@@ -494,3 +494,58 @@ func TestADIssuerSerialKeepsTheSignByte(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// DER encodes a zero serial as 00, so <SR> is 00, never empty. Go parses a
+// zero serial.
+func TestADIssuerSerialZeroSerialIsOneByte(t *testing.T) {
+	c := leaf(t, func(c *x509.Certificate) { c.SerialNumber = new(big.Int) })
+	if got := ADIssuerSerial(c); !strings.HasSuffix(got, "<SR>00") {
+		t.Fatalf("%s", got)
+	}
+}
+
+// A negative serial (parsed only under GODEBUG=x509negativeserial=1) has no
+// <SR> to write: "" is unmapped, which Lookup refuses.
+func TestADIssuerSerialRefusesANegativeSerial(t *testing.T) {
+	c := leaf(t, nil)
+	c.SerialNumber = big.NewInt(-5)
+	if got := ADIssuerSerial(c); got != "" {
+		t.Fatalf("a negative serial gave %q", got)
+	}
+	_, err := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}.Lookup(c, "(objectClass=person)")
+	if !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("a negative serial: %v", err)
+	}
+}
+
+// CertNameToStr joins one RDN's values with " + " where port49 joins every
+// value with ",", so {CN=a + O=b} and CN=a,O=b could render alike: an issuer
+// with a multi-valued RDN is unmapped (fail closed), and Lookup says so as
+// identity_unmapped.
+func TestADIssuerSerialRefusesAMultiValuedIssuerRDN(t *testing.T) {
+	ca, key := issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}},
+		{{Type: oidCN, Value: "a"}, {Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "b"}}})
+	c := issue(t, ca, key, nil)
+	if got := ADIssuerSerial(c); got != "" {
+		t.Fatalf("a multi-valued issuer RDN gave %q", got)
+	}
+	_, err := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}.Lookup(c, "(objectClass=person)")
+	if !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("a multi-valued issuer RDN: %v", err)
+	}
+}
+
+// The quoting set is as Microsoft documents CertNameToStr, and the backslash,
+// slash and newline members are unmeasured: its table says "\n" and its
+// remarks say "Backslash (/)". Until the re-run decides, all three quote.
+func TestADQuoteSet(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
+		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`,
+		`a\b`: `"a\b"`, "a/b": `"a/b"`, "a\nb": "\"a\nb\"", "": `""`,
+	} {
+		if got := adQuote(in); got != want {
+			t.Errorf("adQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

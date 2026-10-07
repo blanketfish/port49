@@ -329,23 +329,34 @@ func printable(s string) bool {
 // ADIssuerSerial is AD's altSecurityIdentities strong form: X509:<I> the
 // issuer's RDNs most significant first, read from RawIssuer so DC= is kept,
 // <SR> the serial's bytes reversed in upper-case hex (KB5014754). L43's run
-// checks it against Samba's form, and L44 measured Windows' quoting. "" when
-// the issuer does not parse, which Lookup refuses.
+// checks it against Samba's form, and L44 measured Windows' quoting of a
+// comma and its sign byte. "" (unmapped, which Lookup refuses) when the issuer
+// does not parse, when an issuer RDN holds more than one attribute, and when
+// the serial is negative.
 func ADIssuerSerial(leaf *x509.Certificate) string {
 	seq, err := rdnsOf(leaf.RawIssuer)
-	if err != nil {
+	if err != nil || leaf.SerialNumber.Sign() < 0 {
 		return ""
 	}
 	var parts []string
 	for _, rdn := range seq {
+		// CertNameToStr joins one RDN's values with " + " where this joins
+		// every value with ",", so two different issuers could render alike
+		// (unmeasured, provisional on L44): fail closed.
+		if len(rdn) != 1 {
+			return ""
+		}
 		for _, atv := range rdn {
 			parts = append(parts, typeName(atv.Type)+"="+adQuote(fmt.Sprint(atv.Value)))
 		}
 	}
 	b := leaf.SerialNumber.Bytes()
+	if len(b) == 0 { // DER encodes zero as 00
+		b = []byte{0}
+	}
 	// DER keeps a 00 before a serial whose top bit is set; Windows' <SR> is
 	// the encoded bytes reversed, that 00 included (L44).
-	if len(b) > 0 && b[0]&0x80 != 0 {
+	if b[0]&0x80 != 0 {
 		b = append([]byte{0}, b...)
 	}
 	r := make([]byte, len(b))
@@ -356,10 +367,16 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 }
 
 // adQuote is an RDN value as Windows' CertNameToStr writes it in
-// altSecurityIdentities (L44): quoted when it is empty, starts or ends with
-// white space, or holds , + = " \ < > # ; or a newline, an inner quote doubled.
+// altSecurityIdentities: quoted when it is empty, starts or ends with white
+// space, or holds , + = " < > # ; or a backslash, a slash or a newline, an
+// inner quote doubled. Only the comma is measured (L44 run 8). Microsoft's
+// page is inconsistent about the rest: its table lists "backslash followed by
+// the letter n" and its remarks list "Backslash (/)", so the backslash, slash
+// and newline members are unmeasured, provisional on L44, and the 7a re-run
+// decides them. White space beyond ' ' (tab, NBSP, ...) is unmeasured too;
+// the re-run's leading-space CA measures ' '.
 func adQuote(v string) string {
-	if v == "" || strings.ContainsAny(v, ",+=\"\\<>#;\n") || strings.TrimSpace(v) != v {
+	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\\/\n") || strings.TrimSpace(v) != v {
 		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
 	}
 	return v
