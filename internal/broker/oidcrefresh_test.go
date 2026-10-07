@@ -428,3 +428,110 @@ func TestARefreshThatCannotRecordItsOwnerAsksForANewChallenge(t *testing.T) {
 		t.Fatalf("%s", shown(w))
 	}
 }
+
+func (h hookStore) SetContextPolicy(ctx context.Context, k store.ContextKey, rev uint64, p store.ContextPolicy) error {
+	if f := h.before["SetContextPolicy"]; f != nil {
+		if err := f(); err != nil {
+			return err
+		}
+	}
+	return h.Store.SetContextPolicy(ctx, k, rev, p)
+}
+
+// Review N2: a refresh marks what it extended after a logout, not every
+// context it visited.
+func TestALogoutMarksOnlyWhatTheRefreshExtended(t *testing.T) {
+	f, tok, iss := oidcSession(t)
+	twoContexts(t, f)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	calls := 0
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
+		if calls++; calls == 1 {
+			return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss, "s-second"), At: f.b.Now()},
+				time.Hour)
+		}
+		return store.ErrConflict // not_judged: visited, not extended
+	}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+	if w.Code != 401 {
+		t.Fatalf("%s", shown(w))
+	}
+	revoked := 0
+	for _, nas := range []string{"leaf1", "nx1"} {
+		if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: nas, Username: "alice"}); !c.RevokedAt.IsZero() {
+			revoked++
+		}
+	}
+	if revoked != 1 {
+		t.Fatalf("%d contexts marked; only the one the refresh extended may be", revoked)
+	}
+}
+
+// Review N1: the operator's lines name the check and the two commands: a
+// logout is not a ban, and the person may log in again.
+func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
+	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "`",
+		"port49 revoke --principal " + alicePrincipal + " --lift"}
+	check := func(t *testing.T, said string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(said, w) {
+				t.Fatalf("the operator's line lacks %q: %s", w, said)
+			}
+		}
+	}
+	t.Run("the marking failed", func(t *testing.T) {
+		f, tok, iss := oidcSession(t)
+		var said strings.Builder
+		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+		nonce := challenge(t, f, tok(nil))
+		f.advance(time.Minute)
+		landed := false
+		f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+			"RefreshContext": func() error {
+				landed = true
+				return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss, "s-second"),
+					At: f.b.Now()}, time.Hour)
+			},
+			"SetContextPolicy": func() error {
+				if landed {
+					return store.ErrUnavailable
+				}
+				return nil
+			}}}
+		w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+			"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+		if w.Code != 401 {
+			t.Fatalf("%s", shown(w))
+		}
+		check(t, said.String())
+	})
+	t.Run("the re-read failed", func(t *testing.T) {
+		f, tok, _ := oidcSession(t)
+		twoContexts(t, f)
+		var said strings.Builder
+		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+		nonce := challenge(t, f, tok(nil))
+		f.advance(time.Minute)
+		calls, failed := 0, false
+		f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+			"RefreshContext": func() error {
+				if calls++; calls > 1 {
+					failed = true
+					return store.ErrUnavailable
+				}
+				return nil
+			},
+			"GetLogout": func() error {
+				if failed {
+					return store.ErrUnavailable
+				}
+				return nil
+			}}}
+		f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+			"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+		check(t, said.String())
+	})
+}
