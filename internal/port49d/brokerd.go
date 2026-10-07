@@ -368,6 +368,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// before the store does (wg).
 	wg.Add(1)
 	go func() { defer wg.Done(); runPool(ctx, brk.Directory) }()
+	wg.Add(1)
+	go func() { defer wg.Done(); runKeySets(ctx, brk.Identity) }()
 	brk.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Marks = marks
 	brk.RevokeTimeout = admin.OpTimeout
@@ -472,7 +474,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// serves.
 	var checker *certstatus.Checker
 	cs := cfg.Broker.CertificateStatus
-	if cs.Disabled {
+	if cs == nil {
+		brokerSay("broker: no x509 verifier is configured, so no client certificate's status is checked")
+	} else if cs.Disabled {
 		brokerSay("broker: certificate status checking is disabled (broker.certificate_status.disabled): a " +
 			"certificate revoked at its CA keeps minting until `port49 revoke --cert`")
 	} else {

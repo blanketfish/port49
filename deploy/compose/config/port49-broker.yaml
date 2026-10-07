@@ -54,3 +54,30 @@ store:
     endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
     ca_file: /etc/port49/etcd/ca.pem
     broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}
+  #
+  # OIDC (spec §13 decision 39) is off here: the trial authenticates people
+  # by certificate alone (broker.client_ca_file above). To accept tokens
+  # from an identity provider, replace client_ca_file with an identity
+  # block; the provider's keys are kept in state_dir across a restart.
+  # identity:
+  #   humans:
+  #     - {type: x509, trust_anchor_file: /etc/port49/broker/broker-ca.pem}
+  #     - type: oidc
+  #       issuer: https://sso.corp.example.com/realms/corp
+  #       client_id: port49-cli                # the public client people log in with (plan 9)
+  #       principal_claim: email               # required: preferred_username, email (needs email_verified) or upn
+  #       principal_domains: [corp.example.com] # required: whose people this provider may name
+  #       scopes: [email]
+  #       # ca_file: /etc/port49/idp-ca.pem    # omit to trust the system roots
+  #   machines:
+  #     - type: oidc
+  #       issuer: https://sso.corp.example.com/realms/corp
+  #       audience: "api://port49-svc"
+  #       clients:                             # required: each client, with its sub at the provider
+  #         - {client_id: oxidized, sub: 5f3c2d1e-0000-4000-8000-000000000049}
+  #   # clock_skew: 60s
+  #   # max_token_age: 2h
+  #   # jwks_refresh_interval: 1h
+  #   # jwks_max_age: 24h                     # past it with no refresh, every OIDC request is refused 503
+  # The provider posts back-channel logouts to https://<broker>:8443/v1/logout:
+  # register that URL, with "backchannel logout session required" on.

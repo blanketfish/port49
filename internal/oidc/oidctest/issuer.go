@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -103,6 +104,12 @@ func (i *Issuer) Roots() *x509.CertPool {
 	p := x509.NewCertPool()
 	p.AddCert(i.srv.Certificate())
 	return p
+}
+
+// CertPEM is the server's TLS certificate, PEM, as an operator's ca_file
+// holds it.
+func (i *Issuer) CertPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: i.srv.Certificate().Raw})
 }
 
 // AddKey makes and publishes a key.
