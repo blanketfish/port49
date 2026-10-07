@@ -58,6 +58,24 @@
       "credentials": [{"type": "password", "value": "lab-only-alice-password", "temporary": false}]
     },
     {
+      "username": "bob",
+      "email": "bob@corp.example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Lab",
+      "credentials": [{"type": "password", "value": "lab-only-bob-password", "temporary": false}]
+    },
+    {
+      "username": "carol",
+      "email": "carol@corp.example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Carol",
+      "lastName": "Lab",
+      "credentials": [{"type": "password", "value": "lab-only-carol-password", "temporary": false}]
+    },
+    {
       "id": "5f3c2d1e-0000-4000-8000-000000000049",
       "username": "service-account-port49-svc",
       "enabled": true,

@@ -102,7 +102,9 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if err != nil || p == nil {
 		t.Fatalf("the lab policy does not load: %v", err)
 	}
-	for _, want := range []string{"user:alice@corp.example.com", "app:port49-svc", "username: alice", "slice_operator"} {
+	for _, want := range []string{"user:alice@corp.example.com", "user:bob@corp.example.com",
+		"user:carol@corp.example.com", "app:port49-svc", "username: alice", "username: bob", "username: carol", "subject: oidc_bob",
+		"subject: oidc_carol", "slice_operator"} {
 		if !strings.Contains(files["policy.yaml"], want) {
 			t.Errorf("policy.yaml lacks %q", want)
 		}

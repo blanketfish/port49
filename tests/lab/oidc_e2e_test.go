@@ -38,13 +38,21 @@ const (
 	// oidcAlice is the realm's person, and the device username her subject names.
 	oidcAlice         = "alice"
 	oidcAlicePassword = "lab-only-alice-password"
+	// oidcBob and oidcCarol are the realm's other two people: bob holds exactly
+	// the two sessions step 6 signs out, and carol the eight step 7 ends, each a
+	// subject and a token key (device, username) no earlier step touched.
+	oidcBob           = "bob"
+	oidcBobPassword   = "lab-only-bob-password"
+	oidcCarol         = "carol"
+	oidcCarolPassword = "lab-only-carol-password"
 	// oidcBrokerLogout is the URL Keycloak posts its logout tokens to on the
 	// stack's network: the broker's certificate names port49-broker (testpki).
 	oidcBrokerLogout = "https://port49-broker:8443/v1/logout"
 )
 
 // oidcE2EFiles gives the broker the identity block and the policy two OIDC
-// subjects: alice by her verified email, and the lab service.
+// subjects: alice, bob and carol by their verified emails, and the lab service.
+// Mint alone touches no device, so bob and carol need no account on one.
 func oidcE2EFiles(files map[string]string) error {
 	b := files["port49-broker.yaml"]
 	i := strings.Index(b, "  client_ca_file:")
@@ -71,9 +79,13 @@ func oidcE2EFiles(files map[string]string) error {
 ` + b[j:]
 	for _, add := range []struct{ key, entries string }{
 		{"subjects:\n", `  - {name: oidc_alice, identity: ["user:alice@corp.example.com"], username: alice, token_ttl: 300s}
+  - {name: oidc_bob, identity: ["user:bob@corp.example.com"], username: bob, token_ttl: 300s}
+  - {name: oidc_carol, identity: ["user:carol@corp.example.com"], username: carol, token_ttl: 300s}
   - {name: oidc_svc, identity: ["app:port49-svc"], username: svc-backup, token_ttl: 300s}
 `},
 		{"grants:\n", `  - {subject: oidc_alice, scope: all_devices, roles: [network_admin], max_privilege: admin}
+  - {subject: oidc_bob, scope: all_devices, roles: [network_admin], max_privilege: admin}
+  - {subject: oidc_carol, scope: all_devices, roles: [network_admin], max_privilege: admin}
   - {subject: oidc_svc, scope: all_devices, roles: [network_admin], max_privilege: admin}
 `},
 	} {
