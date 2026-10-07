@@ -542,7 +542,7 @@ func TestADQuoteSet(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
 		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`,
-		`a\b`: `a\b`, "a/b": "a/b", "a\nb": "\"a\nb\"", "": `""`,
+		`a\b`: `a\b`, "a/b": "a/b", "a/b,c": `"a/b,c"`, "a\nb": "\"a\nb\"", "": `""`,
 	} {
 		if got := adQuote(in); got != want {
 			t.Errorf("adQuote(%q) = %q, want %q", in, got, want)
