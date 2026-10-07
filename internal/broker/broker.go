@@ -77,7 +77,11 @@ type Broker struct {
 	Identity *oidc.Set
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
-	NoX509        bool
+	NoX509 bool
+	// Workload is the workload certificate verifier (plan 8; decision 40):
+	// x509 under broker.identity.machines. Nil reads every certificate as a
+	// person's, as before plan 8.
+	Workload      *Workload
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
