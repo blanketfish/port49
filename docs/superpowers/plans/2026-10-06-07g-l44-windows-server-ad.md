@@ -4299,7 +4299,7 @@ Each cell of the L44 row needs an observation in the note.
 | how the loop is answered | dave's `in_chain` row, or the "loop was not made" line | either present |
 | EXTERNAL over LDAPS | "Binds", the EXTERNAL rows e1–e6, and the matrix's EXTERNAL rows | a result in each, none INVALID; each accepted mapped row's WhoAmI is `u:CORP\port49` |
 | GSSAPI, keytab, no security layer | "Binds", both GSSAPI rows | a result in each, neither INVALID |
-| `altSecurityIdentities` in port49's form matches what the DC maps | the matrix: `adcs-port49`, `comma-*`, `highbit-*` | none INVALID under any value |
+| `altSecurityIdentities` in port49's form matches what the DC maps | the matrix: `adcs-port49`, `comma-*`, `back-*`, `slash-*`, `plus-*`, `quote-*`, `lead-*`, `highbit-*` | none INVALID under any value |
 | SID extension = `objectSid` | "The SID extension and objectSid", alice's `User` row | a SID on both sides |
 | KB5014754's treatment of each | the matrix, three blocks | none INVALID |
 | carried (a) | "The AD capability" | three rows, none "not measured" |
@@ -4318,6 +4318,19 @@ Decide the defects, one rule each. Each rule reads only a block where `control-s
     writes.
   - If neither got one, the comma question stays unanswered. Record it, change no code, and
     carry it to Ryan.
+- **7a, the rest of the set (fix round 1).** The `back`, `slash`, `plus`, `quote` and `lead`
+  CAs each have `-port49`, `-quoted`, `-escaped` and `-raw` rows (recorded, not asserted). Read
+  each CA's block as 7a reads the comma's, and per character:
+  - A character whose `-raw` row got a TGT and whose `-quoted` row did not is not in `adQuote`'s
+    set: remove it from `adQuote` and `winQuote`.
+  - A character whose `-quoted` row got a TGT and whose `-raw` row did not stays in the set.
+  - Both got one: the DC maps either form; keep port49's (quoted) form and say so in the note.
+  - Neither got one (and `-escaped` did, or none did): that character's form stays unanswered.
+    Record it and carry it to Ryan. A `-port49` row that disagrees with `-quoted` is a bug in
+    the lab's form, not a finding.
+  - `quote`'s `-quoted` row measures the doubling; `lead`'s measures ' ' as white space.
+  - A row INVALID in the CA's block, or a CA whose `ca_<slug>` setup failed, decides nothing
+    for that character. The follow-up fix makes `adQuote` match what the rows decide.
 - **7b.** `highbit-signbyte` got a TGT and `highbit-port49` did not. Then port49's `<SR>` must
   keep the sign byte.
 - **7c.** Read OR-1's branches against e2, e3 and e5. Task 7c runs only in branch (ii). In
