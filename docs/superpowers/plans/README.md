@@ -108,7 +108,16 @@ in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03
 - PR #38: the L45 follow-up run.
 - PR #39: a `sub` logout's refusal names the time a login is taken from.
 
-**L44 is closed on Windows Server 2025** (Task 8, 28bb29e; L44 — As built, below). **L45 is closed on Keycloak 26.4.7** (PR #38): one sign-out ended both sessions, and eight back-to-back logouts all arrived. L47 is open. Next: plans 8–11. 12–13 not yet.
+**L44 is closed on Windows Server 2025** (Task 8, 28bb29e; L44 — As built, below). **L45 is closed on Keycloak 26.4.7** (PR #38): one sign-out ended both sessions, and eight back-to-back logouts all arrived. L47 is open. **8 written 2026-10-07** (`2026-10-07-08-workload-certificates.md`, fifteen tasks):
+- Two docs tasks, ten code, one example (`examples/oxidized`) and two lab.
+- Decision 40 holds the rulings. It opens L48 (step-ca) and L49 (Oxidized end to end), and L50 for plan 8b.
+- **8 pre-flight 2026-10-07:** READY WITH FIXES (1 Critical, 6 Important, 19 Minor), every finding applied to the plan.
+  - Decision 16's mapping of a workload certificate to its directory groups is deferred to a named plan 8b, limited to machine-scoped group subjects, not withdrawn.
+  - One `certificate_status` block.
+  - Minting by `scope` goes to plan 9.
+  - No questions for Ryan.
+
+Next: execute 8, then 8b, 9–11. 12–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -4629,6 +4638,14 @@ the in-session re-auth flow, integration examples (design §17 "Integration exam
 - **Optional CRL check of the broker's certificate** when it names a distribution point (the
   CA is the operator's own, so this is defence in depth; revocation of *client* certificates
   at the broker is plan 7's, spec §5.1.4).
+
+**Owed from plan 8 (the controller's ruling on its pre-flight Q3, 2026-10-07):**
+- **Mint by `scope`** (design §17: "Targets are named, not addressed: a device name or a
+  `scope`, resolved through inventory"). Plan 7a built device names only (`api.MintRequest`'s
+  `devices`), and no other plan owns scope targets. Spec text first: a sweep answers only devices
+  the caller holds a grant on, so it is no enumeration oracle; per-item results; paging against
+  `batch_max`. Then `port49 workload token --scope` (plan 8's client) and the Oxidized wrapper
+  can ask for "every device I may back up" instead of a node list.
 
 ## Plan 10 — Kubernetes path (§19 step 10)
 
