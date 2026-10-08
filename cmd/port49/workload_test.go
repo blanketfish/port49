@@ -62,6 +62,11 @@ func workloadBrokerWith(t *testing.T, batchMax int, answer func(w http.ResponseW
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			answer(w, req)
 		case "/v1/identity":
+			if identity.Method == "redirect" {
+				w.Header().Set("Location", "https://elsewhere.example.com/v1/identity")
+				w.WriteHeader(http.StatusTemporaryRedirect)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(identity)
 		}
 	}))
@@ -315,5 +320,123 @@ func TestWorkloadIdentityPrintsSafeText(t *testing.T) {
 	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != 0 ||
 		strings.ContainsAny(out.String(), "\x1b\r\a") || strings.Contains(out.String(), "svc\nforged") {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// identity treats a New error that is not a certificate's as usage, as token does.
+func TestWorkloadIdentityWithANonHTTPSBrokerIsUsage(t *testing.T) {
+	flags := append(workloadBroker(t, mixed), "--broker", "http://127.0.0.1:9")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != 2 {
+		t.Fatalf("exit %d stderr %q", code, errb.String())
+	}
+}
+
+// A redirect on identity is final.
+func TestWorkloadIdentityRedirectIsFinal(t *testing.T) {
+	flags := workloadBrokerWith(t, 100, mixed, api.Identity{Method: "redirect"})
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "redirect") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A control character in a permitted item leaves that device out and says so;
+// the others are written and the run exits 1.
+func TestADeviceWithAControlCharacterIsLeftOut(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		resp := api.MintResponse{}
+		for _, d := range req.Devices {
+			user := "svc"
+			switch d {
+			case "bad1":
+				user = "sv\tc"
+			case "bad2":
+				user = "sv\rc"
+			}
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "permit", Address: "10.0.0.1",
+				Platform: "arista_eos", Username: user, Login: "TOKEN-" + d, ExpiresAt: "2026-10-08T03:00:00Z"})
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "bad1", "bad2"), &out, &errb)
+	if code != 1 || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc\tTOKEN-leaf1\t2026-10-08T03:00:00Z\n" ||
+		!strings.Contains(errb.String(), "bad1") || !strings.Contains(errb.String(), "bad2") ||
+		strings.Contains(errb.String(), "TOKEN") || strings.ContainsAny(errb.String(), "\t\r") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(append([]string{"workload", "token"}, flags...), "bad1"), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "bad1") {
+		t.Fatalf("only bad: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// Tokens were minted but could not be written: temporary, the last output stands.
+func TestAnUnwritableOutputIsTemporary(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	missing := filepath.Join(dir, "nodir", "tokens.tsv")
+	if code := run(append(append([]string{"workload", "token"}, flags...), "--out", missing, "leaf1"), &out, &errb); code != exitTemporary ||
+		strings.Contains(errb.String(), "TOKEN") {
+		t.Fatalf("missing dir: exit %d stderr %q", code, errb.String())
+	}
+	// A directory at the target: the rename fails, the target stands, no temp is left.
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	if code := run(append(append([]string{"workload", "token"}, flags...), "--out", target, "leaf1"), &out, &errb); code != exitTemporary {
+		t.Fatalf("directory target: exit %d stderr %q", code, errb.String())
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "target" {
+		t.Fatalf("the parent holds %d entries, want target alone", len(entries))
+	}
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1"), failingWriter{}, &errb); code != exitTemporary {
+		t.Fatalf("stdout write failed: exit %d", code)
+	}
+}
+
+// A temporary failure on page two writes page one and exits 75.
+func TestATemporaryFailureOnPageTwoWritesPageOne(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.Devices[0] == "leaf2" {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "store_unavailable", Detail: "down"})
+			return
+		}
+		mixed(w, req)
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "leaf2"), &out, &errb)
+	if code != exitTemporary || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc-oxidized\tTOKEN-leaf1\t2026-10-08T03:00:00Z\n" ||
+		!strings.Contains(errb.String(), "1 of 2 devices were not minted; run again") || strings.Contains(errb.String(), "TOKEN") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A fault line is "<device>: <verdict> <reason>: <detail>", with one space.
+func TestAFaultLineCarriesTheDetail(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Results: []api.MintItem{
+			{Device: "fw2", Verdict: "error", Error: "boom", Detail: "why\x1b[2J"},
+			{Device: "fw3", Verdict: "error", Detail: "only detail"},
+		}})
+	})
+	var out, errb bytes.Buffer
+	run(append(append([]string{"workload", "token"}, flags...), "fw2", "fw3"), &out, &errb)
+	if !strings.Contains(errb.String(), "fw2: error boom: why?[2J\n") ||
+		!strings.Contains(errb.String(), "fw3: error: only detail\n") {
+		t.Fatalf("stderr %q", errb.String())
 	}
 }

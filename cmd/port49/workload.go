@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -146,11 +147,25 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	for _, it := range resp.Results {
 		if it.Verdict != "permit" || it.Login == "" {
 			// The item's own words, never its token (there is none on a deny).
+			line := safe(it.Device) + ": " + safe(it.Verdict)
 			reason := it.Reason
 			if it.Error != "" {
 				reason = it.Error
 			}
-			fmt.Fprintf(stderr, "%s: %s: %s %s\n", cmd, safe(it.Device), safe(it.Verdict), safe(reason))
+			if reason != "" {
+				line += " " + safe(reason)
+			}
+			if it.Detail != "" {
+				line += ": " + safe(it.Detail)
+			}
+			fmt.Fprintf(stderr, "%s: %s\n", cmd, line)
+			code = max(code, 1)
+			continue
+		}
+		if *format == "tsv" && hasControl(it, *enable) {
+			// One device's line would corrupt the file: leave that device out.
+			fmt.Fprintf(stderr, "%s: %s: left out, a field holds a control character, which TSV cannot carry\n", cmd,
+				safe(it.Device))
 			code = max(code, 1)
 			continue
 		}
@@ -167,17 +182,37 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	body, err := render(*format, resp, permitted, *enable)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, safe(err.Error()))
-		return 1
+		return exitTemporary
 	}
+	// Tokens were minted but not written: a run again writes them, and the
+	// last output stands (decision 40 ruling 10).
 	if *out == "" {
-		_, _ = stdout.Write(body)
+		if _, err := stdout.Write(body); err != nil {
+			fmt.Fprintf(stderr, "%s: cannot write the tokens to stdout: %v; run again\n", cmd, err)
+			return exitTemporary
+		}
 		return code
 	}
 	if err := writePrivate(*out, body); err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
-		return 1
+		fmt.Fprintf(stderr, "%s: cannot write %s: %v; run again\n", cmd, *out, err)
+		return exitTemporary
 	}
 	return code
+}
+
+// hasControl is a TSV line for it that would hold a control character: a tab
+// or newline would split it, and the rest would reach a terminal.
+func hasControl(it api.MintItem, enable bool) bool {
+	cols := []string{it.Device, it.Address, it.Platform, it.Username, it.Login, it.ExpiresAt}
+	if enable {
+		cols = append(cols, it.Enable)
+	}
+	for _, c := range cols {
+		if strings.ContainsFunc(c, func(r rune) bool { return r < 0x20 || r == 0x7f || unicode.IsControl(r) }) {
+			return true
+		}
+	}
+	return false
 }
 
 // render is the permitted items as format says: TSV with no header, one line
@@ -194,11 +229,6 @@ func render(format string, resp api.MintResponse, permitted []api.MintItem, enab
 			cols = append(cols, it.Enable)
 		}
 		cols = append(cols, it.ExpiresAt)
-		for _, c := range cols {
-			if strings.ContainsAny(c, "\t\n") {
-				return nil, fmt.Errorf("%s: a field holds a tab or a newline, which TSV cannot carry", it.Device)
-			}
-		}
 		b.WriteString(strings.Join(cols, "\t") + "\n")
 	}
 	return []byte(b.String()), nil
@@ -229,7 +259,15 @@ func writePrivate(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	// Best effort: make the rename durable. Some platforms cannot sync a directory.
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // readDevices is a file's device names, one a line, blank lines and # comments skipped.
@@ -269,16 +307,17 @@ func workloadIdentity(args []string, stdout, stderr io.Writer) int {
 		case errors.As(err, &ce):
 			return exitFinal
 		}
-		return 1
+		return 2 // as workload token: the flags or the files named are wrong
 	}
 	id, err := c.Identity(context.Background())
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, safe(err.Error()))
 		var ae *workload.APIError
+		var re *workload.RedirectError
 		switch {
 		case errors.Is(err, workload.ErrTemporary):
 			return exitTemporary
-		case errors.As(err, &ae):
+		case errors.As(err, &ae), errors.As(err, &re):
 			return exitFinal
 		}
 		return 1
