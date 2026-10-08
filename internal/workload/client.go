@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	rand2 "math/rand/v2"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +45,15 @@ const pairWait = 500 * time.Millisecond
 // betweenReads is that wait. A test replaces it with the renewer's second
 // write, so it races no clock.
 var betweenReads = func() { time.Sleep(pairWait) }
+
+// jitter spreads a computed wait; a test replaces it to read exact waits.
+var jitter = jittered
+
+// jittered is d within plus or minus 20%, so a fleet started on one cron
+// minute does not retry in step.
+func jittered(d time.Duration) time.Duration {
+	return d + time.Duration((rand2.Float64()*0.4-0.2)*float64(d))
+}
 
 // Config is a workload's broker and its certificate files.
 type Config struct {
@@ -147,13 +158,25 @@ func New(cfg Config) (*Client, error) {
 		cfg.Deadline = DefaultDeadline
 	}
 	cfg.Broker = strings.TrimRight(cfg.Broker, "/")
+	// The client presents the workload's certificate and takes tokens back, so
+	// it talks to the broker the operator named, over https, trusting the
+	// broker CA alone (decision 40 ruling 10).
+	if u, err := url.Parse(cfg.Broker); err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, errors.New("the broker must be an https URL (https://host:port)")
+	}
+	if cfg.BrokerCA == nil {
+		return nil, errors.New("a broker CA is required: the client trusts it alone, never the system's roots")
+	}
 	cert, err := LoadCertificate(cfg.CertFile, cfg.KeyFile, cfg.Now(), cfg.Warn)
 	if err != nil {
 		return nil, err
 	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
-	return &Client{cfg: cfg, http: &http.Client{Transport: tr, Timeout: 30 * time.Second}, sleep: sleepCtx}, nil
+	// A redirect is never followed; its 3xx comes back as an APIError.
+	hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &Client{cfg: cfg, http: hc, sleep: sleepCtx}, nil
 }
 
 // MintOptions is one run's mint.
@@ -215,10 +238,10 @@ func unminted(err error, devices []string) error {
 }
 
 // do sends one request, and again under the same key while the broker
-// cannot answer now: a 503 (but an uncovered certificate status), a 429, a
-// 409 idempotency_in_progress after its Retry-After (5s when absent, 60s at
-// most), a failed connection after 1s doubling to 30s; until deadline. Any
-// other answer is final.
+// cannot answer now: a 503 (but an uncovered certificate status), a 502, a
+// 504, a 429, a 409 idempotency_in_progress after its Retry-After (5s when
+// absent, 60s at most), a failed connection after 1s doubling to 30s (the
+// computed waits jittered by 20%); until deadline. Any other answer is final.
 func (c *Client) do(ctx context.Context, deadline time.Time, method, path string, body []byte, key string, out any) error {
 	wait := time.Second
 	for {
@@ -239,20 +262,22 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			last, pause = fmt.Errorf("no answer: %w", err), wait
+			last, pause = fmt.Errorf("no answer: %w", err), jitter(wait)
 			wait = min(wait*2, 30*time.Second)
 		} else {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				// The decoder's error names a position or a type, never the body.
 				if err := json.Unmarshal(raw, out); err != nil {
-					return fmt.Errorf("the broker's answer to %s is not JSON: %w", path, err)
+					return decodeError(path, err)
 				}
 				return nil
 			}
 			var e api.Error
 			_ = json.Unmarshal(raw, &e)
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				e = api.Error{Error: "redirect_refused", Detail: "the broker redirected; the client never follows a redirect"}
+			}
 			ae := &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
 			if !retriable(resp.StatusCode, e) {
 				return ae
@@ -278,7 +303,10 @@ func retriable(status int, e api.Error) bool {
 		strings.Contains(e.Detail, api.UncoveredStatus) {
 		return false
 	}
-	return status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests ||
+	// A 502 or 504 is a proxy that could not reach the broker: a refused
+	// connection by another name, and the key makes the retry safe (ruling 10).
+	return status == http.StatusServiceUnavailable || status == http.StatusBadGateway ||
+		status == http.StatusGatewayTimeout || status == http.StatusTooManyRequests ||
 		(status == http.StatusConflict && e.Error == "idempotency_in_progress")
 }
 
@@ -286,7 +314,22 @@ func retryAfter(h http.Header) time.Duration {
 	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil && s > 0 {
 		return min(time.Duration(s)*time.Second, time.Minute)
 	}
-	return 5 * time.Second
+	return jitter(5 * time.Second)
+}
+
+// decodeError says where a 200 failed to decode and never what was there: a
+// mint's body holds tokens, and a decoder's own message can quote a character
+// or a number from the input.
+func decodeError(path string, err error) error {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syn):
+		return fmt.Errorf("the broker's answer to %s is not valid JSON (offset %d)", path, syn.Offset)
+	case errors.As(err, &typ):
+		return fmt.Errorf("the broker's answer to %s has the wrong shape (offset %d)", path, typ.Offset)
+	}
+	return fmt.Errorf("the broker's answer to %s cannot be decoded", path)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

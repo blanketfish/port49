@@ -108,6 +108,9 @@ func newHarness(t *testing.T, f *fakeBroker, life time.Duration) *harness {
 	h.writeCert(t, h.now.Add(-time.Minute), h.now.Add(life))
 	h.cfg = Config{Broker: srv.URL, BrokerCA: ca.Pool(), CertFile: filepath.Join(h.dir, "w.pem"),
 		KeyFile: filepath.Join(h.dir, "w-key.pem"), Now: func() time.Time { return h.now }}
+	prevJitter := jitter
+	jitter = func(d time.Duration) time.Duration { return d }
+	t.Cleanup(func() { jitter = prevJitter })
 	h.sleepFn = func(_ context.Context, d time.Duration) error {
 		h.slept = append(h.slept, d)
 		h.now = h.now.Add(d)
@@ -159,7 +162,7 @@ func TestPagesByBatchMaxEachUnderItsOwnKey(t *testing.T) {
 	h := newHarness(t, f, 24*time.Hour)
 	resp, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(5), TTL: 15 * time.Minute})
 	if err != nil || len(resp.Results) != 5 || resp.Results[4].Device != "leaf5" || resp.Subject != "svc_oxidized" {
-		t.Fatalf("%+v %v", resp, err)
+		t.Fatalf("%d results, subject %q: %v", len(resp.Results), resp.Subject, err) // never the logins
 	}
 	if len(f.keys) != 3 || f.keys[0] == f.keys[1] || f.keys[1] == f.keys[2] || f.keys[0] == "" ||
 		f.bodies[0].TTLSeconds != 900 || len(f.bodies[2].Devices) != 1 {
@@ -192,7 +195,7 @@ func TestTheDeadlineEndsWithTheUnmintedDevices(t *testing.T) {
 	var te *TemporaryError
 	if !errors.As(err, &te) || !errors.Is(err, ErrTemporary) || strings.Join(te.Unminted, ",") != "leaf3,leaf4" ||
 		len(resp.Results) != 2 || !strings.Contains(err.Error(), "503 store_unavailable") {
-		t.Fatalf("%+v %v", resp, err)
+		t.Fatalf("%d results: %v", len(resp.Results), err) // never the logins
 	}
 	if total := sum(h.slept); total > DefaultDeadline {
 		t.Fatalf("slept %v past the deadline", total)
@@ -310,6 +313,129 @@ func TestARenewalOnDiskIsPresentedAtTheNextRun(t *testing.T) {
 	}
 	if len(f.presents) != 2 || f.presents[0] == f.presents[1] {
 		t.Fatalf("presented %v", f.presents)
+	}
+}
+
+func TestANilBrokerCAIsRefused(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	h.cfg.BrokerCA = nil
+	if _, err := New(h.cfg); err == nil || !strings.Contains(err.Error(), "broker CA") {
+		t.Fatalf("a nil broker CA was accepted: %v", err)
+	}
+}
+
+func TestAnyBrokerSchemeButHTTPSIsRefused(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	for _, u := range []string{"http://127.0.0.1:1", "127.0.0.1:1", "ftp://x", "https://", ""} {
+		h.cfg.Broker = u
+		if _, err := New(h.cfg); err == nil || !strings.Contains(err.Error(), "https") {
+			t.Fatalf("%q accepted: %v", u, err)
+		}
+	}
+}
+
+// A redirect is never followed: the certificate and the tokens go to the
+// broker the operator named, alone.
+func TestARedirectIsNotFollowed(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		func(w http.ResponseWriter, _ api.MintRequest) {
+			w.Header().Set("Location", "/v1/identity")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		}}}
+	h := newHarness(t, f, 24*time.Hour)
+	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusTemporaryRedirect || len(f.presents) != 2 {
+		t.Fatalf("%v; %d requests", err, len(f.presents))
+	}
+}
+
+func TestAGatewayErrorIsRetriedUnderTheSameKey(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusBadGateway, "bad_gateway", ""), refuse(http.StatusGatewayTimeout, "timeout", ""), permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil ||
+		len(f.keys) != 3 || f.keys[0] != f.keys[1] || f.keys[1] != f.keys[2] {
+		t.Fatalf("%v; keys %v", err, f.keys)
+	}
+}
+
+func TestAGatewayTimeoutUntilTheDeadlineIsTemporary(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusGatewayTimeout, "timeout", "")}}
+	h := newHarness(t, f, 24*time.Hour)
+	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(2)})
+	var te *TemporaryError
+	if !errors.As(err, &te) || !errors.Is(err, ErrTemporary) || strings.Join(te.Unminted, ",") != "leaf1,leaf2" ||
+		sum(h.slept) > DefaultDeadline {
+		t.Fatalf("%v; slept %v", err, h.slept)
+	}
+}
+
+func TestA429HonoursRetryAfterWithDefaultAndCap(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusTooManyRequests, "rate_limited", "3"),
+		refuse(http.StatusTooManyRequests, "rate_limited", ""),
+		refuse(http.StatusTooManyRequests, "rate_limited", "3600"),
+		permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{3 * time.Second, 5 * time.Second, time.Minute}
+	if len(h.slept) != 3 || h.slept[0] != want[0] || h.slept[1] != want[1] || h.slept[2] != want[2] {
+		t.Fatalf("slept %v, want %v", h.slept, want)
+	}
+}
+
+// A broker that refuses connections is backed off from (1s doubling), never
+// hammered, and the deadline ends it.
+func TestAFailedConnectionBacksOff(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.Broker = "https://" + l.Addr().String()
+	l.Close()
+	_, err = h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	if !errors.Is(err, ErrTemporary) || len(h.slept) < 2 || h.slept[0] != time.Second || h.slept[1] != 2*time.Second ||
+		sum(h.slept) > DefaultDeadline {
+		t.Fatalf("%v; slept %v", err, h.slept)
+	}
+}
+
+func TestJitterStaysWithinAFifthAndSpreads(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for range 1000 {
+		d := jittered(10 * time.Second)
+		if d < 8*time.Second || d > 12*time.Second {
+			t.Fatalf("jittered to %v", d)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 100 {
+		t.Fatalf("only %d distinct waits in 1000", len(seen))
+	}
+}
+
+// A 200 the client cannot decode says where, never what: the body holds
+// tokens when it is a mint's.
+func TestADecodeFailureQuotesNothingOfTheBody(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		func(w http.ResponseWriter, _ api.MintRequest) {
+			_, _ = w.Write([]byte(`{"results":[{"login":"SECRETTOKEN"} SECRETTOKEN`))
+		},
+		func(w http.ResponseWriter, _ api.MintRequest) { _, _ = w.Write([]byte(`{"results":"SECRETTOKEN"}`)) }}}
+	h := newHarness(t, f, 24*time.Hour)
+	for range 2 {
+		_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+		if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "offset") {
+			t.Fatalf("%v", err)
+		}
 	}
 }
 
