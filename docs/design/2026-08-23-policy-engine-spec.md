@@ -7702,7 +7702,13 @@ Ryan may override any.
   everyone). Decision 33 gives no opt-out, and one would weaken status checking: *the controller's
   ruling on recommendation (plan 8's pre-flight Q2)*, revisited only if L48, its CRL fetch trusted,
   measures step-ca's CRL unusable with port49. A 503 for an issuer no source covers is final at
-  `port49 workload`. Tasks 3, 8 and 9.
+  `port49 workload`, and its detail never says "try again". No source covers it when no CRL
+  covers it and no OCSP responder applies: none is set, the certificate names none under
+  `use_aia`, its AIA url is not http or https, or the responder answers `unauthorized` or a
+  signed `unknown`. A responder that applies and fails (no answer, a bad signature or CertID, an
+  answer past its next update) is an outage, retried as a stale list is. *As built in Task 14,
+  ruled by the controller on the review's recommendation; Ryan may override* (6b6a1d0, f7b96b8,
+  060d016). Tasks 3, 8 and 9.
 - **8. The CA enrolls and renews; port49 relies.** A renewal gives the same principal; a mark by
   certificate does not follow it, and `port49 revoke` says so for the workload anchor's issuer and
   any issuer seen on a verified workload chain. Task 7; L48.
