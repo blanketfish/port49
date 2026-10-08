@@ -688,3 +688,29 @@ func TestNextRequestCarriesAJSONBody(t *testing.T) {
 		t.Errorf("the body is not a JSON object: %v", err)
 	}
 }
+
+// The daemon wait covers the certificate's whole life from NotAfter, plus 3m,
+// not a fixed 15m (step-ca backdates NotBefore by 1m, so a "15m" certificate
+// lives about 16m).
+func TestDaemonWaitBound(t *testing.T) {
+	now := time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC)
+	if got := daemonWaitBound(now.Add(16*time.Minute), now); got != 19*time.Minute {
+		t.Errorf("16m of life left: %v", got)
+	}
+	if got := daemonWaitBound(now.Add(-time.Minute), now); got != 3*time.Minute {
+		t.Errorf("already expired: %v", got)
+	}
+}
+
+func TestRenewTimingWords(t *testing.T) {
+	nb := time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC)
+	na := nb.Add(16 * time.Minute)
+	got := renewTimingWords(nb, na, nb.Add(12*time.Minute))
+	if !strings.Contains(got, "12m0s after NotBefore") || !strings.Contains(got, "4m0s before NotAfter") {
+		t.Errorf("%q", got)
+	}
+	late := renewTimingWords(nb, na, na.Add(30*time.Second))
+	if !strings.Contains(late, "30s after NotAfter") {
+		t.Errorf("%q", late)
+	}
+}

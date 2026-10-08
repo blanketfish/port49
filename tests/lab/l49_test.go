@@ -179,6 +179,21 @@ func authMethodsLine(platform, offered string, ok bool) string {
 	return s + " This device's sshd methods could not be read."
 }
 
+// authorizationLine is the note line for a run that produced no
+// authorize_command record, which is a measurement: "" when n > 0. Junos
+// sends no per-command TACACS+ authorization for these commands, as the
+// snippet's unenforced_rules say; no other platform is said to agree.
+func authorizationLine(platform string, n int) string {
+	if n > 0 {
+		return ""
+	}
+	s := "The device sent no per-command authorization for Oxidized's commands (no authorize_command record)."
+	if strings.HasPrefix(platform, "juniper_") {
+		s += " This is consistent with the snippet's `unenforced_rules` on Junos."
+	}
+	return s
+}
+
 // processCrashed is whether ROOT/crash exists: the single file cli.rb writes
 // when the whole Oxidized process crashes.
 func processCrashed(root string) bool {
@@ -602,8 +617,10 @@ func (r *l49Run) phaseA(t *testing.T) {
 	// before phase A's mark, so they are not counted as the phase's.
 	pre := r.l.mark()
 	hostname := r.deviceHostname(t, o)
-	if _, ok := r.l.settleRecords(pre, wantsEvents(oxidizedUser, "redeem", "authorize_command")); !ok {
-		t.Fatalf("the hostname login's records did not reach the decision log within %s (INVALID, not a measured no)", settleBound)
+	// Only the redeem is waited for: a device may send no per-command
+	// authorization (Junos), and the quiet period takes one that is late.
+	if _, ok := r.l.settleRecords(pre, wantsEvents(oxidizedUser, "redeem")); !ok {
+		t.Fatalf("the hostname login's redeem did not reach the decision log within %s (INVALID, not a measured no)", settleBound)
 	}
 	mark, boff := r.l.mark(), fileSize(o.c.brokerLog)
 	start := time.Now()
@@ -616,7 +633,7 @@ func (r *l49Run) phaseA(t *testing.T) {
 	r.ev.add("a_ssh_methods", map[string]any{"offered_for_none": offered, "read": offeredOK})
 	r.say("  - %s", r.startup)
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
-	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem", "authorize_command"))
+	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem"))
 	// The mint is in the broker's log, not port49d's.
 	brecs := waitRecordsOf(o.c.brokerLog, boff, 30*time.Second, func(rs []map[string]any) bool { return len(mintPrincipals(rs)) > 0 })
 	mine := recordsFor(recs, oxidizedUser)
@@ -625,8 +642,11 @@ func (r *l49Run) phaseA(t *testing.T) {
 	principals := mintPrincipals(brecs)
 	r.say("  - The run %s with status `%s`; the wrapper exited 0.", endedWord(ended, 5*time.Minute), status)
 	if !settled {
-		r.say("  - Only %d port49d records for `%s` arrived within %s: the wanted redeem and authorize_command records did not both.",
+		r.say("  - Only %d port49d records for `%s` arrived within %s: no redeem among them.",
 			len(mine), oxidizedUser, settleBound)
+	}
+	if line := authorizationLine(r.l.p.name, len(oxidizedCommands(recs, oxidizedUser, ""))); line != "" {
+		r.say("  - %s", line)
 	}
 	r.say("  - Commands port49 received from `%s`, in order, once each (%d): `%s`.", oxidizedUser, len(cmds), strings.Join(cmds, "`, `"))
 	r.say("  - Authentications (redeem records) for the run: %d (%s).", n, describeCounts(by))
@@ -748,15 +768,17 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	}
 	r.say("- **C. The example's role** (`examples/oxidized/policy.yaml`, the same stack):")
 	cStatus, cEnded := o.awaitRun(node, startC, 5*time.Minute)
-	cRecs, cSettled := r.l.settleRecords(markC, wantsEvents(oxidizedUser, "authorize_command"))
+	cRecs, cSettled := r.l.settleRecords(markC, wantsEvents(oxidizedUser, "redeem"))
 	rows := commandVerdicts(cRecs, oxidizedUser)
 	denied := deniedCommands(rows)
 	r.say("  - The run %s with status `%s`; %d authorize_command records, %d denied.",
 		endedWord(cEnded, 5*time.Minute), cStatus, len(rows), len(denied))
 	if !cSettled {
-		r.say("  - No authorize_command record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
+		r.say("  - No redeem record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
 	}
-	if len(denied) == 0 {
+	if line := authorizationLine(r.l.p.name, len(rows)); line != "" {
+		r.say("  - %s", line)
+	} else if len(denied) == 0 {
 		r.say("  - Every command was permitted.")
 	} else {
 		r.say("  - The snippet lacks: `%s`.", strings.Join(denied, "`, `"))

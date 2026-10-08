@@ -222,3 +222,46 @@ func TestJWSShapeCoversAFivePartJWE(t *testing.T) {
 		t.Errorf("a JWE keeps parts: %q", got)
 	}
 }
+
+// Zero authorize_command records is a measurement, not a fault: Junos sends no
+// per-command TACACS+ authorization for Oxidized's commands.
+func TestAuthorizationLine(t *testing.T) {
+	if got := authorizationLine("juniper_vsrx", 3); got != "" {
+		t.Errorf("records arrived, nothing to add: %q", got)
+	}
+	junos := authorizationLine("juniper_vjunos-router", 0)
+	if !strings.Contains(junos, "sent no per-command authorization for Oxidized's commands") || !strings.Contains(junos, "unenforced_rules") {
+		t.Errorf("junos: %q", junos)
+	}
+	eos := authorizationLine("arista_eos", 0)
+	if !strings.Contains(eos, "sent no per-command authorization for Oxidized's commands") || strings.Contains(eos, "unenforced_rules") {
+		t.Errorf("a platform other than Junos is not said to be consistent with unenforced_rules: %q", eos)
+	}
+}
+
+// What a phase waits for is the redeem; authorize_command rides along when it
+// arrives within the quiet period.
+func TestSettleOnRedeemAloneTakesLateAuthorizeCommand(t *testing.T) {
+	rec := func(ev string) map[string]any {
+		return map[string]any{"event": ev, "session": map[string]any{"username": oxidizedUser}}
+	}
+	start := time.Now()
+	read := func() []map[string]any {
+		recs := []map[string]any{rec("redeem")}
+		if time.Since(start) > 30*time.Millisecond {
+			recs = append(recs, rec("authorize_command"))
+		}
+		return recs
+	}
+	got, ok := settleRecordsFn(read, wantsEvents(oxidizedUser, "redeem"), 150*time.Millisecond, time.Second)
+	if !ok || len(got) != 2 {
+		t.Errorf("ok=%v, %d records", ok, len(got))
+	}
+	// with none, the wait still ends (a measured zero) at the quiet period
+	only := func() []map[string]any { return []map[string]any{rec("redeem")} }
+	begin := time.Now()
+	got, ok = settleRecordsFn(only, wantsEvents(oxidizedUser, "redeem"), 100*time.Millisecond, 5*time.Second)
+	if !ok || len(got) != 1 || time.Since(begin) > time.Second {
+		t.Errorf("ok=%v, %d records, %v", ok, len(got), time.Since(begin))
+	}
+}

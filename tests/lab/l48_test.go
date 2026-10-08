@@ -276,6 +276,25 @@ func untilExpiry(notAfter, t0 time.Time, at time.Duration) time.Duration {
 	return notAfter.Sub(t0.Add(at))
 }
 
+// daemonWaitBound is how long cell 3 waits for the renew daemon: until
+// notAfter, plus 3m. step-ca backdates NotBefore, so a certificate asked for
+// 15m lives about 16m; a fixed bound would stop the wait inside its life.
+func daemonWaitBound(notAfter, now time.Time) time.Duration {
+	return max(notAfter.Sub(now), 0) + 3*time.Minute
+}
+
+// renewTimingWords says when at fell relative to a certificate's NotBefore
+// and NotAfter.
+func renewTimingWords(notBefore, notAfter, at time.Time) string {
+	rel := func(d time.Duration, ref string) string {
+		if d >= 0 {
+			return d.Round(time.Second).String() + " before " + ref
+		}
+		return (-d).Round(time.Second).String() + " after " + ref
+	}
+	return at.Sub(notBefore).Round(time.Second).String() + " after NotBefore and " + rel(notAfter.Sub(at), "NotAfter")
+}
+
 // renewFromHost is `step ca renew --force` of w/ from a one-off container
 // that reaches the published port, so it still runs when the step-ca
 // container is stopped (compose exec would answer "service is not running",
@@ -437,7 +456,8 @@ func (r *l48Run) cell3Daemon() {
 	started := time.Now()
 	var renewed *x509.Certificate
 	var renewedAt time.Time
-	for time.Since(started) < 16*time.Minute {
+	bound := daemonWaitBound(cert.NotAfter, started)
+	for time.Since(started) < bound {
 		if c, err := r.s.leaf(); err == nil && c.SerialNumber.Cmp(cert.SerialNumber) != 0 {
 			renewed, renewedAt = c, time.Now()
 			break
@@ -446,11 +466,15 @@ func (r *l48Run) cell3Daemon() {
 	}
 	stop()
 	if renewed == nil {
-		r.say("- **3. Daemon timing** (`step ca renew --daemon` on a 15m certificate): the certificate was not renewed within 16m.")
-		r.ev.add("daemon", map[string]string{"renewed": "no, within 16m"})
+		r.say("- **3. Daemon timing** (`step ca renew --daemon` on a 15m certificate, `%s` to `%s`): the certificate was not renewed "+
+			"within %s of the daemon's start (its NotAfter plus 3m): a measurement.", cert.NotBefore.UTC().Format(time.RFC3339),
+			cert.NotAfter.UTC().Format(time.RFC3339), bound.Round(time.Second))
+		r.ev.add("daemon", map[string]any{"renewed": "no", "waited_seconds": int(bound.Seconds()),
+			"not_before": cert.NotBefore.UTC().Format(time.RFC3339), "not_after": cert.NotAfter.UTC().Format(time.RFC3339)})
 		return
 	}
-	r.ev.add("daemon", map[string]any{"detected_after_seconds": int(renewedAt.Sub(started).Seconds()), "renewed": factsOf(renewed)})
+	r.ev.add("daemon", map[string]any{"detected_after_seconds": int(renewedAt.Sub(started).Seconds()), "renewed": factsOf(renewed),
+		"relative_to_old_certificate": renewTimingWords(cert.NotBefore, cert.NotAfter, renewedAt)})
 	r.files()
 	r.say("- **3. Daemon timing** (`step ca renew --daemon` on a 15m certificate, polled every 5s):")
 	r.say("  - Renewed %s after the daemon started, at %.2f of the lifetime (detected at %s of `%s` to `%s`); the new "+
@@ -458,6 +482,7 @@ func (r *l48Run) cell3Daemon() {
 		renewFraction(cert.NotBefore, cert.NotAfter, renewedAt), renewedAt.UTC().Format(time.RFC3339),
 		cert.NotBefore.UTC().Format(time.RFC3339), cert.NotAfter.UTC().Format(time.RFC3339),
 		renewFraction(cert.NotBefore, cert.NotAfter, renewed.NotBefore))
+	r.say("  - Detected %s.", renewTimingWords(cert.NotBefore, cert.NotAfter, renewedAt))
 }
 
 func (r *l48Run) cell4CADown() {
