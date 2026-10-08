@@ -4,6 +4,7 @@ package lab
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -57,10 +60,53 @@ func staleRunExcerpt(log string, secrets []string) (string, error) {
 	return out, nil
 }
 
-// crashfiles are the names of the files in Oxidized's crash directory under
-// its config directory dir (Oxidized writes one when a run raises).
-func crashfiles(dir string) []string {
-	ents, err := os.ReadDir(filepath.Join(dir, "crash"))
+// oxidizedHostRoot is the host path of Oxidized's ROOT (config.rb:7:
+// OXIDIZED_HOME, else ~/.config/oxidized), read from the overlay's environment
+// and volumes so the two cannot drift. local is the stack's c.local. An error
+// when ROOT is not a mount of ${PORT49_COMPOSE_LOCAL}.
+func oxidizedHostRoot(overlay []byte, local string) (string, error) {
+	var f struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(overlay, &f); err != nil {
+		return "", err
+	}
+	svc, ok := f.Services["oxidized"]
+	if !ok {
+		return "", errors.New("the overlay has no oxidized service")
+	}
+	rootDir := svc.Environment["OXIDIZED_HOME"]
+	if rootDir == "" {
+		if svc.Environment["HOME"] == "" {
+			return "", errors.New("the overlay sets neither OXIDIZED_HOME nor HOME")
+		}
+		rootDir = svc.Environment["HOME"] + "/.config/oxidized"
+	}
+	const prefix = "${PORT49_COMPOSE_LOCAL}/"
+	for _, v := range svc.Volumes {
+		parts := strings.Split(v, ":")
+		if len(parts) >= 2 && parts[1] == rootDir && strings.HasPrefix(parts[0], prefix) {
+			return filepath.Join(local, strings.TrimPrefix(parts[0], prefix)), nil
+		}
+	}
+	return "", fmt.Errorf("Oxidized's root %s is not a mount of ${PORT49_COMPOSE_LOCAL} in the overlay", rootDir)
+}
+
+// processCrashed is whether ROOT/crash exists: the single file cli.rb writes
+// when the whole Oxidized process crashes.
+func processCrashed(root string) bool {
+	fi, err := os.Stat(filepath.Join(root, "crash"))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// crashfiles are the names of the node crashfiles Oxidized wrote under its
+// ROOT (node.rb writes one per failed node to ROOT/crashes, named by the
+// device address; config.rb:48).
+func crashfiles(root string) []string {
+	ents, err := os.ReadDir(filepath.Join(root, "crashes"))
 	if err != nil {
 		return nil
 	}
@@ -539,7 +585,15 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	time.Sleep(3 * time.Minute) // past the token's 60s and the receipt's 2m
 	markB := r.l.mark()
 	outOff, errOff := fileSize(filepath.Join(o.c.dir, "oxidized.out")), fileSize(filepath.Join(o.c.dir, "oxidized.err"))
-	crashBefore := len(crashfiles(o.dir))
+	overlay, oerr := os.ReadFile(filepath.Join(root, "tests", "lab", "compose", "oxidized.yaml"))
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	oxRoot, oerr := oxidizedHostRoot(overlay, o.c.local)
+	if oerr != nil {
+		t.Fatalf("phase B: %v (INVALID)", oerr)
+	}
+	crashBefore := len(crashfiles(oxRoot))
 	putAt := time.Now()
 	putCode, perr := o.putNext(node)
 	if perr != nil || putCode != http.StatusOK {
@@ -570,8 +624,9 @@ func (r *l49Run) phasesBC(t *testing.T) {
 			r.say("    - `%s`", ln)
 		}
 	}
-	crashAfter := crashfiles(o.dir)
-	r.say("  - Crashfiles in Oxidized's crash directory after the stale run: %d new (%d in all).", len(crashAfter)-crashBefore, len(crashAfter))
+	crashAfter := crashfiles(oxRoot)
+	r.say("  - Node crashfiles in Oxidized's `crashes` directory after the stale run: %d new (%d in all); "+
+		"the process-crash file `crash` exists: %s.", len(crashAfter)-crashBefore, len(crashAfter), yesNo(processCrashed(oxRoot)))
 	restart := time.Now()
 	if err := wrapperFault(o.runWrapper("60s")); err != nil {
 		t.Fatalf("phase B, the wrapper again: %v", err)
@@ -582,7 +637,7 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	r.ev.add("b_stale_token", map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
 		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": 0, "again_status": reStatus,
 		"again_ended": reEnded, "receipt_idle_ttl": receiptIdleTTL, "oxidized_log_excerpt": excerpt,
-		"crashfiles_new": len(crashAfter) - crashBefore})
+		"crashfiles_new": len(crashAfter) - crashBefore, "process_crash_file": processCrashed(oxRoot)})
 
 	// C. The example's role.
 	markC := r.l.mark()

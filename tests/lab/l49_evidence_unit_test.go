@@ -65,14 +65,52 @@ func TestCrashfilesListsOnlyFiles(t *testing.T) {
 	if got := crashfiles(dir); len(got) != 0 {
 		t.Errorf("no crash directory: %v", got)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "crash", "sub"), 0o700); err != nil {
+	// Oxidized's node crashfiles are ROOT/crashes/<ip> (node.rb, config.rb:48);
+	// ROOT/crash is the single process-crash file (cli.rb), a different thing.
+	if err := os.MkdirAll(filepath.Join(dir, "crashes", "sub"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "crash", "172.100.100.11--2026"), []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "crashes", "172.100.100.11"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := crashfiles(dir)
-	if len(got) != 1 || got[0] != "172.100.100.11--2026" {
+	if len(got) != 1 || got[0] != "172.100.100.11" {
 		t.Errorf("got %v", got)
+	}
+	if processCrashed(dir) {
+		t.Error("no process-crash file yet")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crash"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !processCrashed(dir) {
+		t.Error("the process-crash file is missed")
+	}
+}
+
+// The directory the harness reads crashfiles from must be Oxidized's ROOT in
+// the container: OXIDIZED_HOME, else $HOME/.config/oxidized, and that path must
+// be a host mount. The example config must not move the crash directory.
+func TestOxidizedRootIsAHostMountOfTheOverlay(t *testing.T) {
+	raw, err := os.ReadFile("compose/oxidized.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := oxidizedHostRoot(raw, "/L")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/L/oxidized"; got != want {
+		t.Errorf("host root %q, want %q (startOxidized's o.dir)", got, want)
+	}
+	cfg, err := os.ReadFile("../../examples/oxidized/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), "\ncrash:") {
+		t.Error("examples/oxidized/config sets crash:; the harness reads ROOT/crashes")
+	}
+	if _, err := oxidizedHostRoot([]byte("services:\n  oxidized:\n    environment:\n      HOME: /elsewhere\n    volumes:\n      - ${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized\n"), "/L"); err == nil {
+		t.Error("a mount that is not at ROOT was accepted")
 	}
 }

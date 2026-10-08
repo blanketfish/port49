@@ -566,7 +566,9 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   does not name the second, so without it Oxidized never sends the token to EOS (measured in the
   L49 debug). Phase A's note says so.
 - Phase B records, from Oxidized's own log, the class-and-message lines of the stale run (leak
-  checked, never the whole log) and whether a crashfile was created. Oxidized logs the refusal as
+  checked, never the whole log) and whether a node crashfile was created (`crashes/` under
+  Oxidized's root, `/oxhome/.config/oxidized`, the mounted `local/oxidized`; a unit test derives the
+  path from the overlay) and whether the process-crash file `crash` exists. Oxidized logs the refusal as
   `Errno::ENOTTY ... creating crashfile`: net-ssh's keyboard-interactive asks a tty for a second
   password.
 - Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) may name a username
