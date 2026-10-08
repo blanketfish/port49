@@ -83,6 +83,11 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 		next := "try again"
 		if unknownClass(res.Detail) == "uncovered" {
 			next = "it stays so until a CRL or OCSP source covers this certificate"
+			if strings.Contains(res.Detail, "is scoped to the distribution point") {
+				// The fix is the certificate's, not a source: the list exists.
+				next = "it stays so until the certificate is reissued naming that distribution point, " +
+					"or a CRL or OCSP source covers it"
+			}
 		}
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.TrustDomainUnresolved,
 			Error: "certificate_status_unavailable", RetryAfter: 60,

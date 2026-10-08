@@ -137,7 +137,7 @@ func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string)
 	}
 	subj := printsafe.Line(a.cert.Subject.String(), 200)
 	if cfg.OCSP != nil {
-		outcome := "is refused (503, retried)"
+		outcome := "is refused (503; final at port49 workload)"
 		if onUnavailable == "allow" {
 			outcome = "is admitted unchecked (on_unavailable: allow)"
 		}
@@ -145,7 +145,7 @@ func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string)
 			"unchecked for this anchor: one with no OCSP URL, or one its responder does not answer for, %s",
 			subj, a.key, outcome)
 	}
-	outcome := "will be refused (503, retried)"
+	outcome := "will be refused (503; final at port49 workload)"
 	if onUnavailable == "allow" {
 		outcome = "will be admitted with its revocation status unchecked (on_unavailable: allow)"
 	}
@@ -158,7 +158,7 @@ func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string)
 // covers (uncoveredIssuers), for both daemons: what happens to its
 // certificates follows on_unavailable, as anchorCoverLine's does.
 func intermediateCoverLine(subject, onUnavailable string) string {
-	outcome := "will be refused (503, retried)"
+	outcome := "will be refused (503; final at port49 workload)"
 	if onUnavailable == "allow" {
 		outcome = "will be admitted with their revocation status unchecked (on_unavailable: allow)"
 	}

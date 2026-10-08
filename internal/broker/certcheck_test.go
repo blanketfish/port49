@@ -468,6 +468,7 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 503 ||
 			e.Error != "certificate_status_unavailable" || !strings.Contains(e.Detail, api.UncoveredStatus) ||
 			strings.Contains(e.Detail, "try again") || !strings.Contains(e.Detail, "until") ||
+			!strings.Contains(e.Detail, "reissued naming that distribution point") ||
 			w.Header().Get("Retry-After") != "60" {
 			t.Fatalf("%s %v", answer(w), w.Header())
 		}
@@ -863,5 +864,18 @@ func TestAnAgentConnectingDuringAStatusOutageIsToldToTryAgain(t *testing.T) {
 	fs.set(f.alice, certstatus.Result{Verdict: certstatus.Good, Source: "crl", Name: "corp"})
 	if _, err := a.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect after the outage: %v", err)
+	}
+}
+
+// A refresh whose caller names no principal is identity_unmapped, as a mint is
+// (decision 40), not trust_domain_unresolved.
+func TestARefreshByAnUnmappedWorkloadIsIdentityUnmapped(t *testing.T) {
+	f := newFixture(t, 8)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/refresh", nil)
+	f.b.refuseCaller(w, r, f.b.Now(), "", store.Credential{}, fmt.Errorf("%w: its URI SAN is x", ErrWorkloadUnmapped))
+	rec := lastRecord(t, f, "refresh")
+	if w.Code != 401 || rec["reason"] != "identity_unmapped" {
+		t.Fatalf("%d %v", w.Code, rec)
 	}
 }

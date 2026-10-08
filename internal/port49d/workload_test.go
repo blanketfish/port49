@@ -195,7 +195,7 @@ func TestCertificateStatusCoversBothAnchors(t *testing.T) {
 	// admits the certificate unchecked.
 	line := anchorCoverLine(wa, ccfg, "refuse")
 	if !strings.Contains(line, "every certificate under CN=Workloads CA (broker.identity.machines[].trust_anchor_file) "+
-		"will be refused (503, retried)") || !strings.Contains(line, "turn the CA's CRL on") {
+		"will be refused (503; final at port49 workload)") || !strings.Contains(line, "turn the CA's CRL on") {
 		t.Fatalf("uncovered, refuse: %q", line)
 	}
 	line = anchorCoverLine(wa, ccfg, "allow")
@@ -208,7 +208,7 @@ func TestCertificateStatusCoversBothAnchors(t *testing.T) {
 	// (pre-flight M-18).
 	ccfg.OCSP = &certstatus.OCSPConfig{}
 	if line := anchorCoverLine(wa, ccfg, "refuse"); !strings.Contains(line, "are covered by OCSP alone, unchecked for this "+
-		"anchor: one with no OCSP URL, or one its responder does not answer for, is refused (503, retried)") {
+		"anchor: one with no OCSP URL, or one its responder does not answer for, is refused (503; final at port49 workload)") {
 		t.Fatalf("OCSP alone, refuse: %q", line)
 	}
 	if line := anchorCoverLine(wa, ccfg, "allow"); !strings.Contains(line, "are covered by OCSP alone, unchecked for this "+

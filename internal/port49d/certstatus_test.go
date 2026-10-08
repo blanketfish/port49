@@ -469,7 +469,7 @@ func TestRunSaysAnIntermediateNothingCovers(t *testing.T) {
 	now := time.Now()
 	const tail = ": nothing covers CN=status intermediate itself; name the root CA's CRL"
 	const refuse = "port49d: broker: certificate status: certificates issued by CN=status intermediate will be " +
-		"refused (503, retried)" + tail
+		"refused (503; final at port49 workload)" + tail
 	const allow = "port49d: broker: certificate status: certificates issued by CN=status intermediate will be " +
 		"admitted with their revocation status unchecked (on_unavailable: allow)" + tail
 	for name, c := range map[string]struct {
