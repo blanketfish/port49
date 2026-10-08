@@ -194,7 +194,7 @@ func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, 
 		if o.Verdict != Unknown {
 			return o
 		}
-		if strings.HasSuffix(o.Detail, ": "+ocspNoResponder) {
+		if ocspNotApplying(o.Detail) {
 			res.Detail = res.Detail + "; " + o.Detail
 		} else {
 			res.Detail = o.Detail + "; " + strings.Replace(res.Detail, api.UncoveredStatus, "no fresh CRL covers", 1)

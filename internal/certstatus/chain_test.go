@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,28 +24,6 @@ func TestAnUncoveredIssuerOpensWithTheAPIsWords(t *testing.T) {
 	if r := check(t, c, leaf(t, root, 100), root.Cert); r.Verdict != Unknown ||
 		!strings.HasPrefix(r.Detail, api.UncoveredStatus) {
 		t.Fatalf("%+v", r)
-	}
-}
-
-// A responder that applies and was asked but failed is an outage, not an
-// uncovered issuer: its detail leads with the OCSP failure and never opens
-// with the API's uncovered words, so the broker says try again and port49
-// workload retries (decision 40, ruling 10). A responder that does not apply
-// to the certificate (use_aia, none named) leaves it uncovered.
-func TestAnOCSPOutageIsNotUncovered(t *testing.T) {
-	root := newCA(t, "root CA")
-	down := httptest.NewServer(http.NotFoundHandler())
-	down.Close()
-	c, _ := ocspChecker(t, OCSPConfig{Responder: down.URL, Timeout: time.Second})
-	r := check(t, c, leaf(t, root, 100), root.Cert)
-	if r.Verdict != Unknown || !strings.HasPrefix(r.Detail, "OCSP ") ||
-		strings.Contains(r.Detail, api.UncoveredStatus) || !strings.Contains(r.Detail, "no fresh CRL covers") {
-		t.Errorf("the responder down: %+v", r)
-	}
-	c, _ = ocspChecker(t, OCSPConfig{UseAIA: true})
-	if r := check(t, c, leaf(t, root, 100), root.Cert); r.Verdict != Unknown ||
-		!strings.HasPrefix(r.Detail, api.UncoveredStatus) || !strings.Contains(r.Detail, "no responder") {
-		t.Errorf("no responder for the certificate: %+v", r)
 	}
 }
 

@@ -11,9 +11,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
@@ -32,9 +34,27 @@ type ocspCall struct {
 	res  Result
 }
 
-// ocspNoResponder is the one OCSP failure that is not an outage: no
-// responder applies to the certificate (use_aia, and it names none).
-const ocspNoResponder = "no responder for this certificate"
+// The OCSP answers that are not an outage: no responder applies to the
+// certificate, so the issuer stays uncovered and final (decision 40, ruling
+// 10). Signature, CertID and freshness failures are not among them: those
+// may be a responder misconfigured or failing, and are retried.
+const (
+	ocspNoResponder  = "no responder for this certificate"
+	ocspNotHTTP      = "its url is not http or https, so no responder applies"
+	ocspUnauthorized = "answered unauthorized: it does not serve this certificate"
+	ocspUnknownCert  = "answered unknown: it does not know this certificate"
+)
+
+// ocspNotApplying says whether an OCSP Unknown's detail is one that no
+// responder applies to.
+func ocspNotApplying(detail string) bool {
+	for _, s := range []string{ocspNoResponder, ocspNotHTTP, ocspUnauthorized, ocspUnknownCert} {
+		if strings.HasSuffix(detail, ": "+s) {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	ocspMaxCache   = time.Hour        // a revocation reaches the broker within it
@@ -113,7 +133,7 @@ func (c *Checker) askOCSP(ctx context.Context, cert, issuer *x509.Certificate) (
 		return unknown(ocspNoResponder)
 	}
 	if !httpURL(url) {
-		return unknown("its url is not http or https")
+		return unknown(ocspNotHTTP)
 	}
 	reqBody, err := ocsp.CreateRequest(cert, issuer, &ocsp.RequestOptions{Hash: c.cfg.OCSP.Hash})
 	if err != nil {
@@ -142,6 +162,9 @@ func (c *Checker) askOCSP(ctx context.Context, cert, issuer *x509.Certificate) (
 	// issuer, it would refuse an intermediate that embeds its own
 	// certificate, which its parent signed, not itself (re-check R8).
 	r, err := ocsp.ParseResponseForCert(raw, cert, nil)
+	if re := (ocsp.ResponseError{}); errors.As(err, &re) && re.Status == ocsp.Unauthorized {
+		return unknown(ocspUnauthorized)
+	}
 	if err != nil {
 		return unknown("its answer does not parse, or is for another certificate")
 	}
@@ -185,7 +208,7 @@ func (c *Checker) askOCSP(ctx context.Context, cert, issuer *x509.Certificate) (
 		res.Verdict, res.RevokedAt = Revoked, single.Revoked.RevocationTime
 		res.Hold = int(single.Revoked.Reason) == ocsp.CertificateHold
 	default:
-		return unknown("answered unknown")
+		return unknown(ocspUnknownCert)
 	}
 	// Reused only while it is fresh: to its NextUpdate, or with none to
 	// refresh_interval past its ThisUpdate, and never past an hour.
