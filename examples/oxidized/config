@@ -1,0 +1,46 @@
+---
+# Oxidized for port49 (plan 8). PROVISIONAL ON LAB L49 (policy engine spec §15).
+# Each node's username and password come from router.db, which
+# port49-oxidized-run rewrites with a fresh token per node before each run.
+# Oxidized's own interval is a week, so it never tries a node with an expired
+# token; port49-oxidized-run asks for each node's run through the REST API.
+username: unused-see-router-db
+password: unused-see-router-db
+model: eos
+resolve_dns: false
+interval: 604800
+use_syslog: false
+debug: false
+threads: 8
+timeout: 30
+# A failed login retried is the same token failing again (L49 measures it).
+retries: 0
+rest: 127.0.0.1:8888
+next_adds_job: false
+vars: {}
+groups: {}
+input:
+  default: ssh
+  debug: false
+  ssh:
+    # Host keys are verified against ~/.ssh/known_hosts (design §17: a device
+    # address is a fact from the source of truth, trusted no further than its
+    # host key). Populate it once per device; never set secure: false.
+    secure: true
+output:
+  default: git
+  git:
+    user: oxidized
+    email: oxidized@example.com
+    repo: "~/.config/oxidized/configs.git"
+source:
+  default: csv
+  csv:
+    file: "~/.config/oxidized/router.db"
+    delimiter: !ruby/regexp /\t/
+    map:
+      name: 0
+      ip: 1
+      model: 2
+      username: 3
+      password: 4

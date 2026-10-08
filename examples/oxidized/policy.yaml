@@ -1,0 +1,29 @@
+# The port49 policy for Oxidized (plan 8): merge into your policy file.
+# PROVISIONAL ON LAB L49 (policy engine spec §15): the permits are the commands
+# Oxidized's models send, as L49 measures them per platform.
+#
+# The principal is the workload certificate's SPIFFE ID, verbatim; the
+# username is declared, since a workload has no directory entry (spec §2).
+roles:
+  - name: config_backup
+    # show running-config needs level 15 on EOS and IOS-XE: privilege decides
+    # what the device offers, the permits what port49 allows within it (spec §2).
+    privilege: admin
+    permit:
+      - "show running-config **"
+      - "show startup-config"
+      - "show inventory"
+      - "show version"
+      - "terminal length *"
+      - "terminal width *"
+subjects:
+  - name: svc_oxidized
+    identity: ["spiffe://corp.example.com/host/oxidized-01"]
+    username: svc-oxidized
+    token_ttl: 900s
+grants:
+  - {subject: svc_oxidized, scope: all_devices, roles: [config_backup], max_privilege: admin}
+tests:
+  - {subject: svc_oxidized, device: leaf-01, command: "show running-config", expect: permit}
+  - {subject: svc_oxidized, device: leaf-01, command: "configure terminal", expect: deny}
+  - {subject: svc_oxidized, device: leaf-01, command: "reload", expect: deny}
