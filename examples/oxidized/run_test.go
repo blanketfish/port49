@@ -4,6 +4,7 @@
 package oxidized
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,15 @@ func (f *fakeOxidized) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if failed {
 		http.Error(w, "no", http.StatusInternalServerError)
 		return
+	}
+	// oxidized-web 0.18.1 parses a PUT's body as JSON (webapp.rb:126), and an
+	// empty one raises: a 500 (lab L49, first EOS run).
+	if r.Method == http.MethodPut {
+		var opt map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&opt); err != nil {
+			http.Error(w, "JSON::ParserError", http.StatusInternalServerError)
+			return
+		}
 	}
 	_, _ = w.Write([]byte("{}"))
 }

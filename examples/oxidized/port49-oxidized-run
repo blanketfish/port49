@@ -111,14 +111,16 @@ if [ "$status" -eq 75 ]; then
 fi
 
 # A request Oxidized refuses or does not answer in 10s is said and the run
-# goes on to the next node; the run then exits 75.
+# goes on to the next node; the run then exits 75. The queue request's body
+# is JSON: oxidized-web parses it, and an empty one is a 500 (L49).
 if ! curl -fsS --max-time 10 -o /dev/null "$rest/reload?format=json"; then
   echo "port49-oxidized-run: router.db was replaced but Oxidized was not reloaded (the reload request failed); try the next window" >&2
   exit 75
 fi
 rest_failed=0
 while IFS= read -r node; do
-  if ! curl -fsS --max-time 10 -o /dev/null -X PUT "$rest/node/next/$node?format=json"; then
+  if ! curl -fsS --max-time 10 -o /dev/null -X PUT -H 'Content-Type: application/json' --data '{}' \
+    "$rest/node/next/$node?format=json"; then
     echo "port49-oxidized-run: $node: Oxidized refused the queue request; it waits for the next window" >&2
     rest_failed=1
   fi
