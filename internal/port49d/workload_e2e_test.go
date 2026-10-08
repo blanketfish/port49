@@ -3,7 +3,10 @@ package port49d
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/workload"
@@ -56,6 +60,14 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: svc, scope: all
 // stderr and recs its decision log (stdout).
 func startWorkloadDaemon(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir string, out, recs *syncBuffer) {
 	t.Helper()
+	brokerAddr, tacacsAddr, pki, workDir, out, recs, _ = startWorkloadDaemonAt(t)
+	return brokerAddr, tacacsAddr, pki, workDir, out, recs
+}
+
+// startWorkloadDaemonAt is startWorkloadDaemon with an admin socket, whose
+// path it returns.
+func startWorkloadDaemonAt(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir string, out, recs *syncBuffer, socket string) {
+	t.Helper()
 	out, recs = &syncBuffer{}, &syncBuffer{}
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -67,6 +79,14 @@ func startWorkloadDaemon(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir str
 		t.Fatal(err)
 	}
 	cfgPath := writeWorkloadRunConfig(t, b, workDir)
+	socket = filepath.Join(filepath.Dir(cfgPath), "port49d.sock")
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, append([]byte("admin_socket: "+socket+"\n"), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfgPath) }()
@@ -81,7 +101,7 @@ func startWorkloadDaemon(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir str
 	waitForCount(t, out, "port49d: broker listening on ", 1)
 	brokerAddr = regexp.MustCompile(`port49d: broker listening on (\S+)`).FindStringSubmatch(out.String())[1]
 	tacacsAddr = regexp.MustCompile(`port49d: listening on ([^,\s]+),`).FindStringSubmatch(out.String())[1]
-	return brokerAddr, tacacsAddr, pki, workDir, out, recs
+	return brokerAddr, tacacsAddr, pki, workDir, out, recs, socket
 }
 
 func workloadClient(t *testing.T, brokerAddr, pki, workDir string) *workload.Client {
@@ -136,8 +156,50 @@ func TestARenewedCertificateMintsAsTheSamePrincipal(t *testing.T) {
 		t.Fatal(err)
 	}
 	renewed, err := workloadClient(t, brokerAddr, pki, workDir).Identity(context.Background())
-	if err != nil || renewed.Principal != e2eWorkloadID || renewed.Fingerprint == first.Fingerprint {
+	if err != nil || first.Principal != e2eWorkloadID || renewed.Principal != e2eWorkloadID ||
+		renewed.Fingerprint == first.Fingerprint {
 		t.Fatalf("first %+v renewed %+v %v", first, renewed, err)
+	}
+}
+
+// A mark by certificate (issuer, serial) refuses that certificate and nothing
+// that follows it: the renewal, the same ID under a new serial, still mints as
+// the same principal (decision 40 ruling 8). Revoking the principal is the
+// mark that follows a renewal.
+func TestAMarkOnAWorkloadCertificateDoesNotFollowItsRenewal(t *testing.T) {
+	brokerAddr, _, pki, workDir, _, _, socket := startWorkloadDaemonAt(t)
+	ctx := context.Background()
+	opts := workload.MintOptions{Devices: []string{"leaf1"}}
+	if _, err := workloadClient(t, brokerAddr, pki, workDir).Mint(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(workDir, testpki.WorkloadCert))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		t.Fatal("no certificate in the workload cert file")
+	}
+	old, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := askSocket(t, socket, admin.Request{Op: "revoke", CertIssuer: old.Issuer.String(),
+		CertSerial: old.SerialNumber.Text(16)}); resp.Error != "" {
+		t.Fatalf("revoke: %+v", resp)
+	}
+	var apiErr *workload.APIError
+	if _, err := workloadClient(t, brokerAddr, pki, workDir).Mint(ctx, opts); !errors.As(err, &apiErr) ||
+		apiErr.Status != http.StatusUnauthorized || apiErr.Code != "credential_revoked" {
+		t.Fatalf("the marked certificate: %v", err)
+	}
+	if err := testpki.RenewWorkload(workDir, e2eWorkloadID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := workloadClient(t, brokerAddr, pki, workDir).Mint(ctx, opts)
+	if err != nil || resp.Principal != e2eWorkloadID || len(resp.Results) != 1 {
+		t.Fatalf("the renewed certificate: %+v %v", resp, err)
 	}
 }
 
