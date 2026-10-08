@@ -52,6 +52,7 @@ const (
 	stepCAHost     = "https://127.0.0.1:19000" // the published port
 	stepCAWCert    = "/home/step/w/w.pem"
 	stepCAWKey     = "/home/step/w/w-key.pem"
+	caJSONPath     = "/home/step/config/ca.json"
 )
 
 // privateKeyShape is the armor line of any PEM private key.
@@ -132,15 +133,51 @@ func caJSONWithCRL(raw []byte) ([]byte, error) {
 	return encodeCAJSON(m)
 }
 
-// caJSONAllowingURIDomain is raw with the authority's x509 name policy set to
-// allow URIs whose host is domain, and nothing else; every other key is kept.
-// step-ca 0.30.2 reads no provisioner name policy from ca.json (options.x509.allow
-// is ignored), and its URI constraint is a host: a value with a scheme stops it
-// at its start ("contains scheme (not supported yet)"), so one is refused here.
-func caJSONAllowingURIDomain(raw []byte, domain string) ([]byte, error) {
-	if strings.Contains(domain, "://") || strings.Contains(domain, "/") {
-		return nil, fmt.Errorf("%q is not a domain: step-ca's URI policy names a host, and refuses to start on a URI", domain)
+// provisionerOptionsX509 is the x509 options block of the provisioner named
+// provisioner in m (ca.json decoded), made when it is missing.
+func provisionerOptionsX509(m map[string]any, provisioner string) (map[string]any, error) {
+	auth, _ := m["authority"].(map[string]any)
+	provs, _ := auth["provisioners"].([]any)
+	for _, p := range provs {
+		pm, ok := p.(map[string]any)
+		if !ok || pm["name"] != provisioner {
+			continue
+		}
+		opts, ok := pm["options"].(map[string]any)
+		if !ok {
+			opts = map[string]any{}
+			pm["options"] = opts
+		}
+		x509o, ok := opts["x509"].(map[string]any)
+		if !ok {
+			x509o = map[string]any{}
+			opts["x509"] = x509o
+		}
+		return x509o, nil
 	}
+	return nil, fmt.Errorf("ca.json has no provisioner named %q", provisioner)
+}
+
+// caJSONProvisionerAllowURI is raw with the provisioner's options.x509.allow
+// set to the one URI id; every other key, and its other options, are kept.
+// step-ca 0.30.2 does not read it from ca.json (run set 3): cell 6 measures that.
+func caJSONProvisionerAllowURI(raw []byte, provisioner, id string) ([]byte, error) {
+	m, err := decodeCAJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	x509o, err := provisionerOptionsX509(m, provisioner)
+	if err != nil {
+		return nil, err
+	}
+	x509o["allow"] = map[string]any{"uri": []any{id}}
+	return encodeCAJSON(m)
+}
+
+// caJSONAuthorityAllowURI is raw with the authority's x509 name policy
+// allowing the URI id as written. step-ca's URI constraint is a host, and it
+// refuses to start on one with a scheme (run set 3): cell 6 measures that.
+func caJSONAuthorityAllowURI(raw []byte, id string) ([]byte, error) {
 	m, err := decodeCAJSON(raw)
 	if err != nil {
 		return nil, err
@@ -149,8 +186,43 @@ func caJSONAllowingURIDomain(raw []byte, domain string) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("ca.json has no authority block")
 	}
-	auth["policy"] = map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{domain}}}}
+	auth["policy"] = map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{id}}}}
 	return encodeCAJSON(m)
+}
+
+// caJSONProvisionerTemplate is raw with the provisioner's x509 template fixed
+// to the one URI id (as its only SAN and its subject) and clientAuth, whatever
+// a request asks for; a templateFile and an allow list are dropped, so the
+// template is the one in force.
+func caJSONProvisionerTemplate(raw []byte, provisioner, id string) ([]byte, error) {
+	m, err := decodeCAJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	x509o, err := provisionerOptionsX509(m, provisioner)
+	if err != nil {
+		return nil, err
+	}
+	tpl, err := json.Marshal(map[string]any{"subject": map[string]any{"commonName": id}, "uris": []string{id},
+		"keyUsage": []string{"digitalSignature"}, "extKeyUsage": []string{"clientAuth"}})
+	if err != nil {
+		return nil, err
+	}
+	delete(x509o, "templateFile")
+	delete(x509o, "allow")
+	x509o["template"] = string(tpl)
+	return encodeCAJSON(m)
+}
+
+// stepStartRefusal is the line of step-ca's log saying why it would not start
+// on its ca.json's name policy, without the compose prefix, or "".
+func stepStartRefusal(log string) string {
+	for _, ln := range strings.Split(log, "\n") {
+		if _, rest, ok := strings.Cut(ln, "cannot parse "); ok {
+			return "cannot parse " + strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 func decodeCAJSON(raw []byte) (map[string]any, error) {
@@ -438,8 +510,7 @@ func (s *stepCA) revoke() error {
 
 // editCAJSON rewrites ca.json through edit and restarts the container.
 func (s *stepCA) editCAJSON(edit func([]byte) ([]byte, error)) error {
-	const path = "/home/step/config/ca.json"
-	raw, err := s.read(path)
+	raw, err := s.read(caJSONPath)
 	if err != nil {
 		return fmt.Errorf("reading ca.json: %w", err)
 	}
@@ -447,7 +518,7 @@ func (s *stepCA) editCAJSON(edit func([]byte) ([]byte, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := s.write(path, string(out)); err != nil {
+	if err := s.write(caJSONPath, string(out)); err != nil {
 		return err
 	}
 	if o, err := s.dc("restart", "step-ca").CombinedOutput(); err != nil {
@@ -461,11 +532,53 @@ func (s *stepCA) editCAJSON(edit func([]byte) ([]byte, error)) error {
 // container, whose user owns it).
 func (s *stepCA) enableCRL() error { return s.editCAJSON(caJSONWithCRL) }
 
-// allowURIDomain sets the authority's x509 name policy in ca.json to allow
-// URIs under the one host domain (caJSONAllowingURIDomain says why not the
-// provisioner's, and why not a URI) and restarts the container.
-func (s *stepCA) allowURIDomain(domain string) error {
-	return s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONAllowingURIDomain(raw, domain) })
+// running says whether the step-ca container is up.
+func (s *stepCA) running() bool {
+	out, err := s.dc("ps", "--status", "running", "-q", "step-ca").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// tryCAJSON writes body as ca.json, restarts the container, and waits up to
+// 90s for it to answer /health or to stop. It returns whether it started and,
+// when it did not, the refusal from its log (scrubbed as the cleanup's is).
+func (s *stepCA) tryCAJSON(body string) (started bool, refusal string, err error) {
+	if err := s.write(caJSONPath, body); err != nil {
+		return false, "", err
+	}
+	since := time.Now().UTC().Format(time.RFC3339Nano)
+	if o, err := s.dc("restart", "step-ca").CombinedOutput(); err != nil {
+		return false, "", fmt.Errorf("restarting step-ca: %v: %s", err, tailOf(string(o), 300))
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.waitHealth(0) == nil {
+			return true, "", nil
+		}
+		if !s.running() {
+			raw, _ := s.dc("logs", "--no-color", "--since", since, "step-ca").CombinedOutput()
+			kept, lerr := scrubStepLog(string(raw), s.secrets)
+			if lerr != nil {
+				return false, "(log withheld: " + lerr.Error() + ")", nil
+			}
+			return false, stepStartRefusal(kept), nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false, "", errors.New("step-ca neither answered /health nor stopped within 90s")
+}
+
+// restoreCAJSON puts body back as ca.json in the stopped container (compose
+// cp; exec needs it running), starts it and waits for /health.
+func (s *stepCA) restoreCAJSON(body string) error {
+	tmp := filepath.Join(filepath.Dir(s.dir), "ca.json.restore")
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if o, err := s.dc("cp", tmp, "step-ca:"+caJSONPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("copying ca.json back: %v: %s", err, tailOf(string(o), 300))
+	}
+	return s.startCA()
 }
 
 // crl fetches https://127.0.0.1:19000/1.0/crl (trusting the CA's root) and

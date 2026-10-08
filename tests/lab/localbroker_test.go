@@ -34,6 +34,11 @@ const (
 	l48Subject = "svc-oxidized"
 	// l48Device is the one inventory device a mint names.
 	l48Device = "leaf1"
+	// l48CandidateCap is the local broker's token.candidate_cap, over every
+	// unredeemed mint of cells 1 to 5 (a unit test holds the arithmetic);
+	// l48DefaultCandidateCap is port49's default, which cell 4's polls pass.
+	l48CandidateCap        = 64
+	l48DefaultCandidateCap = 8
 )
 
 // localBrokerFiles are the three files a local broker runs on, by absolute
@@ -41,8 +46,8 @@ const (
 // broker's server certificate and the humans' anchor (testpki.WriteLab);
 // anchorFile is the workload verifier's trust anchor (step-ca's intermediate,
 // or a testpki workload CA); crlURL is "" for certificate_status disabled.
-// token.candidate_cap is 64: L48's cells mint without redeeming (cell 4 every
-// 30s for 7m), and the default 8 would refuse them as candidate_cap_reached.
+// token.candidate_cap is l48CandidateCap: L48's cells mint without redeeming,
+// and the default would refuse them as candidate_cap_reached.
 func localBrokerFiles(dir, pki, anchorFile, crlURL, crlIssuer string) (cfg, policy, inventory string) {
 	status := "    disabled: true\n"
 	if crlURL != "" {
@@ -58,7 +63,7 @@ keys:
 encryption:
   current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
-token: {candidate_cap: 64}
+token: {candidate_cap: %d}
 broker:
   listen: "127.0.0.1:0"
   tls_cert_file: %s
@@ -72,7 +77,7 @@ broker:
   revocations_file: %s
   policy_watch_interval: 1s
   certificate_status:
-%s`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
+%s`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"), l48CandidateCap,
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey),
 		filepath.Join(pki, testpki.LabCA), anchorFile, filepath.Join(dir, "policy.yaml"),
 		filepath.Join(dir, "revocations.json"), status)

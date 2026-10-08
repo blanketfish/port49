@@ -4,6 +4,7 @@ package lab
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -77,35 +78,86 @@ func TestCAJSONWithCRLReplacesAnExistingBlock(t *testing.T) {
 	}
 }
 
-// step-ca reads no provisioner name policy from ca.json (0.30.2, run set 3):
-// the allow list is the authority's, and it matches a URI by its host.
-func TestCAJSONAllowingURIDomainSetsTheAuthoritysPolicy(t *testing.T) {
-	out, err := caJSONAllowingURIDomain([]byte(caJSONSample), "port49.lab")
+// cell 6, the first measurement: the named provisioner's options.x509.allow
+// is the one URI; its other options and every other provisioner are kept.
+func TestCAJSONProvisionerAllowURI(t *testing.T) {
+	const id = "spiffe://port49.lab/host/oxidized-01"
+	out, err := caJSONProvisionerAllowURI([]byte(caJSONSample), "lab", id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := decodeJSONObject(t, out)
-	auth := got["authority"].(map[string]any)
-	want := map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{"port49.lab"}}}}
+	provs := got["authority"].(map[string]any)["provisioners"].([]any)
+	x509 := provs[1].(map[string]any)["options"].(map[string]any)["x509"].(map[string]any)
+	if !reflect.DeepEqual(x509["allow"], map[string]any{"uri": []any{id}}) {
+		t.Errorf("allow = %v, want the one URI alone", x509["allow"])
+	}
+	if x509["templateFile"] != "t.tpl" {
+		t.Errorf("the provisioner's other x509 option was lost: %v", x509)
+	}
+	if _, has := provs[0].(map[string]any)["options"]; has {
+		t.Errorf("another provisioner gained options: %v", provs[0])
+	}
+	if got["tls"] == nil || got["db"] == nil {
+		t.Errorf("a top-level key was lost: %v", got)
+	}
+	if _, err := caJSONProvisionerAllowURI([]byte(caJSONSample), "nobody", id); err == nil {
+		t.Error("a provisioner that is not in ca.json was accepted")
+	}
+}
+
+// cell 6, the second: the authority's policy allows the full URI, written as
+// asked (step-ca's refusal of it at its start is the measurement).
+func TestCAJSONAuthorityAllowURI(t *testing.T) {
+	const id = "spiffe://port49.lab/host/oxidized-01"
+	out, err := caJSONAuthorityAllowURI([]byte(caJSONSample), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := decodeJSONObject(t, out)["authority"].(map[string]any)
+	want := map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{id}}}}
 	if !reflect.DeepEqual(auth["policy"], want) {
 		t.Errorf("authority.policy = %v, want %v", auth["policy"], want)
 	}
 	if len(auth["provisioners"].([]any)) != 2 || auth["claims"] == nil {
 		t.Errorf("the authority's other keys were lost: %v", auth)
 	}
-	if got["tls"] == nil || got["db"] == nil {
-		t.Errorf("a top-level key was lost: %v", got)
+	if _, err := caJSONAuthorityAllowURI([]byte(`{"root": "x"}`), id); err == nil {
+		t.Error("a ca.json with no authority was accepted")
 	}
 }
 
-// a URI with a scheme stops step-ca at its start ("contains scheme (not
-// supported yet)"), so it is refused here rather than written.
-func TestCAJSONAllowingURIDomainRefusesAURI(t *testing.T) {
-	if _, err := caJSONAllowingURIDomain([]byte(caJSONSample), "spiffe://port49.lab/host/x"); err == nil {
-		t.Error("a full URI was accepted as the allowed domain")
+// cell 6, the third: the provisioner's x509 template fixes the one URI and the
+// subject, and replaces a templateFile and an allow list.
+func TestCAJSONProvisionerTemplate(t *testing.T) {
+	const id = "spiffe://port49.lab/host/oxidized-01"
+	out, err := caJSONProvisionerTemplate([]byte(caJSONSample), "lab", id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := caJSONAllowingURIDomain([]byte(`{"root": "x"}`), "port49.lab"); err == nil {
-		t.Error("a ca.json with no authority was accepted")
+	provs := decodeJSONObject(t, out)["authority"].(map[string]any)["provisioners"].([]any)
+	x509 := provs[1].(map[string]any)["options"].(map[string]any)["x509"].(map[string]any)
+	if _, has := x509["templateFile"]; has {
+		t.Errorf("a templateFile would win over the template: %v", x509)
+	}
+	if _, has := x509["allow"]; has {
+		t.Errorf("an allow list was kept: %v", x509)
+	}
+	var tpl struct {
+		Subject struct {
+			CommonName string `json:"commonName"`
+		} `json:"subject"`
+		URIs        []string `json:"uris"`
+		ExtKeyUsage []string `json:"extKeyUsage"`
+	}
+	if err := json.Unmarshal([]byte(x509["template"].(string)), &tpl); err != nil {
+		t.Fatalf("the template is not JSON: %v", err)
+	}
+	if !reflect.DeepEqual(tpl.URIs, []string{id}) || tpl.Subject.CommonName != id {
+		t.Errorf("template = %+v, want the one URI and subject %s", tpl, id)
+	}
+	if !reflect.DeepEqual(tpl.ExtKeyUsage, []string{"clientAuth"}) {
+		t.Errorf("extKeyUsage = %v", tpl.ExtKeyUsage)
 	}
 }
 
@@ -378,10 +430,22 @@ func TestLocalBrokerFilesLoad(t *testing.T) {
 		if c.Broker == nil || c.Broker.Identity == nil || c.Broker.Identity.X509AnchorFile != filepath.Join(pki, testpki.LabCA) {
 			t.Errorf("crl=%v: the humans' anchor resolved to %+v", crl, c.Broker)
 		}
-		// Cell 4 polls 15 times and cell 5 up to 19, and neither redeems: the
-		// default cap (8) would refuse them as candidate_cap_reached (run set 3).
-		if c.Token.CandidateCap < 40 {
-			t.Errorf("crl=%v: token.candidate_cap = %d, under the cells' unredeemed mints", crl, c.Token.CandidateCap)
+		if c.Token.CandidateCap != l48CandidateCap {
+			t.Errorf("crl=%v: token.candidate_cap = %d, want %d", crl, c.Token.CandidateCap, l48CandidateCap)
+		}
+		// The note names the default the cells' cap replaces: read it from a
+		// config with no token block.
+		bare := strings.Replace(cfg, fmt.Sprintf("token: {candidate_cap: %d}\n", l48CandidateCap), "", 1)
+		if bare == cfg {
+			t.Fatalf("crl=%v: no token block to remove in\n%s", crl, cfg)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "port49d.yaml"), []byte(bare), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if d, err := config.Load(filepath.Join(dir, "port49d.yaml")); err != nil {
+			t.Fatal(err)
+		} else if d.Token.CandidateCap != l48DefaultCandidateCap {
+			t.Errorf("the default candidate_cap is %d; the note says %d", d.Token.CandidateCap, l48DefaultCandidateCap)
 		}
 		if crl != (len(c.Broker.CertificateStatus.CRLs) == 1) {
 			t.Errorf("crl=%v: certificate_status resolved to %+v", crl, c.Broker.CertificateStatus)

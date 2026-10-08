@@ -42,15 +42,20 @@ const (
 	// carries the name localhost (stepCA.client reaches it as that), so the
 	// broker's fetch names it too; a name mismatch would be a TLS fault, INVALID.
 	stepCACRLURL = "https://localhost:19000/1.0/crl"
-	// l48Domain is l48ID's trust domain, the name policy's allowed URI host.
-	l48Domain = "port49.lab"
-	// l48Other and l48OtherDomain are the SPIFFE IDs the name-policy cell asks
-	// for besides l48ID: one in its trust domain, one in another.
-	l48Other       = "spiffe://port49.lab/host/other"
+	// l48OtherDomain is the SPIFFE ID cell 6 asks for besides l48ID: in another
+	// trust domain, so a policy matching by host refuses it too.
 	l48OtherDomain = "spiffe://elsewhere.lab/host/other"
 	// lateMarker is in both the broker's and the CLI's late-renewal lines.
 	lateMarker = "its renewal is late"
+	// Cell 4 runs `workload token` every cell4Every from 0 to cell4Span; cell 5
+	// every cell5Every for cell5Span after the revocation. Neither redeems.
+	cell4Every, cell4Span = 30 * time.Second, 7 * time.Minute
+	cell5Every, cell5Span = 10 * time.Second, 3 * time.Minute
 )
+
+// polls is the most `workload token` runs a cell makes, polling every every
+// from 0 to span.
+func polls(every, span time.Duration) int { return int(span/every) + 1 }
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -517,8 +522,8 @@ func (r *l48Run) cell4CADown() {
 	var failErr string
 	var lastOK time.Duration = -1
 	for n := 0; ; n++ {
-		target := 30 * time.Second * time.Duration(n)
-		if target > 7*time.Minute {
+		target := cell4Every * time.Duration(n)
+		if target > cell4Span {
 			break
 		}
 		time.Sleep(time.Until(t0.Add(target)))
@@ -554,6 +559,9 @@ func (r *l48Run) cell4CADown() {
 	r.say("- **4. The CA down** (a 6m certificate: its lifetime is %s, as step-ca backdates NotBefore by 1m; `NotAfter` %s after "+
 		"the first run; step-ca stopped, `workload token` every 30s to 7m, times from the first run):",
 		cert.NotAfter.Sub(cert.NotBefore).Round(time.Second), cert.NotAfter.Sub(t0).Round(time.Second))
+	r.say("  - The local broker's `token.candidate_cap` is %d (port49's default is %d): the %d runs, none redeemed, stay under "+
+		"it, so a refusal here is the CA's absence or the certificate's expiry, never the cap.", l48CandidateCap,
+		l48DefaultCandidateCap, polls(cell4Every, cell4Span))
 	r.say("  - `step ca renew` from a one-off container with the CA stopped: `%s`.", oneLineMax(renewAnswer, 300))
 	r.say("  - The broker's \"its renewal is late\" line first appeared: %s. The CLI's warning first appeared: %s.",
 		when(brokerLate), when(cliLate))
@@ -636,14 +644,14 @@ func (r *l48Run) revokeAndRenew(cert *x509.Certificate, brokerUp bool) {
 	} else {
 		reached := time.Duration(-1)
 		var lastRun tokenRun
-		for time.Since(revokedAt) < 3*time.Minute {
+		for time.Since(revokedAt) < cell5Span {
 			at := time.Since(revokedAt)
 			lastRun = r.token("token_after_revoke", at)
 			if lastRun.Exit == 77 && strings.Contains(lastRun.Stderr, "credential_revoked") {
 				reached = at
 				break
 			}
-			time.Sleep(10 * time.Second)
+			time.Sleep(cell5Every)
 		}
 		// A refresh can fail TLS too: that is a harness fault, not a revocation that never came.
 		if crlTLSFailure(r.broker.said()) {
@@ -666,34 +674,84 @@ func (r *l48Run) revokeAndRenew(cert *x509.Certificate, brokerUp bool) {
 	}
 }
 
+// cell6NamePolicy measures three ways to hold a provisioner to one SPIFFE ID
+// (run set 3 found the first ignored): the provisioner's x509 allow list in
+// ca.json, the authority's allow list naming the full URI, and a provisioner
+// x509 template fixing the URI. Each starts from the ca.json the cell found.
 func (r *l48Run) cell6NamePolicy() {
-	// step-ca 0.30.2 reads no provisioner name policy from ca.json, and its URI
-	// constraint is a host, never a URI (run set 3): the policy measured is the
-	// authority's, allowing the trust domain, and the cell asks for the allowed
-	// ID, another ID in the domain, and an ID in another domain.
-	if err := r.s.allowURIDomain(l48Domain); err != nil {
-		r.t.Fatalf("setting step-ca's name policy (INVALID, not a measured no): %v", err)
+	pristine, err := r.s.read(caJSONPath)
+	if err != nil {
+		r.t.Fatalf("reading ca.json (INVALID, not a measured no): %v", err)
 	}
-	r.say("- **6. The name policy** (the authority's x509 `allow: {uri: [%s]}`: step-ca reads no provisioner policy from "+
-		"ca.json, and its URI constraint names a host, not a URI):", l48Domain)
-	// These issues write new keys into the container's w/. They never leave
-	// it (no workloadFiles copy), so nothing here needs registering.
-	for _, req := range []struct{ step, id, what string }{
-		{"policy_allowed", l48ID, "the workload's ID"},
-		{"policy_other", l48Other, "another ID in the trust domain"},
-		{"policy_other_domain", l48OtherDomain, "an ID in another trust domain"},
-	} {
-		c, err := r.s.issue(req.id, 24*time.Hour)
+	r.say("- **6. Holding a provisioner to one SPIFFE ID** (`%s`; the other request is `%s`, another trust domain):", l48ID,
+		l48OtherDomain)
+
+	// 1. The provisioner's options.x509.allow.
+	if err := r.s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONProvisionerAllowURI(raw, stepCAProv, l48ID) }); err != nil {
+		r.t.Fatalf("setting the provisioner's allow list (INVALID, not a measured no): %v", err)
+	}
+	r.say("  - The provisioner's x509 `allow: {uri: [%s]}` in ca.json (step-ca restarted on it):", l48ID)
+	r.policyRequests("policy_provisioner_allow", "")
+
+	// 2. The authority's policy naming the full URI.
+	body, err := caJSONAuthorityAllowURI([]byte(pristine), l48ID)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	started, refusal, err := r.s.tryCAJSON(string(body))
+	if err != nil {
+		r.t.Fatalf("restarting step-ca on the authority's policy (INVALID, not a measured no): %v", err)
+	}
+	r.ev.add("policy_authority_full_uri", map[string]any{"started": started, "refusal": refusal})
+	if started {
+		r.say("  - The authority's x509 `allow: {uri: [%s]}`: step-ca started on it.", l48ID)
+		r.policyRequests("policy_authority_full_uri", "")
+	} else {
+		r.say("  - The authority's x509 `allow: {uri: [%s]}`: step-ca refused to start, `%s`.", l48ID, oneLineMax(refusal, 400))
+	}
+	if err := r.s.restoreCAJSON(pristine); err != nil {
+		r.t.Fatalf("putting ca.json back (INVALID, not a measured no): %v", err)
+	}
+
+	// 3. A provisioner x509 template with the URI fixed.
+	if err := r.s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONProvisionerTemplate(raw, stepCAProv, l48ID) }); err != nil {
+		r.t.Fatalf("setting the provisioner's template (INVALID, not a measured no): %v", err)
+	}
+	r.say("  - The provisioner's x509 template with `uris: [%s]` fixed (step-ca restarted on it):", l48ID)
+	r.policyRequests("policy_template", l48ID)
+}
+
+// policyRequests asks for l48ID and l48OtherDomain and records each answer
+// under step: refused, issued with the asked ID, or issued with another (a
+// template that rewrote it). pinned, when set, is the ID a template fixes.
+// The issues write new keys into the container's w/; they never leave it (no
+// workloadFiles copy), so nothing here needs registering.
+func (r *l48Run) policyRequests(step, pinned string) {
+	for _, id := range []string{l48ID, l48OtherDomain} {
+		c, err := r.s.issue(id, 24*time.Hour)
 		if err != nil {
-			r.ev.add(req.step, map[string]string{"error": oneLineMax(err.Error(), 600)})
-			r.say("  - %s, `%s`: refused, step-ca answered `%s`.", req.what, req.id, oneLineMax(err.Error(), 600))
+			r.ev.add(step, map[string]string{"asked": id, "error": oneLineMax(err.Error(), 600)})
+			r.say("    - `%s`: refused, step-ca answered `%s`.", id, oneLineMax(stripANSI(err.Error()), 400))
 			continue
 		}
 		f := factsOf(c)
-		r.ev.add(req.step, f)
-		r.say("  - %s, `%s`: ISSUED (serial `%s`, URI SANs `%v`).", req.what, req.id, f.Serial, f.URIs)
+		r.ev.add(step, map[string]any{"asked": id, "issued": f})
+		switch {
+		case reflect.DeepEqual(f.URIs, []string{id}):
+			r.say("    - `%s`: ISSUED as asked (URI SANs `%v`).", id, f.URIs)
+		case pinned != "" && reflect.DeepEqual(f.URIs, []string{pinned}):
+			r.say("    - `%s`: issued with the pinned ID instead (URI SANs `%v`, subject `%s`): not refused, rewritten.", id,
+				f.URIs, f.Subject)
+		default:
+			r.say("    - `%s`: issued with URI SANs `%v` (subject `%s`).", id, f.URIs, f.Subject)
+		}
 	}
 }
+
+// ansiShape is a terminal colour sequence, as step prints around its checks.
+var ansiShape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string { return ansiShape.ReplaceAllString(s, "") }
 
 // stepVersion is step-ca's version line and the image id, for the note.
 func stepVersion(s *stepCA) (string, error) {

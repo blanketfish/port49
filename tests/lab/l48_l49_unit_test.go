@@ -755,3 +755,36 @@ func TestTakeoverDone(t *testing.T) {
 		}
 	}
 }
+
+// cells 4 and 5 mint without redeeming: every token they mint stands until
+// its TTL, so the local broker's cap must hold them all, or the cells measure
+// the cap (run set 3: the 9th of cell 4's polls was candidate_cap_reached).
+func TestL48PollsStayUnderTheCap(t *testing.T) {
+	cell4, cell5 := polls(cell4Every, cell4Span), polls(cell5Every, cell5Span)
+	if cell4 != 15 || cell5 != 19 {
+		t.Errorf("polls: cell 4 %d, cell 5 %d; want 15 and 19", cell4, cell5)
+	}
+	// Cell 1's broker serves cells 1 to 4 (one token each in cells 1 and 2);
+	// cell 5's broker is new, and mints once before the revocation.
+	if first, second := 2+cell4, 1+cell5; first > l48CandidateCap || second > l48CandidateCap {
+		t.Errorf("mints %d and %d, over candidate_cap %d", first, second, l48CandidateCap)
+	}
+	if cell4 <= l48DefaultCandidateCap {
+		t.Errorf("cell 4's %d polls fit the default cap %d: the note's reason is wrong", cell4, l48DefaultCandidateCap)
+	}
+}
+
+// step-ca's refusal to start, as cell 6 records it: the line naming the
+// constraint, without the rest of the log.
+func TestStepStartRefusal(t *testing.T) {
+	log := "step-ca-1  | badger 2026/10/08 12:02:55 INFO: Replay took: 3.287µs\n" +
+		"step-ca-1  | cannot parse permitted URI domain constraint \"spiffe://port49.lab/host/oxidized-01\": URI domain " +
+		"constraint \"spiffe://port49.lab/host/oxidized-01\" contains scheme (not supported yet)\n"
+	got := stepStartRefusal(log)
+	if !strings.HasPrefix(got, "cannot parse permitted URI domain constraint") || !strings.Contains(got, "contains scheme") {
+		t.Errorf("stepStartRefusal = %q", got)
+	}
+	if got := stepStartRefusal("step-ca-1  | Serving HTTPS on :9000 ...\n"); got != "" {
+		t.Errorf("a clean start: %q", got)
+	}
+}
