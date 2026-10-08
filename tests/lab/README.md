@@ -504,3 +504,48 @@ the end, keeping `keycloak.log`.
 - L46 stops without writing its note if its SSO control (step 1b, a plain second login that must
   reuse the session) fails: without it, "prompt=login asked for the password" proves nothing.
 - `PORT49_LAB_DIRECTORY_OUT=<dir>` redirects notes and evidence here too, for a dry run.
+
+## Workload CA and Oxidized (plan 8)
+
+Two targets measure the workload-certificate path. Build first: both need `bin/port49d` and
+`bin/port49` (`make build`).
+
+- `make lab-workload` runs L48 on one container, step-ca, and a local `bin/port49d` with a broker
+  and the workload verifier. No device, no containerlab. It needs Docker with Compose v2.24.4 or
+  later; docker runs as `sg docker -c` outside the `docker` group.
+- `PORT49_LAB_PLATFORMS=<one> make lab-oxidized` runs L49 on the compose stack with Oxidized added
+  (`tests/lab/compose/oxidized.yaml`): containerlab, the platform's image, one platform per
+  invocation, as `make lab` runs them. With no selector it loops over every platform and stops at
+  the first that fails.
+
+Both images are pinned by digest, in the compose file and in the Go constant that names the same
+reference (`tests/lab/workload/compose.yaml` and `stepCAImage` in `stepca_test.go`;
+`tests/lab/compose/oxidized.yaml` and `oxidizedImage` in `oxidized_test.go`).
+`TestTheWorkloadImagesArePinnedOnce` holds each pair equal. A note records `step-ca version`,
+`oxidized --version` and the image ID it ran. The Oxidized image is a build after its 0.37.0
+tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
+
+- step-ca's state is `tests/lab/logs/workload/step` (git-ignored), emptied at the start of a run.
+  The directory is emptied and chowned through a root container (`docker run --user root`), as the
+  Keycloak harness does, so no sudo is needed. The provisioner `lab` is a JWK whose password the
+  image generates under `secrets/`. The harness reads it into memory only to refuse it anywhere it
+  would be written; it is never printed, and a step command's output that holds key material, a
+  compact JWS or that password is withheld.
+- L48's local broker trusts step-ca's root for the CRL fetch through `SSL_CERT_FILE`: step-ca serves
+  its CRL over https under its own private root, and the broker fetches with the system roots. A
+  CRL fetch that fails TLS is INVALID, never a measured "no".
+- Oxidized runs as the host user, not as the image's `oxidized` (uid 30000), and `oxidized` is
+  started directly instead of the image's runit services. The image's run script chowns its whole
+  config directory to uid 30000 at every start, which would lock out `port49-oxidized-run` (a host
+  process here, as cron is on a real host) from replacing `router.db`. Starting `oxidized` directly
+  also skips the image's auto-reload service, which reloads in a loop when `CONFIG_RELOAD_INTERVAL`
+  is set at all. The directory is `tests/lab/logs/compose-<platform>/local/oxidized`; `known_hosts`
+  is mounted at `~/.ssh/known_hosts` (that is where Oxidized's SSH client reads it), filled by
+  `ssh-keyscan` of the device.
+- Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) may name a username
+  in a login failure, and the username is a token. It stays on disk; a note never quotes it.
+- A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never
+  answers its REST API) is `t.Fatal` before any note: the run is INVALID. A step that ran and did
+  not do what the claim says is a failed cell, and the note records it.
+- Until plan 8 Task 14 adds the cells, `TestL48StepCA` and `TestL49Oxidized` stop at a `t.Skip`
+  after bring-up, so neither target can read as a measurement.

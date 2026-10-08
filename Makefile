@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-oidc build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-oidc lab-workload lab-oxidized build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -71,6 +71,25 @@ lab-directory:
 # Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".
 lab-oidc:
 	go test -tags lab ./tests/lab/ -run 'TestL45|TestL46' -count=1 -v -timeout 30m
+
+# The workload CA lab (plan 8, L48): step-ca as a container and a local
+# port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;
+# see tests/lab/README.md, "Workload CA and Oxidized".
+lab-workload:
+	go test -tags lab ./tests/lab/ -run 'TestL48' -count=1 -v -timeout 45m
+
+# Oxidized end to end (plan 8, L49): the compose stack with one platform, as
+# `make lab` runs one at a time. Needs containerlab, the platform's image and
+# `make build`.
+lab-oxidized:
+	@set -e; \
+	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
+	  echo "=== lab-oxidized platform: $$p ==="; \
+	  if ! PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL49' -count=1 -v -timeout 90m; then \
+	    echo "=== lab-oxidized platform $$p FAILED; the platforms after it were not run ==="; \
+	    exit 1; \
+	  fi; \
+	done
 
 # Requires containerlab and device images; see tests/lab/README.md.
 #

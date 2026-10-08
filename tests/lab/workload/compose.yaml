@@ -1,0 +1,19 @@
+# step-ca for plan 8's lab (L48): a workload CA, initialised at first start
+# into tests/lab/logs/workload/step (git-ignored), its provisioner "lab" a JWK
+# whose password the image generates under secrets/ (never printed).
+# The image is pinned by digest (stepCAImage in stepca_test.go names the same
+# reference, and a unit test holds the two equal); the note records
+# `step-ca version` and the image ID.
+name: port49labstepca
+
+services:
+  step-ca:
+    image: smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
+    environment:
+      DOCKER_STEPCA_INIT_NAME: port49 lab workloads
+      DOCKER_STEPCA_INIT_DNS_NAMES: step-ca.port49.lab,localhost,127.0.0.1
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: lab
+    volumes:
+      - ../logs/workload/step:/home/step
+    ports:
+      - "127.0.0.1:19000:9000"

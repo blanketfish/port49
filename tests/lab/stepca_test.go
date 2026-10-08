@@ -1,0 +1,502 @@
+//go:build lab
+
+package lab
+
+import (
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+// stepCA is the lab's workload CA (L48). dir is its state on the host
+// (tests/lab/logs/workload/step); the workload's files are dir/w/w.pem and
+// dir/w/w-key.pem, written by step inside the container as /home/step/w/....
+// The key is never read on the host except to copy it, byte for byte, to
+// hostW for bin/port49 to read (workloadFiles); nothing here prints it.
+type stepCA struct {
+	t       *testing.T
+	dir     string
+	compose string   // the compose file, absolute
+	hostW   string   // the host copy of the workload's files (workloadFiles)
+	secrets []string // values no output or note may hold: the provisioner password
+	renewer *exec.Cmd
+}
+
+const (
+	// stepCAImage is workload/compose.yaml's image, pinned by digest; a unit
+	// test holds the two equal. step-ca says "Smallstep CA/0.30.2".
+	stepCAImage   = "smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270"
+	stepCACompose = "tests/lab/workload/compose.yaml"
+	l48ID         = "spiffe://port49.lab/host/oxidized-01"
+
+	stepCAURL      = "https://localhost:9000" // inside the container
+	stepCARoot     = "/home/step/certs/root_ca.crt"
+	stepCAPassword = "/home/step/secrets/password"
+	stepCAProv     = "lab"
+	stepCAHost     = "https://127.0.0.1:19000" // the published port
+	stepCAWCert    = "/home/step/w/w.pem"
+	stepCAWKey     = "/home/step/w/w-key.pem"
+)
+
+// privateKeyShape is the armor line of any PEM private key.
+var privateKeyShape = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+
+// stepLeak says whether a step command's output may not be kept: it holds key
+// material, a compact JWS (a provisioner token), or a registered secret. It
+// says what kind, never which.
+func stepLeak(out string, secrets []string) error {
+	if privateKeyShape.MatchString(out) {
+		return errors.New("it holds a private key")
+	}
+	return leakIn(out, secrets)
+}
+
+// workloadNote is a results note in spec §15 rule 3's form, not yet checked
+// for leaks (leakIn runs on it before it is written).
+func workloadNote(row, platform, claim, observation, evidencePath, run, version string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s — %s\n\n", row, platform)
+	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))
+	fmt.Fprintf(&b, "- **Run:** %s\n", run)
+	fmt.Fprintf(&b, "- **Platform:** %s\n", platform)
+	fmt.Fprintf(&b, "- **Image version:** %s\n", version)
+	fmt.Fprintf(&b, "- **Capture:** `%s`\n", evidencePath)
+	fmt.Fprintf(&b, "- **Credentials:** none here or in the evidence: tokens, keys and the provisioner password are "+
+		"never written; certificates are public.\n")
+	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
+	return b.String()
+}
+
+// caJSONWithCRL is raw (step-ca's ca.json) with its crl block set to
+// {"enabled": true, "generateOnRevoke": true}; every other key is kept, with
+// its numbers as written.
+func caJSONWithCRL(raw []byte) ([]byte, error) {
+	m, err := decodeCAJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	m["crl"] = map[string]any{"enabled": true, "generateOnRevoke": true}
+	return encodeCAJSON(m)
+}
+
+// caJSONAllowingURI is raw with the x509 name policy of the provisioner named
+// provisioner set to allow the one URI id and nothing else; every other key,
+// and the provisioner's other options, are kept.
+func caJSONAllowingURI(raw []byte, provisioner, id string) ([]byte, error) {
+	m, err := decodeCAJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	auth, _ := m["authority"].(map[string]any)
+	provs, _ := auth["provisioners"].([]any)
+	for _, p := range provs {
+		pm, ok := p.(map[string]any)
+		if !ok || pm["name"] != provisioner {
+			continue
+		}
+		opts, ok := pm["options"].(map[string]any)
+		if !ok {
+			opts = map[string]any{}
+			pm["options"] = opts
+		}
+		x509o, ok := opts["x509"].(map[string]any)
+		if !ok {
+			x509o = map[string]any{}
+			opts["x509"] = x509o
+		}
+		x509o["allow"] = map[string]any{"uri": []any{id}}
+		return encodeCAJSON(m)
+	}
+	return nil, fmt.Errorf("ca.json has no provisioner named %q", provisioner)
+}
+
+func decodeCAJSON(raw []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return nil, fmt.Errorf("ca.json is not a JSON object: %w", err)
+	}
+	return m, nil
+}
+
+func encodeCAJSON(m map[string]any) ([]byte, error) {
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+// renewFraction is how far through its lifetime a certificate was when it was
+// renewed: 0 at notBefore, 1 at notAfter. A certificate with no lifetime is 0.
+func renewFraction(notBefore, notAfter, renewedAt time.Time) float64 {
+	life := notAfter.Sub(notBefore)
+	if life <= 0 {
+		return 0
+	}
+	return float64(renewedAt.Sub(notBefore)) / float64(life)
+}
+
+// dc is `docker compose -f <step-ca's file> args...`.
+func (s *stepCA) dc(args ...string) *exec.Cmd {
+	return dockerCmd(append([]string{"compose", "-f", s.compose}, args...)...)
+}
+
+// startStepCA brings step-ca up fresh (its state directory emptied), waits
+// for /health, and takes it down with t.Cleanup. A fault here is the test's
+// t.Fatal: the run is INVALID, never a measured "no".
+func startStepCA(t *testing.T) *stepCA {
+	t.Helper()
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := filepath.Join(repo, "tests", "lab", "logs", "workload")
+	s := &stepCA{t: t, dir: filepath.Join(logs, "step"), hostW: filepath.Join(logs, "host-w"),
+		compose: filepath.Join(repo, stepCACompose)}
+	if err := os.RemoveAll(s.hostW); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// step-ca's files are owned by its uid, so a run starts from an empty
+	// directory emptied and chowned by a root container, as the 7h harness
+	// does for Keycloak: no sudo.
+	uid, err := dockerCmd("run", "--rm", "--entrypoint", "id", stepCAImage, "-u", "step").Output()
+	if err != nil {
+		t.Fatalf("step-ca's uid (does the image pull?): %v", err)
+	}
+	owner := strings.TrimSpace(string(uid))
+	if o, err := dockerCmd("run", "--rm", "--user", "root", "--entrypoint", "sh", "-v", s.dir+":/d", stepCAImage, "-c",
+		"rm -rf /d/* /d/.[!.]* && chown "+owner+":"+owner+" /d").CombinedOutput(); err != nil {
+		t.Fatalf("emptying step-ca's state directory: %v\n%s", err, tailOf(string(o), 500))
+	}
+	if err := os.Chmod(s.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if s.renewer != nil {
+			_ = s.renewer.Process.Kill()
+		}
+		if logs, err := s.dc("logs", "--no-color", "step-ca").CombinedOutput(); err == nil {
+			// step-ca logs requests, never a token or a password.
+			_ = os.WriteFile(filepath.Join(filepath.Dir(s.dir), "step-ca.log"), logs, 0o644)
+		}
+		if o, err := s.dc("down", "-v", "--remove-orphans", "-t", "5").CombinedOutput(); err != nil {
+			t.Errorf("docker compose down (step-ca): %v\n%s", err, tailOf(string(o), 1000))
+		}
+	})
+	if o, err := s.dc("up", "-d").CombinedOutput(); err != nil {
+		t.Fatalf("docker compose up (step-ca): %v\n%s", err, tailOf(string(o), 2000))
+	}
+	if err := s.waitHealth(3 * time.Minute); err != nil {
+		t.Fatalf("step-ca never answered /health: %v", err)
+	}
+	// The password is read into memory to be refused anywhere it would be
+	// written; it is never printed.
+	if pw, err := s.read(stepCAPassword); err != nil || strings.TrimSpace(pw) == "" {
+		t.Fatalf("step-ca's provisioner password file is not readable: %v", err)
+	} else {
+		s.secrets = append(s.secrets, strings.TrimSpace(pw))
+	}
+	return s
+}
+
+// client trusts the CA's root and reaches it as localhost, a name its
+// certificate carries, at the published port.
+func (s *stepCA) client() (*http.Client, error) {
+	raw, err := os.ReadFile(s.root())
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(raw) {
+		return nil, errors.New("root_ca.crt holds no certificate")
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}, nil
+}
+
+func (s *stepCA) waitHealth(within time.Duration) error {
+	deadline := time.Now().Add(within)
+	var last error
+	for {
+		cl, err := s.client()
+		if err == nil {
+			var resp *http.Response
+			if resp, err = cl.Get(stepCAHost + "/health"); err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return nil
+				}
+				err = fmt.Errorf("/health answered %d", resp.StatusCode)
+			}
+		}
+		last = err
+		if time.Now().After(deadline) {
+			return last
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// step runs `step args...` in the container with the CA URL and root, and
+// returns its combined output. An output that holds key material, a token or
+// the provisioner password is not returned: the text says it was withheld and
+// the error is the leak.
+func (s *stepCA) step(args ...string) (string, error) {
+	full := append([]string{"exec", "-T", "step-ca", "step"}, args...)
+	full = append(full, "--ca-url", stepCAURL, "--root", stepCARoot)
+	b, err := s.dc(full...).CombinedOutput()
+	out := string(b)
+	if lerr := stepLeak(out, s.secrets); lerr != nil {
+		out = "(output withheld: " + lerr.Error() + ")"
+		if err == nil {
+			err = lerr
+		}
+	}
+	return out, err
+}
+
+// read is a file of the container's, as text. It is for files that are not
+// printed: a caller never writes the result to a log.
+func (s *stepCA) read(path string) (string, error) {
+	b, err := s.dc("exec", "-T", "step-ca", "cat", path).Output()
+	return string(b), err
+}
+
+// write replaces a file of the container's with body.
+func (s *stepCA) write(path, body string) error {
+	cmd := s.dc("exec", "-T", "step-ca", "sh", "-c", "cat > "+path)
+	cmd.Stdin = strings.NewReader(body)
+	if o, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("writing %s: %v: %s", path, err, tailOf(string(o), 300))
+	}
+	return nil
+}
+
+// leaf is the workload's current certificate, from the container.
+func (s *stepCA) leaf() (*x509.Certificate, error) {
+	raw, err := s.read(stepCAWCert)
+	if err != nil {
+		return nil, fmt.Errorf("reading the workload certificate: %w", err)
+	}
+	block, _ := pem.Decode([]byte(raw))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errors.New("w/w.pem holds no certificate")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// issue asks for a certificate for id, valid for life, into w/.
+func (s *stepCA) issue(id string, life time.Duration) (*x509.Certificate, error) {
+	if o, err := s.dc("exec", "-T", "step-ca", "mkdir", "-p", "/home/step/w").CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("mkdir w: %v: %s", err, tailOf(string(o), 300))
+	}
+	if out, err := s.step("ca", "certificate", id, stepCAWCert, stepCAWKey, "--san", id, "--provisioner", stepCAProv,
+		"--provisioner-password-file", stepCAPassword, "--not-after", life.String(), "--force"); err != nil {
+		return nil, fmt.Errorf("step ca certificate: %v: %s", err, tailOf(out, 500))
+	}
+	return s.leaf()
+}
+
+// renew is `step ca renew --force` of w/.
+func (s *stepCA) renew() (*x509.Certificate, error) {
+	if out, err := s.step("ca", "renew", stepCAWCert, stepCAWKey, "--force"); err != nil {
+		return nil, fmt.Errorf("step ca renew: %v: %s", err, tailOf(out, 500))
+	}
+	return s.leaf()
+}
+
+// renewDaemon starts `step ca renew --daemon` on w/ in the background and
+// returns a func that stops it, in the container as well as here.
+func (s *stepCA) renewDaemon() (stop func(), err error) {
+	cmd := s.dc("exec", "-T", "step-ca", "sh", "-c", "echo $$ > /tmp/renew.pid; exec step ca renew --daemon "+
+		stepCAWCert+" "+stepCAWKey+" --ca-url "+stepCAURL+" --root "+stepCARoot)
+	logf, err := os.Create(filepath.Join(filepath.Dir(s.dir), "renew-daemon.log"))
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		logf.Close()
+		return nil, err
+	}
+	s.renewer = cmd
+	done := make(chan struct{})
+	go func() { cmd.Wait(); logf.Close(); close(done) }()
+	return func() {
+		_ = s.dc("exec", "-T", "step-ca", "sh", "-c", "kill $(cat /tmp/renew.pid)").Run()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+		}
+		s.renewer = nil
+	}, nil
+}
+
+// revoke is `step ca revoke --cert w/w.pem --key w/w-key.pem`.
+func (s *stepCA) revoke() error {
+	if out, err := s.step("ca", "revoke", "--cert", stepCAWCert, "--key", stepCAWKey); err != nil {
+		return fmt.Errorf("step ca revoke: %v: %s", err, tailOf(out, 500))
+	}
+	return nil
+}
+
+// editCAJSON rewrites ca.json through edit and restarts the container.
+func (s *stepCA) editCAJSON(edit func([]byte) ([]byte, error)) error {
+	const path = "/home/step/config/ca.json"
+	raw, err := s.read(path)
+	if err != nil {
+		return fmt.Errorf("reading ca.json: %w", err)
+	}
+	out, err := edit([]byte(raw))
+	if err != nil {
+		return err
+	}
+	if err := s.write(path, string(out)); err != nil {
+		return err
+	}
+	if o, err := s.dc("restart", "step-ca").CombinedOutput(); err != nil {
+		return fmt.Errorf("restarting step-ca: %v: %s", err, tailOf(string(o), 300))
+	}
+	return s.waitHealth(2 * time.Minute)
+}
+
+// enableCRL adds {"crl": {"enabled": true, "generateOnRevoke": true}} to
+// ca.json and restarts the container (the file is edited through the
+// container, whose user owns it).
+func (s *stepCA) enableCRL() error { return s.editCAJSON(caJSONWithCRL) }
+
+// allowURI sets the lab provisioner's x509 name policy in ca.json to allow
+// the one URI id (step-ca's provisioner policy, x509 allow uri) and restarts
+// the container (pre-flight M-11).
+func (s *stepCA) allowURI(id string) error {
+	return s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONAllowingURI(raw, stepCAProv, id) })
+}
+
+// crl fetches https://127.0.0.1:19000/1.0/crl (trusting the CA's root) and
+// parses it with x509.ParseRevocationList; the raw bytes are returned too, for
+// evidence. step-ca serves it DER or PEM-armored; both are read.
+func (s *stepCA) crl() (*x509.RevocationList, []byte, error) {
+	cl, err := s.client()
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := cl.Get(stepCAHost + "/1.0/crl")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, raw, fmt.Errorf("/1.0/crl answered %d", resp.StatusCode)
+	}
+	der := raw
+	if block, _ := pem.Decode(raw); block != nil {
+		der = block.Bytes
+	}
+	rl, err := x509.ParseRevocationList(der)
+	return rl, raw, err
+}
+
+// root is certs/root_ca.crt on the host side of the volume: what the local
+// broker's CRL fetch trusts, through SSL_CERT_FILE (pre-flight I-3).
+func (s *stepCA) root() string { return filepath.Join(s.dir, "certs", "root_ca.crt") }
+
+// stopCA and startCA stop and start the container, for the outage cells.
+func (s *stepCA) stopCA() error {
+	if o, err := s.dc("stop", "-t", "5", "step-ca").CombinedOutput(); err != nil {
+		return fmt.Errorf("stopping step-ca: %v: %s", err, tailOf(string(o), 300))
+	}
+	return nil
+}
+
+func (s *stepCA) startCA() error {
+	if o, err := s.dc("start", "step-ca").CombinedOutput(); err != nil {
+		return fmt.Errorf("starting step-ca: %v: %s", err, tailOf(string(o), 300))
+	}
+	return s.waitHealth(2 * time.Minute)
+}
+
+// intermediate is certs/intermediate_ca.crt, the workload anchor (L48 measures
+// that a CRL covers it there). It is the setup's: a CA without one is INVALID.
+func (s *stepCA) intermediate() *x509.Certificate {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.dir, "certs", "intermediate_ca.crt"))
+	if err != nil {
+		s.t.Fatalf("step-ca's intermediate certificate: %v", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		s.t.Fatal("certs/intermediate_ca.crt holds no PEM block")
+	}
+	c, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		s.t.Fatalf("certs/intermediate_ca.crt: %v", err)
+	}
+	return c
+}
+
+// workloadFiles copies the workload's certificate and key to the host (0600,
+// byte for byte, never printed) for bin/port49 to read, and returns their
+// paths. Call it again after a renewal.
+func (s *stepCA) workloadFiles() (certFile, keyFile string, err error) {
+	if err := os.MkdirAll(s.hostW, 0o700); err != nil {
+		return "", "", err
+	}
+	for _, f := range []struct{ src, dst string }{{stepCAWCert, "w.pem"}, {stepCAWKey, "w-key.pem"}} {
+		raw, err := s.dc("exec", "-T", "step-ca", "cat", f.src).Output()
+		if err != nil {
+			return "", "", fmt.Errorf("copying %s out of the container: %w", filepath.Base(f.src), err)
+		}
+		if err := os.WriteFile(filepath.Join(s.hostW, f.dst), raw, 0o600); err != nil {
+			return "", "", err
+		}
+	}
+	return filepath.Join(s.hostW, "w.pem"), filepath.Join(s.hostW, "w-key.pem"), nil
+}
+
+// TestL48StepCA is the harness's bring-up for L48 (policy engine spec §15):
+// step-ca as a container, a certificate for l48ID from it, and a local
+// port49d whose workload anchor is step-ca's intermediate. Task 14 adds the
+// cells; until then the test stops at a Skip, so `make lab-workload` can
+// never read as a measurement.
+func TestL48StepCA(t *testing.T) {
+	s := startStepCA(t)
+	if _, err := s.issue(l48ID, time.Hour); err != nil {
+		t.Fatalf("step-ca issued no certificate (INVALID, not a measured no): %v", err)
+	}
+	anchor := filepath.Join(s.hostW, "intermediate_ca.crt")
+	if err := os.MkdirAll(s.hostW, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(anchor, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.intermediate().Raw}),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.workloadFiles(); err != nil {
+		t.Fatal(err)
+	}
+	startLocalBroker(t, filepath.Join(filepath.Dir(s.dir), "local-broker"), anchor, "", "", "")
+	t.Skip("harness bring-up passed; L48's cells are plan 8 Task 14's")
+}
