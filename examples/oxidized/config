@@ -19,16 +19,23 @@ timeout: 30
 retries: 0
 rest: 127.0.0.1:8888
 next_adds_job: false
+vars: {}
 # Oxidized's default is none, publickey, password. net-ssh skips a method the
 # device does not list, and Arista EOS lists only publickey and
 # keyboard-interactive (L4), so by default Oxidized never sends the token to EOS.
 # keyboard-interactive is what makes it send one. Leave the device as it is.
-vars:
-  auth_methods:
-    - none
-    - publickey
-    - password
-    - keyboard-interactive
+# It is the eos model's alone: on a device that also lists password (NX-OS,
+# IOS-XE), a global keyboard-interactive made one stale token cost two
+# authentications instead of one (L49). Oxidized looks a model's vars up before
+# the global ones.
+models:
+  eos:
+    vars:
+      auth_methods:
+        - none
+        - publickey
+        - password
+        - keyboard-interactive
 groups: {}
 input:
   default: ssh

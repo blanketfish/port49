@@ -203,7 +203,7 @@ func TestAuthMethodsLineStatesOnlyWhatWasMeasured(t *testing.T) {
 	for _, plat := range []string{"arista_eos", "cisco_nxos", "juniper_vsrx"} {
 		for _, ok := range []bool{true, false} {
 			got := authMethodsLine(plat, "none password keyboard-interactive", ok)
-			if !strings.Contains(got, "vars: auth_methods") || strings.Contains(got, "offers only") || strings.Contains(got, ".md:") {
+			if !strings.Contains(got, "`auth_methods`") || !strings.Contains(got, "`eos` model alone") || strings.Contains(got, "offers only") || strings.Contains(got, ".md:") {
 				t.Errorf("%s/%v: %q", plat, ok, got)
 			}
 			if ok != strings.Contains(got, "none password keyboard-interactive") {

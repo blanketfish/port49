@@ -563,10 +563,12 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
 - The host harness's `port49d` (not the stack's) mints its labcreds at every start, about 152
   `mint` records per start, and the breakglass redeem `token_not_found` in its log is the lab's
   readiness probe. Both are expected, and neither is in the stack's `broker.log` or decision log.
-- The example's `config` sets `vars: auth_methods` with `keyboard-interactive`. vEOS offers only
-  `publickey,keyboard-interactive` (`results/L4-error-arista_eos.md`), and Oxidized's default list
-  does not name the second, so without it Oxidized never sends the token to EOS (measured in the
-  L49 debug). Phase A's note says so.
+- The example's `config` sets `auth_methods` with `keyboard-interactive` for the `eos` model alone.
+  vEOS offers only `publickey,keyboard-interactive` (`results/L4-error-arista_eos.md`), and
+  Oxidized's default list does not name the second, so without it Oxidized never sends the token to
+  EOS (measured in the L49 debug). It is not global because a global setting made one stale token
+  cost two authentications on NX-OS and IOS-XE (run set 2) instead of one. Phase A's note says what
+  the example sets.
 - Phase B records, from Oxidized's own log, the class-and-message lines of the stale run (leak
   checked, never the whole log) and whether a node crashfile was created (`crashes/` under
   Oxidized's root, `/oxhome/.config/oxidized`, the mounted `local/oxidized`; a unit test derives the

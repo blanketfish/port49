@@ -137,10 +137,12 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 - **To stop the workload**: `port49 revoke --principal spiffe://...`, and revoke the certificate
   at the CA.
 
-The `config` sets `vars: auth_methods` to include `keyboard-interactive`. Arista EOS offers only
-`publickey` and `keyboard-interactive` over SSH, and Oxidized's default list does not include the
-second, so without this line Oxidized never sends the token to an EOS device. Do not change the
-EOS side to suit it. After a refused token net-ssh's `keyboard-interactive` asks a tty for a second
+The `config` sets `auth_methods` with `keyboard-interactive` for the `eos` model alone
+(`models: eos: vars`). Arista EOS offers only `publickey` and `keyboard-interactive` over SSH, and
+Oxidized's default list does not include the second, so without this line Oxidized never sends the
+token to an EOS device. Do not change the EOS side to suit it. It is not global: on NX-OS and
+IOS-XE, which also offer `password`, a global setting made a stale token cost two authentications
+(both denied as spent) instead of one, so those models keep Oxidized's default. After a refused token net-ssh's `keyboard-interactive` asks a tty for a second
 password; under a daemon or cron Oxidized logs `Errno::ENOTTY` for it (measured in the L49 lab, which
 has no tty). Run from a terminal in the foreground, it may stop at a password prompt instead; not
 measured.

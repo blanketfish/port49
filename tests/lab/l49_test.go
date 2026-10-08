@@ -167,8 +167,8 @@ func (r *l49Run) deviceOffers() (string, bool) {
 // states what the example sets and what this device's sshd listed when asked;
 // the EOS finding is cited only in the EOS note.
 func authMethodsLine(platform, offered string, ok bool) string {
-	s := "The example's `config` sets `vars: auth_methods` to include `keyboard-interactive`, which Oxidized's default list " +
-		"(`none`, `publickey`, `password`) lacks."
+	s := "The example's `config` sets `auth_methods` with `keyboard-interactive` (which Oxidized's default list " +
+		"`none`, `publickey`, `password` lacks) for the `eos` model alone, under `models: eos: vars`."
 	if platform == "arista_eos" {
 		s += " It is there for Arista EOS, which does not offer `password` (tests/lab/results/L4-error-arista_eos.md); net-ssh " +
 			"skips a method the server does not list, so without it Oxidized never sends the token."
