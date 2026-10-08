@@ -90,6 +90,15 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("%d %s: %s", e.Status, e.Code, e.Detail) }
 
+// RedirectError is a broker that answered with a redirect, which the client
+// never follows: the certificate and tokens go to the broker named alone. It
+// is final, and no broker error code.
+type RedirectError struct{ Status int }
+
+func (e *RedirectError) Error() string {
+	return fmt.Sprintf("the broker answered %d, a redirect; the client never follows one", e.Status)
+}
+
 // TemporaryError is the deadline passing with Unminted not minted; Last is
 // the broker's last answer, or the connection's failure.
 type TemporaryError struct {
@@ -173,7 +182,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
-	// A redirect is never followed; its 3xx comes back as an APIError.
+	// A redirect is never followed; its 3xx comes back as a RedirectError.
 	hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return &Client{cfg: cfg, http: hc, sleep: sleepCtx}, nil
@@ -276,7 +285,7 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 			var e api.Error
 			_ = json.Unmarshal(raw, &e)
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-				e = api.Error{Error: "redirect_refused", Detail: "the broker redirected; the client never follows a redirect"}
+				return &RedirectError{Status: resp.StatusCode}
 			}
 			ae := &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
 			if !retriable(resp.StatusCode, e) {

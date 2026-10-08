@@ -346,9 +346,54 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 		}}}
 	h := newHarness(t, f, 24*time.Hour)
 	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var re *RedirectError
 	var ae *APIError
-	if !errors.As(err, &ae) || ae.Status != http.StatusTemporaryRedirect || len(f.presents) != 2 {
+	if !errors.As(err, &re) || re.Status != http.StatusTemporaryRedirect || errors.As(err, &ae) ||
+		errors.Is(err, ErrTemporary) || len(f.presents) != 2 || len(h.slept) != 0 ||
+		!strings.Contains(err.Error(), "the broker answered 307, a redirect; the client never follows one") {
 		t.Fatalf("%v; %d requests", err, len(f.presents))
+	}
+}
+
+// A redirect on a later page is final, and the pages minted before it are returned.
+func TestARedirectOnALaterPageKeepsThePagesMinted(t *testing.T) {
+	redirect := func(w http.ResponseWriter, _ api.MintRequest) {
+		w.Header().Set("Location", "/v1/identity")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}
+	f := &fakeBroker{batchMax: 1, answers: []func(http.ResponseWriter, api.MintRequest){permitAll, redirect}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(2)})
+	var re *RedirectError
+	if !errors.As(err, &re) || len(resp.Results) != 1 {
+		t.Fatalf("%d results: %v", len(resp.Results), err)
+	}
+}
+
+// jitter is applied to the connection backoff and the 5s default, never to a
+// Retry-After the broker named.
+func TestJitterIsAppliedToComputedWaitsOnly(t *testing.T) {
+	var got []time.Duration
+	record := func(d time.Duration) time.Duration { got = append(got, d); return d }
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusServiceUnavailable, "store_unavailable", "7"),
+		refuse(http.StatusTooManyRequests, "rate_limited", ""), permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	jitter = record
+	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil ||
+		len(got) != 1 || got[0] != 5*time.Second {
+		t.Fatalf("%v; jitter saw %v", err, got)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.Broker = "https://" + l.Addr().String()
+	l.Close()
+	got = nil
+	_, _ = h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	if len(got) < 2 || got[0] != time.Second || got[1] != 2*time.Second {
+		t.Fatalf("jitter saw %v", got)
 	}
 }
 
