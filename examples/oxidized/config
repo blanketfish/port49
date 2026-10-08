@@ -1,10 +1,12 @@
 ---
-# Oxidized for port49 (plan 8). PROVISIONAL ON LAB L49 (policy engine spec §15).
+# Oxidized for port49 (plan 8). Measured in lab L49 (policy engine spec §15;
+# tests/lab/results/L49-oxidized-<platform>.md).
 # Each node's username and password come from router.db, which
 # port49-oxidized-run rewrites with a fresh token per node before each run.
 # Oxidized's own interval is set a week out so that its own schedule tries as
-# few nodes as possible with an expired token; how often it still does, and what
-# each try costs, is what L49 measures. port49-oxidized-run asks for each
+# few nodes as possible with an expired token. A try with a spent token cost one
+# authentication on each platform (L49, phase B); how often Oxidized's own
+# schedule still tries is not measured. port49-oxidized-run asks for each
 # node's run through the REST API.
 username: unused-see-router-db
 password: unused-see-router-db
@@ -15,7 +17,8 @@ use_syslog: false
 debug: false
 threads: 8
 timeout: 30
-# A failed login retried is the same token failing again (L49 measures it).
+# A failed login retried is the same token failing again: with 0, a stale
+# token cost one authentication (L49, phase B).
 retries: 0
 rest: 127.0.0.1:8888
 next_adds_job: false
@@ -26,7 +29,7 @@ vars: {}
 # keyboard-interactive is what makes it send one. Leave the device as it is.
 # It is the eos model's alone: on a device that also lists password (NX-OS,
 # IOS-XE), a global keyboard-interactive made one stale token cost two
-# authentications instead of one (L49). Oxidized looks a model's vars up before
+# authentications instead of one (an L49 run at 0a6d546). Oxidized looks a model's vars up before
 # the global ones.
 models:
   eos:

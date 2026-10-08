@@ -1,8 +1,9 @@
 # Oxidized with port49 workload certificates
 
-> **Provisional on lab L49** (policy engine spec §15). `port49-oxidized-run`, `config` and the
-> `config_backup` role in `policy.yaml` are what the design says Oxidized needs. They stay
-> provisional until L49 closes, and are corrected to what it measures.
+> **Measured in lab L48 and L49** (policy engine spec §15): step-ca 0.30.2
+> (`tests/lab/results/L48-step_ca.md`), and Oxidized 0.37.0 on vEOS, Catalyst 8000V, Nexus 9300v,
+> vJunos-router and vSRX (`tests/lab/results/L49-oxidized-<platform>.md`). What those runs did
+> not measure is said where it applies.
 
 Oxidized backs up network devices over SSH with a username and password. port49 gives it a
 short-lived token per device as that password, so no standing credential exists on the Oxidized
@@ -11,8 +12,9 @@ host. Three files fit together:
 - `port49-oxidized-run` runs `port49 workload token`, writes Oxidized's `router.db`, and asks
   Oxidized to back each node up now.
 - `config` is Oxidized's configuration. It reads `router.db`, and its own interval is set a week
-  out so that its schedule tries as few nodes as possible with an expired token. How often it
-  still does is what L49 measures.
+  out so that its schedule tries as few nodes as possible with an expired token. A try with a
+  spent token cost one authentication, refused `token_spent`, on each of the five platforms (L49,
+  phase B); how often Oxidized's own schedule still tries is not measured.
 - `policy.yaml` is the port49 policy: a `config_backup` role that confines the Oxidized host to
   `show` commands where port49 authorizes commands (see §5a).
 
@@ -32,24 +34,40 @@ device names, one a line.
 ## 2. Enrollment, once
 
 Get a certificate whose one URI SAN is the host's SPIFFE ID (for example
-`spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca, as L48
-measures it, is one such CA; any CA that puts one URI SAN on a client certificate works. Its key
-is readable by the Oxidized user alone.
+`spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca 0.30.2 is one such
+CA: a certificate requested with `--san spiffe://…` carries that ID as its one URI SAN, and a
+renewal keeps the ID and the key (L48, cells 1 and 2). Any CA that puts one URI SAN on a client
+certificate works. Its key is readable by the Oxidized user alone. On step-ca, issue it under
+`step-ca-workload.tpl` (§3 and §5).
 
 ## 3. The workload CA is the trust root
 
 Whoever can get the workload CA to issue a certificate naming a SPIFFE ID *is* that workload to
 port49. `spiffe_trust_domains` does not stop one workload impersonating another within a domain.
-Restrict each provisioner to the host's own ID: on step-ca, the provisioner's x509 name policy
-allows that one URI. L48 measures that it refuses another; this is provisional on L48 until it
-closes.
+Restrict each provisioner to the host's own ID. On step-ca 0.30.2 a name policy cannot do it
+(L48, cell 6):
+
+- an x509 `allow` on a URI in the provisioner's `options` was ignored: another trust domain's ID
+  was issued as asked;
+- the authority's x509 `allow` takes a URI domain, not an ID: given the full SPIFFE ID, step-ca
+  refused to start ("contains scheme (not supported yet)").
+
+What does pin it is a provisioner x509 template with the ID fixed in `uris` in place of the
+requested `sans`. It does not refuse another request: it issues the pinned ID instead. So give
+each host its own provisioner, whose copy of `step-ca-workload.tpl` replaces the `sans` line with
+`"uris": ["spiffe://corp.example.com/host/oxidized-01"]`, and keep the provisioner's credential
+the host's alone. L48 measured the fixed `uris` in a template without the CRL distribution point;
+the two in one template are not measured.
 
 ## 4. Renewal
 
-Renewal is your CA's renewer's job (step's `step ca renew --daemon`, or its systemd timer).
-port49 needs nothing at a renewal. A late one shows in cron mail and in
-`port49_workload_certificates_renewal_late_total`, which each broker replica counts once per
-certificate a day. Alert on its increase.
+Renewal is your CA's renewer's job (step's `step ca renew --daemon`, or its systemd timer;
+`step ca renew --daemon` renewed a 15m certificate at 0.66 of its lifetime, L48 cell 3). port49
+needs nothing at a renewal. With the CA down, once under a quarter of the lifetime is left the
+broker logs "its renewal is late" and `port49 workload` warns (first seen at 0.79 of it, polling
+every 30s), and minting stops at expiry with exit 77 (L48 cell 4). A late one shows in cron mail
+and in `port49_workload_certificates_renewal_late_total`, which each broker replica counts once
+per certificate a day. Alert on its increase.
 
 ## 5. The broker
 
@@ -72,6 +90,16 @@ The anchor is the CA that issues the workload certificates (on step-ca, its inte
   L48), or sync the CRL to a `file:` source; the deployment shapes are plan 12's. With no source,
   every certificate is refused, and `port49 workload` exits 77, not 75. Turning status checking
   off for everyone is not the fix.
+- **step-ca's CRL names a distribution point.** Its issuing distribution point names the CRL's
+  own URL (in the lab, `https://<the CA's first DNS name>/1.0/crl`; `step crl inspect` shows
+  yours), and port49 applies such
+  a list only to a certificate whose CRL distribution points name that URL (spec, "Certificate
+  status, as built"). step-ca's default leaf names none, so with the CRL configured it is refused
+  503 `certificate_status_unavailable` and `port49 workload` exits 77, the detail saying which
+  name it lacks. Issue workload certificates under `step-ca-workload.tpl`, with its
+  `crlDistributionPoints` set to the name `step crl inspect` shows. Measured: a default leaf was
+  refused; a templated one minted, and was refused `credential_revoked` 1m after
+  `step ca revoke` (L48 cell 5).
 
 ## 5a. What `port49 policy test` says about this snippet
 
@@ -85,15 +113,17 @@ true.
   measured that such a session could change the configuration on vEOS and the N9Kv
   (`tests/lab/results/L22-arista_eos.md`, `L22-cisco_nxos.md`). `admin` is the level spec §2
   gives a backup account so `show running-config` is reachable. Whether a lower level serves
-  each Oxidized model is unmeasured (L49). Until it is, the exposure belongs to whoever holds a
-  session opened with this run's tokens. Keep `router.db` and the workload key the Oxidized
+  each Oxidized model is unmeasured: L49 ran at `admin`. Until it is, the exposure belongs to
+  whoever holds a session opened with this run's tokens. Keep `router.db` and the workload key the Oxidized
   user's alone, and keep `PORT49_TTL` to one sweep.
 - **`unenforced_rules` on `juniper_junos`.** A policy that pins no `platform_set` renders with
   set 1.0.0. Under 1.0.0, Junos neither asks port49 about a command nor receives the role's rules
   in its session reply, so on Junos the permits above decide nothing: the session gets what the
   device's own login class gives the port49 username. Set 1.1.0 renders them into the session
-  reply (spec §8), but the permits here name no Junos command. Which commands Oxidized's `junos`
-  model sends, and so which permits a Junos backup needs, is what L49 measures.
+  reply (spec §8), but the permits here name no Junos command. L49 measured it on vJunos-router
+  23.4R2-S2.1 and vSRX: a full backup under set 1.0.0 sent port49 no command at all, so the
+  device's login class for `svc-oxidized` is what limits a Junos backup. Which permits a Junos
+  backup would need under set 1.1.0 is not measured.
 
 ## 6. Check before cron
 
@@ -140,15 +170,24 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 The `config` sets `auth_methods` with `keyboard-interactive` for the `eos` model alone
 (`models: eos: vars`). Arista EOS offers only `publickey` and `keyboard-interactive` over SSH, and
 Oxidized's default list does not include the second, so without this line Oxidized never sends the
-token to an EOS device. Do not change the EOS side to suit it. It is not global: on NX-OS and
-IOS-XE, which also offer `password`, a global setting made a stale token cost two authentications
-(both denied as spent) instead of one, so those models keep Oxidized's default. After a refused token net-ssh's `keyboard-interactive` asks a tty for a second
-password; under a daemon or cron Oxidized logs `Errno::ENOTTY` for it (measured in the L49 lab, which
-has no tty). Run from a terminal in the foreground, it may stop at a password prompt instead; not
-measured.
+token to an EOS device (L49, `L49-oxidized-arista_eos.md`). Do not change the EOS side to suit
+it. It is not global: on NX-OS and IOS-XE, which also offer `password`, an L49 run with it global
+(at 0a6d546, superseded and not kept as a note) measured a stale token costing two
+authentications (both denied as spent) instead of one, so those models keep Oxidized's default.
+After a refused token net-ssh's `keyboard-interactive` asks a tty for a second password; under a
+daemon or cron Oxidized logs `Errno::ENOTTY` for it (measured in the L49 lab, which has no tty).
+Run from a terminal in the foreground, it may stop at a password prompt instead; not measured.
 
-## 9. Provisional on L49
+## 9. What L49 measured, and what it did not
 
-The REST calls the wrapper makes, the platform-to-model table, the `config` settings (including
-`retries: 0` and the interval), and the role's level and permits are not yet measured against
-real Oxidized and devices. They are provisional until L49 closes.
+Measured on all five platforms (`tests/lab/results/L49-oxidized-<platform>.md`):
+
+- the wrapper's REST calls answered 200, and the models `eos`, `ios`, `nxos` and `junos` loaded
+  their nodes and backed them up;
+- one authentication per run, and a stale token refused in one (`retries: 0`);
+- the commands each model sends: `policy.yaml` permits every one port49 was asked about
+  (`show vtp status` on IOS-XE and `show inventory all` on NX-OS were added from it);
+- no token in Oxidized's log.
+
+Not measured: whether a lower level than `admin` serves each model (§5a), how often Oxidized's own
+schedule tries a node with an expired token, and models other than these four.

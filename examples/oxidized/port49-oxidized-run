@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # port49-oxidized-run: give Oxidized one port49 token per node and back every
-# node up now (port49 plan 8). PROVISIONAL ON LAB L49 (policy engine spec §15):
-# the REST calls and the model names below are what L49 measures.
+# node up now (port49 plan 8). The REST calls and the model names below were
+# measured in lab L49 (policy engine spec §15; tests/lab/results/L49-oxidized-*).
 #
 # Run it from cron as the user Oxidized runs as, once per backup window:
 #   17 2 * * *  PORT49_BROKER=... /usr/local/bin/port49-oxidized-run
 # Oxidized's own interval is set a week out (./config) so that its own schedule
-# tries as few nodes as possible with an expired token; how often it still does,
-# and what each try costs, is what L49 measures. This script asks for each
+# tries as few nodes as possible with an expired token (a stale try cost one
+# authentication in L49; how often one happens is not measured). This script asks for each
 # node's run.
 #
 # Environment:
