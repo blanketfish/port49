@@ -4902,7 +4902,9 @@ code is new.
     unreadable file); 75 temporary: the broker did not answer in time (pages minted before it are
     written) or the output could not be written (the last `--out` stands); 77 nothing minted, and a
     run again will not change it (expired certificate, revoked principal, every device denied,
-    uncovered status). On 77, and on 75 with nothing minted, nothing is written.
+    uncovered status, or a TLS trust failure either way: the broker's certificate not under
+    `--broker-ca`, or the broker refusing the workload's certificate). On 77, and on 75 with
+    nothing minted, nothing is written.
   - **A stdout consumer must discard what it read on exit 75**: a failed write may have handed it a
     truncated line. `--out` has no such case.
 - **`port49 workload identity`** shows what the broker makes of a workload's certificate. Run it
