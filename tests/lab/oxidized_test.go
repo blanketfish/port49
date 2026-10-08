@@ -47,6 +47,36 @@ type oxidized struct {
 	nodes    string // the wrapper's OXIDIZED_NODES file
 	repo     string
 	http     *http.Client
+	// secrets are the tokens the wrapper has put in router.db, for the leak
+	// checks of every note and log; they are never printed.
+	secrets []string
+}
+
+// routerDBSecrets are the username and password columns (3 and 4) of a
+// router.db's lines: the minted login token and its pair.
+func routerDBSecrets(raw string) []string {
+	var out []string
+	for _, ln := range strings.Split(raw, "\n") {
+		f := strings.Split(ln, "\t")
+		if len(f) < 5 {
+			continue
+		}
+		for _, v := range f[3:5] {
+			if v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// learnTokens registers the tokens now in router.db as secrets.
+func (o *oxidized) learnTokens() {
+	raw, err := os.ReadFile(filepath.Join(o.dir, "router.db"))
+	if err != nil {
+		return
+	}
+	o.secrets = append(o.secrets, routerDBSecrets(string(raw))...)
 }
 
 // exampleRole is the role block of examples/oxidized/policy.yaml (raw): the
@@ -176,7 +206,7 @@ func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 // line saying they were withheld because they hold a compact JWS.
 func (o *oxidized) startupTail() string {
 	out, _ := o.c.run("--profile", "oxidized", "logs", "--no-color", "--tail", "50", "oxidized")
-	if err := leakIn(out, nil); err != nil {
+	if err := leakIn(out, o.secrets); err != nil {
 		return "(withheld: " + err.Error() + ")"
 	}
 	return out
@@ -412,6 +442,7 @@ func (o *oxidized) runWrapper(ttl string) (int, string) {
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	err := cmd.Run()
+	o.learnTokens() // whatever the exit, router.db may now hold new tokens
 	var ee *exec.ExitError
 	switch {
 	case err == nil:

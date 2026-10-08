@@ -243,6 +243,10 @@ func startStepCA(t *testing.T) *stepCA {
 	t.Cleanup(func() {
 		if s.renewer != nil {
 			_ = s.renewer.Process.Kill()
+			time.Sleep(500 * time.Millisecond) // let the log's writer finish
+			if err := withholdLeakyLog(filepath.Join(logs, "renew-daemon.log"), s.secrets); err != nil {
+				t.Errorf("renew-daemon.log: %v", err)
+			}
 		}
 		if raw, err := s.dc("logs", "--no-color", "step-ca").CombinedOutput(); err == nil {
 			// The image's first start prints the CA's administrative password:
@@ -257,6 +261,13 @@ func startStepCA(t *testing.T) *stepCA {
 		_ = os.RemoveAll(pwDir)
 		if o, err := s.dc("down", "-v", "--remove-orphans", "-t", "5").CombinedOutput(); err != nil {
 			t.Errorf("docker compose down (step-ca): %v\n%s", err, tailOf(string(o), 1000))
+		}
+		// The entrypoint leaves a copy of the password under step/secrets,
+		// possibly world-readable and owned by step's uid: remove it through a
+		// root container, as the directory was prepared.
+		if o, err := dockerCmd("run", "--rm", "--user", "root", "--entrypoint", "sh", "-v", s.dir+":/d", stepCAImage, "-c",
+			"rm -rf /d/secrets").CombinedOutput(); err != nil {
+			t.Errorf("removing step-ca's secrets directory: %v\n%s", err, tailOf(string(o), 500))
 		}
 	})
 	if o, err := s.dc("up", "-d").CombinedOutput(); err != nil {
