@@ -116,8 +116,9 @@ in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03
   - One `certificate_status` block.
   - Minting by `scope` goes to plan 9.
   - No questions for Ryan.
+- **8 executed 2026-10-07 to 2026-10-08** on `feature/workload-certificates` (base `f789c3f`), each task reviewed. L48 (step-ca 0.30.2) and L49 (Oxidized on five images) closed, with the example corrected to them. The lab drove ruling 17 (a CRL scoped to a distribution point, per RFC 5280), and ruling 7 now separates an OCSP outage from an uncovered status. It also found the broker's first-takeover purge window, a plan 7e bug (Plan 8 — As built, below). **Merged 2026-10-08** as PR #40, merge 21dda4c.
 
-Next: execute 8, then 8b, 9–11. 12–13 not yet.
+Next: the purge-window fix PR (a §5.7 reason first), then 8b, 9–11. 12–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
