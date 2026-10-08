@@ -147,13 +147,21 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	for _, it := range resp.Results {
 		if it.Verdict != "permit" || it.Login == "" {
 			// The item's own words, never its token (there is none on a deny).
-			line := safe(it.Device) + ": " + safe(it.Verdict)
+			// "<device>: <verdict> <reason>: <detail>", leaving out what is
+			// empty: the broker's fault item has an error and a detail, no verdict.
 			reason := it.Reason
 			if it.Error != "" {
 				reason = it.Error
 			}
-			if reason != "" {
-				line += " " + safe(reason)
+			var words []string
+			for _, s := range []string{it.Verdict, reason} {
+				if s != "" {
+					words = append(words, safe(s))
+				}
+			}
+			line := safe(it.Device)
+			if len(words) > 0 {
+				line += ": " + strings.Join(words, " ")
 			}
 			if it.Detail != "" {
 				line += ": " + safe(it.Detail)

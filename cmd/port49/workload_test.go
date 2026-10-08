@@ -429,14 +429,15 @@ func TestATemporaryFailureOnPageTwoWritesPageOne(t *testing.T) {
 func TestAFaultLineCarriesTheDetail(t *testing.T) {
 	flags := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
 		_ = json.NewEncoder(w).Encode(api.MintResponse{Results: []api.MintItem{
-			{Device: "fw2", Verdict: "error", Error: "boom", Detail: "why\x1b[2J"},
-			{Device: "fw3", Verdict: "error", Detail: "only detail"},
+			// The broker's own fault item: an error and a detail, no verdict.
+			{Device: "fw2", Error: "broker_error", Detail: "why\x1b[2J"},
+			{Device: "fw3", Detail: "only detail"},
 		}})
 	})
 	var out, errb bytes.Buffer
 	run(append(append([]string{"workload", "token"}, flags...), "fw2", "fw3"), &out, &errb)
-	if !strings.Contains(errb.String(), "fw2: error boom: why?[2J\n") ||
-		!strings.Contains(errb.String(), "fw3: error: only detail\n") {
+	if !strings.Contains(errb.String(), "port49 workload token: fw2: broker_error: why?[2J\n") ||
+		!strings.Contains(errb.String(), "port49 workload token: fw3: only detail\n") {
 		t.Fatalf("stderr %q", errb.String())
 	}
 }
