@@ -145,7 +145,9 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 
 ## 8. On a bad day
 
-- **Exit 75**: the broker or its store did not answer within the deadline, the output could
+- **Exit 75**: the broker or its store did not answer within the deadline, or the broker could not
+  establish the certificate's revocation status (a CRL past its next update, an OCSP responder
+  down: look at the CA, not the broker), the output could
   not be written, files could not be made beside `router.db`, another run holds the lock
   (`router.db.lock`), or Oxidized refused a request. The nodes minted before it are queued; with
   none, Oxidized kept its last `router.db` and was not reloaded. Try the next window.
@@ -156,8 +158,9 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
     the rest are still queued. A failed reload prints that `router.db` was replaced but Oxidized
     was not reloaded.
 - **Exit 77**: nothing was minted and running again will not change it: an expired certificate
-  (said before anything connects), a revoked principal, every node denied, or a certificate
-  status nothing covers. Oxidized kept its last `router.db`. The stderr line says which.
+  (said before anything connects), a revoked principal, every node denied, a certificate
+  status nothing covers, or a TLS trust failure (the broker's certificate is not under
+  `--broker-ca`, or the broker refused the workload's certificate: wrong CA, a clock off). Oxidized kept its last `router.db`. The stderr line says which.
 - **Exit 1**: a node was not permitted, was not minted after a final refusal, or was left out
   because its output line would hold a control character. Its line on stderr says why; the rest
   are queued. A node whose platform has no Oxidized model in the script, or whose name is outside
