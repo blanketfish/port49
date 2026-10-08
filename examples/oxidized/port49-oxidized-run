@@ -33,7 +33,8 @@
 # nothing covers), and Oxidized was left as it was; anything else, a fault,
 # said on stderr. router.db is replaced, and Oxidized reloaded, only when there
 # is a node to write: never with an empty file. A partial run drops the
-# unminted nodes from Oxidized's list until a later run mints them.
+# unminted nodes from Oxidized's list until a later run mints them. 75 takes
+# precedence over 1; the stderr lines name every node either way.
 # No token is ever printed: they go to a 0600 file and into router.db (0600).
 # Never add set -x or an echo of a token here.
 set -euo pipefail
@@ -59,10 +60,10 @@ flock -n 9 || {
 tsv=""
 db=""
 trap 'rm -f "$tsv" "$db"' EXIT
-tsv=$(mktemp "${routerdb}.tsv.XXXXXX") && db=$(mktemp "${routerdb}.XXXXXX") || {
+if ! tsv=$(mktemp "${routerdb}.tsv.XXXXXX") || ! db=$(mktemp "${routerdb}.XXXXXX"); then
   echo "port49-oxidized-run: cannot make files beside $routerdb; nothing changed" >&2
   exit 75
-}
+fi
 
 status=0
 "$port49" workload token --broker "$PORT49_BROKER" --broker-ca "$PORT49_BROKER_CA" \

@@ -33,8 +33,8 @@ device names, one a line.
 
 Get a certificate whose one URI SAN is the host's SPIFFE ID (for example
 `spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca, as L48
-measures it, is one such CA; any CA that puts one URI SAN on a client certificate works. Its key is readable by
-the Oxidized user alone.
+measures it, is one such CA; any CA that puts one URI SAN on a client certificate works. Its key
+is readable by the Oxidized user alone.
 
 ## 3. The workload CA is the trust root
 
@@ -131,12 +131,14 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 - **Exit 1**: a node was not permitted, was not minted after a final refusal, or was left out
   because its output line would hold a control character. Its line on stderr says why; the rest
   are queued. A node whose platform has no Oxidized model in the script, or whose name is outside
-  `A-Z a-z 0-9 . _ -`, is skipped with a line and exits 1 the same way.
+  `A-Z a-z 0-9 . _ -`, is skipped with a line and exits 1 the same way. A run that has both a
+  node of this kind (1) and a failed queue or reload (75) exits 75: 75 takes precedence over 1,
+  and the stderr lines name every node either way.
 - **To stop the workload**: `port49 revoke --principal spiffe://...`, and revoke the certificate
   at the CA.
 
 ## 9. Provisional on L49
 
 The REST calls the wrapper makes, the platform-to-model table, the `config` settings (including
-`retries: 0` and the interval), and the role's level and permits are not yet measured against real Oxidized and devices. They
-are provisional until L49 closes.
+`retries: 0` and the interval), and the role's level and permits are not yet measured against
+real Oxidized and devices. They are provisional until L49 closes.
