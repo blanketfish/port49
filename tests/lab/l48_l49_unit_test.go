@@ -370,7 +370,7 @@ func TestRecordsFor(t *testing.T) {
 	}
 }
 
-// the wait for the CRL's first fetch ends on the fetch's own outcome, not on the start line.
+// a CRL counts as loaded on its "loaded" line alone, never on its refusal.
 func TestCRLLoaded(t *testing.T) {
 	if !crlLoaded("port49d: broker: certificate status: CRL step_ca loaded (next update 2026-10-09T00:00:00Z)\n") {
 		t.Error("a load was not read as one")
@@ -380,6 +380,7 @@ func TestCRLLoaded(t *testing.T) {
 	}
 }
 
+// the wait for the CRL's first fetch ends on the fetch's own outcome, not on the start line.
 func TestCRLFetchOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		said string
