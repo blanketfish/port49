@@ -7699,8 +7699,9 @@ Ryan may override any.
   certificate per 24h and `port49_workload_certificates_renewal_late_total` at each broker replica;
   a warning from `port49 workload`. Tasks 5 and 9.
 - **10. The agentless client.** `port49 workload token` and `identity`: the broker reached over
-  `https` only and trusted by `--broker-ca` alone (never the system's roots, never a redirect
-  elsewhere), since the client presents the workload's certificate and takes tokens back; the files read each run, a
+  `https` only and trusted by `--broker-ca` alone (never the system's roots; a redirect is never
+  followed), since the client presents the workload's certificate and takes tokens back; the
+  files read each run, a
   mismatched pair read again up to three times; one request per `batch_max` page under its own
   `Idempotency-Key`, retried under it on 503 (but an uncovered status), 409
   `idempotency_in_progress`, 429, a failed connection, and a 502 or 504 (a proxy in front of the
