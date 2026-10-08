@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -181,7 +182,7 @@ func crlTLSFailure(said string) bool {
 	for _, ln := range statusLines(said) {
 		for _, m := range []string{"certificate signed by unknown authority", "cannot validate certificate",
 			"failed to verify certificate", "certificate verify failed", "certificate is valid for",
-			"certificate has expired or is not yet valid", "tls:"} {
+			"certificate has expired or is not yet valid", "tls:", "connect:", "connection refused"} {
 			if strings.Contains(ln, m) {
 				return true
 			}
@@ -225,6 +226,38 @@ var crlFetchSaid = regexp.MustCompile(`certificate status: CRL step_ca( loaded|:
 
 func crlFetchOutcome(said string) bool { return crlFetchSaid.MatchString(said) }
 
+// identityPrincipal is the principal `port49 workload identity` printed: the
+// second field of its `principal  <id> (<method> <fingerprint>)` line.
+func identityPrincipal(out string) string {
+	for _, ln := range strings.Split(out, "\n") {
+		if f := strings.Fields(ln); len(f) >= 2 && f[0] == "principal" {
+			return f[1]
+		}
+	}
+	return ""
+}
+
+// tokenSecrets are the tokens in a `workload token` TSV output: its token
+// column alone, so the device, address and username are not registered.
+func tokenSecrets(tsv string) []string { return routerDBSecrets(tsv) }
+
+// renewIsFault says whether a failed one-off docker run is docker's, not
+// step's: it did not run at all, exited 125-127 (docker's own codes), or
+// printed docker's or compose's error.
+func renewIsFault(err error, out string) bool {
+	if err == nil {
+		return false
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return true
+	}
+	if c := ee.ExitCode(); c >= 125 && c <= 127 {
+		return true
+	}
+	return dockerFault(out)
+}
+
 // dockerFault says whether a command's output is docker's or compose's own
 // error, not the answer of the program run in the container.
 func dockerFault(out string) bool {
@@ -260,7 +293,7 @@ func (s *stepCA) renewFromHost() (answer string, fault error) {
 	if lerr := stepLeak(out, s.secrets); lerr != nil {
 		return "(output withheld: " + lerr.Error() + ")", nil
 	}
-	if rerr != nil && dockerFault(out) {
+	if renewIsFault(rerr, out) {
 		return out, fmt.Errorf("docker, not step: %s", tailOf(out, 300))
 	}
 	if rerr == nil {
@@ -336,7 +369,7 @@ func (r *l48Run) files() {
 func (r *l48Run) token(label string, at time.Duration) tokenRun {
 	code, out, errs := r.broker.workloadToken(r.cert, r.key)
 	// The token is a secret before any check: a leak of it into stderr is caught.
-	r.keys = append(r.keys, strings.Fields(out)...)
+	r.keys = append(r.keys, tokenSecrets(out)...)
 	tr := newTokenRun(code, errs, at)
 	r.ev.add(label, tr)
 	return tr
@@ -367,8 +400,8 @@ func (r *l48Run) cell1Issue() {
 		yesNo(reflect.DeepEqual(f.URIs, []string{l48ID})), f.DNS, f.EKUs, f.IsCA)
 	r.say("  - Issuer `%s`; lifetime %s (`%s` to `%s`); serial `%s`.", f.Issuer, f.Lifetime, f.NotBefore, f.NotAfter, f.Serial)
 	r.say("  - The broker, anchored on the intermediate with `certificate_status` disabled: `workload identity` exit %d, "+
-		"prints `%s` (the requested ID: %s); `workload token` exit %d.", idCode, oneLineMax(strings.TrimSpace(idOut), 200),
-		yesNo(strings.TrimSpace(idOut) == l48ID), tr.Exit)
+		"prints the principal `%s` (the requested ID: %s); `workload token` exit %d.", idCode,
+		oneLineMax(identityPrincipal(idOut), 200), yesNo(identityPrincipal(idOut) == l48ID), tr.Exit)
 }
 
 func (r *l48Run) cell2Renew() {

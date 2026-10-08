@@ -370,7 +370,13 @@ func (r *l49Run) deviceHostname(t *testing.T, o *oxidized) string {
 func (r *l49Run) phaseA(t *testing.T) {
 	o := r.startStack(t, false)
 	node := r.l.p.node
+	// The hostname login's own records (its redeem and commands) are let land
+	// before phase A's mark, so they are not counted as the phase's.
+	pre := r.l.mark()
 	hostname := r.deviceHostname(t, o)
+	if _, ok := r.l.settleRecords(pre, wantsEvents(oxidizedUser, "redeem", "authorize_command")); !ok {
+		t.Fatalf("the hostname login's records did not reach the decision log within %s (INVALID, not a measured no)", settleBound)
+	}
 	mark, boff := r.l.mark(), fileSize(o.c.brokerLog)
 	start := time.Now()
 	code, said := o.runWrapper("15m")

@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -465,6 +466,69 @@ func TestDockerFault(t *testing.T) {
 		if got := dockerFault(tc.out); got != tc.want {
 			t.Errorf("dockerFault(%q) = %v, want %v", tc.out, got, tc.want)
 		}
+	}
+}
+
+// the principal is the second field of the line `principal  <id> (<method> <fp>)` of printIdentity.
+func TestIdentityPrincipal(t *testing.T) {
+	out := "principal  spiffe://port49.lab/host/oxidized-01 (x509 ab:cd)\nsubject    svc_oxidized\ngrants     all_devices [oxidized_all] max_privilege admin\n"
+	if got := identityPrincipal(out); got != l48ID {
+		t.Errorf("identityPrincipal = %q", got)
+	}
+	for _, bad := range []string{"", "subject    x\n", "principal\n"} {
+		if got := identityPrincipal(bad); got != "" {
+			t.Errorf("identityPrincipal(%q) = %q", bad, got)
+		}
+	}
+}
+
+// a token run's stdout registers its token column alone: not the device, the address or the user.
+func TestTokenSecretsAreTheTokenColumnAlone(t *testing.T) {
+	out := "leaf1\t10.0.0.1\tarista_eos\tsvc-oxidized\tTOKEN-leaf1\t2026-10-08T03:00:00Z\n"
+	got := tokenSecrets(out)
+	if !reflect.DeepEqual(got, []string{"TOKEN-leaf1"}) {
+		t.Errorf("tokenSecrets = %q", got)
+	}
+	if tokenSecrets("") != nil {
+		t.Error("an empty output registered a secret")
+	}
+}
+
+// a failure to run docker at all, or an exit of docker's own (125-127), is a fault, not step's answer.
+func TestRenewIsFault(t *testing.T) {
+	exit := func(code string) error { return exec.Command("sh", "-c", "exit "+code).Run() }
+	for _, tc := range []struct {
+		name string
+		err  error
+		out  string
+		want bool
+	}{
+		{"success", nil, "renewed", false},
+		{"step refused", exit("1"), "error renewing certificate: connection refused", false},
+		{"docker 125", exit("125"), "", true},
+		{"docker 126", exit("126"), "", true},
+		{"docker 127", exit("127"), "", true},
+		{"docker message", exit("1"), "service \"step-ca\" is not running", true},
+		{"not an exit error", &os.PathError{Op: "fork/exec", Path: "docker", Err: os.ErrNotExist}, "", true},
+	} {
+		if got := renewIsFault(tc.err, tc.out); got != tc.want {
+			t.Errorf("%s: renewIsFault = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// a CRL fetch that could not connect is a harness fault too.
+func TestCRLConnectFailureIsATLSLikeFault(t *testing.T) {
+	for _, said := range []string{
+		"port49d: broker: certificate status: CRL step_ca: Get \"https://localhost:19000/1.0/crl\": dial tcp 127.0.0.1:19000: connect: connection refused; the list in force stays\n",
+		"port49d: broker: certificate status: CRL step_ca: Get \"x\": connection refused\n",
+	} {
+		if !crlTLSFailure(said) {
+			t.Errorf("%q is not a fault", said)
+		}
+	}
+	if crlTLSFailure("port49d: broker: certificate status: CRL step_ca: parse: malformed crl\n") {
+		t.Error("a parse failure is a fault")
 	}
 }
 
