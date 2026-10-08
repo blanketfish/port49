@@ -1066,11 +1066,17 @@ sources `broker.certificate_status` names.
   on.
 - **What is refused.** A list older than the last good one (by number or by `ThisUpdate`); a delta
   list; one carrying a critical extension other than its authority key identifier, its number, or
-  an issuing distribution point that says only `onlyContainsUserCerts`; one with an entry carrying a
-  critical extension.
+  an issuing distribution point that says only `onlyContainsUserCerts`, a distribution point named
+  by `fullName`, or both; one with an entry carrying a critical extension. An issuing distribution
+  point saying anything else (`nameRelativeToCRLIssuer`, `onlySomeReasons`, `indirectCRL`, the CA
+  or attribute scopes) is refused.
 - **Which list applies.** It applies to a certificate when its issuer certificate is the one that
   verified it, and only until its `NextUpdate` (one with none, for `refresh_interval` from its
   `ThisUpdate`). A list scoped `onlyContainsUserCerts` covers leaves only, never an intermediate.
+  A list whose issuing distribution point names a distribution point covers only a certificate
+  whose CRL distribution points extension carries one of those names, byte for byte (RFC 5280
+  §5.2.5); a certificate with no such extension, or another name, is not covered by it, so that
+  list decides nothing for it, never "not revoked" (§13, decision 40, ruling 17).
 - **Persistence.** The last good list of each source is kept beside `broker.revocations_file`, so a
   restart keeps it.
 - **OCSP.** An answer is taken only when it verifies for the issuer, and its signer is the issuer or
@@ -7723,6 +7729,15 @@ Ryan may override any.
   `system:serviceaccount:` stays plan 10's. Task 7.
 - **16. A `spiffe://` identity no verifier can give mints for no one, and the start says so.** Task
   8.
+- **17. A CRL scoped to a distribution point is taken, for the certificates that name it.**
+  step-ca 0.30.2's CRL carries a critical issuing distribution point naming its own CRL URL by
+  `fullName`, and its default leaves carry no CRL distribution point (L48,
+  `tests/lab/results/L48-step_ca.md`). Plan 7b refused any such list, so with certificate status
+  on every step-ca certificate was answered 503. The list is now taken (§ "Certificate status, as
+  built") and applied only where RFC 5280 says it applies: a certificate whose CRL distribution
+  point names it. A certificate it does not cover is undecided by it, and undecided fails closed,
+  so nothing is weaker; a step-ca deployment adds the distribution point to its leaves with a
+  provisioner template (`examples/oxidized`). Ruled by the controller on the lab's evidence, Task 14.
 
 *Ruled by the controller on recommendation (plan 8's pre-flight, 2026-10-07; Ryan may override
 any).* **Q1:** a workload certificate's directory groups are deferred to plan 8b, constrained to
