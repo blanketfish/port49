@@ -249,6 +249,8 @@ func TestDistributionPointScope(t *testing.T) {
 			Tag: 2, IsCompound: true, Bytes: uri})...)},
 		{"the name as a dNSName", dpField(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte(stepCRL)})},
 		{"reasons behind a field out of DER", append(dpField(t, uriName(stepCRL)), 0x83, 0x01, 0xff, 0x81, 0x02, 0x06, 0x40)},
+		{"a primitive distributionPoint holding the fullName", marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific,
+			Tag: 0, Bytes: marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: uri})})},
 	} {
 		t.Run("a leaf whose distribution point has "+tc.name+" is not covered", func(t *testing.T) {
 			c, _ := fileChecker(t, CRLSource{Name: "step_ca", File: crlFile(t, list(7)), Issuer: ca.Cert})

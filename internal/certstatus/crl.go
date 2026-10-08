@@ -260,7 +260,7 @@ func pointNames(p asn1.RawValue) (names [][]byte, ok bool) {
 		var f asn1.RawValue
 		var err error
 		if rest, err = asn1.Unmarshal(rest, &f); err != nil || f.Class != asn1.ClassContextSpecific ||
-			f.Tag > 2 || f.Tag <= last {
+			f.Tag > 2 || f.Tag <= last || (f.Tag == 0 && !f.IsCompound) {
 			return nil, false
 		}
 		last = f.Tag
