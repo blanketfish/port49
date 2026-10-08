@@ -141,6 +141,30 @@ func hostnameLine(cfg string) string {
 	return ""
 }
 
+// startupFault is a setup fault in Oxidized's startup run, which logs in with
+// the setup run's live token: a run that did not end, or one that put no
+// authentication to port49d (Oxidized never offered the device the token).
+// Either is INVALID; a run port49d heard from is measured, whatever its status.
+func startupFault(status string, ended bool, redeems int) error {
+	if !ended {
+		return fmt.Errorf("Oxidized's startup run did not end (status %q) (INVALID, not a measured no)", status)
+	}
+	if redeems == 0 {
+		return fmt.Errorf("Oxidized's startup run ended with status %q and no authentication reached port49d: Oxidized "+
+			"never logged in to the device (INVALID, not a measured no)", status)
+	}
+	return nil
+}
+
+// wrapperFault is a wrapper run that did not mint and queue the node: its
+// phase has nothing to measure, so it is INVALID, never a failed cell.
+func wrapperFault(code int, said string) error {
+	if code == 0 {
+		return nil
+	}
+	return fmt.Errorf("port49-oxidized-run exited %d (INVALID, not a measured no): %s", code, oneLineMax(said, 400))
+}
+
 // endedWord says whether a run ended, for a note.
 func endedWord(ended bool, within time.Duration) string {
 	if ended {
@@ -219,10 +243,21 @@ func parseMintedLogin(tsv string) (user, token string, err error) {
 // Oxidized's REST API, beyond Task 13's
 // ---------------------------------------------------------------------------
 
+// nextRequest is `PUT /node/next/<node>` with the wrapper's body, `{}`:
+// oxidized-web parses the body as JSON and answers an empty one 500.
+func nextRequest(node string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodPut, oxidizedREST+"/node/next/"+node+"?format=json", strings.NewReader("{}"))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
 // putNext is `PUT /node/next/<node>`: queue the node for its next run, as the
 // wrapper does, but without a new mint.
 func (o *oxidized) putNext(node string) (int, error) {
-	req, err := http.NewRequest(http.MethodPut, oxidizedREST+"/node/next/"+node+"?format=json", nil)
+	req, err := nextRequest(node)
 	if err != nil {
 		return 0, err
 	}
@@ -299,10 +334,16 @@ func (r *l49Run) startStack(t *testing.T, restricted bool) *oxidized {
 	}
 	// Oxidized runs the node once at start, with the setup run's token. Let that
 	// finish, so what a phase measures is its own run. Whether it succeeded is
-	// not asked here, but it is recorded.
+	// recorded; whether it reached port49d at all is the setup's check. The
+	// stack's decision log is new with the stack, so it is read from its start.
 	st, ended := o.awaitRun(r.l.p.node, time.Time{}, 5*time.Minute)
-	r.startup = fmt.Sprintf("Oxidized's own startup run (with the setup run's token, before this phase's mark) %s, status `%s`.",
-		endedWord(ended, 5*time.Minute), st)
+	recs, _ := r.l.settleRecords(0, wantsEvents(oxidizedUser, "redeem"))
+	n, by := redeemSummary(recordsFor(recs, oxidizedUser))
+	if err := startupFault(st, ended, n); err != nil {
+		t.Fatalf("%v\nOxidized's last output:\n%s", err, o.startupTail())
+	}
+	r.startup = fmt.Sprintf("Oxidized's own startup run (with the setup run's token, before this phase's mark) %s, status `%s`; "+
+		"authentications at port49d: %d (%s).", endedWord(ended, 5*time.Minute), st, n, describeCounts(by))
 	return o
 }
 
@@ -379,15 +420,11 @@ func (r *l49Run) phaseA(t *testing.T) {
 	}
 	mark, boff := r.l.mark(), fileSize(o.c.brokerLog)
 	start := time.Now()
-	code, said := o.runWrapper("15m")
+	if err := wrapperFault(o.runWrapper("15m")); err != nil {
+		t.Fatalf("phase A: %v", err)
+	}
 	r.say("- **A. What Oxidized sends** (role `**`, `port49-oxidized-run` with `PORT49_TTL=15m`):")
 	r.say("  - %s", r.startup)
-	if code != 0 {
-		r.say("  - FAILED: the wrapper exited %d: %s", code, oneLineMax(said, 400))
-		r.ev.add("a_wrapper", map[string]any{"exit": code, "stderr": oneLineMax(said, 400)})
-		r.finish(o, "A")
-		return
-	}
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
 	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem", "authorize_command"))
 	// The mint is in the broker's log, not port49d's.
@@ -435,12 +472,8 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		"receipt lapses in minutes; the default is 15m):", receiptIdleTTL)
 	r.say("  - %s", r.startup)
 	start := time.Now()
-	code, said := o.runWrapper("60s")
-	if code != 0 {
-		r.say("  - FAILED: the wrapper exited %d: %s", code, oneLineMax(said, 400))
-		r.ev.add("b_wrapper", map[string]any{"exit": code, "stderr": oneLineMax(said, 400)})
-		r.finish(o, "B and C")
-		return
+	if err := wrapperFault(o.runWrapper("60s")); err != nil {
+		t.Fatalf("phase B: %v", err)
 	}
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
 	r.say("  - A 60s token: the run %s with status `%s`.", endedWord(ended, 5*time.Minute), status)
@@ -449,10 +482,7 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	putAt := time.Now()
 	putCode, perr := o.putNext(node)
 	if perr != nil || putCode != http.StatusOK {
-		r.say("  - FAILED: `PUT /node/next/%s` answered %d (%v).", node, putCode, perr)
-		r.ev.add("b_put", map[string]any{"status": putCode, "error": fmt.Sprint(perr)})
-		r.finish(o, "B and C")
-		return
+		t.Fatalf("phase B: `PUT /node/next/%s` answered %d (%v) (INVALID, not a measured no)", node, putCode, perr)
 	}
 	staleStatus, staleEnded := o.awaitRun(node, putAt, 3*time.Minute)
 	bRecs, bSettled := r.l.settleRecords(markB, wantsEvents(oxidizedUser, "redeem"))
@@ -464,29 +494,23 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		r.say("  - No redeem record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
 	}
 	restart := time.Now()
-	code, said = o.runWrapper("60s")
-	reStatus, reEnded := "", false
-	if code == 0 {
-		reStatus, reEnded = o.awaitRun(node, restart, 5*time.Minute)
+	if err := wrapperFault(o.runWrapper("60s")); err != nil {
+		t.Fatalf("phase B, the wrapper again: %v", err)
 	}
-	r.say("  - The wrapper again with a new 60s token (wrapper exit %d): the run %s with status `%s`; Oxidized read the new "+
-		"credential at `/reload`: %s.", code, endedWord(reEnded, 5*time.Minute), reStatus,
-		yesNo(reEnded && reStatus == "success"))
+	reStatus, reEnded := o.awaitRun(node, restart, 5*time.Minute)
+	r.say("  - The wrapper again with a new 60s token (wrapper exit 0): the run %s with status `%s`; Oxidized read the new "+
+		"credential at `/reload`: %s.", endedWord(reEnded, 5*time.Minute), reStatus, yesNo(reEnded && reStatus == "success"))
 	r.ev.add("b_stale_token", map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
-		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": code, "again_status": reStatus,
+		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": 0, "again_status": reStatus,
 		"again_ended": reEnded, "receipt_idle_ttl": receiptIdleTTL})
 
 	// C. The example's role.
 	markC := r.l.mark()
 	startC := time.Now()
-	code, said = o.runWrapper("15m")
-	r.say("- **C. The example's role** (`examples/oxidized/policy.yaml`, the same stack):")
-	if code != 0 {
-		r.say("  - FAILED: the wrapper exited %d: %s", code, oneLineMax(said, 400))
-		r.ev.add("c_wrapper", map[string]any{"exit": code, "stderr": oneLineMax(said, 400)})
-		r.finish(o, "B and C")
-		return
+	if err := wrapperFault(o.runWrapper("15m")); err != nil {
+		t.Fatalf("phase C: %v", err)
 	}
+	r.say("- **C. The example's role** (`examples/oxidized/policy.yaml`, the same stack):")
 	cStatus, cEnded := o.awaitRun(node, startC, 5*time.Minute)
 	cRecs, cSettled := r.l.settleRecords(markC, wantsEvents(oxidizedUser, "authorize_command"))
 	rows := commandVerdicts(cRecs, oxidizedUser)

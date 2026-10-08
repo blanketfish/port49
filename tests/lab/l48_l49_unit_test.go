@@ -632,3 +632,59 @@ func TestEndedWordAndUntilExpiry(t *testing.T) {
 		t.Errorf("untilExpiry = %s", got)
 	}
 }
+
+// Oxidized's startup run is the setup's proof that Oxidized can log in at
+// all: one port49d never heard from is INVALID, whatever its status, and one
+// it heard from is measured, whatever its status (L49's first EOS run).
+func TestStartupFault(t *testing.T) {
+	for _, c := range []struct {
+		status  string
+		ended   bool
+		redeems int
+		fault   string
+	}{
+		{"success", true, 1, ""},
+		{"no_connection", true, 2, ""},
+		{"no_connection", true, 0, "no authentication reached port49d"},
+		{"success", true, 0, "no authentication reached port49d"},
+		{"", false, 1, "did not end"},
+	} {
+		err := startupFault(c.status, c.ended, c.redeems)
+		switch {
+		case c.fault == "" && err != nil:
+			t.Errorf("%+v: %v", c, err)
+		case c.fault != "" && (err == nil || !strings.Contains(err.Error(), c.fault) || !strings.Contains(err.Error(), "INVALID")):
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+}
+
+// A wrapper run that did not queue the node leaves its phase nothing to
+// measure: INVALID, never a failed cell.
+func TestWrapperFault(t *testing.T) {
+	if err := wrapperFault(0, "anything"); err != nil {
+		t.Errorf("exit 0: %v", err)
+	}
+	err := wrapperFault(75, "curl: (22) The requested URL returned error: 500\nport49-oxidized-run: leaf1: refused")
+	if err == nil || !strings.Contains(err.Error(), "exited 75") || !strings.Contains(err.Error(), "INVALID") ||
+		strings.Contains(err.Error(), "\n") {
+		t.Errorf("exit 75: %v", err)
+	}
+}
+
+// oxidized-web 0.18.1 parses `PUT /node/next`'s body as JSON and answers an
+// empty one 500, so the harness's own queue request carries `{}`.
+func TestNextRequestCarriesAJSONBody(t *testing.T) {
+	req, err := nextRequest("leaf1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != "PUT" || req.URL.String() != oxidizedREST+"/node/next/leaf1?format=json" ||
+		req.Header.Get("Content-Type") != "application/json" || req.Body == nil {
+		t.Fatalf("request %s %s %v", req.Method, req.URL, req.Header)
+	}
+	var opt map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&opt); err != nil {
+		t.Errorf("the body is not a JSON object: %v", err)
+	}
+}
