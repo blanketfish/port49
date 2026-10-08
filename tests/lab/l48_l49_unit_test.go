@@ -17,8 +17,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // The pure helpers of the L48 and L49 cells (plan 8, Task 14). Nothing here
@@ -529,6 +532,94 @@ func TestCRLConnectFailureIsATLSLikeFault(t *testing.T) {
 	}
 	if crlTLSFailure("port49d: broker: certificate status: CRL step_ca: parse: malformed crl\n") {
 		t.Error("a parse failure is a fault")
+	}
+}
+
+// step-ca's log holds compact-JWS-shaped text (a one-time token in a request line): it is
+// redacted and the log kept; a registered secret, or key material, is still refused.
+func TestScrubStepLogRedactsJWSShapedText(t *testing.T) {
+	fakeJWS := "eyJhbGciOiJFUzI1NiJ9" + "." + "eyJzdWIiOiJ4In0" + "." + "c2lnbmF0dXJl"
+	raw := "time=1 level=info msg=ok\ntime=2 level=info path=/1.0/sign ott=" + fakeJWS + " status=201\n"
+	got, err := scrubStepLog(raw, nil)
+	if err != nil {
+		t.Fatalf("a JWS-shaped substring refused the log: %v", err)
+	}
+	if strings.Contains(got, "eyJ") || !strings.Contains(got, "ott=<jws redacted> status=201") || !strings.Contains(got, "msg=ok") {
+		t.Errorf("scrubbed = %q", got)
+	}
+	if _, err := scrubStepLog("line with minted-token-value-1234\n"+fakeJWS+"\n", []string{"minted-token-value-1234"}); err == nil {
+		t.Error("a registered secret survived and the log was kept")
+	}
+	if _, err := scrubStepLog("-----BEGIN EC PRIVATE KEY-----\n"+fakeJWS+"\n", nil); err == nil {
+		t.Error("key material was kept")
+	}
+}
+
+// the local broker's config loads and STARTS on the real port49d: the same
+// first-install step, the same load of the config, policy, inventory and
+// revocations file. A config fault must fail here, never on beehive.
+func TestLocalBrokerStartsOnTheRealPort49d(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "port49d")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/port49d").CombinedOutput(); err != nil {
+		t.Skipf("cannot build port49d here (%v): %s", err, tailOf(string(out), 400))
+	}
+	for _, crl := range []bool{false, true} {
+		dir := t.TempDir()
+		wl := filepath.Join(dir, "wl")
+		if err := testpki.WriteWorkloadLab(wl, l48ID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		anchor := filepath.Join(wl, testpki.WorkloadCA)
+		url, issuer := "", ""
+		if crl {
+			url, issuer = "https://localhost:1/1.0/crl", anchor
+		}
+		bdir := filepath.Join(dir, "broker")
+		if _, err := prepareLocalBroker(bdir, anchor, url, issuer); err != nil {
+			t.Fatal(err)
+		}
+		cfg := filepath.Join(bdir, "port49d.yaml")
+		if err := initRevocations(bin, cfg); err != nil {
+			t.Fatalf("crl=%v: %v", crl, err)
+		}
+		errPath := filepath.Join(bdir, "port49d.err")
+		errf, err := os.Create(errPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin, "-config", cfg)
+		cmd.Stderr, cmd.Env = errf, localBrokerEnv("")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() { cmd.Wait(); close(done) }()
+		said := func() string { b, _ := os.ReadFile(errPath); return string(b) }
+		deadline := time.Now().Add(30 * time.Second)
+		for brokerListening.FindStringSubmatch(said()) == nil {
+			select {
+			case <-done:
+				t.Fatalf("crl=%v: port49d exited at start; its stderr:\n%s", crl, said())
+			default:
+			}
+			if time.Now().After(deadline) {
+				_ = cmd.Process.Kill()
+				<-done
+				t.Fatalf("crl=%v: port49d never listened; its stderr:\n%s", crl, said())
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
+		errf.Close()
+		if strings.Contains(said(), "key_groups are read from the inventory file") {
+			t.Errorf("crl=%v: the config still keeps key_groups in the inventory file:\n%s", crl, said())
+		}
 	}
 }
 

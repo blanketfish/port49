@@ -77,7 +77,10 @@ func scrubStepLog(raw string, secrets []string) (string, error) {
 			kept = append(kept, ln)
 		}
 	}
-	out := strings.Join(kept, "\n")
+	// step-ca's request log can hold a compact-JWS-shaped string (a one-time
+	// token): those are redacted, not a reason to lose the log. A registered
+	// secret, or key material, that is left still refuses it.
+	out := jwsShape.ReplaceAllString(strings.Join(kept, "\n"), "<jws redacted>")
 	if err := stepLeak(out, secrets); err != nil {
 		return "", err
 	}

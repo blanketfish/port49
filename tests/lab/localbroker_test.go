@@ -81,9 +81,10 @@ subjects:
   - {name: svc_oxidized, identity: ["%s"], username: %s, token_ttl: 900s}
 grants:
   - {subject: svc_oxidized, scope: all_devices, roles: [network_admin], max_privilege: admin}
+key_groups:
+  - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}
 `, l48ID, l48Subject)
-	inventory = fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n"+
-		"key_groups:\n  - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}\n", l48Device)
+	inventory = fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n", l48Device)
 	return cfg, policy, inventory
 }
 
@@ -122,6 +123,55 @@ func startRefusal(said string) string {
 
 var crlSourceRefusal = regexp.MustCompile(`broker\.certificate_status\.crls\[\d+\]`)
 
+// prepareLocalBroker empties dir and writes what a local broker starts on:
+// the PKI and the three files (localBrokerFiles). It returns the PKI's
+// directory. The daemon's first-install step is initRevocations.
+func prepareLocalBroker(dir, anchorFile, crlURL, crlIssuer string) (string, error) {
+	if err := os.RemoveAll(dir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	pki := filepath.Join(dir, "pki")
+	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+		return "", err
+	}
+	cfg, policy, inventory := localBrokerFiles(dir, pki, anchorFile, crlURL, crlIssuer)
+	for name, body := range map[string]string{"port49d.yaml": cfg, "policy.yaml": policy, "inventory.yaml": inventory} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			return "", err
+		}
+	}
+	return pki, nil
+}
+
+// initRevocations is the daemon's first-install step, `port49d init-revocations
+// --config cfg`: port49d never creates broker.revocations_file itself.
+func initRevocations(bin, cfg string) error {
+	if out, err := exec.Command(bin, "init-revocations", "--config", cfg).CombinedOutput(); err != nil {
+		return fmt.Errorf("port49d init-revocations: %v: %s", err, tailOf(string(out), 500))
+	}
+	return nil
+}
+
+// localBrokerEnv is the daemon's environment: the lab keys its config names,
+// and SSL_CERT_FILE when the CRL fetch must trust a private root.
+func localBrokerEnv(crlRoot string) []string {
+	key, encKey := os.Getenv("PORT49_LAB_KEY"), os.Getenv("PORT49_LAB_ENC_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+	if encKey == "" {
+		encKey = labEncKeyDefault
+	}
+	env := append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	if crlRoot != "" {
+		env = append(env, "SSL_CERT_FILE="+crlRoot)
+	}
+	return env
+}
+
 // launchLocalBroker is startLocalBroker, except that a start port49d refuses
 // over the CRL source returns (nil, the refusal line). Every other fault is
 // t.Fatal.
@@ -136,40 +186,22 @@ func launchLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot
 			t.Fatalf("bin/%s is missing: run `make build` first", bin)
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	pki, err := prepareLocalBroker(dir, anchorFile, crlURL, crlIssuer)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := initRevocations(filepath.Join(repo, "bin", "port49d"), filepath.Join(dir, "port49d.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	b := &localBroker{repo: repo, pki: filepath.Join(dir, "pki"), stderrPath: filepath.Join(dir, "port49d.err")}
-	if err := testpki.WriteLab(b.pki, sliceEmail, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	cfg, policy, inventory := localBrokerFiles(dir, b.pki, anchorFile, crlURL, crlIssuer)
-	for name, body := range map[string]string{"port49d.yaml": cfg, "policy.yaml": policy, "inventory.yaml": inventory} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	b := &localBroker{repo: repo, pki: pki, stderrPath: filepath.Join(dir, "port49d.err")}
 	errf, err := os.Create(b.stderrPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, encKey := os.Getenv("PORT49_LAB_KEY"), os.Getenv("PORT49_LAB_ENC_KEY")
-	if key == "" {
-		key = labKeyDefault
-	}
-	if encKey == "" {
-		encKey = labEncKeyDefault
-	}
 	b.cmd = exec.Command(filepath.Join(repo, "bin", "port49d"), "-config", filepath.Join(dir, "port49d.yaml"))
 	b.cmd.Dir = repo
 	b.cmd.Stderr = errf
-	b.cmd.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
-	if crlRoot != "" {
-		b.cmd.Env = append(b.cmd.Env, "SSL_CERT_FILE="+crlRoot)
-	}
+	b.cmd.Env = localBrokerEnv(crlRoot)
 	if err := b.cmd.Start(); err != nil {
 		errf.Close()
 		t.Fatalf("start port49d: %v", err)
