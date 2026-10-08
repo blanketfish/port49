@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	rand2 "math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -99,6 +100,25 @@ func (e *RedirectError) Error() string {
 	return fmt.Sprintf("the broker answered %d, a redirect; the client never follows one", e.Status)
 }
 
+// TLSError is a TLS verification failure, either way: the broker's certificate
+// not under the broker CA, or the broker's alert refusing the workload's
+// certificate. No retry mends it, so it is final (decision 40 ruling 10).
+type TLSError struct {
+	Refused bool // the broker refused our certificate; otherwise we refused its
+	Err     error
+}
+
+func (e *TLSError) Error() string {
+	if e.Refused {
+		return fmt.Sprintf("the broker refused this workload's certificate (%v): check that its CA is one the broker "+
+			"trusts for workloads, and both clocks", e.Err)
+	}
+	return fmt.Sprintf("the broker's certificate does not verify against --broker-ca (%v): check that --broker-ca is "+
+		"the CA that signed the broker's certificate", e.Err)
+}
+
+func (e *TLSError) Unwrap() error { return e.Err }
+
 // TemporaryError is the deadline passing with Unminted not minted; Last is
 // the broker's last answer, or the connection's failure.
 type TemporaryError struct {
@@ -144,10 +164,19 @@ func LoadCertificate(certFile, keyFile string, now time.Time, warn func(string, 
 	case warn != nil && api.LateRenewal(leaf, now):
 		warn("the certificate %s expires %s (in %s) with under a quarter of its validity left: its renewal is late; "+
 			"renew it against your CA", certFile, leaf.NotAfter.UTC().Format(time.RFC3339),
-			strings.TrimSuffix(leaf.NotAfter.Sub(now).Round(time.Minute).String(), "0s"))
+			leftIn(leaf.NotAfter.Sub(now)))
 	}
 	cert.Leaf = leaf
 	return cert, nil
+}
+
+// leftIn is d for a warning: whole minutes, or whole seconds under a minute so
+// it never reads "0s".
+func leftIn(d time.Duration) string {
+	if d < time.Minute {
+		return max(d.Round(time.Second), 0).String()
+	}
+	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }
 
 // Client is one run's connection to the broker.
@@ -250,7 +279,8 @@ func unminted(err error, devices []string) error {
 // cannot answer now: a 503 (but an uncovered certificate status), a 502, a
 // 504, a 429, a 409 idempotency_in_progress after its Retry-After (5s when
 // absent, 60s at most), a failed connection after 1s doubling to 30s (the
-// computed waits jittered by 20%); until deadline. Any other answer is final.
+// computed waits jittered by 20%); until deadline. Any other answer is final,
+// as is a TLS verification failure either way (TLSError).
 func (c *Client) do(ctx context.Context, deadline time.Time, method, path string, body []byte, key string, out any) error {
 	wait := time.Second
 	for {
@@ -270,6 +300,9 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if te := tlsFailure(err); te != nil {
+				return te
 			}
 			last, pause = fmt.Errorf("no answer: %w", err), jitter(wait)
 			wait = min(wait*2, 30*time.Second)
@@ -302,6 +335,22 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 	}
 }
 
+// tlsFailure is err when it is a TLS verification failure either way, which
+// no retry mends: the broker's certificate not verifying (x509 errors from
+// the handshake), or a TLS alert from the broker refusing ours (a remote
+// error). A dropped, refused or timed-out connection is neither.
+func tlsFailure(err error) *TLSError {
+	var cv *tls.CertificateVerificationError
+	if errors.As(err, &cv) {
+		return &TLSError{Err: cv}
+	}
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "remote error" {
+		return &TLSError{Refused: true, Err: op.Err}
+	}
+	return nil
+}
+
 // retriable is an answer a later try may change. A certificate status no
 // source covers is not one: the broker answers it 503 with Retry-After, but
 // it holds until the operator adds a CRL or OCSP for that issuer, so it is
@@ -330,15 +379,24 @@ func retryAfter(h http.Header) time.Duration {
 // mint's body holds tokens, and a decoder's own message can quote a character
 // or a number from the input.
 func decodeError(path string, err error) error {
+	return &DecodeError{Msg: decodeMessage(path, err)}
+}
+
+// DecodeError is a 200 that is not the broker's answer (a proxy's page): final.
+type DecodeError struct{ Msg string }
+
+func (e *DecodeError) Error() string { return e.Msg }
+
+func decodeMessage(path string, err error) string {
 	var syn *json.SyntaxError
 	var typ *json.UnmarshalTypeError
 	switch {
 	case errors.As(err, &syn):
-		return fmt.Errorf("the broker's answer to %s is not valid JSON (offset %d)", path, syn.Offset)
+		return fmt.Sprintf("the broker's answer to %s is not valid JSON (offset %d)", path, syn.Offset)
 	case errors.As(err, &typ):
-		return fmt.Errorf("the broker's answer to %s has the wrong shape (offset %d)", path, typ.Offset)
+		return fmt.Sprintf("the broker's answer to %s has the wrong shape (offset %d)", path, typ.Offset)
 	}
-	return fmt.Errorf("the broker's answer to %s cannot be decoded", path)
+	return fmt.Sprintf("the broker's answer to %s cannot be decoded", path)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

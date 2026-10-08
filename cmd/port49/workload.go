@@ -322,10 +322,12 @@ func workloadIdentity(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, safe(err.Error()))
 		var ae *workload.APIError
 		var re *workload.RedirectError
+		var tle *workload.TLSError
+		var de *workload.DecodeError
 		switch {
 		case errors.Is(err, workload.ErrTemporary):
 			return exitTemporary
-		case errors.As(err, &ae), errors.As(err, &re):
+		case errors.As(err, &ae), errors.As(err, &re), errors.As(err, &tle), errors.As(err, &de):
 			return exitFinal
 		}
 		return 1

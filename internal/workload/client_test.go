@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -291,6 +292,19 @@ func TestALateCertificateWarns(t *testing.T) {
 	}
 }
 
+// Under a minute left is said in seconds, never "(in )".
+func TestALateWarningUnderAMinuteSaysSeconds(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 4*time.Hour)
+	h.now = h.now.Add(4*time.Hour - 20*time.Second)
+	var warned string
+	h.cfg.Warn = func(format string, args ...any) { warned = fmt.Sprintf(format, args...) }
+	h.client(t)
+	if !strings.Contains(warned, "(in 20s)") {
+		t.Fatalf("%q", warned)
+	}
+}
+
 // A renewal writes the certificate, then the key: a read in between is read
 // again rather than handshaking with a pair that cannot (decision 40 ruling 10).
 // The renewer's second write happens in the wait between reads, so the test
@@ -507,4 +521,48 @@ func sum(ds []time.Duration) time.Duration {
 		t += d
 	}
 	return t
+}
+
+// A broker whose certificate is not under --broker-ca is not mended by a
+// retry: final, naming the trust failure (decision 40 ruling 10).
+func TestABrokerOutsideTheBrokerCAIsFinal(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	other, err := testpki.NewCA("other", h.now.Add(-time.Hour), h.now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.BrokerCA = other.Pool()
+	_, err = h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var te *TLSError
+	if !errors.As(err, &te) || errors.Is(err, ErrTemporary) || len(h.slept) != 0 {
+		t.Fatalf("%v; slept %v", err, h.slept)
+	}
+	if !strings.Contains(err.Error(), "--broker-ca") {
+		t.Fatalf("does not name the trust failure: %v", err)
+	}
+	if _, err := h.client(t).Identity(context.Background()); !errors.As(err, &te) {
+		t.Fatalf("identity: %v", err)
+	}
+}
+
+// A broker that refuses the workload's certificate with a TLS alert (another
+// CA's) is final too.
+func TestABrokerRefusingTheCertificateIsFinal(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	other, err := testpki.NewCA("other", h.now.Add(-time.Hour), h.now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ca = other
+	h.writeCert(t, h.now.Add(-time.Minute), h.now.Add(24*time.Hour))
+	_, err = h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var te *TLSError
+	if !errors.As(err, &te) || errors.Is(err, ErrTemporary) || len(h.slept) != 0 {
+		t.Fatalf("%v; slept %v", err, h.slept)
+	}
+	if !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("does not say the broker refused the certificate: %v", err)
+	}
 }

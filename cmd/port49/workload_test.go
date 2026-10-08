@@ -67,6 +67,10 @@ func workloadBrokerWith(t *testing.T, batchMax int, answer func(w http.ResponseW
 				w.WriteHeader(http.StatusTemporaryRedirect)
 				return
 			}
+			if identity.Method == "html" { // a proxy's page in place of the broker's answer
+				_, _ = w.Write([]byte("<html>sorry</html>"))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(identity)
 		}
 	}))
@@ -439,5 +443,79 @@ func TestAFaultLineCarriesTheDetail(t *testing.T) {
 	if !strings.Contains(errb.String(), "port49 workload token: fw2: broker_error: why?[2J\n") ||
 		!strings.Contains(errb.String(), "port49 workload token: fw3: only detail\n") {
 		t.Fatalf("stderr %q", errb.String())
+	}
+}
+
+// withFlag is flags with the value after name replaced.
+func withFlag(flags []string, name, value string) []string {
+	out := append([]string(nil), flags...)
+	for i := range out {
+		if out[i] == name {
+			out[i+1] = value
+		}
+	}
+	return out
+}
+
+// A TLS trust failure either way is final, not a broker outage: 77 naming it
+// (decision 40 ruling 10), where a refused connection stays 75.
+func TestWorkloadTLSTrustFailureIsFinal(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	other, err := testpki.NewCA("other", time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCA := filepath.Join(t.TempDir(), "other.pem")
+	if err := os.WriteFile(otherCA, other.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrongCA := withFlag(flags, "--broker-ca", otherCA)
+	for _, sub := range [][]string{{"token", "leaf1"}, {"identity"}} {
+		var out, errb bytes.Buffer
+		args := append(append([]string{"workload", sub[0]}, wrongCA...), sub[1:]...)
+		if code := run(args, &out, &errb); code != exitFinal || out.Len() != 0 ||
+			!strings.Contains(errb.String(), "--broker-ca") {
+			t.Fatalf("%s, a broker outside --broker-ca: exit %d stdout %q stderr %q", sub[0], code, out.String(),
+				errb.String())
+		}
+	}
+	// The broker refuses the workload's certificate: its CA is another's.
+	now := time.Now()
+	u, _ := url.Parse("spiffe://corp.example.com/host/oxidized-01")
+	cli, _ := other.Issue(testpki.Leaf{CommonName: "w", URIs: []*url.URL{u}, Client: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	certPEM, keyPEM, _ := testpki.PEMs(cli)
+	dir := t.TempDir()
+	for name, body := range map[string][]byte{"w.pem": certPEM, "w-key.pem": keyPEM} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := withFlag(withFlag(flags, "--cert", filepath.Join(dir, "w.pem")), "--key", filepath.Join(dir, "w-key.pem"))
+	for _, sub := range [][]string{{"token", "leaf1"}, {"identity"}} {
+		var out, errb bytes.Buffer
+		args := append(append([]string{"workload", sub[0]}, refused...), sub[1:]...)
+		if code := run(args, &out, &errb); code != exitFinal || out.Len() != 0 ||
+			!strings.Contains(errb.String(), "refused") {
+			t.Fatalf("%s, a refused certificate: exit %d stdout %q stderr %q", sub[0], code, out.String(), errb.String())
+		}
+	}
+	// A refused connection is still a broker outage.
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := l.Addr().String()
+	l.Close()
+	down := withFlag(flags, "--broker", "https://"+addr)
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, down...), "leaf1"), &out, &errb); code != exitTemporary {
+		t.Fatalf("refused connection: exit %d stderr %q", code, errb.String())
+	}
+}
+
+// identity exits 77 like token for a 200 that does not decode (M-7).
+func TestWorkloadIdentityUndecodableAnswerIsFinal(t *testing.T) {
+	flags := workloadBrokerWith(t, 100, mixed, api.Identity{Method: "html"})
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != exitFinal {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
