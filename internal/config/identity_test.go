@@ -349,7 +349,7 @@ func TestAWorkloadOnlyX509NeedsCertificateStatus(t *testing.T) {
 		t.Fatalf("broker %+v", c.Broker)
 	}
 	noStatus := strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1)
-	if _, err := loadWith(t, noStatus); err == nil || !strings.Contains(err.Error(), "broker.certificate_status is required") {
+	if _, err := loadWith(t, noStatus); err == nil || !strings.Contains(err.Error(), "broker.certificate_status is required with any x509 verifier") {
 		t.Fatalf("no certificate_status: %v", err)
 	}
 }

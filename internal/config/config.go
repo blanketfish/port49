@@ -1303,9 +1303,9 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 	x509 := b.ClientCAFile != "" || b.WorkloadCAFile != ""
 	switch {
 	case b.CertificateStatus == nil && x509:
-		return nil, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
-			"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
-			"certificate_status: {disabled: true} to check none (spec §5.1.4)")
+		return nil, fmt.Errorf("config: broker.certificate_status is required with any x509 verifier " +
+			"(broker.client_ca_file, or x509 under broker.identity): name the CRLs or OCSP responder that say " +
+			"whether a client certificate is revoked, or set certificate_status: {disabled: true} to check none (spec §5.1.4)")
 	case b.CertificateStatus != nil && !x509:
 		return nil, errors.New("config: broker.certificate_status: no x509 verifier is configured, so no client " +
 			"certificate is checked; remove it")
