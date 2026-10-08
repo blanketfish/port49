@@ -6,8 +6,10 @@
 # username is declared, since a workload has no directory entry (spec §2).
 roles:
   - name: config_backup
-    # show running-config needs level 15 on EOS and IOS-XE: privilege decides
-    # what the device offers, the permits what port49 allows within it (spec §2).
+    # privilege: admin, as spec §2 gives a backup account so show running-config
+    # is reachable; the lowest level each model's backup needs is unmeasured (L49).
+    # Privilege decides what the device offers, the permits what port49 allows
+    # within it (spec §2).
     privilege: admin
     permit:
       - "show running-config **"

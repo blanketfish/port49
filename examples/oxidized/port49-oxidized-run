@@ -5,8 +5,10 @@
 #
 # Run it from cron as the user Oxidized runs as, once per backup window:
 #   17 2 * * *  PORT49_BROKER=... /usr/local/bin/port49-oxidized-run
-# Oxidized's own schedule is set a week out (interval in ./config), so it never
-# tries a node with a token that expired; this script asks for each node's run.
+# Oxidized's own interval is set a week out (./config) so that its own schedule
+# tries as few nodes as possible with an expired token; how often it still does,
+# and what each try costs, is what L49 measures. This script asks for each
+# node's run.
 #
 # Environment:
 #   PORT49_BROKER       https://port49-broker.example.com:8443 (required)
@@ -20,15 +22,18 @@
 #                       size it to the whole sweep, since every node is queued at once
 #   PORT49_BIN          the port49 binary (default port49 on PATH)
 #
-# Exit: 0 every node minted and queued; 1 some node not permitted, or left out
-# of the output (port49 said which, and the rest are queued); 75 the broker did
-# not answer in time, or the output could not be written (the nodes minted
-# before it are queued; with none, Oxidized was left as it was: try the next
-# window); 77 nothing minted until someone acts (an expired certificate, a
-# revoked principal, every node denied, a certificate status nothing covers),
-# and Oxidized was left as it was; anything else, a fault, said on stderr.
-# router.db is replaced, and Oxidized reloaded, only when there is a node to
-# write: never with an empty file.
+# Exit: 0 every node minted and queued; 1 some node not permitted, left out of
+# the output, or skipped here for an unknown platform or an unsafe name (a line
+# on stderr says which, and the rest are queued); 75 the broker did not answer
+# in time, the output could not be written, files cannot be made beside
+# router.db, another run holds the lock, or Oxidized refused a request (the
+# nodes minted before it are queued; with none, Oxidized was left as it was:
+# try the next window); 77 nothing minted until someone acts (an expired
+# certificate, a revoked principal, every node denied, a certificate status
+# nothing covers), and Oxidized was left as it was; anything else, a fault,
+# said on stderr. router.db is replaced, and Oxidized reloaded, only when there
+# is a node to write: never with an empty file. A partial run drops the
+# unminted nodes from Oxidized's list until a later run mints them.
 # No token is ever printed: they go to a 0600 file and into router.db (0600).
 # Never add set -x or an echo of a token here.
 set -euo pipefail
@@ -42,9 +47,22 @@ port49=${PORT49_BIN:-port49}
 
 # A fresh --out file each run: if port49 could not write it (exit 75) it is
 # still empty, and the nothing-minted path below leaves the last router.db.
-tsv=$(mktemp "${routerdb}.tsv.XXXXXX")
-db=$(mktemp "${routerdb}.XXXXXX")
+# One run at a time: overlapping cron runs must not interleave.
+exec 9>"${routerdb}.lock" || {
+  echo "port49-oxidized-run: cannot make files beside $routerdb; nothing changed" >&2
+  exit 75
+}
+flock -n 9 || {
+  echo "port49-oxidized-run: another run holds the lock ${routerdb}.lock; nothing changed" >&2
+  exit 75
+}
+tsv=""
+db=""
 trap 'rm -f "$tsv" "$db"' EXIT
+tsv=$(mktemp "${routerdb}.tsv.XXXXXX") && db=$(mktemp "${routerdb}.XXXXXX") || {
+  echo "port49-oxidized-run: cannot make files beside $routerdb; nothing changed" >&2
+  exit 75
+}
 
 status=0
 "$port49" workload token --broker "$PORT49_BROKER" --broker-ca "$PORT49_BROKER_CA" \
@@ -61,11 +79,18 @@ esac
 # port49's platform names to Oxidized's models (L49). A node name goes into a
 # REST path, so one outside A-Z a-z 0-9 . _ - is skipped, never escaped. The
 # TSV never holds a tab or newline inside a field, so splitting on tabs is safe.
+# A skipped node is exit 1, like port49's own left-out device.
+awk_status=0
 awk -F'\t' 'BEGIN { OFS = "\t"
     m["arista_eos"] = "eos"; m["cisco_nxos"] = "nxos"; m["cisco_iosxe"] = "ios"; m["juniper_junos"] = "junos" }
-  $1 !~ /^[A-Za-z0-9._-]+$/ { printf "port49-oxidized-run: %s: a node name outside A-Z a-z 0-9 . _ - is never put in a REST path; skipped\n", $1 > "/dev/stderr"; next }
-  !($3 in m) { printf "port49-oxidized-run: %s: platform %s has no Oxidized model in this script; skipped\n", $1, $3 > "/dev/stderr"; next }
-  { print $1, $2, m[$3], $4, $5 }' "$tsv" >"$db"
+  $1 !~ /^[A-Za-z0-9._-]+$/ { printf "port49-oxidized-run: %s: a node name outside A-Z a-z 0-9 . _ - is never put in a REST path; skipped\n", $1 > "/dev/stderr"; skipped = 1; next }
+  !($3 in m) { printf "port49-oxidized-run: %s: platform %s has no Oxidized model in this script; skipped\n", $1, $3 > "/dev/stderr"; skipped = 1; next }
+  { print $1, $2, m[$3], $4, $5 }
+  END { if (skipped) exit 3 }' "$tsv" >"$db" || awk_status=$?
+if [ "$awk_status" -ne 0 ] && [ "$awk_status" -ne 3 ]; then
+  echo "port49-oxidized-run: awk failed ($awk_status); nothing changed" >&2
+  exit "$awk_status"
+fi
 
 # Only a router.db with a node in it replaces the last one: an empty one
 # would drop every node from Oxidized.
@@ -79,12 +104,23 @@ if [ ! -s "$db" ]; then
   exit "$status"
 fi
 mv -f "$db" "$routerdb"
+if [ "$status" -eq 0 ] && [ "$awk_status" -eq 3 ]; then status=1; fi
 if [ "$status" -eq 75 ]; then
-  echo "port49-oxidized-run: not every node was minted (port49 workload token exited 75: the broker did not answer in time); the minted nodes are queued, the rest wait for the next window" >&2
+  echo "port49-oxidized-run: not every node was minted (port49 workload token exited 75: the broker did not answer in time or the output could not be written); the minted nodes are queued, the rest are absent from Oxidized's list until a later run mints them" >&2
 fi
 
-curl -fsS -o /dev/null "$rest/reload?format=json"
-cut -f1 "$routerdb" | while IFS= read -r node; do
-  curl -fsS -o /dev/null -X PUT "$rest/node/next/$node?format=json"
-done
+# A request Oxidized refuses or does not answer in 10s is said and the run
+# goes on to the next node; the run then exits 75.
+if ! curl -fsS --max-time 10 -o /dev/null "$rest/reload?format=json"; then
+  echo "port49-oxidized-run: router.db was replaced but Oxidized was not reloaded (the reload request failed); try the next window" >&2
+  exit 75
+fi
+rest_failed=0
+while IFS= read -r node; do
+  if ! curl -fsS --max-time 10 -o /dev/null -X PUT "$rest/node/next/$node?format=json"; then
+    echo "port49-oxidized-run: $node: Oxidized refused the queue request; it waits for the next window" >&2
+    rest_failed=1
+  fi
+done < <(cut -f1 "$routerdb")
+if [ "$rest_failed" -eq 1 ]; then status=75; fi
 exit "$status"

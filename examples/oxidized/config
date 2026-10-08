@@ -2,8 +2,10 @@
 # Oxidized for port49 (plan 8). PROVISIONAL ON LAB L49 (policy engine spec §15).
 # Each node's username and password come from router.db, which
 # port49-oxidized-run rewrites with a fresh token per node before each run.
-# Oxidized's own interval is a week, so it never tries a node with an expired
-# token; port49-oxidized-run asks for each node's run through the REST API.
+# Oxidized's own interval is set a week out so that its own schedule tries as
+# few nodes as possible with an expired token; how often it still does, and what
+# each try costs, is what L49 measures. port49-oxidized-run asks for each
+# node's run through the REST API.
 username: unused-see-router-db
 password: unused-see-router-db
 model: eos

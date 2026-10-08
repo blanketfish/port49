@@ -10,8 +10,11 @@ host. Three files fit together:
 
 - `port49-oxidized-run` runs `port49 workload token`, writes Oxidized's `router.db`, and asks
   Oxidized to back each node up now.
-- `config` is Oxidized's configuration. It reads `router.db`, and its own schedule is a week out.
-- `policy.yaml` is the port49 policy: a read-only `config_backup` role for the Oxidized host.
+- `config` is Oxidized's configuration. It reads `router.db`, and its own interval is set a week
+  out so that its schedule tries as few nodes as possible with an expired token. How often it
+  still does is what L49 measures.
+- `policy.yaml` is the port49 policy: a `config_backup` role that confines the Oxidized host to
+  `show` commands where port49 authorizes commands (see §5a).
 
 ## 1. What runs where
 
@@ -29,8 +32,8 @@ device names, one a line.
 ## 2. Enrollment, once
 
 Get a certificate whose one URI SAN is the host's SPIFFE ID (for example
-`spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca is shown here, as L48
-measures it; any CA that puts one URI SAN on a client certificate works. Its key is readable by
+`spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca, as L48
+measures it, is one such CA; any CA that puts one URI SAN on a client certificate works. Its key is readable by
 the Oxidized user alone.
 
 ## 3. The workload CA is the trust root
@@ -70,6 +73,28 @@ The anchor is the CA that issues the workload certificates (on step-ca, its inte
   every certificate is refused, and `port49 workload` exits 77, not 75. Turning status checking
   off for everyone is not the fix.
 
+## 5a. What `port49 policy test` says about this snippet
+
+Merged as shipped, `port49 policy test` prints two reports. Neither fails the run, and both are
+true.
+
+- **`fallback_exposure` on `arista_eos` and `cisco_nxos`.** `config_backup` is at `admin`, which
+  those platforms render as `network-admin`. port49's rules confine the session to the permits in
+  `policy.yaml`. But if port49 stops answering while a session is open, and the device's command
+  method list falls back to `local`, the device authorizes that session by its role alone. L22
+  measured that such a session could change the configuration on vEOS and the N9Kv
+  (`tests/lab/results/L22-arista_eos.md`, `L22-cisco_nxos.md`). `admin` is the level spec §2
+  gives a backup account so `show running-config` is reachable. Whether a lower level serves
+  each Oxidized model is unmeasured (L49). Until it is, the exposure belongs to whoever holds a
+  session opened with this run's tokens. Keep `router.db` and the workload key the Oxidized
+  user's alone, and keep `PORT49_TTL` to one sweep.
+- **`unenforced_rules` on `juniper_junos`.** A policy that pins no `platform_set` renders with
+  set 1.0.0. Under 1.0.0, Junos neither asks port49 about a command nor receives the role's rules
+  in its session reply, so on Junos the permits above decide nothing: the session gets what the
+  device's own login class gives the port49 username. Set 1.1.0 renders them into the session
+  reply (spec §8), but the permits here name no Junos command. Which commands Oxidized's `junos`
+  model sends, and so which permits a Junos backup needs, is what L49 measures.
+
 ## 6. Check before cron
 
 ```
@@ -90,21 +115,28 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 
 ## 8. On a bad day
 
-- **Exit 75**: the broker or its store did not answer within the deadline, or the output could
-  not be written. The nodes minted before it are queued; with none, Oxidized kept its last
-  `router.db` and was not reloaded. Try the next window.
+- **Exit 75**: the broker or its store did not answer within the deadline, the output could
+  not be written, files could not be made beside `router.db`, another run holds the lock
+  (`router.db.lock`), or Oxidized refused a request. The nodes minted before it are queued; with
+  none, Oxidized kept its last `router.db` and was not reloaded. Try the next window.
+  - **A partial run** replaces `router.db` with the minted nodes alone, so the unminted nodes are
+    absent from Oxidized's list until a later run mints them. Their backup history in git is
+    untouched.
+  - **Oxidized refusing** (each request has a 10 second limit): a failed node prints its name and
+    the rest are still queued. A failed reload prints that `router.db` was replaced but Oxidized
+    was not reloaded.
 - **Exit 77**: nothing was minted and running again will not change it: an expired certificate
   (said before anything connects), a revoked principal, every node denied, or a certificate
   status nothing covers. Oxidized kept its last `router.db`. The stderr line says which.
 - **Exit 1**: a node was not permitted, was not minted after a final refusal, or was left out
   because its output line would hold a control character. Its line on stderr says why; the rest
   are queued. A node whose platform has no Oxidized model in the script, or whose name is outside
-  `A-Z a-z 0-9 . _ -`, is skipped with a line.
+  `A-Z a-z 0-9 . _ -`, is skipped with a line and exits 1 the same way.
 - **To stop the workload**: `port49 revoke --principal spiffe://...`, and revoke the certificate
   at the CA.
 
 ## 9. Provisional on L49
 
 The REST calls the wrapper makes, the platform-to-model table, the `config` settings (including
-`retries: 0`) and the role's permits are not yet measured against real Oxidized and devices. They
+`retries: 0` and the interval), and the role's level and permits are not yet measured against real Oxidized and devices. They
 are provisional until L49 closes.
