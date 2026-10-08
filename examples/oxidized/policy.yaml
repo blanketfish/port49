@@ -16,6 +16,7 @@ roles:
       - "show startup-config"
       - "show inventory"
       - "show version"
+      - "show vtp status"
       - "terminal length *"
       - "terminal width *"
 subjects:
