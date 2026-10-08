@@ -1068,15 +1068,18 @@ sources `broker.certificate_status` names.
   list; one carrying a critical extension other than its authority key identifier, its number, or
   an issuing distribution point that says only `onlyContainsUserCerts`, a distribution point named
   by `fullName`, or both; one with an entry carrying a critical extension. An issuing distribution
-  point saying anything else (`nameRelativeToCRLIssuer`, `onlySomeReasons`, `indirectCRL`, the CA
-  or attribute scopes) is refused.
+  point saying anything else (`nameRelativeToCRLIssuer`, `onlySomeReasons` even when empty,
+  `indirectCRL`, the CA or attribute scopes, a field port49 does not know) is refused, and so is
+  one not in DER (its fields out of order, a default spelled out, bytes left over).
 - **Which list applies.** It applies to a certificate when its issuer certificate is the one that
   verified it, and only until its `NextUpdate` (one with none, for `refresh_interval` from its
   `ThisUpdate`). A list scoped `onlyContainsUserCerts` covers leaves only, never an intermediate.
   A list whose issuing distribution point names a distribution point covers only a certificate
   whose CRL distribution points extension carries one of those names, byte for byte (RFC 5280
-  §5.2.5); a certificate with no such extension, or another name, is not covered by it, so that
-  list decides nothing for it, never "not revoked" (§13, decision 40, ruling 17).
+  §5.2.5); a certificate with no such extension, or another name, is not covered by it. A
+  distribution point in the certificate that carries `reasons` or a `cRLIssuer` names nothing.
+  A list that does not cover a certificate never says "not revoked" for it, but its revocation
+  still stands (Precedence) (§13, decision 40, ruling 17).
 - **Persistence.** The last good list of each source is kept beside `broker.revocations_file`, so a
   restart keeps it.
 - **OCSP.** An answer is taken only when it verifies for the issuer, and its signer is the issuer or
@@ -1084,8 +1087,10 @@ sources `broker.certificate_status` names.
   the certificate's, its `ThisUpdate` no more than five minutes ahead, and its `NextUpdate`, when
   set, still to come; with none, its `ThisUpdate` must be within `refresh_interval`. It is cached
   until the earlier of its `NextUpdate` and an hour.
-- **Precedence.** A list that names the serial is final; otherwise a fresh list covering the issuer
-  decides, and then OCSP.
+- **Precedence.** A verified list from the issuer that names the serial is final, whether or not
+  its scope covers the certificate (serials are unique per issuer, and an indirect list or an entry
+  naming another issuer is refused); otherwise a fresh list covering the certificate decides, and
+  then OCSP.
 
 A certificate a source revokes is answered `credential_revoked` before its connection binds, as a
 marked one is, and refused at every mint and refresh; so is every certificate under a revoked
@@ -7737,7 +7742,11 @@ Ryan may override any.
   built") and applied only where RFC 5280 says it applies: a certificate whose CRL distribution
   point names it. A certificate it does not cover is undecided by it, and undecided fails closed,
   so nothing is weaker; a step-ca deployment adds the distribution point to its leaves with a
-  provisioner template (`examples/oxidized`). Ruled by the controller on the lab's evidence, Task 14.
+  provisioner template (`examples/oxidized`). A list's revocation of a serial stands whatever its
+  scope, as the broker's marks already did for every new entry; a certificate distribution point
+  that carries `reasons` or a `cRLIssuer` names nothing, since port49 follows no reason partition or
+  indirect issuer; an issuing distribution point not in DER is refused. Ruled by the controller on
+  the lab's evidence and the review of the change, Task 14.
 
 *Ruled by the controller on recommendation (plan 8's pre-flight, 2026-10-07; Ryan may override
 any).* **Q1:** a workload certificate's directory groups are deferred to plan 8b, constrained to
