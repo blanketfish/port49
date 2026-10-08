@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -448,6 +450,23 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 			t.Fatal("an unestablished certificate minted")
 		}
 		wantDeny(t, lastRecord(t, f, "mint"), "trust_domain_unresolved")
+	})
+
+	// No source covers the certificate: still 503 with Retry-After, but final
+	// to port49 workload (exit 77), so it never says "try again".
+	t.Run("mint, uncovered", func(t *testing.T) {
+		f := newFixture(t, 8)
+		fs := withStatus(t, f, "refuse", nil)
+		fs.set(f.alice, certstatus.Result{Verdict: certstatus.Unknown, Source: "none",
+			Detail: api.UncoveredStatus + ` "CN=corp" (CRL corp is scoped to the distribution point x)`})
+		w := f.post(context.Background(), f.state(f.alice), mintBody, "k1")
+		var e api.Error
+		if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 503 ||
+			e.Error != "certificate_status_unavailable" || !strings.Contains(e.Detail, api.UncoveredStatus) ||
+			strings.Contains(e.Detail, "try again") || !strings.Contains(e.Detail, "until") ||
+			w.Header().Get("Retry-After") != "60" {
+			t.Fatalf("%s %v", answer(w), w.Header())
+		}
 	})
 
 	t.Run("bind", func(t *testing.T) {

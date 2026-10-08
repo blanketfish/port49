@@ -78,9 +78,15 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 				printsafe.Line(res.Detail, 300))
 			return nil
 		}
+		// An uncovered status holds until the operator or the CA changes
+		// something, and port49 workload takes it as final: never "try again".
+		next := "try again"
+		if unknownClass(res.Detail) == "uncovered" {
+			next = "it stays so until a CRL or OCSP source covers this certificate"
+		}
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.TrustDomainUnresolved,
 			Error: "certificate_status_unavailable", RetryAfter: 60,
-			Detail: "the broker cannot establish this certificate's revocation status (" + res.Detail + "); try again"}
+			Detail: "the broker cannot establish this certificate's revocation status (" + res.Detail + "); " + next}
 	}
 	return nil
 }

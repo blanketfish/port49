@@ -216,11 +216,15 @@ func TestAFinalRefusalIsNotRetried(t *testing.T) {
 // statusUnavailable answers as the broker does when it cannot establish a
 // certificate's status, cause in its detail (certcheck.go).
 func statusUnavailable(cause string) func(http.ResponseWriter, api.MintRequest) {
+	next := "try again"
+	if strings.HasPrefix(cause, api.UncoveredStatus) {
+		next = "it stays so until a CRL or OCSP source covers this certificate"
+	}
 	return func(w http.ResponseWriter, _ api.MintRequest) {
 		w.Header().Set("Retry-After", "60")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(api.Error{Error: "certificate_status_unavailable",
-			Detail: "the broker cannot establish this certificate's revocation status (" + cause + "); try again"})
+			Detail: "the broker cannot establish this certificate's revocation status (" + cause + "); " + next})
 	}
 }
 
