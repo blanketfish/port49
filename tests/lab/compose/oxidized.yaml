@@ -18,8 +18,15 @@
 # auto-reload service, which reloads in a loop when CONFIG_RELOAD_INTERVAL is
 # set at all, "0" included. HOME is a path the host user can traverse; the
 # image's own /home/oxidized is 0700 uid 30000.
+#
+# Oxidized is under a profile: it raises NoNodesFound and exits when router.db
+# lists no node, and the wrapper never writes an empty one. startOxidized brings
+# the stack up without it, runs the wrapper once (which writes router.db and
+# exits 75 at /reload, as Oxidized is not up), and then starts it with
+# `--profile oxidized up -d oxidized`.
 services:
   oxidized:
+    profiles: [oxidized]
     image: oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc
     network_mode: host
     user: "${PORT49_LAB_UID:?}:${PORT49_LAB_GID:?}"
@@ -30,7 +37,8 @@ services:
       - ${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized
       - ${PORT49_COMPOSE_LOCAL}/oxidized/known_hosts:/oxhome/.ssh/known_hosts:ro
 
-  # the workload CA the broker's machine verifier trusts
+  # the workload CA the broker's machine verifier trusts: a public certificate,
+  # mode 0644 so the broker's uid (65532) can read it
   port49-broker:
     volumes:
       - ${PORT49_COMPOSE_LOCAL}/workload/workload-ca.pem:/etc/port49-workload/workload-ca.pem:ro

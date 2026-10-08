@@ -527,10 +527,13 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
 
 - step-ca's state is `tests/lab/logs/workload/step` (git-ignored), emptied at the start of a run.
   The directory is emptied and chowned through a root container (`docker run --user root`), as the
-  Keycloak harness does, so no sudo is needed. The provisioner `lab` is a JWK whose password the
-  image generates under `secrets/`. The harness reads it into memory only to refuse it anywhere it
-  would be written; it is never printed, and a step command's output that holds key material, a
-  compact JWS or that password is withheld.
+  Keycloak harness does, so no sudo is needed. The provisioner `lab` is a JWK. The harness
+  generates a random password for the run into `tests/lab/logs/workload/pw/password` (mode 0600,
+  never printed, never read back) and mounts it as `DOCKER_STEPCA_INIT_PASSWORD_FILE`, so the CA
+  key's and the provisioner's passwords are that one value, which the harness refuses anywhere it
+  would be written. (Left to itself the image generates two passwords and prints the provisioner's
+  once in its log.) A step command's output that holds key material, a compact JWS or that password
+  is withheld, and `step-ca.log` is kept with its password lines dropped, or not at all.
 - L48's local broker trusts step-ca's root for the CRL fetch through `SSL_CERT_FILE`: step-ca serves
   its CRL over https under its own private root, and the broker fetches with the system roots. A
   CRL fetch that fails TLS is INVALID, never a measured "no".
@@ -542,6 +545,16 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   is set at all. The directory is `tests/lab/logs/compose-<platform>/local/oxidized`; `known_hosts`
   is mounted at `~/.ssh/known_hosts` (that is where Oxidized's SSH client reads it), filled by
   `ssh-keyscan` of the device.
+- Oxidized exits with `NoNodesFound` on an empty `router.db`, and the wrapper never writes an
+  empty one. So `startOxidized` brings the stack up without Oxidized (its service is under the
+  compose profile `oxidized`), runs the wrapper once (it writes `router.db`, then exits 75 at
+  `/reload` because Oxidized is not up: a setup step, not a cell, and it mints one token for the
+  node), then starts Oxidized with `--profile oxidized up -d oxidized`. After the wrapper's reload,
+  `awaitNode` fails the test (INVALID) if Oxidized never lists the node.
+- After a run, `router.db` and the wrapper's lock file stay in
+  `tests/lab/logs/compose-<platform>/local/oxidized`, and `router.db` holds live tokens (mode 0600)
+  until they expire. The directory is git-ignored; never copy it into evidence. Task 14's cleanup
+  removes it.
 - Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) may name a username
   in a login failure, and the username is a token. It stays on disk; a note never quotes it.
 - A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never

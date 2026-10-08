@@ -25,9 +25,8 @@ import (
 const (
 	// oxidizedImage is compose/oxidized.yaml's image, pinned by digest; a unit
 	// test holds the two equal. `oxidized --version` says 0.37.0-101-g65125713.
-	oxidizedImage   = "oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc"
-	oxidizedVersion = "0.37.0-101-g65125713"
-	oxidizedREST    = "http://127.0.0.1:18888"
+	oxidizedImage = "oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc"
+	oxidizedREST  = "http://127.0.0.1:18888"
 	// oxidizedAnchor is the workload CA in the broker's container
 	// (compose/oxidized.yaml mounts it there).
 	oxidizedAnchor = "/etc/port49-workload/workload-ca.pem"
@@ -107,12 +106,18 @@ func workloadE2EFiles(files map[string]string, roleBlock, roleName string) error
 // recorded whatever it is.
 const allRole = "  - {name: oxidized_all, privilege: admin, permit: [\"**\"]}\n"
 
-// startOxidized brings the compose stack up with Oxidized on it
-// (startComposeWith with compose/oxidized.yaml) and waits for Oxidized's REST
-// API. restricted false gives the workload phase A's role (permit **); true
-// gives examples/oxidized/policy.yaml's. The stack's configs are copied into
-// its volumes once, at `up`, so a different role is a different start. A fault
-// is t.Fatal: INVALID, never a measured "no".
+// startOxidized brings the compose stack up (startComposeWith with
+// compose/oxidized.yaml), runs the wrapper once, then starts Oxidized and waits
+// for its REST API. Oxidized exits on an empty router.db (NoNodesFound) and
+// the wrapper never writes an empty one, so the order is: stack without
+// Oxidized (its service is under the profile "oxidized"); one wrapper run,
+// which writes router.db and exits 75 at /reload because Oxidized is not up
+// (a setup step, not a cell: it mints one token for the node); then
+// `--profile oxidized up -d oxidized`. router.db holds that run's live token
+// until a later run replaces it. restricted false gives the workload phase A's
+// role (permit **); true gives examples/oxidized/policy.yaml's. The stack's
+// configs are copied into its volumes once, at `up`, so a different role is a
+// different start. A fault is t.Fatal: INVALID, never a measured "no".
 func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 	t.Helper()
 	repo, err := repoRoot()
@@ -136,16 +141,56 @@ func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 	o.c = l.startComposeWith(t, composeOptions{Overlay: "oxidized.yaml",
 		Files:   func(files map[string]string) error { return workloadE2EFiles(files, roleBlock, roleName) },
 		Prepare: o.prepare})
+	// The wrapper's first run: router.db written, /reload refused (exit 75).
+	if code, said := o.runWrapper("15m"); code != 75 {
+		t.Fatalf("the setup wrapper run exited %d, want 75 (router.db written, Oxidized not up yet): %s", code, tailOf(said, 800))
+	}
+	if fi, err := os.Stat(filepath.Join(o.dir, "router.db")); err != nil || fi.Size() == 0 {
+		t.Fatalf("the setup wrapper run left no router.db: %v", err)
+	}
+	// Oxidized goes down before the stack does (cleanups run last-in first).
+	t.Cleanup(func() {
+		if out, err := o.c.run("--profile", "oxidized", "rm", "-sfv", "oxidized"); err != nil {
+			t.Errorf("removing Oxidized: %v\n%s", err, tailOf(out, 500))
+		}
+	})
 	// Oxidized's log may hold a login failure naming a username, which is a
-	// token: it stays on disk and is never quoted in a note.
-	if err := o.c.follow(composeProject+"-oxidized-1", "0s", filepath.Join(o.c.dir, "oxidized.out"),
+	// token: it stays on disk and is never quoted in a note. It is followed
+	// from before `up`, so a crash at startup is in it.
+	since := time.Now().UTC().Format(time.RFC3339Nano)
+	if out, err := o.c.run("--profile", "oxidized", "up", "-d", "oxidized"); err != nil {
+		t.Fatalf("starting Oxidized: %v\n%s", err, tailOf(out, 1000))
+	}
+	if err := o.c.follow(composeProject+"-oxidized-1", since, filepath.Join(o.c.dir, "oxidized.out"),
 		filepath.Join(o.c.dir, "oxidized.err")); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.awaitREST(3 * time.Minute); err != nil {
-		t.Fatalf("Oxidized's REST API never answered: %v\ncompose.log (tail):\n%s", err, o.c.tail(30))
+		t.Fatalf("Oxidized's REST API never answered: %v\nOxidized's last output:\n%s\ncompose.log (tail):\n%s", err,
+			o.startupTail(), o.c.tail(30))
 	}
 	return o
+}
+
+// startupTail is the last lines Oxidized wrote, for a failure message, or a
+// line saying they were withheld because they hold a compact JWS.
+func (o *oxidized) startupTail() string {
+	out, _ := o.c.run("--profile", "oxidized", "logs", "--no-color", "--tail", "50", "oxidized")
+	if err := leakIn(out, nil); err != nil {
+		return "(withheld: " + err.Error() + ")"
+	}
+	return out
+}
+
+// writeWorkloadPKI writes the workload's CA, certificate and keys into dir
+// (testpki.WriteWorkloadLab), and makes the CA certificate world-readable:
+// it is a public certificate the broker container (uid 65532) mounts and must
+// read, as the OIDC harness does for idp-ca.pem. The keys stay 0600.
+func writeWorkloadPKI(dir, id string, now time.Time) error {
+	if err := testpki.WriteWorkloadLab(dir, id, now); err != nil {
+		return err
+	}
+	return os.Chmod(filepath.Join(dir, testpki.WorkloadCA), 0o644)
 }
 
 // prepare writes what the overlay mounts, under c.local, before `up`: the
@@ -154,7 +199,7 @@ func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 // ssh-keyscan of the platform's device.
 func (o *oxidized) prepare(c *composeStack) error {
 	o.workload = filepath.Join(c.local, "workload")
-	if err := testpki.WriteWorkloadLab(o.workload, l48ID, time.Now()); err != nil {
+	if err := writeWorkloadPKI(o.workload, l48ID, time.Now()); err != nil {
 		return err
 	}
 	o.dir = filepath.Join(c.local, "oxidized")
@@ -232,6 +277,39 @@ func (o *oxidized) awaitREST(within time.Duration) error {
 	}
 }
 
+// nodeListed says whether a /nodes?format=json answer lists node, by name or
+// full_name.
+func nodeListed(raw []byte, node string) bool {
+	var nodes []map[string]any
+	if json.Unmarshal(raw, &nodes) != nil {
+		return false
+	}
+	for _, n := range nodes {
+		if str(n, "name") == node || str(n, "full_name") == node {
+			return true
+		}
+	}
+	return false
+}
+
+// awaitNode waits for Oxidized to list node (the wrapper's reload loads
+// router.db). A node it never lists is a setup fault, t.Fatal: INVALID, never
+// a failed cell.
+func (o *oxidized) awaitNode(node string, within time.Duration) {
+	o.t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		if code, body, err := o.get("/nodes?format=json"); err == nil && code == http.StatusOK && nodeListed(body, node) {
+			return
+		}
+		if time.Now().After(deadline) {
+			o.t.Fatalf("Oxidized never listed node %s within %s (INVALID, not a measured no)\nOxidized's last output:\n%s",
+				node, within, o.startupTail())
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
 // lastRun reads the "last" run out of a /node/show answer: its status and end
 // time. Oxidized writes the time as "2006-01-02 15:04:05 UTC".
 func lastRun(raw []byte) (string, time.Time, error) {
@@ -291,12 +369,16 @@ func (o *oxidized) fetchConfig(node string) (string, error) {
 }
 
 // oxidizedCommands are the commands in the daemon's authorize_command
-// records for username, in order and once each.
-func oxidizedCommands(recs []map[string]any, username string) []string {
+// records for username, in order and once each. verdict, when not "", keeps
+// only the records with that verdict ("permit" or "deny").
+func oxidizedCommands(recs []map[string]any, username, verdict string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range recs {
 		if str(r, "event") != "authorize_command" || str(sub(r, "session"), "username") != username {
+			continue
+		}
+		if verdict != "" && str(r, "verdict") != verdict {
 			continue
 		}
 		cmd := strings.Join(strs(sub(r, "request"), "vector"), " ")

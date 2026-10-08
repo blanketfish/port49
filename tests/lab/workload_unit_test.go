@@ -164,11 +164,114 @@ func TestOxidizedCommandsAreTheUsersOwnInOrderOnceEach(t *testing.T) {
 		{"event": "authorize_command", "request": map[string]any{"vector": []any{"show", "bare"}}},
 	}
 	want := []string{"terminal length 0", "show version", "show running-config"}
-	if got := oxidizedCommands(recs, "svc-oxidized"); !reflect.DeepEqual(got, want) {
+	if got := oxidizedCommands(recs, "svc-oxidized", ""); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if got := oxidizedCommands(recs, "nobody"); len(got) != 0 {
+	if got := oxidizedCommands(recs, "nobody", ""); len(got) != 0 {
 		t.Errorf("a user with no records: %q", got)
+	}
+}
+
+// a verdict narrows the commands to the permits or the denials alone.
+func TestOxidizedCommandsFilterOnVerdict(t *testing.T) {
+	rec := func(verdict string, vector ...string) map[string]any {
+		v := make([]any, len(vector))
+		for i, w := range vector {
+			v[i] = w
+		}
+		return map[string]any{"event": "authorize_command", "verdict": verdict,
+			"session": map[string]any{"username": "svc-oxidized"}, "request": map[string]any{"vector": v}}
+	}
+	recs := []map[string]any{rec("permit", "show", "version"), rec("deny", "configure", "terminal"),
+		rec("permit", "show", "inventory")}
+	if got, want := oxidizedCommands(recs, "svc-oxidized", "permit"), []string{"show version", "show inventory"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("permit: got %q, want %q", got, want)
+	}
+	if got, want := oxidizedCommands(recs, "svc-oxidized", "deny"), []string{"configure terminal"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("deny: got %q, want %q", got, want)
+	}
+	if got := oxidizedCommands(recs, "svc-oxidized", ""); len(got) != 3 {
+		t.Errorf("no verdict is every command: %q", got)
+	}
+}
+
+// the container's log is kept only with its password lines dropped and no
+// secret left: the image's first start prints the CA's administrative password.
+func TestScrubStepLogDropsPasswordLines(t *testing.T) {
+	const secret = "lab-only-generated-secret-value"
+	raw := "badger info\n👉 Your CA administrative password is: " + secret + "\nlistening on :9000\nPASSWORD file read\n"
+	got, err := scrubStepLog(raw, []string{secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, secret) || strings.Contains(strings.ToLower(got), "password") ||
+		!strings.Contains(got, "badger info") || !strings.Contains(got, "listening on :9000") {
+		t.Errorf("scrubbed log = %q", got)
+	}
+	// a secret on a line that does not say "password" is refused, not kept
+	if _, err := scrubStepLog("token "+secret+"\n", []string{secret}); err == nil {
+		t.Error("a log that still holds the secret was kept")
+	}
+	if _, err := scrubStepLog("-----BEGIN EC PRIVATE KEY-----\n", nil); err == nil {
+		t.Error("a log that holds a private key was kept")
+	}
+}
+
+// a log file with a leak in it is replaced, not kept.
+func TestWithholdLeakyLog(t *testing.T) {
+	dir := t.TempDir()
+	clean, dirty := filepath.Join(dir, "clean.log"), filepath.Join(dir, "dirty.log")
+	if err := os.WriteFile(clean, []byte("renewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dirty, []byte("-----BEGIN EC PRIVATE KEY-----\nAAAA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{clean, dirty} {
+		if err := withholdLeakyLog(p, nil); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+	if b, _ := os.ReadFile(clean); string(b) != "renewed\n" {
+		t.Errorf("a clean log was changed: %q", b)
+	}
+	if b, _ := os.ReadFile(dirty); strings.Contains(string(b), "PRIVATE KEY") || !strings.Contains(string(b), "withheld") {
+		t.Errorf("a leaky log was kept: %q", b)
+	}
+}
+
+// the node list names the node, by name or full_name.
+func TestNodeListed(t *testing.T) {
+	list := []byte(`[{"name":"leaf1","full_name":"leaf1","ip":"172.100.100.11","model":"eos"},{"name":"leaf2"}]`)
+	if !nodeListed(list, "leaf1") || !nodeListed(list, "leaf2") {
+		t.Error("a listed node was not found")
+	}
+	if nodeListed(list, "leaf3") || nodeListed([]byte(`[]`), "leaf1") || nodeListed([]byte(`<html>`), "leaf1") {
+		t.Error("an unlisted node, an empty list or a non-JSON answer found the node")
+	}
+}
+
+// WriteWorkloadLab's CA is a public certificate the broker container (uid
+// 65532) must read; its key stays 0600.
+func TestWriteWorkloadPKIMakesTheCAReadable(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "workload")
+	if err := writeWorkloadPKI(dir, l48ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mode := func(name string) os.FileMode {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Mode().Perm()
+	}
+	if m := mode(testpki.WorkloadCA); m != 0o644 {
+		t.Errorf("workload-ca.pem is %o, want 644", m)
+	}
+	for _, key := range []string{testpki.WorkloadKey, testpki.WorkloadCAKey} {
+		if m := mode(key); m != 0o600 {
+			t.Errorf("%s is %o, want 600", key, m)
+		}
 	}
 }
 
@@ -191,15 +294,21 @@ func TestTheWorkloadImagesArePinnedOnce(t *testing.T) {
 	}
 }
 
-// step-ca's compose file names no password and binds the CA to loopback alone.
+// step-ca's compose file holds no password value, reads the harness's generated
+// file (so the CA key's and the provisioner's passwords are equal), and binds the
+// CA to loopback alone.
 func TestStepCAComposeHoldsNoPasswordAndBindsLoopback(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("workload", "compose.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	if strings.Contains(s, "DOCKER_STEPCA_INIT_PASSWORD") {
-		t.Error("the compose file sets the provisioner password")
+	if strings.Contains(s, "DOCKER_STEPCA_INIT_PASSWORD:") {
+		t.Error("the compose file sets the password itself")
+	}
+	if !strings.Contains(s, "DOCKER_STEPCA_INIT_PASSWORD_FILE: "+stepCAPassword+"\n") ||
+		!strings.Contains(s, "../logs/workload/pw/password:"+stepCAPassword+":ro") {
+		t.Errorf("the compose file does not read the generated password file at %s", stepCAPassword)
 	}
 	if !strings.Contains(s, `"127.0.0.1:19000:9000"`) {
 		t.Error("step-ca is not published on loopback alone")
@@ -219,7 +328,9 @@ func TestOxidizedOverlayIsHostNetworked(t *testing.T) {
 	// chown the directory to uid 30000 and lock the host-side wrapper out.
 	for _, want := range []string{"network_mode: host", "${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized",
 		"${PORT49_COMPOSE_LOCAL}/oxidized/known_hosts:/oxhome/.ssh/known_hosts:ro", `user: "${PORT49_LAB_UID:?}:${PORT49_LAB_GID:?}"`,
-		`command: ["oxidized"]`, "HOME: /oxhome", "/etc/port49-workload/workload-ca.pem:ro"} {
+		`command: ["oxidized"]`, "HOME: /oxhome", "/etc/port49-workload/workload-ca.pem:ro",
+		// Oxidized exits on an empty router.db: it starts only after a wrapper run wrote one
+		"profiles: [oxidized]"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("the overlay lacks %q", want)
 		}

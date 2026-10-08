@@ -42,9 +42,12 @@ const (
 	stepCACompose = "tests/lab/workload/compose.yaml"
 	l48ID         = "spiffe://port49.lab/host/oxidized-01"
 
-	stepCAURL      = "https://localhost:9000" // inside the container
-	stepCARoot     = "/home/step/certs/root_ca.crt"
-	stepCAPassword = "/home/step/secrets/password"
+	stepCAURL  = "https://localhost:9000" // inside the container
+	stepCARoot = "/home/step/certs/root_ca.crt"
+	// stepCAPassword is the harness's generated password file, mounted
+	// read-only (workload/compose.yaml); it is the CA key's and the
+	// provisioner's password both.
+	stepCAPassword = "/run/secrets/lab_password"
 	stepCAProv     = "lab"
 	stepCAHost     = "https://127.0.0.1:19000" // the published port
 	stepCAWCert    = "/home/step/w/w.pem"
@@ -62,6 +65,40 @@ func stepLeak(out string, secrets []string) error {
 		return errors.New("it holds a private key")
 	}
 	return leakIn(out, secrets)
+}
+
+// scrubStepLog is a container log without its password lines, or an error when
+// a secret or key material is still in what is left: the image prints the CA's
+// administrative password at its first start.
+func scrubStepLog(raw string, secrets []string) (string, error) {
+	var kept []string
+	for _, ln := range strings.Split(raw, "\n") {
+		if !strings.Contains(strings.ToLower(ln), "password") {
+			kept = append(kept, ln)
+		}
+	}
+	out := strings.Join(kept, "\n")
+	if err := stepLeak(out, secrets); err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// withholdLeakyLog leaves the log at path as it is when it is clean, and
+// replaces it with a line saying it was withheld when it holds key material, a
+// compact JWS or a registered secret. A missing file is not an error.
+func withholdLeakyLog(path string, secrets []string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if lerr := stepLeak(string(raw), secrets); lerr != nil {
+		return os.WriteFile(path, []byte("(log withheld: "+lerr.Error()+")\n"), 0o644)
+	}
+	return nil
 }
 
 // workloadNote is a results note in spec §15 rule 3's form, not yet checked
@@ -174,29 +211,50 @@ func startStepCA(t *testing.T) *stepCA {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The run's password: one value for the CA key and the provisioner
+	// (DOCKER_STEPCA_INIT_PASSWORD_FILE), in a 0600 file this process writes
+	// and never reads back. It is registered as a secret before anything runs.
+	pw := randomSecret(t)
+	s.secrets = append(s.secrets, pw)
+	pwDir := filepath.Join(logs, "pw")
+	if err := os.RemoveAll(pwDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pwDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pwDir, "password"), []byte(pw), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// step-ca's files are owned by its uid, so a run starts from an empty
-	// directory emptied and chowned by a root container, as the 7h harness
-	// does for Keycloak: no sudo.
+	// directory emptied, chmod'd and chowned by a root container, as the 7h
+	// harness does for Keycloak: no sudo, and no assumption that the host
+	// user is step's. The password file is chowned the same way, so step can
+	// read it.
 	uid, err := dockerCmd("run", "--rm", "--entrypoint", "id", stepCAImage, "-u", "step").Output()
 	if err != nil {
 		t.Fatalf("step-ca's uid (does the image pull?): %v", err)
 	}
 	owner := strings.TrimSpace(string(uid))
-	if o, err := dockerCmd("run", "--rm", "--user", "root", "--entrypoint", "sh", "-v", s.dir+":/d", stepCAImage, "-c",
-		"rm -rf /d/* /d/.[!.]* && chown "+owner+":"+owner+" /d").CombinedOutput(); err != nil {
-		t.Fatalf("emptying step-ca's state directory: %v\n%s", err, tailOf(string(o), 500))
-	}
-	if err := os.Chmod(s.dir, 0o755); err != nil {
-		t.Fatal(err)
+	if o, err := dockerCmd("run", "--rm", "--user", "root", "--entrypoint", "sh", "-v", s.dir+":/d", "-v", pwDir+":/p",
+		stepCAImage, "-c", "rm -rf /d/* /d/.[!.]* && chmod 755 /d && chown "+owner+":"+owner+" /d /p/password").CombinedOutput(); err != nil {
+		t.Fatalf("preparing step-ca's state directory: %v\n%s", err, tailOf(string(o), 500))
 	}
 	t.Cleanup(func() {
 		if s.renewer != nil {
 			_ = s.renewer.Process.Kill()
 		}
-		if logs, err := s.dc("logs", "--no-color", "step-ca").CombinedOutput(); err == nil {
-			// step-ca logs requests, never a token or a password.
-			_ = os.WriteFile(filepath.Join(filepath.Dir(s.dir), "step-ca.log"), logs, 0o644)
+		if raw, err := s.dc("logs", "--no-color", "step-ca").CombinedOutput(); err == nil {
+			// The image's first start prints the CA's administrative password:
+			// the log is kept without its password lines, and not at all if a
+			// secret is still in it.
+			if kept, err := scrubStepLog(string(raw), s.secrets); err != nil {
+				t.Errorf("step-ca.log is not written: %v", err)
+			} else {
+				_ = os.WriteFile(filepath.Join(logs, "step-ca.log"), []byte(kept), 0o644)
+			}
 		}
+		_ = os.RemoveAll(pwDir)
 		if o, err := s.dc("down", "-v", "--remove-orphans", "-t", "5").CombinedOutput(); err != nil {
 			t.Errorf("docker compose down (step-ca): %v\n%s", err, tailOf(string(o), 1000))
 		}
@@ -206,13 +264,6 @@ func startStepCA(t *testing.T) *stepCA {
 	}
 	if err := s.waitHealth(3 * time.Minute); err != nil {
 		t.Fatalf("step-ca never answered /health: %v", err)
-	}
-	// The password is read into memory to be refused anywhere it would be
-	// written; it is never printed.
-	if pw, err := s.read(stepCAPassword); err != nil || strings.TrimSpace(pw) == "" {
-		t.Fatalf("step-ca's provisioner password file is not readable: %v", err)
-	} else {
-		s.secrets = append(s.secrets, strings.TrimSpace(pw))
 	}
 	return s
 }
@@ -328,7 +379,8 @@ func (s *stepCA) renew() (*x509.Certificate, error) {
 func (s *stepCA) renewDaemon() (stop func(), err error) {
 	cmd := s.dc("exec", "-T", "step-ca", "sh", "-c", "echo $$ > /tmp/renew.pid; exec step ca renew --daemon "+
 		stepCAWCert+" "+stepCAWKey+" --ca-url "+stepCAURL+" --root "+stepCARoot)
-	logf, err := os.Create(filepath.Join(filepath.Dir(s.dir), "renew-daemon.log"))
+	logPath := filepath.Join(filepath.Dir(s.dir), "renew-daemon.log")
+	logf, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
 	}
@@ -348,6 +400,9 @@ func (s *stepCA) renewDaemon() (stop func(), err error) {
 			_ = cmd.Process.Kill()
 		}
 		s.renewer = nil
+		if err := withholdLeakyLog(logPath, s.secrets); err != nil {
+			s.t.Errorf("renew-daemon.log: %v", err)
+		}
 	}, nil
 }
 
