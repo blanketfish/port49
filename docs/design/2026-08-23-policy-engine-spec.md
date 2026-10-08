@@ -7707,8 +7707,10 @@ Ryan may override any.
   `idempotency_in_progress`, 429, a failed connection, and a 502 or 504 (a proxy in front of the
   broker that could not reach it: the same failure as a refused connection, and the key makes the
   retry safe), within `--deadline` (2m); tokens to
-  stdout or `--out` (0600, renamed into place); exit 0 (all written), 1 (some written, some not),
-  2 (usage), 75 (temporary; the pages minted are written) or 77 (nothing minted, final). Tasks 9
+  stdout or `--out` (0600, renamed into place; a device whose line would hold a control character
+  is left out and said); exit 0 (all written), 1 (some written, some not), 2 (usage), 75
+  (temporary: the pages minted are written, or the output itself could not be written, and the
+  last `--out` stands) or 77 (nothing minted, final). Tasks 9
   and 10.
 - **11. A workload's device sessions follow §5.6.** Two principals of one subject on one device
   replace each other's context, logged; the verdicts are the subject's. Tasks 5 and 11.
