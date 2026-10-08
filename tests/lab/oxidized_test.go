@@ -147,7 +147,7 @@ const allRole = "  - {name: oxidized_all, privilege: admin, permit: [\"**\"]}\n"
 // role (permit **); true gives examples/oxidized/policy.yaml's. The stack's
 // configs are copied into its volumes once, at `up`, so a different role is a
 // different start. A fault is t.Fatal: INVALID, never a measured "no".
-func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
+func startOxidized(t *testing.T, l *lab, restricted bool, phase string) *oxidized {
 	t.Helper()
 	repo, err := repoRoot()
 	if err != nil {
@@ -167,7 +167,7 @@ func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 	// The overlay runs Oxidized as the host user (compose/oxidized.yaml says why).
 	t.Setenv("PORT49_LAB_UID", strconv.Itoa(os.Getuid()))
 	t.Setenv("PORT49_LAB_GID", strconv.Itoa(os.Getgid()))
-	o.c = l.startComposeWith(t, composeOptions{Overlay: "oxidized.yaml",
+	o.c = l.startComposeWith(t, composeOptions{Overlay: "oxidized.yaml", Phase: phase,
 		Files: func(files map[string]string) error {
 			if err := workloadE2EFiles(files, roleBlock, roleName); err != nil {
 				return err

@@ -35,6 +35,62 @@ const (
 	receiptIdleTTL = "2m"
 )
 
+// staleRunExcerpt is the lines of an Oxidized log that name what happened to a
+// run: the exception class and message, and the crashfile line. Each is cut to
+// 220 characters, and the excerpt is refused (empty, with an error) when it
+// holds a registered secret or a compact JWS. Nothing else of the log is
+// quoted.
+func staleRunExcerpt(log string, secrets []string) (string, error) {
+	var kept []string
+	for _, ln := range strings.Split(log, "\n") {
+		for _, m := range []string{"Errno::", "Net::SSH", "crashfile", " raised "} {
+			if strings.Contains(ln, m) {
+				kept = append(kept, oneLineMax(strings.TrimSpace(ln), 220))
+				break
+			}
+		}
+	}
+	out := strings.Join(kept, "\n")
+	if err := stepLeak(out, secrets); err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// crashfiles are the names of the files in Oxidized's crash directory under
+// its config directory dir (Oxidized writes one when a run raises).
+func crashfiles(dir string) []string {
+	ents, err := os.ReadDir(filepath.Join(dir, "crash"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range ents {
+		if e.Type().IsRegular() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// logSince is what Oxidized's followed output files hold past the offsets
+// (fileSize before the step).
+func logSince(c *composeStack, outOff, errOff int64) string {
+	var b strings.Builder
+	for _, f := range []struct {
+		name string
+		off  int64
+	}{{"oxidized.out", outOff}, {"oxidized.err", errOff}} {
+		raw, err := os.ReadFile(filepath.Join(c.dir, f.name))
+		if err != nil || int64(len(raw)) <= f.off {
+			continue
+		}
+		b.Write(raw[f.off:])
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
@@ -310,14 +366,14 @@ func (r *l49Run) say(format string, a ...any) { fmt.Fprintf(&r.obs, format+"\n",
 // startStack brings the compose stack and Oxidized up. router.db holds live
 // tokens, so it is removed when the stack is gone (this cleanup runs after the
 // stack's own).
-func (r *l49Run) startStack(t *testing.T, restricted bool) *oxidized {
+func (r *l49Run) startStack(t *testing.T, restricted bool, phase string) *oxidized {
 	t.Helper()
-	rdb := filepath.Join(root, "tests", "lab", "logs", "compose-"+r.l.p.name, "local", "oxidized", "router.db")
+	rdb := filepath.Join(root, "tests", "lab", "logs", composeDirName(r.l.p.name, phase), "local", "oxidized", "router.db")
 	t.Cleanup(func() {
 		_ = os.Remove(rdb)
 		_ = os.Remove(rdb + ".lock")
 	})
-	o := startOxidized(t, r.l, restricted)
+	o := startOxidized(t, r.l, restricted, phase)
 	if raw, err := os.ReadFile(filepath.Join(o.workload, testpki.WorkloadKey)); err == nil {
 		o.secrets = append(o.secrets, keySecrets(raw)...)
 	}
@@ -409,7 +465,7 @@ func (r *l49Run) deviceHostname(t *testing.T, o *oxidized) string {
 }
 
 func (r *l49Run) phaseA(t *testing.T) {
-	o := r.startStack(t, false)
+	o := r.startStack(t, false, "a")
 	node := r.l.p.node
 	// The hostname login's own records (its redeem and commands) are let land
 	// before phase A's mark, so they are not counted as the phase's.
@@ -424,6 +480,9 @@ func (r *l49Run) phaseA(t *testing.T) {
 		t.Fatalf("phase A: %v", err)
 	}
 	r.say("- **A. What Oxidized sends** (role `**`, `port49-oxidized-run` with `PORT49_TTL=15m`):")
+	r.say("  - The example's `config` sets `vars: auth_methods` to include `keyboard-interactive`: the device offers only " +
+		"`publickey,keyboard-interactive` (tests/lab/results/L4-error-arista_eos.md:74) and Oxidized's default list " +
+		"(`none`, `publickey`, `password`) names neither, so net-ssh never sends the token without it.")
 	r.say("  - %s", r.startup)
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
 	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem", "authorize_command"))
@@ -464,7 +523,7 @@ func (r *l49Run) phaseA(t *testing.T) {
 }
 
 func (r *l49Run) phasesBC(t *testing.T) {
-	o := r.startStack(t, true)
+	o := r.startStack(t, true, "bc")
 	node := r.l.p.node
 
 	// B. A stale token.
@@ -479,6 +538,8 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	r.say("  - A 60s token: the run %s with status `%s`.", endedWord(ended, 5*time.Minute), status)
 	time.Sleep(3 * time.Minute) // past the token's 60s and the receipt's 2m
 	markB := r.l.mark()
+	outOff, errOff := fileSize(filepath.Join(o.c.dir, "oxidized.out")), fileSize(filepath.Join(o.c.dir, "oxidized.err"))
+	crashBefore := len(crashfiles(o.dir))
 	putAt := time.Now()
 	putCode, perr := o.putNext(node)
 	if perr != nil || putCode != http.StatusOK {
@@ -493,6 +554,24 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	if !bSettled {
 		r.say("  - No redeem record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
 	}
+	// What Oxidized's own log says of the stale run: the class and message only,
+	// leak-checked against every token so far. net-ssh's keyboard-interactive
+	// asks a tty for a second password when the first is refused, so the
+	// expected class is Errno::ENOTTY, not AuthenticationFailed.
+	excerpt, xerr := staleRunExcerpt(logSince(o.c, outOff, errOff), append(append([]string{}, r.secrets...), o.secrets...))
+	switch {
+	case xerr != nil:
+		r.say("  - Oxidized's log for the stale run is withheld: %v. It stays on disk, unquoted.", xerr)
+	case excerpt == "":
+		r.say("  - Oxidized's log for the stale run holds no exception or crashfile line.")
+	default:
+		r.say("  - Oxidized's log for the stale run (class and message lines only):")
+		for _, ln := range strings.Split(excerpt, "\n") {
+			r.say("    - `%s`", ln)
+		}
+	}
+	crashAfter := crashfiles(o.dir)
+	r.say("  - Crashfiles in Oxidized's crash directory after the stale run: %d new (%d in all).", len(crashAfter)-crashBefore, len(crashAfter))
 	restart := time.Now()
 	if err := wrapperFault(o.runWrapper("60s")); err != nil {
 		t.Fatalf("phase B, the wrapper again: %v", err)
@@ -502,7 +581,8 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		"credential at `/reload`: %s.", endedWord(reEnded, 5*time.Minute), reStatus, yesNo(reEnded && reStatus == "success"))
 	r.ev.add("b_stale_token", map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
 		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": 0, "again_status": reStatus,
-		"again_ended": reEnded, "receipt_idle_ttl": receiptIdleTTL})
+		"again_ended": reEnded, "receipt_idle_ttl": receiptIdleTTL, "oxidized_log_excerpt": excerpt,
+		"crashfiles_new": len(crashAfter) - crashBefore})
 
 	// C. The example's role.
 	markC := r.l.mark()

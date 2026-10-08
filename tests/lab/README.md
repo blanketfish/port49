@@ -542,7 +542,7 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   config directory to uid 30000 at every start, which would lock out `port49-oxidized-run` (a host
   process here, as cron is on a real host) from replacing `router.db`. Starting `oxidized` directly
   also skips the image's auto-reload service, which reloads in a loop when `CONFIG_RELOAD_INTERVAL`
-  is set at all. The directory is `tests/lab/logs/compose-<platform>/local/oxidized`; `known_hosts`
+  is set at all. The directory is `tests/lab/logs/compose-<platform>-<phase>/local/oxidized`; `known_hosts`
   is mounted at `~/.ssh/known_hosts` (that is where Oxidized's SSH client reads it), filled by
   `ssh-keyscan` of the device.
 - Oxidized exits with `NoNodesFound` on an empty `router.db`, and the wrapper never writes an
@@ -552,9 +552,23 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   node), then starts Oxidized with `--profile oxidized up -d oxidized`. After the wrapper's reload,
   `awaitNode` fails the test (INVALID) if Oxidized never lists the node.
 - After a run, `router.db` and the wrapper's lock file stay in
-  `tests/lab/logs/compose-<platform>/local/oxidized`, and `router.db` holds live tokens (mode 0600)
+  `tests/lab/logs/compose-<platform>-<phase>/local/oxidized`, and `router.db` holds live tokens (mode 0600)
   until they expire. The directory is git-ignored; never copy it into evidence. Task 14's cleanup
   removes it.
+- Each L49 phase has its own stack directory, `compose-<platform>-a` (phase A) and
+  `compose-<platform>-bc` (phases B and C), because `startComposeWith` removes the directory it is
+  about to use. Phase A's logs survive phase B's start.
+- The host harness's `port49d` (not the stack's) mints its labcreds at every start, about 152
+  `mint` records per start, and the breakglass redeem `token_not_found` in its log is the lab's
+  readiness probe. Both are expected, and neither is in the stack's `broker.log` or decision log.
+- The example's `config` sets `vars: auth_methods` with `keyboard-interactive`. vEOS offers only
+  `publickey,keyboard-interactive` (`results/L4-error-arista_eos.md`), and Oxidized's default list
+  does not name the second, so without it Oxidized never sends the token to EOS (measured in the
+  L49 debug). Phase A's note says so.
+- Phase B records, from Oxidized's own log, the class-and-message lines of the stale run (leak
+  checked, never the whole log) and whether a crashfile was created. Oxidized logs the refusal as
+  `Errno::ENOTTY ... creating crashfile`: net-ssh's keyboard-interactive asks a tty for a second
+  password.
 - Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) may name a username
   in a login failure, and the username is a token. It stays on disk; a note never quotes it.
 - A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never
