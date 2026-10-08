@@ -1,6 +1,7 @@
 package certstatus
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -30,46 +31,76 @@ func uriName(uri string) asn1.RawValue {
 	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte(uri)}
 }
 
+// marshal is v's DER, or the test stops.
+func marshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := asn1.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// seqOf is a SEQUENCE holding body.
+func seqOf(t *testing.T, body ...[]byte) []byte {
+	t.Helper()
+	return marshal(t, asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true,
+		Bytes: bytes.Join(body, nil)})
+}
+
+// dpField is distributionPoint [0] { fullName [0] { names } }.
+func dpField(t *testing.T, names ...asn1.RawValue) []byte {
+	t.Helper()
+	var gns []byte
+	for _, n := range names {
+		gns = append(gns, marshal(t, n)...)
+	}
+	full := marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: gns})
+	return marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: full})
+}
+
 // idpExt is a critical issuing distribution point: a distributionPoint whose
 // fullName holds names (none: no distributionPoint), and the boolean fields
 // asked for.
 func idpExt(t *testing.T, names []asn1.RawValue, userOnly bool, more ...asn1.RawValue) pkix.Extension {
 	t.Helper()
-	var body []byte
+	var body [][]byte
 	if len(names) > 0 {
-		var gns []byte
-		for _, n := range names {
-			b, err := asn1.Marshal(n)
-			if err != nil {
-				t.Fatal(err)
-			}
-			gns = append(gns, b...)
-		}
-		full, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: gns})
-		if err != nil {
-			t.Fatal(err)
-		}
-		dp, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: full})
-		if err != nil {
-			t.Fatal(err)
-		}
-		body = append(body, dp...)
+		body = append(body, dpField(t, names...))
 	}
 	if userOnly {
-		body = append(body, 0x81, 0x01, 0xff)
+		body = append(body, []byte{0x81, 0x01, 0xff})
 	}
 	for _, m := range more {
-		b, err := asn1.Marshal(m)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body = append(body, b...)
+		body = append(body, marshal(t, m))
 	}
-	seq, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: body})
+	return rawIDP(t, body...)
+}
+
+// rawIDP is a critical issuing distribution point holding fields as given,
+// in their order, DER or not.
+func rawIDP(t *testing.T, fields ...[]byte) pkix.Extension {
+	t.Helper()
+	return pkix.Extension{Id: oidIssuingDistPt, Critical: true, Value: seqOf(t, fields...)}
+}
+
+// leafCRLDP is a client certificate ca issues with serial whose CRL
+// distribution points extension holds points, each a DistributionPoint
+// SEQUENCE's body built by hand: Go cannot write reasons or a cRLIssuer.
+func leafCRLDP(t *testing.T, ca *testpki.CA, serial int64, points ...[]byte) *x509.Certificate {
+	t.Helper()
+	var seqs [][]byte
+	for _, p := range points {
+		seqs = append(seqs, seqOf(t, p))
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return pkix.Extension{Id: oidIssuingDistPt, Critical: true, Value: seq}
+	return sign(t, ca, &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "workload"},
+		NotBefore: t0.Add(-time.Hour), NotAfter: t0.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtraExtensions: []pkix.Extension{{Id: oidCRLDistPoints, Value: seqOf(t, seqs...)}}}, key)
 }
 
 // leafDP is a client certificate ca issues with serial, its CRL distribution
@@ -152,9 +183,10 @@ func TestDistributionPointScope(t *testing.T) {
 				!strings.Contains(r.Detail, "CRL step_ca is scoped to the distribution point "+stepCRL) {
 				t.Errorf("detail %q", r.Detail)
 			}
-			// Listed or not, a list that does not cover the certificate says nothing of it.
-			if r := check(t, c, leafDP(t, ca, 7, tc.dps...), ca.Cert); r.Verdict != Unknown {
-				t.Errorf("listed: %+v, want unknown", r)
+			// It never says "not revoked" for the certificate, but its revocation
+			// stands: serials are unique per issuer (Precedence; ruling 17).
+			if r := check(t, c, leafDP(t, ca, 7, tc.dps...), ca.Cert); r.Verdict != Revoked || r.Name != "step_ca" {
+				t.Errorf("listed: %+v, want revoked by step_ca", r)
 			}
 		})
 	}
@@ -177,6 +209,95 @@ func TestDistributionPointScope(t *testing.T) {
 		sub := subCADP(t, ca, "sub CA", stepCRL)
 		if r := check(t, c, sub.Cert, ca.Cert); r.Verdict != Unknown {
 			t.Errorf("a CA naming it: %+v, want unknown", r)
+		}
+	})
+
+	t.Run("a list scoped to user certificates that names an intermediate's serial revokes it", func(t *testing.T) {
+		sub := subCADP(t, ca, "sub CA")
+		userOnly := signCRL(t, ca, crlSpec{number: 1, ext: []pkix.Extension{idpExt(t, nil, true)},
+			revoked: []x509.RevocationListEntry{{SerialNumber: sub.Cert.SerialNumber, RevocationTime: t0.Add(-time.Minute)}}})
+		c, _ := fileChecker(t, CRLSource{Name: "users", File: crlFile(t, userOnly), Issuer: ca.Cert})
+		if r := check(t, c, sub.Cert, ca.Cert); r.Verdict != Revoked || r.Name != "users" {
+			t.Errorf("listed: %+v, want revoked by users", r)
+		}
+		// Unlisted, it still decides nothing for the intermediate.
+		if r := check(t, c, subCADP(t, ca, "other sub CA").Cert, ca.Cert); r.Verdict != Unknown {
+			t.Errorf("not listed: %+v, want unknown", r)
+		}
+	})
+
+	t.Run("a revocation in a list that does not cover the certificate is final over a fresh full list", func(t *testing.T) {
+		full := signCRL(t, ca, crlSpec{number: 1})
+		c, _ := fileChecker(t, CRLSource{Name: "full", File: crlFile(t, full), Issuer: ca.Cert},
+			CRLSource{Name: "step_ca", File: crlFile(t, list(7)), Issuer: ca.Cert})
+		if r := check(t, c, leafDP(t, ca, 7), ca.Cert); r.Verdict != Revoked || r.Name != "step_ca" {
+			t.Errorf("%+v, want revoked by step_ca", r)
+		}
+	})
+
+	// A certificate's distribution point that carries reasons or a cRLIssuer
+	// names nothing: port49 follows no reason partition and no indirect issuer
+	// (ruling 17). The match is on the whole GeneralName, its tag too.
+	uri := marshal(t, uriName(stepCRL))
+	for _, tc := range []struct {
+		name  string
+		point []byte
+	}{
+		{"reasons", append(dpField(t, uriName(stepCRL)), 0x81, 0x02, 0x06, 0x40)},
+		{"reasons with no bit set", append(dpField(t, uriName(stepCRL)), 0x81, 0x01, 0x00)},
+		{"a cRLIssuer", append(dpField(t, uriName(stepCRL)), marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific,
+			Tag: 2, IsCompound: true, Bytes: uri})...)},
+		{"the name as a dNSName", dpField(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte(stepCRL)})},
+		{"reasons behind a field out of DER", append(dpField(t, uriName(stepCRL)), 0x83, 0x01, 0xff, 0x81, 0x02, 0x06, 0x40)},
+	} {
+		t.Run("a leaf whose distribution point has "+tc.name+" is not covered", func(t *testing.T) {
+			c, _ := fileChecker(t, CRLSource{Name: "step_ca", File: crlFile(t, list(7)), Issuer: ca.Cert})
+			r := check(t, c, leafCRLDP(t, ca, 8, tc.point), ca.Cert)
+			if r.Verdict != Unknown || !strings.Contains(r.Detail, "outside a reasons or cRLIssuer restriction") {
+				t.Errorf("not listed: %+v, want unknown, saying why", r)
+			}
+			if r := check(t, c, leafCRLDP(t, ca, 7, tc.point), ca.Cert); r.Verdict != Revoked {
+				t.Errorf("listed: %+v, want revoked", r)
+			}
+		})
+	}
+	t.Run("a leaf with a plain point beside a reasons point is covered", func(t *testing.T) {
+		c, _ := fileChecker(t, CRLSource{Name: "step_ca", File: crlFile(t, list(7)), Issuer: ca.Cert})
+		r := check(t, c, leafCRLDP(t, ca, 8, append(dpField(t, uriName(stepCRL)), 0x81, 0x02, 0x06, 0x40),
+			dpField(t, uriName(stepCRL))), ca.Cert)
+		if r.Verdict != Good {
+			t.Errorf("%+v, want good", r)
+		}
+	})
+
+	t.Run("the unknown detail names two of a list's names and counts the rest", func(t *testing.T) {
+		var names []asn1.RawValue
+		for _, h := range []string{"a", "b", "c", "d", "e"} {
+			names = append(names, uriName("https://"+h+".port49.lab/crl"))
+		}
+		many := signCRL(t, ca, crlSpec{number: 1, ext: []pkix.Extension{idpExt(t, names, false)}})
+		c, _ := fileChecker(t, CRLSource{Name: "step_ca", File: crlFile(t, many), Issuer: ca.Cert})
+		r := check(t, c, leafDP(t, ca, 8), ca.Cert)
+		if r.Verdict != Unknown || !strings.Contains(r.Detail, "https://a.port49.lab/crl, https://b.port49.lab/crl and 3 more") ||
+			strings.Contains(r.Detail, "c.port49.lab") {
+			t.Errorf("%+v", r)
+		}
+	})
+
+	t.Run("a stale list's detail keeps the scoped list's", func(t *testing.T) {
+		clk := newClock()
+		c, _, _ := newChecker(t, Config{CRLs: []CRLSource{
+			{Name: "full", File: crlFile(t, signCRL(t, ca, crlSpec{number: 1})), Issuer: ca.Cert},
+			{Name: "step_ca", File: crlFile(t, list()), Issuer: ca.Cert}}}, clk)
+		if errs := c.LoadAll(context.Background()); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		clk.advance(2 * time.Hour)
+		r := check(t, c, leafDP(t, ca, 8), ca.Cert)
+		if r.Verdict != Unknown || !strings.HasPrefix(r.Detail, "CRL ") ||
+			!strings.Contains(r.Detail, "CRL full is past its next update") ||
+			!strings.Contains(r.Detail, "CRL step_ca is scoped to the distribution point "+stepCRL) {
+			t.Errorf("%+v", r)
 		}
 	})
 
@@ -211,7 +332,7 @@ func TestDistributionPointScope(t *testing.T) {
 		if r := check(t, restarted, leafDP(t, ca, 7, stepCRL), ca.Cert); r.Verdict != Revoked {
 			t.Errorf("a naming leaf, listed: %+v, want revoked", r)
 		}
-		if r := check(t, restarted, leafDP(t, ca, 7), ca.Cert); r.Verdict != Unknown {
+		if r := check(t, restarted, leafDP(t, ca, 8), ca.Cert); r.Verdict != Unknown {
 			t.Errorf("a leaf naming none: %+v, want unknown", r)
 		}
 	})
@@ -239,6 +360,24 @@ func TestDistributionPointScope(t *testing.T) {
 			{"nameRelativeToCRLIssuer", "relative", idpExt(t, nil, false, relDP)},
 			{"onlyContainsCACerts beside a distribution point", "CA certificates",
 				idpExt(t, dp, false, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte{0xff}})},
+			{"onlyContainsAttributeCerts beside a distribution point", "attribute certificates",
+				idpExt(t, dp, false, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 5, Bytes: []byte{0xff}})},
+			{"an empty onlySomeReasons", "some reasons",
+				rawIDP(t, dpField(t, dp...), []byte{0x83, 0x01, 0x00})},
+			// Not DER: Go's struct decoding would take each of these as a plain
+			// distribution point, or as one covering every user certificate.
+			{"onlyContainsUserCerts before the distribution point", "out of order",
+				rawIDP(t, []byte{0x81, 0x01, 0xff}, dpField(t, dp...))},
+			{"a FALSE indirectCRL hiding onlySomeReasons", "default spelled out",
+				rawIDP(t, dpField(t, dp...), []byte{0x84, 0x01, 0x00}, []byte{0x83, 0x02, 0x06, 0x40})},
+			{"a FALSE onlyContainsAttributeCerts hiding onlyContainsCACerts", "default spelled out",
+				rawIDP(t, dpField(t, dp...), []byte{0x85, 0x01, 0x00}, []byte{0x82, 0x01, 0xff})},
+			{"a field port49 does not know", "does not know",
+				rawIDP(t, dpField(t, dp...), []byte{0x87, 0x01, 0xff})},
+			{"a boolean not in DER", "does not parse",
+				rawIDP(t, dpField(t, dp...), []byte{0x81, 0x01, 0x01})},
+			{"bytes left over", "left over",
+				pkix.Extension{Id: oidIssuingDistPt, Critical: true, Value: append(rawIDP(t, dpField(t, dp...)).Value, 0x00)}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				c, _, _ := newChecker(t, Config{CRLs: []CRLSource{{Name: "step_ca", Issuer: ca.Cert,
@@ -253,4 +392,18 @@ func TestDistributionPointScope(t *testing.T) {
 			})
 		}
 	})
+}
+
+// A list's names are said printable and bounded: they come from a verified
+// list, but go into a 503's body and the log.
+func TestNameWords(t *testing.T) {
+	long := "https://" + strings.Repeat("a", 300)
+	got := nameWords([][]byte{marshal(t, uriName("https://x\x1b[2Jy/crl")), marshal(t, uriName(long))})
+	if strings.ContainsRune(got, 0x1b) || !strings.Contains(got, "https://x?[2Jy/crl") ||
+		strings.Contains(got, strings.Repeat("a", 200)) || !strings.Contains(got, "…") {
+		t.Errorf("nameWords = %q", got)
+	}
+	if got := nameWords([][]byte{marshal(t, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte("x")})}); got != "(a name that is not a URI)" {
+		t.Errorf("a dNSName: %q", got)
+	}
 }

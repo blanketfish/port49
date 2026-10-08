@@ -95,12 +95,13 @@ func TestChain(t *testing.T) {
 		if r.Verdict != Unknown || r.Depth != 1 || r.Subject != inter.Cert.Subject.String() {
 			t.Errorf("%+v, want unknown at depth 1", r)
 		}
-		// Even naming the intermediate, it is not read for one.
+		// Naming the intermediate, its revocation stands: a list from the
+		// issuer that names the serial is final whatever its scope (ruling 17).
 		c = withLists(t, signCRL(t, inter, crlSpec{number: 1}), signCRL(t, root, crlSpec{number: 1,
 			ext:     []pkix.Extension{userOnly},
 			revoked: []x509.RevocationListEntry{{SerialNumber: inter.Cert.SerialNumber, RevocationTime: t0}}}))
-		if r := check(t, c, chain...); r.Verdict != Unknown {
-			t.Errorf("%+v, want unknown: a user-certificate list says nothing of a CA", r)
+		if r := check(t, c, chain...); r.Verdict != Revoked || r.Depth != 1 {
+			t.Errorf("%+v, want revoked at depth 1: the list's revocation stands", r)
 		}
 	})
 
