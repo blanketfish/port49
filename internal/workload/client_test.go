@@ -243,6 +243,19 @@ func TestAnUncoveredCertificateStatusIsFinal(t *testing.T) {
 	}
 }
 
+// An OCSP responder that applies but is down is an outage, not an uncovered
+// issuer: retried under the same key (decision 40, ruling 10).
+func TestAnOCSPOutageIsRetried(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		statusUnavailable(`OCSP https://ocsp.port49.lab: did not answer; no fresh CRL covers "CN=Workloads Issuing CA"`),
+		permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil ||
+		len(f.keys) != 2 || f.keys[0] != f.keys[1] || len(h.slept) != 1 {
+		t.Fatalf("%v; keys %v slept %v", err, f.keys, h.slept)
+	}
+}
+
 // A CRL past its next update is temporary: retried under the same key.
 func TestAStaleCRLIsRetried(t *testing.T) {
 	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
@@ -181,7 +182,11 @@ func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
 }
 
 // checkOne is one certificate's status against its issuer: a verified list
-// that names it is final; a fresh one that does not is Good; then OCSP.
+// that names it is final; a fresh one that does not is Good; then OCSP. A
+// responder that applies to cert but failed is an outage, said first and
+// never in the API's uncovered words, so the broker says try again and port49
+// workload retries; one that does not apply leaves an uncovered issuer
+// uncovered (decision 40, ruling 10).
 func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, depth int) Result {
 	res := c.checkCRLs(cert, issuer, depth)
 	if res.Verdict == Unknown && c.cfg.OCSP != nil {
@@ -189,7 +194,11 @@ func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, 
 		if o.Verdict != Unknown {
 			return o
 		}
-		res.Detail = strings.TrimSpace(res.Detail + "; " + o.Detail)
+		if strings.HasSuffix(o.Detail, ": "+ocspNoResponder) {
+			res.Detail = res.Detail + "; " + o.Detail
+		} else {
+			res.Detail = o.Detail + "; " + strings.Replace(res.Detail, api.UncoveredStatus, "no fresh CRL covers", 1)
+		}
 	}
 	return res
 }

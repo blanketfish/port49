@@ -3,6 +3,7 @@ package broker
 import (
 	"bufio"
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -11,17 +12,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/certstatus"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -468,6 +472,42 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 			t.Fatalf("%s %v", answer(w), w.Header())
 		}
 	})
+
+	// Through a real checker: an OCSP responder that applies but is down is
+	// an outage (try again, class ocsp, retried by port49 workload); with no
+	// source at all the issuer is uncovered, final (decision 40, ruling 10).
+	for _, tc := range []struct {
+		name, class string
+		cfg         func(t *testing.T) certstatus.Config
+	}{
+		{"mint, the OCSP responder down", "ocsp", func(t *testing.T) certstatus.Config {
+			down := httptest.NewServer(http.NotFoundHandler())
+			down.Close()
+			return certstatus.Config{OCSP: &certstatus.OCSPConfig{Responder: down.URL, Timeout: time.Second, Hash: crypto.SHA256}}
+		}},
+		{"mint, no source", "uncovered", func(*testing.T) certstatus.Config { return certstatus.Config{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			f.b.CertStatus = certstatus.New(tc.cfg(t), f.b.Now, metrics.New(prometheus.NewRegistry()), t.Logf)
+			f.b.OnUnavailable = "refuse"
+			runQueue(t, f)
+			w := f.post(context.Background(), f.state(f.alice), mintBody, "k1")
+			var e api.Error
+			if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 503 ||
+				e.Error != "certificate_status_unavailable" || w.Header().Get("Retry-After") != "60" {
+				t.Fatalf("%s %v", answer(w), w.Header())
+			}
+			inner := strings.TrimPrefix(e.Detail, "the broker cannot establish this certificate's revocation status (")
+			if got := unknownClass(inner); got != tc.class {
+				t.Errorf("class %q, want %q: %s", got, tc.class, e.Detail)
+			}
+			if final := strings.Contains(e.Detail, api.UncoveredStatus); final != (tc.class == "uncovered") ||
+				strings.HasSuffix(e.Detail, "; try again") == final {
+				t.Errorf("final %v: %s", final, e.Detail)
+			}
+		})
+	}
 
 	t.Run("bind", func(t *testing.T) {
 		f := newFixture(t, 8)

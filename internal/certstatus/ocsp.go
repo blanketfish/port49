@@ -32,6 +32,10 @@ type ocspCall struct {
 	res  Result
 }
 
+// ocspNoResponder is the one OCSP failure that is not an outage: no
+// responder applies to the certificate (use_aia, and it names none).
+const ocspNoResponder = "no responder for this certificate"
+
 const (
 	ocspMaxCache   = time.Hour        // a revocation reaches the broker within it
 	ocspFailCache  = 30 * time.Second // a responder down is asked once per 30s (M15)
@@ -106,7 +110,7 @@ func (c *Checker) askOCSP(ctx context.Context, cert, issuer *x509.Certificate) (
 			Detail: "OCSP " + shown + ": " + printsafe.Line(why, 200)}, ocspFailCache
 	}
 	if url == "" {
-		return unknown("no responder for this certificate")
+		return unknown(ocspNoResponder)
 	}
 	if !httpURL(url) {
 		return unknown("its url is not http or https")
