@@ -365,9 +365,115 @@ func TestRecordsFor(t *testing.T) {
 	}
 }
 
-// a note's path and its evidence pointer name the row and the platform.
-func TestL49Names(t *testing.T) {
-	if got := l49ResultName("arista_eos"); got != "L49-oxidized-arista_eos" {
-		t.Errorf("l49ResultName = %q", got)
+// the wait for the CRL's first fetch ends on the fetch's own outcome, not on the start line.
+func TestCRLFetchOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		said string
+		want bool
+	}{
+		{"port49d: broker: certificate status from CRL step_ca (not loaded yet); a status that cannot be established is refused\n", false},
+		{"port49d: broker: certificate status: CRL step_ca loaded (next update 2026-10-09T00:00:00Z)\n", true},
+		{"port49d: broker: certificate status: CRL step_ca loaded, but its next update, x, has passed: y\n", true},
+		{"port49d: broker: certificate status: CRL step_ca: Get \"https://localhost:19000/1.0/crl\": tls: x; the list in force stays until its next update\n", true},
+		{"port49d: broker: certificate status: CRL other loaded\n", false},
+		{"", false},
+	} {
+		if got := crlFetchOutcome(tc.said); got != tc.want {
+			t.Errorf("crlFetchOutcome(%q) = %v, want %v", tc.said, got, tc.want)
+		}
+	}
+}
+
+// a start that port49d refused over the CRL source is a measurement; any other exit is a fault.
+func TestStartRefusal(t *testing.T) {
+	line := "port49d: broker.certificate_status.crls[0].issuer_file /x/intermediate_ca.crt: CN=Y is neither a trust anchor's certificate nor signed by one"
+	for _, tc := range []struct {
+		name, said, want string
+	}{
+		{"refusal", "port49d: config ok\n" + line + "\n", line},
+		{"yaml", "port49d: config: yaml: line 3: did not find expected key\n", ""},
+		{"unrelated", "port49d: listen tcp 127.0.0.1:49: address already in use\n", ""},
+		{"empty", "", ""},
+	} {
+		if got := startRefusal(tc.said); got != tc.want {
+			t.Errorf("%s: startRefusal = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// settleRecordsFn waits for the wanted records, then for the log to be quiet.
+func TestSettleRecordsFn(t *testing.T) {
+	calls := 0
+	read := func() []map[string]any {
+		calls++
+		n := min(calls, 4) // grows for four reads, then stops
+		return make([]map[string]any, n)
+	}
+	want := func(rs []map[string]any) bool { return len(rs) >= 2 }
+	start := time.Now()
+	recs, ok := settleRecordsFn(read, want, 120*time.Millisecond, 5*time.Second)
+	if !ok || len(recs) != 4 {
+		t.Errorf("got %d records, ok=%v; want 4 and true (the log kept growing after the wanted records)", len(recs), ok)
+	}
+	if time.Since(start) < 120*time.Millisecond {
+		t.Error("returned before the quiet period")
+	}
+	start = time.Now()
+	recs, ok = settleRecordsFn(func() []map[string]any { return nil }, want, 50*time.Millisecond, 300*time.Millisecond)
+	if ok || len(recs) != 0 || time.Since(start) < 300*time.Millisecond {
+		t.Errorf("a wait that is never satisfied: ok=%v, %d records, after %s", ok, len(recs), time.Since(start))
+	}
+}
+
+// the events a phase waits for, for the user alone.
+func TestWantsEvents(t *testing.T) {
+	rec := func(event, user string) map[string]any {
+		return map[string]any{"event": event, "session": map[string]any{"username": user}}
+	}
+	recs := []map[string]any{rec("redeem", "svc-oxidized"), rec("authorize_command", "someone")}
+	if wantsEvents("svc-oxidized", "redeem")(recs) != true || wantsEvents("svc-oxidized", "redeem", "authorize_command")(recs) {
+		t.Error("wantsEvents does not require every event for the user")
+	}
+}
+
+// a minted login: the TSV the CLI writes has the user and the token in the 4th and 5th columns.
+func TestParseMintedLogin(t *testing.T) {
+	user, tok, err := parseMintedLogin("leaf1\tx\tarista_eos\tsvc-oxidized\tsecrettoken123\n")
+	if err != nil || user != "svc-oxidized" || tok != "secrettoken123" {
+		t.Errorf("got %q %q %v", user, tok, err)
+	}
+	for _, bad := range []string{"", "leaf1\tx\n", "a\tb\tc\td\t\n"} {
+		if _, _, err := parseMintedLogin(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+// docker's or compose's own errors are not step's answer.
+func TestDockerFault(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want bool
+	}{
+		{"service \"step-ca\" is not running", true},
+		{"Error response from daemon: No such container: x", true},
+		{"docker: Error response from daemon: pull access denied", true},
+		{"Cannot connect to the Docker daemon at unix:///var/run/docker.sock", true},
+		{"error renewing certificate: client GET https://localhost:19000/health failed: connection refused", false},
+		{"", false},
+	} {
+		if got := dockerFault(tc.out); got != tc.want {
+			t.Errorf("dockerFault(%q) = %v, want %v", tc.out, got, tc.want)
+		}
+	}
+}
+
+func TestEndedWordAndUntilExpiry(t *testing.T) {
+	if endedWord(true, 5*time.Minute) != "ended" || endedWord(false, 5*time.Minute) != "did not end within 5m0s" {
+		t.Errorf("endedWord: %q %q", endedWord(true, time.Minute), endedWord(false, 5*time.Minute))
+	}
+	t0 := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	if got := untilExpiry(t0.Add(6*time.Minute), t0, 270*time.Second); got != 90*time.Second {
+		t.Errorf("untilExpiry = %s", got)
 	}
 }

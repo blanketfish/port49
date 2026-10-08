@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -218,6 +219,56 @@ func crlHasSerial(rl *x509.RevocationList, serial *big.Int) bool {
 	return false
 }
 
+// crlFetchSaid is a certificate-status line that is the outcome of a CRL
+// fetch: loaded, or failed. The start line ("not loaded yet") is neither.
+var crlFetchSaid = regexp.MustCompile(`certificate status: CRL step_ca( loaded|: )`)
+
+func crlFetchOutcome(said string) bool { return crlFetchSaid.MatchString(said) }
+
+// dockerFault says whether a command's output is docker's or compose's own
+// error, not the answer of the program run in the container.
+func dockerFault(out string) bool {
+	for _, m := range []string{"is not running", "No such container", "Cannot connect to the Docker daemon",
+		"Error response from daemon", "docker: "} {
+		if strings.Contains(out, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// untilExpiry is how long before notAfter an event at (t0 + at) happened;
+// negative after expiry.
+func untilExpiry(notAfter, t0 time.Time, at time.Duration) time.Duration {
+	return notAfter.Sub(t0.Add(at))
+}
+
+// renewFromHost is `step ca renew --force` of w/ from a one-off container
+// that reaches the published port, so it still runs when the step-ca
+// container is stopped (compose exec would answer "service is not running",
+// which is not step-ca's answer). Docker's own errors are returned as a
+// fault; step's output, with step's exit, as the answer.
+func (s *stepCA) renewFromHost() (answer string, fault error) {
+	uid, err := dockerCmd("run", "--rm", "--entrypoint", "id", stepCAImage, "-u", "step").Output()
+	if err != nil {
+		return "", fmt.Errorf("step-ca's uid: %w", err)
+	}
+	b, rerr := dockerCmd("run", "--rm", "--network", "host", "--user", strings.TrimSpace(string(uid)), "-v", s.dir+":/home/step",
+		"--entrypoint", "step", stepCAImage, "ca", "renew", stepCAWCert, stepCAWKey, "--force", "--ca-url",
+		"https://localhost:19000", "--root", stepCARoot).CombinedOutput()
+	out := string(b)
+	if lerr := stepLeak(out, s.secrets); lerr != nil {
+		return "(output withheld: " + lerr.Error() + ")", nil
+	}
+	if rerr != nil && dockerFault(out) {
+		return out, fmt.Errorf("docker, not step: %s", tailOf(out, 300))
+	}
+	if rerr == nil {
+		return "renewed", nil
+	}
+	return out, nil
+}
+
 // workloadRunLine is runLine for a test that brings up no platform (root is
 // unset then): the commit under test and the test run.
 func workloadRunLine(repo string) string {
@@ -283,7 +334,9 @@ func (r *l48Run) files() {
 
 // token is one `workload token` run, kept in the evidence under label.
 func (r *l48Run) token(label string, at time.Duration) tokenRun {
-	code, _, errs := r.broker.workloadToken(r.cert, r.key)
+	code, out, errs := r.broker.workloadToken(r.cert, r.key)
+	// The token is a secret before any check: a leak of it into stderr is caught.
+	r.keys = append(r.keys, strings.Fields(out)...)
 	tr := newTokenRun(code, errs, at)
 	r.ev.add(label, tr)
 	return tr
@@ -314,7 +367,8 @@ func (r *l48Run) cell1Issue() {
 		yesNo(reflect.DeepEqual(f.URIs, []string{l48ID})), f.DNS, f.EKUs, f.IsCA)
 	r.say("  - Issuer `%s`; lifetime %s (`%s` to `%s`); serial `%s`.", f.Issuer, f.Lifetime, f.NotBefore, f.NotAfter, f.Serial)
 	r.say("  - The broker, anchored on the intermediate with `certificate_status` disabled: `workload identity` exit %d, "+
-		"prints `%s`; `workload token` exit %d.", idCode, oneLineMax(strings.TrimSpace(idOut), 200), tr.Exit)
+		"prints `%s` (the requested ID: %s); `workload token` exit %d.", idCode, oneLineMax(strings.TrimSpace(idOut), 200),
+		yesNo(strings.TrimSpace(idOut) == l48ID), tr.Exit)
 }
 
 func (r *l48Run) cell2Renew() {
@@ -382,8 +436,13 @@ func (r *l48Run) cell4CADown() {
 	if err := r.s.stopCA(); err != nil {
 		r.t.Fatalf("step-ca did not stop (INVALID, not a measured no): %v", err)
 	}
-	_, rerr := r.s.renew()
-	r.ev.add("renew_with_ca_down", map[string]string{"error": oneLineMax(fmt.Sprint(rerr), 400)})
+	// From a one-off container: compose exec into the stopped container would
+	// answer with docker's error, not step-ca's.
+	renewAnswer, fault := r.s.renewFromHost()
+	if fault != nil {
+		r.t.Fatalf("the renewal could not be tried from a one-off container (INVALID, not a measured no): %v", fault)
+	}
+	r.ev.add("renew_with_ca_down", map[string]string{"answer": oneLineMax(renewAnswer, 400)})
 	cliLate, brokerLate, firstFail := time.Duration(-1), time.Duration(-1), time.Duration(-1)
 	var failExit int
 	var failErr string
@@ -412,15 +471,21 @@ func (r *l48Run) cell4CADown() {
 	if err := r.s.startCA(); err != nil {
 		r.t.Fatalf("step-ca did not start again (INVALID, not a measured no): %v", err)
 	}
+	// Each time is also given as the time left before NotAfter and as a fraction
+	// of the certificate's actual lifetime: step-ca backdates NotBefore by 1m
+	// (its default), so a "6m" certificate lives about 7m and the late-renewal
+	// line (a quarter left) comes about 4m15s after issue, not at 4.5m.
 	when := func(d time.Duration) string {
 		if d < 0 {
 			return "never within 7m"
 		}
-		return d.Round(time.Second).String()
+		return fmt.Sprintf("%s (%s before NotAfter, %.2f of the lifetime)", d.Round(time.Second),
+			untilExpiry(cert.NotAfter, t0, d).Round(time.Second), renewFraction(cert.NotBefore, cert.NotAfter, t0.Add(d)))
 	}
-	r.say("- **4. The CA down** (a 6m certificate, `NotAfter` %s after the first run; step-ca stopped, "+
-		"`workload token` every 30s to 7m):", cert.NotAfter.Sub(t0).Round(time.Second))
-	r.say("  - `step ca renew` with the CA stopped: `%s`.", oneLineMax(fmt.Sprint(rerr), 300))
+	r.say("- **4. The CA down** (a 6m certificate: its lifetime is %s, as step-ca backdates NotBefore by 1m; `NotAfter` %s after "+
+		"the first run; step-ca stopped, `workload token` every 30s to 7m, times from the first run):",
+		cert.NotAfter.Sub(cert.NotBefore).Round(time.Second), cert.NotAfter.Sub(t0).Round(time.Second))
+	r.say("  - `step ca renew` from a one-off container with the CA stopped: `%s`.", oneLineMax(renewAnswer, 300))
 	r.say("  - The broker's \"its renewal is late\" line first appeared: %s. The CLI's warning first appeared: %s.",
 		when(brokerLate), when(cliLate))
 	r.say("  - The last run that exited 0 was at %s. The first exit that was not 0: %s, exit %d, stderr `%s`.",
@@ -449,14 +514,28 @@ func (r *l48Run) cell5CRL() {
 	r.files()
 	// The CRL is fetched over https under step-ca's private root: the broker
 	// trusts it through SSL_CERT_FILE (pre-flight I-3).
-	r.broker = startLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker-crl"), r.anchor, stepCACRLURL, r.anchor,
-		r.s.root())
-	deadline := time.Now().Add(45 * time.Second)
-	for !strings.Contains(r.broker.said(), "loaded") && !crlTLSFailure(r.broker.said()) && time.Now().Before(deadline) {
+	r.broker.stop() // cell 1's broker, so one port49d runs
+	b, refusal := launchLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker-crl"), r.anchor, stepCACRLURL,
+		r.anchor, r.s.root())
+	if b == nil {
+		// port49d refused the CRL source at start (its issuer is not under an
+		// anchor, or is not a CA): a fact about step-ca's intermediate.
+		r.say("  - port49d refused to start with step-ca's intermediate as the CRL's issuer: `%s`.", oneLineMax(refusal, 600))
+		r.ev.add("broker_start_refused", refusal)
+		r.revokeAndRenew(cert, false)
+		return
+	}
+	r.broker = b
+	deadline := time.Now().Add(60 * time.Second)
+	for !crlFetchOutcome(r.broker.said()) && time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 	}
 	lines := statusLines(r.broker.said())
 	r.ev.add("broker_certificate_status_lines", lines)
+	if !crlFetchOutcome(r.broker.said()) {
+		r.t.Fatalf("the broker said nothing about its first CRL fetch in 60s (INVALID, not a measured no):\n%s",
+			strings.Join(lines, "\n"))
+	}
 	if crlTLSFailure(r.broker.said()) {
 		r.t.Fatalf("the broker's CRL fetch failed TLS: a harness fault (INVALID, not a measured \"step-ca's CRL is unusable\"):\n%s",
 			strings.Join(lines, "\n"))
@@ -465,7 +544,14 @@ func (r *l48Run) cell5CRL() {
 		stepCACRLURL, oneLineMax(strings.Join(lines, " | "), 800))
 	pre := r.token("token_before_revoke", 0)
 	r.say("  - `workload token` before the revocation: exit %d.", pre.Exit)
+	r.revokeAndRenew(cert, true)
+}
 
+// revokeAndRenew is the end of cell 5: `step ca revoke`, whether the broker
+// (when one runs on the CRL) refuses the certificate within 3m, and the
+// renewal of the revoked certificate. They need step-ca alone, so they are
+// recorded when the broker refused to start too.
+func (r *l48Run) revokeAndRenew(cert *x509.Certificate, brokerUp bool) {
 	if err := r.s.revoke(); err != nil {
 		r.say("  - `step ca revoke` FAILED: %s", oneLineMax(err.Error(), 300))
 		r.ev.add("revoke", map[string]string{"error": oneLineMax(err.Error(), 300)})
@@ -476,23 +562,31 @@ func (r *l48Run) cell5CRL() {
 	if rl2, _, err := r.s.crl(); err == nil {
 		listed = yesNo(crlHasSerial(rl2, cert.SerialNumber))
 	}
-	reached := time.Duration(-1)
-	var lastRun tokenRun
-	for time.Since(revokedAt) < 3*time.Minute {
-		at := time.Since(revokedAt)
-		lastRun = r.token("token_after_revoke", at)
-		if lastRun.Exit == 77 && strings.Contains(lastRun.Stderr, "credential_revoked") {
-			reached = at
-			break
-		}
-		time.Sleep(10 * time.Second)
-	}
-	if reached < 0 {
-		r.say("  - After `step ca revoke` (step-ca's CRL lists the serial: %s), `workload token` did not exit 77 with "+
-			"`credential_revoked` within 3m; the last run: exit %d, stderr `%s`.", listed, lastRun.Exit, lastRun.Stderr)
+	if !brokerUp {
+		r.say("  - After `step ca revoke` (step-ca's CRL lists the serial: %s): no broker ran on the CRL, so no refusal was tried.", listed)
 	} else {
-		r.say("  - After `step ca revoke` (step-ca's CRL lists the serial: %s), `workload token` first exited 77 with "+
-			"`credential_revoked` %s later (polled every 10s).", listed, reached.Round(time.Second))
+		reached := time.Duration(-1)
+		var lastRun tokenRun
+		for time.Since(revokedAt) < 3*time.Minute {
+			at := time.Since(revokedAt)
+			lastRun = r.token("token_after_revoke", at)
+			if lastRun.Exit == 77 && strings.Contains(lastRun.Stderr, "credential_revoked") {
+				reached = at
+				break
+			}
+			time.Sleep(10 * time.Second)
+		}
+		// A refresh can fail TLS too: that is a harness fault, not a revocation that never came.
+		if crlTLSFailure(r.broker.said()) {
+			r.t.Fatalf("a CRL refresh failed TLS (INVALID, not a measured no):\n%s", strings.Join(statusLines(r.broker.said()), "\n"))
+		}
+		if reached < 0 {
+			r.say("  - After `step ca revoke` (step-ca's CRL lists the serial: %s), `workload token` did not exit 77 with "+
+				"`credential_revoked` within 3m; the last run: exit %d, stderr `%s`.", listed, lastRun.Exit, lastRun.Stderr)
+		} else {
+			r.say("  - After `step ca revoke` (step-ca's CRL lists the serial: %s), `workload token` first exited 77 with "+
+				"`credential_revoked` %s later (polled every 10s).", listed, reached.Round(time.Second))
+		}
 	}
 	_, rerr := r.s.renew()
 	r.ev.add("renew_revoked", map[string]string{"error": oneLineMax(fmt.Sprint(rerr), 400)})
@@ -508,6 +602,8 @@ func (r *l48Run) cell6NamePolicy() {
 		r.t.Fatalf("setting step-ca's name policy (INVALID, not a measured no): %v", err)
 	}
 	r.say("- **6. The name policy** (the provisioner's x509 `allow: {uri: [%s]}`):", l48ID)
+	// These issues write new keys into the container's w/. They never leave
+	// it (no workloadFiles copy), so nothing here needs registering.
 	own, err := r.s.issue(l48ID, 24*time.Hour)
 	if err != nil {
 		r.say("  - A request for the allowed ID FAILED: %s", oneLineMax(err.Error(), 400))

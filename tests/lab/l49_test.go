@@ -3,9 +3,11 @@
 package lab
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -139,6 +141,80 @@ func hostnameLine(cfg string) string {
 	return ""
 }
 
+// endedWord says whether a run ended, for a note.
+func endedWord(ended bool, within time.Duration) string {
+	if ended {
+		return "ended"
+	}
+	return "did not end within " + within.String()
+}
+
+// wantsEvents is a wait condition: every event has a record whose session
+// names username.
+func wantsEvents(username string, events ...string) func([]map[string]any) bool {
+	return func(recs []map[string]any) bool {
+		mine := recordsFor(recs, username)
+		for _, ev := range events {
+			found := false
+			for _, r := range mine {
+				if str(r, "event") == ev {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+const (
+	// settleQuiet and settleBound: a log is read once the wanted records are
+	// in and it has been quiet this long, and in any case after the bound.
+	settleQuiet = 5 * time.Second
+	settleBound = 60 * time.Second
+)
+
+// settleRecordsFn polls read until want holds and the record count has not
+// changed for quiet, or bound passes. ok is whether want held.
+func settleRecordsFn(read func() []map[string]any, want func([]map[string]any) bool, quiet, bound time.Duration) ([]map[string]any, bool) {
+	deadline := time.Now().Add(bound)
+	poll := min(max(quiet/4, 10*time.Millisecond), 500*time.Millisecond)
+	last, lastChange := -1, time.Now()
+	for {
+		recs := read()
+		if len(recs) != last {
+			last, lastChange = len(recs), time.Now()
+		}
+		met := want(recs)
+		if met && time.Since(lastChange) >= quiet {
+			return recs, true
+		}
+		if !time.Now().Before(deadline) {
+			return recs, met
+		}
+		time.Sleep(poll)
+	}
+}
+
+// settleRecords reads port49d's decision log from off (see settleRecordsFn).
+func (l *lab) settleRecords(off int64, want func([]map[string]any) bool) ([]map[string]any, bool) {
+	return settleRecordsFn(func() []map[string]any { return l.recordsSince(off) }, want, settleQuiet, settleBound)
+}
+
+// parseMintedLogin is the user and token of the first line of a
+// `workload token --format tsv` output (node, ?, platform, user, token).
+func parseMintedLogin(tsv string) (user, token string, err error) {
+	for _, ln := range strings.Split(tsv, "\n") {
+		if f := strings.Split(ln, "\t"); len(f) >= 5 && f[3] != "" && f[4] != "" {
+			return f[3], f[4], nil
+		}
+	}
+	return "", "", fmt.Errorf("the output holds no line with a user and a token")
+}
+
 // ---------------------------------------------------------------------------
 // Oxidized's REST API, beyond Task 13's
 // ---------------------------------------------------------------------------
@@ -191,6 +267,7 @@ type l49Run struct {
 	secrets []string // every token minted and the workload's key material, never printed
 	logs    []string // phase D's findings, one line per stack
 	version string
+	startup string // the last stack's startup run, for the note
 }
 
 func (r *l49Run) say(format string, a ...any) { fmt.Fprintf(&r.obs, format+"\n", a...) }
@@ -222,8 +299,10 @@ func (r *l49Run) startStack(t *testing.T, restricted bool) *oxidized {
 	}
 	// Oxidized runs the node once at start, with the setup run's token. Let that
 	// finish, so what a phase measures is its own run. Whether it succeeded is
-	// not asked here.
-	o.awaitRun(r.l.p.node, time.Time{}, 5*time.Minute)
+	// not asked here, but it is recorded.
+	st, ended := o.awaitRun(r.l.p.node, time.Time{}, 5*time.Minute)
+	r.startup = fmt.Sprintf("Oxidized's own startup run (with the setup run's token, before this phase's mark) %s, status `%s`.",
+		endedWord(ended, 5*time.Minute), st)
 	return o
 }
 
@@ -245,34 +324,58 @@ func (r *l49Run) finish(o *oxidized, stack string) {
 		"compact JWS.", stack, len(out), len(r.secrets)))
 }
 
-// breakglassHostname is the hostname line of the device's own configuration,
-// taken through the breakglass account, or "" and the reason when it cannot be.
-func (r *l49Run) breakglassHostname() (string, string) {
-	cmd := "show running-config"
+// deviceHostname is the hostname line of the device's own configuration, read
+// through a login with a token the workload mints for itself (the compose
+// stack has no seeded logins, and port49d refuses the breakglass account on
+// vEOS, N9Kv and IOS-XE). The role is `**`, so any command goes. It is taken
+// before a phase's mark: its authentications are not the phase's. A device
+// whose line cannot be read is t.Fatal (INVALID); the node's name is never
+// stood in for it.
+func (r *l49Run) deviceHostname(t *testing.T, o *oxidized) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "login.tsv")
+	cmd := exec.Command(filepath.Join(o.repo, "bin", "port49"), "workload", "token", "--broker", brokerPublished,
+		"--broker-ca", filepath.Join(o.c.local, "broker", testpki.LabCA), "--cert", filepath.Join(o.workload, testpki.WorkloadCert),
+		"--key", filepath.Join(o.workload, testpki.WorkloadKey), "--ttl", "5m", "--purpose", "hostname for L49", "--format", "tsv",
+		"--out", out, r.l.p.node)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("minting a login to read the hostname (INVALID, not a measured no): %v: %s", err, oneLineMax(errb.String(), 400))
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.secrets = append(o.secrets, routerDBSecrets(string(raw))...)
+	user, token, err := parseMintedLogin(string(raw))
+	if err != nil {
+		t.Fatalf("the minted login (INVALID): %v", err)
+	}
+	show := "show running-config"
 	if strings.HasPrefix(r.l.p.name, "juniper") {
-		cmd = "show configuration"
+		show = "show configuration"
 	}
-	outs, err := r.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, cmd)
+	outs, err := r.l.loginWithin(user, token, 60*time.Second, show)
 	if err != nil || len(outs) == 0 {
-		return "", fmt.Sprintf("breakglass login failed (%s)", oneLineMax(fmt.Sprint(err), 160))
+		t.Fatalf("reading the device's configuration for its hostname (INVALID, not a measured no): %v", err)
 	}
-	if h := hostnameLine(outs[0]); h != "" {
-		return h, ""
+	h := hostnameLine(outs[0])
+	if h == "" {
+		t.Fatalf("the device's %q output has no hostname line (INVALID, not a measured no)", show)
 	}
-	return "", "the device's configuration has no hostname line"
+	return h
 }
 
 func (r *l49Run) phaseA(t *testing.T) {
 	o := r.startStack(t, false)
 	node := r.l.p.node
-	hostname, why := r.breakglassHostname()
-	if hostname == "" {
-		hostname = node
-	}
-	mark := r.l.mark()
+	hostname := r.deviceHostname(t, o)
+	mark, boff := r.l.mark(), fileSize(o.c.brokerLog)
 	start := time.Now()
 	code, said := o.runWrapper("15m")
 	r.say("- **A. What Oxidized sends** (role `**`, `port49-oxidized-run` with `PORT49_TTL=15m`):")
+	r.say("  - %s", r.startup)
 	if code != 0 {
 		r.say("  - FAILED: the wrapper exited %d: %s", code, oneLineMax(said, 400))
 		r.ev.add("a_wrapper", map[string]any{"exit": code, "stderr": oneLineMax(said, 400)})
@@ -280,32 +383,40 @@ func (r *l49Run) phaseA(t *testing.T) {
 		return
 	}
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
-	time.Sleep(10 * time.Second) // the decision log is followed from the container: let it catch up
-	recs := r.l.recordsSince(mark)
+	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem", "authorize_command"))
+	// The mint is in the broker's log, not port49d's.
+	brecs := waitRecordsOf(o.c.brokerLog, boff, 30*time.Second, func(rs []map[string]any) bool { return len(mintPrincipals(rs)) > 0 })
 	mine := recordsFor(recs, oxidizedUser)
 	cmds := oxidizedCommands(recs, oxidizedUser, "")
 	n, by := redeemSummary(mine)
-	principals := mintPrincipals(recs)
-	cfg, cerr := o.fetchConfig(node)
-	r.say("  - The run %s with status `%s`; the wrapper exited 0.", map[bool]string{true: "ended", false: "did not end within 5m"}[ended], status)
+	principals := mintPrincipals(brecs)
+	r.say("  - The run %s with status `%s`; the wrapper exited 0.", endedWord(ended, 5*time.Minute), status)
+	if !settled {
+		r.say("  - Only %d port49d records for `%s` arrived within %s: the wanted redeem and authorize_command records did not both.",
+			len(mine), oxidizedUser, settleBound)
+	}
 	r.say("  - Commands port49 received from `%s`, in order, once each (%d): `%s`.", oxidizedUser, len(cmds), strings.Join(cmds, "`, `"))
 	r.say("  - Authentications (redeem records) for the run: %d (%s).", n, describeCounts(by))
-	r.say("  - The mint record's principal: `%s` (the workload's ID: %s).", strings.Join(principals, "`, `"),
-		yesNo(len(principals) == 1 && principals[0] == l48ID))
-	switch {
-	case cerr != nil:
+	if len(principals) == 0 {
+		r.say("  - No mint record reached the broker's log within 30s.")
+	} else {
+		r.say("  - The mint record's principal: `%s` (the workload's ID: %s).", strings.Join(principals, "`, `"),
+			yesNo(len(principals) == 1 && principals[0] == l48ID))
+	}
+	var cfg string
+	if status != "success" {
+		// fetchConfig is the latest stored backup, which may be an earlier run's.
+		r.say("  - The run's status was `%s`, so `GET /node/fetch` (the latest stored backup) is not read as this run's.", status)
+	} else if c, cerr := o.fetchConfig(node); cerr != nil {
 		r.say("  - The backup: `GET /node/fetch` FAILED: %s", oneLineMax(cerr.Error(), 200))
-	default:
-		what := "the node's name `" + node + "` (" + why + ")"
-		if why == "" {
-			what = "the device's own line `" + hostname + "`"
-		}
-		r.say("  - The backup holds %s: %s; it is %d bytes (over 1 KiB: %s).", what, yesNo(strings.Contains(cfg, hostname)), len(cfg),
-			yesNo(len(cfg) > 1024))
+	} else {
+		cfg = c
+		r.say("  - The backup holds the device's own line `%s`: %s; it is %d bytes (over 1 KiB: %s).", hostname,
+			yesNo(strings.Contains(cfg, hostname)), len(cfg), yesNo(len(cfg) > 1024))
 	}
 	r.ev.add("a_what_oxidized_sends", map[string]any{"status": status, "ended": ended, "commands": cmds, "redeem_count": n,
 		"redeem_by_verdict_reason": by, "mint_principals": principals, "config_bytes": len(cfg), "hostname_checked": hostname,
-		"hostname_note": why, "command_verdicts": commandVerdicts(recs, oxidizedUser)})
+		"settled": settled, "startup_run": r.startup, "command_verdicts": commandVerdicts(recs, oxidizedUser)})
 	r.finish(o, "A")
 }
 
@@ -316,6 +427,7 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	// B. A stale token.
 	r.say("- **B. A stale token** (the example's role; `receipt_idle_ttl: %s` in this stack's `port49d.yaml`, so a spent token's "+
 		"receipt lapses in minutes; the default is 15m):", receiptIdleTTL)
+	r.say("  - %s", r.startup)
 	start := time.Now()
 	code, said := o.runWrapper("60s")
 	if code != 0 {
@@ -325,7 +437,7 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		return
 	}
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
-	r.say("  - A 60s token: the run %s with status `%s`.", map[bool]string{true: "ended", false: "did not end within 5m"}[ended], status)
+	r.say("  - A 60s token: the run %s with status `%s`.", endedWord(ended, 5*time.Minute), status)
 	time.Sleep(3 * time.Minute) // past the token's 60s and the receipt's 2m
 	markB := r.l.mark()
 	putAt := time.Now()
@@ -337,12 +449,14 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		return
 	}
 	staleStatus, staleEnded := o.awaitRun(node, putAt, 3*time.Minute)
-	time.Sleep(10 * time.Second)
-	bRecs := r.l.recordsSince(markB)
+	bRecs, bSettled := r.l.settleRecords(markB, wantsEvents(oxidizedUser, "redeem"))
 	n, by := redeemSummary(recordsFor(bRecs, oxidizedUser))
 	r.say("  - 3m later, `PUT /node/next/%s` with no new mint: the run %s; Oxidized's status `%s` (a success would be `success`).",
-		node, map[bool]string{true: "ended", false: "did not end within 3m"}[staleEnded], staleStatus)
+		node, endedWord(staleEnded, 3*time.Minute), staleStatus)
 	r.say("  - Authentications that one run cost: %d redeem records (%s).", n, describeCounts(by))
+	if !bSettled {
+		r.say("  - No redeem record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
+	}
 	restart := time.Now()
 	code, said = o.runWrapper("60s")
 	reStatus, reEnded := "", false
@@ -350,7 +464,7 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		reStatus, reEnded = o.awaitRun(node, restart, 5*time.Minute)
 	}
 	r.say("  - The wrapper again with a new 60s token (wrapper exit %d): the run %s with status `%s`; Oxidized read the new "+
-		"credential at `/reload`: %s.", code, map[bool]string{true: "ended", false: "did not end within 5m"}[reEnded], reStatus,
+		"credential at `/reload`: %s.", code, endedWord(reEnded, 5*time.Minute), reStatus,
 		yesNo(reEnded && reStatus == "success"))
 	r.ev.add("b_stale_token", map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
 		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": code, "again_status": reStatus,
@@ -368,11 +482,14 @@ func (r *l49Run) phasesBC(t *testing.T) {
 		return
 	}
 	cStatus, cEnded := o.awaitRun(node, startC, 5*time.Minute)
-	time.Sleep(10 * time.Second)
-	rows := commandVerdicts(r.l.recordsSince(markC), oxidizedUser)
+	cRecs, cSettled := r.l.settleRecords(markC, wantsEvents(oxidizedUser, "authorize_command"))
+	rows := commandVerdicts(cRecs, oxidizedUser)
 	denied := deniedCommands(rows)
 	r.say("  - The run %s with status `%s`; %d authorize_command records, %d denied.",
-		map[bool]string{true: "ended", false: "did not end within 5m"}[cEnded], cStatus, len(rows), len(denied))
+		endedWord(cEnded, 5*time.Minute), cStatus, len(rows), len(denied))
+	if !cSettled {
+		r.say("  - No authorize_command record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
+	}
 	if len(denied) == 0 {
 		r.say("  - Every command was permitted.")
 	} else {

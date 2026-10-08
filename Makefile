@@ -76,7 +76,7 @@ lab-oidc:
 # port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;
 # see tests/lab/README.md, "Workload CA and Oxidized".
 lab-workload:
-	go test -tags lab ./tests/lab/ -run 'TestL48' -count=1 -v -timeout 45m
+	go test -tags lab ./tests/lab/ -run 'TestL48' -count=1 -v -timeout 75m
 
 # Oxidized end to end (plan 8, L49): the compose stack with one platform, as
 # `make lab` runs one at a time. Needs containerlab, the platform's image and

@@ -26,6 +26,7 @@ type localBroker struct {
 	addr, stderrPath, pki string
 	cmd                   *exec.Cmd
 	repo                  string
+	stop                  func() // stops the process; safe to call more than once
 }
 
 const (
@@ -99,6 +100,33 @@ var brokerListening = regexp.MustCompile(`port49d: broker listening on (\S+)`)
 // I-3). t.Cleanup stops it. A fault here is t.Fatal: INVALID, never a "no".
 func startLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot string) *localBroker {
 	t.Helper()
+	b, refusal := launchLocalBroker(t, dir, anchorFile, crlURL, crlIssuer, crlRoot)
+	if b == nil {
+		t.Fatalf("port49d refused to start over its CRL source: %s", refusal)
+	}
+	return b
+}
+
+// startRefusal is the line of a port49d start's stderr that says it refused
+// the certificate_status CRL source (its issuer is not under an anchor, or is
+// not a CA), or "" for any other output. Such a refusal is a fact about the
+// CRL's issuer, so a measurement; any other exit is a harness fault.
+func startRefusal(said string) string {
+	for _, ln := range strings.Split(said, "\n") {
+		if crlSourceRefusal.MatchString(ln) {
+			return strings.TrimSpace(ln)
+		}
+	}
+	return ""
+}
+
+var crlSourceRefusal = regexp.MustCompile(`broker\.certificate_status\.crls\[\d+\]`)
+
+// launchLocalBroker is startLocalBroker, except that a start port49d refuses
+// over the CRL source returns (nil, the refusal line). Every other fault is
+// t.Fatal.
+func launchLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot string) (*localBroker, string) {
+	t.Helper()
 	repo, err := repoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +176,7 @@ func startLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot 
 	}
 	done := make(chan struct{})
 	go func() { b.cmd.Wait(); errf.Close(); close(done) }()
-	t.Cleanup(func() {
+	b.stop = func() {
 		_ = b.cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-done:
@@ -156,15 +184,19 @@ func startLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot 
 			_ = b.cmd.Process.Kill()
 			<-done
 		}
-	})
+	}
+	t.Cleanup(b.stop)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if m := brokerListening.FindStringSubmatch(b.said()); m != nil {
 			b.addr = m[1]
-			return b
+			return b, ""
 		}
 		select {
 		case <-done:
+			if line := startRefusal(b.said()); line != "" {
+				return nil, line
+			}
 			t.Fatalf("port49d exited during startup; its stderr:\n%s", tailOf(b.said(), 2000))
 		default:
 		}
