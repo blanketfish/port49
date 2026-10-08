@@ -16,7 +16,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -77,7 +76,11 @@ type Broker struct {
 	Identity *oidc.Set
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
-	NoX509        bool
+	NoX509 bool
+	// Workload is the workload certificate verifier (plan 8; decision 40):
+	// x509 under broker.identity.machines. Nil reads every certificate as a
+	// person's, as before plan 8.
+	Workload      *Workload
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -515,42 +518,43 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case hasBearer:
 		return b.bearerCaller(w, r, event, nothing, raw)
-	case b.NoX509:
+	case b.NoX509 && !(hasCert && b.Workload != nil):
 		// An OIDC-only broker has no anchor and asks for no certificate: say
 		// what it does take rather than blame a certificate.
+		detail := "this broker accepts an OIDC ID token only (Authorization: Bearer); run `port49 login`"
+		if b.Workload != nil {
+			detail = "this broker accepts an OIDC ID token (Authorization: Bearer), or a workload certificate " +
+				"where broker.identity.machines names one; run `port49 login`"
+		}
 		b.emit(decision.Record{TS: b.Now(), Event: event, Verdict: decision.VerdictDeny,
 			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "oidc"}})
-		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved),
-			"this broker accepts an OIDC ID token only (Authorization: Bearer); run `port49 login`")
+		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), detail)
 		return caller{}, false
 	}
 	now := b.Now()
 	authTime := b.authTime(r)
-	var principal, legacy string
-	var cred store.Credential
-	var err error
-	if b.Directory != nil {
-		var leaf *x509.Certificate
-		cred, leaf, err = CertIdentity(r.TLS, now)
-		if leaf != nil {
-			legacy = legacyPrincipal(leaf)
-		}
+	cc, err := b.CertCallerOf(r.TLS, now)
+	principal, legacy, cred := cc.Principal, cc.Legacy, cc.Cred
+	if b.Directory != nil && cc.Domain == DomainHumans {
 		if h := heldOf(r); h != nil && h.answer != nil {
 			principal = h.answer.Principal // already mapped: it names the refusal's caller
 		}
-	} else {
-		principal, cred, err = Identity(r.TLS, now)
 	}
 	// named is whose request a refusal records: the principal when known,
 	// else the one the certificate's email SAN gave before a directory.
 	named := cmp.Or(principal, legacy)
 	if err != nil {
 		// A chain the anchor verified is named on the refusal (principal when
-		// it maps to one, the fingerprint always); no chain names no one.
+		// it maps to one, the fingerprint always); no chain names no one. A
+		// workload naming no principal is identity_unmapped (decision 40).
+		reason := decision.TrustDomainUnresolved
+		if errors.Is(err, ErrWorkloadUnmapped) {
+			reason = decision.IdentityUnmapped
+		}
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.TrustDomainUnresolved, Principal: named,
+			Reason: reason, Principal: named,
 			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
-		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
+		writeError(w, http.StatusUnauthorized, string(reason), err.Error())
 		return caller{}, false
 	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
@@ -596,10 +600,14 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		b.answerRefusal(w, r, ref)
 		return true
 	}
-	if b.Directory == nil {
+	// Without a directory, and for a workload, which never reaches one (decision 40 ruling 5):
+	// the principal is the certificate's own.
+	if b.Directory == nil || cc.Domain == DomainMachines {
 		if marked(principal) || status() {
 			return caller{}, false
 		}
+		// Only a certificate that is served is counted late.
+		b.noteRenewal(cc, now)
 		return caller{principal: principal, cred: cred, authTime: authTime}, true
 	}
 	// Under a directory the certificate's own marks (its key, and the
@@ -633,23 +641,15 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 // (Ruling 4), never the email SAN's; a connection with no pin is refused
 // (errNoPin).
 func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential, err error) {
-	if b.Directory == nil {
-		principal, cred, err = Identity(r.TLS, now)
-		return principal, "", cred, err
-	}
-	var leaf *x509.Certificate
-	cred, leaf, err = CertIdentity(r.TLS, now)
-	if leaf != nil {
-		legacy = legacyPrincipal(leaf)
-	}
-	if err != nil {
-		return "", legacy, cred, err
+	cc, err := b.CertCallerOf(r.TLS, now)
+	if err != nil || b.Directory == nil || cc.Domain == DomainMachines {
+		return cc.Principal, cc.Legacy, cc.Cred, err
 	}
 	if h := heldOf(r); h != nil && h.answer != nil {
-		return h.answer.Principal, legacy, cred, nil
+		return h.answer.Principal, cc.Legacy, cc.Cred, nil
 	}
 	b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
-	return "", legacy, cred, errNoPin
+	return "", cc.Legacy, cc.Cred, errNoPin
 }
 
 // errNoPin is a connection under a directory with no principal pinned to it:
@@ -662,6 +662,9 @@ var errNoPin = errors.New("broker: this connection has no directory principal pi
 func (b *Broker) legacyOf(r *http.Request) string {
 	if b.Directory == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
 		return ""
+	}
+	if machine, _ := b.machineChain(r.TLS); machine {
+		return "" // a workload answers to no person's mark (decision 40 ruling 3)
 	}
 	return legacyPrincipal(r.TLS.VerifiedChains[0][0])
 }

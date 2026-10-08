@@ -199,7 +199,10 @@ type BrokerConfig struct {
 	// ClientCAFile is then its x509 anchor, "" on an OIDC-only broker.
 	Identity    *oidc.Config  `yaml:"-"`
 	IdentitySet *identityYAML `yaml:"identity"`
-	PolicyFile  string        `yaml:"policy_file"`
+	// WorkloadCAFile is the workload verifier's trust anchor file (plan 8):
+	// broker.identity.machines[].trust_anchor_file, "" without one.
+	WorkloadCAFile string `yaml:"-"`
+	PolicyFile     string `yaml:"policy_file"`
 	// BatchMax caps the devices in one mint request; a larger sweep pages
 	// (design §17). Default 100.
 	BatchMax int `yaml:"batch_max"`
@@ -1223,6 +1226,9 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		return nil, err
 	}
 	b.Identity, b.ClientCAFile = id, id.X509AnchorFile
+	if id.X509Machine != nil {
+		b.WorkloadCAFile = id.X509Machine.AnchorFile
+	}
 	required := []struct{ key, v string }{
 		{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
 		{"broker.policy_file", b.PolicyFile},
@@ -1294,12 +1300,13 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 			return nil, err
 		}
 	}
+	x509 := b.ClientCAFile != "" || b.WorkloadCAFile != ""
 	switch {
-	case b.CertificateStatus == nil && b.ClientCAFile != "":
-		return nil, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
-			"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
-			"certificate_status: {disabled: true} to check none (spec §5.1.4)")
-	case b.CertificateStatus != nil && b.ClientCAFile == "":
+	case b.CertificateStatus == nil && x509:
+		return nil, fmt.Errorf("config: broker.certificate_status is required with any x509 verifier " +
+			"(broker.client_ca_file, or x509 under broker.identity): name the CRLs or OCSP responder that say " +
+			"whether a client certificate is revoked, or set certificate_status: {disabled: true} to check none (spec §5.1.4)")
+	case b.CertificateStatus != nil && !x509:
 		return nil, errors.New("config: broker.certificate_status: no x509 verifier is configured, so no client " +
 			"certificate is checked; remove it")
 	case b.CertificateStatus != nil:
@@ -1661,6 +1668,7 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 	others := []struct{ key, path string }{
 		{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+		{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
 		{"inventory_file", c.InventoryFile}, {"accounting.spool_path", c.Accounting.SpoolPath},
 		{"admin_socket", c.AdminSocket},
 	}
@@ -1782,6 +1790,7 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
 			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+			{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
 			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
 		}
 		for _, iss := range identityIssuers(&b) {

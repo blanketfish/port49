@@ -432,6 +432,9 @@ func (e *APIError) Error() string {
 	case e.Status == http.StatusServiceUnavailable && e.Code == "certificate_status_unavailable" && e.Detail != "":
 		// The broker's detail says what it could not establish, as
 		// unavailable says it.
+		if strings.Contains(e.Detail, api.UncoveredStatus) {
+			return "agent: " + e.Detail // final until the operator acts: no "retry in"
+		}
 		return "agent: " + e.Detail + retryIn(e.RetryAfter)
 	case e.Status == http.StatusServiceUnavailable:
 		return "agent: the broker is unavailable just now: " + e.Code + ": " + e.Detail + retryIn(e.RetryAfter)
@@ -733,6 +736,9 @@ func unavailable(resp *http.Response, e api.Error) error {
 	if e.Error == "certificate_status_unavailable" {
 		// The broker's detail says what it could not establish, and to try
 		// again: said as it is, not wrapped in the same sentence again.
+		if strings.Contains(e.Detail, api.UncoveredStatus) {
+			return fmt.Errorf("agent: %s", e.Detail) // final until the operator acts: no "retry in"
+		}
 		if e.Detail != "" {
 			return fmt.Errorf("agent: %s%s", e.Detail, retryHint(resp.Header))
 		}

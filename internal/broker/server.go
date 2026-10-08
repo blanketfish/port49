@@ -60,21 +60,31 @@ const MaxConns = 256
 // that never comes would hold a slot of the cap for good (pre-flight F1). The
 // time between requests is IdleTimeout's, so a held connection is unaffected.
 //
-// anchor must hold the one trust anchor. Server refuses a nil pool, which
-// crypto/tls would take as the system roots — every public CA an anchor for
-// the email mapping — and an empty one, which trusts no one. It returns the
-// refusal rather than panicking (plan 4b): port49d now runs code after start
-// that swaps policy under a live daemon, and nothing on a path that can run
-// with device AAA already serving may end the process.
+// Without a workload verifier, anchor must hold the one trust anchor. Server
+// refuses a nil pool, which crypto/tls would take as the system roots — every
+// public CA an anchor for the email mapping — and an empty one, which trusts
+// no one. It returns the refusal rather than panicking (plan 4b): port49d now
+// runs code after start that swaps policy under a live daemon, and nothing on
+// a path that can run with device AAA already serving may end the process.
 //
-// An OIDC-only broker (NoX509, plan 7h) is served with a nil anchor and
-// requests no certificate.
+// An OIDC-only broker (NoX509, plan 7h) with no workload verifier is served
+// with a nil anchor and requests no certificate.
+//
+// With b.Workload set (plan 8), a nil anchor is accepted: the pool is the
+// workload anchor alone, and certificates are still requested
+// (VerifyClientCertIfGiven). Given a human anchor, the workload anchor is
+// added beside it, and the anchor a chain ends at names its domain.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
 	clientAuth := tls.VerifyClientCertIfGiven
+	var pool *x509.CertPool
 	switch {
 	case anchor != nil && b.NoX509:
 		return nil, errors.New("broker: an OIDC-only broker (NoX509) takes no anchor: it would still verify " +
 			"client certificates")
+	case anchor == nil && b.Workload != nil:
+		// People by OIDC, workloads by certificate (plan 8): the one anchor
+		// is the workloads'.
+		pool = x509.NewCertPool()
 	case anchor == nil && b.NoX509 && b.Identity != nil:
 		// An OIDC-only broker (Ruling 1): no certificate is requested, and
 		// every caller authenticates by bearer.
@@ -82,6 +92,14 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 	case anchor == nil || anchor.Equal(x509.NewCertPool()):
 		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +
 			"roots, and an empty one trusts no one (an OIDC-only broker sets NoX509 and Identity)")
+	default:
+		pool = anchor.Clone()
+	}
+	// One pool of both anchors (decision 40 ruling 2): the handshake verifies
+	// against either, and the anchor a chain ends at is its domain
+	// (CertCallerOf).
+	if b.Workload != nil {
+		pool.AddCert(b.Workload.Anchor)
 	}
 	return &http.Server{
 		Addr:    addr,
@@ -89,7 +107,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		TLSConfig: &tls.Config{
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{cert},
-			ClientCAs:              anchor,
+			ClientCAs:              pool,
 			ClientAuth:             clientAuth,
 			NextProtos:             []string{"http/1.1"},
 			SessionTicketsDisabled: true,
@@ -98,13 +116,14 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 				if len(cs.PeerCertificates) == 0 {
 					return nil // /v1/config only; /v1/tokens refuses it
 				}
-				if b.Directory != nil {
-					// The chain is checked here, the mapping at bind: a leaf
-					// with no email SAN is a person a directory may know.
-					_, _, err := CertIdentity(&cs, b.Now())
-					return err
+				// A chain is checked here; a workload naming no principal is
+				// answered 401 identity_unmapped at bind, never as a TLS alert
+				// the client cannot read (decision 40 ruling 3); a person
+				// under a directory is mapped at bind.
+				_, err := b.CertCallerOf(&cs, b.Now())
+				if errors.Is(err, ErrWorkloadUnmapped) {
+					return nil
 				}
-				_, _, err := Identity(&cs, b.Now())
 				return err
 			},
 		},
@@ -211,16 +230,25 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("broker: server certificate: %w", err)
 	}
-	raw, err := os.ReadFile(anchorFile)
+	anchor, err := ReadAnchor(anchorFile)
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file: %w", err)
 	}
+	return cert, anchor, nil
+}
+
+// ReadAnchor reads a trust anchor file: exactly one certificate, as
+// client_ca_file and each trust_anchor_file must hold (design §19 step 3;
+// plan 8 for the workload anchor).
+func ReadAnchor(path string) (*x509.Certificate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
 	var anchors []*x509.Certificate
-	rest := raw
-	for {
+	for rest := raw; ; {
 		var blk *pem.Block
-		blk, rest = pem.Decode(rest)
-		if blk == nil {
+		if blk, rest = pem.Decode(rest); blk == nil {
 			break
 		}
 		if blk.Type != "CERTIFICATE" {
@@ -228,15 +256,15 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 		}
 		c, err := x509.ParseCertificate(blk.Bytes)
 		if err != nil {
-			return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s: %w", anchorFile, err)
+			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		anchors = append(anchors, c)
 	}
 	if len(anchors) != 1 {
-		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s holds %d certificates; exactly one "+
-			"trust anchor is accepted (design §19 step 3)", anchorFile, len(anchors))
+		return nil, fmt.Errorf("%s holds %d certificates; exactly one trust anchor is accepted (design §19 step 3)",
+			path, len(anchors))
 	}
-	return cert, anchors[0], nil
+	return anchors[0], nil
 }
 
 // readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a

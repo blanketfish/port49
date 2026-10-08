@@ -238,13 +238,13 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 		body []byte
 		want string
 	}{
-		"another CA's":     {other.PEM(), "is neither broker.client_ca_file's certificate nor signed by it"},
+		"another CA's":     {other.PEM(), "is neither a trust anchor's certificate nor signed by one"},
 		"a leaf":           {leafPEM, "is not a CA certificate"},
 		"two certificates": {append(inter.PEM(), anchor.PEM()...), "holds 2 PEM blocks"},
 		"a key":            {keyPEM, "holds a PRIVATE KEY PEM block"},
 		"no PEM":           {[]byte("not a certificate"), "holds 0 PEM blocks"},
 	} {
-		_, err := certStatusConfig(cfg(writeFile(t, dir, "issuer.pem", c.body)), anchor.Cert, dir)
+		_, err := certStatusConfig(cfg(writeFile(t, dir, "issuer.pem", c.body)), []*x509.Certificate{anchor.Cert}, dir)
 		if err == nil || !strings.Contains(err.Error(), "crls[1].issuer_file "+filepath.Join(dir, "issuer.pem")) ||
 			!strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
@@ -253,14 +253,14 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 			t.Errorf("the refusal repeats the file: %v", err)
 		}
 	}
-	if _, err := certStatusConfig(cfg(filepath.Join(dir, "missing.pem")), anchor.Cert, dir); err == nil ||
+	if _, err := certStatusConfig(cfg(filepath.Join(dir, "missing.pem")), []*x509.Certificate{anchor.Cert}, dir); err == nil ||
 		!strings.Contains(err.Error(), "crls[1].issuer_file") {
 		t.Errorf("a missing file: %v", err)
 	}
 
 	c := cfg(writeFile(t, dir, "issuer.pem", pemOf(inter.Cert)))
 	c.OCSP = &config.CertificateStatusOCSP{UseAIA: true, Timeout: time.Second, Hash: "sha1"}
-	got, err := certStatusConfig(c, anchor.Cert, dir)
+	got, err := certStatusConfig(c, []*x509.Certificate{anchor.Cert}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 		t.Fatalf("certstatus.Config: %+v %+v", got, got.OCSP)
 	}
 	c.OCSP.Hash = "sha256"
-	if got, err := certStatusConfig(c, anchor.Cert, dir); err != nil || got.OCSP.Hash.String() != "SHA-256" {
+	if got, err := certStatusConfig(c, []*x509.Certificate{anchor.Cert}, dir); err != nil || got.OCSP.Hash.String() != "SHA-256" {
 		t.Fatalf("sha256: %+v %v", got.OCSP, err)
 	}
 }
@@ -467,16 +467,25 @@ func TestRunRevokesACertificateANewListNames(t *testing.T) {
 // with neither says so once, and still starts (re-check R3).
 func TestRunSaysAnIntermediateNothingCovers(t *testing.T) {
 	now := time.Now()
-	const line = "port49d: broker: certificate status: certificates issued by CN=status intermediate will be " +
-		"refused: nothing covers CN=status intermediate itself; name the root CA's CRL"
+	const tail = ": nothing covers CN=status intermediate itself; name the root CA's CRL"
+	const refuse = "port49d: broker: certificate status: certificates issued by CN=status intermediate will be " +
+		"refused (503; final at port49 workload)" + tail
+	const allow = "port49d: broker: certificate status: certificates issued by CN=status intermediate will be " +
+		"admitted with their revocation status unchecked (on_unavailable: allow)" + tail
 	for name, c := range map[string]struct {
-		root, ocsp bool
-		want       bool
+		root, ocsp, allow bool
+		want              bool
 	}{
-		"the intermediate's list alone": {want: true},
-		"with the root's list":          {root: true},
-		"with OCSP":                     {ocsp: true},
+		"the intermediate's list alone":  {want: true},
+		"under on_unavailable: allow":    {want: true, allow: true},
+		"with the root's list":           {root: true},
+		"with the root's list and allow": {root: true, allow: true},
+		"with OCSP":                      {ocsp: true},
 	} {
+		line, other := refuse, allow
+		if c.allow {
+			line, other = allow, refuse
+		}
 		t.Run(name, func(t *testing.T) {
 			out := captureStderr(t)
 			b := brokerConfig(t, minimalPolicy).Broker
@@ -486,6 +495,9 @@ func TestRunSaysAnIntermediateNothingCovers(t *testing.T) {
 			cs := &config.CertificateStatusConfig{CRLs: []config.CertificateStatusCRL{{Name: "intermediate",
 				File:       writeFile(t, dir, "inter.crl", crl(t, inter, now.Add(-time.Minute), now.Add(time.Hour))),
 				IssuerFile: writeFile(t, dir, "inter.pem", inter.PEM())}}}
+			if c.allow {
+				cs.OnUnavailable = "allow"
+			}
 			if c.root {
 				cs.CRLs = append(cs.CRLs, config.CertificateStatusCRL{Name: "root", IssuerFile: b.ClientCAFile,
 					File: writeFile(t, dir, "root.crl", crl(t, root, now.Add(-time.Minute), now.Add(time.Hour)))})
@@ -499,6 +511,9 @@ func TestRunSaysAnIntermediateNothingCovers(t *testing.T) {
 			stop()
 			if got := strings.Count(out.String(), line); got != map[bool]int{true: 1, false: 0}[c.want] {
 				t.Fatalf("the line %d times: %q", got, out.String())
+			}
+			if strings.Contains(out.String(), other) {
+				t.Fatalf("the other mode's line: %q", out.String())
 			}
 		})
 	}

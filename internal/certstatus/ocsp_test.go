@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/ocsp"
 
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -34,6 +35,7 @@ type answer struct {
 	revokedAt  time.Time
 	reason     int
 	garbage    bool              // an unsigned body, not an OCSP response
+	unauth     bool              // RFC 6960's unauthorized: it does not serve this certificate
 	certIDFor  *x509.Certificate // the CA the CertID names, when not the responder's issuer
 	sigAlg     x509.SignatureAlgorithm
 }
@@ -109,6 +111,11 @@ func (r *responder) serve(w http.ResponseWriter, req *http.Request) {
 	}
 	if ans.garbage {
 		w.Write([]byte("not an OCSP response"))
+		return
+	}
+	if ans.unauth {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		w.Write(ocsp.UnauthorizedErrorResponse)
 		return
 	}
 	signerCert, signerKey := ans.signerCert, ans.signerKey
@@ -529,4 +536,77 @@ func TestOCSP(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A responder that applies and was asked but failed is an outage: its detail
+// leads with the OCSP failure and never opens with the API's uncovered words,
+// so the broker says try again and port49 workload retries (decision 40,
+// ruling 7). One that does not apply to the certificate leaves the issuer
+// uncovered, final, and says which: none named (use_aia), an AIA url that is
+// not http, an answer of unauthorized, or a signed certStatus of unknown.
+func TestAnOCSPOutageIsNotUncovered(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	stranger := newCA(t, "issuing CA") // the issuer's name, another key
+	aiaLeaf := func(t *testing.T, aia ...string) *x509.Certificate {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sign(t, ca, &x509.Certificate{SerialNumber: big.NewInt(300), Subject: pkix.Name{CommonName: "aia user"},
+			NotBefore: t0.Add(-time.Hour), NotAfter: t0.Add(time.Hour), OCSPServer: aia}, key)
+	}
+	answering := func(t *testing.T, ans answer) OCSPConfig {
+		resp := newResponder(t, ca)
+		ans.this, ans.next = t0, t0.Add(30*time.Minute)
+		resp.set(func(r *responder) { r.ans = ans })
+		return OCSPConfig{Responder: resp.URL}
+	}
+	for _, tc := range []struct {
+		name, says string
+		final      bool
+		cfg        func(t *testing.T) OCSPConfig
+		aia        []string
+	}{
+		{"the responder down", "did not answer", false, func(t *testing.T) OCSPConfig {
+			down := httptest.NewServer(http.NotFoundHandler())
+			down.Close()
+			return OCSPConfig{Responder: down.URL}
+		}, nil},
+		{"an answer that does not verify", "does not verify for this issuer", false, func(t *testing.T) OCSPConfig {
+			return answering(t, answer{status: ocsp.Good, signerCert: stranger.Cert, signerKey: stranger.Key})
+		}, nil},
+		{"an answer past its next update", "past its next update", false, func(t *testing.T) OCSPConfig {
+			resp := newResponder(t, ca)
+			resp.set(func(r *responder) {
+				r.ans = answer{status: ocsp.Good, this: t0.Add(-2 * time.Hour), next: t0.Add(-time.Hour)}
+			})
+			return OCSPConfig{Responder: resp.URL}
+		}, nil},
+		{"no responder for the certificate", "no responder for this certificate", true,
+			func(*testing.T) OCSPConfig { return OCSPConfig{UseAIA: true} }, nil},
+		{"an AIA url that is not http", "not http or https", true,
+			func(*testing.T) OCSPConfig { return OCSPConfig{UseAIA: true} }, []string{"ldap://ocsp.port49.lab"}},
+		{"an answer of unauthorized", "unauthorized", true, func(t *testing.T) OCSPConfig {
+			return answering(t, answer{unauth: true})
+		}, nil},
+		{"a certStatus of unknown", "answered unknown", true, func(t *testing.T) OCSPConfig {
+			return answering(t, answer{status: ocsp.Unknown})
+		}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg(t)
+			cfg.Timeout = time.Second
+			c, _ := ocspChecker(t, cfg)
+			r := check(t, c, aiaLeaf(t, tc.aia...), ca.Cert)
+			if r.Verdict != Unknown || !strings.Contains(r.Detail, tc.says) {
+				t.Fatalf("%+v, want unknown saying %q", r, tc.says)
+			}
+			if final := strings.HasPrefix(r.Detail, api.UncoveredStatus); final != tc.final {
+				t.Errorf("final %v, want %v: %s", final, tc.final, r.Detail)
+			}
+			if !tc.final && (!strings.HasPrefix(r.Detail, "OCSP ") || !strings.Contains(r.Detail, "no fresh CRL covers")) {
+				t.Errorf("an outage not said first: %s", r.Detail)
+			}
+		})
+	}
 }

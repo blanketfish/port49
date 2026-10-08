@@ -174,7 +174,7 @@ func TestTheCertificateStatusBlockIsChecked(t *testing.T) {
 		return "  certificate_status:\n    crls:\n      - " + entry + "\n"
 	}
 	for _, c := range []struct{ name, block, key string }{
-		{"absent", "", "broker.certificate_status is required"},
+		{"absent", "", "broker.certificate_status is required with any x509 verifier"},
 		{"disabled beside a CRL", "  certificate_status:\n    disabled: true\n    crls: [{name: a, file: /a.crl, " +
 			"issuer_file: /a.pem}]\n", "broker.certificate_status.disabled"},
 		{"disabled beside OCSP", "  certificate_status: {disabled: true, ocsp: {use_aia: true}}\n",

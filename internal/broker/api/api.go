@@ -3,7 +3,30 @@
 // key is snake_case.
 package api
 
-import "fmt"
+import (
+	"crypto/x509"
+	"fmt"
+	"time"
+)
+
+// UncoveredStatus opens the broker's detail when no certificate status source
+// covers a certificate's issuer (certstatus's "uncovered" Unknown). The broker
+// answers it 503 certificate_status_unavailable with Retry-After, but nothing
+// changes until the operator adds a CRL or OCSP for that issuer, so port49
+// workload treats it as final (spec §13 decision 40 ruling 7).
+const UncoveredStatus = "no fresh CRL or OCSP answer covers"
+
+// LateRenewalFraction: a workload certificate with less than 1/4 of its
+// validity left is late to renew (spec §13 decision 40 ruling 9). The broker
+// says it and counts it; port49 workload warns.
+const LateRenewalFraction = 4
+
+// LateRenewal reports whether c, presented at now, has under a quarter of its
+// validity left.
+func LateRenewal(c *x509.Certificate, now time.Time) bool {
+	life := c.NotAfter.Sub(c.NotBefore)
+	return life > 0 && c.NotAfter.Sub(now) < life/LateRenewalFraction
+}
 
 // Config is GET /v1/config: discovery data, never fleet information.
 type Config struct {

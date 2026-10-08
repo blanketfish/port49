@@ -356,7 +356,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
-	brokerSrv, brk, anchorCert, err := buildBrokerAnchor(cfg, inventoryFrom, bs.st, minter, log, m)
+	brokerSrv, brk, anchors, err := buildBrokerAnchor(cfg, inventoryFrom, bs.st, minter, log, m)
 	if err != nil {
 		return err
 	}
@@ -480,7 +480,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		brokerSay("broker: certificate status checking is disabled (broker.certificate_status.disabled): a " +
 			"certificate revoked at its CA keeps minting until `port49 revoke --cert`")
 	} else {
-		ccfg, err := certStatusConfig(*cs, anchorCert, cfg.Broker.StateDir)
+		ccfg, err := certStatusConfig(*cs, certsOf(anchors), cfg.Broker.StateDir)
 		if err != nil {
 			return fmt.Errorf("broker.certificate_status.%w", err)
 		}
@@ -490,9 +490,14 @@ func runBroker(parent context.Context, cfgPath string) error {
 		for _, err := range checker.LoadPersisted() {
 			brokerSay("broker: certificate status: %s", printsafe.Line(err.Error(), 300))
 		}
-		for _, subject := range uncoveredIssuers(ccfg, anchorCert) { // re-check R3
-			brokerSay("broker: certificate status: certificates issued by %s will be refused: nothing covers %s "+
-				"itself; name the root CA's CRL", subject, subject)
+		for _, a := range anchors {
+			if line := anchorCoverLine(a, ccfg, cs.OnUnavailable); line != "" {
+				brokerSay("%s", line)
+				continue
+			}
+			for _, subject := range uncoveredIssuers(ccfg, a.cert) { // re-check R3
+				brokerSay("%s", intermediateCoverLine(subject, cs.OnUnavailable))
+			}
 		}
 		brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable
 	}
@@ -512,11 +517,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	for _, r := range marks.All() {
 		bl.Revoked(r, true)
 	}
-	bl.Refused = brk.RefusedAtBind
-	bl.Status = brk.BindStatus
-	if brk.Directory != nil {
-		bl.Map = brk.BindMap
-	}
+	brk.Wire(bl)
 	brk.Conns = bl
 	// Only now the marks feed: a change told before brk.Conns was set would
 	// reach no listener, and the listener holds every mark at the load's

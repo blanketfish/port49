@@ -1,0 +1,44 @@
+# Oxidized on the lab's compose stack (plan 8, L49): host networking, so it
+# reaches the containerlab devices as a host on the management bridge would,
+# its REST API on 127.0.0.1:18888. Everything under ${PORT49_COMPOSE_LOCAL}/oxidized
+# (config, router.db, known_hosts) is written by TestL49Oxidized before `up`.
+# The image is pinned (oxidizedImage in oxidized_test.go names the same
+# reference, and a unit test holds the two equal). Its version, from
+# `oxidized --version`, is 0.37.0-101-g65125713: a build after the 0.37.0 tag,
+# so no version tag names it and the digest is the pin.
+#
+# The container runs as the host user, not as the image's own oxidized (uid
+# 30000), and `oxidized` is started directly instead of the image's runit
+# services. The image's run script chowns the whole config directory to
+# uid 30000 at every start, after which port49-oxidized-run (a host process,
+# as cron would run it on the Oxidized host) could not replace router.db, and
+# a 0600 router.db it wrote could not be read by uid 30000. Running as the one
+# user that owns the directory is how the wrapper and Oxidized share it, as
+# they do on a real host. Starting `oxidized` directly also skips the image's
+# auto-reload service, which reloads in a loop when CONFIG_RELOAD_INTERVAL is
+# set at all, "0" included. HOME is a path the host user can traverse; the
+# image's own /home/oxidized is 0700 uid 30000.
+#
+# Oxidized is under a profile: it raises NoNodesFound and exits when router.db
+# lists no node, and the wrapper never writes an empty one. startOxidized brings
+# the stack up without it, runs the wrapper once (which writes router.db and
+# exits 75 at /reload, as Oxidized is not up), and then starts it with
+# `--profile oxidized up -d oxidized`.
+services:
+  oxidized:
+    profiles: [oxidized]
+    image: oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc
+    network_mode: host
+    user: "${PORT49_LAB_UID:?}:${PORT49_LAB_GID:?}"
+    command: ["oxidized"]
+    environment:
+      HOME: /oxhome
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized
+      - ${PORT49_COMPOSE_LOCAL}/oxidized/known_hosts:/oxhome/.ssh/known_hosts:ro
+
+  # the workload CA the broker's machine verifier trusts: a public certificate,
+  # mode 0644 so the broker's uid (65532) can read it
+  port49-broker:
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/workload/workload-ca.pem:/etc/port49-workload/workload-ca.pem:ro

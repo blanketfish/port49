@@ -1,0 +1,83 @@
+[
+  {
+    "step": "a_ssh_methods",
+    "value": {
+      "offered_for_none": "publickey,keyboard-interactive",
+      "read": true
+    }
+  },
+  {
+    "step": "a_what_oxidized_sends",
+    "value": {
+      "command_verdicts": [
+        {
+          "command": "show inventory",
+          "verdict": "permit",
+          "reason": "permit_dominates"
+        },
+        {
+          "command": "show running-config",
+          "verdict": "permit",
+          "reason": "permit_dominates"
+        }
+      ],
+      "commands": [
+        "show inventory",
+        "show running-config"
+      ],
+      "config_bytes": 2225,
+      "ended": true,
+      "hostname_checked": "hostname leaf1",
+      "mint_principals": [
+        "spiffe://port49.lab/host/oxidized-01"
+      ],
+      "redeem_by_verdict_reason": {
+        "permit/token_redeemed": 1
+      },
+      "redeem_count": 1,
+      "settled": true,
+      "startup_run": "Oxidized's own startup run (with the setup run's token, before this phase's mark) ended, status `success`; authentications at port49d: 1 (permit/token_redeemed x1).",
+      "status": "success"
+    }
+  },
+  {
+    "step": "b_stale_token",
+    "value": {
+      "again_ended": true,
+      "again_status": "success",
+      "again_wrapper_exit": 0,
+      "crashfile_written_by_stale_run": true,
+      "crashfiles_total": 1,
+      "first_status": "success",
+      "oxidized_log_excerpt": "2026-10-08 03:23:15.325982 E [7:Job 'leaf1' node.rb:92] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg Inappropriate ioctl for device, creating crashfile\n2026-10-08 03:23:15.326672 E [7:Job 'leaf1' node.rb:108] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg \"Inappropriate ioctl for device\", 172.100.100.11 saved",
+      "process_crash_file": false,
+      "receipt_idle_ttl": "2m",
+      "stale_redeem_by_verdict_reason": {
+        "deny/token_spent": 1
+      },
+      "stale_redeem_count": 1,
+      "stale_run_ended": true,
+      "stale_status": "no_connection"
+    }
+  },
+  {
+    "step": "c_example_role",
+    "value": {
+      "command_verdicts": [
+        {
+          "command": "show inventory",
+          "verdict": "permit",
+          "reason": "permit_dominates"
+        },
+        {
+          "command": "show running-config",
+          "verdict": "permit",
+          "reason": "permit_dominates"
+        }
+      ],
+      "denied": null,
+      "ended": true,
+      "status": "success"
+    }
+  }
+]

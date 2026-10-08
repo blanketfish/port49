@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -230,5 +231,18 @@ func TestExplainBoundsAndRedactsTheCommand(t *testing.T) {
 	w := f.explainAs(t, "alice@example.com", `{"device":"leaf1","command":"username bob secret Hunter2"}`)
 	if w.Code != 200 || strings.Contains(w.Body.String(), "Hunter2") || strings.Contains(f.log.String(), "Hunter2") {
 		t.Fatalf("%d %s\nlog: %s", w.Code, w.Body, f.log)
+	}
+}
+
+// explain_others reaches a workload principal by its SPIFFE ID.
+func TestExplainNamesAWorkload(t *testing.T) {
+	f, _, _ := newWorkloadFixture(t)
+	f.loadPolicy(t, strings.Replace(workloadPolicy, "username: alice, enable: token,",
+		"username: alice, api: [explain_others], enable: token,", 1))
+	res := f.call(context.Background(), f.state(f.alice), "POST", "/v1/explain",
+		`{"device":"leaf1","command":"show running-config","principal":"`+workloadID+`"}`)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"principal":"`+workloadID+`"`) ||
+		!strings.Contains(res.Body.String(), `"verdict":"permit"`) {
+		t.Fatalf("%s", answer(res))
 	}
 }

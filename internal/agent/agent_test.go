@@ -2355,3 +2355,20 @@ func TestARevocationBehindARunningRevocationSaysItWasNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An uncovered certificate status is final until the operator acts: the human
+// agent prints the broker's words and no "retry in" after "it stays so".
+func TestAnUncoveredStatusSaysNoRetryIn(t *testing.T) {
+	const detail = "the broker cannot establish this certificate's revocation status (" + api.UncoveredStatus +
+		` "CN=corp"); it stays so until a CRL or OCSP source covers this certificate`
+	ae := &APIError{Status: http.StatusServiceUnavailable, Code: "certificate_status_unavailable", Detail: detail,
+		RetryAfter: 60 * time.Second}
+	if got := ae.Error(); got != "agent: "+detail {
+		t.Fatalf("APIError: %q", got)
+	}
+	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Retry-After": {"60"}}}
+	err := unavailable(resp, api.Error{Error: "certificate_status_unavailable", Detail: detail})
+	if err == nil || err.Error() != "agent: "+detail {
+		t.Fatalf("unavailable: %v", err)
+	}
+}

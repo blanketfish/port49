@@ -36,6 +36,14 @@ const usage = `usage:
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
+  port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
+                        [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
+                        [--deadline DURATION] [DEVICE...]
+                        (no agent: the certificate and key are read each run; under cron, always
+                        --out, since cron mails a job's stdout; exits 1 when some devices were
+                        written and some not, 75 when the broker did not answer by the deadline,
+                        77 when nothing was minted and a run again will not change that)
+  port49 workload identity --broker URL --broker-ca FILE --cert FILE --key FILE [--json]
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
   port49 explain --device NAME [--command "LINE"] [--principal ID] [--socket PATH]
@@ -92,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return refreshCmd(args[1:], stdout, stderr)
 	case "identity":
 		return identityCmd(args[1:], stdout, stderr)
+	case "workload":
+		return workloadCmd(args[1:], stdout, stderr)
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)

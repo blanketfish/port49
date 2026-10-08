@@ -78,9 +78,20 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 				printsafe.Line(res.Detail, 300))
 			return nil
 		}
+		// An uncovered status holds until the operator or the CA changes
+		// something, and port49 workload takes it as final: never "try again".
+		next := "try again"
+		if unknownClass(res.Detail) == "uncovered" {
+			next = "it stays so until a CRL or OCSP source covers this certificate"
+			if strings.Contains(res.Detail, "is scoped to the distribution point") {
+				// The fix is the certificate's, not a source: the list exists.
+				next = "it stays so until the certificate is reissued naming that distribution point, " +
+					"or a CRL or OCSP source covers it"
+			}
+		}
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.TrustDomainUnresolved,
 			Error: "certificate_status_unavailable", RetryAfter: 60,
-			Detail: "the broker cannot establish this certificate's revocation status (" + res.Detail + "); try again"}
+			Detail: "the broker cannot establish this certificate's revocation status (" + res.Detail + "); " + next}
 	}
 	return nil
 }
@@ -95,7 +106,7 @@ func unknownClass(detail string) string {
 		return "crl"
 	case strings.HasPrefix(detail, "OCSP"):
 		return "ocsp"
-	case strings.HasPrefix(detail, "no fresh CRL or OCSP answer covers"):
+	case strings.HasPrefix(detail, api.UncoveredStatus):
 		return "uncovered"
 	}
 	return "other"

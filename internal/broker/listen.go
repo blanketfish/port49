@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,6 +118,11 @@ type Listener struct {
 	// Broker.BindMap when a directory is configured; nil keeps the email-SAN
 	// principal.
 	Map func(ctx context.Context, cs tls.ConnectionState, cred store.Credential) (directory.Answer, *BindRefusal)
+	// Caller reads a connection's verified certificate as the broker does
+	// (Broker.CertCallerOf; plan 8): a workload's principal is its SPIFFE ID,
+	// never mapped. Broker.Wire sets it. Nil without Map reads a certificate
+	// as before plan 8; nil with Map serves nothing (ErrUnwired).
+	Caller func(cs *tls.ConnectionState, now time.Time) (CertCaller, error)
 
 	ready     chan *tls.Conn
 	done      chan struct{}
@@ -172,6 +176,27 @@ type trackedConn struct {
 	closeOnce  sync.Once
 }
 
+// ErrUnwired is Accept's answer on a listener given Map without Caller: it
+// would map a workload's certificate through the directory as a person's
+// (decision 40 ruling 5), so it serves nothing and says why at start
+// (pre-flight I-4).
+var ErrUnwired = errors.New("broker: the listener has a directory Map but no Caller, so a workload certificate " +
+	"would be mapped as a person's; wire it with Broker.Wire")
+
+// Wire sets l's hooks from b: the one way port49d and port49-broker wire
+// their listener (pre-flight I-4). Refused, Status and Caller always; Map
+// under a directory. Caller is what keeps a workload out of Map. It must run
+// before Serve (the first Accept): the hooks are read without a lock.
+func (b *Broker) Wire(l *Listener) {
+	l.Refused = b.RefusedAtBind
+	l.Status = b.BindStatus
+	l.Caller = b.CertCallerOf
+	l.Map = nil
+	if b.Directory != nil {
+		l.Map = b.BindMap
+	}
+}
+
 // NewListener accepts nothing from inner until the first Accept, so the
 // marks a caller hands it (Revoked) before srv.Serve are all in place before
 // any connection can bind; from then on it accepts on its own, and
@@ -196,6 +221,9 @@ func (l *Listener) Addr() net.Addr { return l.inner.Addr() }
 // Accept returns a connection whose handshake is done, or net.ErrClosed
 // once the listener is closed. The first call starts accepting from inner.
 func (l *Listener) Accept() (net.Conn, error) {
+	if l.Map != nil && l.Caller == nil {
+		return nil, ErrUnwired
+	}
 	l.startOnce.Do(func() { go l.acceptLoop() })
 	select {
 	case tc := <-l.ready:
@@ -299,24 +327,27 @@ func (l *Listener) handshake(c *trackedConn) {
 		return
 	}
 	if cs := tc.ConnectionState(); len(cs.PeerCertificates) > 0 {
-		// The handshake's VerifyConnection ran Identity a moment ago; this
-		// reads the same answer, which a clock step alone could change.
-		var principal, legacy string
-		var cred store.Credential
-		var err error
-		if l.Map != nil {
-			var leaf *x509.Certificate
-			cred, leaf, err = CertIdentity(&cs, l.now())
-			if err == nil {
-				legacy = legacyPrincipal(leaf)
-			}
-		} else {
-			principal, cred, err = Identity(&cs, l.now())
+		// The handshake's VerifyConnection read the certificate a moment ago;
+		// this reads the same answer, which a clock step alone could change.
+		cc, err := l.callerOf(&cs)
+		principal, legacy, cred := cc.Principal, cc.Legacy, cc.Cred
+		if errors.Is(err, ErrWorkloadUnmapped) {
+			// Answered over HTTP and recorded, never a TLS alert the
+			// workload's client cannot read (decision 40 ruling 3).
+			l.m.BrokerConnectionEvents.WithLabelValues("identity_refused").Inc()
+			l.say("identity_unmapped", "broker: answering a connection from %s identity_unmapped and closing it "+
+				"before it bound: %s", c.src, printsafe.Line(err.Error(), 300))
+			l.answerRefused(tc, http.StatusUnauthorized, api.Error{Error: string(decision.IdentityUnmapped),
+				Detail: err.Error()}, 0, "", cred, decision.IdentityUnmapped)
+			return
 		}
 		if err != nil {
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
+		// A workload is never mapped: its principal is its SPIFFE ID
+		// (decision 40 ruling 5).
+		mapped := l.Map != nil && cc.Domain != DomainMachines
 		certKey := store.CertKey(cred.Issuer, cred.Serial)
 		// The status is asked first, and bind decides under one lock: a
 		// mark, then the status's refusal, then the hold. A mark lifted while
@@ -327,7 +358,7 @@ func (l *Listener) handshake(c *trackedConn) {
 		if l.Status != nil {
 			ref = l.Status(cs, cmp.Or(principal, legacy), cred)
 		}
-		if l.Map != nil {
+		if mapped {
 			// The marks the certificate itself answers to (its key, and the
 			// principal its email SAN gave before a directory: pre-flight
 			// I-16) are decided before the directory is asked, so a revoked
@@ -399,6 +430,16 @@ func (l *Listener) handshake(c *trackedConn) {
 	case <-l.done:
 		_ = tc.Close()
 	}
+}
+
+// callerOf is Caller's reading of cs, or, with none (and so no Map:
+// Accept refuses that), the reading before plan 8: Identity.
+func (l *Listener) callerOf(cs *tls.ConnectionState) (CertCaller, error) {
+	if l.Caller != nil {
+		return l.Caller(cs, l.now())
+	}
+	p, cred, err := Identity(cs, l.now())
+	return CertCaller{Domain: DomainHumans, Principal: p, Cred: cred}, err
 }
 
 // refuse counts and says a failed handshake, and closes the connection.

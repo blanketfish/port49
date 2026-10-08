@@ -136,7 +136,7 @@ func proxyModeOf(ps string) string {
 type composeStack struct {
 	l         *lab
 	t         *testing.T
-	dir       string // tests/lab/logs/compose-<platform>
+	dir       string // tests/lab/logs/compose-<platform>[-<phase>]
 	local     string
 	config    string
 	logPath   string // compose.log: every command this stack ran
@@ -302,6 +302,19 @@ type composeOptions struct {
 	// Prepare runs once the stack's PKI is written and before `up`, to write
 	// what the overlay's files read under c.local and slicePKIDir.
 	Prepare func(c *composeStack) error
+	// Phase names the stack's directory (composeDirName), so a test that brings
+	// several stacks up in turn keeps each one's logs. startComposeWith removes
+	// the directory it is about to use.
+	Phase string
+}
+
+// composeDirName is the stack's directory under tests/lab/logs: one per
+// platform, and per phase when a test has several stacks.
+func composeDirName(platform, phase string) string {
+	if phase == "" {
+		return "compose-" + platform
+	}
+	return "compose-" + platform + "-" + phase
 }
 
 // startCompose brings the lab's compose stack up for this platform: the
@@ -321,7 +334,7 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 	if o.Overlay != "" {
 		c.overlays = []string{o.Overlay}
 	}
-	c.dir = filepath.Join(root, "tests", "lab", "logs", "compose-"+l.p.name)
+	c.dir = filepath.Join(root, "tests", "lab", "logs", composeDirName(l.p.name, o.Phase))
 	c.local, c.config = filepath.Join(c.dir, "local"), filepath.Join(c.dir, "config")
 	c.logPath = filepath.Join(c.dir, "compose.log")
 	c.brokerLog, c.brokerErr = filepath.Join(c.dir, "broker.log"), filepath.Join(c.dir, "broker.err")

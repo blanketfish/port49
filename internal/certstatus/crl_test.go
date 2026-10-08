@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -498,7 +499,6 @@ func TestCRL(t *testing.T) {
 				{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1}, Critical: true, Value: []byte{0x05, 0x00}}}}},
 			{"onlySomeReasons", "some reasons", crlSpec{ext: []pkix.Extension{idp(seq(0x83, 0x02, 0x06, 0x40))}}},
 			{"indirectCRL", "indirect", crlSpec{ext: []pkix.Extension{idp(seq(0x84, 0x01, 0xff))}}},
-			{"a distributionPoint", "distribution point", crlSpec{ext: []pkix.Extension{idp(seq(dp...))}}},
 			{"onlyContainsCACerts", "CA certificates", crlSpec{ext: []pkix.Extension{idp(seq(0x82, 0x01, 0xff))}}},
 			{"onlyContainsAttributeCerts", "attribute", crlSpec{ext: []pkix.Extension{idp(seq(0x85, 0x01, 0xff))}}},
 			{"an entry with a critical extension", "entry with a critical extension", crlSpec{
@@ -523,6 +523,23 @@ func TestCRL(t *testing.T) {
 			})
 		}
 
+		// A distributionPoint by fullName loads (decision 40, ruling 17), and
+		// covers only a certificate naming it: this leaf names none, so it is
+		// undecided by the list, never good (idp_test.go has the rest).
+		t.Run("a distributionPoint by fullName loads and does not cover a leaf naming none", func(t *testing.T) {
+			c, _, _, srv, _, _ := one(t, ca)
+			srv.serve(signCRL(t, ca, crlSpec{number: 1, ext: []pkix.Extension{idp(seq(dp...))}}), 200)
+			if errs := c.LoadAll(ctx); len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			if r := check(t, c, leaf(t, ca, 1), ca.Cert); r.Verdict != Unknown {
+				t.Errorf("a leaf with no CRL distribution point: %+v, want unknown", r)
+			}
+			if r := check(t, c, leafDP(t, ca, 1, string(uri)), ca.Cert); r.Verdict != Good {
+				t.Errorf("a leaf naming it: %+v, want good", r)
+			}
+		})
+
 		t.Run("onlyContainsUserCerts alone loads", func(t *testing.T) {
 			c, _, _, srv, _, _ := one(t, ca)
 			srv.serve(signCRL(t, ca, crlSpec{number: 1, ext: []pkix.Extension{idp(seq(0x81, 0x01, 0xff))}}), 200)
@@ -536,7 +553,7 @@ func TestCRL(t *testing.T) {
 	})
 
 	// Built by openssl (testdata/README.md), so a tagging mistake mirrored
-	// in userCertsOnly and in the lists above cannot pass both (re-check R7).
+	// in idpScope and in the lists above cannot pass both (re-check R7).
 	t.Run("lists built outside Go", func(t *testing.T) {
 		blk, _ := pem.Decode(mustRead(t, "testdata/idp-ca.pem"))
 		if blk == nil {
@@ -549,10 +566,10 @@ func TestCRL(t *testing.T) {
 		for _, tc := range []struct {
 			file     string
 			userOnly bool
-			want     string
+			dp       string // the one fullName URI the list is scoped to, or ""
 		}{
 			{"testdata/idp-user-certs.der", true, ""},
-			{"testdata/idp-distribution-point.der", false, "distribution point"},
+			{"testdata/idp-distribution-point.der", false, "http://pki.example.com/a.crl"},
 		} {
 			t.Run(tc.file, func(t *testing.T) {
 				raw := mustRead(t, tc.file)
@@ -566,22 +583,25 @@ func TestCRL(t *testing.T) {
 				}
 				c, _, _ := newChecker(t, Config{}, clk)
 				l, err := c.accept(CRLSource{Name: "fixture", Issuer: issuer}, raw)
-				if tc.want != "" {
-					if err == nil || !strings.Contains(err.Error(), tc.want) {
-						t.Fatalf("err = %v, want refused naming %q", err, tc.want)
-					}
-					return
-				}
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !l.userOnly {
-					t.Error("the list does not cover user certificates only")
+				var want [][]byte
+				if tc.dp != "" {
+					b, err := asn1.Marshal(uriName(tc.dp))
+					if err != nil {
+						t.Fatal(err)
+					}
+					want = [][]byte{b}
+				}
+				if l.userOnly != tc.userOnly || !reflect.DeepEqual(l.dpNames, want) {
+					t.Errorf("userOnly %v, dpNames %x; want %v, %x", l.userOnly, l.dpNames, tc.userOnly, want)
 				}
 				for _, ext := range list.Extensions {
 					if ext.Id.Equal(oidIssuingDistPt) {
-						if got, err := userCertsOnly(ext.Value); err != nil || !got {
-							t.Errorf("userCertsOnly = %v, %v; want true", got, err)
+						if userOnly, names, err := idpScope(ext.Value); err != nil || userOnly != tc.userOnly ||
+							!reflect.DeepEqual(names, want) {
+							t.Errorf("idpScope = %v, %x, %v; want %v, %x", userOnly, names, err, tc.userOnly, want)
 						}
 					}
 				}

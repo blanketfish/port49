@@ -222,7 +222,13 @@ func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, princip
 func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.Time, principal string,
 	cred store.Credential, err error) {
 	if !errors.Is(err, errNoPin) {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		// A workload naming no principal is identity_unmapped, as authenticate
+		// records it (decision 40).
+		reason := decision.TrustDomainUnresolved
+		if errors.Is(err, ErrWorkloadUnmapped) {
+			reason = decision.IdentityUnmapped
+		}
+		b.refuseRefresh(w, now, principal, cred, reason, string(reason), err.Error())
 		return
 	}
 	ref := directoryRefusal(directory.ErrUnavailable)

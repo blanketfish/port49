@@ -504,3 +504,97 @@ the end, keeping `keycloak.log`.
 - L46 stops without writing its note if its SSO control (step 1b, a plain second login that must
   reuse the session) fails: without it, "prompt=login asked for the password" proves nothing.
 - `PORT49_LAB_DIRECTORY_OUT=<dir>` redirects notes and evidence here too, for a dry run.
+
+## Workload CA and Oxidized (plan 8)
+
+Two targets measure the workload-certificate path. Build first: both need `bin/port49d` and
+`bin/port49` (`make build`).
+
+- `make lab-workload` runs L48 on one container, step-ca, and a local `bin/port49d` with a broker
+  and the workload verifier. No device, no containerlab. It needs Docker with Compose v2.24.4 or
+  later; docker runs as `sg docker -c` outside the `docker` group.
+- `PORT49_LAB_PLATFORMS=<one> make lab-oxidized` runs L49 on the compose stack with Oxidized added
+  (`tests/lab/compose/oxidized.yaml`): containerlab, the platform's image, one platform per
+  invocation, as `make lab` runs them. With no selector it loops over every platform and stops at
+  the first that fails.
+
+Both images are pinned by digest, in the compose file and in the Go constant that names the same
+reference (`tests/lab/workload/compose.yaml` and `stepCAImage` in `stepca_test.go`;
+`tests/lab/compose/oxidized.yaml` and `oxidizedImage` in `oxidized_test.go`).
+`TestTheWorkloadImagesArePinnedOnce` holds each pair equal. A note records `step-ca version`,
+`oxidized --version` and the image ID it ran. The Oxidized image is a build after its 0.37.0
+tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
+
+- step-ca's state is `tests/lab/logs/workload/step` (git-ignored), emptied at the start of a run.
+  The directory is emptied and chowned through a root container (`docker run --user root`), as the
+  Keycloak harness does, so no sudo is needed. The provisioner `lab` is a JWK. The harness
+  generates a random password for the run into `tests/lab/logs/workload/pw/password` (mode 0600,
+  never printed, never read back) and mounts it as `DOCKER_STEPCA_INIT_PASSWORD_FILE`, so the CA
+  key's and the provisioner's passwords are that one value, which the harness refuses anywhere it
+  would be written. (Left to itself the image generates two passwords and prints the provisioner's
+  once in its log.) A step command's output that holds key material, a compact JWS or that password
+  is withheld, and `step-ca.log` is kept with its password lines dropped and any JWS- or
+  JWE-shaped string redacted to `<jws redacted>`, or not at all (a registered secret or key material
+  in what is left refuses it).
+- L48's local broker trusts step-ca's root for the CRL fetch through `SSL_CERT_FILE`: step-ca serves
+  its CRL over https under its own private root, and the broker fetches with the system roots. A
+  CRL fetch that fails TLS is INVALID, never a measured "no".
+- Oxidized runs as the host user, not as the image's `oxidized` (uid 30000), and `oxidized` is
+  started directly instead of the image's runit services. The image's run script chowns its whole
+  config directory to uid 30000 at every start, which would lock out `port49-oxidized-run` (a host
+  process here, as cron is on a real host) from replacing `router.db`. Starting `oxidized` directly
+  also skips the image's auto-reload service, which reloads in a loop when `CONFIG_RELOAD_INTERVAL`
+  is set at all. The directory is `tests/lab/logs/compose-<platform>-<phase>/local/oxidized`; `known_hosts`
+  is mounted at `~/.ssh/known_hosts` (that is where Oxidized's SSH client reads it), filled by
+  `ssh-keyscan` of the device.
+- Oxidized exits with `NoNodesFound` on an empty `router.db`, and the wrapper never writes an
+  empty one. So `startOxidized` brings the stack up without Oxidized (its service is under the
+  compose profile `oxidized`), runs the wrapper once (it writes `router.db`, then exits 75 at
+  `/reload` because Oxidized is not up: a setup step, not a cell, and it mints one token for the
+  node), then starts Oxidized with `--profile oxidized up -d oxidized`. After the wrapper's reload,
+  `awaitNode` fails the test (INVALID) if Oxidized never lists the node.
+- After a run, `router.db` and the wrapper's lock file stay in
+  `tests/lab/logs/compose-<platform>-<phase>/local/oxidized`, and `router.db` holds live tokens (mode 0600)
+  until they expire. The directory is git-ignored; never copy it into evidence. Task 14's cleanup
+  removes it.
+- Each L49 phase has its own stack directory, `compose-<platform>-a` (phase A) and
+  `compose-<platform>-bc` (phases B and C), because `startComposeWith` removes the directory it is
+  about to use. Phase A's logs survive phase B's start.
+- The host harness's `port49d` (not the stack's) mints its labcreds at every start, about 152
+  `mint` records per start, and the breakglass redeem `token_not_found` in its log is the lab's
+  readiness probe. Both are expected, and neither is in the stack's `broker.log` or decision log.
+- The example's `config` sets `auth_methods` with `keyboard-interactive` for the `eos` model alone.
+  vEOS offers only `publickey,keyboard-interactive` (`results/L4-error-arista_eos.md`), and
+  Oxidized's default list does not name the second, so without it Oxidized never sends the token to
+  EOS (measured in the L49 debug). It is not global because a global setting made one stale token
+  cost two authentications on NX-OS and IOS-XE (run set 2) instead of one. Phase A's note says what
+  the example sets.
+- Phase B records, from Oxidized's own log, the class-and-message lines of the stale run (leak
+  checked, never the whole log) and whether a node crashfile was created (`crashes/` under
+  Oxidized's root, `/oxhome/.config/oxidized`, the mounted `local/oxidized`; a unit test derives the
+  path from the overlay) and whether the process-crash file `crash` exists. Oxidized logs the refusal as
+  `Errno::ENOTTY ... creating crashfile`: net-ssh's keyboard-interactive asks a tty for a second
+  password.
+- Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) stays on disk. A
+  note quotes only phase B's excerpt of the stale run (class-and-message lines, each checked whole
+  against every minted token and for a compact JWS before it is cut to 220 characters, and the
+  whole excerpt is withheld on a hit). The username (`svc-oxidized`) is an account name, not a
+  secret; the password column of `router.db` is.
+- Phase A also asks the device's sshd which methods it lists (`ssh` with `PreferredAuthentications=none`,
+  refused locally, no TACACS+ attempt) and the note records the answer; the EOS finding is cited
+  only in the EOS note. Phase B counts the redeem records of the one stale run (from a mark just
+  before the `PUT`). If Oxidized is down after the stale run (REST dead, with or without the
+  process-crash file), that is phase B's finding: the wrapper-again run and phase C are skipped and
+  the note says so. A crashfile counts as written by the stale run when its mtime is at or after the
+  `PUT`, because Oxidized names it by the device address and overwrites it.
+- A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never
+  answers its REST API) is `t.Fatal` before any note: the run is INVALID. A step that ran and did
+  not do what the claim says is a failed cell, and the note records it.
+- `TestL48StepCA` runs six cells (issue, renew, daemon timing, the CA down, the CRL, the name
+  policy) and writes `results/L48-step_ca.md` and `evidence/L48-step_ca.json`. `TestL49Oxidized`
+  runs, per platform, phase A (what Oxidized sends, role `**`) on one stack and phases B and C (a
+  stale token, with `receipt_idle_ttl: 2m` in that stack's `port49d.yaml`; then the example's
+  role) on a second, and writes `results/L49-oxidized-<platform>.md` and
+  `evidence/L49-oxidized-<platform>.json`. Phase D (no token in Oxidized's log) checks each
+  stack's log. A note is written only if neither it nor the evidence holds a token, a key or a
+  compact JWS; `router.db` is removed when each stack goes down.

@@ -97,8 +97,6 @@ func TestIdentityRefusals(t *testing.T) {
 	for name, c := range map[string]struct{ block, want string }{
 		"client_ca_file beside identity": {strings.Replace(twoLists, "  identity:", "  client_ca_file: /etc/port49/clients-ca.pem\n  identity:", 1),
 			"broker.client_ca_file: moved to broker.identity.humans[].trust_anchor_file"},
-		"workload x509": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem}]\n    machines: [{type: x509, trust_anchor_file: /b.pem}]\n",
-			"broker.identity.machines[0]: type x509 (workload certificates) is plan 8's"},
 		"k8s": {"  identity:\n    machines: [{type: k8s}]\n", "broker.identity.machines[0]: type k8s is plan 10's"},
 		"two anchors": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem}, {type: x509, trust_anchor_file: /b.pem}]\n",
 			"broker.identity.humans: at most one x509 verifier"},
@@ -308,5 +306,88 @@ func TestAVerifiersCAFileIsNotTheRevocationsFile(t *testing.T) {
 	cfg = strings.Replace(cfg, "/var/lib/port49/revocations.json", ca, 1)
 	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "broker.identity's ca_file for") {
 		t.Fatalf("a revocations_file that is a verifier's ca_file: %v", err)
+	}
+}
+
+const workloadLists = `  identity:
+    humans:
+      - {type: x509, trust_anchor_file: /etc/port49/clients-ca.pem}
+    machines:
+      - type: x509
+        trust_anchor_file: /etc/port49/workloads-ca.pem
+        spiffe_trust_domains: [corp.example.com, corp.example.com, lab.corp.example.com]
+`
+
+func TestAWorkloadVerifierLoads(t *testing.T) {
+	c, err := loadWith(t, brokerWithIdentity(workloadLists))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Broker.Identity.X509Machine
+	if m == nil || m.AnchorFile != "/etc/port49/workloads-ca.pem" ||
+		strings.Join(m.TrustDomains, " ") != "corp.example.com lab.corp.example.com" ||
+		c.Broker.WorkloadCAFile != "/etc/port49/workloads-ca.pem" || c.Broker.ClientCAFile != "/etc/port49/clients-ca.pem" {
+		t.Fatalf("broker %+v machine %+v: the trust domains once each, in order", c.Broker, m)
+	}
+}
+
+// People by OIDC, workloads by certificate: an x509 verifier is configured,
+// so certificate_status is required (decision 40 ruling 7).
+func TestAWorkloadOnlyX509NeedsCertificateStatus(t *testing.T) {
+	block := `  identity:
+    humans:
+      - {type: oidc, issuer: "https://sso.corp.example.com/realms/corp", client_id: port49-cli,
+         principal_claim: email, principal_domains: [corp.example.com]}
+    machines:
+      - {type: x509, trust_anchor_file: /etc/port49/workloads-ca.pem, spiffe_trust_domains: [corp.example.com]}
+`
+	c, err := loadWith(t, brokerWithIdentity(block))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Broker.ClientCAFile != "" || c.Broker.WorkloadCAFile != "/etc/port49/workloads-ca.pem" || c.Broker.CertificateStatus == nil {
+		t.Fatalf("broker %+v", c.Broker)
+	}
+	noStatus := strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1)
+	if _, err := loadWith(t, noStatus); err == nil || !strings.Contains(err.Error(), "broker.certificate_status is required with any x509 verifier") {
+		t.Fatalf("no certificate_status: %v", err)
+	}
+}
+
+func TestWorkloadVerifierRefusals(t *testing.T) {
+	x := "type: x509, trust_anchor_file: /etc/port49/workloads-ca.pem"
+	for name, c := range map[string]struct{ block, want string }{
+		"no trust domains": {"  identity:\n    machines: [{" + x + "}]\n",
+			"broker.identity.machines[0].spiffe_trust_domains is required: the SPIFFE trust domains whose workloads"},
+		"upper case": {"  identity:\n    machines: [{" + x + ", spiffe_trust_domains: [Corp.example.com]}]\n",
+			`broker.identity.machines[0].spiffe_trust_domains: "Corp.example.com" is not a SPIFFE trust domain`},
+		"a path in a domain": {"  identity:\n    machines: [{" + x + ", spiffe_trust_domains: [corp.example.com/host]}]\n",
+			`"corp.example.com/host" is not a SPIFFE trust domain`},
+		"two": {"  identity:\n    machines: [{" + x + ", spiffe_trust_domains: [a]}, {type: x509, trust_anchor_file: /b.pem, spiffe_trust_domains: [b]}]\n",
+			"broker.identity.machines: at most one x509 verifier (the broker verifies a workload's chain against one anchor)"},
+		"no anchor": {"  identity:\n    machines: [{type: x509, spiffe_trust_domains: [a]}]\n",
+			"broker.identity.machines[0]: type x509 takes trust_anchor_file and spiffe_trust_domains alone"},
+		"an oidc key on it": {"  identity:\n    machines: [{" + x + ", spiffe_trust_domains: [a], audience: x}]\n",
+			"broker.identity.machines[0]: type x509 takes trust_anchor_file and spiffe_trust_domains alone"},
+		"trust domains on a human x509": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem, spiffe_trust_domains: [a]}]\n",
+			"broker.identity.humans[0]: type x509 takes trust_anchor_file alone"},
+		"trust domains on an oidc verifier": {"  identity:\n    machines: [{type: oidc, issuer: \"https://sso.corp.example.com/realms/corp\", audience: a, clients: [{client_id: svc, sub: s1}], spiffe_trust_domains: [a]}]\n",
+			"broker.identity.machines[0].spiffe_trust_domains is an x509 machine verifier's"},
+		"one file for both": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /etc/port49/ca.pem}]\n    machines: [{type: x509, trust_anchor_file: /etc/port49/./ca.pem, spiffe_trust_domains: [a]}]\n",
+			"broker.identity's humans and machines trust_anchor_file are one file"},
+	} {
+		if _, err := loadWith(t, brokerWithIdentity(c.block)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+// The workload anchor joins the paths broker.revocations_file and a kept CRL
+// may not be (pre-flight M13's list).
+func TestTheWorkloadAnchorIsNotTheRevocationsFile(t *testing.T) {
+	block := strings.Replace(workloadLists, "/etc/port49/workloads-ca.pem", "/var/lib/port49/revocations.json", 1)
+	if _, err := loadWith(t, brokerWithIdentity(block)); err == nil ||
+		!strings.Contains(err.Error(), "broker.identity.machines[].trust_anchor_file") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -10,22 +10,24 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/spiffe"
 )
 
 // identityVerifierYAML is one entry of broker.identity.humans or .machines
 // (plan 7h, Ruling 1).
 type identityVerifierYAML struct {
-	Type             string              `yaml:"type"`
-	TrustAnchorFile  string              `yaml:"trust_anchor_file"`
-	Issuer           string              `yaml:"issuer"`
-	ClientID         string              `yaml:"client_id"`
-	Audience         string              `yaml:"audience"`
-	PrincipalClaim   string              `yaml:"principal_claim"`
-	PrincipalDomains []string            `yaml:"principal_domains"`
-	Clients          []machineClientYAML `yaml:"clients"`
-	Scopes           []string            `yaml:"scopes"`
-	Algorithms       []string            `yaml:"algorithms"`
-	CAFile           string              `yaml:"ca_file"`
+	Type               string              `yaml:"type"`
+	TrustAnchorFile    string              `yaml:"trust_anchor_file"`
+	SPIFFETrustDomains []string            `yaml:"spiffe_trust_domains"`
+	Issuer             string              `yaml:"issuer"`
+	ClientID           string              `yaml:"client_id"`
+	Audience           string              `yaml:"audience"`
+	PrincipalClaim     string              `yaml:"principal_claim"`
+	PrincipalDomains   []string            `yaml:"principal_domains"`
+	Clients            []machineClientYAML `yaml:"clients"`
+	Scopes             []string            `yaml:"scopes"`
+	Algorithms         []string            `yaml:"algorithms"`
+	CAFile             string              `yaml:"ca_file"`
 }
 
 // machineClientYAML is one entry of a machine verifier's clients (Ruling
@@ -72,7 +74,21 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			at := fmt.Sprintf("broker.identity.%s[%d]", list.domain, i)
 			switch {
 			case v.Type == "x509" && list.domain == oidc.Machines:
-				return nil, fmt.Errorf("config: %s: type x509 (workload certificates) is plan 8's; remove it", at)
+				// The workload verifier (plan 8; decision 40 ruling 1).
+				if out.X509Machine != nil {
+					return nil, errors.New("config: broker.identity.machines: at most one x509 verifier (the broker " +
+						"verifies a workload's chain against one anchor)")
+				}
+				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
+					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
+					v.Algorithms != nil || v.CAFile != "" {
+					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file and spiffe_trust_domains alone", at)
+				}
+				tds, err := spiffeTrustDomains(at, v.SPIFFETrustDomains)
+				if err != nil {
+					return nil, err
+				}
+				out.X509Machine = &oidc.X509Machine{AnchorFile: v.TrustAnchorFile, TrustDomains: tds}
 			case v.Type == "k8s":
 				return nil, fmt.Errorf("config: %s: type k8s is plan 10's; remove it", at)
 			case v.Type == "x509":
@@ -82,7 +98,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
-					v.Algorithms != nil || v.CAFile != "" {
+					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file alone", at)
 				}
 				out.X509AnchorFile = v.TrustAnchorFile
@@ -97,9 +113,19 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			}
 		}
 	}
-	if out.X509AnchorFile == "" && len(out.OIDC) == 0 {
+	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 {
 		return nil, errors.New("config: broker.identity accepts no one: list at least one verifier under humans " +
 			"or machines")
+	}
+	// One file under both lists would make a certificate it verifies a
+	// person's and a workload's at once (decision 40 ruling 2); port49d
+	// refuses the same certificate in two files, and one signing the other,
+	// once it has read them (Task 8).
+	if m := out.X509Machine; m != nil && out.X509AnchorFile != "" &&
+		filepath.Clean(m.AnchorFile) == filepath.Clean(out.X509AnchorFile) {
+		return nil, errors.New("config: broker.identity's humans and machines trust_anchor_file are one file: a " +
+			"certificate it verifies would be a person's and a workload's at once; anchor each list at its own " +
+			"issuing CA")
 	}
 	if err := distinctVerifiers(out.OIDC, *y); err != nil {
 		return nil, err
@@ -116,6 +142,9 @@ func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.V
 	if v.TrustAnchorFile != "" {
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.trust_anchor_file is x509's; an oidc verifier's "+
 			"provider anchor is ca_file", at)
+	}
+	if v.SPIFFETrustDomains != nil {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.spiffe_trust_domains is an x509 machine verifier's", at)
 	}
 	algs, err := oidc.ParseAlgs(v.Algorithms)
 	if err != nil {
@@ -211,6 +240,26 @@ func principalDomains(at string, ds []string) ([]string, error) {
 		}
 		if !slices.Contains(out, l) {
 			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// spiffeTrustDomains is a workload verifier's spiffe_trust_domains, once
+// each and in order (decision 40 ruling 1): at least one, each a SPIFFE trust
+// domain as it is written, never folded to lower case.
+func spiffeTrustDomains(at string, tds []string) ([]string, error) {
+	if len(tds) == 0 {
+		return nil, fmt.Errorf("config: %s.spiffe_trust_domains is required: the SPIFFE trust domains whose "+
+			"workloads this anchor may name (spiffe://<trust domain>/<path>)", at)
+	}
+	var out []string
+	for _, td := range tds {
+		if err := spiffe.CheckTrustDomain(td); err != nil {
+			return nil, fmt.Errorf("config: %s.spiffe_trust_domains: %q is not a SPIFFE trust domain (%v)", at, td, err)
+		}
+		if !slices.Contains(out, td) {
+			out = append(out, td)
 		}
 	}
 	return out, nil

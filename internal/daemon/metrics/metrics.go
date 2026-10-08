@@ -256,6 +256,11 @@ type Metrics struct {
 	// port49_cert_status_unavailable_total: checks whose status could not be
 	// established. No labels.
 	CertStatusUnavailable prometheus.Counter
+	// WorkloadRenewalLate is port49_workload_certificates_renewal_late_total:
+	// each workload certificate seen with under a quarter of its validity
+	// left, once per 24h per certificate on each broker replica (plan 8;
+	// decision 40 ruling 9). No label: a certificate is a workload's identity.
+	WorkloadRenewalLate prometheus.Counter
 	// port49_directory_queries_total{server, outcome}: directory queries by
 	// server (host:port) and outcome: ok, fault (the server's), error (the
 	// query's answer), refused (the dial or bind was refused, no fault).
@@ -602,6 +607,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time the CRL in force passes its next update."}, []string{"crl"}),
 		CertStatusUnavailable: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
 			Help: "Certificate status checks whose status could not be established."}),
+		WorkloadRenewalLate: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_workload_certificates_renewal_late_total",
+			Help: "Workload certificates presented with under a quarter of their validity left, once per certificate " +
+				"per 24h on this replica; alert on its increase."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
 			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
 			[]string{"server", "outcome"}),
@@ -724,7 +732,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
-		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)
+		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)

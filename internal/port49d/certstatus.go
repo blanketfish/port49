@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"syscall"
 
 	"github.com/rhwendt/port49/internal/certstatus"
@@ -31,7 +32,7 @@ const issuerFileMax = 1 << 20
 //
 // It lives here rather than as a config method, as the plan has it, because
 // certstatus imports inventory, which imports config.
-func certStatusConfig(cs config.CertificateStatusConfig, anchor *x509.Certificate, stateDir string) (certstatus.Config, error) {
+func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certificate, stateDir string) (certstatus.Config, error) {
 	out := certstatus.Config{RefreshInterval: cs.RefreshInterval, StateDir: stateDir}
 	for i, src := range cs.CRLs {
 		key := fmt.Sprintf("crls[%d].issuer_file %s", i, src.IssuerFile)
@@ -39,12 +40,13 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchor *x509.Certificat
 		if err != nil {
 			return certstatus.Config{}, fmt.Errorf("%s: %w", key, err)
 		}
-		if !bytes.Equal(issuer.Raw, anchor.Raw) {
-			if err := issuer.CheckSignatureFrom(anchor); err != nil {
-				return certstatus.Config{}, fmt.Errorf("%s: %s is neither broker.client_ca_file's certificate nor "+
-					"signed by it (%v); CRL %s would vouch for certificates the broker does not trust", key,
-					printsafe.Line(issuer.Subject.String(), 200), err, src.Name)
-			}
+		under := slices.ContainsFunc(anchors, func(a *x509.Certificate) bool {
+			return bytes.Equal(issuer.Raw, a.Raw) || issuer.CheckSignatureFrom(a) == nil
+		})
+		if !under {
+			return certstatus.Config{}, fmt.Errorf("%s: %s is neither a trust anchor's certificate nor signed by "+
+				"one (broker.client_ca_file, or a broker.identity x509 trust_anchor_file); CRL %s would vouch for "+
+				"certificates the broker does not trust", key, printsafe.Line(issuer.Subject.String(), 200), src.Name)
 		}
 		if !issuer.BasicConstraintsValid || !issuer.IsCA {
 			return certstatus.Config{}, fmt.Errorf("%s: %s is not a CA certificate, so it signs no CRL", key,
@@ -108,6 +110,62 @@ func readIssuerFile(path string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
+// uncoveredAnchor reports whether no CRL covers anchor: none whose issuer is
+// anchor or a CA it signed. OCSP is not read here: whether a responder
+// answers for this anchor's certificates cannot be known at start
+// (anchorCoverLine says so; pre-flight M-18).
+func uncoveredAnchor(cfg certstatus.Config, anchor *x509.Certificate) bool {
+	for _, src := range cfg.CRLs {
+		if bytes.Equal(src.Issuer.Raw, anchor.Raw) || src.Issuer.CheckSignatureFrom(anchor) == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// anchorCoverLine is what the start says of an anchor no CRL covers, "" when
+// one does. With no OCSP either, every certificate under it has a status
+// nothing can establish: under on_unavailable: refuse (the default) each is
+// refused 503 and retried; under allow each is admitted with its status
+// unchecked. With OCSP alone, the cover is unchecked for this anchor. The
+// start never refuses itself over it (decision 40 ruling 7): a refused
+// port49d start takes device AAA down for everyone. It names the safe path,
+// never on_unavailable: allow.
+func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string) string {
+	if !uncoveredAnchor(cfg, a.cert) {
+		return ""
+	}
+	subj := printsafe.Line(a.cert.Subject.String(), 200)
+	if cfg.OCSP != nil {
+		outcome := "is refused (503; final at port49 workload)"
+		if onUnavailable == "allow" {
+			outcome = "is admitted unchecked (on_unavailable: allow)"
+		}
+		return fmt.Sprintf("broker: certificate status: certificates under %s (%s) are covered by OCSP alone, "+
+			"unchecked for this anchor: one with no OCSP URL, or one its responder does not answer for, %s",
+			subj, a.key, outcome)
+	}
+	outcome := "will be refused (503; final at port49 workload)"
+	if onUnavailable == "allow" {
+		outcome = "will be admitted with its revocation status unchecked (on_unavailable: allow)"
+	}
+	return fmt.Sprintf("broker: certificate status: every certificate under %s (%s) %s: no crls "+
+		"entry is that anchor or a CA it signed, and no ocsp is set; turn the CA's CRL on and name it in crls, "+
+		"or sync it to a file: source", subj, a.key, outcome)
+}
+
+// intermediateCoverLine is what the start says of a CRL signer nothing
+// covers (uncoveredIssuers), for both daemons: what happens to its
+// certificates follows on_unavailable, as anchorCoverLine's does.
+func intermediateCoverLine(subject, onUnavailable string) string {
+	outcome := "will be refused (503; final at port49 workload)"
+	if onUnavailable == "allow" {
+		outcome = "will be admitted with their revocation status unchecked (on_unavailable: allow)"
+	}
+	return fmt.Sprintf("broker: certificate status: certificates issued by %s %s: nothing covers %s itself; "+
+		"name the root CA's CRL", subject, outcome, subject)
+}
+
 // uncoveredIssuers names each CRL signer other than the anchor whose own
 // status nothing can establish: no source's issuer_file is the anchor and
 // OCSP is off. Every certificate it issued is then Unknown, and refused
@@ -124,6 +182,9 @@ func uncoveredIssuers(cfg certstatus.Config, anchor *x509.Certificate) []string 
 	var out []string
 	seen := map[string]bool{}
 	for _, src := range cfg.CRLs {
+		if src.Issuer.CheckSignatureFrom(anchor) != nil {
+			continue // another anchor's: never named under this one
+		}
 		if subject := src.Issuer.Subject.String(); !seen[subject] {
 			seen[subject] = true
 			out = append(out, printsafe.Line(subject, 200))

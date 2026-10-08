@@ -4621,6 +4621,344 @@ Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity
 `username` declared on machine subjects, cross-domain username collision at mint. Unattended
 config backup (Oxidized) as the day-one consumer.
 
+### Plan 8 — As built
+
+Executed from `2026-10-07-08-workload-certificates.md` on `feature/workload-certificates` (base
+`f789c3f`, which holds the plan and its pre-flight fixes; 65 commits at `9db27c1` before this
+record), each task reviewed, most through one to three fix rounds. The ledger is
+`.superpowers/sdd/2026-10-07-08-workload-certificates/progress.md`, with each task's brief, report
+and review beside it, the pre-flight in `preflight.md` (1 critical, 6 important, 19 minor, applied
+before Task 1), and the lab's anomalies and the certificate-status work in `run3-investigation.md`
+and `idp-review.md`. What differs from the plan's text, task by task:
+
+- **Task 1 (spec and design; a55a03d, 70ce4b8).** Decision 40, L48–L50 opened, plan 8b named and
+  decision 16 deferred to it, not withdrawn. One fix round: the `username_collision` row of §5.7
+  had been split across two lines.
+- **Task 2 (`internal/spiffe`; e091e75).** One parser for the policy, the verifier and revocation.
+- **Task 3 (config; 98db865).** `x509` under `broker.identity.machines`.
+- **Task 4 (the chain's anchor decides the domain; e1a9939, 2ae9e10, 2731781).** Ruling: the
+  principal is read from the URI SAN's own DER bytes, not `leaf.URIs[0].String()`, which folds
+  `SPIFFE://` and drops an empty `#`; ruling 4's "never folded" overrides the plan's code. The
+  re-review found a constructed `[6]`, which Go's parser skips, counted as a URI SAN, so it would
+  bypass URI name constraints: a constructed `[6]` is refused, and the raw URI count must equal
+  `len(leaf.URIs)`.
+- **Task 5 (a workload mints; 26b9939, f732acb).** Ruling: a late renewal is counted only on the
+  served path, so a revoked certificate raises no false late-renewal alert.
+- **Task 6 (the listener; 2cd7060, a569b99, 0e9a6c1).** `Broker.Wire` landed here, not in Task 8:
+  port49d's listener had `Map` without `Caller`, which `ErrUnwired` refuses. Ruling: `BindMap`
+  refuses a chain ending at both anchors on its own, without asking the directory, answered
+  `trust_domain_unresolved` (§5.7), not `identity_unmapped`.
+- **Task 7 (revoke and explain by SPIFFE ID; 9dd386d, baa68cd).** The `spiffe://` branch moved before
+  the 1024-byte principal guard, so an ID up to `spiffe.MaxLen` (2048) that mints can be revoked and
+  explained; every downstream limit was checked (the admin frame is about 2110 of 4096 bytes).
+- **Task 8 (port49d; fffecb2, 4e998b6, 7cd3c81).** Ruling: the start lines name the YAML keys as
+  written (`broker.identity.machines[].trust_anchor_file`, `broker.identity.humans[].trust_anchor_file`),
+  an uncovered anchor's or intermediate's line follows `on_unavailable` instead of saying "will be
+  refused" under `allow`, and a run-level test pins that certificate status covers the workload
+  anchor (mutation-proven). The plan's operator block and Task 8 text still show the old spelling
+  and the refuse-only wording; the notes below are what shipped.
+- **Task 9 (`internal/workload`; 567edea, fed0d19, d42d447, 6f070de, 7f0a51f).** Ruling 10 amended
+  first (`fed0d19`, `6f070de`): the client talks `https` only, trusts `--broker-ca` alone (never the
+  system's roots), follows no redirect, and retries a 502 or 504 like a 503 under the same key. A
+  redirect is its own final error (`RedirectError`), not an invented broker code. Backoff jitter
+  is pinned by a test.
+- **Task 10 (`port49 workload token` and `identity`; 4b6660b, 2893020, 9293d42, edb69aa).** Ruling 10
+  amended first (`2893020`): a device whose TSV line would hold a control character is left out
+  and said (exit 1, or 77/75 when none is left); an output that cannot be written is 75, and the
+  last `--out` stands. `identity` exits 2 on a bad URL or CA, as `token` does, and 77 on a redirect.
+- **Task 11 (end to end; 8bd0d3f, 527ef14).** Ruling: an end-to-end test pins that a certificate
+  mark does not follow a renewal (ruling 8; Task 7 had pinned only the warning's text).
+- **Task 12 (`examples/oxidized`; be18f28, 1b33f0f, c280429).** Rulings: a failed REST call no longer
+  stops the later nodes (it is said, and the run exits 75); a skipped node exits 1, as the CLI
+  does; unmeasured interval and level claims were made provisional on L49; the README discloses
+  `fallback_exposure` and `unenforced_rules`; a lock (`router.db.lock`), and 75 takes precedence
+  over 1. shellcheck clean.
+- **Task 13 (the L48 and L49 harnesses; 2f4f4bb, 5b252cc, f382ff0, d15c4c4).** Oxidized is pinned by
+  digest (0.37.0-101-g65125713; no tag names it). Review found step-ca's entrypoint printing its
+  provisioner password to a 0644 log (no log existed yet, nothing leaked): the harness now makes
+  its own password file, scrubs the log, and removes the secrets copy at cleanup. Only `router.db`'s
+  token column is registered as a secret, so a note may name the account.
+- **Task 14 (the lab), split.** 14a, the test code, was reviewed before any lab time (eb824d7,
+  f1e5207, 65b04cc). 14b ran four run sets, each harness fix reviewed or verified before the next:
+  - **Set 1 (65b04cc), invalid.** L48's local broker would not start (a31ebe3 loads its config
+    through port49d's real path). L49 EOS recorded a harness fault as a measurement; the debug
+    found Oxidized's default `auth_methods` lacks `keyboard-interactive`, which vEOS needs (L4), and
+    the wrapper's `PUT /node/next` with an empty body, which oxidized-web 0.18.1 answers 500 (the
+    harness's fake accepted it). Fixes 9f04a95, ec990df, e4715dd, da2fb95, 0a6d546.
+  - **Set 2 (0a6d546), a shakedown, not committed.** It measured `auth_methods` set globally costing
+    two authentications per stale run on NX-OS and IOS-XE, and two permits missing from the
+    example's role. Fixes 8a3bc05, d67c529, 31c329c (Junos sends no `authorize_command`).
+  - **Set 3 (31c329c).** EOS, IOS-XE and NX-OS kept. Five anomalies went to an investigator, nothing
+    committed until each was called real or harness (`run3-investigation.md`): Junos phase A hit the
+    broker's first-takeover purge (a plan 7e product bug the harness walked into; Carried forward);
+    L48 cells 3 and 4 were harness faults (argument order; the default `candidate_cap` of 8);
+    cell 5 was real (step-ca's CRL is distribution-point scoped, and port49 refused it); cell 6
+    was both. Harness fixes bfa22b3, 25ce8f8; vJunos-router re-run at bfa22b3.
+  - **The certificate-status work.** Decision 40 ruling 17 (bdfc9cf, then af12318 after review),
+    d839fca, 737a229 (`examples/oxidized/step-ca-workload.tpl`; L48 cell 5 measures both leaf
+    shapes), ab08dff, 060d016, 88159d5, then the OCSP classes 6b6a1d0, 1cd17cf, f7b96b8; three
+    review rounds (`idp-review.md`).
+  - **Set 4 (f7b96b8).** L48 and vSRX, PASS. Notes a0b909b and 9ac9c7c; example corrections c48b0be,
+    f07ae93, 711b5bb (rule 4); register closed 9db27c1.
+  - A runner's background limit killed the vJunos-router run in set 3 and left its compose stack up;
+    its cleanup was denied by the permission classifier and Ryan ran it.
+- **Task 15 (this section; b0d673c).** The roadmap's status line is not edited here; the controller
+  updates it after the merge.
+
+**Controller slip.** The raw capture of L49 EOS run 1 (set 1, at 65b04cc) was lost: a copy loop failed
+on `ls`'s colour codes and the lab worktree was then removed with `--force`. Its redacted evidence
+pcap and note are archived at `/mnt/images/port49-dbg-captures-2026-10-08/lab-p8/`. The run was
+invalid (a harness fault), not a measurement that counted. Run set 2's raw captures and set 3's
+killed and purge-hit Junos captures are archived under `/mnt/images/` (`port49-runset2-0a6d546-…`,
+`port49-runset3-31c329c-…`); every kept note's capture is in `main` (labpcap audit PASS, 250 pairs).
+
+**The rulings, as made** (decision 40, rulings 1–16 of the plan). All sixteen stood. Those an
+in-flight edit or fix sharpened, each in decision 40's text or consistent with it:
+- **Ruling 2:** a chain ending at both anchors is `trust_domain_unresolved` at the listener's bind
+  too (0e9a6c1).
+- **Ruling 3:** read from the SAN's own bytes; a constructed `[6]` refused (2ae9e10, 2731781).
+- **Ruling 7:** stood. Its revisit condition did not fire: with ruling 17, L48 measured step-ca's
+  CRL usable (a templated leaf revoked 1m after `step ca revoke`). What counts as uncovered was
+  amended into its text by this task (b0d673c).
+- **Ruling 9:** counted only when served (f732acb).
+- **Ruling 10:** amended three times in flight (fed0d19, 6f070de, 2893020). Its exit-code text
+  matches `cmd/port49/workload.go`: 75 covers both a deadline and an output that cannot be written.
+- **Ruling 13:** both rows closed 2026-10-08, the example corrected to them (9db27c1).
+- **Ruling 15:** up to `spiffe.MaxLen`, before the 1024-byte guard (baa68cd).
+- **Ruling 17** was added during execution (bdfc9cf, af12318).
+
+**Q1–Q3** (the controller's rulings on recommendation at pre-flight, in decision 40's closing
+paragraph). **Q1:** a workload certificate's directory groups are deferred to plan 8b, constrained
+to machine-scoped group subjects, not withdrawn (the fix for pre-flight C-1). **Q2:** one
+`certificate_status` block, no per-verifier opt-out. **Q3:** mint by `scope` is plan 9's. Ryan has
+made no override.
+
+**Rulings made on recommendation during execution.** Each was ruled by the controller on
+recommendation; Ryan may override.
+- **Task 4, the raw SAN:** the SPIFFE ID is parsed from the SAN's DER, and any disagreement with Go's
+  parse is refused.
+- **`auth_methods` for EOS alone (measured):** global, it cost two failed authentications per stale
+  run on devices that offer `password` (set 2), so it sits under `models: eos: vars`.
+- **The wrapper's JSON body for `PUT /node/next`:** oxidized-web 0.18.1 answers 500 to an empty one
+  (9f04a95).
+- **I4, a revocation stands whatever the list's scope:** stricter than RFC 5280; it matches how
+  marks already treat every new entry, and serials are unique per issuer (af12318, ab08dff).
+- **R1 and R3, the OCSP classes:** a responder that applies and fails is an outage, retried; one
+  that does not apply (no responder, a non-http AIA url, `unauthorized`, a signed `unknown`) is
+  final (6b6a1d0, f7b96b8; spec b0d673c).
+- **The purge:** a plan 7e broker bug, fixed in its own PR right after plan 8 merges (Carried
+  forward); the L49 harness waits the window out (bfa22b3).
+- **Also:** Tasks 5, 6, 8, 11, 12 and 13's rulings above; Task 9's redirect as its own final error;
+  Task 10's control-character and unwritable-output exits; Task 14's split before lab time and
+  "nothing committed until each anomaly is called real or harness"; commit trailers name the
+  implementing model.
+
+**Lab.**
+- **L48, closed** on step-ca 0.30.2, 2026-10-08 (`tests/lab/results/L48-step_ca.md`, at f7b96b8):
+  the requested ID is the leaf's one URI SAN (step's default template adds `serverAuth` beside
+  `clientAuth`); renew keeps the ID and the key with a new serial; `step ca renew --daemon` renewed
+  at 0.66 of a 15m lifetime; with the CA down the late line came at 0.79 and minting stopped at
+  expiry, exit 77 (the CLI's own expiry check); step-ca's CRL is DER, signed by the intermediate,
+  fetched over https through `SSL_CERT_FILE`, and scoped by a critical IDP naming its own URL, so a
+  default leaf is undecided (503) and a leaf under `step-ca-workload.tpl` was `credential_revoked`
+  1m after `step ca revoke`; no step-ca name policy pins one SPIFFE ID (the provisioner's `allow`
+  is ignored, the authority's refuses a full URI at start), and a fixed-`uris` template pins it by
+  rewriting the request.
+- **L49, closed** on Oxidized 0.37.0-101-g65125713, 2026-10-08, on vEOS 4.31.2F, Catalyst 8000V
+  17.13.01a, Nexus 9300v 10.4(2)F (at 31c329c), vJunos-router 23.4R2-S2.1 (at bfa22b3) and vSRX3
+  21.4R3.15 (at f7b96b8) (`tests/lab/results/L49-oxidized-<platform>.md`): one authentication per
+  run, a stale token refused once (`token_spent`), the credential read at `/reload`, no token in
+  Oxidized's log; on Junos under set 1.0.0 a backup asks port49 about no command. Not measured: a
+  level below `admin`.
+- **Example corrections L48 and L49 caused:** `keyboard-interactive` for `eos` alone (e4715dd,
+  d67c529); the queue request's JSON body (9f04a95); `show vtp status` (c48b0be) and
+  `show inventory all` (f07ae93) in the role; `step-ca-workload.tpl` (737a229); the README's §3, §5,
+  §5a and §9 rewritten to what was measured (711b5bb).
+- **L50, open** for plan 8b.
+
+**The interfaces plan 8 added.** `internal/spiffe` (`ID`, `Parse`, `ParseWorkload`,
+`CheckTrustDomain`, `Scheme`, `MaxLen`, `ErrNotSPIFFE`); `broker.Workload` (with `Issued`),
+`CertCaller`, `Broker.CertCallerOf`, `WorkloadPrincipal`, `ErrWorkloadUnmapped`, `ReadAnchor`;
+`Listener.Caller`, `Broker.Wire`, `ErrUnwired`; `api.LateRenewal` (with `LateRenewalFraction`),
+`api.UncoveredStatus`; `internal/workload` (`Client`, `New`, `Config`, `Mint`, `MintOptions`,
+`Identity`, `LoadCertificate`, `CertError`, `APIError`, `RedirectError`, `TemporaryError`,
+`ErrTemporary`, `DefaultDeadline`); `config.BrokerConfig.WorkloadCAFile`, `oidc.X509Machine`;
+`testpki.WriteWorkloadLab`, `RenewWorkload`, `WriteWorkloadLabFrom`, `CA.IssueCA`;
+`Policy.SPIFFEIdentities`; the metric `port49_workload_certificates_renewal_late_total`. No reason
+code is new.
+
+**Carried forward.**
+- **A fix PR right after plan 8 merges: the takeover purge (plan 7e).** port49-broker answers
+  `/readyz` and mints before its runner's first takeover, and that takeover purges every unspent
+  token: a window of `hold_ttl/3` plus the takeover (5s at defaults, 21s measured) on a first start
+  or a start after a policy edit. The device says `token_not_found`, and the only clue is a count in
+  the broker's stderr. Recommended fix: `POST /v1/token` answers 503 until this replica sees a
+  takeover complete (its own, or `meta/judged` naming the bundle it serves); `/readyz` unchanged. A
+  §5.7 reason must be added to the spec first. The facts are in `run3-investigation.md`, "Purge
+  facts". The L49 harness waits the window out (bfa22b3).
+- **Plan 8b:** a workload certificate's directory groups, constrained to machine-scoped group
+  subjects (L50), unless Ryan cancels it.
+- **Plan 9:** mint by `scope` (in "Plan 9" since pre-flight); the agent's per-user config file may
+  later serve `port49 workload` too.
+- **Plan 10:** the `k8s` verifier joins `machines`. `CertCallerOf` is untouched by it, and a subject
+  listing `spiffe://` and `system:serviceaccount:` is the migration spec §2 describes.
+- **Plan 12:** the alert `increase(port49_workload_certificates_renewal_late_total[1h]) > 0` (summed
+  over replicas); the workload anchor's CRL in each deployment shape, a private CA's https CRL
+  endpoint included (`SSL_CERT_FILE`, or a `file:` source).
+- **A lab recheck, unassigned** (pre-flight M-15): a Keycloak back-channel logout against a broker
+  with a workload verifier, which sends a `CertificateRequest` L45 was not measured with.
+- **Plan 13:** the operator notes below; `examples/oxidized/README.md` as the Oxidized page; the
+  enrollment page for step-ca, with `step-ca-workload.tpl` and the README's step-ca sections (§2,
+  §3, §5); one CA more if a later row measures it.
+- **For the final review:**
+  - step-ca prints the harness's password once into docker's container log, which stays until
+    `down -v` (lab harness; scrubbed from `step-ca.log`).
+  - Task 12's deferred minors: no `sync` before the wrapper's `mv`; the `next_adds_job` comment; the
+    missing-directory test exercises `exec 9>`, not the `mktemp` branch (N-2).
+  - `TestWorkloadE2EFilesLoadForBothRoles` loads the compose stack's configs through the loaders,
+    not the daemon's real load path (as `a31ebe3` did for L48's local broker).
+  - The late-renewal warning prints "(in )" with under 30s left (`internal/workload/client.go`,
+    the rounded duration trimmed to nothing).
+  - The `broker.certificate_status` refusal says "required when broker: is present"; it is required
+    only with an x509 verifier.
+- **For the pre-beta review:** the port49d package takes about 9 minutes to test (538s at the base),
+  near `go test`'s 10m default timeout; slowest are the late-replica reload and restored-token purge
+  tests.
+- **Parked minors** (ledger, "minor (deferred)"): `Workload.Issued` matches on the DN string; one
+  attempt can overrun `--deadline` by up to 30s; an explicit `Retry-After` is not jittered; U+2028
+  and U+2029 pass the TSV control-character guard (harmless to `awk`); the L48 harness's cosmetic
+  nits (a negative lead worded "-1s before", step's ANSI codes quoted in cell 6).
+
+### Operator notes (for the pull request body)
+
+- **Workload certificates** (decision 40).
+  - **Configuration.** `broker.identity.machines: [{type: x509, trust_anchor_file: <the CA that
+    issues your workload certificates>, spiffe_trust_domains: [<yours>]}]`. At most one, beside at
+    most one human `x509` verifier. On step-ca the anchor is its intermediate.
+  - **The two anchors** must be different certificates in unrelated hierarchies. The start refuses
+    one certificate in both files, or one anchor signing the other, naming both keys
+    (`broker.identity.machines[].trust_anchor_file`, and `broker.identity.humans[].trust_anchor_file`
+    or `broker.client_ca_file`). An anchor further down the other's hierarchy is refused at each
+    request whose chain shows it.
+  - **Certificate status.** `broker.certificate_status` is required with any x509 verifier and
+    covers both anchors, with no per-verifier opt-out. An anchor or CRL signer no source covers is
+    said at start, never a refused start; the line says what happens under your `on_unavailable`
+    (refused 503 under `refuse`, admitted unchecked under `allow`). For a workload CA with no CRL,
+    turn its CRL on (step-ca's `crl.enabled`), or sync it to a `file:` source, or stop workloads by
+    principal; never `on_unavailable: allow` or `disabled: true`, which weaken it for people too. A
+    private CA's https CRL endpoint needs its root in the broker's trust store (`SSL_CERT_FILE`,
+    measured on L48), or a `file:` source.
+  - **step-ca users need `examples/oxidized/step-ca-workload.tpl`.** step-ca 0.30.2's CRL names its
+    own URL in a critical issuing distribution point, and port49 applies such a list only to a
+    certificate whose CRL distribution points name that URL (decision 40 ruling 17). step-ca's
+    default leaf names none, so with that CRL configured every default leaf is refused 503
+    `certificate_status_unavailable` and `port49 workload` exits 77, the detail naming the missing
+    distribution point. Issue under the template, its `crlDistributionPoints` set to the name
+    `step crl inspect` shows. Measured (L48): a templated leaf was refused `credential_revoked` 1m
+    after `step ca revoke`.
+  - **OCSP.** A responder that applies and fails (no answer, a bad signature, a stale answer) is an
+    outage: 503 "try again", and `port49 workload` retries within `--deadline`. A responder that
+    does not serve the CA (`unauthorized`, a signed `unknown`), a non-http AIA url, or none at all
+    leaves the issuer uncovered: final, exit 77.
+  - **The TLS handshake changes for everyone** (pre-flight M-15). A workload verifier makes even an
+    OIDC-only broker ask every client for a certificate (`VerifyClientCertIfGiven`), so every
+    connection sees a `CertificateRequest`, Keycloak's back-channel logout included. L45 was
+    measured without one; a recheck is carried.
+  - **The workload CA is the trust root.** Whoever can get it to issue a certificate naming a SPIFFE
+    ID is that workload. Restrict each provisioner to its host's own ID. On step-ca 0.30.2 no name
+    policy can (L48): a provisioner's x509 `allow` is ignored, and the authority's refuses a full
+    URI at start. A provisioner x509 template with the ID fixed in `uris` pins it, by rewriting the
+    request, not refusing it: one provisioner per host, its credential that host's alone. The fixed
+    `uris` and the CRL distribution point in one template are not measured together.
+- **The principal** is the certificate's one URI SAN, a SPIFFE ID with a path
+  (`spiffe://corp.example.com/host/oxidized-01`), verbatim, read from the SAN's own bytes.
+  - Anything else is refused `identity_unmapped`, over HTTP with the reason.
+  - Upper case is refused, never folded.
+  - The policy refuses a `spiffe://` identity outside that form at load. The start says which
+    identities no verifier can give.
+- **No directory for a workload.** It mints with every DC down, never matches a `group:` subject,
+  and declares its `username:`. Directory groups for workloads, through a machine-scoped group
+  subject only, are plan 8b's.
+- **A declared username stands.** Declaring a username a directory user holds locks that user out at
+  the next refresh, and CI cannot see it in advance; `username_collision` names both claimants
+  (decision 38 ruling 3).
+- **Renewal is your CA's job.**
+  - port49 needs nothing at a renewal. Measured on step-ca (L48): a renewal keeps the ID and the
+    key; `step ca renew --daemon` renewed at about two thirds of the lifetime.
+  - A certificate presented with under a quarter of its life left is said once a day and counted in
+    `port49_workload_certificates_renewal_late_total`. Each broker replica counts it once, so alert
+    on its increase, not on a count.
+  - **To stop a workload**, revoke its principal (`port49 revoke --principal spiffe://…`). A mark by
+    certificate does not follow a renewal, and `port49 revoke` says so. Revoke at the CA too.
+- **`port49 workload token`** mints with no agent, reading the certificate and key each run.
+  - It talks to the broker over `https` only, trusting `--broker-ca` alone, and follows no redirect.
+  - It pages by `batch_max` under one `Idempotency-Key` per page, and retries 503, 502, 504, 409
+    in-progress, 429 and dropped connections within `--deadline` (2m). A 503 for a certificate
+    status nothing covers is final, not retried, and no longer says "try again".
+  - Tokens go to stdout or `--out` (0600, renamed into place). Output is `--format tsv|json`.
+    Under cron, always `--out`: cron mails a job's stdout.
+  - Exit 0 all permitted and written; 1 some written, some not (a device denied, or left out
+    because its line would hold a control character); 2 usage (flags, the broker URL, an
+    unreadable file); 75 temporary: the broker did not answer in time (pages minted before it are
+    written) or the output could not be written (the last `--out` stands); 77 nothing minted, and a
+    run again will not change it (expired certificate, revoked principal, every device denied,
+    uncovered status, or a TLS trust failure either way: the broker's certificate not under
+    `--broker-ca`, or the broker refusing the workload's certificate). On 77, and on 75 with
+    nothing minted, nothing is written.
+  - **A stdout consumer must discard what it read on exit 75**: a failed write may have handed it a
+    truncated line. `--out` has no such case.
+- **`port49 workload identity`** shows what the broker makes of a workload's certificate. Run it
+  after enrollment.
+- **Oxidized:** `examples/oxidized/` (the wrapper for cron, Oxidized's config, a policy snippet, the
+  step-ca template), measured by L49 on EOS, NX-OS, IOS-XE, vJunos-router and vSRX. The wrapper
+  replaces `router.db` only when it has a node to write, so a bad night leaves Oxidized's last one in
+  place.
+  - The config sets `keyboard-interactive` for the `eos` model alone: vEOS offers no `password`
+    method, and set globally it costs two failed authentications per stale run elsewhere.
+  - The example's role gained `show vtp status` (IOS-XE) and `show inventory all` (NX-OS), which
+    Oxidized sends.
+  - On Junos under set 1.0.0 a backup asks port49 about no command: the device's login class for
+    the backup account is what limits it.
+  - The role is at `admin`; `port49 policy test` reports `fallback_exposure` on EOS and NX-OS (L22).
+    A lower level is not measured.
+- **`/v1/config`'s `methods`** names how a person authenticates: `x509` only with a human anchor.
+- **A known issue, fixed in a follow-up PR:** on a first start of port49-broker, or after a policy
+  edit, tokens minted in the first 5–21s may be purged by the broker's own takeover; the device then
+  says `token_not_found`. Mint again.
+- **Lab:** L48 (step-ca 0.30.2) and L49 (Oxidized on five images) closed; see the notes. L50 is open
+  for plan 8b.
+
+## Plan 8b — Workload directory groups (design §7; spec §13 decisions 16 and 40 ruling 5)
+
+Deferred from plan 8 by the controller's ruling on its pre-flight Q1 (2026-10-07), on
+recommendation: deferred, not cut. Ryan may cancel it. Plan 8 builds no directory path for a
+workload, and that stays the default when this is built: a workload with no mapping mints with
+every DC down.
+
+- **The constraint.** A machine principal matches only a machine-scoped group subject, never a
+  human `group:` subject. Today's `group:` subject carries `attached_roles.humans` and human
+  `api:` rights (`buildSubjects` sets `Domain = "humans"`), which design §7 forbids a workload.
+  One subject of both domains is a load error. Decision 38 ruling 15's diff gate and the CI report
+  cover the machine form as they cover `group:`.
+- **The mapping.** Opt-in per verifier (a `directory:` key on the `x509` machine verifier), a new
+  mapping kind keyed on the SPIFFE ID: exactly one entry whose attribute equals it. No existing
+  kind serves: `issuer_serial` changes at every renewal, `sid` is AD CS's extension, and the weak
+  kinds need `allow_weak` and an `issuers:` pin. It is a weak kind under decision 38 ruling 1,
+  pinned to the workload anchor, the entry pinned by `objectGUID` or `entryUUID`.
+- **The username.** From the entry's `username_attribute`, under decision 38 ruling 3's collision
+  rules (amending decision 8), or declared on the machine group subject. Spec text first.
+- **Plumbing.** The `IsUser` gates (`memberFor`, `storedMemberOf`, the scheduled refresh,
+  `refresh.go`) become per domain; `forget`, pre-warm and `normalPrincipal` for `forget` widen
+  past `user:`; the membership record is keyed by the SPIFFE ID.
+- **Lab.** Its own row, L50 (opened by plan 8): who can write the attribute on Windows AD (L44's
+  box) and on Samba, since "only directory administrators can write it" is a directory-behaviour
+  claim.
+- **3am, with the mapping configured.** A DC outage past `broker.directory.grace` stops the
+  workload's mints (`directory_unavailable`, `port49 workload` exit 75), and its live device
+  sessions deny `context_stale` at `session.staleness_ceiling`. The start line and the operator
+  notes say so.
+- **Cost.** About 6 to 8 tasks and the lab row.
+
 ## Plan 9 — Agent in full (§19 step 9)
 
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
