@@ -137,6 +137,11 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 - **To stop the workload**: `port49 revoke --principal spiffe://...`, and revoke the certificate
   at the CA.
 
+The `config` sets `vars: auth_methods` to include `keyboard-interactive`. Arista EOS offers only
+`publickey` and `keyboard-interactive` over SSH, and Oxidized's default list does not include the
+second, so without this line Oxidized never sends the token to an EOS device. Do not change the
+EOS side to suit it.
+
 ## 9. Provisional on L49
 
 The REST calls the wrapper makes, the platform-to-model table, the `config` settings (including
