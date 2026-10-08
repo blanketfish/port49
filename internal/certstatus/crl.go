@@ -33,6 +33,11 @@ type loadedCRL struct {
 	list     *x509.RevocationList
 	revoked  map[string]revokedEntry // serial as big.Int.Text(16)
 	userOnly bool                    // IDP onlyContainsUserCerts: covers leaves alone
+	// dpNames are the IDP's distributionPoint fullName GeneralNames, each
+	// in its DER encoding: when set, the list covers only a certificate
+	// whose CRL distribution points carry one of them, byte for byte
+	// (RFC 5280 §5.2.5; spec §13, decision 40, ruling 17).
+	dpNames [][]byte
 }
 
 type revokedEntry struct {
@@ -54,6 +59,7 @@ var (
 	oidCRLNumber          = asn1.ObjectIdentifier{2, 5, 29, 20}
 	oidDeltaCRL           = asn1.ObjectIdentifier{2, 5, 29, 27}
 	oidIssuingDistPt      = asn1.ObjectIdentifier{2, 5, 29, 28}
+	oidCRLDistPoints      = asn1.ObjectIdentifier{2, 5, 29, 31}
 	reasonCertificateHold = 6
 )
 
@@ -101,12 +107,13 @@ func (c *Checker) accept(src CRLSource, raw []byte) (*loadedCRL, error) {
 		case ext.Id.Equal(oidDeltaCRL):
 			return nil, errors.New("is a delta CRL; name the full CRL")
 		case ext.Id.Equal(oidIssuingDistPt):
-			userOnly, err := userCertsOnly(ext.Value)
+			userOnly, names, err := idpScope(ext.Value)
 			if err != nil {
 				return nil, fmt.Errorf("is scoped by its issuing distribution point (%v); name a CRL covering "+
-					"every serial, or one scoped to user certificates alone", err)
+					"every serial, one scoped to user certificates alone, or one scoped to a distribution point "+
+					"its certificates name by fullName", err)
 			}
-			l.userOnly = userOnly
+			l.userOnly, l.dpNames = userOnly, names
 		case ext.Critical && !ext.Id.Equal(oidAuthorityKeyID) && !ext.Id.Equal(oidCRLNumber):
 			return nil, fmt.Errorf("carries a critical extension port49 does not understand (%s)", ext.Id)
 		}
@@ -122,11 +129,13 @@ func (c *Checker) accept(src CRLSource, raw []byte) (*loadedCRL, error) {
 	return l, nil
 }
 
-// userCertsOnly reads an Issuing Distribution Point and accepts it only
-// when it says nothing but onlyContainsUserCerts (true) or nothing at all:
-// a distribution point, a reason subset, an indirect CRL or an attribute or
-// CA scope partitions the issuer's serials (pre-flight I3).
-func userCertsOnly(der []byte) (bool, error) {
+// idpScope reads an Issuing Distribution Point and accepts it only when it
+// says nothing but a distributionPoint named by fullName, onlyContainsUserCerts
+// (true), both, or nothing at all: a name relative to the issuer, a reason
+// subset, an indirect CRL or an attribute or CA scope partitions the issuer's
+// serials in a way port49 does not follow (pre-flight I3; decision 40). names
+// are the fullName GeneralNames, each in its DER encoding.
+func idpScope(der []byte) (userOnly bool, names [][]byte, err error) {
 	var idp struct {
 		DistributionPoint          asn1.RawValue  `asn1:"optional,tag:0"`
 		OnlyContainsUserCerts      bool           `asn1:"optional,tag:1"`
@@ -136,21 +145,108 @@ func userCertsOnly(der []byte) (bool, error) {
 		OnlyContainsAttributeCerts bool           `asn1:"optional,tag:5"`
 	}
 	if rest, err := asn1.Unmarshal(der, &idp); err != nil || len(rest) != 0 {
-		return false, errors.New("an issuing distribution point that does not parse")
+		return false, nil, errors.New("an issuing distribution point that does not parse")
 	}
 	switch {
-	case len(idp.DistributionPoint.FullBytes) > 0:
-		return false, errors.New("it names a distribution point")
 	case idp.OnlyContainsCACerts:
-		return false, errors.New("it covers CA certificates only")
+		return false, nil, errors.New("it covers CA certificates only")
 	case idp.OnlySomeReasons.BitLength > 0:
-		return false, errors.New("it covers some reasons only")
+		return false, nil, errors.New("it covers some reasons only")
 	case idp.IndirectCRL:
-		return false, errors.New("it is an indirect CRL")
+		return false, nil, errors.New("it is an indirect CRL")
 	case idp.OnlyContainsAttributeCerts:
-		return false, errors.New("it covers attribute certificates only")
+		return false, nil, errors.New("it covers attribute certificates only")
 	}
-	return idp.OnlyContainsUserCerts, nil
+	if len(idp.DistributionPoint.FullBytes) > 0 {
+		if names, err = fullNames(idp.DistributionPoint); err != nil {
+			return false, nil, err
+		}
+	}
+	return idp.OnlyContainsUserCerts, names, nil
+}
+
+// fullNames reads a distributionPoint ([0] EXPLICIT DistributionPointName)
+// and returns its fullName GeneralNames, each in its DER encoding. A name
+// relative to the CRL issuer, or an empty or malformed fullName, is an error.
+func fullNames(dp asn1.RawValue) ([][]byte, error) {
+	var dpn asn1.RawValue
+	if rest, err := asn1.Unmarshal(dp.Bytes, &dpn); err != nil || len(rest) != 0 {
+		return nil, errors.New("a distribution point name that does not parse")
+	}
+	if dpn.Class != asn1.ClassContextSpecific || dpn.Tag != 0 || !dpn.IsCompound {
+		return nil, errors.New("it names a distribution point relative to the CRL issuer, not by fullName")
+	}
+	var names [][]byte
+	for rest := dpn.Bytes; len(rest) > 0; {
+		var gn asn1.RawValue
+		var err error
+		if rest, err = asn1.Unmarshal(rest, &gn); err != nil {
+			return nil, errors.New("a distribution point fullName that does not parse")
+		}
+		names = append(names, gn.FullBytes)
+	}
+	if len(names) == 0 {
+		return nil, errors.New("a distribution point fullName with no name")
+	}
+	return names, nil
+}
+
+// certDPNames are the fullName GeneralNames of cert's CRL distribution
+// points, each in its DER encoding. A point naming a cRLIssuer is skipped:
+// it names an indirect CRL, which port49 refuses. An extension that does not
+// parse gives none, so no scoped list covers the certificate (fail closed).
+func certDPNames(cert *x509.Certificate) [][]byte {
+	for _, ext := range cert.Extensions {
+		if !ext.Id.Equal(oidCRLDistPoints) {
+			continue
+		}
+		var dps []struct {
+			DistributionPoint asn1.RawValue  `asn1:"optional,tag:0"`
+			Reasons           asn1.BitString `asn1:"optional,tag:1"`
+			CRLIssuer         asn1.RawValue  `asn1:"optional,tag:2"`
+		}
+		if rest, err := asn1.Unmarshal(ext.Value, &dps); err != nil || len(rest) != 0 {
+			return nil
+		}
+		var names [][]byte
+		for _, dp := range dps {
+			if len(dp.CRLIssuer.FullBytes) > 0 || len(dp.DistributionPoint.FullBytes) == 0 {
+				continue
+			}
+			if n, err := fullNames(dp.DistributionPoint); err == nil {
+				names = append(names, n...)
+			}
+		}
+		return names
+	}
+	return nil
+}
+
+// nameWords is a list's distribution point names for a line: each URI as
+// printable text, any other kind of name said as such.
+func nameWords(names [][]byte) string {
+	var out []string
+	for _, n := range names {
+		var gn asn1.RawValue
+		if _, err := asn1.Unmarshal(n, &gn); err == nil && gn.Class == asn1.ClassContextSpecific && gn.Tag == 6 {
+			out = append(out, printsafe.Line(string(gn.Bytes), 200))
+		} else {
+			out = append(out, "(a name that is not a URI)")
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// namesOne says whether have holds one of want, byte for byte.
+func namesOne(have, want [][]byte) bool {
+	for _, h := range have {
+		for _, w := range want {
+			if bytes.Equal(h, w) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // install puts a verified list in force for its source when it is not
@@ -462,16 +558,25 @@ func minTime(a, b time.Time) time.Time {
 
 // checkCRLs reads every list in force whose issuer certificate is,
 // byte for byte, the certificate that verified cert (pre-flight C1); a
-// list scoped to user certificates covers a leaf that is not itself a CA.
+// list scoped to user certificates covers a leaf that is not itself a CA,
+// and one scoped to a distribution point covers a certificate whose CRL
+// distribution points name it (decision 40). A list that does not cover
+// cert decides nothing for it: never "not revoked".
 func (c *Checker) checkCRLs(cert, issuer *x509.Certificate, depth int) Result {
 	now := c.now()
+	dps := certDPNames(cert)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	serial := cert.SerialNumber.Text(16)
 	var fresh *loadedCRL
-	var stale []string
+	var stale, scoped []string
 	for _, l := range c.crls {
 		if !bytes.Equal(l.issuer.Raw, issuer.Raw) || (l.userOnly && (depth > 0 || cert.IsCA)) {
+			continue
+		}
+		if len(l.dpNames) > 0 && !namesOne(dps, l.dpNames) {
+			scoped = append(scoped, fmt.Sprintf("CRL %s is scoped to the distribution point %s, which this "+
+				"certificate's CRL distribution points do not name; issue it with that name", l.name, nameWords(l.dpNames)))
 			continue
 		}
 		if e, revoked := l.revoked[serial]; revoked {
@@ -488,6 +593,9 @@ func (c *Checker) checkCRLs(cert, issuer *x509.Certificate, depth int) Result {
 		return Result{Verdict: Good, Source: "crl", Name: fresh.name}
 	}
 	detail := fmt.Sprintf("no fresh CRL or OCSP answer covers %q", printsafe.Line(issuer.Subject.String(), 200))
+	if len(scoped) > 0 {
+		detail += " (" + strings.Join(scoped, "; ") + ")"
+	}
 	if len(stale) > 0 {
 		detail = strings.Join(stale, "; ")
 	}

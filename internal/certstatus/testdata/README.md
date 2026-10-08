@@ -1,12 +1,13 @@
 # certstatus test fixtures
 
-Two CRLs built outside Go, so a tagging mistake mirrored in `userCertsOnly` and in the Go-built
+Two CRLs built outside Go, so a tagging mistake mirrored in `idpScope` and in the Go-built
 test lists cannot pass both (plan 7b, re-check R7):
 
 - `idp-user-certs.der`: a critical Issuing Distribution Point saying `onlyContainsUserCerts` alone.
   It loads, and covers leaves only.
-- `idp-distribution-point.der`: a critical Issuing Distribution Point naming a `distributionPoint`.
-  It is refused.
+- `idp-distribution-point.der`: a critical Issuing Distribution Point naming a `distributionPoint`
+  by `fullName` (`URI:http://pki.example.com/a.crl`). It loads, and covers only a certificate whose
+  CRL distribution points name that URI (decision 40, ruling 17).
 - `idp-ca.pem`: their signer. Its key was not kept.
 
 They were made on 2026-10-01 with OpenSSL 3.5.5 and are valid for ten years. **Regenerate them
