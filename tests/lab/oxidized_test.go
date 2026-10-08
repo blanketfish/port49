@@ -433,8 +433,14 @@ func oxidizedCommands(recs []map[string]any, username, verdict string) []string 
 // PORT49_BIN=bin/port49, the stack's broker URL and CA, the workload files,
 // OXIDIZED_NODES holding the platform's node, OXIDIZED_ROUTER_DB the volume's
 // router.db, OXIDIZED_REST, and PORT49_TTL=ttl. It returns the exit code and
-// stderr (the wrapper never prints a token).
+// stderr (the wrapper never prints a token; it is leak-checked all the same,
+// and replaced by a withheld line if it holds one).
 func (o *oxidized) runWrapper(ttl string) (int, string) {
+	code, said := o.runWrapperRaw(ttl)
+	return code, scrubWrapperSaid(said, o.secrets)
+}
+
+func (o *oxidized) runWrapperRaw(ttl string) (int, string) {
 	cmd := exec.Command("bash", filepath.Join(o.repo, "examples", "oxidized", "port49-oxidized-run"))
 	cmd.Dir = o.repo
 	cmd.Env = append(os.Environ(),

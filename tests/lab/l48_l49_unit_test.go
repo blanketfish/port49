@@ -561,7 +561,7 @@ func TestScrubStepLogRedactsJWSShapedText(t *testing.T) {
 func TestLocalBrokerStartsOnTheRealPort49d(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "port49d")
 	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/port49d").CombinedOutput(); err != nil {
-		t.Skipf("cannot build port49d here (%v): %s", err, tailOf(string(out), 400))
+		t.Fatalf("cannot build port49d (%v): %s", err, tailOf(string(out), 400))
 	}
 	for _, crl := range []bool{false, true} {
 		dir := t.TempDir()

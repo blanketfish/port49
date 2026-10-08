@@ -45,9 +45,10 @@ const (
 	kcImage = "quay.io/keycloak/keycloak:26.4@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007"
 )
 
-// jwsShape is a compact JWS: three base64url parts. Nothing the lab writes
-// may hold one, since its signature would be in it.
-var jwsShape = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
+// jwsShape is a compact JWS (three base64url parts) or JWE (five, the second
+// possibly empty). Nothing the lab writes may hold one, since its signature or
+// ciphertext would be in it.
+var jwsShape = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]*){2,4}`)
 
 type keycloak struct {
 	URL    string // the issuer

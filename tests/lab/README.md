@@ -533,7 +533,9 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   key's and the provisioner's passwords are that one value, which the harness refuses anywhere it
   would be written. (Left to itself the image generates two passwords and prints the provisioner's
   once in its log.) A step command's output that holds key material, a compact JWS or that password
-  is withheld, and `step-ca.log` is kept with its password lines dropped, or not at all.
+  is withheld, and `step-ca.log` is kept with its password lines dropped and any JWS- or
+  JWE-shaped string redacted to `<jws redacted>`, or not at all (a registered secret or key material
+  in what is left refuses it).
 - L48's local broker trusts step-ca's root for the CRL fetch through `SSL_CERT_FILE`: step-ca serves
   its CRL over https under its own private root, and the broker fetches with the system roots. A
   CRL fetch that fails TLS is INVALID, never a measured "no".
@@ -571,8 +573,18 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   path from the overlay) and whether the process-crash file `crash` exists. Oxidized logs the refusal as
   `Errno::ENOTTY ... creating crashfile`: net-ssh's keyboard-interactive asks a tty for a second
   password.
-- Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) may name a username
-  in a login failure, and the username is a token. It stays on disk; a note never quotes it.
+- Oxidized's log (`oxidized.out`, `oxidized.err` beside the stack's other logs) stays on disk. A
+  note quotes only phase B's excerpt of the stale run (class-and-message lines, each checked whole
+  against every minted token and for a compact JWS before it is cut to 220 characters, and the
+  whole excerpt is withheld on a hit). The username (`svc-oxidized`) is an account name, not a
+  secret; the password column of `router.db` is.
+- Phase A also asks the device's sshd which methods it lists (`ssh` with `PreferredAuthentications=none`,
+  refused locally, no TACACS+ attempt) and the note records the answer; the EOS finding is cited
+  only in the EOS note. Phase B counts the redeem records of the one stale run (from a mark just
+  before the `PUT`). If Oxidized is down after the stale run (REST dead, with or without the
+  process-crash file), that is phase B's finding: the wrapper-again run and phase C are skipped and
+  the note says so. A crashfile counts as written by the stale run when its mtime is at or after the
+  `PUT`, because Oxidized names it by the device address and overwrites it.
 - A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never
   answers its REST API) is `t.Fatal` before any note: the run is INVALID. A step that ran and did
   not do what the claim says is a failed cell, and the note records it.

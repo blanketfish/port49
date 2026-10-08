@@ -4,12 +4,14 @@ package lab
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,16 +50,17 @@ func staleRunExcerpt(log string, secrets []string) (string, error) {
 	for _, ln := range strings.Split(log, "\n") {
 		for _, m := range []string{"Errno::", "Net::SSH", "crashfile", " raised "} {
 			if strings.Contains(ln, m) {
+				// scrub the whole line, then cut it: a token across the cut
+				// would leave its prefix
+				if err := stepLeak(ln, secrets); err != nil {
+					return "", err
+				}
 				kept = append(kept, oneLineMax(strings.TrimSpace(ln), 220))
 				break
 			}
 		}
 	}
-	out := strings.Join(kept, "\n")
-	if err := stepLeak(out, secrets); err != nil {
-		return "", err
-	}
-	return out, nil
+	return strings.Join(kept, "\n"), nil
 }
 
 // oxidizedHostRoot is the host path of Oxidized's ROOT (config.rb:7:
@@ -93,6 +96,87 @@ func oxidizedHostRoot(overlay []byte, local string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("Oxidized's root %s is not a mount of ${PORT49_COMPOSE_LOCAL} in the overlay", rootDir)
+}
+
+// crashfilesSince are the node crashfiles under root whose mtime is at or
+// after since. Oxidized names a crashfile by the device address, so a second
+// failure overwrites the first: the name says nothing of when it was written.
+func crashfilesSince(root string, since time.Time) []string {
+	ents, err := os.ReadDir(filepath.Join(root, "crashes"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range ents {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && !fi.ModTime().Before(since) {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// oxidizedDownWhy is why Oxidized is not serving after a run, or "" when its
+// REST API answers (restErr nil). A process-crash file alone, with the API
+// answering, is not down.
+func oxidizedDownWhy(crashFile bool, restErr error) string {
+	if restErr == nil {
+		return ""
+	}
+	if crashFile {
+		return "Oxidized's REST API does not answer and the process-crash file exists: the process crashed"
+	}
+	return "Oxidized's REST API does not answer (" + oneLineMax(restErr.Error(), 120) + ")"
+}
+
+// scrubWrapperSaid is the wrapper's stderr, or a line saying it was withheld
+// because it holds a registered secret or a compact JWS.
+func scrubWrapperSaid(said string, secrets []string) string {
+	if err := stepLeak(said, secrets); err != nil {
+		return "(withheld: " + err.Error() + ")"
+	}
+	return said
+}
+
+var offeredShape = regexp.MustCompile(`Permission denied \(([a-z,-]+)\)`)
+
+// offeredMethods reads the authentication methods an sshd lists from the
+// client's refusal of `none`: "Permission denied (publickey,...)".
+func offeredMethods(stderr string) (string, bool) {
+	m := offeredShape.FindStringSubmatch(stderr)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// deviceOffers asks the device's sshd which methods it lists, by trying `none`
+// (the server refuses it locally; no TACACS+ authentication is attempted).
+func (r *l49Run) deviceOffers() (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none",
+		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+		"-o", "LogLevel=ERROR", "probe@"+r.l.p.addr, "true").CombinedOutput()
+	return offeredMethods(string(out))
+}
+
+// authMethodsLine is phase A's note line about the example's auth_methods. It
+// states what the example sets and what this device's sshd listed when asked;
+// the EOS finding is cited only in the EOS note.
+func authMethodsLine(platform, offered string, ok bool) string {
+	s := "The example's `config` sets `vars: auth_methods` to include `keyboard-interactive`, which Oxidized's default list " +
+		"(`none`, `publickey`, `password`) lacks."
+	if platform == "arista_eos" {
+		s += " It is there for Arista EOS, which does not offer `password` (tests/lab/results/L4-error-arista_eos.md); net-ssh " +
+			"skips a method the server does not list, so without it Oxidized never sends the token."
+	}
+	if ok {
+		return s + " This device's sshd listed, for `none`: `" + offered + "`."
+	}
+	return s + " This device's sshd methods could not be read."
 }
 
 // processCrashed is whether ROOT/crash exists: the single file cli.rb writes
@@ -450,7 +534,8 @@ func (r *l49Run) startStack(t *testing.T, restricted bool, phase string) *oxidiz
 }
 
 // finish records the stack's tokens as secrets and checks Oxidized's log for
-// them (phase D). The log stays on disk and is never quoted.
+// them (phase D). The log stays on disk; a note quotes none of it here (phase B
+// quotes a leak-checked excerpt of the stale run's class-and-message lines).
 func (r *l49Run) finish(o *oxidized, stack string) {
 	r.secrets = append(r.secrets, o.secrets...)
 	out, err := o.c.run("--profile", "oxidized", "logs", "--no-color", "oxidized")
@@ -526,9 +611,9 @@ func (r *l49Run) phaseA(t *testing.T) {
 		t.Fatalf("phase A: %v", err)
 	}
 	r.say("- **A. What Oxidized sends** (role `**`, `port49-oxidized-run` with `PORT49_TTL=15m`):")
-	r.say("  - The example's `config` sets `vars: auth_methods` to include `keyboard-interactive`: the device offers only " +
-		"`publickey,keyboard-interactive` (tests/lab/results/L4-error-arista_eos.md:74) and Oxidized's default list " +
-		"(`none`, `publickey`, `password`) names neither, so net-ssh never sends the token without it.")
+	offered, offeredOK := r.deviceOffers()
+	r.say("  - %s", authMethodsLine(r.l.p.name, offered, offeredOK))
+	r.ev.add("a_ssh_methods", map[string]any{"offered_for_none": offered, "read": offeredOK})
 	r.say("  - %s", r.startup)
 	status, ended := o.awaitRun(node, start, 5*time.Minute)
 	recs, settled := r.l.settleRecords(mark, wantsEvents(oxidizedUser, "redeem", "authorize_command"))
@@ -593,7 +678,6 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	if oerr != nil {
 		t.Fatalf("phase B: %v (INVALID)", oerr)
 	}
-	crashBefore := len(crashfiles(oxRoot))
 	putAt := time.Now()
 	putCode, perr := o.putNext(node)
 	if perr != nil || putCode != http.StatusOK {
@@ -604,7 +688,8 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	n, by := redeemSummary(recordsFor(bRecs, oxidizedUser))
 	r.say("  - 3m later, `PUT /node/next/%s` with no new mint: the run %s; Oxidized's status `%s` (a success would be `success`).",
 		node, endedWord(staleEnded, 3*time.Minute), staleStatus)
-	r.say("  - Authentications that one run cost: %d redeem records (%s).", n, describeCounts(by))
+	r.say("  - Authentications that one stale run cost: %d redeem records for `%s` between the mark taken just before the "+
+		"`PUT` and the settle after it (%s); no other run was started in that span.", n, oxidizedUser, describeCounts(by))
 	if !bSettled {
 		r.say("  - No redeem record for `%s` arrived within %s of the run's end.", oxidizedUser, settleBound)
 	}
@@ -624,9 +709,27 @@ func (r *l49Run) phasesBC(t *testing.T) {
 			r.say("    - `%s`", ln)
 		}
 	}
-	crashAfter := crashfiles(oxRoot)
-	r.say("  - Node crashfiles in Oxidized's `crashes` directory after the stale run: %d new (%d in all); "+
-		"the process-crash file `crash` exists: %s.", len(crashAfter)-crashBefore, len(crashAfter), yesNo(processCrashed(oxRoot)))
+	// A crashfile is named by the device address, so a later failure overwrites
+	// an earlier one: the stale run wrote one when a file's mtime is at or after
+	// the PUT.
+	crashAll, crashStale := crashfiles(oxRoot), crashfilesSince(oxRoot, putAt)
+	processCrash := processCrashed(oxRoot)
+	r.say("  - Node crashfiles in Oxidized's `crashes` directory: %d written by the stale run (modified at or after the `PUT`), "+
+		"%d in all; the process-crash file `crash` exists: %s.", len(crashStale), len(crashAll), yesNo(processCrash))
+	stale := map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
+		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "receipt_idle_ttl": receiptIdleTTL,
+		"oxidized_log_excerpt": excerpt, "crashfile_written_by_stale_run": len(crashStale) > 0, "crashfiles_total": len(crashAll),
+		"process_crash_file": processCrash}
+	// Oxidized itself gone after the stale token is a finding, not a setup
+	// fault: it is recorded, and the rest of the phase cannot run.
+	if why := oxidizedDownWhy(processCrash, o.awaitREST(20*time.Second)); why != "" {
+		r.say("  - After the stale run: %s. The wrapper-again run and phase C were not run.", why)
+		stale["oxidized_down"] = why
+		r.ev.add("b_stale_token", stale)
+		r.say("- **C. The example's role**: not run, Oxidized was down after phase B's stale run.")
+		r.finish(o, "B")
+		return
+	}
 	restart := time.Now()
 	if err := wrapperFault(o.runWrapper("60s")); err != nil {
 		t.Fatalf("phase B, the wrapper again: %v", err)
@@ -634,10 +737,8 @@ func (r *l49Run) phasesBC(t *testing.T) {
 	reStatus, reEnded := o.awaitRun(node, restart, 5*time.Minute)
 	r.say("  - The wrapper again with a new 60s token (wrapper exit 0): the run %s with status `%s`; Oxidized read the new "+
 		"credential at `/reload`: %s.", endedWord(reEnded, 5*time.Minute), reStatus, yesNo(reEnded && reStatus == "success"))
-	r.ev.add("b_stale_token", map[string]any{"first_status": status, "stale_status": staleStatus, "stale_run_ended": staleEnded,
-		"stale_redeem_count": n, "stale_redeem_by_verdict_reason": by, "again_wrapper_exit": 0, "again_status": reStatus,
-		"again_ended": reEnded, "receipt_idle_ttl": receiptIdleTTL, "oxidized_log_excerpt": excerpt,
-		"crashfiles_new": len(crashAfter) - crashBefore, "process_crash_file": processCrashed(oxRoot)})
+	stale["again_wrapper_exit"], stale["again_status"], stale["again_ended"] = 0, reStatus, reEnded
+	r.ev.add("b_stale_token", stale)
 
 	// C. The example's role.
 	markC := r.l.mark()
