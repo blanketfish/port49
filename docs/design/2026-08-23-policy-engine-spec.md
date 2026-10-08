@@ -7723,7 +7723,10 @@ Ryan may override any.
   `Idempotency-Key`, retried under it on 503 (but an uncovered status), 409
   `idempotency_in_progress`, 429, a failed connection, and a 502 or 504 (a proxy in front of the
   broker that could not reach it: the same failure as a refused connection, and the key makes the
-  retry safe), within `--deadline` (2m); tokens to
+  retry safe), within `--deadline` (2m), but never on a TLS verification failure either way (the
+  broker's certificate not under `--broker-ca`, or the broker's alert refusing the workload's:
+  wrong CA, a clock off, a chain at both anchors), which no retry mends and which exits 77 naming
+  it; tokens to
   stdout or `--out` (0600, renamed into place; a device whose line would hold a control character
   is left out and said); exit 0 (all written), 1 (some written, some not), 2 (usage), 75
   (temporary: the pages minted are written, or the output itself could not be written, and the
