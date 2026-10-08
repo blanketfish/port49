@@ -219,7 +219,8 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 
 	// ---- 1. Log in at Keycloak, mint with the ID token, log in to the device.
 	// The first mint retries while the broker's key set has not yet fetched
-	// Keycloak's keys (pre-flight I-9).
+	// Keycloak's keys (pre-flight I-9), and while the broker's start gate
+	// holds mints until its first takeover (decision 36).
 	first := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
 	tok, said := br.mintRetry(t, first.IDToken, l.p.node, 3*time.Minute)
 	cell("1a. Keycloak login, POST /v1/tokens with the ID token as bearer", said)
@@ -885,12 +886,15 @@ func (b oidcBroker) challenge(t *testing.T, bearer string) string {
 }
 
 // retryMint calls mint until it gives a token, answers anything but 503
-// identity_provider_unavailable, or within passes; every apart.
+// identity_provider_unavailable or store_unavailable, or within passes;
+// every apart. store_unavailable is the broker's start gate, closed until
+// its runner's first takeover is done (decision 36).
 func retryMint(mint func() (string, string), within, every time.Duration) (string, string) {
 	deadline := time.Now().Add(within)
 	for {
 		tok, said := mint()
-		if tok != "" || !strings.Contains(said, "identity_provider_unavailable") || time.Now().After(deadline) {
+		if tok != "" || !(strings.Contains(said, "identity_provider_unavailable") ||
+			strings.Contains(said, "store_unavailable")) || time.Now().After(deadline) {
 			return tok, said
 		}
 		time.Sleep(every)

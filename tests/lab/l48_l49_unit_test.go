@@ -749,7 +749,8 @@ func TestRenewDaemonScriptPutsTheFilesFirst(t *testing.T) {
 
 // the broker's runner purges every unspent token at its first takeover: a
 // mint before the takeover's last line can be purged under the client (run
-// set 3, L49 Junos phase A).
+// set 3, L49 Junos phase A). The broker's start gate now refuses such a
+// mint itself (decision 36); the harness's wait stays as hygiene.
 func TestTakeoverDone(t *testing.T) {
 	for _, tc := range []struct {
 		said string

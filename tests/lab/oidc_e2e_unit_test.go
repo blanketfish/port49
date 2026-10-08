@@ -303,12 +303,15 @@ func TestOIDCRetryMintRetriesOnlyWhileTheProviderIsUnavailable(t *testing.T) {
 	calls := 0
 	tok, said := retryMint(func() (string, string) {
 		calls++
-		if calls < 3 {
+		switch calls {
+		case 1:
+			return "", "503 store_unavailable: the broker has not yet recorded what it serves in the store"
+		case 2, 3:
 			return "", "503 identity_provider_unavailable: the provider's keys are not fetched"
 		}
 		return "t0k3n-token", "200 ok"
 	}, time.Minute, time.Millisecond)
-	if tok != "t0k3n-token" || calls != 3 || said != "200 ok" {
+	if tok != "t0k3n-token" || calls != 4 || said != "200 ok" {
 		t.Errorf("tok %q said %q after %d calls", tok, said, calls)
 	}
 	calls = 0
