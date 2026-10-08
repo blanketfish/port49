@@ -36,7 +36,7 @@ type ocspCall struct {
 
 // The OCSP answers that are not an outage: no responder applies to the
 // certificate, so the issuer stays uncovered and final (decision 40, ruling
-// 10). Signature, CertID and freshness failures are not among them: those
+// 7). Signature, CertID and freshness failures are not among them: those
 // may be a responder misconfigured or failing, and are retried.
 const (
 	ocspNoResponder  = "no responder for this certificate"

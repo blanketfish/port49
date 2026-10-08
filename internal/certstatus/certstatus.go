@@ -186,7 +186,7 @@ func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
 // responder that applies to cert but failed is an outage, said first and
 // never in the API's uncovered words, so the broker says try again and port49
 // workload retries; one that does not apply leaves an uncovered issuer
-// uncovered (decision 40, ruling 10).
+// uncovered (decision 40, ruling 7).
 func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, depth int) Result {
 	res := c.checkCRLs(cert, issuer, depth)
 	if res.Verdict == Unknown && c.cfg.OCSP != nil {

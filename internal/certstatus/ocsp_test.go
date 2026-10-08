@@ -541,7 +541,7 @@ func TestOCSP(t *testing.T) {
 // A responder that applies and was asked but failed is an outage: its detail
 // leads with the OCSP failure and never opens with the API's uncovered words,
 // so the broker says try again and port49 workload retries (decision 40,
-// ruling 10). One that does not apply to the certificate leaves the issuer
+// ruling 7). One that does not apply to the certificate leaves the issuer
 // uncovered, final, and says which: none named (use_aia), an AIA url that is
 // not http, an answer of unauthorized, or a signed certStatus of unknown.
 func TestAnOCSPOutageIsNotUncovered(t *testing.T) {
