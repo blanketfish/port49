@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -179,6 +180,13 @@ func startOxidized(t *testing.T, l *lab, restricted bool, phase string) *oxidize
 			return nil
 		},
 		Prepare: o.prepare})
+	// The broker's runner purges every unspent token at its first takeover,
+	// some seconds after /readyz: a token minted before then can be purged
+	// between the mint and the device's redeem (token_not_found; run set 3,
+	// Junos phase A). Nothing is minted until the takeover's last line.
+	if err := awaitTakeover(o.c.brokerErr, 3*time.Minute); err != nil {
+		t.Fatalf("%v (INVALID, not a measured no)", err)
+	}
 	// The wrapper's first run: router.db written, /reload refused (exit 75).
 	if code, said := o.runWrapper("15m"); code != 75 {
 		t.Fatalf("the setup wrapper run exited %d, want 75 (router.db written, Oxidized not up yet): %s", code, tailOf(said, 800))
@@ -208,6 +216,30 @@ func startOxidized(t *testing.T, l *lab, restricted bool, phase string) *oxidize
 			o.startupTail(), o.c.tail(30))
 	}
 	return o
+}
+
+// takeoverSaid is the broker runner's last takeover line, printed after its
+// purge of unspent tokens (internal/port49d/runner.go, takeover).
+var takeoverSaid = regexp.MustCompile(`runner: \d+ live context\(s\) carried onto the policy in force`)
+
+// takeoverDone says whether the broker's stderr holds the takeover's last line.
+func takeoverDone(said string) bool { return takeoverSaid.MatchString(said) }
+
+// awaitTakeover waits, up to within, for the broker's stderr file at path to
+// say its runner's takeover is done.
+func awaitTakeover(path string, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for {
+		raw, _ := os.ReadFile(path)
+		if takeoverDone(string(raw)) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the broker's runner did not finish its takeover within %s (no %q line in %s)",
+				within, "carried onto the policy in force", path)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // startupTail is the last lines Oxidized wrote, for a failure message, or a

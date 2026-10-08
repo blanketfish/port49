@@ -42,8 +42,12 @@ const (
 	// carries the name localhost (stepCA.client reaches it as that), so the
 	// broker's fetch names it too; a name mismatch would be a TLS fault, INVALID.
 	stepCACRLURL = "https://localhost:19000/1.0/crl"
-	// l48Other is the SPIFFE ID the name-policy cell asks for.
-	l48Other = "spiffe://port49.lab/host/other"
+	// l48Domain is l48ID's trust domain, the name policy's allowed URI host.
+	l48Domain = "port49.lab"
+	// l48Other and l48OtherDomain are the SPIFFE IDs the name-policy cell asks
+	// for besides l48ID: one in its trust domain, one in another.
+	l48Other       = "spiffe://port49.lab/host/other"
+	l48OtherDomain = "spiffe://elsewhere.lab/host/other"
 	// lateMarker is in both the broker's and the CLI's late-renewal lines.
 	lateMarker = "its renewal is late"
 )
@@ -449,7 +453,7 @@ func (r *l48Run) cell3Daemon() {
 	cert := r.mustIssue(l48ID, 15*time.Minute)
 	r.ev.add("issue_15m", factsOf(cert))
 	r.files()
-	stop, err := r.s.renewDaemon()
+	stop, exited, err := r.s.renewDaemon()
 	if err != nil {
 		r.t.Fatalf("step ca renew --daemon did not start (INVALID, not a measured no): %v", err)
 	}
@@ -461,6 +465,13 @@ func (r *l48Run) cell3Daemon() {
 		if c, err := r.s.leaf(); err == nil && c.SerialNumber.Cmp(cert.SerialNumber) != 0 {
 			renewed, renewedAt = c, time.Now()
 			break
+		}
+		// A daemon that is gone renews nothing: waiting on would record a
+		// "not renewed" that measured no daemon (run set 3).
+		if exited() {
+			stop()
+			r.t.Fatalf("step ca renew --daemon exited %s after it started (INVALID, not a measured no); "+
+				"tests/lab/logs/workload/renew-daemon.log says why", time.Since(started).Round(time.Second))
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -656,28 +667,32 @@ func (r *l48Run) revokeAndRenew(cert *x509.Certificate, brokerUp bool) {
 }
 
 func (r *l48Run) cell6NamePolicy() {
-	if err := r.s.allowURI(l48ID); err != nil {
+	// step-ca 0.30.2 reads no provisioner name policy from ca.json, and its URI
+	// constraint is a host, never a URI (run set 3): the policy measured is the
+	// authority's, allowing the trust domain, and the cell asks for the allowed
+	// ID, another ID in the domain, and an ID in another domain.
+	if err := r.s.allowURIDomain(l48Domain); err != nil {
 		r.t.Fatalf("setting step-ca's name policy (INVALID, not a measured no): %v", err)
 	}
-	r.say("- **6. The name policy** (the provisioner's x509 `allow: {uri: [%s]}`):", l48ID)
+	r.say("- **6. The name policy** (the authority's x509 `allow: {uri: [%s]}`: step-ca reads no provisioner policy from "+
+		"ca.json, and its URI constraint names a host, not a URI):", l48Domain)
 	// These issues write new keys into the container's w/. They never leave
 	// it (no workloadFiles copy), so nothing here needs registering.
-	own, err := r.s.issue(l48ID, 24*time.Hour)
-	if err != nil {
-		r.say("  - A request for the allowed ID FAILED: %s", oneLineMax(err.Error(), 400))
-		r.ev.add("policy_allowed", map[string]string{"error": oneLineMax(err.Error(), 400)})
-	} else {
-		r.ev.add("policy_allowed", factsOf(own))
-		r.say("  - A request for the allowed ID was issued (serial `%s`).", factsOf(own).Serial)
+	for _, req := range []struct{ step, id, what string }{
+		{"policy_allowed", l48ID, "the workload's ID"},
+		{"policy_other", l48Other, "another ID in the trust domain"},
+		{"policy_other_domain", l48OtherDomain, "an ID in another trust domain"},
+	} {
+		c, err := r.s.issue(req.id, 24*time.Hour)
+		if err != nil {
+			r.ev.add(req.step, map[string]string{"error": oneLineMax(err.Error(), 600)})
+			r.say("  - %s, `%s`: refused, step-ca answered `%s`.", req.what, req.id, oneLineMax(err.Error(), 600))
+			continue
+		}
+		f := factsOf(c)
+		r.ev.add(req.step, f)
+		r.say("  - %s, `%s`: ISSUED (serial `%s`, URI SANs `%v`).", req.what, req.id, f.Serial, f.URIs)
 	}
-	other, err := r.s.issue(l48Other, 24*time.Hour)
-	if err != nil {
-		r.ev.add("policy_other", map[string]string{"error": oneLineMax(err.Error(), 600)})
-		r.say("  - A request for `%s`: refused, step-ca answered `%s`.", l48Other, oneLineMax(err.Error(), 600))
-		return
-	}
-	r.ev.add("policy_other", factsOf(other))
-	r.say("  - A request for `%s` was ISSUED (not refused).", l48Other)
 }
 
 // stepVersion is step-ca's version line and the image id, for the note.

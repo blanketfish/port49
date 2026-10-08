@@ -714,3 +714,44 @@ func TestRenewTimingWords(t *testing.T) {
 		t.Errorf("%q", late)
 	}
 }
+
+// step stops reading flags at the first positional when a flag comes before
+// it: the daemon's two files come first, or `--ca-url` and `--root` are read as
+// more positionals and the daemon exits at once (run set 3).
+func TestRenewDaemonScriptPutsTheFilesFirst(t *testing.T) {
+	script := renewDaemonScript()
+	_, cmd, ok := strings.Cut(script, "exec ")
+	if !ok {
+		t.Fatalf("no exec in %q", script)
+	}
+	f := strings.Fields(cmd)
+	want := []string{"step", "ca", "renew", stepCAWCert, stepCAWKey}
+	if len(f) < len(want) || !reflect.DeepEqual(f[:len(want)], want) {
+		t.Fatalf("the command starts %v, want %v", f, want)
+	}
+	for _, flag := range []string{"--daemon", "--ca-url", "--root"} {
+		if !strings.Contains(cmd, flag) {
+			t.Errorf("%s is missing from %q", flag, cmd)
+		}
+	}
+}
+
+// the broker's runner purges every unspent token at its first takeover: a
+// mint before the takeover's last line can be purged under the client (run
+// set 3, L49 Junos phase A).
+func TestTakeoverDone(t *testing.T) {
+	for _, tc := range []struct {
+		said string
+		want bool
+	}{
+		{"port49-broker: runner: took keyspace /port49/ (x): this replica runs the start\n", false},
+		{"port49-broker: runner: the bundle in force (sha256:a) is not the one the last runner judged (none recorded); 153 unspent token(s) purged\n", false},
+		{"port49-broker: runner: 1 live context(s) carried onto the policy in force (bundle sha256:a)\n", true},
+		{"port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:a)\n", true},
+		{"", false},
+	} {
+		if got := takeoverDone(tc.said); got != tc.want {
+			t.Errorf("takeoverDone(%q) = %v, want %v", tc.said, got, tc.want)
+		}
+	}
+}

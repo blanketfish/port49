@@ -77,47 +77,35 @@ func TestCAJSONWithCRLReplacesAnExistingBlock(t *testing.T) {
 	}
 }
 
-// the allow list is the one URI, on the named provisioner alone; its other
-// options and every other provisioner are kept.
-func TestCAJSONAllowingURISetsOneProvisionersAllowList(t *testing.T) {
-	const id = "spiffe://port49.lab/host/oxidized-01"
-	out, err := caJSONAllowingURI([]byte(caJSONSample), "lab", id)
+// step-ca reads no provisioner name policy from ca.json (0.30.2, run set 3):
+// the allow list is the authority's, and it matches a URI by its host.
+func TestCAJSONAllowingURIDomainSetsTheAuthoritysPolicy(t *testing.T) {
+	out, err := caJSONAllowingURIDomain([]byte(caJSONSample), "port49.lab")
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := decodeJSONObject(t, out)
-	provs := got["authority"].(map[string]any)["provisioners"].([]any)
-	lab := provs[1].(map[string]any)
-	x509 := lab["options"].(map[string]any)["x509"].(map[string]any)
-	if !reflect.DeepEqual(x509["allow"], map[string]any{"uri": []any{id}}) {
-		t.Errorf("allow = %v, want the one URI alone", x509["allow"])
+	auth := got["authority"].(map[string]any)
+	want := map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{"port49.lab"}}}}
+	if !reflect.DeepEqual(auth["policy"], want) {
+		t.Errorf("authority.policy = %v, want %v", auth["policy"], want)
 	}
-	if x509["templateFile"] != "t.tpl" {
-		t.Errorf("the provisioner's other x509 option was lost: %v", x509)
-	}
-	if _, has := provs[0].(map[string]any)["options"]; has {
-		t.Errorf("another provisioner gained options: %v", provs[0])
+	if len(auth["provisioners"].([]any)) != 2 || auth["claims"] == nil {
+		t.Errorf("the authority's other keys were lost: %v", auth)
 	}
 	if got["tls"] == nil || got["db"] == nil {
 		t.Errorf("a top-level key was lost: %v", got)
 	}
 }
 
-// a provisioner with no options gets the block made; an unknown one is an error.
-func TestCAJSONAllowingURINeedsTheProvisioner(t *testing.T) {
-	out, err := caJSONAllowingURI([]byte(caJSONSample), "admin", "spiffe://port49.lab/host/x")
-	if err != nil {
-		t.Fatal(err)
+// a URI with a scheme stops step-ca at its start ("contains scheme (not
+// supported yet)"), so it is refused here rather than written.
+func TestCAJSONAllowingURIDomainRefusesAURI(t *testing.T) {
+	if _, err := caJSONAllowingURIDomain([]byte(caJSONSample), "spiffe://port49.lab/host/x"); err == nil {
+		t.Error("a full URI was accepted as the allowed domain")
 	}
-	admin := decodeJSONObject(t, out)["authority"].(map[string]any)["provisioners"].([]any)[0].(map[string]any)
-	if admin["options"].(map[string]any)["x509"].(map[string]any)["allow"] == nil {
-		t.Errorf("no allow list made: %v", admin)
-	}
-	if _, err := caJSONAllowingURI([]byte(caJSONSample), "nobody", "spiffe://port49.lab/host/x"); err == nil {
-		t.Error("a provisioner that is not in ca.json was accepted")
-	}
-	if _, err := caJSONAllowingURI([]byte(`{"authority": {}}`), "lab", "spiffe://port49.lab/host/x"); err == nil {
-		t.Error("a ca.json with no provisioners was accepted")
+	if _, err := caJSONAllowingURIDomain([]byte(`{"root": "x"}`), "port49.lab"); err == nil {
+		t.Error("a ca.json with no authority was accepted")
 	}
 }
 
@@ -389,6 +377,11 @@ func TestLocalBrokerFilesLoad(t *testing.T) {
 		}
 		if c.Broker == nil || c.Broker.Identity == nil || c.Broker.Identity.X509AnchorFile != filepath.Join(pki, testpki.LabCA) {
 			t.Errorf("crl=%v: the humans' anchor resolved to %+v", crl, c.Broker)
+		}
+		// Cell 4 polls 15 times and cell 5 up to 19, and neither redeems: the
+		// default cap (8) would refuse them as candidate_cap_reached (run set 3).
+		if c.Token.CandidateCap < 40 {
+			t.Errorf("crl=%v: token.candidate_cap = %d, under the cells' unredeemed mints", crl, c.Token.CandidateCap)
 		}
 		if crl != (len(c.Broker.CertificateStatus.CRLs) == 1) {
 			t.Errorf("crl=%v: certificate_status resolved to %+v", crl, c.Broker.CertificateStatus)

@@ -132,35 +132,25 @@ func caJSONWithCRL(raw []byte) ([]byte, error) {
 	return encodeCAJSON(m)
 }
 
-// caJSONAllowingURI is raw with the x509 name policy of the provisioner named
-// provisioner set to allow the one URI id and nothing else; every other key,
-// and the provisioner's other options, are kept.
-func caJSONAllowingURI(raw []byte, provisioner, id string) ([]byte, error) {
+// caJSONAllowingURIDomain is raw with the authority's x509 name policy set to
+// allow URIs whose host is domain, and nothing else; every other key is kept.
+// step-ca 0.30.2 reads no provisioner name policy from ca.json (options.x509.allow
+// is ignored), and its URI constraint is a host: a value with a scheme stops it
+// at its start ("contains scheme (not supported yet)"), so one is refused here.
+func caJSONAllowingURIDomain(raw []byte, domain string) ([]byte, error) {
+	if strings.Contains(domain, "://") || strings.Contains(domain, "/") {
+		return nil, fmt.Errorf("%q is not a domain: step-ca's URI policy names a host, and refuses to start on a URI", domain)
+	}
 	m, err := decodeCAJSON(raw)
 	if err != nil {
 		return nil, err
 	}
-	auth, _ := m["authority"].(map[string]any)
-	provs, _ := auth["provisioners"].([]any)
-	for _, p := range provs {
-		pm, ok := p.(map[string]any)
-		if !ok || pm["name"] != provisioner {
-			continue
-		}
-		opts, ok := pm["options"].(map[string]any)
-		if !ok {
-			opts = map[string]any{}
-			pm["options"] = opts
-		}
-		x509o, ok := opts["x509"].(map[string]any)
-		if !ok {
-			x509o = map[string]any{}
-			opts["x509"] = x509o
-		}
-		x509o["allow"] = map[string]any{"uri": []any{id}}
-		return encodeCAJSON(m)
+	auth, ok := m["authority"].(map[string]any)
+	if !ok {
+		return nil, errors.New("ca.json has no authority block")
 	}
-	return nil, fmt.Errorf("ca.json has no provisioner named %q", provisioner)
+	auth["policy"] = map[string]any{"x509": map[string]any{"allow": map[string]any{"uri": []any{domain}}}}
+	return encodeCAJSON(m)
 }
 
 func decodeCAJSON(raw []byte) (map[string]any, error) {
@@ -388,24 +378,42 @@ func (s *stepCA) renew() (*x509.Certificate, error) {
 	return s.leaf()
 }
 
+// renewDaemonScript is the shell line that runs `step ca renew --daemon` on
+// w/ in the container, its pid written for the stop. The files come before
+// every flag: step stops reading flags at the first positional when a flag
+// precedes it, and the daemon then exits at once on "too many positional
+// arguments" (run set 3).
+func renewDaemonScript() string {
+	return "echo $$ > /tmp/renew.pid; exec step ca renew " + stepCAWCert + " " + stepCAWKey + " --daemon --ca-url " +
+		stepCAURL + " --root " + stepCARoot
+}
+
 // renewDaemon starts `step ca renew --daemon` on w/ in the background and
-// returns a func that stops it, in the container as well as here.
-func (s *stepCA) renewDaemon() (stop func(), err error) {
-	cmd := s.dc("exec", "-T", "step-ca", "sh", "-c", "echo $$ > /tmp/renew.pid; exec step ca renew --daemon "+
-		stepCAWCert+" "+stepCAWKey+" --ca-url "+stepCAURL+" --root "+stepCARoot)
+// returns a func that stops it, in the container as well as here, and one
+// that says whether it has exited on its own.
+func (s *stepCA) renewDaemon() (stop func(), exited func() bool, err error) {
+	cmd := s.dc("exec", "-T", "step-ca", "sh", "-c", renewDaemonScript())
 	logPath := filepath.Join(filepath.Dir(s.dir), "renew-daemon.log")
 	logf, err := os.Create(logPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
 		logf.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	s.renewer = cmd
 	done := make(chan struct{})
 	go func() { cmd.Wait(); logf.Close(); close(done) }()
+	exited = func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 	return func() {
 		_ = s.dc("exec", "-T", "step-ca", "sh", "-c", "kill $(cat /tmp/renew.pid)").Run()
 		select {
@@ -417,7 +425,7 @@ func (s *stepCA) renewDaemon() (stop func(), err error) {
 		if err := withholdLeakyLog(logPath, s.secrets); err != nil {
 			s.t.Errorf("renew-daemon.log: %v", err)
 		}
-	}, nil
+	}, exited, nil
 }
 
 // revoke is `step ca revoke --cert w/w.pem --key w/w-key.pem`.
@@ -453,11 +461,11 @@ func (s *stepCA) editCAJSON(edit func([]byte) ([]byte, error)) error {
 // container, whose user owns it).
 func (s *stepCA) enableCRL() error { return s.editCAJSON(caJSONWithCRL) }
 
-// allowURI sets the lab provisioner's x509 name policy in ca.json to allow
-// the one URI id (step-ca's provisioner policy, x509 allow uri) and restarts
-// the container (pre-flight M-11).
-func (s *stepCA) allowURI(id string) error {
-	return s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONAllowingURI(raw, stepCAProv, id) })
+// allowURIDomain sets the authority's x509 name policy in ca.json to allow
+// URIs under the one host domain (caJSONAllowingURIDomain says why not the
+// provisioner's, and why not a URI) and restarts the container.
+func (s *stepCA) allowURIDomain(domain string) error {
+	return s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONAllowingURIDomain(raw, domain) })
 }
 
 // crl fetches https://127.0.0.1:19000/1.0/crl (trusting the CA's root) and

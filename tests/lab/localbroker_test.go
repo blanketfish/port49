@@ -41,6 +41,8 @@ const (
 // broker's server certificate and the humans' anchor (testpki.WriteLab);
 // anchorFile is the workload verifier's trust anchor (step-ca's intermediate,
 // or a testpki workload CA); crlURL is "" for certificate_status disabled.
+// token.candidate_cap is 64: L48's cells mint without redeeming (cell 4 every
+// 30s for 7m), and the default 8 would refuse them as candidate_cap_reached.
 func localBrokerFiles(dir, pki, anchorFile, crlURL, crlIssuer string) (cfg, policy, inventory string) {
 	status := "    disabled: true\n"
 	if crlURL != "" {
@@ -56,6 +58,7 @@ keys:
 encryption:
   current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
+token: {candidate_cap: 64}
 broker:
   listen: "127.0.0.1:0"
   tls_cert_file: %s
