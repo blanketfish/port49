@@ -541,28 +541,3 @@ func (s *stepCA) workloadFiles() (certFile, keyFile string, err error) {
 	}
 	return filepath.Join(s.hostW, "w.pem"), filepath.Join(s.hostW, "w-key.pem"), nil
 }
-
-// TestL48StepCA is the harness's bring-up for L48 (policy engine spec §15):
-// step-ca as a container, a certificate for l48ID from it, and a local
-// port49d whose workload anchor is step-ca's intermediate. Task 14 adds the
-// cells; until then the test stops at a Skip, so `make lab-workload` can
-// never read as a measurement.
-func TestL48StepCA(t *testing.T) {
-	s := startStepCA(t)
-	if _, err := s.issue(l48ID, time.Hour); err != nil {
-		t.Fatalf("step-ca issued no certificate (INVALID, not a measured no): %v", err)
-	}
-	anchor := filepath.Join(s.hostW, "intermediate_ca.crt")
-	if err := os.MkdirAll(s.hostW, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(anchor, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.intermediate().Raw}),
-		0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.workloadFiles(); err != nil {
-		t.Fatal(err)
-	}
-	startLocalBroker(t, filepath.Join(filepath.Dir(s.dir), "local-broker"), anchor, "", "", "")
-	t.Skip("harness bring-up passed; L48's cells are plan 8 Task 14's")
-}

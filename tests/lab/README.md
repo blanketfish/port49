@@ -560,5 +560,11 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
 - A fault in the setup (an image that will not pull, step-ca that never answers, Oxidized that never
   answers its REST API) is `t.Fatal` before any note: the run is INVALID. A step that ran and did
   not do what the claim says is a failed cell, and the note records it.
-- Until plan 8 Task 14 adds the cells, `TestL48StepCA` and `TestL49Oxidized` stop at a `t.Skip`
-  after bring-up, so neither target can read as a measurement.
+- `TestL48StepCA` runs six cells (issue, renew, daemon timing, the CA down, the CRL, the name
+  policy) and writes `results/L48-step_ca.md` and `evidence/L48-step_ca.json`. `TestL49Oxidized`
+  runs, per platform, phase A (what Oxidized sends, role `**`) on one stack and phases B and C (a
+  stale token, with `receipt_idle_ttl: 2m` in that stack's `port49d.yaml`; then the example's
+  role) on a second, and writes `results/L49-oxidized-<platform>.md` and
+  `evidence/L49-oxidized-<platform>.json`. Phase D (no token in Oxidized's log) checks each
+  stack's log. A note is written only if neither it nor the evidence holds a token, a key or a
+  compact JWS; `router.db` is removed when each stack goes down.

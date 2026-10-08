@@ -168,7 +168,16 @@ func startOxidized(t *testing.T, l *lab, restricted bool) *oxidized {
 	t.Setenv("PORT49_LAB_UID", strconv.Itoa(os.Getuid()))
 	t.Setenv("PORT49_LAB_GID", strconv.Itoa(os.Getgid()))
 	o.c = l.startComposeWith(t, composeOptions{Overlay: "oxidized.yaml",
-		Files:   func(files map[string]string) error { return workloadE2EFiles(files, roleBlock, roleName) },
+		Files: func(files map[string]string) error {
+			if err := workloadE2EFiles(files, roleBlock, roleName); err != nil {
+				return err
+			}
+			if restricted {
+				// phase B: a spent token's receipt lapses in minutes (L49)
+				return withReceiptIdleTTL(files, receiptIdleTTL)
+			}
+			return nil
+		},
 		Prepare: o.prepare})
 	// The wrapper's first run: router.db written, /reload refused (exit 75).
 	if code, said := o.runWrapper("15m"); code != 75 {
@@ -450,15 +459,4 @@ func (o *oxidized) runWrapper(ttl string) (int, string) {
 		return ee.ExitCode(), errb.String()
 	}
 	return -1, errb.String() + strings.TrimSpace(err.Error())
-}
-
-// TestL49Oxidized is the harness's bring-up for L49 (policy engine spec §15):
-// the compose stack with one platform's devices and Oxidized on it, REST
-// answering. Task 14 adds the phases; until then the test stops at a Skip, so
-// `make lab-oxidized` can never read as a measurement.
-func TestL49Oxidized(t *testing.T) {
-	eachPlatform(t, func(t *testing.T, l *lab) {
-		startOxidized(t, l, false)
-		t.Skip("harness bring-up passed; L49's phases are plan 8 Task 14's")
-	})
 }

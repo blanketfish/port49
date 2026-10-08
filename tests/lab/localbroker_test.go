@@ -179,8 +179,20 @@ func startLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot 
 // keyFile for leaf1, and returns its exit code, stdout and stderr (stdout
 // holds a token: it is never written to a note, only its presence).
 func (b *localBroker) workloadToken(certFile, keyFile string) (int, string, string) {
-	cmd := exec.Command(filepath.Join(b.repo, "bin", "port49"), "workload", "token", "--broker", "https://"+b.addr,
-		"--broker-ca", filepath.Join(b.pki, testpki.LabCA), "--cert", certFile, "--key", keyFile, l48Device)
+	return b.workload("token", certFile, keyFile, l48Device)
+}
+
+// workloadIdentity is `port49 workload identity` against b (stdout is the
+// principal the broker resolved, which a note may quote).
+func (b *localBroker) workloadIdentity(certFile, keyFile string) (int, string, string) {
+	return b.workload("identity", certFile, keyFile)
+}
+
+// workload runs `port49 workload <sub>` against b with certFile and keyFile,
+// then extra, and returns its exit code, stdout and stderr.
+func (b *localBroker) workload(sub, certFile, keyFile string, extra ...string) (int, string, string) {
+	cmd := exec.Command(filepath.Join(b.repo, "bin", "port49"), append([]string{"workload", sub, "--broker", "https://" + b.addr,
+		"--broker-ca", filepath.Join(b.pki, testpki.LabCA), "--cert", certFile, "--key", keyFile}, extra...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()

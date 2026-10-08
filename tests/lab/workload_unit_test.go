@@ -426,6 +426,13 @@ func TestWorkloadE2EFilesLoadForBothRoles(t *testing.T) {
 		if err := workloadE2EFiles(files, tc.block, tc.name); err != nil {
 			t.Fatal(err)
 		}
+		// phase B's stack (the example's role) also shortens the receipt window (L49).
+		restricted := tc.name == exName
+		if restricted {
+			if err := withReceiptIdleTTL(files, "2m"); err != nil {
+				t.Fatal(err)
+			}
+		}
 		dir := t.TempDir()
 		t.Setenv("PORT49_LAB_KEY", "labsecret")
 		t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
@@ -466,8 +473,12 @@ func TestWorkloadE2EFilesLoadForBothRoles(t *testing.T) {
 		if !strings.Contains(files["port49-broker.yaml"], "trust_anchor_file: "+oxidizedAnchor+", spiffe_trust_domains: [port49.lab]") {
 			t.Errorf("%s: the machines verifier is not the workload anchor:\n%s", tc.name, files["port49-broker.yaml"])
 		}
-		if _, err := config.Load(filepath.Join(dir, "etc", "port49d.yaml")); err != nil {
+		d, err := config.Load(filepath.Join(dir, "etc", "port49d.yaml"))
+		if err != nil {
 			t.Fatalf("%s: port49d's config does not load: %v", tc.name, err)
+		}
+		if want := map[bool]time.Duration{false: 15 * time.Minute, true: 2 * time.Minute}[restricted]; d.ReceiptIdleTTL != want {
+			t.Errorf("%s: receipt_idle_ttl = %s, want %s", tc.name, d.ReceiptIdleTTL, want)
 		}
 		if _, err := policy.Parse([]byte(files["policy.yaml"]), policy.Env{}); err != nil {
 			t.Fatalf("%s: the lab policy does not compile: %v\n%s", tc.name, err, files["policy.yaml"])
