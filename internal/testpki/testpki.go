@@ -280,6 +280,109 @@ func WriteInventoryLab(dir string, now time.Time) error {
 	return nil
 }
 
+// The file names WriteWorkloadLab writes (plan 8): a workload CA of its own,
+// its key (so RenewWorkload can issue again), and one workload certificate.
+const (
+	WorkloadCA    = "workload-ca.pem"
+	WorkloadCAKey = "workload-ca-key.pem"
+	WorkloadCert  = "workload.pem"
+	WorkloadKey   = "workload-key.pem"
+)
+
+// WriteWorkloadLab writes a workload PKI into dir: a CA, and a client
+// certificate whose one URI SAN is id, valid for a day from now. Keys are
+// 0600.
+func WriteWorkloadLab(dir, id string, now time.Time) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	ca, err := NewCA("port49 lab workloads CA", now.Add(-time.Hour), now.Add(48*time.Hour))
+	if err != nil {
+		return err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(ca.Key)
+	if err != nil {
+		return err
+	}
+	if err := writeFresh(filepath.Join(dir, WorkloadCA), ca.PEM()); err != nil {
+		return err
+	}
+	if err := writeFresh(filepath.Join(dir, WorkloadCAKey), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY",
+		Bytes: keyDER})); err != nil {
+		return err
+	}
+	return issueWorkload(ca, dir, id, now)
+}
+
+// RenewWorkload issues dir's workload certificate again from the CA
+// WriteWorkloadLab wrote there: the same id, a new key and serial, as a
+// renewal against a real CA gives.
+func RenewWorkload(dir, id string, now time.Time) error {
+	ca, err := readWorkloadCA(dir)
+	if err != nil {
+		return err
+	}
+	return issueWorkload(ca, dir, id, now)
+}
+
+// WriteWorkloadLabFrom issues a second workload certificate for id from the
+// CA in caDir, into dir: a second workload under one anchor.
+func WriteWorkloadLabFrom(caDir, dir, id string, now time.Time) error {
+	ca, err := readWorkloadCA(caDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return issueWorkload(ca, dir, id, now)
+}
+
+func issueWorkload(ca *CA, dir, id string, now time.Time) error {
+	u, err := url.Parse(id)
+	if err != nil {
+		return err
+	}
+	c, err := ca.Issue(Leaf{CommonName: id, URIs: []*url.URL{u}, Client: true, NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(24 * time.Hour)})
+	if err != nil {
+		return err
+	}
+	certPEM, keyPEM, err := PEMs(c)
+	if err != nil {
+		return err
+	}
+	if err := writeFresh(filepath.Join(dir, WorkloadCert), certPEM); err != nil {
+		return err
+	}
+	return writeFresh(filepath.Join(dir, WorkloadKey), keyPEM)
+}
+
+func readWorkloadCA(dir string) (*CA, error) {
+	certPEM, err := os.ReadFile(filepath.Join(dir, WorkloadCA))
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(dir, WorkloadCAKey))
+	if err != nil {
+		return nil, err
+	}
+	cb, _ := pem.Decode(certPEM)
+	kb, _ := pem.Decode(keyPEM)
+	if cb == nil || kb == nil {
+		return nil, fmt.Errorf("testpki: %s holds no workload CA", dir)
+	}
+	cert, err := x509.ParseCertificate(cb.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, err := x509.ParseECPrivateKey(kb.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return &CA{Cert: cert, Key: key}, nil
+}
+
 // writeFresh writes body to a new 0600 file at path, removing whatever was
 // there first. os.WriteFile would truncate an existing file and keep its mode,
 // so a key left loose by an earlier run would hold the new key, if only until
