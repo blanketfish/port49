@@ -240,10 +240,11 @@ func TestWithholdLeakyLog(t *testing.T) {
 	}
 }
 
-// router.db's username and password columns are tokens: both are registered as secrets.
-func TestRouterDBSecretsAreTheLoginColumns(t *testing.T) {
-	raw := "leaf1\t172.100.100.11\teos\ttok-user-aaaa\ttok-pass-bbbb\nleaf2\t172.100.100.12\tios\ttok-user-cccc\ttok-pass-dddd\n\nshort\tline\n"
-	want := []string{"tok-user-aaaa", "tok-pass-bbbb", "tok-user-cccc", "tok-pass-dddd"}
+// router.db's password column is the token and is registered as a secret; the
+// username column is the account name, which every note names, and is not.
+func TestRouterDBSecretsAreTheTokenColumnAlone(t *testing.T) {
+	raw := "leaf1\t172.100.100.11\teos\tsvc-oxidized\ttok-pass-bbbb\nleaf2\t172.100.100.12\tios\tsvc-oxidized\ttok-pass-dddd\n\nshort\tline\n"
+	want := []string{"tok-pass-bbbb", "tok-pass-dddd"}
 	if got := routerDBSecrets(raw); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}

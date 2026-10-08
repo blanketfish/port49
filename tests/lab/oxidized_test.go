@@ -52,8 +52,9 @@ type oxidized struct {
 	secrets []string
 }
 
-// routerDBSecrets are the username and password columns (3 and 4) of a
-// router.db's lines: the minted login token and its pair.
+// routerDBSecrets are the password column (4) of a router.db's lines: the
+// minted login token. The username column (3) is the account name, which notes
+// name, so it is not a secret.
 func routerDBSecrets(raw string) []string {
 	var out []string
 	for _, ln := range strings.Split(raw, "\n") {
@@ -61,10 +62,8 @@ func routerDBSecrets(raw string) []string {
 		if len(f) < 5 {
 			continue
 		}
-		for _, v := range f[3:5] {
-			if v != "" {
-				out = append(out, v)
-			}
+		if f[4] != "" {
+			out = append(out, f[4])
 		}
 	}
 	return out
