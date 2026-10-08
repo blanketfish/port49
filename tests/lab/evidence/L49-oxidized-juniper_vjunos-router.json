@@ -1,0 +1,58 @@
+[
+  {
+    "step": "a_ssh_methods",
+    "value": {
+      "offered_for_none": "publickey,password,keyboard-interactive",
+      "read": true
+    }
+  },
+  {
+    "step": "a_what_oxidized_sends",
+    "value": {
+      "command_verdicts": null,
+      "commands": null,
+      "config_bytes": 14544,
+      "ended": true,
+      "hostname_checked": "host-name srx1;",
+      "mint_principals": [
+        "spiffe://port49.lab/host/oxidized-01"
+      ],
+      "redeem_by_verdict_reason": {
+        "permit/token_redeemed": 1
+      },
+      "redeem_count": 1,
+      "settled": true,
+      "startup_run": "Oxidized's own startup run (with the setup run's token, before this phase's mark) ended, status `success`; authentications at port49d: 1 (permit/token_redeemed x1).",
+      "status": "success"
+    }
+  },
+  {
+    "step": "b_stale_token",
+    "value": {
+      "again_ended": true,
+      "again_status": "success",
+      "again_wrapper_exit": 0,
+      "crashfile_written_by_stale_run": false,
+      "crashfiles_total": 0,
+      "first_status": "success",
+      "oxidized_log_excerpt": "2026-10-08 12:15:25.322129 W [7:Job 'srx1'] Oxidized::Node -- 172.100.100.21 raised Net::SSH::AuthenticationFailed with msg \"Authentication failed for user svc-oxidized@172.100.100.21\"",
+      "process_crash_file": false,
+      "receipt_idle_ttl": "2m",
+      "stale_redeem_by_verdict_reason": {
+        "deny/token_spent": 1
+      },
+      "stale_redeem_count": 1,
+      "stale_run_ended": true,
+      "stale_status": "no_connection"
+    }
+  },
+  {
+    "step": "c_example_role",
+    "value": {
+      "command_verdicts": null,
+      "denied": null,
+      "ended": true,
+      "status": "success"
+    }
+  }
+]
