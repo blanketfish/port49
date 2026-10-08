@@ -1,0 +1,319 @@
+package main
+
+import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+)
+
+// workloadBroker serves /v1/config and /v1/tokens as answer says, over TLS
+// requiring a client certificate, and returns the flags that reach it.
+func workloadBroker(t *testing.T, answer func(w http.ResponseWriter, req api.MintRequest)) []string {
+	t.Helper()
+	return workloadBrokerPaged(t, 100, answer)
+}
+
+// workloadBrokerPaged is workloadBroker with /v1/config's batch_max.
+func workloadBrokerPaged(t *testing.T, batchMax int, answer func(w http.ResponseWriter, req api.MintRequest)) []string {
+	t.Helper()
+	return workloadBrokerWith(t, batchMax, answer, api.Identity{Principal: "spiffe://corp.example.com/host/oxidized-01",
+		Method: "cert", Subject: "svc_oxidized"})
+}
+
+// workloadBrokerWith is workloadBrokerPaged with the identity /v1/identity answers.
+func workloadBrokerWith(t *testing.T, batchMax int, answer func(w http.ResponseWriter, req api.MintRequest),
+	identity api.Identity) []string {
+	t.Helper()
+	now := time.Now()
+	dir := t.TempDir()
+	ca, err := testpki.NewCA("workloads", now.Add(-time.Hour), now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvCert, _ := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour)})
+	u, _ := url.Parse("spiffe://corp.example.com/host/oxidized-01")
+	cli, _ := ca.Issue(testpki.Leaf{CommonName: "w", URIs: []*url.URL{u}, Client: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	certPEM, keyPEM, _ := testpki.PEMs(cli)
+	for name, body := range map[string][]byte{"ca.pem": ca.PEM(), "w.pem": certPEM, "w-key.pem": keyPEM} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/config":
+			_ = json.NewEncoder(w).Encode(api.Config{BatchMax: batchMax})
+		case "/v1/tokens":
+			var req api.MintRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			answer(w, req)
+		case "/v1/identity":
+			_ = json.NewEncoder(w).Encode(identity)
+		}
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: ca.Pool(), MinVersion: tls.VersionTLS13}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return []string{"--broker", srv.URL, "--broker-ca", filepath.Join(dir, "ca.pem"),
+		"--cert", filepath.Join(dir, "w.pem"), "--key", filepath.Join(dir, "w-key.pem"), "--deadline", "1s"}
+}
+
+func mixed(w http.ResponseWriter, req api.MintRequest) {
+	resp := api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01", Subject: "svc_oxidized"}
+	for _, d := range req.Devices {
+		if d == "fw1" {
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "no_grants_matched"})
+			continue
+		}
+		resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "permit", Address: "10.0.0.1",
+			Platform: "arista_eos", Username: "svc-oxidized", Login: "TOKEN-" + d, ExpiresAt: "2026-10-08T03:00:00Z"})
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func TestWorkloadTokenWritesTSV(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "leaf2"), &out, &errb)
+	want := "leaf1\t10.0.0.1\tarista_eos\tsvc-oxidized\tTOKEN-leaf1\t2026-10-08T03:00:00Z\n" +
+		"leaf2\t10.0.0.1\tarista_eos\tsvc-oxidized\tTOKEN-leaf2\t2026-10-08T03:00:00Z\n"
+	if code != 0 || out.String() != want || errb.Len() != 0 {
+		t.Fatalf("exit %d\nstdout %q\nstderr %q", code, out.String(), errb.String())
+	}
+}
+
+// 0 all permitted; 1 one denied (the permitted still written, no token on
+// stderr); 77 every device denied, or a final refusal before anything was
+// minted, with nothing written; 75 nothing minted by the deadline; 2 usage
+// (pre-flight I-1).
+func TestExitCodesTellCronWhatHappened(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "fw1"), &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "TOKEN-leaf1") || !strings.Contains(errb.String(), "fw1: deny no_grants_matched") ||
+		strings.Contains(errb.String(), "TOKEN") {
+		t.Fatalf("one denied: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(append([]string{"workload", "token"}, flags...), "fw1"), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "fw1: deny no_grants_matched") {
+		t.Fatalf("every device denied: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	revoked := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "credential_revoked", Detail: "this principal is revoked"})
+	})
+	out.Reset()
+	errb.Reset()
+	if code := run(append(append([]string{"workload", "token"}, revoked...), "leaf1", "leaf2"), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "401 credential_revoked") ||
+		!strings.Contains(errb.String(), "2 of 2 devices were not minted") {
+		t.Fatalf("revoked: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	busy := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "store_unavailable", Detail: "the broker's store did not answer"})
+	})
+	out.Reset()
+	errb.Reset()
+	if code := run(append(append([]string{"workload", "token"}, busy...), "leaf1", "leaf2"), &out, &errb); code != exitTemporary ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "2 of 2 devices were not minted; run again") {
+		t.Fatalf("busy: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if code := run([]string{"workload", "token", "leaf1"}, &out, &errb); code != 2 {
+		t.Fatalf("no flags: exit %d", code)
+	}
+}
+
+// A final refusal on page two after page one minted: page one is written and
+// the run exits 1, so the wrapper still queues those nodes; a token never
+// reaches stderr (pre-flight I-1).
+func TestAFinalRefusalOnPageTwoWritesPageOne(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.Devices[0] == "leaf2" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "credential_revoked", Detail: "this principal is revoked"})
+			return
+		}
+		mixed(w, req)
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "leaf2"), &out, &errb)
+	if code != 1 || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc-oxidized\tTOKEN-leaf1\t2026-10-08T03:00:00Z\n" ||
+		!strings.Contains(errb.String(), "401 credential_revoked") ||
+		!strings.Contains(errb.String(), "1 of 2 devices were not minted") || strings.Contains(errb.String(), "TOKEN") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// An expired certificate is final: said before anything connects, nothing
+// written, exit 77 (pre-flight I-1).
+func TestAnExpiredCertificateIsFinal(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	now := time.Now()
+	ca, err := testpki.NewCA("expired", now.Add(-72*time.Hour), now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := ca.Issue(testpki.Leaf{CommonName: "w", Client: true, NotBefore: now.Add(-48 * time.Hour),
+		NotAfter: now.Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, keyPEM, err := testpki.PEMs(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for name, body := range map[string][]byte{"w.pem": certPEM, "w-key.pem": keyPEM} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A flag given twice takes its last value.
+	flags = append(flags, "--cert", filepath.Join(dir, "w.pem"), "--key", filepath.Join(dir, "w-key.pem"))
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1"), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "renew it against your CA") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A broker that is not an https URL is a usage error: nothing is read or sent.
+func TestABrokerThatIsNotHTTPSIsUsage(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	flags = append(flags, "--broker", "http://127.0.0.1:9")
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1"), &out, &errb); code != 2 ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "https") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A redirect is final and never followed: before anything minted it is 77
+// with nothing written; after page one it is 1 with page one written.
+func TestARedirectIsFinal(t *testing.T) {
+	redirect := func(w http.ResponseWriter, _ api.MintRequest) {
+		w.Header().Set("Location", "https://elsewhere.example.com/v1/tokens")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}
+	var out, errb bytes.Buffer
+	flags := workloadBroker(t, redirect)
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1"), &out, &errb); code != exitFinal ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "redirect") || !strings.Contains(errb.String(), "1 of 1 devices were not minted") {
+		t.Fatalf("first page: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	flags = workloadBrokerPaged(t, 1, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.Devices[0] == "leaf2" {
+			redirect(w, req)
+			return
+		}
+		mixed(w, req)
+	})
+	if code := run(append(append([]string{"workload", "token"}, flags...), "leaf1", "leaf2"), &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "TOKEN-leaf1") || !strings.Contains(errb.String(), "redirect") ||
+		strings.Contains(errb.String(), "TOKEN") {
+		t.Fatalf("page two: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// What the broker sends back is untrusted text: no control character reaches
+// stderr, from an error's code and detail or from an item's own words, and no
+// token does either.
+func TestBrokerTextIsPrintSafeOnStderr(t *testing.T) {
+	hostile := func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Results: []api.MintItem{
+			{Device: "fw\x1b[2J1", Verdict: "deny", Reason: "no\nforged: permit\x1b]0;x\a"},
+			{Device: "fw2", Verdict: "error", Error: "boom\r\x00"},
+		}})
+	}
+	flags := workloadBroker(t, hostile)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "fw1", "fw2"), &out, &errb)
+	if code != exitFinal || out.Len() != 0 || strings.ContainsAny(errb.String(), "\x1b\r\x00\a") ||
+		strings.Count(errb.String(), "\n") != 2 {
+		t.Fatalf("items: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	refused := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "bad\x1b[31m_code", Detail: "line one\nforged line\x1b[2J"})
+	})
+	code = run(append(append([]string{"workload", "token"}, refused...), "leaf1"), &out, &errb)
+	if code != exitFinal || out.Len() != 0 || strings.ContainsAny(errb.String(), "\x1b\r\x00\a") ||
+		strings.Count(errb.String(), "\n") != 1 {
+		t.Fatalf("error: exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// --out is 0600 and renamed into place; --devices-file reads one name a line,
+// skipping blanks and # comments.
+func TestWorkloadTokenWritesItsOutputPrivately(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	dir := t.TempDir()
+	list := filepath.Join(dir, "nodes")
+	if err := os.WriteFile(list, []byte("# backed up nightly\nleaf1\n\nleaf2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outFile := filepath.Join(dir, "tokens.tsv")
+	if err := os.WriteFile(outFile, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	args := append(append([]string{"workload", "token"}, flags...), "--devices-file", list, "--out", outFile, "--format", "json")
+	if code := run(args, &out, &errb); code != 0 || out.Len() != 0 {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	fi, err := os.Stat(outFile)
+	raw, _ := os.ReadFile(outFile)
+	var resp api.MintResponse
+	if err != nil || fi.Mode().Perm() != 0o600 || json.Unmarshal(raw, &resp) != nil || len(resp.Results) != 2 {
+		// The body holds tokens: say its size, never its text.
+		t.Fatalf("mode %v err %v body of %d bytes", fi.Mode(), err, len(raw))
+	}
+}
+
+func TestWorkloadIdentityPrintsTheWorkload(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "spiffe://corp.example.com/host/oxidized-01") ||
+		!strings.Contains(out.String(), "svc_oxidized") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if code := run([]string{"workload", "identity"}, &out, &errb); code != 2 { // pre-flight M-6
+		t.Fatalf("no flags: exit %d", code)
+	}
+}
+
+// The identity's text is the broker's: printed as one safe line each.
+func TestWorkloadIdentityPrintsSafeText(t *testing.T) {
+	flags := workloadBrokerWith(t, 100, mixed, api.Identity{Principal: "spiffe://corp.example.com/host/a\x1b[2Jb",
+		Method: "cert", Subject: "svc\nforged", Groups: []string{"g\x1b1"},
+		Grants: []api.IdentityGrant{{Scope: "all\r", Roles: []string{"r\x07"}}}, AuthTime: "now\x1b"})
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"workload", "identity"}, flags...), &out, &errb); code != 0 ||
+		strings.ContainsAny(out.String(), "\x1b\r\a") || strings.Contains(out.String(), "svc\nforged") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
