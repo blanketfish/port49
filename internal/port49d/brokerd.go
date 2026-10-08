@@ -394,8 +394,11 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// graceful stop. The first lands before anything that mints is served
 	// (Task 15a review M-1), and so does the mark on meta/judged when it
 	// names another bundle (re-review 1, I-2): until then this replica is
-	// not ready. Each mint asks the gate after (skewGate).
-	gate := &skewGate{}
+	// not ready. Each mint asks the gate after (skewGate), which also holds
+	// every mint until a takeover is seen done for the bundle this replica
+	// serves (decision 36, the mint gate at a start): its own runner's
+	// (rn.tookOver), or one meta/judged names, not in doubt (openAtJudged).
+	gate := newStartGate(m.BrokerMintGateClosed)
 	startBundle := brk.Policy.Load().Bundle
 	if err := recordStart(ctx, bs.raw, who, startBundle, cfg.Store.Etcd.HoldTTL, 4*cfg.Store.Etcd.CallTimeout,
 		5*time.Second, stderr); err != nil {
@@ -406,6 +409,16 @@ func runBroker(parent context.Context, cfgPath string) error {
 	}
 	gate.flag(startBundle)
 	brk.MintGate = gate.allow
+	// Read once here, after the start's mark and before the API serves: a
+	// rolling restart, meta/judged already naming this bundle, mints at once.
+	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Store.Etcd.CallTimeout); named {
+		gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", startBundle), stderr)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Store.Etcd.CallTimeout, startGateEvery, stderr)
+	}()
 	swapped := make(chan struct{}, 1)
 	wg.Add(1)
 	go func() {
@@ -414,7 +427,10 @@ func runBroker(parent context.Context, cfgPath string) error {
 	}()
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
 		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
-		marksReloaded: make(chan struct{}, 1), witness: wit}
+		marksReloaded: make(chan struct{}, 1), witness: wit,
+		tookOver: func(carried *policy.Policy) {
+			gate.open(fmt.Sprintf("this replica's takeover is done (bundle %s)", carried.Bundle), stderr)
+		}}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
 	// token under another bundle is then judged. Every swap, the runner's
@@ -457,7 +473,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 				return
 			case b := <-asks:
 				flagSwap(ctx, bs.raw, gate, who, b, cfg.Store.Etcd.HoldTTL, 4*cfg.Store.Etcd.CallTimeout,
-					5*time.Second, m.BrokerMintGateClosed, stderr)
+					5*time.Second, stderr)
 				if rn.running() {
 					continue // the runner's own passes judge its contexts
 				}

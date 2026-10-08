@@ -135,8 +135,10 @@ type Broker struct {
 	// with the policy held: an error refuses the whole batch
 	// store_unavailable, minting nothing. port49-broker refuses until a
 	// replica serving a bundle other than the one last judged has marked
-	// meta/judged in doubt (Task 15a re-review 1, I-2). Its error is never
-	// the caller's to read: the gate's owner says why, once, as it waits.
+	// meta/judged in doubt (Task 15a re-review 1, I-2), and from its start
+	// until it has seen a takeover done for the bundle it serves (decision
+	// 36, the mint gate at a start). Its error is never the caller's to
+	// read: the gate's owner says why, once, as it waits.
 	MintGate func(pol *policy.Policy) error
 
 	// CertStatus answers a certificate chain's revocation status (spec
@@ -458,7 +460,8 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
 			w.Header().Set("Retry-After", "5")
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-				"the broker has not yet recorded what it serves in the store, so it minted nothing; retry shortly")
+				"the broker has not yet recorded what it serves in the store, or seen it judged since it started, "+
+					"so it minted nothing; retry shortly")
 			return
 		}
 	}

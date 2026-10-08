@@ -133,14 +133,27 @@ func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
 }
 
 // mintWith is mintKeyed with the client certificate and key at certFile
-// and keyFile in pkiDir.
+// and keyFile in pkiDir. A 503 store_unavailable, the mint gate's, is
+// tried again for up to 30s, as port49 workload and the agent retry it:
+// a port49-broker's start holds every mint until a takeover judges its
+// bundle (decision 36). A test of the gate posts once (postMint).
 func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
 	t.Helper()
-	resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
+	var raw []byte
+	var status int
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
+		var err error
+		raw, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		status = resp.StatusCode
+		if status != http.StatusServiceUnavailable || !bytes.Contains(raw, []byte(`"store_unavailable"`)) ||
+			time.Now().After(deadline) {
+			break
+		}
 	}
 	var out api.MintResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -152,7 +165,7 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 		var e api.Error
 		_ = json.Unmarshal(raw, &e)
 		t.Fatalf("mint: %d result(s); status %d, error %q; a mint answer carries tokens and is not printed",
-			len(out.Results), resp.StatusCode, e.Error)
+			len(out.Results), status, e.Error)
 	}
 	return out.Results[0].Login
 }

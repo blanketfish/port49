@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -181,15 +182,125 @@ func flagSkew(ctx context.Context, st startRecorder, bundle string, out io.Write
 // flags its bundle before anything that mints is served, and the asker
 // flags each swap's once its mark lands, the runner's included
 // (re-review 2, I-3).
-type skewGate struct{ flagged atomic.Pointer[string] }
+//
+// A start's gate (newStartGate) is closed besides until this replica has
+// seen a takeover done for the bundle it serves (decision 36, the mint
+// gate at a start; L49): the API serves before the runner takes the hold,
+// and a takeover that purges would purge every token minted before it.
+// Its own runner's takeover opens it (runner.tookOver), and so does
+// meta/judged naming the bundle, not in doubt (openAtJudged): a rolling
+// restart is never held. closed, the gauge port49_broker_mint_gate_closed,
+// reads 1 while either holds mints; nil sets nothing.
+type skewGate struct {
+	flagged  atomic.Pointer[string]
+	starting atomic.Bool
+	mu       sync.Mutex // orders the gauge's writes with the state they follow
+	swapping bool
+	closed   prometheus.Gauge
+}
+
+// newStartGate is a start's gate: closed until a takeover is seen done.
+func newStartGate(closed prometheus.Gauge) *skewGate {
+	g := &skewGate{closed: closed}
+	g.starting.Store(true)
+	g.gauge()
+	return g
+}
 
 func (g *skewGate) flag(bundle string) { g.flagged.Store(&bundle) }
 
 func (g *skewGate) allow(pol *policy.Policy) error {
+	if g.starting.Load() {
+		return fmt.Errorf("no takeover is yet seen done for bundle %s since this replica started", pol.Bundle)
+	}
 	if f := g.flagged.Load(); f != nil && *f == pol.Bundle {
 		return nil
 	}
 	return fmt.Errorf("bundle %s is not yet flagged against the bundle last judged", pol.Bundle)
+}
+
+// open ends the start's hold, once, and says why.
+func (g *skewGate) open(why string, out io.Writer) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.starting.CompareAndSwap(true, false) {
+		return
+	}
+	g.gaugeLocked()
+	fmt.Fprintf(out, "port49-broker: policy: mints open: %s\n", why)
+}
+
+// opened reports whether the start's hold is over.
+func (g *skewGate) opened() bool { return !g.starting.Load() }
+
+// swap is flagSwap's wait for its mark: on while it waits.
+func (g *skewGate) swap(on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.swapping = on
+	g.gaugeLocked()
+}
+
+func (g *skewGate) gauge() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.gaugeLocked()
+}
+
+func (g *skewGate) gaugeLocked() {
+	if g.closed != nil {
+		g.closed.Set(b2f(g.starting.Load() || g.swapping))
+	}
+}
+
+// startGateEvery is how often a start's gate reads meta/judged
+// (openAtJudged) while it is closed.
+const startGateEvery = time.Second
+
+// judgedNames reports whether meta/judged names bundle and is not in
+// doubt: a takeover is done for it, and the next one purges nothing. A
+// read the store did not answer is false: the gate stays closed.
+func judgedNames(ctx context.Context, judged judgedReader, bundle string, call time.Duration) (string, bool) {
+	rctx, cancel := context.WithTimeout(ctx, call)
+	defer cancel()
+	rec, ok, err := judged.Judged(rctx)
+	switch {
+	case err != nil:
+		return "could not be read", false
+	case !ok:
+		return "none recorded", false
+	case rec.InDoubt:
+		return fmt.Sprintf("bundle %s, in doubt", lineBundle(rec.Bundle)), false
+	}
+	return "bundle " + lineBundle(rec.Bundle), rec.Bundle == bundle
+}
+
+// openAtJudged is the start's gate's half that waits on another runner
+// (decision 36): until gate opens or ctx ends, it reads meta/judged at
+// once and every every, and opens the gate once it names the bundle live
+// serves, not in doubt. runBroker makes one such read itself before the
+// API serves, so a rolling restart's first mint is never held. While the
+// gate stays closed it says once what the mints wait for.
+func openAtJudged(ctx context.Context, judged judgedReader, gate *skewGate, live *policy.Live, call,
+	every time.Duration, out io.Writer) {
+	said := false
+	for !gate.opened() {
+		bundle := live.Load().Bundle
+		rec, named := judgedNames(ctx, judged, bundle, call)
+		if named {
+			gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", bundle), out)
+			return
+		}
+		if !said {
+			fmt.Fprintf(out, "port49-broker: policy: mints wait for a takeover to judge bundle %s (meta/judged: %s): "+
+				"until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, "+
+				"which port49 workload and the agent retry\n", bundle, rec)
+			said = true
+		}
+		if !sleepCtx(ctx, every) {
+			return
+		}
+	}
 }
 
 // flagSwap is the asker's half of every swap to bundle, the runner's too
@@ -199,13 +310,13 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 // under bundle. A mark the store did not answer, or refused (a role
 // edited, then fixed), is tried again every wait until it lands or ctx
 // ends (re-review 2, M-8): a replica that cannot flag its skew mints
-// nothing under it (broker.Broker.MintGate). closed, the gauge
+// nothing under it (broker.Broker.MintGate). The gate's gauge,
 // port49_broker_mint_gate_closed, reads 1 while it waits (re-review 3,
 // I-4); readiness never shows it, a store fault being an alarm (design
 // §12).
 func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, who, bundle string, ttl, call, wait time.Duration,
-	closed prometheus.Gauge, out io.Writer) {
-	closed.Set(1)
+	out io.Writer) {
+	gate.swap(true)
 	// The record lands first, as the start's does (recordAtStart): a runner
 	// whose PutJudgedSince read the records before it is refused, and one
 	// that read after it declines. Marked first, a runner could clear the
@@ -218,7 +329,7 @@ func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, who, bundle
 		bundle), call, wait, out, func(ctx context.Context) error { return (*markSkew.Load())(ctx, st, bundle, out) },
 		store.ErrRefused) == nil {
 		gate.flag(bundle)
-		closed.Set(0)
+		gate.swap(false)
 	}
 }
 
