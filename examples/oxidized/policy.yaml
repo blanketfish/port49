@@ -15,6 +15,7 @@ roles:
       - "show running-config **"
       - "show startup-config"
       - "show inventory"
+      - "show inventory all"
       - "show version"
       - "show vtp status"
       - "terminal length *"
