@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
@@ -127,11 +128,31 @@ func TestCAJSONAuthorityAllowURI(t *testing.T) {
 	}
 }
 
-// cell 6, the third: the provisioner's x509 template fixes the one URI and the
-// subject, and replaces a templateFile and an allow list.
-func TestCAJSONProvisionerTemplate(t *testing.T) {
+// cell 6, the third: the pinned template fixes the one URI and the subject.
+func TestPinnedTemplate(t *testing.T) {
 	const id = "spiffe://port49.lab/host/oxidized-01"
-	out, err := caJSONProvisionerTemplate([]byte(caJSONSample), "lab", id)
+	var tpl struct {
+		Subject struct {
+			CommonName string `json:"commonName"`
+		} `json:"subject"`
+		URIs        []string `json:"uris"`
+		ExtKeyUsage []string `json:"extKeyUsage"`
+	}
+	if err := json.Unmarshal([]byte(pinnedTemplate(id)), &tpl); err != nil {
+		t.Fatalf("the template is not JSON: %v", err)
+	}
+	if !reflect.DeepEqual(tpl.URIs, []string{id}) || tpl.Subject.CommonName != id {
+		t.Errorf("template = %+v, want the one URI and subject %s", tpl, id)
+	}
+	if !reflect.DeepEqual(tpl.ExtKeyUsage, []string{"clientAuth"}) {
+		t.Errorf("extKeyUsage = %v", tpl.ExtKeyUsage)
+	}
+}
+
+// a provisioner's template is set as given, replacing a templateFile and an
+// allow list, so it is the one in force; other provisioners are untouched.
+func TestCAJSONProvisionerTemplate(t *testing.T) {
+	out, err := caJSONProvisionerTemplate([]byte(caJSONSample), "lab", `{"a": 1}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,21 +164,58 @@ func TestCAJSONProvisionerTemplate(t *testing.T) {
 	if _, has := x509["allow"]; has {
 		t.Errorf("an allow list was kept: %v", x509)
 	}
-	var tpl struct {
-		Subject struct {
-			CommonName string `json:"commonName"`
-		} `json:"subject"`
-		URIs        []string `json:"uris"`
-		ExtKeyUsage []string `json:"extKeyUsage"`
+	if x509["template"] != `{"a": 1}` {
+		t.Errorf("template = %v", x509["template"])
 	}
-	if err := json.Unmarshal([]byte(x509["template"].(string)), &tpl); err != nil {
-		t.Fatalf("the template is not JSON: %v", err)
+	if _, has := provs[0].(map[string]any)["options"]; has {
+		t.Errorf("another provisioner gained options: %v", provs[0])
 	}
-	if !reflect.DeepEqual(tpl.URIs, []string{id}) || tpl.Subject.CommonName != id {
-		t.Errorf("template = %+v, want the one URI and subject %s", tpl, id)
+}
+
+// examples/oxidized's step-ca template, with the lab CA's CRL name put in,
+// renders (with stand-ins for step's template functions) to a leaf that keeps
+// the requested names, is clientAuth alone, and names the CRL as step-ca's
+// issuing distribution point does (cell 5).
+func TestExampleWorkloadTemplateRenders(t *testing.T) {
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(tpl.ExtKeyUsage, []string{"clientAuth"}) {
-		t.Errorf("extKeyUsage = %v", tpl.ExtKeyUsage)
+	src, err := exampleWorkloadTemplate(repo, stepCACRLIDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(src, exampleCRLName) {
+		t.Errorf("the example's placeholder is still in it")
+	}
+	tpl, err := template.New("leaf").Funcs(template.FuncMap{
+		"toJson": func(v any) string { b, _ := json.Marshal(v); return string(b) },
+		"typeIs": func(string, any) bool { return false },
+	}).Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	data := map[string]any{"Subject": map[string]any{"commonName": l48ID},
+		"SANs":     []map[string]any{{"type": "uri", "value": l48ID}},
+		"Insecure": map[string]any{"CR": map[string]any{"PublicKey": nil}}}
+	if err := tpl.Execute(&out, data); err != nil {
+		t.Fatal(err)
+	}
+	var leaf struct {
+		SANs        []map[string]any `json:"sans"`
+		ExtKeyUsage []string         `json:"extKeyUsage"`
+		CRLDPs      []string         `json:"crlDistributionPoints"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &leaf); err != nil {
+		t.Fatalf("the rendered template is not JSON: %v\n%s", err, out.String())
+	}
+	if !reflect.DeepEqual(leaf.CRLDPs, []string{stepCACRLIDP}) || !reflect.DeepEqual(leaf.ExtKeyUsage, []string{"clientAuth"}) ||
+		len(leaf.SANs) != 1 || leaf.SANs[0]["value"] != l48ID {
+		t.Errorf("rendered: %+v", leaf)
+	}
+	if _, err := exampleWorkloadTemplate(t.TempDir(), stepCACRLIDP); err == nil {
+		t.Error("a repository without the example was accepted")
 	}
 }
 

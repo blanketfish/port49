@@ -229,6 +229,11 @@ func crlHasSerial(rl *x509.RevocationList, serial *big.Int) bool {
 	return false
 }
 
+// crlLoaded says whether the broker said its CRL step_ca loaded.
+func crlLoaded(said string) bool {
+	return strings.Contains(said, "certificate status: CRL step_ca loaded")
+}
+
 // crlFetchSaid is a certificate-status line that is the outcome of a CRL
 // fetch: loaded, or failed. The start line ("not loaded yet") is neither.
 var crlFetchSaid = regexp.MustCompile(`certificate status: CRL step_ca( loaded|: )`)
@@ -371,6 +376,7 @@ type l48Run struct {
 	anchor string // the intermediate's PEM file, the broker's workload anchor
 	cert   string // the workload's certificate and key on the host
 	key    string
+	repo   string // the repository root, for examples/oxidized
 }
 
 func (r *l48Run) say(format string, a ...any) { fmt.Fprintf(&r.obs, format+"\n", a...) }
@@ -395,7 +401,12 @@ func (r *l48Run) files() {
 
 // token is one `workload token` run, kept in the evidence under label.
 func (r *l48Run) token(label string, at time.Duration) tokenRun {
-	code, out, errs := r.broker.workloadToken(r.cert, r.key)
+	return r.tokenWith(label, r.cert, r.key, at)
+}
+
+// tokenWith is token with another certificate and key.
+func (r *l48Run) tokenWith(label, cert, key string, at time.Duration) tokenRun {
+	code, out, errs := r.broker.workloadToken(cert, key)
 	// The token is a secret before any check: a leak of it into stderr is caught.
 	r.keys = append(r.keys, tokenSecrets(out)...)
 	tr := newTokenRun(code, errs, at)
@@ -586,9 +597,41 @@ func (r *l48Run) cell5CRL() {
 			"%d entries.", yesNo(cf.DER), cf.Issuer, yesNo(cf.IssuerIsIntermediate), yesNo(cf.SignatureOK), cf.NextUpdate, cf.Entries)
 	}
 
+	if cf.Issuer != "" {
+		names := idpNames(rl)
+		r.ev.add("crl_idp_names", names)
+		r.say("  - Its issuing distribution point names `%v` by fullName (the name the template puts on leaves, `%s`: %s).",
+			names, stepCACRLIDP, yesNo(reflect.DeepEqual(names, []string{stepCACRLIDP})))
+	}
+
+	// A leaf issued by the provisioner's default template: no CRL
+	// distribution point. Its files are kept beside the templated leaf's.
+	plain := r.mustIssue(l48ID, 24*time.Hour)
+	r.ev.add("issue_for_crl_default", factsOf(plain))
+	r.files()
+	plainCert, plainKey := filepath.Join(r.s.hostW, "default.pem"), filepath.Join(r.s.hostW, "default-key.pem")
+	if err := os.Rename(r.cert, plainCert); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.Rename(r.key, plainKey); err != nil {
+		r.t.Fatal(err)
+	}
+	// A leaf issued under examples/oxidized/step-ca-workload.tpl, with the
+	// lab CA's CRL name put in: it carries the CRL distribution point.
+	tpl, err := exampleWorkloadTemplate(r.repo, stepCACRLIDP)
+	if err != nil {
+		r.t.Fatalf("the example's template (INVALID, not a measured no): %v", err)
+	}
+	if err := r.s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONProvisionerTemplate(raw, stepCAProv, tpl) }); err != nil {
+		r.t.Fatalf("setting the example's template (INVALID, not a measured no): %v", err)
+	}
 	cert := r.mustIssue(l48ID, 24*time.Hour)
 	r.ev.add("issue_for_crl", factsOf(cert))
 	r.files()
+	r.say("  - Leaves: one from the provisioner's default template (CRL distribution points `%v`), and one under "+
+		"`examples/oxidized/step-ca-workload.tpl` (CRL distribution points `%v`, URI SANs `%v`).", plain.CRLDistributionPoints,
+		cert.CRLDistributionPoints, factsOf(cert).URIs)
+
 	// The CRL is fetched over https under step-ca's private root: the broker
 	// trusts it through SSL_CERT_FILE (pre-flight I-3).
 	r.broker.stop() // cell 1's broker, so one port49d runs
@@ -617,10 +660,12 @@ func (r *l48Run) cell5CRL() {
 		r.t.Fatalf("the broker's CRL fetch failed TLS: a harness fault (INVALID, not a measured \"step-ca's CRL is unusable\"):\n%s",
 			strings.Join(lines, "\n"))
 	}
-	r.say("  - The broker, trusting step-ca's root through `SSL_CERT_FILE` (`%s`), `refresh_interval: 1m`, started with: `%s`.",
-		stepCACRLURL, oneLineMax(strings.Join(lines, " | "), 800))
+	r.say("  - The broker, trusting step-ca's root through `SSL_CERT_FILE` (`%s`), `refresh_interval: 1m`, started with: `%s`. "+
+		"The CRL loaded: %s.", stepCACRLURL, oneLineMax(strings.Join(lines, " | "), 800), yesNo(crlLoaded(r.broker.said())))
+	def := r.tokenWith("token_default_leaf", plainCert, plainKey, 0)
+	r.say("  - `workload token` with the default leaf (no CRL distribution point): exit %d, stderr `%s`.", def.Exit, def.Stderr)
 	pre := r.token("token_before_revoke", 0)
-	r.say("  - `workload token` before the revocation: exit %d.", pre.Exit)
+	r.say("  - `workload token` with the templated leaf before the revocation: exit %d.", pre.Exit)
 	r.revokeAndRenew(cert, true)
 }
 
@@ -714,7 +759,9 @@ func (r *l48Run) cell6NamePolicy() {
 	}
 
 	// 3. A provisioner x509 template with the URI fixed.
-	if err := r.s.editCAJSON(func(raw []byte) ([]byte, error) { return caJSONProvisionerTemplate(raw, stepCAProv, l48ID) }); err != nil {
+	if err := r.s.editCAJSON(func(raw []byte) ([]byte, error) {
+		return caJSONProvisionerTemplate(raw, stepCAProv, pinnedTemplate(l48ID))
+	}); err != nil {
 		r.t.Fatalf("setting the provisioner's template (INVALID, not a measured no): %v", err)
 	}
 	r.say("  - The provisioner's x509 template with `uris: [%s]` fixed (step-ca restarted on it):", l48ID)
@@ -774,7 +821,11 @@ func TestL48StepCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step-ca's version (INVALID, not a measured no): %v", err)
 	}
-	r := &l48Run{t: t, s: s, inter: s.intermediate()}
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &l48Run{t: t, s: s, inter: s.intermediate(), repo: repo}
 	if err := os.MkdirAll(s.hostW, 0o700); err != nil {
 		t.Fatal(err)
 	}

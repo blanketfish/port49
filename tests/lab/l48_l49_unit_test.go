@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -370,6 +371,15 @@ func TestRecordsFor(t *testing.T) {
 }
 
 // the wait for the CRL's first fetch ends on the fetch's own outcome, not on the start line.
+func TestCRLLoaded(t *testing.T) {
+	if !crlLoaded("port49d: broker: certificate status: CRL step_ca loaded (next update 2026-10-09T00:00:00Z)\n") {
+		t.Error("a load was not read as one")
+	}
+	if crlLoaded("port49d: broker: certificate status: CRL step_ca: is scoped by its issuing distribution point\n") {
+		t.Error("a refusal was read as a load")
+	}
+}
+
 func TestCRLFetchOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		said string
@@ -765,8 +775,9 @@ func TestL48PollsStayUnderTheCap(t *testing.T) {
 		t.Errorf("polls: cell 4 %d, cell 5 %d; want 15 and 19", cell4, cell5)
 	}
 	// Cell 1's broker serves cells 1 to 4 (one token each in cells 1 and 2);
-	// cell 5's broker is new, and mints once before the revocation.
-	if first, second := 2+cell4, 1+cell5; first > l48CandidateCap || second > l48CandidateCap {
+	// cell 5's broker is new, and mints for the default leaf and the
+	// templated one before the revocation.
+	if first, second := 2+cell4, 2+cell5; first > l48CandidateCap || second > l48CandidateCap {
 		t.Errorf("mints %d and %d, over candidate_cap %d", first, second, l48CandidateCap)
 	}
 	if cell4 <= l48DefaultCandidateCap {
@@ -786,5 +797,35 @@ func TestStepStartRefusal(t *testing.T) {
 	}
 	if got := stepStartRefusal("step-ca-1  | Serving HTTPS on :9000 ...\n"); got != "" {
 		t.Errorf("a clean start: %q", got)
+	}
+}
+
+// the IDP's fullName URIs, as cell 5 records them and the template must match.
+func TestIDPNames(t *testing.T) {
+	ca, caKey := testCA(t)
+	uri := asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte(stepCACRLIDP)}
+	gn, _ := asn1.Marshal(uri)
+	full, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: gn})
+	dp, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: full})
+	idp, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: dp})
+	for _, tc := range []struct {
+		ext  []pkix.Extension
+		want []string
+	}{
+		{[]pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 28}, Critical: true, Value: idp}}, []string{stepCACRLIDP}},
+		{nil, nil},
+	} {
+		der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(1),
+			ThisUpdate: time.Now().Add(-time.Minute), NextUpdate: time.Now().Add(time.Hour), ExtraExtensions: tc.ext}, ca, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rl, err := x509.ParseRevocationList(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := idpNames(rl); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("idpNames = %v, want %v", got, tc.want)
+		}
 	}
 }

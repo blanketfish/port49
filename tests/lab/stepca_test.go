@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -53,6 +54,12 @@ const (
 	stepCAWCert    = "/home/step/w/w.pem"
 	stepCAWKey     = "/home/step/w/w-key.pem"
 	caJSONPath     = "/home/step/config/ca.json"
+	// stepCACRLIDP is the name step-ca's CRL gives its own distribution point:
+	// https://<the first of DOCKER_STEPCA_INIT_DNS_NAMES>/1.0/crl (L48).
+	stepCACRLIDP = "https://step-ca.port49.lab/1.0/crl"
+	// exampleCRLName is the CRL name examples/oxidized/step-ca-workload.tpl
+	// holds for an operator to replace.
+	exampleCRLName = "https://ca.corp.example.com/1.0/crl"
 )
 
 // privateKeyShape is the armor line of any PEM private key.
@@ -190,11 +197,10 @@ func caJSONAuthorityAllowURI(raw []byte, id string) ([]byte, error) {
 	return encodeCAJSON(m)
 }
 
-// caJSONProvisionerTemplate is raw with the provisioner's x509 template fixed
-// to the one URI id (as its only SAN and its subject) and clientAuth, whatever
-// a request asks for; a templateFile and an allow list are dropped, so the
-// template is the one in force.
-func caJSONProvisionerTemplate(raw []byte, provisioner, id string) ([]byte, error) {
+// caJSONProvisionerTemplate is raw with the provisioner's x509 template set
+// to tpl; a templateFile and an allow list are dropped, so the template is
+// the one in force.
+func caJSONProvisionerTemplate(raw []byte, provisioner, tpl string) ([]byte, error) {
 	m, err := decodeCAJSON(raw)
 	if err != nil {
 		return nil, err
@@ -203,15 +209,63 @@ func caJSONProvisionerTemplate(raw []byte, provisioner, id string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	tpl, err := json.Marshal(map[string]any{"subject": map[string]any{"commonName": id}, "uris": []string{id},
-		"keyUsage": []string{"digitalSignature"}, "extKeyUsage": []string{"clientAuth"}})
-	if err != nil {
-		return nil, err
-	}
 	delete(x509o, "templateFile")
 	delete(x509o, "allow")
-	x509o["template"] = string(tpl)
+	x509o["template"] = tpl
 	return encodeCAJSON(m)
+}
+
+// pinnedTemplate is an x509 template fixing the one URI id (as its only SAN
+// and its subject) and clientAuth, whatever a request asks for (cell 6).
+func pinnedTemplate(id string) string {
+	tpl, _ := json.Marshal(map[string]any{"subject": map[string]any{"commonName": id}, "uris": []string{id},
+		"keyUsage": []string{"digitalSignature"}, "extKeyUsage": []string{"clientAuth"}})
+	return string(tpl)
+}
+
+// exampleWorkloadTemplate is examples/oxidized/step-ca-workload.tpl with its
+// CRL name (exampleCRLName, there once) replaced by crlName (cell 5).
+func exampleWorkloadTemplate(repo, crlName string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(repo, "examples", "oxidized", "step-ca-workload.tpl"))
+	if err != nil {
+		return "", err
+	}
+	if n := strings.Count(string(raw), exampleCRLName); n != 1 {
+		return "", fmt.Errorf("examples/oxidized/step-ca-workload.tpl names %s %d times, want once", exampleCRLName, n)
+	}
+	return strings.Replace(string(raw), exampleCRLName, crlName, 1), nil
+}
+
+// idpNames are the fullName URIs of rl's issuing distribution point, or nil.
+func idpNames(rl *x509.RevocationList) []string {
+	for _, ext := range rl.Extensions {
+		if !ext.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 28}) {
+			continue
+		}
+		var idp struct {
+			DistributionPoint asn1.RawValue `asn1:"optional,tag:0"`
+		}
+		if _, err := asn1.Unmarshal(ext.Value, &idp); err != nil || len(idp.DistributionPoint.Bytes) == 0 {
+			return nil
+		}
+		var full asn1.RawValue
+		if _, err := asn1.Unmarshal(idp.DistributionPoint.Bytes, &full); err != nil || full.Tag != 0 {
+			return nil
+		}
+		var out []string
+		for rest := full.Bytes; len(rest) > 0; {
+			var gn asn1.RawValue
+			var err error
+			if rest, err = asn1.Unmarshal(rest, &gn); err != nil {
+				return nil
+			}
+			if gn.Class == asn1.ClassContextSpecific && gn.Tag == 6 {
+				out = append(out, string(gn.Bytes))
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // stepStartRefusal is the line of step-ca's log saying why it would not start
