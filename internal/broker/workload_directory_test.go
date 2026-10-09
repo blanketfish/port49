@@ -351,8 +351,9 @@ func TestForgetTakesASPIFFEID(t *testing.T) {
 	if _, err := f.st.GetMembership(context.Background(), workloadID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("still held: %v", err)
 	}
-	if _, err := f.b.Forget(context.Background(), "SPIFFE://corp.example.com/host/oxidized-01", "test"); err == nil {
-		t.Fatal("an upper-case scheme was taken")
+	if _, err := f.b.Forget(context.Background(), "SPIFFE://corp.example.com/host/oxidized-01", "test"); err == nil ||
+		!strings.Contains(err.Error(), "is not a principal as the log spells one") {
+		t.Fatalf("an upper-case scheme was taken: %v", err)
 	}
 	// With no workload mapping, no workload's membership is used: forget
 	// says so rather than answer as if it forgot something (pre-flight M-6).

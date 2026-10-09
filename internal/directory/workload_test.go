@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 const (
@@ -262,5 +263,113 @@ func TestAnotherCaseOfTheSchemeIsNoWorkloadsEntry(t *testing.T) {
 	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))", a)
 	if _, err := w.r.Verify(context.Background(), alicePrincipal); err != nil {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Pre-warm verifies a machine_group's members as workloads (decision 41
+// ruling 6): the principal is the SPIFFE ID the member's attribute holds, in
+// a listed trust domain, else the member is skipped and counted. A pre-warmed
+// workload is served in an outage within grace though it never minted
+// (Review Focus 4), and no mb/user: record is written for it (Review Focus 5).
+func TestPrewarmVerifiesMachineGroupMembersAsWorkloads(t *testing.T) {
+	w := newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 10
+	const stray = "CN=stray,OU=Workloads,DC=corp"
+	w.dir.onBase(gBackup, "(objectClass=*)", entry(gBackup, map[string][]string{"member": {wlDN, stray}}))
+	w.dir.onBase(wlDN, "(objectClass=user)", wlEntry(wlID))
+	w.dir.onBase(stray, "(objectClass=user)", entry(stray, map[string][]string{
+		"uid": {"spiffe://elsewhere.example/x"}, "sAMAccountName": {"stray"}}))
+	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup}, nil)
+	if err != nil || rep.Groups != 1 || rep.Principals != 1 || rep.Failed != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if v := testutil.ToFloat64(w.r.M.DirectoryPrewarmPrincipals); v != 1 {
+		t.Fatalf("port49_directory_prewarm_principals = %v", v)
+	}
+	if ps, _ := w.st.MembershipPrincipals(context.Background()); !slices.Equal(ps, []string{wlID}) {
+		t.Fatalf("pre-warm wrote %v", ps)
+	}
+	w.clk.Add(time.Hour)
+	w.down()
+	a, err := w.r.CurrentWorkload(context.Background(), wlID)
+	if err != nil || a.Source != Grace || !slices.Equal(a.GroupNames, []string{"backup-hosts"}) {
+		t.Fatalf("%+v %v", a, err)
+	}
+}
+
+// Without a workload mapping, neither machine groups nor workload identities
+// are pre-warmed.
+func TestPrewarmSkipsMachineGroupsWithoutAMapping(t *testing.T) {
+	w := newWorld(t)
+	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup}, []string{wlID})
+	if err != nil || rep.Groups != 0 || rep.Principals != 0 || len(w.dir.calls) != 0 {
+		t.Fatalf("%+v %v %d searches", rep, err, len(w.dir.calls))
+	}
+}
+
+// An identity-only workload, granted by its own spiffe:// subject and in no
+// machine_group, is pre-warmed too (decision 41 ruling 6; pre-flight I-3):
+// its last own verification is past grace, the pass verifies it, and it is
+// served in an outage within grace of the pass. An identity outside the
+// verifier's trust domains is not searched. The workloads share one
+// prewarm.max_principals: past it the rest are capped.
+func TestPrewarmVerifiesIdentityOnlyWorkloads(t *testing.T) {
+	w := newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 10
+	if _, err := w.r.VerifyWorkload(context.Background(), wlID); err != nil { // its own last mint
+		t.Fatal(err)
+	}
+	w.clk.Add(5 * time.Hour) // past grace (4h)
+	rep, err := w.r.PrewarmAll(context.Background(), nil, nil, []string{"spiffe://elsewhere.example/x", wlID})
+	if err != nil || rep.Principals != 1 || rep.Failed != 0 || rep.Capped {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	for _, c := range w.dir.calls {
+		if strings.Contains(c.Filter, "elsewhere.example") {
+			t.Fatalf("an identity outside the trust domains was searched: %s", c.Filter)
+		}
+	}
+	w.clk.Add(time.Hour)
+	w.down()
+	if a, err := w.r.CurrentWorkload(context.Background(), wlID); err != nil || a.Source != Grace {
+		t.Fatalf("in the outage: %+v %v", a, err)
+	}
+	// The budget: one principal, two workloads; the second (sorted) is capped.
+	w = newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 1
+	rep, err = w.r.PrewarmAll(context.Background(), nil, nil,
+		[]string{"spiffe://corp.example.com/host/oxidized-02", wlID})
+	if err != nil || rep.Principals != 1 || rep.Failed != 0 || !rep.Capped {
+		t.Fatalf("capped: %+v %v", rep, err)
+	}
+}
+
+// Pre-warm of a machine group's member fails, counted and skipped, when the
+// member's attribute is not a SPIFFE ID in a listed trust domain (a value
+// outside them, or not a SPIFFE ID at all), or when the entry is not under the
+// workload user_filter; none of them is stored (Task 2 review Minor 2).
+func TestPrewarmSkipsMachineGroupMembersThatAreNoWorkload(t *testing.T) {
+	const bad = "CN=bad,OU=Workloads,DC=corp"
+	for name, e := range map[string]*ldap.Entry{
+		"outside the trust domains": entry(bad, map[string][]string{"uid": {"spiffe://elsewhere.example/x"}, "sAMAccountName": {"bad"}}),
+		"malformed":                 entry(bad, map[string][]string{"uid": {"spiffe://corp.example.com"}, "sAMAccountName": {"bad"}}),
+		"not a SPIFFE ID":           entry(bad, map[string][]string{"uid": {"bad"}, "sAMAccountName": {"bad"}}),
+		"outside the user_filter":   nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorkloadWorld(t)
+			w.r.Cfg.PrewarmMax = 10
+			w.dir.onBase(gBackup, "(objectClass=*)", entry(gBackup, map[string][]string{"member": {bad}}))
+			if e != nil {
+				w.dir.onBase(bad, "(objectClass=user)", e)
+			}
+			rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup}, nil)
+			if err != nil || rep.Groups != 1 || rep.Principals != 0 || rep.Failed != 1 {
+				t.Fatalf("%+v %v", rep, err)
+			}
+			if ps, _ := w.st.MembershipPrincipals(context.Background()); len(ps) != 0 {
+				t.Fatalf("pre-warm wrote %v", ps)
+			}
+		})
 	}
 }
