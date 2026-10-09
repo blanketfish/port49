@@ -1,0 +1,2 @@
+Host nx1 172.100.100.31
+    PubkeyAuthentication no

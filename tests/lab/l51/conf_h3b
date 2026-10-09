@@ -1,0 +1,4 @@
+Include $W/snip3/*.conf
+Host *
+    IdentitiesOnly yes
+    IdentityFile $W/stem/id_l51
