@@ -400,8 +400,8 @@ func TestCheckConfigNamesSubjectsWhoseUsernameIsTheDirectorys(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01", cfg}, &out, &errb)
 	for _, want := range []string{
-		"note: subject oncall reaches leaf-01; its usernames are (from the directory entry), so they are not checked\n",
-		"note: subject oxidized reaches leaf-01; its usernames are (from the directory entry), so they are not checked\n",
+		"note: subject oncall reaches leaf-01; its usernames come from its directory entries, so they are not checked\n",
+		"note: subject oxidized reaches leaf-01; its usernames come from its directory entries, so they are not checked\n",
 		"2 usernames served on leaf-01 (arista_eos), 0 findings\n",
 	} {
 		if !strings.Contains(out.String(), want) {
