@@ -1,6 +1,6 @@
 #!/bin/bash
 W=$(cat /tmp/l51.workdir); AG=$W/agent.sock
-run() { label=$1; user=$2; shift 2; $W/probe4.sh "$label" "$user" -o IdentityFile=none "$@" 2>&1 | sed "s/^debug1: //" ; sleep 6; }
+run() { label=$1; user=$2; shift 2; $W/probe.sh "$label" "$user" -o IdentityFile=none "$@" 2>&1 | sed "s/^debug1: //" ; sleep 6; }
 export AGENT=$AG
 run C0-agent-default alice12
 run C1-pubkeyauth-no alice13 -o PubkeyAuthentication=no
