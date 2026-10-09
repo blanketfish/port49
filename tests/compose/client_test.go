@@ -100,7 +100,9 @@ func (d device) permits(user string, words ...string) bool {
 
 // mint asks the broker at addr for a token on device with the client
 // certificate WriteCompose cut for alice. The answer carries a token and
-// is never printed.
+// is never printed. A 503 is tried again for up to 60s, as port49 workload
+// retries it: a first start's broker holds every mint until its takeover
+// judges the bundle (decision 36, the start gate).
 func mint(t *testing.T, local, addr, device string) string {
 	t.Helper()
 	pki := filepath.Join(local, "broker")
@@ -116,10 +118,18 @@ func mint(t *testing.T, local, addr, device string) string {
 	roots.AppendCertsFromPEM(caPEM)
 	c := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13}}}
-	resp, err := c.Post("https://"+addr+"/v1/tokens", "application/json",
-		bytes.NewReader([]byte(`{"devices":["`+device+`"]}`)))
-	if err != nil {
-		t.Fatal(err)
+	var resp *http.Response
+	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(time.Second) {
+		resp, err = c.Post("https://"+addr+"/v1/tokens", "application/json",
+			bytes.NewReader([]byte(`{"devices":["`+device+`"]}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusServiceUnavailable || time.Now().After(deadline) {
+			break
+		}
+		resp.Body.Close()
+		t.Logf("mint: 503, the broker's start gate; trying again")
 	}
 	defer resp.Body.Close()
 	var out api.MintResponse
