@@ -82,6 +82,8 @@ func TestWorkloadDirectoryRefusals(t *testing.T) {
 		"no issuers": {edit("          issuers: [\"CN=Workloads Issuing CA,O=Corp\"]\n", ""), true,
 			"directory.issuers: a weak mapping is pinned to its issuers"},
 		"a bad pin": {edit("CN=Workloads Issuing CA,O=Corp", "no equals sign"), true, "is not an RFC 4514 DN"},
+		"a pin naming a type no pin matches": {edit("CN=Workloads Issuing CA,O=Corp", "favouriteColour=Blue,O=Corp"),
+			true, "is not an RFC 4514 DN"},
 		"a bad user_filter": {edit("          attribute: uid\n", "          attribute: uid\n          user_filter: \"(objectClass=user\"\n"),
 			true, "directory.user_filter"},
 		"on a human x509": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem, directory: {kind: spiffe_id}}]\n",

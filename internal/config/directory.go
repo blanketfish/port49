@@ -340,8 +340,6 @@ func refreshInterval(d time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// descriptor is an LDAP attribute description: a name or a numeric OID
-// (RFC 4512 §1.4). A value outside it would be pasted into a filter.
 // checkWorkloadMapping resolves an x509 machine verifier's directory: (plan 8b;
 // spec §13 decision 41 rulings 1 and 2): spiffe_id alone, attribute required,
 // weak so allow_weak and issuers required, user_filter defaulting to
@@ -377,6 +375,8 @@ func checkWorkloadMapping(d oidc.WorkloadDirectory, trustDomains []string, userF
 	return w, nil
 }
 
+// descriptor is an LDAP attribute description: a name or a numeric OID
+// (RFC 4512 §1.4). A value outside it would be pasted into a filter.
 var descriptor = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)$`)
 
 // checkSearchShape refuses, at load, a filter that does not compile and an
