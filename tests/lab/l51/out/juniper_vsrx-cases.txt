@@ -1,0 +1,219 @@
+== C0-agent-default (prompts reached: 0)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Will attempt key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Will attempt key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Will attempt key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Will attempt key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Will attempt key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Will attempt key: l51-throwaway-certkey ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Offering public key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Received disconnect from 172.100.100.22 port 22:2: Too many authentication failures
+Disconnected from 172.100.100.22 port 22
+== C1-pubkeyauth-no (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice13@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== C2-identityagent-none (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice14@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== C3-preferred-kbd-pw (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice15@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ce-identitiesonly-noI (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice16@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Cf-identitiesonly-cert-pubfile (prompts reached: 2)
+identity file $W/kc.pub type 2
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Will attempt key: $W/kc.pub ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Offering public key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: $W/kc.pub ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice12@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Cg1-host-pubkeyauth-no (prompts reached: 0)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Will attempt key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Will attempt key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Will attempt key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Will attempt key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Will attempt key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Will attempt key: l51-throwaway-certkey ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Offering public key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Received disconnect from 172.100.100.22 port 22:2: Too many authentication failures
+Disconnected from 172.100.100.22 port 22
+== Cg2-match-identityagent-none (prompts reached: 0)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Will attempt key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Will attempt key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Will attempt key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Will attempt key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Will attempt key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Will attempt key: l51-throwaway-certkey ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Offering public key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Received disconnect from 172.100.100.22 port 22:2: Too many authentication failures
+Disconnected from 172.100.100.22 port 22
+== Cg3-host-preferred (prompts reached: 0)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Will attempt key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Will attempt key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Will attempt key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Will attempt key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Will attempt key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Will attempt key: l51-throwaway-certkey ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Offering public key: l51-throwaway-1 ED25519 SHA256:ZjJeZAA3tvlmpOJr7nRUQuk74PnJd/uhx2IqLuCWCe4 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-2 ED25519 SHA256:leLzsX1CXCZheLhKpRMD3UBtXfi8bsWRYRqhnIBPDJ0 agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-3 ED25519 SHA256:Z8cGPHtNoMscjm+EFTHhgHgJIy7ld6xOUZ9VPrFt0MA agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-4 ED25519 SHA256:x4YJmd0bCg7P3nMnhbUxxekDX8KbIWaSiIufort1iso agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-5 ED25519 SHA256:AtDIAur0XCCgGY8y6Siq5/TEgstO8KTzeNetMTX71Bs agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: l51-throwaway-certkey ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 agent
+Received disconnect from 172.100.100.22 port 22:2: Too many authentication failures
+Disconnected from 172.100.100.22 port 22
+== Ch1-snippet-certonly-agent (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Offering public key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice16@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ch2-plus-identityfile-pub (prompts reached: 2)
+identity file $W/kc.pub type 2
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Will attempt key: $W/kc.pub ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Offering public key: $W/kc-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: $W/kc.pub ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice12@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ch3-cert-and-key-on-disk-no-agent (prompts reached: 2)
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/stem/id_l51-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Offering public key: $W/stem/id_l51-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice13@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ch3b-cert-and-identityfile-stem-disk-no-agent (prompts reached: 2)
+identity file $W/stem/id_l51 type 2
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/stem/id_l51-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Will attempt key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Offering public key: $W/stem/id_l51-cert.pub ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice14@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ch3c-identityfile-stem-only-cert-autopair (prompts reached: 2)
+identity file $W/stem/id_l51 type 2
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Will attempt key: $W/stem/id_l51 ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Offering public key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: $W/stem/id_l51 ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice15@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).
+== Ch3d-agent-loaded-explicit-stem-key (prompts reached: 2)
+identity file $W/stem/id_l51 type 2
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: publickey
+Will attempt key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Will attempt key: $W/stem/id_l51 ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Offering public key: $W/stem/id_l51 ED25519 SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Offering public key: $W/stem/id_l51 ED25519-CERT SHA256:m6BdMMc8+y6BzpG6dFmy3vucJ0rS9jCXPhPjG7Fp3e8 explicit agent
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: keyboard-interactive
+Authentications that can continue: publickey,password,keyboard-interactive
+Next authentication method: password
+Authentications that can continue: publickey,password,keyboard-interactive
+alice16@172.100.100.22: Permission denied (publickey,password,keyboard-interactive).

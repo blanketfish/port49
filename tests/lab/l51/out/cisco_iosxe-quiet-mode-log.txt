@@ -1,0 +1,9 @@
+xe1#show logging | include SEC_LOGIN-[15]-QUIET|LOGIN_FAILED
+*Oct  9 04:11:57.592: %SEC_LOGIN-1-QUIET_MODE_ON: Still timeleft for watching failures is 25 secs, [user: alice09] [Source: 172.100.100.1] [localport: 22] [Reason: Login Authentication Failed] [ACL: sl_def_acl] at 04:11:57 UTC Fri
+*Oct  9 04:13:57.592: %SEC_LOGIN-5-QUIET_MODE_OFF: Quiet Mode is OFF, because block period timed out at 04:13:57 UTC Fri Oct 9 2026
+*Oct  9 04:16:53.751: %SEC_LOGIN-1-QUIET_MODE_ON: Still timeleft for watching failures is 3 secs, [user: alice10] [Source: 172.100.100.1] [localport: 22] [Reason: Login Authentication Failed] [ACL: sl_def_acl] at 04:16:53 UTC Fri 
+*Oct  9 04:18:53.750: %SEC_LOGIN-5-QUIET_MODE_OFF: Quiet Mode is OFF, because block period timed out at 04:18:53 UTC Fri Oct 9 2026
+*Oct  9 04:21:35.950: %SEC_LOGIN-1-QUIET_MODE_ON: Still timeleft for watching failures is 17 secs, [user: alice09] [Source: 172.100.100.1] [localport: 22] [Reason: Login Authentication Failed] [ACL: sl_def_acl] at 04:21:35 UTC Fri
+*Oct  9 04:23:35.950: %SEC_LOGIN-5-QUIET_MODE_OFF: Quiet Mode is OFF, because block period timed out at 04:23:35 UTC Fri Oct 9 2026
+*Oct  9 04:25:15.184: %SEC_LOGIN-1-QUIET_MODE_ON: Still timeleft for watching failures is 20 secs, [user: alice11] [Source: 172.100.100.1] [localport: 22] [Reason: Login Authentication Failed] [ACL: sl_def_acl] at 04:25:15 UTC Fri
+*Oct  9 04:27:15.184: %SEC_LOGIN-5-QUIET_MODE_OFF: Quiet Mode is OFF, because block period timed out at 04:27:15 UTC Fri Oct 9 2026

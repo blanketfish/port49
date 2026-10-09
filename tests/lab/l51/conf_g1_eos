@@ -1,0 +1,2 @@
+Host 172.100.100.11
+    PubkeyAuthentication no

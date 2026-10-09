@@ -1,0 +1,3 @@
+Include $W/snip3/*.conf
+Host *
+    IdentitiesOnly yes
