@@ -167,7 +167,8 @@ def connect(device, enable=False, port49="port49", pins=None):
                 # Never the original's text: only the device and the fix.
                 raise RuntimeError(
                     f"{device}: the SSH host key does not match the pin. If the device's key changed on purpose, "
-                    f"compare its fingerprint on the console and run 'port49 devices trust --replace {device}'") from e
+                    f"compare its key on the console (NX-OS prints a fingerprint, the others the key; see "
+                    f"'port49 devices trust' help) and run 'port49 devices trust --replace {device}'") from e
             raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

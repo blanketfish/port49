@@ -3,8 +3,9 @@
 `port49_netmiko.connect("leaf1")` logs in to `leaf1` with a fresh token from your agent
 (`port49 login` first), as the username the broker says, at the address inventory gives.
 
-Pin the device's key once, with `port49 devices trust leaf1`, comparing the fingerprint with the
-device's console. The example refuses a device with no pin, and Netmiko refuses a key other than
+Pin the device's key once, with `port49 devices trust leaf1`, comparing the key with the device's
+console: NX-OS prints a SHA256 fingerprint; EOS, IOS-XE, vJunos-router and vSRX print the key itself
+(tests/lab/results/L53-*.md), so give `--fingerprint` the `ssh-keygen -lf` of that key. The example refuses a device with no pin, and Netmiko refuses a key other than
 the pin. It matches the device's name without regard to case, as OpenSSH does. It refuses a pins
 file, or its directory, that anyone but you or root can write, as port49 does; port49 also checks
 every directory above, which this example does not. It refuses the whole file, naming the line,
