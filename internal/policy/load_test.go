@@ -91,7 +91,7 @@ func TestAGoodPolicyLoads(t *testing.T) {
 		}
 	}
 	if _, ok := p.SubjectOf("CN=netops-admins,OU=Groups,DC=example,DC=com"); ok {
-		t.Error("a group is matched through the directory (plan 7), never as an identity")
+		t.Error("a group is matched through the directory, never as an identity")
 	}
 	s, _ := p.Subject("svc_oxidized")
 	if s.Domain != "machines" || s.Enable != "none" {

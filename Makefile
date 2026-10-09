@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-oidc lab-workload lab-oxidized build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-workload lab-oxidized build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -69,6 +69,12 @@ evidence:
 # Compose v2.24.4+; see tests/lab/README.md, "Directories".
 lab-directory:
 	go test -tags lab ./tests/lab/ -run 'TestL42|TestL43' -count=1 -v -timeout 30m
+
+# L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
+# the Windows Server DC. Needs Docker with Compose v2.24.4+, KVM, the cached
+# evaluation ISO and PORT49_LAB_L50=1; see tests/lab/README.md, "Directories".
+lab-l50:
+	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
 
 # The identity-provider lab (plan 7h): Keycloak as a container, no devices.
 # Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".

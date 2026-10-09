@@ -566,3 +566,23 @@ func TestABrokerRefusingTheCertificateIsFinal(t *testing.T) {
 		t.Fatalf("does not say the broker refused the certificate: %v", err)
 	}
 }
+
+// A mapped workload's broker in a DC outage past grace answers 503
+// directory_unavailable (decision 41 ruling 7): retried under one key to the
+// deadline, then temporary, every device unminted.
+func TestADirectoryOutageIsRetriedToTheDeadline(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusServiceUnavailable, "directory_unavailable", "30")}}
+	h := newHarness(t, f, 24*time.Hour)
+	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(2)})
+	var te *TemporaryError
+	if !errors.As(err, &te) || !errors.Is(err, ErrTemporary) || len(te.Unminted) != 2 ||
+		!strings.Contains(err.Error(), "503 directory_unavailable") || len(f.keys) < 2 {
+		t.Fatalf("%v keys %v", err, f.keys)
+	}
+	for _, k := range f.keys {
+		if k != f.keys[0] {
+			t.Fatalf("a retry under another key: %v", f.keys)
+		}
+	}
+}

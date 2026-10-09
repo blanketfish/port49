@@ -445,7 +445,9 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// declare the username the directory gave this member: the collision
 	// is judged again under the policy the mint holds, as verify judged it
 	// under the one it saw (final review M-1).
-	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+	// A workload's username is settled again here (decision 41 ruling 4):
+	// its own subject's declaration is no collision, another's is.
+	if m, err = heldCollision(pol, m, answer); err != nil {
 		release()
 		ref := directoryRefusal(directory.ErrUsernameTaken)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,

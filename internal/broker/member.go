@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -74,26 +75,85 @@ func (b *Broker) BindMap(ctx context.Context, cs tls.ConnectionState, _ store.Cr
 	return a, nil
 }
 
-// member is the policy's view of a directory answer.
+// member is the policy's view of a person's directory answer.
 func member(a directory.Answer) policy.Member {
-	return policy.Member{Principal: a.Principal, Directory: true, Username: a.Username, GroupDNs: a.GroupDNs,
-		GroupNames: a.GroupNames}
+	return policy.Member{Principal: a.Principal, Domain: policy.DomainHumans, Directory: true, Username: a.Username,
+		GroupDNs: a.GroupDNs, GroupNames: a.GroupNames}
+}
+
+// workloadMapped reports whether principal is a workload this broker resolves
+// through the directory (decision 41 ruling 1): a SPIFFE ID, with the x509
+// machine verifier's directory: configured.
+func (b *Broker) workloadMapped(principal string) bool {
+	return b.Directory != nil && b.Directory.Cfg.Workload != nil && directory.IsWorkload(principal)
+}
+
+// workloadMember is a workload's directory answer as pol judges it (decision
+// 41 ruling 4). Its username is the one its identity subject declares, when
+// that subject declares one; else its entry's, refused
+// directory.ErrUsernameTaken when a subject declares that, the declared one
+// standing (decision 38 ruling 3).
+func workloadMember(pol *policy.Policy, a directory.Answer) (policy.Member, error) {
+	m := policy.Member{Principal: a.Principal, Domain: policy.DomainMachines, Directory: true, Username: a.Username,
+		GroupDNs: a.GroupDNs, GroupNames: a.GroupNames}
+	if u := pol.DeclaredFor(a.Principal); u != "" {
+		m.Username = u
+		return m, nil
+	}
+	if who, ok := pol.DeclaredUsernames()[a.Username]; ok && a.Username != "" {
+		return policy.Member{Principal: a.Principal, Domain: policy.DomainMachines, Directory: true},
+			fmt.Errorf("%w: the directory derives username %q for %s, which subject %q declares",
+				directory.ErrUsernameTaken, a.Username, printsafe.Line(a.Principal, 300), who)
+	}
+	return m, nil
+}
+
+// heldCollision judges m's username again under pol, the policy a mint or a
+// session refresh holds: a reload can land between the membership read and
+// the hold, and declare the username the directory gave (final review M-1).
+// A workload under the mapping is settled again by workloadMember, so its own
+// subject's declaration is no collision and another's is (decision 41 ruling
+// 4); the member it returns is the one to judge. Anyone else is refused
+// directory.ErrUsernameTaken when a subject now declares its username.
+func heldCollision(pol *policy.Policy, m policy.Member, answer *directory.Answer) (policy.Member, error) {
+	if m.Domain == policy.DomainMachines && answer != nil {
+		return workloadMember(pol, *answer)
+	}
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		return m, directory.ErrUsernameTaken
+	}
+	return m, nil
 }
 
 // memberFor is the membership one request resolves with. A request on a
 // held connection reads the pinned principal's membership again (fresh, or
 // grace): group membership is resolved at mint time (design §7), not at
-// bind. Without a directory, or for a machine principal, it is
-// MemberOf(principal) and the answer is nil (pre-flight I-10).
+// bind. Without a directory, or for a machine principal the workload
+// mapping does not cover, it is MemberOf(principal) and the answer is nil
+// (pre-flight I-10; decision 41 ruling 1).
 func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member, *directory.Answer, error) {
-	if b.Directory == nil || !directory.IsUser(principal) {
-		return policy.MemberOf(principal), nil, nil
+	switch {
+	case b.Directory != nil && directory.IsUser(principal):
+		a, err := b.Directory.Current(ctx, principal)
+		if err != nil {
+			return policy.Member{}, nil, err
+		}
+		return member(a), &a, nil
+	case b.workloadMapped(principal):
+		// A workload is never mapped at bind: its principal is its SPIFFE
+		// ID, and its membership is read here, as a person's is (decision
+		// 41 ruling 6).
+		a, err := b.Directory.CurrentWorkload(ctx, principal)
+		if err != nil {
+			return policy.Member{}, nil, err
+		}
+		m, err := workloadMember(b.Policy.Load(), a)
+		if err != nil {
+			return policy.Member{}, nil, err
+		}
+		return m, &a, nil
 	}
-	a, err := b.Directory.Current(ctx, principal)
-	if err != nil {
-		return policy.Member{}, nil, err
-	}
-	return member(a), &a, nil
+	return policy.MemberOf(principal), nil, nil
 }
 
 // memberBudget is memberFor's deadline: the directory's own query_timeout
@@ -120,6 +180,12 @@ func directoryAuth(a *directory.Answer) *decision.Directory {
 // wait on the directory. With none stored, or none readable, it is
 // identity subjects alone.
 func (b *Broker) storedMemberOf(ctx context.Context, principal string) policy.Member {
+	if b.workloadMapped(principal) {
+		if m, err := b.storedWorkload(ctx, principal); err == nil {
+			return m
+		}
+		return policy.MemberOf(principal)
+	}
 	if b.Directory == nil || !directory.IsUser(principal) {
 		return policy.MemberOf(principal)
 	}

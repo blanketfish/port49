@@ -520,9 +520,9 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	for _, s := range d.Subjects {
-		if s.OldGroup != s.NewGroup {
-			fmt.Fprintf(stdout, "subject: %s's group %q -> %q; a group subject mints for no one until plan 7\n", s.Subject,
-				s.OldGroup, s.NewGroup)
+		if s.OldGroup != s.NewGroup || s.OldGroupKey != s.NewGroupKey {
+			fmt.Fprintf(stdout, "subject: %s's %s -> %s\n", s.Subject, groupSide(s.OldGroupKey, s.OldGroup),
+				groupSide(s.NewGroupKey, s.NewGroup))
 		}
 		if !slices.Equal(s.OldAPI, s.NewAPI) {
 			label, tail := "api", ""
@@ -707,6 +707,15 @@ func quarantineLine(e policy.QuarantineEntry, now time.Time) string {
 	return e.Message(now)
 }
 
+// groupSide is one side of a subject's group change: the key and the value it
+// names, or "none" for a subject that is no group on that side.
+func groupSide(key, value string) string {
+	if key == "" {
+		return "none"
+	}
+	return fmt.Sprintf("%s %q", key, value)
+}
+
 func orNone(s string) string {
 	if s == "" {
 		return "none"
@@ -878,7 +887,7 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	s, _ := p.Subject(*subject)
-	who := "group " + s.Group
+	who := s.GroupKey() + " " + s.Group
 	if s.Group == "" {
 		who = "identity " + strings.Join(s.Identity, ", ")
 	}

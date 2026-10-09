@@ -11,6 +11,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/oidc"
 )
 
 type serverYAML struct {
@@ -53,8 +54,12 @@ type failbackYAML struct {
 }
 
 type prewarmYAML struct {
-	Interval      *time.Duration `yaml:"interval"`
-	MaxPrincipals int            `yaml:"max_principals"`
+	Interval *time.Duration `yaml:"interval"`
+	// MaxPrincipals bounds one pre-warm pass's principals. People and, under
+	// a workload mapping, workloads (machine_group members and listed
+	// spiffe:// identities) each take up to it, so one interval verifies up
+	// to twice it (plan 8b; spec §13 decision 41 ruling 6).
+	MaxPrincipals int `yaml:"max_principals"`
 }
 
 // directoryYAML is broker.directory (design §10; plan 7g).
@@ -284,6 +289,10 @@ func checkBind(b bindYAML, getenv func(string) string) (directory.Bind, error) {
 func checkMapping(m mappingYAML) (directory.Mapping, error) {
 	const p = "broker.directory.certificate_mapping."
 	kind := directory.MappingKind(m.Kind)
+	if kind == directory.MapSPIFFEID {
+		return directory.Mapping{}, fmt.Errorf("config: %skind spiffe_id is a workload certificate's mapping: set it "+
+			"under broker.identity.machines[].directory", p)
+	}
 	if !slices.Contains(directory.Kinds, kind) {
 		names := make([]string, len(directory.Kinds))
 		for i, k := range directory.Kinds {
@@ -329,6 +338,41 @@ func refreshInterval(d time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("config: broker.refresh_interval %s: must be 1m to 1h", d)
 	}
 	return d, nil
+}
+
+// checkWorkloadMapping resolves an x509 machine verifier's directory: (plan 8b;
+// spec §13 decision 41 rulings 1 and 2): spiffe_id alone, attribute required,
+// weak so allow_weak and issuers required, user_filter defaulting to
+// broker.directory's.
+func checkWorkloadMapping(d oidc.WorkloadDirectory, trustDomains []string, userFilter string) (*directory.WorkloadMapping, error) {
+	const p = "broker.identity.machines[].directory."
+	switch {
+	case directory.MappingKind(d.Kind) != directory.MapSPIFFEID:
+		return nil, fmt.Errorf("config: %skind %q: spiffe_id, the one kind a workload's mapping takes (spec §13 "+
+			"decision 41)", p, d.Kind)
+	case d.Attribute == "":
+		return nil, fmt.Errorf("config: %sattribute is required: no schema has one for a SPIFFE ID; name the "+
+			"attribute your directory administrators reserve for it", p)
+	case !descriptor.MatchString(d.Attribute):
+		return nil, fmt.Errorf("config: %sattribute %q: not an attribute descriptor", p, d.Attribute)
+	case !d.AllowWeak:
+		return nil, fmt.Errorf("config: %s: spiffe_id is a weak mapping: set allow_weak: true and list the issuers "+
+			"it is pinned to (design §7)", strings.TrimSuffix(p, "."))
+	case len(d.Issuers) == 0:
+		return nil, fmt.Errorf("config: %sissuers: a weak mapping is pinned to its issuers; list at least one "+
+			"(design §7)", p)
+	}
+	for i, iss := range d.Issuers {
+		if _, err := ldap.ParseDN(iss); err != nil || !strings.Contains(iss, "=") || !directory.ValidPin(iss) {
+			return nil, fmt.Errorf("config: %sissuers[%d] %q is not an RFC 4514 DN", p, i, iss)
+		}
+	}
+	w := &directory.WorkloadMapping{Attribute: d.Attribute, Issuers: d.Issuers, UserFilter: or(d.UserFilter, userFilter),
+		TrustDomains: trustDomains}
+	if _, err := ldap.CompileFilter(w.UserFilter); err != nil {
+		return nil, fmt.Errorf("config: %suser_filter %q: %v", p, w.UserFilter, err)
+	}
+	return w, nil
 }
 
 // descriptor is an LDAP attribute description: a name or a numeric OID

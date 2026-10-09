@@ -15,6 +15,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -33,6 +34,12 @@ var ErrNotUser = errors.New("directory: not a user: principal")
 // IsUser reports whether principal is one the directory resolves: a
 // user: principal (design §7). Every other is policy.MemberOf alone.
 func IsUser(principal string) bool { return strings.HasPrefix(principal, "user:") }
+
+// IsWorkload reports whether principal is a workload certificate's: a SPIFFE
+// ID, as the verifier gives it, lower-case scheme (decision 40 ruling 4). The
+// broker sends one to the directory only under a workload mapping
+// (decision 41 ruling 1).
+func IsWorkload(principal string) bool { return strings.HasPrefix(principal, spiffe.Scheme) }
 
 // Answer is a membership and where it came from.
 type Answer struct {
@@ -90,6 +97,12 @@ type lookup struct {
 	want   string // the principal the entry must still give; "" at a bind or a pre-warm
 	mapKey string // the key a bind searched with: indexed on success, refused on a refusal
 	say    string // what names the lookup in a line said once
+	// workload is a workload certificate's lookup (decision 41): the entry is
+	// read by workloadIdentityOf, its SPIFFE ID checked by workloadUnique, no
+	// mapping key is indexed, and no declared username is checked here, since
+	// the broker settles a workload's username against its own subject
+	// (ruling 4).
+	workload bool
 }
 
 // Map maps a client certificate to its membership at a bind (Ruling 4):
@@ -110,7 +123,7 @@ func (r *Resolver) Map(ctx context.Context, leaf *x509.Certificate) (Answer, err
 	}
 	return r.grace(ctx, func(ctx context.Context) (store.Membership, error) {
 		return r.Store.MembershipByKey(ctx, l.Key)
-	}, err, "this certificate")
+	}, err, "this certificate", true)
 }
 
 // Verify reads principal's entry and groups from a server, never from
@@ -126,6 +139,62 @@ func (r *Resolver) Verify(ctx context.Context, principal string) (Answer, error)
 	v := strings.TrimPrefix(principal, "user:")
 	filter := fmt.Sprintf("(&%s(%s=%s))", r.Cfg.UserFilter, r.Cfg.PrincipalAttribute, ldap.EscapeFilter(v))
 	return r.verify(ctx, lookup{find: r.byFilter(filter), want: principal, say: filter})
+}
+
+// VerifyWorkload reads a workload's entry and groups from a server, never from
+// grace (decision 41 ruling 2): the one entry whose workload attribute holds
+// principal, under the workload user_filter. ErrNotUser without a workload
+// mapping, or for a principal that is no SPIFFE ID.
+func (r *Resolver) VerifyWorkload(ctx context.Context, principal string) (Answer, error) {
+	if r.Cfg.Workload == nil || !IsWorkload(principal) {
+		return Answer{}, fmt.Errorf("%w: %s is no workload under broker.identity.machines[].directory", ErrNotUser,
+			printsafe.Line(principal, 300))
+	}
+	if r.static != nil {
+		return r.answerStatic(principal)
+	}
+	w := r.Cfg.Workload
+	filter := fmt.Sprintf("(&%s(%s=%s))", w.UserFilter, w.Attribute, ldap.EscapeFilter(principal))
+	return r.verify(ctx, lookup{find: r.byWorkloadFilter(filter), want: principal, say: filter, workload: true})
+}
+
+// CurrentWorkload is the membership a workload's request uses: VerifyWorkload,
+// else the store's within grace (decision 41 ruling 6).
+func (r *Resolver) CurrentWorkload(ctx context.Context, principal string) (Answer, error) {
+	if r.static != nil && r.Cfg.Workload != nil && IsWorkload(principal) {
+		return r.answerStatic(principal)
+	}
+	a, err := r.VerifyWorkload(ctx, principal)
+	if !errors.Is(err, ErrUnavailable) {
+		return a, err
+	}
+	return r.grace(ctx, func(ctx context.Context) (store.Membership, error) {
+		return r.Store.GetMembership(ctx, principal)
+	}, err, principal, false)
+}
+
+// byWorkloadFilter finds the one entry filter matches under base_dn, reading
+// the workload attributes.
+func (r *Resolver) byWorkloadFilter(filter string) func(Searcher) (*ldap.Entry, error) {
+	return func(s Searcher) (*ldap.Entry, error) { return r.Cfg.oneEntry(s, filter, r.Cfg.workloadAttrs()) }
+}
+
+// byWorkloadDN reads the entry at dn under the workload user_filter (pre-warm:
+// a machine group's member).
+func (r *Resolver) byWorkloadDN(dn string) func(Searcher) (*ldap.Entry, error) {
+	return func(s Searcher) (*ldap.Entry, error) {
+		res, err := s.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1,
+			int(r.Cfg.QueryTimeout.Seconds()), false, r.Cfg.Workload.UserFilter, r.Cfg.workloadAttrs(), nil))
+		switch {
+		case ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject):
+			return nil, fmt.Errorf("%w: no entry %s", ErrUnmapped, printsafe.Line(dn, 200))
+		case err != nil:
+			return nil, err
+		case len(res.Entries) != 1:
+			return nil, fmt.Errorf("%w: %s is not under the workload user_filter", ErrUnmapped, printsafe.Line(dn, 200))
+		}
+		return res.Entries[0], nil
+	}
 }
 
 // byFilter finds the one entry filter matches under base_dn.
@@ -162,7 +231,7 @@ func (r *Resolver) Current(ctx context.Context, principal string) (Answer, error
 	}
 	return r.grace(ctx, func(ctx context.Context) (store.Membership, error) {
 		return r.Store.GetMembership(ctx, principal)
-	}, err, principal)
+	}, err, principal, true)
 }
 
 // Stored is the membership the store holds, whatever its age, refused or
@@ -197,13 +266,25 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 		if err != nil {
 			return err
 		}
-		if id, err = r.Cfg.identityOf(e); err != nil {
+		if q.workload {
+			id, err = r.Cfg.workloadIdentityOf(e, q.want)
+		} else if err = r.Cfg.notWorkload(e); err == nil {
+			// A person's entry must not be a workload's (decision 41
+			// ruling 4): a bind, a mint, the scheduled refresh and pre-warm
+			// all read a person through here.
+			id, err = r.Cfg.identityOf(e)
+		}
+		if err != nil {
 			return err
 		}
-		if q.want != "" && id.Principal != q.want {
+		if !q.workload && q.want != "" && id.Principal != q.want {
 			return fmt.Errorf("%w: the entry now gives %s", ErrUnmapped, id.Principal)
 		}
-		if err := r.Cfg.principalUnique(s, id); err != nil {
+		unique := r.Cfg.principalUnique
+		if q.workload {
+			unique = r.Cfg.workloadUnique
+		}
+		if err := unique(s, id); err != nil {
 			refuse = id.Principal
 			return err
 		}
@@ -211,7 +292,9 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 			refuse = id.Principal
 			return err
 		}
-		keys = r.Cfg.Mapping.KeysOf(e)
+		if !q.workload {
+			keys = r.Cfg.Mapping.KeysOf(e)
+		}
 		g, err = r.Cfg.groupsOf(s, id.DN)
 		return err
 	})
@@ -221,11 +304,15 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 		// No refusal is written for the principal here at a bind: it is
 		// another person's, and its record (with its pin) stands. The line
 		// is said once an hour per principal, naming the way out.
-		if err = r.pinned(ctx, id); errors.Is(err, ErrUnmapped) {
+		attr := r.Cfg.PrincipalAttribute
+		if q.workload {
+			attr = r.Cfg.Workload.Attribute
+		}
+		if err = r.pinned(ctx, id, attr); errors.Is(err, ErrUnmapped) {
 			r.sayOnce("pin:"+id.Principal, time.Hour, "%s", printsafe.Line(err.Error(), 900))
 		}
 	}
-	if err == nil {
+	if err == nil && !q.workload {
 		if who, ok := r.declared()[id.Username]; ok {
 			refuse = id.Principal
 			err = fmt.Errorf("%w: the directory derives username %q for %s, which subject %q declares",
@@ -239,8 +326,8 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 		return Answer{}, err
 	case errors.Is(err, ErrAmbiguous):
 		r.count("ambiguous")
-		r.sayOnce("ambiguous:"+q.say, time.Hour, "directory: identity_ambiguous: %s; refusing it: two people "+
-			"matching one certificate is an impersonation path (design §7)", printsafe.Line(err.Error(), 400))
+		r.sayOnce("ambiguous:"+q.say, time.Hour, "directory: identity_ambiguous: %s; refusing it: two entries "+
+			"matching one identity is an impersonation path (design §7)", printsafe.Line(err.Error(), 400))
 		r.refuse(ctx, q, refuse, id)
 		return Answer{}, err
 	case errors.Is(err, ErrUsernameTaken):
@@ -293,7 +380,7 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 // another entry (Ruling 3): a principal_attribute value moved between
 // entries never carries the principal with it. A refused record keeps its
 // pin and is checked the same way.
-func (r *Resolver) pinned(ctx context.Context, id Identity) error {
+func (r *Resolver) pinned(ctx context.Context, id Identity, attr string) error {
 	sctx, cancel := r.storeCtx(ctx)
 	defer cancel()
 	m, err := r.Store.GetMembership(sctx, id.Principal)
@@ -311,8 +398,8 @@ func (r *Resolver) pinned(ctx context.Context, id Identity) error {
 	return fmt.Errorf("%w: %s is pinned to entry %s and is now claimed by %s (%s); a %s value moved "+
 		"between entries never carries a principal with it (Ruling 3); if this is the same person's entry "+
 		"re-created (a rehire, a restore), confirm that and run `port49 directory forget %s` against the "+
-		"broker's admin_socket", ErrUnmapped, id.Principal, printsafe.Line(m.EntryID, 120),
-		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), r.Cfg.PrincipalAttribute, id.Principal)
+		"broker's admin_socket", ErrUnmapped, printsafe.Line(id.Principal, spiffe.MaxLen), printsafe.Line(m.EntryID, 120),
+		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), attr, printsafe.Line(id.Principal, spiffe.MaxLen))
 }
 
 // unreadPin is the entry id of a refusal whose held pin could not be read:
@@ -353,7 +440,7 @@ func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identit
 			pin = unreadPin
 			r.sayOnce("unreadpin:"+p, time.Hour, "directory: %s: the pin it was held to could not be read (%v); "+
 				"the principal is held refused to every entry; once the store is healthy, `port49 directory forget %s` "+
-				"against the broker's admin_socket frees it", p, err, p)
+				"against the broker's admin_socket frees it", printsafe.Line(p, spiffe.MaxLen), err, printsafe.Line(p, spiffe.MaxLen))
 		}
 		if err := r.Store.PutMembership(sctx, store.Membership{Principal: p, EntryID: pin, Refused: true,
 			VerifiedAt: now}, r.TTL()); err != nil {
@@ -373,7 +460,7 @@ func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identit
 // never served (pre-flight C-1), and a declared username still collides
 // (pre-flight M-11).
 func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.Membership, error), cause error,
-	who string) (Answer, error) {
+	who string, declared bool) (Answer, error) {
 	sctx, cancel := r.storeCtx(ctx)
 	defer cancel()
 	m, gerr := read(sctx)
@@ -386,25 +473,25 @@ func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.
 	case m.Refused:
 		r.count("unavailable")
 		return Answer{}, fmt.Errorf("%w: the directory refused %s at %s, before it stopped answering; grace never "+
-			"overrules a refusal", ErrUnavailable, m.Principal, m.VerifiedAt.UTC().Format(time.RFC3339))
+			"overrules a refusal", ErrUnavailable, printsafe.Line(m.Principal, spiffe.MaxLen), m.VerifiedAt.UTC().Format(time.RFC3339))
 	}
 	age := r.Now().Sub(m.VerifiedAt)
 	if r.Cfg.Grace == 0 || age > r.Cfg.Grace {
 		r.count("unavailable")
 		r.sayOnce("past:"+m.Principal, time.Hour, "directory: %s: no server answered and the membership stored was "+
-			"verified %s ago, past directory.grace (%s); refused directory_unavailable", m.Principal,
+			"verified %s ago, past directory.grace (%s); refused directory_unavailable", printsafe.Line(m.Principal, spiffe.MaxLen),
 			age.Round(time.Minute), r.Cfg.Grace)
 		return Answer{}, fmt.Errorf("%w: the membership stored for %s was verified %s ago, past directory.grace (%s)",
-			ErrUnavailable, m.Principal, age.Round(time.Minute), r.Cfg.Grace)
+			ErrUnavailable, printsafe.Line(m.Principal, spiffe.MaxLen), age.Round(time.Minute), r.Cfg.Grace)
 	}
-	if subj, ok := r.declared()[m.Username]; ok {
+	if subj, ok := r.declared()[m.Username]; declared && ok {
 		r.count("collision")
 		return Answer{}, fmt.Errorf("%w: the stored membership gives username %q for %s, which subject %q declares",
 			ErrUsernameTaken, m.Username, m.Principal, subj)
 	}
 	r.count("grace")
 	r.sayOnce("grace:"+m.Principal, time.Hour, "directory: %s minted from a membership verified %s ago (grace)",
-		m.Principal, age.Round(time.Minute))
+		printsafe.Line(m.Principal, spiffe.MaxLen), age.Round(time.Minute))
 	return Answer{Membership: m, Source: Grace}, nil
 }
 

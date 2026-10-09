@@ -82,8 +82,9 @@ func (p *Policy) NextChange(t time.Time) (at time.Time, ok bool) {
 }
 
 // Principals is every identity a subject lists, sorted: every principal this
-// policy can mint for. A group subject lists none; it mints for no one until
-// plan 7's directory resolves membership.
+// policy can mint for by identity. A group subject lists none; it mints for a
+// member once the directory resolves it (SubjectsOf), so it has no principal
+// here.
 func (p *Policy) Principals() []string {
 	out := make([]string, 0, len(p.byID))
 	for id := range p.byID {

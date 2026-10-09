@@ -33,6 +33,10 @@ const (
 	MapSANEmail     MappingKind = "san_email"
 	MapSubjectDN    MappingKind = "subject_dn"
 	MapCN           MappingKind = "cn"
+	// MapSPIFFEID is a workload certificate's mapping (plan 8b; spec §13
+	// decision 41 ruling 2): never broker.directory.certificate_mapping's, so
+	// it is not in Kinds.
+	MapSPIFFEID MappingKind = "spiffe_id"
 )
 
 // Mapping is the resolved certificate_mapping.
@@ -41,6 +45,17 @@ type Mapping struct {
 	Attribute string // resolved: the kind's default when unset
 	AllowWeak bool
 	Issuers   []string // RFC 4514 issuer DNs a weak kind is pinned to
+}
+
+// WorkloadMapping is broker.identity.machines[].directory resolved (plan 8b;
+// spec §13 decision 41): a workload certificate's entry, found by the SPIFFE
+// ID its attribute holds. It is weak (decision 38 ruling 1), so it is always
+// issuer-pinned.
+type WorkloadMapping struct {
+	Attribute    string   // the entry attribute holding the SPIFFE ID; no default
+	Issuers      []string // RFC 4514 DNs the leaf's issuer must be one of
+	UserFilter   string   // resolved: the block's, else broker.directory.user_filter
+	TrustDomains []string // the verifier's spiffe_trust_domains: what pre-warm takes from an entry
 }
 
 // Nested is how nested group membership is resolved.
@@ -60,17 +75,20 @@ type Config struct {
 	GroupNameAttribute      string
 	MemberAttribute         string
 	Mapping                 Mapping
-	Nested                  Nested
-	MaxDepth                int
-	QueryTimeout            time.Duration
-	HealthInterval          time.Duration
-	HealthTimeout           time.Duration
-	FailureThreshold        int
-	ProbeInterval           time.Duration
-	StabilityWindow         time.Duration
-	Grace                   time.Duration
-	PrewarmInterval         time.Duration
-	PrewarmMax              int
+	// Workload is the workload certificate mapping, nil without one: then no
+	// workload is ever sent to the directory (decision 40 ruling 5).
+	Workload         *WorkloadMapping
+	Nested           Nested
+	MaxDepth         int
+	QueryTimeout     time.Duration
+	HealthInterval   time.Duration
+	HealthTimeout    time.Duration
+	FailureThreshold int
+	ProbeInterval    time.Duration
+	StabilityWindow  time.Duration
+	Grace            time.Duration
+	PrewarmInterval  time.Duration
+	PrewarmMax       int
 }
 
 // Strong reports whether a kind binds a key-specific value (design §7):

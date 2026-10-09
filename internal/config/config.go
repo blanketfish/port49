@@ -1323,6 +1323,29 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		}
 		b.Directory = d
 	}
+	// A workload certificate's directory (plan 8b; spec §13 decision 41 ruling
+	// 1) reuses broker.directory's pool, bind and base_dn, so it needs one.
+	if m := id.X509Machine; m != nil && m.Directory != nil {
+		if b.Directory == nil {
+			return nil, errors.New("config: broker.identity.machines[].directory maps workload certificates through " +
+				"broker.directory, which is not configured: configure it, or remove directory to keep workloads off " +
+				"the directory")
+		}
+		w, err := checkWorkloadMapping(*m.Directory, m.TrustDomains, b.Directory.UserFilter)
+		if err != nil {
+			return nil, err
+		}
+		// The people's own attributes: a SPIFFE ID there would become a
+		// device username, or refuse a person (final review M-3).
+		for _, a := range []struct{ key, v string }{{"username_attribute", b.Directory.UsernameAttribute},
+			{"principal_attribute", b.Directory.PrincipalAttribute}} {
+			if strings.EqualFold(w.Attribute, a.v) {
+				return nil, fmt.Errorf("config: broker.identity.machines[].directory.attribute %q is "+
+					"broker.directory.%s: name an attribute the people's entries do not use for it", w.Attribute, a.key)
+			}
+		}
+		b.Directory.Workload = w
+	}
 	ri, err := refreshInterval(b.RefreshInterval)
 	if err != nil {
 		return nil, err

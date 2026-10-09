@@ -113,7 +113,8 @@ func (failingMembership) DeleteMembership(context.Context, string) (store.Member
 }
 
 // Forget refuses what holds no membership: no directory configured, and a
-// principal that is not user: (pre-flight I-10's machine principals).
+// principal that is neither a user: principal nor a workload's spiffe:// ID
+// (pre-flight I-10's machine principals).
 func TestForgetRefusesWhatHoldsNoMembership(t *testing.T) {
 	f := newFixture(t, 8)
 	if _, err := f.b.Forget(context.Background(), alice, "admin_socket uid 0"); err == nil ||
@@ -122,7 +123,7 @@ func TestForgetRefusesWhatHoldsNoMembership(t *testing.T) {
 	}
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, nil)
 	if _, err := f.b.Forget(context.Background(), "app:ci-runner", "admin_socket uid 0"); err == nil ||
-		!strings.Contains(err.Error(), "not a user: principal") {
+		!strings.Contains(err.Error(), "neither a user: principal nor a workload's spiffe:// ID") {
 		t.Fatalf("a machine principal: %v", err)
 	}
 }

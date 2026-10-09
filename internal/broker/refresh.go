@@ -859,6 +859,37 @@ func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Memb
 	return m, time.Time{}, nil
 }
 
+// storedWorkload is storedMember for a workload under the mapping (decision 41
+// ruling 6). A refusal has no groups and no username, so nothing it holds
+// stands, as for a person. With none stored (opted in, not yet verified) it
+// has no groups and the username its identity subject declares, if any: a
+// reload before its first verification keeps what it held under that
+// subject, never more (pre-flight M-2). Past grace it has no groups and the
+// username it last had. Otherwise it is the stored membership. The username
+// is settled by workloadMember under the policy in force; a collision is the
+// refused member and directory.ErrUsernameTaken.
+func (b *Broker) storedWorkload(ctx context.Context, principal string) (policy.Member, error) {
+	none := policy.Member{Principal: principal, Domain: policy.DomainMachines, Directory: true}
+	sm, ok, err := b.Directory.Stored(ctx, principal)
+	switch {
+	case err != nil:
+		return policy.Member{}, err
+	case !ok:
+		none.Username = b.Policy.Load().DeclaredFor(principal)
+		return none, nil
+	case sm.Refused:
+		return none, nil
+	}
+	if b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace {
+		sm.GroupDNs, sm.GroupNames = nil, nil
+	}
+	m, err := workloadMember(b.Policy.Load(), directory.Answer{Membership: sm})
+	if err != nil {
+		return none, err
+	}
+	return m, nil
+}
+
 // storedMember is the membership a policy pass judges principal by: the
 // store's, if it is unrefused and verified within directory.grace; else no
 // groups (Ruling 12; pre-flight I-14). A machine principal is MemberOf.
@@ -869,6 +900,9 @@ func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Memb
 // caller revokes it username_collision (storedJudge) or judges the refused
 // member (the token scan, the re-index); never keeps it.
 func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Member, error) {
+	if b.workloadMapped(principal) {
+		return b.storedWorkload(ctx, principal)
+	}
 	if b.Directory == nil || !directory.IsUser(principal) {
 		return policy.MemberOf(principal), nil // a machine principal has no entry (pre-flight I-10)
 	}

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,15 +53,19 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 }
 
 // policyEnv is the policy's environment in this process: the key refs, and
-// whether its broker resolves humans through a directory (Ruling 16).
+// whether its broker resolves humans through a directory (Ruling 16), and
+// workloads (decision 41 ruling 1).
 func policyEnv(cfg config.Config) policy.Env {
 	env := policy.Env{KeyRefs: cfg.KeyRefs()}
 	switch {
 	case cfg.Broker == nil:
 	case cfg.Broker.Directory != nil:
-		env.Directory = policy.DirectoryOn
+		env.Directory, env.WorkloadDirectory = policy.DirectoryOn, policy.DirectoryOff
+		if cfg.Broker.Directory.Workload != nil {
+			env.WorkloadDirectory = policy.DirectoryOn
+		}
 	default:
-		env.Directory = policy.DirectoryOff
+		env.Directory, env.WorkloadDirectory = policy.DirectoryOff, policy.DirectoryOff
 	}
 	return env
 }
@@ -72,11 +78,21 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 		return
 	}
 	d := cfg.Broker.Directory
+	machineGroups := func() {
+		if d != nil && d.Workload != nil {
+			return
+		}
+		if gs := pol.MachineGroupSubjects(); len(gs) > 0 {
+			fmt.Fprintf(w, "%s: policy: %d machine_group subjects (%s) mint for no one: no "+
+				"broker.identity.machines[].directory is configured\n", proc, len(gs), strings.Join(gs, ", "))
+		}
+	}
 	if d == nil {
 		if gs := pol.GroupSubjects(); len(gs) > 0 {
 			fmt.Fprintf(w, "%s: policy: %d group subjects (%s) mint for no one: no broker.directory is configured\n",
 				proc, len(gs), strings.Join(gs, ", "))
 		}
+		machineGroups()
 		return
 	}
 	var servers []string
@@ -106,6 +122,41 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 	fmt.Fprintf(w, "%s: directory: grace %s; pre-warm %s; the scheduled refresh every %s stamps refreshed_at "+
 		"(session.staleness_ceiling denies a session past it)\n", proc, d.Grace, every(d.PrewarmInterval),
 		cfg.Broker.RefreshInterval)
+	machineGroups()
+	if wm := d.Workload; wm != nil {
+		// Ruling Q2's cost (pre-flight I-4): every workload of the verifier,
+		// identity-only ones included, needs its entry, and an outage stops it.
+		fmt.Fprintf(w, "%s: directory: workload certificates map by spiffe_id (weak, pinned to %s) through %s under "+
+			"%s; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID: none is "+
+			"refused identity_unmapped, two or more identity_ambiguous, and while the directory is down past grace it is refused "+
+			"directory_unavailable; username from the identity subject listing the SPIFFE ID, else from %s; an entry "+
+			"holding a SPIFFE ID in %s is never a person's; machine_group subjects match them, group subjects never\n",
+			proc, strings.Join(wm.Issuers, "; "), wm.Attribute, wm.UserFilter, d.UsernameAttribute, wm.Attribute)
+		warm := fmt.Sprintf("pre-warm %s keeps mapped workloads verified (machine_group members and each spiffe:// "+
+			"identity a subject lists, up to prewarm.max_principals (%d) besides the people's)", every(d.PrewarmInterval),
+			d.PrewarmMax)
+		if d.PrewarmInterval == 0 {
+			warm = "pre-warm is off, so a workload that has not minted within grace is refused in an outage"
+		}
+		// Two clocks (pre-flight M-1): grace bounds a mint; port49d's
+		// staleness ceiling, counted from the last pass that reached the
+		// directory, bounds a session. Their defaults coincide; they need not.
+		fmt.Fprintf(w, "%s: directory: a mapped workload mints only while a server answers or its membership was "+
+			"verified within grace (%s): past it its mints are refused directory_unavailable (port49 workload exits "+
+			"75); its live device sessions go unstamped from the first scheduled refresh that cannot verify it, and "+
+			"deny context_stale once port49d's session.staleness_ceiling has passed since the last one that did; %s\n",
+			proc, d.Grace, warm)
+		fmt.Fprintf(w, "%s: directory: %s must be writable only by directory administrators: whoever can write it on "+
+			"an entry chooses which workload takes that entry's groups\n", proc, wm.Attribute)
+		// L50: on AD the entry itself (SELF) writes these two whatever the
+		// OU's ACL. Said, not refused: an operator may have removed SELF's
+		// Web-Information grant.
+		if strings.EqualFold(wm.Attribute, "wWWHomePage") || strings.EqualFold(wm.Attribute, "url") {
+			fmt.Fprintf(w, "%s: directory: on Active Directory the entry itself can write %s whatever the OU's ACL "+
+				"(lab L50, measured on a service account's entry), so an entry under the workload user_filter can put "+
+				"another workload's SPIFFE ID on itself; use uid or description\n", proc, wm.Attribute)
+		}
+	}
 }
 
 // bindWho is who the bind is, as the start says it: never a secret.
@@ -181,7 +232,9 @@ func prewarm(ctx context.Context, r *directory.Resolver, live *policy.Live, inte
 		case <-time.After(wait):
 		}
 		wait = interval
-		rep, err := r.Prewarm(ctx, live.Load().GroupValues())
+		pol := live.Load()
+		rep, err := r.PrewarmAll(ctx, pol.GroupValues(), pol.MachineGroupValues(),
+			slices.Collect(maps.Keys(pol.SPIFFEIdentities())))
 		switch {
 		case ctx.Err() != nil:
 			return

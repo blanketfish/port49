@@ -122,7 +122,10 @@ The purge-window fix merged as PR #41 (fc89f47): port49-broker's mint gate is cl
 until a takeover judges its bundle; no new §5.7 reason (it reuses the gate's `store_unavailable`).
 Carried to the pre-beta review: `internal/broker/member.go`'s bind-refusal 503 details say "the
 agent retries", which it does not. L51 (SSH keys offered before the password) opened 2026-10-09,
-lab running. Next: 8b, then 9–11. 12–13 not yet.
+lab running. **8b written 2026-10-09** (`2026-10-09-08b-workload-directory.md`, eight tasks, six
+rulings Q1–Q6 recorded as decision 41); **8b executed 2026-10-09** on `feature/workload-directory`
+(base `df198b2`), each task reviewed and whole-branch reviewed (0 Critical, 2 Important, 6 Minor,
+fixed or parked), closing L50 (Plan 8b — As built, below). Next: 9–11. 12–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -4779,7 +4782,8 @@ recommendation; Ryan may override.
   d67c529); the queue request's JSON body (9f04a95); `show vtp status` (c48b0be) and
   `show inventory all` (f07ae93) in the role; `step-ca-workload.tpl` (737a229); the README's §3, §5,
   §5a and §9 rewritten to what was measured (711b5bb).
-- **L50, open** for plan 8b.
+- **L50, closed in plan 8b** (2026-10-09, Windows Server 2025 and Samba AD 4.17; see "Plan 8b — As
+  built", below).
 
 **The interfaces plan 8 added.** `internal/spiffe` (`ID`, `Parse`, `ParseWorkload`,
 `CheckTrustDomain`, `Scheme`, `MaxLen`, `ErrNotSPIFFE`); `broker.Workload` (with `Issued`),
@@ -4802,7 +4806,7 @@ code is new.
   §5.7 reason must be added to the spec first. The facts are in `run3-investigation.md`, "Purge
   facts". The L49 harness waits the window out (bfa22b3).
 - **Plan 8b:** a workload certificate's directory groups, constrained to machine-scoped group
-  subjects (L50), unless Ryan cancels it.
+  subjects (L50), unless Ryan cancels it. *Built 2026-10-09 (Plan 8b — As built, below).*
 - **Plan 9:** mint by `scope` (in "Plan 9" since pre-flight); the agent's per-user config file may
   later serve `port49 workload` too.
 - **Plan 10:** the `k8s` verifier joins `machines`. `CertCallerOf` is untouched by it, and a subject
@@ -4930,8 +4934,8 @@ code is new.
 - **A known issue, fixed in a follow-up PR:** on a first start of port49-broker, or after a policy
   edit, tokens minted in the first 5–21s may be purged by the broker's own takeover; the device then
   says `token_not_found`. Mint again.
-- **Lab:** L48 (step-ca 0.30.2) and L49 (Oxidized on five images) closed; see the notes. L50 is open
-  for plan 8b.
+- **Lab:** L48 (step-ca 0.30.2) and L49 (Oxidized on five images) closed; see the notes. L50 was
+  open for plan 8b, which closed it (Plan 8b — As built, below).
 
 ## Plan 8b — Workload directory groups (design §7; spec §13 decisions 16 and 40 ruling 5)
 
@@ -4952,6 +4956,8 @@ every DC down.
   pinned to the workload anchor, the entry pinned by `objectGUID` or `entryUUID`.
 - **The username.** From the entry's `username_attribute`, under decision 38 ruling 3's collision
   rules (amending decision 8), or declared on the machine group subject. Spec text first.
+  **Superseded by decision 41 ruling 4:** a `machine_group:` subject declares no `username:` (a
+  load error). The username is the declaring identity subject's, else the entry's.
 - **Plumbing.** The `IsUser` gates (`memberFor`, `storedMemberOf`, the scheduled refresh,
   `refresh.go`) become per domain; `forget`, pre-warm and `normalPrincipal` for `forget` widen
   past `user:`; the membership record is keyed by the SPIFFE ID.
@@ -4963,6 +4969,74 @@ every DC down.
   sessions deny `context_stale` at `session.staleness_ceiling`. The start line and the operator
   notes say so.
 - **Cost.** About 6 to 8 tasks and the lab row.
+
+### Plan 8b — As built
+
+Executed from `2026-10-09-08b-workload-directory.md` on `feature/workload-directory` (base
+`df198b2`, which holds the plan and its pre-flight amendment 3b67275), each task reviewed, most
+through one fix round, then a whole-branch review. The ledger is
+`.superpowers/sdd/2026-10-09-08b-workload-directory/progress.md`, with each task's brief, report and
+review beside it, and the final review in `final-review.md` (0 Critical, 2 Important, 6 Minor). The
+pre-flight (0 Critical, 9 Important, 8 Minor) was applied before Task 1. The rulings are decision 41
+of the spec (§13). What the build settled:
+
+- **Rulings Q1–Q6 (the writer's questions, ruled on recommendation 2026-10-09).**
+  - **Q1.** The username is the identity subject's declared one, else the entry's. A
+    `machine_group:` subject declares none, so no group shares a `(nas, username)` context. The
+    brief's "or declared on the machine group subject" is superseded (decision 41 ruling 4).
+  - **Q2.** Every workload of a mapped verifier needs an entry: `identity_unmapped` otherwise, and
+    a directory outage stops its mints. Opt-in per verifier; the start line says so.
+  - **Q3.** `issuers:` is required, as decision 38 ruling 1 requires it for every weak kind.
+  - **Q4.** `attribute` has no default; the docs name `uid` or `description` after L50.
+  - **Q5.** L50 measured `uid`, `description`, `wWWHomePage` and `url` against four writers: the
+    entry itself, Account Operators, a delegated OU administrator and an ordinary user.
+  - **Q6.** The start line states the ACL requirement, not L50's status.
+- **L50, closed 2026-10-09** on Windows Server 2025 and Samba AD 4.17, same matrix
+  (`tests/lab/results/L50-windows_ad.md`, `L50-samba_ad.md`). Ruling 10's final form says what was
+  measured and prescribes no deny ACL:
+  - an ordinary user writes none of the four attributes;
+  - the entry itself writes `wWWHomePage` and `url`, whatever the OU's ACL;
+  - Account Operators write all four, whatever the OU's ACL;
+  - a delegated OU administrator writes all four, and defeats an inherited deny by adding an allow
+    ACE for itself; owning the entry alone gives no write;
+  - so the attribute is `uid` or `description`, and whoever can change the entry's ACL decides a
+    workload's groups.
+
+  Not measured, and asserted nowhere: a narrower delegation, a persistent Samba `smb.conf` audit
+  setting, whether an ACE change is itself logged.
+- **Carried to plan 13's docs.** The final review's operator-facing notes, summarized here;
+  decision 41 has the text:
+  - opting in (the `broker.identity.machines[].directory` block; `kind`, `attribute`, `allow_weak`
+    and `issuers` all required) and the cost of it: every workload the verifier accepts needs one
+    entry, and an outage past grace stops its mints; without the block nothing changes;
+  - choosing the attribute (`uid` or `description` on AD; never `wWWHomePage` or `url`; never the
+    broker's `username_attribute` or `principal_attribute`);
+  - who decides a workload's groups, directory-change auditing (Windows 5136 and 4662; Samba
+    `dsdb_json_audit` at level 5) and the reason the docs prescribe no deny;
+  - `machine_group:` subjects: workloads only, `attached_roles.machines`, never `username:`, never
+    beside `group:`; moving a subject between the two keys is a gated change in `port49 policy diff`;
+  - usernames, including that a mapped workload's entry always needs one canonical, unique
+    `username_attribute` value;
+  - the 3am behaviour: mints refused 503 `directory_unavailable` past grace (`port49 workload` exits
+    75), sessions deny `context_stale` at the ceiling, `/readyz` stays 200 by design (decision 34),
+    and the metric and decision records to watch;
+  - pre-warm (keep it on; up to twice the searches), `port49 directory forget spiffe://…`, and each
+    refusal with its HTTP status (401 `identity_unmapped`, `identity_ambiguous`,
+    `username_collision`; 503 `directory_unavailable`);
+  - the start lines, quoted with what each means.
+- **Parked.**
+  - **M-5, for plan 13's docs.** Writing a SPIFFE ID onto a person's entry takes effect at the
+    next refresh (within `refresh_interval`); run `port49 revoke user:…` for immediate effect.
+    Until then the entry can serve both domains; only a directory administrator can open the
+    window (ruling 10), and ruling 4 accepts it.
+  - **The Task 8 re-review's four Minors,** none a security issue, judged by the final review.
+  - **Declined by the final review:** several SPIFFE IDs in one identity subject share one
+    `(nas, username)` (plan 8's intent); refusing the attribute by OID form as well as name.
+- **Fixed after the final review.** M-1 (the start line names any entry under the workload
+  `user_filter`), M-2 (a lint finding for a spiffe-only subject with no `username:`), M-3 (config
+  refuses `attribute` equal to `username_attribute` or `principal_attribute`), M-4 (decision 41
+  ruling 4 says the entry always needs a username), M-6 (SPIFFE IDs in the resolver's log lines go
+  through `printsafe.Line`). I-2 (the §15 conflict with main) was resolved by the merge 0dcfabc.
 
 ## Plan 9 — Agent in full (§19 step 9)
 

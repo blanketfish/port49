@@ -23,9 +23,19 @@ const (
 	DirectoryOff
 )
 
+// The trust domains, as a Subject's Domain and attached_roles name them.
+const (
+	DomainHumans   = "humans"
+	DomainMachines = "machines"
+)
+
 // Member is a principal as the broker resolved it.
 type Member struct {
-	Principal  string
+	Principal string
+	// Domain is the verifier's list the principal came from: DomainMachines
+	// for a workload the broker resolved through the workload mapping
+	// (decision 41), DomainHumans or "" for a person.
+	Domain     string
 	Directory  bool
 	Username   string
 	GroupDNs   []string
@@ -51,16 +61,44 @@ func (p *Policy) subjectsOf(m Member) []*Subject {
 	if name, ok := p.byID[m.Principal]; ok {
 		out = append(out, p.subs[name])
 	}
-	// A group subject matches people, never a machine principal.
-	if m.Directory && p.env.Directory != DirectoryOff && strings.HasPrefix(m.Principal, "user:") {
+	// A group subject matches people and a machine_group subject workloads,
+	// each only its own domain's (design §7; decision 41 ruling 5).
+	if domain := p.groupDomainOf(m); domain != "" {
 		for _, name := range sortedKeys(p.subs) {
-			if sub := p.subs[name]; sub.Group != "" && sub.matches(m) {
+			if sub := p.subs[name]; sub.Group != "" && sub.Domain == domain && sub.matches(m) {
 				out = append(out, sub)
 			}
 		}
 	}
 	slices.SortFunc(out, func(a, b *Subject) int { return strings.Compare(a.Name, b.Name) })
 	return out
+}
+
+// groupDomainOf is the domain whose group subjects m may match: humans for a
+// user: principal the directory resolved, machines for a workload's SPIFFE ID
+// resolved through the workload mapping, "" otherwise. Both the member's
+// domain and the principal's form must agree, so a mislabeled member matches
+// no group at all.
+func (p *Policy) groupDomainOf(m Member) string {
+	switch {
+	case !m.Directory:
+		return ""
+	case m.Domain != DomainMachines && strings.HasPrefix(m.Principal, "user:") && p.env.Directory != DirectoryOff:
+		return DomainHumans
+	case m.Domain == DomainMachines && strings.HasPrefix(m.Principal, spiffe.Scheme) &&
+		p.env.WorkloadDirectory != DirectoryOff:
+		return DomainMachines
+	}
+	return ""
+}
+
+// DeclaredFor is the username the identity subject listing principal declares,
+// "" when none lists it or it declares none (decision 41 ruling 4).
+func (p *Policy) DeclaredFor(principal string) string {
+	if name, ok := p.byID[principal]; ok {
+		return p.subs[name].Username
+	}
+	return ""
 }
 
 // matches reports whether a group subject's group is one of m's: by DN,
@@ -194,12 +232,18 @@ func leastTTL(subs []*Subject) time.Duration {
 	return least
 }
 
-// GroupValues is every group subject's group:, once each, sorted: the
-// population pre-warm enumerates (Ruling 20).
-func (p *Policy) GroupValues() []string {
+// GroupValues is every group: subject's value, once each, sorted: the people
+// pre-warm enumerates (Ruling 20). A machine_group: is never in it.
+func (p *Policy) GroupValues() []string { return p.groupValues(DomainHumans) }
+
+// MachineGroupValues is every machine_group: subject's value, once each,
+// sorted: the workloads pre-warm enumerates (decision 41 ruling 6).
+func (p *Policy) MachineGroupValues() []string { return p.groupValues(DomainMachines) }
+
+func (p *Policy) groupValues(domain string) []string {
 	var out []string
 	for _, s := range p.subs {
-		if s.Group != "" {
+		if s.Group != "" && s.Domain == domain {
 			out = append(out, s.Group)
 		}
 	}
@@ -207,11 +251,16 @@ func (p *Policy) GroupValues() []string {
 	return slices.Compact(out)
 }
 
-// GroupSubjects is every group subject's name, sorted.
-func (p *Policy) GroupSubjects() []string {
+// GroupSubjects is every group: subject's name, sorted.
+func (p *Policy) GroupSubjects() []string { return p.groupSubjects(DomainHumans) }
+
+// MachineGroupSubjects is every machine_group: subject's name, sorted.
+func (p *Policy) MachineGroupSubjects() []string { return p.groupSubjects(DomainMachines) }
+
+func (p *Policy) groupSubjects(domain string) []string {
 	var out []string
 	for _, name := range sortedKeys(p.subs) {
-		if p.subs[name].Group != "" {
+		if s := p.subs[name]; s.Group != "" && s.Domain == domain {
 			out = append(out, name)
 		}
 	}

@@ -175,7 +175,7 @@ func checkClaim(t *testing.T, p *Policy, subject string, d admission.Device, lin
 // What CI reports about §11: svc_oxidized's fallback exposure, which is spec
 // §12's own example — port49 confines it to show commands, and elevated_session
 // lands it at admin, network-admin on the device when port49 cannot answer —
-// three group subjects nobody can mint for until plan 7, and the SRX whose
+// three group subjects that mint only with broker.directory configured, and the SRX whose
 // version the comparator could not order, included in the mitigation and
 // named (spec §5.5).
 func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {

@@ -104,8 +104,8 @@ func (p *Policy) Resolve(principal string, d admission.Device, now time.Time) (R
 }
 
 // ResolveSubject is Resolve for a subject named directly, as the offline
-// tools name them: a group subject has no identity to resolve by until plan 7
-// reads the directory.
+// tools name them: a group subject has no identity to resolve by, and a
+// subject whose username is its directory entry's resolves with Username "".
 func (p *Policy) ResolveSubject(subject string, d admission.Device, now time.Time) (Resolution, error) {
 	sub, ok := p.subs[subject]
 	if !ok {

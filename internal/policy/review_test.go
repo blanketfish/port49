@@ -39,7 +39,7 @@ func TestReviewListsEveryGrantRow(t *testing.T) {
 
 // ServedUsernames is every username a grant reaches the device with, by the
 // subject that claims it; a group subject's members are the directory's, so
-// the group is named instead (spec §5.6; plan 7).
+// the group is named instead (spec §5.6).
 func TestServedUsernamesAreTheOnesAGrantReaches(t *testing.T) {
 	p := mustParse(t, good)
 	users, groups, err := p.ServedUsernames("leaf-01", noon)

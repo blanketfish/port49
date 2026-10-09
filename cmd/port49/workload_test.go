@@ -519,3 +519,21 @@ func TestWorkloadIdentityUndecodableAnswerIsFinal(t *testing.T) {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
+
+// The 3am case (decision 41 ruling 7): through a DC outage past grace the
+// broker answers 503 directory_unavailable; port49 workload token retries to
+// --deadline, writes nothing, and exits 75 so cron tries the next window.
+func TestADirectoryOutageExitsTemporary(t *testing.T) {
+	down := workloadBroker(t, func(w http.ResponseWriter, _ api.MintRequest) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "directory_unavailable", Detail: "no directory server answered " +
+			"and no membership verified within the grace window is held; the agent retries"})
+	})
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, down...), "leaf1"), &out, &errb); code != exitTemporary ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "503 directory_unavailable") ||
+		!strings.Contains(errb.String(), "1 of 1 devices were not minted; run again") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}

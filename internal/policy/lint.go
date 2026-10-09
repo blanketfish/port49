@@ -67,6 +67,12 @@ const (
 	// selects nothing there. A warning, not a failure, since a device may be
 	// pinned before it is onboarded (spec §10).
 	FindingPinAbsent = "pin_absent"
+	// FindingWorkloadNoUsername is a subject of spiffe:// identities alone with
+	// no username:. The offline tools accept it, not knowing whether the
+	// deployment maps workloads to directory entries; a broker without that
+	// mapping refuses the reload (decision 41 ruling 4). A warning, not a
+	// failure.
+	FindingWorkloadNoUsername = "workload_no_username"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -93,14 +99,26 @@ func (p *Policy) Lint(now time.Time) []Finding {
 		if len(p.Grants(name)) == 0 {
 			add(FindingGrantlessSubject, "subject %q has no grant and matches nothing; remove the block (spec §12)", name)
 		}
+		if sub.Domain == DomainMachines && len(sub.Identity) > 0 && sub.Username == "" && allSPIFFE(sub.Identity) &&
+			len(p.Grants(name)) > 0 {
+			add(FindingWorkloadNoUsername, "subject %q declares no username: it mints only under "+
+				"broker.identity.machines[].directory, where its entry's username_attribute names it", name)
+		}
 		if len(sub.API) > 0 {
 			add(FindingAPIRights, "subject %q holds api: [%s], authority over other people's sessions (spec §2)",
 				name, strings.Join(sub.API, " "))
 		}
 		if sub.Group != "" {
-			add(FindingGroupSubject, "subject %q is a group: the broker matches a principal to a group through the "+
-				"directory, which is plan 7's, so until then it mints for no one; explain and policy tests "+
-				"evaluate it by name", name)
+			// Lint reads the policy alone, so it says the condition, not
+			// whether this deployment meets it; the start says that
+			// (decision 38 ruling 17; decision 41 ruling 5).
+			cond, who := "broker.directory configured", "a person"
+			if sub.Domain == DomainMachines {
+				cond, who = "broker.identity.machines[].directory configured (a workload certificate's directory "+
+					"mapping)", "a workload"
+			}
+			add(FindingGroupSubject, "subject %q is a %s: subject: it mints only with %s, through which the broker "+
+				"matches %s to the group; explain and policy tests evaluate it by name", name, sub.GroupKey(), cond, who)
 		}
 	}
 	for name, r := range p.roles {
