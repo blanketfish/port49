@@ -344,6 +344,29 @@ func TestPrewarmVerifiesIdentityOnlyWorkloads(t *testing.T) {
 	}
 }
 
+// The people's cap line, said first, does not silence the machine groups' cap
+// line, and that line says it is the workloads' cap.
+func TestPrewarmSaysTheWorkloadsCapAfterThePeoplesCap(t *testing.T) {
+	w := newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 1
+	w.dir.onBase(gOnCall, "(objectClass=*)", memberEntry(alice, dave))
+	addUser(w, alice, "alice", grp(gOnCall, "netops-oncall"))
+	addUser(w, dave, "dave")
+	const stray = "CN=stray,OU=Workloads,DC=corp"
+	w.dir.onBase(gBackup, "(objectClass=*)", entry(gBackup, map[string][]string{"member": {wlDN, stray}}))
+	w.dir.onBase(wlDN, "(objectClass=user)", wlEntry(wlID))
+	rep, err := w.r.PrewarmAll(context.Background(), []string{gOnCall}, []string{gBackup}, nil)
+	if err != nil || !rep.Capped {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if n := w.say.count("pre-warm reached prewarm.max_principals (1); the rest"); n != 1 {
+		t.Fatalf("the people's cap was said %d times: %v", n, w.say.l)
+	}
+	if n := w.say.count("pre-warm reached prewarm.max_principals (1) for the workloads in machine groups"); n != 1 {
+		t.Fatalf("the workloads' cap was said %d times: %v", n, w.say.l)
+	}
+}
+
 // Pre-warm of a machine group's member fails, counted and skipped, when the
 // member's attribute is not a SPIFFE ID in a listed trust domain (a value
 // outside them, or not a SPIFFE ID at all), or when the entry is not under the

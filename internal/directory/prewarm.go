@@ -30,7 +30,12 @@ type PrewarmReport struct {
 // outage (design §10; Ruling 20). groups are the policy's `group:` values: a
 // DN, or a name resolved to its one group under groups_base_dn (a shared name
 // is skipped and said, as it matches no one).
-func (r *Resolver) prewarm(ctx context.Context, c Config, groups []string, at func(dn string) lookup) (PrewarmReport, error) {
+//
+// capKey and capFor tell the pass's cap line apart from another pass's: the
+// sayOnce key suffix and the words that say whose cap it is (both empty for
+// the people's).
+func (r *Resolver) prewarm(ctx context.Context, c Config, groups []string, at func(dn string) lookup,
+	capKey, capFor string) (PrewarmReport, error) {
 	var rep PrewarmReport
 	var dns []string
 	_, err := r.Pool.Do(ctx, func(s Searcher) error {
@@ -92,8 +97,8 @@ func (r *Resolver) prewarm(ctx context.Context, c Config, groups []string, at fu
 		}
 		if capped {
 			rep.Capped = true
-			r.sayOnce("prewarmcap", time.Hour, "directory: pre-warm reached prewarm.max_principals (%d); the rest "+
-				"are not pre-warmed", c.PrewarmMax)
+			r.sayOnce("prewarmcap"+capKey, time.Hour, "directory: pre-warm reached prewarm.max_principals (%d)%s; "+
+				"the rest are not pre-warmed", c.PrewarmMax, capFor)
 			break
 		}
 	}
@@ -129,7 +134,7 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 // no group); without a mapping neither is read. A workload in both is
 // verified twice, which costs one search pair and no grant.
 func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups, workloads []string) (PrewarmReport, error) {
-	rep, err := r.prewarm(ctx, r.Cfg, groups, func(dn string) lookup { return lookup{find: r.byDN(dn), say: dn} })
+	rep, err := r.prewarm(ctx, r.Cfg, groups, func(dn string) lookup { return lookup{find: r.byDN(dn), say: dn} }, "", "")
 	if err != nil {
 		return rep, err
 	}
@@ -140,7 +145,7 @@ func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups, worklo
 			wc.UserFilter = w.UserFilter
 			wrep, err = r.prewarm(ctx, wc, machineGroups, func(dn string) lookup {
 				return lookup{find: r.byWorkloadDN(dn), say: dn, workload: true}
-			})
+			}, ":machine_groups", " for the workloads in machine groups")
 		}
 		if err == nil {
 			err = r.prewarmWorkloads(ctx, slices.Sorted(slices.Values(workloads)), &wrep)

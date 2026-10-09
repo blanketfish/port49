@@ -291,8 +291,8 @@ type Metrics struct {
 	// within directory.grace), unavailable (no server and no grace),
 	// unmapped, ambiguous, collision (the directory's refusals).
 	DirectoryLookups *prometheus.CounterVec
-	// port49_directory_prewarm_principals: principals the last pre-warm
-	// pass verified and stored.
+	// port49_directory_prewarm_principals: people and workloads together
+	// that the last pre-warm pass verified and stored.
 	DirectoryPrewarmPrincipals prometheus.Gauge
 	// port49_directory_prewarm_last_success_timestamp_seconds: the Unix time
 	// the last pre-warm pass finished, 0 before one has.
@@ -629,7 +629,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision."},
 			[]string{"outcome"}),
 		DirectoryPrewarmPrincipals: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_principals",
-			Help: "Principals the last pre-warm pass verified and stored."}),
+			Help: "People and workloads together that the last pre-warm pass verified and stored."}),
 		DirectoryPrewarmLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_last_success_timestamp_seconds",
 			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
 		DirectoryRefreshLastComplete: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
