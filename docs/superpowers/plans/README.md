@@ -126,7 +126,8 @@ and closed the same day on five platforms (PR #42), which also opened L52 (a C80
 TACACS+ method). **8b merged 2026-10-09** (PR #43, bb948e5). **8b written 2026-10-09** (`2026-10-09-08b-workload-directory.md`, eight tasks, six
 rulings Q1–Q6 recorded as decision 41); **8b executed 2026-10-09** on `feature/workload-directory`
 (base `df198b2`), each task reviewed and whole-branch reviewed (0 Critical, 2 Important, 6 Minor,
-fixed or parked), closing L50 (Plan 8b — As built, below). Next: 9–11. 12–13 not yet.
+fixed or parked), closing L50 (Plan 8b — As built, below). **9a built 2026-10-09** on `feature/sweeps-and-ssh`
+(base `40cbb23`; Plan 9a — As built, below), closing L53 and L54. Next: 9b–11. 12–13 not yet.
 **9 split into 9a–9d, and 9a written 2026-10-09** (`2026-10-09-09a-sweeps-and-ssh.md`, nine tasks:
 one spec, five code, one example, one lab, one docs). It covers mint by `scope` with no enumeration
 oracle, `port49 workload token --scope`, the per-user config file, pinned host keys with `port49
@@ -5118,6 +5119,81 @@ merges (CLAUDE.md).
   - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
     lookup plugin over it. Third-party clients look a key up by address, and 9d is where the mint
     can tell them which key to expect.
+
+### Plan 9a — As built
+
+Executed from `2026-10-09-09a-sweeps-and-ssh.md` on `feature/sweeps-and-ssh` (base `40cbb23`), each
+task reviewed, most through one or two fix rounds. The ledger is
+`.superpowers/sdd/2026-10-09-09a-sweeps-and-ssh/progress.md`. The pre-flight (0 Critical, 10
+Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of the spec (§13).
+
+- **Built** (`git log d6bc054..HEAD`; `make test` passes on every package, about 3,240 tests):
+  - **Spec and broker** (ae0446c, c6cdeb2, 26bbb18, 8226bfc, d685ece): mint by `scope`, paged by
+    name, with no enumeration oracle.
+    - `after` takes up to 255 bytes (`bundle.NameOK`); `scope` and `devices` keep 253.
+    - A `devices` key beside `scope` is refused, even when empty.
+    - An empty sweep page sits behind the mint gate and writes one `mint deny no_grants_matched`.
+  - **`port49 workload token --scope`** (acff6f6, 8802f50): sweeps by the broker's pages, and the
+    Oxidized wrapper takes `PORT49_SCOPE`. The minted count excludes denied devices, and a
+    cut-short sweep never exits 0.
+  - **userconfig** (9e38b8f, 4f994ca, 2e7408a, 61b7428, 1f2c4f9): the per-user config file gives
+    `port49 login` its defaults. One top-down path resolver, `resolveOwned`, with `PrivateDir`, walks
+    the written and the resolved path. The broker CA is read once and passed to the agent child on
+    fd 3 (`--broker-ca-fd`).
+  - **hostkeys and `port49 devices trust`** (7589b00, 8773ef8): names match case-insensitively,
+    stored as given, and a fold collision needs `--replace`. A pins file with any line port49
+    cannot parse is refused whole. The trust prompt goes to stderr.
+  - **`port49 ssh`** (f65465e, fa4af0b, cb6965f, 1abc249):
+    - the askpass is `/proc/<pid>/exe` on Linux;
+    - it fails closed on every askpass error path;
+    - it signals its parent through a pidfd-guarded call;
+    - it folds the device name's case in the prompt match;
+    - it restores the terminal;
+    - a stale-socket sweep touches only sockets over 10 s old, so it leaves live sessions alone.
+  - **Netmiko example** (085c63f, 198160b, 3685669): stderr is inherited, port 22 only, and a
+    host-key mismatch names the device. Netmiko 4.8.0 and Paramiko 5.0.0 refuse a wrong or unknown
+    key before authentication.
+  - **Lab:** **L53 and L54 closed 2026-10-09 on five platforms** (EOS, NX-OS, IOS-XE,
+    vJunos-router, vSRX; 317914c, then re-measured with positive controls and closed again in
+    77f3d30; `tests/lab/results/L53-*.md`, `L54-*.md`). `make lab-ssh` re-measures only with
+    `PORT49_LAB_REMEASURE=L53,L54` (b19dc76). The re-measure corrected the first close: the scan
+    does write a log line on EOS, vJunos and vSRX, the negotiated algorithm is `rsa-sha2-256`, and
+    only NX-OS prints a SHA256 fingerprint (404a7c4 fixed the `devices trust` help).
+- **Carried:**
+  - **Pre-beta review:**
+    - by-name `no_grants_matched` denies carry no bundle (pre-existing; fix the three denies
+      together);
+    - mint bodies accept trailing JSON, and the comment at `broker.go:351` is inaccurate;
+    - names of 254–255 bytes can be swept but not named in `devices` (plan 3 F11);
+    - the agent child reads `--cert` and `--key` by path, with the keyfile checks only.
+  - **9d:** inventory host keys and the Python and Ansible clients, in a format that follows what
+    L53 measured.
+  - **9b and 9c:** the OIDC and hardware-key credentials, as outlined above; 9a changes nothing the
+    agent holds.
+  - The final review's findings are added here by the controller.
+- **Operator-facing notes** (the plan's "Operator notes," as the lab measured them; plan 13 owns
+  the guide):
+  - `port49 login` needs no flags once `~/.config/port49/config.yaml` exists. Keep it, the CA file
+    and every directory above them writable by you alone; on Ubuntu run `chmod go-w ~/.config`
+    once. `--config FILE` reads another file, which must exist.
+  - Pin a device once before `port49 ssh`: `port49 devices trust DEVICE`. Verify the key on the
+    console. The lab found: every platform shows the scanned RSA key on a privileged console (EOS
+    `show management ssh hostkey rsa public`; Junos `file show /etc/ssh/ssh_host_rsa_key.pub`;
+    NX-OS `show ssh key`; IOS-XE `show ip ssh` or `show crypto key mypubkey rsa`). Only NX-OS
+    prints a SHA256 fingerprint, so elsewhere compare the key or run `ssh-keygen -lf` on it. Pins
+    are keyed by inventory name; `--fingerprint` is for automation; `--replace` after verifying a
+    changed key.
+  - `port49 ssh DEVICE [-- COMMAND]` needs OpenSSH 8.5 or later; on older ones use `port49 token`.
+    It forces public-key authentication off (L51), asks a jump host's password on your terminal,
+    and sends the token once to the device's own prompt. A refused token is not retried.
+  - A scan by `devices trust` is no TACACS+ exchange and does not count against IOS-XE
+    `login block-for` or NX-OS `aaa authentication rejected`. EOS, IOS-XE, vJunos and vSRX log it
+    on the device; NX-OS does not.
+  - The key survives a reload with the configuration saved, on all five platforms.
+  - On EOS, NX-OS and Junos `port49 ssh` prints the session-ceiling warning (L34).
+  - `port49 workload token --scope NAME` exits 77 for a scope that selects nothing you hold and a
+    scope that does not exist alike. Every sweep page's decision record carries `sweep: {scope,
+    after}`.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
