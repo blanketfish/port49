@@ -294,7 +294,8 @@ func openAtJudged(ctx context.Context, judged judgedReader, gate *skewGate, live
 		if !said {
 			fmt.Fprintf(out, "port49-broker: policy: mints wait for a takeover to judge bundle %s (meta/judged: %s): "+
 				"until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, "+
-				"which port49 workload and the agent retry\n", bundle, rec)
+				"which is this start gate and not a store fault: port49 workload retries it, and port49 token "+
+				"(through the agent) exits saying to retry in 5s\n", bundle, rec)
 			said = true
 		}
 		if !sleepCtx(ctx, every) {

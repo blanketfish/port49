@@ -134,7 +134,8 @@ func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
 
 // mintWith is mintKeyed with the client certificate and key at certFile
 // and keyFile in pkiDir. A 503 store_unavailable, the mint gate's, is
-// tried again for up to 30s, as port49 workload and the agent retry it:
+// tried again for up to 30s, as port49 workload retries it (the agent does
+// not; port49 token exits saying to retry):
 // a port49-broker's start holds every mint until a takeover judges its
 // bundle (decision 36). A test of the gate posts once (postMint).
 func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
