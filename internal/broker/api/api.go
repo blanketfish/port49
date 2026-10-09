@@ -49,10 +49,13 @@ type OIDCProvider struct {
 	Scopes   []string `json:"scopes"`
 }
 
-// MintRequest is POST /v1/tokens. TTLSeconds is a request, not an
-// instruction: the broker clamps it to the subject's token_ttl.
+// MintRequest is POST /v1/tokens: Devices by name, or a page of Scope's
+// (spec §13 decision 42), continued after After. TTLSeconds is a request,
+// not an instruction: the broker clamps it to the subject's token_ttl.
 type MintRequest struct {
-	Devices    []string `json:"devices"`
+	Devices    []string `json:"devices,omitempty"`
+	Scope      string   `json:"scope,omitempty"`
+	After      string   `json:"after,omitempty"`
 	Enable     bool     `json:"enable"`
 	TTLSeconds int      `json:"ttl_seconds"`
 	Purpose    string   `json:"purpose"`
@@ -115,6 +118,9 @@ type MintResponse struct {
 	// more than one; Subject is then absent (plan 7g).
 	Subjects []string   `json:"subjects,omitempty"`
 	Results  []MintItem `json:"results"`
+	// Next is a sweep page's last device when more remain: the next page's
+	// after. Absent at a sweep's end, and on a mint by name.
+	Next string `json:"next,omitempty"`
 }
 
 // Error is every non-200 body.

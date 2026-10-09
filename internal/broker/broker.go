@@ -328,9 +328,14 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a mint request: "+err.Error())
 		return
 	}
-	if len(req.Devices) == 0 || len(req.Devices) > b.BatchMax {
+	if req.Scope != "" || req.After != "" {
+		if msg := sweepRequestError(req); msg != "" {
+			writeError(w, http.StatusBadRequest, "bad_request", msg)
+			return
+		}
+	} else if len(req.Devices) == 0 || len(req.Devices) > b.BatchMax {
 		writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf(
-			"name between 1 and %d devices per request; page a larger sweep (design §17)", b.BatchMax))
+			"name between 1 and %d devices per request, or a scope; page a larger sweep (design §17)", b.BatchMax))
 		return
 	}
 	seen := make(map[string]bool, len(req.Devices))
@@ -365,7 +370,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ref := directoryRefusal(err)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: c.auth()})
+			Principal: principal, Auth: c.auth(), Sweep: sweepOf(req)})
 		b.answerRefusal(w, r, ref)
 		return
 	}
@@ -377,9 +382,29 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		ocancel()
 		if err != nil {
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
+				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth(), Sweep: sweepOf(req)})
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker could not record your session for a logout to find, so it minted nothing; try again")
+			return
+		}
+	}
+
+	// A sweep's page is resolved here, from the policy in force now, so the
+	// reservation below holds each of its devices; each is minted under the
+	// hold against the policy held, as a named device is (decision 42 ruling
+	// 1). An empty page is one answer whatever made it so (ruling 2).
+	var next string
+	if req.Scope != "" {
+		pol := b.Policy.Load()
+		req.Devices, next = pol.SweepPage(m, req.Scope, req.After, b.BatchMax, now)
+		if len(req.Devices) == 0 {
+			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+				Reason: decision.NoGrantsMatched, Principal: principal,
+				Auth:  &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
+				Sweep: sweepOf(req)})
+			resp := api.MintResponse{Principal: principal, Results: []api.MintItem{}}
+			resp.Subject, resp.Subjects = subjectNames(pol, m)
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 	}
@@ -404,7 +429,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		b.Metrics.BrokerIdempotency.WithLabelValues("store_error").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth(), Sweep: sweepOf(req)})
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 			"the broker could not reserve the Idempotency-Key, so it minted nothing; retry under the same key")
 		return
@@ -451,7 +476,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		release()
 		ref := directoryRefusal(directory.ErrUsernameTaken)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: c.auth()})
+			Principal: principal, Auth: c.auth(), Sweep: sweepOf(req)})
 		b.answerRefusal(w, r, ref)
 		return
 	}
@@ -459,7 +484,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		if err := b.MintGate(pol); err != nil {
 			release()
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
+				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth(), Sweep: sweepOf(req)})
 			w.Header().Set("Retry-After", "5")
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker has not yet recorded what it serves in the store, or seen it judged since it started, "+
@@ -495,7 +520,32 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	if b.revokedSince(w, r, c, resp.Results) {
 		return
 	}
+	resp.Next = next
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// sweepRequestError is why a request naming scope or after is malformed, or
+// "" (decision 42 ruling 1): a scope in place of devices, after only beside
+// a scope, each written as an inventory name is.
+func sweepRequestError(req api.MintRequest) string {
+	switch {
+	case req.Scope == "":
+		return "after continues a sweep: name its scope (design §17)"
+	case len(req.Devices) > 0:
+		return "name devices or a scope, not both (design §17)"
+	case !deviceName(req.Scope) || (req.After != "" && !deviceName(req.After)):
+		return fmt.Sprintf("a scope, and a sweep's after, is 1 to %d printable ASCII characters", maxDeviceName)
+	}
+	return ""
+}
+
+// sweepOf is the sweep block a mint record carries, nil for a mint by name
+// (decision 42 ruling 4).
+func sweepOf(req api.MintRequest) *decision.Sweep {
+	if req.Scope == "" {
+		return nil
+	}
+	return &decision.Sweep{Scope: req.Scope, After: req.After}
 }
 
 // authenticate is the first step of every authenticated endpoint but the
@@ -1003,7 +1053,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
-			Device: &decision.Device{Name: name, Platform: platform}}
+			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req)}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
 		}
@@ -1120,7 +1170,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
 		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-		Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf})
+		Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req)})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):

@@ -39,6 +39,9 @@ type Record struct {
 	Change *Change `json:"change,omitempty"`
 	// Forget is the directory_forget record's body (spec §5.7).
 	Forget *Forget `json:"forget,omitempty"`
+	// Sweep names the sweep a mint record's device came from, when the
+	// request was by scope (spec §13 decision 42 ruling 4).
+	Sweep *Sweep `json:"sweep,omitempty"`
 	// Revocation is the revoke record's body (spec §5.7).
 	Revocation *Revocation `json:"revocation,omitempty"`
 	// Explain is an explain record's own (spec §5.7): who asked, and whether
@@ -208,6 +211,12 @@ type Mint struct {
 	TokenSHA256 []string `json:"token_sha256"`
 	TTLSeconds  int      `json:"ttl_seconds"`
 	BlobHash    string   `json:"blob,omitempty"`
+}
+
+// Sweep is a mint record's sweep: the scope and the page's cursor.
+type Sweep struct {
+	Scope string `json:"scope"`
+	After string `json:"after,omitempty"`
 }
 
 // Policy is the record's policy identity and what it matched (spec §5.7).
