@@ -84,7 +84,7 @@ var l53UptimeLine = regexp.MustCompile(`(?im)^.*(uptime|booted).*$`)
 // in. The Junos images log to `messages` through the syslog stanza in
 // configs/vjunos-startup.conf; without it vSRX has no such file at all.
 var l53Log = map[string][]string{
-	"arista_eos":            {"show logging"},
+	"arista_eos":            {"show logging", "bash sudo cat /var/log/secure"},
 	"cisco_nxos":            {"show logging logfile"},
 	"cisco_iosxe":           {"show logging"},
 	"juniper_vjunos-router": {"show log messages"},
@@ -96,6 +96,21 @@ var l53Log = map[string][]string{
 // log that records nothing of a login, so its silence about the scan proves
 // nothing (task 8 review I-2).
 const l53ControlUser = "l53-control"
+
+// l53ControlLine is, per platform, what the control's line in the log
+// matches. The user's name is in it where the log writes one. NX-OS masks
+// the name (`Authentication failure for illegal user *****`) and IOS-XE
+// writes none (an SSH2_USERAUTH line for an empty user, Failed), so there it is the line
+// for a failed login nearest the control's window, and the note says that is
+// what was matched. Found by logging in as l53-control and reading each log
+// (task 8 fix round 1).
+var l53ControlLine = map[string]*regexp.Regexp{
+	"arista_eos":            regexp.MustCompile(regexp.QuoteMeta(l53ControlUser)),
+	"cisco_nxos":            regexp.MustCompile(`PAM: Authentication failure for illegal user`),
+	"cisco_iosxe":           regexp.MustCompile(`SSH2_USERAUTH: User '' .*Failed`),
+	"juniper_vjunos-router": regexp.MustCompile(regexp.QuoteMeta(l53ControlUser)),
+	"juniper_vsrx":          regexp.MustCompile(regexp.QuoteMeta(l53ControlUser)),
+}
 
 // l53Window is a span of host time a step of the test took.
 type l53Window struct {
@@ -180,12 +195,21 @@ func l53Step(line string, offset time.Duration, scan, control l53Window) string 
 // into its step; and it says whether the log can speak to the scan. The
 // second result is false when the control's line is missing: the log clause
 // is then unmeasured on this log.
-func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass string) (string, bool) {
+func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass string,
+	controlRe *regexp.Regexp) (string, bool) {
+	// The control's line is the one controlRe matches nearest the window of
+	// the login that made it, and within 10s of it: the harness's own failed
+	// logins (its probes) come 20s or more before the control, and are not it.
 	var ctl string
+	near := 10 * time.Second
+	mid := l53TimeOfDay(control.from.Add(control.to.Sub(control.from) / 2))
 	for _, ln := range fresh {
-		if _, ok := l53ClockOf(ln); ok && strings.Contains(ln, l53ControlUser) {
-			ctl = ln
-			break
+		t, ok := l53ClockOf(ln)
+		if !ok || !controlRe.MatchString(ln) {
+			continue
+		}
+		if d := max(l53Wrap(t-mid), -l53Wrap(t-mid)); d < near {
+			ctl, near = ln, d
 		}
 	}
 	win := func(w l53Window) string {
@@ -196,9 +220,9 @@ func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass 
 		"control login %s.\n\n", cmd, len(fresh), win(scan), win(control))
 	var offset time.Duration
 	if ctl == "" {
-		fmt.Fprintf(&b, "**The control, a refused login as `%s`, is not in this log**: it records no failed "+
-			"login, so its silence about the scan means nothing, and **the log clause is UNMEASURED here**.\n\n",
-			l53ControlUser)
+		fmt.Fprintf(&b, "**The control, a refused login as `%s`, is not in this log** (no line matching `%s` within 10s "+
+			"of its window): it records no failed login, so its silence about the scan means nothing, and **the log "+
+			"clause is UNMEASURED here**.\n\n", l53ControlUser, controlRe)
 	} else {
 		t, _ := l53ClockOf(ctl)
 		if !l53In(t, 0, control) {
@@ -211,8 +235,9 @@ func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass 
 			clock = fmt.Sprintf("the device's clock differs from the host's by about %s, which is removed below",
 				offset.Round(time.Second))
 		}
-		fmt.Fprintf(&b, "The control, a refused login as `%s` (host %s), is in the log, stamped %s (%s), so this log "+
-			"records a failed login:\n\n    %s\n\n", l53ControlUser, win(control), l53Clock.FindString(ctl), clock, ctl)
+		fmt.Fprintf(&b, "The control, a refused login as `%s` (host %s), is in the log as the line matching `%s` "+
+			"nearest its window, stamped %s (%s), so this log records a failed login:\n\n    %s\n\n", l53ControlUser,
+			win(control), controlRe, l53Clock.FindString(ctl), clock, ctl)
 	}
 	steps := map[string]int{}
 	var tagged []string
@@ -778,6 +803,9 @@ func TestL53L54PortSSH(t *testing.T) {
 			t.Errorf("a login as %s succeeded; it must be refused", l53ControlUser)
 		}
 		control := l53Window{controlFrom, time.Now()}
+		// The admin session that reads the log logs in too: its lines must
+		// fall outside the control's window and its slack.
+		time.Sleep(5 * time.Second)
 
 		// L53: the console, as an operator with privilege sees it (the
 		// break-glass CLI): every candidate command, the uptime, and the
@@ -813,7 +841,8 @@ func TestL53L54PortSSH(t *testing.T) {
 		say(&l53, "Before the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(outs[nc], -1))
 		logMeasured := false
 		for i, cmd := range l53Log[l.p.name] {
-			note, sawControl := l53LogNote(cmd, l53NewLines(logBefore[cmd], outs[nc+1+i]), scan, control, breakglassUser)
+			note, sawControl := l53LogNote(cmd, l53NewLines(logBefore[cmd], outs[nc+1+i]), scan, control, breakglassUser,
+				l53ControlLine[l.p.name])
 			say(&l53, "%s", note)
 			logMeasured = logMeasured || sawControl
 		}

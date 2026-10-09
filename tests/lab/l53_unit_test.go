@@ -10,6 +10,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,7 +145,8 @@ func TestL53LogNoteAttributesByStampAndNeedsTheControl(t *testing.T) {
 			t.Errorf("l53Step(%q) = %q, want %q", line, got, want)
 		}
 	}
-	note, seen := l53LogNote("show logging", fresh, scan, control, "breakglass")
+	re := regexp.MustCompile("l53-control")
+	note, seen := l53LogNote("show logging", fresh, scan, control, "breakglass", re)
 	for _, want := range []string{"scan 1, control 1, before the scan 2", "is in the log", "[scan] *Oct  9 18:13:47.370",
 		"[before the scan] *Oct  9 18:13:31.496", "No line names the break-glass login"} {
 		if !strings.Contains(note, want) {
@@ -153,11 +156,21 @@ func TestL53LogNoteAttributesByStampAndNeedsTheControl(t *testing.T) {
 	if !seen {
 		t.Error("the control is in the log, so the clause is measured")
 	}
-	note, seen = l53LogNote("show log messages", fresh[:4], scan, control, "breakglass")
+	note, seen = l53LogNote("show log messages", fresh[:4], scan, control, "breakglass", re)
 	if seen || !strings.Contains(note, "UNMEASURED") {
 		t.Errorf("a log without the control must be unmeasured: seen %v\n%s", seen, note)
 	}
-	note, _ = l53LogNote("show logging", append(fresh, "*Oct  9 18:14:10.000: Login Success [user: breakglass]"), scan, control, "breakglass")
+	// IOS-XE names no user: the control is the failed-login line nearest its window. The harness's probe
+	// failed 22s before is not within 10s, so without the control's own line the clause is unmeasured.
+	iosxe := regexp.MustCompile(`SSH2_USERAUTH: User '' .*Failed`)
+	if _, seen = l53LogNote("show logging", fresh[:4], scan, control, "breakglass", iosxe); seen {
+		t.Error("a probe's failed login 22s before the control is not the control")
+	}
+	nameless := append(slices.Clone(fresh[:4]), "*Oct  9 18:14:00.100: %SSH-5-SSH2_USERAUTH: User '' authentication Failed")
+	if _, seen = l53LogNote("show logging", nameless, scan, control, "breakglass", iosxe); !seen {
+		t.Error("a failed login in the control's window is the control where the log names no user")
+	}
+	note, _ = l53LogNote("show logging", append(fresh, "*Oct  9 18:14:10.000: Login Success [user: breakglass]"), scan, control, "breakglass", re)
 	if !strings.Contains(note, "The break-glass login that read the log is among the lines.") {
 		t.Errorf("the break-glass line is among them:\n%s", note)
 	}
@@ -166,7 +179,7 @@ func TestL53LogNoteAttributesByStampAndNeedsTheControl(t *testing.T) {
 	if got := l53Step("Oct  9 18:13:52 srx1 sshd[1]: Connection closed [preauth]", 5*time.Second, scan, control); got != "scan" {
 		t.Errorf("a stamp 5s ahead of the host is the scan's once the offset is removed, got %q", got)
 	}
-	if note, seen := l53LogNote("show log messages", []string{skewed}, scan, control, ""); !seen ||
+	if note, seen := l53LogNote("show log messages", []string{skewed}, scan, control, "", re); !seen ||
 		!strings.Contains(note, "differs from the host's by about 6s") {
 		t.Errorf("the offset comes from the control's stamp: seen %v\n%s", seen, note)
 	}
