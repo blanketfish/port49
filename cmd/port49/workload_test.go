@@ -537,3 +537,51 @@ func TestADirectoryOutageExitsTemporary(t *testing.T) {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
+
+// --scope sweeps every page and writes one line per permitted device.
+func TestWorkloadTokenSweepsAScope(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, func(w http.ResponseWriter, req api.MintRequest) {
+		resp := api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01"}
+		item := func(d, tok string) api.MintItem {
+			return api.MintItem{Device: d, Verdict: "permit", Address: "10.0.0.1", Platform: "arista_eos",
+				Username: "svc", Login: tok, ExpiresAt: "2026-10-09T03:00:00Z"}
+		}
+		switch req.After {
+		case "":
+			resp.Results, resp.Next = []api.MintItem{item("leaf1", "T1")}, "leaf1"
+		case "leaf1":
+			resp.Results = []api.MintItem{item("leaf2", "T2")}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "--scope", "backup_targets"), &out, &errb)
+	if code != 0 || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc\tT1\t2026-10-09T03:00:00Z\n"+
+		"leaf2\t10.0.0.1\tarista_eos\tsvc\tT2\t2026-10-09T03:00:00Z\n" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A sweep that selects nothing for the workload is final, exit 77, with one
+// message whether the scope exists or not (decision 42 rulings 2 and 5).
+func TestAnEmptySweepIsFinal(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Results: []api.MintItem{}})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "--scope", "nope"), &out, &errb)
+	if code != exitFinal || out.Len() != 0 || !strings.Contains(errb.String(),
+		"port49 workload token: scope nope: no device it selects is one you hold a grant on, or no scope has that name") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// --scope with a device list is usage.
+func TestAScopeAndDevicesTogetherIsUsage(t *testing.T) {
+	flags := workloadBroker(t, mixed)
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"workload", "token"}, flags...), "--scope", "dc", "leaf1"), &out, &errb); code != 2 {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}

@@ -16,6 +16,8 @@
 #   PORT49_CERT         this host's workload certificate, renewed by your CA (required)
 #   PORT49_KEY          its key, readable by this user alone (required)
 #   OXIDIZED_NODES      the device names to back up, one a line (default /etc/port49/oxidized-nodes)
+#   PORT49_SCOPE        a policy scope: mint every device it selects that this host
+#                       holds a grant on, in place of OXIDIZED_NODES (port49 plan 9a)
 #   OXIDIZED_ROUTER_DB  Oxidized's CSV source (default ~/.config/oxidized/router.db)
 #   OXIDIZED_REST       Oxidized's REST API (default http://127.0.0.1:8888)
 #   PORT49_TTL          the tokens' lifetime: about one backup run (default 15m);
@@ -66,9 +68,11 @@ if ! tsv=$(mktemp "${routerdb}.tsv.XXXXXX") || ! db=$(mktemp "${routerdb}.XXXXXX
   exit 75
 fi
 
+targets=(--devices-file "$nodes")
+if [ -n "${PORT49_SCOPE:-}" ]; then targets=(--scope "$PORT49_SCOPE"); fi
 status=0
 "$port49" workload token --broker "$PORT49_BROKER" --broker-ca "$PORT49_BROKER_CA" \
-  --cert "$PORT49_CERT" --key "$PORT49_KEY" --devices-file "$nodes" \
+  --cert "$PORT49_CERT" --key "$PORT49_KEY" "${targets[@]}" \
   --ttl "${PORT49_TTL:-15m}" --purpose "oxidized backup" --format tsv --out "$tsv" || status=$?
 case $status in
 0 | 1 | 75) ;; # 75 may carry the pages minted before the deadline

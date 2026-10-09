@@ -38,7 +38,7 @@ const usage = `usage:
   port49 identity [--json] [--socket PATH]
   port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
-                        [--deadline DURATION] [DEVICE...]
+                        [--deadline DURATION] [--scope NAME | DEVICE...]
                         (no agent: the certificate and key are read each run; under cron, always
                         --out, since cron mails a job's stdout; exits 1 when some devices were
                         written and some not, 75 when the broker did not answer by the deadline,

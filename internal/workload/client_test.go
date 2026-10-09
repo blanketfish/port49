@@ -586,3 +586,75 @@ func TestADirectoryOutageIsRetriedToTheDeadline(t *testing.T) {
 		}
 	}
 }
+
+// sweepPages answers each sweep request with the page its after names.
+func sweepPages(pages map[string]api.MintResponse) func(http.ResponseWriter, api.MintRequest) {
+	return func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(pages[req.After])
+	}
+}
+
+func permitted(names ...string) []api.MintItem {
+	var out []api.MintItem
+	for _, n := range names {
+		out = append(out, api.MintItem{Device: n, Verdict: "permit", Username: "svc-oxidized", Login: "TOKEN" + n})
+	}
+	return out
+}
+
+// A sweep follows next, each page under its own key, naming the scope and
+// no device list (decision 42 ruling 3).
+func TestASweepFollowsNextEachPageUnderItsOwnKey(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){sweepPages(map[string]api.MintResponse{
+		"":  {Principal: "spiffe://corp.example.com/host/oxidized-01", Subject: "svc_oxidized", Results: permitted("a", "b"), Next: "b"},
+		"b": {Principal: "spiffe://corp.example.com/host/oxidized-01", Results: permitted("c")},
+	})}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc", TTL: time.Minute})
+	if err != nil || len(resp.Results) != 3 || resp.Results[2].Device != "c" || resp.Subject != "svc_oxidized" {
+		t.Fatalf("%d results, subject %q: %v", len(resp.Results), resp.Subject, err)
+	}
+	if len(f.bodies) != 2 || f.bodies[0].Scope != "dc" || f.bodies[0].After != "" || f.bodies[1].After != "b" ||
+		len(f.bodies[0].Devices) != 0 || f.keys[0] == f.keys[1] || f.bodies[1].TTLSeconds != 60 {
+		t.Fatalf("keys %v bodies %+v", f.keys, f.bodies)
+	}
+}
+
+// A broker whose next does not advance is a fault, never a loop.
+func TestASweepThatDoesNotAdvanceStops(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){sweepPages(map[string]api.MintResponse{
+		"":  {Results: permitted("a"), Next: "a"},
+		"a": {Results: permitted("b"), Next: "a"},
+	})}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc"})
+	var de *DecodeError
+	if !errors.As(err, &de) || len(resp.Results) != 2 || len(f.bodies) != 2 {
+		t.Fatalf("err %v, %d results, %d requests", err, len(resp.Results), len(f.bodies))
+	}
+}
+
+// An empty sweep is no error: the caller says what it means.
+func TestAnEmptySweepIsNoError(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){sweepPages(map[string]api.MintResponse{
+		"": {Principal: "spiffe://corp.example.com/host/oxidized-01", Results: []api.MintItem{}},
+	})}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "nope"})
+	if err != nil || len(resp.Results) != 0 || len(f.bodies) != 1 {
+		t.Fatalf("err %v, %d results, %d requests", err, len(resp.Results), len(f.bodies))
+	}
+}
+
+// A sweep page the gate refuses is retried under its key, like any mint.
+func TestASweepPageRetriesWhileTheGateIsClosed(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusServiceUnavailable, "store_unavailable", "3"),
+		sweepPages(map[string]api.MintResponse{"": {Results: permitted("a")}})}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc"})
+	if err != nil || len(resp.Results) != 1 || len(f.keys) != 2 || f.keys[0] != f.keys[1] ||
+		len(h.slept) != 1 || h.slept[0] != 3*time.Second {
+		t.Fatalf("err %v, %d results, keys %v, slept %v", err, len(resp.Results), f.keys, h.slept)
+	}
+}

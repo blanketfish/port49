@@ -217,9 +217,11 @@ func New(cfg Config) (*Client, error) {
 	return &Client{cfg: cfg, http: hc, sleep: sleepCtx}, nil
 }
 
-// MintOptions is one run's mint.
+// MintOptions is one run's mint: Devices by name, or every device Scope
+// selects that the workload holds a grant on (spec §13 decision 42).
 type MintOptions struct {
 	Devices []string
+	Scope   string
 	Enable  bool
 	TTL     time.Duration
 	Purpose string
@@ -231,6 +233,9 @@ type MintOptions struct {
 // device from that page on.
 func (c *Client) Mint(ctx context.Context, o MintOptions) (api.MintResponse, error) {
 	deadline := c.cfg.Now().Add(c.cfg.Deadline)
+	if o.Scope != "" {
+		return c.sweep(ctx, deadline, o)
+	}
 	var conf api.Config
 	if err := c.do(ctx, deadline, http.MethodGet, "/v1/config", nil, "", &conf); err != nil {
 		return api.MintResponse{}, unminted(err, o.Devices)
@@ -258,6 +263,43 @@ func (c *Client) Mint(ctx context.Context, o MintOptions) (api.MintResponse, err
 		out.Results = append(out.Results, resp.Results...)
 	}
 	return out, nil
+}
+
+// sweep mints o.Scope's pages, each under its own Idempotency-Key, following
+// the broker's next until it names none (decision 42 ruling 3). A next that
+// does not advance past the page's after is the broker's fault, a
+// *DecodeError, never a loop. A page the deadline ends is a *TemporaryError
+// with the pages before it returned; it names no unminted device, since a
+// sweep's devices are the broker's to list.
+func (c *Client) sweep(ctx context.Context, deadline time.Time, o MintOptions) (api.MintResponse, error) {
+	out := api.MintResponse{Results: []api.MintItem{}}
+	after := ""
+	for {
+		body, err := json.Marshal(api.MintRequest{Scope: o.Scope, After: after, Enable: o.Enable,
+			TTLSeconds: int(o.TTL / time.Second), Purpose: o.Purpose})
+		if err != nil {
+			return out, err
+		}
+		key, err := newKey()
+		if err != nil {
+			return out, err
+		}
+		var resp api.MintResponse
+		if err := c.do(ctx, deadline, http.MethodPost, "/v1/tokens", body, key, &resp); err != nil {
+			return out, err
+		}
+		if out.Principal == "" {
+			out.Principal, out.Subject, out.Subjects = resp.Principal, resp.Subject, resp.Subjects
+		}
+		out.Results = append(out.Results, resp.Results...)
+		if resp.Next == "" {
+			return out, nil
+		}
+		if resp.Next <= after || len(resp.Results) == 0 {
+			return out, &DecodeError{Msg: fmt.Sprintf("the broker's sweep of %s did not advance past %q", o.Scope, after)}
+		}
+		after = resp.Next
+	}
 }
 
 // Identity is what the broker resolves this certificate to.
