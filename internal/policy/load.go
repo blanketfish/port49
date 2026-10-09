@@ -8,6 +8,7 @@ package policy
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -69,6 +70,11 @@ type Env struct {
 	// offline tool or the inventory service does not know, and checks no
 	// human subject's username for it.
 	Directory DirectoryMode
+	// WorkloadDirectory is whether this process's workload verifier maps a
+	// workload certificate through the directory (plan 8b; spec §13 decision
+	// 41): on, off, or unknown to an offline tool, which then matches
+	// machine_group subjects and asks a spiffe://-only subject for no username.
+	WorkloadDirectory DirectoryMode
 	// Now is the present the joint checks start from: a grant already expired
 	// by then is not checked. Zero is the clock at load; tests fix it.
 	Now time.Time
@@ -166,10 +172,12 @@ type Role struct {
 
 // Subject addresses a set of principals (spec §2).
 type Subject struct {
-	Name     string
+	Name string
+	// Group is a group subject's group: or machine_group: value; Domain says
+	// which (humans for group:, machines for machine_group:).
 	Group    string
 	Identity []string
-	Domain   string // "humans" | "machines", the key attached_roles uses
+	Domain   string // DomainHumans | DomainMachines, the key attached_roles uses
 	Username string
 	Enable   string
 	TokenTTL time.Duration
@@ -177,6 +185,18 @@ type Subject struct {
 	// groupDN is a group: given as a DN, in the directory package's canonical
 	// form, parsed at load; empty for a group given as a name.
 	groupDN string
+}
+
+// GroupKey is the key a group subject was written with: "group",
+// "machine_group", or "" for an identity subject.
+func (s *Subject) GroupKey() string {
+	switch {
+	case s.Group == "":
+		return ""
+	case s.Domain == DomainMachines:
+		return "machine_group"
+	}
+	return "group"
 }
 
 // Grant is one flat row: subject × scope × roles (spec §13, decision 2).
@@ -1169,7 +1189,7 @@ func (p *Policy) buildScopes(f file) error {
 			}
 		}
 		deny := false
-		for _, domain := range []string{"humans", "machines"} {
+		for _, domain := range []string{DomainHumans, DomainMachines} {
 			for _, r := range sc.Attached[domain] {
 				role, ok := p.roles[r]
 				if !ok {
@@ -1219,7 +1239,7 @@ func identityDomain(id string) (string, error) {
 			return "", fmt.Errorf("identity %q must be lower-case, because certificate identities are compared "+
 				"lower-case: write \"user:%s\"", id, lower)
 		}
-		return "humans", nil
+		return DomainHumans, nil
 	case strings.HasPrefix(strings.ToLower(id), spiffe.Scheme):
 		// A workload certificate's principal (plan 8): checked here as the
 		// verifier checks it, so a policy naming one it can never give
@@ -1228,10 +1248,10 @@ func identityDomain(id string) (string, error) {
 			return "", fmt.Errorf("identity %q: a workload certificate's principal is its SPIFFE ID, "+
 				"spiffe://<trust domain>/<path>, verbatim (spec §2; §13 decision 40): %w", id, err)
 		}
-		return "machines", nil
+		return DomainMachines, nil
 	case serviceAccount.MatchString(id),
 		strings.HasPrefix(id, "app:") && len(id) > len("app:"):
-		return "machines", nil
+		return DomainMachines, nil
 	}
 	return "", fmt.Errorf("identity %q is in no recognized form: user:<email>, spiffe://…, "+
 		"system:serviceaccount:<namespace>:<name>, or app:<client_id> (spec §2)", id)
@@ -1247,27 +1267,40 @@ func (p *Policy) buildSubjects(f file) error {
 		if _, dup := p.subs[s.Name]; dup {
 			return fmt.Errorf("subject %q is declared twice", s.Name)
 		}
-		sub := &Subject{Name: s.Name, Group: s.Group, Identity: s.Identity, Username: s.Username,
-			Enable: s.Enable, TokenTTL: s.TokenTTL, API: s.API}
+		sub := &Subject{Name: s.Name, Group: cmp.Or(s.Group, s.MachineGroup), Identity: s.Identity,
+			Username: s.Username, Enable: s.Enable, TokenTTL: s.TokenTTL, API: s.API}
 		switch {
-		case s.Group != "" && len(s.Identity) > 0:
+		case s.Group != "" && s.MachineGroup != "":
+			return fmt.Errorf("subject %q: group names people and machine_group names workloads; a subject is one "+
+				"trust domain, so give each its own subject (spec §2; §13 decision 41 ruling 5)", s.Name)
+		case sub.Group != "" && len(s.Identity) > 0:
 			return fmt.Errorf("subject %q: a subject is a group or a list of identities, not both (spec §2)", s.Name)
-		case s.Group == "" && len(s.Identity) == 0:
+		case sub.Group == "" && len(s.Identity) == 0:
 			return fmt.Errorf("subject %q: give it a group or an identity list (spec §2)", s.Name)
-		case s.Group != "":
-			// A group is resolved through the directory, whose members are
-			// people, and each member's username comes from the same query
-			// (spec §2). Declaring one would give every member the same name.
-			sub.Domain = "humans"
-			if strings.Contains(s.Group, "=") {
-				if _, err := ldap.ParseDN(s.Group); err != nil {
-					return fmt.Errorf("subject %q: group %q holds = but is not a DN", s.Name, s.Group)
-				}
-				sub.groupDN = directory.CanonicalDN(s.Group)
+		case sub.Group != "":
+			// A group: is resolved through the directory, whose members are
+			// people, each username from the same query (spec §2). A
+			// machine_group: is resolved through the workload mapping, whose
+			// members are workloads (decision 41 ruling 5). Neither declares a
+			// username: one name would be every member's.
+			key := "group"
+			sub.Domain = DomainHumans
+			if s.MachineGroup != "" {
+				sub.Domain, key = DomainMachines, "machine_group"
 			}
-			if s.Username != "" {
+			if strings.Contains(sub.Group, "=") {
+				if _, err := ldap.ParseDN(sub.Group); err != nil {
+					return fmt.Errorf("subject %q: %s %q holds = but is not a DN", s.Name, key, sub.Group)
+				}
+				sub.groupDN = directory.CanonicalDN(sub.Group)
+			}
+			switch {
+			case s.Username != "" && key == "group":
 				return fmt.Errorf("subject %q: a group's usernames come from the directory, one per member; "+
 					"remove username", s.Name)
+			case s.Username != "":
+				return fmt.Errorf("subject %q: a machine_group's members take the username their identity subject "+
+					"declares, or their entry's (§13 decision 41 ruling 4); remove username", s.Name)
 			}
 		}
 		for _, id := range s.Identity {
@@ -1288,7 +1321,7 @@ func (p *Policy) buildSubjects(f file) error {
 					"resolve to one subject", id, other, s.Name)
 			}
 			p.byID[id] = s.Name
-			if domain == "humans" && s.Username != "" && p.env.Directory == DirectoryOn {
+			if domain == DomainHumans && s.Username != "" && p.env.Directory == DirectoryOn {
 				return fmt.Errorf("subject %q: the directory supplies human usernames (spec §2; decision 38); "+
 					"remove username", s.Name)
 			}
@@ -1427,7 +1460,14 @@ func (p *Policy) buildGrants(f file) error {
 func (p *Policy) checkMinters(file) error {
 	for _, g := range p.grants {
 		s := p.subs[g.Subject]
-		if len(s.Identity) > 0 && s.Username == "" && (s.Domain == "machines" || p.env.Directory == DirectoryOff) {
+		needsName := len(s.Identity) > 0 && s.Username == "" && (s.Domain == DomainMachines || p.env.Directory == DirectoryOff)
+		// A workload certificate's entry gives its username where the
+		// verifier maps it (decision 41 ruling 4); an offline tool does not
+		// know, and asks for none. An app: identity has no entry.
+		if needsName && s.Domain == DomainMachines && p.env.WorkloadDirectory != DirectoryOff && allSPIFFE(s.Identity) {
+			needsName = false
+		}
+		if needsName {
 			// A machine has no directory entry, so it declares its username
 			// (spec §2). A human identity declares one too when no directory
 			// supplies it (plan 7g, Ruling 16).
@@ -1440,6 +1480,11 @@ func (p *Policy) checkMinters(file) error {
 		}
 	}
 	return nil
+}
+
+// allSPIFFE reports whether every identity is a workload certificate's.
+func allSPIFFE(ids []string) bool {
+	return !slices.ContainsFunc(ids, func(id string) bool { return !strings.HasPrefix(id, spiffe.Scheme) })
 }
 
 func (p *Policy) buildTests(f file) error {

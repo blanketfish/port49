@@ -1625,3 +1625,26 @@ func TestPolicyReplayVerifiesARedactedBlobFromTheFiles(t *testing.T) {
 	check("another bundle", []string{"--policy", pol, "--inventory", inv2, asLogged}, 1,
 		"replayed 3 records: 0 agree, 0 diverge, 3 unverifiable")
 }
+
+// The diff report names the key a group subject uses (decision 41 ruling 8).
+func TestPolicyDiffNamesAMachineGroup(t *testing.T) {
+	_, inv := policyFixture(t)
+	dir := t.TempDir()
+	body := func(key string) []byte {
+		return []byte("scopes: [{name: all_devices, match: {}}]\nroles: [{name: ro, privilege: readonly, permit: [show **]}]\n" +
+			"subjects: [{name: backup, " + key + ": backup-hosts, token_ttl: 5m}]\n" +
+			"grants: [{subject: backup, scope: all_devices, roles: [ro]}]\n")
+	}
+	oldPol, newPol := filepath.Join(dir, "old.yaml"), filepath.Join(dir, "new.yaml")
+	if err := os.WriteFile(oldPol, body("group"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPol, body("machine_group"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `subject: backup's group "backup-hosts" -> machine_group "backup-hosts"`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

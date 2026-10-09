@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -520,9 +521,9 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	for _, s := range d.Subjects {
-		if s.OldGroup != s.NewGroup {
-			fmt.Fprintf(stdout, "subject: %s's group %q -> %q; a group subject mints for no one until plan 7\n", s.Subject,
-				s.OldGroup, s.NewGroup)
+		if s.OldGroup != s.NewGroup || s.OldGroupKey != s.NewGroupKey {
+			fmt.Fprintf(stdout, "subject: %s's %s %q -> %s %q\n", s.Subject, cmp.Or(s.OldGroupKey, "group"),
+				s.OldGroup, cmp.Or(s.NewGroupKey, "group"), s.NewGroup)
 		}
 		if !slices.Equal(s.OldAPI, s.NewAPI) {
 			label, tail := "api", ""
@@ -878,7 +879,7 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	s, _ := p.Subject(*subject)
-	who := "group " + s.Group
+	who := s.GroupKey() + " " + s.Group
 	if s.Group == "" {
 		who = "identity " + strings.Join(s.Identity, ", ")
 	}

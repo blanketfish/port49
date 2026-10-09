@@ -95,13 +95,14 @@ type filePipe struct {
 }
 
 type fileSubject struct {
-	Name     string        `yaml:"name"`
-	Group    string        `yaml:"group"`
-	Identity stringList    `yaml:"identity"`
-	Username string        `yaml:"username"`
-	Enable   string        `yaml:"enable"`
-	TokenTTL time.Duration `yaml:"token_ttl"`
-	API      []string      `yaml:"api"`
+	Name         string        `yaml:"name"`
+	Group        string        `yaml:"group"`
+	MachineGroup string        `yaml:"machine_group"`
+	Identity     stringList    `yaml:"identity"`
+	Username     string        `yaml:"username"`
+	Enable       string        `yaml:"enable"`
+	TokenTTL     time.Duration `yaml:"token_ttl"`
+	API          []string      `yaml:"api"`
 }
 
 type fileGrant struct {

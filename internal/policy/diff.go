@@ -171,8 +171,12 @@ type PrincipalChange struct {
 // (decision 38); rights lost are reported, since a right lost widens nothing.
 type SubjectChange struct {
 	Subject, OldUsername, NewUsername, OldGroup, NewGroup string
-	OldAPI, NewAPI, APIGained                             []string
-	Gated, Acknowledged                                   bool
+	// OldGroupKey and NewGroupKey are the keys the group was written with,
+	// "group" or "machine_group" ("" for none): moving between them is a
+	// changed group (decision 41 ruling 8).
+	OldGroupKey, NewGroupKey  string
+	OldAPI, NewAPI, APIGained []string
+	Gated, Acknowledged       bool
 }
 
 // UnacknowledgedPrincipals counts the gated principal and username changes
@@ -510,13 +514,15 @@ func (c *comparison) principals(now time.Time) {
 			was = &Subject{Username: is.Username}
 		}
 		apiGained := gained(was.API, is.API)
-		// A group given as a DN is the same group in any spelling.
-		sameGroup := was.Group == is.Group || (was.groupDN != "" && was.groupDN == is.groupDN)
+		// A group given as a DN is the same group in any spelling; one moved
+		// between group: and machine_group: is another (decision 41 ruling 8).
+		sameGroup := was.GroupKey() == is.GroupKey() &&
+			(was.Group == is.Group || (was.groupDN != "" && was.groupDN == is.groupDN))
 		if was.Username == is.Username && sameGroup && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
 			continue
 		}
 		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
-			NewGroup: is.Group, OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
+			NewGroup: is.Group, OldGroupKey: was.GroupKey(), NewGroupKey: is.GroupKey(), OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
 			Gated: was.Username != is.Username || !sameGroup || len(apiGained) > 0}
 		names := slices.Clone(is.Identity)
 		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })

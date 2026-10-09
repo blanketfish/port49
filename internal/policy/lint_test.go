@@ -236,3 +236,37 @@ func TestAConfigCheckSecretLiteralIsReportedRedacted(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// A group subject's finding names its key and the config it mints under
+// (decision 41 ruling 5; pre-flight I-5): group: through broker.directory,
+// machine_group: through a workload verifier's directory mapping. Neither
+// says "plan 7".
+func TestLintSaysWhenAGroupSubjectMints(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects:
+  - {name: people, group: netops, token_ttl: 60s}
+  - {name: hosts, machine_group: backup-hosts, token_ttl: 60s}
+grants:
+  - {subject: people, scope: all_devices, roles: [ro]}
+  - {subject: hosts, scope: all_devices, roles: [ro]}
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingGroupSubject {
+			got = append(got, f.Message)
+		}
+	}
+	slices.Sort(got)
+	want := []string{
+		`subject "hosts" is a machine_group: subject: it mints only with broker.identity.machines[].directory ` +
+			`configured (a workload certificate's directory mapping), through which the broker matches a workload ` +
+			`to the group; explain and policy tests evaluate it by name`,
+		`subject "people" is a group: subject: it mints only with broker.directory configured, through which ` +
+			`the broker matches a person to the group; explain and policy tests evaluate it by name`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
