@@ -25,6 +25,9 @@ a human `group:` subject, with the 3am cost of opting in said at start and pinne
   - Otherwise the entry's `username_attribute` gives it, under ruling 3's collision rules: the
     declared name stands.
   - A `machine_group:` subject declares none.
+  - **One entry, one domain.** While the mapping is configured, an entry whose `attribute` holds a
+    SPIFFE ID is a workload's: the person path refuses it `identity_unmapped`, so one entry never
+    gives a person and a workload one `(nas, username)` context.
 - **The machine-scoped group subject (ruling 5).** `machine_group: <name or DN>`, domain
   `machines`.
   - A workload resolved through the mapping matches it. A `user:` principal never does.
@@ -35,7 +38,8 @@ a human `group:` subject, with the 3am cost of opting in said at start and pinne
   - The broker's `IsUser` gates become per domain: `memberFor`, `storedMemberOf`, `storedMember`
     and the scheduled refresh's judge.
   - `forget` takes `spiffe://`.
-  - Pre-warm verifies `machine_group:` members as workloads.
+  - Pre-warm verifies as workloads the `machine_group:` members and every `spiffe://` identity a
+    subject lists.
   - The membership record is `mb/<SPIFFE ID>`.
 - **The 3am case (ruling 7).** With the mapping configured, a DC outage past
   `broker.directory.grace` has two effects:
@@ -55,7 +59,8 @@ a human `group:` subject, with the 3am cost of opting in said at start and pinne
     person's, through a `lookup.workload` flag. The flag reads the entry as `workloadIdentityOf`,
     checks the ID unique with `workloadUnique`, writes no mapping key, and leaves the
     declared-username check to the broker.
-  - `PrewarmAll` adds the machine groups to pre-warm.
+  - The person path refuses an entry holding a SPIFFE ID in the workload attribute (`notWorkload`).
+  - `PrewarmAll` adds the machine groups and the listed `spiffe://` identities to pre-warm.
 - **`internal/config`:**
   - `directory:` on the machine x509 verifier, as `oidc.X509Machine.Directory`.
   - It is resolved into `directory.Config.Workload` once `broker.directory` is read.
@@ -68,10 +73,11 @@ a human `group:` subject, with the 3am cost of opting in said at start and pinne
     `MachineGroupSubjects`.
   - `checkMinters` asks a `spiffe://`-only subject for no username under the mapping.
   - The diff compares `GroupKey`; `SubjectChange` gains `OldGroupKey` and `NewGroupKey`.
+  - Lint's group-subject finding names the key and the config it mints under.
 - **`internal/broker`:**
   - `workloadMapped` and `workloadMember` settle a workload's member and username.
-  - `memberFor`, `storedMemberOf`, `storedMember`, the scheduled judge and the mint's hold-time
-    collision check branch on them.
+  - `memberFor`, `storedMemberOf`, `storedMember` and the scheduled judge branch on them.
+  - `heldCollision` is the hold-time collision check, shared by the mint and `RefreshSession`.
   - `CertCallerOf` checks the issuer pin; `Forget` widens.
 - **`internal/port49d`:** `policyEnv` sets `WorkloadDirectory`. `announceDirectory` says the
   mapping, its 3am cost, its ACL requirement, and the `machine_group:` subjects that mint for no
@@ -152,13 +158,15 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 - **A broker start with the mapping** (Task 6, `TestTheWorkloadMappingStartLines`):
 
   ```
-  port49-broker: directory: workload certificates map by spiffe_id (weak, pinned to CN=Workloads Issuing CA,O=Corp) through uid under (objectClass=user); username from the identity subject listing the SPIFFE ID, else from sAMAccountName; machine_group subjects match them, group subjects never
-  port49-broker: directory: a mapped workload mints only while a server answers or its membership was verified within grace (4h0m0s): past it its mints are refused directory_unavailable (port49 workload exits 75), and its live device sessions deny context_stale at port49d's session.staleness_ceiling; pre-warm every 1h0m0s keeps machine_group members verified
+  port49-broker: directory: workload certificates map by spiffe_id (weak, pinned to CN=Workloads Issuing CA,O=Corp) through uid under (objectClass=user); every workload this verifier accepts must have exactly one entry holding its SPIFFE ID, or it is refused identity_unmapped, and while the directory is down past grace it is refused directory_unavailable; username from the identity subject listing the SPIFFE ID, else from sAMAccountName; an entry holding a SPIFFE ID in uid is never a person's; machine_group subjects match them, group subjects never
+  port49-broker: directory: a mapped workload mints only while a server answers or its membership was verified within grace (4h0m0s): past it its mints are refused directory_unavailable (port49 workload exits 75); its live device sessions go unstamped from the first scheduled refresh that cannot verify it, and deny context_stale once port49d's session.staleness_ceiling has passed since the last one that did; pre-warm every 1h0m0s keeps mapped workloads verified (machine_group members and each spiffe:// identity a subject lists, up to prewarm.max_principals (10000) besides the people's)
   port49-broker: directory: uid must be writable only by directory administrators: whoever can write it on an entry chooses which workload takes that entry's groups
   ```
 
   With `prewarm.interval: 0s` the second line ends `; pre-warm is off, so a workload that has not
-  minted within grace is refused in an outage`.
+  minted within grace is refused in an outage`. The first line carries ruling Q2's cost (pre-flight
+  I-4); the second keeps the two clocks apart, grace for a mint and the staleness ceiling for a
+  session (pre-flight M-1).
 - **`machine_group:` subjects with no mapping** (Task 6):
 
   ```
@@ -176,8 +184,11 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   - `subject "x": a machine_group's members take the username their identity subject declares, or their entry's (§13 decision 41 ruling 4); remove username`.
 - **A workload refused** (Task 5): `401 identity_unmapped` (issuer not pinned, no entry, the value
   not byte for byte); `401 identity_ambiguous` (two entries); `401 username_collision` (an entry's
-  username a subject declares); `503 directory_unavailable` with `Retry-After: 30` (an outage past
-  grace).
+  username a subject declares, at a mint or a session refresh); `503 directory_unavailable` with
+  `Retry-After: 30` (an outage past grace). The refusal record names the SPIFFE ID, the issuer
+  pin's included (pre-flight M-4).
+- **A person refused** (Task 2): `401 identity_unmapped`, detail `… the entry is a workload's (uid)
+  …`, when the person's entry holds a SPIFFE ID in the mapping's attribute (one entry, one domain).
 - **`port49 workload token` in an outage** (Task 7), on stderr, exit 75:
 
   ```
@@ -185,7 +196,11 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
 - **`port49 policy diff`** (Task 4): `subject: backup's group "backup-hosts" -> machine_group "backup-hosts"`.
 - **`port49 directory forget spiffe://corp.example.com/host/oxidized-01`** (Task 5) forgets a
-  workload's pin as a person's.
+  workload's pin as a person's. With no workload mapping it answers `no workload mapping is
+  configured (broker.identity.machines[].directory) …` (pre-flight M-6).
+- **`port49 policy lint`** (Task 4), for each group subject:
+  - `subject "people" is a group: subject: it mints only with broker.directory configured, through which the broker matches a person to the group; explain and policy tests evaluate it by name`;
+  - `subject "hosts" is a machine_group: subject: it mints only with broker.identity.machines[].directory configured (a workload certificate's directory mapping), through which the broker matches a workload to the group; explain and policy tests evaluate it by name`.
 
 ## Global Constraints
 
@@ -205,7 +220,9 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 - **Fail closed, never widen.** Each of these is a refusal or matches no one:
   - a subject naming both `group:` and `machine_group:`;
   - a workload matching a `group:` subject; a `user:` principal matching a `machine_group:`;
-  - a value another case of the SPIFFE ID; two entries holding it; an issuer not pinned.
+  - a value another case of the SPIFFE ID; two entries holding it (in any case the directory's
+    matching rule equates); an issuer not pinned;
+  - a person's entry holding a SPIFFE ID in the workload attribute (one entry, one domain).
 - **Opt-in.** With no `directory:` on the machine verifier, every line of plan 8's behaviour holds:
   the resolver is never asked for a workload, and it mints with every DC down. Task 5 pins it.
 - Verify with `make test && make vet`, and `make test-race` on every touched package, and report the
@@ -235,16 +252,20 @@ The five inputs or conditions most likely to bite a person, and the test that pi
    attributes ignore case, while a SPIFFE ID's path does not
    (`spiffe://corp.example.com/host/Oxidized-01` is another workload).
    - **Expected:** the entry found for one ID holding another case of it is `identity_unmapped`,
-     never that workload. Two entries holding the two cases are `identity_ambiguous` for both,
-     never the first.
+     never that workload. Two entries the directory returns for one ID are `identity_ambiguous`,
+     never the first, in two cases: both hold it exactly, or one holds another case of it that the
+     directory's matching rule equates. The uniqueness search reads no values, so a case variant is
+     never waved through as "not the same ID".
    - **Pinned by** Task 2's `TestAWorkloadEntryMustHoldItsIDByteForByte` and
-     `TestTwoEntriesHoldingOneSPIFFEIDAreAmbiguous`.
+     `TestTwoEntriesHoldingOneSPIFFEIDAreAmbiguous` (both cases).
 2. **A workload whose own subject declares the username its entry also holds** (`svc-oxidized`
    declared, `sAMAccountName: svc-oxidized`), the natural configuration.
-   - **Expected:** it mints as `svc-oxidized`, never refused `username_collision` against itself.
-     Another workload whose entry holds a name some subject declares is refused.
-   - **Pinned by** Task 5's `TestAWorkloadsOwnDeclaredUsernameIsNoCollision` and
-     `TestAnEntryUsernameASubjectDeclaresIsTheWorkloadsCollision`.
+   - **Expected:** it mints as `svc-oxidized`, and its session refresh is extended, never refused
+     `username_collision` against itself. Another workload whose entry holds a name some subject
+     declares is refused, at the mint and at the refresh.
+   - **Pinned by** Task 5's `TestAWorkloadsOwnDeclaredUsernameIsNoCollision`,
+     `TestAnEntryUsernameASubjectDeclaresIsTheWorkloadsCollision` and
+     `TestASessionRefreshSettlesAWorkloadsUsernameAsTheMintDoes`.
 3. **One group named both ways, and a subject moved between the two keys.**
    - **The inputs:** `group: backup-hosts` and `machine_group: backup-hosts` in two subjects; a
      diff moving `group: backup-hosts` to `machine_group: backup-hosts`.
@@ -256,16 +277,21 @@ The five inputs or conditions most likely to bite a person, and the test that pi
 4. **A nightly cron job in a DC outage.** A workload that minted 24h ago has a membership record at
    the end of its `max(grace, 24h)` lease, verified far past grace.
    - **Expected:** with pre-warm on, its record is verified each hour, so it mints within grace.
-     With pre-warm off, the start says it will be refused. Either way the mint is never served from
-     a record past grace.
-   - **Pinned by** Task 6's `TestPrewarmVerifiesMachineGroupMembersAsWorkloads` and
-     `TestTheWorkloadMappingStartLines`, and Task 2's `TestAWorkloadInGraceAndPastIt`.
-5. **A service account's entry pre-warmed as a person.** A group is listed under `machine_group:`
-   only.
+     That holds whether its grants come from a `machine_group:` or from its own `spiffe://`
+     identity subject alone (pre-flight I-3). With pre-warm off, the start says it will be refused.
+     Either way the mint is never served from a record past grace.
+   - **Pinned by** Task 6's `TestPrewarmVerifiesMachineGroupMembersAsWorkloads`,
+     `TestPrewarmVerifiesIdentityOnlyWorkloads` and `TestTheWorkloadMappingStartLines`, and Task
+     2's `TestAWorkloadInGraceAndPastIt`.
+5. **A service account's entry read as a person.** A group is listed under `machine_group:` only,
+   and its members' entries also hold a `userPrincipalName`.
    - **Expected:** human pre-warm never enumerates it, so no `mb/user:…` record is written for its
-     members. Machine pre-warm writes `mb/spiffe://…` records only.
-   - **Pinned by** Task 4's `TestAMachineGroupIsAMachinesSubject` (`GroupValues` excludes it) and
-     Task 6's `TestPrewarmVerifiesMachineGroupMembersAsWorkloads`.
+     members. Machine pre-warm writes `mb/spiffe://…` records only. A person's certificate that
+     maps to such an entry is refused `identity_unmapped`, so the entry never gives a `user:`
+     principal the workload's `(nas, username)` context (pre-flight I-2).
+   - **Pinned by** Task 4's `TestAMachineGroupIsAMachinesSubject` (`GroupValues` excludes it),
+     Task 6's `TestPrewarmVerifiesMachineGroupMembersAsWorkloads`, and Task 2's
+     `TestOneEntryIsOneDomain`.
 
 ## Conflict scan: where tasks share a file or an interface
 
@@ -273,10 +299,11 @@ The five inputs or conditions most likely to bite a person, and the test that pi
   `prewarm.go`: Task 6 alone. Task 6 reads Task 2's `byWorkloadDN` and `lookup.workload`.
 - `internal/oidc/config.go`, `internal/config/identity.go`, `directory.go` and `config.go`: Task 3
   alone.
-- `internal/policy/file.go`, `load.go`, `member.go` and `diff.go`, and `cmd/port49/policy.go`:
-  Task 4 alone.
+- `internal/policy/file.go`, `load.go`, `member.go`, `diff.go`, `lint.go` and `lint_test.go`, and
+  `cmd/port49/policy.go`: Task 4 alone.
 - `internal/broker/member.go`, `scheduled.go`, `refresh.go` (`storedMember`), `broker.go` (the
-  hold-time check), `workload.go` (`CertCallerOf`) and `forget.go`: Task 5 alone.
+  hold-time check), `sessionrefresh.go` (the same check in `RefreshSession`), `workload.go`
+  (`CertCallerOf`) and `forget.go`: Task 5 alone.
 - `internal/port49d/directory.go`: Task 6 alone.
 - `cmd/port49/workload_test.go` and `internal/workload/client_test.go`: Task 7 alone, tests only.
 - `tests/lab/`: Task 8 alone.
@@ -306,14 +333,14 @@ three; Task 6 needs 2, 3 and 4; Task 7 needs 5; Task 8 needs 1–7 merged into t
 - `internal/directory/config.go`, `mapping.go`, `entry.go`, `resolver.go` (Task 2) and `prewarm.go`
   (Task 6).
 - `internal/oidc/config.go`; `internal/config/identity.go`, `directory.go` and `config.go` (Task 3).
-- `internal/policy/file.go`, `load.go`, `member.go` and `diff.go`; `cmd/port49/policy.go`;
-  `cmd/port49/policy_test.go` (Task 4).
-- `internal/broker/member.go`, `scheduled.go`, `refresh.go`, `broker.go`, `workload.go` and
-  `forget.go` (Task 5).
+- `internal/policy/file.go`, `load.go`, `member.go`, `diff.go` and `lint.go`;
+  `internal/policy/lint_test.go`; `cmd/port49/policy.go`; `cmd/port49/policy_test.go` (Task 4).
+- `internal/broker/member.go`, `scheduled.go`, `refresh.go`, `broker.go`, `sessionrefresh.go`,
+  `workload.go` and `forget.go` (Task 5).
 - `internal/port49d/directory.go` (Task 6).
 - `cmd/port49/workload_test.go` and `internal/workload/client_test.go` (Task 7).
-- `tests/lab/windows_test.go` (`winScripts`, `winSecretParams`), `tests/lab/README.md` and
-  `Makefile` (`lab-l50`) (Task 8).
+- `tests/lab/windows_test.go` (`winScripts`, `winSecretParams`), `tests/lab/directory/samba/Dockerfile`,
+  `tests/lab/README.md` and `Makefile` (`lab-l50`) (Task 8).
 
 ---
 
@@ -363,7 +390,9 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
     matching rule may not be, so an entry holding another case of the ID is `identity_unmapped`,
     never that workload.
   - **Uniqueness.** A second entry holding the ID, searched with no `user_filter`, is
-    `identity_ambiguous`, as decision 38 ruling 3's principal search is.
+    `identity_ambiguous`, as decision 38 ruling 3's principal search is. The search reads no
+    values, so a second entry holding another case of the ID, which a case-insensitive matching
+    rule returns, makes it `identity_ambiguous` too.
   - **Weak.** It binds a name, not a key, so it is weak under decision 38 ruling 1: refused at load
     without `allow_weak: true` and a non-empty `issuers:`. The pin compares the leaf's issuer, read
     from its DER, at every reading of the certificate (the bind and each request), before any
@@ -388,7 +417,18 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
     name for many workloads would put them in one `(nas, username)` context.
   - **Who must declare.** Under the mapping, a subject whose identities are all `spiffe://` IDs
     need not declare one; a subject listing an `app:` identity still must.
-  - Tasks 4 and 5.
+  - **One entry, one domain.** An entry whose workload `attribute` holds a SPIFFE ID is a
+    workload's. While a workload mapping is configured, the person path (a bind, a mint, the
+    scheduled refresh, pre-warm) refuses such an entry `identity_unmapped`, so one entry never gives
+    a `user:` principal and a workload one `(nas, username)` context, where whichever minted last
+    would hold the other's grants. The workload path need not mirror it: the person path is the
+    one that grants by `principal_attribute`. An entry whose attribute holds a value that is no
+    SPIFFE ID (a `description`, say) stays a person's. *Added at plan 8b's pre-flight (I-2).*
+  - **Judged again at the hold.** The mint and a session refresh judge the username again under
+    the policy they hold, since a reload can land between the membership read and the hold (plan
+    7g's final review M-1). For a workload that judgment is this ruling's, so its own subject's
+    declaration is never its collision.
+  - Tasks 2, 4 and 5.
 - **5. The machine-scoped group subject.** `machine_group: <name or DN>`, matched as decision 38
   ruling 7 matches `group:`: a DN in canonical form, a name only while one group under
   `groups_base_dn` has it.
@@ -411,16 +451,21 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
     stored membership.
   - **Pre-warm** verifies the members of every `machine_group:` as workloads. It reads each
     member's SPIFFE ID from `attribute`; one outside the verifier's `spiffe_trust_domains` is
-    skipped and counted. So a workload that has not minted within grace can mint in an outage.
+    skipped and counted. It then verifies every `spiffe://` identity a subject lists, in those
+    trust domains, so a workload granted by its own identity subject alone is kept warm too. So a
+    workload that has not minted within grace can mint in an outage. The workloads take their own
+    `prewarm.max_principals`, besides the people's, so one interval verifies up to twice it.
   - Tasks 2, 5 and 6.
 - **7. The 3am case.** With the mapping configured, a directory outage past
   `broker.directory.grace` does two things:
   - **Mints stop.** The workload's mints are refused 503 `directory_unavailable` with
     `Retry-After: 30`. `port49 workload token` retries within `--deadline`, then exits 75
     (decision 40 ruling 10).
-  - **Sessions go stale.** Its live device sessions go unstamped and deny `context_stale` at
-    `session.staleness_ceiling` from a reachable port49d, where break-glass does not help; decision
-    38's escapes apply.
+  - **Sessions go stale.** Its live device sessions go unstamped from the first scheduled refresh
+    that cannot verify it, and deny `context_stale` once port49d's `session.staleness_ceiling` has
+    passed since the last one that did, from a reachable port49d, where break-glass does not help;
+    decision 38's escapes apply. The two clocks are separate: grace bounds a mint, the ceiling a
+    session.
 
   Opting in trades plan 8's "mints with every DC down" for directory groups, and the start line
   says so. Tasks 5, 6 and 7.
@@ -529,7 +574,8 @@ with
 
 ```markdown
   within grace. Task 10. *Amended by decision 41 ruling 6 (plan 8b, 2026-10-09):* the members of
-  every `machine_group:` are verified as workloads, by the SPIFFE ID their entry holds.
+  every `machine_group:` are verified as workloads, by the SPIFFE ID their entry holds, and so is
+  every `spiffe://` identity a subject lists, under their own `prewarm.max_principals`.
 ```
 
 Decision 40 ruling 5: replace
@@ -618,7 +664,7 @@ or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never
 with
 
 ```markdown
-or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte;
+or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds a SPIFFE ID in the mapping's `attribute`, so it is a workload's (§13 decision 41 ruling 4);
 ```
 
 In the `identity_ambiguous` row, replace
@@ -753,7 +799,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `internal/directory/config.go` (`MapSPIFFEID`, `WorkloadMapping`, `Config.Workload`)
 - Modify: `internal/directory/mapping.go` (`WorkloadMapping.Pinned`)
 - Modify: `internal/directory/entry.go` (`usernameOf` factored out of `identityOf`;
-  `workloadAttrs`, `workloadIdentityOf`, `workloadUnique`)
+  `entryAttrs` reads the workload attribute under a mapping; `notWorkload`; `workloadAttrs`,
+  `workloadIdentityOf`, `workloadUnique`)
 - Modify: `internal/directory/resolver.go` (`IsWorkload`, `lookup.workload`, `VerifyWorkload`,
   `CurrentWorkload`, `byWorkloadFilter`, `byWorkloadDN`; `verify`, `grace` and `pinned` take the
   workload path)
@@ -870,14 +917,60 @@ func TestAWorkloadEntryMustHoldItsIDByteForByte(t *testing.T) {
 
 // Two entries holding one SPIFFE ID, found by the uniqueness search with no
 // user_filter, refuse it identity_ambiguous, never the first (decision 41
-// ruling 2; Review Focus 1).
+// ruling 2; Review Focus 1). Two cases: the twin holds the ID exactly, or
+// another case of it that a case-insensitive matching rule returns for the
+// ID. The search reads no values, so the variant is never waved through.
 func TestTwoEntriesHoldingOneSPIFFEIDAreAmbiguous(t *testing.T) {
+	for name, twin := range map[string]*ldap.Entry{
+		"exact": entry("CN=alice,OU=Staff,DC=corp", map[string][]string{"uid": {wlID}}),
+		"another case": entry("CN=svc-variant,OU=Staff,DC=corp",
+			map[string][]string{"uid": {"spiffe://corp.example.com/host/Oxidized-01"}}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorkloadWorld(t)
+			w.dir.on("(uid="+wlID+")", wlEntry(wlID), twin)
+			if _, err := w.r.VerifyWorkload(context.Background(), wlID); !errors.Is(err, ErrAmbiguous) ||
+				!strings.Contains(err.Error(), "OU=Staff") {
+				t.Fatalf("%v", err)
+			}
+		})
+	}
+}
+
+// One entry, one domain (decision 41 ruling 4; pre-flight I-2): a service
+// account holding both a userPrincipalName and a SPIFFE ID in the workload
+// attribute is the workload's alone. Verify refuses it as a person,
+// identity_unmapped naming the attribute; VerifyWorkload accepts it. A
+// person whose uid holds no SPIFFE ID stays a person.
+func TestOneEntryIsOneDomain(t *testing.T) {
 	w := newWorkloadWorld(t)
-	other := entry("CN=alice,OU=Staff,DC=corp", map[string][]string{"uid": {wlID}})
-	w.dir.on("(uid="+wlID+")", wlEntry(wlID), other)
-	if _, err := w.r.VerifyWorkload(context.Background(), wlID); !errors.Is(err, ErrAmbiguous) ||
-		!strings.Contains(err.Error(), "OU=Staff") {
-		t.Fatalf("%v", err)
+	both := entry(wlDN, map[string][]string{"uid": {wlID}, "userPrincipalName": {"svc-oxidized-01@corp.example.com"},
+		"sAMAccountName": {"svc-oxidized-01"}, "objectGUID": {"\x01\x02"}})
+	w.dir.on(wlFilter, both)
+	w.dir.on("(uid="+wlID+")", both)
+	w.dir.on("(sAMAccountName=svc-oxidized-01)", both)
+	w.dir.on("(&(objectClass=person)(userPrincipalName=svc-oxidized-01@corp.example.com))", both)
+	w.dir.on("(userPrincipalName=svc-oxidized-01@corp.example.com)", both)
+	_, err := w.r.Verify(context.Background(), "user:svc-oxidized-01@corp.example.com")
+	if !errors.Is(err, ErrUnmapped) || !strings.Contains(err.Error(), "the entry is a workload's (uid)") {
+		t.Fatalf("as a person: %v", err)
+	}
+	if a, err := w.r.VerifyWorkload(context.Background(), wlID); err != nil || a.Principal != wlID {
+		t.Fatalf("as a workload: %+v %v", a, err)
+	}
+	// alice's uid is a login name, no SPIFFE ID: she is still a person.
+	a := entry(alice, map[string][]string{"userPrincipalName": {"alice@corp.example.com"},
+		"sAMAccountName": {"alice"}, "mail": {"alice@corp.example.com"}, "uid": {"alice"}})
+	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))", a)
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); err != nil {
+		t.Fatalf("alice: %v", err)
+	}
+	// The person search reads the workload attribute, or the check sees nothing.
+	if !slices.ContainsFunc(w.dir.calls, func(c *ldap.SearchRequest) bool {
+		return c.Filter == "(&(objectClass=person)(userPrincipalName=alice@corp.example.com))" &&
+			slices.Contains(c.Attributes, "uid")
+	}) {
+		t.Fatal("the person search does not read the workload attribute")
 	}
 }
 
@@ -970,7 +1063,7 @@ func TestTheWorkloadIssuerPin(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/directory/ -run 'Workload|SPIFFEID' -count=1`
+Run: `go test ./internal/directory/ -run 'Workload|SPIFFEID|OneDomain' -count=1`
 Expected: FAIL to compile: `undefined: WorkloadMapping`, `VerifyWorkload`, `CurrentWorkload` and
 `IsWorkload`.
 
@@ -1083,8 +1176,46 @@ func (c Config) usernameOf(e *ldap.Entry) (string, error) {
 }
 ```
 
-The messages are the ones `identityOf` had, so `entry_test.go` passes unchanged. After
-`principalUnique`, add:
+The messages are the ones `identityOf` had, so `entry_test.go` passes unchanged.
+
+Replace `entryAttrs` with:
+
+```go
+// entryAttrs is what an entry search reads: the principal and username
+// attributes, the mapping's, for KeysOf, both immutable ids, of which a
+// directory holds one, and, under a workload mapping, its attribute, which
+// notWorkload reads (decision 41 ruling 4).
+func (c Config) entryAttrs() []string {
+	attrs := []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
+	if c.Workload != nil {
+		attrs = append(attrs, c.Workload.Attribute)
+	}
+	return attrs
+}
+
+// notWorkload is ErrUnmapped when e, read as a person's, holds a SPIFFE ID in
+// the workload attribute (decision 41 ruling 4: one entry, one domain). Such
+// an entry is a workload's: as a person's too, it would give a user:
+// principal and a workload one (nas, username) context, and whichever minted
+// last would hold the other's grants. A value that is no SPIFFE ID (an
+// attribute such as description, set on people for other reasons) is no
+// refusal. The scheme is compared in any case, failing closed.
+func (c Config) notWorkload(e *ldap.Entry) error {
+	if c.Workload == nil {
+		return nil
+	}
+	for _, v := range e.GetAttributeValues(c.Workload.Attribute) {
+		if strings.HasPrefix(strings.ToLower(v), spiffe.Scheme) {
+			return fmt.Errorf("%w: entry %s: the entry is a workload's (%s): it holds a SPIFFE ID there, and one "+
+				"entry is one trust domain, so it is never a person's principal (spec §13 decision 41 ruling 4)",
+				ErrUnmapped, printsafe.Line(e.DN, 200), c.Workload.Attribute)
+		}
+	}
+	return nil
+}
+```
+
+After `principalUnique`, add:
 
 ```go
 // workloadAttrs is what a workload entry search reads: the workload
@@ -1240,7 +1371,10 @@ func (r *Resolver) byWorkloadDN(dn string) func(Searcher) (*ldap.Entry, error) {
 		}
 		if q.workload {
 			id, err = r.Cfg.workloadIdentityOf(e, q.want)
-		} else {
+		} else if err = r.Cfg.notWorkload(e); err == nil {
+			// A person's entry must not be a workload's (decision 41
+			// ruling 4): a bind, a mint, the scheduled refresh and pre-warm
+			// all read a person through here.
 			id, err = r.Cfg.identityOf(e)
 		}
 		if err != nil {
@@ -1321,7 +1455,8 @@ VerifyWorkload and CurrentWorkload find a workload certificate's one entry
 by the SPIFFE ID its attribute holds byte for byte, check it unique with no
 user_filter, pin it, and serve it from grace; no mapping key is written, and
 the declared-username check is the broker's. WorkloadMapping.Pinned is the
-weak kind's issuer pin.
+weak kind's issuer pin. Under a mapping, the person path refuses an entry
+holding a SPIFFE ID in the workload attribute: one entry, one domain.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1333,6 +1468,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   second value. Two entries holding one ID are both refused `identity_ambiguous`.
 - An entry deleted and re-created is refused until `port49 directory forget spiffe://…` (Task 5),
   as a person's is.
+- **One entry, one domain.** A service account whose entry holds a SPIFFE ID in the mapping's
+  `attribute` is a workload. A person's certificate mapping to it is refused `identity_unmapped`
+  ("the entry is a workload's"). Give a person who also runs a workload two entries.
+- **Case.** A directory whose matching rule ignores case returns an entry holding another case of
+  the ID; that makes the ID `identity_ambiguous`. Two workloads whose IDs differ only in case
+  cannot both be mapped on such a directory.
 
 ---
 
@@ -1343,7 +1484,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `internal/config/identity.go` (`workloadDirectoryYAML`; the machine x509 branch takes it;
   others refuse it)
 - Modify: `internal/config/directory.go` (`checkWorkloadMapping`; `checkMapping` refuses
-  `spiffe_id`)
+  `spiffe_id`; `prewarmYAML.MaxPrincipals`'s doc comment)
 - Modify: `internal/config/config.go` (`checkBroker` resolves the block into
   `Directory.Workload`)
 - Test: `internal/config/workload_directory_test.go`
@@ -1595,6 +1736,16 @@ func checkWorkloadMapping(d oidc.WorkloadDirectory, trustDomains []string, userF
 The `not weak` message reads `broker.identity.machines[].directory: spiffe_id is a weak mapping:
 …`. Add `"github.com/rhwendt/port49/internal/oidc"` to `directory.go`'s imports.
 
+In the same file, give `prewarmYAML.MaxPrincipals` its doc comment (pre-flight M-5):
+
+```go
+	// MaxPrincipals bounds one pre-warm pass's principals. People and, under
+	// a workload mapping, workloads (machine_group members and listed
+	// spiffe:// identities) each take up to it, so one interval verifies up
+	// to twice it (plan 8b; spec §13 decision 41 ruling 6).
+	MaxPrincipals int            `yaml:"max_principals"`
+```
+
 - [ ] **Step 6: `checkBroker` resolves it**
 
 In `internal/config/config.go`, in `checkBroker`, after the `if b.DirectorySet != nil { … }`
@@ -1668,8 +1819,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `subjectsOf` and `groupDomainOf`; `DeclaredFor`; `GroupValues`, `GroupSubjects`,
   `MachineGroupValues`, `MachineGroupSubjects`)
 - Modify: `internal/policy/diff.go` (`SubjectChange.OldGroupKey`, `NewGroupKey`; `sameGroup`)
+- Modify: `internal/policy/lint.go` (`FindingGroupSubject`'s text names the key and when it mints;
+  the controller's ruling, pre-flight I-5)
 - Modify: `cmd/port49/policy.go` (the diff report line; access review's `who`)
-- Test: `internal/policy/machine_group_test.go`; `cmd/port49/policy_test.go`
+- Test: `internal/policy/machine_group_test.go`; `internal/policy/lint_test.go`
+  (`TestLintSaysWhenAGroupSubjectMints`); `cmd/port49/policy_test.go`
   (`TestPolicyDiffNamesAMachineGroup`)
 
 **Interfaces:**
@@ -1895,6 +2049,44 @@ func TestAGroupMovedToMachineGroupIsGated(t *testing.T) {
 }
 ```
 
+In `internal/policy/lint_test.go`, add:
+
+```go
+// A group subject's finding names its key and the config it mints under
+// (decision 41 ruling 5; pre-flight I-5): group: through broker.directory,
+// machine_group: through a workload verifier's directory mapping. Neither
+// says "plan 7".
+func TestLintSaysWhenAGroupSubjectMints(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects:
+  - {name: people, group: netops, token_ttl: 60s}
+  - {name: hosts, machine_group: backup-hosts, token_ttl: 60s}
+grants:
+  - {subject: people, scope: all_devices, roles: [ro]}
+  - {subject: hosts, scope: all_devices, roles: [ro]}
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingGroupSubject {
+			got = append(got, f.Message)
+		}
+	}
+	slices.Sort(got)
+	want := []string{
+		`subject "hosts" is a machine_group: subject: it mints only with broker.identity.machines[].directory ` +
+			`configured (a workload certificate's directory mapping), through which the broker matches a workload ` +
+			`to the group; explain and policy tests evaluate it by name`,
+		`subject "people" is a group: subject: it mints only with broker.directory configured, through which ` +
+			`the broker matches a person to the group; explain and policy tests evaluate it by name`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+```
+
 In `cmd/port49/policy_test.go`, add:
 
 ```go
@@ -1924,9 +2116,10 @@ func TestPolicyDiffNamesAMachineGroup(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/policy/ -run 'MachineGroup|DeclaredFor|SPIFFEOnly|BothDomains' -count=1`
+Run: `go test ./internal/policy/ -run 'MachineGroup|DeclaredFor|SPIFFEOnly|BothDomains|WhenAGroupSubjectMints' -count=1`
 Expected: FAIL to compile: `undefined: DomainMachines`, `Member.Domain`, `GroupKey`,
-`MachineGroupValues`, `DeclaredFor`, `Env.WorkloadDirectory`.
+`MachineGroupValues`, `DeclaredFor`, `Env.WorkloadDirectory`. (Once it compiles,
+`TestLintSaysWhenAGroupSubjectMints` fails on the text until Step 8.)
 
 - [ ] **Step 3: The file and the environment**
 
@@ -2200,13 +2393,50 @@ with
 and in `port49 access review`, replace `who := "group " + s.Group` with `who := s.GroupKey() + " " +
 s.Group`. Add `"cmp"` to the imports if absent.
 
-- [ ] **Step 8: Run the tests**
+- [ ] **Step 8: Lint's group-subject finding (the controller's ruling; pre-flight I-5)**
+
+In `internal/policy/lint.go`, replace
+
+```go
+		if sub.Group != "" {
+			add(FindingGroupSubject, "subject %q is a group: the broker matches a principal to a group through the "+
+				"directory, which is plan 7's, so until then it mints for no one; explain and policy tests "+
+				"evaluate it by name", name)
+		}
+```
+
+with
+
+```go
+		if sub.Group != "" {
+			// Lint reads the policy alone, so it says the condition, not
+			// whether this deployment meets it; the start says that
+			// (decision 38 ruling 17; decision 41 ruling 5).
+			cond, who := "broker.directory configured", "a person"
+			if sub.Domain == DomainMachines {
+				cond, who = "broker.identity.machines[].directory configured (a workload certificate's directory "+
+					"mapping)", "a workload"
+			}
+			add(FindingGroupSubject, "subject %q is a %s: subject: it mints only with %s, through which the broker "+
+				"matches %s to the group; explain and policy tests evaluate it by name", name, sub.GroupKey(), cond, who)
+		}
+```
+
+`spec11_test.go`'s finding list (`want` in `TestTheCompletePolicyExampleReportsWhatItShould`, line
+204) still holds: it compares kinds, and its three group subjects are `group:`. No other test or
+doc quotes the old text (`grep -rn "plan 7's, so until" internal cmd tests` finds only `lint.go`).
+In that test's doc comment, replace `three group subjects nobody can mint for until plan 7` with
+`three group subjects that mint only with broker.directory configured`. `TestLintReportsWhatAReviewerMustSee` asserts no group finding and is
+unchanged.
+
+- [ ] **Step 9: Run the tests**
 
 Run: `go test ./internal/policy/ ./cmd/port49/ -count=1 && go vet ./internal/policy/ ./cmd/port49/`
-Expected: PASS, clean. `TestAGroupSubjectNeverMatchesAMachine`, `TestAChangedGroupIsGated` and
-`TestARespelledGroupDNIsNotAChange` pass unchanged.
+Expected: PASS, clean. `TestAGroupSubjectNeverMatchesAMachine`, `TestAChangedGroupIsGated`,
+`TestARespelledGroupDNIsNotAChange` and `TestTheCompletePolicyExampleReportsWhatItShould`'s kind list
+pass unchanged.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add internal/policy/ cmd/port49/policy.go cmd/port49/policy_test.go
@@ -2216,7 +2446,8 @@ A machine_group: subject is a machines subject a workload resolved through
 the workload mapping matches, never a person; a group: subject never matches
 a workload. Both keys on one subject is a load error, and a machine_group
 declares no username. The diff gates a move between the two keys, and the
-report names the key.
+report names the key. Lint's group-subject finding names the key and the
+config it mints under, in place of the stale "plan 7" text.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2232,6 +2463,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   declares, else its entry's `username_attribute`.
 - **CI.** `port49 policy diff` fails a changed `machine_group:`, or a subject moved between
   `group:` and `machine_group:`, until a session test naming the subject asserts its access.
+- **Lint.** `port49 policy lint` reports each group subject with the config it needs:
+  `broker.directory` for `group:`, `broker.identity.machines[].directory` for `machine_group:`.
+  Lint reads the policy alone; the start says whether this deployment meets the condition.
 
 ---
 
@@ -2242,9 +2476,13 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `memberFor`, `storedMemberOf`)
 - Modify: `internal/broker/refresh.go` (`storedMember` → `storedWorkload`)
 - Modify: `internal/broker/scheduled.go` (the judge's member)
-- Modify: `internal/broker/broker.go` (the mint's hold-time check)
-- Modify: `internal/broker/workload.go` (`CertCallerOf` checks the pin)
-- Modify: `internal/broker/forget.go` (`spiffe://` taken)
+- Modify: `internal/broker/member.go` (`heldCollision`, the hold-time check shared by the mint and
+  the session refresh)
+- Modify: `internal/broker/broker.go` (the mint's hold-time check calls `heldCollision`)
+- Modify: `internal/broker/sessionrefresh.go` (`RefreshSession`'s hold-time check calls
+  `heldCollision`; pre-flight I-1)
+- Modify: `internal/broker/workload.go` (`CertCallerOf` checks the pin, the principal set first)
+- Modify: `internal/broker/forget.go` (`spiffe://` taken; refused with no workload mapping)
 - Test: `internal/broker/workload_directory_test.go`
 
 **Interfaces:**
@@ -2255,6 +2493,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Produces:
   - `func (b *Broker) workloadMapped(principal string) bool`;
   - `func workloadMember(pol *policy.Policy, a directory.Answer) (policy.Member, error)`;
+  - `func heldCollision(pol *policy.Policy, m policy.Member, answer *directory.Answer) (policy.Member, error)`;
   - `func (b *Broker) storedWorkload(ctx context.Context, principal string) (policy.Member, error)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2457,6 +2696,67 @@ func TestAnUnpinnedIssuerIsIdentityUnmapped(t *testing.T) {
 	if n := r.Calls.Load(); n != 0 {
 		t.Fatalf("the directory was asked %d times before the pin", n)
 	}
+	// The refusal names the workload refused (pre-flight M-4).
+	recs := eventsOf(f.records(t), decision.EventMint)
+	if len(recs) != 1 || recs[0]["reason"] != string(decision.IdentityUnmapped) || recs[0]["principal"] != workloadID {
+		t.Fatalf("records %v", recs)
+	}
+}
+
+// The session refresh judges the username at its hold as the mint does
+// (decision 41 ruling 4; pre-flight I-1): a workload's own subject declaring
+// its entry's name is no collision, and its refresh extends; another
+// workload whose entry holds that name is still refused.
+func TestASessionRefreshSettlesAWorkloadsUsernameAsTheMintDoes(t *testing.T) {
+	f, wca, w := newWorkloadFixture(t)
+	f.loadPolicy(t, strings.Replace(mappedPolicy, "grants:\n",
+		"  - {name: svc_oxidized, identity: [\""+workloadID+"\"], username: svc-oxidized, token_ttl: 60s}\ngrants:\n", 1)+
+		"  - {subject: svc_oxidized, scope: all_devices, roles: [backup], max_privilege: admin}\n")
+	a := workloadAnswer("svc-oxidized", "backup-hosts")
+	f.mapped(wca, map[string]directory.Answer{workloadID: a}, nil)
+	if resp := decodeMint(t, f.post(context.Background(), chainState(w, wca), mintLeaf1, "k1")); resp.Results[0].Verdict != decision.VerdictPermit {
+		t.Fatalf("the mint: %+v", resp)
+	}
+	// The device session the mint's token opened, as a redemption writes it;
+	// then the refresh, as /v1/refresh calls it after memberFor (as
+	// TestAReloadBetweenTheMemberAndTheHoldRefusesARefresh drives it).
+	f.workloadContext(t, a, f.now)
+	m, err := workloadMember(f.b.Policy.Load(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.RefreshSession(context.Background(), m, &a, store.Credential{Method: "cert"}, f.b.Now(), nil)
+	if err != nil || len(rep.Sessions) != 1 || rep.Sessions[0].Outcome != "extended" {
+		t.Fatalf("its own declared username refused its refresh: %+v %v", rep, err)
+	}
+	other := a
+	other.Principal = "spiffe://corp.example.com/host/other"
+	om := policy.Member{Principal: other.Principal, Domain: policy.DomainMachines, Directory: true,
+		Username: "svc-oxidized", GroupNames: other.GroupNames}
+	if _, err := f.b.RefreshSession(context.Background(), om, &other, store.Credential{Method: "cert"}, f.b.Now(),
+		nil); !errors.Is(err, directory.ErrUsernameTaken) {
+		t.Fatalf("another workload's entry name: %v", err)
+	}
+}
+
+// A reload between opting in and a workload's first verification (pre-flight
+// M-2): with no membership stored, the policy pass judges it by its identity
+// subject's declared username, so its live context is not revoked.
+func TestAReloadBeforeAWorkloadsFirstVerificationKeepsItsDeclaredName(t *testing.T) {
+	f, wca, _ := newWorkloadFixture(t)
+	body := strings.Replace(mappedPolicy, "grants:\n",
+		"  - {name: svc_oxidized, identity: [\""+workloadID+"\"], username: svc-oxidized, token_ttl: 60s}\ngrants:\n", 1) +
+		"  - {subject: svc_oxidized, scope: all_devices, roles: [backup], max_privilege: admin}\n"
+	f.loadPolicy(t, body)
+	f.mapped(wca, nil, nil) // nothing stored for the workload
+	f.workloadContext(t, workloadAnswer("svc-oxidized", "backup-hosts"), f.now)
+	rep, err := f.b.Refresh(context.Background(), f.reloadDir(t, body))
+	if err != nil || rep.Revoked != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "svc-oxidized"); !got.RevokedAt.IsZero() {
+		t.Fatalf("revoked: %+v", got)
+	}
 }
 
 // workloadContext writes the workload's live context on leaf1 as the policy
@@ -2555,14 +2855,21 @@ func TestForgetTakesASPIFFEID(t *testing.T) {
 	if _, err := f.b.Forget(context.Background(), "SPIFFE://corp.example.com/host/oxidized-01", "test"); err == nil {
 		t.Fatal("an upper-case scheme was taken")
 	}
+	// With no workload mapping, no workload's membership is used: forget
+	// says so rather than answer as if it forgot something (pre-flight M-6).
+	f.b.Directory.Cfg.Workload = nil
+	if _, err := f.b.Forget(context.Background(), workloadID, "test"); err == nil ||
+		!strings.Contains(err.Error(), "no workload mapping is configured") {
+		t.Fatalf("no mapping: %v", err)
+	}
 }
 ```
 
-Add `"log"` to the test file's imports.
+Add `"log"` and `"github.com/rhwendt/port49/internal/policy"` to the test file's imports.
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/broker/ -run 'Mapped|MappedWorkload|NeverMatches|OwnDeclared|EntryUsername|OutagePastGrace|UnpinnedIssuer|ForgetTakes|WithoutTheMapping' -count=1`
+Run: `go test ./internal/broker/ -run 'Mapped|MappedWorkload|NeverMatches|OwnDeclared|EntryUsername|OutagePastGrace|UnpinnedIssuer|ForgetTakes|WithoutTheMapping|SessionRefreshSettles|FirstVerification' -count=1`
 Expected: FAIL to compile: `undefined: workloadMember`.
 
 - [ ] **Step 3: `member.go`**
@@ -2599,6 +2906,23 @@ func workloadMember(pol *policy.Policy, a directory.Answer) (policy.Member, erro
 		return policy.Member{Principal: a.Principal, Domain: policy.DomainMachines, Directory: true},
 			fmt.Errorf("%w: the directory derives username %q for %s, which subject %q declares",
 				directory.ErrUsernameTaken, a.Username, printsafe.Line(a.Principal, 300), who)
+	}
+	return m, nil
+}
+
+// heldCollision judges m's username again under pol, the policy a mint or a
+// session refresh holds: a reload can land between the membership read and
+// the hold, and declare the username the directory gave (final review M-1).
+// A workload under the mapping is settled again by workloadMember, so its own
+// subject's declaration is no collision and another's is (decision 41 ruling
+// 4); the member it returns is the one to judge. Anyone else is refused
+// directory.ErrUsernameTaken when a subject now declares its username.
+func heldCollision(pol *policy.Policy, m policy.Member, answer *directory.Answer) (policy.Member, error) {
+	if m.Domain == policy.DomainMachines && answer != nil {
+		return workloadMember(pol, *answer)
+	}
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		return m, directory.ErrUsernameTaken
 	}
 	return m, nil
 }
@@ -2664,18 +2988,24 @@ and after `storedMember`, add:
 
 ```go
 // storedWorkload is storedMember for a workload under the mapping (decision 41
-// ruling 6). With none stored or a refusal, it has no groups and no username,
-// so nothing it holds stands, as for a person. Past grace it has no groups and
-// the username it last had. Otherwise it is the stored membership. The
-// username is settled by workloadMember under the policy in force; a
-// collision is the refused member and directory.ErrUsernameTaken.
+// ruling 6). A refusal has no groups and no username, so nothing it holds
+// stands, as for a person. With none stored (opted in, not yet verified) it
+// has no groups and the username its identity subject declares, if any: a
+// reload before its first verification keeps what it held under that
+// subject, never more (pre-flight M-2). Past grace it has no groups and the
+// username it last had. Otherwise it is the stored membership. The username
+// is settled by workloadMember under the policy in force; a collision is the
+// refused member and directory.ErrUsernameTaken.
 func (b *Broker) storedWorkload(ctx context.Context, principal string) (policy.Member, error) {
 	none := policy.Member{Principal: principal, Domain: policy.DomainMachines, Directory: true}
 	sm, ok, err := b.Directory.Stored(ctx, principal)
 	switch {
 	case err != nil:
 		return policy.Member{}, err
-	case !ok, sm.Refused:
+	case !ok:
+		none.Username = b.Policy.Load().DeclaredFor(principal)
+		return none, nil
+	case sm.Refused:
 		return none, nil
 	}
 	if b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace {
@@ -2732,7 +3062,10 @@ under the mapping is verified as a person is (decision 41 ruling 6); any other m
 and every principal without a directory, is judged on the policy alone and stamped with the pass's
 instant.`
 
-- [ ] **Step 6: The mint's hold-time check**
+- [ ] **Step 6: The hold-time check, at the mint and at the session refresh (pre-flight I-1)**
+
+Both holds judge the username again with `heldCollision` (Step 3), so a workload's own declared
+username refuses neither its mint nor its session refresh.
 
 In `internal/broker/broker.go`, replace
 
@@ -2745,24 +3078,36 @@ In `internal/broker/broker.go`, replace
 with
 
 ```go
-	collided := m.Directory && pol.DeclaredUsernames()[m.Username] != ""
-	if m.Domain == policy.DomainMachines && answer != nil {
-		// A workload's username is settled again under the policy the mint
-		// holds (decision 41 ruling 4): its own subject's declaration is no
-		// collision, another's is.
-		var werr error
-		if m, werr = workloadMember(pol, *answer); werr != nil {
-			collided = true
-		} else {
-			collided = false
-		}
-	}
-	if collided {
+	// A workload's username is settled again here (decision 41 ruling 4):
+	// its own subject's declaration is no collision, another's is.
+	if m, err = heldCollision(pol, m, answer); err != nil {
 		release()
 		ref := directoryRefusal(directory.ErrUsernameTaken)
 ```
 
-The rest of that block is unchanged.
+The rest of that block is unchanged. (`m`, `answer` and `err` are the handler's, from
+`b.memberFor` and `b.Minter.Reserve` above; this assigns, it declares nothing.)
+
+In `internal/broker/sessionrefresh.go`'s `RefreshSession`, replace
+
+```go
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		return rep, directory.ErrUsernameTaken
+	}
+```
+
+with
+
+```go
+	m, err := heldCollision(pol, m, answer)
+	if err != nil {
+		return rep, err
+	}
+```
+
+(`m` is the parameter, reassigned; `err` is new here, and the `refs, err :=` that follows still
+declares `refs`.) Both callers, `/v1/refresh` and the OIDC refresh, already answer
+`directory.ErrUsernameTaken` as `username_collision`.
 
 - [ ] **Step 7: The pin, and forget**
 
@@ -2773,6 +3118,7 @@ In `internal/broker/workload.go`'s `CertCallerOf`, replace
 		if err != nil {
 			return cc, err
 		}
+		cc.Principal = p
 ```
 
 with
@@ -2782,6 +3128,9 @@ with
 		if err != nil {
 			return cc, err
 		}
+		// Set before the pin: the SPIFFE ID is validated, so a pin refusal's
+		// record names the workload refused (pre-flight M-4).
+		cc.Principal = p
 		// The workload mapping is weak, so its issuer is pinned at every
 		// reading of the certificate, before any search (decision 41 ruling 2).
 		if b.Directory != nil && b.Directory.Cfg.Workload != nil {
@@ -2806,9 +3155,17 @@ In `internal/broker/forget.go`, replace the `user:` check and the `normalPrincip
 		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: user: and an email, or a "+
 			"workload's SPIFFE ID verbatim", printsafe.Line(principal, 300))
 	}
+	if directory.IsWorkload(normal) && b.Directory.Cfg.Workload == nil {
+		// Nothing is held for a workload without the mapping, and nothing
+		// would read it (pre-flight M-6). A record left from when one was
+		// configured expires with its lease.
+		return "", fmt.Errorf("broker: no workload mapping is configured (broker.identity.machines[].directory), so "+
+			"no membership is held for %s to forget", printsafe.Line(normal, 300))
+	}
 ```
 
-Add `"github.com/rhwendt/port49/internal/spiffe"` to `forget.go`'s imports. Update `Forget`'s doc
+Add `"github.com/rhwendt/port49/internal/directory"` and `"github.com/rhwendt/port49/internal/spiffe"`
+to `forget.go`'s imports. Update `Forget`'s doc
 comment's first line to: `Forget is \`port49 directory forget\` (Ruling 3's escape; decision 41
 ruling 3 for a workload).`
 
@@ -2817,7 +3174,8 @@ ruling 3 for a workload).`
 Run: `go test ./internal/broker/ -count=1 && go vet ./internal/broker/`
 Expected: PASS: every new test, and every existing one. `TestAWorkloadMintsWhileTheDirectoryIsDown`
 and `TestAMachinePrincipalIsStampedAndKept` pass unchanged: the static resolver's `Cfg.Workload` is
-nil.
+nil. `TestAReloadBetweenTheMemberAndTheHoldRefusesARefresh` and its mint twin pass unchanged:
+`heldCollision` keeps a person's rule.
 
 Run: `go test -race ./internal/broker/ -count=1`
 Expected: PASS.
@@ -2831,8 +3189,10 @@ git commit -m "feat(broker): a mapped workload's directory groups (decision 41)
 memberFor, storedMemberOf, storedMember and the scheduled judge resolve a
 workload under the mapping by its SPIFFE ID; workloadMember settles its
 username (its subject's declared one wins, else its entry's, which a
-declaration refuses). CertCallerOf checks the issuer pin before any search;
-forget takes a spiffe:// ID. Without the mapping nothing changes.
+declaration refuses). heldCollision judges it again at the mint's hold and
+the session refresh's. CertCallerOf checks the issuer pin before any search,
+naming the workload in the refusal; forget takes a spiffe:// ID. Without the
+mapping nothing changes.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2844,23 +3204,29 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   sessions go `context_stale` at `session.staleness_ceiling`. This holds even for a workload whose
   grants come from its identity subject alone, since the mapping makes every workload of that
   verifier a directory principal.
-- **The username.** A workload whose identity subject declares `username:` keeps it. One with no
-  such subject takes its entry's `username_attribute`. A name some subject declares is refused
-  `username_collision`, naming both; the declared one stands.
+- **The username.** A workload whose identity subject declares `username:` keeps it, at mint and at
+  session refresh. One with no such subject takes its entry's `username_attribute`. A name some
+  subject declares is refused `username_collision`, naming both; the declared one stands.
+- **Opting in.** A reload before a workload's first verification keeps its identity subject's
+  grants under its declared username; one with no declared username is revoked until its next
+  mint, as a person with no stored membership is.
 - **`port49 directory forget spiffe://…`** frees a workload whose entry was deleted and re-created,
   as for a person. Run it only after confirming the new entry is that workload's.
 - **The issuer pin.** A workload certificate whose issuer `issuers:` does not list is refused
-  `identity_unmapped` at bind, before the directory is asked.
+  `identity_unmapped` at bind, before the directory is asked. The decision record names its SPIFFE
+  ID, so the refused workload can be found.
+- **`forget` with no mapping** answers that no workload mapping is configured, and deletes nothing.
 
 ---
 
 ### Task 6: port49d says the mapping and pre-warms machine groups
 
 **Files:**
-- Modify: `internal/directory/prewarm.go` (`PrewarmAll`; `Prewarm` delegates; `prewarm` takes a
-  config and a lookup)
+- Modify: `internal/directory/prewarm.go` (`PrewarmAll`; `prewarmWorkloads`; `Prewarm` delegates;
+  `prewarm` takes a config and a lookup)
 - Modify: `internal/port49d/directory.go` (`policyEnv`; `announceDirectory`; `prewarm`)
-- Test: `internal/directory/workload_test.go` (`TestPrewarmVerifiesMachineGroupMembersAsWorkloads`)
+- Test: `internal/directory/workload_test.go` (`TestPrewarmVerifiesMachineGroupMembersAsWorkloads`,
+  `TestPrewarmSkipsMachineGroupsWithoutAMapping`, `TestPrewarmVerifiesIdentityOnlyWorkloads`)
 - Test: `internal/port49d/workload_directory_test.go`
 
 **Interfaces:**
@@ -2868,8 +3234,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - Task 2: `lookup.workload`, `byWorkloadDN`, `Config.Workload`.
   - Task 3: `cfg.Broker.Directory.Workload`.
   - Task 4: `Policy.MachineGroupValues`, `MachineGroupSubjects`, `Env.WorkloadDirectory`.
-- Produces: `func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups []string)
-  (PrewarmReport, error)`.
+  - Plan 8: `Policy.SPIFFEIdentities` (`internal/policy/member.go`), the identity-only workloads.
+- Produces: `func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups, workloads
+  []string) (PrewarmReport, error)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2889,7 +3256,7 @@ func TestPrewarmVerifiesMachineGroupMembersAsWorkloads(t *testing.T) {
 	w.dir.onBase(wlDN, "(objectClass=user)", wlEntry(wlID))
 	w.dir.onBase(stray, "(objectClass=user)", entry(stray, map[string][]string{
 		"uid": {"spiffe://elsewhere.example/x"}, "sAMAccountName": {"stray"}}))
-	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup})
+	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup}, nil)
 	if err != nil || rep.Groups != 1 || rep.Principals != 1 || rep.Failed != 1 {
 		t.Fatalf("%+v %v", rep, err)
 	}
@@ -2907,12 +3274,50 @@ func TestPrewarmVerifiesMachineGroupMembersAsWorkloads(t *testing.T) {
 	}
 }
 
-// Without a workload mapping, machine groups are not pre-warmed.
+// Without a workload mapping, neither machine groups nor workload identities
+// are pre-warmed.
 func TestPrewarmSkipsMachineGroupsWithoutAMapping(t *testing.T) {
 	w := newWorld(t)
-	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup})
-	if err != nil || rep.Groups != 0 || len(w.dir.calls) != 0 {
+	rep, err := w.r.PrewarmAll(context.Background(), nil, []string{gBackup}, []string{wlID})
+	if err != nil || rep.Groups != 0 || rep.Principals != 0 || len(w.dir.calls) != 0 {
 		t.Fatalf("%+v %v %d searches", rep, err, len(w.dir.calls))
+	}
+}
+
+// An identity-only workload, granted by its own spiffe:// subject and in no
+// machine_group, is pre-warmed too (decision 41 ruling 6; pre-flight I-3):
+// its last own verification is past grace, the pass verifies it, and it is
+// served in an outage within grace of the pass. An identity outside the
+// verifier's trust domains is not searched. The workloads share one
+// prewarm.max_principals: past it the rest are capped.
+func TestPrewarmVerifiesIdentityOnlyWorkloads(t *testing.T) {
+	w := newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 10
+	if _, err := w.r.VerifyWorkload(context.Background(), wlID); err != nil { // its own last mint
+		t.Fatal(err)
+	}
+	w.clk.Add(5 * time.Hour) // past grace (4h)
+	rep, err := w.r.PrewarmAll(context.Background(), nil, nil, []string{"spiffe://elsewhere.example/x", wlID})
+	if err != nil || rep.Principals != 1 || rep.Failed != 0 || rep.Capped {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	for _, c := range w.dir.calls {
+		if strings.Contains(c.Filter, "elsewhere.example") {
+			t.Fatalf("an identity outside the trust domains was searched: %s", c.Filter)
+		}
+	}
+	w.clk.Add(time.Hour)
+	w.down()
+	if a, err := w.r.CurrentWorkload(context.Background(), wlID); err != nil || a.Source != Grace {
+		t.Fatalf("in the outage: %+v %v", a, err)
+	}
+	// The budget: one principal, two workloads; the second (sorted) is capped.
+	w = newWorkloadWorld(t)
+	w.r.Cfg.PrewarmMax = 1
+	rep, err = w.r.PrewarmAll(context.Background(), nil, nil,
+		[]string{"spiffe://corp.example.com/host/oxidized-02", wlID})
+	if err != nil || rep.Principals != 1 || rep.Failed != 0 || !rep.Capped {
+		t.Fatalf("capped: %+v %v", rep, err)
 	}
 }
 ```
@@ -2938,8 +3343,10 @@ func workloadMapping() *directory.WorkloadMapping {
 		UserFilter: "(objectClass=user)", TrustDomains: []string{"corp.example.com"}}
 }
 
-// The start says the mapping, its 3am cost and its ACL requirement (decision
-// 41 rulings 2, 7 and 10), never the fact L50 measures.
+// The start says the mapping, what every workload of the verifier then needs
+// (ruling Q2; pre-flight I-4), its 3am cost with the two clocks apart
+// (pre-flight M-1) and its ACL requirement (decision 41 rulings 2, 7 and 10),
+// never the fact L50 measures.
 func TestTheWorkloadMappingStartLines(t *testing.T) {
 	cfg := brokerConfig(t, directoryPolicy)
 	cfg.Broker.Directory = directoryCfg("gssapi")
@@ -2950,12 +3357,17 @@ func TestTheWorkloadMappingStartLines(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"port49-broker: directory: workload certificates map by spiffe_id (weak, pinned to CN=Workloads Issuing CA,O=Corp) " +
-			"through uid under (objectClass=user); username from the identity subject listing the SPIFFE ID, else from " +
-			"sAMAccountName; machine_group subjects match them, group subjects never\n",
+			"through uid under (objectClass=user); every workload this verifier accepts must have exactly one entry " +
+			"holding its SPIFFE ID, or it is refused identity_unmapped, and while the directory is down past grace it " +
+			"is refused directory_unavailable; username from the identity subject listing the SPIFFE ID, else from " +
+			"sAMAccountName; an entry holding a SPIFFE ID in uid is never a person's; machine_group subjects match " +
+			"them, group subjects never\n",
 		"port49-broker: directory: a mapped workload mints only while a server answers or its membership was verified " +
-			"within grace (4h0m0s): past it its mints are refused directory_unavailable (port49 workload exits 75), and " +
-			"its live device sessions deny context_stale at port49d's session.staleness_ceiling; pre-warm every 1h0m0s " +
-			"keeps machine_group members verified\n",
+			"within grace (4h0m0s): past it its mints are refused directory_unavailable (port49 workload exits 75); its " +
+			"live device sessions go unstamped from the first scheduled refresh that cannot verify it, and deny " +
+			"context_stale once port49d's session.staleness_ceiling has passed since the last one that did; pre-warm " +
+			"every 1h0m0s keeps mapped workloads verified (machine_group members and each spiffe:// identity a subject " +
+			"lists, up to prewarm.max_principals (10000) besides the people's)\n",
 		"port49-broker: directory: uid must be writable only by directory administrators: whoever can write it on an " +
 			"entry chooses which workload takes that entry's groups\n",
 	} {
@@ -3019,7 +3431,7 @@ func TestPolicyEnvSaysTheWorkloadMapping(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/directory/ ./internal/port49d/ -run 'Prewarm.*Machine|WorkloadMapping|MachineGroupSubjects|PolicyEnvSays' -count=1`
+Run: `go test ./internal/directory/ ./internal/port49d/ -run 'Prewarm.*Machine|PrewarmVerifiesIdentityOnly|WorkloadMapping|MachineGroupSubjects|PolicyEnvSays' -count=1`
 Expected: FAIL to compile: `undefined: PrewarmAll`, and `policy.Env` has no `WorkloadDirectory` set
 by `policyEnv` (FAIL at the assertion).
 
@@ -3047,26 +3459,36 @@ Then add:
 ```go
 // Prewarm is PrewarmAll for people alone.
 func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport, error) {
-	return r.PrewarmAll(ctx, groups, nil)
+	return r.PrewarmAll(ctx, groups, nil, nil)
 }
 
 // PrewarmAll verifies every member of groups as a person, and, under a
-// workload mapping, every member of machineGroups as a workload (decision 41
-// ruling 6), each at most prewarm.max_principals, and writes each membership,
+// workload mapping, every member of machineGroups and then every SPIFFE ID in
+// workloads as a workload (decision 41 ruling 6), and writes each membership,
 // so a principal that never asked can be served in an outage within grace
-// (design §10; Ruling 20). machineGroups are the policy's machine_group:
-// values; without a mapping they are not read.
-func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups []string) (PrewarmReport, error) {
+// (design §10; Ruling 20). People take at most prewarm.max_principals, and
+// workloads, the two kinds together, as many again. machineGroups are the
+// policy's machine_group: values and workloads its listed spiffe:// identities
+// (pre-flight I-3: a workload granted by its own identity subject alone is in
+// no group); without a mapping neither is read. A workload in both is
+// verified twice, which costs one search pair and no grant.
+func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups, workloads []string) (PrewarmReport, error) {
 	rep, err := r.prewarm(ctx, r.Cfg, groups, func(dn string) lookup { return lookup{find: r.byDN(dn), say: dn} })
 	if err != nil {
 		return rep, err
 	}
-	if w := r.Cfg.Workload; w != nil && len(machineGroups) > 0 {
-		wc := r.Cfg
-		wc.UserFilter = w.UserFilter
-		wrep, err := r.prewarm(ctx, wc, machineGroups, func(dn string) lookup {
-			return lookup{find: r.byWorkloadDN(dn), say: dn, workload: true}
-		})
+	if w := r.Cfg.Workload; w != nil {
+		var wrep PrewarmReport
+		if len(machineGroups) > 0 {
+			wc := r.Cfg
+			wc.UserFilter = w.UserFilter
+			wrep, err = r.prewarm(ctx, wc, machineGroups, func(dn string) lookup {
+				return lookup{find: r.byWorkloadDN(dn), say: dn, workload: true}
+			})
+		}
+		if err == nil {
+			err = r.prewarmWorkloads(ctx, slices.Sorted(slices.Values(workloads)), &wrep)
+		}
 		rep.Groups, rep.Principals, rep.Failed = rep.Groups+wrep.Groups, rep.Principals+wrep.Principals, rep.Failed+wrep.Failed
 		rep.Capped = rep.Capped || wrep.Capped
 		if err != nil {
@@ -3077,8 +3499,42 @@ func (r *Resolver) PrewarmAll(ctx context.Context, groups, machineGroups []strin
 	r.M.DirectoryPrewarmLastSuccess.Set(float64(r.Now().Unix()))
 	return rep, nil
 }
+
+// prewarmWorkloads verifies each SPIFFE ID in ids, in the verifier's trust
+// domains, as VerifyWorkload does, within what the machine groups left of
+// prewarm.max_principals, adding to rep. An ID outside the trust domains is
+// skipped unsearched: no workload certificate gives it (decision 40 ruling
+// 16's start line names it). An outage stops the pass, as for people.
+func (r *Resolver) prewarmWorkloads(ctx context.Context, ids []string, rep *PrewarmReport) error {
+	left := r.Cfg.PrewarmMax - rep.Principals - rep.Failed
+	for _, p := range ids {
+		if id, err := spiffe.ParseWorkload(p); err != nil || !slices.Contains(r.Cfg.Workload.TrustDomains, id.TrustDomain) {
+			continue
+		}
+		if left <= 0 {
+			rep.Capped = true
+			r.sayOnce("prewarmcap:workloads", time.Hour, "directory: pre-warm reached prewarm.max_principals (%d) "+
+				"for workloads; the rest are not pre-warmed", r.Cfg.PrewarmMax)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		left--
+		if _, err := r.VerifyWorkload(ctx, p); err != nil {
+			if errors.Is(err, ErrUnavailable) {
+				return err
+			}
+			rep.Failed++
+			continue
+		}
+		rep.Principals++
+	}
+	return nil
+}
 ```
 
+Add `"slices"` and `"github.com/rhwendt/port49/internal/spiffe"` to `prewarm.go`'s imports.
 `prewarm_test.go` calls `Prewarm` and passes unchanged.
 
 - [ ] **Step 4: port49d**
@@ -3128,18 +3584,28 @@ and at the end of `announceDirectory`, after the grace line, add:
 ```go
 	machineGroups()
 	if wm := d.Workload; wm != nil {
+		// Ruling Q2's cost (pre-flight I-4): every workload of the verifier,
+		// identity-only ones included, needs its entry, and an outage stops it.
 		fmt.Fprintf(w, "%s: directory: workload certificates map by spiffe_id (weak, pinned to %s) through %s under "+
-			"%s; username from the identity subject listing the SPIFFE ID, else from %s; machine_group subjects match "+
-			"them, group subjects never\n", proc, strings.Join(wm.Issuers, "; "), wm.Attribute, wm.UserFilter,
-			d.UsernameAttribute)
-		warm := fmt.Sprintf("pre-warm %s keeps machine_group members verified", every(d.PrewarmInterval))
+			"%s; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID, or it is "+
+			"refused identity_unmapped, and while the directory is down past grace it is refused "+
+			"directory_unavailable; username from the identity subject listing the SPIFFE ID, else from %s; an entry "+
+			"holding a SPIFFE ID in %s is never a person's; machine_group subjects match them, group subjects never\n",
+			proc, strings.Join(wm.Issuers, "; "), wm.Attribute, wm.UserFilter, d.UsernameAttribute, wm.Attribute)
+		warm := fmt.Sprintf("pre-warm %s keeps mapped workloads verified (machine_group members and each spiffe:// "+
+			"identity a subject lists, up to prewarm.max_principals (%d) besides the people's)", every(d.PrewarmInterval),
+			d.PrewarmMax)
 		if d.PrewarmInterval == 0 {
 			warm = "pre-warm is off, so a workload that has not minted within grace is refused in an outage"
 		}
+		// Two clocks (pre-flight M-1): grace bounds a mint; port49d's
+		// staleness ceiling, counted from the last pass that reached the
+		// directory, bounds a session. Their defaults coincide; they need not.
 		fmt.Fprintf(w, "%s: directory: a mapped workload mints only while a server answers or its membership was "+
 			"verified within grace (%s): past it its mints are refused directory_unavailable (port49 workload exits "+
-			"75), and its live device sessions deny context_stale at port49d's session.staleness_ceiling; %s\n", proc,
-			d.Grace, warm)
+			"75); its live device sessions go unstamped from the first scheduled refresh that cannot verify it, and "+
+			"deny context_stale once port49d's session.staleness_ceiling has passed since the last one that did; %s\n",
+			proc, d.Grace, warm)
 		fmt.Fprintf(w, "%s: directory: %s must be writable only by directory administrators: whoever can write it on "+
 			"an entry chooses which workload takes that entry's groups\n", proc, wm.Attribute)
 	}
@@ -3149,8 +3615,11 @@ In `prewarm`, replace `rep, err := r.Prewarm(ctx, live.Load().GroupValues())` wi
 
 ```go
 		pol := live.Load()
-		rep, err := r.PrewarmAll(ctx, pol.GroupValues(), pol.MachineGroupValues())
+		rep, err := r.PrewarmAll(ctx, pol.GroupValues(), pol.MachineGroupValues(),
+			slices.Collect(maps.Keys(pol.SPIFFEIdentities())))
 ```
+
+Add `"maps"` and `"slices"` to `directory.go`'s imports (`PrewarmAll` sorts the identities).
 
 - [ ] **Step 5: Run the tests**
 
@@ -3167,18 +3636,27 @@ git commit -m "feat(port49d): say the workload mapping, its 3am cost, and pre-wa
 policyEnv sets WorkloadDirectory; the start says the spiffe_id mapping, that
 a mapped workload stops minting past grace and port49 workload exits 75, the
 attribute's ACL requirement, and machine_group subjects that mint for no one.
-PrewarmAll verifies machine_group members as workloads.
+PrewarmAll verifies machine_group members and the listed spiffe:// identities
+as workloads, within their own prewarm.max_principals.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
 **Operator notes (for plan 13):**
-- **Read the start.** It names the mapping's attribute, pin and filter, says the 3am cost in full,
+- **Read the start.** It names the mapping's attribute, pin and filter, says that every workload of
+  the verifier then needs exactly one entry (identity-only ones too), says the 3am cost in full,
   and names `machine_group:` subjects that mint for no one.
+- **Two clocks.** Past `broker.directory.grace` with no server, a mapped workload's mints are
+  refused. Its live sessions are a separate clock: they deny `context_stale` once port49d's
+  `session.staleness_ceiling` has passed since the last scheduled refresh that reached the
+  directory. The defaults are both 4h; changing one does not move the other.
 - **Keep pre-warm on** (`broker.directory.prewarm.interval`, default 1h) where workloads run on a
   schedule. A nightly job's own last mint is about 24h old in an outage, far past grace. Pre-warm
-  re-verifies every `machine_group:` member each hour, so the job mints within grace.
+  re-verifies every `machine_group:` member and every `spiffe://` identity a subject lists each
+  hour, so the job mints within grace whether its grants come from a group or its own subject.
+- **Pre-warm's budget.** `prewarm.max_principals` bounds people and workloads separately, so one
+  interval makes up to twice that many verifications. Size it, and the DCs' load, for both.
 - **The runbook line, for a DC outage past grace with workloads mapped:**
   - Mapped workloads stop minting, and `port49 workload` exits 75.
   - Their sessions deny `context_stale` at the ceiling.
@@ -3322,9 +3800,11 @@ the disk has at least 60 GB free for the Windows VM.
 
 From the main checkout:
 `git worktree add --detach .worktrees/lab-l50 <the branch's head commit>`. Run everything from
-there (the lab-run rule: never from the shared feature worktree). Start a background stall watchdog
-before the run, and re-arm it on each wake. Its signals:
-- the mtime of `tests/lab/logs/directory/` and of `tests/lab/evidence/L50-*.json`;
+there (the lab-run rule: never from the shared feature worktree). The notes and evidence are
+written into the feature worktree, not this one (Step 7, pre-flight I-9). Start a background stall
+watchdog before the run, and re-arm it on each wake. Its signals:
+- the mtime of `.worktrees/lab-l50/tests/lab/logs/directory/` and of
+  `.worktrees/workload-directory/tests/lab/evidence/L50-*.json`;
 - `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"`;
 - `sg docker -c 'docker ps'` for `port49labwin`.
 
@@ -3340,7 +3820,9 @@ harness's `w.run` takes `within`).
 # Account Operators member, a delegated OU administrator (the delegation
 # wizard's "Create, delete, and manage user accounts" on OU=Workloads), and an
 # ordinary user, every one with actor_password. Idempotent: a re-run resets
-# the passwords and the delegation.
+# the passwords and the delegation, and removes a previous run's prescribed
+# denies, so a reused DC's "default" cells are measured at the default. It
+# answers the OU's SDDL after that, the evidence of what "default" was.
 param([string]$actor_password)
 $ErrorActionPreference = 'Stop'
 Import-Module ActiveDirectory
@@ -3368,7 +3850,22 @@ Add-ADGroupMember -Identity 'Account Operators' -Members 'l50-acctop'
 # The wizard's ACEs: create and delete user objects, full control over them.
 dsacls $ou /G "$nb\l50-ouadmin:CCDC;user" | Out-Null
 dsacls $ou /I:S /G "$nb\l50-ouadmin:GA;;user" | Out-Null
-@{ ou = $ou; target = (Get-ADUser 'svc-oxidized-01').DistinguishedName }
+# A previous run's prescribed denies (audit.ps1 acl set), and nothing else:
+# an explicit deny of WriteProperty on user objects for SELF, Account
+# Operators or l50-ouadmin. Never dsacls /R, which strips a trustee's every
+# ACE, Account Operators' default grants on the OU included (pre-flight I-8).
+$schema = (Get-ADRootDSE).schemaNamingContext
+$userClass = [guid](Get-ADObject -SearchBase $schema -LDAPFilter '(lDAPDisplayName=user)' -Properties schemaIDGUID).schemaIDGUID
+$sids = @('S-1-5-10', 'S-1-5-32-548', (Get-ADUser 'l50-ouadmin').SID.Value)
+$acl = Get-Acl -Path "AD:$ou"
+$stale = @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | Where-Object {
+  $_.AccessControlType -eq 'Deny' -and $_.ActiveDirectoryRights -eq 'WriteProperty' -and
+  $_.InheritedObjectType -eq $userClass -and $sids -contains $_.IdentityReference.Value })
+foreach ($r in $stale) { $acl.RemoveAccessRuleSpecific($r) }
+if ($stale.Count -gt 0) { Set-Acl -Path "AD:$ou" -AclObject $acl }
+$sddl = (Get-Acl -Path "AD:$ou").Sddl
+@{ ou = $ou; target = (Get-ADUser 'svc-oxidized-01').DistinguishedName; removed_denies = $stale.Count
+   sddl = $sddl.Substring(0, [Math]::Min(4000, $sddl.Length)) }
 ```
 
 `tests/lab/directory/windows/scripts/write_as.ps1`:
@@ -3428,12 +3925,22 @@ switch ($mode) {
   'acl' {
     # The prescribed ACL under test: an inherited deny of write on attribute,
     # on OU=Workloads, for SELF, Account Operators and the delegated admin.
-    foreach ($who in @('NT AUTHORITY\SELF', 'BUILTIN\Account Operators', "$nb\l50-ouadmin")) {
-      if ($state -eq 'set') { dsacls $ou /I:S /D "${who}:WP;$attribute;user" | Out-Null }
-      else { dsacls $ou /R "$who" | Out-Null }
+    # "clear" removes exactly the rules "set" adds, never another ACE: dsacls
+    # /R would strip each trustee's every ACE on the OU, Account Operators'
+    # default create/delete grants included (pre-flight I-8).
+    $schema = (Get-ADRootDSE).schemaNamingContext
+    $attrGuid = [guid](Get-ADObject -SearchBase $schema -LDAPFilter "(lDAPDisplayName=$attribute)" -Properties schemaIDGUID).schemaIDGUID
+    $userClass = [guid](Get-ADObject -SearchBase $schema -LDAPFilter '(lDAPDisplayName=user)' -Properties schemaIDGUID).schemaIDGUID
+    $acl = Get-Acl -Path "AD:$ou"
+    foreach ($sid in @('S-1-5-10', 'S-1-5-32-548', (Get-ADUser 'l50-ouadmin').SID.Value)) {
+      $rule = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+        (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'WriteProperty', 'Deny', $attrGuid,
+        [System.DirectoryServices.ActiveDirectorySecurityInheritance]::Descendents, $userClass)
+      if ($state -eq 'set') { $acl.AddAccessRule($rule) } else { $acl.RemoveAccessRuleSpecific($rule) }
     }
-    if ($state -ne 'set') { dsacls $ou /G "$nb\l50-ouadmin:CCDC;user" | Out-Null; dsacls $ou /I:S /G "$nb\l50-ouadmin:GA;;user" | Out-Null }
-    @{ ou = $ou; state = $state }
+    Set-Acl -Path "AD:$ou" -AclObject $acl
+    $sddl = (Get-Acl -Path "AD:$ou").Sddl
+    @{ ou = $ou; state = $state; sddl = $sddl.Substring(0, [Math]::Min(4000, $sddl.Length)) }
   }
 }
 ```
@@ -3450,18 +3957,37 @@ secret parameter.
 
 ```sh
 #!/bin/sh
-# l50-seed.sh <password> [acl set|clear <attribute>]: L50's writers on Samba
-# AD, as l50_seed.ps1 makes them on Windows. The password is read from $1 and
-# never printed. With "acl", it sets or clears the prescribed deny of write on
-# <attribute> on OU=Workloads for SELF, Account Operators and l50-ouadmin.
+# l50-seed.sh <password> [acl set|clear <attribute> | sddl]: L50's writers on
+# Samba AD, as l50_seed.ps1 makes them on Windows. The password is read from
+# $1 and never printed. With "acl", it sets or clears the prescribed deny of
+# write on <attribute> on OU=Workloads for SELF, Account Operators and
+# l50-ouadmin. With "sddl", it prints the OU's security descriptor, the
+# evidence of what the "default" cells ran under (pre-flight I-8).
 set -eu
 pw=$1
-base=$(ldbsearch -H /var/lib/samba/private/sam.ldb -s base -b "" defaultNamingContext | sed -n 's/^defaultNamingContext: //p')
+sam=/var/lib/samba/private/sam.ldb
+base=$(ldbsearch -H $sam -s base -b "" defaultNamingContext | sed -n 's/^defaultNamingContext: //p')
 ou="OU=Workloads,$base"
+if [ "${2:-}" = sddl ]; then
+  samba-tool dsacl get --objectdn="$ou"
+  exit 0
+fi
 if [ "${2:-}" = acl ]; then
-  guid=$(ldbsearch -H /var/lib/samba/private/sam.ldb -b "CN=Schema,CN=Configuration,$base" "(lDAPDisplayName=$4)" schemaIDGUID |
+  # --show-binary prints schemaIDGUID as a dashed GUID; anything else (empty,
+  # or base64 from a "schemaIDGUID::" line) would make an ACE with no object
+  # GUID, a deny of every property: fail loudly instead (pre-flight M-7).
+  guid=$(ldbsearch -H $sam --show-binary -b "CN=Schema,CN=Configuration,$base" "(lDAPDisplayName=$4)" schemaIDGUID |
     sed -n 's/^schemaIDGUID: //p')
-  for sid in PS AO "$(samba-tool user show l50-ouadmin --attributes=objectSid | sed -n 's/^objectSid: //p')"; do
+  case "$guid" in
+    ????????-????-????-????-????????????) ;;
+    *) echo "l50-seed.sh: no schemaIDGUID for $4 (read '$guid'); no ACE written" >&2; exit 2 ;;
+  esac
+  ouadmin=$(samba-tool user show l50-ouadmin --attributes=objectSid | sed -n 's/^objectSid: //p')
+  case "$ouadmin" in
+    S-1-5-21-*) ;;
+    *) echo "l50-seed.sh: no objectSid for l50-ouadmin (read '$ouadmin'); no ACE written" >&2; exit 2 ;;
+  esac
+  for sid in PS AO "$ouadmin"; do
     ace="(OD;CI;WP;$guid;bf967aba-0de6-11d0-a285-00aa003049e2;$sid)"
     if [ "$3" = set ]; then samba-tool dsacl set --objectdn="$ou" --sddl="$ace" >/dev/null
     else samba-tool dsacl delete --objectdn="$ou" --sddl="$ace" >/dev/null; fi
@@ -3514,24 +4040,41 @@ with these pieces. Each body is short, and the steps above show what each does.
 - `func l50Value(attr, writer, acl string) string` returns `"spiffe://corp.example.com/host/l50-" +
   attr + "-" + writer + "-" + acl`. Each write is distinct, so a reads-back is never an earlier
   write's.
-- `func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) []l50Cell`:
+- `func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells []l50Cell, notes string)`:
   1. Exec `l50-seed.sh <password>` in the Samba container, so the password is passed as an argument
      and never printed.
-  2. For each ACL state (`default`, then `l50-seed.sh <pw> acl set <attr>` per attribute, which is
+  2. Exec `l50-seed.sh <password> sddl` and put its output, cut to 4000 characters, in `notes`
+     under "The OU's security descriptor before the default cells" (pre-flight I-8). The container
+     is fresh each run (`startDirectories` runs `down -v` first), so this is the default.
+  3. For each ACL state (`default`, then `l50-seed.sh <pw> acl set <attr>` per attribute, which is
      `prescribed`), for each attribute and writer: dial the Samba LDAPS URI with go-ldap. The TLS
-     config is `l.d.pki.clientTLS(l.uri)`.
-  3. Bind simple as `<writer>@corp.example.com` with the password, then `Modify` the target DN with
+     config is `l.d.pki.clientTLS(l.uri)`. A non-zero exit of `acl set` fails the test as the
+     harness's fault (M-7: no ACE with an empty GUID is ever measured).
+  4. Bind simple as `<writer>@corp.example.com` with the password, then `Modify` the target DN with
      `Replace(attr, l50Value(...))`.
-  4. Record the result code (`ldapCode(err)`), or written. On written, read the value back with
+  5. Record the result code (`ldapCode(err)`), or written. On written, read the value back with
      `Search` at base scope.
-  5. Each step is `ev.mark`ed, and the password is never in a mark.
-  6. After the cells, the audit: `l.exec("smbcontrol", "samba", "debug", "dsdb_json_audit:5
-     dsdb_audit:5")`. Run one accepted and one refused write again. Grep the container's
-     `/var/log/samba/log.samba*` for the target DN in a `dsdbChange` record, as installed (before
-     the smbcontrol) and after it. Record both.
-- `func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) []l50Cell`:
-  1. Run `w.run(t, "l50_seed", {"actor_password": password}, 5*time.Minute, &seed)`.
+  6. Each step is `ev.mark`ed, and the password is never in a mark.
+  7. After the cells, the audit (pre-flight I-7). The container runs `samba -i`, which logs to
+     stdout, so the audit is read from `docker compose logs --no-color --since <t> samba`
+     (`l.d.dockerCompose`), never from `/var/log/samba`. Take `t0`, run one accepted and one
+     refused write again, and read the logs since `t0`: a `dsdbChange` record naming the target DN
+     is "as installed: in the log", none is "as installed: not". Then
+     `l.exec("smbcontrol", "samba", "debug", "dsdb_json_audit:5 dsdb_audit:5")`, take `t1`, and do
+     the same.
+  8. **The positive control.** After the smbcontrol, the accepted write must produce a `dsdbChange`
+     line naming the target DN. If none appears, `t.Fatalf` as the harness's fault ("the audit
+     control saw no dsdbChange after debug dsdb_json_audit:5"); never record "not audited" from a
+     log the harness could not read. Each matching line is `ev.mark`ed, scrubbed (`winScrub`) and
+     cut to 600 characters.
+- `func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cells []l50Cell, notes string)`:
+  1. Run `w.run(t, "l50_seed", {"actor_password": password}, 5*time.Minute, &seed)`. Put
+     `seed.removed_denies` and `seed.sddl` in `notes` under "The OU's security descriptor before the
+     default cells": the evidence that a reused DC's default cells ran at the default (pre-flight
+     I-8).
   2. Run the same matrix through `write_as`, with `acl` state changes through `audit` mode `acl`.
+     The `acl clear` after the prescribed cells leaves the OU as the seed found it; its `sddl`
+     answer is marked.
   3. For the audit, run `audit read` since the step's start, as installed. Then run `audit on`, one
      accepted and one refused write again, and `audit read`. A 5136 event naming the target DN and
      the attribute is "in the audit log"; none is "not". Record each event's id and time, never its
@@ -3539,19 +4082,36 @@ with these pieces. Each body is short, and the steps above show what each does.
 - `func l50Table(cells []l50Cell) string` writes the Markdown matrix with header `| attribute |
   writer | ACL | written | reads back | refusal |`. Then it writes one line per writer and ACL
   summarising which attributes it could write.
-- The test:
+- The test (pre-flight I-6: the two phases never share a `tests/lab/logs/directory` tree, since
+  `newDirectories` starts with `os.RemoveAll(d.dir)` and `startDirectories` calls it):
   1. `l50RequireOptIn(t)` skips unless `PORT49_LAB_L50=1`.
-  2. `d := newDirectories(t)`; `d.runSel = "^TestL50WorkloadAttributeWriters$"`.
-  3. Generate `password` (`winPassword()`) and add it to `d.extra`, so every note and evidence check
-     refuses it.
-  4. Samba first: `sd := startDirectories(t)`, `ev := evidence(t, sd, "L50-samba_ad")`,
-     `cells := sd.samba.l50Samba(...)`, then `ev.assertClean(t, password, sd.password)` and
-     `writeResult(t, sd, "L50", sd.samba, l50Claim, sd.samba.version(t), sd.samba.configNote()+l50Table(cells)+audit,
-     "tests/lab/evidence/L50-samba_ad.json")`.
-  5. Then Windows: `dc := startWindowsDC(t, d)`, the same with `dc.l50Windows`, and `writeResult(t, d,
-     "L50", dc, …, "tests/lab/evidence/L50-windows_ad.json")`.
-  6. Each platform's note is written even when the other fails, so a partial run leaves what it
-     measured.
+  2. Generate `password` (`winPassword()`) once, for both platforms.
+  3. **Samba first, in its own subtest**, as `l44CompareCapabilities` runs its directories:
+     `t.Run("samba_ad", func(t *testing.T) { … })`. Inside it:
+     - `sd := startDirectories(t)`; `sd.runSel = "^TestL50WorkloadAttributeWriters$"`;
+       `sd.extra = append(sd.extra, password)`, so `writeResult`'s secret check (`noteText`, which
+       reads the `directories` it is given) refuses the actor password in the Samba note too.
+     - `ev := evidence(t, sd, "L50-samba_ad")`; `cells, notes := sd.samba.l50Samba(t, ev, password)`;
+       `ev.assertClean(t, password, sd.password)`.
+     - `writeResult(t, sd, "L50", sd.samba, l50Claim, sd.samba.version(t),
+       sd.samba.configNote()+notes+l50Table(cells), "tests/lab/evidence/L50-samba_ad.json")`.
+
+     `startDirectories` registers its cleanup on the subtest, so the Samba containers are down
+     (and `samba.log` kept) before the Windows phase starts.
+  4. **Then Windows, after the Samba subtest returns**, pass or fail:
+     `t.Run("windows_ad", func(t *testing.T) { … })`. Inside it:
+     - `d := newDirectories(t)` (a fresh tree: its own PKI, `lab.env` and krb5 files);
+       `d.runSel = "^TestL50WorkloadAttributeWriters$"`; `d.extra = append(d.extra, password)`.
+     - `dc := startWindowsDC(t, d)`; `ev := evidence(t, d, "L50-windows_ad")`;
+       `cells, notes := dc.l50Windows(t, ev, password)`; `ev.assertClean(t, password, d.password)`.
+     - `writeResult(t, d, "L50", dc, l50Claim, <the DC's build from facts>, notes+l50Table(cells),
+       "tests/lab/evidence/L50-windows_ad.json")`.
+  5. Each platform's note is written even when the other fails, so a partial run leaves what it
+     measured: a failed subtest does not stop its sibling.
+  6. `newDirectories` for Windows removes the Samba phase's `tests/lab/logs/directory`, its
+     `samba.log` included. The Samba audit lines the note relies on are in the Samba evidence
+     (`l50Samba`'s items 7 and 8), which `evidence` writes under `directoryOut()`, not under
+     `tests/lab/logs`, so nothing the note cites is lost.
 
 `make lab-l50` runs the line above. Add the target after `lab-directory`:
 
@@ -3564,8 +4124,9 @@ lab-l50:
 ```
 
 and a README paragraph naming the run line, the four writers, the four attributes, the two ACL
-states and the audit modes, and the rule that `actor_password` is generated per run and never
-printed.
+states and the audit modes, the rule that `actor_password` is generated per run and never
+printed, and that a run from a pinned worktree sets `PORT49_LAB_DIRECTORY_OUT` to the branch's
+worktree so the notes land where they are committed.
 
 - [ ] **Step 6: Unit-check and commit the harness**
 
@@ -3582,11 +4143,24 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 - [ ] **Step 7: Run it**
 
-From the pinned worktree, with the watchdog armed: `sg docker -c 'make lab-l50'`. Wait in a
-foreground loop with a deadline, `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"` every 60s, up to 240
-minutes. Re-arm the watchdog each wake.
+Immediately before starting, re-run Step 1's three checks (pre-flight M-8): L51 may have started
+since. If any shows a run, do not start; report "lab busy" and wait, as Step 1 says.
 
-Expected: two notes under `tests/lab/results/`, and two evidence files. Each note has the date,
+From the pinned worktree, with the watchdog armed, and the notes and evidence written into the
+feature worktree (pre-flight I-9: the harness's `PORT49_LAB_DIRECTORY_OUT`, read by
+`directoryOut()`):
+
+```bash
+cd /home/rwendt/git/port49/.worktrees/lab-l50
+sg docker -c 'PORT49_LAB_DIRECTORY_OUT=/home/rwendt/git/port49/.worktrees/workload-directory make lab-l50'
+```
+
+Wait in a foreground loop with a deadline, `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"` every 60s,
+up to 240 minutes. Re-arm the watchdog each wake.
+
+Expected: two notes under `.worktrees/workload-directory/tests/lab/results/`, and two evidence
+files under its `tests/lab/evidence/`; nothing new under `.worktrees/lab-l50/tests/lab/results/`
+(check with `git -C .worktrees/lab-l50 status --short`). Each note has the date,
 the platform and image version (Samba's `samba --version`; Windows' build from `facts`), the claim,
 the matrix, the audit observations and the capture pointer. Read both notes in full before going on.
 Neither holds a password: `writeResult` refuses one.
@@ -3607,7 +4181,13 @@ Neither holds a password: `writeResult` refuses one.
 - **A result contradicts a doc** (for example, decision 41 or design §7 implying something the lab
   refutes): the doc is wrong (rule 4). Fix it, cite the note, and say so in the commit message.
 
+The commit is made on `feature/workload-directory`, in its worktree, where Step 7 wrote the notes;
+never in the detached `.worktrees/lab-l50`, where a commit would be orphaned and Step 9 deletes the
+files (pre-flight I-9).
+
 ```bash
+cd /home/rwendt/git/port49/.worktrees/workload-directory
+git branch --show-current   # expect feature/workload-directory
 git add tests/lab/results/L50-*.md tests/lab/evidence/L50-*.json docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L50
 
@@ -3626,7 +4206,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Copy any raw captures to the main checkout's `tests/lab/captures/` before removing the worktree.
   The L50 run writes no pcap: the wire is TLS, and the evidence is the client's JSON lines, as
   L42–L44's is. Check with `ls tests/lab/captures/`.
-- `git worktree remove .worktrees/lab-l50`.
+- Confirm the notes and evidence are committed on `feature/workload-directory` (Step 8) and that
+  `git -C .worktrees/lab-l50 status --short` lists no L50 file, then
+  `git worktree remove .worktrees/lab-l50`.
 - Report to the controller that the lab is free.
 
 **Operator notes (for plan 13), written only from the notes:**
@@ -3647,21 +4229,27 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Without it, nothing changes:** a workload never reaches the directory and mints with every DC
   down.
 - **With it:**
-  - **One entry per workload.** Each workload must have exactly one directory entry holding its
-    SPIFFE ID, exactly, as the one value of `attribute`. Two entries holding one ID are both
-    refused, and an entry deleted and re-created needs `port49 directory forget spiffe://…`.
+  - **One entry per workload.** Each workload the verifier accepts, identity-only ones included,
+    must have exactly one directory entry holding its SPIFFE ID, exactly, as the one value of
+    `attribute`. Two entries holding one ID are both refused, and an entry deleted and re-created
+    needs `port49 directory forget spiffe://…`.
+  - **One entry, one domain.** An entry holding a SPIFFE ID in `attribute` is a workload's; a
+    person's certificate that maps to it is refused `identity_unmapped`.
   - **Grants.** A new `machine_group: <group>` subject grants that group's workloads. A person in it
     never gets those grants, and a workload never gets a `group:` subject's.
   - **The username** is the workload's identity subject's declared one when it declares one, else
     its entry's `username_attribute`.
   - **The 3am cost.** A DC outage past `broker.directory.grace` (default 4h) stops mapped workloads
     minting (`directory_unavailable`, `port49 workload` exit 75), and their device sessions deny
-    `context_stale` at `session.staleness_ceiling`. Keep pre-warm on so scheduled jobs stay within
-    grace. The start says all of this.
+    `context_stale` once port49d's `session.staleness_ceiling` has passed since the last refresh
+    that reached the directory. Keep pre-warm on so scheduled jobs stay within grace: it verifies
+    `machine_group:` members and every `spiffe://` identity a subject lists, up to
+    `prewarm.max_principals` workloads besides as many people. The start says all of this.
 - **Who can write `attribute`** decides which workload an entry's groups reach. Lab L50 measures it
   on Windows AD and Samba (see its notes). The docs prescribe an ACL only as measured.
 - **CI.** `port49 policy diff` gates a changed `machine_group:` as a changed `group:`, including a
-  move between the two keys.
+  move between the two keys. `port49 policy lint` names each group subject's key and the config it
+  mints under.
 
 ## Self-review against the spec
 
@@ -3675,12 +4263,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - the `objectGUID`/`entryUUID` pin: Task 2;
   - the store record by SPIFFE ID: Task 2.
 - **The username** (ruling 3 via decision 8; declared on the group subject, ruled out by R2): Tasks
-  1, 4 and 5.
+  1, 4 and 5; judged again at both holds, the mint's and the session refresh's (`heldCollision`):
+  Task 5.
+- **One entry, one domain** (decision 41 ruling 4, added at pre-flight): Task 2's `notWorkload`
+  and `TestOneEntryIsOneDomain`; the §5.7 row in Task 1.
 - **The plumbing:**
   - per-domain gates (`memberFor`, `storedMemberOf`, `storedMember`, the scheduled judge): Task 5;
   - `forget` and `normalPrincipal`: Task 5;
-  - pre-warm: Task 6;
+  - pre-warm, machine groups and identity-only workloads: Task 6;
   - the membership record keyed by SPIFFE ID: Task 2.
+- **Lint** (the controller's ruling): Task 4 Step 8.
 - **The 3am case:**
   - the mint 503: Task 5;
   - exit 75: Task 7;
@@ -3691,8 +4283,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Opt-in pinned by a test:** Task 5's `TestWithoutTheMappingAWorkloadNeverReachesTheDirectory`.
   Plan 8's `TestAWorkloadMintsWhileTheDirectoryIsDown` stays.
 - **Lab L50, and "only directory administrators can write it" unasserted until it closes:** Task 8,
-  and the Global Constraints.
-- **The lab-free check:** Task 8 Step 1.
+  and the Global Constraints. The harness's own soundness: the phases never share a logs tree
+  (Step 5), the Samba audit reads the container's stdout with a positive control, the default
+  cells run at a recorded default (the seeds remove only L50's own denies and record the SDDL),
+  and the notes land in the branch's worktree (Steps 7–8).
+- **The lab-free check:** Task 8 Step 1, repeated just before the run (Step 7).
 - **Spec text first, with provenance:** Task 1. No §5.7 code is added; four rows widen.
 - **Security:**
   - both domains on one subject: Task 4;
@@ -3718,16 +4313,36 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `storedWorkload` (`DomainMachines`), and read by Task 4's `groupDomainOf`.
 - `Subject.GroupKey()` (Task 4) is read by `diff.go`, `cmd/port49/policy.go`'s report and access
   review.
-- `Policy.DeclaredFor` (Task 4) is read only by Task 5's `workloadMember`.
+- `Policy.DeclaredFor` (Task 4) is read by Task 5's `workloadMember` and `storedWorkload` (the
+  no-record fallback).
+- `heldCollision(pol, m, answer)` (Task 5 Step 3) is called by the mint (`broker.go`) and by
+  `RefreshSession` (`sessionrefresh.go`), each with the `m` and `answer` `memberFor` gave.
+- `Config.notWorkload(e)` and the widened `entryAttrs` (Task 2 Step 5) are read by `verify`'s
+  person branch (Task 2 Step 6).
+- `Resolver.PrewarmAll(ctx, groups, machineGroups, workloads)` (Task 6) is called by `Prewarm`
+  (`nil, nil`), by port49d's `prewarm` (`pol.SPIFFEIdentities()`'s keys), and by Task 6's tests.
+  `prewarmWorkloads` calls Task 2's `VerifyWorkload`.
+- `l50Samba` and `l50Windows` return `(cells []l50Cell, notes string)`; the test passes `notes` to
+  `writeResult` (Task 8).
 - `Resolver.grace`'s new `declared bool` is passed `true` by `Map` and `Current` and `false` by
   `CurrentWorkload` (Task 2).
 - `Resolver.pinned`'s new `attr string` is passed by `verify` (Task 2).
 
 **Review Focus.** Each of the five names its test in its owning task.
 
+**Amendment 1 (pre-flight, 2026-10-09).** Every Important (I-1 to I-9) and Minor (M-1 to M-8)
+finding of the pre-flight review is applied as the reviewer proposed, with one correction: M-3's
+case-variant entry is asserted `identity_ambiguous`, not "neither matches nor ambiguous", because
+the uniqueness search (`heldElsewhere`) reads no values and refuses any second entry the directory
+returns, which is the fail-closed answer Review Focus 1 already promised. I-2's refusal fires on a
+SPIFFE ID in the attribute, not on any value, so a `description`-style attribute set on people
+refuses no one. The controller's lint ruling is Task 4 Step 8.
+
 ## Questions for the controller
 
-Each comes with a recommendation; none blocks writing or executing the plan as written.
+Each comes with a recommendation; none blocks writing or executing the plan as written. **Ruled by
+the controller, 2026-10-09: all six as recommended** (Q2's start-line cost is Task 6's line 1, added
+by amendment 1; Q5 adds Ryan's production attribute if he names one).
 
 1. **The username source (R2).** The brief allows "from the entry … or declared on the machine
    group subject". The plan rules: the identity subject's declared name wins, else the entry's, and
