@@ -254,7 +254,8 @@ func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
 		!strings.Contains(errb, "if ssh's message above says Host key verification failed") ||
-		!strings.Contains(errb, "port49 devices trust --replace leaf1") {
+		!strings.Contains(errb, "port49 devices trust --known-hosts "+r.known+" --socket "+r.sock+
+			" --port "+strconv.Itoa(dev.port)+" --replace leaf1") {
 		t.Fatalf("code %d stderr %q", code, errb)
 	}
 }

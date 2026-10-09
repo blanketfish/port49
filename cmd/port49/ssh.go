@@ -644,8 +644,9 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if len(pinned) == 0 {
-		fmt.Fprintf(stderr, "%s: no host key is pinned for %s: verify its key on its console and run 'port49 "+
-			"devices trust %s' first; a key never seen is never accepted (design §17)\n", cmd, device, device)
+		fmt.Fprintf(stderr, "%s: no host key is pinned for %s: verify its key on its console and run '%s' "+
+			"first; a key never seen is never accepted (design §17)\n", cmd, device,
+			trustCommand(trustHint{knownHosts: *knownHosts, socket: *socket, port: *port}, device))
 		return 1
 	}
 	path, err := exec.LookPath(*bin)
@@ -768,8 +769,8 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
 			"its message is above); if ssh's message above says Host key verification failed, the address inventory "+
-			"gives for %s may not be the device: verify the key on its console, then run 'port49 devices trust "+
-			"--replace %s'\n", cmd, device, device, device)
+			"gives for %s may not be the device: verify the key on its console, then run '%s'\n", cmd, device, device,
+			trustCommand(trustHint{knownHosts: *knownHosts, socket: *socket, port: *port, replace: true}, device))
 	}
 	return code
 }

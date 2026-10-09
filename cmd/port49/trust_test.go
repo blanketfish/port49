@@ -217,7 +217,7 @@ func TestTrustNeverReplacesWithoutReplace(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(append(args, "leaf1"), &out, &errb); code != 1 || scans.Load() != 0 ||
 		!strings.Contains(errb.String(), "already pinned") ||
-		!strings.Contains(errb.String(), "port49 devices trust --known-hosts "+known+" --replace leaf1") {
+		!strings.Contains(errb.String(), "port49 devices trust --known-hosts "+known+" --socket "+sock+" --replace leaf1") {
 		t.Fatalf("without --replace: code %d stderr %q", code, errb.String())
 	}
 	errb.Reset()
@@ -225,7 +225,8 @@ func TestTrustNeverReplacesWithoutReplace(t *testing.T) {
 		t.Fatalf("with --replace: code %d stderr %q", code, errb.String())
 	}
 	// The old fingerprint is shown beside the new one before the pin.
-	if !strings.Contains(errb.String(), "replacing "+hostkeys.Fingerprint(old)+" with "+hostkeys.Fingerprint(key)) {
+	if !strings.Contains(errb.String(), "leaf1's pins: "+hostkeys.Fingerprint(old)+"; the new key "+
+		hostkeys.Fingerprint(key)+" would replace them") {
 		t.Fatalf("replace shows both fingerprints: %q", errb.String())
 	}
 	if got := pinnedFor(t, known, "leaf1"); len(got) != 1 || hostkeys.Fingerprint(got[0]) != hostkeys.Fingerprint(key) {
