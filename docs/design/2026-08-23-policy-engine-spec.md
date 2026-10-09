@@ -7849,6 +7849,9 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
   - **What it gives.** The principal stays the SPIFFE ID. The directory supplies the groups, and
     the username under ruling 4. No mapping key is written, since the principal is known before
     the search. `spiffe_id` under `broker.directory.certificate_mapping` is refused at load.
+  - **Not the people's attributes.** `attribute` equal, case-insensitively, to
+    `broker.directory.username_attribute` or `principal_attribute` is refused at load, naming both
+    keys: a SPIFFE ID there would become a device username, or refuse a person (final review M-3).
   - Tasks 2 and 3.
 - **3. The membership** is decision 38 rulings 3 and 10's, by the SPIFFE ID: `mb/<SPIFFE ID>`,
   sealed, pinned to the entry's `objectGUID` or `entryUUID` (else DN) for the record's life; a

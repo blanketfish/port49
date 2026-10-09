@@ -1335,6 +1335,15 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The people's own attributes: a SPIFFE ID there would become a
+		// device username, or refuse a person (final review M-3).
+		for _, a := range []struct{ key, v string }{{"username_attribute", b.Directory.UsernameAttribute},
+			{"principal_attribute", b.Directory.PrincipalAttribute}} {
+			if strings.EqualFold(w.Attribute, a.v) {
+				return nil, fmt.Errorf("config: broker.identity.machines[].directory.attribute %q is "+
+					"broker.directory.%s: name an attribute the people's entries do not use for it", w.Attribute, a.key)
+			}
+		}
 		b.Directory.Workload = w
 	}
 	ri, err := refreshInterval(b.RefreshInterval)
