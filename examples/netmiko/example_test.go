@@ -3,6 +3,7 @@
 package netmiko
 
 import (
+	"os"
 	"os/exec"
 	"testing"
 )
@@ -12,7 +13,10 @@ func TestTheNetmikoExample(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 is not installed: the example's own test needs it")
 	}
-	if out, err := exec.Command(py, "test_port49_netmiko.py", "-v").CombinedOutput(); err != nil {
+	cmd := exec.Command(py, "test_port49_netmiko.py", "-v")
+	// Never write bytecode into the tree.
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }

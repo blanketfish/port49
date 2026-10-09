@@ -10,6 +10,8 @@ file, or its directory, that anyone but you or root can write, as port49 does; p
 every directory above, which this example does not. It refuses the whole file, naming the line,
 if any line is not a plain `name keytype key`: a pattern, a comma list, a hashed name, an `@`
 marker, a negation or a port form, since OpenSSH would read those differently from port49.
+The example connects on port 22 only: port49 pins a device under its bare address, and Paramiko
+looks a key up as `[address]:port` at any other port, so a pin would not be found there.
 Public-key authentication and the SSH agent are off, since a refused key counts against the
 device's login-attempt limit (policy engine spec §15, L51).
 

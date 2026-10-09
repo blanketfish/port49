@@ -12,6 +12,10 @@ coverage.out
 .env
 .env.local
 
+# Python bytecode (the examples' own tests)
+__pycache__/
+*.pyc
+
 # Editor / OS
 .DS_Store
 *.swp

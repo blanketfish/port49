@@ -4,6 +4,7 @@ Netmiko, so it runs with neither installed."""
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import types
@@ -138,6 +139,70 @@ class Example(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             port49_netmiko.connect("leaf1", port49=self.port49, pins=self.pins)
         self.assertNotIn("LOGINTOKEN", str(cm.exception))
+
+    def fake_port49(self, script):
+        with open(self.port49, "w", encoding="ascii") as f:
+            f.write("#!/bin/sh\n" + script)
+
+    def test_port49s_own_explanation_reaches_the_operator(self):
+        # port49 token explains a failure on stderr only. It must reach the operator's stderr,
+        # not be captured: the raised error carries neither it nor a token.
+        self.write_pins("leaf1 " + KEY + "\n")
+        self.fake_port49("echo 'no agent at /run/port49.sock; run port49 login' >&2\nexit 1\n")
+        err_path = os.path.join(self.dir, "stderr")
+        saved = os.dup(2)
+        with open(err_path, "w", encoding="ascii") as err:
+            os.dup2(err.fileno(), 2)
+            try:
+                with self.assertRaises(subprocess.CalledProcessError) as cm:
+                    port49_netmiko.connect("leaf1", port49=self.port49, pins=self.pins)
+            finally:
+                os.dup2(saved, 2)
+                os.close(saved)
+        with open(err_path, encoding="ascii") as f:
+            self.assertIn("run port49 login", f.read())
+        self.assertIsNone(cm.exception.stderr)
+        self.assertNotIn("LOGINTOKEN", str(cm.exception) + repr(cm.exception))
+
+    def test_port49_not_on_path_says_so(self):
+        self.write_pins("leaf1 " + KEY + "\n")
+        with self.assertRaises(RuntimeError) as cm:
+            port49_netmiko.connect("leaf1", port49=os.path.join(self.dir, "no-such-port49"), pins=self.pins)
+        self.assertIn("port49 is not on PATH", str(cm.exception))
+        self.assertIn("port49=", str(cm.exception))
+
+    def test_a_host_key_mismatch_names_the_device_and_the_fix(self):
+        # Netmiko wraps Paramiko's BadHostKeyException; its message is the only thing it keeps.
+        class NetmikoTimeoutException(Exception):
+            pass
+
+        def mismatch(**kw):
+            raise NetmikoTimeoutException(
+                "Host key for server '10.0.0.11' does not match: got 'AAAA', expected 'BBBB'")
+
+        real = sys.modules["netmiko"].ConnectHandler
+        sys.modules["netmiko"].ConnectHandler = mismatch
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                port49_netmiko.connect("leaf1", port49=self.port49, pins=self.pins)
+        finally:
+            sys.modules["netmiko"].ConnectHandler = real
+        self.assertIn("leaf1", str(cm.exception))
+        self.assertIn("port49 devices trust --replace leaf1", str(cm.exception))
+        self.assertNotIn("LOGINTOKEN", str(cm.exception))
+        self.assertIsInstance(cm.exception.__cause__, NetmikoTimeoutException)
+
+    def test_another_connection_failure_passes_through(self):
+        def refused(**kw):
+            raise OSError("connection refused")
+
+        real = sys.modules["netmiko"].ConnectHandler
+        sys.modules["netmiko"].ConnectHandler = refused
+        try:
+            with self.assertRaises(OSError):
+                port49_netmiko.connect("leaf1", port49=self.port49, pins=self.pins)
+        finally:
+            sys.modules["netmiko"].ConnectHandler = real
 
 
 if __name__ == "__main__":

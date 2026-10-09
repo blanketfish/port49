@@ -102,11 +102,29 @@ def pinned_keys(device, pins=None):
 def token(device, enable=False, port49="port49"):
     """The broker's answer for device, minted through your agent."""
     cmd = [port49, "token", "--json"] + (["--enable"] if enable else []) + [device]
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    # stdout only: port49 writes the token there and explains every failure on stderr
+    # ("run port49 login", a deny's reason), which is left to reach the operator's terminal.
+    try:
+        out = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True).stdout
+    except FileNotFoundError:
+        raise RuntimeError("port49 is not on PATH (or pass port49=<path>)") from None
     try:
         return json.loads(out)
     except ValueError:
         raise RuntimeError(f"{port49} token --json {device} printed something that is not JSON") from None
+
+
+def is_host_key_mismatch(exc):
+    """Whether exc, or what it wraps, is Paramiko's BadHostKeyException. Netmiko may wrap it in its
+    own timeout or authentication exception, so the chain is walked, by type name and then by the
+    message Paramiko gives ("Host key for server ... does not match")."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if type(exc).__name__ == "BadHostKeyException" or ("Host key for server" in str(exc) and "does not match" in str(exc)):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 def connect(device, enable=False, port49="port49", pins=None):
@@ -130,18 +148,26 @@ def connect(device, enable=False, port49="port49", pins=None):
         with os.fdopen(fd, "w", encoding="ascii") as f:
             for k in keys:
                 f.write(f"{address} {k}\n")
-        return ConnectHandler(
-            device_type=device_type,
-            host=address,
-            username=tok["username"],
-            password=tok["login"],
-            secret=tok.get("enable", ""),
-            ssh_strict=True,           # a key not in the file is refused
-            system_host_keys=False,    # ~/.ssh/known_hosts is not consulted
-            alt_host_keys=True,
-            alt_key_file=known,
-            use_keys=False,            # spec §15 L51: refused keys count against the device's limit
-            allow_agent=False,
-        )
+        try:
+            return ConnectHandler(
+                device_type=device_type,
+                host=address,
+                username=tok["username"],
+                password=tok["login"],
+                secret=tok.get("enable", ""),
+                ssh_strict=True,           # a key not in the file is refused
+                system_host_keys=False,    # ~/.ssh/known_hosts is not consulted
+                alt_host_keys=True,
+                alt_key_file=known,
+                use_keys=False,            # spec §15 L51: refused keys count against the device's limit
+                allow_agent=False,
+            )
+        except Exception as e:
+            if is_host_key_mismatch(e):
+                # Never the original's text: only the device and the fix.
+                raise RuntimeError(
+                    f"{device}: the SSH host key does not match the pin. If the device's key changed on purpose, "
+                    f"compare its fingerprint on the console and run 'port49 devices trust --replace {device}'") from e
+            raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
