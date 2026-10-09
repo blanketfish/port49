@@ -41,8 +41,9 @@ func (p *Policy) Review(subject string, now time.Time) ([]ReviewRow, error) {
 // ServedUsernames is every username port49 would mint a token under for the
 // device at now, by the subject that claims it: each identity-list subject a
 // grant reaches the device with. A group subject's usernames come from the
-// directory one per member (plan 7), so groups names the group subjects that
-// reach it, whose members the check cannot list.
+// directory one per member, and so does an identity subject's that declares
+// none (a spiffe://-only one under the workload mapping), so groups names the
+// subjects that reach it whose usernames the check cannot list.
 func (p *Policy) ServedUsernames(device string, now time.Time) (usernames map[string]string, groups []string, err error) {
 	d, ok := p.device(device)
 	if !ok {
@@ -54,7 +55,7 @@ func (p *Policy) ServedUsernames(device string, now time.Time) (usernames map[st
 		if len(p.compose(s, d, now).grants) == 0 {
 			continue
 		}
-		if s.Group != "" {
+		if s.Group != "" || s.Username == "" {
 			groups = append(groups, name)
 			continue
 		}

@@ -1760,8 +1760,9 @@ func (p *Policy) SubjectOf(principal string) (string, bool) {
 
 // HasRight reports whether the subject principal resolves to declares right
 // in its api: list (spec §2). A principal no subject names holds none. A
-// group subject's members are resolved through the directory (plan 7g), so
-// until then a right is held through an identity list alone, as a mint is.
+// group subject's members are resolved through the directory, which a bare
+// principal has not been through, so here a right is held through an identity
+// list alone (HasRightOf takes the directory's answer).
 func (p *Policy) HasRight(principal, right string) bool {
 	return p.HasRightOf(MemberOf(principal), right)
 }

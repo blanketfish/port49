@@ -61,7 +61,7 @@ func sortedCopy(s []string) []string {
 // A platform that renders no level sends no attributes, and still numbers the
 // ceiling for the token (plan 3's table), as one that renders a role and no
 // priv-lvl numbers it from its own; a group subject resolves by name only,
-// since matching a person to a group is the directory's (plan 7).
+// since matching a person to a group is the directory's.
 func TestAPlatformThatRendersNothingStillHasACeiling(t *testing.T) {
 	p := mustParse(t, good)
 	if _, err := p.Resolve("CN=netops-admins,OU=Groups,DC=example,DC=com", deviceNamed(t, "srx-fw-04"), noon); !errors.Is(err, ErrNoGrants) {

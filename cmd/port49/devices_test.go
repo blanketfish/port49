@@ -378,3 +378,37 @@ func TestCheckConfigTakesConfigOnlyOnAProjectedPlatform(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A subject whose username is its directory entry's, and a group subject,
+// serve no username the check can compare: each is named in a note that says
+// where the username comes from, never as an empty one.
+func TestCheckConfigNamesSubjectsWhoseUsernameIsTheDirectorys(t *testing.T) {
+	pol, inv := policyFixture(t)
+	body := strings.Replace(string(readFile(t, pol)), "subjects:\n",
+		"subjects:\n  - {name: oncall, group: NetOps-OnCall, token_ttl: 60s}\n"+
+			"  - {name: oxidized, identity: \"spiffe://corp.example.com/host/oxidized-01\", token_ttl: 60s}\n", 1)
+	body = strings.Replace(body, "grants:\n", "grants:\n  - {subject: oncall, scope: all_devices, roles: [read_only]}\n"+
+		"  - {subject: oxidized, scope: all_devices, roles: [read_only]}\n", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "leaf-01.cfg")
+	if err := os.WriteFile(cfg, []byte("aaa authorization exec default group port49 local\n"+
+		"aaa authorization commands all default group port49 local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01", cfg}, &out, &errb)
+	for _, want := range []string{
+		"note: subject oncall reaches leaf-01; its usernames are (from the directory entry), so they are not checked\n",
+		"note: subject oxidized reaches leaf-01; its usernames are (from the directory entry), so they are not checked\n",
+		"2 usernames served on leaf-01 (arista_eos), 0 findings\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+	if code != 0 || strings.Contains(out.String(), `""`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

@@ -203,8 +203,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 			"config_checks\n", d.Platform)
 	}
 	for _, g := range groups {
-		fmt.Fprintf(stdout, "note: group subject %s reaches %s; its members' usernames come from the directory "+
-			"(plan 7), so they are not checked\n", g, *device)
+		fmt.Fprintf(stdout, "note: subject %s reaches %s; its usernames are (from the directory entry), "+
+			"so they are not checked\n", g, *device)
 	}
 	fmt.Fprintf(stdout, "%d local accounts, %d usernames served on %s (%s), %d findings\n", len(accounts), len(served),
 		*device, d.Platform, failed)
