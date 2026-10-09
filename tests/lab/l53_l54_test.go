@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/rhwendt/port49/internal/hostkeys"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // l53Console is, per platform, the console commands that may show the SSH
@@ -138,41 +140,68 @@ func l53Tail(s string, n int) string {
 	return strings.Join(lines[max(0, len(lines)-n):], "\n")
 }
 
-// l53WaitDown waits until addr has refused or dropped two connection
-// attempts in a row, within bound: the device went down. A VM still
-// answering SSH right after its reload command would otherwise be scanned
-// before it reloaded, and its old key reported as surviving (pre-flight I-6).
+// l53WaitDown waits until addr has twice in a row refused a connection or
+// accepted one and sent no SSH banner, within bound: the device went down. A
+// VM still answering SSH right after its reload command would otherwise be
+// scanned before it reloaded, and its old key reported as surviving
+// (pre-flight I-6). The banner is the test because the vrnetlab container
+// forwards port 22 and accepts the connection whether or not the VM is up.
 func l53WaitDown(addr string, within time.Duration) error {
 	deadline := time.Now().Add(within)
 	failed := 0
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 3*time.Second)
-		if err != nil {
-			if failed++; failed == 2 {
-				return nil
-			}
-		} else {
+		up := false
+		if c, err := net.DialTimeout("tcp", addr, 3*time.Second); err == nil {
+			c.SetReadDeadline(time.Now().Add(4 * time.Second))
+			b := make([]byte, 4)
+			n, _ := io.ReadFull(c, b)
+			up = string(b[:n]) == "SSH-"
 			c.Close()
+		}
+		if up {
 			failed = 0
+		} else if failed++; failed == 2 {
+			return nil
 		}
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("%s still accepted connections %s after the reload command: the device never went down", addr, within)
 }
 
-// l53Configure sends lines in one CLI session, each answered by a prompt.
-func l53Configure(t *testing.T, l *lab, sock string, lines []string) {
+// l53Admin opens the platform's break-glass CLI: the operator's own view of
+// the device, at the privilege the console commands and the reload need.
+func l53Admin(l *lab) (*cliConn, error) {
+	if strings.HasPrefix(l.p.name, "juniper") {
+		return l.junosCLI(breakglassUser, breakglassPassword)
+	}
+	return adminCLI(l)
+}
+
+// l53Show runs one command on the break-glass CLI c.
+func l53Show(l *lab, c *cliConn, cmd string) (string, error) {
+	if strings.HasPrefix(l.p.name, "juniper") {
+		return junosShow(c, cmd)
+	}
+	return l.adminShow(c, cmd)
+}
+
+// l53Configure sends lines in one break-glass CLI session, each answered by a
+// prompt; a line the device refuses fails the step.
+func l53Configure(t *testing.T, admin func(func(*cliConn) error), lines []string) {
 	t.Helper()
-	c, err := l.sshCLI(sliceUser, mustToken(t, sock, l.p.node))
-	if err != nil {
-		t.Fatalf("configuration session: %v", err)
-	}
-	defer c.Close()
-	for _, line := range lines {
-		if out, err := c.sendExpect(line, 30*time.Second, "#"); err != nil {
-			t.Fatalf("%q: %v\n%s", line, err, trimForNote(out))
+	admin(func(c *cliConn) error {
+		for _, line := range lines {
+			out, err := c.sendExpect(line, 30*time.Second, "#")
+			if err != nil {
+				return fmt.Errorf("%q: %v\n%s", line, err, trimForNote(out))
+			}
+			if strings.Contains(out, "% Invalid") || strings.Contains(out, "Invalid command") ||
+				strings.Contains(out, "% Incomplete") {
+				return fmt.Errorf("%q was refused by the device:\n%s", line, trimForNote(out))
+			}
 		}
-	}
+		return nil
+	})
 }
 
 // l53Limit measures whether scans count against the login-attempt limit
@@ -180,23 +209,24 @@ func l53Configure(t *testing.T, l *lab, sock string, lines []string) {
 // control, two refused logins and a login with a fresh token, which the
 // limit must refuse for the measurement to mean anything. It waits out the
 // limit's 60s, then removes it with lim[1].
-func l53Limit(t *testing.T, l *lab, sock, addr string, lim [2][]string) (note string, inForce bool) {
+func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func() string, addr string,
+	lim [2][]string) (note string, inForce bool) {
 	t.Helper()
-	l53Configure(t, l, sock, lim[0])
+	l53Configure(t, admin, lim[0])
 	for i := range 3 {
 		if _, err := hostkeys.Scan(context.Background(), addr); err != nil {
 			t.Errorf("scan %d with the limit set: %v", i+1, err)
 		}
 	}
-	_, afterScans := l.login(sliceUser, mustToken(t, sock, l.p.node), "show version")
+	_, afterScans := l.login(sliceUser, token(), "show version")
 	for range 2 {
 		if c, err := l.dial("l53-control", "not-a-token", 30*time.Second); err == nil {
 			c.Close()
 		}
 	}
-	_, afterControl := l.login(sliceUser, mustToken(t, sock, l.p.node), "show version")
+	_, afterControl := l.login(sliceUser, token(), "show version")
 	time.Sleep(75 * time.Second)
-	l53Configure(t, l, sock, lim[1])
+	l53Configure(t, admin, lim[1])
 	outcome := func(err error) string {
 		if err == nil {
 			return "it succeeded"
@@ -222,8 +252,72 @@ func TestL53L54PortSSH(t *testing.T) {
 	}
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		port49 := filepath.Join(root, "bin", "port49")
+		// The broker's PKI and a port49d with the broker block, as the slice
+		// test starts them; the standing daemon is put back afterwards.
+		if err := testpki.WriteLab(filepath.Join(root, slicePKIDir), sliceEmail, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		brokerYAML, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := l.derivedConfig("slice", platformSessionAttributes[l.p.name], string(brokerYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.stopDaemon(); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.startDaemonWith(cfg, true); err != nil {
+			t.Fatalf("port49d would not start with the broker block, so nothing was measured: %v", err)
+		}
+		if err := l.awaitTACACS(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := l.stopDaemon(); err != nil {
+				t.Errorf("could not stop the broker daemon: %v", err)
+				return
+			}
+			std, err := l.configPath()
+			if err != nil {
+				t.Fatalf("derive this platform's daemon config: %v", err)
+			}
+			if err := l.startDaemonWith(std, true); err != nil {
+				t.Fatalf("could not put port49d back on the lab config: %v", err)
+			}
+		}()
 		sock, stopAgent := l29Agent(t)
-		defer stopAgent()
+		defer func() { stopAgent() }()
+		token := func() string { return mustToken(t, sock, l.p.node) }
+		// admin runs fn on the break-glass CLI. The device takes the local
+		// password only while port49d is down, so the daemon is stopped for
+		// the session and the broker daemon and a new agent put back after.
+		admin := func(fn func(c *cliConn) error) {
+			t.Helper()
+			if err := l.stopDaemon(); err != nil {
+				t.Fatalf("could not stop port49d before the admin CLI: %v", err)
+			}
+			var fnErr error
+			c, err := l53Admin(l)
+			if err != nil {
+				fnErr = fmt.Errorf("no admin CLI: %w", err)
+			} else {
+				fnErr = fn(c)
+				c.Close()
+			}
+			stopAgent()
+			if err := l.startDaemonWith(cfg, true); err != nil {
+				t.Fatalf("port49d would not start again: %v", err)
+			}
+			if err := l.awaitTACACS(); err != nil {
+				t.Fatal(err)
+			}
+			sock, stopAgent = l29Agent(t)
+			if fnErr != nil {
+				t.Fatalf("break-glass session: %v", fnErr)
+			}
+		}
 		xdg := t.TempDir()
 		// Only this user may write above the pins file, whatever the
 		// lab host's umask (decision 42 ruling 6).
@@ -272,13 +366,21 @@ func TestL53L54PortSSH(t *testing.T) {
 		say(&l53, "Within 10s of the scan: %d decision records, and %d TACACS+ packets to or from the device in the "+
 			"capture.", len(l.recordsSince(off)), tacacsIn(scanFrom, time.Now()))
 
-		// L53: the console. One minted token, one login: every candidate
-		// command, the uptime, and the device's log after the scan.
+		// L53: the console, as an operator with privilege sees it (the
+		// break-glass CLI): every candidate command, the uptime, and the
+		// device's log after the scan.
 		cmds := append(append([]string{}, l53Console[l.p.name]...), l53Uptime[l.p.name], l53Log[l.p.name])
-		outs, err := l.login(sliceUser, mustToken(t, sock, l.p.node), cmds...)
-		if err != nil || len(outs) != len(cmds) {
-			t.Fatalf("console session: %v (%d of %d outputs)", err, len(outs), len(cmds))
-		}
+		var outs []string
+		admin(func(c *cliConn) error {
+			for _, cmd := range cmds {
+				out, err := l53Show(l, c, cmd)
+				if err != nil {
+					return fmt.Errorf("%q: %v\n%s", cmd, err, trimForNote(out))
+				}
+				outs = append(outs, out)
+			}
+			return nil
+		})
 		consoleFP := ""
 		for i, cmd := range l53Console[l.p.name] {
 			form := l53Shown(outs[i], key)
@@ -295,7 +397,7 @@ func TestL53L54PortSSH(t *testing.T) {
 
 		// L53: the device's login-attempt limit, where the row names one.
 		if lim, ok := l53Limits[l.p.name]; ok {
-			note, inForce := l53Limit(t, l, sock, addr, lim)
+			note, inForce := l53Limit(t, l, admin, token, addr, lim)
 			say(&l53, "%s", note)
 			if !inForce {
 				t.Errorf("%s: the control did not trip the limit, so whether a scan counts against it is unmeasured "+
@@ -369,30 +471,64 @@ func TestL53L54PortSSH(t *testing.T) {
 
 		// L53: the key after a reload, with the configuration saved. The
 		// device must be seen to go down before it is waited for.
-		c, err := l.sshCLI(sliceUser, mustToken(t, sock, l.p.node))
-		if err != nil {
-			t.Fatalf("reload session: %v", err)
-		}
-		for _, step := range l53Reload[l.p.name] {
-			want := []string{"#", ">", step[1]}
-			if step[1] == "" {
-				want = []string{"#", ">"}
+		var reloadAt time.Time
+		admin(func(c *cliConn) error {
+			steps := l53Reload[l.p.name]
+			for i, step := range steps {
+				// The reload line itself is not waited on for a prompt: the
+				// console of a reloading VM may stay open for minutes, long
+				// enough for the device to be down and back before the wait
+				// for it to go down starts. Its confirmation is answered.
+				last := i == len(steps)-1
+				if last {
+					reloadAt = time.Now()
+				}
+				want := []string{"#", ">"}
+				if step[1] != "" {
+					want = []string{step[1]}
+				}
+				if last && step[1] == "" {
+					t.Logf("reload step %q: sent, no prompt waited for", step[0])
+					if err := c.send(step[0]); err != nil {
+						return err
+					}
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				out, err := c.sendExpect(step[0], 90*time.Second, want...)
+				t.Logf("reload step %q: err %v; the device said:\n%s", step[0], err, trimForNote(out))
+				if err != nil {
+					return err
+				}
+				if step[1] != "" {
+					if err := c.send(step[2]); err != nil {
+						return err
+					}
+					if last {
+						time.Sleep(3 * time.Second)
+					}
+				}
 			}
-			out, _ := c.sendExpect(step[0], 3*time.Minute, want...)
-			if step[1] != "" && strings.Contains(out, step[1]) {
-				_ = c.send(step[2])
-			}
-		}
-		c.Close()
+			return nil
+		})
 		if err := l53WaitDown(addr, 10*time.Minute); err != nil {
 			t.Fatalf("after the reload command: %v", err)
 		}
+		downAt := time.Now()
 		if err := l.waitDeviceReady(l.p.boot); err != nil {
 			t.Fatalf("after the reload: %v", err)
 		}
-		if up, err := l.login(sliceUser, mustToken(t, sock, l.p.node), l53Uptime[l.p.name]); err == nil && len(up) == 1 {
-			say(&l53, "After the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(up[0], -1))
-		}
+		say(&l53, "The reload command was sent at %s; the device was seen down (no SSH banner on two connections in a "+
+			"row) at %s, and serving SSH authentication again %s later.", reloadAt.UTC().Format("15:04:05"),
+			downAt.UTC().Format("15:04:05"), time.Since(downAt).Round(time.Second))
+		admin(func(c *cliConn) error {
+			up, err := l53Show(l, c, l53Uptime[l.p.name])
+			if err != nil {
+				return err
+			}
+			say(&l53, "After the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(up, -1))
+			return nil
+		})
 		after, err := hostkeys.Scan(context.Background(), addr)
 		switch {
 		case err != nil:
