@@ -128,3 +128,27 @@ Full agent loaded, real token each: all three reached the prompt on the first tr
 - Advice that is now measured here: scope `PubkeyAuthentication no` or `IdentityAgent none` or `PreferredAuthentications keyboard-interactive,password` to the device with a `Host`/`Match host` block (g1-g3 all work); raising `ssh login-attempts` helps only up to a maximum of 10 and needs the offers + 1 within it. A certificate-based broker needs the cert offered, which costs two attempts; keep the agent's other identities out (`IdentitiesOnly yes` plus `CertificateFile`, h1) and the default `~/.ssh` keys out as well (`IdentityFile none`, or a dedicated host block).
 
 *Unmeasured:* RSA/ECDSA key-type offers on NX-OS beyond the two throwaways in the 12-identity run (they were offered and counted the same); `ssh login-attempts` between 4 and 9 (the rule offers + 1 <= limit follows from 3 and 10 and was not swept); a user that exists locally on the device (the lab users are TACACS-only, "invalid user"); whether the break-glass local account is counted differently; other NX-OS releases and OpenSSH releases.
+
+## Addendum: the login ban (`aaa authentication rejected`), measured 2026-10-09 on a second deploy of the same image
+
+- **Capture:** `tests/lab/evidence/L51-cisco_nxos-ban.pcap`; scripts `tests/lab/l51/ban_nxos.sh`, `ban2_nxos.sh`, `ban3_nxos.sh`.
+- **The command exists.** Exact `?` output at the config prompt:
+
+```
+nx1(config)# aaa authentication ?
+  login     Configure methods for login
+  rejected  Set max number of fail attempts
+
+nx1(config)# aaa authentication rejected ?
+  <1-65535>  Fail attempts max value
+
+nx1(config)# aaa authentication rejected 3 ?
+  in  Watch period for fail attempts
+```
+
+  Set: `aaa authentication rejected 3 in 60 ban 120`; `show running-config all | include "aaa authentication rejected"` -> `aaa authentication rejected 3 in 60 ban 120`. `login ?` offers only `on-failure` and `on-success` (no `block-for`). Removing it: `no aaa authentication rejected` printed `All Blocked / Watched user statistics will be cleared.` and `Note: Per User Login block feature is completely disabled.` Restored; the line is gone from the running config.
+- **Refused public keys do not count.** One connection with 3 refused keys (cut with `Too many authentication failures`), then a correct token login as the same user at +0 s, and as another user: both `Authenticated ... using "keyboard-interactive"`. Then 3 such connections (9 refused keys) within 60 s, as one user: the token login straight after, as that user and as another, succeeded. Two keys with no password offered, then a login: succeeded (control).
+- **Failed password sessions do count, and the ban is per user, not per source.** Three sessions with a wrong answer as `alice11` (each `Permission denied`, three `redeem token_not_found` in the decision log), then at +0 s: `alice11` with its correct token `Permission denied` after two prompts, `alice12` from the same source address `Authenticated`. The device sends **no TACACS+ request** for a banned user (no `redeem` record for the refused attempts).
+- **Timing** (user `alice15`, three failed sessions at 03:34:35-03:34:37, correct token tried every 30 s): refused at +0, +30, +60, +90, +120 s (`Permission denied`, `prompts=2`, no TACACS+ packet); `Authenticated ... using "keyboard-interactive"` at +150 s and +180 s. The 120 s ban lapsed between +120 and +150 s after the third failure.
+- **Device log:** `show logging logfile | include "ban|reject|lock|too many"` shows nothing for the ban (only an unrelated `EXT4-fs ... superblock` kernel line). The operator sees only a refused login.
+- **Reading for L51:** a refused public key is not an AAA rejection on NX-OS, so a login ban of this kind is not triggered by an agent's key offers; a typed wrong token is, and bans that username for the ban period while port49 is never asked. A user who mistypes a token three times in the window cannot log in even with a fresh token until the ban lapses.
