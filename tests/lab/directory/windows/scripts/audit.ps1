@@ -3,7 +3,8 @@
 # and puts a success-and-failure SACL for Everyone's writes on OU=Workloads,
 # inherited by its objects; "read" answers the Security log's 5136
 # (attribute modified) and 4662 (an access) events since a moment, each cut
-# at 600 characters; "acl" sets or clears the prescribed deny on attribute.
+# at 1500 characters (the harness keeps 600; its match needs the attribute
+# name, which a 5136 gives after the first 600); "acl" sets or clears the prescribed deny on attribute.
 param([string]$mode, [string]$since, [string]$attribute, [string]$state)
 $ErrorActionPreference = 'Stop'
 Import-Module ActiveDirectory
@@ -34,7 +35,7 @@ switch ($mode) {
     $t = [DateTime]::Parse($since, $null, [Globalization.DateTimeStyles]::RoundtripKind).ToLocalTime()
     $evs = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5136, 4662; StartTime = $t } -ErrorAction SilentlyContinue |
       ForEach-Object { $m = "$($_.Message)" -replace '\s+', ' '
-        @{ id = $_.Id; time = $_.TimeCreated.ToUniversalTime().ToString('o'); message = $m.Substring(0, [Math]::Min(600, $m.Length)) } })
+        @{ id = $_.Id; time = $_.TimeCreated.ToUniversalTime().ToString('o'); message = $m.Substring(0, [Math]::Min(1500, $m.Length)) } })
     @{ events = $evs }
   }
   'acl' {

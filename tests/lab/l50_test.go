@@ -360,7 +360,7 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 	w.run(t, "audit", map[string]any{"mode": "state"}, 3*time.Minute, &found)
 	ev.mark("l50 windows: audit settings as found: changes=%s | access=%s | sacl=%s", oneLineMax(found.Changes, 400),
 		oneLineMax(found.Access, 400), oneLineMax(found.SACL, 400))
-	fmt.Fprintf(&b, "### The audit settings as found, before this run changed any\n\nOn %s.\n\n"+
+	fmt.Fprintf(&b, "### The audit settings as found, before this run changed any\n\nThe DC is %s.\n\n"+
 		"- `auditpol` Directory Service Changes: `%s`\n- `auditpol` Directory Service Access: `%s`\n- SACL on the OU: `%s`\n\n",
 		state, oneLineMax(found.Changes, 400), oneLineMax(found.Access, 400), oneLineMax(found.SACL, 400))
 
@@ -384,74 +384,74 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 	if acc == nil {
 		t.Fatalf("no write was accepted under the default ACLs; the audit has nothing to probe")
 	}
-	// probe makes the accepted and the refused write and reads the Security
-	// log's 5136 and 4662 events since just before each.
-	probe := func(phase string) (accEv, refEv []winEvent) {
-		for i, c := range []*l50Cell{acc, ref} {
-			if c == nil {
-				continue
-			}
-			since := w.clock(t)
-			l.l50WinWrite(t, ev, seed.Target, c.attr, c.writer, "audit-"+phase, l50Value(c.attr, c.writer, "audit-"+phase), password)
-			time.Sleep(5 * time.Second)
-			var r struct {
-				Events []winEvent `json:"events"`
-			}
-			w.run(t, "audit", map[string]any{"mode": "read", "since": since}, 3*time.Minute, &r)
-			evs := l44CleanEvents(r.Events, secrets...)
-			for k := range evs {
-				evs[k].Message = oneLineMax(evs[k].Message, 600)
-			}
-			for _, e := range evs {
-				ev.mark("l50 windows: %s event %d at %s: %s", phase, e.ID, e.Time, e.Message)
-			}
-			if i == 0 {
-				accEv = evs
-			} else {
-				refEv = evs
+	// probe makes the accepted and the refused write, waits for the DC (it
+	// logs a 5136 several seconds after the write, measured), and reads the
+	// Security log's 5136 and 4662 events since before both. Each event is
+	// assigned to a write by the "Account Name" in its message, which is read
+	// at up to 1500 characters; the evidence keeps 600.
+	probe := func(phase string) []winEvent {
+		since := w.clock(t)
+		for _, c := range []*l50Cell{acc, ref} {
+			if c != nil {
+				l.l50WinWrite(t, ev, seed.Target, c.attr, c.writer, "audit-"+phase, l50Value(c.attr, c.writer, "audit-"+phase), password)
 			}
 		}
-		return
+		time.Sleep(30 * time.Second)
+		var r struct {
+			Events []winEvent `json:"events"`
+		}
+		w.run(t, "audit", map[string]any{"mode": "read", "since": since}, 3*time.Minute, &r)
+		evs := make([]winEvent, len(r.Events))
+		for i, e := range r.Events {
+			e.Message = oneLineMax(winScrub(e.Message, secrets...), 1500)
+			evs[i] = e
+			ev.mark("l50 windows: %s event %d at %s: %s", phase, e.ID, e.Time, oneLineMax(e.Message, 600))
+		}
+		return evs
 	}
-	names := func(evs []winEvent, attr string) string {
+	// seen says what the events hold for one write: the 5136 (attribute
+	// modified) naming the target and the attribute, and the 4662 (an access)
+	// naming the target, each by the writer's account.
+	seen := func(evs []winEvent, c *l50Cell) string {
 		var hit5136, hit4662 int
 		for _, e := range evs {
 			m := strings.ToLower(e.Message)
-			named := strings.Contains(m, strings.ToLower(seed.Target)) || strings.Contains(m, "svc-oxidized-01")
-			if e.ID == 5136 && named && strings.Contains(m, strings.ToLower(attr)) {
+			if !strings.Contains(m, "account name: "+strings.ToLower(c.writer)) || !strings.Contains(m, "svc-oxidized-01") {
+				continue
+			}
+			if e.ID == 5136 && strings.Contains(m, "ldap display name: "+strings.ToLower(c.attr)) {
 				hit5136++
 			}
-			if e.ID == 4662 && named {
+			if e.ID == 4662 {
 				hit4662++
 			}
 		}
-		return fmt.Sprintf("%d event(s) read; %d 5136 naming the target and `%s`, %d 4662 naming the target", len(evs), hit5136, attr, hit4662)
+		return fmt.Sprintf("`%s` by %s: %d 5136 event(s) naming the target and the attribute, %d 4662 event(s) naming the target", c.attr, c.writer, hit5136, hit4662)
+	}
+	both := func(evs []winEvent) string {
+		s := fmt.Sprintf("%d event(s) read in all. Accepted write, %s.", len(evs), seen(evs, acc))
+		if ref != nil {
+			s += " Refused write, " + seen(evs, ref) + "."
+		}
+		return s
 	}
 	fmt.Fprintf(&b, "### The audit\n\nOne accepted write (`%s` by %s)", acc.attr, acc.writer)
 	if ref != nil {
 		fmt.Fprintf(&b, " and one refused (`%s` by %s)", ref.attr, ref.writer)
 	}
-	b.WriteString(" are made twice, each followed by a read of the Security log's 5136 (attribute modified) and 4662 (an access) events since just before it. " +
-		"The DC's events are listed in the evidence, each cut at 600 characters.\n\n")
+	b.WriteString(" are made twice, each pair followed, 30 seconds later (the DC logs a 5136 several seconds after the write), by a read of the " +
+		"Security log's 5136 (attribute modified) and 4662 (an access) events since before the pair. Each event is assigned to a write by " +
+		"its `Account Name`. The DC's events are in the evidence, each cut at 600 characters.\n\n")
 
 	ev.mark("l50 windows: audit as installed")
-	accEv, refEv := probe("installed")
-	fmt.Fprintf(&b, "- **As installed** (the settings above): accepted write: %s. ", names(accEv, acc.attr))
-	if ref != nil {
-		fmt.Fprintf(&b, "Refused write: %s.", names(refEv, ref.attr))
-	}
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "- **As installed** (the settings above): %s\n", both(probe("installed")))
 
 	var on struct {
 		Audit string `json:"audit"`
 	}
 	w.run(t, "audit", map[string]any{"mode": "on"}, 3*time.Minute, &on)
 	ev.mark("l50 windows: audit on: %s", oneLineMax(on.Audit, 400))
-	accEv, refEv = probe("on")
-	fmt.Fprintf(&b, "- **With directory-change auditing on** (`audit.ps1 on`: success and failure for Directory Service Changes and Access, and a success-and-failure SACL for Everyone's writes on the OU, inherited): accepted write: %s. ", names(accEv, acc.attr))
-	if ref != nil {
-		fmt.Fprintf(&b, "Refused write: %s.", names(refEv, ref.attr))
-	}
-	b.WriteString("\n\n")
+	fmt.Fprintf(&b, "- **With directory-change auditing on** (`audit.ps1 on`: success and failure for Directory Service Changes and Access, and a "+
+		"success-and-failure SACL for Everyone's writes on the OU, inherited): %s\n\n", both(probe("on")))
 	return cells, b.String()
 }
