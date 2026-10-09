@@ -401,7 +401,8 @@ func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells
 	l.l50SambaACL(t, ev, password, "set", "uid", nil)
 	cells = append(cells, l.l50SambaDelegated(t, ev, password, &b)...)
 	l.l50SambaACL(t, ev, password, "clear", "uid", nil)
-	b.WriteString("\nThe re-seed that followed undid the ACE and the entry.\n\n")
+	b.WriteString("\nThe re-seeds that followed (one between (a) and (c), one after (c)) undid the ACE, the entry and the ownership change: " +
+		"each recreates the OU and the target.\n\n")
 
 	// The audit. The container runs `samba -i`, which logs to stdout.
 	acc, ref := l50AuditPair(cells)
