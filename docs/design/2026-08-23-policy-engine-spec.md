@@ -44,7 +44,8 @@ Scopes are authored and describe intent. Keeping them separate is what makes
 
 **Principal is runtime; Subject is policy.** A principal is `CN=alice,OU=netops,O=example`
 or `system:serviceaccount:netops:oxidized`. A subject is how policy addresses a set of
-them, and it has exactly two forms — an LDAP group, or one or more literal identities. That
+them, and it has exactly two forms — an LDAP group (of people, `group:`; or of workloads,
+`machine_group:`, §13 decision 41 ruling 5, plan 8b), or one or more literal identities. That
 single mechanism covers both directory-driven human access and hand-maintained service
 accounts. A group is named by its name (the entry's `broker.directory.group_name_attribute`, `cn` by
 default), matched only while exactly one group under `broker.directory.groups_base_dn` has it,
@@ -159,13 +160,17 @@ fetches groups. No additional query:
 | LDAP or AD | `sAMAccountName` / `uid`, from the group-resolution query |
 | OIDC | with `broker.directory`, the directory's `username_attribute`, read for the principal as a certificate's is; without it, the identity subject's declared `username:`. The `preferred_username` claim is never a username (§13 decision 39) |
 | certificate | via the certificate-to-directory mapping (§7 of the design document) |
+| workload certificate, mapped | its identity subject's declared `username:`; else the entry's `username_attribute`, found by the SPIFFE ID (§13 decision 41 ruling 4, plan 8b) |
 
 With `broker.directory`, a `user:` identity subject declares no `username:`; the broker refuses
 one at load. Without it, one is required, as before plan 7g.
 
 **Machine identities have no directory entry**, so the subject declares one. A machine principal is
-never sent to the directory, at mint or by the scheduled refresh, until plan 8b builds a workload
-certificate's opt-in directory mapping, and never matches a human `group:` subject, then or after
+never sent to the directory, at mint or by the scheduled refresh, unless it is a workload
+certificate whose verifier maps it (`broker.identity.machines[].directory`, §13 decision 41, plan
+8b, 2026-10-09). Such a workload takes its identity subject's declared username when it declares
+one, else its entry's `username_attribute` under §13 decision 38 ruling 3, and matches
+`machine_group:` subjects. No machine principal matches a human `group:` subject, then or after
 (§13 decisions 16 and 40 ruling 5):
 
 ```yaml
@@ -862,9 +867,10 @@ answer for is left as it is and unstamped, counted `unverified` in
 `port49_context_refreshes_total`, and its sessions deny `context_stale` once
 `session.staleness_ceiling` passes (§5.1.1). A principal whose entry is gone, is ambiguous or has
 its username taken has every context revoked. A machine principal (`spiffe://`,
-`system:serviceaccount:`, `app:`) is never sent to the directory, until plan 8b builds a workload
-certificate's opt-in directory mapping (§13 decisions 16 and 40 ruling 5): it is judged by the
-policy alone and stamped with the pass's instant. Without `broker.directory`, the pass judges against the
+`system:serviceaccount:`, `app:`) is never sent to the directory unless it is a workload
+certificate whose verifier maps it (§13 decision 41 ruling 6, plan 8b, 2026-10-09), which is
+verified and stamped as a `user:` principal is: it is otherwise judged by the policy alone and
+stamped with the pass's instant. Without `broker.directory`, the pass judges against the
 policy alone and stamps its own instant: the ceiling then bounds a broker outage. A policy refresh
 never stamps `refreshed_at`, and judges a group member by the membership last verified (held in
 the store; design §12), or by no groups where none is held, where the directory refused the
@@ -2274,10 +2280,10 @@ refused request named; any other path is recorded `mint`.
 |---|---|
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
-| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
-| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
-| `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
+| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38); or a workload under a directory mapping whose identity subject declares no username takes from its entry one a subject declares or a second entry holds (§13 decision 41 ruling 4, plan 8b). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds in the mapping's `attribute` any value beginning `spiffe://`, so it is a workload's (§13 decision 41 ruling 4); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when two entries hold a workload's SPIFFE ID in the workload mapping's `attribute` (§13 decision 41, plan 8b); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
+| `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38); for a workload under a directory mapping, the membership stored for its SPIFFE ID (§13 decision 41 ruling 7, plan 8b), which `port49 workload` retries within `--deadline` and then exits 75. Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers, which is final at `port49 workload`, §13 decision 40 ruling 7) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, never a final 401, and to be retried but for an uncovered issuer. A certificate whose verified chains end at both the human and the workload trust anchor, or, on a broker with no human x509 verifier, do not end at the workload anchor (§13 decision 40 ruling 2), is refused at the TLS handshake, which leaves a log line and a `handshake_failures{identity_refused}` count, not a decision record. On `mint`, `refresh`, `identity`, `explain` and `revoke` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
@@ -5785,7 +5791,8 @@ naming one of the subject's principals. A principal removed from every subject i
 does not fail. A subject's `group:` changing fails the gate unless a passing session test naming
 that subject asserts the access it resolves to, as a changed `username:` does: who holds a group
 subject's access is the group. A new group subject is gated as a new subject's principals are
-(§13 decision 38).
+(§13 decision 38). `machine_group:` is gated the same way, and a subject moved between `group:` and
+`machine_group:` with one value is a changed group (§13 decision 41 ruling 8, plan 8b).
 
 **A broker API right gained fails the gate** (owner's ruling 2026-09-24, review M6). A subject's
 `api:` rights (§2) let it act on other people's sessions, so the diff compares them per subject,
@@ -6142,7 +6149,7 @@ right failure. (§5.5)
 
 **8. The device-facing username — derived at mint, declared for machines.** Human usernames
 come from the same directory query that resolves groups, or, with no directory, the identity
-subject's declared `username` (decision 38 ruling 16; decision 39 ruling 7); machine subjects declare one, since they have no directory entry. Unique across
+subject's declared `username` (decision 38 ruling 16; decision 39 ruling 7); machine subjects declare one, since they have no directory entry. *Amended by decision 41 ruling 4 (plan 8b, 2026-10-09):* a workload certificate whose verifier maps it through the directory takes its identity subject's declared username when it declares one, and its entry's `username_attribute` otherwise, under decision 38 ruling 3. Unique across
 subjects, and compared after case and domain normalization. (§2)
 
 **9. Platform data — compiled into the decision, not distributed to daemons.** The broker
@@ -6377,7 +6384,9 @@ entry may still supply groups through the certificate-to-directory mapping. *Ame
 40 ruling 5:* a workload's directory groups, when built, come only through a machine-scoped group
 subject, never a `group:` subject, which is a human subject (design document §7: a workload MUST
 NOT inherit a human principal's grants), and through a mapping keyed on the workload's SPIFFE ID.
-Plan 8 builds none; plan 8b owns it, with its own lab row (L50). (§2, design document §7)
+Plan 8 builds none; plan 8b owns it, with its own lab row (L50). *Built by plan 8b as decision 41
+(2026-10-09):* opt-in per `x509` machine verifier, the `spiffe_id` mapping kind, the
+`machine_group:` subject. (§2, design document §7)
 
 **17. Session refresh is a fresh authentication event, and the certificate-path session is a
 held connection.** The ceiling `auth_time + max_session_age` is only a compliance clock if
@@ -7363,6 +7372,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   alice's `objectSid`, and the KDC issued a TGT with no `altSecurityIdentities`; a certificate
   with a UPN SAN, no SID extension and no mapping was refused (certificate mismatch). Setting
   enforcement to 1 or 2 changed none of it on this build. Tasks 4 and 8.
+  *Amended by decision 41 ruling 2 (plan 8b, 2026-10-09):* a seventh kind, `spiffe_id`, weak, is a
+  workload certificate's alone, configured under `broker.identity.machines[].directory` and never
+  here; `certificate_mapping.kind: spiffe_id` is refused at load.
 - **2. Exactly one entry, or no principal.** One search under `base_dn` with a size limit of 2.
   Zero entries is `identity_unmapped`; two or more, or the server's size-limit-exceeded, is
   `identity_ambiguous` and never the first; a server fault is `directory_unavailable`. Task 8.
@@ -7381,6 +7393,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   same person. The two attributes must be writable only by directory administrators; the
   uniqueness searches hold when they are not. This is a ruling, not a device claim, and is not
   provisional. Tasks 5, 8 and 13.
+  *Amended by decision 41 rulings 2–4 (plan 8b, 2026-10-09):* a workload's principal is its SPIFFE
+  ID, which its entry must hold byte for byte and alone; its username is its identity subject's
+  declared one, else its entry's under this ruling; its pin and its forget are this ruling's.
 - **4. The mapping runs once per held connection, at bind, and is pinned.** The order is the
   certificate checks, the certificate-key mark, `Status`, the mapping bounded by
   `query_timeout`, then the principal's mark, so a revoked certificate is answered 401
@@ -7485,6 +7500,8 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   context. Tokens of narrowed or revoked principals are superseded. Without a directory the pass
   stamps its own instant. A policy-reload pass never stamps and judges by the stored membership,
   or by no groups where none is held, it is refused or it is older than grace. Tasks 14 and 15.
+  *Amended by decision 41 ruling 6 (plan 8b, 2026-10-09):* a workload whose verifier maps it is
+  verified and stamped as a `user:` principal is.
 - **13. Rights and identity through groups.** `HasRightOf` is the union over every matching
   subject; `revoke_others` and `explain_others` work through a group from the membership
   verified at that request. A caller revoking only their own principal never asks the
@@ -7497,7 +7514,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   Task 15.
 - **15. The diff gates a changed `group:`.** A subject whose `group:` changed fails the gate
   unless a passing session test naming it asserts the access it resolves to (§12); a new group
-  subject is gated as a new subject's principals are. Task 11.
+  subject is gated as a new subject's principals are. Task 11. *Amended by decision 41 ruling 8
+  (plan 8b, 2026-10-09):* `machine_group:` is gated as `group:`, and a subject moved between the
+  two keys is a change.
 - **16. A directory-derived username never meets a declared human one.** With a directory, a
   `user:` identity subject declaring `username:` is refused at the broker's load; without one it
   is required; the offline tools load either. Task 11.
@@ -7519,7 +7538,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   enumerated under the nested mode, one query at a time on the sticky server, at most
   `prewarm.max_principals` (default 10000), writing each with every mapping key its entry
   answers to. An operator who has never logged in before can then log in during an outage
-  within grace. Task 10.
+  within grace. Task 10. *Amended by decision 41 ruling 6 (plan 8b, 2026-10-09):* the members of
+  every `machine_group:` are verified as workloads, by the SPIFFE ID their entry holds, and so is
+  every `spiffe://` identity a subject lists, under their own `prewarm.max_principals`.
 
 ### Deferred, with reasons
 
@@ -7715,7 +7736,8 @@ Ryan may override any.
   with its own lab row, L50. Decisions 8 and 16 conflict only in the letter; §5.1.3 and decision 38
   ruling 13 record 7g's as-built for the machine principals of the time. *The controller's ruling
   on recommendation (plan 8's pre-flight Q1), deferring rather than cutting under the
-  follow-the-spec rule; Ryan may cancel plan 8b.* Tasks 1 and 5.
+  follow-the-spec rule; Ryan may cancel plan 8b.* Tasks 1 and 5. *Built by plan 8b as decision 41
+  (2026-10-09); the default above stands.*
 - **6. The declared username stands.** A directory-derived username a subject declares is
   `username_collision` for the directory's claimant, whichever came first. The authority is
   decision 38 ruling 3 (plan 7g, a95b9fc), which superseded §2's "later claimant" sentence; §2 is
@@ -7789,6 +7811,127 @@ any).* **Q1:** a workload certificate's directory groups are deferred to plan 8b
 machine-scoped group subjects, not withdrawn (ruling 5). **Q2:** no per-verifier certificate-status
 opt-out (ruling 7). **Q3:** mint by `scope` (design §17) is plan 9's, which writes its spec text
 first.
+
+**41. Workload directory groups: opt-in per verifier, keyed on the SPIFFE ID, reaching
+`machine_group:` subjects alone.** *Plan 8b, 2026-10-09.* Rulings rest on reasoning unless they
+say data. The plan's open choices (the workload asked per request, the username, `attribute`
+required, the pin required, `broker.directory` reused) were ruled by the plan on reasoning and
+are confirmed or overridden at its pre-flight; Ryan may override any.
+
+- **1. Opt-in, per verifier.** `broker.identity.machines[]`'s `x509` verifier takes `directory:`.
+  With it, every workload that verifier accepts is a directory principal: exactly one entry, or no
+  principal (decision 38 ruling 2). Without it, decision 40 ruling 5 holds unchanged: no workload
+  is sent to the directory, and one mints with every server down. `directory:` needs
+  `broker.directory`, whose pool, bind, `base_dn`, `username_attribute`, nested mode, grace and
+  pre-warm it uses; one `base_dn` keeps decision 38 ruling 3's username search spanning people and
+  workloads. Tasks 3 and 5.
+- **2. The mapping kind `spiffe_id`.** The block takes `kind: spiffe_id` (the one kind there),
+  `attribute` (required: no schema has one for a SPIFFE ID), `allow_weak`, `issuers` and
+  `user_filter` (default `broker.directory.user_filter`).
+  - **The search.** `(&<user_filter>(<attribute>=<the SPIFFE ID, escaped>))` under `base_dn`, size
+    limit 2. Zero entries is `identity_unmapped`; two is `identity_ambiguous`, never the first.
+  - **The value.** The entry's `attribute` must hold exactly one value, equal to the SPIFFE ID byte
+    for byte. A SPIFFE ID's path is case-sensitive (decision 40 ruling 4) and a directory's
+    matching rule may not be, so an entry holding another case of the ID is `identity_unmapped`,
+    never that workload.
+  - **Uniqueness.** A second entry holding the ID, searched with no `user_filter`, is
+    `identity_ambiguous`, as decision 38 ruling 3's principal search is. The search reads no
+    values, so a second entry holding another case of the ID, which a case-insensitive matching
+    rule returns, makes it `identity_ambiguous` too.
+  - **Weak.** It binds a name, not a key, so it is weak under decision 38 ruling 1: refused at load
+    without `allow_weak: true` and a non-empty `issuers:`. The pin compares the leaf's issuer, read
+    from its DER, at every reading of the certificate (the bind and each request), before any
+    search. An issuer not pinned is `identity_unmapped`, answered 401 at bind over HTTP (decision
+    40 ruling 3).
+  - **What it gives.** The principal stays the SPIFFE ID. The directory supplies the groups, and
+    the username under ruling 4. No mapping key is written, since the principal is known before
+    the search. `spiffe_id` under `broker.directory.certificate_mapping` is refused at load.
+  - Tasks 2 and 3.
+- **3. The membership** is decision 38 rulings 3 and 10's, by the SPIFFE ID: `mb/<SPIFFE ID>`,
+  sealed, pinned to the entry's `objectGUID` or `entryUUID` (else DN) for the record's life; a
+  refusal written and never overruled by grace; a lease of `max(grace, 24h)`. `port49 directory
+  forget spiffe://…` is the escape. Tasks 2 and 5.
+- **4. The username** (amends decision 8 through decision 38 ruling 3).
+  - **Declared wins.** The identity subject listing the SPIFFE ID gives it when that subject
+    declares a `username:`, so turning the mapping on renames no workload.
+  - **Else the entry's.** Otherwise the entry's `broker.directory.username_attribute` gives it,
+    under ruling 3: lower-cased, canonical, not reserved, held by that entry alone (a second entry
+    holding it is `username_collision`), and refused `username_collision` when any subject declares
+    it. The declared one stands, whichever came first.
+  - **Never on a group.** A `machine_group:` subject declares no `username:` (a load error): one
+    name for many workloads would put them in one `(nas, username)` context.
+  - **Who must declare.** Under the mapping, a subject whose identities are all `spiffe://` IDs
+    need not declare one; a subject listing an `app:` identity still must.
+  - **One entry, one domain.** An entry whose workload `attribute` holds any value beginning
+    `spiffe://` is a workload's. While a workload mapping is configured, the person path (a bind,
+    a mint, the scheduled refresh, pre-warm) refuses such an entry `identity_unmapped`, so one
+    entry never gives a `user:` principal and a workload one `(nas, username)` context, where
+    whichever minted last would hold the other's grants. The refusal tests the prefix, not an
+    exact match to a configured trust domain or a well-formed ID, so it fails closed. The workload
+    path need not mirror it: the person path is the one that grants by `principal_attribute`. An
+    entry whose attribute holds no value beginning `spiffe://` (a `description`, say) stays a
+    person's. *Added at plan 8b's pre-flight (I-2); the prefix test is re-review N-2's.*
+  - **Judged again at the hold.** The mint and a session refresh judge the username again under
+    the policy they hold, since a reload can land between the membership read and the hold (plan
+    7g's final review M-1). For a workload that judgment is this ruling's, so its own subject's
+    declaration is never its collision.
+  - Tasks 2, 4 and 5.
+- **5. The machine-scoped group subject.** `machine_group: <name or DN>`, matched as decision 38
+  ruling 7 matches `group:`: a DN in canonical form, a name only while one group under
+  `groups_base_dn` has it.
+  - **Its domain is `machines`.** `attached_roles.machines` reach it, never `attached_roles.humans`.
+  - **What matches it.** Only a workload resolved through ruling 1's mapping, never a `user:`
+    principal. A `group:` subject never matches a workload.
+  - **Load errors.** A subject with both `group:` and `machine_group:`, as one with either and
+    `identity:`.
+  - **Rights.** CI reports its `api:` rights as any subject's.
+  - **No mapping.** With none configured, `machine_group:` subjects mint for no one and the start
+    names them (as decision 38 ruling 17 for `group:`).
+  - Tasks 4 and 6.
+- **6. When the directory is asked.**
+  - **Per request.** A mapped workload's membership is read by its SPIFFE ID, fresh or within
+    grace (decision 38 ruling 10): at mint, at `/v1/identity`, at `/v1/explain`, and as a
+    revocation's caller. A workload is never mapped at bind: its principal is known from the
+    certificate, and the listener is unchanged.
+  - **The scheduled refresh** verifies it from a server and stamps its contexts with the
+    verification's time, as a `user:` principal's (ruling 12 widened). A policy refresh judges the
+    stored membership.
+  - **Pre-warm** verifies the members of every `machine_group:` as workloads. It reads each
+    member's SPIFFE ID from `attribute`; one outside the verifier's `spiffe_trust_domains` is
+    skipped and counted. It then verifies every `spiffe://` identity a subject lists, in those
+    trust domains, so a workload granted by its own identity subject alone is kept warm too. So a
+    workload that has not minted within grace can mint in an outage. The workloads take their own
+    `prewarm.max_principals`, besides the people's, so one interval verifies up to twice it.
+  - Tasks 2, 5 and 6.
+- **7. The 3am case.** With the mapping configured, a directory outage past
+  `broker.directory.grace` does two things:
+  - **Mints stop.** The workload's mints are refused 503 `directory_unavailable` with
+    `Retry-After: 30`. `port49 workload token` retries within `--deadline`, then exits 75
+    (decision 40 ruling 10).
+  - **Sessions go stale.** Its live device sessions go unstamped from the first scheduled refresh
+    that cannot verify it, and deny `context_stale` once port49d's `session.staleness_ceiling` has
+    passed since the last one that did, from a reachable port49d, where break-glass does not help;
+    decision 38's escapes apply. The two clocks are separate: grace bounds a mint, the ceiling a
+    session.
+
+  Opting in trades plan 8's "mints with every DC down" for directory groups, and the start line
+  says so. Tasks 5, 6 and 7.
+- **8. The diff gate and CI.** Decision 38 ruling 15 covers `machine_group:` as `group:`.
+  - A changed value fails the gate, as does a subject moved between `group:` and `machine_group:`
+    with one value, until a passing session test naming the subject asserts its access.
+  - A new `machine_group:` subject is gated as a new subject's principals are.
+  - The CI report names the key.
+  - Task 4.
+- **9. What is logged.** A SPIFFE ID, a DN and an attribute's value, each through
+  `printsafe.Line`; never a token; no SPIFFE ID or device in a metric label. A workload's lookups
+  count in `port49_directory_lookups_total` as people's do. Tasks 2 and 6.
+- **10. The lab.** "`attribute` must be writable only by directory administrators" is a requirement
+  on the operator, said at start as ruling 3's is.
+  - **Measured by L50, open.** Whether a directory's default ACLs, or the ACL the docs prescribe,
+    make it so is a directory-behaviour claim.
+  - **Until it closes,** no doc asserts who can or cannot write it, and the docs prescribe no ACL as
+    sufficient.
+  - Task 8.
 
 ---
 
@@ -8249,6 +8392,13 @@ Beyond those already listed in the design document's §14:
   username a subject declares is refused `username_collision` and the declared one mints; a
   scope's `attached_roles.machines` compose into a workload's grant and `attached_roles.humans` do
   not.
+  Under a directory mapping (§13 decision 41, plan 8b): with no `directory:` the resolver is never
+  asked for a workload; with it, a workload matches a `machine_group:` subject its entry's groups
+  name and never a `group:` subject, and a `user:` principal never matches a `machine_group:`; an
+  entry holding another case of the SPIFFE ID is `identity_unmapped` and two entries holding it
+  `identity_ambiguous`; a workload whose subject declares the username its entry holds mints under
+  it; an outage past grace refuses its mints `directory_unavailable`, `port49 workload` exits 75,
+  and the scheduled refresh leaves its contexts unstamped.
 - **Staleness ceiling**: with the broker unreachable, a context authorizes until
   `staleness_ceiling` elapses since `refreshed_at`, then denies `context_stale` with a
   `server_msg`, and resumes on the first refresh after the broker returns.
@@ -8454,7 +8604,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L47** | L45's and L46's claims on hosted providers, and their access tokens' `azp`, `aud` and `sub` under the client-credentials grant. For Microsoft Entra ID also: a v2 access token's `aud` (the application's GUID, or its `api://` URI); whether an ID token carries `email_verified` (if not, `principal_claim: email` refuses every Entra person); and the `idtyp` and `scp` claims an app-only and a delegated access token carry. | As L45 and L46, for hosted providers; `app:` + `azp` and the delegated-token refusal (§13 decision 39 rulings 6 and 21) | Microsoft Entra ID, Okta | open — added 2026-10-06 (plan 7h); needs a tenant each (OR-3) |
 | **L48** | A workload CA's behaviour with port49's workload verifier (plan 8). On step-ca: whether a certificate requested for a SPIFFE ID carries it as its one URI SAN, with `clientAuth`, not a CA; whether `step ca renew` keeps the ID and the key and changes the serial, and port49 mints for the renewed certificate with no change; when `step ca renew --daemon` renews, as a fraction of the lifetime; with step-ca stopped, whether port49 mints until `NotAfter` and refuses after, and when the late-renewal line comes; whether step-ca's CRL (`crl.enabled`) is DER, issued by the intermediate, and loaded by port49's `certificate_status` over https with the broker trusting step-ca's root (`SSL_CERT_FILE`), and whether a `step ca revoke` reaches port49 within `refresh_interval` and stops a renewal of the revoked certificate; whether a provisioner's x509 name policy allowing one URI refuses a request for another SPIFFE ID. | §13 decision 40 rulings 7–9 (ruling 7's revisit condition); the workload anchor's recommended placement (the intermediate); the README's advice to restrict the provisioner to the host's own ID | step-ca | closed — measured 2026-10-08; tests/lab/results/L48-step_ca.md. Measured on step-ca 0.30.2: the requested SPIFFE ID is the leaf's one URI SAN (with `serverAuth` beside `clientAuth` in step's default template); renew keeps the ID and the key with a new serial; `step ca renew --daemon` renewed at 0.66 of a 15m lifetime; with the CA down the late-renewal warning came at 0.79 (30s polls) and minting stopped at expiry, exit 77. step-ca's CRL carries a critical issuing distribution point naming its own URL and its default leaves no CRL distribution point, so a default leaf is undecided (503) and a leaf under `examples/oxidized/step-ca-workload.tpl` was refused `credential_revoked` 1m after `step ca revoke` (§13, decision 40, ruling 17). No step-ca name policy pins one SPIFFE ID: the provisioner's x509 `allow` was ignored, the authority's refuses a full URI at start; a fixed-`uris` template pins it by rewriting the request |
 | **L49** | Oxidized as the day-one consumer of minted tokens (plan 8): the commands each model (`eos`, `nxos`, `ios`, `junos`) sends at login and during a backup, as port49 receives them; whether Oxidized reads a node's username and password from its CSV source at each `/reload` and uses them at the node's next run (`/node/next/<node>`); with a token past its TTL, how many authentications one node's run costs and what Oxidized records; that no token appears in Oxidized's log at its default level; and that a backup made with a minted token holds the device's configuration, the decision log naming the workload's principal. | `examples/oxidized` (the role and the wrapper's REST calls; §13 decision 40 ruling 13) | EOS, NX-OS, IOS-XE, Junos (vJunos-router, vSRX) | closed — measured 2026-10-08; tests/lab/results/L49-oxidized-arista_eos.md, L49-oxidized-cisco_iosxe.md, L49-oxidized-cisco_nxos.md, L49-oxidized-juniper_vjunos-router.md, L49-oxidized-juniper_vsrx.md. Oxidized 0.37.0 on all five: one authentication per run, a stale token refused in one (`token_spent`), the credential read at `/reload`, no token in Oxidized's log. vEOS offers no `password` method, so the example sets `keyboard-interactive` for the `eos` model alone. The example's role lacked `show vtp status` (ios) and `show inventory all` (nxos), now added. On Junos under set 1.0.0 a backup asks port49 about no command. Not measured: a level below `admin` |
-| **L50** | Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16 and 40 ruling 5): on Windows AD and on Samba AD, whether an attribute holding a SPIFFE ID on a service account's entry can be written by the entry itself (`SELF`), by an account operator, or by a delegated OU administrator, under the default ACLs and under the ACL plan 8b's docs prescribe; and whether a write is in the directory's audit log. Until it closes, plan 8b's "only directory administrators can write it" is unmeasured. | §13 decision 40 ruling 5 (plan 8b's mapping kind) | Windows Server AD (L44's box), Samba AD | open — added 2026-10-07 (plan 8, for plan 8b) |
+| **L50** | Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16, 40 ruling 5 and 41 ruling 10): on Windows AD and on Samba AD, for a service account's entry in its own OU, and for each of `uid`, `description`, `wWWHomePage` and `url` holding a SPIFFE ID, whether the entry itself (`SELF`), a member of Account Operators, a delegated OU administrator ("create, delete and manage user accounts" on the OU) and an ordinary domain user can write it, under the default ACLs and under the ACL plan 8b's docs would prescribe (an inherited deny of write on that attribute on the OU for each writer that is not a domain administrator); and whether each write, accepted or refused, is in the directory's audit log as installed and with directory-change auditing turned on. Until it closes, no doc asserts who can write it (rule 1). Row text sharpened by plan 8b, 2026-10-09. | §13 decision 41 ruling 10 (the docs' ACL for the mapping's attribute) | Windows Server AD (L44's box), Samba AD | open — added 2026-10-07 (plan 8, for plan 8b) |
 | **L51** | What an SSH client offering several public keys before the password does to a port49 login (raised by the owner from production NX-OS experience): on each platform, whether each refused key counts against the device's SSH authentication-attempt limit (NX-OS `ssh login-attempts`, Junos `retry-options`, IOS-XE `ip ssh authentication-retries`, EOS's), how many keys an OpenSSH client with a loaded agent can offer before the password prompt never comes, whether a refused key reaches port49 as any TACACS+ exchange, whether the refusals lock the user or the source out afterwards and for how long, and which client-side settings (`IdentitiesOnly yes`, `PubkeyAuthentication no`, `PreferredAuthentications keyboard-interactive,password`) and device-side settings avoid it. Until it closes, the docs give no advice on it. | The operator docs for typing a minted token at an SSH password prompt (plan 13), the agent's and `port49 workload`'s guidance, and Oxidized's SSH settings (`examples/oxidized`) | NX-OS (first), EOS, IOS-XE, vJunos-router, vSRX | open — added 2026-10-09 |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
