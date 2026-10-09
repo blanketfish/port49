@@ -240,12 +240,15 @@ func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass 
 			win(control), controlRe, l53Clock.FindString(ctl), clock, ctl)
 	}
 	steps := map[string]int{}
-	var tagged []string
+	var tagged, inScan []string
 	named := false
 	for _, ln := range fresh {
 		step := l53Step(ln, offset, scan, control)
 		steps[step]++
 		tagged = append(tagged, "["+step+"] "+ln)
+		if step == "scan" {
+			inScan = append(inScan, ln)
+		}
 		named = named || (breakglass != "" && strings.Contains(ln, breakglass))
 	}
 	fmt.Fprintf(&b, "By step: scan %d, control %d, before the scan %d, between the scan and the control %d, after the "+
@@ -256,7 +259,14 @@ func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass 
 	} else {
 		b.WriteString(" No line names the break-glass login that read the log.")
 	}
-	fmt.Fprintf(&b, " The last 30 lines, each with its step:\n\n```\n%s\n```", trimForNote(l53Tail(strings.Join(tagged, "\n"), 30)))
+	if len(inScan) == 0 {
+		b.WriteString("\n\nNo line is stamped inside the scan's window.")
+	} else {
+		fmt.Fprintf(&b, "\n\nEvery line stamped inside the scan's window (a line there is the scan's only if it is about "+
+			"an SSH connection from the scanning address; the rest is the device's own):\n\n```\n%s\n```",
+			trimForNote(strings.Join(inScan, "\n")))
+	}
+	fmt.Fprintf(&b, "\n\nThe last 30 lines, each with its step:\n\n```\n%s\n```", trimForNote(l53Tail(strings.Join(tagged, "\n"), 30)))
 	return b.String(), ctl != ""
 }
 

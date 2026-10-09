@@ -148,7 +148,8 @@ func TestL53LogNoteAttributesByStampAndNeedsTheControl(t *testing.T) {
 	re := regexp.MustCompile("l53-control")
 	note, seen := l53LogNote("show logging", fresh, scan, control, "breakglass", re)
 	for _, want := range []string{"scan 1, control 1, before the scan 2", "is in the log", "[scan] *Oct  9 18:13:47.370",
-		"[before the scan] *Oct  9 18:13:31.496", "No line names the break-glass login"} {
+		"[before the scan] *Oct  9 18:13:31.496", "No line names the break-glass login",
+		"Every line stamped inside the scan's window"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("the note lacks %q:\n%s", want, note)
 		}
