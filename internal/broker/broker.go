@@ -340,11 +340,9 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	if req.Scope != "" || req.After != "" {
 		// devices beside a scope is refused whatever it holds, [] included:
 		// the key is what ruling 1 refuses, not its length.
-		var keys struct {
-			Devices json.RawMessage `json:"devices"`
-		}
-		_ = json.Unmarshal(body, &keys) // decoded whole above
-		if msg := sweepRequestError(req, len(keys.Devices) > 0 && string(keys.Devices) != "null"); msg != "" {
+		// encoding/json leaves the slice nil for an absent key or null, and
+		// non-nil for [].
+		if msg := sweepRequestError(req, req.Devices != nil); msg != "" {
 			writeError(w, http.StatusBadRequest, "bad_request", msg)
 			return
 		}

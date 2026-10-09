@@ -199,6 +199,7 @@ func TestMalformedSweepsAreRefusedWhole(t *testing.T) {
 		"a 256-byte after":          `{"scope":"dc","after":"` + strings.Repeat("a", 256) + `"}`,
 		"after with no scope":       `{"after":"dc-a"}`,
 		"after with devices":        `{"devices":["dc-a"],"after":"dc-a"}`,
+		"scope, devices, trailing":  `{"scope":"dc","devices":["dc-a"]} x`,
 		"a scope with a space":      `{"scope":"d c"}`,
 		"a control character":       `{"scope":"dc","after":"dc\u0007"}`,
 		"a 254-byte scope":          `{"scope":"` + strings.Repeat("s", 254) + `"}`,
