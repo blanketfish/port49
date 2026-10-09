@@ -3,13 +3,16 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +20,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,10 +54,11 @@ var l53Console = map[string][]string{
 // transcript in the note: fix the prompt here, never the claim. NX-OS sets
 // its boot variable first: the N9Kv was first booted from the loader by the
 // vrnetlab launcher and has none, so a reload stopped at `loader >` (measured
-// on the first run); the boot variable is what a real switch has.
+// on the first run); the boot variable is what a real switch has. The image
+// it names is the one `show version` says the switch booted ({nxos_image}).
 var l53Reload = map[string][][3]string{
 	"arista_eos": {{"write memory", "", ""}, {"reload now", "", ""}},
-	"cisco_nxos": {{"configure terminal", "", ""}, {"boot nxos bootflash:/nxos64-cs.10.4.2.F.bin", "", ""},
+	"cisco_nxos": {{"configure terminal", "", ""}, {"boot nxos {nxos_image}", "", ""},
 		{"end", "", ""}, {"copy running-config startup-config", "", ""}, {"reload", "(y/n)", "y"}},
 	"cisco_iosxe":           {{"write memory", "", ""}, {"reload", "[confirm]", ""}},
 	"juniper_vjunos-router": {{"request system reboot", "[yes,no]", "yes"}},
@@ -73,14 +80,345 @@ var l53UptimeLine = regexp.MustCompile(`(?im)^.*(uptime|booted).*$`)
 
 // l53Log is, per platform, the commands that show the device's own log. Each
 // is read before the scan and after it, and the note keeps the lines the
-// second read has that the first did not, so a line the scan wrote is there to
-// see. vSRX has no `messages` file here, so its list of log files is read too.
+// second read has that the first did not, each with the step it was written
+// in. The Junos images log to `messages` through the syslog stanza in
+// configs/vjunos-startup.conf; without it vSRX has no such file at all.
 var l53Log = map[string][]string{
 	"arista_eos":            {"show logging"},
 	"cisco_nxos":            {"show logging logfile"},
 	"cisco_iosxe":           {"show logging"},
 	"juniper_vjunos-router": {"show log messages"},
-	"juniper_vsrx":          {"show log messages", "file list /var/log/"},
+	"juniper_vsrx":          {"show log messages"},
+}
+
+// l53ControlUser is the user of the log's positive control: a refused SSH
+// login as an account that does not exist. A log that does not show it is a
+// log that records nothing of a login, so its silence about the scan proves
+// nothing (task 8 review I-2).
+const l53ControlUser = "l53-control"
+
+// l53Window is a span of host time a step of the test took.
+type l53Window struct {
+	from, to time.Time
+}
+
+// l53Slack is how far outside a step's window a log line may be stamped and
+// still be the step's: the logs stamp whole seconds, truncated.
+const l53Slack = 2 * time.Second
+
+var l53Clock = regexp.MustCompile(`(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?`)
+
+// l53ClockOf is the time of day of the first HH:MM:SS in line, which is where
+// every platform's log stamps it, and whether there is one.
+func l53ClockOf(line string) (time.Duration, bool) {
+	m := l53Clock.FindStringSubmatch(line)
+	if m == nil {
+		return 0, false
+	}
+	h, _ := strconv.Atoi(m[1])
+	mi, _ := strconv.Atoi(m[2])
+	s, _ := strconv.Atoi(m[3])
+	d := time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute + time.Duration(s)*time.Second
+	if m[4] != "" {
+		frac, _ := strconv.ParseFloat("0."+m[4], 64)
+		d += time.Duration(frac * float64(time.Second))
+	}
+	return d, true
+}
+
+// l53TimeOfDay is t's time of day in UTC.
+func l53TimeOfDay(t time.Time) time.Duration {
+	t = t.UTC()
+	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute +
+		time.Duration(t.Second())*time.Second + time.Duration(t.Nanosecond())
+}
+
+// l53Wrap folds d into [-12h, 12h): a time of day is compared across midnight.
+func l53Wrap(d time.Duration) time.Duration {
+	const day = 24 * time.Hour
+	d %= day
+	switch {
+	case d >= day/2:
+		d -= day
+	case d < -day/2:
+		d += day
+	}
+	return d
+}
+
+// l53In reports whether a log stamp t, with the device's clock offset from
+// the host's removed, is inside w.
+func l53In(t, offset time.Duration, w l53Window) bool {
+	d := l53Wrap(t - offset - l53TimeOfDay(w.from))
+	return d >= -l53Slack && d <= w.to.Sub(w.from)+l53Slack
+}
+
+// l53Step names the step of the test a log line was written in, by its own
+// stamp and only by that: "scan" is the scan's window and nothing else, so
+// the harness's readiness probes (which fail logins and dial SSH too) are
+// never credited to it (task 8 review I-1).
+func l53Step(line string, offset time.Duration, scan, control l53Window) string {
+	t, ok := l53ClockOf(line)
+	switch {
+	case !ok:
+		return "no time"
+	case l53In(t, offset, scan):
+		return "scan"
+	case l53In(t, offset, control):
+		return "control"
+	case l53Wrap(t-offset-l53TimeOfDay(scan.from)) < 0:
+		return "before the scan"
+	case l53Wrap(t-offset-l53TimeOfDay(control.from)) < 0:
+		return "between the scan and the control"
+	}
+	return "after the control"
+}
+
+// l53LogNote reads the lines a log gained between its two reads (fresh). It
+// finds the control's line, which says whether the log records a refused login
+// at all and how far the device's clock is from the host's; it sorts every line
+// into its step; and it says whether the log can speak to the scan. The
+// second result is false when the control's line is missing: the log clause
+// is then unmeasured on this log.
+func l53LogNote(cmd string, fresh []string, scan, control l53Window, breakglass string) (string, bool) {
+	var ctl string
+	for _, ln := range fresh {
+		if _, ok := l53ClockOf(ln); ok && strings.Contains(ln, l53ControlUser) {
+			ctl = ln
+			break
+		}
+	}
+	win := func(w l53Window) string {
+		return w.from.UTC().Format("15:04:05") + "-" + w.to.UTC().Format("15:04:05")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "`%s`: %d lines it has now that it did not before the scan. Host windows (UTC): scan %s, "+
+		"control login %s.\n\n", cmd, len(fresh), win(scan), win(control))
+	var offset time.Duration
+	if ctl == "" {
+		fmt.Fprintf(&b, "**The control, a refused login as `%s`, is not in this log**: it records no failed "+
+			"login, so its silence about the scan means nothing, and **the log clause is UNMEASURED here**.\n\n",
+			l53ControlUser)
+	} else {
+		t, _ := l53ClockOf(ctl)
+		if !l53In(t, 0, control) {
+			// The line is somewhere in the login's span: the middle is the
+			// best guess, and the slack covers the rest.
+			offset = l53Wrap(t - l53TimeOfDay(control.from.Add(control.to.Sub(control.from)/2)))
+		}
+		clock := "the device's clock agrees with the host's to within 2s"
+		if offset != 0 {
+			clock = fmt.Sprintf("the device's clock differs from the host's by about %s, which is removed below",
+				offset.Round(time.Second))
+		}
+		fmt.Fprintf(&b, "The control, a refused login as `%s` (host %s), is in the log, stamped %s (%s), so this log "+
+			"records a failed login:\n\n    %s\n\n", l53ControlUser, win(control), l53Clock.FindString(ctl), clock, ctl)
+	}
+	steps := map[string]int{}
+	var tagged []string
+	named := false
+	for _, ln := range fresh {
+		step := l53Step(ln, offset, scan, control)
+		steps[step]++
+		tagged = append(tagged, "["+step+"] "+ln)
+		named = named || (breakglass != "" && strings.Contains(ln, breakglass))
+	}
+	fmt.Fprintf(&b, "By step: scan %d, control %d, before the scan %d, between the scan and the control %d, after the "+
+		"control %d, no time %d.", steps["scan"], steps["control"], steps["before the scan"],
+		steps["between the scan and the control"], steps["after the control"], steps["no time"])
+	if named {
+		b.WriteString(" The break-glass login that read the log is among the lines.")
+	} else {
+		b.WriteString(" No line names the break-glass login that read the log.")
+	}
+	fmt.Fprintf(&b, " The last 30 lines, each with its step:\n\n```\n%s\n```", trimForNote(l53Tail(strings.Join(tagged, "\n"), 30)))
+	return b.String(), ctl != ""
+}
+
+var (
+	l53UnitRe   = regexp.MustCompile(`(?i)(\d+)\s*(week|day|hour|minute|second)`)
+	l53BootedRe = regexp.MustCompile(`System booted: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \S+)`)
+)
+
+// l53UpFor is the time the first line of out that names an uptime says the
+// device has been up (EOS "Uptime: 1 minute", IOS-XE "xe1 uptime is 1 hour, 5
+// minutes", NX-OS "Kernel uptime is 0 day(s), 0 hour(s), 3 minute(s), 23
+// second(s)").
+func l53UpFor(out string) (time.Duration, bool) {
+	units := map[string]time.Duration{"week": 7 * 24 * time.Hour, "day": 24 * time.Hour, "hour": time.Hour,
+		"minute": time.Minute, "second": time.Second}
+	for _, ln := range strings.Split(out, "\n") {
+		if !strings.Contains(strings.ToLower(ln), "uptime") {
+			continue
+		}
+		var d time.Duration
+		ms := l53UnitRe.FindAllStringSubmatch(ln, -1)
+		for _, m := range ms {
+			n, _ := strconv.Atoi(m[1])
+			d += time.Duration(n) * units[strings.ToLower(m[2])]
+		}
+		if len(ms) > 0 {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// l53Rebooted reports whether the device rebooted between two reads of its
+// uptime command taken elapsed apart: for Junos, its "System booted" time
+// changed; for the others, the uptime after is below the uptime before plus
+// the time between the reads, by 2 minutes at least (the logs' resolution is
+// a minute). A device that never went down, or that only stalled, shows an
+// uptime that kept counting. The string says what was compared.
+func l53Rebooted(before, after string, elapsed time.Duration) (bool, string) {
+	if b := l53BootedRe.FindStringSubmatch(before); b != nil {
+		a := l53BootedRe.FindStringSubmatch(after)
+		if a == nil {
+			return false, "the read after the reload has no System booted line"
+		}
+		return a[1] != b[1], fmt.Sprintf("System booted %s, then %s", b[1], a[1])
+	}
+	b, okB := l53UpFor(before)
+	a, okA := l53UpFor(after)
+	if !okB || !okA {
+		return false, "no uptime line in one of the reads"
+	}
+	return a+2*time.Minute < b+elapsed, fmt.Sprintf("uptime %s, then %s after %s", b, a, elapsed.Round(time.Second))
+}
+
+var l53NXOSImage = regexp.MustCompile(`NXOS image file is:\s*(\S+)`)
+
+// l53BootLine is a reload step's line with {nxos_image} replaced by the image
+// show version says the switch booted, in the bootflash:/ form `boot nxos`
+// takes.
+func l53BootLine(line, showVersion string) (string, error) {
+	if !strings.Contains(line, "{nxos_image}") {
+		return line, nil
+	}
+	m := l53NXOSImage.FindStringSubmatch(showVersion)
+	if m == nil {
+		return "", errors.New(`show version has no "NXOS image file is:" line`)
+	}
+	return strings.ReplaceAll(line, "{nxos_image}", strings.Replace(m[1], "bootflash:///", "bootflash:/", 1)), nil
+}
+
+// l53String reads one SSH string (uint32 length, bytes) from b.
+func l53String(b []byte) (s, rest []byte, err error) {
+	if len(b) < 4 {
+		return nil, nil, errors.New("short string")
+	}
+	n := int(binary.BigEndian.Uint32(b))
+	if n < 0 || len(b) < 4+n {
+		return nil, nil, errors.New("short string")
+	}
+	return b[4 : 4+n], b[4+n:], nil
+}
+
+// l53KexSignatureAlgorithm is the algorithm name in the signature of the
+// first key exchange reply (ECDH or DH, message 31, or group exchange, 33) in
+// stream, the bytes a server sent a client: the host-key algorithm the two
+// negotiated. The packets before the keys change are not encrypted.
+func l53KexSignatureAlgorithm(stream []byte) (string, error) {
+	b := stream
+	for {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			return "", errors.New("no identification line")
+		}
+		line := b[:i+1]
+		b = b[i+1:]
+		if bytes.HasPrefix(line, []byte("SSH-")) {
+			break
+		}
+	}
+	for len(b) >= 5 {
+		n := int(binary.BigEndian.Uint32(b))
+		if n < 2 || n > 1<<16 || len(b) < 4+n {
+			break
+		}
+		pad := int(b[4])
+		if 1+pad > n {
+			break
+		}
+		payload := b[5 : 4+n-pad]
+		b = b[4+n:]
+		if len(payload) == 0 || (payload[0] != 31 && payload[0] != 33) {
+			continue
+		}
+		p := payload[1:]
+		var err error
+		for range 2 { // the host key, then the server's key share
+			if _, p, err = l53String(p); err != nil {
+				break
+			}
+		}
+		if err != nil {
+			continue // a group exchange's group message, not a reply
+		}
+		sig, _, err := l53String(p)
+		if err != nil {
+			continue
+		}
+		alg, _, err := l53String(sig)
+		if err != nil {
+			continue
+		}
+		return string(alg), nil
+	}
+	return "", errors.New("no key exchange reply in the stream")
+}
+
+// l53Tap keeps what a connection reads.
+type l53Tap struct {
+	net.Conn
+	mu  sync.Mutex
+	got bytes.Buffer
+}
+
+func (t *l53Tap) Read(p []byte) (int, error) {
+	n, err := t.Conn.Read(p)
+	t.mu.Lock()
+	t.got.Write(p[:n])
+	t.mu.Unlock()
+	return n, err
+}
+
+func (t *l53Tap) bytes() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.got.Bytes())
+}
+
+// l53HostKeyAlgorithm is the host-key algorithm the device at addr signs
+// with when offered what hostkeys.Scan offers (the same lists; if Scan's
+// change, change these), read off the wire. The key type is not it: an RSA
+// key is signed with rsa-sha2-512, rsa-sha2-256 or ssh-rsa, and which the
+// scan gets is what the row's first clause asks (task 8 review M9).
+func l53HostKeyAlgorithm(addr string) (string, error) {
+	sup, weak := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
+	hostKeys := slices.DeleteFunc(append(slices.Clone(sup.HostKeys), weak.HostKeys...), func(a string) bool {
+		return strings.Contains(a, "-cert-v01@") || a == ssh.InsecureKeyAlgoDSA
+	})
+	nc, err := net.DialTimeout("tcp", addr, 20*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer nc.Close()
+	_ = nc.SetDeadline(time.Now().Add(20 * time.Second))
+	tap := &l53Tap{Conn: nc}
+	cfg := &ssh.ClientConfig{
+		User:              "port49-scan",
+		HostKeyCallback:   func(string, net.Addr, ssh.PublicKey) error { return errors.New("algorithm probe") },
+		HostKeyAlgorithms: hostKeys,
+		Config: ssh.Config{
+			KeyExchanges: append(slices.Clone(sup.KeyExchanges), weak.KeyExchanges...),
+			Ciphers:      append(slices.Clone(sup.Ciphers), weak.Ciphers...),
+			MACs:         append(slices.Clone(sup.MACs), weak.MACs...),
+		},
+		Timeout: 20 * time.Second,
+	}
+	_, _, _, _ = ssh.NewClientConn(tap, addr, cfg)
+	return l53KexSignatureAlgorithm(tap.bytes())
 }
 
 // l53NewLines is the lines of after that before does not have, in order.
@@ -380,6 +718,14 @@ func TestL53L54PortSSH(t *testing.T) {
 			return n
 		}
 
+		// L53: the host-key algorithm the scan's offer negotiates. It is a
+		// scan of its own, so it is made before the log is read for the
+		// scan's: whatever it writes is in the log's "before".
+		alg, algErr := l53HostKeyAlgorithm(addr)
+		if algErr != nil {
+			t.Errorf("reading the negotiated host-key algorithm: %v", algErr)
+		}
+
 		// L53: the device's log before the scan, to tell the scan's lines
 		// from the rest.
 		logBefore := map[string]string{}
@@ -415,10 +761,23 @@ func TestL53L54PortSSH(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scan %s: %v", addr, err)
 		}
-		say(&l53, "The scan read a `%s` key, %s.", key.Type(), hostkeys.Fingerprint(key))
+		scan := l53Window{scanFrom, time.Now()}
+		say(&l53, "The scan (%s-%s UTC) read a `%s` key, %s. The host-key algorithm the device signed with when offered "+
+			"what the scan offers: `%s`.", scan.from.UTC().Format("15:04:05"), scan.to.UTC().Format("15:04:05"), key.Type(),
+			hostkeys.Fingerprint(key), alg)
 		time.Sleep(10 * time.Second)
 		say(&l53, "Within 10s of the scan: %d decision records, and %d TACACS+ packets to or from the device in the "+
 			"capture.", len(l.recordsSince(off)), tacacsIn(scanFrom, time.Now()))
+
+		// L53: the control for the log. A refused SSH login as an account
+		// that does not exist: if the log does not show it, it records no
+		// login, and its silence about the scan is not a measurement.
+		controlFrom := time.Now()
+		if c, err := l.dial(l53ControlUser, "not-a-token", 30*time.Second); err == nil {
+			c.Close()
+			t.Errorf("a login as %s succeeded; it must be refused", l53ControlUser)
+		}
+		control := l53Window{controlFrom, time.Now()}
 
 		// L53: the console, as an operator with privilege sees it (the
 		// break-glass CLI): every candidate command, the uptime, and the
@@ -426,6 +785,7 @@ func TestL53L54PortSSH(t *testing.T) {
 		cmds := append(append([]string{}, l53Console[l.p.name]...), l53Uptime[l.p.name])
 		cmds = append(cmds, l53Log[l.p.name]...)
 		var outs []string
+		var uptimeBeforeAt time.Time
 		admin(func(c *cliConn) error {
 			for _, cmd := range cmds {
 				out, err := l53Show(l, c, cmd)
@@ -433,6 +793,9 @@ func TestL53L54PortSSH(t *testing.T) {
 					return fmt.Errorf("%q: %v\n%s", cmd, err, trimForNote(out))
 				}
 				outs = append(outs, out)
+				if cmd == l53Uptime[l.p.name] {
+					uptimeBeforeAt = time.Now()
+				}
 			}
 			return nil
 		})
@@ -448,10 +811,19 @@ func TestL53L54PortSSH(t *testing.T) {
 		}
 		nc := len(l53Console[l.p.name])
 		say(&l53, "Before the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(outs[nc], -1))
+		logMeasured := false
 		for i, cmd := range l53Log[l.p.name] {
-			fresh := l53NewLines(logBefore[cmd], outs[nc+1+i])
-			say(&l53, "`%s`: %d lines it has now that it did not before the scan (the break-glass login that read it "+
-				"is among them), the last 30:\n\n```\n%s\n```", cmd, len(fresh), trimForNote(l53Tail(strings.Join(fresh, "\n"), 30)))
+			note, sawControl := l53LogNote(cmd, l53NewLines(logBefore[cmd], outs[nc+1+i]), scan, control, breakglassUser)
+			say(&l53, "%s", note)
+			logMeasured = logMeasured || sawControl
+		}
+		if logMeasured {
+			say(&l53, "The log clause is measured here: the control login is in the log, so what the log holds for the "+
+				"scan's window is what the scan wrote.")
+		} else {
+			say(&l53, "**The log clause is UNMEASURED on %s**: no log read showed the control login, so none of them "+
+				"can show that the scan left no line. L53 stays open on this clause.", l.p.name)
+			t.Logf("L53 %s: the log clause is unmeasured (the control is not in the log)", l.p.name)
 		}
 
 		// L53: the device's login-attempt limit, where the row names one.
@@ -476,6 +848,7 @@ func TestL53L54PortSSH(t *testing.T) {
 			t.Fatalf("port49 devices trust: %v\n%s", err, out)
 		}
 		off = l.mark()
+		goodFrom := time.Now()
 		run := exec.Command(port49, "ssh", "-v", "--socket", sock, "--ssh-config", sshConfig, l.p.node, "--",
 			"show version")
 		run.Env = env
@@ -512,6 +885,9 @@ func TestL53L54PortSSH(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Second)
+		goodTACACS := tacacsIn(goodFrom, time.Now())
+		say(&l54, "The good login's own window, from its start to 10s after it ended: %d TACACS+ packets to or from the "+
+			"device in the capture. The counter counts: the wrong-pin zero below is a zero of the same count.", goodTACACS)
 		off = l.mark()
 		wrongFrom := time.Now()
 		bad := exec.Command(port49, "ssh", "--socket", sock, "--ssh-config", sshConfig, l.p.node, "--", "show version")
@@ -536,8 +912,13 @@ func TestL53L54PortSSH(t *testing.T) {
 		// would be down and back before a later wait began.
 		var reloadAt, downAt time.Time
 		downErr := make(chan error, 1)
+		steps := slices.Clone(l53Reload[l.p.name])
+		for i := range steps {
+			if steps[i][0], err = l53BootLine(steps[i][0], outs[nc]); err != nil {
+				t.Fatalf("the reload steps: %v", err)
+			}
+		}
 		admin(func(c *cliConn) error {
-			steps := l53Reload[l.p.name]
 			for i, step := range steps {
 				// The reload line itself is not waited on for a prompt: the
 				// console of a reloading VM may stay open for minutes, long
@@ -594,16 +975,26 @@ func TestL53L54PortSSH(t *testing.T) {
 			t.Fatalf("after the reload: %v", err)
 		}
 		say(&l53, "The reload command was sent at %s; the device was seen down (no SSH banner on two connections in a "+
-			"row) at %s, and serving SSH authentication again %s later.", reloadAt.UTC().Format("15:04:05"),
-			downAt.UTC().Format("15:04:05"), time.Since(downAt).Round(time.Second))
+			"row) at %s, and was serving SSH authentication again no later than %s after that: an upper bound, since "+
+			"it is read after the admin helper's daemon restart (which on IOS-XE includes a probe login) and after "+
+			"the readiness wait.", reloadAt.UTC().Format("15:04:05"), downAt.UTC().Format("15:04:05"),
+			time.Since(downAt).Round(time.Second))
+		var uptimeAfter string
+		var uptimeAfterAt time.Time
 		admin(func(c *cliConn) error {
 			up, err := l53Show(l, c, l53Uptime[l.p.name])
 			if err != nil {
 				return err
 			}
+			uptimeAfter, uptimeAfterAt = up, time.Now()
 			say(&l53, "After the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(up, -1))
 			return nil
 		})
+		rebooted, rebootedWhy := l53Rebooted(outs[nc], uptimeAfter, uptimeAfterAt.Sub(uptimeBeforeAt))
+		say(&l53, "The device rebooted: %v (%s).", rebooted, rebootedWhy)
+		if !rebooted {
+			t.Errorf("the uptime does not show a reboot: %s", rebootedWhy)
+		}
 		after, err := hostkeys.Scan(context.Background(), addr)
 		switch {
 		case err != nil:
@@ -626,6 +1017,9 @@ func TestL53L54PortSSH(t *testing.T) {
 		}
 		if asked != 1 {
 			t.Errorf("the askpass was asked %d times; want once", asked)
+		}
+		if goodTACACS == 0 {
+			t.Errorf("the good port49 ssh login's window holds no TACACS+ packet, so the wrong-pin zero proves nothing")
 		}
 		if wrongTACACS != 0 || len(wrongOther) != 0 {
 			t.Errorf("a wrong pin reached the device's authentication: %d TACACS+ packets, records %v", wrongTACACS,

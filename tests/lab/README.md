@@ -626,6 +626,10 @@ trust` (L53) and `port49 ssh` against it (L54). Each device is reloaded once, so
 `PORT49_LAB_SSH=1`, which the target sets and a plain `make lab` does not. The notes go to
 `tests/lab/results/L53-*.md` and `L54-*.md`. The run's capture is
 `tests/lab/captures/L53L54-<platform>.pcap` and goes through `make evidence` like every other. On
-IOS-XE and NX-OS the run sets a login-attempt limit for about two minutes and removes it; a run
+IOS-XE and NX-OS the run sets a login-attempt limit for about three minutes (a 70 s wait, three
+scans, the control's logins, which may each wait up to 30 s, and a 75 s wait) and removes it; a run
 stopped in that window leaves it set (`no login block-for`, `no aaa authentication rejected 2 in 60
-ban 60`).
+ban 60`). Each run also makes a refused login as `l53-control` and requires the device's log to show
+it: a log that does not is no evidence about what the scan wrote, and the note says the log clause is
+unmeasured. The Junos images log to `messages` through the `system syslog` stanza in
+`configs/vjunos-startup.conf`.
