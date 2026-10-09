@@ -236,7 +236,7 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 	}
 	_, afterScans := l.login(sliceUser, token(), "show version")
 	for range 2 {
-		if c, err := l.dial("l53-control", "not-a-token", 30*time.Second); err == nil {
+		if c, err := l.dial(sliceUser, "not-a-token", 30*time.Second); err == nil {
 			c.Close()
 		}
 	}
@@ -250,8 +250,8 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 		return fmt.Sprintf("it was refused (%v)", err)
 	}
 	return fmt.Sprintf("With `%s` set: three scans, then a login with a fresh token: %s. The control, two refused "+
-		"logins as `l53-control` and then a login with a fresh token: %s.", lim[0][1], outcome(afterScans),
-		outcome(afterControl)), afterControl != nil
+		"logins as `"+sliceUser+"`, the user the login uses, and then a login with a fresh token: %s.", lim[0][1],
+		outcome(afterScans), outcome(afterControl)), afterControl != nil
 }
 
 // TestL53L54PortSSH measures L53 and L54 on each selected platform: the
