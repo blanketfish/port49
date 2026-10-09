@@ -15,6 +15,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestL53NewLinesAreTheOnesTheLogGained(t *testing.T) {
+	before := "a\r\nb\n  c  \n"
+	after := "a\nb\nc\nscan line\r\n\nd\n"
+	got := l53NewLines(before, after)
+	if len(got) != 2 || got[0] != "scan line" || got[1] != "d" {
+		t.Errorf("l53NewLines = %q, want [scan line d]", got)
+	}
+}
+
 // l53Shown recognises the key in a console command's output: its OpenSSH
 // base64 blob, its SHA256 fingerprint, its DER as hex (IOS-XE's `show crypto
 // key mypubkey rsa`), its MD5 fingerprint, or none of them.

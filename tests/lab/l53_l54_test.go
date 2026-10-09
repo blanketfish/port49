@@ -67,15 +67,31 @@ var l53Uptime = map[string]string{
 
 var l53UptimeLine = regexp.MustCompile(`(?im)^.*(uptime|booted).*$`)
 
-// l53Log is, per platform, the command that shows the device's own log. It
-// is read after the scan, and the note keeps its last 30 lines, so a line the
-// scan wrote is there to see.
-var l53Log = map[string]string{
-	"arista_eos":            "show logging",
-	"cisco_nxos":            "show logging logfile",
-	"cisco_iosxe":           "show logging",
-	"juniper_vjunos-router": "show log messages",
-	"juniper_vsrx":          "show log messages",
+// l53Log is, per platform, the commands that show the device's own log. Each
+// is read before the scan and after it, and the note keeps the lines the
+// second read has that the first did not, so a line the scan wrote is there to
+// see. vSRX has no `messages` file here, so its list of log files is read too.
+var l53Log = map[string][]string{
+	"arista_eos":            {"show logging"},
+	"cisco_nxos":            {"show logging logfile"},
+	"cisco_iosxe":           {"show logging"},
+	"juniper_vjunos-router": {"show log messages"},
+	"juniper_vsrx":          {"show log messages", "file list /var/log/"},
+}
+
+// l53NewLines is the lines of after that before does not have, in order.
+func l53NewLines(before, after string) []string {
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(before, "\n") {
+		seen[strings.TrimSpace(ln)] = true
+	}
+	var out []string
+	for _, ln := range strings.Split(after, "\n") {
+		if s := strings.TrimSpace(ln); s != "" && !seen[s] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // l53Limits is, for each platform the L53 row names a login-attempt limit
@@ -354,7 +370,35 @@ func TestL53L54PortSSH(t *testing.T) {
 			return n
 		}
 
-		// L53: the scan, and what it leaves behind.
+		// L53: the device's log before the scan, to tell the scan's lines
+		// from the rest.
+		logBefore := map[string]string{}
+		admin(func(c *cliConn) error {
+			for _, cmd := range l53Log[l.p.name] {
+				out, err := l53Show(l, c, cmd)
+				if err != nil {
+					return fmt.Errorf("%q: %v\n%s", cmd, err, trimForNote(out))
+				}
+				logBefore[cmd] = out
+			}
+			return nil
+		})
+
+		// L53: the scan, and what it leaves behind. A device that has just
+		// booted or been reconfigured talks to port49d on its own, so the
+		// scan waits for a window of 10s in which it does not, and that
+		// window is the baseline the scan's own is read against.
+		quiet := func() (recs, pkts int) {
+			from, off := time.Now(), l.mark()
+			time.Sleep(10 * time.Second)
+			return len(l.recordsSince(off)), tacacsIn(from, time.Now())
+		}
+		baseRecs, basePkts := quiet()
+		for i := 0; i < 18 && baseRecs+basePkts != 0; i++ {
+			baseRecs, basePkts = quiet()
+		}
+		say(&l53, "The window of 10s before the scan, its baseline: %d decision records, and %d TACACS+ packets to or "+
+			"from the device in the capture.", baseRecs, basePkts)
 		off := l.mark()
 		scanFrom := time.Now()
 		key, err := hostkeys.Scan(context.Background(), addr)
@@ -369,7 +413,8 @@ func TestL53L54PortSSH(t *testing.T) {
 		// L53: the console, as an operator with privilege sees it (the
 		// break-glass CLI): every candidate command, the uptime, and the
 		// device's log after the scan.
-		cmds := append(append([]string{}, l53Console[l.p.name]...), l53Uptime[l.p.name], l53Log[l.p.name])
+		cmds := append(append([]string{}, l53Console[l.p.name]...), l53Uptime[l.p.name])
+		cmds = append(cmds, l53Log[l.p.name]...)
 		var outs []string
 		admin(func(c *cliConn) error {
 			for _, cmd := range cmds {
@@ -391,9 +436,13 @@ func TestL53L54PortSSH(t *testing.T) {
 			}
 			say(&l53, "`%s`: %s.\n\n```\n%s\n```", cmd, form, trimForNote(outs[i]))
 		}
-		say(&l53, "Before the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(outs[len(cmds)-2], -1))
-		say(&l53, "The device's log after the scan, `%s`, its last 30 lines:\n\n```\n%s\n```", l53Log[l.p.name],
-			trimForNote(l53Tail(outs[len(cmds)-1], 30)))
+		nc := len(l53Console[l.p.name])
+		say(&l53, "Before the reload, `%s` says: %q.", l53Uptime[l.p.name], l53UptimeLine.FindAllString(outs[nc], -1))
+		for i, cmd := range l53Log[l.p.name] {
+			fresh := l53NewLines(logBefore[cmd], outs[nc+1+i])
+			say(&l53, "`%s`: %d lines it has now that it did not before the scan (the break-glass login that read it "+
+				"is among them), the last 30:\n\n```\n%s\n```", cmd, len(fresh), trimForNote(l53Tail(strings.Join(fresh, "\n"), 30)))
+		}
 
 		// L53: the device's login-attempt limit, where the row names one.
 		if lim, ok := l53Limits[l.p.name]; ok {
