@@ -127,8 +127,8 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 		// Ruling Q2's cost (pre-flight I-4): every workload of the verifier,
 		// identity-only ones included, needs its entry, and an outage stops it.
 		fmt.Fprintf(w, "%s: directory: workload certificates map by spiffe_id (weak, pinned to %s) through %s under "+
-			"%s; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID, or it is "+
-			"refused identity_unmapped, and while the directory is down past grace it is refused "+
+			"%s; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID: none is "+
+			"refused identity_unmapped, two or more identity_ambiguous, and while the directory is down past grace it is refused "+
 			"directory_unavailable; username from the identity subject listing the SPIFFE ID, else from %s; an entry "+
 			"holding a SPIFFE ID in %s is never a person's; machine_group subjects match them, group subjects never\n",
 			proc, strings.Join(wm.Issuers, "; "), wm.Attribute, wm.UserFilter, d.UsernameAttribute, wm.Attribute)

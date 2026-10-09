@@ -32,8 +32,8 @@ func TestTheWorkloadMappingStartLines(t *testing.T) {
 	for _, want := range []string{
 		"port49-broker: directory: workload certificates map by spiffe_id (weak, pinned to CN=Workloads Issuing CA,O=Corp) " +
 			"through uid under (objectClass=user); every workload this verifier accepts must have exactly one entry " +
-			"holding its SPIFFE ID, or it is refused identity_unmapped, and while the directory is down past grace it " +
-			"is refused directory_unavailable; username from the identity subject listing the SPIFFE ID, else from " +
+			"holding its SPIFFE ID: none is refused identity_unmapped, two or more identity_ambiguous, and while the " +
+			"directory is down past grace it is refused directory_unavailable; username from the identity subject listing the SPIFFE ID, else from " +
 			"sAMAccountName; an entry holding a SPIFFE ID in uid is never a person's; machine_group subjects match " +
 			"them, group subjects never\n",
 		"port49-broker: directory: a mapped workload mints only while a server answers or its membership was verified " +
