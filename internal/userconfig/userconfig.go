@@ -362,6 +362,13 @@ func dirError(d string, err error, what string) error {
 	return err
 }
 
+// PrivateDir resolves dir as WritePrivate does (resolveOwned): a missing
+// directory is made 0700 under a prefix that has passed, and the resolved path,
+// holding no links, is returned. It is for a caller that keeps a file beside
+// the one WritePrivate writes, such as a lock, and must not make it before the
+// directory is judged.
+func PrivateDir(dir, what string) (string, error) { return resolveOwned(dir, true, what) }
+
 // WritePrivate replaces path with data at mode 0600, through a temporary
 // file in its directory renamed over it, so a reader never sees half a file.
 // Missing directories are made 0700. The directory is walked as ReadPrivate

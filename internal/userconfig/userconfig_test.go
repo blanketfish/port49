@@ -496,3 +496,27 @@ func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
 		t.Fatalf("left behind: %v", ents)
 	}
 }
+
+// PrivateDir makes a missing directory 0700 and returns it judged; a refused
+// one is an error and creates nothing.
+func TestPrivateDirCreatesAndJudges(t *testing.T) {
+	top := privateDir(t)
+	got, err := PrivateDir(filepath.Join(top, "a", "b"), "pinned host keys file")
+	if err != nil || got != filepath.Join(top, "a", "b") {
+		t.Fatalf("%q %v", got, err)
+	}
+	if fi, err := os.Stat(got); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("%v %v", fi, err)
+	}
+	if err := os.Chmod(top, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(top, 0o700) })
+	if _, err := PrivateDir(filepath.Join(top, "c"), "pinned host keys file"); err == nil ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a world-writable parent: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(top, "c")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a refused path created a directory: %v", err)
+	}
+}

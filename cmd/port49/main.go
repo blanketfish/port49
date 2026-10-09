@@ -72,6 +72,9 @@ const usage = `usage:
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
   port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
+  port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
+                       [--socket PATH] DEVICE
+                (pins the SSH host key DEVICE presents, against the fingerprint you verified on its console)
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
@@ -125,6 +128,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "platform":
 		return platformCmd(args[1:], stdout, stderr)
 	case "devices":
+		if len(args) > 1 && args[1] == "trust" {
+			return devicesTrust(args[2:], stdout, stderr)
+		}
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)
 		}
@@ -481,53 +487,13 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	device := fs.Arg(0)
 	item, err := agent.NewClient(*socket).Token(context.Background(),
 		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)})
-	var ie *agent.ItemError
-	switch {
-	case errors.As(err, &ie):
-		// The broker could not decide this device. Whatever else the item
-		// carries is not printed.
-		fmt.Fprintf(stderr, "port49 token: %s: %s\n", device, unprefixed(ie))
-		return 1
-	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 token: no agent at %s; run `port49 login`\n", *socket)
-		return 1
-	case errors.Is(err, agent.ErrSessionOver):
-		// The error says to log in and then why the session ended: an
-		// expired certificate has to be renewed before a login will work.
-		// A revocation says since when and who lifts it instead.
-		fmt.Fprintf(stderr, "port49 token: %s\n", unprefixed(err))
-		return 1
-	case err != nil:
-		fmt.Fprintln(stderr, "port49 token:", unprefixed(err))
-		return 1
-	}
-	if item.Verdict != "permit" {
-		// The item's detail, when it has one, says what to do: a session
-		// past its ceiling is told to refresh (pre-flight M12).
-		detail := ""
-		if item.Detail != "" {
-			detail = ": " + item.Detail
-		}
-		fmt.Fprintf(stderr, "port49 token: %s: %s %s%s\n", device, item.Verdict, item.Reason, detail)
-		return 1
-	}
-	if item.Login == "" {
-		// Printed, it would be an empty password to whatever reads stdout.
-		fmt.Fprintf(stderr, "port49 token: %s: the broker answered permit with no token\n", device)
+	if mintFailed("port49 token", *socket, device, item, err, stderr) {
 		return 1
 	}
 	// The device's own ceiling, said where the operator is looking, for a
-	// platform that does not show the server_msg warning (decision 33). On
-	// stderr, so --json's stdout stays one object (pre-flight M12). Placed
-	// before the --json and plain prints, so both get it.
-	if exp, err := time.Parse(time.RFC3339, item.SessionExpiresAt); err == nil {
-		if st, err := agent.NewClient(*socket).Status(context.Background()); err == nil && st.CeilingWarningSeconds > 0 {
-			if left := time.Until(exp); left <= time.Duration(st.CeilingWarningSeconds)*time.Second {
-				fmt.Fprintf(stderr, "port49: your session on %s ends at %s (%s); run 'port49 refresh'\n",
-					device, item.SessionExpiresAt, timeLeft(left))
-			}
-		}
-	}
+	// platform that does not show the server_msg warning (decision 33).
+	// Before the --json and plain prints, so both get it.
+	warnNearCeiling(stderr, device, item, ceilingWarning(*socket))
 	if *asJSON {
 		_ = json.NewEncoder(stdout).Encode(item)
 		return 0
