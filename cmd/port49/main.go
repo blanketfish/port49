@@ -146,7 +146,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 // and, for any they leave out, the per-user config file (decision 42 ruling
 // 6). The key is read from a file until plan 9c holds it on a hardware token
 // (design §7; plan 3, Question 1).
-type sessionFlags struct{ broker, cert, key, brokerCA, socket, configFile string }
+type sessionFlags struct {
+	broker, cert, key, brokerCA, socket, configFile string
+	// brokerCAPEM is the CA file's bytes when brokerCA came from the config
+	// file: userconfig.Load read them through its ownership walk, and they
+	// are what the login trusts, not a second read of the path.
+	brokerCAPEM []byte
+}
 
 func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
@@ -168,7 +174,11 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	if !named && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" {
 		return nil
 	}
-	f, ok, err := userconfig.Load(s.configFile)
+	var opts []userconfig.Option
+	if s.brokerCA != "" {
+		opts = append(opts, userconfig.WithoutCA()) // --broker-ca wins; the file's is unused
+	}
+	f, ok, err := userconfig.Load(s.configFile, opts...)
 	switch {
 	case err != nil:
 		return err
@@ -177,7 +187,10 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	case !ok:
 		return nil
 	}
-	s.broker, s.brokerCA = cmp.Or(s.broker, f.Broker), cmp.Or(s.brokerCA, f.BrokerCA)
+	if s.brokerCA == "" {
+		s.brokerCA, s.brokerCAPEM = f.BrokerCA, f.BrokerCAPEM
+	}
+	s.broker = cmp.Or(s.broker, f.Broker)
 	s.cert, s.key = cmp.Or(s.cert, f.Cert), cmp.Or(s.key, f.Key)
 	return nil
 }
@@ -203,9 +216,12 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
-	caPEM, err := os.ReadFile(s.brokerCA)
-	if err != nil {
-		return agent.Config{}, err
+	caPEM := s.brokerCAPEM
+	if caPEM == nil {
+		// Named by --broker-ca: the operator's own choice of path.
+		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
+			return agent.Config{}, err
+		}
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {

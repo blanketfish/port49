@@ -36,6 +36,9 @@ func private(t *testing.T, name, body string) string {
 func TestLoadResolvesPaths(t *testing.T) {
 	t.Setenv("HOME", "/home/alice")
 	p := private(t, "config.yaml", "broker: https://b.example:8443\nbroker_ca: ca.pem\ncert: ~/.port49/a.pem\nkey: /k.pem\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(p), "ca.pem"), []byte("PEM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	f, ok, err := Load(p)
 	if err != nil || !ok {
 		t.Fatalf("ok %v err %v", ok, err)
@@ -225,6 +228,55 @@ func TestABrokerCAOthersCanWriteIsRefused(t *testing.T) {
 	}
 	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by others") {
 		t.Fatalf("a group-writable CA: %v", err)
+	}
+}
+
+// Load reads the CA once, through the ownership walk, and carries its bytes;
+// a CA in a directory others can write is refused like the file is.
+func TestTheBrokerCAIsReadOnceThroughTheWalk(t *testing.T) {
+	p := private(t, "config.yaml", "broker_ca: ca.pem\n")
+	ca := filepath.Join(filepath.Dir(p), "ca.pem")
+	if err := os.WriteFile(ca, []byte("PEM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, _, err := Load(p)
+	if err != nil || string(f.BrokerCAPEM) != "PEM" {
+		t.Fatalf("%q %v", f.BrokerCAPEM, err)
+	}
+	// In a directory anyone can write, the CA could be renamed over.
+	open := privateDir(t)
+	if err := os.WriteFile(filepath.Join(open, "ca.pem"), []byte("PEM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	p = private(t, "config.yaml", "broker_ca: "+filepath.Join(open, "ca.pem")+"\n")
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), open+" is writable by others") {
+		t.Fatalf("a CA in a writable directory: %v", err)
+	}
+	// A CA that is not there is said so, naming the path.
+	p = private(t, "config.yaml", "broker_ca: gone.pem\n")
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "gone.pem") {
+		t.Fatalf("a missing CA: %v", err)
+	}
+}
+
+// A CA the file names but --broker-ca overrides is not used, so a bad one does
+// not block the login.
+func TestAnOverriddenBrokerCAIsNotChecked(t *testing.T) {
+	p := private(t, "config.yaml", "broker_ca: ca.pem\n")
+	ca := filepath.Join(filepath.Dir(p), "ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ca, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	f, ok, err := Load(p, WithoutCA())
+	if err != nil || !ok || f.BrokerCAPEM != nil {
+		t.Fatalf("%+v ok %v err %v", f, ok, err)
 	}
 }
 

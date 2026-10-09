@@ -48,15 +48,36 @@ type File struct {
 	BrokerCA string `yaml:"broker_ca"`
 	Cert     string `yaml:"cert"`
 	Key      string `yaml:"key"`
+
+	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
+	// through the same ownership walk; nil under WithoutCA or with no CA named.
+	BrokerCAPEM []byte `yaml:"-"`
 }
 
-// maxFile bounds config.yaml.
-const maxFile = 64 << 10
+// Option changes what Load does.
+type Option func(*loadOptions)
+
+type loadOptions struct{ skipCA bool }
+
+// WithoutCA is for a caller whose --broker-ca overrides the file's: a CA that
+// is not going to be used is neither read nor checked, so a bad one does not
+// block a login that never touches it.
+func WithoutCA() Option { return func(o *loadOptions) { o.skipCA = true } }
+
+// maxFile bounds config.yaml; maxCA bounds the broker CA.
+const (
+	maxFile = 64 << 10
+	maxCA   = 1 << 20
+)
 
 // Load reads config.yaml at path. ok is false, with no error, when there is
 // no file; a file that is there and cannot be used is an error, never a file
 // ignored.
-func Load(path string) (f File, ok bool, err error) {
+func Load(path string, opts ...Option) (f File, ok bool, err error) {
+	var o loadOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	raw, err := ReadPrivate(path, maxFile, "port49 config file")
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, false, nil
@@ -80,12 +101,12 @@ func Load(path string) (f File, ok bool, err error) {
 		}
 	}
 	// The CA this file names pins the broker as the file does, so it is held
-	// to the same line: nobody else may write it. A missing one is left to
-	// the read that follows, which says so.
-	if f.BrokerCA != "" {
-		if fi, err := os.Stat(f.BrokerCA); err == nil && fi.Mode().Perm()&0o022 != 0 {
-			return File{}, false, fmt.Errorf("%s is writable by others (mode %v); whoever can write the broker CA "+
-				"chooses which broker port49 trusts: chmod go-w %s", f.BrokerCA, fi.Mode().Perm(), f.BrokerCA)
+	// to the same line, ReadPrivate's: owned by you or root, nobody else can
+	// write it or the directories above it. It is read here, once, and its
+	// bytes carried, so nothing can be swapped in between a check and a read.
+	if f.BrokerCA != "" && !o.skipCA {
+		if f.BrokerCAPEM, err = ReadPrivate(f.BrokerCA, maxCA, "broker CA"); err != nil {
+			return File{}, false, fmt.Errorf("broker_ca in %s: %w", path, err)
 		}
 	}
 	return f, true, nil
