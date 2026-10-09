@@ -273,7 +273,10 @@ func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells
 		fmt.Fprintf(&b, "- **As installed: in the log** (%d `dsdbChange` record(s)).\n", len(hits))
 	}
 
-	if out, err := l.exec("smbcontrol", "samba", "debug", "dsdb_json_audit:5 dsdb_audit:5"); err != nil {
+	// "all", not "samba": the LDAP server's pre-forked workers are separate
+	// processes, and "samba" reached only the root process (measured: with
+	// "samba" a write through LDAPS logged no dsdbChange).
+	if out, err := l.exec("smbcontrol", "all", "debug", "dsdb_json_audit:5 dsdb_audit:5"); err != nil {
 		t.Fatalf("smbcontrol debug: %v\n%s", err, tailOf(out, 400))
 	}
 	ev.mark("l50 samba: audit with dsdb_json_audit:5 dsdb_audit:5")
@@ -284,7 +287,7 @@ func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells
 	if len(hits) == 0 {
 		t.Fatalf("the audit control saw no dsdbChange after debug dsdb_json_audit:5")
 	}
-	fmt.Fprintf(&b, "- **After `smbcontrol samba debug \"dsdb_json_audit:5 dsdb_audit:5\"`: in the log** (%d `dsdbChange` record(s)):\n\n", len(hits))
+	fmt.Fprintf(&b, "- **After `smbcontrol all debug \"dsdb_json_audit:5 dsdb_audit:5\"`: in the log** (%d `dsdbChange` record(s); `smbcontrol samba debug` reaches only the root process, not the LDAP workers):\n\n", len(hits))
 	for _, h := range hits {
 		fmt.Fprintf(&b, "  - `%s`\n", strings.ReplaceAll(h, "`", "'"))
 	}
