@@ -1,0 +1,21 @@
+#!/usr/bin/expect -f
+# Test 4: resize the terminal under a setsid'd ssh, then send ssh SIGWINCH from outside, as a
+# parent forwarding the signal would. Does the remote see the new size?
+set timeout 10
+log_user 0
+set stty_init "rows 24 columns 80"
+set env(PS1) {LOCAL> }
+spawn bash --norc --noprofile -i
+expect "LOCAL> "
+send "DISPLAY=:0 SSH_ASKPASS=/usr/local/bin/askpass setsid -w ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password tuser@127.0.0.1\r"
+after 2000
+send "PS1='PR''MT> '\r"
+expect "PRMT> " {} timeout { puts "T5: no remote prompt"; exit 1 }
+exec stty rows 40 columns 120 < $spawn_out(slave,name)
+after 300
+exec sh -c "pkill -WINCH -f '^ssh .*tuser@127.0.0.1'"
+after 500
+send "stty size\r"
+expect -re {\r\n(\d+ \d+)\r\n} { puts "T5: after a resize to 40x120 and SIGWINCH sent to ssh, remote size is $expect_out(1,string)" }
+send "exit\r"
+expect "LOCAL> "

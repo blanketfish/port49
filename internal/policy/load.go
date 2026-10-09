@@ -131,6 +131,11 @@ type Policy struct {
 	// devIndex is the inventory by name, filled first thing in Parse, so
 	// every step — buildTests included — finds a device in O(1).
 	devIndex map[string]admission.Device
+	// sweepOnce and sweep memoize sweepIndex: every inventory name sorted,
+	// and each declared scope's selection in that order, once per policy
+	// (decision 42).
+	sweepOnce sync.Once
+	sweep     *sweepIndex
 	// keyGroups assign each device its key_ref (spec §10), and admitted and
 	// assigned are the answer for each inventory device, by name; trie
 	// indexes admitted by address. notices are what a load says without
@@ -333,6 +338,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		return nil, errors.New("declares no subjects, so nobody can mint; is this the right file?")
 	}
 	p.checkDevices()
+	// Built here, with the load's other per-bundle work, so the first sweep
+	// after a reload does not pay for it while others wait (decision 42).
+	p.sweepIndex()
 	return p, nil
 }
 

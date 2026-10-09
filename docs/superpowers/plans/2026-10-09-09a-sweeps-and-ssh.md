@@ -693,7 +693,9 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     itself, which ssh runs with `SSH_ASKPASS_REQUIRE=force` and one argument; it asks `port49
     ssh` over a socket in the agent's 0700 directory. The token is never in argv or the
     environment. A port49 that ssh's children run otherwise (a `ProxyCommand`, a `Match exec`)
-    inherits the socket's variable, and refuses to run as a command there.
+    inherits the socket's variable, and refuses to run as a command there when given two or more
+    arguments. Given one, it acts as an askpass for that argument as the prompt, which moves no
+    token, since that prompt is not the device's.
   - **A token that expired first.** When the device's prompt comes within 5s of the token's
     `expires_at` or after it, as behind a slow jump host, `port49 ssh` mints once more through the
     agent and answers with that token, still once. When no fresh token is had, nothing is sent,

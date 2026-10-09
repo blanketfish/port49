@@ -618,3 +618,19 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   `evidence/L49-oxidized-<platform>.json`. Phase D (no token in Oxidized's log) checks each
   stack's log. A note is written only if neither it nor the evidence holds a token, a key or a
   compact JWS; `router.db` is removed when each stack goes down.
+
+## port49 ssh (L53, L54)
+
+`make build && make lab-ssh` measures the SSH host key each platform presents to `port49 devices
+trust` (L53) and `port49 ssh` against it (L54). Each device is reloaded once, so it is gated by
+`PORT49_LAB_SSH=1`. `PORT49_LAB_REMEASURE` passes through from the caller's environment, so a
+plain `make lab-ssh` refuses to overwrite closed entries; `PORT49_LAB_REMEASURE=L53,L54 make lab-ssh`
+re-measures them. The notes go to `tests/lab/results/L53-*.md` and `L54-*.md`. The run's capture is
+`tests/lab/captures/L53L54-<platform>.pcap` and goes through `make evidence` like every other. On
+IOS-XE and NX-OS the run sets a login-attempt limit for about three minutes (a 70 s wait, three
+scans, the control's logins, which may each wait up to 30 s, and a 75 s wait) and removes it; a run
+stopped in that window leaves it set (`no login block-for`, `no aaa authentication rejected 2 in 60
+ban 60`). Each run also makes a refused login as `l53-control` and requires the device's log to show
+it: a log that does not is no evidence about what the scan wrote, and the note says the log clause is
+unmeasured. The Junos images log to `messages` through the `system syslog` stanza in
+`configs/vjunos-startup.conf`.

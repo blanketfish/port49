@@ -29,7 +29,11 @@ its key are that user's files. Cron runs the wrapper once per backup window:
 ```
 
 The wrapper's environment is documented at the top of the script. `OXIDIZED_NODES` is a file of
-device names, one a line.
+device names, one a line. `PORT49_SCOPE` names a policy scope in its place: the wrapper then asks
+port49 for every device the scope selects that this host holds a grant on, page by page, and
+reads no nodes file (policy engine spec §13 decision 42). A scope that selects nothing for this
+host, and a scope name that does not exist, both exit 77 with one message. L49 ran with a nodes
+file; a sweep was not part of it.
 
 ## 2. Enrollment, once
 

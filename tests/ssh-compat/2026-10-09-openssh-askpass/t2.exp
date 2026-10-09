@@ -1,0 +1,88 @@
+#!/usr/bin/expect -f
+# Test 2: an interactive session from an operator's interactive shell (bash -i on a pty, with
+# job control), as a person at a terminal runs it.
+# mode "setsid": the shell runs `setsid -w ssh ...`. setsid -w stays in the shell's foreground
+#   job, as port49 ssh would, and ssh runs in a new session with no controlling terminal.
+#   DISPLAY and SSH_ASKPASS are set, so ssh asks the askpass for the password.
+# mode "control": the shell runs ssh as usual. It logs in by a key: what is compared is ssh's
+#   terminal handling, not the authentication method.
+set timeout 10
+log_user 0
+set mode [lindex $argv 0]
+set stty_init "rows 24 columns 80"
+set env(PS1) {LOCAL> }
+spawn bash --norc --noprofile -i
+expect "LOCAL> "
+proc out {s} { global mode; puts "T2 $mode: $s" }
+set common {-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR}
+if {$mode eq "setsid"} {
+  send "DISPLAY=:0 SSH_ASKPASS=/usr/local/bin/askpass setsid -w ssh $common -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password tuser@127.0.0.1\r"
+} else {
+  send "ssh -i /root/.ssh/ctl $common tuser@127.0.0.1\r"
+}
+after 2000
+
+# 1. A remote prompt arrives: the login worked and typed input reaches the remote.
+send "PS1='PR''MT> '\r"
+expect {
+  "PRMT> " { out "login ok; remote prompt arrived; typed input reaches the remote" }
+  timeout  { out "no remote prompt; saw: [string map {\r {} \n { / }} $expect_out(buffer)]"; exit 1 }
+}
+send "stty size\r"
+expect -re {\r\n(\d+ \d+)\r\n} { out "remote size $expect_out(1,string)" }
+expect "PRMT> "
+
+# 2. Window resize: change the local pty's size. ssh learns it only through SIGWINCH, which the
+#    kernel sends to the terminal's foreground process group.
+exec stty rows 40 columns 120 < $spawn_out(slave,name)
+after 500
+send "stty size\r"
+expect -re {\r\n(\d+ \d+)\r\n} { out "after a local resize to 40x120, remote size is $expect_out(1,string)" }
+expect "PRMT> "
+
+# 3. ^C interrupts a remote sleep.
+send "sleep 20; echo SLEPT''_FULL\r"
+after 1000
+send "\003"
+set timeout 5
+expect {
+  "SLEPT_FULL" { out "^C did not interrupt the remote sleep" }
+  "PRMT> "     { out "^C interrupted the remote sleep (prompt back within 5s)" }
+  timeout      { out "^C: no prompt within 5s" }
+}
+
+# 4. The ~? escape.
+send "\r"
+expect "PRMT> "
+send "~?"
+expect {
+  "Supported escape sequences" { out "~? escape works" }
+  timeout { out "~? escape: no help text" }
+}
+send "\r"
+expect "PRMT> "
+
+# 5. ~^Z: ssh suspends itself. Does the operator's shell get its prompt back?
+send "\r"
+expect "PRMT> "
+send "~\032"
+expect {
+  -re {Stopped[^\r\n]*}  { out "~^Z: the local shell reports '[string trim $expect_out(0,string)]'" }
+  timeout { out "~^Z: the local shell did not get its prompt back within 5s" }
+}
+after 500
+set st [exec sh -c "ps -o stat=,args= -e | grep '\[s\]sh .*tuser@127.0.0.1' || true"]
+out "after ~^Z: [string map {\n { | }} [string trim $st]]"
+send "fg\r"
+after 500
+catch {exec sh -c "pkill -CONT -f 'ssh .*tuser@127.0.0.1'"}
+after 500
+
+# 6. Exit status passes through.
+set timeout 10
+send "\rexit 7\r"
+expect "LOCAL> "
+send "echo STATUS=\$?\r"
+expect -re {STATUS=(\d+)} { out "after 'exit 7' the local shell sees status $expect_out(1,string)" }
+send "exit\r"
+expect eof

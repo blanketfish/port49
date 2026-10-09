@@ -232,6 +232,42 @@ func TestALineThatIsNotARecordDivergesAndTheRestReplays(t *testing.T) {
 	}
 }
 
+// A sweep page that holds no device writes one mint record: a denial with no
+// device and no blob, carrying the sweep (decision 42 ruling 2). The replay
+// reads authorization records only, so it passes over that record: it reports
+// nothing for it, no divergence among them, and the records around it replay
+// as before.
+func TestAnEmptySweepPagesMintRecordIsNoDivergence(t *testing.T) {
+	log, _ := daemonLog(t)
+	var line bytes.Buffer
+	decision.NewJSONLines(&line).Emit(decision.Record{TS: time.Now(), Event: decision.EventMint,
+		Verdict: decision.VerdictDeny, Reason: decision.NoGrantsMatched, Principal: "user:alice@example.com",
+		Auth:   &decision.Auth{Method: "cert"},
+		Policy: &decision.Policy{Bundle: "sha256:abc"},
+		Sweep:  &decision.Sweep{Scope: "edge", After: "srx-fw-22"}})
+	var rec decision.Record
+	if err := rec.UnmarshalJSON(bytes.TrimSpace(line.Bytes())); err != nil ||
+		rec.Sweep == nil || rec.Sweep.Scope != "edge" || rec.Sweep.After != "srx-fw-22" || rec.Device != nil ||
+		rec.Policy == nil || rec.Policy.Bundle != "sha256:abc" || rec.Policy.Blob != "" {
+		t.Fatalf("the record does not round-trip: %+v %v", rec, err)
+	}
+	want := replayAll(t, log)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	mixed := strings.Join(append(lines[:1:1], append([]string{strings.TrimSpace(line.String())}, lines[1:]...)...), "\n")
+	got := replayAll(t, mixed)
+	for _, r := range got {
+		if r.Event == decision.EventMint {
+			t.Fatalf("the replay reported on a mint record: %+v", r)
+		}
+		if r.Status == Diverge {
+			t.Fatalf("a divergence with a sweep record in the log: %+v", r)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d results with the sweep record, %d without", len(got), len(want))
+	}
+}
+
 // A record redacted before it was written (spec §5.8) does not carry the
 // command it decided, so the replay says so rather than claim an agreement
 // over the redacted words.

@@ -90,6 +90,18 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 		}})
 }
 
+// mintedCount is the items that carry a token: a denied device is an answer,
+// not a mint.
+func mintedCount(items []api.MintItem) int {
+	n := 0
+	for _, it := range items {
+		if it.Verdict == "permit" && it.Login != "" {
+			n++
+		}
+	}
+	return n
+}
+
 func workloadToken(args []string, stdout, stderr io.Writer) int {
 	const cmd = "port49 workload token"
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -102,6 +114,8 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	purpose := fs.String("purpose", "", "said in the mint record, e.g. \"oxidized nightly backup\"")
 	format := fs.String("format", "tsv", "tsv (device, address, platform, username, login[, enable], expires_at) or json")
 	out := fs.String("out", "", "write the tokens here (0600, replaced whole) instead of stdout")
+	scope := fs.String("scope", "", "mint every device this scope selects that the workload holds a grant on, "+
+		"in place of DEVICE... and --devices-file (decision 42)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -114,7 +128,7 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 		}
 		devices = append(devices, more...)
 	}
-	if len(devices) == 0 || (*format != "tsv" && *format != "json") {
+	if (len(devices) == 0) == (*scope == "") || (*format != "tsv" && *format != "json") {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -127,21 +141,35 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
-	resp, err := c.Mint(context.Background(), workload.MintOptions{Devices: devices, Enable: *enable, TTL: *ttl,
-		Purpose: *purpose})
+	resp, err := c.Mint(context.Background(), workload.MintOptions{Devices: devices, Scope: *scope, Enable: *enable,
+		TTL: *ttl, Purpose: *purpose})
 	code := 0
 	var te *workload.TemporaryError
 	switch {
+	case errors.As(err, &te) && *scope != "":
+		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted; run again\n", cmd,
+			safe(err.Error()), safe(*scope), mintedCount(resp.Results))
+		code = exitTemporary
 	case errors.As(err, &te):
 		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted; run again\n", cmd, safe(err.Error()),
 			len(te.Unminted), len(devices))
 		code = exitTemporary
+	case err != nil && *scope != "":
+		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted\n", cmd, safe(err.Error()),
+			safe(*scope), mintedCount(resp.Results))
+		code = 1
 	case err != nil:
 		// A final answer, perhaps after earlier pages minted: those are
 		// still written (pre-flight I-1).
 		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted\n", cmd, safe(err.Error()),
 			len(devices)-len(resp.Results), len(devices))
 		code = 1
+	case *scope != "" && len(resp.Results) == 0:
+		// One message for an undeclared scope and an ungranted one: the
+		// broker never tells them apart (decision 42 ruling 2).
+		fmt.Fprintf(stderr, "%s: scope %s: no device it selects is one you hold a grant on, or no scope has that name\n",
+			cmd, safe(*scope))
+		return exitFinal
 	}
 	var permitted []api.MintItem
 	for _, it := range resp.Results {

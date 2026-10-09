@@ -11,6 +11,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -29,16 +30,22 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 const usage = `usage:
-  port49 login --broker URL --cert FILE --key FILE --broker-ca FILE [--socket PATH]
+  port49 login [--config FILE] [--broker URL] [--cert FILE] [--key FILE] [--broker-ca FILE] [--socket PATH]
+               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
+  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [--known-hosts FILE] [-v]
+             [--socket PATH] DEVICE [-- COMMAND...]
+             (mints through your agent and runs your OpenSSH, 8.5 or later; DEVICE's key must be pinned
+             first with port49 devices trust; exits with ssh's status)
   port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
-                        [--deadline DURATION] [DEVICE...]
+                        [--deadline DURATION] [--scope NAME | DEVICE...]
                         (no agent: the certificate and key are read each run; under cron, always
                         --out, since cron mails a job's stdout; exits 1 when some devices were
                         written and some not, 75 when the broker did not answer by the deadline,
@@ -69,6 +76,10 @@ const usage = `usage:
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
   port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
+  port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
+                       [--socket PATH] DEVICE
+                (pins the SSH host key DEVICE presents, against the key you verified on its console: NX-OS
+                 prints its SHA256 fingerprint, the others print the key, so give ssh-keygen -lf's)
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
@@ -84,9 +95,27 @@ const usage = `usage:
                 entry deleted and re-created, once you have confirmed it is the same person)
 `
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() {
+	// ssh runs port49 itself as its askpass, with askpassEnv naming `port49
+	// ssh`'s socket (decision 42 ruling 10).
+	if sock, ok := askpassCall(os.Args[1:]); ok {
+		os.Exit(askpassMain(sock, os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// A port49 that ssh's children run (a ProxyCommand, a Match exec) under
+	// `port49 ssh` inherits askpassEnv. Given two or more arguments it is not
+	// the askpass, and runs no command there either: it says why (decision 42
+	// ruling 10). Given one under SSH_ASKPASS_REQUIRE=force, main took it for
+	// an askpass call before this, and no token moves, since that prompt is
+	// not the device's.
+	if os.Getenv(askpassEnv) != "" {
+		fmt.Fprintf(stderr, "port49: %s is set, so this port49 was started under port49 ssh's ssh (a ProxyCommand "+
+			"or Match exec?) and is not its askpass; unset %s to run a port49 command there\n", askpassEnv, askpassEnv)
+		return 2
+	}
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -102,6 +131,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return identityCmd(args[1:], stdout, stderr)
 	case "workload":
 		return workloadCmd(args[1:], stdout, stderr)
+	case "ssh":
+		return sshCmd(args[1:], stdout, stderr)
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)
@@ -122,6 +153,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "platform":
 		return platformCmd(args[1:], stdout, stderr)
 	case "devices":
+		if len(args) > 1 && args[1] == "trust" {
+			return devicesTrust(args[2:], stdout, stderr)
+		}
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)
 		}
@@ -139,17 +173,66 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// sessionFlags are what the agent needs to open the session. The key is read
-// from a file: BORROWED AHEAD from plan 9, which holds it on a hardware token
+// sessionFlags are what the agent needs to open the session, from the flags
+// and, for any they leave out, the per-user config file (decision 42 ruling
+// 6). The key is read from a file until plan 9c holds it on a hardware token
 // (design §7; plan 3, Question 1).
-type sessionFlags struct{ broker, cert, key, brokerCA, socket string }
+type sessionFlags struct {
+	broker, cert, key, brokerCA, socket, configFile string
+	// brokerCAPEM is the CA's bytes: userconfig.Load read them through its
+	// ownership walk when brokerCA came from the config file, config() read
+	// them from --broker-ca otherwise. login hands these same bytes to the
+	// agent it starts on brokerCAFD, so what the session trusts is what was
+	// read once, not a second read of the path.
+	brokerCAPEM []byte
+	// brokerCAFD is an inherited descriptor the CA's bytes come on, to EOF
+	// (the agent child's; hidden: the login sets it). 0 is unset.
+	brokerCAFD int
+}
+
+// maxBrokerCA bounds the CA read from the descriptor, as userconfig bounds a file.
+const maxBrokerCA = 1 << 20
 
 func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&s.cert, "cert", "", "your client certificate (PEM)")
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
+	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
+	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file: broker, broker_ca, cert and "+
+		"key, each overridden by its flag")
+}
+
+// fill takes from the config file each of --broker, --broker-ca, --cert and
+// --key the command line left out (decision 42 ruling 6). A missing file at
+// the default path is no file; one --config names must be there, and is
+// read and checked even when every flag is given.
+func (s *sessionFlags) fill(fs *flag.FlagSet) error {
+	named := false
+	fs.Visit(func(f *flag.Flag) { named = named || f.Name == "config" })
+	if !named && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" {
+		return nil
+	}
+	var opts []userconfig.Option
+	if s.brokerCA != "" {
+		opts = append(opts, userconfig.WithoutCA()) // --broker-ca wins; the file's is unused
+	}
+	f, ok, err := userconfig.Load(s.configFile, opts...)
+	switch {
+	case err != nil:
+		return err
+	case !ok && named:
+		return fmt.Errorf("%s: no such file", s.configFile)
+	case !ok:
+		return nil
+	}
+	if s.brokerCA == "" {
+		s.brokerCA, s.brokerCAPEM = f.BrokerCA, f.BrokerCAPEM
+	}
+	s.broker = cmp.Or(s.broker, f.Broker)
+	s.cert, s.key = cmp.Or(s.cert, f.Cert), cmp.Or(s.key, f.Key)
+	return nil
 }
 
 func (s *sessionFlags) args() []string {
@@ -158,7 +241,8 @@ func (s *sessionFlags) args() []string {
 
 func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if s.broker == "" || s.cert == "" || s.key == "" {
-		return agent.Config{}, errors.New("--broker, --cert, --key and --broker-ca are all required")
+		return agent.Config{}, fmt.Errorf("--broker, --cert, --key and --broker-ca are all required, as flags "+
+			"or in %s", s.configFile)
 	}
 	// Required, not defaulted: with no pool the agent would trust every
 	// public CA for a broker whose certificate a private CA issued.
@@ -172,13 +256,38 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
-	caPEM, err := os.ReadFile(s.brokerCA)
-	if err != nil {
-		return agent.Config{}, err
+	caPEM := s.brokerCAPEM
+	// source is where the bytes came from, for the message when they hold no
+	// certificate: the path is only read in the default case.
+	source := s.brokerCA
+	switch {
+	case caPEM != nil:
+		source = "the broker CA read for " + s.configFile + " (" + s.brokerCA + ")"
+	case s.brokerCAFD != 0:
+		source = "the broker CA the login passed (from " + s.brokerCA + ")"
+		// The login read the CA once and passed the bytes; the path is not
+		// read again.
+		in := os.NewFile(uintptr(s.brokerCAFD), "broker-ca")
+		if in == nil {
+			return agent.Config{}, fmt.Errorf("--broker-ca-fd %d is not an open descriptor", s.brokerCAFD)
+		}
+		defer in.Close()
+		if caPEM, err = io.ReadAll(io.LimitReader(in, maxBrokerCA+1)); err != nil {
+			return agent.Config{}, fmt.Errorf("reading the broker CA from the login: %w", err)
+		}
+		if len(caPEM) > maxBrokerCA {
+			return agent.Config{}, fmt.Errorf("the broker CA is over %d bytes", maxBrokerCA)
+		}
+	default:
+		// Named by --broker-ca: the operator's own choice of path.
+		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
+			return agent.Config{}, err
+		}
 	}
+	s.brokerCAPEM = caPEM
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", s.brokerCA)
+		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", source)
 	}
 	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log}, nil
 }
@@ -195,6 +304,10 @@ func login(args []string, stdout, stderr io.Writer) int {
 	var sf sessionFlags
 	sf.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := sf.fill(fs); err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
 	cfg, err := sf.config(stderr)
@@ -246,13 +359,31 @@ func login(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 1
 	}
-	cmd := exec.Command(self, append([]string{"agent"}, sf.args()...)...)
+	// The CA this login read goes to the agent on a pipe (descriptor 3, the
+	// first of ExtraFiles), so the agent trusts these bytes and does not read
+	// the path a second time.
+	caR, caW, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 1
+	}
+	defer caR.Close()
+	defer caW.Close()
+	cmd := exec.Command(self, append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")...)
 	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.ExtraFiles = []*os.File{caR}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(stderr, "port49 login: starting the agent:", err)
 		return 1
 	}
+	caR.Close()
+	// A goroutine: the pipe holds 64 KiB and the CA may be larger. An agent
+	// that dies leaves the write failing, which ends it.
+	go func() {
+		_, _ = caW.Write(sf.brokerCAPEM)
+		caW.Close()
+	}()
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
@@ -292,6 +423,10 @@ func agentMain(args []string, stderr io.Writer) int {
 	var sf sessionFlags
 	sf.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := sf.fill(fs); err != nil {
+		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
 	cfg, err := sf.config(stderr)
@@ -382,53 +517,13 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	device := fs.Arg(0)
 	item, err := agent.NewClient(*socket).Token(context.Background(),
 		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)})
-	var ie *agent.ItemError
-	switch {
-	case errors.As(err, &ie):
-		// The broker could not decide this device. Whatever else the item
-		// carries is not printed.
-		fmt.Fprintf(stderr, "port49 token: %s: %s\n", device, unprefixed(ie))
-		return 1
-	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 token: no agent at %s; run `port49 login`\n", *socket)
-		return 1
-	case errors.Is(err, agent.ErrSessionOver):
-		// The error says to log in and then why the session ended: an
-		// expired certificate has to be renewed before a login will work.
-		// A revocation says since when and who lifts it instead.
-		fmt.Fprintf(stderr, "port49 token: %s\n", unprefixed(err))
-		return 1
-	case err != nil:
-		fmt.Fprintln(stderr, "port49 token:", unprefixed(err))
-		return 1
-	}
-	if item.Verdict != "permit" {
-		// The item's detail, when it has one, says what to do: a session
-		// past its ceiling is told to refresh (pre-flight M12).
-		detail := ""
-		if item.Detail != "" {
-			detail = ": " + item.Detail
-		}
-		fmt.Fprintf(stderr, "port49 token: %s: %s %s%s\n", device, item.Verdict, item.Reason, detail)
-		return 1
-	}
-	if item.Login == "" {
-		// Printed, it would be an empty password to whatever reads stdout.
-		fmt.Fprintf(stderr, "port49 token: %s: the broker answered permit with no token\n", device)
+	if mintFailed("port49 token", *socket, device, item, err, stderr) {
 		return 1
 	}
 	// The device's own ceiling, said where the operator is looking, for a
-	// platform that does not show the server_msg warning (decision 33). On
-	// stderr, so --json's stdout stays one object (pre-flight M12). Placed
-	// before the --json and plain prints, so both get it.
-	if exp, err := time.Parse(time.RFC3339, item.SessionExpiresAt); err == nil {
-		if st, err := agent.NewClient(*socket).Status(context.Background()); err == nil && st.CeilingWarningSeconds > 0 {
-			if left := time.Until(exp); left <= time.Duration(st.CeilingWarningSeconds)*time.Second {
-				fmt.Fprintf(stderr, "port49: your session on %s ends at %s (%s); run 'port49 refresh'\n",
-					device, item.SessionExpiresAt, timeLeft(left))
-			}
-		}
-	}
+	// platform that does not show the server_msg warning (decision 33).
+	// Before the --json and plain prints, so both get it.
+	warnNearCeiling(stderr, device, item, ceilingWarning(*socket))
 	if *asJSON {
 		_ = json.NewEncoder(stdout).Encode(item)
 		return 0

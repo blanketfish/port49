@@ -54,6 +54,7 @@ type scenario struct {
 	fail    map[string]bool // REST calls the fake Oxidized answers 500
 	hold    bool            // another run holds the lock beside router.db
 	noDir   bool            // router.db's directory does not exist
+	scope   string          // PORT49_SCOPE, when set
 }
 
 // run runs the wrapper with a fake port49 that writes tsv to --out and exits
@@ -82,6 +83,7 @@ func runCase(t *testing.T, c scenario) (int, string, []string, string) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "port49")
 	script := `#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FAKE_ARGS"
 out=""
 while [ $# -gt 0 ]; do [ "$1" = --out ] && out=$2; shift; done
 if [ "$FAKE_WRITE" = 1 ]; then printf '%s' "$FAKE_TSV" > "$out"; fi
@@ -124,7 +126,10 @@ exit $FAKE_EXIT
 	cmd.Env = append(os.Environ(), "PORT49_BIN="+fake, "PORT49_BROKER=https://broker.example:8443",
 		"PORT49_BROKER_CA=/ca.pem", "PORT49_CERT=/w.pem", "PORT49_KEY=/w-key.pem", "OXIDIZED_NODES="+nodes,
 		"OXIDIZED_ROUTER_DB="+db, "OXIDIZED_REST="+srv.URL, "FAKE_TSV="+tsv, "FAKE_EXIT="+strconv.Itoa(exit),
-		"FAKE_WRITE="+fakeWrite)
+		"FAKE_WRITE="+fakeWrite, "FAKE_ARGS="+filepath.Join(dir, "args"))
+	if c.scope != "" {
+		cmd.Env = append(cmd.Env, "PORT49_SCOPE="+c.scope)
+	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -277,6 +282,34 @@ func TestAHeldLockStopsTheRun(t *testing.T) {
 	if code != 75 || string(raw) != "old\tdb\n" || len(calls) != 0 ||
 		!strings.Contains(stderr, "another run holds the lock") {
 		t.Fatalf("exit %d router.db %q calls %v stderr %s", code, raw, calls, stderr)
+	}
+}
+
+// PORT49_SCOPE replaces the node list: port49 is asked for the scope's
+// devices, and the nodes file is not read (decision 42 ruling 5).
+func TestAScopeReplacesTheNodeList(t *testing.T) {
+	code, stderr, calls, db := runCase(t, scenario{tsv: minted, exit: 0, scope: "backup_targets"})
+	args, err := os.ReadFile(filepath.Join(filepath.Dir(db), "args"))
+	if err != nil || !strings.Contains(string(args), "--scope\nbackup_targets\n") ||
+		strings.Contains(string(args), "--devices-file") {
+		t.Fatalf("exit %d args %q stderr %s", code, args, stderr)
+	}
+	if len(calls) == 0 || calls[0] != "GET /reload" {
+		t.Fatalf("calls %v", calls)
+	}
+}
+
+// Exit 1 on a scope sweep may be a sweep a final answer cut short: the nodes
+// minted are queued, and the run says router.db may be short.
+func TestAScopeSweepAtExit1SaysItMayBeShort(t *testing.T) {
+	code, stderr, calls, _ := runCase(t, scenario{tsv: minted, exit: 1, scope: "backup_targets"})
+	if code != 1 || len(calls) == 0 || calls[0] != "GET /reload" ||
+		!strings.Contains(stderr, "port49 workload token exited 1 for scope backup_targets: the sweep may have stopped early") {
+		t.Fatalf("exit %d calls %v stderr %s", code, calls, stderr)
+	}
+	code, stderr, _, _ = runCase(t, scenario{tsv: minted, exit: 1})
+	if code != 1 || strings.Contains(stderr, "the sweep may have stopped early") {
+		t.Fatalf("a node list: exit %d stderr %s", code, stderr)
 	}
 }
 
