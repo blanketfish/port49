@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -522,8 +521,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, s := range d.Subjects {
 		if s.OldGroup != s.NewGroup || s.OldGroupKey != s.NewGroupKey {
-			fmt.Fprintf(stdout, "subject: %s's %s %q -> %s %q\n", s.Subject, cmp.Or(s.OldGroupKey, "group"),
-				s.OldGroup, cmp.Or(s.NewGroupKey, "group"), s.NewGroup)
+			fmt.Fprintf(stdout, "subject: %s's %s -> %s\n", s.Subject, groupSide(s.OldGroupKey, s.OldGroup),
+				groupSide(s.NewGroupKey, s.NewGroup))
 		}
 		if !slices.Equal(s.OldAPI, s.NewAPI) {
 			label, tail := "api", ""
@@ -706,6 +705,15 @@ func quarantineLine(e policy.QuarantineEntry, now time.Time) string {
 		return e.Cause
 	}
 	return e.Message(now)
+}
+
+// groupSide is one side of a subject's group change: the key and the value it
+// names, or "none" for a subject that is no group on that side.
+func groupSide(key, value string) string {
+	if key == "" {
+		return "none"
+	}
+	return fmt.Sprintf("%s %q", key, value)
 }
 
 func orNone(s string) string {

@@ -1648,3 +1648,32 @@ func TestPolicyDiffNamesAMachineGroup(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A subject that is no group on one side of the diff says so: "none", never a
+// group key it never had.
+func TestPolicyDiffNamesNoneForAMissingGroup(t *testing.T) {
+	_, inv := policyFixture(t)
+	dir := t.TempDir()
+	write := func(name, subjects string) string {
+		path := filepath.Join(dir, name)
+		body := "scopes: [{name: all_devices, match: {}}]\nroles: [{name: ro, privilege: readonly, permit: [show **]}]\n" +
+			"subjects: [" + subjects + "]\n" +
+			"grants: [{subject: backup, scope: all_devices, roles: [ro]}]\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	identity := write("identity.yaml", `{name: backup, identity: "app:backup", username: backup, token_ttl: 5m}`)
+	machines := write("machines.yaml", `{name: backup, machine_group: backup-hosts, token_ttl: 5m}`)
+	for _, tc := range []struct{ old, new, want string }{
+		{machines, identity, `subject: backup's machine_group "backup-hosts" -> none`},
+		{identity, machines, `subject: backup's none -> machine_group "backup-hosts"`},
+	} {
+		var out, errb bytes.Buffer
+		if code := run([]string{"policy", "diff", "--old", tc.old, "--new", tc.new, "--inventory", inv}, &out, &errb); code != 1 ||
+			!strings.Contains(out.String(), tc.want) {
+			t.Errorf("code %d, want %q\n%s%s", code, tc.want, out.String(), errb.String())
+		}
+	}
+}

@@ -171,8 +171,8 @@ func TestASPIFFEOnlySubjectNeedsNoUsernameUnderTheMapping(t *testing.T) {
 }
 
 // A changed machine_group fails the gate until a session test names the
-// subject; a new one is gated; a group moved to machine_group with one value
-// is a change (decision 41 ruling 8; Review Focus 3).
+// subject (decision 41 ruling 8; Review Focus 3). A new one and a group moved
+// to machine_group are the next tests.
 func TestAChangedMachineGroupIsGated(t *testing.T) {
 	before := loadDiff(t, `subjects: [{name: oncall, machine_group: backup-hosts, token_ttl: 5m}]`+grantOnCall)
 	after := loadDiff(t, `subjects: [{name: oncall, machine_group: other-hosts, token_ttl: 5m}]`+grantOnCall)
@@ -200,5 +200,49 @@ func TestAGroupMovedToMachineGroupIsGated(t *testing.T) {
 		if s.Subject == "x" {
 			t.Fatalf("an identity subject reported as a group change: %+v", s)
 		}
+	}
+}
+
+// A new machine_group subject is gated, as a new group one is.
+func TestANewMachineGroupIsGated(t *testing.T) {
+	before := loadDiff(t, `subjects: [{name: oncall, machine_group: backup-hosts, token_ttl: 5m}]`+grantOnCall)
+	added := loadDiff(t, `subjects: [{name: oncall, machine_group: backup-hosts, token_ttl: 5m}, {name: other, machine_group: x, token_ttl: 5m}]`+
+		grantOnCall)
+	if d := Compare(before, added, noon); d.UnacknowledgedPrincipals() != 1 {
+		t.Fatalf("a new machine_group subject: %+v", d.Subjects)
+	}
+}
+
+// A machine_group DN respelled with the same meaning is not a changed group.
+func TestARespelledMachineGroupDNIsNotAChange(t *testing.T) {
+	a := loadDiff(t, `subjects: [{name: oncall, machine_group: "CN=a,DC=x", token_ttl: 5m}]`+grantOnCall)
+	b := loadDiff(t, `subjects: [{name: oncall, machine_group: "cn=A, dc=x", token_ttl: 5m}]`+grantOnCall)
+	if d := Compare(a, b, noon); len(d.Subjects) != 0 || d.UnacknowledgedPrincipals() != 0 {
+		t.Fatalf("%+v", d.Subjects)
+	}
+}
+
+// A machines-domain member whose principal is not a spiffe:// one (an OIDC
+// app: or a Kubernetes service account) matches no machine_group subject.
+func TestAnOIDCMachineMatchesNoMachineGroup(t *testing.T) {
+	p := machinePolicy(t, DirectoryOn)
+	for _, principal := range []string{"app:oxidized", "system:serviceaccount:ops:oxidized"} {
+		m := everyGroup(Member{Principal: principal, Domain: DomainMachines, Directory: true, Username: "svc"})
+		if got := p.SubjectsOf(m); len(got) != 0 {
+			t.Fatalf("%s matched %v", principal, got)
+		}
+	}
+}
+
+// A spiffe://-only subject takes its username from the directory entry, so
+// the offline lists that name usernames leave it out and say who it is.
+func TestADirectoryNamedSubjectServesNoUsername(t *testing.T) {
+	p, err := loadWorkloadText(t, `subjects: [{name: a, identity: ["`+wlPrincipal+`"], token_ttl: 5m}]`+"\n"+minimalGrant, DirectoryOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, groups, err := p.ServedUsernames("leaf-01", noon)
+	if err != nil || len(users) != 0 || !slices.Equal(groups, []string{"a"}) {
+		t.Fatalf("%v %v %v", users, groups, err)
 	}
 }

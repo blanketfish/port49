@@ -521,8 +521,9 @@ func (c *comparison) principals(now time.Time) {
 		if was.Username == is.Username && sameGroup && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
 			continue
 		}
-		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
-			NewGroup: is.Group, OldGroupKey: was.GroupKey(), NewGroupKey: is.GroupKey(), OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
+		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username,
+			OldGroup: was.Group, NewGroup: is.Group, OldGroupKey: was.GroupKey(), NewGroupKey: is.GroupKey(),
+			OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
 			Gated: was.Username != is.Username || !sameGroup || len(apiGained) > 0}
 		names := slices.Clone(is.Identity)
 		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })
