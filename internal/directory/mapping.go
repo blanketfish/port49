@@ -306,6 +306,18 @@ func ValidPin(pin string) bool {
 	return ok
 }
 
+// Pinned is nil when leaf's issuer, read from its DER, is one w.Issuers pins
+// (decision 41 ruling 2, as decision 38 ruling 1 pins every weak kind); else
+// an error naming the issuer. The broker calls it at every reading of the
+// certificate, before any search.
+func (w *WorkloadMapping) Pinned(leaf *x509.Certificate) error {
+	if pinned(leaf, w.Issuers) {
+		return nil
+	}
+	return fmt.Errorf("its issuer %q is not one broker.identity.machines[].directory.issuers pins",
+		printsafe.Line(nameString(leaf.RawIssuer), 300))
+}
+
 // pinned reports whether leaf's issuer, read from its DER, equals one of
 // issuers (Ruling 1).
 func pinned(leaf *x509.Certificate, issuers []string) bool {

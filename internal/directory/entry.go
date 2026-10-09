@@ -3,11 +3,13 @@ package directory
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/token"
 )
 
@@ -16,10 +18,37 @@ import (
 type Identity struct{ DN, EntryID, Principal, Username string }
 
 // entryAttrs is what an entry search reads: the principal and username
-// attributes, the mapping's, for KeysOf, and both immutable ids, of which
-// a directory holds one.
+// attributes, the mapping's, for KeysOf, both immutable ids, of which a
+// directory holds one, and, under a workload mapping, its attribute, which
+// notWorkload reads (decision 41 ruling 4).
 func (c Config) entryAttrs() []string {
-	return []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
+	attrs := []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
+	if c.Workload != nil {
+		attrs = append(attrs, c.Workload.Attribute)
+	}
+	return attrs
+}
+
+// notWorkload is ErrUnmapped when e, read as a person's, holds a SPIFFE ID in
+// the workload attribute (decision 41 ruling 4: one entry, one domain). Such
+// an entry is a workload's: as a person's too, it would give a user:
+// principal and a workload one (nas, username) context, and whichever minted
+// last would hold the other's grants. A value that is no SPIFFE ID (an
+// attribute such as description, set on people for other reasons) is no
+// refusal. The prefix test is byte for byte, as a workload's own match is: a
+// value in another case can never map a workload, so it is no workload's.
+func (c Config) notWorkload(e *ldap.Entry) error {
+	if c.Workload == nil {
+		return nil
+	}
+	for _, v := range e.GetAttributeValues(c.Workload.Attribute) {
+		if strings.HasPrefix(v, spiffe.Scheme) {
+			return fmt.Errorf("%w: entry %s: the entry is a workload's (%s): it holds a SPIFFE ID there, and one "+
+				"entry is one trust domain, so it is never a person's principal (spec §13 decision 41 ruling 4)",
+				ErrUnmapped, printsafe.Line(e.DN, 200), c.Workload.Attribute)
+		}
+	}
+	return nil
 }
 
 // entryID is e's immutable id (Ruling 3): entryUUID lower-cased (RFC 4530,
@@ -83,24 +112,36 @@ func (c Config) identityOf(e *ldap.Entry) (Identity, error) {
 		return Identity{}, fmt.Errorf("%w: entry %s's %s is not a printable name with an @ (%d bytes)", ErrUnmapped,
 			printsafe.Line(e.DN, 200), c.PrincipalAttribute, len(p))
 	}
-	u, err := one(c.UsernameAttribute)
+	u, err := c.usernameOf(e)
 	if err != nil {
 		return Identity{}, err
 	}
+	return Identity{DN: e.DN, EntryID: entryID(e), Principal: "user:" + p, Username: u}, nil
+}
+
+// usernameOf is e's username_attribute as a username (Ruling 3): one value,
+// printable ASCII, lower-cased, canonical and not reserved.
+func (c Config) usernameOf(e *ldap.Entry) (string, error) {
+	vs := e.GetAttributeValues(c.UsernameAttribute)
+	if len(vs) != 1 {
+		return "", fmt.Errorf("%w: entry %s has %d values of %s; exactly one", ErrUnmapped,
+			printsafe.Line(e.DN, 200), len(vs), c.UsernameAttribute)
+	}
+	u := vs[0]
 	if !asciiName(u) {
-		return Identity{}, fmt.Errorf("%w: entry %s's %s is not printable ASCII (%d bytes)", ErrUnmapped,
+		return "", fmt.Errorf("%w: entry %s's %s is not printable ASCII (%d bytes)", ErrUnmapped,
 			printsafe.Line(e.DN, 200), c.UsernameAttribute, len(u))
 	}
 	u = strings.ToLower(u)
 	switch {
 	case !token.CanonicalUsername(u):
-		return Identity{}, fmt.Errorf("%w: entry %s's %s is not a canonical username (printable ASCII, no "+
+		return "", fmt.Errorf("%w: entry %s's %s is not a canonical username (printable ASCII, no "+
 			"DOMAIN\\ prefix, no @suffix; %d bytes)", ErrUnmapped, printsafe.Line(e.DN, 200), c.UsernameAttribute, len(u))
 	case token.ReservedUsername(u):
-		return Identity{}, fmt.Errorf("%w: entry %s's %s %q is reserved: the device's own account (spec §2)",
+		return "", fmt.Errorf("%w: entry %s's %s %q is reserved: the device's own account (spec §2)",
 			ErrUnmapped, printsafe.Line(e.DN, 200), c.UsernameAttribute, u)
 	}
-	return Identity{DN: e.DN, EntryID: entryID(e), Principal: "user:" + p, Username: u}, nil
+	return u, nil
 }
 
 // asciiName is whether s is bytes 0x21-0x7E only (spec §5.7), checked before
@@ -155,6 +196,58 @@ func (c Config) usernameUnique(s Searcher, id Identity) error {
 	}
 	return fmt.Errorf("%w: username %q is held by %s and by %s", ErrUsernameTaken, id.Username,
 		printsafe.Line(id.DN, 200), printsafe.Line(other, 200))
+}
+
+// workloadAttrs is what a workload entry search reads: the workload
+// attribute, the username and both immutable ids (decision 41 ruling 2).
+func (c Config) workloadAttrs() []string {
+	return []string{c.Workload.Attribute, c.UsernameAttribute, "objectGUID", "entryUUID"}
+}
+
+// workloadIdentityOf is e as the workload it names (decision 41 rulings 2 and
+// 4). With want, e's workload attribute must hold want as its one value, byte
+// for byte: a SPIFFE ID's path is case-sensitive and a directory's matching
+// rule need not be, so another case is no match. With no want (pre-warm), the
+// value is read, and must be a SPIFFE ID in one of the verifier's trust
+// domains. The username is usernameOf's.
+func (c Config) workloadIdentityOf(e *ldap.Entry, want string) (Identity, error) {
+	attr := c.Workload.Attribute
+	vs := e.GetAttributeValues(attr)
+	if len(vs) != 1 {
+		return Identity{}, fmt.Errorf("%w: entry %s has %d values of %s; exactly one", ErrUnmapped,
+			printsafe.Line(e.DN, 200), len(vs), attr)
+	}
+	p := vs[0]
+	switch {
+	case want != "" && p != want:
+		return Identity{}, fmt.Errorf("%w: entry %s's %s is %s, which is not %s byte for byte: a SPIFFE ID's "+
+			"path is case-sensitive, and the directory's matching rule found it anyway", ErrUnmapped,
+			printsafe.Line(e.DN, 200), attr, printsafe.Line(p, 300), printsafe.Line(want, 300))
+	case want == "":
+		id, err := spiffe.ParseWorkload(p)
+		if err != nil || !slices.Contains(c.Workload.TrustDomains, id.TrustDomain) {
+			return Identity{}, fmt.Errorf("%w: entry %s's %s is not a SPIFFE ID in %s", ErrUnmapped,
+				printsafe.Line(e.DN, 200), attr, strings.Join(c.Workload.TrustDomains, ", "))
+		}
+	}
+	u, err := c.usernameOf(e)
+	if err != nil {
+		return Identity{}, err
+	}
+	return Identity{DN: e.DN, EntryID: entryID(e), Principal: p, Username: u}, nil
+}
+
+// workloadUnique is ErrAmbiguous when another entry under base_dn holds id's
+// SPIFFE ID in the workload attribute, searched with no user_filter (decision
+// 41 ruling 2, as principalUnique is decision 38 ruling 3's).
+func (c Config) workloadUnique(s Searcher, id Identity) error {
+	other, err := c.heldElsewhere(s, c.Workload.Attribute, id.Principal, id.DN)
+	if err != nil || other == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s %q is held by %s and by %s: two entries under one workload is an impersonation path",
+		ErrAmbiguous, c.Workload.Attribute, printsafe.Line(id.Principal, 300), printsafe.Line(id.DN, 200),
+		printsafe.Line(other, 200))
 }
 
 // principalUnique is ErrAmbiguous when another entry under base_dn holds
