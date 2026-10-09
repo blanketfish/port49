@@ -127,6 +127,15 @@ TACACS+ method). **8b merged 2026-10-09** (PR #43, bb948e5). **8b written 2026-1
 rulings Q1–Q6 recorded as decision 41); **8b executed 2026-10-09** on `feature/workload-directory`
 (base `df198b2`), each task reviewed and whole-branch reviewed (0 Critical, 2 Important, 6 Minor,
 fixed or parked), closing L50 (Plan 8b — As built, below). Next: 9–11. 12–13 not yet.
+**9 split into 9a–9d, and 9a written 2026-10-09** (`2026-10-09-09a-sweeps-and-ssh.md`, nine tasks:
+one spec, five code, one example, one lab, one docs). It covers mint by `scope` with no enumeration
+oracle, `port49 workload token --scope`, the per-user config file, pinned host keys with `port49
+devices trust`, `port49 ssh` over the operator's OpenSSH with a one-time askpass, the in-session
+ceiling warning, and the Netmiko example. Decision 42 holds its fourteen rulings. Its five
+pre-flight questions, Q1–Q5, were ruled as recommended on 2026-10-09 (Plan 9, below), and it opens
+L53 and L54. Pre-flight review 2026-10-09: 0 Critical, 10 Important, 17 Minor, all folded in; the
+OpenSSH floor rose to 8.5 on a container measurement
+(`tests/ssh-compat/2026-10-09-openssh-askpass.md`). 9b–9d are outlined under "Plan 9".
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5043,6 +5052,72 @@ of the spec (§13). What the build settled:
 
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
 the in-session re-auth flow, integration examples (design §17 "Integration examples").
+
+**Split 2026-10-09 into four plans, each one branch.** The boundary is the client's credential.
+9a works with today's credential, a PEM key and a certificate. 9b and 9c change what the agent
+holds. 9d changes what the broker returns. Each later plan is written after the one before it
+merges (CLAUDE.md).
+
+- **9a — Sweeps by scope, the config file, and `port49 ssh`** (`2026-10-09-09a-sweeps-and-ssh.md`,
+  written 2026-10-09; branch `feature/sweeps-and-ssh`).
+  - **What it builds:** all of plan 8's owed item (mint by `scope`) and the config file plan 3
+    owes; `port49 ssh` with `port49 devices trust`, and the certificate path's in-session warning;
+    the Netmiko example.
+  - **Its rulings and rows:** decision 42; it opens L53 (host keys per platform) and L54
+    (`port49 ssh` per platform).
+  - **Pre-flight questions,** each ruled as recommended on 2026-10-09 (decision 42 rulings 10, 13,
+    2, 9 and 14):
+    - **Q1:** wrap the operator's OpenSSH 8.5+, not an `x/crypto/ssh` client. 8.0–8.4 are refused,
+      as measured in `tests/ssh-compat/2026-10-09-openssh-askpass.md`.
+    - **Q2, for 9c:** PKCS#11 through purego and TPM through go-tpm, both without cgo; the Secure
+      Enclave behind a macOS spike.
+    - **Q3:** a sweep may name any declared scope, intersected with the caller's grants.
+    - **Q4:** `devices trust` learns the address by one mint, or `--address`.
+    - **Q5:** inventory host keys and the Python and Ansible clients go to 9d, after L53.
+- **9b — The OIDC public client** (plan 7h's hand-off).
+  - **Login:** `port49 login --oidc`, an authorization-code flow with PKCE (S256) over a loopback
+    redirect (RFC 8252), against `/v1/config`'s `oidc` providers.
+  - **What the agent holds:**
+    - the ID token, the bearer on each request in place of the held mTLS connection;
+    - the provider's refresh token, held per design §7. Where it lives is a bearer on disk, so 9b's
+      Task 1 rules it: the agent's memory, else a 0600 file.
+  - **Silent renewal.** The ID token is renewed with the refresh-token grant before its `exp`. The
+    grant keeps the original `auth_time` (L46), so it never extends the ceiling.
+  - **`port49 refresh`** is the challenge as a `prompt=login` request's `nonce` (decision 39 ruling
+    15), through the browser.
+  - **Re-login** on `credential_revoked` from a back-channel logout.
+  - **The 3am cases, each a test:**
+    - the IdP down: the bearer works until its `exp`, then `port49 token` says the provider is
+      unreachable, never "log in again";
+    - `identity_provider_unavailable` (the broker's JWKS stale): retried, never a session end;
+    - a browser-less host: the device-code grant is not in decision 39, so 9b's spec task decides
+      it.
+  - **Lab:** a new row, the agent's login, refresh and logout end to end on Keycloak and one device.
+    L47, the hosted providers, stays unassigned.
+- **9c — Hardware-backed client keys and the broker certificate's CRL check** (plan 3's two
+  hand-offs).
+  - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
+    signature (`api.SignRefresh`) take it unchanged:
+    - PKCS#11 through purego, for YubiKey PIV and smartcards;
+    - TPM 2.0 through go-tpm;
+    - the macOS Secure Enclave through purego, if 9c's own first task, a spike on a macOS host,
+      allows (decision 42 ruling 13; a drop goes back to Ryan).
+  - **Policy:** touch and PIN policy are the operator's (design §7: `cached` or PIN-only is the
+    default). The PEM file stays as the fallback.
+  - **The 3am case,** a test: the key unplugged mid-session. The held connection still mints, since
+    the key was used at the handshake. `port49 refresh` and a reconnect say "insert your key", and
+    never end the session.
+  - **The CRL check:** the broker certificate's, from the distribution point it names (defence in
+    depth: the CA is the operator's).
+  - **CI and lab:** SoftHSM2 and swtpm in CI; a new row for a real YubiKey on the SER8 (touch, PIN,
+    unplug), if one is to hand.
+- **9d — Host keys from inventory, and the Python and Ansible clients** (design §17).
+  - **Host keys:** an optional host-key fingerprint per device in inventory, carried through the
+    bundle into the mint item (`host_keys`), and checked by `port49 ssh` beside its pins. A changed
+    one is a security event in the sync diff. Its format follows L53.
+  - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
+    lookup plugin over it. Third-party clients look a key up by address, and 9d is where the mint
+    can tell them which key to expect.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
