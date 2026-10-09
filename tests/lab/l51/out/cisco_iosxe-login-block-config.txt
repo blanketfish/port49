@@ -1,0 +1,58 @@
+xe1(config)#login ?
+  block-for                  Set quiet-mode active time period
+  delay                      Set delay between successive fail login
+  on-failure                 Set options for failed login attempt
+  on-success                 Set options for successful login attempt
+  password-reuse-interval    Set the number of days for reuse of password
+  password-warning-interval  Set warning interval for user
+  quiet-mode                 Set quiet-mode options
+
+xe1(config)#login 
+% Incomplete command.
+
+xe1(config)#login block-for ?
+  <1-65535>  Time period in seconds
+
+xe1(config)#login block-for 
+% Incomplete command.
+
+xe1(config)#login block-for 120 ?
+  attempts  Set max number of fail attempts
+
+xe1(config)#login block-for 120 
+% Incomplete command.
+
+xe1(config)#login block-for 120 attempts ?
+  <1-65535>  Fail attempts max value
+
+xe1(config)#login block-for 120 attempts 
+% Incomplete command.
+
+xe1(config)#login block-for 120 attempts 3 ?
+  within  Watch period for fail attempts
+
+xe1(config)#login block-for 120 attempts 3 
+% Incomplete command.
+
+xe1(config)#login block-for 120 attempts 3 within ?
+  <1-65535>  Time period in seconds
+
+xe1(config)#login block-for 120 attempts 3 within 
+% Incomplete command.
+
+xe1(config)#login block-for 120 attempts 3 within 60
+xe1(config)#end
+xe1#show login
+     A default login delay of 1 seconds is applied.
+     No Quiet-Mode access list has been configured.
+     All successful login is logged.
+
+     Router enabled to watch for login Attacks.
+     If more than 3 login failures occur in 60 seconds or less,
+     logins will be disabled for 120 seconds.
+
+     Router presently in Normal-Mode.
+     Current Watch Window remaining time 54 seconds.
+     Present login failure count 0.
+
+xe1#show running-config | include login block|aaa accounting|source-interface$g-config | include login block|aaa accounting|source-interface|         single-co include login block|aaa accounting|source-interface|single-con         n

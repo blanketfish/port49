@@ -1,0 +1,10 @@
+== Cg-g1-eos (prompts reached: 1)
+Next authentication method: keyboard-interactive
+alice06@172.100.100.11: Permission denied (publickey,keyboard-interactive).
+== Cg-g2-eos (prompts reached: 1)
+Next authentication method: publickey
+Next authentication method: keyboard-interactive
+alice06@172.100.100.11: Permission denied (publickey,keyboard-interactive).
+== Cg-g3-eos (prompts reached: 1)
+Next authentication method: keyboard-interactive
+alice06@172.100.100.11: Permission denied (publickey,keyboard-interactive).

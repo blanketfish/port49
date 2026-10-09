@@ -1,0 +1,61 @@
+03:49:21 aaa_methodlist_dot1x_dead
+03:49:45 login_failed_user_empty
+03:49:51 aaa_methodlist_dot1x_dead
+03:49:51 aaa_methodlist_dot1x_dead
+03:49:55 login_ok alice02
+03:50:08 login_ok alice03
+03:50:20 login_ok alice04
+03:50:36 login_failed_user_empty
+03:50:47.309: %SSH-5-SSH2_USERAUTH: User 'breakglass' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+03:51:57.055: %SSH-5-SSH2_USERAUTH: User 'breakglass' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+03:52:14 aaa_methodlist_dot1x_dead
+03:52:26 login_failed_user_empty
+03:52:39 login_failed_user_empty
+03:52:44 aaa_methodlist_dot1x_dead
+03:52:44 aaa_methodlist_dot1x_dead
+03:52:48 login_ok alice03
+03:52:59 login_ok alice04
+03:53:10 login_ok alice05
+03:53:22 login_ok alice06
+03:53:37 login_failed_user_empty
+03:53:50 login_failed_user_empty
+03:54:03 login_failed_user_empty
+03:54:16 login_failed_user_empty
+03:54:25 login_ok alice11
+03:54:37 login_ok alice12
+03:54:48 login_ok alice13
+03:54:59 login_ok alice14
+03:55:14 login_failed_user_empty
+03:55:28 login_failed_user_empty
+03:55:47.405: %SSH-5-SSH2_USERAUTH: User 'breakglass' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+03:56:12 aaa_methodlist_dot1x_dead
+03:56:42 aaa_methodlist_dot1x_dead
+03:56:42 aaa_methodlist_dot1x_dead
+03:56:55 login_ok alice01
+03:57:01 login_ok alice02
+03:57:07 login_ok alice03
+03:57:14 login_ok alice04
+03:57:24 login_failed_user_empty
+03:57:32 login_failed_user_empty
+03:57:40 login_failed_user_empty
+03:57:48 login_failed_user_empty
+03:57:56 login_failed_user_empty
+03:58:05 login_failed_user_empty
+03:58:13 login_failed_user_empty
+03:58:17 login_ok alice12
+03:58:23 login_ok alice13
+03:58:29 login_ok alice14
+03:58:36 login_ok alice15
+03:58:46 login_failed_user_empty
+03:58:54 login_failed_user_empty
+03:59:02 login_failed_user_empty
+03:59:10 login_failed_user_empty
+03:59:18 login_failed_user_empty
+03:59:27 login_failed_user_empty
+03:59:35 login_failed_user_empty
+03:59:39 login_ok alice07
+03:59:39 aaa_methodlist_dot1x_dead
+03:59:49 login_failed_user_empty
+04:00:09 aaa_methodlist_dot1x_dead
+04:00:09 aaa_methodlist_dot1x_dead
+04:00:09.317: %SSH-5-SSH2_USERAUTH: User 'breakglass' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded

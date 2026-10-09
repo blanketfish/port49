@@ -1,0 +1,50 @@
+# IOS-XE 17.x debug aaa authentication + debug tacacs events + debug ip ssh. Successful TACACS+ login (alice02, run D) then failing logins. Lines filtered to AAA/TPLUS/SSH auth events; no credentials appear.
+## succeeded, 03:49:55 (D2)
+*Oct  9 03:49:55.793: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+*Oct  9 03:49:55.835: SSH2 0: Using method = none
+*Oct  9 03:49:55.835: SSH2 0: Using method = keyboard-interactive
+*Oct  9 03:49:55.835: AAA/BIND(00000FC5): Bind i/f  
+*Oct  9 03:49:55.835: AAA/AUTHEN/LOGIN (00000FC5): Pick method list 'default' 
+*Oct  9 03:49:55.835: TPLUS: Source IP selected is: 10.0.0.15
+*Oct  9 03:49:55.837: TPLUS(00000FC5) login timer stopped
+*Oct  9 03:49:55.837: TPLUS(00000FC5)/0/None: Started 120 sec timeout
+*Oct  9 03:49:55.852: TPLUS(00000FC5)/0/None: Timer Stoped 
+*Oct  9 03:49:55.853: TPLUS(00000FC5) login timer stopped
+*Oct  9 03:49:55.853: TPLUS: Invalid Client information received as input
+*Oct  9 03:49:55.853: %SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: alice02] [Source: 172.100.100.1] [localport: 22] at 03:49:55 UTC Fri Oct 9 2026
+*Oct  9 03:49:55.854: %SSH-5-SSH2_USERAUTH: User 'alice02' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+*Oct  9 03:49:55.855: TPLUS: Source IP selected is: 10.0.0.15
+*Oct  9 03:49:55.857: TPLUS(00000FC5) login timer stopped
+*Oct  9 03:49:55.857: TPLUS: Invalid Client information received as input
+*Oct  9 03:49:57.857: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user 'alice02' using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' closed
+*Oct  9 03:49:57.857:  Socket I/O cleanup message sent to TACACS
+
+## failed, 03:49:41 (D1): TACACS+ never consulted
+*Oct  9 03:49:41.647: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+*Oct  9 03:49:41.689: SSH2 0: Using method = none
+*Oct  9 03:49:41.689: SSH2 0: Using method = keyboard-interactive
+*Oct  9 03:49:41.689: AAA/BIND(00000FC4): Bind i/f  
+*Oct  9 03:49:41.689: AAA/AUTHEN/LOGIN (00000FC4): Pick method list 'default' 
+*Oct  9 03:49:41.689: TPLUS(00000FC4) login timer stopped
+*Oct  9 03:49:43.722: SSH2 0: Using method = password
+*Oct  9 03:49:43.722: AAA/AUTHEN/LOGIN (00000FC4): Pick method list 'default' 
+*Oct  9 03:49:43.722: TPLUS(00000FC4) login timer stopped
+*Oct  9 03:49:43.722: SSH0: AAA authentication fail reason: Password: 
+*Oct  9 03:49:45.723: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Failed
+*Oct  9 03:49:45.723: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user '' using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' closed
+*Oct  9 03:49:45.724:  Socket I/O cleanup message sent to TACACS
+
+## failed, 03:57:20 (F5) after four successes, single-connection socket idle
+*Oct  9 03:57:20.357: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Succeeded
+*Oct  9 03:57:20.398: SSH2 0: Using method = none
+*Oct  9 03:57:20.398: SSH2 0: Using method = keyboard-interactive
+*Oct  9 03:57:20.398: AAA/BIND(00000FE0): Bind i/f  
+*Oct  9 03:57:20.398: AAA/AUTHEN/LOGIN (00000FE0): Pick method list 'default' 
+*Oct  9 03:57:20.398: TPLUS(00000FE0) login timer stopped
+*Oct  9 03:57:22.430: SSH2 0: Using method = password
+*Oct  9 03:57:22.430: AAA/AUTHEN/LOGIN (00000FE0): Pick method list 'default' 
+*Oct  9 03:57:22.431: TPLUS(00000FE0) login timer stopped
+*Oct  9 03:57:22.431: SSH0: AAA authentication fail reason: Password: 
+*Oct  9 03:57:24.432: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' Failed
+*Oct  9 03:57:24.432: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user '' using crypto cipher 'chacha20-poly1305@openssh.com', hmac 'hmac-sha2-512' closed
+*Oct  9 03:57:24.432:  Socket I/O cleanup message sent to TACACS

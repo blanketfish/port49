@@ -1,0 +1,4 @@
+Include $W/snip/*.conf
+Host *
+    IdentitiesOnly yes
+    IdentityFile $W/kc.pub
