@@ -126,8 +126,10 @@ and closed the same day on five platforms (PR #42), which also opened L52 (a C80
 TACACS+ method). **8b merged 2026-10-09** (PR #43, bb948e5). **8b written 2026-10-09** (`2026-10-09-08b-workload-directory.md`, eight tasks, six
 rulings Q1–Q6 recorded as decision 41); **8b executed 2026-10-09** on `feature/workload-directory`
 (base `df198b2`), each task reviewed and whole-branch reviewed (0 Critical, 2 Important, 6 Minor,
-fixed or parked), closing L50 (Plan 8b — As built, below). **9a built 2026-10-09** on `feature/sweeps-and-ssh`
-(base `40cbb23`; Plan 9a — As built, below), closing L53 and L54. Next: 9b–11. 12–13 not yet.
+fixed or parked), closing L50 (Plan 8b — As built, below). **9a merged 2026-10-09** (PR #44,
+d81cf75), built on `feature/sweeps-and-ssh` (base `40cbb23`; Plan 9a — As built, below), each task
+reviewed and whole-branch reviewed (0 Critical, 1 Important, 8 Minor, fixed or carried), closing
+L53 and L54. Next: 9b–11. 12–13 not yet.
 **9 split into 9a–9d, and 9a written 2026-10-09** (`2026-10-09-09a-sweeps-and-ssh.md`, nine tasks:
 one spec, five code, one example, one lab, one docs). It covers mint by `scope` with no enumeration
 oracle, `port49 workload token --scope`, the per-user config file, pinned host keys with `port49
