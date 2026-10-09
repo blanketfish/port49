@@ -36,7 +36,7 @@ def main():
     creds.set_password(password)
     try:
         samdb = SamDB(url="ldap://localhost", credentials=creds, lp=lp)
-        domain_sid = samdb.get_domain_sid()
+        domain_sid = security.dom_sid(samdb.get_domain_sid())
         res = samdb.search(base=dn, scope=ldb.SCOPE_BASE, attrs=["nTSecurityDescriptor"],
                            controls=["sd_flags:1:%d" % (OWNER | GROUP | DACL)])
         sd = ndr_unpack(security.descriptor, res[0]["nTSecurityDescriptor"][0])
