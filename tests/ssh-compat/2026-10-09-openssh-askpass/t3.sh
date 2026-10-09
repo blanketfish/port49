@@ -19,8 +19,8 @@ grep -q '^ChallengeResponseAuthentication yes' /etc/ssh/sshd_config || echo 'Cha
 pkill -x sshd; sleep 1; /usr/sbin/sshd
 go
 
-# Test 4: SIGWINCH forwarding. With ssh in its own session, the parent forwards SIGWINCH.
-echo "T4 forwarding SIGWINCH to the setsid'd ssh (password auth again):"
+# Test 5: SIGWINCH forwarding. With ssh in its own session, the parent forwards SIGWINCH.
+echo "T5 forwarding SIGWINCH to the setsid'd ssh (password auth again):"
 sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 pkill -x sshd; sleep 1; /usr/sbin/sshd
-expect -f /work/t4.exp
+expect -f /work/t5.exp

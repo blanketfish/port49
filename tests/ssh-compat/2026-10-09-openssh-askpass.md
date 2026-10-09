@@ -60,7 +60,7 @@ was not used and authentication failed (`Permission denied`).
 | Login, and typed input reaching the remote shell | yes | yes, through the askpass |
 | Askpass able to open `/dev/tty` | — | no (`dev_tty=fails`): a jump host's prompt could not be asked of the terminal by the askpass itself |
 | Local resize to 40x120, then the remote's `stty size` | `40 120` | `24 80`: ssh is not in the terminal's foreground process group, so it gets no `SIGWINCH` |
-| The same with `SIGWINCH` sent to ssh by hand (`t4.exp`) | — | `40 120`: a parent that forwards it would fix this |
+| The same with `SIGWINCH` sent to ssh by hand (Test 5, `t5.exp`) | — | `40 120`: a parent that forwards it would fix this |
 | ^C during a remote `sleep 20` | interrupted | interrupted (raw mode passes it to the remote) |
 | `~?` escape | works | works |
 | `~^Z` | the shell reports `Stopped`, ssh state `T` | ignored: ssh stays `Ss`, the shell gets no prompt back (a stop signal to an orphaned process group is discarded) |
@@ -89,7 +89,7 @@ The source agrees. Upstream `sshconnect2.c`'s `input_userauth_info_req` builds
 
 ## Test 4: the option values `port49 ssh` writes, on 8.5p1
 
-`ssh -G -F /dev/null -o KnownHostsCommand=none -o HostName="fe80::1%%eth0" -o UserKnownHostsFile="/tmp/a b/%%d/k" -o HostKeyAlias=leaf1 x`
+Run by hand, with no script. `ssh -G -F /dev/null -o KnownHostsCommand=none -o HostName="fe80::1%%eth0" -o UserKnownHostsFile="/tmp/a b/%%d/k" -o HostKeyAlias=leaf1 x`
 printed `hostname fe80::1%eth0`, `userknownhostsfile /tmp/a b/%d/k` and `hostkeyalias leaf1`,
 with no error. The quotes keep the space, `%%` is a literal `%`, and `KnownHostsCommand=none` is
 accepted. 10.2p1 on the host printed the same, and given `HostName=fe80::1%eth0` unescaped it
