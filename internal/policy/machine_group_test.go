@@ -170,6 +170,33 @@ func TestASPIFFEOnlySubjectNeedsNoUsernameUnderTheMapping(t *testing.T) {
 	}
 }
 
+// CI accepts such a subject without knowing the deployment, so lint says what
+// the broker will: without the mapping it refuses the reload (final review M-2).
+func TestLintSaysASPIFFEOnlySubjectWithoutUsernameNeedsTheMapping(t *testing.T) {
+	lint := func(subjects string) []string {
+		p, err := loadWorkloadText(t, subjects+"\n"+minimalGrant, DirectoryUnknown)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingWorkloadNoUsername {
+				got = append(got, f.Message)
+			}
+		}
+		return got
+	}
+	want := []string{`subject "a" declares no username: it mints only under broker.identity.machines[].directory, ` +
+		`where its entry's username_attribute names it`}
+	got := lint(`subjects: [{name: a, identity: ["` + wlPrincipal + `"], token_ttl: 5m}]`)
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+	if got := lint(`subjects: [{name: a, identity: ["` + wlPrincipal + `"], username: backup, token_ttl: 5m}]`); len(got) != 0 {
+		t.Errorf("a declared username: %q", got)
+	}
+}
+
 // A changed machine_group fails the gate until a session test names the
 // subject (decision 41 ruling 8; Review Focus 3). A new one and a group moved
 // to machine_group are the next tests.
