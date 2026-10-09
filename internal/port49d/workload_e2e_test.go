@@ -6,6 +6,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,8 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
+
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/workload"
@@ -25,6 +33,88 @@ const (
 	e2eWorkloadID  = "spiffe://port49.test/host/oxidized-01"
 	e2eWorkload2ID = "spiffe://port49.test/host/oxidized-02"
 )
+
+// aliceEntryClient is a directory connection holding one entry, alice's, which
+// answers the searches that name her (the mapping lookup and the two
+// uniqueness checks) and finds no groups.
+type aliceEntryClient struct{ alice *ldap.Entry }
+
+func (c aliceEntryClient) SearchContext(_ context.Context, req *ldap.SearchRequest, _ uint32) (*ldap.SearchResult, error) {
+	if strings.Contains(req.Filter, "alice@example.com") || strings.Contains(req.Filter, "(sAMAccountName=corp_alice)") {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{c.alice}}, nil
+	}
+	return &ldap.SearchResult{}, nil
+}
+
+func (aliceEntryClient) Close() error { return nil }
+
+// mintAsAliceThroughADirectory runs port49d over a real resolver whose one
+// server holds alice's entry with extra attributes, with the workload mapping
+// wm (nil: none), and returns the status and body of alice's mint.
+func mintAsAliceThroughADirectory(t *testing.T, wm *directory.WorkloadMapping, extra map[string][]string) (int, string) {
+	t.Helper()
+	var out syncBuffer
+	e, o, h := stderr, stdout, openDirectoryHook
+	t.Cleanup(func() { stderr, stdout, openDirectoryHook = e, o, h })
+	stderr, stdout = &out, io.Discard
+	attrs := map[string][]string{"userPrincipalName": {"alice@example.com"}, "sAMAccountName": {"corp_alice"},
+		"mail": {"alice@example.com"}}
+	maps.Copy(attrs, extra)
+	client := aliceEntryClient{alice: ldap.NewEntry("CN=Al Lee,OU=Staff,DC=corp", attrs)}
+	openDirectoryHook = func(_ config.Config, st store.Store, _ *policy.Live, m *metrics.Metrics,
+		say func(string, ...any)) (*directory.Resolver, error) {
+		cfg := *directoryCfg("simple")
+		cfg.Servers = []directory.Server{{URI: "ldaps://dc-01", Priority: 100}}
+		cfg.Site, cfg.Nested = "", "direct"
+		cfg.BaseDN, cfg.GroupsBaseDN = "DC=corp", "OU=G,DC=corp"
+		cfg.UserFilter, cfg.GroupFilter, cfg.GroupNameAttribute, cfg.MemberAttribute =
+			"(objectClass=person)", "(objectClass=group)", "cn", "member"
+		cfg.Mapping = directory.Mapping{Kind: directory.MapSANEmail, Attribute: "mail", AllowWeak: true}
+		cfg.Workload = wm
+		dial := func(context.Context, directory.Server) (directory.Client, error) { return client, nil }
+		noCheck := func(context.Context, directory.Searcher) error { return nil }
+		pool := directory.NewPool(cfg, dial, noCheck, time.Now, m, say)
+		return &directory.Resolver{Cfg: cfg, Pool: pool, Store: st, Now: time.Now, M: m, Say: say}, nil
+	}
+	b := brokerConfig(t, minimalPolicy).Broker
+	pki := filepath.Dir(b.ClientCAFile)
+	cfgPath := writeRunConfig(t, b)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("run did not return")
+		}
+	})
+	waitFor(t, &out, "port49d: broker listening on ")
+	addr := regexp.MustCompile(`port49d: broker listening on (\S+)`).FindStringSubmatch(out.String())[1]
+	status, body, err := postAsAlice(pki, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, body
+}
+
+// A person whose directory entry holds a SPIFFE ID in the workload mapping's
+// attribute is refused identity_unmapped (one entry, one domain: decision 41
+// ruling 4); with no mapping the same entry binds as before.
+func TestAPersonWhoseEntryHoldsASPIFFEIDIsRefusedUnderTheWorkloadMapping(t *testing.T) {
+	uid := map[string][]string{"uid": {"spiffe://corp.example.com/host/oxidized-01"}}
+	status, body := mintAsAliceThroughADirectory(t, workloadMapping(), uid)
+	if status == http.StatusOK || !strings.Contains(body, "identity_unmapped") {
+		t.Fatalf("under the mapping: %d %s", status, body)
+	}
+	if status, body := mintAsAliceThroughADirectory(t, nil, uid); status != http.StatusOK {
+		t.Fatalf("without the mapping: %d %s", status, body)
+	}
+	if status, body := mintAsAliceThroughADirectory(t, workloadMapping(), nil); status != http.StatusOK {
+		t.Fatalf("under the mapping, no SPIFFE ID in her entry: %d %s", status, body)
+	}
+}
 
 // writeWorkloadRunConfig is writeRunConfig with broker.identity: the lab
 // anchor for people and the workload anchor in pki for machines, and a
