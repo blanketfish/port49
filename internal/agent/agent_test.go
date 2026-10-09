@@ -2372,3 +2372,30 @@ func TestAnUncoveredStatusSaysNoRetryIn(t *testing.T) {
 		t.Fatalf("unavailable: %v", err)
 	}
 }
+
+// /status carries the last refresh's answer per device, so port49 ssh's
+// in-session warning follows a refresh made in another terminal (decision 42
+// ruling 11).
+func TestStatusCarriesTheLastRefreshsSessions(t *testing.T) {
+	r := newRealRig(t)
+	status := func() Status {
+		w := httptest.NewRecorder()
+		r.a.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
+		var st Status
+		if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := status(); len(st.Sessions) != 0 {
+		t.Fatalf("before any refresh: %+v", st.Sessions)
+	}
+	r.advance(30 * time.Minute)
+	out, err := r.a.Refresh(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := status(); len(st.Sessions) != 1 || st.Sessions[0] != out.Sessions[0] || st.Sessions[0].Device != "leaf1" {
+		t.Fatalf("after a refresh: %+v, the broker said %+v", st.Sessions, out.Sessions)
+	}
+}

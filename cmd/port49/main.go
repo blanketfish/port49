@@ -39,6 +39,10 @@ const usage = `usage:
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
+  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [--known-hosts FILE] [-v]
+             [--socket PATH] DEVICE [-- COMMAND...]
+             (mints through your agent and runs your OpenSSH, 8.5 or later; DEVICE's key must be pinned
+             first with port49 devices trust; exits with ssh's status)
   port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
                         [--deadline DURATION] [--scope NAME | DEVICE...]
@@ -90,9 +94,27 @@ const usage = `usage:
                 entry deleted and re-created, once you have confirmed it is the same person)
 `
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() {
+	// ssh runs port49 itself as its askpass, with askpassEnv naming `port49
+	// ssh`'s socket (decision 42 ruling 10).
+	if sock, ok := askpassCall(os.Args[1:]); ok {
+		os.Exit(askpassMain(sock, os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// A port49 that ssh's children run (a ProxyCommand, a Match exec) under
+	// `port49 ssh` inherits askpassEnv. Given two or more arguments it is not
+	// the askpass, and runs no command there either: it says why (decision 42
+	// ruling 10). Given one under SSH_ASKPASS_REQUIRE=force, main took it for
+	// an askpass call before this, and no token moves, since that prompt is
+	// not the device's.
+	if os.Getenv(askpassEnv) != "" {
+		fmt.Fprintf(stderr, "port49: %s is set, so this port49 was started under port49 ssh's ssh (a ProxyCommand "+
+			"or Match exec?) and is not its askpass; unset %s to run a port49 command there\n", askpassEnv, askpassEnv)
+		return 2
+	}
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -108,6 +130,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return identityCmd(args[1:], stdout, stderr)
 	case "workload":
 		return workloadCmd(args[1:], stdout, stderr)
+	case "ssh":
+		return sshCmd(args[1:], stdout, stderr)
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)

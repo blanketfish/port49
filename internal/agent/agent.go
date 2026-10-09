@@ -139,6 +139,9 @@ type Agent struct {
 	// ceilingWarning is /v1/config's ceiling_warning_seconds: how near a
 	// device's own ceiling `port49 token` warns.
 	ceilingWarning time.Duration
+	// refreshed is the last refresh's per-context answer, for GET /status.
+	// A refresh replaces it whole, never edits it.
+	refreshed []api.RefreshedSession
 
 	// refreshMu runs one refresh at a time: a second challenge on the
 	// connection would replace the first one's nonce under it.
@@ -894,6 +897,7 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	}
 	a.mu.Lock()
 	a.deadline = ends
+	a.refreshed = out.Sessions
 	a.mu.Unlock()
 	select {
 	case a.deadlineChanged <- struct{}{}:
@@ -1107,6 +1111,10 @@ type Status struct {
 	SessionEndsAt         string `json:"session_ends_at"`
 	Handshakes            int64  `json:"handshakes"`
 	CeilingWarningSeconds int    `json:"ceiling_warning_seconds"`
+	// Sessions is the last refresh's answer per live context, absent before
+	// one: what `port49 ssh` reads when its in-session warning is due, so a
+	// `port49 refresh` in another terminal moves it (decision 42 ruling 11).
+	Sessions []api.RefreshedSession `json:"sessions,omitempty"`
 }
 
 // Handler is the agent's socket: POST /token mints one device and answers the
@@ -1166,11 +1174,11 @@ func (a *Agent) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
-		warn := a.ceilingWarning
+		warn, sessions := a.ceilingWarning, a.refreshed
 		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
-			CeilingWarningSeconds: int(warn / time.Second)})
+			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions})
 	})
 	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
 		out, err := a.Identity(r.Context())

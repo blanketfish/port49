@@ -278,6 +278,11 @@ func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
 const runCLIEnv = "PORT49_TEST_RUN_CLI"
 
 func TestMain(m *testing.M) {
+	// The test binary is port49 ssh's askpass in the ssh tests, as port49
+	// is in production.
+	if sock, ok := askpassCall(os.Args[1:]); ok {
+		os.Exit(askpassMain(sock, os.Args[1:], os.Stdout, os.Stderr))
+	}
 	if os.Getenv(runCLIEnv) == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
