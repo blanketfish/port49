@@ -3,7 +3,7 @@
 # Samba AD, as l50_seed.ps1 makes them on Windows. The password is read from
 # $1 and never printed. With "acl", it sets or clears the prescribed deny of
 # write on <attribute> on OU=Workloads for SELF, Account Operators and
-# l50-ouadmin. With "sddl", it prints the OU's security descriptor, the
+# l50-ouadmin ("clear" re-seeds the OU: Samba 4.17 has no dsacl delete). With "sddl", it prints the OU's security descriptor, the
 # evidence of what the "default" cells ran under (pre-flight I-8).
 set -eu
 pw=$1
@@ -13,6 +13,12 @@ ou="OU=Workloads,$base"
 if [ "${2:-}" = sddl ]; then
   samba-tool dsacl get --objectdn="$ou"
   exit 0
+fi
+if [ "${2:-}" = acl ] && [ "$3" = clear ]; then
+  # Samba 4.17's samba-tool has no "dsacl delete" (it came after): clear the
+  # prescribed denies by re-seeding the OU, which also recreates the target.
+  samba-tool ou delete "$ou" --force-subtree-delete >/dev/null
+  exec "$0" "$pw"
 fi
 if [ "${2:-}" = acl ]; then
   # --show-binary prints schemaIDGUID as a dashed GUID; anything else (empty,
@@ -31,8 +37,7 @@ if [ "${2:-}" = acl ]; then
   esac
   for sid in PS AO "$ouadmin"; do
     ace="(OD;CI;WP;$guid;bf967aba-0de6-11d0-a285-00aa003049e2;$sid)"
-    if [ "$3" = set ]; then samba-tool dsacl set --objectdn="$ou" --sddl="$ace" >/dev/null
-    else samba-tool dsacl delete --objectdn="$ou" --sddl="$ace" >/dev/null; fi
+    samba-tool dsacl set --objectdn="$ou" --sddl="$ace" >/dev/null
   done
   exit 0
 fi
