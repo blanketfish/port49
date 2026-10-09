@@ -5119,6 +5119,10 @@ merges (CLAUDE.md).
   - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
     lookup plugin over it. Third-party clients look a key up by address, and 9d is where the mint
     can tell them which key to expect.
+  - **The scan through the operator's own transport** (9a's final review I-1): `port49 devices
+    trust` dials the device directly, so behind a jump host it needs a forwarded port. 9d scans
+    through the operator's OpenSSH transport (`ssh -G` / `ssh -W`), or takes `--key FILE|-` pinned
+    against its fingerprint.
 
 ### Plan 9a — As built
 
@@ -5160,17 +5164,33 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
     does write a log line on EOS, vJunos and vSRX, the negotiated algorithm is `rsa-sha2-256`, and
     only NX-OS prints a SHA256 fingerprint (404a7c4 fixed the `devices trust` help).
 - **Carried:**
-  - **Pre-beta review:**
+  - **Pre-beta review** (final review P1, P2b, P3, P8, P12, and a failure that predates the branch):
     - by-name `no_grants_matched` denies carry no bundle (pre-existing; fix the three denies
-      together);
-    - mint bodies accept trailing JSON, and the comment at `broker.go:351` is inaccurate;
-    - names of 254–255 bytes can be swept but not named in `devices` (plan 3 F11);
-    - the agent child reads `--cert` and `--key` by path, with the keyfile checks only.
-  - **9d:** inventory host keys and the Python and Ansible clients, in a format that follows what
-    L53 measured.
+      together) (P1);
+    - mint bodies accept trailing JSON, here and at the other endpoints' decoders; reject it
+      everywhere at once, a second `Decode` returning `io.EOF` (P2b);
+    - names of 254–255 bytes can be swept but not named in `devices` (plan 3 F11) (P3);
+    - `--broker-ca-fd N` given by hand wraps any descriptor; an `fstat` for `S_IFIFO` is the fix
+      (P8);
+    - the no-pidfd fallback of the askpass's parent signal has no CI test; `PidfdOpen` needs to be
+      injectable (P12);
+    - `GOOS=darwin go vet ./...` fails at `internal/port49d/coldstart_test.go:402`
+      (`fence.FileOwner` undefined); it predates this branch.
   - **9b and 9c:** the OIDC and hardware-key credentials, as outlined above; 9a changes nothing the
     agent holds.
-  - The final review's findings are added here by the controller.
+    - **9c** (P4): the agent child reads `--cert` and `--key` by path, with the keyfile checks only.
+      9c replaces how the agent holds its key.
+  - **9d:** inventory host keys and the Python and Ansible clients, in a format that follows what
+    L53 measured.
+    - Netmiko's host-key check is structural only (P14); 9d's Python client replaces the example and
+      takes the mint-carried fingerprint.
+    - `devices trust` through a jump host (I-1; above).
+  - **Plan 12 and plan 13** (P15): install port49 0755, with no setgid and no file capabilities.
+    Otherwise `/proc/<pid>/exe` is unexecutable for the askpass, and the device is sent `""`. Plan 12
+    states it as a deployment requirement; plan 13's guide repeats it.
+  - **Plan 13** also tabulates the exit codes: `port49 ssh`'s own refusals exit 1, as a remote
+    command's exit 1 does (the `port49 ssh:` line tells them apart), and login exits 2 where ssh
+    and trust exit 1 for the same refused `~/.config`.
 - **Operator-facing notes** (the plan's "Operator notes," as the lab measured them; plan 13 owns
   the guide):
   - `port49 login` needs no flags once `~/.config/port49/config.yaml` exists. Keep it, the CA file
@@ -5192,8 +5212,14 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
   - The key survives a reload with the configuration saved, on all five platforms.
   - On EOS, NX-OS and Junos `port49 ssh` prints the session-ceiling warning (L34).
   - `port49 workload token --scope NAME` exits 77 for a scope that selects nothing you hold and a
-    scope that does not exist alike. Every sweep page's decision record carries `sweep: {scope,
-    after}`.
+    scope that does not exist alike. Every mint record a sweep page writes carries `sweep: {scope,
+    after}`; the revocation re-check's records do not (decision 42 ruling 4).
+  - `port49 devices trust` connects directly, not through your ssh_config's `ProxyJump` or `Port`
+    (`port49 ssh` honours both). Behind a jump host, forward a port with `ssh -N -L
+    2222:<addr>:22 <jump>`, then run `port49 devices trust --address 127.0.0.1 --port 2222
+    --fingerprint SHA256:… DEVICE`. The pin is keyed by the inventory name and authorized by the
+    fingerprint you verified, so the forward cannot substitute a key. A scan that cannot dial prints
+    this with your device and flags.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
@@ -5250,6 +5276,10 @@ Carried here from plan 1's review:
   into one series per device — both a cardinality problem and, against design §15's "device
   identity never appears in metric labels", a correctness one. Say which it is and bound it
   when the alarms are written.
+
+**Carried from plan 9a** (final review P15): state in the deployment docs that port49 is installed
+0755, with no setgid bit and no file capabilities. `port49 ssh`'s askpass is `/proc/<pid>/exe`, which
+a setgid or capability install makes unexecutable, and ssh then sends the device `""`.
 
 **Carried from plan 6a** (Plan 6a — As built, "Carried"): `secret_ref:` resolvers, with the key
 sets moving into the policy repository; `key_ref` on `port49_key_version_devices` and
@@ -5322,7 +5352,9 @@ GitHub Action — written when the repository goes public. Four sections:
   code so it cannot drift.
 
 **Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
-this file).
+this file). From plan 9a's final review: the install must be 0755 with no setgid or file
+capabilities (plan 12 states it; this guide repeats it), and a table of `port49 ssh`, `trust` and
+`login` exit codes.
 
 **Leaves for later:** nothing. **Lab:** none.
 
