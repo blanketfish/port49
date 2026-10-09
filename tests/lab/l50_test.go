@@ -416,17 +416,20 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 		var hit5136, hit4662 int
 		for _, e := range evs {
 			m := strings.ToLower(e.Message)
-			if !strings.Contains(m, "account name: "+strings.ToLower(c.writer)) || !strings.Contains(m, "svc-oxidized-01") {
+			if !strings.Contains(m, "account name: "+strings.ToLower(c.writer)) {
 				continue
 			}
-			if e.ID == 5136 && strings.Contains(m, "ldap display name: "+strings.ToLower(c.attr)) {
+			// A 5136 names the object by DN and the attribute by name; a 4662 names
+			// the object by its class and GUID only (measured), so it is assigned
+			// by the account alone.
+			if e.ID == 5136 && strings.Contains(m, "dn: "+strings.ToLower(seed.Target)) && strings.Contains(m, "ldap display name: "+strings.ToLower(c.attr)) {
 				hit5136++
 			}
 			if e.ID == 4662 {
 				hit4662++
 			}
 		}
-		return fmt.Sprintf("`%s` by %s: %d 5136 event(s) naming the target and the attribute, %d 4662 event(s) naming the target", c.attr, c.writer, hit5136, hit4662)
+		return fmt.Sprintf("`%s` by %s: %d 5136 event(s) naming the target's DN and the attribute, %d 4662 event(s) by that account (a 4662 names the object by GUID, not DN)", c.attr, c.writer, hit5136, hit4662)
 	}
 	both := func(evs []winEvent) string {
 		s := fmt.Sprintf("%d event(s) read in all. Accepted write, %s.", len(evs), seen(evs, acc))
