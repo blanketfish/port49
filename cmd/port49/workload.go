@@ -90,6 +90,18 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 		}})
 }
 
+// mintedCount is the items that carry a token: a denied device is an answer,
+// not a mint.
+func mintedCount(items []api.MintItem) int {
+	n := 0
+	for _, it := range items {
+		if it.Verdict == "permit" && it.Login != "" {
+			n++
+		}
+	}
+	return n
+}
+
 func workloadToken(args []string, stdout, stderr io.Writer) int {
 	const cmd = "port49 workload token"
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -135,16 +147,16 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	var te *workload.TemporaryError
 	switch {
 	case errors.As(err, &te) && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d devices; run again\n", cmd,
-			safe(err.Error()), safe(*scope), len(resp.Results))
+		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted; run again\n", cmd,
+			safe(err.Error()), safe(*scope), mintedCount(resp.Results))
 		code = exitTemporary
 	case errors.As(err, &te):
 		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted; run again\n", cmd, safe(err.Error()),
 			len(te.Unminted), len(devices))
 		code = exitTemporary
 	case err != nil && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d devices\n", cmd, safe(err.Error()),
-			safe(*scope), len(resp.Results))
+		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted\n", cmd, safe(err.Error()),
+			safe(*scope), mintedCount(resp.Results))
 		code = 1
 	case err != nil:
 		// A final answer, perhaps after earlier pages minted: those are

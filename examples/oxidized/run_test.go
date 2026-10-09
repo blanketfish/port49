@@ -299,6 +299,20 @@ func TestAScopeReplacesTheNodeList(t *testing.T) {
 	}
 }
 
+// Exit 1 on a scope sweep may be a sweep a final answer cut short: the nodes
+// minted are queued, and the run says router.db may be short.
+func TestAScopeSweepAtExit1SaysItMayBeShort(t *testing.T) {
+	code, stderr, calls, _ := runCase(t, scenario{tsv: minted, exit: 1, scope: "backup_targets"})
+	if code != 1 || len(calls) == 0 || calls[0] != "GET /reload" ||
+		!strings.Contains(stderr, "port49 workload token exited 1 for scope backup_targets: the sweep may have stopped early") {
+		t.Fatalf("exit %d calls %v stderr %s", code, calls, stderr)
+	}
+	code, stderr, _, _ = runCase(t, scenario{tsv: minted, exit: 1})
+	if code != 1 || strings.Contains(stderr, "the sweep may have stopped early") {
+		t.Fatalf("a node list: exit %d stderr %s", code, stderr)
+	}
+}
+
 // router.db's directory is missing: files cannot be made beside it, which is
 // temporary (75), not the 1 of "a node not permitted".
 func TestAMissingRouterDBDirectoryExits75(t *testing.T) {

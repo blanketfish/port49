@@ -26,13 +26,16 @@
 #
 # Exit: 0 every node minted and queued; 1 some node not permitted, left out of
 # the output, or skipped here for an unknown platform or an unsafe name (a line
-# on stderr says which, and the rest are queued); 75 the broker did not answer
+# on stderr says which, and the rest are queued), or, with PORT49_SCOPE, a sweep
+# a final broker answer stopped (the pages before it are queued, the rest absent
+# until a later run); 75 the broker did not answer
 # in time (or could not establish the certificate's revocation status: a stale
 # CRL, an OCSP responder down), the output could not be written, files cannot be made beside
 # router.db, another run holds the lock, or Oxidized refused a request (the
 # nodes minted before it are queued; with none, Oxidized was left as it was:
 # try the next window); 77 nothing minted until someone acts (an expired
-# certificate, a revoked principal, every node denied, a certificate status
+# certificate, a revoked principal, every node denied, a scope that selects
+# nothing this host holds a grant on, a certificate status
 # nothing covers, a TLS trust failure), and Oxidized was left as it was; anything else, a fault,
 # said on stderr. router.db is replaced, and Oxidized reloaded, only when there
 # is a node to write: never with an empty file. A partial run drops the
@@ -113,6 +116,9 @@ mv -f "$db" "$routerdb"
 if [ "$status" -eq 0 ] && [ "$awk_status" -eq 3 ]; then status=1; fi
 if [ "$status" -eq 75 ]; then
   echo "port49-oxidized-run: not every node was minted (port49 workload token exited 75: the broker did not answer in time or the output could not be written); the minted nodes are queued, the rest are absent from Oxidized's list until a later run mints them" >&2
+fi
+if [ "$status" -eq 1 ] && [ -n "${PORT49_SCOPE:-}" ]; then
+  echo "port49-oxidized-run: port49 workload token exited 1 for scope $PORT49_SCOPE: the sweep may have stopped early (a line above says if so); the minted nodes are queued, any beyond the stop are absent from Oxidized's list until a later run mints them" >&2
 fi
 
 # A request Oxidized refuses or does not answer in 10s is said and the run

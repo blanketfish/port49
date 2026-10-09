@@ -634,6 +634,49 @@ func TestASweepThatDoesNotAdvanceStops(t *testing.T) {
 	}
 }
 
+// A page with next and no results is a fault, never a loop: the pages before
+// it are still returned.
+func TestASweepPageWithNextAndNoResultsStops(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){sweepPages(map[string]api.MintResponse{
+		"":  {Results: permitted("a"), Next: "a"},
+		"a": {Results: []api.MintItem{}, Next: "b"},
+	})}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc"})
+	var de *DecodeError
+	if !errors.As(err, &de) || len(resp.Results) != 1 || len(f.bodies) != 2 {
+		t.Fatalf("err %v, %d results, %d requests", err, len(resp.Results), len(f.bodies))
+	}
+}
+
+// A sweep whose page two cannot be answered before the deadline returns page
+// one with the temporary error, so the caller can write what was minted.
+func TestASweepThatFailsOnPageTwoReturnsPageOne(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){
+		sweepPages(map[string]api.MintResponse{"": {Results: permitted("a", "b"), Next: "b"}}),
+		refuse(http.StatusServiceUnavailable, "store_unavailable", "30")}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc"})
+	var te *TemporaryError
+	if !errors.As(err, &te) || !errors.Is(err, ErrTemporary) || len(resp.Results) != 2 || len(f.keys) < 3 ||
+		f.keys[1] != f.keys[2] || f.keys[0] == f.keys[1] {
+		t.Fatalf("err %v, %d results, keys %v", err, len(resp.Results), f.keys)
+	}
+}
+
+// A final answer on page two is the APIError, with page one returned.
+func TestASweepWithAFinalAnswerOnPageTwoReturnsPageOne(t *testing.T) {
+	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){
+		sweepPages(map[string]api.MintResponse{"": {Results: permitted("a", "b"), Next: "b"}}),
+		refuse(http.StatusBadRequest, "bad_request", "")}}
+	h := newHarness(t, f, 24*time.Hour)
+	resp, err := h.client(t).Mint(context.Background(), MintOptions{Scope: "dc"})
+	var ae *APIError
+	if !errors.As(err, &ae) || errors.Is(err, ErrTemporary) || len(resp.Results) != 2 || len(f.keys) != 2 {
+		t.Fatalf("err %v, %d results, keys %v", err, len(resp.Results), f.keys)
+	}
+}
+
 // An empty sweep is no error: the caller says what it means.
 func TestAnEmptySweepIsNoError(t *testing.T) {
 	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){sweepPages(map[string]api.MintResponse{

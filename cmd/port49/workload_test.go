@@ -562,6 +562,50 @@ func TestWorkloadTokenSweepsAScope(t *testing.T) {
 	}
 }
 
+// A sweep cut short by a broker that cannot answer page two writes page one,
+// exits 75, and counts only the tokens minted (a denied item is not one).
+func TestASweepCutShortByTheGateWritesPageOne(t *testing.T) {
+	flags := workloadBrokerPaged(t, 2, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.After == "leaf2" {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "store_unavailable", Detail: "the broker's store did not answer"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Results: []api.MintItem{
+				{Device: "leaf1", Verdict: "permit", Address: "10.0.0.1", Platform: "arista_eos", Username: "svc",
+					Login: "T1", ExpiresAt: "2026-10-09T03:00:00Z"},
+				{Device: "leaf2", Verdict: "deny", Reason: "no_grants_matched"}}, Next: "leaf2"})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--deadline", "1ms"}, flags...), "--scope", "dc"), &out, &errb)
+	if code != exitTemporary || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc\tT1\t2026-10-09T03:00:00Z\n" ||
+		!strings.Contains(errb.String(), "stopped after 1 tokens minted; run again") || strings.Contains(errb.String(), "T1") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A final refusal on page two of a sweep writes page one and exits 1.
+func TestASweepRefusedOnPageTwoWritesPageOne(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.After == "leaf1" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "bad_request", Detail: "after is not a device"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Results: []api.MintItem{{Device: "leaf1", Verdict: "permit", Address: "10.0.0.1", Platform: "arista_eos",
+				Username: "svc", Login: "T1", ExpiresAt: "2026-10-09T03:00:00Z"}}, Next: "leaf1"})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token"}, flags...), "--scope", "dc"), &out, &errb)
+	if code != 1 || out.String() != "leaf1\t10.0.0.1\tarista_eos\tsvc\tT1\t2026-10-09T03:00:00Z\n" ||
+		!strings.Contains(errb.String(), "stopped after 1 tokens minted") || strings.Contains(errb.String(), "T1") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
 // A sweep that selects nothing for the workload is final, exit 77, with one
 // message whether the scope exists or not (decision 42 rulings 2 and 5).
 func TestAnEmptySweepIsFinal(t *testing.T) {
