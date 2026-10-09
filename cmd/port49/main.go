@@ -78,7 +78,8 @@ const usage = `usage:
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
                        [--socket PATH] DEVICE
-                (pins the SSH host key DEVICE presents, against the fingerprint you verified on its console)
+                (pins the SSH host key DEVICE presents, against the key you verified on its console: NX-OS
+                 prints its SHA256 fingerprint, the others print the key, so give ssh-keygen -lf's)
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE

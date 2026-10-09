@@ -42,7 +42,8 @@ func devicesTrust(args []string, stdout, stderr io.Writer) int {
 	const cmd = "port49 devices trust"
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fingerprint := fs.String("fingerprint", "", "the SHA256:... fingerprint you read on the device's console; "+
+	fingerprint := fs.String("fingerprint", "", "the SHA256:... fingerprint of the key you verified on the "+
+		"device's console (NX-OS prints it; the others print the key itself, so run `ssh-keygen -lf` on it); "+
 		"the key is pinned only if the device presents it")
 	address := fs.String("address", "", "the device's address, when you know it; otherwise one mint through "+
 		"your agent asks the broker")
@@ -127,8 +128,9 @@ func devicesTrust(args []string, stdout, stderr io.Writer) int {
 			*fingerprint, device, device)
 		return 1
 	case *fingerprint == "" && !(trustStdinIsTerminal() && trustStderrIsTerminal(stderr)):
-		fmt.Fprintf(stderr, "%s: nothing pinned: pass --fingerprint with the fingerprint you read on %s's console; "+
-			"a key is never pinned unseen (design §17)\n", cmd, device)
+		fmt.Fprintf(stderr, "%s: nothing pinned: pass --fingerprint with the SHA256:... fingerprint of the key %s's "+
+			"console shows (NX-OS prints the fingerprint; the other platforms print the key itself, so run "+
+			"`ssh-keygen -lf` on it); a key is never pinned unseen (design §17)\n", cmd, device)
 		return 2
 	case *fingerprint == "":
 		fmt.Fprintf(stderr, "Compare it with the key %s's console shows. Pin it? [yes/no]: ", device)
