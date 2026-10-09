@@ -7155,18 +7155,18 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   instant for every key; with the same, it purges none, so a rolling restart of the brokers
   keeps everyone's tokens. A token minted in the moment between that instant and the purge is
   purged too, and its login fails `token_not_found`. A replica's own start never mints into
-  that moment when the restore runbook was followed: the runbook deletes `meta/judged`, which
-  keeps the gate closed, whereas a snapshot restored without that step brings back a
-  `meta/judged` that names the bundle, and the gate opens on it at once (the restore guard
-  and the runner's purge are then the backstop, and each such login fails `token_not_found`).
-  The lab's seed tokens, minted before the gate and before "listening on", are not covered:
-  the first takeover purges them. Otherwise its mint gate stays closed from the start until it has seen a takeover done
-  for the bundle it serves, its own runner's or another's that `meta/judged` records, not in
+  that moment when the restore runbook was followed: its mint gate stays closed from the start
+  until it has seen a takeover done for the bundle it serves, its own runner's or another's that `meta/judged` records, not in
   doubt. A rolling restart, `meta/judged` already naming the bundle, is never held; a first
   start, or one after a policy edit, refuses mints with a retryable `store_unavailable` for up
   to `hold_ttl`/3 and the takeover (plus up to `hold_ttl` when the previous run's lease must
   expire first, as after a crash), and a replica whose bundle the runner does not serve until
-  a runner judges it. The tokens such a takeover would purge were minted under the very bundle
+  a runner judges it. The runbook deletes `meta/judged`, which is what keeps the gate closed
+  after a restore; a snapshot restored without that step brings back a `meta/judged` that names
+  the bundle, the gate opens on it at once, and the restore guard and the runner's purge are
+  the backstop (each such login fails `token_not_found`). The lab's seed tokens, minted before
+  the gate and before "listening on", are not covered: the first takeover purges them. The
+  tokens such a takeover would purge were minted under the very bundle
   it then records, so purging by mint time was not taken: it would keep, too, a token another
   replica minted after the instant under a bundle no runner judged. The moment stays for a
   token minted after the gate opened, under a bundle a later takeover finds unjudged (an edit

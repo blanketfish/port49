@@ -170,7 +170,10 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
     ...` and then `mints open: ...`, and `port49_broker_mint_gate_closed` reads 1 meanwhile.
     `/readyz` stays 200. A rolling restart on the same policy is never held. A replica whose
     policy file differs from the runner's stays held until the files agree (its
-    `port49_policy_bundle_matches_runner` is 0).
+    `port49_policy_bundle_matches_runner` is 0). When the runner's takeover could not judge
+    every context (the directory or the IdP unreachable), the runner says `N live context(s)
+    left unjudged at the takeover`; its own broker mints, and the other replicas stay held
+    until its settle pass records the bundle.
 - **Exit 77**: nothing was minted and running again will not change it: an expired certificate
   (said before anything connects), a revoked principal, every node denied, a certificate
   status nothing covers, or a TLS trust failure (the broker's certificate is not under
