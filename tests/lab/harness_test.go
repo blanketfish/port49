@@ -32,6 +32,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -3273,7 +3274,8 @@ func (l *lab) guardRefusal(entry string) string {
 	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", fmt.Sprintf("%s-%s.md", entry, l.p.name))); err != nil {
 		return ""
 	}
-	if os.Getenv("PORT49_LAB_REMEASURE") == entry {
+	// One entry, or several separated by commas (`make lab-ssh` writes L53 and L54).
+	if slices.Contains(strings.Split(os.Getenv("PORT49_LAB_REMEASURE"), ","), entry) {
 		return ""
 	}
 	return fmt.Sprintf("%s is closed and tests/lab/results/%s-%s.md exists: set PORT49_LAB_REMEASURE=%s to re-measure it "+

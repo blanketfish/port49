@@ -384,7 +384,8 @@ func TestGuardClosedRefusesAClosedEntryWithANote(t *testing.T) {
 	for _, c := range []struct {
 		entry, remeasure string
 		refused          bool
-	}{{"L35", "", true}, {"L35", "L35", false}, {"login", "", false}} {
+	}{{"L35", "", true}, {"L35", "L35", false}, {"login", "", false}, {"L35", "L53,L35", false},
+		{"L35", "L350", true}} {
 		t.Setenv("PORT49_LAB_REMEASURE", c.remeasure)
 		if got := l.guardRefusal(c.entry) != ""; got != c.refused {
 			t.Errorf("%s with REMEASURE=%q: refused %v, want %v", c.entry, c.remeasure, got, c.refused)

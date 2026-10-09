@@ -108,7 +108,7 @@ lab-ssh:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
 	  echo "=== lab-ssh platform: $$p ==="; \
-	  if ! PORT49_LAB_SSH=1 PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL53L54PortSSH' -count=1 -v -timeout 90m; then \
+	  if ! PORT49_LAB_SSH=1 PORT49_LAB_REMEASURE=L53,L54 PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL53L54PortSSH' -count=1 -v -timeout 90m; then \
 	    echo "=== lab-ssh platform $$p FAILED; the platforms after it were not run ==="; \
 	    exit 1; \
 	  fi; \
