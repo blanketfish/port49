@@ -96,6 +96,17 @@ var DefaultTiming = Timing{ClockSkew: time.Minute, MaxTokenAge: 2 * time.Hour, J
 type X509Machine struct {
 	AnchorFile   string
 	TrustDomains []string
+	// Directory is the verifier's directory: block as written (plan 8b; spec
+	// §13 decision 41); nil without one. Config resolves it into
+	// directory.Config.Workload once broker.directory is read.
+	Directory *WorkloadDirectory
+}
+
+// WorkloadDirectory is broker.identity.machines[].directory as written.
+type WorkloadDirectory struct {
+	Kind, Attribute, UserFilter string
+	AllowWeak                   bool
+	Issuers                     []string
 }
 
 // Config is broker.identity resolved: the one x509 human anchor ("" for

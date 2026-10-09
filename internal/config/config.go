@@ -1323,6 +1323,20 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		}
 		b.Directory = d
 	}
+	// A workload certificate's directory (plan 8b; spec §13 decision 41 ruling
+	// 1) reuses broker.directory's pool, bind and base_dn, so it needs one.
+	if m := id.X509Machine; m != nil && m.Directory != nil {
+		if b.Directory == nil {
+			return nil, errors.New("config: broker.identity.machines[].directory maps workload certificates through " +
+				"broker.directory, which is not configured: configure it, or remove directory to keep workloads off " +
+				"the directory")
+		}
+		w, err := checkWorkloadMapping(*m.Directory, m.TrustDomains, b.Directory.UserFilter)
+		if err != nil {
+			return nil, err
+		}
+		b.Directory.Workload = w
+	}
 	ri, err := refreshInterval(b.RefreshInterval)
 	if err != nil {
 		return nil, err

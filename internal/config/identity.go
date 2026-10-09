@@ -13,21 +13,32 @@ import (
 	"github.com/rhwendt/port49/internal/spiffe"
 )
 
+// workloadDirectoryYAML is an x509 machine verifier's directory: (plan 8b;
+// spec §13 decision 41).
+type workloadDirectoryYAML struct {
+	Kind       string   `yaml:"kind"`
+	Attribute  string   `yaml:"attribute"`
+	AllowWeak  bool     `yaml:"allow_weak"`
+	Issuers    []string `yaml:"issuers"`
+	UserFilter string   `yaml:"user_filter"`
+}
+
 // identityVerifierYAML is one entry of broker.identity.humans or .machines
 // (plan 7h, Ruling 1).
 type identityVerifierYAML struct {
-	Type               string              `yaml:"type"`
-	TrustAnchorFile    string              `yaml:"trust_anchor_file"`
-	SPIFFETrustDomains []string            `yaml:"spiffe_trust_domains"`
-	Issuer             string              `yaml:"issuer"`
-	ClientID           string              `yaml:"client_id"`
-	Audience           string              `yaml:"audience"`
-	PrincipalClaim     string              `yaml:"principal_claim"`
-	PrincipalDomains   []string            `yaml:"principal_domains"`
-	Clients            []machineClientYAML `yaml:"clients"`
-	Scopes             []string            `yaml:"scopes"`
-	Algorithms         []string            `yaml:"algorithms"`
-	CAFile             string              `yaml:"ca_file"`
+	Type               string                 `yaml:"type"`
+	TrustAnchorFile    string                 `yaml:"trust_anchor_file"`
+	SPIFFETrustDomains []string               `yaml:"spiffe_trust_domains"`
+	Issuer             string                 `yaml:"issuer"`
+	ClientID           string                 `yaml:"client_id"`
+	Audience           string                 `yaml:"audience"`
+	PrincipalClaim     string                 `yaml:"principal_claim"`
+	PrincipalDomains   []string               `yaml:"principal_domains"`
+	Clients            []machineClientYAML    `yaml:"clients"`
+	Scopes             []string               `yaml:"scopes"`
+	Algorithms         []string               `yaml:"algorithms"`
+	CAFile             string                 `yaml:"ca_file"`
+	Directory          *workloadDirectoryYAML `yaml:"directory"`
 }
 
 // machineClientYAML is one entry of a machine verifier's clients (Ruling
@@ -89,6 +100,10 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 					return nil, err
 				}
 				out.X509Machine = &oidc.X509Machine{AnchorFile: v.TrustAnchorFile, TrustDomains: tds}
+				if d := v.Directory; d != nil {
+					out.X509Machine.Directory = &oidc.WorkloadDirectory{Kind: d.Kind, Attribute: d.Attribute,
+						UserFilter: d.UserFilter, AllowWeak: d.AllowWeak, Issuers: d.Issuers}
+				}
 			case v.Type == "k8s":
 				return nil, fmt.Errorf("config: %s: type k8s is plan 10's; remove it", at)
 			case v.Type == "x509":
@@ -98,7 +113,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
-					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil {
+					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file alone", at)
 				}
 				out.X509AnchorFile = v.TrustAnchorFile
@@ -145,6 +160,9 @@ func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.V
 	}
 	if v.SPIFFETrustDomains != nil {
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.spiffe_trust_domains is an x509 machine verifier's", at)
+	}
+	if v.Directory != nil {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.directory is an x509 machine verifier's", at)
 	}
 	algs, err := oidc.ParseAlgs(v.Algorithms)
 	if err != nil {
