@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-workload lab-oxidized build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-workload lab-oxidized lab-ssh build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -96,6 +96,20 @@ lab-oxidized:
 	  echo "=== lab-oxidized platform: $$p ==="; \
 	  if ! PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL49' -count=1 -v -timeout 90m; then \
 	    echo "=== lab-oxidized platform $$p FAILED; the platforms after it were not run ==="; \
+	    exit 1; \
+	  fi; \
+	done
+
+# L53 and L54 (plan 9a): port49 devices trust and port49 ssh against each
+# platform, one at a time as `make lab` runs them. Each device is reloaded
+# once, so this is its own target. Needs containerlab, the images and
+# `make build`.
+lab-ssh:
+	@set -e; \
+	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
+	  echo "=== lab-ssh platform: $$p ==="; \
+	  if ! PORT49_LAB_SSH=1 PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL53L54PortSSH' -count=1 -v -timeout 90m; then \
+	    echo "=== lab-ssh platform $$p FAILED; the platforms after it were not run ==="; \
 	    exit 1; \
 	  fi; \
 	done
