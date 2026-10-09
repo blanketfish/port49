@@ -265,6 +265,12 @@ func (s *askpassServer) answer(c net.Conn) {
 	// Room for a fresh mint (remint's own bound is 10s) before the reply.
 	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
 	line, err := bufio.NewReader(io.LimitReader(c, maxPrompt)).ReadString('\n')
+	if err == io.EOF && line == "" {
+		// Not a prompt: every ask sends at least `""`. Another run's sweep
+		// dials each askpass socket and hangs up, and must not end a live
+		// session.
+		return
+	}
 	if err != nil {
 		s.failClosed()
 		return
@@ -309,23 +315,24 @@ func askpassMain(sock string, args []string, stdout, stderr io.Writer) int {
 		notifyTerminal(args[0], stderr)
 		return 0
 	}
+	parent := watchParent()
 	c, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: port49 ssh is not answering at %s: %v\n", sock, err)
-		endSSH()
+		endSSH(parent)
 		return 1
 	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(25 * time.Second))
 	if _, err := io.WriteString(c, strconv.Quote(args[0])+"\n"); err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: %v\n", err)
-		endSSH()
+		endSSH(parent)
 		return 1
 	}
 	reply, err := bufio.NewReader(io.LimitReader(c, 1<<10)).ReadString('\n')
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: port49 ssh did not answer: %v\n", err)
-		endSSH()
+		endSSH(parent)
 		return 1
 	}
 	switch reply = strings.TrimSuffix(reply, "\n"); {
@@ -352,20 +359,19 @@ func terminalPrompt(prompt string) string {
 	return strings.Join(lines, "\n")
 }
 
-// terminateSSH ends the ssh that ran this askpass. OpenSSH's read_passphrase
-// sends an empty password for an askpass that fails, so an askpass that cannot
-// get its answer ends ssh instead of leaving it to send one. A test swaps it.
-var terminateSSH = func() {
-	if ppid := os.Getppid(); ppid > 1 {
-		_ = syscall.Kill(ppid, syscall.SIGTERM)
-	}
-}
+// terminateSSH ends the ssh that ran this askpass, held as parent from the
+// askpass's start. OpenSSH's read_passphrase sends an empty password for an
+// askpass that fails, so an askpass that cannot get its answer ends ssh
+// instead of leaving it to send one. It signals nothing else: a parent that
+// has since exited leaves this adopted by a process that is not ssh. A test
+// swaps it.
+var terminateSSH = func(parent sshParent) { parent.terminate() }
 
 // endSSH is terminateSSH for a port49 that ssh ran as its askpass
 // (SSH_ASKPASS_REQUIRE=force), and nothing for any other.
-func endSSH() {
+func endSSH(parent sshParent) {
 	if os.Getenv("SSH_ASKPASS_REQUIRE") == "force" {
-		terminateSSH()
+		terminateSSH(parent)
 	}
 }
 
@@ -477,13 +483,19 @@ func listenAskpass(agentSocket string) (net.Listener, string, error) {
 	return ln, path, nil
 }
 
+// staleAge is how old an askpass socket is before the sweep may judge it
+// stale: a run between Listen and its first Accept refuses a dial for a
+// moment. A test sets it to 0.
+var staleAge = 10 * time.Second
+
 // removeStaleAskpassSockets removes the askpass sockets in dir that nothing
 // listens on: a port49 ssh that was killed leaves its own behind. A socket
-// whose dial is refused is stale; any other answer leaves it.
+// older than staleAge whose dial is refused is stale; any other answer leaves
+// it.
 func removeStaleAskpassSockets(dir string) {
 	old, _ := filepath.Glob(filepath.Join(dir, "askpass-*.sock"))
 	for _, p := range old {
-		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSocket == 0 || time.Since(fi.ModTime()) < staleAge {
 			continue
 		}
 		c, err := net.DialTimeout("unix", p, time.Second)
@@ -695,11 +707,11 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 
 	c := exec.Command(path, sshArgs(sshOptions{config: *sshConfig, knownHosts: *knownHosts, device: device,
 		address: item.Address, username: item.Username, port: *port, verbose: *verbose, command: command})...)
-	c.Env = append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+self, "SSH_ASKPASS_REQUIRE=force",
+	c.Env = append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+askpassPath(self), "SSH_ASKPASS_REQUIRE=force",
 		askpassEnv+"="+sockPath)
-	// What ssh said last, for the message after a 255.
-	var said tailBuffer
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, io.MultiWriter(stderr, &said)
+	// ssh's stderr is the caller's own: ssh acts on whether it is a terminal,
+	// and no descendant holding it can keep this from returning.
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
 	// An askpass or ssh that dies mid-read can leave echo off; the terminal is
 	// put back as it was found once ssh has ended.
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
@@ -753,37 +765,11 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s was sent the token and the connection failed (ssh exit 255, its message is "+
 			"above); if it says Permission denied, `port49 explain --device %s` says whether your policy permits "+
 			"you, and port49d's decision log says why the device refused\n", cmd, device, device)
-	case code == 255 && strings.Contains(said.String(), "Host key verification failed"):
-		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
-			"its message is above); the address inventory gives for %s may not be the device: verify the key on its "+
-			"console, then run 'port49 devices trust --replace %s'\n", cmd, device, device, device)
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
-			"its message is above)\n", cmd, device)
+			"its message is above); if ssh's message above says Host key verification failed, the address inventory "+
+			"gives for %s may not be the device: verify the key on its console, then run 'port49 devices trust "+
+			"--replace %s'\n", cmd, device, device, device)
 	}
 	return code
-}
-
-// tailBuffer keeps the last tailMax bytes written to it.
-type tailBuffer struct {
-	mu sync.Mutex
-	b  []byte
-}
-
-const tailMax = 4 << 10
-
-func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.b = append(t.b, p...)
-	if len(t.b) > tailMax {
-		t.b = t.b[len(t.b)-tailMax:]
-	}
-	return len(p), nil
-}
-
-func (t *tailBuffer) String() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return string(t.b)
 }

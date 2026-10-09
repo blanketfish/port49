@@ -161,7 +161,7 @@ func TestAnUnreadablePromptEndsSSH(t *testing.T) {
 func TestAnAskpassThatCannotDialEndsSSH(t *testing.T) {
 	var ended atomic.Int32
 	prev := terminateSSH
-	terminateSSH = func() { ended.Add(1) }
+	terminateSSH = func(sshParent) { ended.Add(1) }
 	t.Cleanup(func() { terminateSSH = prev })
 	sock := filepath.Join(t.TempDir(), "gone.sock")
 	t.Setenv("SSH_ASKPASS_REQUIRE", "force")
@@ -185,6 +185,10 @@ func TestStaleAskpassSocketsAreSwept(t *testing.T) {
 	}
 	ln.(*net.UnixListener).SetUnlinkOnClose(false)
 	ln.Close()
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
 	live := filepath.Join(dir, "askpass-0000000000000002.sock")
 	lv, err := net.Listen("unix", live)
 	if err != nil {
@@ -234,9 +238,10 @@ func TestANonOpenSSHIsPointedAtPort49Token(t *testing.T) {
 	}
 }
 
-// Exit 255 for a reason that is not the host key does not say the host key may
-// have changed (task 6 review M-5).
-func TestTheHostKeyHintComesOnlyWithAHostKeyFailure(t *testing.T) {
+// Exit 255 for a reason that is not the host key says the host key hint
+// conditionally, on ssh's own message above it: ssh's stderr goes straight to
+// the caller's, so port49 ssh cannot tell (task 6 review M-5, re-review N-3).
+func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
@@ -247,8 +252,35 @@ func TestTheHostKeyHintComesOnlyWithAHostKeyFailure(t *testing.T) {
 	}
 	r.flags[3] = fake
 	code, _, errb := r.run(t, "leaf1")
-	if code != 255 || !strings.Contains(errb, "so it was never sent") || strings.Contains(errb, "host key") ||
-		strings.Contains(errb, "trust --replace") {
+	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
+		!strings.Contains(errb, "if ssh's message above says Host key verification failed") ||
+		!strings.Contains(errb, "port49 devices trust --replace leaf1") {
 		t.Fatalf("code %d stderr %q", code, errb)
+	}
+}
+
+// ssh's stderr is the caller's own, not a pipe port49 ssh holds: ssh's
+// behaviour that depends on a terminal stays, and a descendant holding it
+// cannot keep port49 ssh from returning (task 6 re-review N-3).
+func TestSSHsStderrIsTheCallersOwn(t *testing.T) {
+	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
+	fake := filepath.Join(t.TempDir(), "ssh")
+	script := "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
+		"sleep 3 >&2 &\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.flags[3] = fake
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	start := time.Now()
+	var out lockedBuffer
+	code := run(append(append([]string{"ssh"}, r.flags...), "leaf1"), &out, f)
+	if code != 0 || time.Since(start) > 2*time.Second {
+		t.Fatalf("code %d after %v: a descendant holding ssh's stderr held port49 ssh", code, time.Since(start))
 	}
 }

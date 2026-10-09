@@ -277,7 +277,13 @@ func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
 // can start the agent from os.Executable as it does in production.
 const runCLIEnv = "PORT49_TEST_RUN_CLI"
 
+// subreaperHook is set by the Linux test that needs a child subreaper.
+var subreaperHook func()
+
 func TestMain(m *testing.M) {
+	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
+		subreaperHook()
+	}
 	// The test binary is port49 ssh's askpass in the ssh tests, as port49
 	// is in production.
 	if sock, ok := askpassCall(os.Args[1:]); ok {
