@@ -1,0 +1,22 @@
+#!/usr/bin/expect -f
+# Test 1: ssh run on a pty (it has a controlling terminal). Does SSH_ASKPASS_REQUIRE=force
+# make it use the askpass, or does it take the terminal prompt?
+# argv: label, then env assignments (NAME=VALUE) to set for ssh.
+set timeout 15
+log_user 0
+set label [lindex $argv 0]
+foreach kv [lrange $argv 1 end] {
+  set i [string first = $kv]
+  set env([string range $kv 0 [expr {$i-1}]]) [string range $kv [expr {$i+1}] end]
+}
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+  -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password \
+  tuser@127.0.0.1 echo LOGGED_IN_OK
+expect {
+  -re {[Pp]assword: ?$} { set r "ssh asked the terminal: [string trim $expect_out(0,string)]"; send "\003" }
+  "LOGGED_IN_OK"        { set r "logged in without a terminal prompt (askpass answered)" }
+  timeout               { set r "timeout" }
+  eof                   { set r "eof before prompt or login" }
+}
+catch {close}; catch {wait}
+puts "T1 $label: $r"
