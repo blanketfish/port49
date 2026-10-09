@@ -77,21 +77,82 @@ func TestPinThenLookup(t *testing.T) {
 	}
 }
 
-// A pattern, a marker or a hashed line never pins a device by its name.
-func TestLookupReadsExactNamesAndNoMarkers(t *testing.T) {
+// A line OpenSSH would read but port49 does not fully understand (a pattern, a
+// list, a hash, a marker, a negation) makes Lookup and Pin refuse the file,
+// naming it and the line; blank lines and comments are fine, and a missing
+// file pins nothing.
+func TestLookupAndPinRefuseALineTheyCannotParse(t *testing.T) {
 	_, k := newKey(t)
 	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k)))
 	dir := privateDir(t)
-	path := filepath.Join(dir, "known_hosts")
-	body := "# the operator's comment\nleaf* " + line + "\n@revoked leaf1 " + line + "\nleaf1,leaf2 " + line + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+	for name, bad := range map[string]string{
+		"pattern":  "leaf* " + line,
+		"list":     "leaf1,leaf2 " + line,
+		"hashed":   "|1|c2FsdA==|aGFzaA== " + line,
+		"revoked":  "@revoked leaf1 " + line,
+		"ca":       "@cert-authority leaf1 " + line,
+		"negation": "!leaf1 " + line,
+		"bracket":  "[leaf1]:2222 " + line,
+		"garbage":  "leaf1 ssh-ed25519 notbase64!!",
+	} {
+		path := filepath.Join(dir, name)
+		body := "# the operator's comment\n\n" + bad + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Lookup(path, "leaf1")
+		if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "line 3") ||
+			!strings.Contains(err.Error(), "port49 will not guess") || !strings.Contains(err.Error(), "~/.ssh/known_hosts") {
+			t.Errorf("%s: lookup: %v", name, err)
+		}
+		_, other := newKey(t)
+		if err := Pin(path, "spine1", other, false); err == nil || !strings.Contains(err.Error(), "line 3") {
+			t.Errorf("%s: pin: %v", name, err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != body {
+			t.Errorf("%s: the file changed: %q", name, got)
+		}
+	}
+	ok := filepath.Join(dir, "ok")
+	if err := os.WriteFile(ok, []byte("# a comment\n\n  \nleaf1 "+line+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := Lookup(path, "leaf1"); err != nil || len(got) != 0 {
-		t.Fatalf("%v %v", got, err)
+	if got, err := Lookup(ok, "leaf1"); err != nil || len(got) != 1 {
+		t.Fatalf("comments and blanks: %v %v", got, err)
 	}
 	if got, err := Lookup(filepath.Join(dir, "none"), "leaf1"); err != nil || got != nil {
 		t.Fatalf("a missing file pins nothing: %v %v", got, err)
+	}
+}
+
+// OpenSSH matches the host field without regard to case, so Lookup and Pin do
+// too: a pin for leaf1 is a pin for LEAF1. Names are written as given. Pin
+// without replace refuses a name that differs only in case, and with replace
+// the new name takes the old line's place.
+func TestNamesMatchWithoutRegardToCase(t *testing.T) {
+	path := filepath.Join(privateDir(t), "known_hosts")
+	_, k1 := newKey(t)
+	_, k2 := newKey(t)
+	if err := Pin(path, "leaf1", k1, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Lookup(path, "LEAF1"); err != nil || len(got) != 1 || !same(got[0], k1) {
+		t.Fatalf("lookup LEAF1: %v %v", got, err)
+	}
+	err := Pin(path, "LEAF1", k2, false)
+	var pe *PinnedError
+	if !errors.Is(err, ErrPinned) || !errors.As(err, &pe) || pe.Name != "leaf1" || pe.Line != 1 {
+		t.Fatalf("pin LEAF1: %#v", err)
+	}
+	if raw, _ := os.ReadFile(path); strings.Count(string(raw), "\n") != 1 {
+		t.Fatalf("a second line: %q", raw)
+	}
+	if err := Pin(path, "LEAF1", k2, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Count(string(raw), "\n") != 1 || !strings.HasPrefix(string(raw), "LEAF1 ") {
+		t.Fatalf("after replace: %q", raw)
 	}
 }
 

@@ -19,11 +19,15 @@ import (
 // trustScan reads a device's host key; a test swaps it.
 var trustScan = hostkeys.Scan
 
-// trustIsTerminal and trustAnswer are the operator's terminal; tests swap
-// them.
+// The operator's terminal; tests swap these. A confirmation needs stdin and
+// stderr (where the fingerprint and the prompt go) both on a terminal.
 var (
-	trustIsTerminal           = func() bool { return isTerminal(os.Stdin) }
-	trustAnswer     io.Reader = os.Stdin
+	trustStdinIsTerminal  = func() bool { return isTerminal(os.Stdin) }
+	trustStderrIsTerminal = func(w io.Writer) bool {
+		f, ok := w.(*os.File)
+		return ok && isTerminal(f)
+	}
+	trustAnswer io.Reader = os.Stdin
 )
 
 // trustTTL is the lifetime trust asks for the token whose mint gives it the
@@ -61,14 +65,32 @@ func devicesTrust(args []string, stdout, stderr io.Writer) int {
 			"serves it\n", cmd, device)
 		return 2
 	}
-	pinned, err := hostkeys.Lookup(*knownHosts, device)
+	if *fingerprint != "" && !strings.HasPrefix(*fingerprint, "SHA256:") {
+		fmt.Fprintf(stderr, "%s: --fingerprint %q is not in the SHA256:... form: give the SHA256:… form "+
+			"`ssh-keygen -lf` prints, not an MD5 or hex one\n", cmd, *fingerprint)
+		return 2
+	}
+	pinned, err := hostkeys.Entries(*knownHosts, device)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
 		return 1
 	}
 	if len(pinned) > 0 && !*replace {
-		fmt.Fprintf(stderr, "%s: %s is already pinned (%s); pass --replace to pin another key, once you have "+
-			"verified the device's new key on its console\n", cmd, device, hostkeys.Fingerprint(pinned[0]))
+		replaceCmd := "port49 devices trust"
+		if *knownHosts != hostkeys.Path() {
+			replaceCmd += " --known-hosts " + *knownHosts
+		}
+		replaceCmd += " --replace " + device
+		old := pinned[0]
+		if old.Name != device {
+			fmt.Fprintf(stderr, "%s: %s differs from %s, pinned on line %d of %s (%s), only in case; OpenSSH treats "+
+				"the two as one host, so port49 will not pin a second key. To replace that pin, once you have verified "+
+				"the device's key on its console: %s\n", cmd, device, old.Name, old.Line, *knownHosts,
+				hostkeys.Fingerprint(old.Key), replaceCmd)
+			return 1
+		}
+		fmt.Fprintf(stderr, "%s: %s is already pinned (%s); to pin another key, once you have verified the "+
+			"device's new key on its console: %s\n", cmd, device, hostkeys.Fingerprint(old.Key), replaceCmd)
 		return 1
 	}
 	addr := *address
@@ -92,19 +114,24 @@ func devicesTrust(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fp := hostkeys.Fingerprint(key)
-	fmt.Fprintf(stdout, "%s at %s presents %s %s\n", device, target, key.Type(), fp)
+	// The fingerprint and the prompt are stderr's, the result stdout's, so a
+	// redirected stdout never hides what the operator is asked to confirm.
+	fmt.Fprintf(stderr, "%s at %s presents %s %s\n", device, target, key.Type(), fp)
+	if len(pinned) > 0 {
+		fmt.Fprintf(stderr, "replacing %s with %s for %s\n", hostkeys.Fingerprint(pinned[0].Key), fp, device)
+	}
 	switch {
 	case *fingerprint != "" && *fingerprint != fp:
 		fmt.Fprintf(stderr, "%s: %s presents %s, not the %s you verified: nothing pinned; the address inventory "+
 			"gives may not be %s's, so check inventory's address for %s before anything else\n", cmd, device, fp,
 			*fingerprint, device, device)
 		return 1
-	case *fingerprint == "" && !trustIsTerminal():
+	case *fingerprint == "" && !(trustStdinIsTerminal() && trustStderrIsTerminal(stderr)):
 		fmt.Fprintf(stderr, "%s: nothing pinned: pass --fingerprint with the fingerprint you read on %s's console; "+
 			"a key is never pinned unseen (design §17)\n", cmd, device)
 		return 2
 	case *fingerprint == "":
-		fmt.Fprintf(stdout, "Compare it with the key %s's console shows. Pin it? [yes/no]: ", device)
+		fmt.Fprintf(stderr, "Compare it with the key %s's console shows. Pin it? [yes/no]: ", device)
 		line, _ := bufio.NewReader(trustAnswer).ReadString('\n')
 		if strings.TrimSpace(line) != "yes" {
 			fmt.Fprintf(stderr, "%s: nothing pinned\n", cmd)

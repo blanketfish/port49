@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -51,12 +50,81 @@ func ValidName(device string) bool { return validName.MatchString(device) }
 // ErrPinned is a device that already has a pinned key.
 var ErrPinned = errors.New("hostkeys: a key is already pinned for this device")
 
+// PinnedError is ErrPinned with the line that holds the pin: Name is the host
+// field as written there, which differs from the device asked about when the
+// two differ only in case. OpenSSH matches the host field without regard to
+// case, so port49 does too: the two are one host.
+type PinnedError struct {
+	Name string
+	Line int
+}
+
+func (e *PinnedError) Error() string {
+	return fmt.Sprintf("%v (line %d, %q)", ErrPinned, e.Line, e.Name)
+}
+
+func (e *PinnedError) Is(target error) bool { return target == ErrPinned }
+
 // Fingerprint is k's SHA-256 fingerprint as OpenSSH prints it: SHA256:base64.
 func Fingerprint(k ssh.PublicKey) string { return ssh.FingerprintSHA256(k) }
 
-// Lookup is every key pinned for device: lines with no marker whose host
-// field is device and nothing else. A missing file pins nothing.
-func Lookup(path, device string) ([]ssh.PublicKey, error) {
+// Entry is one pin: the host field as written, its line number (from 1), and
+// its key.
+type Entry struct {
+	Name string
+	Line int
+	Key  ssh.PublicKey
+}
+
+// parsed is one line of the pins file: its text (newline kept), and, for a
+// pin, the entry.
+type parsed struct {
+	text  string
+	entry *Entry
+}
+
+// parse reads the pins file. port49 owns this file, and OpenSSH reads it
+// differently from the way port49 does for anything but a plain
+// "name key" line, so a line that is not a blank, a comment or exactly that is
+// refused, naming the file and the line, and port49 neither guesses what
+// OpenSSH would make of it nor rewrites around it.
+func parse(path string, raw []byte) ([]parsed, error) {
+	var lines []parsed
+	for i, text := range strings.SplitAfter(string(raw), "\n") {
+		if text == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, parsed{text: text})
+			continue
+		}
+		marker, hosts, key, _, _, err := ssh.ParseKnownHosts([]byte(text))
+		var why string
+		switch {
+		case err != nil:
+			why = "it does not parse (" + err.Error() + ")"
+		case marker != "":
+			why = "it carries the marker @" + marker
+		case len(hosts) != 1:
+			why = "it names several hosts"
+		case !ValidName(hosts[0]):
+			why = fmt.Sprintf("its host field %q is a pattern, a hash, a negation or a port form", hosts[0])
+		}
+		if why != "" {
+			return nil, fmt.Errorf("%s: line %d: %s: port49 owns this file; OpenSSH would read this line, "+
+				"so port49 will not guess. Remove it, or move it to ~/.ssh/known_hosts", path, i+1, why)
+		}
+		lines = append(lines, parsed{text: strings.TrimSuffix(text, "\n") + "\n",
+			entry: &Entry{Name: hosts[0], Line: i + 1, Key: key}})
+	}
+	return lines, nil
+}
+
+// Entries is every pin whose host field is device, compared without regard to
+// case as OpenSSH does. A missing file pins nothing; a line port49 does not
+// fully understand refuses the file.
+func Entries(path, device string) ([]Entry, error) {
 	raw, err := userconfig.ReadPrivate(path, maxFile, what)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -64,27 +132,35 @@ func Lookup(path, device string) ([]ssh.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	var keys []ssh.PublicKey
-	for rest := raw; len(rest) > 0; {
-		marker, hosts, key, _, next, err := ssh.ParseKnownHosts(rest)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
-		if marker == "" && slices.Equal(hosts, []string{device}) {
-			keys = append(keys, key)
-		}
-		rest = next
+	lines, err := parse(path, raw)
+	if err != nil {
+		return nil, err
 	}
-	return keys, nil
+	var found []Entry
+	for _, l := range lines {
+		if l.entry != nil && strings.EqualFold(l.entry.Name, device) {
+			found = append(found, *l.entry)
+		}
+	}
+	return found, nil
 }
 
-// Pin writes key as device's pinned key. A device with a pin already is
-// ErrPinned unless replace is set, which removes every key pinned for it
-// first. Every other line, another device's or one the operator wrote, is
-// kept as it was.
+// Lookup is every key pinned for device (see Entries).
+func Lookup(path, device string) ([]ssh.PublicKey, error) {
+	found, err := Entries(path, device)
+	var keys []ssh.PublicKey
+	for _, e := range found {
+		keys = append(keys, e.Key)
+	}
+	return keys, err
+}
+
+// Pin writes key as device's pinned key, under the name as given. A device
+// with a pin already, one whose name differs only in case included, is a
+// *PinnedError (ErrPinned) unless replace is set, which removes every key
+// pinned for it first. Every other line, another device's or a comment the
+// operator wrote, is kept as it was. A file holding a line port49 does not
+// understand is refused and left alone.
 func Pin(path, device string, key ssh.PublicKey, replace bool) error {
 	if !ValidName(device) {
 		return fmt.Errorf("hostkeys: %q is not a name port49 pins (decision 42 ruling 8)", device)
@@ -98,23 +174,19 @@ func Pin(path, device string, key ssh.PublicKey, replace bool) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	lines, err := parse(path, raw)
+	if err != nil {
+		return err
+	}
 	var kept []string
-	pinned := false
-	for _, line := range strings.SplitAfter(string(raw), "\n") {
-		if line == "" {
+	for _, l := range lines {
+		if l.entry != nil && strings.EqualFold(l.entry.Name, device) {
+			if !replace {
+				return &PinnedError{Name: l.entry.Name, Line: l.entry.Line}
+			}
 			continue
 		}
-		marker, hosts, _, _, _, perr := ssh.ParseKnownHosts([]byte(line))
-		if perr == nil && marker == "" && slices.Equal(hosts, []string{device}) {
-			pinned = true
-			if replace {
-				continue
-			}
-		}
-		kept = append(kept, strings.TrimSuffix(line, "\n")+"\n")
-	}
-	if pinned && !replace {
-		return ErrPinned
+		kept = append(kept, l.text)
 	}
 	kept = append(kept, device+" "+string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))+"\n")
 	return userconfig.WritePrivate(path, []byte(strings.Join(kept, "")), what)
