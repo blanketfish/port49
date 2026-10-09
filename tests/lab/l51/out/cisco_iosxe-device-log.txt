@@ -1,0 +1,13 @@
+*Oct  9 02:09:04.110: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0)  Succeeded
+*Oct  9 02:09:10.172: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0)  Failed
+*Oct  9 02:09:10.172: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user ''  closed
+*Oct  9 02:09:15.244: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0)  Succeeded
+*Oct  9 02:09:23.810: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0)  Failed
+*Oct  9 02:09:23.810: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user ''  closed
+*Oct  9 02:09:29.027: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0)  Succeeded
+*Oct  9 02:09:37.548: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0)  Failed
+*Oct  9 02:09:37.548: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user ''  closed
+*Oct  9 02:09:42.712: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0)  Succeeded
+*Oct  9 02:09:50.756: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0)  Failed
+*Oct  9 02:09:50.756: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user ''  closed
+*Oct  9 02:09:55.945: %SSH-5-SSH2_SESSION: SSH2 Session request from 172.100.100.1 (tty = 0)  Succeeded
