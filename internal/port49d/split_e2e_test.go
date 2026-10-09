@@ -90,6 +90,7 @@ func TestALoginOnOneDaemonIsAnsweredOnAnother(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	a := startSplitDaemon(t, f.daemon, &out, 1)
 	b := startSplitDaemon(t, f.copyDaemon(t), &out, 2)
 	api, _ := startBroker(t, f.broker, &out, 1)
@@ -110,6 +111,7 @@ func TestARevocationOnOneBrokerReachesTheOther(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	apiA, _ := startBroker(t, f.broker, &out, 1)
 	cfgB := f.copyBroker(t) // its own API address and admin socket

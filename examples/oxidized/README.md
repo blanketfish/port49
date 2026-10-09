@@ -157,6 +157,23 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
   - **Oxidized refusing** (each request has a 10 second limit): a failed node prints its name and
     the rest are still queued. A failed reload prints that `router.db` was replaced but Oxidized
     was not reloaded.
+  - **Just after a broker start**: a port49-broker's first start, or a start after a policy
+    edit, refuses every mint with a retryable `503 store_unavailable` until its runner's
+    takeover is done: up to `store.etcd.hold_ttl`/3 (5s at the default 15s, 20s at 60s) plus the
+    takeover itself, plus up to `hold_ttl` more when the last run's lease must expire first
+    (a crash or a SIGKILL of the only broker: 80s or more at 60s). The takeover purges every
+    unspent token, so the broker holds the mint rather than hand out a token that is about to
+    be deleted. The cause is this start gate, not a store fault, so do not chase etcd.
+    `port49 workload` retries it within its deadline, so a run normally just takes longer; exit
+    75 means the window outlasted the deadline. `port49 token`, through the agent, does not
+    retry: it exits saying to retry in 5s, and running it again is the answer. The broker's stderr says `mints wait for a takeover to judge bundle
+    ...` and then `mints open: ...`, and `port49_broker_mint_gate_closed` reads 1 meanwhile.
+    `/readyz` stays 200. A rolling restart on the same policy is never held. A replica whose
+    policy file differs from the runner's stays held until the files agree (its
+    `port49_policy_bundle_matches_runner` is 0). When the runner's takeover could not judge
+    every context (the directory or the IdP unreachable), the runner says `N live context(s)
+    left unjudged at the takeover`; its own broker mints, and the other replicas stay held
+    until its settle pass records the bundle.
 - **Exit 77**: nothing was minted and running again will not change it: an expired certificate
   (said before anything connects), a revoked principal, every node denied, a certificate
   status nothing covers, or a TLS trust failure (the broker's certificate is not under

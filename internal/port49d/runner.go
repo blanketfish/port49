@@ -61,6 +61,9 @@ type runner struct {
 	// (broker.state_dir/witness.json; Ruling 18), which the takeover and
 	// the duties' keepWitness judge meta/witness against.
 	witness *witnessRecord
+	// tookOver is told the policy each takeover carried, once it is done:
+	// it opens the start's mint gate (decision 36). nil tells nothing.
+	tookOver func(carried *policy.Policy)
 }
 
 // judgedStore is meta/ as the runner reads and writes it (etcd.Store):
@@ -173,6 +176,9 @@ func (r *runner) duties(ctx context.Context) {
 				"again\n", err)
 		}
 		return
+	}
+	if r.tookOver != nil {
+		r.tookOver(carried)
 	}
 	defer r.duty.Store(nil)
 	if !r.begin(ctx, carried) {
@@ -773,8 +779,9 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 }
 
 // takeover is what a replica runs on taking the hold, with the API already
-// serving (decision 35, a start on etcd; plan 7e, Ruling 6; pre-flight C1,
-// M41; re-check IA2):
+// serving and its mints held by the start's gate until a takeover is done
+// (decision 35, a start on etcd; plan 7e, Ruling 6; pre-flight C1, M41;
+// re-check IA2; decision 36, the mint gate at a start):
 //  1. records this start's seal keys, warning on the last (checkSealKeys);
 //  2. puts back every mark this replica's copy holds that the store lacks
 //     (restoreMarks; Ruling 12), then lists the marks, so those are applied

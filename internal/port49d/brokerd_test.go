@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -163,6 +164,34 @@ func (f *fleet) policyOf(t *testing.T, cfg string) string {
 	}
 	return regexp.MustCompile(`(?m)^  policy_file: (\S+)$`).FindStringSubmatch(string(raw))[1]
 }
+
+// judged writes meta/judged naming f's bundle, not in doubt, as a rolling
+// restart finds it, so a broker started after it mints at once. A test
+// whose subject is not the start's mint gate (decision 36) calls it before
+// its first broker, rather than wait out hold_ttl/3 and the takeover.
+//
+// It also marks the fleet pre-judged (judgedFleets): a mint on it that meets
+// the start gate's 503 fails the test, so a slow gate cannot hide behind
+// mintWith's retry. And it reads the record back as a broker's gate does
+// (judgedNames), so a fixture that stops decoding fails here, not as a
+// quiet 3.5s retry in every test that calls it.
+func (f *fleet) judged(t *testing.T) {
+	t.Helper()
+	putJudged(t, f, f.bundle(t), false)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
+	if rec, ok := judgedNames(ctx, bs.raw, f.bundle(t), 5*time.Second); !ok {
+		t.Fatalf("fleet.judged: meta/judged was written but reads as %s, not as judged and not in doubt", rec)
+	}
+	judgedFleets.Store(f.pki, true)
+	t.Cleanup(func() { judgedFleets.Delete(f.pki) })
+}
+
+// judgedFleets holds the lab PKI directory of every fleet.judged was called
+// on: the flag mintWith reads, since it is given the directory and not the
+// fleet.
+var judgedFleets sync.Map
 
 // editPolicy rewrites f.broker's policy file with one comment line added,
 // so its bundle differs.
@@ -794,6 +823,7 @@ func TestAStartAppliesAStandingMarkToAKeptContext(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
@@ -830,6 +860,7 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	root := f.srv.Client(t, "root")
 	ctx := context.Background()
 	api, stopBroker := startBroker(t, f.broker, &out, 1)
@@ -1633,6 +1664,7 @@ func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
@@ -1702,6 +1734,7 @@ func TestAnOfflineRevokeGoesOnWhenThePolicyFileDoesNotLoad(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}

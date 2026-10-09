@@ -352,9 +352,13 @@ type Metrics struct {
 	// port49_broker_mint_gate_closed: 1 while this port49-broker waits to
 	// mark meta/judged in doubt for a swap, minting nothing under the
 	// swapped bundle meanwhile (Task 15a re-review 1, I-2; re-review 3,
-	// I-4). A swap holds it for a store round trip; 1 for longer than a
-	// minute is a store that does not answer, or refuses, the broker's
-	// mark. Readiness never shows it (design §12): it is an alarm.
+	// I-4), and from its start until it has seen a takeover done for the
+	// bundle it serves (decision 36, the mint gate at a start). A swap
+	// holds it for a store round trip, a first start for hold_ttl/3 and
+	// the takeover; 1 for longer than a minute is a store that does not
+	// answer, or refuses, the broker's mark, or no runner that judges this
+	// replica's bundle. Readiness never shows it (design §12): it is an
+	// alarm.
 	BrokerMintGateClosed prometheus.Gauge
 	// port49_redemption_restore_guarded: 1 while this port49d refuses every
 	// token redemption store_unavailable, having found meta/witness below
@@ -655,8 +659,9 @@ func New(reg prometheus.Registerer) *Metrics {
 				"policy file that differs from the brokers', for admission, quarantine and redaction."}),
 		BrokerMintGateClosed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed",
 			Help: "1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing " +
-				"under the swapped bundle; 1 for longer than a minute is a store that does not answer, or refuses, " +
-				"the mark."}),
+				"under the swapped bundle, and from its start until it has seen a takeover done for the bundle it " +
+				"serves; 1 for longer than a minute is a store that does not answer, or refuses, the mark, or no " +
+				"runner that judges this broker's bundle."}),
 		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
 			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
 				"snapshot, until a broker runner's purge is done."}),

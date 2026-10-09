@@ -184,6 +184,10 @@ func startOxidized(t *testing.T, l *lab, restricted bool, phase string) *oxidize
 	// some seconds after /readyz: a token minted before then can be purged
 	// between the mint and the device's redeem (token_not_found; run set 3,
 	// Junos phase A). Nothing is minted until the takeover's last line.
+	// The broker now holds its own mints until then (decision 36, the mint
+	// gate at a start: 503 store_unavailable, which the wrapper's port49
+	// workload retries); the wait stays as harness hygiene, so the setup
+	// run's deadline is not spent on the gate.
 	if err := awaitTakeover(o.c.brokerErr, 3*time.Minute); err != nil {
 		t.Fatalf("%v (INVALID, not a measured no)", err)
 	}

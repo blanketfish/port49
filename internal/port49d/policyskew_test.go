@@ -86,14 +86,14 @@ func TestAStartMarksTheJudgedBundleOnlyWhenItIsAnother(t *testing.T) {
 func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	var out syncBuffer
 	b1, b2 := policyWithBundle(t, "b1"), policyWithBundle(t, "b2")
-	gate := &skewGate{}
-	gate.flag("b1")
 	closed := prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed"})
+	gate := &skewGate{closed: closed}
+	gate.flag("b1")
 	if gate.allow(b1) != nil || gate.allow(b2) == nil {
 		t.Fatal("the gate is open only to the bundle flagged")
 	}
 	st := &fakeBundles{judged: "b1", markFail: 3, failErr: store.ErrUnavailable}
-	flagSwap(context.Background(), st, gate, "replica-b", "b2", time.Minute, time.Second, 10*time.Millisecond, closed, &out)
+	flagSwap(context.Background(), st, gate, "replica-b", "b2", time.Minute, time.Second, 10*time.Millisecond, &out)
 	if gate.allow(b2) != nil || gate.allow(b1) == nil || !st.inDoubt {
 		t.Fatalf("a swap flagged: in doubt %v; said %s", st.inDoubt, out.String())
 	}
@@ -103,7 +103,7 @@ func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	}
 	b4 := policyWithBundle(t, "b4")
 	st = &fakeBundles{judged: "b3", markFail: 1, failErr: store.ErrRefused}
-	flagSwap(context.Background(), st, gate, "replica-b", "b4", time.Minute, time.Second, 10*time.Millisecond, closed, &out)
+	flagSwap(context.Background(), st, gate, "replica-b", "b4", time.Minute, time.Second, 10*time.Millisecond, &out)
 	if gate.allow(b4) != nil || !st.inDoubt || !strings.Contains(out.String(), "(b4): store: refused this identity") {
 		t.Fatalf("a refused mark, then one that lands: in doubt %v; said %s", st.inDoubt, out.String())
 	}
@@ -111,13 +111,13 @@ func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	st = &fakeBundles{judged: "b3", markFail: 1 << 30, failErr: store.ErrRefused}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	flagSwap(ctx, st, gate, "replica-b", "b5", time.Minute, time.Second, 10*time.Millisecond, closed, &out)
+	flagSwap(ctx, st, gate, "replica-b", "b5", time.Minute, time.Second, 10*time.Millisecond, &out)
 	if gate.allow(b5) == nil || st.inDoubt || testutil.ToFloat64(closed) != 1 {
 		t.Fatalf("a mark that never lands opened the gate (gauge %v)", testutil.ToFloat64(closed))
 	}
 	b3 := policyWithBundle(t, "b3")
 	st = &fakeBundles{judged: "b3"}
-	flagSwap(context.Background(), st, gate, "replica-b", "b3", time.Minute, time.Second, 10*time.Millisecond, closed, &out)
+	flagSwap(context.Background(), st, gate, "replica-b", "b3", time.Minute, time.Second, 10*time.Millisecond, &out)
 	if gate.allow(b3) != nil || st.inDoubt || testutil.ToFloat64(closed) != 0 {
 		t.Fatalf("a swap onto the bundle judged: in doubt %v, gauge %v", st.inDoubt, testutil.ToFloat64(closed))
 	}
@@ -142,12 +142,11 @@ func (m *markOrder) JudgeInDoubt(ctx context.Context, unless string) (string, bo
 // bundle (final review 7e-2 M-1).
 func TestASwapRecordsItsBundleBeforeItMarks(t *testing.T) {
 	var out syncBuffer
-	gate := &skewGate{}
 	closed := prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed"})
+	gate := &skewGate{closed: closed}
 	st := &markOrder{fakeBundles: &fakeBundles{judged: "b1"}, who: "replica-b"}
 	st.set("replica-b", "b1")
-	flagSwap(context.Background(), st, gate, "replica-b", "b2", time.Minute, time.Second, 10*time.Millisecond, closed,
-		&out)
+	flagSwap(context.Background(), st, gate, "replica-b", "b2", time.Minute, time.Second, 10*time.Millisecond, &out)
 	if st.atMark != "b2" || !st.inDoubt {
 		t.Fatalf("the record named %q when the mark landed (in doubt %v)", st.atMark, st.inDoubt)
 	}

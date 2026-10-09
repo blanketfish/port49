@@ -150,10 +150,13 @@ const purgePage = 256
 
 // PurgeTokens deletes the token family a page at a time: it reads a page
 // of tokens, counts its live ones, and deletes exactly that page's key
-// range, until none is left. It runs at a start, before any listener
-// binds and with the keyspace held (Task 12), so nothing mints between
-// the pages; a token put mid-purge would be purged by a later page or
-// left, never half-deleted. A large t/ costs pages, never a request etcd
+// range, until none is left. It runs with the keyspace held: at plan 7d's
+// single-process start before any listener binds (Task 12), and at a
+// port49-broker runner's takeover, with the API serving. There the
+// replica's own start mints nothing until a takeover is seen done
+// (decision 36, the mint gate at a start), and another replica's mint may
+// land mid-purge: a token put mid-purge is purged by a later page or left,
+// never half-deleted. A large t/ costs pages, never a request etcd
 // refuses.
 func (s *Store) PurgeTokens(ctx context.Context) (int, error) {
 	prefix := s.k.family(famToken)

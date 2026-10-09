@@ -133,14 +133,37 @@ func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
 }
 
 // mintWith is mintKeyed with the client certificate and key at certFile
-// and keyFile in pkiDir.
+// and keyFile in pkiDir. A 503 store_unavailable, the mint gate's, is
+// tried again for up to 30s, as port49 workload retries it (the agent does
+// not; port49 token exits saying to retry):
+// a port49-broker's start holds every mint until a takeover judges its
+// bundle (decision 36). Each retry is logged with its count and elapsed
+// time, so a slow gate shows in -v output; on a fleet that was pre-judged
+// (fleet.judged) there is no gate to wait for, and a retry fails the test.
+// A test of the gate posts once (postMint).
 func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
 	t.Helper()
-	resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
+	var raw []byte
+	var status int
+	begin, retries := time.Now(), 0
+	for deadline := begin.Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
+		var err error
+		raw, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		status = resp.StatusCode
+		if status != http.StatusServiceUnavailable || !bytes.Contains(raw, []byte(`"store_unavailable"`)) ||
+			time.Now().After(deadline) {
+			break
+		}
+		if _, pre := judgedFleets.Load(pkiDir); pre {
+			t.Fatalf("mint on a pre-judged fleet met 503 store_unavailable: no start gate should hold it")
+		}
+		retries++
+		t.Logf("mint: 503 store_unavailable, retry %d after %s", retries, time.Since(begin).Round(time.Millisecond))
 	}
 	var out api.MintResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -152,7 +175,7 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 		var e api.Error
 		_ = json.Unmarshal(raw, &e)
 		t.Fatalf("mint: %d result(s); status %d, error %q; a mint answer carries tokens and is not printed",
-			len(out.Results), resp.StatusCode, e.Error)
+			len(out.Results), status, e.Error)
 	}
 	return out.Results[0].Login
 }

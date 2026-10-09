@@ -2286,7 +2286,7 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the replica's mark on `meta/judged` has not landed since its policy swap (the mint gate; one store round trip, `port49_broker_mint_gate_closed`). On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not, so `port49 token` exits saying to retry in 5s. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -6993,7 +6993,9 @@ review (the owner may override them).*
 - **A start on etcd.** *Amended by decision 36 (plan 7e):* on etcd the hold, the marks put
   back (step 2, from the runner's `broker.state_dir/marks.json`), the purge (step 5, only when
   the bundle in force is not the one last judged) and the carry (step 6) are the runner's at
-  its takeover (decision 36, the runner and the purge at a takeover). port49d's own start is
+  its takeover (decision 36, the runner and the purge at a takeover). port49-broker serves the
+  API before that takeover, and refuses mints `store_unavailable` until it has seen one done
+  for the bundle it serves (decision 36, the mint gate at a start). port49d's own start is
   decision 36's, and it purges nothing. As plan 7d built it: port49d waits for the store with
   every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
@@ -7141,7 +7143,10 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   Every replica serves the API and the admin socket, runs the token half of its own reload's
   passes and certificate status, and follows the contexts and the marks. A runner that loses
   the hold stops those duties at once, keeps serving the API, and tries to take the hold again
-  every 5s; a broker's readiness is never the store's.
+  every 5s; a broker's readiness is never the store's. Its mints are another matter: each
+  replica serves the API before its runner tries for the hold, and from its start until it has
+  seen a takeover done for the bundle it serves (its own runner's, or one `meta/judged` names,
+  not in doubt) its mint gate refuses every mint `store_unavailable` (§5.7), ready meanwhile.
 - **The purge at a takeover.** The runner records in `meta/judged` the bundle in force, with its
   policy, when a pass leaves `port49_policy_refresh_pending` at 0 and every broker process
   serves that bundle, and at a takeover whose carry leaves nothing owed. A runner taking the
@@ -7149,7 +7154,27 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   settle pass, or a replica serving another bundle) purges every unspent token and records the
   instant for every key; with the same, it purges none, so a rolling restart of the brokers
   keeps everyone's tokens. A token minted in the moment between that instant and the purge is
-  purged too, and its login fails `token_not_found`. After an etcd restore, the unspent tokens
+  purged too, and its login fails `token_not_found`. A replica's own start never mints into
+  that moment when the restore runbook was followed: its mint gate stays closed from the start
+  until it has seen a takeover done for the bundle it serves, its own runner's or another's that `meta/judged` records, not in
+  doubt. A rolling restart, `meta/judged` already naming the bundle, is never held; a first
+  start, or one after a policy edit, refuses mints with a retryable `store_unavailable` for up
+  to `hold_ttl`/3 and the takeover (plus up to `hold_ttl` when the previous run's lease must
+  expire first, as after a crash), and a replica whose bundle the runner does not serve until
+  a runner judges it. The runbook deletes `meta/judged`, which is what keeps the gate closed
+  after a restore; a snapshot restored without that step brings back a `meta/judged` that names
+  the bundle, the gate opens on it at once, and the restore guard and the runner's purge are
+  the backstop (each such login fails `token_not_found`). The lab's seed tokens, minted before
+  the gate and before "listening on", are not covered: the first takeover purges them. The
+  tokens such a takeover would purge were minted under the very bundle
+  it then records, so purging by mint time was not taken: it would keep, too, a token another
+  replica minted after the instant under a bundle no runner judged. The moment stays for a
+  token minted after the gate opened, under a bundle a later takeover finds unjudged (an edit
+  whose runner stopped before its settle pass, or a replica serving another bundle). The gate
+  at a start was found by plan 8's L49 (`tests/lab/results/L49-oxidized-juniper_vjunos-router.md`:
+  run set 3's phase A lost its setup mint to the first takeover's purge, 5 to 21s after
+  "listening on"; the note itself is from the re-run after the harness waited the window out),
+  and ruled by the controller on recommendation (2026-10-08); Ryan may override. After an etcd restore, the unspent tokens
   (`<prefix>v1/t/`), `meta/judged` and `meta/judged_bundle` are deleted before any port49 process reaches the
   restored store (design §13's runbook): a restore brings back every token redeemed since the
   snapshot, unspent, and a port49d, one that ran across the restore too, would redeem it again
