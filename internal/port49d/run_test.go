@@ -137,12 +137,16 @@ func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
 // tried again for up to 30s, as port49 workload retries it (the agent does
 // not; port49 token exits saying to retry):
 // a port49-broker's start holds every mint until a takeover judges its
-// bundle (decision 36). A test of the gate posts once (postMint).
+// bundle (decision 36). Each retry is logged with its count and elapsed
+// time, so a slow gate shows in -v output; on a fleet that was pre-judged
+// (fleet.judged) there is no gate to wait for, and a retry fails the test.
+// A test of the gate posts once (postMint).
 func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
 	t.Helper()
 	var raw []byte
 	var status int
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+	begin, retries := time.Now(), 0
+	for deadline := begin.Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
 		var err error
 		raw, err = io.ReadAll(resp.Body)
@@ -155,6 +159,11 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 			time.Now().After(deadline) {
 			break
 		}
+		if _, pre := judgedFleets.Load(pkiDir); pre {
+			t.Fatalf("mint on a pre-judged fleet met 503 store_unavailable: no start gate should hold it")
+		}
+		retries++
+		t.Logf("mint: 503 store_unavailable, retry %d after %s", retries, time.Since(begin).Round(time.Millisecond))
 	}
 	var out api.MintResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
