@@ -233,6 +233,11 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 	lim [2][]string) (note string, inForce bool) {
 	t.Helper()
 	l53Configure(t, admin, lim[0])
+	// The daemon's restart after the configuration session probes the device
+	// with logins that fail until port49d answers, and with the limit set
+	// those can trip it. Wait out its 60s so the scans meet a limit in force
+	// and not yet tripped.
+	time.Sleep(70 * time.Second)
 	for i := range 3 {
 		if _, err := hostkeys.Scan(context.Background(), addr); err != nil {
 			t.Errorf("scan %d with the limit set: %v", i+1, err)
@@ -253,7 +258,8 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 		}
 		return fmt.Sprintf("it was refused (%v)", err)
 	}
-	return fmt.Sprintf("With `%s` set: three scans, then a login with a fresh token: %s. The control, two refused "+
+	return fmt.Sprintf("With `%s` set (and 70s waited, so the harness's own failed probe logins after the daemon's "+
+		"restart were out of its window): three scans, then a login with a fresh token: %s. The control, two refused "+
 		"logins as `"+sliceUser+"`, the user the login uses, and then a login with a fresh token: %s.", lim[0][1],
 		outcome(afterScans), outcome(afterControl)), afterControl != nil
 }
@@ -558,7 +564,9 @@ func TestL53L54PortSSH(t *testing.T) {
 						return err
 					}
 					if last {
-						time.Sleep(3 * time.Second)
+						time.Sleep(5 * time.Second)
+						t.Logf("after the answer %q, the device said:\n%s", step[2],
+							trimForNote(strings.TrimPrefix(c.transcript(), out)))
 					}
 				}
 			}
