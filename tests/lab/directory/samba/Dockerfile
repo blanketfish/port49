@@ -4,7 +4,7 @@
 FROM debian:bookworm-slim
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       samba samba-ad-provision samba-dsdb-modules samba-vfs-modules krb5-user winbind ldb-tools ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY entrypoint.sh seed.sh set-attr.sh l50-seed.sh /lab/
-RUN chmod 0755 /lab/entrypoint.sh /lab/seed.sh /lab/set-attr.sh /lab/l50-seed.sh
+COPY entrypoint.sh seed.sh set-attr.sh l50-seed.sh l50-dacl.py /lab/
+RUN chmod 0755 /lab/entrypoint.sh /lab/seed.sh /lab/set-attr.sh /lab/l50-seed.sh /lab/l50-dacl.py
 EXPOSE 88/tcp 88/udp 389 636
 ENTRYPOINT ["/lab/entrypoint.sh"]

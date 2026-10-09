@@ -263,10 +263,11 @@ func (l *labDir) l50SambaACL(t *testing.T, ev *evidenceLog, password, op, attr s
 // l50SambaDelegated is the delegated administrator's attempts to get round the
 // prescribed deny on uid (review I-3), as l50-ouadmin: (b) it creates an entry
 // in the OU and writes uid on it, (a) it adds an allow of write on uid for
-// itself to the target's DACL and writes uid. The deny must be set; the caller
-// clears it, by a re-seed, which also undoes the ACE and the entry. Taking
-// ownership (c) is not measured on Samba: samba-tool 4.17 has no way to set the
-// owner of an object.
+// itself to the target's DACL and writes uid, (c) it takes ownership of the
+// target, then does (a). The deny must be set; a re-seed undoes the ACE, the
+// entry and the ownership (it recreates the OU and the target), and the caller
+// does one last. The ACE and the owner change are made by l50-dacl.py, as
+// samba-tool dsacl stops for a delegated admin before changing anything.
 func (l *labDir) l50SambaDelegated(t *testing.T, ev *evidenceLog, password string, b *strings.Builder) (cells []l50Cell) {
 	t.Helper()
 	secrets := []string{password, l.d.password}
@@ -330,7 +331,26 @@ func (l *labDir) l50SambaDelegated(t *testing.T, ev *evidenceLog, password strin
 		w.writer = aceWrite
 		cells = append(cells, w)
 	}
-	b.WriteString("- (c) Taking ownership is not measured on Samba: `samba-tool dsacl` 4.17 can add an ACE but cannot set the owner.\n")
+
+	// (c) ownership first, then (a), on a fresh OU and target (a re-seed, then the
+	// deny again, undoes (a)'s ACE).
+	l.l50SambaACL(t, ev, password, "clear", "uid", nil)
+	l.l50SambaACL(t, ev, password, "set", "uid", nil)
+	c, ok = step("l50-ouadmin (takes ownership of the target)", "dacl", "own")
+	cells = append(cells, c)
+	if ok {
+		fmt.Fprintf(b, "- (c) The target's owner and group after l50-ouadmin took ownership: `%s`.\n", owner(sd("svc-oxidized-01")))
+		w := l.l50SambaWriteTo(ev, l50SambaTarget, "uid", "l50-ouadmin", l50Value("uid", "l50-ouadmin-own", l50Prescribed), l50Prescribed, secrets...)
+		w.writer = "l50-ouadmin (writes the target after taking ownership, no ACE)"
+		cells = append(cells, w)
+		c, ok = step("l50-ouadmin (after taking ownership, adds an allow ACE for itself)", "dacl", "allow", "uid")
+		cells = append(cells, c)
+		if ok {
+			w := l.l50SambaWriteTo(ev, l50SambaTarget, "uid", "l50-ouadmin", l50Value("uid", "l50-ouadmin-own-ace", l50Prescribed), l50Prescribed, secrets...)
+			w.writer = "l50-ouadmin (writes the target after taking ownership and that ACE)"
+			cells = append(cells, w)
+		}
+	}
 	return cells
 }
 

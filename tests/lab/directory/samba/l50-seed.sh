@@ -11,8 +11,9 @@
 #   ran under (pre-flight I-8).
 # - "dacl ..." acts as the delegated admin l50-ouadmin, not as root: "allow
 #   <attribute>" adds an explicit allow of write on <attribute> for itself to
-#   the target; "create" makes the user l50-made in the OU; "delete" removes it;
-#   "get <cn>" prints the descriptor of CN=<cn> in the OU.
+#   the target; "own" makes itself the target's owner; "create" makes the user
+#   l50-made in the OU; "delete" removes it; "get <cn>" prints the descriptor of
+#   CN=<cn> in the OU (as root).
 set -eu
 pw=$1
 sam=/var/lib/samba/private/sam.ldb
@@ -65,20 +66,11 @@ if [ "${2:-}" = dacl ]; then
   # with signing; the DC requires strong auth), so the directory decides.
   case "$3" in
     allow)
-      ace="(OA;;WP;$(schemaid "$4");;$(ouadminsid))"
-      # samba-tool 4.17 prints the descriptor after the change, and the print
-      # fails for a delegated admin (no right to read the SACL: KeyError). So the
-      # judge of whether the change landed is the descriptor, read as root.
-      rc=0
-      out=$(samba-tool dsacl set --objectdn="$target" --sddl="$ace" -H ldap://localhost -U "l50-ouadmin%$pw" 2>&1) || rc=$?
-      if samba-tool dsacl get --objectdn="$target" | grep -qF "$ace"; then
-        echo "ACE present; samba-tool dsacl set exited $rc: $(echo "$out" | tail -n 1)"
-      else
-        echo "$out"
-        echo "ACE absent; samba-tool dsacl set exited $rc"
-        exit 1
-      fi
+      # Not samba-tool dsacl: it reads the SACL first, which a delegated admin
+      # cannot, and stops before changing anything (measured).
+      /lab/l50-dacl.py "$pw" allow "$target" "$(schemaid "$4")" "$(ouadminsid)"
       ;;
+    own) /lab/l50-dacl.py "$pw" own "$target" "" "$(ouadminsid)" ;;
     create)
       samba-tool user create l50-made "$pw" --userou=OU=Workloads -H ldap://localhost -U "l50-ouadmin%$pw" >/dev/null
       ;;
