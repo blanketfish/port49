@@ -107,6 +107,13 @@ func TestTwoEntriesHoldingOneSPIFFEIDAreAmbiguous(t *testing.T) {
 				!strings.Contains(err.Error(), "OU=Staff") {
 				t.Fatalf("%v", err)
 			}
+			// The uniqueness search reads no values (attribute 1.1), so a
+			// variant is never compared and waved through.
+			if !slices.ContainsFunc(w.dir.calls, func(c *ldap.SearchRequest) bool {
+				return c.Filter == "(uid="+wlID+")" && slices.Equal(c.Attributes, []string{"1.1"})
+			}) {
+				t.Fatal("the uniqueness search does not request 1.1")
+			}
 		})
 	}
 }
@@ -146,6 +153,17 @@ func TestOneEntryIsOneDomain(t *testing.T) {
 	}) {
 		t.Fatal("the person search does not read the workload attribute")
 	}
+	// With no mapping, a SPIFFE value is only a value: alice stays a person.
+	t.Run("no mapping", func(t *testing.T) {
+		w := newWorkloadWorld(t)
+		w.r.Cfg.Workload = nil
+		a := entry(alice, map[string][]string{"userPrincipalName": {"alice@corp.example.com"},
+			"sAMAccountName": {"alice"}, "mail": {"alice@corp.example.com"}, "uid": {wlID}})
+		w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))", a)
+		if _, err := w.r.Verify(context.Background(), alicePrincipal); err != nil {
+			t.Fatalf("%v", err)
+		}
+	})
 }
 
 // With no server answering, a workload is served from the store within

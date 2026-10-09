@@ -326,8 +326,8 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 		return Answer{}, err
 	case errors.Is(err, ErrAmbiguous):
 		r.count("ambiguous")
-		r.sayOnce("ambiguous:"+q.say, time.Hour, "directory: identity_ambiguous: %s; refusing it: two people "+
-			"matching one certificate is an impersonation path (design §7)", printsafe.Line(err.Error(), 400))
+		r.sayOnce("ambiguous:"+q.say, time.Hour, "directory: identity_ambiguous: %s; refusing it: two entries "+
+			"matching one identity is an impersonation path (design §7)", printsafe.Line(err.Error(), 400))
 		r.refuse(ctx, q, refuse, id)
 		return Answer{}, err
 	case errors.Is(err, ErrUsernameTaken):
