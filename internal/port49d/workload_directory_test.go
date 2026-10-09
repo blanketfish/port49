@@ -63,8 +63,8 @@ func TestTheWorkloadMappingStartLines(t *testing.T) {
 // stays quiet for an attribute the entry cannot write.
 func TestTheWorkloadMappingStartSaysSelfWrittenAttributes(t *testing.T) {
 	const selfWritten = "port49-broker: directory: on Active Directory the entry itself can write %s whatever the " +
-		"OU's ACL (lab L50), so any entry under the workload user_filter, a person's included, can put another " +
-		"workload's SPIFFE ID on itself; use uid or description\n"
+		"OU's ACL (lab L50, measured on a service account's entry), so an entry under the workload user_filter " +
+		"can put another workload's SPIFFE ID on itself; use uid or description\n"
 	for _, tc := range []struct {
 		attribute string
 		said      bool

@@ -398,8 +398,8 @@ func (r *Resolver) pinned(ctx context.Context, id Identity, attr string) error {
 	return fmt.Errorf("%w: %s is pinned to entry %s and is now claimed by %s (%s); a %s value moved "+
 		"between entries never carries a principal with it (Ruling 3); if this is the same person's entry "+
 		"re-created (a rehire, a restore), confirm that and run `port49 directory forget %s` against the "+
-		"broker's admin_socket", ErrUnmapped, printsafe.Line(id.Principal, 300), printsafe.Line(m.EntryID, 120),
-		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), attr, printsafe.Line(id.Principal, 300))
+		"broker's admin_socket", ErrUnmapped, printsafe.Line(id.Principal, spiffe.MaxLen), printsafe.Line(m.EntryID, 120),
+		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), attr, printsafe.Line(id.Principal, spiffe.MaxLen))
 }
 
 // unreadPin is the entry id of a refusal whose held pin could not be read:
@@ -440,7 +440,7 @@ func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identit
 			pin = unreadPin
 			r.sayOnce("unreadpin:"+p, time.Hour, "directory: %s: the pin it was held to could not be read (%v); "+
 				"the principal is held refused to every entry; once the store is healthy, `port49 directory forget %s` "+
-				"against the broker's admin_socket frees it", printsafe.Line(p, 300), err, printsafe.Line(p, 300))
+				"against the broker's admin_socket frees it", printsafe.Line(p, spiffe.MaxLen), err, printsafe.Line(p, spiffe.MaxLen))
 		}
 		if err := r.Store.PutMembership(sctx, store.Membership{Principal: p, EntryID: pin, Refused: true,
 			VerifiedAt: now}, r.TTL()); err != nil {
@@ -473,16 +473,16 @@ func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.
 	case m.Refused:
 		r.count("unavailable")
 		return Answer{}, fmt.Errorf("%w: the directory refused %s at %s, before it stopped answering; grace never "+
-			"overrules a refusal", ErrUnavailable, printsafe.Line(m.Principal, 300), m.VerifiedAt.UTC().Format(time.RFC3339))
+			"overrules a refusal", ErrUnavailable, printsafe.Line(m.Principal, spiffe.MaxLen), m.VerifiedAt.UTC().Format(time.RFC3339))
 	}
 	age := r.Now().Sub(m.VerifiedAt)
 	if r.Cfg.Grace == 0 || age > r.Cfg.Grace {
 		r.count("unavailable")
 		r.sayOnce("past:"+m.Principal, time.Hour, "directory: %s: no server answered and the membership stored was "+
-			"verified %s ago, past directory.grace (%s); refused directory_unavailable", printsafe.Line(m.Principal, 300),
+			"verified %s ago, past directory.grace (%s); refused directory_unavailable", printsafe.Line(m.Principal, spiffe.MaxLen),
 			age.Round(time.Minute), r.Cfg.Grace)
 		return Answer{}, fmt.Errorf("%w: the membership stored for %s was verified %s ago, past directory.grace (%s)",
-			ErrUnavailable, printsafe.Line(m.Principal, 300), age.Round(time.Minute), r.Cfg.Grace)
+			ErrUnavailable, printsafe.Line(m.Principal, spiffe.MaxLen), age.Round(time.Minute), r.Cfg.Grace)
 	}
 	if subj, ok := r.declared()[m.Username]; declared && ok {
 		r.count("collision")
@@ -491,7 +491,7 @@ func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.
 	}
 	r.count("grace")
 	r.sayOnce("grace:"+m.Principal, time.Hour, "directory: %s minted from a membership verified %s ago (grace)",
-		printsafe.Line(m.Principal, 300), age.Round(time.Minute))
+		printsafe.Line(m.Principal, spiffe.MaxLen), age.Round(time.Minute))
 	return Answer{Membership: m, Source: Grace}, nil
 }
 

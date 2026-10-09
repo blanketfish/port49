@@ -7872,7 +7872,9 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
   - **Never on a group.** A `machine_group:` subject declares no `username:` (a load error): one
     name for many workloads would put them in one `(nas, username)` context.
   - **Who must declare.** Under the mapping, a subject whose identities are all `spiffe://` IDs
-    need not declare one; a subject listing an `app:` identity still must.
+    need not declare one; a subject listing an `app:` identity still must. Since the offline tools
+    do not know whether a mapping is configured, `port49 policy lint` reports such a subject as
+    `workload_no_username` (advisory): it mints only under the mapping.
   - **One entry, one domain.** An entry whose workload `attribute` holds any value beginning
     `spiffe://` is a workload's. While a workload mapping is configured, the person path (a bind,
     a mint, the scheduled refresh, pre-warm) refuses such an entry `identity_unmapped`, so one
