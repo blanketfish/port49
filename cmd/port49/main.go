@@ -148,17 +148,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 // (design §7; plan 3, Question 1).
 type sessionFlags struct {
 	broker, cert, key, brokerCA, socket, configFile string
-	// brokerCAPEM is the CA file's bytes when brokerCA came from the config
-	// file: userconfig.Load read them through its ownership walk, and they
-	// are what the login trusts, not a second read of the path.
+	// brokerCAPEM is the CA's bytes: userconfig.Load read them through its
+	// ownership walk when brokerCA came from the config file, config() read
+	// them from --broker-ca otherwise. login hands these same bytes to the
+	// agent it starts on brokerCAFD, so what the session trusts is what was
+	// read once, not a second read of the path.
 	brokerCAPEM []byte
+	// brokerCAFD is an inherited descriptor the CA's bytes come on, to EOF
+	// (the agent child's; hidden: the login sets it). 0 is unset.
+	brokerCAFD int
 }
+
+// maxBrokerCA bounds the CA read from the descriptor, as userconfig bounds a file.
+const maxBrokerCA = 1 << 20
 
 func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&s.cert, "cert", "", "your client certificate (PEM)")
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
+	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file: broker, broker_ca, cert and "+
 		"key, each overridden by its flag")
@@ -217,12 +226,29 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
 	caPEM := s.brokerCAPEM
-	if caPEM == nil {
+	switch {
+	case caPEM != nil:
+	case s.brokerCAFD != 0:
+		// The login read the CA once and passed the bytes; the path is not
+		// read again.
+		in := os.NewFile(uintptr(s.brokerCAFD), "broker-ca")
+		if in == nil {
+			return agent.Config{}, fmt.Errorf("--broker-ca-fd %d is not an open descriptor", s.brokerCAFD)
+		}
+		defer in.Close()
+		if caPEM, err = io.ReadAll(io.LimitReader(in, maxBrokerCA+1)); err != nil {
+			return agent.Config{}, fmt.Errorf("reading the broker CA from the login: %w", err)
+		}
+		if len(caPEM) > maxBrokerCA {
+			return agent.Config{}, fmt.Errorf("the broker CA is over %d bytes", maxBrokerCA)
+		}
+	default:
 		// Named by --broker-ca: the operator's own choice of path.
 		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
 			return agent.Config{}, err
 		}
 	}
+	s.brokerCAPEM = caPEM
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", s.brokerCA)
@@ -297,13 +323,31 @@ func login(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 1
 	}
-	cmd := exec.Command(self, append([]string{"agent"}, sf.args()...)...)
+	// The CA this login read goes to the agent on a pipe (descriptor 3, the
+	// first of ExtraFiles), so the agent trusts these bytes and does not read
+	// the path a second time.
+	caR, caW, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 1
+	}
+	defer caR.Close()
+	defer caW.Close()
+	cmd := exec.Command(self, append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")...)
 	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.ExtraFiles = []*os.File{caR}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(stderr, "port49 login: starting the agent:", err)
 		return 1
 	}
+	caR.Close()
+	// A goroutine: the pipe holds 64 KiB and the CA may be larger. An agent
+	// that dies leaves the write failing, which ends it.
+	go func() {
+		_, _ = caW.Write(sf.brokerCAPEM)
+		caW.Close()
+	}()
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
