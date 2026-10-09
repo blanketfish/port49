@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,112 @@ func TestADirectoryAboveOthersCanWriteIsRefused(t *testing.T) {
 	}
 }
 
+// A config directory reached through a symlink lives where the link points:
+// whoever can write that directory's parent can rename it and put their own
+// in its place, so the walk covers the resolved path too (decision 42 ruling
+// 6; OpenSSH's secure_path resolves first).
+func TestASymlinkedDirectoryIntoAWritableOneIsRefused(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	shared := filepath.Join(privateDir(t), "shared")
+	real := filepath.Join(shared, "port49")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "config.yaml"), []byte("broker: https://b.example:8443\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(home, ".config", "port49")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shared, 0o700) })
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(home, ".config", "port49", "config.yaml")
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by others") {
+		t.Fatalf("a link into a world-writable directory: %v", err)
+	}
+	if err := WritePrivate(p, []byte("x\n"), "pinned host keys file"); err == nil ||
+		!strings.Contains(err.Error(), shared+" is writable by others") {
+		t.Fatalf("a write through it: %v", err)
+	}
+}
+
+// A symlinked ~/.config into a directory only you can write is how a dotfiles
+// repo lays out a home: accepted, by ReadPrivate and WritePrivate alike.
+func TestASymlinkedConfigDirectoryYouOwnAloneIsAccepted(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	dotfiles := privateDir(t)
+	if err := os.Mkdir(filepath.Join(dotfiles, "port49"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfiles, filepath.Join(home, ".config")); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(home, ".config", "port49", "config.yaml")
+	if err := WritePrivate(p, []byte("broker: https://b.example:8443\n"), "port49 config file"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if f, ok, err := Load(p); err != nil || !ok || f.Broker != "https://b.example:8443" {
+		t.Fatalf("read: %+v ok %v err %v", f, ok, err)
+	}
+}
+
+// The refusal names the owner and you, and says what to do.
+func TestTheNotOwnedRefusalNamesTheOwnerAndYou(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, the file is root's")
+	}
+	p := private(t, "config.yaml", "broker: https://b.example:8443\n")
+	prev := getuid
+	getuid = func() int { return os.Getuid() + 1 }
+	t.Cleanup(func() { getuid = prev })
+	_, _, err := Load(p)
+	want := "owned by uid " + strconv.Itoa(os.Getuid()) + ", not you (uid " + strconv.Itoa(os.Getuid()+1) + ")"
+	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "recreate it as yourself") {
+		t.Fatalf("%v, want %q", err, want)
+	}
+}
+
+// ~user is not expanded; it is refused, not read as <dir>/~user.
+func TestATildeNotFollowedBySlashIsRefused(t *testing.T) {
+	p := private(t, "config.yaml", "cert: ~bob/cert.pem\n")
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "~bob/cert.pem") ||
+		!strings.Contains(err.Error(), "~user") {
+		t.Fatalf("~bob: %v", err)
+	}
+}
+
+// A file or directory port49 may not open says which, and what to run.
+func TestAnUnreadableFileSaysWhatToRun(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, nothing is unreadable")
+	}
+	p := private(t, "config.yaml", "broker: https://b.example:8443\n")
+	if err := os.Chmod(p, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "chmod u+r "+p) {
+		t.Fatalf("an unreadable file: %v", err)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := filepath.Dir(p)
+	if err := os.Chmod(d, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(d, 0o700) })
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "chmod u+rx "+d) {
+		t.Fatalf("an unsearchable directory: %v", err)
+	}
+}
+
 // The broker CA the file names is refused when others can write it: whoever
 // can chooses which broker the operator trusts.
 func TestABrokerCAOthersCanWriteIsRefused(t *testing.T) {
@@ -129,7 +236,7 @@ func TestAFileAnotherUserOwnsIsRefused(t *testing.T) {
 	prev := getuid
 	getuid = func() int { return os.Getuid() + 1 }
 	t.Cleanup(func() { getuid = prev })
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "not owned by you") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "not you (uid") {
 		t.Fatalf("another user's file: %v", err)
 	}
 }

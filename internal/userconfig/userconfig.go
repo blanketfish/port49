@@ -97,6 +97,8 @@ func resolve(base, p string) (string, error) {
 	switch {
 	case p == "":
 		return "", nil
+	case strings.HasPrefix(p, "~") && p != "~" && !strings.HasPrefix(p, "~/"):
+		return "", fmt.Errorf("%q: port49 expands ~ and ~/ to your home directory, not ~user; write the path out", p)
 	case p == "~" || strings.HasPrefix(p, "~/"):
 		h, err := os.UserHomeDir()
 		if err != nil {
@@ -118,6 +120,14 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {
 		return nil, fmt.Errorf("%s is a symbolic link; the %s is read only as a file of its own", path, what)
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		// Not even a stat of the file works: the directory is the problem.
+		if _, serr := os.Lstat(path); errors.Is(serr, fs.ErrPermission) {
+			return nil, dirError(filepath.Dir(path), serr, what)
+		}
+		return nil, fmt.Errorf("cannot open %s: permission denied; the %s must be readable by you: chmod u+r %s (%w)",
+			path, what, path, err)
 	}
 	if err != nil {
 		return nil, err
@@ -153,10 +163,8 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 // for. Root owning a file is OpenSSH's StrictModes rule too: root can write
 // anything, so trusting it trusts nobody new.
 func ownedAlone(path string, fi fs.FileInfo, what string) error {
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || (int(st.Uid) != getuid() && st.Uid != 0) {
-		return fmt.Errorf("%s is not owned by you (uid %d); whoever owns the %s chooses what port49 trusts, "+
-			"so it is refused", path, getuid(), what)
+	if err := ownedBy(path, fi, what); err != nil {
+		return err
 	}
 	if fi.Mode().Perm()&0o022 != 0 && !(fi.IsDir() && fi.Mode()&fs.ModeSticky != 0) {
 		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
@@ -165,30 +173,82 @@ func ownedAlone(path string, fi fs.FileInfo, what string) error {
 	return nil
 }
 
+// ownedBy refuses what fi describes unless this user or root owns it.
+func ownedBy(path string, fi fs.FileInfo, what string) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || (int(st.Uid) != getuid() && st.Uid != 0) {
+		var owner any = "an unknown user"
+		if ok {
+			owner = st.Uid
+		}
+		return fmt.Errorf("%s is owned by uid %v, not you (uid %d); whoever owns the %s chooses what port49 "+
+			"trusts, so it is refused: move it aside and recreate it as yourself", path, owner, getuid(), what)
+	}
+	return nil
+}
+
 // dirsOwnedAlone holds dir and each directory above it to ownedAlone, up to
 // the home directory or /: one that someone else can write lets them rename
 // the directory below it and put their own in its place (OpenSSH's
-// StrictModes walk). The walk is of the path as written, each component
-// stat'ed through any symlink.
+// StrictModes walk). It walks two paths. The path as written: whoever can
+// write the directory holding a symlink can repoint it, so each symlink in it
+// must be owned by you or root. And the path it resolves to, when that
+// differs: whoever can write any ancestor of the real directory can rename
+// it. A symlinked ~/.config into a directory only you can write passes both.
 func dirsOwnedAlone(dir, what string) error {
 	d, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
 	home, _ := os.UserHomeDir()
+	if err := walkOwnedAlone(d, home, what); err != nil {
+		return err
+	}
+	real, err := filepath.EvalSymlinks(d)
+	if err != nil {
+		return dirError(d, err, what)
+	}
+	if real == d {
+		return nil
+	}
+	if h, err := filepath.EvalSymlinks(home); err == nil {
+		home = h
+	}
+	return walkOwnedAlone(real, home, what)
+}
+
+// walkOwnedAlone is the walk up from d to stop or /, each component judged by
+// Lstat, so a symlink is judged as the link and not as what it points at.
+func walkOwnedAlone(d, stop, what string) error {
 	for {
-		di, err := os.Stat(d)
+		di, err := os.Lstat(d)
+		if err != nil {
+			return dirError(d, err, what)
+		}
+		if di.Mode()&fs.ModeSymlink != 0 {
+			// A link's own mode is never the point; who owns it is.
+			err = ownedBy(d, di, "directory holding the "+what)
+		} else {
+			err = ownedAlone(d, di, "directory holding the "+what)
+		}
 		if err != nil {
 			return err
 		}
-		if err := ownedAlone(d, di, "directory holding the "+what); err != nil {
-			return err
-		}
-		if d == home || d == filepath.Dir(d) {
+		if d == stop || d == filepath.Dir(d) {
 			return nil
 		}
 		d = filepath.Dir(d)
 	}
+}
+
+// dirError says which directory port49 could not look at, and for a refused
+// one what to run.
+func dirError(d string, err error, what string) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("%s: permission denied; port49 must look inside it to check who can write the %s: "+
+			"chmod u+rx %s (%w)", d, what, d, err)
+	}
+	return err
 }
 
 // WritePrivate replaces path with data at mode 0600, through a temporary
@@ -219,12 +279,15 @@ func WritePrivate(path string, data []byte, what string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	di, err := os.Lstat(dir)
+	// Stat, not Lstat: a symlinked directory is accepted exactly when
+	// ReadPrivate accepts it, by the walk below, which judges the link and
+	// where it points.
+	di, err := os.Stat(dir)
 	if err != nil {
 		return err
 	}
 	if !di.IsDir() {
-		return fmt.Errorf("%s is not a directory; the %s's directory must be one", dir, what)
+		return fmt.Errorf("%s is not a directory; the directory for the %s must be one", dir, what)
 	}
 	if err := dirsOwnedAlone(dir, what); err != nil {
 		return err
