@@ -148,6 +148,14 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 			proc, d.Grace, warm)
 		fmt.Fprintf(w, "%s: directory: %s must be writable only by directory administrators: whoever can write it on "+
 			"an entry chooses which workload takes that entry's groups\n", proc, wm.Attribute)
+		// L50: on AD the entry itself (SELF) writes these two whatever the
+		// OU's ACL. Said, not refused: an operator may have removed SELF's
+		// Web-Information grant.
+		if strings.EqualFold(wm.Attribute, "wWWHomePage") || strings.EqualFold(wm.Attribute, "url") {
+			fmt.Fprintf(w, "%s: directory: on Active Directory the entry itself can write %s whatever the OU's ACL "+
+				"(lab L50), so a workload's own account can put another workload's SPIFFE ID on its entry; use uid "+
+				"or description\n", proc, wm.Attribute)
+		}
 	}
 }
 

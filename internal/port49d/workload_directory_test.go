@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,34 @@ func TestTheWorkloadMappingStartLines(t *testing.T) {
 	announceDirectory(&off, "port49-broker", cfg, buildPolicy(t, cfg, directoryPolicy))
 	if !strings.Contains(off.String(), "; pre-warm is off, so a workload that has not minted within grace is refused in an outage\n") {
 		t.Errorf("pre-warm off is not said:\n%s", off.String())
+	}
+}
+
+// On AD the entry itself writes wWWHomePage and url whatever the OU's ACL (L50;
+// decision 41 ruling 10), so the start says so for either, in any case, and
+// stays quiet for an attribute the entry cannot write.
+func TestTheWorkloadMappingStartSaysSelfWrittenAttributes(t *testing.T) {
+	const selfWritten = "port49-broker: directory: on Active Directory the entry itself can write %s whatever the " +
+		"OU's ACL (lab L50), so a workload's own account can put another workload's SPIFFE ID on its entry; use uid " +
+		"or description\n"
+	for _, tc := range []struct {
+		attribute string
+		said      bool
+	}{
+		{"wWWHomePage", true},
+		{"URL", true},
+		{"uid", false},
+	} {
+		cfg := brokerConfig(t, directoryPolicy)
+		cfg.Broker.Directory = directoryCfg("gssapi")
+		cfg.Broker.Directory.Workload = workloadMapping()
+		cfg.Broker.Directory.Workload.Attribute = tc.attribute
+		var out syncBuffer
+		announceDirectory(&out, "port49-broker", cfg, buildPolicy(t, cfg, directoryPolicy))
+		got := out.String()
+		if has := strings.Contains(got, fmt.Sprintf(selfWritten, tc.attribute)); has != tc.said {
+			t.Errorf("attribute %s: the self-written line present = %v, want %v:\n%s", tc.attribute, has, tc.said, got)
+		}
 	}
 }
 
