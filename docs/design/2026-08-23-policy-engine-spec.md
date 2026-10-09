@@ -7155,7 +7155,12 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   instant for every key; with the same, it purges none, so a rolling restart of the brokers
   keeps everyone's tokens. A token minted in the moment between that instant and the purge is
   purged too, and its login fails `token_not_found`. A replica's own start never mints into
-  that moment: its mint gate stays closed from the start until it has seen a takeover done
+  that moment when the restore runbook was followed: the runbook deletes `meta/judged`, which
+  keeps the gate closed, whereas a snapshot restored without that step brings back a
+  `meta/judged` that names the bundle, and the gate opens on it at once (the restore guard
+  and the runner's purge are then the backstop, and each such login fails `token_not_found`).
+  The lab's seed tokens, minted before the gate and before "listening on", are not covered:
+  the first takeover purges them. Otherwise its mint gate stays closed from the start until it has seen a takeover done
   for the bundle it serves, its own runner's or another's that `meta/judged` records, not in
   doubt. A rolling restart, `meta/judged` already naming the bundle, is never held; a first
   start, or one after a policy edit, refuses mints with a retryable `store_unavailable` for up
