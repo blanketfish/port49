@@ -281,7 +281,16 @@ func TestMain(m *testing.M) {
 	if os.Getenv(runCLIEnv) == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	os.Exit(m.Run())
+	// No test reads the developer's own ~/.config/port49 (plan 9a): every
+	// default path under it lands in a directory of the test's.
+	dir, err := os.MkdirTemp("", "p49cfg")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // labBroker is a real broker behind its own Listener, as port49d serves it,

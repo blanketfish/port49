@@ -11,6 +11,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -29,10 +30,12 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 const usage = `usage:
-  port49 login --broker URL --cert FILE --key FILE --broker-ca FILE [--socket PATH]
+  port49 login [--config FILE] [--broker URL] [--cert FILE] [--key FILE] [--broker-ca FILE] [--socket PATH]
+               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
@@ -139,10 +142,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// sessionFlags are what the agent needs to open the session. The key is read
-// from a file: BORROWED AHEAD from plan 9, which holds it on a hardware token
+// sessionFlags are what the agent needs to open the session, from the flags
+// and, for any they leave out, the per-user config file (decision 42 ruling
+// 6). The key is read from a file until plan 9c holds it on a hardware token
 // (design §7; plan 3, Question 1).
-type sessionFlags struct{ broker, cert, key, brokerCA, socket string }
+type sessionFlags struct{ broker, cert, key, brokerCA, socket, configFile string }
 
 func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
@@ -150,6 +154,32 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
+	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file: broker, broker_ca, cert and "+
+		"key, each overridden by its flag")
+}
+
+// fill takes from the config file each of --broker, --broker-ca, --cert and
+// --key the command line left out (decision 42 ruling 6). A missing file at
+// the default path is no file; one --config names must be there, and is
+// read and checked even when every flag is given.
+func (s *sessionFlags) fill(fs *flag.FlagSet) error {
+	named := false
+	fs.Visit(func(f *flag.Flag) { named = named || f.Name == "config" })
+	if !named && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" {
+		return nil
+	}
+	f, ok, err := userconfig.Load(s.configFile)
+	switch {
+	case err != nil:
+		return err
+	case !ok && named:
+		return fmt.Errorf("%s: no such file", s.configFile)
+	case !ok:
+		return nil
+	}
+	s.broker, s.brokerCA = cmp.Or(s.broker, f.Broker), cmp.Or(s.brokerCA, f.BrokerCA)
+	s.cert, s.key = cmp.Or(s.cert, f.Cert), cmp.Or(s.key, f.Key)
+	return nil
 }
 
 func (s *sessionFlags) args() []string {
@@ -158,7 +188,8 @@ func (s *sessionFlags) args() []string {
 
 func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if s.broker == "" || s.cert == "" || s.key == "" {
-		return agent.Config{}, errors.New("--broker, --cert, --key and --broker-ca are all required")
+		return agent.Config{}, fmt.Errorf("--broker, --cert, --key and --broker-ca are all required, as flags "+
+			"or in %s", s.configFile)
 	}
 	// Required, not defaulted: with no pool the agent would trust every
 	// public CA for a broker whose certificate a private CA issued.
@@ -195,6 +226,10 @@ func login(args []string, stdout, stderr io.Writer) int {
 	var sf sessionFlags
 	sf.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := sf.fill(fs); err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
 	cfg, err := sf.config(stderr)
@@ -292,6 +327,10 @@ func agentMain(args []string, stderr io.Writer) int {
 	var sf sessionFlags
 	sf.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := sf.fill(fs); err != nil {
+		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
 	cfg, err := sf.config(stderr)
