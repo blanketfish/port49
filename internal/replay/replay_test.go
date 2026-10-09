@@ -242,11 +242,13 @@ func TestAnEmptySweepPagesMintRecordIsNoDivergence(t *testing.T) {
 	var line bytes.Buffer
 	decision.NewJSONLines(&line).Emit(decision.Record{TS: time.Now(), Event: decision.EventMint,
 		Verdict: decision.VerdictDeny, Reason: decision.NoGrantsMatched, Principal: "user:alice@example.com",
-		Auth:  &decision.Auth{Method: "cert"},
-		Sweep: &decision.Sweep{Scope: "edge", After: "srx-fw-22"}})
+		Auth:   &decision.Auth{Method: "cert"},
+		Policy: &decision.Policy{Bundle: "sha256:abc"},
+		Sweep:  &decision.Sweep{Scope: "edge", After: "srx-fw-22"}})
 	var rec decision.Record
 	if err := rec.UnmarshalJSON(bytes.TrimSpace(line.Bytes())); err != nil ||
-		rec.Sweep == nil || rec.Sweep.Scope != "edge" || rec.Sweep.After != "srx-fw-22" || rec.Device != nil || rec.Policy != nil {
+		rec.Sweep == nil || rec.Sweep.Scope != "edge" || rec.Sweep.After != "srx-fw-22" || rec.Device != nil ||
+		rec.Policy == nil || rec.Policy.Bundle != "sha256:abc" || rec.Policy.Blob != "" {
 		t.Fatalf("the record does not round-trip: %+v %v", rec, err)
 	}
 	want := replayAll(t, log)
