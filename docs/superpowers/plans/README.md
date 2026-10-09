@@ -121,8 +121,9 @@ in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03
 The purge-window fix merged as PR #41 (fc89f47): port49-broker's mint gate is closed at a start
 until a takeover judges its bundle; no new §5.7 reason (it reuses the gate's `store_unavailable`).
 Carried to the pre-beta review: `internal/broker/member.go`'s bind-refusal 503 details say "the
-agent retries", which it does not. L51 (SSH keys offered before the password) opened 2026-10-09,
-lab running. **8b written 2026-10-09** (`2026-10-09-08b-workload-directory.md`, eight tasks, six
+agent retries", which it does not. L51 (SSH keys offered before the password) opened 2026-10-09
+and closed the same day on five platforms (PR #42), which also opened L52 (a C8000V skipping its
+TACACS+ method). **8b merged 2026-10-09** (PR #43, bb948e5). **8b written 2026-10-09** (`2026-10-09-08b-workload-directory.md`, eight tasks, six
 rulings Q1–Q6 recorded as decision 41); **8b executed 2026-10-09** on `feature/workload-directory`
 (base `df198b2`), each task reviewed and whole-branch reviewed (0 Critical, 2 Important, 6 Minor,
 fixed or parked), closing L50 (Plan 8b — As built, below). Next: 9–11. 12–13 not yet.
