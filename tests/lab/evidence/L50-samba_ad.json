@@ -1,0 +1,50 @@
+{"event":"mark","label":"l50 samba: seed"}
+{"event":"mark","label":"l50 samba: the OU's security descriptor before the default cells was read"}
+{"event":"mark","label":"l50 samba: uid by svc-oxidized-01 under default: code 50"}
+{"event":"mark","label":"l50 samba: uid by l50-acctop under default: code 0"}
+{"event":"mark","label":"l50 samba: uid by l50-ouadmin under default: code 0"}
+{"event":"mark","label":"l50 samba: uid by l50-user under default: code 50"}
+{"event":"mark","label":"l50 samba: description by svc-oxidized-01 under default: code 50"}
+{"event":"mark","label":"l50 samba: description by l50-acctop under default: code 0"}
+{"event":"mark","label":"l50 samba: description by l50-ouadmin under default: code 0"}
+{"event":"mark","label":"l50 samba: description by l50-user under default: code 50"}
+{"event":"mark","label":"l50 samba: wWWHomePage by svc-oxidized-01 under default: code 0"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-acctop under default: code 0"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-ouadmin under default: code 0"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-user under default: code 50"}
+{"event":"mark","label":"l50 samba: url by svc-oxidized-01 under default: code 0"}
+{"event":"mark","label":"l50 samba: url by l50-acctop under default: code 0"}
+{"event":"mark","label":"l50 samba: url by l50-ouadmin under default: code 0"}
+{"event":"mark","label":"l50 samba: url by l50-user under default: code 50"}
+{"event":"mark","label":"l50 samba: acl set uid"}
+{"event":"mark","label":"l50 samba: uid by svc-oxidized-01 under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: uid by l50-acctop under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: uid by l50-ouadmin under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: uid by l50-user under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: acl clear uid"}
+{"event":"mark","label":"l50 samba: acl set description"}
+{"event":"mark","label":"l50 samba: description by svc-oxidized-01 under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: description by l50-acctop under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: description by l50-ouadmin under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: description by l50-user under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: acl clear description"}
+{"event":"mark","label":"l50 samba: acl set wWWHomePage"}
+{"event":"mark","label":"l50 samba: wWWHomePage by svc-oxidized-01 under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-acctop under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-ouadmin under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: wWWHomePage by l50-user under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: acl clear wWWHomePage"}
+{"event":"mark","label":"l50 samba: acl set url"}
+{"event":"mark","label":"l50 samba: url by svc-oxidized-01 under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: url by l50-acctop under prescribed: code 0"}
+{"event":"mark","label":"l50 samba: url by l50-ouadmin under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: url by l50-user under prescribed: code 50"}
+{"event":"mark","label":"l50 samba: acl clear url"}
+{"event":"mark","label":"l50 samba: audit as installed"}
+{"event":"mark","label":"l50 samba: uid by l50-acctop under audit-installed: code 0"}
+{"event":"mark","label":"l50 samba: uid by svc-oxidized-01 under audit-installed: code 50"}
+{"event":"mark","label":"l50 samba: audit with dsdb_json_audit:5 dsdb_audit:5"}
+{"event":"mark","label":"l50 samba: uid by l50-acctop under audit-debug: code 0"}
+{"event":"mark","label":"l50 samba: uid by svc-oxidized-01 under audit-debug: code 50"}
+{"event":"mark","label":"l50 samba: debug: samba-1 | {\"timestamp\": \"2026-10-09T05:33:13.253568+0000\", \"type\": \"dsdbChange\", \"dsdbChange\": {\"version\": {\"major\": 1, \"minor\": 0}, \"statusCode\": 0, \"status\": \"Success\", \"operation\": \"Modify\", \"remoteAddress\": \"ipv4:172.30.42.1:56648\", \"performedAsSystem\": false, \"userSid\": \"S-1-5-21-556814435-4026451668-2265281451-1117\", \"dn\": \"CN=svc-oxidized-01,OU=Workloads,DC=corp,DC=example,DC=com\", \"transactionId\": \"7ad802da-5e86-4007-8e13-eea799a90e9d\", \"sessionId\": \"a80c700f-5cc9-4a1d-a77f-cbd45dcbed78\", \"attributes\": {\"uid\": {\"actions\": [{\"action\": \"replace\", \"values\": [{\"value\": \"spiffe://corp.examp..."}
+{"event":"mark","label":"l50 samba: debug: samba-1 | {\"timestamp\": \"2026-10-09T05:33:13.305592+0000\", \"type\": \"dsdbChange\", \"dsdbChange\": {\"version\": {\"major\": 1, \"minor\": 0}, \"statusCode\": 50, \"status\": \"insufficient access rights\", \"operation\": \"Modify\", \"remoteAddress\": \"ipv4:172.30.42.1:56650\", \"performedAsSystem\": false, \"userSid\": \"S-1-5-21-556814435-4026451668-2265281451-1123\", \"dn\": \"CN=svc-oxidized-01,OU=Workloads,DC=corp,DC=example,DC=com\", \"transactionId\": \"e2056963-e4cf-4ebd-8469-ffb7d1289477\", \"sessionId\": \"dce1e234-bbd8-4583-b88a-2948d8519497\", \"attributes\": {\"uid\": {\"actions\": [{\"action\": \"replace\", \"values\": [{\"value\": ..."}
