@@ -636,6 +636,10 @@ func winSecretForms(sv string) []winSecretForm {
 		{`^Set-ADAccountPassword -Identity \$name -Reset -NewPassword {S}$`, 1},
 		{`^\$\w+ = New-Object System\.Management\.Automation\.PSCredential\("\$nb\\\$user", \(ConvertTo-SecureString {S} -AsPlainText -Force\)\)$`, 1},
 		{`^Set-ADObject -Identity \$dn -Replace @\{ \$attribute = \$value \} -Credential {S} -Server localhost$`, 1},
+		// l50_dacl.ps1 hands the credential to New-ADUser and to an AD drive,
+		// which consume it.
+		{`^New-ADUser -Name \$name -SamAccountName \$name -Path \$ou -Server localhost -Credential {S}$`, 1},
+		{`^New-PSDrive -Name L50 -PSProvider ActiveDirectory -Root '//RootDSE/' -Server localhost -Credential {S} \| Out-Null$`, 1},
 	} {
 		out = append(out, winSecretForm{regexp.MustCompile("(?i)" + strings.ReplaceAll(f.re, "{S}", sv)), f.uses})
 	}

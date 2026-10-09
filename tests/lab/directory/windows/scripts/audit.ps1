@@ -4,7 +4,9 @@
 # inherited by its objects; "read" answers the Security log's 5136
 # (attribute modified) and 4662 (an access) events since a moment, each cut
 # at 1500 characters (the harness keeps 600; its match needs the attribute
-# name, which a 5136 gives after the first 600); "acl" sets or clears the prescribed deny on attribute.
+# name, which a 5136 gives after the first 600); "acl" sets or clears the
+# prescribed deny on attribute (state "set" or "clear"), or, for state "show",
+# changes nothing and answers the OU's SDDL.
 param([string]$mode, [string]$since, [string]$attribute, [string]$state)
 $ErrorActionPreference = 'Stop'
 Import-Module ActiveDirectory
@@ -52,9 +54,9 @@ switch ($mode) {
       $rule = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
         (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'WriteProperty', 'Deny', $attrGuid,
         [System.DirectoryServices.ActiveDirectorySecurityInheritance]::Descendents, $userClass)
-      if ($state -eq 'set') { $acl.AddAccessRule($rule) } else { $acl.RemoveAccessRuleSpecific($rule) }
+      if ($state -eq 'set') { $acl.AddAccessRule($rule) } elseif ($state -eq 'clear') { $acl.RemoveAccessRuleSpecific($rule) }
     }
-    Set-Acl -Path "AD:$ou" -AclObject $acl
+    if ($state -ne 'show') { Set-Acl -Path "AD:$ou" -AclObject $acl }
     $sddl = (Get-Acl -Path "AD:$ou").Sddl
     @{ ou = $ou; state = $state; sddl = $sddl.Substring(0, [Math]::Min(4000, $sddl.Length)) }
   }

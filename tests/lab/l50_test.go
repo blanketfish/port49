@@ -14,6 +14,7 @@ package lab
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -76,6 +77,11 @@ func TestL50WorkloadAttributeWriters(t *testing.T) {
 		sd := startDirectories(t)
 		sd.runSel = "^TestL50WorkloadAttributeWriters$"
 		sd.extra = append(sd.extra, password)
+		sd.capture = "one JSON line per mark: each write (attribute, writer, ACL, the LDAP result code), the security descriptors " +
+			"read back after every ACL change and every re-seed, and the audit-log lines found. There are no search or bind lines; the " +
+			"wire is LDAPS, so a pcap would be encrypted."
+		sd.credentials = "none appear here or in the evidence. The writers' shared password is generated for each run; it is never " +
+			"printed or logged, and reaches the container only as an argument of `l50-seed.sh`."
 		ev := evidence(t, sd, "L50-samba_ad")
 		cells, notes := sd.samba.l50Samba(t, ev, password)
 		ev.assertClean(t, password, sd.password)
@@ -88,6 +94,11 @@ func TestL50WorkloadAttributeWriters(t *testing.T) {
 		d := newDirectories(t)
 		d.runSel = "^TestL50WorkloadAttributeWriters$"
 		d.extra = append(d.extra, password)
+		d.capture = "one JSON line per mark: each write (attribute, writer, ACL, whether it was accepted), the OU's SDDL after every " +
+			"ACL change, the audit settings as found, and the Security log's 5136 and 4662 events (each cut at 600 characters). " +
+			"There are no search or bind lines."
+		d.credentials = "none appear here or in the evidence. The writers' shared password and the Administrator and DSRM passwords are " +
+			"generated for each run and never printed or logged; L50 uses no keytab, ticket or certificate."
 		dc := startWindowsDC(t, d)
 		ev := evidence(t, d, "L50-windows_ad")
 		cells, notes := dc.l50Windows(t, ev, password)
@@ -105,12 +116,17 @@ func l50Table(cells []l50Cell) string {
 		refusal := "-"
 		if !c.written {
 			refusal = l44MDCell(c.refused)
-			if c.code > 0 {
+			// A go-ldap refusal already reads `LDAP Result Code 50 "...": ...`.
+			if c.code > 0 && !strings.Contains(refusal, fmt.Sprintf("Code %d", c.code)) {
 				refusal = fmt.Sprintf("LDAP result %d: %s", c.code, refusal)
 			}
 		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %v | %v | %s |\n", c.attr, c.writer, c.acl, c.written, c.readsBack, refusal)
 	}
+	b.WriteString("\nThe rows whose writer is `l50-ouadmin` with a parenthesis are the delegated administrator trying to get around the " +
+		"prescribed deny on `uid`. A row that names a step (adds an ACE, creates an entry, takes ownership) is the step itself: " +
+		"`written` is whether the directory accepted it, and `reads back` is `false` as nothing is read. A row that names a write is " +
+		"the write of `uid` that followed it. Every ACE, entry and ownership change those rows made was undone afterwards.\n")
 	b.WriteString("\n### Who could write what\n\n")
 	for _, acl := range []string{l50Default, l50Prescribed} {
 		for _, w := range l50Writers {
@@ -156,6 +172,11 @@ const l50SambaTarget = "CN=svc-oxidized-01,OU=Workloads," + dirBase
 
 // l50SambaWrite binds as writer and replaces attr on the target with value.
 func (l *labDir) l50SambaWrite(ev *evidenceLog, attr, writer, value, acl string, secrets ...string) l50Cell {
+	return l.l50SambaWriteTo(ev, l50SambaTarget, attr, writer, value, acl, secrets...)
+}
+
+// l50SambaWriteTo is l50SambaWrite on the entry dn.
+func (l *labDir) l50SambaWriteTo(ev *evidenceLog, dn, attr, writer, value, acl string, secrets ...string) l50Cell {
 	cell := l50Cell{attr: attr, writer: writer, acl: acl, code: -1}
 	tc, err := l.d.pki.clientTLS(l.uri)
 	if err != nil {
@@ -174,7 +195,7 @@ func (l *labDir) l50SambaWrite(ev *evidenceLog, attr, writer, value, acl string,
 		cell.refused = "bind: " + oneLineMax(winScrub(err.Error(), secrets...), 160)
 		return cell
 	}
-	req := ldap.NewModifyRequest(l50SambaTarget, nil)
+	req := ldap.NewModifyRequest(dn, nil)
 	req.Replace(attr, []string{value})
 	err = c.Modify(req)
 	cell.code = ldapCode(err)
@@ -184,7 +205,7 @@ func (l *labDir) l50SambaWrite(ev *evidenceLog, attr, writer, value, acl string,
 		return cell
 	}
 	cell.written = true
-	res, err := c.Search(ldap.NewSearchRequest(l50SambaTarget, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 15, false,
+	res, err := c.Search(ldap.NewSearchRequest(dn, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 15, false,
 		"(objectClass=*)", []string{attr}, nil))
 	if err == nil && len(res.Entries) == 1 {
 		cell.readsBack = slices.Contains(res.Entries[0].GetAttributeValues(attr), value)
@@ -203,6 +224,113 @@ func (l *labDir) l50SambaSeed(t *testing.T, password string, args ...string) str
 	return out
 }
 
+var l50DenyACE = regexp.MustCompile(`\(OD;[^)]*\)`)
+
+// l50Denies is the deny ACEs in the OU's descriptor and in the target's, from
+// the output of l50-seed.sh's "sddl" (two `samba-tool dsacl get` blocks).
+func l50Denies(t *testing.T, out string) (ou, target []string) {
+	t.Helper()
+	blocks := strings.Split(out, "descriptor for ")
+	if len(blocks) != 3 {
+		t.Fatalf("l50-seed.sh printed %d descriptors, want the OU's and the target's", len(blocks)-1)
+	}
+	return l50DenyACE.FindAllString(blocks[1], -1), l50DenyACE.FindAllString(blocks[2], -1)
+}
+
+// l50SambaACL sets or clears (a re-seed) the prescribed deny on attr, checks
+// the descriptor it printed holds what the step claims, marks the descriptors
+// as evidence (review I-1) and answers one line for the note.
+func (l *labDir) l50SambaACL(t *testing.T, ev *evidenceLog, password, op, attr string, first *[]string) string {
+	t.Helper()
+	ev.mark("l50 samba: acl %s %s", op, attr)
+	out := l.l50SambaSeed(t, password, "acl", op, attr)
+	ou, target := l50Denies(t, out)
+	ev.mark("l50 samba: after acl %s %s, the OU's and the target's security descriptors: %s", op, attr,
+		oneLineMax(winScrub(out, password, l.d.password), 12000))
+	switch {
+	case op == "set" && len(ou) != 3:
+		t.Fatalf("l50 samba: after acl set %s the OU holds %d deny ACEs, want 3 (SELF, Account Operators, l50-ouadmin)", attr, len(ou))
+	case op == "clear" && (len(ou) != 0 || len(target) != 0):
+		t.Fatalf("l50 samba: after acl clear %s the OU holds %d and the target %d deny ACEs, want none", attr, len(ou), len(target))
+	}
+	if op == "set" && first != nil && *first == nil {
+		*first = append(append([]string{"OU:"}, ou...), "target:")
+		*first = append(*first, target...)
+	}
+	return fmt.Sprintf("- after `acl %s %s`: the OU holds %d deny ACE(s), the target %d (inherited)\n", op, attr, len(ou), len(target))
+}
+
+// l50SambaDelegated is the delegated administrator's attempts to get round the
+// prescribed deny on uid (review I-3), as l50-ouadmin: (b) it creates an entry
+// in the OU and writes uid on it, (a) it adds an allow of write on uid for
+// itself to the target's DACL and writes uid. The deny must be set; the caller
+// clears it, by a re-seed, which also undoes the ACE and the entry. Taking
+// ownership (c) is not measured on Samba: samba-tool 4.17 has no way to set the
+// owner of an object.
+func (l *labDir) l50SambaDelegated(t *testing.T, ev *evidenceLog, password string, b *strings.Builder) (cells []l50Cell) {
+	t.Helper()
+	secrets := []string{password, l.d.password}
+	madeDN := "CN=l50-made,OU=Workloads," + dirBase
+	step := func(label string, args ...string) (l50Cell, bool) {
+		out, err := l.exec(append([]string{"/lab/l50-seed.sh", password}, args...)...)
+		c := l50Cell{attr: "uid", writer: label, acl: l50Prescribed, code: -1, written: err == nil}
+		if err != nil {
+			c.refused = oneLineMax(winScrub(out, secrets...), 400)
+		}
+		ev.mark("l50 samba: %s: accepted %v: %s", label, err == nil, oneLineMax(winScrub(out, secrets...), 400))
+		return c, err == nil
+	}
+	sd := func(cn string) string {
+		out, err := l.exec("/lab/l50-seed.sh", password, "dacl", "get", cn)
+		if err != nil {
+			t.Fatalf("l50-seed.sh dacl get %s: %v\n%s", cn, err, tailOf(winScrub(out, secrets...), 600))
+		}
+		out = oneLineMax(winScrub(out, secrets...), 8000)
+		ev.mark("l50 samba: security descriptor of %s: %s", cn, out)
+		return out
+	}
+	owner := func(sddl string) string {
+		if i := strings.Index(sddl, " O:"); i >= 0 {
+			if j := strings.Index(sddl[i:], "G:"); j > 0 {
+				return strings.TrimSpace(sddl[i : i+j])
+			}
+		}
+		return "(not read)"
+	}
+
+	// (b) an entry it creates, and so owns.
+	const mkLabel = "l50-ouadmin (creates l50-made in the OU)"
+	const mkWrite = "l50-ouadmin (writes l50-made, which it created)"
+	c, ok := step(mkLabel, "dacl", "create")
+	cells = append(cells, c)
+	if ok {
+		fmt.Fprintf(b, "- (b) `l50-made`, created by l50-ouadmin, has owner and group `%s`.\n", owner(sd("l50-made")))
+		w := l.l50SambaWriteTo(ev, madeDN, "uid", "l50-ouadmin", l50Value("uid", "l50-ouadmin-made", l50Prescribed), l50Prescribed, secrets...)
+		w.writer = mkWrite
+		cells = append(cells, w)
+		if out, err := l.exec("/lab/l50-seed.sh", password, "dacl", "delete"); err != nil {
+			t.Fatalf("l50-seed.sh dacl delete: %v\n%s", err, tailOf(winScrub(out, secrets...), 600))
+		}
+	}
+
+	// (a) an explicit allow it adds to the target's own DACL.
+	const aceLabel = "l50-ouadmin (adds an allow ACE for itself on the target)"
+	const aceWrite = "l50-ouadmin (writes the target after that ACE)"
+	before := sd("svc-oxidized-01")
+	fmt.Fprintf(b, "- (a) The target's owner and group before the ACE: `%s`.\n", owner(before))
+	c, ok = step(aceLabel, "dacl", "allow", "uid")
+	cells = append(cells, c)
+	if ok {
+		after := sd("svc-oxidized-01")
+		fmt.Fprintf(b, "- (a) The target's descriptor now holds an explicit allow for l50-ouadmin: %v.\n", strings.Contains(after, "(OA;;WP;0bb0fca0-"))
+		w := l.l50SambaWriteTo(ev, l50SambaTarget, "uid", "l50-ouadmin", l50Value("uid", "l50-ouadmin-ace", l50Prescribed), l50Prescribed, secrets...)
+		w.writer = aceWrite
+		cells = append(cells, w)
+	}
+	b.WriteString("- (c) Taking ownership is not measured on Samba: `samba-tool dsacl` 4.17 can add an ACE but cannot set the owner.\n")
+	return cells
+}
+
 func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells []l50Cell, notes string) {
 	t.Helper()
 	secrets := []string{password, l.d.password}
@@ -210,24 +338,47 @@ func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells
 	ev.mark("l50 samba: seed")
 	l.l50SambaSeed(t, password)
 	sddl := l.l50SambaSeed(t, password, "sddl")
-	ev.mark("l50 samba: the OU's security descriptor before the default cells was read")
-	fmt.Fprintf(&b, "### The OU's security descriptor before the default cells\n\nThe container is fresh each run, so this is the "+
-		"default: `samba-tool dsacl get --objectdn=OU=Workloads,%s`\n\n```\n%s\n```\n\n", dirBase, tailOf(winScrub(sddl, secrets...), 4000))
+	ev.mark("l50 samba: the OU's and the target's security descriptors before the default cells: %s", oneLineMax(winScrub(sddl, secrets...), 12000))
+	fmt.Fprintf(&b, "### The OU's and the target's security descriptors before the default cells\n\nThe container is fresh each run, so this is the "+
+		"default: `samba-tool dsacl get --objectdn=OU=Workloads,%s`, then the same for `CN=svc-oxidized-01` in it.\n\n```\n%s\n```\n\n",
+		dirBase, tailOf(winScrub(sddl, secrets...), 8000))
 
 	for _, attr := range l50Attributes {
 		for _, w := range l50Writers {
 			cells = append(cells, l.l50SambaWrite(ev, attr, w, l50Value(attr, w, l50Default), l50Default, password, l.d.password))
 		}
 	}
+	// Samba 4.17's samba-tool has no dsacl delete, so each "acl clear" re-seeds
+	// the OU (deletes it and its subtree, and seeds it again). That recreates the
+	// target too, with a new SID: every prescribed attribute ran against a fresh
+	// OU and a fresh entry. After every set and every re-seed the descriptors are
+	// read back and kept as evidence (review I-1).
+	var proof strings.Builder
+	var firstSet []string
 	for _, attr := range l50Attributes {
-		ev.mark("l50 samba: acl set %s", attr)
-		l.l50SambaSeed(t, password, "acl", "set", attr)
+		proof.WriteString(l.l50SambaACL(t, ev, password, "set", attr, &firstSet))
 		for _, w := range l50Writers {
 			cells = append(cells, l.l50SambaWrite(ev, attr, w, l50Value(attr, w, l50Prescribed), l50Prescribed, password, l.d.password))
 		}
-		ev.mark("l50 samba: acl clear %s", attr)
-		l.l50SambaSeed(t, password, "acl", "clear", attr)
+		proof.WriteString(l.l50SambaACL(t, ev, password, "clear", attr, nil))
 	}
+	b.WriteString("### How the prescribed deny was set and cleared on Samba\n\n" +
+		"`acl set` writes three ACEs (`OD;CI;WP;<the attribute's schemaIDGUID>;<user class>;` for SELF `PS`, Account Operators `AO` and " +
+		"l50-ouadmin) with `samba-tool dsacl set`. Samba 4.17's `samba-tool` has no `dsacl delete`, so `acl clear` **re-seeds the OU**: it " +
+		"deletes `OU=Workloads` and its subtree and seeds it again, which also **recreates the target `svc-oxidized-01` with a new SID**. " +
+		"Every prescribed attribute therefore ran against a fresh OU and a fresh target. After every set and every re-seed the harness " +
+		"reads both descriptors back, stops if the set did not leave exactly three deny ACEs on the OU or the re-seed left any, and " +
+		"keeps the descriptors in the evidence (`l50 samba: after acl ...` marks). What it found:\n\n" + proof.String() + "\n")
+	if len(firstSet) > 0 {
+		b.WriteString("The deny ACEs after `acl set uid`:\n\n```\n" + strings.Join(firstSet, "\n") + "\n```\n\n")
+	}
+
+	// The delegated administrator's attempts to get round the deny on uid.
+	b.WriteString("### The delegated administrator against the prescribed deny on `uid`\n\n")
+	l.l50SambaACL(t, ev, password, "set", "uid", nil)
+	cells = append(cells, l.l50SambaDelegated(t, ev, password, &b)...)
+	l.l50SambaACL(t, ev, password, "clear", "uid", nil)
+	b.WriteString("\nThe re-seed that followed undid the ACE and the entry.\n\n")
 
 	// The audit. The container runs `samba -i`, which logs to stdout.
 	acc, ref := l50AuditPair(cells)
@@ -268,7 +419,8 @@ func (l *labDir) l50Samba(t *testing.T, ev *evidenceLog, password string) (cells
 		ev.mark("l50 samba: as installed: %s", h)
 	}
 	if len(hits) == 0 {
-		b.WriteString("- **As installed: not in the log.** No `dsdbChange` record named the target.\n")
+		b.WriteString("- **As installed: not in the log.** No `dsdbChange` record named the target. \"As installed\" is `log level = 1` " +
+			"(`tests/lab/directory/samba/entrypoint.sh:30`, written into `smb.conf`), with no `dsdb_json_audit` or `dsdb_audit` class set.\n")
 	} else {
 		fmt.Fprintf(&b, "- **As installed: in the log** (%d `dsdbChange` record(s)).\n", len(hits))
 	}
@@ -330,6 +482,106 @@ func (l *labDir) l50WinAcl(t *testing.T, ev *evidenceLog, attr, state string) st
 	return r.SDDL
 }
 
+// l50WinStep is what l50_dacl.ps1 answers.
+type l50WinStep struct {
+	Accepted    bool   `json:"accepted"`
+	DN          string `json:"dn"`
+	SDDL        string `json:"sddl"`
+	RemovedACEs int    `json:"removed_aces"`
+	RefusedType string `json:"refused_type"`
+	Refused     string `json:"refused"`
+}
+
+// l50WinDelegated is the delegated administrator's attempts to get round the
+// prescribed deny on uid (review I-3), as l50-ouadmin: (b) it creates an entry
+// in the OU and writes uid on it, (a) it adds an allow of write on uid for
+// itself to the target's DACL and writes uid, (c) it takes ownership of the
+// target, then does (a). The deny must be set. Each scenario is undone, and the
+// target's descriptor must be what it was before (else the test fails).
+func (l *labDir) l50WinDelegated(t *testing.T, ev *evidenceLog, target, password string, b *strings.Builder) (cells []l50Cell) {
+	t.Helper()
+	secrets := l.l44Secrets()
+	const ouadmin = "l50-ouadmin"
+	step := func(label, what string) (res l50WinStep, c l50Cell) {
+		p := map[string]any{"step": what, "dn": target, "attribute": "uid", "name": "l50-made", "user": ouadmin, "password": password}
+		l.win.run(t, "l50_dacl", p, 3*time.Minute, &res)
+		c = l50Cell{attr: "uid", writer: label, acl: l50Prescribed, written: res.Accepted, code: -1}
+		if !res.Accepted {
+			c.refused = oneLineMax(winScrub(res.RefusedType+": "+res.Refused, secrets...), 300)
+		}
+		ev.mark("l50 windows: %s: accepted %v: %s; sddl %s", label, res.Accepted, c.refused, oneLineMax(winScrub(res.SDDL, secrets...), 6000))
+		return res, c
+	}
+	show := func() string {
+		var r l50WinStep
+		l.win.run(t, "l50_dacl", map[string]any{"step": "show", "dn": target}, 3*time.Minute, &r)
+		ev.mark("l50 windows: the target's SDDL: %s", oneLineMax(winScrub(r.SDDL, secrets...), 6000))
+		return r.SDDL
+	}
+	// cleanup removes ouadmin's explicit allow, gives the target back to Domain
+	// Admins and deletes l50-made; the result must equal the SDDL before.
+	cleanup := func(what, before string) {
+		var r l50WinStep
+		l.win.run(t, "l50_dacl", map[string]any{"step": "cleanup", "dn": target, "attribute": "uid", "user": ouadmin, "name": "l50-made"},
+			3*time.Minute, &r)
+		ev.mark("l50 windows: cleanup after %s removed %d ACE(s); the target's SDDL: %s", what, r.RemovedACEs, oneLineMax(winScrub(r.SDDL, secrets...), 6000))
+		if r.SDDL != before {
+			t.Errorf("l50 windows: after %s and its cleanup the target's SDDL is not what it was before", what)
+			fmt.Fprintf(b, "- **The target's SDDL after the cleanup of %s differs from before it** (the evidence holds both).\n", what)
+		}
+	}
+	writeOn := func(label, dn, valueKey string) l50Cell {
+		c := l.l50WinWrite(t, ev, dn, "uid", ouadmin, l50Prescribed, l50Value("uid", valueKey, l50Prescribed), password)
+		c.writer = label
+		return c
+	}
+
+	before := show()
+	fmt.Fprintf(b, "- The target's owner and group before: `%s`.\n", l50SDDLOwner(before))
+
+	// (b) an entry it creates, and so owns.
+	r, c := step("l50-ouadmin (creates l50-made in the OU)", "create")
+	cells = append(cells, c)
+	if r.Accepted {
+		fmt.Fprintf(b, "- (b) `l50-made`, created by l50-ouadmin, has owner and group `%s`.\n", l50SDDLOwner(r.SDDL))
+		cells = append(cells, writeOn("l50-ouadmin (writes l50-made, which it created)", r.DN, "l50-ouadmin-made"))
+	}
+	cleanup("(b)", before)
+
+	// (a) an explicit allow it adds to the target's own DACL.
+	r, c = step("l50-ouadmin (adds an allow ACE for itself on the target)", "allow")
+	cells = append(cells, c)
+	if r.Accepted {
+		cells = append(cells, writeOn("l50-ouadmin (writes the target after that ACE)", target, "l50-ouadmin-ace"))
+	}
+	cleanup("(a)", before)
+
+	// (c) ownership first, then (a).
+	r, c = step("l50-ouadmin (takes ownership of the target)", "own")
+	cells = append(cells, c)
+	if r.Accepted {
+		fmt.Fprintf(b, "- (c) The target's owner and group after l50-ouadmin took ownership: `%s`.\n", l50SDDLOwner(r.SDDL))
+		cells = append(cells, writeOn("l50-ouadmin (writes the target after taking ownership, no ACE)", target, "l50-ouadmin-own"))
+		r, c = step("l50-ouadmin (after taking ownership, adds an allow ACE for itself)", "allow")
+		cells = append(cells, c)
+		if r.Accepted {
+			cells = append(cells, writeOn("l50-ouadmin (writes the target after taking ownership and that ACE)", target, "l50-ouadmin-own-ace"))
+		}
+	}
+	cleanup("(c)", before)
+	return cells
+}
+
+// l50SDDLOwner is the "O:...G:..." part of an SDDL string.
+func l50SDDLOwner(sddl string) string {
+	if i := strings.Index(sddl, "O:"); i >= 0 {
+		if j := strings.Index(sddl[i:], "D:"); j > 0 {
+			return sddl[i : i+j]
+		}
+	}
+	return "(not read)"
+}
+
 func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cells []l50Cell, notes string) {
 	t.Helper()
 	w := l.win
@@ -376,8 +628,17 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 		}
 		l.l50WinAcl(t, ev, attr, "clear")
 	}
-	sddl := l.l50WinAcl(t, ev, l50Attributes[0], "clear")
-	fmt.Fprintf(&b, "### The OU's security descriptor after the prescribed cells\n\nAfter every `acl clear`, so it is the seed's again:\n\n```\n%s\n```\n\n",
+
+	// The delegated administrator against the deny on uid.
+	b.WriteString("### The delegated administrator against the prescribed deny on `uid`\n\n")
+	l.l50WinAcl(t, ev, "uid", "set")
+	cells = append(cells, l.l50WinDelegated(t, ev, seed.Target, password, &b)...)
+	l.l50WinAcl(t, ev, "uid", "clear")
+	b.WriteString("\nEach scenario was undone (the ACE removed, ownership returned to Domain Admins, `l50-made` deleted) and the target's " +
+		"SDDL read again: it equalled the SDDL before.\n\n")
+
+	sddl := l.l50WinAcl(t, ev, l50Attributes[0], "show")
+	fmt.Fprintf(&b, "### The OU's security descriptor after the prescribed cells\n\nAfter every `acl clear`, so it is the seed's again (read without a change):\n\n```\n%s\n```\n\n",
 		oneLineMax(winScrub(sddl, secrets...), 4000))
 
 	acc, ref := l50AuditPair(cells)
@@ -385,7 +646,7 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 		t.Fatalf("no write was accepted under the default ACLs; the audit has nothing to probe")
 	}
 	// probe makes the accepted and the refused write, waits for the DC (it
-	// logs a 5136 several seconds after the write, measured), and reads the
+	// logs a 5136 about 9 s after the 4662, one sample), and reads the
 	// Security log's 5136 and 4662 events since before both. Each event is
 	// assigned to a write by the "Account Name" in its message, which is read
 	// at up to 1500 characters; the evidence keeps 600.
@@ -442,7 +703,7 @@ func (l *labDir) l50Windows(t *testing.T, ev *evidenceLog, password string) (cel
 	if ref != nil {
 		fmt.Fprintf(&b, " and one refused (`%s` by %s)", ref.attr, ref.writer)
 	}
-	b.WriteString(" are made twice, each pair followed, 30 seconds later (the DC logs a 5136 several seconds after the write), by a read of the " +
+	b.WriteString(" are made twice, each pair followed, 30 seconds later (in one sample the DC logged a 5136 about 9 seconds after the write's 4662), by a read of the " +
 		"Security log's 5136 (attribute modified) and 4662 (an access) events since before the pair. Each event is assigned to a write by " +
 		"its `Account Name`. The DC's events are in the evidence, each cut at 600 characters.\n\n")
 

@@ -82,7 +82,7 @@ var winScripts = map[string][]string{
 	"enroll_as": {"csr_pem", "user"}, "set_attr": {"dn", "attribute", "values"}, "registry": {"name", "value"},
 	"service": {"name", "state", "restart_after"}, "events": {"since"}, "facts": nil,
 	"l50_seed": {"actor_password"}, "write_as": {"dn", "attribute", "value", "user", "password"},
-	"audit": {"mode", "since", "attribute", "state"},
+	"audit": {"mode", "since", "attribute", "state"}, "l50_dacl": {"step", "dn", "attribute", "user", "password", "name"},
 }
 
 // winSecretParams are the parameters that carry a secret: no script may

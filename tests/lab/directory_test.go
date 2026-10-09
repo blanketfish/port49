@@ -104,6 +104,10 @@ type directories struct {
 	extra    []string // other secrets a note or the evidence must never hold (the Windows DC's)
 	openldap *labDir
 	samba    *labDir
+
+	// capture and credentials replace the note's Capture description and Credentials
+	// line when a row's evidence is not the default's (L50's is marks only).
+	capture, credentials string
 }
 
 func (d *directories) all() []*labDir { return []*labDir{d.openldap, d.samba} }
@@ -961,10 +965,16 @@ func noteText(d *directories, row string, l *labDir, claim, version, observation
 	if l.name == platWindows {
 		wire = "TLS (LDAPS or StartTLS)" // L44's EXTERNAL cells run over StartTLS
 	}
-	fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, "+
-		"the LDAP result code and the duration, recorded by the broker's own client (the wire is %s, so a pcap would be "+
-		"encrypted).\n", evidencePath, wire)
-	if l.credentials != "" {
+	if d.capture != "" {
+		fmt.Fprintf(&b, "- **Capture:** `%s`: %s\n", evidencePath, d.capture)
+	} else {
+		fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, "+
+			"the LDAP result code and the duration, recorded by the broker's own client (the wire is %s, so a pcap would be "+
+			"encrypted).\n", evidencePath, wire)
+	}
+	if d.credentials != "" {
+		fmt.Fprintf(&b, "- **Credentials:** %s\n", d.credentials)
+	} else if l.credentials != "" {
 		fmt.Fprintf(&b, "- **Credentials:** %s\n", l.credentials)
 	} else {
 		fmt.Fprintf(&b, "- **Credentials:** none appear here or in the evidence. The bind password is generated for each run and "+
