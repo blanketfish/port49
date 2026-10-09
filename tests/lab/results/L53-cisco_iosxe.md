@@ -109,7 +109,7 @@ The control, a refused login as `l53-control` (host 20:08:48-20:08:53), is in th
 
     *Oct  9 20:08:53.790: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'aes128-gcm@openssh.com', hmac 'hmac-sha2-512' Failed
 
-By step: scan 3, control 3, before the scan 9, between the scan and the control 0, after the control 5, no time 3. The break-glass login that read the log is among the lines.
+By step: scan 3, control 3, before the scan 9, between the scan and the control 0, after the control 5, no time 3. The break-glass login that read the log is among the lines. The lines tagged `[before the scan]` (20:08:22–27) are the harness's readiness probe.
 
 Every line stamped inside the scan's window (a line there is the scan's only if it is about an SSH connection from the scanning address; the rest is the device's own):
 

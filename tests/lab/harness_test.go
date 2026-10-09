@@ -3274,7 +3274,7 @@ func (l *lab) guardRefusal(entry string) string {
 	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", fmt.Sprintf("%s-%s.md", entry, l.p.name))); err != nil {
 		return ""
 	}
-	// One entry, or several separated by commas (`make lab-ssh` writes L53 and L54).
+	// One entry, or several separated by commas.
 	if slices.Contains(strings.Split(os.Getenv("PORT49_LAB_REMEASURE"), ","), entry) {
 		return ""
 	}
