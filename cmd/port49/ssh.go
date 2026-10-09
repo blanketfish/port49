@@ -152,9 +152,10 @@ func sshArgs(o sshOptions) []string {
 // "(<user>@<device>) <the device's text>" for keyboard-interactive, where
 // <device> is the HostKeyAlias (OpenSSH 8.5p1, 8.9p1 and 10.2p1, measured
 // for plan 9a; §15 L54 per platform). A jump host's prompt names the jump
-// host.
+// host. ssh lowercases the alias in a prompt and keeps the username's case, so
+// the device is compared folded and the username exact.
 func ownPrompt(prompt, username, device string) bool {
-	who := username + "@" + device
+	who := username + "@" + strings.ToLower(device)
 	return prompt == who+"'s password: " || strings.HasPrefix(prompt, "("+who+") ")
 }
 
@@ -203,6 +204,17 @@ func (s *askpassServer) refuse(c net.Conn) {
 		s.kill()
 	}
 	_, _ = io.WriteString(c, "X\n")
+}
+
+// failClosed ends ssh when a prompt could not be read, parsed or fitted: it
+// may have been the device's, and an askpass left without an answer makes ssh
+// send an empty password.
+func (s *askpassServer) failClosed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.kill != nil {
+		s.kill()
+	}
 }
 
 // stale reports whether the token is too near its expires_at, or past it, to
@@ -254,10 +266,12 @@ func (s *askpassServer) answer(c net.Conn) {
 	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
 	line, err := bufio.NewReader(io.LimitReader(c, maxPrompt)).ReadString('\n')
 	if err != nil {
+		s.failClosed()
 		return
 	}
 	prompt, err := strconv.Unquote(strings.TrimSuffix(line, "\n"))
 	if err != nil {
+		s.failClosed()
 		return
 	}
 	s.mu.Lock()
@@ -298,17 +312,20 @@ func askpassMain(sock string, args []string, stdout, stderr io.Writer) int {
 	c, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: port49 ssh is not answering at %s: %v\n", sock, err)
+		endSSH()
 		return 1
 	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(25 * time.Second))
 	if _, err := io.WriteString(c, strconv.Quote(args[0])+"\n"); err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: %v\n", err)
+		endSSH()
 		return 1
 	}
 	reply, err := bufio.NewReader(io.LimitReader(c, 1<<10)).ReadString('\n')
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 askpass: port49 ssh did not answer: %v\n", err)
+		endSSH()
 		return 1
 	}
 	switch reply = strings.TrimSuffix(reply, "\n"); {
@@ -321,6 +338,35 @@ func askpassMain(sock string, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "port49 askpass: not answering %q: port49 ssh presents its token once, to the device's "+
 		"own prompt\n", printsafe.Line(args[0], 200))
 	return 1
+}
+
+// terminalPrompt is prompt with each control character but newline made `?`:
+// a jump host's keyboard-interactive text is the server's, and must not move
+// the operator's terminal. The yes/no questions are several lines, so newlines
+// stay.
+func terminalPrompt(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	for i, l := range lines {
+		lines[i] = printsafe.Line(l, maxPrompt)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// terminateSSH ends the ssh that ran this askpass. OpenSSH's read_passphrase
+// sends an empty password for an askpass that fails, so an askpass that cannot
+// get its answer ends ssh instead of leaving it to send one. A test swaps it.
+var terminateSSH = func() {
+	if ppid := os.Getppid(); ppid > 1 {
+		_ = syscall.Kill(ppid, syscall.SIGTERM)
+	}
+}
+
+// endSSH is terminateSSH for a port49 that ssh ran as its askpass
+// (SSH_ASKPASS_REQUIRE=force), and nothing for any other.
+func endSSH() {
+	if os.Getenv("SSH_ASKPASS_REQUIRE") == "force" {
+		terminateSSH()
+	}
 }
 
 // askEchoes reports whether the answer to prompt is shown as it is typed: a
@@ -352,7 +398,7 @@ var askTerminal = func(prompt string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer tty.Close()
-	fmt.Fprint(tty, prompt)
+	fmt.Fprint(tty, terminalPrompt(prompt))
 	if askEchoes(prompt, os.Getenv("SSH_ASKPASS_PROMPT")) {
 		line, err := bufio.NewReader(tty).ReadString('\n')
 		if err != nil && line == "" {
@@ -361,24 +407,57 @@ var askTerminal = func(prompt string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, strings.TrimRight(line, "\r\n"))
 		return 0
 	}
-	pw, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprint(tty, "\r\n")
+	// ReadPassword restores the terminal only when it returns, and a signal
+	// that ends this process first would leave echo off, as ssh's own
+	// readpassphrase never does: trap them, restore, then go.
+	fd := int(tty.Fd())
+	saved, err := term.GetState(fd)
 	if err != nil {
 		return 1
 	}
-	fmt.Fprintln(stdout, string(pw))
-	return 0
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	defer signal.Stop(sigs)
+	type read struct {
+		pw  []byte
+		err error
+	}
+	got := make(chan read, 1)
+	go func() {
+		pw, err := term.ReadPassword(fd)
+		got <- read{pw, err}
+	}()
+	select {
+	case <-sigs:
+		_ = term.Restore(fd, saved)
+		fmt.Fprint(tty, "\r\n")
+		return 1
+	case r := <-got:
+		fmt.Fprint(tty, "\r\n")
+		if r.err != nil {
+			return 1
+		}
+		fmt.Fprintln(stdout, string(r.pw))
+		return 0
+	}
 }
 
-// listenAskpass opens the askpass socket in the agent socket's directory,
-// which userconfig.PrivateDir walks top down and holds at 0700 and owned by
-// this user: whoever can reach the socket can already mint as this operator.
-// The socket is made in the directory PrivateDir resolved, holding no links.
+// listenAskpass opens the askpass socket in the agent socket's directory.
+// userconfig.PrivateDir resolves it top down, holding no links, but accepts a
+// root-owned, a 0755 or a sticky world-writable directory; the agent's own
+// check then requires exactly 0700 and this uid, on the resolved path. So the
+// socket is never made where another user can reach it, which also closes the
+// window between Listen and Chmod: whoever can reach the socket can already
+// mint as this operator.
 func listenAskpass(agentSocket string) (net.Listener, string, error) {
 	dir, err := userconfig.PrivateDir(filepath.Dir(agentSocket), "askpass socket")
 	if err != nil {
 		return nil, "", err
 	}
+	if err := agent.PrivateDir(dir); err != nil {
+		return nil, "", err
+	}
+	removeStaleAskpassSockets(dir)
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return nil, "", err
@@ -396,6 +475,26 @@ func listenAskpass(agentSocket string) (net.Listener, string, error) {
 		return nil, "", err
 	}
 	return ln, path, nil
+}
+
+// removeStaleAskpassSockets removes the askpass sockets in dir that nothing
+// listens on: a port49 ssh that was killed leaves its own behind. A socket
+// whose dial is refused is stale; any other answer leaves it.
+func removeStaleAskpassSockets(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "askpass-*.sock"))
+	for _, p := range old {
+		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSocket == 0 {
+			continue
+		}
+		c, err := net.DialTimeout("unix", p, time.Second)
+		if err == nil {
+			c.Close()
+			continue
+		}
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			_ = os.Remove(p)
+		}
+	}
 }
 
 // withoutAskpass is env with no SSH_ASKPASS, SSH_ASKPASS_REQUIRE,
@@ -544,7 +643,8 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	v, err := sshVersion(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
+		fmt.Fprintf(stderr, "%s: %v; port49 ssh runs OpenSSH 8.5 or later. Run `port49 token %s` and your own ssh "+
+			"instead\n", cmd, err, device)
 		return 1
 	}
 	if !atLeast(v, minSSH) {
@@ -572,6 +672,12 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
 		return 1
 	}
+	// The terminal sends ^C and ^\ to ssh too; port49 ssh outlives them to
+	// report ssh's status. A TERM or HUP sent to port49 alone goes on to ssh.
+	// Taken before the socket is made, so a ^C between the two leaves none.
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
 	ln, sockPath, err := listenAskpass(*socket)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, unprefixed(err))
@@ -591,12 +697,16 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		address: item.Address, username: item.Username, port: *port, verbose: *verbose, command: command})...)
 	c.Env = append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+self, "SSH_ASKPASS_REQUIRE=force",
 		askpassEnv+"="+sockPath)
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
-	// The terminal sends ^C and ^\ to ssh too; port49 ssh outlives them to
-	// report ssh's status. A TERM or HUP sent to port49 alone goes on to ssh.
-	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigs)
+	// What ssh said last, for the message after a 255.
+	var said tailBuffer
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, io.MultiWriter(stderr, &said)
+	// An askpass or ssh that dies mid-read can leave echo off; the terminal is
+	// put back as it was found once ssh has ended.
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		if saved, err := term.GetState(fd); err == nil {
+			defer func() { _ = term.Restore(fd, saved) }()
+		}
+	}
 	if err := c.Start(); err != nil {
 		fmt.Fprintf(stderr, "%s: starting %s: %v\n", cmd, path, err)
 		return 1
@@ -643,11 +753,37 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s was sent the token and the connection failed (ssh exit 255, its message is "+
 			"above); if it says Permission denied, `port49 explain --device %s` says whether your policy permits "+
 			"you, and port49d's decision log says why the device refused\n", cmd, device, device)
+	case code == 255 && strings.Contains(said.String(), "Host key verification failed"):
+		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
+			"its message is above); the address inventory gives for %s may not be the device: verify the key on its "+
+			"console, then run 'port49 devices trust --replace %s'\n", cmd, device, device, device)
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
-			"its message is above); if ssh says the host key changed, the address inventory gives for %s may not "+
-			"be the device: verify the key on its console, then run 'port49 devices trust --replace %s'\n", cmd,
-			device, device, device)
+			"its message is above)\n", cmd, device)
 	}
 	return code
+}
+
+// tailBuffer keeps the last tailMax bytes written to it.
+type tailBuffer struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+const tailMax = 4 << 10
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > tailMax {
+		t.b = t.b[len(t.b)-tailMax:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.b)
 }

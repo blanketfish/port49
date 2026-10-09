@@ -47,6 +47,7 @@ type sshRig struct {
 	mints *atomic.Int32
 	flags []string
 	sock  string
+	known string // the pinned host keys file
 
 	mu     sync.Mutex
 	items  []api.MintItem // the nth mint answers items[n], the last one after that
@@ -82,6 +83,7 @@ func newSSHRig(t *testing.T, dev *deviceSSH, item api.MintItem, warn int, pin ss
 	}))
 	dir := privateDir(t)
 	known := filepath.Join(dir, "known_hosts")
+	r.known = known
 	if pin != nil {
 		if err := hostkeys.Pin(known, "leaf1", pin, false); err != nil {
 			t.Fatal(err)
