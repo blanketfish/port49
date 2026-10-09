@@ -478,7 +478,10 @@ Account Operators member, `l50-acctop`; a delegated OU administrator, `l50-ouadm
 user, `l50-user`) each try to replace each of `uid`, `description`, `wWWHomePage` and `url` on
 `CN=svc-oxidized-01,OU=Workloads` with a SPIFFE ID, under two ACL states: `default`, and
 `prescribed`, an inherited deny of write on that attribute on the OU for SELF, Account Operators
-and `l50-ouadmin`. The audit is read in two modes, as installed and with auditing turned on:
+and `l50-ouadmin`. Under the prescribed deny on `uid` it then tries to get round the deny as
+`l50-ouadmin`: write an entry it created, add an allow ACE for itself to the target and write,
+take ownership of the target and do both (each undone, and the target's descriptor checked
+against the one before). The audit is read in two modes, as installed and with auditing turned on:
 Samba's `dsdbChange` records in the container's log (before and after `smbcontrol ... debug
 dsdb_json_audit:5 dsdb_audit:5`, with a positive control) and the Windows Security log's 5136
 and 4662 events (before and after `audit.ps1 on`; the settings as found are recorded first). The
