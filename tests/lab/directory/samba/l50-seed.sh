@@ -66,7 +66,18 @@ if [ "${2:-}" = dacl ]; then
   case "$3" in
     allow)
       ace="(OA;;WP;$(schemaid "$4");;$(ouadminsid))"
-      samba-tool dsacl set --objectdn="$target" --sddl="$ace" -H ldap://localhost -U "l50-ouadmin%$pw" >/dev/null
+      # samba-tool 4.17 prints the descriptor after the change, and the print
+      # fails for a delegated admin (no right to read the SACL: KeyError). So the
+      # judge of whether the change landed is the descriptor, read as root.
+      rc=0
+      out=$(samba-tool dsacl set --objectdn="$target" --sddl="$ace" -H ldap://localhost -U "l50-ouadmin%$pw" 2>&1) || rc=$?
+      if samba-tool dsacl get --objectdn="$target" | grep -qF "$ace"; then
+        echo "ACE present; samba-tool dsacl set exited $rc: $(echo "$out" | tail -n 1)"
+      else
+        echo "$out"
+        echo "ACE absent; samba-tool dsacl set exited $rc"
+        exit 1
+      fi
       ;;
     create)
       samba-tool user create l50-made "$pw" --userou=OU=Workloads -H ldap://localhost -U "l50-ouadmin%$pw" >/dev/null

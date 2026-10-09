@@ -278,6 +278,9 @@ func (l *labDir) l50SambaDelegated(t *testing.T, ev *evidenceLog, password strin
 			c.refused = oneLineMax(winScrub(out, secrets...), 400)
 		}
 		ev.mark("l50 samba: %s: accepted %v: %s", label, err == nil, oneLineMax(winScrub(out, secrets...), 400))
+		if err == nil && strings.TrimSpace(out) != "" {
+			fmt.Fprintf(b, "- %s: `%s`\n", label, strings.ReplaceAll(oneLineMax(winScrub(out, secrets...), 400), "`", "'"))
+		}
 		return c, err == nil
 	}
 	sd := func(cn string) string {
