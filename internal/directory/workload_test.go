@@ -221,6 +221,33 @@ func TestTheResolverLeavesAWorkloadsDeclaredUsernameToTheBroker(t *testing.T) {
 	}
 }
 
+// A mapped workload's entry always needs one canonical username_attribute
+// value, unique among entries, even where its identity subject declares a
+// username: the resolver never sees the subject, so the entry is refused
+// identity_unmapped or username_collision (decision 41 ruling 4; final review
+// M-4).
+func TestAMappedWorkloadsEntryNeedsAUniqueUsernameWhateverItsSubjectDeclares(t *testing.T) {
+	declared := func() map[string]string { return map[string]string{"svc_oxidized": "oxidized"} }
+	t.Run("no username", func(t *testing.T) {
+		w := newWorkloadWorld(t)
+		w.r.Declared = declared
+		w.dir.on(wlFilter, entry(wlDN, map[string][]string{"uid": {wlID}, "objectGUID": {"\x01\x02"}}))
+		if _, err := w.r.VerifyWorkload(context.Background(), wlID); !errors.Is(err, ErrUnmapped) ||
+			!strings.Contains(err.Error(), "0 values of sAMAccountName") {
+			t.Fatalf("%v", err)
+		}
+	})
+	t.Run("a shared username", func(t *testing.T) {
+		w := newWorkloadWorld(t)
+		w.r.Declared = declared
+		w.dir.on("(sAMAccountName=svc-oxidized-01)", wlEntry(wlID),
+			entry("CN=other,OU=Staff,DC=corp", map[string][]string{"sAMAccountName": {"svc-oxidized-01"}}))
+		if _, err := w.r.VerifyWorkload(context.Background(), wlID); !errors.Is(err, ErrUsernameTaken) {
+			t.Fatalf("%v", err)
+		}
+	})
+}
+
 // Only a SPIFFE ID under a mapping is a workload to verify; Verify still
 // takes user: alone (pre-flight I-10).
 func TestOnlyAWorkloadUnderTheMappingIsVerified(t *testing.T) {

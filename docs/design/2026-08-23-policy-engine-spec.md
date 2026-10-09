@@ -7864,6 +7864,11 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
     under ruling 3: lower-cased, canonical, not reserved, held by that entry alone (a second entry
     holding it is `username_collision`), and refused `username_collision` when any subject declares
     it. The declared one stands, whichever came first.
+  - **The entry needs one regardless.** A mapped workload's entry always has exactly one canonical
+    `username_attribute` value, unique among entries, even when its identity subject declares a
+    username: the resolver never sees the subject, so the entry is refused `identity_unmapped` or
+    `username_collision` otherwise (`TestAMappedWorkloadsEntryNeedsAUniqueUsernameWhateverItsSubjectDeclares`;
+    final review M-4).
   - **Never on a group.** A `machine_group:` subject declares no `username:` (a load error): one
     name for many workloads would put them in one `(nas, username)` context.
   - **Who must declare.** Under the mapping, a subject whose identities are all `spiffe://` IDs
