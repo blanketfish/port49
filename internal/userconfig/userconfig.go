@@ -137,18 +137,49 @@ func resolve(base, p string) (string, error) {
 // user or root owns and nobody else can write, and every directory above it
 // is held to dirsOwnedAlone. A missing file is an error errors.Is(err,
 // fs.ErrNotExist) reports. what names the file in a refusal.
+//
+// path is walked as the kernel resolves it, one component at a time from the
+// path as written (resolveOwned), and the file is opened by the resolved path,
+// so the file read is the one whose directories were judged.
 func ReadPrivate(path string, max int64, what string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	dir, base, err := splitPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+	}
+	resolved, err := resolveOwned(dir, false, what)
+	if err != nil {
+		// Nothing is read from a path refused, and nothing is there to read
+		// when the kernel finds no file: that is no file, as it always was,
+		// not a complaint about a directory that holds nothing.
+		if _, serr := os.Lstat(path); errors.Is(serr, fs.ErrNotExist) {
+			return nil, serr
+		}
+		return nil, err
+	}
+	file := joinPath(resolved, base)
+	li, err := os.Lstat(file)
+	if errors.Is(err, fs.ErrPermission) {
+		return nil, dirError(resolved, err, what)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if li.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symbolic link; the %s is read only as a file of its own", path, what)
+	}
+	if !li.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file; the %s must be one", path, what)
+	}
+	if err := ownedAlone(file, li, what); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(file, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {
 		return nil, fmt.Errorf("%s is a symbolic link; the %s is read only as a file of its own", path, what)
 	}
 	if errors.Is(err, fs.ErrPermission) {
-		// Not even a stat of the file works: the directory is the problem.
-		if _, serr := os.Lstat(path); errors.Is(serr, fs.ErrPermission) {
-			return nil, dirError(filepath.Dir(path), serr, what)
-		}
 		return nil, fmt.Errorf("cannot open %s: permission denied; the %s must be readable by you: chmod u+r %s (%w)",
-			path, what, path, err)
+			file, what, file, err)
 	}
 	if err != nil {
 		return nil, err
@@ -158,14 +189,9 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file; the %s must be one", path, what)
-	}
-	if err := ownedAlone(path, fi, what); err != nil {
-		return nil, err
-	}
-	if err := dirsOwnedAlone(filepath.Dir(path), what); err != nil {
-		return nil, err
+	// The file opened is the file judged, not one swapped in between.
+	if !os.SameFile(li, fi) {
+		return nil, fmt.Errorf("%s changed while port49 was checking it; run the command again", file)
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
@@ -208,62 +234,126 @@ func ownedBy(path string, fi fs.FileInfo, what string) error {
 	return nil
 }
 
-// dirsOwnedAlone holds dir and each directory above it to ownedAlone, up to
-// the home directory or /: one that someone else can write lets them rename
-// the directory below it and put their own in its place (OpenSSH's
-// StrictModes walk). It walks two paths. The path as written: whoever can
-// write the directory holding a symlink can repoint it, so each symlink in it
-// must be owned by you or root. And the path it resolves to, when that
-// differs: whoever can write any ancestor of the real directory can rename
-// it. A symlinked ~/.config into a directory only you can write passes both.
-func dirsOwnedAlone(dir, what string) error {
-	d, err := filepath.Abs(dir)
-	if err != nil {
-		return err
+// maxLinks is how many symbolic links resolveOwned follows before it calls a
+// path a loop; Linux's own limit is 40.
+const maxLinks = 40
+
+// splitPath is path's directory part, as written, and its last element. It
+// does not Clean: Dir would fold `link/..` away lexically, and the kernel does
+// not.
+func splitPath(path string) (dir, base string, err error) {
+	i := strings.LastIndexByte(path, '/')
+	switch {
+	case i < 0:
+		dir, base = ".", path
+	case i == 0:
+		dir, base = "/", path[1:]
+	default:
+		dir, base = path[:i], path[i+1:]
+	}
+	if base == "" || base == "." || base == ".." {
+		return "", "", errors.New("names a directory")
+	}
+	return dir, base, nil
+}
+
+// joinPath is dir, a resolved absolute path, and one name.
+func joinPath(dir, name string) string {
+	if dir == "/" {
+		return "/" + name
+	}
+	return dir + "/" + name
+}
+
+// resolveOwned resolves dir as the kernel does, from "/" one component at a
+// time, and judges every component on the way (OpenSSH's StrictModes walk,
+// with the check in the loop). A directory must be owned by you or root and
+// not writable by its group or others: one that someone else can write lets
+// them rename the directory below it and put their own in its place. A
+// symbolic link must be owned by you or root, and the directory holding it has
+// passed already, so nobody else can repoint it; its target is spliced in
+// front of the rest of the path and walked the same way, so a link met inside
+// a target is judged like the first. `..` goes to the parent of the resolved
+// prefix, which holds no links, never to the lexical one. The returned path
+// holds no links.
+//
+// dir is taken as written, never cleaned; a relative one is joined to the
+// working directory as a string. The directories above the home directory are
+// not judged: root's, and the one a login got to the home through. With create
+// set, a missing directory is made 0700 and judged like the rest, which only
+// happens below a prefix that has passed, so a refused path creates nothing.
+func resolveOwned(dir string, create bool, what string) (string, error) {
+	if !strings.HasPrefix(dir, "/") {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		dir = cwd + "/" + dir
 	}
 	home, _ := os.UserHomeDir()
-	if err := walkOwnedAlone(d, home, what); err != nil {
-		return err
-	}
-	real, err := filepath.EvalSymlinks(d)
-	if err != nil {
-		return dirError(d, err, what)
-	}
-	if real == d {
-		return nil
-	}
-	if h, err := filepath.EvalSymlinks(home); err == nil {
+	if h, err := filepath.EvalSymlinks(home); err == nil && home != "" {
 		home = h
 	}
-	return walkOwnedAlone(real, home, what)
-}
-
-// walkOwnedAlone is the walk up from d to stop or /, each component judged by
-// Lstat, so a symlink is judged as the link and not as what it points at.
-func walkOwnedAlone(d, stop, what string) error {
-	for {
-		di, err := os.Lstat(d)
-		if err != nil {
-			return dirError(d, err, what)
+	holder := "directory holding the " + what
+	prefix, links := "/", 0
+	pending := strings.Split(dir, "/")
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			prefix = filepath.Dir(prefix)
+			continue
 		}
-		if di.Mode()&fs.ModeSymlink != 0 {
+		next := joinPath(prefix, c)
+		fi, err := os.Lstat(next)
+		if create && errors.Is(err, fs.ErrNotExist) {
+			if err = os.Mkdir(next, 0o700); err == nil || errors.Is(err, fs.ErrExist) {
+				fi, err = os.Lstat(next)
+			}
+		}
+		if err != nil {
+			return "", dirError(prefix, err, what)
+		}
+		switch {
+		case fi.Mode()&fs.ModeSymlink != 0:
 			// A link's own mode is never the point; who owns it is.
-			err = ownedBy(d, di, "directory holding the "+what)
-		} else {
-			err = ownedAlone(d, di, "directory holding the "+what)
+			if err := ownedBy(next, fi, holder); err != nil {
+				return "", err
+			}
+			if links++; links > maxLinks {
+				return "", fmt.Errorf("%s: too many symbolic links (over %d) on the way to the %s; a link loop is refused",
+					dir, maxLinks, what)
+			}
+			target, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			if strings.HasPrefix(target, "/") {
+				prefix = "/"
+			}
+			pending = append(strings.Split(target, "/"), pending...)
+		case !fi.IsDir():
+			return "", fmt.Errorf("%s is not a directory; the directory for the %s must be one", next, what)
+		default:
+			if home != "" && home != next && strings.HasPrefix(home, next+"/") {
+				prefix = next // above the home directory: not judged
+				continue
+			}
+			if err := ownedAlone(next, fi, holder); err != nil {
+				return "", err
+			}
+			prefix = next
 		}
-		if err != nil {
-			return err
-		}
-		if d == stop || d == filepath.Dir(d) {
-			return nil
-		}
-		d = filepath.Dir(d)
 	}
+	return prefix, nil
 }
 
-// dirError says which directory port49 could not look at, and for a refused
-// one what to run.
+// dirError says which directory port49 could not look inside, and for a
+// refused one what to run. d is the directory that was being searched, not
+// the entry below it that failed.
 func dirError(d string, err error, what string) error {
 	if errors.Is(err, fs.ErrPermission) {
 		return fmt.Errorf("%s: permission denied; port49 must look inside it to check who can write the %s: "+
@@ -274,46 +364,20 @@ func dirError(d string, err error, what string) error {
 
 // WritePrivate replaces path with data at mode 0600, through a temporary
 // file in its directory renamed over it, so a reader never sees half a file.
-// The directory is made 0700 when missing. It is refused as ReadPrivate
-// refuses it, and before anything is created: the walk covers the nearest
-// directory that exists first, so no directory or file is made under a path
-// that would be refused.
+// Missing directories are made 0700. The directory is walked as ReadPrivate
+// walks it (resolveOwned), top down, and a directory is made only under a
+// prefix that has passed, so a path that would be refused creates nothing.
 func WritePrivate(path string, data []byte, what string) error {
-	dir, err := filepath.Abs(filepath.Dir(path))
+	dirPart, base, err := splitPath(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+	}
+	dir, err := resolveOwned(dirPart, true, what)
 	if err != nil {
 		return err
 	}
-	existing := dir
-	for {
-		if _, err := os.Stat(existing); err == nil {
-			break
-		}
-		if up := filepath.Dir(existing); up != existing {
-			existing = up
-			continue
-		}
-		break
-	}
-	if err := dirsOwnedAlone(existing, what); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	// Stat, not Lstat: a symlinked directory is accepted exactly when
-	// ReadPrivate accepts it, by the walk below, which judges the link and
-	// where it points.
-	di, err := os.Stat(dir)
-	if err != nil {
-		return err
-	}
-	if !di.IsDir() {
-		return fmt.Errorf("%s is not a directory; the directory for the %s must be one", dir, what)
-	}
-	if err := dirsOwnedAlone(dir, what); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	path = joinPath(dir, base)
+	tmp, err := os.CreateTemp(dir, "."+base+".*")
 	if err != nil {
 		return err
 	}

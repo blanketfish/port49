@@ -165,6 +165,136 @@ func TestASymlinkedConfigDirectoryYouOwnAloneIsAccepted(t *testing.T) {
 	}
 }
 
+// walkLab is a private parent P holding HOME=P/home (0700) and P/shared, a
+// directory anyone can write and without the sticky bit: whoever is in it can
+// rename any entry, so a path through it is refused.
+func walkLab(t *testing.T) (home, shared string) {
+	t.Helper()
+	p := privateDir(t)
+	home = filepath.Join(p, "home")
+	shared = filepath.Join(p, "shared")
+	for _, d := range []string{home, shared} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	return home, shared
+}
+
+func mustDo(t *testing.T, errs ...error) {
+	t.Helper()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A chain of links whose middle one sits in a directory others can write is
+// refused: they rename it and put their own link in its place, one hop further
+// than the link the path names (probe C).
+func TestAChainOfLinksThroughAWritableDirectoryIsRefused(t *testing.T) {
+	home, shared := walkLab(t)
+	real := filepath.Join(home, "real")
+	mustDo(t, os.MkdirAll(filepath.Join(real, "port49"), 0o700),
+		os.WriteFile(filepath.Join(real, "port49", "config.yaml"), []byte("broker: https://b.example:8443\n"), 0o600),
+		os.Symlink(real, filepath.Join(shared, "hop")),
+		os.Symlink(filepath.Join(shared, "hop"), filepath.Join(home, ".config")))
+	p := filepath.Join(home, ".config", "port49", "config.yaml")
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by others") {
+		t.Fatalf("a chain through a writable directory: %v", err)
+	}
+}
+
+// A link inside a link's target is judged too, and the directory holding it
+// (probe C3).
+func TestALinkInsideALinksTargetIsRefused(t *testing.T) {
+	home, shared := walkLab(t)
+	stuff := filepath.Join(home, "stuff")
+	mustDo(t, os.MkdirAll(filepath.Join(stuff, "b"), 0o700),
+		os.WriteFile(filepath.Join(stuff, "b", "config.yaml"), []byte("broker: https://b.example:8443\n"), 0o600),
+		os.Symlink(stuff, filepath.Join(shared, "a")),
+		os.Symlink(filepath.Join(shared, "a", "b"), filepath.Join(home, ".config")))
+	if _, _, err := Load(filepath.Join(home, ".config", "config.yaml")); err == nil ||
+		!strings.Contains(err.Error(), shared+" is writable by others") {
+		t.Fatalf("a link mid-target: %v", err)
+	}
+}
+
+// `..` after a link goes to the link target's parent, as the kernel does, not
+// to the path's lexical parent: the file read is the directory walked (probe
+// E3).
+func TestDotDotAfterALinkIsWalkedWhereTheKernelGoes(t *testing.T) {
+	home, shared := walkLab(t)
+	mustDo(t, os.Mkdir(filepath.Join(shared, "sub"), 0o700),
+		os.Mkdir(filepath.Join(shared, "x"), 0o700),
+		os.WriteFile(filepath.Join(shared, "x", "config.yaml"), []byte("broker: https://evil:1\n"), 0o600),
+		os.Mkdir(filepath.Join(home, "x"), 0o700),
+		os.Symlink(filepath.Join(shared, "sub"), filepath.Join(home, "link")))
+	f, _, err := Load(home + "/link/../x/config.yaml")
+	if err == nil || f.Broker != "" {
+		t.Fatalf("read the attacker's file: %+v %v", f, err)
+	}
+	// A plain a/b/.. is the same directory either way.
+	mustDo(t, os.MkdirAll(filepath.Join(home, "a", "b"), 0o700),
+		os.WriteFile(filepath.Join(home, "a", "config.yaml"), []byte("broker: https://b.example:8443\n"), 0o600))
+	if f, ok, err := Load(home + "/a/b/../config.yaml"); err != nil || !ok || f.Broker != "https://b.example:8443" {
+		t.Fatalf("a/b/..: %+v ok %v err %v", f, ok, err)
+	}
+}
+
+// A refused chain creates nothing (item 5): not a directory, not a file.
+func TestWritePrivateCreatesNothingWhenTheChainIsRefused(t *testing.T) {
+	home, shared := walkLab(t)
+	real := filepath.Join(home, "real2")
+	mustDo(t, os.Mkdir(real, 0o700),
+		os.Symlink(real, filepath.Join(shared, "hop")),
+		os.Symlink(filepath.Join(shared, "hop"), filepath.Join(home, ".cfg2")))
+	err := WritePrivate(filepath.Join(home, ".cfg2", "sub", "pins.yaml"), []byte("x\n"), "pinned host keys file")
+	if err == nil {
+		t.Fatal("wrote through a chain that ReadPrivate refuses")
+	}
+	if ents, _ := os.ReadDir(real); len(ents) != 0 {
+		t.Fatalf("left behind in %s: %v", real, ents)
+	}
+}
+
+// A loop of links is refused, not followed forever.
+func TestALinkLoopIsRefused(t *testing.T) {
+	home, _ := walkLab(t)
+	mustDo(t, os.Symlink(filepath.Join(home, "b"), filepath.Join(home, "a")),
+		os.Symlink(filepath.Join(home, "a"), filepath.Join(home, "b")))
+	if _, _, err := Load(filepath.Join(home, "a", "config.yaml")); err == nil ||
+		!strings.Contains(err.Error(), "too many symbolic links") {
+		t.Fatalf("a loop: %v", err)
+	}
+	if err := WritePrivate(filepath.Join(home, "a", "k"), []byte("x"), "k"); err == nil ||
+		!strings.Contains(err.Error(), "too many symbolic links") {
+		t.Fatalf("a loop, writing: %v", err)
+	}
+}
+
+// The refusal for a directory port49 cannot search names that directory, not
+// the one below it.
+func TestAnUnsearchableAncestorIsNamed(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, nothing is unsearchable")
+	}
+	home, _ := walkLab(t)
+	mustDo(t, os.MkdirAll(filepath.Join(home, "up", "down"), 0o700),
+		os.WriteFile(filepath.Join(home, "up", "down", "config.yaml"), []byte("x"), 0o600),
+		os.Chmod(filepath.Join(home, "up"), 0o600))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(home, "up"), 0o700) })
+	if _, _, err := Load(filepath.Join(home, "up", "down", "config.yaml")); err == nil ||
+		!strings.Contains(err.Error(), "chmod u+rx "+filepath.Join(home, "up")) {
+		t.Fatalf("an unsearchable ancestor: %v", err)
+	}
+}
+
 // The refusal names the owner and you, and says what to do.
 func TestTheNotOwnedRefusalNamesTheOwnerAndYou(t *testing.T) {
 	if os.Getuid() == 0 {
