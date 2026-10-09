@@ -153,8 +153,8 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 		// Web-Information grant.
 		if strings.EqualFold(wm.Attribute, "wWWHomePage") || strings.EqualFold(wm.Attribute, "url") {
 			fmt.Fprintf(w, "%s: directory: on Active Directory the entry itself can write %s whatever the OU's ACL "+
-				"(lab L50), so a workload's own account can put another workload's SPIFFE ID on its entry; use uid "+
-				"or description\n", proc, wm.Attribute)
+				"(lab L50), so any entry under the workload user_filter, a person's included, can put another "+
+				"workload's SPIFFE ID on itself; use uid or description\n", proc, wm.Attribute)
 		}
 	}
 }
