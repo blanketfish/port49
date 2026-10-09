@@ -530,7 +530,12 @@ func TestL53L54PortSSH(t *testing.T) {
 
 		// L53: the key after a reload, with the configuration saved. The
 		// device must be seen to go down before it is waited for.
-		var reloadAt time.Time
+		// The wait for the device to go down starts with the reload line, not
+		// after the admin session: putting the daemon back waits for the device
+		// to ask it something, and a device that reloads in under a minute
+		// would be down and back before a later wait began.
+		var reloadAt, downAt time.Time
+		downErr := make(chan error, 1)
 		admin(func(c *cliConn) error {
 			steps := l53Reload[l.p.name]
 			for i, step := range steps {
@@ -541,6 +546,11 @@ func TestL53L54PortSSH(t *testing.T) {
 				last := i == len(steps)-1
 				if last {
 					reloadAt = time.Now()
+					go func() {
+						err := l53WaitDown(addr, 10*time.Minute)
+						downAt = time.Now()
+						downErr <- err
+					}()
 				}
 				want := []string{"#", ">"}
 				if step[1] != "" {
@@ -572,7 +582,7 @@ func TestL53L54PortSSH(t *testing.T) {
 			}
 			return nil
 		})
-		if err := l53WaitDown(addr, 10*time.Minute); err != nil {
+		if err := <-downErr; err != nil {
 			admin(func(c *cliConn) error {
 				up, _ := l53Show(l, c, l53Uptime[l.p.name])
 				t.Logf("the device, asked after the failed wait, `%s`: %s", l53Uptime[l.p.name], trimForNote(up))
@@ -580,7 +590,6 @@ func TestL53L54PortSSH(t *testing.T) {
 			})
 			t.Fatalf("after the reload command: %v", err)
 		}
-		downAt := time.Now()
 		if err := l.waitDeviceReady(l.p.boot); err != nil {
 			t.Fatalf("after the reload: %v", err)
 		}
