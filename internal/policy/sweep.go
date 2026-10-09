@@ -85,9 +85,9 @@ func (p *Policy) sweepPage(m Member, scope, after string, limit int, now time.Ti
 	return devices, "", visited
 }
 
-// sweepIndex builds the index once: a Policy is one bundle, never changed
-// once loaded. Every declared scope is indexed at once, so the first sweep
-// after a load costs the same whichever scope it names.
+// sweepIndex is the index, built by Parse and memoized: a Policy is one
+// bundle, never changed once loaded. Every declared scope is indexed at
+// once, so a sweep costs the same whichever scope it names.
 func (p *Policy) sweepIndex() *sweepIndex {
 	p.sweepOnce.Do(func() {
 		x := &sweepIndex{names: make([]string, 0, len(p.devIndex)), scopes: make(map[string][]int32, len(p.scopes))}

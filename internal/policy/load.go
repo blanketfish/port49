@@ -338,6 +338,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		return nil, errors.New("declares no subjects, so nobody can mint; is this the right file?")
 	}
 	p.checkDevices()
+	// Built here, with the load's other per-bundle work, so the first sweep
+	// after a reload does not pay for it while others wait (decision 42).
+	p.sweepIndex()
 	return p, nil
 }
 

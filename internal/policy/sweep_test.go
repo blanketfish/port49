@@ -107,3 +107,33 @@ func TestASweepVisitsOnlyGrantedDevices(t *testing.T) {
 		t.Fatalf("the inventory has %d devices: the test needs more than alice's three to mean anything", n)
 	}
 }
+
+// An after naming a real device alice holds no grant on pages as a name that
+// is not in the inventory, in the same gap, does (decision 42 ruling 2).
+func TestAnAfterNamingAnUngrantedDevicePagesAsAMissingNameDoes(t *testing.T) {
+	// alice holds srx-fw-04 and srx-fw-22; srx-fw-05 lies between them, in the
+	// inventory and ungranted.
+	p := mustParse(t, `
+scopes: [{name: pair, match: {name: [srx-fw-04, srx-fw-22]}}]
+roles: [{name: ro, privilege: readonly, permit: ["show **"]}]
+subjects: [{name: fw_ops, identity: ["user:alice@corp.example.com"], username: alice, token_ttl: 5m}]
+grants: [{subject: fw_ops, scope: pair, roles: [ro]}]
+`)
+	if _, ok := p.devIndex["srx-fw-05"]; !ok {
+		t.Fatal("srx-fw-05 is not in the inventory: the test names a device that is not there")
+	}
+	ungranted, un := p.SweepPage(sweepAlice, "pair", "srx-fw-05", 10, now)
+	missing, mn := p.SweepPage(sweepAlice, "pair", "srx-fw-045", 10, now)
+	if !slices.Equal(ungranted, []string{"srx-fw-22"}) || !slices.Equal(ungranted, missing) || un != mn {
+		t.Fatalf("after an ungranted device: %v next %q; after a missing name: %v next %q", ungranted, un, missing, mn)
+	}
+}
+
+// The index is built when the policy loads, so no sweep after a reload pays
+// for it (review M7).
+func TestTheSweepIndexIsBuiltAtLoad(t *testing.T) {
+	p := mustParse(t, sweepYAML)
+	if p.sweep == nil || len(p.sweep.names) != len(inventory()) || len(p.sweep.scopes) != 3 {
+		t.Fatalf("the sweep index after load: %+v", p.sweep)
+	}
+}
