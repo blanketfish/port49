@@ -18,9 +18,10 @@ import (
 // directory, from a server and never from grace, its contexts judged on
 // that membership and stamped with its verification time. A principal the
 // directory does not answer for is left and unstamped; its contexts
-// deny context_stale past session.staleness_ceiling. A machine principal,
-// and every principal without a directory, is judged on the policy alone
-// and stamped with the pass's instant.
+// deny context_stale past session.staleness_ceiling. A workload
+// under the mapping is verified as a person is (decision 41 ruling 6); any
+// other machine principal, and every principal without a directory, is judged
+// on the policy alone and stamped with the pass's instant.
 //
 // Each principal is verified first, with no policy held, then judged and
 // written under b.Policy.Hold, so a reload between two principals is the
@@ -41,20 +42,34 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 	var first error // the first principal the directory failed for in a way that is no outage and no refusal
 	judge := passJudge{
 		member: func(ctx context.Context, principal string) (policy.Member, time.Time, error) {
-			if b.Directory == nil || !directory.IsUser(principal) {
-				return policy.MemberOf(principal), rep.At, nil
+			switch {
+			case b.Directory != nil && directory.IsUser(principal):
+				a, err := b.Directory.Verify(ctx, principal)
+				if err != nil {
+					return policy.Member{}, time.Time{}, b.verifyFailed(ctx, principal, err, &first)
+				}
+				// A declaration made by a reload since the answer was written is
+				// the resolver's collision too (pre-flight M-11).
+				if who, ok := b.Directory.DeclaredBy(a.Username); ok {
+					return policy.Member{}, time.Time{}, fmt.Errorf("%w: the directory derives username %q for %s, "+
+						"which subject %q declares", directory.ErrUsernameTaken, a.Username, principal, who)
+				}
+				return member(a), a.VerifiedAt, nil
+			case b.workloadMapped(principal):
+				// A mapped workload is verified and stamped as a person is
+				// (decision 41 ruling 6); its username is settled under the
+				// policy in force.
+				a, err := b.Directory.VerifyWorkload(ctx, principal)
+				if err != nil {
+					return policy.Member{}, time.Time{}, b.verifyFailed(ctx, principal, err, &first)
+				}
+				m, err := workloadMember(b.Policy.Load(), a)
+				if err != nil {
+					return policy.Member{}, time.Time{}, err
+				}
+				return m, a.VerifiedAt, nil
 			}
-			a, err := b.Directory.Verify(ctx, principal)
-			if err != nil {
-				return policy.Member{}, time.Time{}, b.verifyFailed(ctx, principal, err, &first)
-			}
-			// A declaration made by a reload since the answer was written is
-			// the resolver's collision too (pre-flight M-11).
-			if who, ok := b.Directory.DeclaredBy(a.Username); ok {
-				return policy.Member{}, time.Time{}, fmt.Errorf("%w: the directory derives username %q for %s, "+
-					"which subject %q declares", directory.ErrUsernameTaken, a.Username, principal, who)
-			}
-			return member(a), a.VerifiedAt, nil
+			return policy.MemberOf(principal), rep.At, nil
 		},
 		hold: func() (*policy.Policy, func()) {
 			buf := newHeldLog()

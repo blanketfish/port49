@@ -159,7 +159,16 @@ func (b *Broker) CertCallerOf(cs *tls.ConnectionState, now time.Time) (CertCalle
 		if err != nil {
 			return cc, err
 		}
+		// Set before the pin: the SPIFFE ID is validated, so a pin refusal's
+		// record names the workload refused (pre-flight M-4).
 		cc.Principal = p
+		// The workload mapping is weak, so its issuer is pinned at every
+		// reading of the certificate, before any search (decision 41 ruling 2).
+		if b.Directory != nil && b.Directory.Cfg.Workload != nil {
+			if err := b.Directory.Cfg.Workload.Pinned(leaf); err != nil {
+				return cc, fmt.Errorf("%w: %v", ErrWorkloadUnmapped, err)
+			}
+		}
 		b.Workload.noteIssuer(leaf.Issuer.String())
 		return cc, nil
 	}

@@ -7,11 +7,14 @@ import (
 	"strings"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// Forget is `port49 directory forget` (Ruling 3's escape). An entry
+// Forget is `port49 directory forget` (Ruling 3's escape; decision 41
+// ruling 3 for a workload). An entry
 // deleted and re-created, a rehire or a directory restore, has a new
 // objectGUID or entryUUID, and is refused identity_unmapped while its
 // principal's record lives: max(directory.grace, 24h) after the last
@@ -31,14 +34,24 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 	}
 	// The principal as the log spells it (the mark's own rule), so a
 	// mixed-case name finds the record it names.
-	if !strings.HasPrefix(strings.ToLower(principal), "user:") {
-		return "", fmt.Errorf("broker: %q is not a user: principal; only a directory principal has a membership",
-			printsafe.Line(principal, 200))
+	// A person's principal, or a mapped workload's SPIFFE ID (decision 41
+	// ruling 3), as the log spells it.
+	lower := strings.ToLower(principal)
+	if !strings.HasPrefix(lower, "user:") && !strings.HasPrefix(lower, spiffe.Scheme) {
+		return "", fmt.Errorf("broker: %q is neither a user: principal nor a workload's spiffe:// ID; only a "+
+			"directory principal has a membership", printsafe.Line(principal, 200))
 	}
 	normal, err := normalPrincipal(principal)
 	if err != nil {
-		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: printable ASCII, user: and an email",
-			printsafe.Line(principal, 200))
+		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: user: and an email, or a "+
+			"workload's SPIFFE ID verbatim", printsafe.Line(principal, 300))
+	}
+	if directory.IsWorkload(normal) && b.Directory.Cfg.Workload == nil {
+		// Nothing is held for a workload without the mapping, and nothing
+		// would read it (pre-flight M-6). A record left from when one was
+		// configured expires with its lease.
+		return "", fmt.Errorf("broker: no workload mapping is configured (broker.identity.machines[].directory), so "+
+			"no membership is held for %s to forget", printsafe.Line(normal, 300))
 	}
 	principal = normal
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)

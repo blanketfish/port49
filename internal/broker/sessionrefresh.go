@@ -288,8 +288,9 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 	rep := SessionRefreshReport{At: at}
 	// The member was read before the hold: a reload since may declare its
 	// username (final review M-1). The caller answers username_collision.
-	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
-		return rep, directory.ErrUsernameTaken
+	m, err := heldCollision(pol, m, answer)
+	if err != nil {
+		return rep, err
 	}
 	refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
