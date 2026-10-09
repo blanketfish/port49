@@ -1,0 +1,49 @@
+#!/bin/sh
+# l50-seed.sh <password> [acl set|clear <attribute> | sddl]: L50's writers on
+# Samba AD, as l50_seed.ps1 makes them on Windows. The password is read from
+# $1 and never printed. With "acl", it sets or clears the prescribed deny of
+# write on <attribute> on OU=Workloads for SELF, Account Operators and
+# l50-ouadmin. With "sddl", it prints the OU's security descriptor, the
+# evidence of what the "default" cells ran under (pre-flight I-8).
+set -eu
+pw=$1
+sam=/var/lib/samba/private/sam.ldb
+base=$(ldbsearch -H $sam -s base -b "" defaultNamingContext | sed -n 's/^defaultNamingContext: //p')
+ou="OU=Workloads,$base"
+if [ "${2:-}" = sddl ]; then
+  samba-tool dsacl get --objectdn="$ou"
+  exit 0
+fi
+if [ "${2:-}" = acl ]; then
+  # --show-binary prints schemaIDGUID as a dashed GUID; anything else (empty,
+  # or base64 from a "schemaIDGUID::" line) would make an ACE with no object
+  # GUID, a deny of every property: fail loudly instead (pre-flight M-7).
+  guid=$(ldbsearch -H $sam --show-binary -b "CN=Schema,CN=Configuration,$base" "(lDAPDisplayName=$4)" schemaIDGUID |
+    sed -n 's/^schemaIDGUID: //p')
+  case "$guid" in
+    ????????-????-????-????-????????????) ;;
+    *) echo "l50-seed.sh: no schemaIDGUID for $4 (read '$guid'); no ACE written" >&2; exit 2 ;;
+  esac
+  ouadmin=$(samba-tool user show l50-ouadmin --attributes=objectSid | sed -n 's/^objectSid: //p')
+  case "$ouadmin" in
+    S-1-5-21-*) ;;
+    *) echo "l50-seed.sh: no objectSid for l50-ouadmin (read '$ouadmin'); no ACE written" >&2; exit 2 ;;
+  esac
+  for sid in PS AO "$ouadmin"; do
+    ace="(OD;CI;WP;$guid;bf967aba-0de6-11d0-a285-00aa003049e2;$sid)"
+    if [ "$3" = set ]; then samba-tool dsacl set --objectdn="$ou" --sddl="$ace" >/dev/null
+    else samba-tool dsacl delete --objectdn="$ou" --sddl="$ace" >/dev/null; fi
+  done
+  exit 0
+fi
+samba-tool ou create "$ou" >/dev/null 2>&1 || true
+for u in svc-oxidized-01 l50-acctop l50-ouadmin l50-user; do
+  path=CN=Users
+  [ "$u" = svc-oxidized-01 ] && path=OU=Workloads
+  samba-tool user create "$u" "$pw" --userou="$path" >/dev/null 2>&1 || samba-tool user setpassword "$u" --newpassword="$pw" >/dev/null
+done
+samba-tool group addmembers "Account Operators" l50-acctop >/dev/null 2>&1 || true
+sid=$(samba-tool user show l50-ouadmin --attributes=objectSid | sed -n 's/^objectSid: //p')
+# The wizard's ACEs: create and delete user objects; full control over them.
+samba-tool dsacl set --objectdn="$ou" --sddl="(OA;;CCDC;bf967aba-0de6-11d0-a285-00aa003049e2;;$sid)" >/dev/null
+samba-tool dsacl set --objectdn="$ou" --sddl="(A;CIIO;GA;;bf967aba-0de6-11d0-a285-00aa003049e2;$sid)" >/dev/null

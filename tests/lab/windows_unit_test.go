@@ -631,6 +631,11 @@ func winSecretForms(sv string) []winSecretForm {
 		{`^& ktpass\.exe [^|;>]*-pass {S} [^|;>]*\*> \$null$`, 1},
 		{`^Install-ADDSForest [^|;>]*-SafeModeAdministratorPassword {S} [^|;>]*\| Out-Null$`, 1},
 		{`^New-ADUser [^|;>]*-AccountPassword (?:{S}|\(New-LabSecret\))(?: [^|;>]*)?$`, 1},
+		// L50's: l50_seed.ps1 resets an actor's password; write_as.ps1 makes a
+		// credential from one and hands it to Set-ADObject, which consumes it.
+		{`^Set-ADAccountPassword -Identity \$name -Reset -NewPassword {S}$`, 1},
+		{`^\$\w+ = New-Object System\.Management\.Automation\.PSCredential\("\$nb\\\$user", \(ConvertTo-SecureString {S} -AsPlainText -Force\)\)$`, 1},
+		{`^Set-ADObject -Identity \$dn -Replace @\{ \$attribute = \$value \} -Credential {S} -Server localhost$`, 1},
 	} {
 		out = append(out, winSecretForm{regexp.MustCompile("(?i)" + strings.ReplaceAll(f.re, "{S}", sv)), f.uses})
 	}

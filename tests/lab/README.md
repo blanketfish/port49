@@ -470,6 +470,23 @@ leaves nothing to commit; `PORT49_LAB_DIRECTORY_KEEP=1` leaves the containers up
 A recorded run is made from a detached worktree pinned at the commit under test, as every
 lab run is.
 
+**L50 (plan 8b).** `make lab-l50` (`PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run
+'^TestL50WorkloadAttributeWriters$' -count=1 -v -timeout 240m`) measures who can write the
+attribute a workload mapping reads, on Samba AD first and then on the Windows Server DC (it
+needs L44's KVM, ISO and 66 GiB). Four writers (the target entry itself, `svc-oxidized-01`; an
+Account Operators member, `l50-acctop`; a delegated OU administrator, `l50-ouadmin`; an ordinary
+user, `l50-user`) each try to replace each of `uid`, `description`, `wWWHomePage` and `url` on
+`CN=svc-oxidized-01,OU=Workloads` with a SPIFFE ID, under two ACL states: `default`, and
+`prescribed`, an inherited deny of write on that attribute on the OU for SELF, Account Operators
+and `l50-ouadmin`. The audit is read in two modes, as installed and with auditing turned on:
+Samba's `dsdbChange` records in the container's log (before and after `smbcontrol ... debug
+dsdb_json_audit:5 dsdb_audit:5`, with a positive control) and the Windows Security log's 5136
+and 4662 events (before and after `audit.ps1 on`; the settings as found are recorded first). The
+actors' `actor_password` is generated per run, reaches the VM on stdin and the Samba container
+as an argument, and is never printed; the notes and evidence refuse to hold it. A run from a
+pinned worktree sets `PORT49_LAB_DIRECTORY_OUT` to the branch's worktree so the notes land where
+they are committed.
+
 ## Identity provider (plan 7h)
 
 `make lab-oidc` runs L45 and L46 on one container, Keycloak, with no network device and no
