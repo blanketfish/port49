@@ -1,0 +1,2 @@
+Host 172.100.100.22
+    PreferredAuthentications keyboard-interactive,password
