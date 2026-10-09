@@ -560,19 +560,24 @@ func TestL53L54PortSSH(t *testing.T) {
 					return err
 				}
 				if step[1] != "" {
+					answered := len(c.transcript())
 					if err := c.send(step[2]); err != nil {
 						return err
 					}
 					if last {
 						time.Sleep(5 * time.Second)
-						t.Logf("after the answer %q, the device said:\n%s", step[2],
-							trimForNote(strings.TrimPrefix(c.transcript(), out)))
+						t.Logf("after the answer %q, the device said:\n%s", step[2], trimForNote(c.transcript()[answered:]))
 					}
 				}
 			}
 			return nil
 		})
 		if err := l53WaitDown(addr, 10*time.Minute); err != nil {
+			admin(func(c *cliConn) error {
+				up, _ := l53Show(l, c, l53Uptime[l.p.name])
+				t.Logf("the device, asked after the failed wait, `%s`: %s", l53Uptime[l.p.name], trimForNote(up))
+				return nil
+			})
 			t.Fatalf("after the reload command: %v", err)
 		}
 		downAt := time.Now()
