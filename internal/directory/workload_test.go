@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/rhwendt/port49/internal/store"
 )
 
 const (
@@ -422,4 +424,47 @@ func TestPrewarmSkipsMachineGroupMembersThatAreNoWorkload(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A SPIFFE ID reaches the log through printsafe.Line wherever it is printed
+// (decision 41 ruling 9; final review M-6): the pin message, the grace
+// refusals and the unread-pin line.
+func TestASPIFFEIDInTheResolversLinesIsPrintSafe(t *testing.T) {
+	const hostile = "spiffe://corp.example.com/host/x\x1b[31m\nforged"
+	ctx := context.Background()
+	clean := func(t *testing.T, what string, got ...string) {
+		t.Helper()
+		for _, s := range got {
+			if strings.ContainsAny(s, "\x1b\n") || !strings.Contains(s, "x?[31m?forged") {
+				t.Errorf("%s: %q", what, s)
+			}
+		}
+	}
+	w := newWorkloadWorld(t)
+	if err := w.st.PutMembership(ctx, store.Membership{Principal: hostile, EntryID: "guid:aa"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	err := w.r.pinned(ctx, Identity{Principal: hostile, DN: wlDN, EntryID: "guid:bb"}, "uid")
+	if err == nil {
+		t.Fatal("the pin was not enforced")
+	}
+	clean(t, "pin", err.Error())
+
+	read := func(m store.Membership) func(context.Context) (store.Membership, error) {
+		return func(context.Context) (store.Membership, error) { return m, nil }
+	}
+	_, err = w.r.grace(ctx, read(store.Membership{Principal: hostile, Refused: true, VerifiedAt: w.clk.Now()}),
+		errors.New("down"), hostile, false)
+	clean(t, "refused in grace", err.Error())
+	w.clk.Add(10 * time.Hour)
+	_, err = w.r.grace(ctx, read(store.Membership{Principal: hostile, VerifiedAt: w.clk.Now().Add(-9 * time.Hour)}),
+		errors.New("down"), hostile, false)
+	said := w.say.l[len(w.say.l)-1]
+	clean(t, "past grace", err.Error(), said)
+
+	g := &getFails{Store: w.st}
+	g.fail.Store(true)
+	w.r.Store = g
+	w.r.refuse(ctx, lookup{want: hostile}, "", Identity{})
+	clean(t, "unread pin", w.say.l[len(w.say.l)-1])
 }
