@@ -45,10 +45,14 @@ var l53Console = map[string][]string{
 // l53Reload is, per platform, the lines that save the configuration and
 // reload, each with the prompt that may follow it ("" for none expected) and
 // the answer to give. A prompt that differs fails the step with the
-// transcript in the note: fix the prompt here, never the claim.
+// transcript in the note: fix the prompt here, never the claim. NX-OS sets
+// its boot variable first: the N9Kv was first booted from the loader by the
+// vrnetlab launcher and has none, so a reload stopped at `loader >` (measured
+// on the first run); the boot variable is what a real switch has.
 var l53Reload = map[string][][3]string{
-	"arista_eos":            {{"write memory", "", ""}, {"reload now", "", ""}},
-	"cisco_nxos":            {{"copy running-config startup-config", "", ""}, {"reload", "(y/n)", "y"}},
+	"arista_eos": {{"write memory", "", ""}, {"reload now", "", ""}},
+	"cisco_nxos": {{"configure terminal", "", ""}, {"boot nxos bootflash:/nxos64-cs.10.4.2.F.bin", "", ""},
+		{"end", "", ""}, {"copy running-config startup-config", "", ""}, {"reload", "(y/n)", "y"}},
 	"cisco_iosxe":           {{"write memory", "", ""}, {"reload", "[confirm]", ""}},
 	"juniper_vjunos-router": {{"request system reboot", "[yes,no]", "yes"}},
 	"juniper_vsrx":          {{"request system reboot", "[yes,no]", "yes"}},
