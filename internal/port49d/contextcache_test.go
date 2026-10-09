@@ -33,6 +33,7 @@ func daemonMetrics(t *testing.T, out *syncBuffer) string {
 func cachedFleet(t *testing.T, out *syncBuffer, ttl, health string) (*fleet, tacacsClient, string) {
 	t.Helper()
 	f := splitFleet(t)
+	f.judged(t)
 	addUnderEtcd(t, f.daemon, "    context_cache: {ttl: "+ttl+"}\n"+health)
 	api, _ := startBroker(t, f.broker, out, 1)
 	tacacs := startSplitDaemon(t, f.daemon, out, 1)
@@ -165,6 +166,7 @@ func TestARevokedSessionIsDeniedInsideTheTTL(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	addUnderEtcd(t, f.daemon, "    context_cache: {ttl: 30s}\n")
 	api, stopBroker := startBroker(t, f.broker, &out, 1)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)

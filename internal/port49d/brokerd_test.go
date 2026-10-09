@@ -164,6 +164,15 @@ func (f *fleet) policyOf(t *testing.T, cfg string) string {
 	return regexp.MustCompile(`(?m)^  policy_file: (\S+)$`).FindStringSubmatch(string(raw))[1]
 }
 
+// judged writes meta/judged naming f's bundle, not in doubt, as a rolling
+// restart finds it, so a broker started after it mints at once. A test
+// whose subject is not the start's mint gate (decision 36) calls it before
+// its first broker, rather than wait out hold_ttl/3 and the takeover.
+func (f *fleet) judged(t *testing.T) {
+	t.Helper()
+	putJudged(t, f, f.bundle(t), false)
+}
+
 // editPolicy rewrites f.broker's policy file with one comment line added,
 // so its bundle differs.
 func (f *fleet) editPolicy(t *testing.T) {
@@ -794,6 +803,7 @@ func TestAStartAppliesAStandingMarkToAKeptContext(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
@@ -830,6 +840,7 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	root := f.srv.Client(t, "root")
 	ctx := context.Background()
 	api, stopBroker := startBroker(t, f.broker, &out, 1)
@@ -1633,6 +1644,7 @@ func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
@@ -1702,6 +1714,7 @@ func TestAnOfflineRevokeGoesOnWhenThePolicyFileDoesNotLoad(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
