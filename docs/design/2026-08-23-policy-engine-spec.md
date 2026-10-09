@@ -2123,7 +2123,7 @@ events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`
 
 | `event` | Emitted by | Decides |
 |---|---|---|
-| `mint` | broker | which grants matched, which roles composed, which blob resulted |
+| `mint` | broker | which grants matched, which roles composed, which blob resulted. A record a sweep page writes through the mint (`POST /v1/tokens` by `scope`) carries `sweep: {scope, after}`; the revocation re-check's records after the mint do not (§13 decision 42 ruling 4) |
 | `redeem` | daemon | whether a presented credential is valid, and creates the context |
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
@@ -2279,7 +2279,7 @@ refused request named; any other path is recorded `mint`.
 | `reason` | Meaning |
 |---|---|
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
-| `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
+| `no_grants_matched` | `mint`: no declared grant for this principal selects the device; or, on a sweep page by `scope`, the page holds no device: the scope is not declared, selects no device the principal holds a grant on, or the page is past the end, which are one answer and one record carrying `sweep` and no device (§13 decision 42 ruling 2). `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38); or a workload under a directory mapping whose identity subject declares no username takes from its entry one a subject declares or a second entry holds (§13 decision 41 ruling 4, plan 8b). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
 | `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds in the mapping's `attribute` any value beginning `spiffe://`, so it is a workload's (§13 decision 41 ruling 4); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
 | `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when two entries hold a workload's SPIFFE ID in the workload mapping's `attribute` (§13 decision 41, plan 8b); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two entries matching one identity is an impersonation path. On `refresh`: every context of the principal is revoked |
@@ -6028,6 +6028,30 @@ otherwise; it also refreshes once after a new session connects. `port49 token` w
 the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
 ceiling on a device.
 
+**`port49 login`** takes `--broker`, `--broker-ca`, `--cert` and `--key` from the per-user config
+file, `$XDG_CONFIG_HOME/port49/config.yaml`, for each one its flags leave out. It reads the file
+only when nobody but the operator or root can write it or any directory above it (§13 decision
+42 ruling 6).
+
+**`port49 devices trust [--fingerprint SHA256:…] [--address ADDR] [--port N] [--replace] DEVICE`**
+pins the SSH host key the device presents, in `$XDG_CONFIG_HOME/port49/known_hosts` under its
+inventory name.
+- **The address.** One mint through the agent gives it; `--address` is the alternative.
+- **When it pins.** Only against a `--fingerprint` the operator verified on the device's console,
+  or a `yes` typed at a terminal.
+- **An existing pin.** It is replaced only with `--replace` (decision 42 rulings 7–9).
+
+**`port49 ssh [--port N] [--ssh PATH] [--ssh-config FILE] [-v] DEVICE [-- COMMAND…]`** mints a
+token through the agent and logs in with the operator's OpenSSH (8.5 or later).
+- **Host keys.** It refuses a device with no pinned key before minting, and hands ssh the pin as
+  the only key it accepts.
+- **The token** goes only to the device's own password prompt, once, through ssh's askpass.
+- **Exit and warnings.** It exits with ssh's status, and warns on the terminal within
+  `session.ceiling_warning` of the device's ceiling (decision 42 rulings 10 and 11).
+
+**`port49 workload token … --scope NAME`** mints, page by page, every device the scope selects on
+which the workload holds a grant, in place of a device list (decision 42 rulings 1–5).
+
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
 prints what a change to the inventory does to the bundle: devices added, removed and changed,
 addresses added to existing devices, `key_ref` and admission changes, and every scope membership
@@ -7969,6 +7993,205 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
       delegate's ACE change is itself logged was not measured.
   - Task 8.
 
+**42. The agent in full, first part: sweeps by scope, the per-user config file, `port49 ssh` with
+pinned host keys.** *Plan 9a, 2026-10-09.* Rulings rest on reasoning unless they say data. Plan
+9a's pre-flight questions Q1–Q5 were answered as the plan recommended; Ryan may override any.
+Plan 9 is split: 9b the OIDC public client, 9c hardware-backed keys and the broker certificate's
+CRL check, 9d host keys from inventory and the Python and Ansible clients.
+
+- **1. Mint by scope** (design §17: "a device name or a `scope`, resolved through inventory").
+  - **The request.** `POST /v1/tokens` takes `scope` in place of `devices`, one or the other, and
+    `after` to continue a sweep. Each is 1 to 253 printable ASCII characters. Anything else is
+    `400 bad_request`: both keys, `after` without `scope`, neither.
+  - **The page.** In the byte order of their inventory names, after `after`, at most `batch_max`:
+    the devices the scope selects (§5.5) on which the caller's subjects hold a grant unexpired
+    now. `next` names the page's last device when more remain, and is absent at the end.
+  - **Per item.** Each device is answered exactly as the same device named would be: the same
+    records, the same refusals, a quarantine or a refused admission included.
+  - **When the page is resolved.** Against the policy in force when the request arrives, before
+    the reservation, which needs the list. Each device is then minted under the hold. A reload
+    between the two changes an item's answer, never the list.
+  - Task 2.
+- **2. No enumeration oracle.** These three are one answer, byte for byte, and one record:
+  - a scope the policy does not declare;
+  - a declared scope selecting no device the caller holds a grant on;
+  - a page past the end.
+
+  The answer is 200, `results: []`, no `next`; the record is one `mint` record, `deny
+  no_grants_matched`, carrying the sweep and no device. A sweep never lists a device the caller
+  holds no grant on, so it tells the caller nothing a mint by name would not. Any declared scope
+  may be swept, intersected with the caller's grants (pre-flight Q3).
+
+  **Nor a timing oracle, up to a logarithmic term.** A page walks only the devices the caller
+  holds an unexpired grant on, from an index built once per policy, never the inventory. The
+  swept scope filters that walk, and an undeclared scope is walked as one selecting nothing. So
+  what a page costs depends on the caller's own grants, and on the swept scope's size only by
+  the logarithm of it: each device visited is looked up in the scope's sorted list by binary
+  search, which an undeclared scope, an empty list, skips. For a caller granted 50,000 devices
+  and a declared scope of 10,000 that selects none of them, that is about 700,000 comparisons, on
+  the order of a millisecond, which enough samples could tell from an undeclared name. The term is
+  accepted as low impact; it is not claimed away. Task 2.
+- **3. Paging and idempotency.**
+  - **Its own request.** Each page is its own request under its own `Idempotency-Key`.
+  - **A retry.** A retry under the key, with the same body, is resolved again. Devices minted
+    under the key are replayed, never minted again. A reload between the page and its retry that
+    adds a granted device below the page's end shifts the page by one. Its last device, minted
+    under the key, is then not in the retry's answer, and the next page mints it again. The first
+    token is never returned and expires at its TTL.
+  - **The policy each page sees.** Each page is resolved against the policy in force when it is
+    asked. A device added below the cursor during a sweep is in the next run's sweep; a device
+    removed is not answered.
+  - **The client** stops when `next` is absent, and refuses a `next` that does not advance past
+    `after`: a fault, never a loop.
+  - Tasks 2 and 3.
+- **4. The record.** A record a sweep page writes through the mint carries `sweep: {scope,
+  after}`:
+  - each item's `mint` record, permit or deny;
+  - the empty page's;
+  - a refusal of the whole page by the mint path: the directory's, the store's, a username
+    collision, the mint gate.
+
+  Two kinds do not carry it: the `store_unavailable` refusal written when the revocation re-check
+  fails after the page was minted, and the revoked or logged-out records that re-check writes.
+  Task 2.
+- **5. `port49 workload token --scope NAME`.**
+  - It sweeps in place of `DEVICE…` and `--devices-file`; naming both is usage, exit 2.
+  - Nothing selected for the workload exits 77, with one message for an undeclared scope and an
+    ungranted one alike.
+  - `examples/oxidized` takes `PORT49_SCOPE` in place of `OXIDIZED_NODES`.
+  - Task 3.
+- **6. The per-user config file** (plan 3's rulings, 2026-09-24).
+  - **Where and what.** `$XDG_CONFIG_HOME/port49/config.yaml`, else
+    `~/.config/port49/config.yaml`, holding `broker`, `broker_ca`, `cert` and `key`.
+  - **Precedence.** `port49 login` takes from it each value its flags leave out; a flag always
+    wins.
+  - **Paths.** A relative path is taken from the file's directory, and `~/` is the home
+    directory.
+  - **Who can write it.** It is read only when this user or root owns it and every directory
+    above it up to the home directory or `/`, none is writable by group or others (a sticky
+    directory, as `/tmp` is, excepted), and it is no symlink. Whoever can write it chooses which
+    broker the operator trusts.
+  - **Strict.** An unknown key, or a second YAML document, is refused. `--config FILE` names
+    another file, which must exist; a missing file at the default path is no file.
+  - **The CA.** `broker_ca` stays required, from the flag or the file, and never falls back to the
+    system roots. It pins the CA that issued the broker's certificate, not the leaf, so a renewal
+    breaks nothing. A CA file the config file names is refused when group or others can write it.
+  - **Not `port49 workload`.** A cron job states what it trusts on its own line.
+  - Task 4.
+- **7. Pinned host keys** (design §17).
+  - **The file.** `$XDG_CONFIG_HOME/port49/known_hosts`, in OpenSSH's format, one line per key,
+    whose host field is the device's inventory name. It is held to ruling 6's ownership rule.
+  - **How `port49 ssh` uses it.** As ssh's only known-hosts source, with the device's name as
+    `HostKeyAlias` and strict checking. A key is checked against the device it was pinned for,
+    whatever address inventory gives today, so an address moved to another host fails before
+    authentication.
+  - **No pin.** A device with no pinned key is refused before anything is minted.
+  - Tasks 5 and 6.
+- **8. Names.** `port49 ssh` and `port49 devices trust` take device names of letters, digits, `.`,
+  `_` and `-`, starting with a letter or a digit, 253 at most.
+  - `known_hosts` reads `*`, `?`, `!`, `,` and `[` as patterns, and a leading `@` or `|` as a
+    marker or a hash, so a name holding one could pin a key for other devices.
+  - A name outside the set is refused with the reason; `port49 token` still serves it.
+  - Task 5.
+- **9. `port49 devices trust DEVICE`.**
+  - **The address.** It comes from one mint through the agent, asking a 60s TTL; the token is
+    never used and expires at its TTL. A device the caller holds no grant on is refused there, so
+    trust is no oracle. `--address` skips the mint (pre-flight Q4).
+  - **The key.** It is read by a key exchange abandoned before authentication: no username is
+    offered and no credential is sent. What a device does with that is L53's (open).
+  - **When it pins.** Only when `--fingerprint` equals the SHA-256 fingerprint presented, or the
+    operator answers `yes` on a terminal. Never on a non-terminal without `--fingerprint`.
+  - **An existing pin.** It is replaced only with `--replace`.
+  - Task 5.
+- **10. `port49 ssh DEVICE [-- COMMAND…]`** (pre-flight Q1: the operator's OpenSSH, 8.5 or later).
+  - **Why 8.5.** What was measured is in `tests/ssh-compat/2026-10-09-openssh-askpass.md`, in
+    containers:
+    - OpenSSH 8.0p1 and 8.2p1 ignore `SSH_ASKPASS_REQUIRE=force` and take the terminal prompt.
+    - 8.4p1 honours `force`, as 8.5p1 does. Run with no controlling terminal and `DISPLAY` set,
+      8.0p1 and 8.2p1 also ask the askpass.
+    - On 8.0p1, 8.2p1 and 8.4p1, a keyboard-interactive prompt reaches the askpass as the
+      server's bare text (`Password: `). 8.5p1 names the host, as `(<user>@<HostKeyAlias>)
+      Password: `.
+
+    What follows is reasoning from that, not measured (the note ran no jump host): with a bare
+    prompt the askpass cannot tell the device's prompt from a jump host's, and could hand the token
+    to a host that is not the device. 8.0p1 and 8.2p1 fail on `force`, and 8.4p1 on the prompt
+    alone. `port49 token` serves an older ssh.
+  - **The command line.** `ssh_config` is honoured. The command line forces:
+    - the pinned file, `HostKeyAlias`, `StrictHostKeyChecking yes`, no host-key update, no DNS or
+      `KnownHostsCommand` source. The file's path and the address are quoted and `%`-escaped, since
+      ssh expands `%` tokens and splits on whitespace there;
+    - `PubkeyAuthentication no` (L51: every refused key counts against the device's attempt
+      limit, and an IOS-XE `login block-for` locks the source address out);
+    - `PreferredAuthentications keyboard-interactive,password`, one prompt each;
+    - no multiplexing, no agent forwarding.
+  - **The token's route.** It reaches ssh through ssh's askpass alone. That askpass is port49
+    itself, which ssh runs with `SSH_ASKPASS_REQUIRE=force` and one argument; it asks `port49
+    ssh` over a socket in the agent's 0700 directory. The token is never in argv or the
+    environment. A port49 that ssh's children run otherwise (a `ProxyCommand`, a `Match exec`)
+    inherits the socket's variable, and refuses to run as a command there when given two or more
+    arguments. Given one, it acts as an askpass for that argument as the prompt, which moves no
+    token, since that prompt is not the device's.
+  - **A token that expired first.** When the device's prompt comes within 5s of the token's
+    `expires_at` or after it, as behind a slow jump host, `port49 ssh` mints once more through the
+    agent and answers with that token, still once. When no fresh token is had, nothing is sent,
+    ssh is ended, and `port49 ssh` says why.
+  - **Answered once, to one prompt.** The token is answered once, to the prompt naming
+    `<username>@<device>`. OpenSSH 10.2p1 writes `alice@leaf1's password: ` and
+    `(alice@leaf1) Password: `, measured against an `x/crypto/ssh` server for plan 9a; L54
+    measures it per platform.
+  - **Other prompts.** Any other prompt, a jump host's, is asked of the terminal as ssh would ask
+    it: a password with echo off, and a yes/no question with echo on.
+  - **A second ask.** A second ask for the device's password, which ssh makes when the device
+    refuses the token and offers another method, ends the connection before ssh answers it. No
+    second or empty password reaches the device's failed-login counters.
+  - **Exit.** ssh's exit status is `port49 ssh`'s. A 255 is explained: before the token was sent,
+    or after it.
+  - Task 6.
+- **11. The in-session warning** (decision 33).
+  - **Before ssh starts.** Within `session.ceiling_warning` of the device's ceiling, `port49 ssh`
+    says so, as `port49 token` does.
+  - **During the session.** For a session that outlives that moment, it says so once, on the
+    terminal, at that moment.
+  - **After a refresh.** `port49 refresh` in another terminal extends the session in place (§5.6).
+    The agent keeps the last refresh's per-device answer and serves it on `GET /status` as
+    `sessions`. When the warning is due, `port49 ssh` asks first. A refresh that extended this
+    device's session, and reached it, moves the warning to the new moment, so the line never
+    names a ceiling that has moved.
+  - **Where it matters.** EOS, NX-OS and Junos show port49's `server_msg` warning nowhere (§15
+    L34), so there this line is the warning.
+  - Task 6.
+- **12. The lab.** L53 (host keys per platform) and L54 (`port49 ssh` per platform), both open.
+  Until each closes, no doc says which console command shows a device's key, that a scan leaves
+  no trace on a device, or which authentication method a platform takes. Task 8.
+- **13. Hardware-backed client keys, for plan 9c** (pre-flight Q2), all without cgo.
+  - **PKCS#11 through `github.com/ebitengine/purego`.** It covers YubiKey PIV, smartcards and HSMs.
+    The module is `dlopen`ed at run time with `CGO_ENABLED=0`, and CI tests it against SoftHSM2.
+  - **TPM 2.0 through `github.com/google/go-tpm`.** It is pure Go. CI tests it against `swtpm` over
+    the MS-simulator protocol, never `go-tpm-tools`' simulator, which is cgo.
+  - **The macOS Secure Enclave through purego**, behind a spike task on a macOS host.
+  - **What was checked (2026-10-09, from the module cache):**
+    - cgo: `go-piv/piv-go/v2` v2.6.0 on Linux and macOS, `miekg/pkcs11` v1.1.2, `crypto11`
+      v1.6.8 and `google/go-pkcs11` v0.3.0;
+    - pure Go: `go-tpm` v0.9.8;
+    - no cgo on Tier 1: `purego` v0.11.1, "beta software" by its README.
+  - **Unverified, and 9c's first task measures it:** whether a module that starts threads
+    (`libykcs11`) behaves under purego.
+  - **What goes back to Ryan.** If the spike shows a persistent Secure Enclave key needs an
+    entitlement an unsigned `port49` cannot have, macOS is served through PKCS#11, a YubiKey. The
+    Secure Enclave is dropped only then, and only by Ryan, as is any other route the spike or 9c's
+    measurement rules out.
+- **14. Inventory-carried host keys and the Python and Ansible clients, for plan 9d** (pre-flight
+  Q5).
+  - **What moves to 9d:** both. Inventory's host-key fingerprint (design §17's MAY) goes through the
+    bundle into the mint item, and `port49 ssh` checks it beside its pins.
+  - **Why after L53:** its format follows what L53 shows devices present.
+  - **Why the clients go with it:** third-party clients (Ansible's `network_cli`, Netmiko over
+    paramiko) look a host key up by address. They can verify one only once the mint says which key
+    to expect.
+  - **Until then:** 9a's Netmiko example verifies against port49's own pins, written under the
+    address for the one connection (Task 7).
+
 ---
 
 ## 14. Required test assertions
@@ -8645,6 +8868,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L50** | Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16, 40 ruling 5 and 41 ruling 10): on Windows AD and on Samba AD, for a service account's entry in its own OU, and for each of `uid`, `description`, `wWWHomePage` and `url` holding a SPIFFE ID, whether the entry itself (`SELF`), a member of Account Operators, a delegated OU administrator ("create, delete and manage user accounts" on the OU) and an ordinary domain user can write it, under the default ACLs and under a candidate ACL plan 8b's docs might prescribe once this row closes (an inherited deny of write on that attribute on the OU for each writer that is not a domain administrator); and whether each write, accepted or refused, is in the directory's audit log as installed and with directory-change auditing turned on. Until it closes, no doc asserts who can write it (rule 1). Row text sharpened by plan 8b, 2026-10-09. | §13 decision 41 ruling 10 (the docs' ACL for the mapping's attribute) | Windows Server AD (L44's box), Samba AD | closed — measured 2026-10-09; tests/lab/results/L50-windows_ad.md, L50-samba_ad.md. Windows Server 2025 and Samba 4.17 alike: an ordinary user writes none of the four; `SELF` writes `wWWHomePage` and `url` whatever the OU's ACL; Account Operators write all four whatever it; a delegated OU administrator writes all four, and under the OU deny adds an allow for itself on the entry and writes (owning the entry alone does not). Neither directory logs a write as installed; with directory-change auditing on, both do. Decision 41 ruling 10 records what the docs say. |
 | **L51** | What an SSH client offering several public keys before the password does to a port49 login (raised by the owner from production NX-OS experience): on each platform, whether each refused key counts against the device's SSH authentication-attempt limit (NX-OS `ssh login-attempts`, Junos `retry-options`, IOS-XE `ip ssh authentication-retries`, EOS's), how many keys an OpenSSH client with a loaded agent can offer before the password prompt never comes, whether a refused key reaches port49 as any TACACS+ exchange, whether the refusals lock the user or the source out afterwards and for how long, and which client-side settings (`IdentitiesOnly yes`, `PubkeyAuthentication no`, `PreferredAuthentications keyboard-interactive,password`) and device-side settings avoid it. Until it closes, the docs give no advice on it. | The operator docs for typing a minted token at an SSH password prompt (plan 13), the agent's and `port49 workload`'s guidance, and Oxidized's SSH settings (`examples/oxidized`) | NX-OS (first), EOS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L51-cisco_nxos.md, L51-arista_eos.md, L51-cisco_iosxe.md, L51-juniper_vjunos.md, L51-juniper_vsrx.md. OpenSSH 10.2p1 client. Every refused key counts as one attempt and sends no TACACS+; the password prompt never comes at 3 keys on NX-OS 10.4(2)F (`ssh login-attempts`, default 3), 4 on IOS-XE 17.13.01a (`ip ssh authentication-retries`, default 3), 6 on EOS 4.31.2F, and 2 × `retry-options tries-before-disconnect` on vJunos-router and vSRX (6 at the default). An agent certificate is two identities. On defaults no lockout follows. A login ban changes that: IOS-XE `login block-for` counts each refused key and blocks the source address, every user and break-glass included, for its period; NX-OS `aaa authentication rejected ... ban` does not count refused keys but bans a username after wrong tokens, the correct token refused at the device with no TACACS+ and no device log line. `PubkeyAuthentication no`, `IdentityAgent none` (on-disk default keys are still offered) and `PreferredAuthentications keyboard-interactive,password` each reach the prompt first try on all five, scoped by `Host`/`Match host`; each disables certificate login for those hosts. A `CertificateFile` with no `IdentityFile` under `IdentitiesOnly yes` offers the certificate alone, one attempt; adding the key's `IdentityFile` makes it two. |
 | **L52** | Why a C8000V running IOS-XE 17.13.01a intermittently skips its TACACS+ method for SSH logins (found during L51, Addendum B of tests/lab/results/L51-cisco_iosxe.md): about four good logins, then 40–55 s in which `aaa authentication login default group port49 local` falls straight to `local` with no connection to port49d, `show tacacs` reporting the server alive with no timeouts, and repeating; unchanged without `single-connection`, without `ip tacacs source-interface`, without accounting, and with no keys offered. Whether it reproduces on another IOS-XE image or a hardware platform, and what the device's AAA state is during a failure window. Until it closes, the docs say only what the operator sees (a valid token refused, nothing in port49's log, `SSH2_USERAUTH` for `User ''`) and must not attribute it to port49 or to IOS-XE generally. | The operator docs' IOS-XE troubleshooting (plan 13) | IOS-XE (C8000V 17.13.01a first) | open — added 2026-10-09 |
+| **L53** | The SSH host key each platform presents to `port49 devices trust`'s scan (plan 9a), and what the scan does to the device. The key: the host-key algorithm negotiated with a client offering every algorithm `x/crypto/ssh` knows but DSA, which OpenSSH 10 cannot use; whether a console command shows the same key or a fingerprint of it, which command, and in what form (OpenSSH base64, SHA-256, hex DER, MD5), so an operator can verify it out of band; whether the key is the same after a reload with the configuration saved, the device shown to have gone down and come back. The scan, a key exchange abandoned before authentication: whether it reaches port49 as any TACACS+ exchange, writes a device log line, or counts against the device's login-attempt or ban limits (IOS-XE `login block-for`, NX-OS `aaa authentication rejected`: a limit of two failures set, three scans, then a login; valid only where a control of two refused logins does trip the limit). | §13 decision 42 rulings 9 and 12; the operator docs' "verify the key on the console" (plan 13) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open — added 2026-10-09 |
+| **L54** | `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's askpass answers it once and the login succeeds at the first try; that a command after `--` runs and its exit status is `port49 ssh`'s; that a pinned key the device does not hold is refused by ssh before any TACACS+ exchange, with the minted token never presented. | §13 decision 42 rulings 10 and 11 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open — added 2026-10-09 |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
