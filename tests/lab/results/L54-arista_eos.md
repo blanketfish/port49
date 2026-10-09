@@ -4,9 +4,9 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/evidence/L53L54-arista_eos.pcap` — 525 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L53L54-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L53L54-arista_eos.pcap` — 548 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L53L54-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `99b8abd2ab85e4c5468c9d5ffa0116ccd9c706a6`, `PORT49_LAB_PLATFORMS=eos`, `-run TestL53L54PortSSH`
+- **Run:** commit `0a5e9d30b6e6962340b6ca26d0085f0b9dd68211`, `PORT49_LAB_PLATFORMS=eos`, `-run TestL53L54PortSSH`
 
 ## Claim
 
@@ -30,12 +30,12 @@ IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
 Someone could be eavesdropping on you right now (man-in-the-middle attack)!
 It is also possible that a host key has just been changed.
 The fingerprint for the ED25519 key sent by the remote host is
-SHA256:QNxjPAI10Ijsd/Vmik/rUM7C4ooom56JiWmO/2jH68E.
+SHA256:K2a3fo1MKUY0Xn8AXsXsALNQSG1jbTpFSc6oQRtlRhs.
 Please contact your system administrator.
-Add correct host key in /tmp/TestL53L54PortSSHarista_eos2065077508/001/port49/known_hosts to get rid of this message.
-Offending ED25519 key in /tmp/TestL53L54PortSSHarista_eos2065077508/001/port49/known_hosts:1
+Add correct host key in /tmp/TestL53L54PortSSHarista_eos476867291/001/port49/known_hosts to get rid of this message.
+Offending ED25519 key in /tmp/TestL53L54PortSSHarista_eos476867291/001/port49/known_hosts:1
   remove with:
-  ssh-keygen -f '/tmp/TestL53L54PortSSHarista_eos2065077508/001/port49/known_hosts' -R 'leaf1'
+  ssh-keygen -f '/tmp/TestL53L54PortSSHarista_eos476867291/001/port49/known_hosts' -R 'leaf1'
 Host key for leaf1 has changed and you have requested strict checking.
 Host key verification failed.
 port49 ssh: ssh stopped before leaf1 asked for the token, so it was never sent (ssh exit 255, its message is above); if ssh's message above says Host key verification failed, the address inventory gives for leaf1 may not be the device: verify the key on its console, then run 'port49 devices trust --replace leaf1'
