@@ -6,8 +6,11 @@ build:
 	go build -o bin/port49-inventory ./cmd/port49-inventory
 	go build -o bin/port49-broker ./cmd/port49-broker
 
+# internal/port49d runs about 9.5 minutes under the full parallel suite, close
+# to go test's 10-minute default, so the limit is set here rather than left to
+# turn a slow machine into a timeout panic.
 test: lab-unit
-	go test ./... -count=1
+	go test ./... -count=1 -timeout 20m
 
 # The race detector over the daemon's packages. On the memory store a split
 # between a login's mark check and its write that never yields between the
