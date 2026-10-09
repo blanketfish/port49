@@ -257,9 +257,14 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
 	caPEM := s.brokerCAPEM
+	// source is where the bytes came from, for the message when they hold no
+	// certificate: the path is only read in the default case.
+	source := s.brokerCA
 	switch {
 	case caPEM != nil:
+		source = "the broker CA read for " + s.configFile + " (" + s.brokerCA + ")"
 	case s.brokerCAFD != 0:
+		source = "the broker CA the login passed (from " + s.brokerCA + ")"
 		// The login read the CA once and passed the bytes; the path is not
 		// read again.
 		in := os.NewFile(uintptr(s.brokerCAFD), "broker-ca")
@@ -282,7 +287,7 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	s.brokerCAPEM = caPEM
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", s.brokerCA)
+		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", source)
 	}
 	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log}, nil
 }

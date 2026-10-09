@@ -135,7 +135,7 @@ func resolve(base, p string) (string, error) {
 // ReadPrivate reads path, at most max bytes, refusing it unless it is a
 // regular file of its own (a symlink is refused, not followed) that this
 // user or root owns and nobody else can write, and every directory above it
-// is held to dirsOwnedAlone. A missing file is an error errors.Is(err,
+// is held to resolveOwned. A missing file is an error errors.Is(err,
 // fs.ErrNotExist) reports. what names the file in a refusal.
 //
 // path is walked as the kernel resolves it, one component at a time from the
