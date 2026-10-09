@@ -6037,8 +6037,8 @@ only when nobody but the operator or root can write it or any directory above it
 pins the SSH host key the device presents, in `$XDG_CONFIG_HOME/port49/known_hosts` under its
 inventory name.
 - **The address.** One mint through the agent gives it; `--address` is the alternative.
-- **When it pins.** Only against a `--fingerprint` the operator verified on the device's console,
-  or a `yes` typed at a terminal.
+- **When it pins.** Only against a `--fingerprint` the operator verified out of band (on the
+  device's console, where L53 shows one does), or a `yes` typed at a terminal.
 - **An existing pin.** It is replaced only with `--replace` (decision 42 rulings 7–9).
 
 **`port49 ssh [--port N] [--ssh PATH] [--ssh-config FILE] [-v] DEVICE [-- COMMAND…]`** mints a
@@ -8115,8 +8115,8 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
 
     What follows is reasoning from that, not measured (the note ran no jump host): with a bare
     prompt the askpass cannot tell the device's prompt from a jump host's, and could hand the token
-    to a host that is not the device. 8.0p1 and 8.2p1 fail on `force`, and 8.4p1 on the prompt
-    alone. `port49 token` serves an older ssh.
+    to a host that is not the device. 8.0p1 and 8.2p1 fail on `force` and, by the no-terminal
+    route, on the prompt; 8.4p1 on the prompt alone. `port49 token` serves an older ssh.
   - **The command line.** `ssh_config` is honoured. The command line forces:
     - the pinned file, `HostKeyAlias`, `StrictHostKeyChecking yes`, no host-key update, no DNS or
       `KnownHostsCommand` source. The file's path and the address are quoted and `%`-escaped, since
@@ -8138,8 +8138,9 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     ssh is ended, and `port49 ssh` says why.
   - **Answered once, to one prompt.** The token is answered once, to the prompt naming
     `<username>@<device>`. OpenSSH 10.2p1 writes `alice@leaf1's password: ` and
-    `(alice@leaf1) Password: `, measured against an `x/crypto/ssh` server for plan 9a; L54
-    measures it per platform.
+    `(alice@leaf1) Password: `, observed against an `x/crypto/ssh` server while plan 9a was
+    written (no note records it; Task 6's askpass tests pin the forms) and measured per platform
+    by L54.
   - **Other prompts.** Any other prompt, a jump host's, is asked of the terminal as ssh would ask
     it: a password with echo off, and a yes/no question with echo on.
   - **A second ask.** A second ask for the device's password, which ssh makes when the device
