@@ -25,15 +25,19 @@ What 9b builds:
   - `state`, the `nonce` and RFC 9207's `iss` are checked.
   - On a host with no display no browser is launched. The address is always printed, and on a
     terminal the address the browser ended on can be pasted back, so a person on a jump host
-    signs in from their laptop's browser.
+    signs in from their laptop's browser. With no terminal either, and no fixed port to forward,
+    that is said at once.
+  - The login and the refresh print whom the person signed in as.
   - The device authorization grant is ruled out (ruling 5).
 - **What the agent holds (rulings 7–11, 13).** The ID token and the refresh token, in the
   agent's memory alone, never on disk.
   - They reach the agent on an inherited pipe at login, and over its socket at a refresh.
-  - The agent makes itself non-dumpable on Linux.
+  - The agent makes itself non-dumpable on Linux and denies a debugger on macOS, and an agent
+    that cannot holds no OIDC session.
   - Every broker request carries the ID token as its bearer. It is renewed at three quarters of
     its own life, measured on the agent's clock from when it arrived, so a clock skewed from the
-    provider's never refuses it. A renewal that moves `auth_time` is refused.
+    provider's never refuses it. A renewal that moves `auth_time` is refused, and the refresh
+    token the provider rotated to in that answer is kept.
   - **The provider down:** the token works until its life ends, then `port49 token` says the
     provider did not renew it, when, and when the session ends, and never "log in again".
   - **`invalid_grant`:** the provider ended the session, and the agent ends too.
@@ -50,8 +54,9 @@ What 9b builds:
   - **L55:** Keycloak as this client meets it. It covers which redirect registration admits an
     ephemeral loopback port, PKCE enforcement, the `iss` parameter, the refresh-token grant, and
     what the grant answers after a logout and at the provider's own session limits.
-  - **L56:** the real CLI end to end on Keycloak and vEOS: login, silent renewal, refresh,
-    logout, and the provider stopped and started.
+  - **L56:** the real CLI end to end on Keycloak and vEOS: login, silent renewal, refresh (in a
+    browser and by the paste), logout, and the provider stopped and started. The CLI's raw output
+    is checked for leaked tokens, and every cell asserts against a control.
 
 **Architecture:**
 - **`internal/oidc` (`client.go`, new file):** `ReadIDToken` and `ReadDiscovery`, the client's
@@ -60,32 +65,33 @@ What 9b builds:
 - **`internal/oidc/oidctest`:** `AuthServer`, an authorization server on the test issuer
   (`/authorize`, `/token` with PKCE and refresh-token rotation), and `Browser` and `Redirected`.
 - **`internal/oidcclient` (new):** `Discover`, `Login`, `Renew`, `Skew`, `AuthorizationURL`;
-  `Provider`, `Endpoints`, `Tokens`; `UnreachableError`, `ProviderError`, `ErrSessionEnded`.
+  `Provider`, `Endpoints`, `Tokens`; `UnreachableError`, `ProviderError`, `RefusedError`,
+  `ErrSessionEnded`, `ErrNoWayBack`.
 - **`internal/broker/api`:** `OIDCProvider.MaxTokenAgeSeconds`. **`internal/broker`:**
   `config` fills it.
 - **`internal/agent`:**
   - `Config.OIDC` and `OIDCConfig`. `oidc.go` holds the session: bearer, renewal loop, errors.
-  - `Agent.OIDCChallenge` and `OIDCRefresh`; `Status.Method` and `OIDCIssuer`.
+  - `Agent.OIDCChallenge` and `OIDCRefresh`; `Status.Method`, `OIDCIssuer` and `Principal`.
   - The socket's `POST /oidc/challenge` and `POST /oidc/refresh`, and the client's methods for
     them.
   - `RenewFailedError`, `ErrBrowserRequired`, `ErrNotOIDC`.
 - **`internal/userconfig`:** the four new keys; `WithoutOIDCCA`.
 - **`cmd/port49`:**
   - `oidc.go`: `loginOIDC`, `refreshOIDC`, `signIn`, `oidcHandoff`, `pickProvider`,
-    `browserCommand`, `fetchBrokerConfig`;
-  - `harden_linux.go`;
+    `browserCommand`, `fetchBrokerConfig`, `idTokenEnd`, `afterOIDCLogin` (D1's one edit point);
+  - `harden_linux.go`, `harden_darwin.go`, and `hardenAgent` in `main.go`;
   - `sessionFlags`' new flags, and `brokerPool`, `oidcRoots`, `oidcConfig`, `startAgent` factored
     out of `config` and `login`;
   - `refreshCmd`'s OIDC branch.
-- **`tests/lab`:** `l55_test.go`, `l56_test.go`, `l55_l56_unit_test.go`; `make lab-oidc` runs L55,
-  and `make lab-oidc-agent` runs L56.
+- **`tests/lab`:** `l55_test.go`, `l56_test.go`, `l55_l56_unit_test.go`; `make lab-oidc-l55` runs
+  L55, and `make lab-oidc-agent` runs L56. (`make lab-oidc` already runs L45 and L46.)
 
 **Tech Stack:**
 - Go 1.26, module `github.com/rhwendt/port49`, **no cgo**, and **no new module in the build
   graph**.
   - The standard library does the HTTP, the PKCE hash and the loopback listener.
   - `golang.org/x/term` (direct since 9a) reads the paste with echo off.
-  - `golang.org/x/sys/unix` (direct) gives `Prctl`.
+  - `golang.org/x/sys/unix` (direct) gives `Prctl`, and `PtraceDenyAttach` on macOS.
 - Keycloak 26.4, digest-pinned in `tests/lab/oidc/compose.yaml` and `tests/lab/compose/oidc.yaml`
   (plan 7h).
 
@@ -109,9 +115,15 @@ What 9b builds:
 
 ## Questions for Ryan
 
-None. Each choice the roadmap leaves open is ruled below (R1–R8) on reasoning, and Task 1 writes
+One, open: **D1** from the pre-flight review, whether a new OIDC login extends the device
+sessions an earlier login left (R5). Ryan is deciding it. Until then R5 stands as written, marked
+pending wherever it reaches the text or the code, and "D1: the edit for each option" below gives
+each option as a self-contained edit.
+
+Each other choice the roadmap leaves open is ruled below (R1–R8) on reasoning, and Task 1 writes
 it into decision 43. None weakens a control: each is the stricter of the options. Ryan may
-override any; R2 and R3 are the two he is likeliest to want to see.
+override any; R2 and R3 are the two they are likeliest to want to see. The pre-flight review's
+findings, and the rulings it left to the plan, are in "Pre-flight rulings" (P1–P12).
 
 ## Rulings where the brief is open
 
@@ -127,28 +139,36 @@ override any; R2 and R3 are the two he is likeliest to want to see.
     without the provider, and the ID token it renews lives minutes.
   - On Linux the agent sets itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`). No core file is
     written, and another process of the same user cannot `ptrace` it or read `/proc/<pid>/mem`,
-    so the refresh token cannot be lifted out of a running agent. The socket still lets that user
-    mint while the agent runs, as it always did. That is reach for the session's life, not the
-    provider's.
+    so the refresh token cannot be lifted out of a running agent. On macOS it denies a debugger
+    (`ptrace(PT_DENY_ATTACH)`). An agent that cannot do either refuses the OIDC session (P6). The
+    socket still lets that user mint while the agent runs, as it always did. That is reach for the
+    session's life, not the provider's.
 - **R2. A browser-less host signs in by pasting the address back; the device authorization grant
   (RFC 8628) is not built** (the roadmap: "the device-code grant is not in decision 39, so 9b's
   spec task decides it").
-  - **Why not the device grant:**
-    - RFC 8628 has no `nonce`. A refresh must answer the broker's challenge in the ID token's
-      `nonce` (decision 39 ruling 15), so a device-grant session could never be extended.
+  - **Why not the device grant** (P4):
+    - The paste below already covers the browser-less host, with the loopback flow's every
+      property, so a second grant buys nothing.
     - Its user code, typed into another device, is the phishing route RFC 8628 §5.4 warns of. An
       attacker starts a flow and talks a person into entering the code.
     - It is a grant the provider must enable per client.
+
+    Two reasons this plan first gave are withdrawn. A device-grant session could be extended: the
+    refresh is its own sign-in, which could use the code flow or the paste. And whether a provider
+    takes `nonce` on a device-grant request is untested (RFC 8628 defines none; some providers take
+    it as an extension parameter).
   - **The paste:**
     - The command prints the authorization URL. The person opens it on any browser and signs in.
       The provider redirects that browser to `http://127.0.0.1:<port>/callback?code=…&state=…`,
       which fails to load on their laptop.
-    - They paste that address at the prompt, with echo off. The code is bound to the PKCE verifier
-      this process holds, so the address is useless anywhere else, and it is spent within the
-      second.
+    - They paste that address at the prompt, with echo off. Its code is bound to the PKCE verifier
+      this process holds, so whoever else reads that address cannot exchange it, and it is spent
+      within the second. (The authorization URL port49 prints is another matter: its `state` must
+      not leave this user. See P2.)
     - It keeps every property of the loopback flow: PKCE, `state`, `nonce`, `prompt=login`, `iss`.
   - **3am, SSH'd into a bastion:** `port49 login --oidc` prints the URL and asks for the paste.
-    No `ssh -L`, no second grant to enable.
+    No `ssh -L`, no second grant to enable. With no terminal either (`ssh host port49 login`, cron),
+    the login says so at once, naming `ssh -t`, or `--redirect-port` with `ssh -L` (P5).
 - **R3. Every sign-in asks `prompt=login`, the login as well as the refresh.**
   - On the certificate path a login is a handshake, one use of the key. A login that reused an IdP
     SSO session from hours ago would start the port49 session with an old `auth_time`, a ceiling
@@ -166,6 +186,7 @@ override any; R2 and R3 are the two he is likeliest to want to see.
   - A key-set client in the agent would be a second JWKS cache to age out, for no decision the
     agent makes.
 - **R5. A new OIDC agent does not refresh at login.**
+  PENDING Ryan's ruling on D1 (pre-flight review)
   - On the certificate path a new agent refreshes once, so live device sessions an earlier login
     left are extended. On the OIDC path a refresh is a second sign-in carrying the broker's
     challenge: a second password.
@@ -191,16 +212,141 @@ override any; R2 and R3 are the two he is likeliest to want to see.
   - A provider that moved `auth_time` on a refresh-token grant would silently extend the bearer's
     session clock (decision 39 ruling 9) with no authentication. So that token is refused, the
     held one is sent until its life ends, and the failure is said.
+  - The refresh token that refused answer carried is kept (P1). The provider may have rotated the
+    one sent out of use, and without it the next renewal is `invalid_grant`, blamed on a sign-out.
   - L46 measured that Keycloak keeps `auth_time`.
+
+## Pre-flight rulings
+
+The pre-flight review (`.superpowers/sdd/2026-10-09-09b-oidc-public-client/preflight-review.md`)
+found 1 Critical, 6 Important and 16 Minor problems, and gave a fix for each. Every fix is applied
+in the tasks below. Where the review offered a choice, or was unsure, the ruling is here.
+
+- **P1. A refused renewal keeps the rotated refresh token** (review I2). `Renew` answers a 200 it
+  will not use (no `id_token`, another `sub`, a moved `auth_time`) with `*RefusedError`, which
+  carries that answer's refresh token. The agent holds it in place of the one it sent, and keeps
+  the held ID token. The review's other choice, carrying the refusal's cause into later failures,
+  is not taken: it would still end the session at the next renewal, for a fault that may clear.
+- **P2. A leaked authorization URL is a login CSRF, and the defence is to show the principal**
+  (review I4). Whoever reads the URL holds its `state`, and can finish this sign-in with their own
+  account. PKCE does not stop that; `state` alone does, so it must not leave this user.
+  - The login prints `logged in to … as <principal> through …`, and the refresh prints `signed in
+    again at … as <principal>`. The principal is `/v1/identity`'s, carried on `/status`.
+  - Ruling 17 and the Global Constraints say the URL is not a credential, but that its `state`
+    must not leave this user. The operator notes say that on a shared host `$BROWSER` and
+    `xdg-open` show the URL to other users in `/proc/<pid>/cmdline`.
+  - The review gives no further mitigation. A flag naming the expected user is not added: no spec
+    text asks for one, and the printed principal is the same check without one more thing to set.
+- **P3. The wait before L56's second login is `loginAgainAt`** (review I6): the broker's named
+  time when it names one, else the sign-out plus `clock_skew` plus 5s. The review said 2s; the
+  harness's own rule (`oidc_e2e_test.go`) is 5s, for `iat`'s truncation and margin, and the plan
+  uses it.
+- **P4. R2 rests on three reasons** (review M5): the paste covers the case, the user code is a
+  phishing route, and the grant is enabled per client. The two the review showed wrong or untested
+  are withdrawn, in R2, decision 43 ruling 5 and design §7.
+- **P5. No browser and no terminal is said at once only with an ephemeral port** (review M9).
+  With `--redirect-port`, an `ssh -L` can carry the browser's answer, so the sign-in waits and
+  says how. With an ephemeral port nothing can, so `Login` returns `ErrNoWayBack` before it
+  prints the URL, and the command names `ssh -t`, or `--redirect-port` with `ssh -L`.
+- **P6. `harden` fails closed on the OIDC path, and macOS gets `PT_DENY_ATTACH` now** (review C1
+  and M11). `agentMain` hardens after its flags are parsed and before any credential is read.
+  - On failure an OIDC agent exits 1 before it reads the sign-in, and the login reports the
+    agent's exit. A certificate agent says so and runs on: its key is a file this user reads
+    already.
+  - `harden_darwin.go` calls `unix.PtraceDenyAttach()`, which needs no cgo.
+  - `hardenAgent` is a variable that `TestMain` makes a no-op on the in-process path, so the
+    tests that run the agent in-process leave the test binary dumpable for the ssh tests. A child
+    agent the login starts takes the `runCLIEnv` branch first and hardens for real.
+- **P7. L55 measures Keycloak's idle window rather than assuming it** (review M14, which was
+  unsure). Cell 7 reads two sessions with the maximum lifespan raised to 600s, so it is no cause:
+  one 75s after its last use, one 195s after (60s idle plus a 120s window). It records the
+  refresh token's own `exp − iat`. Cell 8 then sets the maximum lifespan to 150s.
+- **P8. The agent socket's provider code is `id_token_not_renewed`** (review M16).
+  `identity_provider_unreachable` sat beside the broker's `identity_provider_unavailable`, for
+  another fault. The new name says what happened: nothing was sent, since the ID token was not
+  renewed.
+- **P9. The Keycloak token-lifetime line is italic until L56 closes** (review M10). L56 records
+  the ID token's `exp − iat` at a 60s Access Token Lifespan, and fails unless it is 60s.
+- **P10. L55's PKCE cell says which client it measured** (review M13). The run reads
+  `pkce.code.challenge.method` off `port49-cli` and the note states it. L55 also gets a control:
+  the realm's own redirect is accepted and `http://evil.example/callback` refused, or the run is
+  INVALID.
+- **P11. L56 checks the CLI's raw output, and every cell asserts** (review I5).
+  - Each command's raw stdout and stderr go through `leakIn` before `scrubbed`. A compact JWS, or
+    any value the run registered, fails the run.
+  - The exemptions are a list of their own (`l56CLI.printed`), never `known`: the printed URL's
+    `state`, `nonce` and `code_challenge`, and each device token on `port49 token`'s stdout.
+  - Each cell's assertion has a control that shows it can fail, named beside it in the code. The
+    leak check's control is a device token, registered, which `leakIn` must see.
+- **P12. The paste is measured on Keycloak** (review M15). L56 cell 4b runs `port49 refresh`
+  with a pty for stdin, and types the address Keycloak sent the browser to. That address is never
+  sent to the listener. The cell records whether the pasted address carried `iss` and
+  `session_state`.
+
+## D1: the edit for each option
+
+PENDING Ryan's ruling on D1 (pre-flight review)
+
+R5 as written is the default the tasks build. The review's three options each change these
+places, and nothing else:
+- R5's text;
+- decision 43 ruling 12's "A new agent" bullet (Task 1 Step 1);
+- the §12 sentence Task 1 Step 4 writes;
+- the operator notes' `port49 refresh` line;
+- `afterOIDCLogin`'s body (Task 7 Step 5);
+- the `refreshed at` line in `TestLoginOIDCStartsAnAgentThatMints` (Task 7 Step 1).
+
+- **(a) The login runs the second sign-in itself.**
+  - `afterOIDCLogin` becomes:
+
+    ```go
+    func afterOIDCLogin(sf *sessionFlags, st agent.Status, stdout, stderr io.Writer) int {
+    	// The session is up whatever the refresh does, as on the certificate
+    	// path: a failure is said, and the login still succeeds.
+    	if refreshOIDC(context.Background(), agent.NewClient(sf.socket), st.Principal, sf.noBrowser,
+    		"port49 login", stdout, stderr) != 0 {
+    		fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed")
+    	}
+    	return 0
+    }
+    ```
+  - The test asserts `refreshed at` in stdout and two authorizations, the second carrying a
+    `nonce` that is not the first's.
+  - R5 becomes "A new OIDC agent refreshes once at login, a second sign-in". Ruling 12's bullet
+    becomes "A new OIDC agent refreshes once at login, as the certificate path does, by a second
+    sign-in carrying the broker's challenge". Task 1 Step 4 drops "and a new OIDC session does
+    not refresh at login". The operator note says a login asks the password twice.
+- **(b) Keep R5, and say it.**
+  - `afterOIDCLogin`'s body prints one line and returns 0:
+
+    ```go
+    	fmt.Fprintln(stderr, "port49 login: device sessions an earlier login left are not extended; run "+
+    		"`port49 refresh` to extend them (one more sign-in)")
+    	return 0
+    ```
+  - The test asserts that line on stderr.
+  - Task 1 gains two replacements in the spec:
+    - §5.6, after the sentence that ends "so a late `port49 login` resumes the session rather
+      than forcing a reconnect." (`grep -n "retained through a grace window"`), adds: "On the
+      OIDC path a new agent's login does not; `port49 refresh` does (§13 decision 43 ruling 12)."
+    - §14's "**In-place refresh**" bullet ends: "(on the OIDC path, `port49 refresh`, or a login
+      while the agent runs)".
+- **(c) As (b), plus `port49 login --oidc --refresh`, which does (a) on request.**
+  - `sessionFlags` gains `refreshAtLogin bool`, registered as `--refresh` ("with --oidc: also
+    extend the device sessions an earlier login left, by a second sign-in").
+  - `afterOIDCLogin` runs (a)'s body when `sf.refreshAtLogin`, else (b)'s.
+  - Both tests are kept, the (a) one run with `--refresh`.
+  - The usage line gains `[--refresh]`, and ruling 15's flag list gains `--refresh`.
 
 ## What this plan does not do
 
 - **No new reason code.** The decision log is untouched; every refusal the agent meets is one the
   broker already writes. `internal/decision/reasons.go` is unchanged.
-- **No new broker API error code.** The agent's socket gains two of its own:
-  - `503 identity_provider_unreachable`, beside 7d's `revocation_running`;
-  - `409 browser_required`.
-  
+- **No new broker API error code.** The agent's socket gains three of its own:
+  - `503 id_token_not_renewed`, beside 7d's `revocation_running` (P8);
+  - `409 browser_required`;
+  - `409 not_oidc`.
+
   They go in design §17's error list as the socket's, not the broker's.
 - **No new broker endpoint.** `/v1/config` gains one field.
 - **No new metric.** The agent has none.
@@ -221,8 +367,11 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49: sign in at https://kc.example.com/realms/corp in the browser that opened; if none did, open this address:
     https://kc.example.com/realms/corp/protocol/openid-connect/auth?client_id=port49-cli&code_challenge=…&prompt=login&…
-  port49: logged in to https://port49-broker.example.com:8443 through https://kc.example.com/realms/corp; the session ends at 2026-10-09T21:00:00Z (agent pid 4242, log /run/user/1000/port49/agent.log)
+  port49: logged in to https://port49-broker.example.com:8443 as user:alice@example.com through https://kc.example.com/realms/corp; the session ends at 2026-10-09T21:00:00Z (agent pid 4242, log /run/user/1000/port49/agent.log)
   ```
+
+  The principal is the check a person makes (P2): a sign-in finished with someone else's answer
+  names someone else.
 - **On a jump host with no display** (Task 7, `TestLoginOIDCWithAPastedAddress`):
 
   ```
@@ -235,6 +384,12 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
   ```
   port49: that is not the address the sign-in was sent back to (http://127.0.0.1:43117/callback?…); paste the address again:
+  ```
+- **No browser and no terminal** (`ssh host port49 login`, cron), with no fixed redirect port
+  (Task 7, `TestLoginOIDCWithNoWayBackSaysSoAtOnce`), exit 1 at once:
+
+  ```
+  port49 login: no browser opened on this host and stdin is not a terminal to paste the address into, so the sign-in's answer has no way back to port49; run the command in a terminal (ssh -t), or log in with --redirect-port N and forward that port to this host (ssh -L N:127.0.0.1:N)
   ```
 - **The provider down, past the ID token's life** (Task 5, `TestAProviderOutageEndsNothing`),
   exit 1, the agent still running:
@@ -255,9 +410,10 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   port49 token: the session is over: your identity provider ended your sessions at 2026-10-09T03:00:00Z (back-channel logout); log in again from 2026-10-09T03:01:01Z
   ```
 - **`port49 refresh` on the OIDC path** (Task 7, `TestAnOIDCRefreshSignsInAgainAndExtends`). It
-  prints the sign-in lines, then plan 7b's per-device lines:
+  prints the sign-in lines, whom it signed in as, then plan 7b's per-device lines:
 
   ```
+  port49: signed in again at https://kc.example.com/realms/corp as user:alice@example.com
   refreshed at 2026-10-09T20:52:00Z; this login lasts until 2026-10-10T08:52:00Z
     leaf1 (alice)  extended to 2026-10-10T08:52:00Z
   ```
@@ -296,13 +452,25 @@ when it closes.
     exactly those.
 - **Every login and every refresh asks for your password** (and your MFA) at the provider. A login
   is a fresh authentication, as a certificate login is a use of the key.
+- **Check whom you signed in as.** `port49 login` prints `logged in to … as <you> through …`, and
+  `port49 refresh` prints `signed in again at … as <you>`.
+  - The address port49 prints is not a password, but keep it to yourself. Whoever has it can finish
+    your sign-in with their own account, and your agent would then act as them.
+  - On a shared host, a browser port49 launches (`$BROWSER`, `xdg-open`) shows that address to
+    other users in its command line (`/proc/<pid>/cmdline`). There, use `--no-browser` and open
+    the address on your own machine.
 - **On a host with no browser** (a jump host over SSH), port49 prints the address. Open it in your
   laptop's browser and sign in. The browser then fails to load a `127.0.0.1` page: copy that
-  page's address and paste it at port49's prompt. It is not shown, and it is useless anywhere but
-  this one sign-in. `--no-browser` prints the address without trying to open a browser.
+  page's address and paste it at port49's prompt. It is not shown, and its code is useless to
+  anyone without this sign-in's verifier. `--no-browser` prints the address without trying to
+  open a browser.
+  - With no terminal either (`ssh host port49 login` without `-t`, or cron), port49 says so at
+    once. Use `ssh -t`, or log in with `--redirect-port N` and forward it with `ssh -L
+    N:127.0.0.1:N`; then the browser's answer reaches port49 with no paste.
 - **Nothing is written to disk.** The agent holds the session in memory. When the agent stops, a
-  reboot say, `port49 login` signs in again. On Linux the agent is non-dumpable, so no process of
-  yours can read the session out of it.
+  reboot say, `port49 login` signs in again. On Linux the agent is non-dumpable, and on macOS it
+  refuses a debugger, so no process of yours can read the session out of it. An agent that cannot
+  do this refuses the OIDC session, and the login says why.
 - **The ID token is renewed in the background** with the provider's refresh token, within its
   lifetime, with no browser.
   - *If your provider ends sessions sooner than `session.max_session_age_default` (12h), port49's
@@ -310,13 +478,14 @@ when it closes.
     that limit is "SSO Session Max"; whether a `port49 refresh` restarts it is L55's.*
   - Set the provider's limit at or above the broker's.
 - **When your provider is down,** `port49 token` keeps working until the ID token's lifetime ends
-  (on Keycloak, the realm's Access Token Lifespan).
+  *(on Keycloak, the realm's Access Token Lifespan: L56 records it)*.
   - Then it says the provider did not renew the token, when the token ended and when your session
     ends. It never says to log in again: the agent keeps trying every 30s and resumes on its own.
   - Open device sessions go on. Certificate logins and break-glass are not affected.
 - **`port49 refresh`** extends your live device sessions after a fresh sign-in, as on the
   certificate path. A login while an OIDC agent runs does the same. A *new* agent does not extend
   sessions an earlier login left: run `port49 refresh` for those.
+  PENDING Ryan's ruling on D1 (pre-flight review)
 - **A back-channel logout ends the agent.** `port49 token` prints the broker's words, with the
   time from which a new login is taken.
 - **An egress proxy.** `HTTPS_PROXY` is honoured for the provider and never for the broker.
@@ -335,8 +504,11 @@ when it closes.
 - **No token, code, verifier, refresh token or broker challenge is logged or printed.**
   - The authorization URL is printed on the operator's terminal and passed to the browser
     launcher. It carries `state`, the `nonce` (a refresh's challenge) and the `code_challenge`.
-    The browser must carry all three to the provider (decision 39 ruling 15), and none signs
-    anyone in: PKCE binds the code to the verifier this process holds (RFC 7636 §1).
+    The browser must carry all three to the provider (decision 39 ruling 15). The URL is not a
+    credential: PKCE binds the code to the verifier this process holds (RFC 7636 §1), so no one
+    else can exchange it. But its `state` must not leave this user: whoever holds it can complete
+    this sign-in with their own account (P2). So the login and the refresh print the principal
+    signed in.
   - The agent never sees that URL, and its log holds none of these values.
   - The tokens reach the agent on an inherited pipe or its 0600 socket, never argv or the
     environment.
@@ -353,7 +525,8 @@ when it closes.
   - an ID token whose `nonce`, `iss`, `aud` or `azp` is not this sign-in's;
   - a renewal that moves `auth_time` or names another `sub`;
   - a refresh signed in as another user;
-  - an `oidc_ca` others can write.
+  - an `oidc_ca` others can write;
+  - an OIDC session in an agent that could not make itself non-dumpable (P6).
 - **The lab register rules** (CLAUDE.md 1–4). Task 1 opens L55 and L56, and Task 8 measures
   them. Until L55 closes, no doc says which redirect registration Keycloak accepts, that it
   enforces PKCE, or what its refresh grant answers at its limits.
@@ -381,20 +554,28 @@ The five inputs or conditions most likely to bite a person, and the test that pi
 2. **A browser-less shell** (SSH to a jump host, WSL with no display).
    - **Expected:** no browser is launched without a display. The address is printed, and a pasted
      address completes the sign-in. A paste that is not this sign-in's is refused, saying why, and
-     asked again. The terminal's echo is restored however the sign-in ends.
-   - **Pinned by** Task 4's `TestAPastedAddressCompletesTheSignIn`, Task 7's
-     `TestBrowserCommand` and `TestLoginOIDCWithAPastedAddress`.
+     asked again. The terminal's echo is restored however the sign-in ends. With no terminal and
+     an ephemeral port, that is said at once, not after 5 minutes.
+   - **Pinned by** Task 4's `TestAPastedAddressCompletesTheSignIn` and
+     `TestNoBrowserAndNoTerminalIsSaidAtOnce`, Task 7's `TestBrowserCommand`,
+     `TestLoginOIDCWithAPastedAddress` and `TestLoginOIDCWithNoWayBackSaysSoAtOnce`, and L56
+     cell 4b on Keycloak.
 3. **A forged answer on the loopback port** (another local user, or a provider mix-up).
    - **Expected:** a callback with another `state` is answered 400 and waited past. One naming
      another `iss` ends the sign-in with a refusal. A code is never exchanged without this
-     process's verifier.
+     process's verifier. A sign-in someone else finished from a leaked URL (P2) cannot be told
+     apart here, so the login and the refresh name the principal, and a refresh as another user
+     is refused.
    - **Pinned by** Task 4's `TestACallbackWithAnotherStateIsIgnored` and
-     `TestAnIssParameterNamingAnotherIssuerIsRefused`, and Task 2's
-     `TestTheTokenEndpointRefusesAWrongVerifier`.
+     `TestAnIssParameterNamingAnotherIssuerIsRefused`, Task 2's
+     `TestTheTokenEndpointRefusesAWrongVerifier`, Task 6's `TestARefreshByAnotherUserChangesNothing`,
+     and Task 7's `TestLoginOIDCStartsAnAgentThatMints` (the principal printed).
 4. **A provider that misbehaves on renewal.** It moves `auth_time`, names another `sub`, sends no
    ID token, or answers `invalid_grant`.
    - **Expected:** the first three are refused, the held token is kept until its life ends, and
-     the failure is said. `invalid_grant` ends the session with "run `port49 login`".
+     the failure is said. The refresh token the refused answer carried is kept, so the next
+     renewal fails for the same cause, not `invalid_grant`. `invalid_grant` ends the session with
+     "run `port49 login`".
    - **Pinned by** Task 3's `TestARenewalThatMovesAuthTimeIsRefused` and
      `TestARenewalNamingAnotherSubIsRefused`, and Task 5's `TestARenewalThatMovesAuthTimeIsNotUsed`
      and `TestInvalidGrantEndsTheSession`.
@@ -419,8 +600,9 @@ The five inputs or conditions most likely to bite a person, and the test that pi
     `Handler`, `answer`) and `socket.go` (`Refresh`, `roundTrip`, two methods).
 - **`internal/userconfig`:** Task 7 alone.
 - **`cmd/port49`:** Task 7 alone. It edits `main.go`, `refresh.go` and `main_test.go`
-  (`newLabBroker` becomes `newLabBrokerWith`), and creates `oidc.go`, `harden_linux.go`,
-  `harden_other.go`, `oidc_test.go` and `oidc_login_linux_test.go`.
+  (`newLabBrokerWith`, and `TestMain`'s `hardenAgent`), and creates `oidc.go`,
+  `harden_linux.go`, `harden_darwin.go`, `harden_other.go`, `oidc_test.go` and
+  `oidc_login_linux_test.go`.
 - **The spec and the design:** Task 1 writes them. Task 8 closes L55 and L56 and fixes any text
   their results contradict.
 - **`tests/lab/`, `Makefile` and `tests/lab/README.md`:** Task 8 alone.
@@ -436,7 +618,7 @@ needs 6. Task 8 needs 1–7. Task 9 is last.
 - `internal/oidcclient/oidcclient.go`, `oidcclient_test.go`, `login.go`, `login_test.go`.
 - `internal/agent/oidc.go`, `oidc_test.go`, `oidcrefresh.go`, `oidcrefresh_test.go`.
 - `cmd/port49/oidc.go`, `oidc_test.go`, `oidc_login_linux_test.go`, `harden_linux.go`,
-  `harden_other.go`.
+  `harden_darwin.go`, `harden_other.go`.
 - `tests/lab/l55_test.go`, `tests/lab/l56_test.go`, `tests/lab/l55_l56_unit_test.go`.
 - `tests/lab/results/L55-keycloak.md` and `tests/lab/results/L56-arista_eos.md`, written by the
   run, with their evidence.
@@ -450,7 +632,7 @@ needs 6. Task 8 needs 1–7. Task 9 is last.
 - `internal/agent/agent.go`, `internal/agent/socket.go` (Tasks 5, 6).
 - `internal/userconfig/userconfig.go`, `userconfig_test.go` (Task 7).
 - `cmd/port49/main.go`, `refresh.go`, `main_test.go`, `config_test.go` (Task 7).
-- `Makefile` (`lab-oidc`, `lab-oidc-agent`) and `tests/lab/README.md` (Task 8).
+- `Makefile` (`lab-oidc-l55`, `lab-oidc-agent`) and `tests/lab/README.md` (Task 8).
 - `docs/superpowers/plans/README.md` (Task 9).
 
 ---
@@ -473,6 +655,10 @@ needs 6. Task 8 needs 1–7. Task 9 is last.
 
 This task is docs only. Each step is an edit with the exact text. Where a step says "replace", the
 old text is quoted and appears once; check with `grep -n` before editing.
+
+D1 is ruled before this task runs, and its option's edits made ("D1: the edit for each option").
+A line reading "PENDING Ryan's ruling on D1 (pre-flight review)" is then deleted from this plan,
+and never copied into the spec.
 
 - [ ] **Step 1: Decision 43, after decision 42**
 
@@ -535,9 +721,11 @@ L47 (hosted providers, open).
   - **The paste.** When stdin is a terminal, the address the browser ended on may be pasted back,
     and is not echoed. A browser on another host cannot reach `127.0.0.1`, but its address bar
     holds the answer.
+  - **No way back.** With no browser opened, no terminal, and an ephemeral port, nothing can
+    bring the answer back: that is said at once, naming `ssh -t`, or a fixed port forwarded with
+    `ssh -L`. With a fixed port the sign-in waits, and says how to forward it.
   - **No device grant.** The device authorization grant (RFC 8628) is not built:
-    - it carries no `nonce`, so a session it starts could never answer ruling 15's refresh
-      challenge;
+    - the paste covers the browser-less host, with every property of the loopback flow;
     - its user code is a phishing route (RFC 8628 §5.4);
     - a provider must enable it per client.
   - Tasks 4 and 7.
@@ -560,7 +748,9 @@ L47 (hosted providers, open).
     from the login on an inherited pipe, never argv or the environment, and from `port49 refresh`
     over the agent's 0600 socket.
   - **Non-dumpable.** On Linux the agent sets itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`):
-    no core file, and no process of the same user reads its memory or traces it.
+    no core file, and no process of the same user reads its memory or traces it. On macOS it
+    denies a debugger (`ptrace(PT_DENY_ATTACH)`). An agent that cannot holds no OIDC session: it
+    exits before it reads the sign-in, and the login says why.
   - **An agent that stops ends the OIDC session,** as a dropped connection ends the certificate
     path's.
   - Tasks 5 and 7.
@@ -573,20 +763,21 @@ L47 (hosted providers, open).
   - Task 5.
 - **9. Silent renewal** (data: RFC 6749 §6, OIDC Core §12.2; measured on Keycloak, L46;
   provisional on L55).
-  - **The grant.** The refresh-token grant, with the sign-in's scope.
+  - **The grant.** The refresh-token grant, with the sign-in's scope, `openid` always in it.
   - **When.** At three quarters of the token's usable life: `exp − iat`, capped by `/v1/config`'s
     `max_token_age_seconds`, counted on this host's wall clock from when the token arrived, never
     by reading `exp` against it. And before a request within 15s of the usable life's end.
   - **What a renewed token must keep.** The held `iss`, `sub` and `auth_time`. One that moves
     `auth_time` is refused: it would extend the bearer's session clock (decision 39 ruling 9) with
     no authentication. A renewal never extends the ceiling.
-  - **A rotated refresh token** replaces the held one.
+  - **A rotated refresh token** replaces the held one, even from an answer whose ID token is
+    refused: the provider may have retired the one sent.
   - Tasks 3 and 5.
 - **10. The provider unreachable, or ending the session** (provisional on L55).
   - **A failed renewal.** One that fails any way but `invalid_grant` leaves the held token in use
     until its usable life ends, and is tried every 30s. Then each call is answered, on the agent's
-    socket, `503 identity_provider_unreachable`. It names the provider, when the token ended and
-    when the session ends, and never says to log in again.
+    socket, `503 id_token_not_renewed`. It names the provider, when the token ended and when the
+    session ends, and never says to log in again.
   - **`invalid_grant`.** The provider ended the session (a sign-out, its own session limit), and
     the agent ends: run `port49 login`.
   - **No refresh token.** Without one, the session ends with the ID token, said at login.
@@ -608,6 +799,7 @@ L47 (hosted providers, open).
     Otherwise it holds the old ones, and a refusal of the new token ends nothing.
   - **A new agent.** A new OIDC agent does not refresh at login, since that would be a second
     sign-in. `port49 refresh` extends live device sessions an earlier login left.
+    PENDING Ryan's ruling on D1 (pre-flight review)
   - Tasks 6 and 7.
 - **13. The session's end.** `max_session_age` after the ID token's `auth_time`, reckoned from
   receipt: `received + max_session_age − (iat − auth_time)`. Without a refresh token, the token's
@@ -627,9 +819,11 @@ L47 (hosted providers, open).
   - **`broker_ca`** stays required: it is the broker's TLS, on either path.
   - Task 7.
 - **16. The agent's socket.**
-  - **`GET /status`** gains `method` (`x509` or `oidc`) and `oidc_issuer`.
+  - **`GET /status`** gains `method` (`x509` or `oidc`), `oidc_issuer`, and on the OIDC path
+    `principal`, the broker's `/v1/identity` at connect.
   - **The new routes.** `POST /oidc/challenge` answers the challenge and the sign-in parameters.
-    `POST /oidc/refresh` takes `{id_token, refresh_token}`.
+    `POST /oidc/refresh` takes `{id_token, refresh_token}`. On a certificate agent both answer
+    `409 not_oidc`.
   - **`POST /refresh`** on an OIDC agent answers `409 browser_required`.
   - **A login meeting another agent.** One with another method or another issuer exits 1 naming
     it, as one with another certificate does.
@@ -641,8 +835,12 @@ L47 (hosted providers, open).
 
   The authorization URL is printed on the operator's terminal and handed to the browser. It
   carries `state`, the `nonce` and the `code_challenge`, which the browser must carry to the
-  provider, and none of which signs anyone in. A provider's refusal is said by its OAuth error
-  code and its description, made printable. All tasks.
+  provider. It is not a credential: the code it leads to is bound to this process's verifier. But
+  its `state` must not leave this user, since whoever holds it can complete this sign-in with
+  their own account (a login CSRF; RFC 6749 §10.12). So the login and the refresh print the
+  principal signed in, and on a shared host a launched browser's command line shows the URL to
+  other users. A provider's refusal is said by its OAuth error code and its description, made
+  printable. All tasks.
 - **18. The lab.**
   - **L55:** Keycloak as this client meets it.
   - **L56:** the CLI end to end on Keycloak and vEOS.
@@ -711,6 +909,8 @@ otherwise; it also refreshes once after a new session connects. `port49 token` w
 
 with
 
+PENDING Ryan's ruling on D1 (pre-flight review)
+
 ```markdown
 otherwise; it also refreshes once after a new session connects. On the OIDC path (§13 decision 43
 ruling 12), the refresh is a sign-in at the provider with `prompt=login`, carrying the broker's
@@ -737,8 +937,8 @@ refresh token in memory.
 After the row that begins `| **L54** |` (`grep -n "^| \*\*L54\*\*"`), insert:
 
 ```markdown
-| **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port, another fixed port and an ephemeral one (RFC 8252 §7.3). **PKCE:** with `S256`, whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The refresh-token grant:** whether it returns an ID token, whether it rotates the refresh token, whether the renewed ID token keeps `iss`, `sub`, `aud`, `sid` and `auth_time` and carries no `nonce`, and whether a rotated-out refresh token is still taken. **What it answers** (status and `error`) after an RP-initiated logout, after an administrator's sign-out of the user, after `ssoSessionIdleTimeout` with no grant, and after `ssoSessionMaxLifespan`; and whether a `prompt=login` sign-in inside the SSO session restarts the session's maximum lifespan. | §13 decision 43 rulings 1, 4, 9 and 10; the operator notes' redirect registration and "set the provider's session limit at or above the broker's" (plan 13) | Keycloak (26.x) | open — added 2026-10-09 |
-| **L56** | The agent's OIDC session end to end on Keycloak and one device (plan 9b), with the real `port49` CLI and the realm's Access Token Lifespan at 60s. Whether: `port49 login --oidc --no-browser` signs in through a scripted browser and starts the agent; `port49 token` mints and the device takes the token over SSH; `port49 token` still mints after at least two ID-token lifetimes with no browser; `port49 refresh` asks the password again and extends the device session; an administrator's sign-out ends the agent, `port49 token` printing the broker's logout words, and a login from the time they name works; with Keycloak stopped, `port49 token` mints until the held ID token's life ends, then exits 1 saying the provider did not renew it and not to log in, the agent still running, and with Keycloak started again a `port49 token` mints with no login (or, if Keycloak lost its sessions, what the agent says). No token, code or verifier in the CLI's output or the agent's log. | §13 decision 43 rulings 5, 7, 9, 10, 11 and 12; the operator notes (plan 13) | Keycloak (26.x); EOS | open — added 2026-10-09 |
+| **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port, another fixed port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The refresh-token grant:** whether it returns an ID token, whether it rotates the refresh token, whether the renewed ID token keeps `iss`, `sub`, `aud`, `sid` and `auth_time` and carries no `nonce`, and whether a rotated-out refresh token is still taken. **What it answers** (status and `error`) after an RP-initiated logout, after an administrator's sign-out of the user, after `ssoSessionIdleTimeout` with no grant (75s after the last use, and past a 120s window beyond it, with the refresh token's own `exp − iat`), and after `ssoSessionMaxLifespan`; and whether a `prompt=login` sign-in inside the SSO session restarts the session's maximum lifespan. | §13 decision 43 rulings 1, 4, 9 and 10; the operator notes' redirect registration and "set the provider's session limit at or above the broker's" (plan 13) | Keycloak (26.x) | open — added 2026-10-09 |
+| **L56** | The agent's OIDC session end to end on Keycloak and one device (plan 9b), with the real `port49` CLI and the realm's Access Token Lifespan at 60s, the ID token's `exp − iat` recorded. Whether: `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, starts the agent and names the principal signed in; `port49 token` mints and the device takes the token over SSH; `port49 token` still mints after at least two ID-token lifetimes with no browser; `port49 refresh` asks the password again, names the principal and extends the device session, in a browser and with the address pasted at a terminal; an administrator's sign-out ends the agent, in the broker's logout words or the provider's (which is recorded), and a login from the time the broker names works; with Keycloak stopped, `port49 token` mints until the held ID token's life ends, then exits 1 saying the provider did not renew it and not to log in, the agent still running, and with Keycloak started again a `port49 token` mints with no login, or the agent says the provider ended the session. No compact JWS, ID token, refresh token, code or verifier in the CLI's raw output or the agent's log. Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 7, 9, 10, 11, 12 and 17; the operator notes (plan 13) | Keycloak (26.x); EOS | open — added 2026-10-09 |
 ```
 
 - [ ] **Step 6: Design §7, the OIDC path as built**
@@ -766,24 +966,26 @@ As built (plan 9b; policy engine spec §13 decision 43 rulings 1–13):
   in the command's own process, over a loopback redirect, with `prompt=login`: a login is a fresh
   authentication.
 - **Not on disk.** The refresh token is held in the agent's memory and never written. The agent
-  is non-dumpable on Linux, so the file this section warns of does not exist. An agent that stops
-  ends the session, as a dropped connection does on the certificate path.
+  is non-dumpable on Linux and refuses a debugger on macOS, so the file this section warns of
+  does not exist. An agent that stops ends the session, as a dropped connection does on the
+  certificate path.
 - **Renewal.** The agent renews the ID token, each request's bearer, with the refresh token, and
   a renewed token never moves `auth_time`.
 - **No browser.** On a host with no browser the address is printed, and the one the browser ends
   on is pasted back.
-- **No device grant.** The device authorization grant is not built: it carries no `nonce` for the
-  refresh challenge, and its user code is a phishing route.
+- **No device grant.** The device authorization grant is not built: the paste covers the
+  browser-less host, its user code is a phishing route, and a provider must enable it per client.
 ```
 
-- [ ] **Step 7: Design §17, the socket's two codes and the client**
+- [ ] **Step 7: Design §17, the socket's three codes and the client**
 
 After the line that begins `503  revocation_running` (`grep -n "^503  revocation_running"`),
 insert:
 
 ```
-503  identity_provider_unreachable    the agent's socket, not the broker: the agent's ID token's life ended and the identity provider did not renew it; nothing was sent; the agent keeps trying (plan 9b)
+503  id_token_not_renewed             the agent's socket, not the broker: the agent's ID token's life ended and the identity provider did not renew it; nothing was sent; the agent keeps trying (plan 9b)
 409  browser_required                 the agent's socket: POST /refresh on an OIDC session, whose refresh is a sign-in `port49 refresh` runs (plan 9b)
+409  not_oidc                         the agent's socket: POST /oidc/challenge or /oidc/refresh on a certificate session (plan 9b)
 ```
 
 Replace
@@ -1067,27 +1269,27 @@ type AuthServer struct {
 	ClientID string
 	Sub      string
 	// Claims go into every ID token beside iss, aud, sub, iat, exp,
-	// auth_time, sid and a sign-in's nonce.
+	// auth_time, sid, jti and a sign-in's nonce.
 	Claims map[string]any
 	// Now is the provider's clock; nil is time.Now.
 	Now func() time.Time
 
-	t           testing.TB
-	i           *Issuer
-	mu          sync.Mutex
-	lifetime    time.Duration
-	authTime    time.Time
-	moveAuth    bool
-	noRefresh   bool
-	noIss       bool
-	deny        string
-	failStatus  int
-	failCode    string
-	codes       map[string]grant
-	refreshes   map[string]grant
-	asked       []url.Values
-	grants      []url.Values
-	issued      []string
+	t          testing.TB
+	i          *Issuer
+	mu         sync.Mutex
+	lifetime   time.Duration
+	authTime   time.Time
+	moveAuth   bool
+	noRefresh  bool
+	noIss      bool
+	deny       string
+	failStatus int
+	failCode   string
+	codes      map[string]grant
+	refreshes  map[string]grant
+	asked      []url.Values
+	grants     []url.Values
+	issued     []string
 }
 
 // grant is what a code or a refresh token stands for.
@@ -1187,11 +1389,13 @@ func (a *AuthServer) signInTime() time.Time {
 }
 
 // answer is g's ID token and, unless NoRefreshToken, a new refresh token
-// for g. Called with a.mu held.
+// for g. Called with a.mu held. Each ID token carries a random jti: RS256
+// is deterministic, so without one a renewal in the same second as the
+// sign-in would be the same JWS, and no test could see it happen.
 func (a *AuthServer) answer(g grant, nonce string) (string, string) {
 	now := a.now()
 	c := map[string]any{"iss": a.i.URL, "aud": a.ClientID, "sub": a.Sub, "iat": now.Unix(),
-		"exp": now.Add(a.lifetime).Unix(), "auth_time": g.authTime.Unix(), "sid": g.sid}
+		"exp": now.Add(a.lifetime).Unix(), "auth_time": g.authTime.Unix(), "sid": g.sid, "jti": opaque()}
 	if nonce != "" {
 		c["nonce"] = nonce
 	}
@@ -1509,9 +1713,10 @@ git commit -m "feat(oidc): a test authorization server with PKCE and rotation; /
   - `func oidcclient.Skew(t Tokens) time.Duration`
   - `func exchange(ctx context.Context, p Provider, e Endpoints, code, redirect, verifier, nonce string, now func() time.Time) (Tokens, error)` (unexported, for Task 4)
   - `func oidcclient.AuthorizationURL(p Provider, e Endpoints, redirect, state, nonce, challenge string) (string, error)`;
-    `challengeOf`, `opaque` (unexported, for Task 4)
+    `challengeOf`, `opaque`, `scopeOf` (unexported, for Task 4)
   - `var oidcclient.ErrSessionEnded error`; `type oidcclient.UnreachableError struct{ Issuer string; Err error }`;
-    `type oidcclient.ProviderError struct{ Issuer string; Status int; Code, Description string }`
+    `type oidcclient.ProviderError struct{ Issuer string; Status int; Code, Description string }`;
+    `type oidcclient.RefusedError struct{ Refresh string; Err error }` (P1, for Task 5)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1566,16 +1771,16 @@ func TestReadIDTokenChecksWhatAClientChecks(t *testing.T) {
 		nonce  string
 		want   string
 	}{
-		"another issuer":                {with("iss", "https://evil.example"), "", "was not issued by"},
-		"another audience":              {with("aud", "other"), "", "aud does not name"},
-		"several audiences and no azp":  {with("aud", []string{"port49-cli", "other"}), "", "no azp"},
-		"another azp":                   {with("azp", "other"), "", "azp is not"},
-		"no sub":                        {with("sub", nil), "", "no usable sub"},
-		"no auth_time":                  {with("auth_time", nil), "", "no auth_time"},
-		"a date as a string":            {with("iat", "1700000000"), "", "NumericDate"},
-		"exp before iat":                {with("exp", now.Add(-time.Minute).Unix()), "", "expires before"},
-		"another nonce":                 {good, "n-2", "nonce is not"},
-		"no nonce when one was sent":    {with("nonce", nil), "n-1", "nonce is not"},
+		"another issuer":               {with("iss", "https://evil.example"), "", "was not issued by"},
+		"another audience":             {with("aud", "other"), "", "aud does not name"},
+		"several audiences and no azp": {with("aud", []string{"port49-cli", "other"}), "", "no azp"},
+		"another azp":                  {with("azp", "other"), "", "azp is not"},
+		"no sub":                       {with("sub", nil), "", "no usable sub"},
+		"no auth_time":                 {with("auth_time", nil), "", "no auth_time"},
+		"a date as a string":           {with("iat", "1700000000"), "", "NumericDate"},
+		"exp before iat":               {with("exp", now.Add(-time.Minute).Unix()), "", "expires before"},
+		"another nonce":                {good, "n-2", "nonce is not"},
+		"no nonce when one was sent":   {with("nonce", nil), "n-1", "nonce is not"},
 		"a claim named twice in cases": {with("SUB", "x"), "", "twice"},
 	} {
 		_, err := oidc.ReadIDToken(iss.Token(t, "k1", c.claims), iss.URL, "port49-cli", c.nonce)
@@ -1630,6 +1835,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -1742,16 +1948,38 @@ func TestRenewKeepsAuthTimeAndTakesTheRotatedToken(t *testing.T) {
 	}
 }
 
-// A renewal that moves auth_time is refused (OIDC Core §12.2; R8).
+// A renewal that moves auth_time is refused (OIDC Core §12.2; R8), and the
+// refusal carries the refresh token the provider rotated to, which %#v
+// withholds.
 func TestARenewalThatMovesAuthTimeIsRefused(t *testing.T) {
 	iss, as, p := provider(t)
 	as.SetAuthTime(time.Now().Add(-time.Hour))
 	e, _ := Discover(context.Background(), p)
 	h := held(t, iss, as)
 	as.MoveAuthTimeOnRefresh()
-	if _, err := Renew(context.Background(), p, e, h.Refresh, h.ID, time.Now); err == nil ||
-		!strings.Contains(err.Error(), "auth_time") {
+	_, err := Renew(context.Background(), p, e, h.Refresh, h.ID, time.Now)
+	var refused *RefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "auth_time") || refused.Refresh == "" ||
+		refused.Refresh == h.Refresh {
 		t.Fatalf("%v", err)
+	}
+	if s := fmt.Sprintf("%v %+v %#v", err, err, err); strings.Contains(s, refused.Refresh) {
+		t.Fatalf("the refusal prints its refresh token: %s", s)
+	}
+}
+
+// Every renewal asks for openid, as the sign-in does, whatever the verifier's
+// scopes leave out (OIDC Core §12.1).
+func TestARenewalAlwaysAsksForOpenID(t *testing.T) {
+	iss, as, p := provider(t)
+	p.Scopes = []string{"email"}
+	e, _ := Discover(context.Background(), p)
+	h := held(t, iss, as)
+	if _, err := Renew(context.Background(), p, e, h.Refresh, h.ID, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if g := as.Grants(); g[0].Get("scope") != "openid email" {
+		t.Fatalf("the renewal's scope %q", g[0].Get("scope"))
 	}
 }
 
@@ -2152,11 +2380,14 @@ func tokenRequest(ctx context.Context, p Provider, e Endpoints, form url.Values)
 			Code: printsafe.Line(oe.Error, 64), Description: printsafe.Line(oe.Description, 200)}
 	}
 	var t tokenResponse
-	if json.Unmarshal(body, &t) != nil || t.IDToken == "" {
-		return tokenResponse{}, fmt.Errorf("%s: the token endpoint's answer carries no id_token", p.Issuer)
+	if json.Unmarshal(body, &t) != nil {
+		return tokenResponse{}, fmt.Errorf("%s: the token endpoint's answer is not a JSON object", p.Issuer)
 	}
 	return t, nil
 }
+
+// errNoIDToken is a token response with no id_token.
+var errNoIDToken = errors.New("the token endpoint's answer carries no id_token")
 
 // exchange is the code's exchange (RFC 6749 §4.1.3, RFC 7636 §4.5): the
 // verifier, no secret, and an ID token whose nonce is the request's.
@@ -2167,6 +2398,9 @@ func exchange(ctx context.Context, p Provider, e Endpoints, code, redirect, veri
 	if err != nil {
 		return Tokens{}, err
 	}
+	if t.IDToken == "" {
+		return Tokens{}, fmt.Errorf("%s: %w", p.Issuer, errNoIDToken)
+	}
 	id, err := oidc.ReadIDToken(t.IDToken, p.Issuer, p.ClientID, nonce)
 	if err != nil {
 		return Tokens{}, fmt.Errorf("%s: %w", p.Issuer, err)
@@ -2174,15 +2408,37 @@ func exchange(ctx context.Context, p Provider, e Endpoints, code, redirect, veri
 	return Tokens{ID: id, IDRaw: t.IDToken, Refresh: t.RefreshToken, Received: now().Round(0)}, nil
 }
 
-// Renew is the refresh-token grant (RFC 6749 §6; decision 43 ruling 9). The
-// renewed ID token must name held's sub and keep its auth_time (OIDC Core
-// §12.2): one that moved it is refused, since it would extend the session
-// clock with no authentication. invalid_grant is ErrSessionEnded. Refresh is
-// "" when the provider did not rotate it; the caller keeps the old one.
+// RefusedError is a renewal whose answer is not used: the provider answered
+// 200, but with no ID token, or one this session cannot take (another sub, a
+// moved auth_time). Refresh is the refresh token that answer carried, "" for
+// none: the provider may have rotated the one sent out of use, so the caller
+// holds Refresh in its place, or its next renewal is invalid_grant for the
+// wrong reason (decision 43 ruling 9).
+type RefusedError struct {
+	Refresh string
+	Err     error
+}
+
+func (e *RefusedError) Error() string { return e.Err.Error() }
+
+func (e *RefusedError) Unwrap() error { return e.Err }
+
+// GoString withholds the refresh token, which %#v would print.
+func (e *RefusedError) GoString() string {
+	return fmt.Sprintf("&oidcclient.RefusedError{refresh token %t: %v}", e.Refresh != "", e.Err)
+}
+
+// Renew is the refresh-token grant (RFC 6749 §6; decision 43 ruling 9), with
+// the sign-in's scope, openid always in it. The renewed ID token must name
+// held's sub and keep its auth_time (OIDC Core §12.2): one that moved it is
+// refused, since it would extend the session clock with no authentication. A
+// 200 refused so is a *RefusedError carrying the answer's refresh token.
+// invalid_grant is ErrSessionEnded. Refresh is "" when the provider did not
+// rotate it; the caller keeps the old one.
 func Renew(ctx context.Context, p Provider, e Endpoints, refresh string, held oidc.IDToken,
 	now func() time.Time) (Tokens, error) {
 	t, err := tokenRequest(ctx, p, e, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh},
-		"client_id": {p.ClientID}, "scope": {strings.Join(p.Scopes, " ")}})
+		"client_id": {p.ClientID}, "scope": {scopeOf(p)}})
 	var pe *ProviderError
 	if errors.As(err, &pe) && pe.Code == "invalid_grant" {
 		why := "invalid_grant"
@@ -2194,16 +2450,22 @@ func Renew(ctx context.Context, p Provider, e Endpoints, refresh string, held oi
 	if err != nil {
 		return Tokens{}, err
 	}
+	refused := func(err error) (Tokens, error) {
+		return Tokens{}, &RefusedError{Refresh: t.RefreshToken, Err: err}
+	}
+	if t.IDToken == "" {
+		return refused(fmt.Errorf("%s: the renewal: %w", p.Issuer, errNoIDToken))
+	}
 	id, err := oidc.ReadIDToken(t.IDToken, p.Issuer, p.ClientID, "")
 	switch {
 	case err != nil:
-		return Tokens{}, fmt.Errorf("%s: the renewed %w", p.Issuer, err)
+		return refused(fmt.Errorf("%s: the renewed %w", p.Issuer, err))
 	case id.Subject != held.Subject:
-		return Tokens{}, fmt.Errorf("%s: the renewed ID token names another sub than the session's", p.Issuer)
+		return refused(fmt.Errorf("%s: the renewed ID token names another sub than the session's", p.Issuer))
 	case !id.AuthTime.Equal(held.AuthTime):
-		return Tokens{}, fmt.Errorf("%s: the renewed ID token moved auth_time from %s to %s with no authentication "+
+		return refused(fmt.Errorf("%s: the renewed ID token moved auth_time from %s to %s with no authentication "+
 			"(OpenID Connect Core §12.2), so it is not used", p.Issuer, held.AuthTime.UTC().Format(time.RFC3339),
-			id.AuthTime.UTC().Format(time.RFC3339))
+			id.AuthTime.UTC().Format(time.RFC3339)))
 	}
 	return Tokens{ID: id, IDRaw: t.IDToken, Refresh: t.RefreshToken, Received: now().Round(0)}, nil
 }
@@ -2234,18 +2496,25 @@ func AuthorizationURL(p Provider, e Endpoints, redirect, state, nonce, challenge
 	if err != nil {
 		return "", fmt.Errorf("%s's authorization_endpoint: %w", p.Issuer, err)
 	}
-	scopes := p.Scopes
-	if !slices.Contains(scopes, "openid") {
-		scopes = append([]string{"openid"}, scopes...)
-	}
 	q := u.Query()
 	for k, v := range map[string]string{"response_type": "code", "client_id": p.ClientID, "redirect_uri": redirect,
-		"scope": strings.Join(scopes, " "), "state": state, "nonce": nonce, "code_challenge": challenge,
+		"scope": scopeOf(p), "state": state, "nonce": nonce, "code_challenge": challenge,
 		"code_challenge_method": "S256", "prompt": "login"} {
 		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// scopeOf is the scope every request of p's sends, the sign-in's and each
+// renewal's alike: the verifier's scopes, openid first when they leave it
+// out, so a renewal is answered with an ID token (OIDC Core §12.1).
+func scopeOf(p Provider) string {
+	scopes := p.Scopes
+	if !slices.Contains(scopes, "openid") {
+		scopes = append([]string{"openid"}, scopes...)
+	}
+	return strings.Join(scopes, " ")
 }
 
 // challengeOf is verifier's S256 code challenge (RFC 7636 §4.2).
@@ -2287,7 +2556,7 @@ git commit -m "feat(oidcclient): read an ID token as a client, discovery, the co
   `challengeOf`, `opaque`; Task 2's `AuthServer`, `Issuer.Browser`, `Issuer.Redirected`;
   `printsafe.Line`.
 - Produces, for Tasks 6 and 7:
-  - `const SignInWait = 5 * time.Minute`
+  - `const SignInWait = 5 * time.Minute`; `var ErrNoWayBack error` (P5)
   - `type LoginOptions struct { Nonce string; Port int; Browser func(url string) error; Paste func() (string, error); Out io.Writer; Now func() time.Time }`
   - `func Login(ctx context.Context, p Provider, e Endpoints, o LoginOptions) (Tokens, error)`
 
@@ -2435,7 +2704,10 @@ func TestADeniedSignInSaysTheProvidersCode(t *testing.T) {
 	iss, as, p := provider(t)
 	e, _ := Discover(context.Background(), p)
 	as.Deny("access_denied")
-	if _, err := Login(context.Background(), p, e, LoginOptions{Browser: iss.Browser()}); err == nil ||
+	// The browser opened: the 400 it ends on is port49's own page saying the
+	// sign-in failed.
+	browse := func(u string) error { _ = iss.Browser()(u); return nil }
+	if _, err := Login(context.Background(), p, e, LoginOptions{Browser: browse}); err == nil ||
 		!strings.Contains(err.Error(), "access_denied") {
 		t.Fatalf("%v", err)
 	}
@@ -2510,6 +2782,36 @@ func TestACancelledSignInStops(t *testing.T) {
 	}
 }
 
+// No browser, no terminal and an ephemeral port is said at once; with a
+// fixed port, which ssh -L can forward, the sign-in waits and says how
+// (ruling 5).
+func TestNoBrowserAndNoTerminalIsSaidAtOnce(t *testing.T) {
+	_, as, p := provider(t)
+	e, _ := Discover(context.Background(), p)
+	none := func(string) error { return errors.New("no display") }
+	start := time.Now()
+	var out bytes.Buffer
+	if _, err := Login(context.Background(), p, e, LoginOptions{Browser: none, Out: &out}); !errors.Is(err, ErrNoWayBack) ||
+		time.Since(start) > 5*time.Second || out.Len() != 0 {
+		t.Fatalf("%v after %s, printed %q", err, time.Since(start), out.String())
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := Login(ctx, p, e, LoginOptions{Browser: none, Port: port, Out: &out}); !errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(out.String(), fmt.Sprintf("ssh -L %d:127.0.0.1:%d", port, port)) {
+		t.Fatalf("a fixed port: %v\n%s", err, out.String())
+	}
+	if n := len(as.Authorizations()); n != 0 {
+		t.Fatalf("%d authorizations with no browser", n)
+	}
+}
+
 // lockedWriter serializes writes from Login and its paste reader.
 type lockedWriter struct {
 	mu *sync.Mutex
@@ -2525,8 +2827,8 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/oidcclient/ -run 'TestASignIn|TestTheChallengeIsTheNonce|TestACallback|TestAnIssParameter|TestADenied|TestAPasted|TestAFixedPort|TestACancelled' -count=1`
-Expected: FAIL to build: `undefined: Login`, `undefined: LoginOptions`.
+Run: `go test ./internal/oidcclient/ -run 'TestASignIn|TestTheChallengeIsTheNonce|TestACallback|TestAnIssParameter|TestADenied|TestAPasted|TestAFixedPort|TestACancelled|TestNoBrowserAndNoTerminal' -count=1`
+Expected: FAIL to build: `undefined: Login`, `undefined: LoginOptions`, `undefined: ErrNoWayBack`.
 
 - [ ] **Step 3: `internal/oidcclient/login.go`**
 
@@ -2554,6 +2856,13 @@ import (
 // refresh's sign-in never outlives the nonce it carries.
 const SignInWait = 5 * time.Minute
 
+// ErrNoWayBack is a sign-in that cannot complete: no browser opened on this
+// host, stdin is no terminal to paste the address into, and the port is an
+// ephemeral one no ssh -L could have forwarded (decision 43 ruling 5). It is
+// said at once, not after SignInWait.
+var ErrNoWayBack = errors.New("no browser opened on this host and stdin is not a terminal to paste the address " +
+	"into, so the sign-in's answer has no way back to port49")
+
 // LoginOptions is one sign-in.
 type LoginOptions struct {
 	// Nonce is the request's nonce: the broker's challenge for a refresh,
@@ -2577,7 +2886,10 @@ type LoginOptions struct {
 // 127.0.0.1 listener or pasted, and the code exchanged. The authorization
 // URL is printed to o.Out: it carries state, the nonce and the
 // code_challenge, none a credential, since the code is bound to the
-// verifier this call holds.
+// verifier this call holds; but whoever holds its state can complete this
+// sign-in with their own account, so the caller says whom it signed in as
+// (ruling 17). With no way for the answer to come back, it is ErrNoWayBack
+// at once.
 func Login(ctx context.Context, p Provider, e Endpoints, o LoginOptions) (Tokens, error) {
 	if o.Now == nil {
 		o.Now = time.Now
@@ -2604,16 +2916,26 @@ func Login(ctx context.Context, p Provider, e Endpoints, o LoginOptions) (Tokens
 	srv := &http.Server{Handler: w, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
-	if o.Browser != nil && o.Browser(authURL) == nil {
+	opened := o.Browser != nil && o.Browser(authURL) == nil
+	switch {
+	case opened:
 		fmt.Fprintf(o.Out, "port49: sign in at %s in the browser that opened; if none did, open this address:\n  %s\n",
 			p.Issuer, authURL)
-	} else {
+	case o.Paste == nil && o.Port == 0:
+		// No browser here, no terminal to paste into, and a port no ssh -L
+		// can name in advance: nothing can bring the answer back.
+		return Tokens{}, ErrNoWayBack
+	default:
 		fmt.Fprintf(o.Out, "port49: open this address in a browser and sign in at %s:\n  %s\n", p.Issuer, authURL)
 	}
-	if o.Paste != nil {
+	switch {
+	case o.Paste != nil:
 		fmt.Fprintf(o.Out, "port49: waiting up to %s. If the browser ends on a page that cannot be reached (it runs on "+
 			"another host), copy that page's address and paste it here (it is not shown), then press Enter:\n", SignInWait)
 		go w.readPastes(o.Paste, o.Out)
+	case !opened:
+		fmt.Fprintf(o.Out, "port49: waiting up to %s for the browser to come back to %s; from another host, forward "+
+			"that port first (ssh -L %d:127.0.0.1:%d)\n", SignInWait, redirect, o.Port, o.Port)
 	}
 	wait, cancel := context.WithTimeout(ctx, SignInWait)
 	defer cancel()
@@ -2761,14 +3083,15 @@ git commit -m "feat(oidcclient): the sign-in over a loopback redirect with PKCE,
 
 **Interfaces:**
 - Consumes: Task 3's `oidc.ReadIDToken`, `oidc.IDToken`, `oidcclient.Provider`, `Endpoints`,
-  `Tokens`, `Renew`, `Discover`, `ErrSessionEnded`; Task 2's `AuthServer` and
+  `Tokens`, `Renew`, `Discover`, `ErrSessionEnded`, `RefusedError`; Task 2's `AuthServer` and
   `api.OIDCProvider.MaxTokenAgeSeconds`; the agent's `ErrSessionOver`, `RevokedError`, `sessionOver`,
   `unavailable`, `drain`, `writeJSON`, `socketFor` (test).
 - Produces, for Tasks 6 and 7:
   - `type OIDCConfig struct { Provider oidcclient.Provider; Endpoints oidcclient.Endpoints; Tokens oidcclient.Tokens; CAPEM []byte; RedirectPort int }`
   - `Config.OIDC *OIDCConfig`
   - `type RenewFailedError struct { Issuer string; Ended, SessionEndsAt time.Time; Err error; Detail string }`
-  - `Status.Method string` (`json:"method,omitempty"`), `Status.OIDCIssuer string` (`json:"oidc_issuer,omitempty"`)
+  - `Status.Method string` (`json:"method,omitempty"`), `Status.OIDCIssuer string` (`json:"oidc_issuer,omitempty"`),
+    `Status.Principal string` (`json:"principal,omitempty"`)
   - `(*oidcSession).current() oidcclient.Tokens`, `(*oidcSession).install(oidcclient.Tokens)`;
     `bearerKey{}` (a request context key: the bearer a request carries in place of the held one);
     `final(error) bool`; `(*Agent).over(status int, e api.Error) error`
@@ -2913,7 +3236,7 @@ type oidcLog struct {
 }
 
 func (l *oidcLog) Write(p []byte) (int, error) { l.mu.Lock(); defer l.mu.Unlock(); return l.b.Write(p) }
-func (l *oidcLog) String() string             { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+func (l *oidcLog) String() string              { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 // oidcRig is an OIDC agent on a fake broker, holding a sign-in from an
 // authorization server; the three share the rig's clock, which stands
@@ -3121,7 +3444,7 @@ func TestAProviderOutageEndsNothing(t *testing.T) {
 		!strings.Contains(err.Error(), "did not renew your ID token") || ended(r.a) {
 		t.Fatalf("past it: %v, ended %v", err, ended(r.a))
 	}
-	// Over the socket: 503 identity_provider_unreachable, the same words.
+	// Over the socket: 503 id_token_not_renewed, the same words.
 	if _, err := socketFor(t, r.a).Token(context.Background(), TokenRequest{Device: "leaf1"}); !errors.As(err, &rf) ||
 		!strings.Contains(err.Error(), "did not renew your ID token") {
 		t.Fatalf("over the socket: %v", err)
@@ -3154,7 +3477,9 @@ func TestInvalidGrantEndsTheSession(t *testing.T) {
 }
 
 // A renewal that moves auth_time is not used: the held token goes on to
-// its end, and the failure names auth_time (R8).
+// its end, and the failure names auth_time (R8). The refresh token the
+// provider rotated to in that answer is held, so the next renewal is
+// refused for auth_time again, never invalid_grant.
 func TestARenewalThatMovesAuthTimeIsNotUsed(t *testing.T) {
 	r := newOIDCRig(t, func(r *oidcRig) { r.as.SetAuthTime(r.at.Add(-30 * time.Minute)) })
 	r.as.MoveAuthTimeOnRefresh()
@@ -3163,9 +3488,12 @@ func TestARenewalThatMovesAuthTimeIsNotUsed(t *testing.T) {
 	if _, err := r.mint(); err != nil || r.a.oidc.current().IDRaw != first.IDRaw {
 		t.Fatalf("%v, token replaced %v", err, r.a.oidc.current().IDRaw != first.IDRaw)
 	}
+	if r.a.oidc.current().Refresh == first.Refresh {
+		t.Fatal("the rotated refresh token was not held")
+	}
 	r.advance(20 * time.Second)
-	if _, err := r.mint(); err == nil || !strings.Contains(err.Error(), "auth_time") {
-		t.Fatalf("%v", err)
+	if _, err := r.mint(); err == nil || !strings.Contains(err.Error(), "auth_time") || ended(r.a) {
+		t.Fatalf("%v, ended %v", err, ended(r.a))
 	}
 }
 
@@ -3228,25 +3556,38 @@ func TestTheBrokerNotListingTheProviderFailsConnect(t *testing.T) {
 	}
 }
 
-// GET /status names the method and the provider (ruling 16).
+// GET /status names the method, the provider and whom the session signed
+// in as (ruling 16).
 func TestStatusNamesTheMethodAndIssuer(t *testing.T) {
 	r := newOIDCRig(t, nil)
 	st, err := socketFor(t, r.a).Status(context.Background())
-	if err != nil || st.Method != "oidc" || st.OIDCIssuer != r.iss.URL || st.CertFingerprint != "" {
+	if err != nil || st.Method != "oidc" || st.OIDCIssuer != r.iss.URL || st.CertFingerprint != "" ||
+		st.Principal != "user:alice@example.com" {
 		t.Fatalf("%+v %v", st, err)
 	}
 }
 
 // The loop renews with no request at three quarters of the token's life.
+// nearEnd is 0 here, so no request renews first: Connect's own requests,
+// with a 4s token inside the default 15s, would.
 func TestTheRenewalLoopRenewsWithNoRequest(t *testing.T) {
+	saved := nearEnd
+	nearEnd = 0
+	t.Cleanup(func() { nearEnd = saved })
 	r := newOIDCRig(t, func(r *oidcRig) {
 		r.real = true
 		r.as.SetLifetime(4 * time.Second)
 	})
-	for deadline := time.Now().Add(6 * time.Second); r.lastGrant() != "refresh_token"; time.Sleep(50 * time.Millisecond) {
+	if n := len(r.as.Grants()); n != 0 {
+		t.Fatalf("%d grants before the loop ran: a request renewed", n)
+	}
+	for deadline := time.Now().Add(6 * time.Second); len(r.as.Grants()) == 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("no renewal within 6s of a 4s token")
 		}
+	}
+	if r.lastGrant() != "refresh_token" {
+		t.Fatalf("the loop's grant: %q", r.lastGrant())
 	}
 }
 ```
@@ -3435,7 +3776,14 @@ func (s *oidcSession) renewNow(ctx context.Context, seen oidcclient.Tokens) (oid
 		s.finish(over)
 		return oidcclient.Tokens{}, over
 	case err != nil:
+		var refused *oidcclient.RefusedError
 		s.mu.Lock()
+		if errors.As(err, &refused) && refused.Refresh != "" && s.tokens.IDRaw == cur.IDRaw {
+			// The provider rotated the refresh token in the answer refused:
+			// hold the new one, or the next renewal is invalid_grant and the
+			// session ends blamed on a sign-out (R8). The held ID token stays.
+			s.tokens.Refresh = refused.Refresh
+		}
 		first := s.failing == nil
 		s.failing = err
 		s.mu.Unlock()
@@ -3604,9 +3952,9 @@ func (a *Agent) over(status int, e api.Error) error {
 
 // connectOIDC finishes Connect on the OIDC path (ruling 13): the broker must
 // list the session's provider, it must take the held ID token (GET
-// /v1/identity), and the session ends max_session_age after the token's
-// auth_time, reckoned from when the token arrived. Called with the wire
-// held.
+// /v1/identity, whose principal /status then names), and the session ends
+// max_session_age after the token's auth_time, reckoned from when the token
+// arrived. Called with the wire held.
 func (a *Agent) connectOIDC(ctx context.Context, c api.Config) error {
 	p := a.oidc.cfg.Provider
 	var entry *api.OIDCProvider
@@ -3643,6 +3991,10 @@ func (a *Agent) connectOIDC(ctx context.Context, c api.Config) error {
 		}
 		return fmt.Errorf("agent: %s/v1/identity answered %s: %s %s", a.broker, resp.Status, e.Error, e.Detail)
 	}
+	var id api.Identity
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&id); err != nil || id.Principal == "" {
+		return fmt.Errorf("agent: %s/v1/identity named no principal", a.broker)
+	}
 	t := a.oidc.current()
 	age := max(t.ID.IssuedAt.Sub(t.ID.AuthTime), 0)
 	deadline := t.Received.Add(time.Duration(c.MaxSessionAgeSeconds)*time.Second - age)
@@ -3654,6 +4006,7 @@ func (a *Agent) connectOIDC(ctx context.Context, c api.Config) error {
 	a.mu.Lock()
 	a.deadline = deadline
 	a.ceilingWarning = time.Duration(c.CeilingWarningSeconds) * time.Second
+	a.principal = id.Principal
 	a.mu.Unlock()
 	go a.oidc.run(a.done)
 	return nil
@@ -3809,6 +4162,16 @@ In `internal/agent/agent.go`:
   `exchange` and `refreshRefused`; `grep -n "sessionOver(resp.StatusCode" internal/agent/agent.go`
   lists them) with `a.over(resp.StatusCode, e)`. `sessionOver` itself is unchanged; `over` calls it.
 
+- In `Agent`, after `refreshed []api.RefreshedSession`, add:
+
+  ```go
+  	// principal is whom an OIDC session signed in as, from /v1/identity at
+  	// Connect: what `port49 login` and `port49 refresh` print, so a sign-in
+  	// that came back as someone else is seen (plan 9b). "" on the
+  	// certificate path.
+  	principal string
+  ```
+
 - In `Status`, after `Sessions`, add:
 
   ```go
@@ -3817,11 +4180,17 @@ In `internal/agent/agent.go`:
   	Method string `json:"method,omitempty"`
   	// OIDCIssuer is an OIDC session's provider.
   	OIDCIssuer string `json:"oidc_issuer,omitempty"`
+  	// Principal is whom an OIDC session signed in as (decision 43 ruling
+  	// 16): a sign-in completed by another person's answer is seen at once.
+  	Principal string `json:"principal,omitempty"`
   ```
 
 - In `Handler`'s `GET /status`, replace
 
   ```go
+  		a.mu.Lock()
+  		warn, sessions := a.ceilingWarning, a.refreshed
+  		a.mu.Unlock()
   		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
   			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
   			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions})
@@ -3830,13 +4199,17 @@ In `internal/agent/agent.go`:
   with
 
   ```go
+  		a.mu.Lock()
+  		warn, sessions, principal := a.ceilingWarning, a.refreshed, a.principal
+  		a.mu.Unlock()
   		method, issuer := "x509", ""
   		if a.oidc != nil {
   			method, issuer = "oidc", a.oidc.cfg.Provider.Issuer
   		}
   		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
   			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
-  			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions, Method: method, OIDCIssuer: issuer})
+  			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions, Method: method, OIDCIssuer: issuer,
+  			Principal: principal})
   ```
 
 - In `Handler`'s `POST /token` switch, before `case err != nil:`, add:
@@ -3845,7 +4218,7 @@ In `internal/agent/agent.go`:
   		case errors.As(err, new(*RenewFailedError)):
   			// The provider, not the broker: nothing was sent, and the session
   			// goes on (decision 43 ruling 10).
-  			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "identity_provider_unreachable", Detail: err.Error()})
+  			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "id_token_not_renewed", Detail: err.Error()})
   ```
 
 - In `answer`, before `case errors.As(err, &refused):`, add the same case.
@@ -3856,7 +4229,7 @@ In `internal/agent/socket.go`:
   add:
 
   ```go
-  		if e.Error == "identity_provider_unreachable" {
+  		if e.Error == "id_token_not_renewed" {
   			return api.MintItem{}, &RenewFailedError{Detail: e.Detail}
   		}
   ```
@@ -3864,7 +4237,7 @@ In `internal/agent/socket.go`:
 - In `roundTrip`'s switch, before `case e.Error != "":`, add:
 
   ```go
-  	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "identity_provider_unreachable":
+  	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "id_token_not_renewed":
   		return &RenewFailedError{Detail: e.Detail}
   ```
 
@@ -4132,7 +4505,7 @@ func (a *Agent) OIDCRefresh(ctx context.Context, r OIDCRefreshRequest) (api.Refr
 	held := a.oidc.current()
 	id, err := oidc.ReadIDToken(r.IDToken, held.ID.Issuer, a.oidc.cfg.Provider.ClientID, "")
 	if err != nil {
-		return api.RefreshResponse{}, fmt.Errorf("agent: the sign-in's %w", err)
+		return api.RefreshResponse{}, fmt.Errorf("agent: the new sign-in: %w", err)
 	}
 	if id.Subject != held.ID.Subject {
 		return api.RefreshResponse{}, errors.New("agent: you signed in at your identity provider as another user " +
@@ -4290,15 +4663,16 @@ git commit -m "feat(agent): an OIDC refresh: the challenge with the provider's p
 **Files:**
 - Modify: `internal/userconfig/userconfig.go`, `internal/userconfig/userconfig_test.go`
 - Create: `cmd/port49/oidc.go`, `cmd/port49/oidc_test.go`, `cmd/port49/oidc_login_linux_test.go`,
-  `cmd/port49/harden_linux.go`, `cmd/port49/harden_other.go`
-- Modify: `cmd/port49/main.go` (usage, `sessionFlags`, `login`, `startAgent` (new, from `login`),
-  `agentMain`), `cmd/port49/refresh.go`, `cmd/port49/main_test.go` (`newLabBrokerWith`),
-  `cmd/port49/config_test.go`
+  `cmd/port49/harden_linux.go`, `cmd/port49/harden_darwin.go`, `cmd/port49/harden_other.go`
+- Modify: `cmd/port49/main.go` (usage, `sessionFlags`, `hardenAgent`, `login`, `startAgent` (new,
+  from `login`), `agentMain`), `cmd/port49/refresh.go`, `cmd/port49/main_test.go` (`TestMain`,
+  `newLabBrokerWith`), `cmd/port49/config_test.go`
 
 **Interfaces:**
-- Consumes: Task 3's `oidcclient.Provider`, `Endpoints`, `Tokens`, `Discover`, `Skew`;
-  `oidc.ReadIDToken`; Task 4's `oidcclient.Login`, `LoginOptions`; Task 5's `agent.OIDCConfig`,
-  `Config.OIDC`, `Status.Method`, `Status.OIDCIssuer`; Task 6's `Client.OIDCChallenge`,
+- Consumes: Task 3's `oidcclient.Provider`, `Endpoints`, `Tokens`, `Discover`, `Skew`,
+  `UnreachableError`; `oidc.ReadIDToken`; Task 4's `oidcclient.Login`, `LoginOptions`,
+  `ErrNoWayBack`; Task 5's `agent.OIDCConfig`, `Config.OIDC`, `Status.Method`,
+  `Status.OIDCIssuer`, `Status.Principal`; Task 6's `Client.OIDCChallenge`,
   `Client.OIDCRefresh`, `OIDCRefreshRequest`; Task 2's `AuthServer`, `Issuer.Browser`,
   `Issuer.Redirected`, `AuthServer.Issued`; `userconfig.ReadPrivate`; `printRefresh`, `unprefixed`,
   `stopAgentAt`, `privateSocket`, `privateDir`, `labConfig`, `runningAgent`, `configBroker`,
@@ -4307,7 +4681,7 @@ git commit -m "feat(agent): an OIDC refresh: the challenge with the provider's p
   - `userconfig.File.Method`, `OIDCIssuer`, `OIDCCA`, `OIDCRedirectPort`, `OIDCCAPEM`;
     `userconfig.WithoutOIDCCA()`;
   - `loginOIDC`, `refreshOIDC`, `signIn`, `startAgent`, `browserCommand`, `pickProvider`,
-    `fetchBrokerConfig`, `warnSkew`, `harden`;
+    `fetchBrokerConfig`, `warnSkew`, `idTokenEnd`, `afterOIDCLogin`, `harden`, `hardenAgent`;
   - `oidcHandoff` (JSON: `issuer`, `client_id`, `scopes`, `ca_pem`, `authorization_endpoint`,
     `token_endpoint`, `iss_parameter`, `redirect_port`, `id_token`, `refresh_token`,
     `received_at`).
@@ -4353,7 +4727,7 @@ func TestAnOIDCCAOthersCanWriteIsRefused(t *testing.T) {
 
 func TestAnUnknownMethodOrABadPortIsRefused(t *testing.T) {
 	for body, want := range map[string]string{
-		"method: saml\n":             `method "saml"`,
+		"method: saml\n":              `method "saml"`,
 		"oidc_redirect_port: 70000\n": "is not a port",
 		"oidc_redirect_port: -1\n":    "is not a port",
 	} {
@@ -4371,6 +4745,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -4449,6 +4824,32 @@ func TestASkewedClockIsWarnedNotRefused(t *testing.T) {
 	warnSkew(&b, "port49 login", oidcclient.Tokens{ID: oidc.IDToken{IssuedAt: at}, Received: at.Add(-7 * time.Minute)})
 	if !strings.Contains(b.String(), "this host's clock is 7m0s behind your identity provider's") {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+// With no refresh token the session ends with the ID token: exp − iat from
+// receipt, capped by the broker's max_token_age, as the agent reckons it.
+func TestIDTokenEnd(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0)
+	tok := oidcclient.Tokens{ID: oidc.IDToken{IssuedAt: at, Expires: at.Add(24 * time.Hour)}, Received: at.Add(time.Hour)}
+	if got := idTokenEnd(tok, 0); !got.Equal(at.Add(25 * time.Hour)) {
+		t.Fatalf("no max_token_age: %s", got)
+	}
+	if got := idTokenEnd(tok, 7200); !got.Equal(at.Add(3 * time.Hour)) {
+		t.Fatalf("max_token_age 2h: %s", got)
+	}
+}
+
+// An agent that cannot make itself non-dumpable refuses an OIDC session
+// before it reads the sign-in (ruling 7).
+func TestAnAgentThatCannotHardenHoldsNoOIDCSession(t *testing.T) {
+	saved := hardenAgent
+	hardenAgent = func() error { return errors.New("prctl: operation not permitted") }
+	t.Cleanup(func() { hardenAgent = saved })
+	var out, errb bytes.Buffer
+	if code := run([]string{"agent", "--broker", configBroker, "--broker-ca", "ca.pem", "--oidc-fd", "99"}, &out,
+		&errb); code != 1 || !strings.Contains(errb.String(), "will not hold an identity provider's refresh token") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
 
@@ -4593,7 +4994,9 @@ func TestLoginOIDCStartsAnAgentThatMints(t *testing.T) {
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
 	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
-		!strings.Contains(out.String(), "port49: logged in to "+o.url+" through "+o.iss.URL+"; the session ends at ") ||
+		!strings.Contains(out.String(), "port49: logged in to "+o.url+" as user:alice@example.com through "+o.iss.URL+
+			"; the session ends at ") ||
+		// PENDING Ryan's ruling on D1 (pre-flight review): R5, no refresh at login.
 		strings.Contains(out.String(), "refreshed at") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -4609,13 +5012,15 @@ func TestLoginOIDCStartsAnAgentThatMints(t *testing.T) {
 		t.Fatalf("%+v %v", st, err)
 	}
 	if os.Getuid() != 0 {
-		// A non-dumpable process's /proc/<pid> files are root's (proc(5)).
+		// A non-dumpable process's /proc/<pid> files are root's (proc(5)),
+		// which a user namespace with root unmapped shows as the overflow
+		// uid: either way, not this user's.
 		fi, err := os.Stat(fmt.Sprintf("/proc/%d/environ", peerPid(t, sock)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if uid := fi.Sys().(*syscall.Stat_t).Uid; uid != 0 {
-			t.Fatalf("the agent is dumpable: its /proc/<pid>/environ is uid %d's", uid)
+		if uid := fi.Sys().(*syscall.Stat_t).Uid; uid == uint32(os.Getuid()) {
+			t.Fatalf("the agent is dumpable: its /proc/<pid>/environ is this user's (uid %d)", uid)
 		}
 	}
 	log, _ := os.ReadFile(filepath.Join(filepath.Dir(sock), "agent.log"))
@@ -4637,6 +5042,7 @@ func TestAnOIDCRefreshSignsInAgainAndExtends(t *testing.T) {
 	}
 	out.Reset()
 	if code := run([]string{"refresh", "--socket", sock}, &out, &errb); code != 0 ||
+		!strings.HasPrefix(out.String(), "port49: signed in again at "+o.iss.URL+" as user:alice@example.com\n") ||
 		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("refresh: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -4647,7 +5053,8 @@ func TestAnOIDCRefreshSignsInAgainAndExtends(t *testing.T) {
 	o.step(11 * time.Second) // past the challenge pacing
 	out.Reset()
 	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
-		!strings.HasPrefix(out.String(), "port49: already logged in to "+o.url+" through "+o.iss.URL+"; refreshing\n") ||
+		!strings.HasPrefix(out.String(), "port49: already logged in to "+o.url+" as user:alice@example.com through "+
+			o.iss.URL+"; refreshing\n") ||
 		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("a second login: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -4733,13 +5140,42 @@ func TestLoginOIDCWithTheProviderDownSaysSo(t *testing.T) {
 		t.Fatal("an agent started")
 	}
 }
+
+// A provider that answers and is refused is not an outage: waiting changes
+// nothing, so the login does not say to try again.
+func TestADiscoveryRefusalIsNotAnOutage(t *testing.T) {
+	o := newOIDCLab(t)
+	o.iss.Discovery(func(d map[string]any) { d["code_challenge_methods_supported"] = []string{"plain"} })
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "S256") || strings.Contains(errb.String(), "try again") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
+// No browser and no terminal, with an ephemeral port: said at once, naming
+// the two ways that work (ruling 5).
+func TestLoginOIDCWithNoWayBackSaysSoAtOnce(t *testing.T) {
+	o := newOIDCLab(t)
+	saved, savedTerm := openBrowser, stdinIsTerminal
+	openBrowser = func(string) error { return fmt.Errorf("no display") }
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { openBrowser, stdinIsTerminal = saved, savedTerm })
+	var out, errb bytes.Buffer
+	start := time.Now()
+	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
+		time.Since(start) > 10*time.Second || !strings.Contains(errb.String(), "ssh -t") ||
+		!strings.Contains(errb.String(), "--redirect-port") || strings.Contains(errb.String(), "https://") {
+		t.Fatalf("code %d after %s, stderr %q", code, time.Since(start), errb.String())
+	}
+}
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/userconfig/ ./cmd/port49/ -run 'OIDC|BrowserCommand|PickProvider|Handoff|Skewed|UnknownMethod|ChooseOIDC|PromptLogin|PastedAddress|RefreshToken' -count=1`
+Run: `go test ./internal/userconfig/ ./cmd/port49/ -run 'OIDC|BrowserCommand|PickProvider|Handoff|Skewed|UnknownMethod|ChooseOIDC|PromptLogin|PastedAddress|RefreshToken|IDTokenEnd|CannotHarden|DiscoveryRefusal|NoWayBack' -count=1`
 Expected: FAIL to build: `unknown field Method`, `undefined: browserCommand`, `undefined:
-newLabBrokerWith`.
+newLabBrokerWith`, `undefined: hardenAgent`.
 
 - [ ] **Step 3: The config file's keys**
 
@@ -4828,7 +5264,7 @@ In `internal/userconfig/userconfig.go`:
   	}
   ```
 
-- [ ] **Step 4: `cmd/port49/harden_linux.go` and `harden_other.go`**
+- [ ] **Step 4: `cmd/port49/harden_linux.go`, `harden_darwin.go` and `harden_other.go`**
 
 ```go
 //go:build linux
@@ -4845,14 +5281,30 @@ func harden() error { return unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0) }
 ```
 
 ```go
-//go:build !linux
+//go:build darwin
 
 package main
 
-// harden is Linux's alone (harden_linux.go); elsewhere the OS's own
-// protection of a process's memory is all there is.
+import "golang.org/x/sys/unix"
+
+// harden denies the agent process to a debugger (spec §13 decision 43 ruling
+// 7): ptrace(PT_DENY_ATTACH), so no process of this user can attach to it
+// and read the memory an OIDC session's refresh token lives in. It is
+// harden_linux.go's PR_SET_DUMPABLE on macOS, with no cgo.
+func harden() error { return unix.PtraceDenyAttach() }
+```
+
+```go
+//go:build !linux && !darwin
+
+package main
+
+// harden is Linux's and macOS's alone (harden_linux.go, harden_darwin.go);
+// elsewhere the OS's own protection of a process's memory is all there is.
 func harden() error { return nil }
 ```
+
+Check the macOS build: `CGO_ENABLED=0 GOOS=darwin go vet ./cmd/port49/` is silent.
 
 - [ ] **Step 5: `cmd/port49/oidc.go`**
 
@@ -4910,8 +5362,9 @@ func loginOIDC(sf *sessionFlags, stdout, stderr io.Writer) int {
 				"stop that agent first, or use --socket\n", other, sf.socket)
 			return 1
 		}
-		fmt.Fprintf(stdout, "port49: already logged in to %s through %s; refreshing\n", st.Broker, st.OIDCIssuer)
-		return refreshOIDC(ctx, agent.NewClient(sf.socket), sf.noBrowser, "port49 login", stdout, stderr)
+		fmt.Fprintf(stdout, "port49: already logged in to %s as %s through %s; refreshing\n", st.Broker, st.Principal,
+			st.OIDCIssuer)
+		return refreshOIDC(ctx, agent.NewClient(sf.socket), st.Principal, sf.noBrowser, "port49 login", stdout, stderr)
 	}
 	pool, err := sf.brokerPool()
 	if err != nil {
@@ -4936,7 +5389,12 @@ func loginOIDC(sf *sessionFlags, stdout, stderr io.Writer) int {
 	p := oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
 	e, err := oidcclient.Discover(ctx, p)
 	if err != nil {
-		fmt.Fprintf(stderr, "port49 login: %v; try again once it answers\n", err)
+		var down *oidcclient.UnreachableError
+		if errors.As(err, &down) {
+			fmt.Fprintf(stderr, "port49 login: %v; try again once it answers\n", err)
+		} else {
+			fmt.Fprintln(stderr, "port49 login:", err)
+		}
 		return 1
 	}
 	tokens, err := signIn(ctx, p, e, "", sf.redirectPort, sf.noBrowser, stderr)
@@ -4949,7 +5407,7 @@ func loginOIDC(sf *sessionFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "port49 login: %s issued no refresh token, so this session ends with the ID token, at %s; "+
 			"ask its administrator to allow refresh tokens for client %s (some providers issue one only for the "+
 			"offline_access scope, which the broker's verifier then lists in scopes)\n", p.Issuer,
-			tokens.Received.Add(tokens.ID.Expires.Sub(tokens.ID.IssuedAt)).UTC().Format(time.RFC3339), p.ClientID)
+			idTokenEnd(tokens, prov.MaxTokenAgeSeconds).UTC().Format(time.RFC3339), p.ClientID)
 	}
 	return startAgent(sf, &oidcHandoff{Issuer: p.Issuer, ClientID: p.ClientID, Scopes: p.Scopes, CAPEM: string(caPEM),
 		AuthorizationEndpoint: e.Authorization, TokenEndpoint: e.Token, IssParameter: e.IssParameter,
@@ -4957,10 +5415,33 @@ func loginOIDC(sf *sessionFlags, stdout, stderr io.Writer) int {
 		ReceivedAt: tokens.Received.UTC().Format(time.RFC3339Nano)}, stdout, stderr)
 }
 
+// afterOIDCLogin is what an OIDC login does once its new agent answers, in
+// the place where the certificate path refreshes once (decision 43 ruling
+// 12). R5: nothing, since that refresh would be a second sign-in.
+//
+// PENDING Ryan's ruling on D1 (pre-flight review). Each D1 option is a new
+// body for this function alone; the plan's "D1: the edit for each option"
+// gives them.
+func afterOIDCLogin(sf *sessionFlags, st agent.Status, stdout, stderr io.Writer) int { return 0 }
+
+// idTokenEnd is when a session with no refresh token ends: the ID token's
+// usable life from its receipt, exp − iat capped by the broker's
+// max_token_age, as the agent reckons it (decision 43 rulings 9 and 13).
+func idTokenEnd(t oidcclient.Tokens, maxTokenAgeSeconds int) time.Time {
+	life := t.ID.Expires.Sub(t.ID.IssuedAt)
+	if m := time.Duration(maxTokenAgeSeconds) * time.Second; m > 0 && m < life {
+		life = m
+	}
+	return t.Received.Add(life)
+}
+
 // refreshOIDC is `port49 refresh`, and `port49 login` with an OIDC agent
 // running (ruling 12): the agent's challenge, a sign-in carrying it, and the
-// agent's refresh with the new tokens. what names the command in its lines.
-func refreshOIDC(ctx context.Context, c *agent.Client, noBrowser bool, what string, stdout, stderr io.Writer) int {
+// agent's refresh with the new tokens. principal is whom the session signed
+// in as, said once the refresh is done; the agent took the sign-in only for
+// that same user. what names the command in its lines.
+func refreshOIDC(ctx context.Context, c *agent.Client, principal string, noBrowser bool, what string,
+	stdout, stderr io.Writer) int {
 	si, err := c.OIDCChallenge(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", what, unprefixed(err))
@@ -4987,6 +5468,7 @@ func refreshOIDC(ctx context.Context, c *agent.Client, noBrowser bool, what stri
 		fmt.Fprintf(stderr, "%s: %s\n", what, unprefixed(err))
 		return 1
 	}
+	fmt.Fprintf(stdout, "port49: signed in again at %s as %s\n", si.Issuer, principal)
 	printRefresh(stdout, out)
 	return 0
 }
@@ -5022,7 +5504,12 @@ func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, 
 		}
 		o.Paste = readPaste
 	}
-	return oidcclient.Login(ctx, p, e, o)
+	t, err := oidcclient.Login(ctx, p, e, o)
+	if errors.Is(err, oidcclient.ErrNoWayBack) {
+		return t, fmt.Errorf("%w; run the command in a terminal (ssh -t), or log in with --redirect-port N and "+
+			"forward that port to this host (ssh -L N:127.0.0.1:N)", err)
+	}
+	return t, err
 }
 
 // browserCommand is the command that opens url here, or nil for none (ruling
@@ -5293,6 +5780,16 @@ func (s *sessionFlags) oidcConfig(log io.Writer) (agent.Config, error) {
   	oidcFD int
   ```
 
+- After the `sessionFlags` type, add (P6):
+
+  ```go
+  // hardenAgent is harden, a var so TestMain makes it a no-op: the tests that
+  // run the agent in-process would make the whole test binary non-dumpable,
+  // and the ssh tests exec /proc/<pid>/exe as the askpass. An agent the login
+  // starts is its own process and hardens for real.
+  var hardenAgent = harden
+  ```
+
 - In `register`, before the `--config` flag, add:
 
   ```go
@@ -5498,8 +5995,8 @@ func (s *sessionFlags) oidcConfig(log io.Writer) (agent.Config, error) {
   // the OIDC path, the sign-in on descriptor 4 (decision 43 ruling 7), so it
   // reads neither path again and no token is in its argv or environment. The
   // certificate path then refreshes once, so the device sessions an earlier
-  // login left are extended; the OIDC path does not, since its refresh is a
-  // second sign-in (ruling 12).
+  // login left are extended; the OIDC path runs afterOIDCLogin there instead
+  // (ruling 12; D1).
   func startAgent(sf *sessionFlags, h *oidcHandoff, stdout, stderr io.Writer) int {
   	ctx := context.Background()
   	dir := filepath.Dir(sf.socket)
@@ -5582,9 +6079,9 @@ func (s *sessionFlags) oidcConfig(log io.Writer) (agent.Config, error) {
   			continue
   		}
   		if h != nil {
-  			fmt.Fprintf(stdout, "port49: logged in to %s through %s; the session ends at %s (agent pid %d, log %s)\n",
-  				st.Broker, st.OIDCIssuer, st.SessionEndsAt, cmd.Process.Pid, logPath)
-  			return 0
+  			fmt.Fprintf(stdout, "port49: logged in to %s as %s through %s; the session ends at %s (agent pid %d, "+
+  				"log %s)\n", st.Broker, st.Principal, st.OIDCIssuer, st.SessionEndsAt, cmd.Process.Pid, logPath)
+  			return afterOIDCLogin(sf, st, stdout, stderr)
   		}
   		fmt.Fprintf(stdout, "port49: logged in to %s; the session ends at %s (agent pid %d, log %s)\n",
   			st.Broker, st.SessionEndsAt, cmd.Process.Pid, logPath)
@@ -5607,11 +6104,27 @@ func (s *sessionFlags) oidcConfig(log io.Writer) (agent.Config, error) {
   `login` keeps `ctx := context.Background()` for its running-agent check. `main.go` already
   imports everything `startAgent` uses (`encoding/json`, `os/exec`, `syscall`).
 
-- In `agentMain`, as its first statement:
+- In `agentMain`, after
 
   ```go
-  	// Before any credential is read (decision 43 ruling 7).
-  	if err := harden(); err != nil {
+  	if err := fs.Parse(args); err != nil {
+  		return 2
+  	}
+  ```
+
+  and before `if err := sf.fill(fs); err != nil {`, add (P6):
+
+  ```go
+  	// Before any credential is read (decision 43 ruling 7). An OIDC session
+  	// is refused without it: its refresh token would live in a process any
+  	// of this user's could read. A certificate session runs on, saying so:
+  	// its key is a file this user can read already.
+  	if err := hardenAgent(); err != nil {
+  		if sf.oidcFD != 0 {
+  			fmt.Fprintf(stderr, "port49 agent: could not make the agent non-dumpable (%v), so it will not hold an "+
+  				"identity provider's refresh token\n", err)
+  			return 1
+  		}
   		fmt.Fprintf(stderr, "port49 agent: could not make the agent non-dumpable (%v); it runs on\n", err)
   	}
   ```
@@ -5660,12 +6173,30 @@ Replace `refreshCmd`'s body from `socket := fs.String(…)` to `out, err := agen
 	c := agent.NewClient(*socket)
 	// An OIDC session's refresh is a sign-in, run here (decision 43 ruling 12).
 	if st, err := c.Status(ctx); err == nil && st.Method == "oidc" {
-		return refreshOIDC(ctx, c, *noBrowser, "port49 refresh", stdout, stderr)
+		return refreshOIDC(ctx, c, st.Principal, *noBrowser, "port49 refresh", stdout, stderr)
 	}
 	out, err := c.Refresh(ctx)
 ```
 
-- [ ] **Step 8: `newLabBrokerWith` in `cmd/port49/main_test.go`**
+- [ ] **Step 8: `TestMain` and `newLabBrokerWith` in `cmd/port49/main_test.go`**
+
+In `TestMain`, after the `runCLIEnv` branch
+
+```go
+	if os.Getenv(runCLIEnv) == "1" {
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+```
+
+add (P6; the pre-flight review's C1):
+
+```go
+	// The tests that run the agent in-process (run([]string{"agent", …}))
+	// would make this whole binary non-dumpable, and every later ssh test
+	// would then fail to exec /proc/<pid>/exe as its askpass. A child agent
+	// the login starts takes the branch above, and hardens for real.
+	hardenAgent = func() error { return nil }
+```
 
 Rename `newLabBroker` to `newLabBrokerWith(t *testing.T, maxAge time.Duration, iss *oidctest.Issuer)
 *labBroker`, add `func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker { return
@@ -5728,9 +6259,12 @@ principal alone:
 - [ ] **Step 9: Run the tests to verify they pass**
 
 Run: `go test ./internal/userconfig/ ./cmd/port49/ -count=1`
-Expected: PASS, every earlier `cmd/port49` and `userconfig` test unchanged.
+Expected: PASS, every earlier `cmd/port49` and `userconfig` test unchanged. The ssh tests
+(`TestPortSSHLogsInWithTheTokenAndRunsTheCommand` and the rest) pass in the full run, not only
+alone: if they fail with `ssh_askpass: exec(/proc/<pid>/exe): Permission denied`, `TestMain` is
+not making `hardenAgent` a no-op. Never weaken `harden` to fix it.
 
-Run: `go vet ./... && go test -race ./internal/userconfig/ ./cmd/port49/ -count=1`
+Run: `go vet ./... && CGO_ENABLED=0 GOOS=darwin go vet ./cmd/port49/ && go test -race ./internal/userconfig/ ./cmd/port49/ -count=1`
 Expected: PASS, and vet silent.
 
 - [ ] **Step 10: Commit**
@@ -5761,7 +6295,8 @@ git commit -m "feat(port49): login --oidc and the OIDC refresh: a sign-in in the
   `oidcE2EPKI`, `oidcBroker` (`mintRetry`), `brokerClient`, `sliceBrokerURL`, `slicePKIDir`, `root`,
   `platformSelection`, `labFor`, `l.startComposeWith`, `c.run`, `c.local`, `l.capture`, `l.shell`,
   `l.runPermitted`, `l.result`, `(k *keycloak) adminFromEnv`, `Admin`, `adminDo`, `UserID`,
-  `LogoutUser`, `SetLogoutURL`, `EndSession`, `know`, `known`.
+  `LogoutUser`, `SetLogoutURL`, `EndSession`, `Login`, `know`, `known`, `oidcNoteLeak`,
+  `loginAgainAt`, `e2eAlice`, `jwsShape` (through `leakIn`).
 - Produces: the two rows' notes. Until they close, decision 43's rulings 1, 4, 9 and 10 stay
   provisional, and no doc says which redirect registration Keycloak accepts.
 
@@ -5825,12 +6360,43 @@ func TestL56FilesAskForTheEmailScope(t *testing.T) {
 		t.Fatalf("%s", files["port49-broker.yaml"])
 	}
 }
+
+func TestL56EndingNamesWhoEndedIt(t *testing.T) {
+	ended := "port49 agent: your identity provider ended the session: the session is over: invalid_grant\n"
+	for _, c := range []struct{ stderr, log, want string }{
+		{"port49 token: the session is over: ... (back-channel logout); log in again from 2026-10-10T03:01:01Z", "", "broker's"},
+		{"port49 token: the session is over; run `port49 login`: your identity provider no longer renews this session", "", "on the mint"},
+		{"port49 token: no agent at /run/x; run 'port49 login'", ended, "in the agent's log"},
+		{"port49 token: no agent at /run/x; run 'port49 login'", "", ""},
+		{"port49 token: the broker at x is unreachable", ended, ""},
+	} {
+		if got := l56Ending(c.stderr, c.log); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%q: %q, want %q", c.stderr, got, c.want)
+		}
+	}
+}
+
+// The leak check exempts what port49 prints by design and nothing else.
+func TestL56LeakExemptsOnlyWhatPort49Prints(t *testing.T) {
+	kc := &keycloak{}
+	kc.know("state-0123456789", "verifier-0123456789")
+	c := &l56CLI{printed: []string{"state-0123456789"}}
+	if err := c.leak(kc, "  https://k/auth?state=state-0123456789"); err != nil {
+		t.Fatalf("the printed state: %v", err)
+	}
+	for _, text := range []string{"verifier-0123456789", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"} {
+		if c.leak(kc, "port49: "+text) == nil {
+			t.Errorf("%q not seen", text)
+		}
+	}
+}
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `go test -tags lab ./tests/lab/ -run 'TestL56AuthURL|TestL56LoginFrom|TestL55Accepted|TestL56Files' -count=1`
-Expected: FAIL to build: `undefined: l56AuthURL`.
+Run: `go test -tags lab ./tests/lab/ -run 'TestL56AuthURL|TestL56LoginFrom|TestL55Accepted|TestL56Files|TestL56Ending|TestL56Leak' -count=1`
+Expected: FAIL to build: `undefined: l56AuthURL`. (Never `-run TestL56` alone: it matches
+`TestL56AgentEndToEnd`, the lab run itself.)
 
 - [ ] **Step 3: L55**
 
@@ -5860,18 +6426,31 @@ import (
 
 const l55Claim = "Keycloak as port49's public client meets it (plan 9b): which redirect registration admits an " +
 	"authorization request naming http://127.0.0.1:<port>/callback, for the registered port and for another, " +
-	"ephemeral one (RFC 8252 §7.3); whether a code is exchanged with the right S256 verifier, a wrong one and none, " +
-	"and whether code_challenge_method=plain is accepted; discovery's code_challenge_methods_supported and " +
-	"authorization_response_iss_parameter_supported, and whether the authorization response carries iss (RFC " +
-	"9207); whether the refresh-token grant returns an ID token keeping iss, sub, aud, sid and auth_time with no " +
-	"nonce, whether it rotates the refresh token and still takes a rotated-out one; what it answers after an " +
-	"RP-initiated logout, an administrator's sign-out, ssoSessionIdleTimeout and ssoSessionMaxLifespan; and whether " +
+	"ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another " +
+	"host's; whether a code is exchanged with the right S256 verifier, a wrong one and none, for port49-cli as the " +
+	"realm file sets its PKCE method, and whether code_challenge_method=plain is accepted; discovery's " +
+	"code_challenge_methods_supported and authorization_response_iss_parameter_supported, and whether the " +
+	"authorization response carries iss (RFC 9207); whether the refresh-token grant returns an ID token keeping " +
+	"iss, sub, aud, sid and auth_time with no nonce, whether it rotates the refresh token and still takes a " +
+	"rotated-out one; what it answers after an RP-initiated logout, an administrator's sign-out, " +
+	"ssoSessionIdleTimeout (75s after the last use, and past a 120s window beyond it, the refresh token's own " +
+	"exp − iat recorded) and ssoSessionMaxLifespan; and whether " +
 	"a prompt=login sign-in inside the SSO session restarts the session's maximum lifespan (policy engine spec §15 " +
 	"L55; §13 decision 43 rulings 1, 4, 9 and 10)."
 
 // l55Accepted is whether Keycloak took an authorization request: it showed
 // the login form, rather than its "Invalid parameter" page.
-func l55Accepted(status int, body []byte) bool { return status == http.StatusOK && formAction.Match(body) }
+func l55Accepted(status int, body []byte) bool {
+	return status == http.StatusOK && formAction.Match(body)
+}
+
+// l55Word is an authorization request's outcome as a cell says it.
+func l55Word(accepted bool) string {
+	if accepted {
+		return "accepted"
+	}
+	return "refused"
+}
 
 // l55Browser is a browser of its own: a fresh cookie jar, so no SSO session.
 func (k *keycloak) l55Browser() *http.Client {
@@ -6057,6 +6636,13 @@ func TestL55PublicClient(t *testing.T) {
 	cell("1c. the authorization response's iss", fmt.Sprintf("present %v, the issuer %v", q.Has("iss"), q.Get("iss") == k.URL))
 
 	// 2. The redirect registrations, each against the registered port and an ephemeral one.
+	// Controls: with the realm's own registration, its own redirect is
+	// accepted and another host's refused, so "accepted" rests on a matcher
+	// seen to say both.
+	if !k.authorizeAccepted(t, kcRedirect, nil) || k.authorizeAccepted(t, "http://evil.example/callback", nil) {
+		t.Fatal("INVALID: the realm's own redirect was not accepted, or another host's was; l55Accepted cannot tell")
+	}
+	cell("2. control: the realm's own redirect, and http://evil.example/callback", "accepted; refused")
 	_, orig := k.redirects(t)
 	defer k.setRedirects(t, orig)
 	ephemeral := l55FreePort(t)
@@ -6067,8 +6653,8 @@ func TestL55PublicClient(t *testing.T) {
 		}
 		var parts []string
 		for _, port := range []int{18749, ephemeral} {
-			parts = append(parts, fmt.Sprintf("port %d %s", port, map[bool]string{true: "accepted", false: "refused"}[
-				k.authorizeAccepted(t, fmt.Sprintf("http://127.0.0.1:%d/callback", port), nil)]))
+			parts = append(parts, fmt.Sprintf("port %d %s", port,
+				l55Word(k.authorizeAccepted(t, fmt.Sprintf("http://127.0.0.1:%d/callback", port), nil))))
 		}
 		cell("2. registration "+reg, strings.Join(parts, "; "))
 	}
@@ -6076,16 +6662,23 @@ func TestL55PublicClient(t *testing.T) {
 		t.Fatal("INVALID: the realm's own redirect could not be put back; no note is written")
 	}
 
-	// 3. PKCE.
+	// 3. PKCE, on port49-cli as the realm file configures it.
+	client, _ := k.redirects(t)
+	attrs, _ := client["attributes"].(map[string]any)
+	pkce := fmt.Sprint(attrs["pkce.code.challenge.method"])
+	preface := fmt.Sprintf("port49-cli's `pkce.code.challenge.method` attribute is %q (`tests/lab/oidc/keycloak/"+
+		"realm.json`), so step 3 measures a client Keycloak is told requires that method; what it does for a client "+
+		"set to require none, which decision 43 ruling 1's provider listing no methods resembles, is not measured "+
+		"here.\n\n", pkce)
+	cell("3. port49-cli's pkce.code.challenge.method attribute", pkce)
 	for _, c := range []struct{ name, how string }{{"the right verifier", "right"}, {"a wrong verifier", "wrong"},
 		{"no verifier", "none"}} {
 		code, verifier, _ := k.l55SignIn(t, k.l55Browser(), nil)
 		sent := map[string]string{"right": verifier, "wrong": verifier + "x", "none": ""}[c.how]
 		cell("3. the exchange with "+c.name, l55Said(k.l55Exchange(t, code, sent)))
 	}
-	cell("3d. code_challenge_method=plain", map[bool]string{true: "accepted", false: "refused"}[
-		k.authorizeAccepted(t, kcRedirect, url.Values{"code_challenge_method": {"plain"},
-			"code_challenge": {randomSecret(t) + randomSecret(t)}})])
+	cell("3d. code_challenge_method=plain", l55Word(k.authorizeAccepted(t, kcRedirect,
+		url.Values{"code_challenge_method": {"plain"}, "code_challenge": {randomSecret(t) + randomSecret(t)}})))
 
 	// 4. The refresh-token grant.
 	code, verifier, _ := k.l55SignIn(t, k.l55Browser(), url.Values{"nonce": {"n-l55"}})
@@ -6119,12 +6712,34 @@ func TestL55PublicClient(t *testing.T) {
 	cell("6. the refresh grant after an administrator's sign-out", l55Said(k.l55Refresh(t, s6["refresh_token"].(string))))
 
 	// 7 and 8. The session limits, shortened for the run and put back.
-	k.adminDo(t, "PUT", "", map[string]any{"ssoSessionIdleTimeout": 60, "ssoSessionMaxLifespan": 150}, nil)
+	// 7. ssoSessionIdleTimeout 60s, the maximum lifespan long enough to be no
+	// cause. Keycloak may take a refresh for a window past the idle timeout
+	// (unverified; its SessionTimeoutHelper's), so one session is tried 75s
+	// after its last use and another past 60s plus a 120s window, and the
+	// refresh token's own exp − iat is recorded beside them.
+	k.adminDo(t, "PUT", "", map[string]any{"ssoSessionIdleTimeout": 60, "ssoSessionMaxLifespan": 600}, nil)
 	defer k.adminDo(t, "PUT", "", map[string]any{"ssoSessionIdleTimeout": 1800, "ssoSessionMaxLifespan": 36000}, nil)
-	code, verifier, _ = k.l55SignIn(t, k.l55Browser(), nil)
-	_, s7 := k.l55Exchange(t, code, verifier)
-	time.Sleep(75 * time.Second)
-	cell("7. the refresh grant 75s after the last use, ssoSessionIdleTimeout 60s", l55Said(k.l55Refresh(t, s7["refresh_token"].(string))))
+	var s7 [2]map[string]any
+	var used [2]time.Time
+	for i := range s7 {
+		code, verifier, _ = k.l55SignIn(t, k.l55Browser(), nil)
+		_, s7[i] = k.l55Exchange(t, code, verifier)
+		used[i] = time.Now()
+	}
+	rtLife := "the refresh token is not a JWS"
+	if _, rc := claimsOf(s7[0]["refresh_token"].(string)); rc != nil {
+		iat, _ := rc["iat"].(float64)
+		exp, _ := rc["exp"].(float64)
+		rtLife = fmt.Sprintf("the refresh token's exp − iat %.0fs", exp-iat)
+	}
+	for i, after := range []time.Duration{75 * time.Second, 195 * time.Second} {
+		time.Sleep(time.Until(used[i].Add(after)))
+		cell(fmt.Sprintf("7%c. the refresh grant %ds after the last use, ssoSessionIdleTimeout 60s", 'a'+i,
+			int(after/time.Second)), l55Said(k.l55Refresh(t, s7[i]["refresh_token"].(string)))+"; "+rtLife)
+	}
+	// 8. ssoSessionMaxLifespan 150s, the session kept from idling by a grant
+	// every 40s.
+	k.adminDo(t, "PUT", "", map[string]any{"ssoSessionMaxLifespan": 150}, nil)
 	browser := k.l55Browser()
 	t0 := time.Now()
 	code, verifier, _ = k.l55SignIn(t, browser, nil)
@@ -6150,7 +6765,7 @@ func TestL55PublicClient(t *testing.T) {
 		line = append(line, fmt.Sprintf("+%ds %s", int(at/time.Second), l55Said(st, out)))
 	}
 	cell("8. ssoSessionMaxLifespan 150s, grants every 40s, a prompt=login sign-in at +100s", strings.Join(line, "; "))
-	writeOIDCResult(t, k, "L55", l55Claim, obs.String(), evPath)
+	writeOIDCResult(t, k, "L55", l55Claim, preface+obs.String(), evPath)
 }
 ```
 
@@ -6180,23 +6795,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
 const l56Claim = "The agent's OIDC session end to end on Keycloak and one device (plan 9b), with the real port49 " +
-	"CLI and the realm's Access Token Lifespan at 60s: port49 login --oidc --no-browser signs in through a " +
-	"scripted browser and starts the agent; port49 token mints and the device takes the token over SSH; port49 " +
-	"token still mints after two ID-token lifetimes with no browser; port49 refresh asks the password again and " +
-	"extends the device session; an administrator's sign-out ends the agent with the broker's logout words and a " +
-	"login from the time they name works; with Keycloak stopped, port49 token mints until the held ID token's life " +
-	"ends, then says the provider did not renew it and not to log in, the agent still running, and with Keycloak " +
-	"started again a port49 token mints with no login (or what the agent says if Keycloak lost its sessions); no " +
-	"compact JWS in the CLI's output or the agent's log (policy engine spec §15 L56; §13 decision 43)."
+	"CLI and the realm's Access Token Lifespan at 60s, the ID token's exp − iat recorded: port49 login --oidc " +
+	"--no-browser signs in through a scripted browser, asks the password, starts the agent and names the principal " +
+	"signed in; port49 token mints and the device takes the token over SSH; port49 token still mints after two " +
+	"ID-token lifetimes with no browser; port49 refresh asks the password again, names the principal and extends " +
+	"the device session, and does so with the address pasted at a terminal; an administrator's sign-out ends the " +
+	"agent, in the broker's logout words or the provider's, and a login from the time the broker names works; with " +
+	"Keycloak stopped, port49 token mints until the held ID token's life ends, then says the provider did not renew " +
+	"it and not to log in, the agent still running, and with Keycloak started again a port49 token mints with no " +
+	"login, or the agent says the provider ended the session; no compact JWS, ID token, refresh token, code or " +
+	"verifier in the CLI's output or the agent's log (policy engine spec §15 L56; §13 decision 43)."
 
 // l56AuthURL is the authorization URL port49 prints on its own line,
 // indented two spaces.
@@ -6217,6 +6836,24 @@ func l56LoginFrom(text string) (time.Time, bool) {
 	}
 	at, err := time.Parse(time.RFC3339, m[1])
 	return at, err == nil
+}
+
+// l56Ending is how the session ended after an administrator's sign-out,
+// from `port49 token`'s stderr and the agent's log: the broker's
+// back-channel words on the mint, or the provider's invalid_grant on the
+// mint or, when the agent's own renewal met the sign-out first and the agent
+// is gone, in its log. "" is neither.
+func l56Ending(stderr, log string) string {
+	switch {
+	case strings.Contains(stderr, "back-channel logout"):
+		return "the broker's back-channel logout words"
+	case strings.Contains(stderr, "no longer renews this session"):
+		return "the provider's invalid_grant words, on the mint"
+	case strings.Contains(stderr, "no agent") &&
+		strings.Contains(log, "port49 agent: your identity provider ended the session"):
+		return "the provider's invalid_grant words, in the agent's log: its renewal met the sign-out first"
+	}
+	return ""
 }
 
 // l56Files is the end to end's files, the human verifier asking for the
@@ -6268,12 +6905,42 @@ func l56Proxy(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// l56Pty is a pseudo-terminal: the master the test types on, and the slave
+// port49 takes for its stdin, so it offers the paste (cmd/port49's openPty,
+// failing where that one skips: the lab has no reason to lack a pty).
+func l56Pty(t *testing.T) (master, slave *os.File) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("INVALID: no pty: %v", err)
+	}
+	var unlock int32
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, m.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); e != 0 {
+		t.Fatalf("INVALID: no pty: TIOCSPTLCK: %v", e)
+	}
+	var n uint32
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, m.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))); e != 0 {
+		t.Fatalf("INVALID: no pty: TIOCGPTN: %v", e)
+	}
+	s, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatalf("INVALID: no pty: %v", err)
+	}
+	t.Cleanup(func() { m.Close(); s.Close() })
+	return m, s
+}
+
 // l56CLI is bin/port49 as an operator runs it: its own config directory
 // and agent socket, the broker's CA, Keycloak's CA, and the proxy.
 type l56CLI struct {
 	bin, sock string
 	env       []string
 	flags     []string
+	// printed is what port49 prints by design among the values the run
+	// registered as secret: each authorization URL's state, nonce and
+	// code_challenge (decision 43 ruling 17), and each device token on
+	// `port49 token`'s stdout. leak exempts these and nothing else.
+	printed []string
 }
 
 func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
@@ -6296,15 +6963,118 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 	return c
 }
 
-// l56Run is one command's outcome, scrubbed of every registered secret.
+// agentLog is the agent's log, as the login started it.
+func (c *l56CLI) agentLog() string {
+	b, _ := os.ReadFile(filepath.Join(filepath.Dir(c.sock), "agent.log"))
+	return string(b)
+}
+
+// l56Run is one command's outcome. Its raw output is checked for a leaked
+// credential first (leak), then scrubbed of every registered secret for the
+// note.
 type l56Run struct {
 	code           int
 	stdout, stderr string
-	form           bool // the scripted browser was shown the password form
+	form           bool  // the scripted browser was shown the password form
+	leak           error // the raw output held a credential (l56CLI.leak)
 }
 
 func (r l56Run) cell() string {
 	return fmt.Sprintf("exit %d; stdout %q; stderr %q", r.code, oneLineMax(r.stdout, 300), oneLineMax(r.stderr, 400))
+}
+
+// leak is leakIn on raw CLI output, before any scrubbing: a compact JWS, or
+// a value the run registered as secret (a code, a verifier, a token Keycloak
+// issued, the admin password) that port49 does not print by design.
+func (c *l56CLI) leak(kc *keycloak, raw string) error {
+	var secrets []string
+	for _, v := range kc.known() {
+		if !slices.Contains(c.printed, v) {
+			secrets = append(secrets, v)
+		}
+	}
+	return leakIn(raw, secrets)
+}
+
+// finish is r with its raw output checked for a leak, then scrubbed.
+func (c *l56CLI) finish(kc *keycloak, r l56Run) l56Run {
+	r.leak = c.leak(kc, r.stdout+"\n"+r.stderr)
+	r.stdout, r.stderr = scrubbed(r.stdout, kc.known()), scrubbed(r.stderr, kc.known())
+	return r
+}
+
+// l56Cmd is one port49 command running, its stderr read line by line for the
+// authorization URL it prints.
+type l56Cmd struct {
+	cmd            *exec.Cmd
+	stdout, stderr bytes.Buffer
+	urls           chan string
+	done           chan struct{}
+}
+
+// start runs port49 with args, stdin from stdin (nil: none).
+func (c *l56CLI) start(t *testing.T, stdin *os.File, args ...string) *l56Cmd {
+	t.Helper()
+	p := &l56Cmd{cmd: exec.Command(c.bin, args...), urls: make(chan string, 1), done: make(chan struct{})}
+	p.cmd.Env = c.env
+	p.cmd.Stdout = &p.stdout
+	if stdin != nil {
+		p.cmd.Stdin = stdin
+	}
+	errR, err := p.cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		defer close(p.done)
+		sc := bufio.NewScanner(errR)
+		sc.Buffer(make([]byte, 64<<10), 64<<10)
+		for sc.Scan() {
+			p.stderr.WriteString(sc.Text() + "\n")
+			if u, ok := l56AuthURL(sc.Text()); ok {
+				select {
+				case p.urls <- u:
+				default:
+				}
+			}
+		}
+	}()
+	return p
+}
+
+// authURL is the address the command printed, its state, nonce and
+// code_challenge registered as secret and as printed by design; "" when none
+// came within 30s, the command killed.
+func (p *l56Cmd) authURL(c *l56CLI, kc *keycloak) string {
+	select {
+	case u := <-p.urls:
+		if q, err := url.Parse(u); err == nil {
+			v := []string{q.Query().Get("state"), q.Query().Get("nonce"), q.Query().Get("code_challenge")}
+			kc.know(v...)
+			c.printed = append(c.printed, v...)
+		}
+		return u
+	case <-time.After(30 * time.Second):
+		_ = p.cmd.Process.Kill()
+		return ""
+	}
+}
+
+// wait waits up to 60s for the command to end, and is its outcome.
+func (p *l56Cmd) wait(c *l56CLI, kc *keycloak, form bool) l56Run {
+	waited := make(chan error, 1)
+	go func() { <-p.done; waited <- p.cmd.Wait() }()
+	select {
+	case <-waited:
+	case <-time.After(60 * time.Second):
+		_ = p.cmd.Process.Kill()
+		<-waited
+	}
+	return c.finish(kc, l56Run{code: p.cmd.ProcessState.ExitCode(), stdout: p.stdout.String(),
+		stderr: p.stderr.String(), form: form})
 }
 
 // signIn runs port49 with args, reads the address from its stderr, signs in
@@ -6312,60 +7082,47 @@ func (r l56Run) cell() string {
 // port49's listener on 127.0.0.1:18749.
 func (c *l56CLI) signIn(t *testing.T, kc *keycloak, browser *http.Client, args ...string) l56Run {
 	t.Helper()
-	cmd := exec.Command(c.bin, args...)
-	cmd.Env = c.env
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	errR, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	urls := make(chan string, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		sc := bufio.NewScanner(errR)
-		sc.Buffer(make([]byte, 64<<10), 64<<10)
-		for sc.Scan() {
-			stderr.WriteString(sc.Text() + "\n")
-			if u, ok := l56AuthURL(sc.Text()); ok {
-				select {
-				case urls <- u:
-				default:
-				}
-			}
+	p := c.start(t, nil, args...)
+	form := false
+	if u := p.authURL(c, kc); u != "" {
+		loc, shown := kc.answer(t, browser, u, oidcAlice, oidcAlicePassword)
+		form = shown
+		cb, err := (&http.Client{Timeout: 10 * time.Second}).Get(loc.String())
+		if err != nil {
+			t.Fatalf("the callback: %s", errCause(err))
 		}
-	}()
-	r := l56Run{code: -1}
-	select {
-	case u := <-urls:
-		if p, err := url.Parse(u); err == nil {
-			kc.know(p.Query().Get("state"), p.Query().Get("nonce"), p.Query().Get("code_challenge"))
-		}
-		r.form = kc.browse(t, browser, u, oidcAlice, oidcAlicePassword)
-	case <-time.After(30 * time.Second):
-		_ = cmd.Process.Kill()
+		cb.Body.Close()
 	}
-	waited := make(chan error, 1)
-	go func() { <-done; waited <- cmd.Wait() }()
-	select {
-	case <-waited:
-	case <-time.After(60 * time.Second):
-		_ = cmd.Process.Kill()
-		<-waited
-	}
-	r.code = cmd.ProcessState.ExitCode()
-	r.stdout, r.stderr = scrubbed(stdout.String(), kc.known()), scrubbed(stderr.String(), kc.known())
-	return r
+	return p.wait(c, kc, form)
 }
 
-// browse is a person's browser on an address port49 printed: it signs in
-// when Keycloak shows the form, then follows the redirect to port49's
-// loopback listener. It reports whether the form was shown.
-func (k *keycloak) browse(t *testing.T, browser *http.Client, authURL, user, pass string) bool {
+// signInPasting is signIn at a terminal, the jump host's path (decision 43
+// ruling 5): port49's stdin is a pty, and the address Keycloak sent the
+// browser to is typed at port49's prompt, never sent to its listener. It
+// also says whether that address carried iss and session_state.
+func (c *l56CLI) signInPasting(t *testing.T, kc *keycloak, browser *http.Client, args ...string) (l56Run, string) {
+	t.Helper()
+	m, s := l56Pty(t)
+	go func() { _, _ = io.Copy(io.Discard, m) }()
+	p := c.start(t, s, args...)
+	form, carried := false, "no address"
+	if u := p.authURL(c, kc); u != "" {
+		loc, shown := kc.answer(t, browser, u, oidcAlice, oidcAlicePassword)
+		form = shown
+		carried = fmt.Sprintf("the address pasted carries iss %v, session_state %v", loc.Query().Has("iss"),
+			loc.Query().Has("session_state"))
+		if _, err := io.WriteString(m, loc.String()+"\n"); err != nil {
+			t.Fatalf("typing the address: %v", err)
+		}
+	}
+	return p.wait(c, kc, form), carried
+}
+
+// answer is a person's browser on an address port49 printed: it signs in
+// when Keycloak shows the form, and returns where Keycloak then sends the
+// browser, port49's loopback address, unfollowed. It reports whether the
+// form was shown.
+func (k *keycloak) answer(t *testing.T, browser *http.Client, authURL, user, pass string) (*url.URL, bool) {
 	t.Helper()
 	resp, err := browser.Get(authURL)
 	if err != nil {
@@ -6391,12 +7148,25 @@ func (k *keycloak) browse(t *testing.T, browser *http.Client, authURL, user, pas
 		t.Fatalf("INVALID: Keycloak did not send the browser to port49's listener (%s, %s)", resp.Status, locShape(loc))
 	}
 	k.know(loc.Query().Get("code"))
-	cb, err := (&http.Client{Timeout: 10 * time.Second}).Get(loc.String())
+	return loc, form
+}
+
+// formWithoutPrompt is the control for "the password was asked": an
+// authorization request in browser with no prompt=login, which Keycloak
+// answers from the browser's SSO session, with no form. It reports whether
+// the form was shown.
+func (k *keycloak) formWithoutPrompt(t *testing.T, browser *http.Client) bool {
+	t.Helper()
+	resp, err := browser.Get(k.l55Authorize(t, kcRedirect, randomSecret(t)+randomSecret(t), url.Values{"prompt": nil}))
 	if err != nil {
-		t.Fatalf("the callback: %s", errCause(err))
+		t.Fatalf("authorize: %s", errCause(err))
 	}
-	cb.Body.Close()
-	return form
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if loc, err := url.Parse(resp.Header.Get("Location")); err == nil {
+		k.know(loc.Query().Get("code"))
+	}
+	return l55Accepted(resp.StatusCode, body)
 }
 
 // run runs port49 with args and no sign-in.
@@ -6406,28 +7176,29 @@ func (c *l56CLI) run(kc *keycloak, args ...string) l56Run {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	_ = cmd.Run()
-	r := l56Run{code: cmd.ProcessState.ExitCode(), stdout: stdout.String(), stderr: stderr.String()}
-	if args[0] == "token" && r.code == 0 {
-		kc.know(strings.TrimSpace(r.stdout))
-	}
-	r.stdout, r.stderr = scrubbed(r.stdout, kc.known()), scrubbed(r.stderr, kc.known())
-	return r
+	return c.finish(kc, l56Run{code: cmd.ProcessState.ExitCode(), stdout: stdout.String(), stderr: stderr.String()})
 }
 
-// token mints device and returns the token, registered as secret.
+// token mints device and returns the token, registered as secret and as
+// printed by design. That token is all the leak check exempts: anything
+// else on stdout, and all of stderr, is checked as any output is.
 func (c *l56CLI) token(kc *keycloak, device string) (string, l56Run) {
 	cmd := exec.Command(c.bin, "token", "--socket", c.sock, device)
 	cmd.Env = c.env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	_ = cmd.Run()
+	r := l56Run{code: cmd.ProcessState.ExitCode(), stdout: "[the token]"}
 	tok := strings.TrimSpace(stdout.String())
-	if cmd.ProcessState.ExitCode() != 0 {
-		tok = ""
+	if r.code != 0 {
+		tok, r.stdout = "", scrubbed(stdout.String(), kc.known())
+	} else {
+		kc.know(tok)
+		c.printed = append(c.printed, tok)
 	}
-	kc.know(tok)
-	return tok, l56Run{code: cmd.ProcessState.ExitCode(), stdout: "[the token]",
-		stderr: scrubbed(stderr.String(), kc.known())}
+	r.leak = c.leak(kc, stdout.String()+"\n"+stderr.String())
+	r.stderr = scrubbed(stderr.String(), kc.known())
+	return tok, r
 }
 
 // stopAgent ends the agent listening on the socket, by its peer credentials.
@@ -6464,13 +7235,23 @@ func TestL56AgentEndToEnd(t *testing.T) {
 	t.Skip("PORT49_LAB_PLATFORMS does not select arista_eos")
 }
 
-// l56 is the claim measured on one device. A fault in the setup is INVALID
-// and stops before the note, as the 7h end to end's (oidcEndToEnd).
+// l56 is the claim measured on one device. A fault in the setup, or a
+// control that does not hold, is INVALID and stops before the note, as the
+// 7h end to end's (oidcEndToEnd). Every cell asserts what the claim says of
+// it, through fail, and each assertion has a control that shows it can
+// fail: noted beside the cell.
 func l56(t *testing.T, l *lab) {
 	var failed []string
 	fail := func(format string, args ...any) { failed = append(failed, fmt.Sprintf(format, args...)) }
 	var obs strings.Builder
 	cell := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, wideCell(what)) }
+	// ran is a CLI cell: its outcome, and a failure if its output leaked.
+	ran := func(step string, r l56Run, extra string) {
+		cell(step, r.cell()+extra)
+		if r.leak != nil {
+			fail("%s: the CLI's output: %v", step, r.leak)
+		}
+	}
 	complete := false
 	var kc *keycloak
 
@@ -6497,10 +7278,12 @@ func l56(t *testing.T, l *lab) {
 			return
 		}
 		note := "The CLI reaches Keycloak through a CONNECT proxy in the test (`l56Proxy`), since this host does " +
-			"not resolve keycloak.port49.lab; that is lab plumbing, not part of the claim.\n\n" +
+			"not resolve keycloak.port49.lab; that is lab plumbing, not part of the claim. The CLI's raw output " +
+			"is checked for a compact JWS or any value the run registered as secret before it is scrubbed for this " +
+			"note; the authorization URL's state, nonce and code_challenge, and each device token on `port49 " +
+			"token`'s stdout, are exempt, being printed by design.\n\n" +
 			"| step | observed |\n|---|---|\n" + obs.String()
-		log, _ := os.ReadFile(filepath.Join(filepath.Dir(cli.sock), "agent.log"))
-		if err := leakIn(string(log), kc.known()); err != nil {
+		if err := leakIn(cli.agentLog(), kc.known()); err != nil {
 			failed = append(failed, "the agent's log: "+err.Error())
 		}
 		if len(failed) > 0 {
@@ -6526,24 +7309,50 @@ func l56(t *testing.T, l *lab) {
 	br := oidcBroker{c: brokerClient(t), kc: kc, base: sliceBrokerURL}
 	// The broker takes Keycloak's tokens once its key fetch and start gate
 	// allow (as oidcEndToEnd waits); a fault here is setup, not the claim.
-	if tok, said := br.mintRetry(t, kc.Login(t, oidcAlice, oidcAlicePassword, nil).IDToken, l.p.node, 3*time.Minute); tok == "" {
+	setup := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
+	kc.know(setup.IDToken, setup.AccessToken, setup.RefreshToken)
+	if tok, said := br.mintRetry(t, setup.IDToken, l.p.node, 3*time.Minute); tok == "" {
 		t.Fatalf("INVALID: the broker never took a Keycloak token: %s", said)
+	}
+	// 0. The ID token's life at this Access Token Lifespan (the operator
+	// notes' "on Keycloak, the realm's Access Token Lifespan").
+	_, claims := claimsOf(setup.IDToken)
+	iat, _ := claims["iat"].(float64)
+	exp, _ := claims["exp"].(float64)
+	cell("0. Keycloak's ID token, exp − iat, at Access Token Lifespan 60s", fmt.Sprintf("%.0fs", exp-iat))
+	if iat == 0 || exp-iat != 60 {
+		fail("the ID token's exp − iat is %.0fs, not the Access Token Lifespan's 60s", exp-iat)
 	}
 	cli = newL56CLI(t, l56Proxy(t), filepath.Join(c.local, "oidc", "idp-ca.pem"))
 	browser := keycloakClient(idpCA)
 	browser.Jar, _ = cookiejar.New(nil)
 
-	// 1. Login.
+	// 1. Login. Control for "password asked": with the SSO session it
+	// leaves, a request with no prompt=login is answered with no form.
 	r := cli.signIn(t, kc, browser, append([]string{"login"}, cli.flags...)...)
-	cell("1. port49 login --oidc --no-browser, a scripted browser", r.cell()+fmt.Sprintf("; password asked %v", r.form))
+	ran("1. port49 login --oidc --no-browser, a scripted browser", r, fmt.Sprintf("; password asked %v", r.form))
 	if r.code != 0 {
 		t.Fatalf("INVALID: the login failed: %s", r.cell())
 	}
-	// 2. A token, and the device takes it.
+	if !r.form || !strings.Contains(r.stdout, " as "+e2eAlice+" through ") {
+		fail("the login: password asked %v, principal named %v", r.form, strings.Contains(r.stdout, " as "+e2eAlice))
+	}
+	if kc.formWithoutPrompt(t, browser) {
+		t.Fatal("INVALID: Keycloak showed the form to a request with no prompt=login inside the SSO session, so " +
+			"\"password asked\" cannot tell prompt=login was honoured")
+	}
+	cell("1c. control: no prompt=login in the same browser", "no form shown")
+
+	// 2. A token, and the device takes it. Control for the leak check: the
+	// token's own stdout holds a registered value, and leakIn says so.
+	// Control for "permitted": a token port49 did not mint is refused.
 	tok, tr := cli.token(kc, l.p.node)
-	cell("2a. port49 token", tr.cell())
+	ran("2a. port49 token", tr, "")
 	if tok == "" {
 		t.Fatalf("INVALID: the first token: %s", tr.cell())
+	}
+	if leakIn(tok+"\n", kc.known()) == nil {
+		t.Fatal("INVALID: the leak check does not see a value the run registered")
 	}
 	sh, err := l.shell(oidcAlice, tok)
 	if err != nil {
@@ -6552,53 +7361,105 @@ func l56(t *testing.T, l *lab) {
 	res := l.runPermitted(sh, "show version", 20*time.Second)
 	sh.Close()
 	cell("2b. SSH as alice with it, `show version`", res.cell)
-	// 3. Two ID-token lifetimes, no browser.
+	if !res.permitted {
+		fail("the device did not run `show version` with the minted token: %s", res.cell)
+	}
+	if bad, err := l.shell(oidcAlice, (randomSecret(t) + randomSecret(t))[:30]); err == nil {
+		bad.Close()
+		t.Fatal("INVALID: the device took a token port49 never minted, so 2b cannot tell")
+	}
+	cell("2c. control: SSH as alice with a token port49 never minted", "refused")
+
+	// 3. Two ID-token lifetimes, no browser. Control: 6b, where with
+	// Keycloak stopped the token is refused once its life ends.
 	time.Sleep(130 * time.Second)
 	tok, tr = cli.token(kc, l.p.node)
-	cell("3. port49 token 130s later (two 60s ID-token lifetimes), no browser", tr.cell())
+	ran("3. port49 token 130s later (two 60s ID-token lifetimes), no browser", tr, "")
 	if tok == "" {
 		fail("no token after two ID-token lifetimes: %s", tr.cell())
 	}
-	// 4. Refresh: a fresh sign-in, the device session extended.
+
+	// 4. Refresh: a fresh sign-in, the device session extended; then the
+	// same at a terminal, the address pasted. Control: 1c.
 	r = cli.signIn(t, kc, browser, "refresh", "--no-browser", "--socket", cli.sock)
-	cell("4. port49 refresh --no-browser", r.cell()+fmt.Sprintf("; password asked %v", r.form))
-	if r.code != 0 || !r.form || !strings.Contains(r.stdout, "extended to") {
+	ran("4a. port49 refresh --no-browser", r, fmt.Sprintf("; password asked %v", r.form))
+	if r.code != 0 || !r.form || !strings.Contains(r.stdout, "extended to") ||
+		!strings.Contains(r.stdout, " as "+e2eAlice) {
 		fail("the refresh: %s, password asked %v", r.cell(), r.form)
 	}
-	// 5. An administrator's sign-out ends the agent; a login from the time named works.
+	time.Sleep(15 * time.Second) // past the broker's challenge pacing
+	r, carried := cli.signInPasting(t, kc, browser, "refresh", "--no-browser", "--socket", cli.sock)
+	ran("4b. port49 refresh at a terminal, the address pasted", r, fmt.Sprintf("; password asked %v; %s", r.form, carried))
+	if r.code != 0 || !r.form || !strings.Contains(r.stderr, "paste it here (it is not shown)") ||
+		!strings.Contains(r.stdout, "extended to") {
+		fail("the pasted refresh: %s, password asked %v", r.cell(), r.form)
+	}
+
+	// 5. An administrator's sign-out ends the agent. The broker's
+	// back-channel words are expected on the next mint; the agent's own
+	// renewal (about every 45s at a 60s token) can meet invalid_grant first
+	// and end it in the provider's words. Either is the claim's; which one is
+	// recorded. Control for 5b: 6c, the agent found while it runs.
+	signedOut := time.Now()
 	kc.LogoutUser(t, kc.UserID(t, oidcAlice))
-	time.Sleep(5 * time.Second)
-	_, tr = cli.token(kc, l.p.node)
-	cell("5a. port49 token after an administrator's sign-out", tr.cell())
-	if tr.code == 0 || !strings.Contains(tr.stderr, "back-channel logout") {
+	ending := ""
+	for deadline := time.Now().Add(10 * time.Second); ending == "" && time.Now().Before(deadline); time.Sleep(time.Second) {
+		_, tr = cli.token(kc, l.p.node)
+		if tr.code != 0 {
+			ending = l56Ending(tr.stderr, cli.agentLog())
+			if ending == "" {
+				ending = "neither: " + tr.cell()
+				break
+			}
+		}
+	}
+	ran("5a. port49 token after an administrator's sign-out, polled up to 10s", tr, "; ended by "+ending)
+	if ending == "" || strings.HasPrefix(ending, "neither") {
 		fail("after the sign-out: %s", tr.cell())
 	}
-	time.Sleep(2 * time.Second)
-	gone := cli.run(kc, "identity", "--socket", cli.sock)
-	cell("5b. the agent after it", gone.cell())
-	if from, ok := l56LoginFrom(tr.stderr); ok {
-		time.Sleep(time.Until(from) + time.Second)
+	var gone l56Run
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		if gone = cli.run(kc, "identity", "--socket", cli.sock); strings.Contains(gone.stderr, "no agent") {
+			break
+		}
 	}
+	ran("5b. the agent after it", gone, "")
+	if gone.code == 0 || !strings.Contains(gone.stderr, "no agent") {
+		fail("the agent still answers after the sign-out: %s", gone.cell())
+	}
+	// A new login is taken from the time the broker named, else from the
+	// sub record's clock_skew after the sign-out (loginAgainAt).
+	from, named := l56LoginFrom(tr.stderr)
+	waited := "the time the broker named"
+	if !named {
+		from, waited = loginAgainAt(signedOut), "clock_skew after the sign-out"
+	}
+	time.Sleep(time.Until(from) + time.Second)
 	browser.Jar, _ = cookiejar.New(nil) // the sign-out ended the browser's SSO session too
 	r = cli.signIn(t, kc, browser, append([]string{"login"}, cli.flags...)...)
-	cell("5c. port49 login again, from the time named", r.cell())
+	ran("5c. port49 login again, from "+waited, r, "")
 	if r.code != 0 {
 		t.Fatalf("INVALID: the second login failed, so step 6 has no session: %s", r.cell())
 	}
+
 	// 6. Keycloak stopped, then started.
 	if _, err := c.run("stop", "keycloak"); err != nil {
 		t.Fatalf("INVALID: stopping Keycloak: %v", err)
 	}
-	_, tr = cli.token(kc, l.p.node)
-	cell("6a. port49 token at once, Keycloak stopped", tr.cell())
+	tok, tr = cli.token(kc, l.p.node)
+	ran("6a. port49 token at once, Keycloak stopped", tr, "")
+	if tok == "" {
+		fail("the held ID token, minutes old, was not used with Keycloak stopped: %s", tr.cell())
+	}
 	time.Sleep(75 * time.Second)
 	_, tr = cli.token(kc, l.p.node)
-	cell("6b. port49 token 75s later, Keycloak stopped", tr.cell())
+	ran("6b. port49 token 75s later, Keycloak stopped", tr, "")
 	if tr.code == 0 || !strings.Contains(tr.stderr, "did not renew your ID token") || strings.Contains(tr.stderr, "port49 login") {
 		fail("Keycloak down past the token's life: %s", tr.cell())
 	}
+	// The agent answers, even if only to say its token was not renewed.
 	st := cli.run(kc, "identity", "--socket", cli.sock)
-	cell("6c. the agent, Keycloak stopped", st.cell())
+	ran("6c. the agent, Keycloak stopped", st, "")
 	if strings.Contains(st.stderr, "no agent") {
 		fail("the agent ended while Keycloak was down: %s", st.cell())
 	}
@@ -6606,26 +7467,36 @@ func l56(t *testing.T, l *lab) {
 		t.Fatalf("INVALID: starting Keycloak: %v", err)
 	}
 	waitDiscovery(t, kc, 3*time.Minute)
-	var after string
-	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Second) {
+	logFrom := len(cli.agentLog()) // 5's agent may have written the provider's words already
+	after := ""
+	for deadline := time.Now().Add(3 * time.Minute); after == "" && time.Now().Before(deadline); time.Sleep(10 * time.Second) {
 		tok, tr = cli.token(kc, l.p.node)
-		after = tr.cell()
-		if tok != "" || strings.Contains(tr.stderr, "the session is over") {
-			break
+		switch {
+		case tok != "":
+			after = "a token minted with no login"
+		case strings.Contains(tr.stderr, "the session is over") ||
+			strings.Contains(cli.agentLog()[logFrom:], "your identity provider ended the session"):
+			after = "the agent said the provider ended the session"
 		}
 	}
-	cell("6d. port49 token once Keycloak answers again", after)
+	if after == "" {
+		fail("once Keycloak answered again, no token and no word that the session ended: %s", tr.cell())
+		after = "neither within 3m"
+	}
+	ran("6d. port49 token once Keycloak answers again", tr, "; "+after)
 	complete = true
 }
 ```
 
-`l.shell`, `l.runPermitted` and `res.cell` are the harness's (`l29_shell_test.go`,
-`directory_e2e_test.go`). `c.run` is the compose stack's `docker compose` with its overlays, so
-`stop keycloak` and `start keycloak` act on the stack's own Keycloak.
+`l.shell`, `l.runPermitted` and `res.cell` (and `res.permitted`) are the harness's
+(`l29_shell_test.go`, `directory_e2e_test.go`), as is `e2eAlice` (`user:alice@corp.example.com`,
+the e2e broker's principal for alice). `loginAgainAt` is `oidc_e2e_test.go`'s (P3); `l55Authorize`
+and `l55Accepted` are L55's, in the same package. `c.run` is the compose stack's `docker compose`
+with its overlays, so `stop keycloak` and `start keycloak` act on the stack's own Keycloak.
 
 - [ ] **Step 5: The unit tests pass**
 
-Run: `go test -tags lab ./tests/lab/ -run 'TestL56AuthURL|TestL56LoginFrom|TestL55Accepted|TestL56Files' -count=1 && make lab-unit`
+Run: `go test -tags lab ./tests/lab/ -run 'TestL56AuthURL|TestL56LoginFrom|TestL55Accepted|TestL56Files|TestL56Ending|TestL56Leak' -count=1 && make lab-unit`
 Expected: PASS.
 
 - [ ] **Step 6: The targets and the README**
@@ -6634,7 +7505,7 @@ In `Makefile`, add `lab-oidc-l55 lab-oidc-agent` to `.PHONY`, and after `lab-oid
 
 ```make
 # L55 (plan 9b): Keycloak as port49's OIDC public client meets it. Needs
-# Docker with Compose v2.24.4+; about 8 minutes, most of it the session-limit
+# Docker with Compose v2.24.4+; about 10 minutes, most of it the session-limit
 # waits. lab-oidc re-measures the closed L45 and L46; this runs L55 alone.
 lab-oidc-l55:
 	go test -tags lab ./tests/lab/ -run 'TestL55' -count=1 -v -timeout 30m
@@ -6656,6 +7527,12 @@ In `tests/lab/README.md`, after the identity-provider section, add a section "OI
   (`HTTPS_PROXY`), since the host does not resolve that name. port49 never sends the broker through
   a proxy.
 - The realm's Access Token Lifespan is 60s for L56.
+- L56 step 4b runs `port49 refresh` with a pty for stdin and types the address Keycloak sent the
+  browser to, as a person on a jump host pastes it.
+- Every CLI command's raw output is checked for a compact JWS or a registered secret before it is
+  scrubbed for the note, and a leak fails the run. Only what port49 prints by design is exempt.
+- Each L56 cell asserts, and each assertion has a control that shows it can fail. A control that
+  does not hold is INVALID, and no note is written.
 - Keycloak is stopped and started by `docker compose stop|start keycloak`. If its dev-mode database
   loses the session across that, the note records what the agent said.
 
@@ -6685,7 +7562,9 @@ Then rule 4: if a result contradicts a doc, the doc is wrong.
   did, say Keycloak needs a fixed port and `oidc_redirect_port`; the client's ephemeral default
   stands, from RFC 8252.
 - **This plan's operator notes**, which Task 9 copies: replace each italic line with what was
-  measured.
+  measured. The Keycloak token-lifetime line closes on L56 cell 0, the ID token's `exp − iat`.
+- **Ruling 9's idle and maximum limits** (L55 cells 7 and 8): say what Keycloak answered past
+  `ssoSessionIdleTimeout`, with and without its window, and the refresh token's own `exp − iat`.
 
 Commit the harness and the notes first, and make the spec edits after that commit, so the second
 commit holds them alone, as CLAUDE.md asks:
