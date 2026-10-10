@@ -139,13 +139,20 @@ pre-flight questions, Q1–Q5, were ruled as recommended on 2026-10-09 (Plan 9, 
 L53 and L54. Pre-flight review 2026-10-09: 0 Critical, 10 Important, 17 Minor, all folded in; the
 OpenSSH floor rose to 8.5 on a container measurement
 (`tests/ssh-compat/2026-10-09-openssh-askpass.md`). 9b–9d are outlined under "Plan 9".
-**9b written 2026-10-09** (`2026-10-09-09b-oidc-public-client.md`, nine tasks: one spec, six code,
-one lab, one docs). It covers `port49 login --oidc` (the authorization-code flow with PKCE S256 over
-a loopback redirect, `prompt=login` at every sign-in, a pasted address on a host with no browser, no
-device grant), the tokens in the agent's memory alone with the agent non-dumpable, silent renewal
-that keeps `auth_time`, a provider outage said and never a session end, and the OIDC `port49
-refresh`. Decision 43 holds its eighteen rulings; R1–R8 were ruled on recommendation, with no
-questions for Ryan. It opens L55 (Keycloak as the client meets it) and L56 (end to end on vEOS).
+**9b written 2026-10-09, rewritten 2026-10-10** on Ryan's direction of that day
+(`2026-10-09-09b-oidc-public-client.md`, twelve tasks: one spec, nine code, one lab, one docs). The
+2026-10-09 draft held the provider's tokens in the agent; the rewrite makes design §7's issued
+certificate v1. `port49 login --oidc` signs in at the provider (PKCE S256 over a loopback redirect,
+`prompt=login`, a pasted address on a host with no browser, no device grant), generates a key on the
+host, and the broker issues a short-lived client certificate for it from its own issuing CA (`POST
+/v1/certificate`; the sign-in's `nonce` names the key, and its `sid` travels in the certificate).
+The agent then runs the certificate path unchanged, so a refresh and a new agent's extension are key
+signatures, and pre-flight D1 dissolves. A broker that issues takes a person's ID token nowhere else;
+its CA is made by `init-issuer`, rotated with overlap, and never stops a start. Decision 43 holds its
+twenty-three rulings; three questions for Ryan, each with a recommendation (Q1 when 7h's bearer path
+for people retires, Q2 where the lifetime is set, Q3 the held key reused across agents). It opens
+L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS). 9e, a
+directory-password sign-in issuing the same certificate, is added to Plan 9.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5063,10 +5070,10 @@ of the spec (§13). What the build settled:
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
 the in-session re-auth flow, integration examples (design §17 "Integration examples").
 
-**Split 2026-10-09 into four plans, each one branch.** The boundary is the client's credential.
-9a works with today's credential, a PEM key and a certificate. 9b and 9c change what the agent
-holds. 9d changes what the broker returns. Each later plan is written after the one before it
-merges (CLAUDE.md).
+**Split 2026-10-09 into four plans, each one branch; a fifth, 9e, added 2026-10-10.** The boundary
+is the client's credential. 9a works with today's credential, a PEM key and a certificate. 9b and 9c
+change what the agent holds. 9d changes what the broker returns. 9e adds a second way to get 9b's
+certificate. Each later plan is written after the one before it merges (CLAUDE.md).
 
 - **9a — Sweeps by scope, the config file, and `port49 ssh`** (`2026-10-09-09a-sweeps-and-ssh.md`,
   written 2026-10-09; branch `feature/sweeps-and-ssh`).
@@ -5084,27 +5091,40 @@ merges (CLAUDE.md).
     - **Q3:** a sweep may name any declared scope, intersected with the caller's grants.
     - **Q4:** `devices trust` learns the address by one mint, or `--address`.
     - **Q5:** inventory host keys and the Python and Ansible clients go to 9d, after L53.
-- **9b — The OIDC public client** (plan 7h's hand-off; `2026-10-09-09b-oidc-public-client.md`,
-  written 2026-10-09; branch `feature/oidc-public-client`).
-  - **Login:** `port49 login --oidc`, an authorization-code flow with PKCE (S256) over a loopback
-    redirect (RFC 8252), against `/v1/config`'s `oidc` providers.
-  - **What the agent holds:**
-    - the ID token, the bearer on each request in place of the held mTLS connection;
-    - the provider's refresh token, held per design §7. Where it lives is a bearer on disk, so 9b's
-      Task 1 rules it: the agent's memory, else a 0600 file.
-  - **Silent renewal.** The ID token is renewed with the refresh-token grant before its `exp`. The
-    grant keeps the original `auth_time` (L46), so it never extends the ceiling.
-  - **`port49 refresh`** is the challenge as a `prompt=login` request's `nonce` (decision 39 ruling
-    15), through the browser.
-  - **Re-login** on `credential_revoked` from a back-channel logout.
+- **9b — Port49-issued user certificates over an OIDC sign-in** (plan 7h's hand-off;
+  `2026-10-09-09b-oidc-public-client.md`, written 2026-10-09 and rewritten 2026-10-10 on Ryan's
+  direction; branch `feature/oidc-public-client`). Design §7's "the broker MAY issue a short-lived
+  client certificate", made v1: a company with neither a PKI nor an IdP-held session on disk can use
+  port49, and after the sign-in every session runs on the certificate path.
+  - **The sign-in:** `port49 login --oidc`, an authorization-code flow with PKCE (S256) over a
+    loopback redirect (RFC 8252), `prompt=login`, `state`, `nonce` and `iss` checked, against
+    `/v1/config`'s `oidc` providers. A host with no browser pastes back the address; no device
+    grant.
+  - **The certificate:** the login generates a key on the host (a 0600 file through
+    `userconfig.WritePrivate`; 9c's hardware behind the same signer). `POST /v1/certificate` takes
+    the ID token as its bearer, its `nonce` naming the key, its `auth_time` within 5 minutes, once,
+    and the broker issues a certificate from its own issuing CA: `certificate_lifetime` (12h,
+    1h–24h), the sign-in's `iss`, `sub` and `sid` in a URI SAN.
+  - **After it:** the agent runs the existing mTLS path unchanged. Mints, refreshes and a new
+    agent's extension of earlier sessions are key signatures (decision 43 ruling 11; D1 dissolves).
+    A held certificate is reused while a quarter of its life is left; `--sign-in` forces a sign-in.
+  - **One path for people:** a broker that issues takes a person's ID token at
+    `/v1/certificate` alone. 7h's bearer verifier stays for machines; its human path retires at the
+    pre-beta review (Q1).
   - **The 3am cases, each a test:**
-    - the IdP down: the bearer works until its `exp`, then `port49 token` says the provider is
-      unreachable, never "log in again";
-    - `identity_provider_unavailable` (the broker's JWKS stale): retried, never a session end;
-    - a browser-less host: the device-code grant is not in decision 39, so 9b's spec task decides
-      it.
-  - **Lab:** a new row, the agent's login, refresh and logout end to end on Keycloak and one device.
-    L47, the hosted providers, stays unassigned.
+    - the IdP down: everyone holding a certificate works all day, new agents included; only a
+      sign-in fails, and says so;
+    - the issuing CA's key missing or unreadable: the broker starts and serves everything else;
+      a sign-in is 503 `issuance_unavailable`, and the start says to run `init-issuer`;
+    - a back-channel logout: the certificate carries its sign-in's `sid`, so the logout refuses
+      its next use and reaches its device sessions; the next login removes it.
+  - **The CA:** `issuing-ca.pem` and `.key` in the state directory, made once by `init-issuer`,
+    rotated with overlap by `rotate-issuer` (stage, promote, the previous trusted until removed); a
+    KMS or HSM is a later swap behind `crypto.Signer`.
+  - **Lab:** L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on
+    Keycloak and vEOS). L47, the hosted providers, stays unassigned.
+  - **Dropped from the 2026-10-09 draft:** tokens in the agent, silent renewal, the browser refresh,
+    `id_token_not_renewed`.
 - **9c — Hardware-backed client keys and the broker certificate's CRL check** (plan 3's two
   hand-offs).
   - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
@@ -5115,6 +5135,16 @@ merges (CLAUDE.md).
       allows (decision 42 ruling 13; a drop goes back to Ryan).
   - **Policy:** touch and PIN policy are the operator's (design §7: `cached` or PIN-only is the
     default). The PEM file stays as the fallback.
+  - **Issued keys too:** `port49 login --oidc` (9b) generates its key in the TPM, the Secure
+    Enclave or the token behind the same signer, in place of 9b's 0600 file.
+  - **Step-up for high-impact devices** (Ryan, 2026-10-10). A grant or role can require a fresh
+    hardware-key presence proof, a YubiKey touch on an "always"-touch slot, at mint time for devices
+    an inventory attribute marks (`tier: core`, `backbone`). It extends spec §5.1.4's "`amr` and
+    `acr` are recorded … a role that requires MFA is a natural extension". It applies only to the
+    grants that carry it, so a machine principal's grants without it are unaffected. 9c's spec task
+    writes the policy key, how the proof rides the mint (a signature over a mint challenge by the
+    touch slot's key), and what a held device session does on a platform that never asks about a
+    command when the proof is not given.
   - **The 3am case,** a test: the key unplugged mid-session. The held connection still mints, since
     the key was used at the handshake. `port49 refresh` and a reconnect say "insert your key", and
     never end the session.
@@ -5144,6 +5174,21 @@ merges (CLAUDE.md).
     lookup plugin over it.
   - The 9d plan amends the spec (decision 42) to match. 9a's final review I-1 (the direct dial in
     `devices trust`) is moot with the command out of the user flow.
+
+- **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
+  with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
+  `broker.directory`, plus a second factor, and the broker issues the same short-lived certificate
+  9b issues, so everything after the sign-in is 9b's.
+  - **Its spec task decides:** the second factor (TOTP enrolled where, or the directory's own); the
+    password's path (to the broker over its TLS, to the directory as a bind over LDAPS or StartTLS,
+    never stored or logged, never hashed into `credential_sha256`); lockout and rate limits against
+    password spraying, per principal and per source; and what `auth.amr` records.
+  - **It amends design §7's "port49 has no password path at all",** written for service accounts:
+    a person's password reaches the broker once per sign-in and is never a device credential.
+  - **The 3am case, a test:** the directory down, holders of a certificate keep working; only a
+    sign-in fails, and says so.
+  - **Lab:** a new row on OpenLDAP and Samba AD (the 7g harness), and Windows AD on the SER8.
+  - **Order:** after 9d, before plan 10.
 
 ### Plan 9a — As built
 
