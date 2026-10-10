@@ -5122,27 +5122,29 @@ merges (CLAUDE.md).
     depth: the CA is the operator's).
   - **CI and lab:** SoftHSM2 and swtpm in CI; a new row for a real YubiKey on the SER8 (touch, PIN,
     unplug), if one is to hand.
-- **9d — Host keys from inventory, and the Python and Ansible clients** (design §17).
-  - **Host keys:** an optional host-key fingerprint per device in inventory, carried through the
-    bundle into the mint item (`host_keys`). A changed one is a security event in the sync diff.
-    Its format follows L53.
-  - **Trust is not in the user's flow** (Ryan, 2026-10-10; amends decision 42's pin-first rule). A
-    person or an Ansible run reaching a thousand switches it has never touched trusts nothing by
-    hand. An inventory fingerprint is sufficient on its own: `port49 ssh` and every client take the
-    key the mint names and connect, with no per-user pin. A device with no inventory key is
-    accepted on first use and pinned, with a line saying so. Either way a key that **changes** stops
-    the connection, shows the old and new fingerprints, and connects again only after the person
-    trusts the new key by hand (`port49 devices trust --replace`). The Netmiko example's strict
-    `RejectPolicy` takes its expected key from the mint for the same reason. The 9d plan amends the
-    spec (decision 42) to match. A central fleet scan that fills inventory's keys for review in the
-    sync diff, so first use is rarely the user's, is in scope.
+- **9d — OpenSSH's own host-key handling, optional inventory keys, and the Python and Ansible
+  clients** (design §17).
+  - **Host keys are OpenSSH's job** (Ryan, 2026-10-10; replaces decision 42's pin-first rule). port49
+    does not reimplement host-key trust. `port49 ssh` forces `StrictHostKeyChecking=accept-new`
+    (never `no`) against the person's own `~/.ssh/known_hosts`: a first connection is accepted and
+    saved, and a changed key stops with OpenSSH's own warning and is re-trusted the usual way
+    (`ssh-keygen -R`). A thousand-switch Ansible run that has never touched a device trusts nothing
+    by hand. 9a's separate pins file, `internal/hostkeys` and `port49 devices trust` leave the user
+    flow: 9d removes them, or keeps `devices trust` only as an admin tool if a reason survives
+    review. The reason host keys matter at all stays in the docs: the device password is a one-time
+    token, and an impostor that takes it can replay it to the real device within its lifetime.
+  - **Inventory keys, optional:** a host-key fingerprint per device in inventory, carried through
+    the bundle into the mint item (`host_keys`); a changed one is a security event in the sync diff.
+    Where inventory has a key, `port49 ssh` hands it to OpenSSH through `KnownHostsCommand`
+    (OpenSSH 8.5+), which closes the first-contact window. Never required. Collected server side
+    (from the configs and `show` output Oxidized already backs up, or a central scan once the lab
+    shows whether a key read counts toward a login ban such as IOS-XE `login block-for`).
+  - **Netmiko and Python:** Paramiko's equivalent of accept-new (save an unknown key, and Paramiko
+    always refuses a changed one) replaces the example's strict `RejectPolicy`.
   - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
-    lookup plugin over it. Third-party clients look a key up by address, and 9d is where the mint
-    can tell them which key to expect.
-  - **The scan through the operator's own transport** (9a's final review I-1): `port49 devices
-    trust` dials the device directly, so behind a jump host it needs a forwarded port. 9d scans
-    through the operator's OpenSSH transport (`ssh -G` / `ssh -W`), or takes `--key FILE|-` pinned
-    against its fingerprint.
+    lookup plugin over it.
+  - The 9d plan amends the spec (decision 42) to match. 9a's final review I-1 (the direct dial in
+    `devices trust`) is moot with the command out of the user flow.
 
 ### Plan 9a — As built
 
