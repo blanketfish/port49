@@ -5133,10 +5133,14 @@ merges (CLAUDE.md).
     flow: 9d removes them, or keeps `devices trust` only as an admin tool if a reason survives
     review. The reason host keys matter at all stays in the docs: the device password is a one-time
     token, and an impostor that takes it can replay it to the real device within its lifetime.
-  - **Inventory keys, optional:** a host-key fingerprint per device in inventory, carried through
-    the bundle into the mint item (`host_keys`); a changed one is a security event in the sync diff.
-    Where inventory has a key, `port49 ssh` hands it to OpenSSH through `KnownHostsCommand`
-    (OpenSSH 8.5+), which closes the first-contact window. Never required. Collected server side
+  - **Inventory keys, optional:** the device's SSH public key(s) in inventory (the key itself, not
+    only a fingerprint, since OpenSSH needs key material), carried through the bundle into the mint
+    item (`host_keys`); a changed one is a security event in the sync diff. Where inventory has a
+    key, `port49 ssh` hands it to OpenSSH through `KnownHostsCommand` (OpenSSH 8.5+) and, for that
+    connection, sets `UserKnownHostsFile=/dev/null`, so inventory alone decides: an impostor's key a
+    person once accepted cannot satisfy it, and no local edit gets past a mismatch. This closes the
+    first-contact window. Never required. A re-keyed device (an RMA) is refused for everyone until
+    its inventory key is updated, and the refusal says so and names inventory. Collected server side
     (from the configs and `show` output Oxidized already backs up, or a central scan once the lab
     shows whether a key read counts toward a login ban such as IOS-XE `login block-for`).
   - **Netmiko and Python:** Paramiko's equivalent of accept-new (save an unknown key, and Paramiko
