@@ -151,8 +151,9 @@ signatures, and pre-flight D1 dissolves. A broker that issues takes a person's I
 its CA is made by `init-issuer`, rotated with overlap, and never stops a start. The client's config
 moves to `~/.port49`, under a root-owned `/etc/port49/config.yaml` the install ships, so a new user's
 first login is `port49 login` and the sign-in (Ryan's no-toil rule). Decision 43 holds its
-twenty-four rulings; three questions for Ryan, each with a recommendation (Q1 when 7h's bearer path
-for people retires, Q2 where the lifetime is set, Q3 the held key reused across agents). It opens
+twenty-four rulings; three questions (Q1 when 7h's bearer path for people retires, Q2 where the
+lifetime is set, Q3 the held key reused across agents), each ruled as recommended on 2026-10-10 by
+the controller under Ryan's standing grant. It opens
 L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS). 9e, a
 directory-password sign-in issuing the same certificate, is added to Plan 9.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed

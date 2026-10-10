@@ -166,10 +166,11 @@ What 9b builds:
 
 **Prerequisite:** plan 9a merged (`main` at `39e6004` or later).
 
-## Questions for Ryan
+## Questions, ruled
 
-Three, each ruled below on its recommendation and written into decision 43. The tasks build the
-recommendation; each alternative is a small change, said beside it.
+Three, each ruled as recommended on 2026-10-10 by the controller under Ryan's standing grant, and
+written into decision 43. The tasks build each ruling; each alternative is a small change, said
+beside it.
 
 - **Q1. When does plan 7h's bearer path for people retire?** (ruling 13)
   - **Recommendation:** gate it now, retire it at the pre-beta review. A broker that issues refuses
@@ -458,8 +459,9 @@ closes.
   - With several providers, name one with `--issuer` or `oidc_issuer`. A provider whose TLS
     certificate a private CA issued needs `oidc_ca` or `--oidc-ca`.
   - The key and certificate are kept in `~/.port49/issued/<broker host>_<port>.key` and
-    `.pem`, 0600. The key is your session until the certificate ends: never copy it off the host.
-    (9c moves it into a hardware key.)
+    `.pem`, 0600. The key is your session until the certificate ends: a reboot or a new agent uses
+    it with no sign-in, and whoever copies it holds your session until then, so never copy it off
+    the host. (9c moves it into a TPM, the OS keystore or a hardware key where there is one.)
 - **Check whom you signed in as.** The login prints `signed in at … as <you>`. The address port49
   prints is not a password, but keep it to yourself: whoever has it can finish your sign-in with
   their own account. On a shared host a browser port49 launches shows that address to other users
@@ -671,8 +673,11 @@ follow it. Between that line and the blank line, insert a blank line and:
 **43. The agent in full, second part: port49-issued user certificates over an OIDC sign-in.**
 *Plan 9b, 2026-10-10, on Ryan's direction of that day: design §7's "the broker MAY issue a
 short-lived client certificate", made v1.* Rulings rest on reasoning unless they say data. Rulings
-4 and 8 are provisional on L55 (Keycloak) and L47 (hosted providers, open). Q1–Q3 were ruled on
-recommendation (rulings 9, 12 and 13); Ryan may override any.
+4 and 8 are provisional on L55 (Keycloak) and L47 (hosted providers, open). Q1–Q3 (rulings 13, 9 and
+12) were ruled as recommended on 2026-10-10 by the controller under Ryan's standing grant: a
+person's bearer outside `/v1/certificate` retires at the pre-beta review, not now; the lifetime is
+broker config, 12h, 1h–24h, per role later if asked; a new agent reuses the held key and
+certificate while the certificate is valid.
 
 - **1. The flow** (data: RFC 6749 §4.1, RFC 7636, RFC 8252, OIDC Core §3.1).
   - **What it is.** The authorization-code flow with PKCE, `S256` only, as a public client with no
