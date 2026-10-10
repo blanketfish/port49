@@ -138,7 +138,8 @@ What 9b builds:
 - **`internal/hostkeys`:** `Path` stays in plan 9a's directory, through `userconfig.LegacyDir`,
   until 9d (Task 11).
 - **The broker's CA bundle (ruling 25):** `internal/broker/api/cabundle.go` (`ParseCABundle`,
-  `EncodeCABundle`, `CAFingerprints`), `api.Config.BrokerCABundle`, `Broker.CABundle`,
+  `EncodeCABundle`, `CAFingerprints`), `api.Config.BrokerCABundle` and `BrokerCABundleRefused`,
+  `Broker.CABundle` and `CABundleRefused`,
   `broker.tls_ca_bundle_file`, and port49d's `loadCABundle` (Task 8); `agent.BrokerRoot`,
   `agent.RotatedCAHint`, `userconfig.CABundlePath`, and `cmd/port49`'s `keepCABundle`,
   `forgetBundle` and `withKeptBundle` (Task 11).
@@ -461,7 +462,11 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
 
   and, where it did not hold that CA: `port49 agent: the broker sends no CA bundle; removed … (it
-  held …)`.
+  held …)`. A broker that refused its own bundle at start leaves the kept file as it was:
+
+  ```
+  port49 agent: the broker refused its own tls_ca_bundle_file at start (its log says why), so it sends no CA bundle; /home/alice/.port49/broker_ca/port49-broker.example.com_8443.pem is left as it was
+  ```
 - **The broker's start with a bundle** (Task 8, `TestLoadCABundle`):
 
   ```
@@ -556,9 +561,12 @@ closes.
   end when you have one.
 - **A back-channel logout** refuses your certificate at its next use, in the broker's words, and
   ends your device sessions as before. Your next `port49 login` removes the certificate and signs
-  you in. On a broker that issues, a logout's record is kept `max(max_token_age,
-  certificate_lifetime) + 2×clock_skew` (12h2m by default), so it refuses the certificate for as
-  long as the certificate lives.
+  you in. On a broker that issues, a logout's record is kept `max(max_token_age, 24h) +
+  2×clock_skew` (24h being the longest `certificate_lifetime` allowed), so it refuses the
+  certificate for as long as the certificate lives, whatever lifetime it was issued with.
+- **Configure `issuance` alike on every broker on one store.** A broker without it keeps a
+  logout's record for `max_token_age` alone, so a logout it receives stops reaching an issued
+  certificate after that.
 - **Revoke a person's certificates** with `port49 revoke --principal user:…` (every certificate,
   issued or not), or one with `--cert-issuer DN --cert-serial HEX` from its `issue` record.
 - **A person's ID token is refused at a broker that issues,** except at `POST /v1/certificate`. A
@@ -568,8 +576,9 @@ closes.
   certificate (1 to 4 CAs, at most 64 KiB); every agent keeps it at its start, per broker, in
   `~/.port49/broker_ca/`.
   1. Add the next CA to the bundle and restart every broker. Each start names the bundle's
-     fingerprints; a bundle without the CA of the certificate in use is not sent, and the start
-     says so. In the same change, ship the current and the next CA together in
+     fingerprints; a bundle without the CA of the certificate in use, or one that cannot be read,
+     is not sent, the start says so, and agents keep the CAs they hold until it is fixed. In the
+     same change, ship the current and the next CA together in
      `/etc/port49/broker-ca.pem` through the install's config management (package, config
      management or MDM), so a host away has both on its return.
   2. Wait while people log in: every agent that starts keeps the new bundle (its log says
@@ -662,7 +671,8 @@ The five inputs or conditions most likely to bite a person, and the test that pi
      the `sid` index; the agent ends; the next `port49 login` removes the certificate and the one
      after signs in.
    - **Expected, past `max_token_age`:** the logout still refuses the certificate, for as long as the
-     certificate lives; its record stands `max(max_token_age, certificate_lifetime) + 2×clock_skew`.
+     certificate lives; its record stands `max(max_token_age, 24h) + 2×clock_skew`, 24h being
+     `issuer.MaxLifetime`, so a `certificate_lifetime` lowered since changes nothing.
    - **Pinned by** Task 6's `TestALogoutRefusesAnIssuedCertificate` and
      `TestALogoutReachesAnIssuedCertificatesContexts`, Task 7's
      `TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate`, Task 10's
@@ -980,8 +990,12 @@ certificate while the certificate is valid.
   refresh's own reading after its writes marks what it extended. The `sid` index reaches its device
   sessions. A logout leaves no mark: a sign-in after it is taken. The certificate carries no mark of
   its own, so the logout record is what refuses it: on a broker that issues, a logout record stands
-  `max(max_token_age, certificate_lifetime) + 2×clock_skew` (12h2m by default), not decision 39's
-  `max_token_age + 2×clock_skew`, and the recovery's lift time follows it.
+  `max(max_token_age, 24h) + 2×clock_skew` (24h is the longest `certificate_lifetime` allowed, so a
+  lifetime lowered since leaves no certificate unreached), not decision 39's `max_token_age +
+  2×clock_skew`, and the recovery's lift time follows it. Every broker on one store configures
+  `issuance` alike: one without it keeps the shorter record. A recovery for a logout the store
+  could not write names the shorter path: revoke the sign-in's certificates by serial, from their
+  `issue` records, and lift the principal's mark after `max_token_age`.
 - **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
   refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
 - **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds}`.
@@ -1065,6 +1079,11 @@ certificate while the certificate is valid.
     `broker_ca_bundle`, a kept file that does not hold the CA this connection was verified to is
     removed, and one that does is cut to that CA alone, each said in one line. So the next login
     still verifies the broker, and any other CA the file held is gone.
+  - **A broker that refused its own bundle is not one that sends none.** When
+    `tls_ca_bundle_file` is configured and refused at start (unreadable, out of bounds, or without
+    the server certificate's CA), `/v1/config` carries `broker_ca_bundle_refused: true`, and each
+    agent leaves its kept file as it was, saying so in one line. So a typo in the bundle
+    mid-rotation drops no CA a client holds, as the broker's own start line says.
   - **A rotation.** The operator adds the next CA to the bundle, and the install's config
     management adds it to every host's `broker_ca` at once (ruling 24); restarts the brokers; waits
     while people log in (every agent that starts keeps the new bundle: a day covers everyone who
@@ -1089,7 +1108,7 @@ certificate while the certificate is valid.
     at its next start.
 ```
 
-- [ ] **Step 2: Decision 39 rulings 15 and 16, decision 42 ruling 6, and §12's config file point at decision 43**
+- [ ] **Step 2: Decision 39 rulings 13, 15 and 16, decision 42 ruling 6, §5.6's logout record and §12's config file point at decision 43**
 
 Replace
 
@@ -1145,6 +1164,36 @@ out. It reads a file only when nobody but the operator or root can write it or a
 it, and the system file only when it is root's (§13 decision 42 ruling 6, decision 43 ruling 24).
 ```
 
+In decision 39 ruling 13 (pre-flight 2 re-review N5), replace
+
+```markdown
+  `sub`: every token issued at or before the logout's `iat` + `clock_skew`; kept `max_token_age` +
+  2 × `clock_skew`); then each owner principal's own unspent tokens, only principals in the
+```
+
+with
+
+```markdown
+  `sub`: every token issued at or before the logout's `iat` + `clock_skew`; kept `max_token_age` +
+  2 × `clock_skew`, and on a broker that issues certificates `max(max_token_age, 24h)` + 2 ×
+  `clock_skew`, decision 43 ruling 16); then each owner principal's own unspent tokens, only
+  principals in the
+```
+
+In §5.6, replace
+
+```markdown
+- **A logout record**, written first, kept `max_token_age` plus twice `clock_skew`. By `sid`, it
+```
+
+with
+
+```markdown
+- **A logout record**, written first, kept `max_token_age` plus twice `clock_skew` (on a broker
+  that issues certificates, `max(max_token_age, 24h)` plus twice `clock_skew`, 24h being the
+  longest certificate it may issue; §13 decision 43 ruling 16). By `sid`, it
+```
+
 - [ ] **Step 3: §2, the issued certificate's principal**
 
 Before the row that begins `| Kubernetes |` (`grep -n "^| Kubernetes |"`), insert:
@@ -1187,8 +1236,8 @@ the agent holds the session on the certificate path, unchanged:
 - **The certificate's end** bounds the mint and the refresh, not a device session: what a last
   refresh extended runs to its own ceiling.
 - **A back-channel logout** refuses the certificate through its `sid` for as long as it lives: on a
-  broker that issues, a logout record stands `max(max_token_age, certificate_lifetime) +
-  2×clock_skew` (§13 decision 43 ruling 16).
+  broker that issues, a logout record stands `max(max_token_age, 24h) + 2×clock_skew`, 24h being
+  the longest `certificate_lifetime` allowed (§13 decision 43 ruling 16).
 ```
 
 - [ ] **Step 6: §5.7, the `issue` event and `certificate_issued`**
@@ -3964,6 +4013,10 @@ git commit -m "feat(issuer): the broker's issuing CA, the sign-in its certificat
   - `const personBearerText`
   - test helpers: `(f *fixture) withIssuance(t) *oidctest.Issuer`, `aliceSignIn(iss) issuer.SignIn`,
     `issued(t, s) tls.Certificate`, `issuedState(c) *tls.ConnectionState`
+- Not here: the logout record's life on an issuing broker (ruling 16) is Task 7 Step 5's, in
+  `logout.go`; it reads `issuer.MaxLifetime` beside `certificateLifetime`, which Task 7 creates.
+  Until then the record keeps decision 39's `max_token_age + 2×clock_skew`, and Task 6's logout
+  tests act seconds after the logout.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4717,7 +4770,7 @@ git commit -m "feat(broker): trust the certificates the broker issues, for peopl
 **Files:**
 - Create: `internal/broker/issue.go`, `internal/broker/issue_test.go`
 - Modify: `internal/broker/broker.go` (`Broker.CertificateLifetime`, `Handler`, `config`)
-- Modify: `internal/broker/logout.go` (`logoutRecordTTL`, `logoutUnapplied`)
+- Modify: `internal/broker/logout.go` (`logoutRecordTTL`, `logoutUnapplied`, `revokeIssuedSooner`)
 - Modify: `internal/decision/reasons.go` (`CertificateIssued`, `EventIssue`), `internal/decision/log.go`
   (`Record.Certificate`, `Certificate`), `internal/decision/reasons_test.go`
 - Modify: `internal/daemon/metrics/metrics.go` (`CertificatesIssued`, `IssuingCANotAfter`)
@@ -4727,7 +4780,8 @@ git commit -m "feat(broker): trust the certificates the broker issues, for peopl
   `issuer.DefaultLifetime`, `api.IssuanceNonce`, `api.IssueRequest`, `api.IssueResponse`,
   `api.Issuance`; Task 6's `withIssuance`, `issued`, `issuedState`, `aliceSignIn`; the broker's
   `bearerOf`, `bearerCaller`, `noteOwner`, `sayOnce`, `say`, `sayEvery`, `holdTimeout`,
-  `logoutRecordTTL`, `logoutUnapplied`, `Logout`; the tests' `advance`.
+  `logoutRecordTTL`, `logoutUnapplied`, `Logout`, `AdminSocket`; Task 5's `issuer.MaxLifetime`; the
+  tests' `advance`.
 - Produces, for Tasks 8, 10 and 12:
   - `POST /v1/certificate`; `Broker.CertificateLifetime time.Duration`;
     `func (b *Broker) certificateLifetime() time.Duration`
@@ -5036,22 +5090,30 @@ func TestConfigSaysTheBrokerIssues(t *testing.T) {
 // A logout's record stands on a broker that issues while a certificate
 // issued on a sign-in before it may still be presented: the certificate
 // carries no mark of its own, so past max_token_age its next mint is refused
-// still (decision 43 ruling 16). A lifetime under max_token_age keeps
-// max_token_age; and a broker that issued nothing when the logout landed
-// keeps the record max_token_age alone, the control that shows the mint
-// would otherwise pass.
+// still (decision 43 ruling 16). The record stands the longest lifetime any
+// broker may issue, so a lifetime lowered since keeps it; a broker that
+// issued nothing when the logout landed keeps the record max_token_age
+// alone, the control that shows the mint would otherwise pass. A recovery
+// for a logout the store could not write names the shorter path, revoking
+// the sign-in's certificates by serial, on a broker that issues alone.
 func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 	f := newFixture(t, 8)
 	iss := f.withIssuance(t)
 	tm := f.b.Identity.Timing
-	if got, want := f.b.logoutRecordTTL(), issuer.DefaultLifetime+2*tm.ClockSkew; got != want {
+	if got, want := f.b.logoutRecordTTL(), issuer.MaxLifetime+2*tm.ClockSkew; got != want {
 		t.Fatalf("an issuing broker's logout record stands %s, want %s", got, want)
 	}
 	f.b.CertificateLifetime = time.Hour
-	if got, want := f.b.logoutRecordTTL(), tm.MaxTokenAge+2*tm.ClockSkew; got != want {
-		t.Fatalf("with a 1h lifetime the record stands %s, want %s", got, want)
+	if got, want := f.b.logoutRecordTTL(), issuer.MaxLifetime+2*tm.ClockSkew; got != want {
+		t.Fatalf("with the lifetime lowered to 1h the record stands %s, want %s", got, want)
 	}
 	f.b.CertificateLifetime = 0
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	if got := f.b.logoutUnapplied(alicePrincipal, f.b.Now().Add(f.b.logoutRecordTTL())); !strings.Contains(got,
+		"`port49 revoke --cert-issuer DN --cert-serial HEX`") ||
+		!strings.Contains(got, f.b.Now().Add(tm.MaxTokenAge+2*tm.ClockSkew).UTC().Format(time.RFC3339)) {
+		t.Fatalf("the recovery names no shorter path: %s", got)
+	}
 	past := tm.MaxTokenAge + 2*tm.ClockSkew + time.Minute
 	logout := func(f *fixture, iss *oidctest.Issuer) {
 		t.Helper()
@@ -5073,6 +5135,10 @@ func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 	gc := g.issued(t, g.aliceSignIn(giss))
 	ca := g.b.Issuer
 	g.b.Issuer = nil
+	g.b.AdminSocket = "/run/port49/admin.sock"
+	if got := g.b.logoutUnapplied(alicePrincipal, g.b.Now()); strings.Contains(got, "--cert-serial") {
+		t.Fatalf("a broker that issues nothing names revoking by serial: %s", got)
+	}
 	logout(g, giss)
 	g.b.Issuer = ca
 	g.advance(past)
@@ -5433,12 +5499,19 @@ In `internal/broker/broker.go`:
   	}
   ```
 
-In `internal/broker/logout.go` (decision 43 ruling 16; pre-flight 2 C1): a certificate the broker
-issued carries no mark of its own, so on a broker that issues the logout record must stand while a
-certificate issued on a sign-in before it may be presented, `max(max_token_age,
-certificate_lifetime) + 2×clock_skew`. `logoutUnapplied`'s lift time is `now + logoutRecordTTL()`
-already, so it follows; its words name the certificate too.
+In `internal/broker/logout.go` (decision 43 ruling 16; pre-flight 2 C1, and its re-review's N4
+and N7): a certificate the broker issued carries no mark of its own, so on a broker that issues the
+logout record must stand while a certificate issued on a sign-in before it may be presented. That
+is `max(max_token_age, issuer.MaxLifetime) + 2×clock_skew`, 24h2m: the longest lifetime any broker
+may issue, not this broker's `certificate_lifetime`, so a lifetime lowered since still leaves no
+certificate unreached. (A replica on the same store with no `issuance` writes the short record;
+the operator notes say every broker on one store configures `issuance` alike.)
+`logoutUnapplied`'s lift time is `now + logoutRecordTTL()` already, so it follows; its words name
+the certificate too, and on a broker that issues it names the shorter path: revoke the sign-in's
+certificates by serial, then lift after `max_token_age`.
 
+- Add `"github.com/rhwendt/port49/internal/issuer"` to the imports, after
+  `"github.com/rhwendt/port49/internal/decision"`.
 - Replace
 
   ```go
@@ -5458,12 +5531,15 @@ already, so it follows; its words name the certificate too.
   // before it could still be presented, and on a broker that issues
   // certificates while one issued on a sign-in before it could (decision 43
   // ruling 16): such a certificate carries no mark of its own, so the record
-  // is what refuses it. The recovery's lift time is the same quantity.
+  // is what refuses it. That is the longest lifetime any broker may issue,
+  // issuer.MaxLifetime, not this one's certificate_lifetime: a lifetime
+  // lowered since, or a replica configured otherwise, leaves certificates
+  // issued for longer. The recovery's lift time is the same quantity.
   func (b *Broker) logoutRecordTTL() time.Duration {
   	t := b.Identity.Timing
   	held := t.MaxTokenAge
   	if b.Issuer != nil {
-  		held = max(held, b.certificateLifetime())
+  		held = max(held, issuer.MaxLifetime)
   	}
   	return held + 2*t.ClockSkew
   }
@@ -5496,7 +5572,11 @@ already, so it follows; its words name the certificate too.
   // logoutUnapplied is the recovery for a logout nothing of which was written:
   // no logout record refuses the session's held ID token, or the certificate
   // issued on its sign-in, so the contexts are ended and the mark is lifted
-  // only after lift, when that token or certificate has expired.
+  // only after lift, when that token or certificate has expired. On a broker
+  // that issues, lift is a day off (issuer.MaxLifetime), so it also names the
+  // shorter path: each certificate the sign-in got revoked by serial, from its
+  // issue record, and the mark lifted once no ID token from before the logout
+  // can still be presented.
   func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
   	at := lift.UTC().Format(time.RFC3339)
   	if b.AdminSocket == "" {
@@ -5509,7 +5589,21 @@ already, so it follows; its words name the certificate too.
   	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
   		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
   		": no logout record refuses the session's held ID token or issued certificate until then; last check that " +
-  		"`port49 revoke --list` there shows no mark for " + principal
+  		"`port49 revoke --list` there shows no mark for " + principal + b.revokeIssuedSooner(principal, where)
+  }
+
+  // revokeIssuedSooner is logoutUnapplied's shorter path on a broker that
+  // issues (decision 43 ruling 16), "" on one that does not.
+  func (b *Broker) revokeIssuedSooner(principal, where string) string {
+  	if b.Issuer == nil {
+  		return ""
+  	}
+  	t := b.Identity.Timing
+  	sooner := b.Now().Add(t.MaxTokenAge + 2*t.ClockSkew).UTC().Format(time.RFC3339)
+  	return "; or, sooner: revoke each certificate this broker issued " + principal + " on that sign-in with " +
+  		"`port49 revoke --cert-issuer DN --cert-serial HEX` on " + where + ", the DN and serial from the decision " +
+  		"log's issue records for " + principal + ", and lift the principal's mark after " + sooner + " instead, " +
+  		"when no ID token from before the logout can still be presented"
   }
   ```
 
@@ -5542,8 +5636,8 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
 - The broker's CA bundle (ruling 25): Create `internal/broker/api/cabundle.go`,
   `internal/broker/api/cabundle_test.go`, `internal/broker/cabundle_test.go`,
   `internal/port49d/cabundle.go`, `internal/port49d/cabundle_test.go`; Modify
-  `internal/broker/api/api.go` (`Config.BrokerCABundle`), `internal/broker/broker.go`
-  (`Broker.CABundle`, `config`), `internal/config/config.go` (`BrokerConfig.TLSCABundleFile`)
+  `internal/broker/api/api.go` (`Config.BrokerCABundle`, `BrokerCABundleRefused`),
+  `internal/broker/broker.go` (`Broker.CABundle`, `CABundleRefused`, `config`), `internal/config/config.go` (`BrokerConfig.TLSCABundleFile`)
 
 **Interfaces:**
 - Consumes: Task 5's `issuer.Load`, `issuer.New`, `issuer.Files`, the file names and lifetimes;
@@ -5561,7 +5655,8 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
   - for Task 11: `api.ParseCABundle(raw []byte) ([]*x509.Certificate, error)`,
     `api.EncodeCABundle`, `api.CAFingerprints`, `api.MaxCABundleBytes`, `api.MaxCABundleCerts`,
     `api.Config.BrokerCABundle`, `Broker.CABundle`; `broker.tls_ca_bundle_file`;
-    `func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) []byte`
+    `func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) (bundle []byte, refused bool)`;
+    `api.Config.BrokerCABundleRefused`, `Broker.CABundleRefused`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5670,7 +5765,7 @@ func TestInitAndRotateIssuer(t *testing.T) {
 	if staged.Unavailable != nil || len(staged.Trusted) != 2 || !bytes.Equal(staged.Cert.Raw, first.Cert.Raw) {
 		t.Fatalf("staged: %v %d", staged.Unavailable, len(staged.Trusted))
 	}
-	if line, err = rotateIssuer(dir, now); err != nil || !strings.Contains(line, "promoted") {
+	if line, err = rotateIssuer(dir, now); err != nil || !strings.Contains(line, "promoted the staged CA") {
 		t.Fatalf("the promotion: %q %v", line, err)
 	}
 	after, _ := issuer.Load(issuerFiles(dir), now)
@@ -5753,12 +5848,13 @@ func TestRotateIssuerEdges(t *testing.T) {
 	if _, err := rotateIssuer(b, now); err == nil || !strings.Contains(err.Error(), "the broker that staged it") {
 		t.Fatalf("a promotion with no staged key: %v", err)
 	}
-	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted") {
+	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted the staged CA") {
 		t.Fatalf("the promotion: %q %v", line, err)
 	}
 	copyToB(issuer.CertFile, issuer.KeyFile, issuer.PreviousCertFile)
 	before, _ := os.ReadFile(filepath.Join(b, issuer.CertFile))
-	if line, err := rotateIssuer(b, now); err != nil || !strings.Contains(line, "nothing was promoted") {
+	if line, err := rotateIssuer(b, now); err != nil || !strings.Contains(line, "nothing was promoted") ||
+		!strings.Contains(line, "if this broker promoted it, copy") {
 		t.Fatalf("a staged file left from the promotion: %q %v", line, err)
 	}
 	after, _ := os.ReadFile(filepath.Join(b, issuer.CertFile))
@@ -5776,7 +5872,7 @@ func TestRotateIssuerEdges(t *testing.T) {
 	if err := os.Remove(filepath.Join(a, issuer.PreviousCertFile)); err != nil {
 		t.Fatal(err)
 	}
-	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted") {
+	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted the staged CA") {
 		t.Fatalf("the promotion once it is removed: %q %v", line, err)
 	}
 }
@@ -5918,8 +6014,9 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 )
 
-// GET /v1/config carries the CA bundle the broker was given, and no field
-// at all with none (decision 43 ruling 25).
+// GET /v1/config carries the CA bundle the broker was given, no field at all
+// with none, and broker_ca_bundle_refused for one it refused (decision 43
+// ruling 25).
 func TestConfigCarriesTheCABundle(t *testing.T) {
 	b := &Broker{MaxSessionAge: time.Hour, CABundle: []byte("-----BEGIN CERTIFICATE-----\n")}
 	rec := httptest.NewRecorder()
@@ -5933,6 +6030,15 @@ func TestConfigCarriesTheCABundle(t *testing.T) {
 	b.config(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
 	if strings.Contains(rec.Body.String(), "broker_ca_bundle") {
 		t.Fatalf("%q", rec.Body.String())
+	}
+	// A bundle configured and refused at start is said, so clients keep what
+	// they hold.
+	b.CABundleRefused = true
+	rec = httptest.NewRecorder()
+	b.config(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
+	c = api.Config{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || !c.BrokerCABundleRefused || c.BrokerCABundle != "" {
+		t.Fatalf("%v %q", err, rec.Body.String())
 	}
 }
 ```
@@ -5956,9 +6062,9 @@ import (
 )
 
 // The bundle GET /v1/config sends: sent when it holds the server
-// certificate's CA, said by fingerprint; not sent, and said, when it does
-// not, or cannot be read. The start goes on either way (decision 43 ruling
-// 25).
+// certificate's CA, said by fingerprint; not sent, said, and marked refused
+// when it does not, or cannot be read. The start goes on either way
+// (decision 43 ruling 25).
 func TestLoadCABundle(t *testing.T) {
 	dir := t.TempDir()
 	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
@@ -5987,9 +6093,9 @@ func TestLoadCABundle(t *testing.T) {
 	say := func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
 
 	both := write("both.pem", append(append([]byte{}, cur...), next.PEM()...))
-	got := loadCABundle(both, cert, say)
+	got, refused := loadCABundle(both, cert, say)
 	certs, err := api.ParseCABundle(got)
-	if err != nil || len(certs) != 2 || !certs[1].Equal(next.Cert) || len(said) != 1 ||
+	if err != nil || refused || len(certs) != 2 || !certs[1].Equal(next.Cert) || len(said) != 1 ||
 		!strings.Contains(said[0], "sent to every client: "+api.CAFingerprints(certs)) {
 		t.Fatalf("%v %v", err, said)
 	}
@@ -5999,13 +6105,14 @@ func TestLoadCABundle(t *testing.T) {
 		"a leaf":            {write("leaf.pem", mustRead(t, filepath.Join(dir, testpki.LabServerCert))), "is not a CA"},
 	} {
 		said = nil
-		if got := loadCABundle(c.path, cert, say); got != nil || len(said) != 1 || !strings.Contains(said[0], c.want) ||
+		if got, refused := loadCABundle(c.path, cert, say); got != nil || !refused || len(said) != 1 ||
+			!strings.Contains(said[0], c.want) ||
 			!strings.Contains(said[0], "no CA bundle is sent, so clients keep the CAs they hold") {
 			t.Errorf("%s: %q %v", name, got, said)
 		}
 	}
-	if got := loadCABundle("", cert, say); got != nil {
-		t.Fatal("no file named sends nothing")
+	if got, refused := loadCABundle("", cert, say); got != nil || refused {
+		t.Fatal("no file named sends nothing, and refuses nothing")
 	}
 }
 
@@ -6282,7 +6389,9 @@ func rotateIssuer(dir string, now time.Time) (string, error) {
 			return "", err
 		}
 		return fmt.Sprintf("the staged CA in %s is the current one already (%s), so nothing was promoted; removed "+
-			"the staged files left from its promotion", dir, fingerprintOf(cur)), nil
+			"the staged files left from its promotion; if this broker promoted it, copy %s, %s and %s to every "+
+			"other broker on this store, and restart each", dir, fingerprintOf(cur), issuer.CertFile, issuer.KeyFile,
+			issuer.PreviousCertFile), nil
 	case nextKey == nil:
 		return "", fmt.Errorf("%s is in %s without %s: this broker trusts the staged CA but cannot promote it; run "+
 			"rotate-issuer on the broker that staged it, which holds the key, then copy the files it names here",
@@ -6518,6 +6627,11 @@ with
 	// (decision 43 ruling 25). Empty when broker.tls_ca_bundle_file is not
 	// set.
 	BrokerCABundle string `json:"broker_ca_bundle,omitempty"`
+	// BrokerCABundleRefused is set when broker.tls_ca_bundle_file is
+	// configured and the broker refused it at start (its log says why): a
+	// client keeps the CAs it holds, and does not read the missing bundle as
+	// the broker sending none.
+	BrokerCABundleRefused bool `json:"broker_ca_bundle_refused,omitempty"`
 }
 ```
 
@@ -6538,6 +6652,9 @@ with
 	// CABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET /v1/config
 	// sends every client (decision 43 ruling 25); nil sends none.
 	CABundle []byte
+	// CABundleRefused is a tls_ca_bundle_file configured and refused at
+	// start: GET /v1/config says so, and clients keep what they hold.
+	CABundleRefused bool
 ```
 
 In `internal/broker/broker.go`, replace
@@ -6553,7 +6670,7 @@ with
 ```go
 		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
 	}
-	c.BrokerCABundle = string(b.CABundle)
+	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
 	writeJSON(w, http.StatusOK, c)
 ```
 
@@ -6588,7 +6705,7 @@ In `internal/port49d/main.go`, replace
 with
 
 ```go
-	caBundle := loadCABundle(cfg.Broker.TLSCABundleFile, cert, func(format string, args ...any) {
+	caBundle, caBundleRefused := loadCABundle(cfg.Broker.TLSCABundleFile, cert, func(format string, args ...any) {
 		fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
 	})
 	var anchors []namedAnchor
@@ -6607,7 +6724,7 @@ with
 ```go
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
-	b.CABundle = caBundle
+	b.CABundle, b.CABundleRefused = caBundle, caBundleRefused
 ```
 
 Create `internal/port49d/cabundle.go`:
@@ -6630,10 +6747,12 @@ import (
 // /v1/config sends every client (spec §13 decision 43 ruling 25), or nil.
 // A bundle that cannot be read, is out of api.ParseCABundle's bounds, or
 // does not verify the server certificate being served is not sent, and is
-// said in one line; the start goes on, and clients keep the CAs they hold.
-func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) []byte {
+// said in one line; the start goes on. refused is then true, and GET
+// /v1/config says so (broker_ca_bundle_refused), so clients keep the CAs
+// they hold rather than read the broker as one that sends none.
+func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) (bundle []byte, refused bool) {
 	if path == "" {
-		return nil
+		return nil, false
 	}
 	certs, err := readCABundle(path)
 	if err == nil {
@@ -6641,10 +6760,10 @@ func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) [
 	}
 	if err != nil {
 		say("broker: tls_ca_bundle_file %s: %v; no CA bundle is sent, so clients keep the CAs they hold", path, err)
-		return nil
+		return nil, true
 	}
 	say("broker: tls_ca_bundle_file %s, sent to every client: %s", path, api.CAFingerprints(certs))
-	return api.EncodeCABundle(certs)
+	return api.EncodeCABundle(certs), false
 }
 
 func readCABundle(path string) ([]*x509.Certificate, error) {
@@ -8661,8 +8780,8 @@ the user (decision 43 ruling 25).
 **Interfaces:**
 - Consumes: Task 10's `userconfig.File` with its eight keys, `Load`, `WithoutCA`, `WithoutOIDCCA`,
   `IssuedPaths`, `IssuedPathsIn`, and `sessionFlags.fill`; Task 8's `api.ParseCABundle`,
-  `api.EncodeCABundle`, `api.CAFingerprints`, `api.MaxCABundleBytes`, `api.Config.BrokerCABundle`
-  and `Broker.CABundle`; the tests' `newOIDCLab`, `driveBrowser`, `privateSocket`, `stopAgentAt`,
+  `api.EncodeCABundle`, `api.CAFingerprints`, `api.MaxCABundleBytes`, `api.Config.BrokerCABundle`,
+  `BrokerCABundleRefused` and `Broker.CABundle`; the tests' `newOIDCLab`, `driveBrowser`, `privateSocket`, `stopAgentAt`,
   `labConfig`, `runningAgent`, `configBroker`, `runCLIEnv`, `newLabBroker`.
 - Produces:
   - `userconfig.Dir() string` (now `~/.port49`), `userconfig.EnvConfig` (`"PORT49_CONFIG"`),
@@ -8673,7 +8792,7 @@ the user (decision 43 ruling 25).
   - the tests' `systemConfig(t, path)` and `testSystemConfig`;
   - `userconfig.CABundlePathIn(dir, broker string) (string, error)`, `userconfig.CABundlePath`;
     `func (a *agent.Agent) BrokerRoot() *x509.Certificate`, `agent.RotatedCAHint`;
-    `keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer)`,
+    `keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, log io.Writer)`,
     `forgetBundle(path string, root *x509.Certificate, log io.Writer)`,
     `withKeptBundle(broker string, caPEM []byte) ([]byte, error)`.
 
@@ -9029,7 +9148,7 @@ func TestKeepCABundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), cur.Cert, &log)
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, cur.Cert, &log)
 	raw, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(raw, append(cur.PEM(), next.PEM()...)) ||
 		!strings.Contains(log.String(), "kept the broker's CA bundle in "+path) || !strings.Contains(log.String(), "(was none)") {
@@ -9040,7 +9159,7 @@ func TestKeepCABundle(t *testing.T) {
 	}
 	// The same bundle again is no change, and no line.
 	log.Reset()
-	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), cur.Cert, &log)
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, cur.Cert, &log)
 	if log.Len() != 0 {
 		t.Fatalf("%q", log.String())
 	}
@@ -9052,7 +9171,7 @@ func TestKeepCABundle(t *testing.T) {
 		"junk":                  {string(cur.PEM()) + "junk", "other than PEM"},
 	} {
 		log.Reset()
-		keepCABundle(bundleBroker, c.bundle, cur.Cert, &log)
+		keepCABundle(bundleBroker, c.bundle, false, cur.Cert, &log)
 		if got, _ := os.ReadFile(path); !bytes.Equal(got, raw) || !strings.Contains(log.String(), c.want) ||
 			!strings.Contains(log.String(), "is left as it was") {
 			t.Errorf("%s: %q", name, log.String())
@@ -9061,7 +9180,7 @@ func TestKeepCABundle(t *testing.T) {
 	// The rotation's end: the old CA leaves the bundle once the server's
 	// certificate is the next CA's, and the change is said.
 	log.Reset()
-	keepCABundle(bundleBroker, string(next.PEM()), next.Cert, &log)
+	keepCABundle(bundleBroker, string(next.PEM()), false, next.Cert, &log)
 	if !strings.Contains(log.String(), "(was "+api.CAFingerprints([]*x509.Certificate{cur.Cert, next.Cert})+")") {
 		t.Fatalf("%q", log.String())
 	}
@@ -9080,20 +9199,29 @@ func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
 	if _, err := os.Stat(path); !os.IsNotExist(err) || log.Len() != 0 {
 		t.Fatalf("nothing kept: %v %q", err, log.String())
 	}
-	keepCABundle(bundleBroker, string(cur.PEM())+string(planted.PEM()), cur.Cert, &bytes.Buffer{})
+	keepCABundle(bundleBroker, string(cur.PEM())+string(planted.PEM()), false, cur.Cert, &bytes.Buffer{})
 	log.Reset()
-	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
 	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, cur.PEM()) ||
 		!strings.Contains(log.String(), "now holds only the CA this connection was verified to") {
 		t.Fatalf("the CA verified to, kept alone: %v %q", err, log.String())
 	}
-	keepCABundle(bundleBroker, string(other.PEM())+string(planted.PEM()), other.Cert, &bytes.Buffer{})
+	// A broker that refused its own bundle at start leaves the kept file as it
+	// was: a typo in tls_ca_bundle_file mid-rotation drops no CA a client holds.
 	log.Reset()
-	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	keepCABundle(bundleBroker, "", true, cur.Cert, &log)
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, cur.PEM()) ||
+		!strings.Contains(log.String(), "refused its own tls_ca_bundle_file") ||
+		!strings.Contains(log.String(), path+" is left as it was") {
+		t.Fatalf("a refused bundle: %v %q", err, log.String())
+	}
+	keepCABundle(bundleBroker, string(other.PEM())+string(planted.PEM()), false, other.Cert, &bytes.Buffer{})
+	log.Reset()
+	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
 	if _, err := os.Stat(path); !os.IsNotExist(err) || !strings.Contains(log.String(), "removed "+path) {
 		t.Fatalf("a bundle the connection did not need: %v %q", err, log.String())
 	}
@@ -9105,7 +9233,7 @@ func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
 func TestALoginTrustsTheKeptBundleBesideItsCA(t *testing.T) {
 	t.Setenv("HOME", privateDir(t))
 	cur, next := testCA(t), testCA(t)
-	keepCABundle(bundleBroker, string(next.PEM()), next.Cert, &bytes.Buffer{})
+	keepCABundle(bundleBroker, string(next.PEM()), false, next.Cert, &bytes.Buffer{})
 	caFile := filepath.Join(privateDir(t), "ca.pem")
 	if err := os.WriteFile(caFile, cur.PEM(), 0o600); err != nil {
 		t.Fatal(err)
@@ -9916,7 +10044,7 @@ In `cmd/port49/main.go`, replace
 with
 
 ```go
-	keepCABundle(sf.broker, conf.BrokerCABundle, a.BrokerRoot(), stderr)
+	keepCABundle(sf.broker, conf.BrokerCABundle, conf.BrokerCABundleRefused, a.BrokerRoot(), stderr)
 	ln, err := agent.Listen(sf.socket)
 ```
 
@@ -9970,11 +10098,18 @@ import (
 // refused and the file left as it was; a change is logged by fingerprint.
 // A broker that sends no bundle clears what was kept (forgetBundle), so a
 // CA planted by whoever held the broker's key once is gone at the real
-// broker's next answer. Nothing here ends the session.
-func keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer) {
+// broker's next answer; one that refused its own bundle at start (refused)
+// leaves the kept file as it was, since it sends none by fault, not by
+// choice. Nothing here ends the session.
+func keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, log io.Writer) {
 	path, err := userconfig.CABundlePath(broker)
 	if err != nil {
 		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)
+		return
+	}
+	if refused {
+		fmt.Fprintf(log, "port49 agent: the broker refused its own tls_ca_bundle_file at start (its log says why), "+
+			"so it sends no CA bundle; %s is left as it was\n", path)
 		return
 	}
 	if bundle == "" {
@@ -10523,15 +10658,24 @@ func TestL55PublicClient(t *testing.T) {
 
 	// 4b. prompt=login over a live SSO session, which cell 4's fresh browser
 	// cannot show: decision 43 ruling 8's freshness check rests on it. One
-	// browser signs in with no prompt; 15s later, the control: the same
-	// session with no prompt shows no form and keeps the first auth_time;
-	// then prompt=login, which must show the form and move auth_time on.
+	// browser signs in with no prompt, and its fresh jar must be shown the
+	// form; 15s later, the control: the same session with no prompt shows no
+	// form and keeps the first auth_time, or there is no SSO session for
+	// prompt=login to be measured over, and the cell is INVALID; then
+	// prompt=login, which must show the form and move auth_time on.
 	sso, noPrompt := k.l55Browser(), url.Values{"prompt": {""}}
-	code, verifier, _, _ = k.l55SignInForm(t, sso, noPrompt)
+	code, verifier, _, formFirst := k.l55SignInForm(t, sso, noPrompt)
+	if !formFirst {
+		t.Fatal("INVALID: cell 4b's first sign-in, in a fresh browser, was not shown the login form; no note is written")
+	}
 	first, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
 	time.Sleep(15 * time.Second)
 	code, verifier, _, formNone := k.l55SignInForm(t, sso, noPrompt)
 	again, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
+	if formNone || again != first {
+		t.Fatalf("INVALID: cell 4b's control: no SSO session held (form %v, auth_time %+.0fs); no note is written",
+			formNone, again-first)
+	}
 	code, verifier, _, formLogin := k.l55SignInForm(t, sso, nil)
 	login, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
 	cell("4b. control: the same SSO session 15s later, no prompt", fmt.Sprintf("form shown %v; auth_time %+.0fs "+
@@ -11406,8 +11550,9 @@ Then rule 4: if a result contradicts a doc, the doc is wrong.
   stands, from RFC 8252.
 - **Ruling 8.** If L55 cell 4 shows Keycloak does not echo the nonce byte for byte, or its
   `auth_time` is not the sign-in's under `prompt=login`, or cell 4b shows a `prompt=login` over a
-  live SSO session that does not move `auth_time` on (its control holding: the session with no
-  `prompt` kept the first), the key binding or the freshness check does not hold there: stop, and
+  live SSO session that does not move `auth_time` on (its controls hold, or the run is INVALID:
+  the fresh browser was shown the form, and the session with no `prompt` was not and kept the
+  first `auth_time`), the key binding or the freshness check does not hold there: stop, and
   take it to Ryan before closing anything. A cell 4 or 4b exchange with no `id_token` is INVALID,
   never recorded.
 - **This plan's operator notes**, which Task 13 copies: replace each italic line with what was
