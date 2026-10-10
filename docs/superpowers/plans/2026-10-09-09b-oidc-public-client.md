@@ -11,6 +11,11 @@
 > I5 and I6. What issuance makes moot is dropped: tokens in the agent, silent renewal, the 401
 > renew-and-resend, the browser refresh, and `id_token_not_renewed`. Pre-flight D1 dissolves
 > (decision 43 ruling 11).
+>
+> **Amended the same day** for Ryan's later rulings: the client's config moves to `~/.port49`, under
+> a root-owned `/etc/port49/config.yaml` the install ships, and no step per user may remain that
+> cannot be done at scale (decision 43 ruling 24, R8, and a new Task 11; the lab and roadmap tasks
+> become 12 and 13).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -21,8 +26,8 @@ extension after the sign-in is a key signature.
 
 **Plan 9 is split five ways** (roadmap, "Plan 9"). This is 9b.
 - **9a** (merged, PR #44): sweeps by scope, the per-user config file, `port49 ssh`.
-- **9c:** hardware-backed client keys (which hold 9b's issued keys too), step-up for high-impact
-  devices, and the broker certificate's CRL check.
+- **9c:** hardware-backed client keys (which hold 9b's issued keys too), `per_login_mfa` for the
+  devices a policy level marks, and the broker certificate's CRL check.
 - **9d:** host keys carried by inventory, and the Python and Ansible clients.
 - **9e:** a directory-password sign-in, issuing the same certificate (added 2026-10-10).
 
@@ -70,6 +75,13 @@ What 9b builds:
     its next request and refresh, and reaches its device sessions through the `sid` index.
 - **The provider down at 3am (ruling 17).** People holding a certificate keep working all day,
   through a new agent too. Only a sign-in fails, and it says so.
+- **The client's config (ruling 24; Task 11).** Ryan's standing rule of 2026-10-10: no step per
+  user that cannot be done at scale.
+  - `~/.port49/` holds `config.yaml` and the issued key and certificate, as `~/.ssh` does, made
+    0700. `$PORT49_CONFIG` and `--config` name another file.
+  - A root-owned `/etc/port49/config.yaml`, shipped by the install, is read under the user's file
+    key by key, so a new user's first login is `port49 login` and the sign-in.
+  - A config file at plan 9a's `~/.config/port49/` is refused in one line naming the move.
 - **Lab (ruling 23).**
   - **L55:** Keycloak as the client meets it: the redirect registrations, PKCE, the `iss`
     parameter, and the key-binding `nonce` echoed.
@@ -105,7 +117,11 @@ What 9b builds:
 - **`internal/agent`:** `CertificateEnd`, which `agentMain` exits at when it comes before the
   session's deadline.
 - **`internal/userconfig`:** `method`, `oidc_issuer`, `oidc_ca`, `oidc_redirect_port`;
-  `WithoutOIDCCA`; `IssuedPaths`, `IssuedPathsIn`.
+  `WithoutOIDCCA`; `IssuedPaths`, `IssuedPathsIn` (Task 10). `Dir` moves to `~/.port49`, under
+  which a root-owned `/etc/port49/config.yaml` is read key by key: `LoadAll`, `SystemPath`,
+  `SystemOwner`, `EnvConfig` (`PORT49_CONFIG`), `LegacyDir` (Task 11).
+- **`internal/hostkeys`:** `Path` stays in plan 9a's directory, through `userconfig.LegacyDir`,
+  until 9d (Task 11).
 - **`cmd/port49`:**
   - `issue.go`: `loginIssued`, `issueCertificate`, `requestCertificate`, `heldCertificate`,
     `startIssued`, `signIn`, `pickProvider`, `browserCommand`, `fetchBrokerConfig`, `warnSkew`;
@@ -171,7 +187,7 @@ recommendation; each alternative is a small change, said beside it.
     1h–24h. 12h matches `session.max_session_age_default`, so one sign-in covers one working day.
   - **Alternative:** a per-role `certificate_lifetime` in the policy file, composed as the minimum,
     as `max_session_age` is. That is a policy-language change for a value nothing yet varies by
-    role. 9c's step-up is where per-grant strength arrives.
+    role. 9c's `per_login_mfa` is where per-device strength arrives.
 - **Q3. Is a held key file reused across agents?** (rulings 7 and 12)
   - **Recommendation:** yes, while more than a quarter of the certificate's life is left. A
     reboot, an agent crash or an OS update then costs no sign-in, and with the identity provider
@@ -226,6 +242,31 @@ Each is the stricter of the options, or the one the spec's own text already chos
 - **R7. The issued key is generated in `port49 login`, not the agent,** and handed to the agent
   as today's `--cert` and `--key` are. The agent stays the certificate path's, unchanged but for
   the session end at the certificate's end.
+- **R8. The toil check** (Ryan's standing rule, 2026-10-10). The cases weighed: 1,000 devices, 50
+  operators, a new hire, a laptop rebuilt, and each CA rotated.
+  - **A new user's first login:** `port49 login` and the sign-in. The broker URL, its CA and the
+    method come from `/etc/port49/config.yaml`, shipped with the install. No file is written, no
+    CA fetched, no directory made or `chmod`ed by the user (Task 11). Before this plan it was four
+    keys, a CA file, and `chmod go-w ~/.config` on Ubuntu, per user and per host.
+  - **A laptop rebuilt:** the same as a new user. The issued key is not backed up, and need not be:
+    a sign-in makes a new one.
+  - **The issuing CA rotated:** nothing for users; no client holds it (ruling 14).
+  - **The broker's TLS CA rotated:** one file per host, `broker-ca.pem` holding the old and the new
+    CA through the overlap, shipped by whatever shipped it. Nothing per user.
+  - **A certificate expired or late:** the next `port49 login` signs in and writes over the key and
+    certificate; a refused one is removed (R6). No file is handled by hand.
+  - **50 operators on 4 jump hosts:** one system file per host, not 200 copies of five values.
+- **R9. What the system file holds, and what it does not.**
+  - **It holds** what only the install knows: `broker`, `broker_ca`, `method`, and where needed
+    `oidc_issuer` and `oidc_ca`.
+  - **It does not hold** the client id or the certificate's lifetime, which the brief listed. The
+    broker already says both at each sign-in (`/v1/config`'s `oidc` and `issuance`), so a copy on
+    every host could only drift from them. That is a toil the rule removes.
+  - **Plan 9a's file moves alone.** The refusal says `mv <old>/config.yaml ~/.port49/config.yaml`,
+    not `mv ~/.config/port49 ~/.port49` as the brief had it. The pins file stays in 9a's directory
+    until 9d, and moving the whole directory would leave `port49 ssh` with no pins.
+  - **Root alone** may own the system file: it names the broker for every user on the host. A
+    directory above it is held to ruling 6's walk, as every config file is.
 
 ## What carries over from the superseded draft
 
@@ -252,7 +293,7 @@ Each is the stricter of the options, or the one the spec's own text already chos
 - **New API codes:** `404 not_issuing`, `503 issuance_unavailable`, `401 sign_in_not_fresh`,
   `401 sign_in_not_bound`, `401 sign_in_spent`. Task 1 adds them to design §17.
 - **One new endpoint,** `POST /v1/certificate`. `/v1/config` gains `issuance`.
-- **No hardware key** (9c), **no step-up** (9c), **no password sign-in** (9e), **no device
+- **No hardware key** (9c), **no `per_login_mfa`** (9c), **no password sign-in** (9e), **no device
   authorization grant**, and **no ID or refresh token held by the agent or written to disk.**
 - **No CRL or OCSP for issued certificates.** The broker trusts its own CA, no device sees the
   certificate, and the short lifetime and the marks are the revocation.
@@ -346,6 +387,25 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   trust_domain_unresolved: this broker takes a person's ID token at POST /v1/certificate alone, which exchanges it for a short-lived certificate; run `port49 login` (spec §13 decision 43 ruling 13)
   ```
+- **A new user on a host the install set up** (Task 11, `TestTheSystemFileAloneIsAFirstLogin`):
+  `port49 login`, with no flag and no file of their own, prints the desktop sign-in above.
+- **A config file left at plan 9a's place** (Task 11, `TestAConfigFileAtPlan9asPlaceIsRefused`),
+  exit 2:
+
+  ```
+  port49 login: /home/alice/.config/port49/config.yaml is where plan 9a kept port49's config file; port49 reads /home/alice/.port49/config.yaml now: mkdir -m 700 -p /home/alice/.port49 && mv /home/alice/.config/port49/config.yaml /home/alice/.port49/config.yaml
+  ```
+- **A system file that is not root's** (Task 11, `TestASystemFileNotRootsIsRefused`), exit 2:
+
+  ```
+  port49 login: /etc/port49/config.yaml is not owned by root; the system port49 config file names the broker for every user on this host, so it is root's alone: chown root /etc/port49/config.yaml
+  ```
+- **A directory above a config file that others can write** (Task 11), exit 2, with no `chmod`
+  suggested for a directory that may be shared:
+
+  ```
+  port49 login: /srv/shared is writable by others (mode -rwxrwxr-x); whoever can write the directory holding the port49 config file chooses what port49 trusts, so port49 needs it writable by its owner alone (mode 0755 or 0700)
+  ```
 
 ## Operator notes
 
@@ -377,12 +437,27 @@ closes.
     register `http://127.0.0.1:<fixed>/callback` and set `oidc_redirect_port: <fixed>`.*
   - Ask for the claim the broker maps (`email`, say) in the verifier's `scopes`: port49 asks for
     exactly those.
-- **`port49 login --oidc`** (or `method: oidc` in `~/.config/port49/config.yaml`) signs in at the
-  provider the broker lists, and asks your password and MFA every time (`prompt=login`).
-  - It needs `broker` and `broker_ca`, as a certificate login does.
+- **Ship `/etc/port49/config.yaml` with the client** (a package, config management or MDM), owned
+  by root and writable by root alone, with the broker CA beside it:
+
+  ```yaml
+  broker: https://port49-broker.example.com:8443
+  broker_ca: broker-ca.pem        # /etc/port49/broker-ca.pem; relative paths are this file's directory's
+  method: oidc
+  # oidc_issuer: https://kc.example.com/realms/corp   # only when the broker lists several providers
+  # oidc_ca: idp-ca.pem                                # only when a private CA issued the provider's TLS
+  ```
+
+  A new user then runs `port49 login` and signs in; that is all. Each user's `~/.port49/config.yaml`
+  (or the file `$PORT49_CONFIG` names) overrides it key by key, and a flag overrides both. The
+  client id, scopes and lifetime come from the broker. To rotate the broker's TLS CA, ship both
+  the old and the new CA in `broker-ca.pem` for the overlap; no user does anything.
+- **`port49 login --oidc`** (or `method: oidc` in a config file) signs in at the provider the broker
+  lists, and asks your password and MFA every time (`prompt=login`).
+  - It needs `broker` and `broker_ca`, as a certificate login does; the system file gives both.
   - With several providers, name one with `--issuer` or `oidc_issuer`. A provider whose TLS
     certificate a private CA issued needs `oidc_ca` or `--oidc-ca`.
-  - The key and certificate are kept in `~/.config/port49/issued/<broker host>_<port>.key` and
+  - The key and certificate are kept in `~/.port49/issued/<broker host>_<port>.key` and
     `.pem`, 0600. The key is your session until the certificate ends: never copy it off the host.
     (9c moves it into a hardware key.)
 - **Check whom you signed in as.** The login prints `signed in at … as <you>`. The address port49
@@ -444,7 +519,7 @@ closes.
     takes now;
   - an issued certificate whose sign-in a logout ended.
 - **Never refuse a start over the issuing CA** (R4): issuance stops, and the start says why.
-- **The lab register rules** (CLAUDE.md 1–4). Task 1 rewords L55 and L56, and Task 11 measures
+- **The lab register rules** (CLAUDE.md 1–4). Task 1 rewords L55 and L56, and Task 12 measures
   them. Until L55 closes, no doc says which redirect registration Keycloak accepts or that it
   enforces PKCE.
 - Verify with `make test && make vet`, and `make test-race` on every touched package, and report
@@ -514,14 +589,16 @@ The five inputs or conditions most likely to bite a person, and the test that pi
 - **`internal/decision` and `internal/daemon/metrics`:** Task 7 alone.
 - **`internal/config`, `internal/port49d`:** Task 8 alone.
 - **`internal/agent`:** Task 9 alone.
-- **`internal/userconfig`, `cmd/port49`:** Task 10 alone.
-- **The spec and the design:** Task 1 writes them. Task 11 closes L55 and L56 and fixes any text
+- **`internal/userconfig`, `cmd/port49`:** Task 10, then Task 11 (`~/.port49`, the system file),
+  which edits the same `Load`, `fill` and `TestMain` after Task 10 is committed. Task 11 also edits
+  `internal/hostkeys/hostkeys.go` (`Path`) and `cmd/port49/trust_hint_test.go`.
+- **The spec and the design:** Task 1 writes them. Task 12 closes L55 and L56 and fixes any text
   their results contradict.
-- **`tests/lab/`, `Makefile`, `tests/lab/README.md`:** Task 11 alone.
+- **`tests/lab/`, `Makefile`, `tests/lab/README.md`:** Task 12 alone.
 
 Task 2 needs Task 1. Tasks 3 and 4 run in order after 2. Task 5 needs 1. Task 6 needs 5. Task 7
-needs 6. Task 8 needs 7. Task 9 needs 1. Task 10 needs 4, 7 and 9. Task 11 needs 1–10. Task 12 is
-last.
+needs 6. Task 8 needs 7. Task 9 needs 1. Task 10 needs 4, 7 and 9. Task 11 needs 10. Task 12
+needs 1–11. Task 13 is last.
 
 ## File Structure
 
@@ -542,7 +619,7 @@ last.
 
 **Modify:**
 - `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md` (Task
-  1; Task 11 closes L55 and L56).
+  1; Task 12 closes L55 and L56).
 - `internal/oidc/oidctest/issuer.go` (Task 2); `internal/oidc/config.go` (Task 8).
 - `internal/broker/api/api.go` (Task 5).
 - `internal/broker/broker.go`, `workload.go`, `server.go`, `listen.go`, `certcheck.go`,
@@ -553,9 +630,11 @@ last.
   (Task 8).
 - `internal/agent/agent.go`, `agent_test.go` (Task 9).
 - `internal/userconfig/userconfig.go`, `userconfig_test.go`; `cmd/port49/main.go`, `main_test.go`,
-  `config_test.go` (Task 10).
-- `Makefile` (`lab-oidc-l55`, `lab-oidc-agent`), `tests/lab/README.md` (Task 11).
-- `docs/superpowers/plans/README.md` (Task 12).
+  `config_test.go` (Task 10; Task 11 again, with `issue_login_linux_test.go` and
+  `trust_hint_test.go`).
+- `internal/hostkeys/hostkeys.go` (Task 11).
+- `Makefile` (`lab-oidc-l55`, `lab-oidc-agent`), `tests/lab/README.md` (Task 12).
+- `docs/superpowers/plans/README.md` (Task 13).
 
 ---
 
@@ -576,8 +655,8 @@ last.
 
 **Interfaces:**
 - Consumes: the rulings R1–R7 and Q1–Q3 above.
-- Produces: decision 43, rulings 1–23, which every later task cites; the `issue` event and the
-  `certificate_issued` reason, which Task 7 builds; L55 and L56, which Task 11 measures.
+- Produces: decision 43, rulings 1–24, which every later task cites; the `issue` event and the
+  `certificate_issued` reason, which Task 7 builds; L55 and L56, which Task 12 measures.
 
 This task is docs only. Each step is an edit with the exact text. Where a step says "replace", the
 old text is quoted and appears once; check with `grep -n` before editing.
@@ -656,7 +735,7 @@ recommendation (rulings 9, 12 and 13); Ryan may override any.
     and the broker verifies it. A skew over 5 minutes between `iat` and this host's clock is
     warned, never refused.
 - **7. The key.** `port49 login` generates an ECDSA P-256 key for each sign-in. Plan 9b keeps it
-  in a file, `$XDG_CONFIG_HOME/port49/issued/<broker host>_<port>.key`, written 0600 through
+  in a file, `~/.port49/issued/<broker host>_<port>.key`, written 0600 through
   `userconfig.WritePrivate`, beside the certificate (`.pem`). Plan 9c generates it in a TPM, the
   Secure Enclave or a token behind the same `crypto.Signer`. It never leaves the host; the broker
   sees its public key, in a CSR whose signature proves it.
@@ -687,8 +766,8 @@ recommendation (rulings 9, 12 and 13); Ryan may override any.
     `port49-sign-in:v1?iss=…&sub=…&sid=…&auth_time=…&iat=…&amr=…&acr=…`, carrying the sign-in, so
     the `sid` is bound to the serial under the CA's signature (R1); `clientAuth`; no email or DNS
     SAN.
-  - A per-role lifetime is not built: no policy value varies by role yet, and plan 9c's step-up is
-    where per-grant strength arrives.
+  - A per-role lifetime is not built: no policy value varies by role yet, and plan 9c's
+    `per_login_mfa` is where per-device strength arrives.
 - **10. The broker trusts its own certificates, for people alone.**
   - Its issuing CAs (current, next, previous) join the handshake's pool. A chain ending at one of
     them is the `humans` domain; one ending there and at another anchor is refused.
@@ -711,7 +790,8 @@ recommendation (rulings 9, 12 and 13); Ryan may override any.
     on any certificate is, while the certificate is valid. Against today's file-key certificate
     path it is the same proof, possession of a key in a 0600 file, with a key at most
     `certificate_lifetime` old, generated at a sign-in that was itself a fresh authentication. Plan
-    9c's hardware key adds presence, and its step-up adds presence per grant.
+    9c's hardware key adds presence, and its `per_login_mfa` adds a proof per login to the devices
+    a policy level marks.
   - `notAfter` bounds the mint and the refresh, never a device session (§5.1.4). So one sign-in
     gives at most `certificate_lifetime` of mints and refreshes, and the device sessions a last
     refresh extended run to their own ceilings.
@@ -798,9 +878,41 @@ recommendation (rulings 9, 12 and 13); Ryan may override any.
 - **23. The lab.** L55: Keycloak as this client meets it. L56: issued certificates end to end on
   Keycloak and vEOS. L47 (hosted providers) stays open. Until L55 closes, no doc says which redirect
   registration admits an ephemeral port on Keycloak, or that it enforces PKCE.
+- **24. The client's config, with no step per user** (Ryan, 2026-10-10, and the toil audit's H4;
+  amends decision 42 ruling 6).
+  - **The rule** (Ryan's, standing). A step too hard for a user or an operator to do at scale is
+    not in the design, and what can be automated away from the user is. The cases weighed: 1,000
+    devices, 50 operators, a new hire, a laptop rebuilt, and each CA rotated.
+  - **Where.** `~/.port49/`, as `~/.ssh/` is, made 0700 when it is missing. It holds `config.yaml`
+    and `issued/`, and no host-key pins: those stay in plan 9a's
+    `$XDG_CONFIG_HOME/port49/known_hosts` until plan 9d takes them out of the user's flow.
+    `$PORT49_CONFIG`, and over it `--config FILE`, name another personal file, which must exist.
+  - **The system file.** `/etc/port49/config.yaml`, shipped by the install (a package, config
+    management or MDM), takes the same keys, under the personal file key by key. A key the personal
+    file sets wins, and a flag wins over both. The system file must be root's, and neither its group
+    nor others may write it; the walk above it is ruling 6's. It holds what the install knows:
+    `broker`, `broker_ca` (the CA beside it, as `/etc/port49/broker-ca.pem`), `method: oidc`, and
+    where needed `oidc_issuer` and `oidc_ca`. The client id, the scopes and the certificate's
+    lifetime come from the broker's `/v1/config` at each sign-in (decision 39 ruling 16; ruling 18),
+    so no file holds a copy that can drift.
+  - **A new user's first login** is `port49 login` and the sign-in at the provider. Nothing is per
+    user: no file to write, no CA to fetch, no directory to make or `chmod`. Under plan 9a it was a
+    config file of four keys, a CA file fetched, and on Ubuntu `chmod go-w ~/.config`, per user and
+    per host; the OIDC path would have added up to four more keys.
+  - **Each CA rotated, with no step by a user.** The issuing CA (ruling 14) is the broker's alone;
+    no client holds it. The broker's TLS CA is `broker_ca`: the install ships the old and the new CA
+    in one file for the overlap, one file per host.
+  - **An expired or late certificate** is replaced by the next `port49 login`, which signs in and
+    writes over the key and the certificate (ruling 12); a refused one is removed. No file is moved
+    or deleted by hand.
+  - **Plan 9a's file.** A `config.yaml` at `$XDG_CONFIG_HOME/port49/` (else `~/.config/port49/`),
+    with none at `~/.port49/`, is refused in one line naming the move; it is never read, and never
+    silently passed over.
+  - **What a refusal says.** It names the exact path and the owner or mode it needs. It never
+    suggests a `chmod` on a directory, which may be shared, as a group-writable `~/.config` is.
 ```
 
-- [ ] **Step 2: Decision 39 rulings 15 and 16, and decision 42 ruling 6, point at decision 43**
+- [ ] **Step 2: Decision 39 rulings 15 and 16, decision 42 ruling 6, and §12's config file point at decision 43**
 
 Replace
 
@@ -831,9 +943,29 @@ In decision 42 ruling 6, replace
 with
 
 ```markdown
-  - **Where and what.** `$XDG_CONFIG_HOME/port49/config.yaml`, else
-    `~/.config/port49/config.yaml`, holding `broker`, `broker_ca`, `cert` and `key`. Plan 9b adds
-    `method`, `oidc_issuer`, `oidc_ca` and `oidc_redirect_port` (decision 43 ruling 19).
+  - **Where and what.** `~/.port49/config.yaml`, over the system-wide `/etc/port49/config.yaml`
+    key by key (decision 43 ruling 24; plan 9a's `$XDG_CONFIG_HOME/port49/config.yaml` is refused,
+    naming the move), holding `broker`, `broker_ca`, `cert` and `key`. Plan 9b adds `method`,
+    `oidc_issuer`, `oidc_ca` and `oidc_redirect_port` (decision 43 ruling 19).
+```
+
+In §12, replace
+
+```markdown
+**`port49 login`** takes `--broker`, `--broker-ca`, `--cert` and `--key` from the per-user config
+file, `$XDG_CONFIG_HOME/port49/config.yaml`, for each one its flags leave out. It reads the file
+only when nobody but the operator or root can write it or any directory above it (§13 decision
+42 ruling 6).
+```
+
+with
+
+```markdown
+**`port49 login`** takes `--broker`, `--broker-ca`, `--cert` and `--key` from the per-user config
+file, `~/.port49/config.yaml` (or the file `$PORT49_CONFIG` names), for each one its flags leave
+out, and from the system-wide `/etc/port49/config.yaml` the install ships for each one both leave
+out. It reads a file only when nobody but the operator or root can write it or any directory above
+it, and the system file only when it is root's (§13 decision 42 ruling 6, decision 43 ruling 24).
 ```
 
 - [ ] **Step 3: §2, the issued certificate's principal**
@@ -920,8 +1052,8 @@ otherwise; it also refreshes once after a new session connects. On a certificate
 `port49 token` warns on stderr when
 ```
 
-After the line `42 ruling 6).` that ends the `port49 login` paragraph (`grep -n "^42 ruling
-6)\.$"`), insert a blank line and:
+After the line that ends the `port49 login` paragraph Step 2 wrote (`grep -n "^it, and the
+system file only when it is root's"`), insert a blank line and:
 
 ```markdown
 **`port49 login --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser]
@@ -929,7 +1061,7 @@ After the line `42 ruling 6).` that ends the `port49 login` paragraph (`grep -n 
 issues (§13 decision 43).
 - **The sign-in.** At the identity provider `/v1/config` lists, by the authorization-code flow
   with PKCE and `prompt=login`, in a browser, or by pasting back the address it ended on.
-- **The certificate.** For a key generated on this host (`$XDG_CONFIG_HOME/port49/issued/`, 0600),
+- **The certificate.** For a key generated on this host (`~/.port49/issued/`, 0600),
   valid `certificate_lifetime`. The agent then holds the session as on the certificate path.
 - **No sign-in** while a held certificate has more than a quarter of its life left, or while the
   provider does not answer and it is still valid; `--sign-in` forces one.
@@ -1115,7 +1247,7 @@ git commit -m "docs(spec): decision 43, port49-issued user certificates over an 
 
 **Interfaces:**
 - Consumes: `oidctest.Issuer` (`URL`, `Token`, `Roots`, `mu`, the discovery handler).
-- Produces, for Tasks 3–11:
+- Produces, for Tasks 3–12:
   - `func (i *Issuer) AuthServer(t testing.TB, clientID, sub string, claims map[string]any) *AuthServer`
   - `type AuthServer struct { ClientID, Sub string; Claims map[string]any; Now func() time.Time; … }`
   - `func (a *AuthServer) SetAuthTime(at time.Time)`, `NoIssParameter()`, `Deny(code string)`
@@ -2882,7 +3014,7 @@ git commit -m "feat(oidcclient): the sign-in over a loopback redirect with PKCE,
 
 **Interfaces:**
 - Consumes: the standard library alone.
-- Produces, for Tasks 6–11:
+- Produces, for Tasks 6–12:
   - `const issuer.CertFile, KeyFile, NextCertFile, NextKeyFile, PreviousCertFile`;
     `issuer.DefaultLifetime`, `MinLifetime`, `MaxLifetime`
   - `func issuer.New(now time.Time) (certPEM, keyPEM []byte, err error)`
@@ -4414,7 +4546,7 @@ git commit -m "feat(broker): trust the certificates the broker issues, for peopl
   `issuer.DefaultLifetime`, `api.IssuanceNonce`, `api.IssueRequest`, `api.IssueResponse`,
   `api.Issuance`; Task 6's `withIssuance`, `issued`, `issuedState`; the broker's `bearerOf`,
   `bearerCaller`, `noteOwner`, `sayOnce`, `say`, `sayEvery`, `holdTimeout`.
-- Produces, for Tasks 8, 10 and 11:
+- Produces, for Tasks 8, 10 and 12:
   - `POST /v1/certificate`; `Broker.CertificateLifetime time.Duration`;
     `func (b *Broker) certificateLifetime() time.Duration`
   - `decision.EventIssue`, `decision.CertificateIssued`, `decision.Certificate{Serial, Issuer, Fingerprint, NotAfter}`,
@@ -5060,7 +5192,7 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
   Task 7's `Broker.CertificateLifetime`, `Metrics.IssuingCANotAfter`; port49d's `brokerStateDir`,
   `readOwnerOnly`, `writeOwnerOnly`, `procOf`, `stderr`; the tests' `brokerConfig`, `oidcOnly`,
   `captureStderr`, `seedMinter`, `minimalPolicy`, `loadWith`, `brokerWithIdentity`, `twoLists`.
-- Produces, for Tasks 10 and 11:
+- Produces, for Tasks 10 and 12:
   - `oidc.Config.Issuance *oidc.Issuance`; `type oidc.Issuance struct { CertificateLifetime time.Duration }`
   - `func issuerFiles(dir string) issuer.Files`; `func openIssuer(cfg config.Config, m *metrics.Metrics, say func(string, ...any)) *issuer.CA`
   - `func initIssuer(dir string, now time.Time) (created bool, line string, err error)`;
@@ -7559,7 +7691,850 @@ git commit -m "feat(port49): login --oidc signs in, holds the certificate the br
 
 ---
 
-### Task 11: Lab L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS)
+### Task 11: The client's config home: `~/.port49`, the system file, `PORT49_CONFIG`
+
+Ryan's rulings of 2026-10-10 and the toil audit's H4 (decision 43 ruling 24). The per-user
+directory moves to `~/.port49`, as `~/.ssh` is, and leaves `$XDG_CONFIG_HOME/port49`: on Ubuntu
+`~/.config` is group-writable (0775), and the walk refused every file below it. A root-owned
+`/etc/port49/config.yaml`, which the install ships, is read under the user's file, key by key, so a
+new user's first login is `port49 login` and the sign-in. The pinned host keys stay where 9a put
+them until 9d takes them out of the user's flow.
+
+**Files:**
+- Modify: `internal/userconfig/userconfig.go` (the package comment, `Dir`, `EnvConfig`, `Path`,
+  `SystemPath`, `SystemOwner`, `LegacyDir`, `Load` split into `parse` and `readCAs`, `LoadAll`,
+  `overlay`, `noLegacy`, `options`, `readPrivate`, `ownedAlone`'s directory refusal),
+  `internal/userconfig/userconfig_test.go`
+- Modify: `internal/hostkeys/hostkeys.go` (`Path`)
+- Modify: `cmd/port49/main.go` (usage, the `--config` help, `fill`), `cmd/port49/main_test.go`
+  (`TestMain`, `testSystemConfig`), `cmd/port49/config_test.go`,
+  `cmd/port49/issue_login_linux_test.go`, `cmd/port49/trust_hint_test.go`
+
+**Interfaces:**
+- Consumes: Task 10's `userconfig.File` with its eight keys, `Load`, `WithoutCA`, `WithoutOIDCCA`,
+  `IssuedPaths`, `IssuedPathsIn`, and `sessionFlags.fill`; the tests' `newOIDCLab`, `driveBrowser`,
+  `privateSocket`, `stopAgentAt`, `labConfig`, `runningAgent`, `configBroker`, `runCLIEnv`.
+- Produces:
+  - `userconfig.Dir() string` (now `~/.port49`), `userconfig.EnvConfig` (`"PORT49_CONFIG"`),
+    `userconfig.Path() string`, `userconfig.SystemPath`, `userconfig.SystemOwner`,
+    `userconfig.LegacyDir() string`;
+  - `userconfig.LoadAll(path string, named bool, opts ...Option) (File, bool, error)`;
+  - `hostkeys.Path()` at `LegacyDir`;
+  - the tests' `systemConfig(t, path)` and `testSystemConfig`.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `internal/userconfig/userconfig_test.go`, in `TestADirectoryAboveOthersCanWriteIsRefused`:
+
+Replace
+
+```go
+	// The refusal tells the operator what to run.
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by others") ||
+		!strings.Contains(err.Error(), "chmod go-w "+top) {
+```
+
+with
+
+```go
+	// The refusal says what the directory needs, and no chmod: it may be
+	// shared, as a group-writable ~/.config is.
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by others") ||
+		!strings.Contains(err.Error(), "writable by its owner alone (mode 0755 or 0700)") ||
+		strings.Contains(err.Error(), "chmod") {
+```
+
+At the end of `internal/userconfig/userconfig_test.go`, add:
+
+```go
+// asSystem stands path in for /etc/port49/config.yaml for the rest of the
+// test, owned by owner in root's place.
+func asSystem(t *testing.T, path string, owner uint32) {
+	t.Helper()
+	oldPath, oldOwner := SystemPath, SystemOwner
+	SystemPath, SystemOwner = path, owner
+	t.Cleanup(func() { SystemPath, SystemOwner = oldPath, oldOwner })
+}
+
+// ~/.port49 is the directory, $PORT49_CONFIG names another file, and plan
+// 9a's directory is kept for the pins alone (decision 43 ruling 24).
+func TestTheDirectories(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv(EnvConfig, "")
+	if Dir() != "/home/alice/.port49" || Path() != "/home/alice/.port49/config.yaml" ||
+		LegacyDir() != "/home/alice/.config/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+	t.Setenv(EnvConfig, "/srv/p49.yaml")
+	t.Setenv("XDG_CONFIG_HOME", "/x")
+	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || LegacyDir() != "/x/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+}
+
+// The personal file is over the system file, key by key; each file's
+// relative paths are its own directory's, and the CA is read from the file
+// whose key won. The system file alone is a config.
+func TestLoadAllLayersYoursOverTheSystemFile(t *testing.T) {
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\nbroker_ca: ca.pem\nmethod: oidc\n"+
+		"oidc_issuer: https://idp.example\noidc_redirect_port: 18000\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(sys), "ca.pem"), []byte("SYSTEM CA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asSystem(t, sys, uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	mine := private(t, "config.yaml", "broker: https://mine.example:8443\noidc_redirect_port: 18001\n")
+	f, ok, err := LoadAll(mine, false)
+	if err != nil || !ok || f.Broker != "https://mine.example:8443" || f.OIDCRedirectPort != 18001 ||
+		f.Method != "oidc" || f.OIDCIssuer != "https://idp.example" ||
+		f.BrokerCA != filepath.Join(filepath.Dir(sys), "ca.pem") || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	f, ok, err = LoadAll(filepath.Join(privateDir(t), "config.yaml"), false)
+	if err != nil || !ok || f.Broker != "https://sys.example:8443" || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("the system file alone: %+v %v %v", f, ok, err)
+	}
+	// A CA the system file names is refused in the system file's name.
+	if err := os.Chmod(filepath.Join(filepath.Dir(sys), "ca.pem"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(mine, false); err == nil || !strings.Contains(err.Error(), "broker_ca in "+sys) {
+		t.Fatalf("a CA others can write: %v", err)
+	}
+}
+
+// Neither file is no config; a named file must be there.
+func TestLoadAllWithNeitherFile(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, ok, err := LoadAll(p, false); ok || err != nil {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	if _, _, err := LoadAll(p, true); err == nil || err.Error() != p+": no such file" {
+		t.Fatalf("named: %v", err)
+	}
+}
+
+// The system file names the broker for every user on the host, so it is
+// root's alone; this user's own is refused, naming the owner it needs.
+func TestASystemFileNotRootsIsRefused(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, this user's file is root's")
+	}
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\n")
+	asSystem(t, sys, 0)
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is not owned by root") || !strings.Contains(err.Error(), "chown root "+sys) {
+		t.Fatalf("%v", err)
+	}
+	// Writable by others, it is refused as any config file is.
+	asSystem(t, sys, uint32(os.Getuid()))
+	if err := os.Chmod(sys, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is writable by others") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A config file at plan 9a's place, with none at the default path, is
+// refused naming the move; with one at the default path it is not read.
+func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	xdg := privateDir(t)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	old := filepath.Join(xdg, "port49", "config.yaml")
+	if err := WritePrivate(old, []byte("broker: https://old.example:8443\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, _, err := LoadAll(p, false); err == nil ||
+		err.Error() != old+" is where plan 9a kept port49's config file; port49 reads "+p+" now: mkdir -m 700 -p "+
+			filepath.Dir(p)+" && mv "+old+" "+p {
+		t.Fatalf("%v", err)
+	}
+	if err := os.WriteFile(p, []byte("broker: https://new.example:8443\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok, err := LoadAll(p, false); err != nil || !ok || f.Broker != "https://new.example:8443" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+}
+```
+
+In `cmd/port49/config_test.go`, add `"github.com/rhwendt/port49/internal/userconfig"` to the
+imports, after `internal/testpki`. Then replace `TestLoginTakesWhatItLacksFromTheConfigFile` whole,
+from its comment to its closing brace:
+
+```go
+// login takes what its flags leave out from the config file, at the default
+// path and at --config (decision 42 ruling 6).
+func TestLoginTakesWhatItLacksFromTheConfigFile(t *testing.T) {
+	xdg := privateDir(t)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir := filepath.Join(xdg, "port49")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := labConfig(t, dir, configBroker)
+	for name, args := range map[string][]string{
+		"the default path": nil,
+		"--config":         {"--config", cfg},
+	} {
+		sock, refreshes := runningAgent(t, dir)
+		var out, errb bytes.Buffer
+		code := run(append(append([]string{"login"}, args...), "--socket", sock), &out, &errb)
+		if code != 0 || refreshes() != 1 ||
+			!strings.HasPrefix(out.String(), "port49: already logged in to "+configBroker+"; refreshing\n") {
+			t.Errorf("%s: code %d stdout %q stderr %q", name, code, out.String(), errb.String())
+		}
+	}
+}
+
+```
+
+with
+
+```go
+// login takes what its flags leave out from the config file, at the default
+// path, ~/.port49/config.yaml, at $PORT49_CONFIG and at --config (decision 42
+// ruling 6; decision 43 ruling 24).
+func TestLoginTakesWhatItLacksFromTheConfigFile(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".port49")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	labConfig(t, dir, configBroker)
+	other := privateDir(t)
+	named := labConfig(t, other, configBroker)
+	for _, c := range []struct {
+		name, dir, env string
+		args           []string
+	}{
+		{"the default path", dir, "", nil},
+		{"$PORT49_CONFIG", other, named, nil},
+		{"--config", other, "", []string{"--config", named}},
+	} {
+		// Each file names its own lab certificate, so only the file the
+		// login should read matches the running agent's.
+		t.Setenv(userconfig.EnvConfig, c.env)
+		sock, refreshes := runningAgent(t, c.dir)
+		var out, errb bytes.Buffer
+		code := run(append(append([]string{"login"}, c.args...), "--socket", sock), &out, &errb)
+		if code != 0 || refreshes() != 1 ||
+			!strings.HasPrefix(out.String(), "port49: already logged in to "+configBroker+"; refreshing\n") {
+			t.Errorf("%s: code %d stdout %q stderr %q", c.name, code, out.String(), errb.String())
+		}
+	}
+}
+
+// systemConfig stands path in for /etc/port49/config.yaml, and this user in
+// for root, for the rest of the test.
+func systemConfig(t *testing.T, path string) {
+	t.Helper()
+	oldPath, oldOwner := userconfig.SystemPath, userconfig.SystemOwner
+	userconfig.SystemPath, userconfig.SystemOwner = path, uint32(os.Getuid())
+	t.Cleanup(func() { userconfig.SystemPath, userconfig.SystemOwner = oldPath, oldOwner })
+}
+
+// The install's file is under the user's, key by key: a user who sets only
+// broker keeps the system file's CA, certificate and key (decision 43
+// ruling 24).
+func TestTheSystemFileIsUnderYoursKeyByKey(t *testing.T) {
+	sys := privateDir(t)
+	systemConfig(t, labConfig(t, sys, "https://elsewhere.example:8443"))
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	if err := userconfig.WritePrivate(filepath.Join(home, ".port49", "config.yaml"),
+		[]byte("broker: "+configBroker+"\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	sock, refreshes := runningAgent(t, sys)
+	var out, errb bytes.Buffer
+	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 || refreshes() != 1 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A config file at plan 9a's place, with none at ~/.port49, is refused in
+// one line naming the move, exit 2, and nothing is asked of the agent.
+func TestAConfigFileAtPlan9asPlaceIsRefused(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	labConfig(t, filepath.Join(home, ".config", "port49"), configBroker)
+	sock, refreshes := runningAgent(t, filepath.Join(home, ".config", "port49"))
+	var out, errb bytes.Buffer
+	code := run([]string{"login", "--socket", sock}, &out, &errb)
+	old, now := filepath.Join(home, ".config", "port49", "config.yaml"), filepath.Join(home, ".port49", "config.yaml")
+	if code != 2 || refreshes() != 0 || strings.Count(errb.String(), "\n") != 1 ||
+		!strings.Contains(errb.String(), "mkdir -m 700 -p "+filepath.Join(home, ".port49")+" && mv "+old+" "+now) {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
+```
+
+In `cmd/port49/issue_login_linux_test.go`, before `// After the sign-in, no browser: a login with
+the agent running refreshes by`, add:
+
+```go
+// A new user with nothing but the install's /etc/port49/config.yaml runs
+// `port49 login` and signs in, and that is all: no file of their own, no
+// flag (the socket is the test's), and ~/.port49 and its issued directory
+// made 0700 (decision 43 ruling 24).
+func TestTheSystemFileAloneIsAFirstLogin(t *testing.T) {
+	o := newOIDCLab(t, true)
+	sys := filepath.Join(privateDir(t), "config.yaml")
+	if err := os.WriteFile(sys, []byte("broker: "+o.url+"\nbroker_ca: "+filepath.Join(o.dir, testpki.LabCA)+
+		"\nmethod: oidc\noidc_ca: "+o.idpCA+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemConfig(t, sys)
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "port49: signed in at "+o.iss.URL+" as user:alice@example.com") ||
+		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	certPath, _ := o.issuedPaths(t)
+	for _, d := range []string{filepath.Join(home, ".port49"), filepath.Dir(certPath)} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 || !strings.HasPrefix(certPath, d) {
+			t.Fatalf("%s: %v %v", d, fi, err)
+		}
+	}
+}
+```
+
+In `cmd/port49/trust_hint_test.go`, in `TestTrustRefusesAPinsDirectoryBeforeItMints`, a pins
+directory is refused with what it needs, no longer a `chmod`:
+
+Replace
+
+```go
+scans.Load() != 0 || !strings.Contains(errb.String(), "chmod go-w") {
+```
+
+with
+
+```go
+scans.Load() != 0 || !strings.Contains(errb.String(), "writable by its owner alone") {
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `go test ./internal/userconfig ./cmd/port49`
+Expected: FAIL to build: `undefined: SystemPath`, `SystemOwner`, `LoadAll`, `LegacyDir`,
+`EnvConfig`, and `undefined: userconfig.SystemPath` in `cmd/port49`.
+
+- [ ] **Step 3: `internal/userconfig/userconfig.go`**
+
+Add `"cmp"` to the imports, after `"bytes"`.
+
+Replace the package comment's head
+
+```go
+// Package userconfig is the operator's own files under
+// $XDG_CONFIG_HOME/port49 (spec §13 decision 42, ruling 6): config.yaml,
+// which gives `port49 login` its broker, broker CA, certificate and key; and
+// the private-file reading and writing it shares with the pinned host keys
+// (internal/hostkeys).
+```
+
+with
+
+```go
+// Package userconfig is the operator's own files under ~/.port49 (spec §13
+// decision 43 ruling 24, amending decision 42 ruling 6): config.yaml, over the
+// system-wide /etc/port49/config.yaml the install ships, which gives `port49
+// login` its broker, broker CA, certificate and key, or its identity provider
+// (decision 43 ruling 19); the certificate the broker issued it
+// (IssuedPaths); and the private-file reading and writing it shares with the
+// pinned host keys (internal/hostkeys).
+```
+
+Replace `Dir` and `Path`
+
+```go
+// Dir is $XDG_CONFIG_HOME/port49, else ~/.config/port49.
+func Dir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "port49")
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".config", "port49")
+	}
+	return filepath.Join(".config", "port49")
+}
+
+// Path is the config file's default path.
+func Path() string { return filepath.Join(Dir(), "config.yaml") }
+```
+
+with
+
+```go
+// Dir is ~/.port49, the operator's own port49 directory, as ~/.ssh is
+// OpenSSH's (decision 43 ruling 24): config.yaml, and the certificates
+// brokers issued (IssuedPaths). WritePrivate makes it 0700 when it is
+// missing. It sits in the home directory, so its walk never meets a shared
+// parent such as a group-writable ~/.config.
+func Dir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".port49")
+	}
+	return ".port49"
+}
+
+// EnvConfig names a config file in place of ~/.port49/config.yaml; --config
+// overrides it.
+const EnvConfig = "PORT49_CONFIG"
+
+// Path is the personal config file: $PORT49_CONFIG, else
+// ~/.port49/config.yaml.
+func Path() string {
+	if p := os.Getenv(EnvConfig); p != "" {
+		return p
+	}
+	return filepath.Join(Dir(), "config.yaml")
+}
+
+// SystemPath is the system-wide config file the install ships, under every
+// user's own (LoadAll). Only the tests change it.
+var SystemPath = "/etc/port49/config.yaml"
+
+// SystemOwner is the uid that must own SystemPath: 0, root, as /etc is. Only
+// the tests change it, standing their own uid in for root's, which no test
+// can give a file.
+var SystemOwner uint32
+
+// LegacyDir is plan 9a's directory, $XDG_CONFIG_HOME/port49, else
+// ~/.config/port49. The pinned host keys stay there until plan 9d takes
+// them out of the user's flow; a config.yaml there is refused, naming the
+// move (LoadAll).
+func LegacyDir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "port49")
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".config", "port49")
+	}
+	return filepath.Join(".config", "port49")
+}
+```
+
+Replace `// IssuedPaths is IssuedPathsIn the config directory (Dir).` with `// IssuedPaths is
+IssuedPathsIn ~/.port49 (Dir).`
+
+`Load` becomes `parse`, which reads one file and no CA, and `readCAs`; `Load` and the new `LoadAll`
+are built on them. Replace the head of `Load`, from its comment to its `ReadPrivate` line,
+
+```go
+// Load reads config.yaml at path. ok is false, with no error, when there is
+// no file; a file that is there and cannot be used is an error, never a file
+// ignored.
+func Load(path string, opts ...Option) (f File, ok bool, err error) {
+	var o loadOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	raw, err := ReadPrivate(path, maxFile, "port49 config file")
+```
+
+with
+
+```go
+// Load reads config.yaml at path. ok is false, with no error, when there is
+// no file; a file that is there and cannot be used is an error, never a file
+// ignored.
+func Load(path string, opts ...Option) (File, bool, error) {
+	f, ok, err := parse(path, "port49 config file", false)
+	if err != nil || !ok {
+		return File{}, false, err
+	}
+	if err := f.readCAs(options(opts), path, path); err != nil {
+		return File{}, false, err
+	}
+	return f, true, nil
+}
+
+// LoadAll is Load over two files, key by key (decision 43 ruling 24): the
+// system-wide file at SystemPath, then path's, every key of which that is
+// set wins. path is the personal file, ~/.port49/config.yaml, or one that
+// --config or $PORT49_CONFIG names (named), which must then be there. ok is
+// false, with no error, when neither file is. The system file must be
+// root's: it names the broker for every user on the host. Each file's
+// relative paths are its own directory's, and each CA is read once, from
+// the file whose key won.
+func LoadAll(path string, named bool, opts ...Option) (File, bool, error) {
+	sys, sysOK, err := parse(SystemPath, "system port49 config file", true)
+	if err != nil {
+		return File{}, false, err
+	}
+	f, ok, err := parse(path, "port49 config file", false)
+	switch {
+	case err != nil:
+		return File{}, false, err
+	case !ok && named:
+		return File{}, false, fmt.Errorf("%s: no such file", path)
+	case !ok:
+		if err := noLegacy(path); err != nil {
+			return File{}, false, err
+		}
+		if !sysOK {
+			return File{}, false, nil
+		}
+	}
+	brokerFrom, oidcFrom := path, path
+	if f.BrokerCA == "" {
+		brokerFrom = SystemPath
+	}
+	if f.OIDCCA == "" {
+		oidcFrom = SystemPath
+	}
+	f = overlay(sys, f)
+	if err := f.readCAs(options(opts), brokerFrom, oidcFrom); err != nil {
+		return File{}, false, err
+	}
+	return f, true, nil
+}
+
+// overlay is base with every key over sets in its place.
+func overlay(base, over File) File {
+	base.Broker = cmp.Or(over.Broker, base.Broker)
+	base.BrokerCA = cmp.Or(over.BrokerCA, base.BrokerCA)
+	base.Cert = cmp.Or(over.Cert, base.Cert)
+	base.Key = cmp.Or(over.Key, base.Key)
+	base.Method = cmp.Or(over.Method, base.Method)
+	base.OIDCIssuer = cmp.Or(over.OIDCIssuer, base.OIDCIssuer)
+	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
+	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
+	return base
+}
+
+// noLegacy refuses a config.yaml at plan 9a's place when path, the default,
+// holds none, and names the move: unread, it would leave the operator logged
+// in to whatever the system file names, or to nothing, with no word why.
+func noLegacy(path string) error {
+	old := filepath.Join(LegacyDir(), "config.yaml")
+	if _, err := os.Lstat(old); err != nil {
+		return nil
+	}
+	return fmt.Errorf("%s is where plan 9a kept port49's config file; port49 reads %s now: "+
+		"mkdir -m 700 -p %s && mv %s %s", old, path, filepath.Dir(path), old, path)
+}
+
+// options is what opts make of Load's defaults.
+func options(opts []Option) loadOptions {
+	var o loadOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// parse reads and checks one config file, resolving its paths, and reads no
+// CA. With rootOnly the file must be root's (SystemOwner).
+func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
+	raw, err := readPrivate(path, maxFile, what, rootOnly)
+```
+
+and replace the tail of the old `Load`, now `parse`'s, from the path loop to its closing brace,
+
+```go
+	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
+		if *p, err = resolve(base, *p); err != nil {
+			return File{}, false, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	// The CA this file names pins the broker as the file does, so it is held
+	// to the same line, ReadPrivate's: owned by you or root, nobody else can
+	// write it or the directories above it. It is read here, once, and its
+	// bytes carried, so nothing can be swapped in between a check and a read.
+	if f.BrokerCA != "" && !o.skipCA {
+		if f.BrokerCAPEM, err = ReadPrivate(f.BrokerCA, maxCA, "broker CA"); err != nil {
+			return File{}, false, fmt.Errorf("broker_ca in %s: %w", path, err)
+		}
+	}
+	// The provider's CA decides whose sign-in port49 trusts, as the broker
+	// CA decides the broker: held to the same line, read once.
+	if f.OIDCCA != "" && !o.skipOIDCCA {
+		if f.OIDCCAPEM, err = ReadPrivate(f.OIDCCA, maxCA, "identity provider CA"); err != nil {
+			return File{}, false, fmt.Errorf("oidc_ca in %s: %w", path, err)
+		}
+	}
+	return f, true, nil
+}
+```
+
+with
+
+```go
+	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
+		if *p, err = resolve(base, *p); err != nil {
+			return File{}, false, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	return f, true, nil
+}
+
+// readCAs reads the CAs f names; brokerFrom and oidcFrom are the files that
+// named them, for a refusal.
+func (f *File) readCAs(o loadOptions, brokerFrom, oidcFrom string) error {
+	var err error
+	// The CA a config file names pins the broker as the file does, so it is
+	// held to the same line, ReadPrivate's: owned by you or root, nobody
+	// else can write it or the directories above it. It is read here, once,
+	// and its bytes carried, so nothing can be swapped in between a check and
+	// a read.
+	if f.BrokerCA != "" && !o.skipCA {
+		if f.BrokerCAPEM, err = ReadPrivate(f.BrokerCA, maxCA, "broker CA"); err != nil {
+			return fmt.Errorf("broker_ca in %s: %w", brokerFrom, err)
+		}
+	}
+	// The provider's CA decides whose sign-in port49 trusts, as the broker
+	// CA decides the broker: held to the same line, read once.
+	if f.OIDCCA != "" && !o.skipOIDCCA {
+		if f.OIDCCAPEM, err = ReadPrivate(f.OIDCCA, maxCA, "identity provider CA"); err != nil {
+			return fmt.Errorf("oidc_ca in %s: %w", oidcFrom, err)
+		}
+	}
+	return nil
+}
+```
+
+`parse`'s body between them is the old `Load`'s unchanged (the decoder, the second document, the
+method and port checks); its named results `f`, `ok` and `err` are what that body assigns.
+
+`readPrivate` gains the root-only check. Replace
+
+```go
+func ReadPrivate(path string, max int64, what string) ([]byte, error) {
+	dir, base, err := splitPath(path)
+```
+
+with
+
+```go
+func ReadPrivate(path string, max int64, what string) ([]byte, error) {
+	return readPrivate(path, max, what, false)
+}
+
+// readPrivate is ReadPrivate; with rootOnly the file must be root's
+// (SystemOwner), not this user's.
+func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, error) {
+	dir, base, err := splitPath(path)
+```
+
+and, in `readPrivate`, replace `ownedAlone`'s check
+
+```go
+	if err := ownedAlone(file, li, what); err != nil {
+		return nil, err
+	}
+```
+
+with
+
+```go
+	if err := ownedAlone(file, li, what); err != nil {
+		return nil, err
+	}
+	if st, ok := li.Sys().(*syscall.Stat_t); rootOnly && (!ok || st.Uid != SystemOwner) {
+		return nil, fmt.Errorf("%s is not owned by root; the %s names the broker for every user on this host, "+
+			"so it is root's alone: chown root %s", path, what, path)
+	}
+```
+
+In `ownedAlone`, a directory's refusal says what it needs and names no command: the directory may be
+shared, and a `chmod` would change it for everyone else (Ryan, 2026-10-10). Replace
+
+```go
+	if fi.Mode().Perm()&0o022 != 0 && !(fi.IsDir() && fi.Mode()&fs.ModeSticky != 0) {
+		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
+			"trusts: chmod go-w %s", path, fi.Mode().Perm(), what, path)
+	}
+```
+
+with
+
+```go
+	if fi.Mode().Perm()&0o022 != 0 && fi.IsDir() && fi.Mode()&fs.ModeSticky == 0 {
+		// A directory may be shared, as a group-writable ~/.config is, so
+		// the refusal says what it needs, never a chmod that would change it
+		// for everyone else.
+		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
+			"trusts, so port49 needs it writable by its owner alone (mode 0755 or 0700)", path, fi.Mode().Perm(), what)
+	}
+	if fi.Mode().Perm()&0o022 != 0 && !fi.IsDir() {
+		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
+			"trusts: chmod go-w %s", path, fi.Mode().Perm(), what, path)
+	}
+```
+
+- [ ] **Step 4: `internal/hostkeys/hostkeys.go`**
+
+The pins stay in 9a's directory until 9d takes them out of the user's flow; `~/.port49` holds no
+pins file (Ryan, 2026-10-10). Replace
+
+```go
+func Path() string { return filepath.Join(userconfig.Dir(), "known_hosts") }
+```
+
+with
+
+```go
+// It stays in plan 9a's directory (userconfig.LegacyDir), not ~/.port49,
+// until plan 9d takes the pins out of the user's flow.
+func Path() string { return filepath.Join(userconfig.LegacyDir(), "known_hosts") }
+```
+
+- [ ] **Step 5: `cmd/port49/main.go` and `TestMain`**
+
+In the usage, replace
+
+```
+               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml; --oidc
+               signs in at your identity provider and holds the certificate the broker issues, signing in
+               again when it has under a quarter of its life left, or with --sign-in)
+```
+
+with
+
+```
+               (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
+               each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity
+               provider and holds the certificate the broker issues, signing in again when it has under a
+               quarter of its life left, or with --sign-in)
+```
+
+Replace `--config`'s help, `"your port49 config file: broker, broker_ca, cert and "+ "key, each
+overridden by its flag"`, with `"your port49 config file, over /etc/port49/config.yaml "+ "key by
+key; each flag overrides its key"`.
+
+Replace `fill`'s comment's head
+
+```go
+// fill takes from the config file each value the command line left out
+// (decision 42 ruling 6; decision 43 ruling 19). A missing file at the
+// default path is no file; one --config names must be there, and is read
+// and checked even when every flag is given.
+```
+
+with
+
+```go
+// fill takes from the config files each value the command line left out
+// (decision 42 ruling 6; decision 43 rulings 19 and 24): the personal one
+// over the system-wide one, key by key. A missing file at the default path
+// is no file; one --config or $PORT49_CONFIG names must be there, and
+// --config's is read and checked even when every flag is given.
+```
+
+and, in `fill`, replace
+
+```go
+	f, ok, err := userconfig.Load(s.configFile, opts...)
+	switch {
+	case err != nil:
+		return err
+	case !ok && set["config"]:
+		return fmt.Errorf("%s: no such file", s.configFile)
+	case !ok:
+		return nil
+	}
+```
+
+with
+
+```go
+	named := set["config"] || os.Getenv(userconfig.EnvConfig) != ""
+	f, ok, err := userconfig.LoadAll(s.configFile, named, opts...)
+	if err != nil || !ok {
+		return err
+	}
+```
+
+In `cmd/port49/main_test.go`, add `"github.com/rhwendt/port49/internal/userconfig"` to the imports,
+after `internal/token`. After `const runCLIEnv = "PORT49_TEST_RUN_CLI"`, add:
+
+```go
+// testSystemConfig carries TestMain's stand-in for /etc/port49/config.yaml
+// to the test binary run as port49.
+const testSystemConfig = "PORT49_TEST_SYSTEM_CONFIG"
+```
+
+At the top of `TestMain`, before the subreaper hook, add:
+
+```go
+	// A child the tests start reads the system file the parent named.
+	if p := os.Getenv(testSystemConfig); p != "" {
+		userconfig.SystemPath = p
+	}
+```
+
+and replace
+
+```go
+	// No test reads the developer's own ~/.config/port49 (plan 9a): every
+	// default path under it lands in a directory of the test's.
+	dir, err := os.MkdirTemp("", "p49cfg")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", dir)
+```
+
+with
+
+```go
+	// No test reads the developer's own ~/.port49, ~/.config/port49 or
+	// /etc/port49 (plans 9a and 9b): every default path lands in a
+	// directory of the test's, 0700 as a home directory is.
+	dir, err := os.MkdirTemp("", "p49cfg")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", dir)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	os.Unsetenv(userconfig.EnvConfig)
+	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
+	os.Setenv(testSystemConfig, userconfig.SystemPath)
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `go test -race ./internal/userconfig ./internal/hostkeys ./cmd/port49`, then `make test &&
+make vet`, `CGO_ENABLED=0 GOOS=darwin go vet ./internal/userconfig ./cmd/port49`, and `go vet -tags
+lab ./tests/lab/`.
+Expected: PASS, with `TestTheDirectories`, `TestLoadAllLayersYoursOverTheSystemFile`,
+`TestLoadAllWithNeitherFile`, `TestASystemFileNotRootsIsRefused`,
+`TestAConfigAtPlan9asPlaceIsRefused`, `TestTheSystemFileIsUnderYoursKeyByKey`,
+`TestAConfigFileAtPlan9asPlaceIsRefused` and `TestTheSystemFileAloneIsAFirstLogin` among them.
+Every earlier test passes unchanged but the two whose message changed (Step 1).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add internal/userconfig internal/hostkeys/hostkeys.go cmd/port49/main.go cmd/port49/main_test.go \
+  cmd/port49/config_test.go cmd/port49/issue_login_linux_test.go cmd/port49/trust_hint_test.go
+git commit -m "feat(userconfig): the client's config in ~/.port49, over a system-wide /etc/port49/config.yaml"
+```
+
+---
+
+### Task 12: Lab L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS)
 
 **Files:**
 - Create: `tests/lab/l55_test.go`, `tests/lab/l56_test.go`, `tests/lab/l55_l56_unit_test.go` (each
@@ -8134,7 +9109,7 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
 	c := &l56CLI{bin: bin, home: home, sock: filepath.Join(home, "run", "agent.sock"),
-		env: append(os.Environ(), "XDG_CONFIG_HOME="+home, "HTTPS_PROXY=http://"+proxy, "NO_PROXY=127.0.0.1",
+		env: append(os.Environ(), "HOME="+home, "HTTPS_PROXY=http://"+proxy, "NO_PROXY=127.0.0.1",
 			"BROWSER=", "DISPLAY=", "WAYLAND_DISPLAY=")}
 	c.flags = []string{"--oidc", "--no-browser", "--redirect-port", "18749", "--broker", sliceBrokerURL,
 		"--broker-ca", filepath.Join(root, slicePKIDir, testpki.LabCA), "--oidc-ca", idpCA, "--socket", c.sock}
@@ -8145,7 +9120,7 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 // issued is where the CLI keeps the broker's certificate and its key.
 func (c *l56CLI) issued(t *testing.T) (string, string) {
 	t.Helper()
-	cert, key, err := userconfig.IssuedPathsIn(filepath.Join(c.home, "port49"), sliceBrokerURL)
+	cert, key, err := userconfig.IssuedPathsIn(filepath.Join(c.home, ".port49"), sliceBrokerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8805,7 +9780,7 @@ Then rule 4: if a result contradicts a doc, the doc is wrong.
 - **Ruling 8.** If L55 cell 4 shows Keycloak does not echo the nonce byte for byte, or its
   `auth_time` is not the sign-in's under `prompt=login`, the key binding or the freshness check
   does not hold there: stop, and take it to Ryan before closing anything.
-- **This plan's operator notes**, which Task 12 copies: replace each italic line with what was
+- **This plan's operator notes**, which Task 13 copies: replace each italic line with what was
   measured.
 
 Commit the harness and the notes first, and make the spec edits after that commit, so the second
@@ -8823,7 +9798,7 @@ A code fix the run called for is its own `fix(...)` commit before the first, wit
 
 ---
 
-### Task 12: The roadmap's as-built entry
+### Task 13: The roadmap's as-built entry
 
 **Files:**
 - Modify: `docs/superpowers/plans/README.md` ("Plan 9" and the status paragraph)
@@ -8836,7 +9811,11 @@ Under `## Plan 9 — Agent in full (§19 step 9)`, after `### Plan 9a — As bui
 - **Carried:** to 9c, 9e, plan 12, plan 13 or the pre-beta review, each with its reason. At least
   these:
   - **9c:** the issued key into the TPM, the Secure Enclave or a token, behind the same
-    `crypto.Signer`; step-up for high-impact devices.
+    `crypto.Signer`; `per_login_mfa`.
+  - **9d:** the pins file leaves `userconfig.LegacyDir` with `port49 devices trust`; `LegacyDir`
+    then serves the refusal of plan 9a's config file alone.
+  - **Plan 12:** each deployment shape's client package ships `/etc/port49/config.yaml` and the
+    broker CA beside it, root-owned (decision 43 ruling 24).
   - **Plan 12:** a check that every broker on one store holds the same issuing CA (each start prints
     its fingerprint today); the issuing CA's files in each deployment shape's state volume, and
     `init-issuer` in each shape's setup.

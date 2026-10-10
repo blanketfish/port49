@@ -140,7 +140,7 @@ L53 and L54. Pre-flight review 2026-10-09: 0 Critical, 10 Important, 17 Minor, a
 OpenSSH floor rose to 8.5 on a container measurement
 (`tests/ssh-compat/2026-10-09-openssh-askpass.md`). 9b–9d are outlined under "Plan 9".
 **9b written 2026-10-09, rewritten 2026-10-10** on Ryan's direction of that day
-(`2026-10-09-09b-oidc-public-client.md`, twelve tasks: one spec, nine code, one lab, one docs). The
+(`2026-10-09-09b-oidc-public-client.md`, thirteen tasks: one spec, ten code, one lab, one docs). The
 2026-10-09 draft held the provider's tokens in the agent; the rewrite makes design §7's issued
 certificate v1. `port49 login --oidc` signs in at the provider (PKCE S256 over a loopback redirect,
 `prompt=login`, a pasted address on a host with no browser, no device grant), generates a key on the
@@ -148,8 +148,10 @@ host, and the broker issues a short-lived client certificate for it from its own
 /v1/certificate`; the sign-in's `nonce` names the key, and its `sid` travels in the certificate).
 The agent then runs the certificate path unchanged, so a refresh and a new agent's extension are key
 signatures, and pre-flight D1 dissolves. A broker that issues takes a person's ID token nowhere else;
-its CA is made by `init-issuer`, rotated with overlap, and never stops a start. Decision 43 holds its
-twenty-three rulings; three questions for Ryan, each with a recommendation (Q1 when 7h's bearer path
+its CA is made by `init-issuer`, rotated with overlap, and never stops a start. The client's config
+moves to `~/.port49`, under a root-owned `/etc/port49/config.yaml` the install ships, so a new user's
+first login is `port49 login` and the sign-in (Ryan's no-toil rule). Decision 43 holds its
+twenty-four rulings; three questions for Ryan, each with a recommendation (Q1 when 7h's bearer path
 for people retires, Q2 where the lifetime is set, Q3 the held key reused across agents). It opens
 L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS). 9e, a
 directory-password sign-in issuing the same certificate, is added to Plan 9.
@@ -5111,6 +5113,12 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
   - **One path for people:** a broker that issues takes a person's ID token at
     `/v1/certificate` alone. 7h's bearer verifier stays for machines; its human path retires at the
     pre-beta review (Q1).
+  - **The client's config, with no step per user** (Ryan's no-toil rule, 2026-10-10; the toil
+    audit's H4). `~/.port49/` holds `config.yaml` and the issued key and certificate, as `~/.ssh`
+    does, and no host-key pins. A root-owned `/etc/port49/config.yaml`, shipped by the install, is
+    read under it key by key, so a new user's first login is `port49 login` and the sign-in.
+    `$PORT49_CONFIG` and `--config` name another file. 9a's `~/.config/port49/config.yaml` is
+    refused in one line naming the move. No CA rotation asks anything of a user.
   - **The 3am cases, each a test:**
     - the IdP down: everyone holding a certificate works all day, new agents included; only a
       sign-in fails, and says so;
@@ -5125,8 +5133,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     Keycloak and vEOS). L47, the hosted providers, stays unassigned.
   - **Dropped from the 2026-10-09 draft:** tokens in the agent, silent renewal, the browser refresh,
     `id_token_not_renewed`.
-- **9c — Hardware-backed client keys and the broker certificate's CRL check** (plan 3's two
-  hand-offs).
+- **9c — Hardware-backed client keys, `per_login_mfa`, and the broker certificate's CRL check**
+  (plan 3's two hand-offs; `per_login_mfa` added by Ryan, 2026-10-10).
   - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
     signature (`api.SignRefresh`) take it unchanged:
     - PKCS#11 through purego, for YubiKey PIV and smartcards;
@@ -5137,14 +5145,44 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     default). The PEM file stays as the fallback.
   - **Issued keys too:** `port49 login --oidc` (9b) generates its key in the TPM, the Secure
     Enclave or the token behind the same signer, in place of 9b's 0600 file.
-  - **Step-up for high-impact devices** (Ryan, 2026-10-10). A grant or role can require a fresh
-    hardware-key presence proof, a YubiKey touch on an "always"-touch slot, at mint time for devices
-    an inventory attribute marks (`tier: core`, `backbone`). It extends spec §5.1.4's "`amr` and
-    `acr` are recorded … a role that requires MFA is a natural extension". It applies only to the
-    grants that carry it, so a machine principal's grants without it are unaffected. 9c's spec task
-    writes the policy key, how the proof rides the mint (a signature over a mint challenge by the
-    touch slot's key), and what a held device session does on a platform that never asks about a
-    command when the proof is not given.
+  - **`per_login_mfa`: a second factor at each login to the devices a policy level marks** (Ryan,
+    2026-10-10). It is a proof at the login to a matching device, not the daily sign-in, which may
+    already include MFA; it is never called `mfa: required`. It extends spec §5.1.4's "`amr` and
+    `acr` are recorded … a role that requires MFA is a natural extension". The intended schema,
+    illustrative until 9c's spec task fixes it:
+
+    ```yaml
+    per_login_mfa:
+      accept: [hardware_key_touch]   # or [hardware_key_touch, idp_mfa]
+      reuse_for: 15m                 # the default; 0m asks for a proof at every login
+    ```
+
+    - **`accept`** is an explicit list of self-describing methods, with no booleans and no `none`;
+      leaving the key out is no requirement.
+      - `hardware_key_touch`: a touch on an always-touch slot, signing a broker challenge. It is
+        instant.
+      - `idp_mfa`: a fresh sign-in at the identity provider whose `amr` shows a second factor (an
+        Okta push, say). It is a browser round trip at each such login, and operators will see
+        the difference.
+    - **`reuse_for`** is how long one proof covers further logins to devices under a requirement
+      that proof satisfies. It defaults to 15m when left out. The proof is bound to the principal
+      and to the agent's session: another agent, or the same person on another machine, proves
+      again.
+    - **Four levels:** under `defaults` (global), under a role, under an inventory device class or
+      tag (`tier: core`, say), and under one device. The strictest that applies wins: the
+      intersection of the `accept` lists and the minimum `reuse_for`. A lower level never weakens a
+      higher one. An empty intersection is a policy error at load, naming both levels.
+    - **Machine principals are exempt** (a workload has no finger to touch a key, and its
+      credential is already a key) unless a level sets `applies_to_machines: true`, which is
+      spelled out and never implied. So a global or per-device requirement does not break
+      automation.
+    - **What people see.** A refusal or a prompt names the device, the level that set the
+      requirement, and the accepted methods. `port49 explain` and the policy tooling print a
+      device's effective requirement: the accepted methods, the effective `reuse_for`, and the
+      level each came from, so the default is never invisible.
+    - **9c's spec task also writes** how the proof rides the mint (a signature over a mint
+      challenge by the touch slot's key) and what a held device session does, on a platform that
+      never asks about a command, when the proof is not given.
   - **The 3am case,** a test: the key unplugged mid-session. The held connection still mints, since
     the key was used at the handshake. `port49 refresh` and a reconnect say "insert your key", and
     never end the session.
