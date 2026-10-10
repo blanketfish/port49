@@ -17,6 +17,17 @@
 > cannot be done at scale (decision 43 ruling 24, R8, and a new Task 11; the lab and roadmap tasks
 > become 12 and 13). The broker sends its CA bundle and each agent keeps it, so a rotation of the
 > broker's TLS CA asks nothing of users either (ruling 25, R10; Tasks 8 and 11).
+>
+> **Amended after pre-flight 2** (`.superpowers/sdd/2026-10-09-09b-oidc-public-client/preflight2-review.md`).
+> - On a broker that issues, a logout record stands as long as a certificate issued before it
+>   can be presented (C1; ruling 16, Task 7).
+> - A broker that sends no CA bundle clears what agents kept, and ruling 25 states what a taken
+>   server key can plant (I1; Task 11).
+> - L55 measures `prompt=login` over a live SSO session (I2), and L56 checks each run against the
+>   key it wrote (I4).
+> - A broker-CA rotation ships `broker_ca` through config management, so no user steps in (I3).
+> - Freshness is judged on two clocks (m3), and `rotate-issuer` has guards (m4).
+> - The gap m5 leaves until 9d is carried explicitly.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -88,7 +99,7 @@ What 9b builds:
     step by a user (ruling 25).
 - **Lab (ruling 23).**
   - **L55:** Keycloak as the client meets it: the redirect registrations, PKCE, the `iss`
-    parameter, and the key-binding `nonce` echoed.
+    parameter, the key-binding `nonce` echoed, and `prompt=login` over a live SSO session.
   - **L56:** the real CLI end to end on Keycloak and vEOS: the CA missing and then made; sign-in,
     issue, mint, refresh with no browser, a new agent with no sign-in, a pasted sign-in, a logout,
     and the provider stopped.
@@ -129,8 +140,8 @@ What 9b builds:
 - **The broker's CA bundle (ruling 25):** `internal/broker/api/cabundle.go` (`ParseCABundle`,
   `EncodeCABundle`, `CAFingerprints`), `api.Config.BrokerCABundle`, `Broker.CABundle`,
   `broker.tls_ca_bundle_file`, and port49d's `loadCABundle` (Task 8); `agent.BrokerRoot`,
-  `agent.RotatedCAHint`, `userconfig.CABundlePath`, and `cmd/port49`'s `keepCABundle` and
-  `withKeptBundle` (Task 11).
+  `agent.RotatedCAHint`, `userconfig.CABundlePath`, and `cmd/port49`'s `keepCABundle`,
+  `forgetBundle` and `withKeptBundle` (Task 11).
 - **`cmd/port49`:**
   - `issue.go`: `loginIssued`, `issueCertificate`, `requestCertificate`, `heldCertificate`,
     `startIssued`, `signIn`, `pickProvider`, `browserCommand`, `fetchBrokerConfig`, `warnSkew`;
@@ -203,8 +214,9 @@ beside it.
     reboot, an agent crash or an OS update then costs no sign-in, and with the identity provider
     down a person keeps working through all of them. That is what makes ruling 17's "all day"
     true.
-  - **The cost:** whoever copies `issued/<broker>.key` and its certificate holds the person's
-    session until the certificate ends, at most `certificate_lifetime` (12h). That is today's
+  - **The cost:** whoever copies `issued/<broker>.key` and its certificate, a home-directory backup
+    included, holds the person's session until the certificate ends, at most
+    `certificate_lifetime` (12h). That is today's
     file-key certificate path, with the key at most 12h old rather than a year. 9c moves the key
     into hardware.
   - **Alternative:** sign in at every new agent: delete the reuse branch in `loginIssued` (Task
@@ -231,9 +243,14 @@ Each is the stricter of the options, or the one the spec's own text already chos
     whose hash it names. The broker also takes each token once.
   - No challenge round trip is needed, and no unauthenticated store write. A challenge endpoint
     any caller could hit would be one.
-- **R3. Freshness.** The token's `auth_time` must be within 5 minutes (plus `clock_skew`) of the
-  broker's now. That is the sign-in's own wait (`oidcclient.SignInWait`), and it is how a
-  `prompt=login` a provider ignored is caught: `401 sign_in_not_fresh`.
+- **R3. Freshness, on two clocks.** 5 minutes (plus `clock_skew`) is the sign-in's own wait
+  (`oidcclient.SignInWait`). Each refusal is `401 sign_in_not_fresh`, and its words name the cause:
+  - `iat − auth_time` over it, on the provider's own clock: a `prompt=login` the provider ignored.
+    That is how one is caught.
+  - `now − iat` over it, the broker's clock against the provider's: a sign-in that took too long, or
+    two clocks apart. That is never blamed on `prompt=login` (pre-flight 2 m3).
+  - `auth_time` after `iat` plus `clock_skew`: no sign-in. (The verifier already refuses an
+    `auth_time` ahead of the broker's now.)
 - **R4. Never refuse the start over the CA.** port49d answers device AAA in the same process.
   - A missing or unreadable key stops issuance alone.
   - A missing CA certificate also stops trust in the certificates it issued, and is said as loudly.
@@ -248,6 +265,9 @@ Each is the stricter of the options, or the one the spec's own text already chos
   - When the new agent's first refresh is answered `credential_revoked` (a logout, or a mark on the
     certificate), `port49 login` deletes the issued key and certificate, says why, and the next
     login signs in.
+  - A logout's record stands on a broker that issues as long as a certificate issued before it can
+    be presented (ruling 16; pre-flight 2 C1), so a held certificate is still refused, and removed,
+    hours after the logout, not only within `max_token_age`.
   - Kept, the files would start an agent that every request refuses.
 - **R7. The issued key is generated in `port49 login`, not the agent,** and handed to the agent
   as today's `--cert` and `--key` are. The agent stays the certificate path's, unchanged but for
@@ -263,7 +283,8 @@ Each is the stricter of the options, or the one the spec's own text already chos
   - **The issuing CA rotated:** nothing for users; no client holds it (ruling 14).
   - **The broker's TLS CA rotated:** nothing for users either (ruling 25). The broker sends its CA
     bundle on `/v1/config`; each agent keeps it, and the next login trusts it beside `broker_ca`.
-    A host away through the whole overlap is told the fix in one line.
+    Config management ships the next CA in `broker_ca` at the rotation's start, so a host away
+    through the whole overlap has it on its return; an unmanaged one is told the fix in one line.
   - **A certificate expired or late:** the next `port49 login` signs in and writes over the key and
     certificate; a refused one is removed (R6). No file is handled by hand.
   - **50 operators on 4 jump hosts:** one system file per host, not 200 copies of five values.
@@ -318,6 +339,12 @@ Each is the stricter of the options, or the one the spec's own text already chos
   Keycloak".
 - **No claim about Keycloak before L55 closes:** which redirect registration admits an ephemeral
   port, and whether it enforces PKCE.
+- **No fix for `port49 ssh` on a group-writable `~/.config`** (pre-flight 2 m5; carried to 9d). The
+  pins file stays in 9a's `~/.config/port49/known_hosts` until 9d (R9), read through ruling 6's
+  walk, and a refusal no longer names a `chmod` on a directory (ruling 24). So where `~/.config` is
+  group-writable, Ubuntu's default 0775, `port49 ssh` and `port49 devices trust` are refused with
+  no fix to run. Both rules stand; 9d removes the pins file, which ends it, and nothing ships
+  between 9b and 9d. The PR body lists it under known limitations.
 
 ## What the operator sees
 
@@ -426,6 +453,15 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49 agent: kept the broker's CA bundle in /home/alice/.port49/broker_ca/port49-broker.example.com_8443.pem: sha256:3f…, sha256:9c… (was sha256:3f…)
   ```
+- **A broker that sends no CA bundle** (Task 11, `TestABrokerWithNoBundleClearsTheKeptOne`), in the
+  agent's log, where the kept file held a CA beside the one the connection was verified to:
+
+  ```
+  port49 agent: the broker sends no CA bundle; /home/alice/.port49/broker_ca/port49-broker.example.com_8443.pem now holds only the CA this connection was verified to: sha256:9c… (was sha256:3f…, sha256:9c…)
+  ```
+
+  and, where it did not hold that CA: `port49 agent: the broker sends no CA bundle; removed … (it
+  held …)`.
 - **The broker's start with a bundle** (Task 8, `TestLoadCABundle`):
 
   ```
@@ -461,12 +497,17 @@ closes.
   sign-ins fail (503 `issuance_unavailable`), and its start line says what to run. Alert on
   `port49_certificates_issued_total{outcome="unavailable"}` and on
   `port49_issuing_ca_not_after_timestamp_seconds` (0, or within 90 days).
-- **Rotate with overlap:**
-  1. `rotate-issuer` stages `issuing-ca-next.pem`. Restart every broker: each now trusts it.
-  2. `rotate-issuer` again promotes it. The old CA becomes `issuing-ca-previous.pem` and its key
-     is deleted. Restart every broker: each now issues with the new CA and still trusts the old.
+- **Rotate with overlap,** running `rotate-issuer` on one broker throughout:
+  1. `rotate-issuer` stages `issuing-ca-next.pem` and its key. Copy `issuing-ca-next.pem` alone to
+     every other broker, and restart every broker: each now trusts it. The key stays where it was
+     made.
+  2. `rotate-issuer` again, on the same broker, promotes it. The old CA becomes
+     `issuing-ca-previous.pem` and its key is overwritten. Copy `issuing-ca.pem`, `issuing-ca.key`
+     and `issuing-ca-previous.pem` to every other broker, remove the `issuing-ca-next.pem` staged
+     there, and restart every broker: each now issues with the new CA and still trusts the old.
   3. After `certificate_lifetime`, every certificate the old CA issued has expired. Remove
-     `issuing-ca-previous.pem` and restart.
+     `issuing-ca-previous.pem` and restart. The next rotation's promotion is refused until it is
+     gone.
 - **Register port49 at your provider as a public client:** no secret, the authorization-code flow,
   PKCE with S256 required. Its client id is the broker verifier's `client_id`.
   - *Its redirect URI: port49 listens on `http://127.0.0.1:<port>/callback`, on a free port each
@@ -497,7 +538,9 @@ closes.
   - The key and certificate are kept in `~/.port49/issued/<broker host>_<port>.key` and
     `.pem`, 0600. The key is your session until the certificate ends: a reboot or a new agent uses
     it with no sign-in, and whoever copies it holds your session until then, so never copy it off
-    the host. (9c moves it into a TPM, the OS keystore or a hardware key where there is one.)
+    the host, and exclude `~/.port49/issued/` from home-directory backups (Time Machine, rsync and
+    the like): a restore within the certificate's life holds the session. (9c moves it into a TPM,
+    the OS keystore or a hardware key where there is one.)
 - **Check whom you signed in as.** The login prints `signed in at … as <you>`. The address port49
   prints is not a password, but keep it to yourself: whoever has it can finish your sign-in with
   their own account. On a shared host a browser port49 launches shows that address to other users
@@ -513,7 +556,9 @@ closes.
   end when you have one.
 - **A back-channel logout** refuses your certificate at its next use, in the broker's words, and
   ends your device sessions as before. Your next `port49 login` removes the certificate and signs
-  you in.
+  you in. On a broker that issues, a logout's record is kept `max(max_token_age,
+  certificate_lifetime) + 2×clock_skew` (12h2m by default), so it refuses the certificate for as
+  long as the certificate lives.
 - **Revoke a person's certificates** with `port49 revoke --principal user:…` (every certificate,
   issued or not), or one with `--cert-issuer DN --cert-serial HEX` from its `issue` record.
 - **A person's ID token is refused at a broker that issues,** except at `POST /v1/certificate`. A
@@ -524,15 +569,24 @@ closes.
   `~/.port49/broker_ca/`.
   1. Add the next CA to the bundle and restart every broker. Each start names the bundle's
      fingerprints; a bundle without the CA of the certificate in use is not sent, and the start
-     says so.
+     says so. In the same change, ship the current and the next CA together in
+     `/etc/port49/broker-ca.pem` through the install's config management (package, config
+     management or MDM), so a host away has both on its return.
   2. Wait while people log in: every agent that starts keeps the new bundle (its log says
      `kept the broker's CA bundle`). A day covers everyone who works daily; wait longer for
      people away.
   3. Switch `tls_cert_file` to a certificate the next CA issued, and restart.
-  4. Later, drop the old CA from the bundle, and update `/etc/port49/broker-ca.pem` in the install
-     at your own pace.
-  - **A host away for the whole overlap** gets one line naming the fix: get the broker's current CA
-    and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on.
+  4. Drop the old CA from the bundle and from `/etc/port49/broker-ca.pem`, through config
+     management again.
+  - **Rotating because the old CA is compromised:** push the new `/etc/port49/broker-ca.pem`
+    through config management at once. The bundle adds trust and never removes it, so the old CA
+    stays trusted wherever `broker_ca` still holds it.
+  - **Removing `tls_ca_bundle_file`** once a rotation is done is safe: each agent's next start,
+    told no bundle, cuts what it kept to the CA its connection was verified to, or removes it.
+    That is also the remedy if the broker's server key was ever taken: a bundle the taker sent is
+    gone at each agent's next start against the real broker.
+  - **An unmanaged host away for the whole overlap** gets one line naming the fix: get the broker's
+    current CA and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on.
 
 ## Global Constraints
 
@@ -557,7 +611,7 @@ closes.
   - The broker's refusals and log lines name the provider, the principal and the reason, never a
     token or a body.
   - Every test that runs a sign-in asserts that stdout, stderr and the agent's log hold none of
-    `AuthServer.Issued()` and none of the key's PEM.
+    `AuthServer.Issued()`, no `code_verifier` of `AuthServer.Grants()`, and none of the key's PEM.
 - No device identity and no principal in a metric label.
 - **Fail closed, never widen.** Each of these is a refusal:
   - a callback whose `iss` names another issuer, or with no `iss` from a provider that promised
@@ -607,8 +661,11 @@ The five inputs or conditions most likely to bite a person, and the test that pi
      `credential_revoked` in the broker's logout words; its device sessions are revoked through
      the `sid` index; the agent ends; the next `port49 login` removes the certificate and the one
      after signs in.
+   - **Expected, past `max_token_age`:** the logout still refuses the certificate, for as long as the
+     certificate lives; its record stands `max(max_token_age, certificate_lifetime) + 2×clock_skew`.
    - **Pinned by** Task 6's `TestALogoutRefusesAnIssuedCertificate` and
-     `TestALogoutReachesAnIssuedCertificatesContexts`, Task 10's
+     `TestALogoutReachesAnIssuedCertificatesContexts`, Task 7's
+     `TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate`, Task 10's
      `TestARevokedHeldCertificateIsRemoved`, and L56 cell 5.
 4. **A stolen ID token, a replay, or a leaked authorization URL.**
    - **Expected:** a token whose `nonce` names another key is refused `sign_in_not_bound`; a token
@@ -808,9 +865,12 @@ certificate while the certificate is valid.
   - a token any of decision 39 rulings 2–6 refuses, a marked principal, or a logged-out session,
     as a mint is refused;
   - a machine's token (400);
-  - an `auth_time` more than 5 minutes (plus `clock_skew`) before the broker's now: `401
-    sign_in_not_fresh`, `trust_domain_unresolved`. That is the sign-in's own wait, and catches a
-    provider that ignored `prompt=login` (provisional on L55);
+  - a sign-in that is not fresh, `401 sign_in_not_fresh`, `trust_domain_unresolved`, judged on two
+    clocks: an `auth_time` more than 5 minutes (plus `clock_skew`) before the token's `iat`, the
+    provider's own clock, which catches a provider that ignored `prompt=login` (provisional on
+    L55); an `iat` more than that before the broker's now, a slow sign-in or two clocks apart, said
+    as such; or an `auth_time` after the `iat` plus `clock_skew`. 5 minutes is the sign-in's own
+    wait;
   - a CSR that does not parse, whose signature is not its key's, or whose key is not ECDSA
     P-256/P-384, Ed25519 or RSA 2048–8192 (400);
   - a `nonce` that is not `api.IssuanceNonce` of the CSR's key: `401 sign_in_not_bound`;
@@ -890,12 +950,20 @@ certificate while the certificate is valid.
     P-256 key and a self-signed CA certificate valid 5 years. On every further broker on one
     store, the operator copies both files. Each start prints the CA's fingerprint; a cross-replica
     check is carried to plan 12.
-  - **Rotation with overlap** (R5). `rotate-issuer` stages `issuing-ca-next.pem` and `.key`, which
-    every broker trusts from its next start. Run again, it promotes: the current certificate
-    becomes `issuing-ca-previous.pem`, its key is deleted, and the next becomes current. A broker
-    trusts every one of the three present and signs with the current. The previous is removed by
-    hand after `certificate_lifetime`; trusting it longer admits nothing, since its key is gone.
-    The promotion is idempotent, so an interrupted one is finished by running it again.
+  - **Rotation with overlap** (R5). `rotate-issuer`, on one broker, stages `issuing-ca-next.pem`
+    and `.key`. Only the certificate is copied to the other brokers, which trust it from their next
+    start; the key stays on the broker that staged it until the promotion. Run again there, it
+    promotes: the current certificate becomes `issuing-ca-previous.pem`, its key is overwritten,
+    and the next becomes current; the operator copies the three files to the other brokers. A
+    broker trusts every one of the three present and signs with the current. The previous is
+    removed by hand after `certificate_lifetime`; trusting it longer admits nothing, since its key
+    is gone.
+  - **The promotion's guards** (pre-flight 2 m4). It is idempotent, so an interrupted one is
+    finished by running it again. It is refused while an earlier rotation's
+    `issuing-ca-previous.pem` is still there, whose certificates may still be valid, and on a
+    broker that holds the staged certificate without its key. A staged file that is already the
+    current CA, left by a finished promotion or copied from the promoting broker, is removed, and
+    nothing is promoted or said to be.
   - **At 3am** (R4). A start never fails over these files. A missing or unusable key stops
     issuance alone: `503 issuance_unavailable`, and the certificates already issued are trusted. A
     missing or unusable CA certificate also stops their trust. Each is said at start, naming the
@@ -910,7 +978,10 @@ certificate while the certificate is valid.
   `sub` for a sign-in whose `iat` is at or before the logout plus `clock_skew`, refuses the
   certificate's next request and refresh `credential_revoked` in the broker's logout words, and a
   refresh's own reading after its writes marks what it extended. The `sid` index reaches its device
-  sessions. A logout leaves no mark: a sign-in after it is taken.
+  sessions. A logout leaves no mark: a sign-in after it is taken. The certificate carries no mark of
+  its own, so the logout record is what refuses it: on a broker that issues, a logout record stands
+  `max(max_token_age, certificate_lifetime) + 2×clock_skew` (12h2m by default), not decision 39's
+  `max_token_age + 2×clock_skew`, and the recovery's lift time follows it.
 - **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
   refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
 - **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds}`.
@@ -964,8 +1035,10 @@ certificate while the certificate is valid.
     config file of four keys, a CA file fetched, and on Ubuntu `chmod go-w ~/.config`, per user and
     per host; the OIDC path would have added up to four more keys.
   - **Each CA rotated, with no step by a user.** The issuing CA (ruling 14) is the broker's alone;
-    no client holds it. The broker's TLS CA is `broker_ca`: the install ships the old and the new CA
-    in one file for the overlap, one file per host.
+    no client holds it. The broker's TLS CA rotates through the bundle each agent keeps (ruling 25),
+    and the install's config management ships the old and the new CA in `broker_ca`, one file per
+    host, at the rotation's start, and the new alone at its end. A host config management reaches
+    needs nothing of its user; the by-hand fix is for an unmanaged host alone.
   - **An expired or late certificate** is replaced by the next `port49 login`, which signs in and
     writes over the key and the certificate (ruling 12); a refused one is removed. No file is moved
     or deleted by hand.
@@ -988,16 +1061,32 @@ certificate while the certificate is valid.
   - **Refused, and the file left as it was:** a bundle out of those bounds, or one that does not
     hold the CA this connection was verified to. A change is logged by fingerprint, old and new.
     A kept file that cannot be used is refused at login, naming it.
-  - **A rotation.** The operator adds the next CA to the bundle and restarts the brokers; waits
+  - **A broker that sends no bundle clears it.** On a verified `/v1/config` with no
+    `broker_ca_bundle`, a kept file that does not hold the CA this connection was verified to is
+    removed, and one that does is cut to that CA alone, each said in one line. So the next login
+    still verifies the broker, and any other CA the file held is gone.
+  - **A rotation.** The operator adds the next CA to the bundle, and the install's config
+    management adds it to every host's `broker_ca` at once (ruling 24); restarts the brokers; waits
     while people log in (every agent that starts keeps the new bundle: a day covers everyone who
     works daily, longer covers people away); then switches the server certificate to one the next
-    CA issued; and later drops the old CA from the bundle. No user does anything.
-  - **A host away through the whole overlap** meets a certificate no CA it trusts issued, and the
+    CA issued; and later drops the old CA from the bundle and from `broker_ca`. No user does
+    anything.
+  - **A host away through the whole overlap** that config management reaches has the new
+    `broker_ca` on its return. An unmanaged one meets a certificate no CA it trusts issued, and the
     refusal says on the same line: get the broker's CA from its operator and run `port49 login
-    --broker-ca FILE` once; port49 keeps it current from then on.
+    --broker-ca FILE` once; port49 keeps it current from then on. That is the last resort, not the
+    rotation's path.
   - **What it does not do.** The bundle only adds trust beside `broker_ca`; it never removes the
-    configured CA, which the install updates in its own time. It carries trust only for the broker
-    that sent it, which already holds the server key; it adds no power a compromised broker lacks.
+    configured CA, which config management updates. So a rotation because the old CA is
+    compromised also pushes the new `broker_ca` to every host at once: until then the old CA stays
+    trusted there.
+  - **What it costs** (pre-flight 2 I1). It carries trust only for the broker that sent it, over a
+    connection verified to a CA the host already trusts, so a plain MITM pins nothing. But whoever
+    holds the broker's server key, even briefly, can send a bundle that adds a CA of their own, and
+    each agent that starts meanwhile trusts it for that broker. That outlives the compromise on a
+    host that does not reconnect to the real broker, since a bundle is replaced only by a later
+    one. The remedy is the real broker's next answer, a bundle or none, which every agent applies
+    at its next start.
 ```
 
 - [ ] **Step 2: Decision 39 rulings 15 and 16, decision 42 ruling 6, and §12's config file point at decision 43**
@@ -1097,6 +1186,9 @@ the agent holds the session on the certificate path, unchanged:
   and refreshes.
 - **The certificate's end** bounds the mint and the refresh, not a device session: what a last
   refresh extended runs to its own ceiling.
+- **A back-channel logout** refuses the certificate through its `sid` for as long as it lives: on a
+  broker that issues, a logout record stands `max(max_token_age, certificate_lifetime) +
+  2×clock_skew` (§13 decision 43 ruling 16).
 ```
 
 - [ ] **Step 6: §5.7, the `issue` event and `certificate_issued`**
@@ -1167,8 +1259,8 @@ Before the line that begins `- **Staleness ceiling**: with the broker unreachabl
   refused and recorded; the certificate mints as the sign-in's principal with `auth.oidc` on its
   records, never mapped through the directory; a chain ending at the issuing CA and another anchor
   is refused; a sign-in whose issuer no human verifier takes now is refused; a back-channel logout
-  of its `sid` refuses its next mint and refresh `credential_revoked` and revokes its device
-  sessions; a key signature refreshes it with no sign-in; a person's ID token at any other endpoint
+  of its `sid` refuses its next mint and refresh `credential_revoked`, for as long as the certificate
+  lives, and revokes its device sessions; a key signature refreshes it with no sign-in; a person's ID token at any other endpoint
   of a broker that issues is refused, and a machine's is not; a broker with no issuing CA key
   starts, answers a sign-in `issuance_unavailable`, and says so.
 ```
@@ -1178,8 +1270,8 @@ Before the line that begins `- **Staleness ceiling**: with the broker unreachabl
 After the row that begins `| **L54** |` (`grep -n "^| \*\*L54\*\*"`), insert:
 
 ```markdown
-| **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | open — added 2026-10-09, reworded 2026-10-10 |
-| **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA answers a sign-in's exchange 503 `issuance_unavailable` and its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code, verifier or private key in the CLI's raw output or the agent's log. Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | open — added 2026-10-09, reworded 2026-10-10 |
+| **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. **`prompt=login` over a live SSO session:** in one browser, a sign-in with no `prompt`, then 15s later, the control, the same session with no `prompt` (whether the form is shown, and `auth_time` against the first), then a `prompt=login` sign-in (whether the form is shown, and whether `auth_time` moves on by 15s or more). | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | open — added 2026-10-09, reworded 2026-10-10 |
+| **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA answers a sign-in's exchange 503 `issuance_unavailable` and its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code or private key in the CLI's raw output or the agent's log (the PKCE verifier, which port49 draws and the lab never sees, is checked by the unit tests' `credentialsNowhere`). Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | open — added 2026-10-09, reworded 2026-10-10 |
 ```
 
 - [ ] **Step 10: Design §7, the issued certificate as built**
@@ -4625,6 +4717,7 @@ git commit -m "feat(broker): trust the certificates the broker issues, for peopl
 **Files:**
 - Create: `internal/broker/issue.go`, `internal/broker/issue_test.go`
 - Modify: `internal/broker/broker.go` (`Broker.CertificateLifetime`, `Handler`, `config`)
+- Modify: `internal/broker/logout.go` (`logoutRecordTTL`, `logoutUnapplied`)
 - Modify: `internal/decision/reasons.go` (`CertificateIssued`, `EventIssue`), `internal/decision/log.go`
   (`Record.Certificate`, `Certificate`), `internal/decision/reasons_test.go`
 - Modify: `internal/daemon/metrics/metrics.go` (`CertificatesIssued`, `IssuingCANotAfter`)
@@ -4632,8 +4725,9 @@ git commit -m "feat(broker): trust the certificates the broker issues, for peopl
 **Interfaces:**
 - Consumes: Task 5's `issuer.CA.Issue`, `PEM`, `Unavailable`, `issuer.Fingerprint`,
   `issuer.DefaultLifetime`, `api.IssuanceNonce`, `api.IssueRequest`, `api.IssueResponse`,
-  `api.Issuance`; Task 6's `withIssuance`, `issued`, `issuedState`; the broker's `bearerOf`,
-  `bearerCaller`, `noteOwner`, `sayOnce`, `say`, `sayEvery`, `holdTimeout`.
+  `api.Issuance`; Task 6's `withIssuance`, `issued`, `issuedState`, `aliceSignIn`; the broker's
+  `bearerOf`, `bearerCaller`, `noteOwner`, `sayOnce`, `say`, `sayEvery`, `holdTimeout`,
+  `logoutRecordTTL`, `logoutUnapplied`, `Logout`; the tests' `advance`.
 - Produces, for Tasks 8, 10 and 12:
   - `POST /v1/certificate`; `Broker.CertificateLifetime time.Duration`;
     `func (b *Broker) certificateLifetime() time.Duration`
@@ -4671,6 +4765,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -4798,19 +4893,43 @@ func TestASignInIsExchangedOnce(t *testing.T) {
 	}
 }
 
-// An auth_time over 5 minutes old is a prompt=login the provider ignored:
-// refused, and recorded (decision 43 ruling 8; R3).
+// An auth_time over 5 minutes before the token's iat is a prompt=login the
+// provider ignored, judged on the provider's own clock; a token issued over 5
+// minutes before the broker's now is a slow sign-in or two clocks apart, and
+// never blamed on prompt=login; an auth_time after the iat (the verifier
+// refuses one ahead of the broker's now) is no sign-in.
+// Each is refused and recorded (decision 43 ruling 8; R3). An auth_time and
+// iat 4 minutes old, the control, is issued.
 func TestAStaleSignInIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
 	iss := f.withIssuance(t)
-	key := newECKey(t)
-	tok := f.signInFor(t, iss, key, map[string]any{"auth_time": f.b.Now().Add(-10 * time.Minute).Unix()})
-	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok); w.Code != 401 ||
-		apiError(w) != "sign_in_not_fresh" || !strings.Contains(w.Body.String(), "prompt=login") {
-		t.Fatalf("%s", shown(w))
+	now := f.b.Now()
+	for name, c := range map[string]struct {
+		claims       map[string]any
+		want, unwant string
+	}{
+		"prompt=login ignored": {map[string]any{"auth_time": now.Add(-10 * time.Minute).Unix()},
+			"prompt=login was not honoured", "clocks"},
+		"the clocks apart": {map[string]any{"auth_time": now.Add(-10 * time.Minute).Unix(),
+			"iat": now.Add(-10 * time.Minute).Unix()}, "clock and the broker's differ", "prompt=login"},
+		"auth_time after iat": {map[string]any{"auth_time": now.Unix(), "iat": now.Add(-4 * time.Minute).Unix()},
+			"after it issued the token", "prompt=login"},
+	} {
+		key := newECKey(t)
+		w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), f.signInFor(t, iss, key, c.claims))
+		if w.Code != 401 || apiError(w) != "sign_in_not_fresh" || !strings.Contains(w.Body.String(), c.want) ||
+			strings.Contains(w.Body.String(), c.unwant) {
+			t.Errorf("%s: %s", name, shown(w))
+		}
 	}
-	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 1 || recs[0]["verdict"] != "deny" {
+	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 3 || recs[0]["verdict"] != "deny" {
 		t.Fatalf("%v", recs)
+	}
+	key := newECKey(t)
+	tok := f.signInFor(t, iss, key, map[string]any{"auth_time": now.Add(-4 * time.Minute).Unix(),
+		"iat": now.Add(-4 * time.Minute).Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok); w.Code != 200 {
+		t.Fatalf("the control, 4 minutes old: %s", shown(w))
 	}
 }
 
@@ -4911,6 +5030,54 @@ func TestConfigSaysTheBrokerIssues(t *testing.T) {
 	f.b.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/config", nil))
 	if strings.Contains(w.Body.String(), "issuance") {
 		t.Fatalf("a broker that does not issue says it does: %s", w.Body)
+	}
+}
+
+// A logout's record stands on a broker that issues while a certificate
+// issued on a sign-in before it may still be presented: the certificate
+// carries no mark of its own, so past max_token_age its next mint is refused
+// still (decision 43 ruling 16). A lifetime under max_token_age keeps
+// max_token_age; and a broker that issued nothing when the logout landed
+// keeps the record max_token_age alone, the control that shows the mint
+// would otherwise pass.
+func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	tm := f.b.Identity.Timing
+	if got, want := f.b.logoutRecordTTL(), issuer.DefaultLifetime+2*tm.ClockSkew; got != want {
+		t.Fatalf("an issuing broker's logout record stands %s, want %s", got, want)
+	}
+	f.b.CertificateLifetime = time.Hour
+	if got, want := f.b.logoutRecordTTL(), tm.MaxTokenAge+2*tm.ClockSkew; got != want {
+		t.Fatalf("with a 1h lifetime the record stands %s, want %s", got, want)
+	}
+	f.b.CertificateLifetime = 0
+	past := tm.MaxTokenAge + 2*tm.ClockSkew + time.Minute
+	logout := func(f *fixture, iss *oidctest.Issuer) {
+		t.Helper()
+		if _, err := f.b.Logout(context.Background(), oidc.LogoutToken{Issuer: iss.URL, Sid: "s-sub-alice",
+			IssuedAt: f.b.Now(), Domains: []string{"example.com"}}, "backchannel_logout "+iss.URL); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := f.issued(t, f.aliceSignIn(iss))
+	logout(f, iss)
+	f.advance(past)
+	if w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.b.Now()); w.Code != 401 ||
+		apiError(w) != "credential_revoked" || !strings.Contains(w.Body.String(), "back-channel logout") {
+		t.Fatalf("a mint %s after the logout: %s", past, shown(w))
+	}
+
+	g := newFixture(t, 8)
+	giss := g.withIssuance(t)
+	gc := g.issued(t, g.aliceSignIn(giss))
+	ca := g.b.Issuer
+	g.b.Issuer = nil
+	logout(g, giss)
+	g.b.Issuer = ca
+	g.advance(past)
+	if w := g.postAt(context.Background(), g.issuedState(gc), mintLeaf1, "", g.b.Now()); w.Code != 200 {
+		t.Fatalf("the control, a record kept max_token_age alone: %s", shown(w))
 	}
 }
 ```
@@ -5116,10 +5283,28 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 			"certificate or token")
 		return
 	}
-	if now.Sub(c.oidc.AuthTime) > issueFresh+b.Identity.Timing.ClockSkew {
+	// Freshness on two clocks (R3): iat − auth_time is the provider's own, so
+	// only it can say prompt=login was not honoured; now − iat is the
+	// broker's against the provider's, a sign-in that took too long or two
+	// clocks that differ, never blamed on the provider's prompt.
+	skew, at := b.Identity.Timing.ClockSkew, c.oidc.AuthTime.UTC().Format(time.RFC3339)
+	iat := c.oidc.IssuedAt.UTC().Format(time.RFC3339)
+	switch {
+	case c.oidc.AuthTime.After(c.oidc.IssuedAt.Add(skew)):
+		refuse(http.StatusUnauthorized, "sign_in_not_fresh", fmt.Sprintf("your identity provider's token says you "+
+			"authenticated at %s, after it issued the token at %s; such a token is no sign-in; run `port49 login` "+
+			"again, and if it recurs tell the provider's operator", at, iat))
+		return
+	case c.oidc.IssuedAt.Sub(c.oidc.AuthTime) > issueFresh+skew:
 		refuse(http.StatusUnauthorized, "sign_in_not_fresh", fmt.Sprintf("your identity provider last authenticated "+
-			"you at %s, over %s ago: it did not ask you to sign in again (prompt=login was not honoured), or the "+
-			"sign-in took too long; run `port49 login` again", c.oidc.AuthTime.UTC().Format(time.RFC3339), issueFresh))
+			"you at %s, over %s before it issued this sign-in's token at %s: it did not ask you to sign in again "+
+			"(prompt=login was not honoured); run `port49 login` again", at, issueFresh, iat))
+		return
+	case now.Sub(c.oidc.IssuedAt) > issueFresh+skew:
+		refuse(http.StatusUnauthorized, "sign_in_not_fresh", fmt.Sprintf("your identity provider issued this "+
+			"sign-in's token at %s, over %s before the broker's now (%s): the sign-in took too long, or the "+
+			"provider's clock and the broker's differ by more than that; run `port49 login` again, and if it "+
+			"recurs tell the broker's operator to check both clocks", iat, issueFresh, now.UTC().Format(time.RFC3339)))
 		return
 	}
 	var req api.IssueRequest
@@ -5226,7 +5411,7 @@ func issuableKey(pub any) string {
 }
 ```
 
-- [ ] **Step 5: The route, the lifetime and `/v1/config`**
+- [ ] **Step 5: The route, the lifetime, `/v1/config`, and the logout record's life**
 
 In `internal/broker/broker.go`:
 
@@ -5246,6 +5431,86 @@ In `internal/broker/broker.go`:
   	if b.Issuer != nil {
   		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
   	}
+  ```
+
+In `internal/broker/logout.go` (decision 43 ruling 16; pre-flight 2 C1): a certificate the broker
+issued carries no mark of its own, so on a broker that issues the logout record must stand while a
+certificate issued on a sign-in before it may be presented, `max(max_token_age,
+certificate_lifetime) + 2×clock_skew`. `logoutUnapplied`'s lift time is `now + logoutRecordTTL()`
+already, so it follows; its words name the certificate too.
+
+- Replace
+
+  ```go
+  // logoutRecordTTL is how long a logout record stands: while a token issued
+  // before it could still be presented. The recovery's lift time is the same
+  // quantity.
+  func (b *Broker) logoutRecordTTL() time.Duration {
+  	t := b.Identity.Timing
+  	return t.MaxTokenAge + 2*t.ClockSkew
+  }
+  ```
+
+  with
+
+  ```go
+  // logoutRecordTTL is how long a logout record stands: while a token issued
+  // before it could still be presented, and on a broker that issues
+  // certificates while one issued on a sign-in before it could (decision 43
+  // ruling 16): such a certificate carries no mark of its own, so the record
+  // is what refuses it. The recovery's lift time is the same quantity.
+  func (b *Broker) logoutRecordTTL() time.Duration {
+  	t := b.Identity.Timing
+  	held := t.MaxTokenAge
+  	if b.Issuer != nil {
+  		held = max(held, b.certificateLifetime())
+  	}
+  	return held + 2*t.ClockSkew
+  }
+  ```
+
+- Replace
+
+  ```go
+  // logoutUnapplied is the recovery for a logout nothing of which was written:
+  // no logout record refuses the session's held ID token, so the contexts are
+  // ended and the mark is lifted only after lift, when that token has expired.
+  func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
+  	at := lift.UTC().Format(time.RFC3339)
+  	if b.AdminSocket == "" {
+  		return b.proc() + " has no admin_socket configured, so end " + principal + "'s contexts: remove " + principal +
+  			"'s grants from broker.policy_file (live within two watch intervals), and restore them only after " + at +
+  			", when no ID token the logout would have refused can still mint; or configure admin_socket and revoke there"
+  	}
+  	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+  	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
+  		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
+  		": no logout record refuses the session's held ID token until then; last check that `port49 revoke --list` " +
+  		"there shows no mark for " + principal
+  }
+  ```
+
+  with
+
+  ```go
+  // logoutUnapplied is the recovery for a logout nothing of which was written:
+  // no logout record refuses the session's held ID token, or the certificate
+  // issued on its sign-in, so the contexts are ended and the mark is lifted
+  // only after lift, when that token or certificate has expired.
+  func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
+  	at := lift.UTC().Format(time.RFC3339)
+  	if b.AdminSocket == "" {
+  		return b.proc() + " has no admin_socket configured, so end " + principal + "'s contexts: remove " + principal +
+  			"'s grants from broker.policy_file (live within two watch intervals), and restore them only after " + at +
+  			", when no ID token or issued certificate the logout would have refused can still mint; or configure " +
+  			"admin_socket and revoke there"
+  	}
+  	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+  	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
+  		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
+  		": no logout record refuses the session's held ID token or issued certificate until then; last check that " +
+  		"`port49 revoke --list` there shows no mark for " + principal
+  }
   ```
 
 - [ ] **Step 6: Run the tests to verify they pass**
@@ -5452,6 +5717,67 @@ func TestAnInterruptedPromotionFinishes(t *testing.T) {
 	if ca, _ := issuer.Load(issuerFiles(dir), now); ca.Unavailable != nil || len(ca.Trusted) != 2 ||
 		!bytes.Equal(ca.Cert.Raw, mustCert(t, next)) {
 		t.Fatalf("after the rerun: %v", ca.Unavailable)
+	}
+}
+
+// The edges of a rotation (decision 43 ruling 14): another broker holds the
+// staged certificate alone, trusts it, and cannot promote it; a staged file
+// left there once the promotion is copied over is the current CA already,
+// and is removed with nothing promoted; and a promotion is refused while an
+// earlier rotation's previous CA is still there, until it is removed.
+func TestRotateIssuerEdges(t *testing.T) {
+	a, b, now := stateDir(t), stateDir(t), time.Now()
+	if _, _, err := initIssuer(a, now); err != nil {
+		t.Fatal(err)
+	}
+	copyToB := func(names ...string) {
+		t.Helper()
+		for _, n := range names {
+			raw, err := os.ReadFile(filepath.Join(a, n))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeOwnerOnly(filepath.Join(b, n), raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	copyToB(issuer.CertFile, issuer.KeyFile)
+	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "copy "+issuer.NextCertFile+" alone") {
+		t.Fatalf("the stage: %q %v", line, err)
+	}
+	copyToB(issuer.NextCertFile)
+	if ca, _ := issuer.Load(issuerFiles(b), now); ca.Unavailable != nil || len(ca.Trusted) != 2 {
+		t.Fatalf("the other broker, the staged certificate alone: %v, %d trusted", ca.Unavailable, len(ca.Trusted))
+	}
+	if _, err := rotateIssuer(b, now); err == nil || !strings.Contains(err.Error(), "the broker that staged it") {
+		t.Fatalf("a promotion with no staged key: %v", err)
+	}
+	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted") {
+		t.Fatalf("the promotion: %q %v", line, err)
+	}
+	copyToB(issuer.CertFile, issuer.KeyFile, issuer.PreviousCertFile)
+	before, _ := os.ReadFile(filepath.Join(b, issuer.CertFile))
+	if line, err := rotateIssuer(b, now); err != nil || !strings.Contains(line, "nothing was promoted") {
+		t.Fatalf("a staged file left from the promotion: %q %v", line, err)
+	}
+	after, _ := os.ReadFile(filepath.Join(b, issuer.CertFile))
+	if _, err := os.Stat(filepath.Join(b, issuer.NextCertFile)); !errors.Is(err, fs.ErrNotExist) ||
+		!bytes.Equal(before, after) {
+		t.Fatalf("the leftover is still there (%v), or the current CA changed", err)
+	}
+	if _, err := rotateIssuer(a, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rotateIssuer(a, now); err == nil ||
+		!strings.Contains(err.Error(), issuer.PreviousCertFile+" from an earlier rotation") {
+		t.Fatalf("a promotion over the previous CA: %v", err)
+	}
+	if err := os.Remove(filepath.Join(a, issuer.PreviousCertFile)); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := rotateIssuer(a, now); err != nil || !strings.Contains(line, "promoted") {
+		t.Fatalf("the promotion once it is removed: %q %v", line, err)
 	}
 }
 
@@ -5724,8 +6050,22 @@ type Issuance struct {
 In `internal/config/identity.go`:
 
 - Add `"github.com/rhwendt/port49/internal/issuer"` to the imports.
-- In `identityYAML`, after `JWKSMaxAge *time.Duration \`yaml:"jwks_max_age"\``, add
-  `Issuance *issuanceYAML \`yaml:"issuance"\``, and after the type add:
+- In `identityYAML`, replace
+
+  ```go
+  	JWKSMaxAge          *time.Duration         `yaml:"jwks_max_age"`
+  }
+  ```
+
+  with (aligned as `gofmt` leaves it)
+
+  ```go
+  	JWKSMaxAge          *time.Duration         `yaml:"jwks_max_age"`
+  	Issuance            *issuanceYAML          `yaml:"issuance"`
+  }
+  ```
+
+  and after the type add:
 
   ```go
   // issuanceYAML is broker.identity.issuance (plan 9b; spec §13 decision 43).
@@ -5885,27 +6225,41 @@ func initIssuer(dir string, now time.Time) (created bool, line string, err error
 		dir, issuer.CertFile, fingerprintOf(certPEM), issuer.KeyFile, os.Geteuid()), nil
 }
 
-// rotateIssuer is rotate-issuer (decision 43 ruling 14; R5). With no staged
-// CA it stages one, which every broker trusts from its next start. With one
-// it promotes it: the current certificate becomes the previous, its key is
-// overwritten by the staged key, and the staged becomes current. Each step
-// is a whole-file write, so a promotion interrupted is finished by running
-// it again.
+// rotateIssuer is rotate-issuer (decision 43 ruling 14; R5), run on one
+// broker. With no staged CA it stages one: its certificate alone goes to the
+// other brokers, which trust it from their next start, and its key stays
+// here. With one it promotes it: the current certificate becomes the
+// previous, its key is overwritten by the staged key, and the staged becomes
+// current. A promotion is refused while an earlier rotation's previous CA is
+// still here, since certificates it issued may still be valid, and on a
+// broker that holds the staged certificate without its key. Each step is a
+// whole-file write, so a promotion interrupted is finished by running it
+// again; a staged file that is already the current CA, left by a promotion
+// that finished or kept by another broker, is removed and nothing promoted.
 func rotateIssuer(dir string, now time.Time) (string, error) {
 	f := issuerFiles(dir)
-	cur, err := f.Cert(issuer.CertFile)
-	if err != nil {
-		return "", err
-	}
-	nextCert, err := f.Cert(issuer.NextCertFile)
-	if err != nil {
-		return "", err
-	}
-	nextKey, err := f.Key(issuer.NextKeyFile)
-	if err != nil {
-		return "", err
+	var cur, curKey, prev, nextCert, nextKey []byte
+	for _, r := range []struct {
+		dst  *[]byte
+		name string
+		read func(string) ([]byte, error)
+	}{{&cur, issuer.CertFile, f.Cert}, {&curKey, issuer.KeyFile, f.Key}, {&prev, issuer.PreviousCertFile, f.Cert},
+		{&nextCert, issuer.NextCertFile, f.Cert}, {&nextKey, issuer.NextKeyFile, f.Key}} {
+		raw, err := r.read(r.name)
+		if err != nil {
+			return "", err
+		}
+		*r.dst = raw
 	}
 	join := func(name string) string { return filepath.Join(dir, name) }
+	removeNext := func() error {
+		for _, name := range []string{issuer.NextKeyFile, issuer.NextCertFile} {
+			if err := os.Remove(join(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		return nil
+	}
 	switch {
 	case cur == nil:
 		return "", fmt.Errorf("there is no %s in %s to rotate from; run init-issuer first", issuer.CertFile, dir)
@@ -5920,12 +6274,26 @@ func rotateIssuer(dir string, now time.Time) (string, error) {
 		if err := writeOwnerOnly(join(issuer.NextCertFile), certPEM); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("staged the next issuing CA in %s (%s): copy %s and %s to every broker on this store and "+
-			"restart each, so each trusts it; then run rotate-issuer again to issue with it", dir, fingerprintOf(certPEM),
-			issuer.NextCertFile, issuer.NextKeyFile), nil
-	case nextCert == nil || nextKey == nil:
-		return "", fmt.Errorf("one of %s and %s is in %s without the other; restore it, or remove it on purpose",
-			issuer.NextCertFile, issuer.NextKeyFile, dir)
+		return fmt.Sprintf("staged the next issuing CA in %s (%s): copy %s alone to every other broker on this store "+
+			"(its key, %s, stays here) and restart each, so each trusts it; then run rotate-issuer again here to issue "+
+			"with it", dir, fingerprintOf(certPEM), issuer.NextCertFile, issuer.NextKeyFile), nil
+	case nextCert != nil && bytes.Equal(cur, nextCert) && (nextKey == nil || bytes.Equal(curKey, nextKey)):
+		if err := removeNext(); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("the staged CA in %s is the current one already (%s), so nothing was promoted; removed "+
+			"the staged files left from its promotion", dir, fingerprintOf(cur)), nil
+	case nextKey == nil:
+		return "", fmt.Errorf("%s is in %s without %s: this broker trusts the staged CA but cannot promote it; run "+
+			"rotate-issuer on the broker that staged it, which holds the key, then copy the files it names here",
+			issuer.NextCertFile, dir, issuer.NextKeyFile)
+	case nextCert == nil:
+		return "", fmt.Errorf("%s is in %s without %s; restore it, or remove it on purpose", issuer.NextKeyFile, dir,
+			issuer.NextCertFile)
+	case prev != nil && !bytes.Equal(prev, cur) && !bytes.Equal(cur, nextCert):
+		return "", fmt.Errorf("%s from an earlier rotation is still in %s, and a promotion would overwrite it while "+
+			"certificates it issued may still be valid: remove it once certificate_lifetime has passed since that "+
+			"promotion, restart each broker, and run rotate-issuer again", issuer.PreviousCertFile, dir)
 	}
 	if !bytes.Equal(cur, nextCert) {
 		if err := writeOwnerOnly(join(issuer.PreviousCertFile), cur); err != nil {
@@ -5938,15 +6306,13 @@ func rotateIssuer(dir string, now time.Time) (string, error) {
 	if err := writeOwnerOnly(join(issuer.KeyFile), nextKey); err != nil {
 		return "", err
 	}
-	for _, name := range []string{issuer.NextKeyFile, issuer.NextCertFile} {
-		if err := os.Remove(join(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
+	if err := removeNext(); err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("promoted the staged CA in %s (%s): copy %s, %s and %s to every broker on this store and "+
-		"restart each; each then issues with it and still trusts the previous; after certificate_lifetime, remove %s "+
-		"and restart again", dir, fingerprintOf(nextCert), issuer.CertFile, issuer.KeyFile, issuer.PreviousCertFile,
-		issuer.PreviousCertFile), nil
+	return fmt.Sprintf("promoted the staged CA in %s (%s): copy %s, %s and %s to every other broker on this store, "+
+		"remove the %s staged there, and restart each; each then issues with it and still trusts the previous; after "+
+		"certificate_lifetime, remove %s and restart again", dir, fingerprintOf(nextCert), issuer.CertFile,
+		issuer.KeyFile, issuer.PreviousCertFile, issuer.NextCertFile, issuer.PreviousCertFile), nil
 }
 
 // issuerCmd runs `<proc> init-issuer|rotate-issuer [--config FILE]`
@@ -6833,10 +7199,16 @@ func agentLog(sock string) string {
 }
 
 // credentialsNowhere fails if any text holds a value the provider issued,
-// or the first line of the issued key's PEM.
+// a PKCE verifier the login sent it, or the first line of the issued key's
+// PEM.
 func (o *oidcLab) credentialsNowhere(t *testing.T, texts ...string) {
 	t.Helper()
 	secrets := o.as.Issued()
+	for _, g := range o.as.Grants() {
+		if v := g.Get("code_verifier"); v != "" {
+			secrets = append(secrets, v)
+		}
+	}
 	_, keyPath := o.issuedPaths(t)
 	if raw, err := os.ReadFile(keyPath); err == nil {
 		if blk, _ := pem.Decode(raw); blk != nil {
@@ -6846,7 +7218,7 @@ func (o *oidcLab) credentialsNowhere(t *testing.T, texts ...string) {
 	for _, text := range texts {
 		for _, v := range secrets {
 			if strings.Contains(text, v) {
-				t.Fatal("a code, a token or the key reached the terminal or the agent's log")
+				t.Fatal("a code, a token, a verifier or the key reached the terminal or the agent's log")
 			}
 		}
 	}
@@ -8302,6 +8674,7 @@ the user (decision 43 ruling 25).
   - `userconfig.CABundlePathIn(dir, broker string) (string, error)`, `userconfig.CABundlePath`;
     `func (a *agent.Agent) BrokerRoot() *x509.Certificate`, `agent.RotatedCAHint`;
     `keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer)`,
+    `forgetBundle(path string, root *x509.Certificate, log io.Writer)`,
     `withKeptBundle(broker string, caPEM []byte) ([]byte, error)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -8694,6 +9067,38 @@ func TestKeepCABundle(t *testing.T) {
 	}
 }
 
+// A broker that sends no bundle, on a verified connection, clears what the
+// agent kept: a kept bundle holding a CA beside the one verified to (one a
+// broker key held briefly by another could have planted) is cut to that CA,
+// and one that does not hold it is removed, each said; with nothing kept
+// nothing is said (decision 43 ruling 25).
+func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	cur, planted, other := testCA(t), testCA(t), testCA(t)
+	path, err := userconfig.CABundlePath(bundleBroker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	if _, err := os.Stat(path); !os.IsNotExist(err) || log.Len() != 0 {
+		t.Fatalf("nothing kept: %v %q", err, log.String())
+	}
+	keepCABundle(bundleBroker, string(cur.PEM())+string(planted.PEM()), cur.Cert, &bytes.Buffer{})
+	log.Reset()
+	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, cur.PEM()) ||
+		!strings.Contains(log.String(), "now holds only the CA this connection was verified to") {
+		t.Fatalf("the CA verified to, kept alone: %v %q", err, log.String())
+	}
+	keepCABundle(bundleBroker, string(other.PEM())+string(planted.PEM()), other.Cert, &bytes.Buffer{})
+	log.Reset()
+	keepCABundle(bundleBroker, "", cur.Cert, &log)
+	if _, err := os.Stat(path); !os.IsNotExist(err) || !strings.Contains(log.String(), "removed "+path) {
+		t.Fatalf("a bundle the connection did not need: %v %q", err, log.String())
+	}
+}
+
 // A login trusts its broker_ca and the bundle the agent kept for that
 // broker, and no other broker's; a kept file that cannot be used is refused
 // naming it.
@@ -8865,14 +9270,20 @@ Expected: FAIL to build: `undefined: SystemPath`, `SystemOwner`, `LoadAll`, `Leg
 
 Add `"cmp"` to the imports, after `"bytes"`.
 
-Replace the package comment's head
+Replace the package comment, as Task 10 Step 3 left it,
 
 ```go
 // Package userconfig is the operator's own files under
 // $XDG_CONFIG_HOME/port49 (spec §13 decision 42, ruling 6): config.yaml,
-// which gives `port49 login` its broker, broker CA, certificate and key; and
+// which gives `port49 login` its broker, broker CA, certificate and key, or its
+// identity provider (spec §13 decision 43 ruling 19), and the certificate the
+// broker issued it (IssuedPaths); and
 // the private-file reading and writing it shares with the pinned host keys
-// (internal/hostkeys).
+// (internal/hostkeys). Whoever can write these files chooses which broker the
+// operator trusts and which device keys `port49 ssh` accepts, so a file, or a
+// directory holding one, that anyone else can write is refused, never read.
+// It is keyfile's rule for a private key, for writing rather than reading,
+// and unlike internal/fence it holds on macOS too.
 ```
 
 with
@@ -8884,7 +9295,11 @@ with
 // login` its broker, broker CA, certificate and key, or its identity provider
 // (decision 43 ruling 19); the certificate the broker issued it
 // (IssuedPaths); and the private-file reading and writing it shares with the
-// pinned host keys (internal/hostkeys).
+// pinned host keys (internal/hostkeys). Whoever can write these files chooses
+// which broker the operator trusts and which device keys `port49 ssh`
+// accepts, so a file, or a directory holding one, that anyone else can write
+// is refused, never read. It is keyfile's rule for a private key, for writing
+// rather than reading, and unlike internal/fence it holds on macOS too.
 ```
 
 Replace `Dir` and `Path`
@@ -9534,11 +9949,13 @@ Create `cmd/port49/cabundle.go`:
 package main
 
 import (
+	"cmp"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"slices"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -9551,14 +9968,17 @@ import (
 // So a rotation of the broker's CA asks nothing of the user. A bundle out of
 // bounds, or one that drops the CA this connection was verified to, is
 // refused and the file left as it was; a change is logged by fingerprint.
-// Nothing here ends the session.
+// A broker that sends no bundle clears what was kept (forgetBundle), so a
+// CA planted by whoever held the broker's key once is gone at the real
+// broker's next answer. Nothing here ends the session.
 func keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer) {
-	if bundle == "" {
-		return
-	}
 	path, err := userconfig.CABundlePath(broker)
 	if err != nil {
 		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)
+		return
+	}
+	if bundle == "" {
+		forgetBundle(path, root, log)
 		return
 	}
 	certs, err := api.ParseCABundle([]byte(bundle))
@@ -9583,6 +10003,46 @@ func keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer) 
 		return
 	}
 	fmt.Fprintf(log, "port49 agent: kept the broker's CA bundle in %s: %s (was %s)\n", path, api.CAFingerprints(certs), was)
+}
+
+// forgetBundle clears the bundle kept at path when the broker, on a verified
+// connection, sends none (decision 43 ruling 25). A kept file that does not
+// hold the CA this connection was verified to is not needed for it, and is
+// removed; one that does is cut to that CA alone, so the next login still
+// verifies the broker while any other CA it held is dropped.
+func forgetBundle(path string, root *x509.Certificate, log io.Writer) {
+	old, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle")
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	held, perr := api.ParseCABundle(old)
+	if err == nil && perr != nil {
+		err = perr
+	}
+	if err != nil || root == nil {
+		fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is left as it was: %v\n", path,
+			cmp.Or(err, errors.New("no CA was verified")))
+		return
+	}
+	if !slices.ContainsFunc(held, root.Equal) {
+		if err := os.Remove(path); err != nil {
+			fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is not removed: %v\n", path, err)
+			return
+		}
+		fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle; removed %s (it held %s)\n", path,
+			api.CAFingerprints(held))
+		return
+	}
+	if len(held) == 1 {
+		return
+	}
+	only := []*x509.Certificate{root}
+	if err := userconfig.WritePrivate(path, api.EncodeCABundle(only), "broker CA bundle"); err != nil {
+		fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is not changed: %v\n", path, err)
+		return
+	}
+	fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle; %s now holds only the CA this connection was "+
+		"verified to: %s (was %s)\n", path, api.CAFingerprints(only), api.CAFingerprints(held))
 }
 
 // withKeptBundle is caPEM and the bundle the agent kept for broker, which a
@@ -9787,8 +10247,9 @@ const l55Claim = "Keycloak as port49's public client meets it (plan 9b): which r
 	"PKCE method, and whether code_challenge_method=plain is accepted; discovery's code_challenge_methods_supported " +
 	"and authorization_response_iss_parameter_supported, and whether the authorization response carries iss (RFC " +
 	"9207); whether a 43-character base64url nonce, port49's key binding, comes back in the ID token byte for byte, " +
-	"and whether a prompt=login sign-in's auth_time is within 10s of it (policy engine spec §15 L55; §13 decision 43 " +
-	"rulings 1, 3, 4 and 8)."
+	"and whether a prompt=login sign-in's auth_time is within 10s of it, and over a live SSO session whether " +
+	"prompt=login shows the form and moves auth_time on, against the same session with no prompt (policy engine " +
+	"spec §15 L55; §13 decision 43 rulings 1, 3, 4 and 8)."
 
 // l55Accepted is whether Keycloak took an authorization request: it showed
 // the login form, rather than its "Invalid parameter" page.
@@ -9812,7 +10273,8 @@ func (k *keycloak) l55Browser() *http.Client {
 }
 
 // l55Authorize is an authorization request for port49-cli naming redirect,
-// with an S256 challenge for verifier, a fresh state, and extra.
+// with an S256 challenge for verifier, a fresh state, and extra; a parameter
+// extra sets to "" is left out.
 func (k *keycloak) l55Authorize(t *testing.T, redirect, verifier string, extra url.Values) string {
 	t.Helper()
 	state := randomSecret(t)
@@ -9823,6 +10285,9 @@ func (k *keycloak) l55Authorize(t *testing.T, redirect, verifier string, extra u
 		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
 	for key, v := range extra {
 		q[key] = v
+		if len(v) == 1 && v[0] == "" {
+			delete(q, key)
+		}
 	}
 	return k.URL + "/protocol/openid-connect/auth?" + q.Encode()
 }
@@ -9844,7 +10309,16 @@ func (k *keycloak) authorizeAccepted(t *testing.T, redirect string, extra url.Va
 // and the authorization response's query (the code registered as secret).
 func (k *keycloak) l55SignIn(t *testing.T, browser *http.Client, extra url.Values) (string, string, url.Values) {
 	t.Helper()
-	verifier := randomSecret(t) + randomSecret(t)
+	code, verifier, q, _ := k.l55SignInForm(t, browser, extra)
+	return code, verifier, q
+}
+
+// l55SignInForm is l55SignIn, and whether Keycloak showed the login form
+// (false: an SSO session in browser answered with no password).
+func (k *keycloak) l55SignInForm(t *testing.T, browser *http.Client, extra url.Values) (string, string, url.Values,
+	bool) {
+	t.Helper()
+	verifier, form := randomSecret(t)+randomSecret(t), false
 	resp, err := browser.Get(k.l55Authorize(t, kcRedirect, verifier, extra))
 	if err != nil {
 		t.Fatalf("authorize: %s", errCause(err))
@@ -9856,6 +10330,7 @@ func (k *keycloak) l55SignIn(t *testing.T, browser *http.Client, extra url.Value
 		if m == nil {
 			t.Fatalf("INVALID: authorize answered %s with no login form; no note is written", resp.Status)
 		}
+		form = true
 		if resp, err = browser.PostForm(html.UnescapeString(string(m[1])), url.Values{"username": {oidcAlice},
 			"password": {oidcAlicePassword}, "credentialId": {""}}); err != nil {
 			t.Fatalf("login: %s", errCause(err))
@@ -9867,7 +10342,7 @@ func (k *keycloak) l55SignIn(t *testing.T, browser *http.Client, extra url.Value
 		t.Fatalf("INVALID: no code (%s, redirect %s); no note is written", resp.Status, locShape(loc))
 	}
 	k.know(loc.Query().Get("code"))
-	return loc.Query().Get("code"), verifier, loc.Query()
+	return loc.Query().Get("code"), verifier, loc.Query(), form
 }
 
 // l55Exchange is the code's exchange with verifierSent ("" sends none); it
@@ -9892,6 +10367,19 @@ func (k *keycloak) l55Exchange(t *testing.T, code, verifierSent string) (int, ma
 		}
 	}
 	return resp.StatusCode, out
+}
+
+// l55IDClaims is the claims of the ID token the code's exchange answers; a
+// cell with no id_token is INVALID, and no note is written.
+func (k *keycloak) l55IDClaims(t *testing.T, code, verifier, cell string) map[string]any {
+	t.Helper()
+	status, out := k.l55Exchange(t, code, verifier)
+	id, ok := out["id_token"].(string)
+	if !ok {
+		t.Fatalf("INVALID: cell %s's exchange gave no id_token (%s); no note is written", cell, l55Said(status, out))
+	}
+	_, claims := claimsOf(id)
+	return claims
 }
 
 // l55Said is a token answer as a cell: its status, and its error or what it
@@ -10028,12 +10516,28 @@ func TestL55PublicClient(t *testing.T) {
 	nonce := base64.RawURLEncoding.EncodeToString(sum[:])
 	signedAt := time.Now()
 	code, verifier, _ := k.l55SignIn(t, k.l55Browser(), url.Values{"nonce": {nonce}})
-	_, out := k.l55Exchange(t, code, verifier)
-	id, _ := out["id_token"].(string)
-	_, claims := claimsOf(id)
+	claims := k.l55IDClaims(t, code, verifier, "4")
 	at, _ := claims["auth_time"].(float64)
 	cell("4. a 43-character nonce, and auth_time", fmt.Sprintf("nonce echoed byte for byte %v; auth_time %+.0fs "+
 		"from the sign-in", claims["nonce"] == nonce, at-float64(signedAt.Unix())))
+
+	// 4b. prompt=login over a live SSO session, which cell 4's fresh browser
+	// cannot show: decision 43 ruling 8's freshness check rests on it. One
+	// browser signs in with no prompt; 15s later, the control: the same
+	// session with no prompt shows no form and keeps the first auth_time;
+	// then prompt=login, which must show the form and move auth_time on.
+	sso, noPrompt := k.l55Browser(), url.Values{"prompt": {""}}
+	code, verifier, _, _ = k.l55SignInForm(t, sso, noPrompt)
+	first, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
+	time.Sleep(15 * time.Second)
+	code, verifier, _, formNone := k.l55SignInForm(t, sso, noPrompt)
+	again, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
+	code, verifier, _, formLogin := k.l55SignInForm(t, sso, nil)
+	login, _ := k.l55IDClaims(t, code, verifier, "4b")["auth_time"].(float64)
+	cell("4b. control: the same SSO session 15s later, no prompt", fmt.Sprintf("form shown %v; auth_time %+.0fs "+
+		"after the first sign-in's", formNone, again-first))
+	cell("4b. prompt=login over that SSO session", fmt.Sprintf("form shown %v; auth_time %+.0fs after the first "+
+		"sign-in's (expected 15s or more)", formLogin, login-first))
 	writeOIDCResult(t, k, "L55", l55Claim, preface+obs.String(), evPath)
 }
 ```
@@ -10092,7 +10596,7 @@ const l56Claim = "Port49-issued certificates end to end on Keycloak and one devi
 	"next mint in the broker's logout words and ends the agent, a port49 login over that certificate removes it, and " +
 	"a sign-in from the time the broker names works; with Keycloak stopped, port49 token, port49 refresh and a new " +
 	"agent over the held certificate work, and port49 login --sign-in says the provider did not answer and when the " +
-	"held certificate ends; no compact JWS, code, verifier or private key in the CLI's raw output or the agent's log " +
+	"held certificate ends; no compact JWS, code or private key in the CLI's raw output or the agent's log " +
 	"(policy engine spec §15 L56; §13 decision 43)."
 
 // l56AuthURL is the authorization URL port49 prints on its own line,
@@ -10234,16 +10738,26 @@ func (c *l56CLI) issued(t *testing.T) (string, string) {
 	return cert, key
 }
 
-// knowKey registers the issued key's PEM first line as a value no output may
-// hold, and returns the certificate's SHA-256, "" for none.
-func (c *l56CLI) knowKey(t *testing.T, kc *keycloak) string {
-	t.Helper()
-	certPath, keyPath := c.issued(t)
+// keyNow registers the issued key there now, its PEM's first line, as a value
+// no output may hold. finish calls it once the command has ended, so the run
+// that wrote a key is checked against that key.
+func (c *l56CLI) keyNow(kc *keycloak) {
+	_, keyPath, err := userconfig.IssuedPathsIn(filepath.Join(c.home, ".port49"), sliceBrokerURL)
+	if err != nil {
+		return
+	}
 	if raw, err := os.ReadFile(keyPath); err == nil {
 		if blk, _ := pem.Decode(raw); blk != nil {
 			kc.know(base64.StdEncoding.EncodeToString(blk.Bytes)[:64])
 		}
 	}
+}
+
+// knowKey is keyNow, and the certificate's SHA-256, "" for none.
+func (c *l56CLI) knowKey(t *testing.T, kc *keycloak) string {
+	t.Helper()
+	c.keyNow(kc)
+	certPath, _ := c.issued(t)
 	raw, err := os.ReadFile(certPath)
 	if err != nil {
 		return ""
@@ -10273,8 +10787,9 @@ func (r l56Run) cell() string {
 }
 
 // leak is leakIn on raw CLI output, before any scrubbing: a compact JWS, or
-// a value the run registered as secret (a code, a verifier, a token Keycloak
-// issued, the key, the admin password) that port49 does not print by design.
+// a value the run registered as secret (a code, the key, the admin password)
+// that port49 does not print by design. The PKCE verifier port49 draws is
+// never seen here; the unit tests' credentialsNowhere checks it.
 func (c *l56CLI) leak(kc *keycloak, raw string) error {
 	var secrets []string
 	for _, v := range kc.known() {
@@ -10285,8 +10800,10 @@ func (c *l56CLI) leak(kc *keycloak, raw string) error {
 	return leakIn(raw, secrets)
 }
 
-// finish is r with its raw output checked for a leak, then scrubbed.
+// finish is r with its raw output checked for a leak, then scrubbed. The key
+// the command may have written is registered first.
 func (c *l56CLI) finish(kc *keycloak, r l56Run) l56Run {
+	c.keyNow(kc)
 	r.leak = c.leak(kc, r.stdout+"\n"+r.stderr)
 	r.stdout, r.stderr = scrubbed(r.stdout, kc.known()), scrubbed(r.stderr, kc.known())
 	return r
@@ -10842,7 +11359,8 @@ lab-oidc-agent:
 In `tests/lab/README.md`, after the identity-provider section, add a section "OIDC sign-in and
 issued certificates (plan 9b): L55 and L56" saying, in the README's style:
 - `make lab-oidc-l55` measures L55 on the standalone Keycloak. It changes `port49-cli`'s redirect
-  URIs for the run and puts them back.
+  URIs for the run and puts them back. Cell 4b keeps one browser's SSO session across three
+  sign-ins, 15s apart, to see whether `prompt=login` authenticates again.
 - `make build && make lab-oidc-agent` measures L56: `bin/port49 login --oidc --no-browser` on the
   compose stack, a scripted browser signing in from the address port49 prints.
 - L56 starts the broker with `broker.identity.issuance` and no issuing CA, checks what it says, then
@@ -10853,8 +11371,10 @@ issued certificates (plan 9b): L55 and L56" saying, in the README's style:
 - L56 step 4b runs `port49 login --sign-in` with a pty for stdin and types the address Keycloak sent
   the browser to, as a person on a jump host pastes it.
 - Every CLI command's raw output is checked for a compact JWS or a registered secret (the issued
-  key's PEM included) before it is scrubbed for the note, and a leak fails the run. Only what port49
-  prints by design is exempt.
+  key's PEM included, read once the command has ended, so a run is checked against the key it
+  wrote) before it is scrubbed for the note, and a leak fails the run. Only what port49 prints by
+  design is exempt. The PKCE verifier port49 draws is never seen by the lab; the unit tests check
+  it.
 - Each L56 cell asserts, and each assertion has a control that shows it can fail. A control that
   does not hold is INVALID, and no note is written.
 - Keycloak is stopped and started by `docker compose stop|start keycloak`.
@@ -10885,8 +11405,11 @@ Then rule 4: if a result contradicts a doc, the doc is wrong.
   did, say Keycloak needs a fixed port and `oidc_redirect_port`; the client's ephemeral default
   stands, from RFC 8252.
 - **Ruling 8.** If L55 cell 4 shows Keycloak does not echo the nonce byte for byte, or its
-  `auth_time` is not the sign-in's under `prompt=login`, the key binding or the freshness check
-  does not hold there: stop, and take it to Ryan before closing anything.
+  `auth_time` is not the sign-in's under `prompt=login`, or cell 4b shows a `prompt=login` over a
+  live SSO session that does not move `auth_time` on (its control holding: the session with no
+  `prompt` kept the first), the key binding or the freshness check does not hold there: stop, and
+  take it to Ryan before closing anything. A cell 4 or 4b exchange with no `id_token` is INVALID,
+  never recorded.
 - **This plan's operator notes**, which Task 13 copies: replace each italic line with what was
   measured.
 
@@ -10921,11 +11444,21 @@ Under `## Plan 9 — Agent in full (§19 step 9)`, after `### Plan 9a — As bui
     `crypto.Signer`; `per_login_mfa`.
   - **9d:** the pins file leaves `userconfig.LegacyDir` with `port49 devices trust`; `LegacyDir`
     then serves the refusal of plan 9a's config file alone.
+  - **9d:** `port49 ssh` and `devices trust` are refused with no fix on a host whose `~/.config` is
+    group-writable (pre-flight 2 m5): 9d must fix it, which removing the pins file does. The
+    roadmap's 9d entry carries it already; the PR body lists it under known limitations.
   - **Plan 12:** each deployment shape's client package ships `/etc/port49/config.yaml` and the
     broker CA beside it, root-owned (decision 43 ruling 24).
   - **Plan 12:** a check that every broker on one store holds the same issuing CA (each start prints
     its fingerprint today); the issuing CA's files in each deployment shape's state volume, and
     `init-issuer` in each shape's setup.
+  - **Plan 12: the issuing CA's custody at broker scale** (pre-flight 2 m7). `init-issuer` and
+    `rotate-issuer` mean copying CA files to each broker by hand, three restart rounds per
+    rotation: fine for 2–5 brokers once in five years. A Kubernetes Secret mounted read-only makes
+    `rotate-issuer`'s writes fail, so that shape needs its own rotation (a new Secret per round).
+    Keeping the CA in the shared store, sealed by `internal/store/crypt`, is the option that
+    removes the copying: plan 12 weighs it against the key leaving the broker's disk for the
+    store.
   - **Pre-beta review:** retiring plan 7h's bearer path for people (Q1), and its harness
     (`make lab-oidc`) rebuilt on issuance.
   - **Plan 13:** this plan's operator notes as the lab corrected them.

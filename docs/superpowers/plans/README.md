@@ -5216,6 +5216,12 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     lookup plugin over it.
   - The 9d plan amends the spec (decision 42) to match. 9a's final review I-1 (the direct dial in
     `devices trust`) is moot with the command out of the user flow.
+  - **9d must fix `port49 ssh` refusing on a group-writable `~/.config`** (carried from 9b's
+    pre-flight 2, m5). After 9b the pins file stays in 9a's `~/.config/port49/known_hosts`, read
+    through ruling 6's walk, and 9b's refusal no longer names a `chmod` for a directory. So on a
+    host whose `~/.config` is group-writable (Ubuntu's default 0775), `port49 ssh` and `devices
+    trust` are refused with no fix to run. The pins file goes away in 9d, which ends it; 9d's
+    plan checks that nothing it keeps reads a file under `~/.config` through that walk.
 
 - **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
   with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
