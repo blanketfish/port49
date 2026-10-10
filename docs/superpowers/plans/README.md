@@ -5124,8 +5124,18 @@ merges (CLAUDE.md).
     unplug), if one is to hand.
 - **9d — Host keys from inventory, and the Python and Ansible clients** (design §17).
   - **Host keys:** an optional host-key fingerprint per device in inventory, carried through the
-    bundle into the mint item (`host_keys`), and checked by `port49 ssh` beside its pins. A changed
-    one is a security event in the sync diff. Its format follows L53.
+    bundle into the mint item (`host_keys`). A changed one is a security event in the sync diff.
+    Its format follows L53.
+  - **Trust is not in the user's flow** (Ryan, 2026-10-10; amends decision 42's pin-first rule). A
+    person or an Ansible run reaching a thousand switches it has never touched trusts nothing by
+    hand. An inventory fingerprint is sufficient on its own: `port49 ssh` and every client take the
+    key the mint names and connect, with no per-user pin. A device with no inventory key is
+    accepted on first use and pinned, with a line saying so. Either way a key that **changes** stops
+    the connection, shows the old and new fingerprints, and connects again only after the person
+    trusts the new key by hand (`port49 devices trust --replace`). The Netmiko example's strict
+    `RejectPolicy` takes its expected key from the mint for the same reason. The 9d plan amends the
+    spec (decision 42) to match. A central fleet scan that fills inventory's keys for review in the
+    sync diff, so first use is rarely the user's, is in scope.
   - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
     lookup plugin over it. Third-party clients look a key up by address, and 9d is where the mint
     can tell them which key to expect.
