@@ -5122,8 +5122,7 @@ merges (CLAUDE.md).
     depth: the CA is the operator's).
   - **CI and lab:** SoftHSM2 and swtpm in CI; a new row for a real YubiKey on the SER8 (touch, PIN,
     unplug), if one is to hand.
-- **9d — OpenSSH's own host-key handling, optional inventory keys, and the Python and Ansible
-  clients** (design §17).
+- **9d — OpenSSH's own host-key handling, and the Python and Ansible clients** (design §17).
   - **Host keys are OpenSSH's job** (Ryan, 2026-10-10; replaces decision 42's pin-first rule). port49
     does not reimplement host-key trust. `port49 ssh` forces `StrictHostKeyChecking=accept-new`
     (never `no`) against the person's own `~/.ssh/known_hosts`: a first connection is accepted and
@@ -5133,16 +5132,12 @@ merges (CLAUDE.md).
     flow: 9d removes them, or keeps `devices trust` only as an admin tool if a reason survives
     review. The reason host keys matter at all stays in the docs: the device password is a one-time
     token, and an impostor that takes it can replay it to the real device within its lifetime.
-  - **Inventory keys, optional:** the device's SSH public key(s) in inventory (the key itself, not
-    only a fingerprint, since OpenSSH needs key material), carried through the bundle into the mint
-    item (`host_keys`); a changed one is a security event in the sync diff. Where inventory has a
-    key, `port49 ssh` hands it to OpenSSH through `KnownHostsCommand` (OpenSSH 8.5+) and, for that
-    connection, sets `UserKnownHostsFile=/dev/null`, so inventory alone decides: an impostor's key a
-    person once accepted cannot satisfy it, and no local edit gets past a mismatch. This closes the
-    first-contact window. Never required. A re-keyed device (an RMA) is refused for everyone until
-    its inventory key is updated, and the refusal says so and names inventory. Collected server side
-    (from the configs and `show` output Oxidized already backs up, or a central scan once the lab
-    shows whether a key read counts toward a login ban such as IOS-XE `login block-for`).
+  - **No inventory host keys** (Ryan, 2026-10-10). Keeping every device's key in the source of
+    truth, and updating it on every re-key, is not feasible at production scale. port49 stores no
+    host keys anywhere. The first-contact window accept-new leaves is the one every SSH user
+    accepts, and the docs say so plainly. A shop that wants verified first contact can already
+    use OpenSSH's own tools (a managed `GlobalKnownHostsFile`, or host certificates via
+    `@cert-authority`), which `port49 ssh` leaves untouched.
   - **Netmiko and Python:** Paramiko's equivalent of accept-new (save an unknown key, and Paramiko
     always refuses a changed one) replaces the example's strict `RejectPolicy`.
   - **Clients:** the Python library (~300 lines: identity, mint, sweep, retry) and the Ansible
