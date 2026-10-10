@@ -150,8 +150,9 @@ The agent then runs the certificate path unchanged, so a refresh and a new agent
 signatures, and pre-flight D1 dissolves. A broker that issues takes a person's ID token nowhere else;
 its CA is made by `init-issuer`, rotated with overlap, and never stops a start. The client's config
 moves to `~/.port49`, under a root-owned `/etc/port49/config.yaml` the install ships, so a new user's
-first login is `port49 login` and the sign-in (Ryan's no-toil rule). Decision 43 holds its
-twenty-four rulings; three questions (Q1 when 7h's bearer path for people retires, Q2 where the
+first login is `port49 login` and the sign-in (Ryan's no-toil rule); the broker sends its CA
+bundle and each agent keeps it, so a rotation of the broker's CA asks nothing of users. Decision 43
+holds its twenty-five rulings; three questions (Q1 when 7h's bearer path for people retires, Q2 where the
 lifetime is set, Q3 the held key reused across agents), each ruled as recommended on 2026-10-10 by
 the controller under Ryan's standing grant. It opens
 L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS). 9e, a
@@ -5119,7 +5120,9 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     does, and no host-key pins. A root-owned `/etc/port49/config.yaml`, shipped by the install, is
     read under it key by key, so a new user's first login is `port49 login` and the sign-in.
     `$PORT49_CONFIG` and `--config` name another file. 9a's `~/.config/port49/config.yaml` is
-    refused in one line naming the move. No CA rotation asks anything of a user.
+    refused in one line naming the move. No CA rotation asks anything of a user: the broker sends
+    its CA bundle on `/v1/config` (`broker.tls_ca_bundle_file`), each agent keeps it per broker, and
+    a login trusts it beside `broker_ca` (ruling 25).
   - **The 3am cases, each a test:**
     - the IdP down: everyone holding a certificate works all day, new agents included; only a
       sign-in fails, and says so;

@@ -15,7 +15,8 @@
 > **Amended the same day** for Ryan's later rulings: the client's config moves to `~/.port49`, under
 > a root-owned `/etc/port49/config.yaml` the install ships, and no step per user may remain that
 > cannot be done at scale (decision 43 ruling 24, R8, and a new Task 11; the lab and roadmap tasks
-> become 12 and 13).
+> become 12 and 13). The broker sends its CA bundle and each agent keeps it, so a rotation of the
+> broker's TLS CA asks nothing of users either (ruling 25, R10; Tasks 8 and 11).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -82,6 +83,9 @@ What 9b builds:
   - A root-owned `/etc/port49/config.yaml`, shipped by the install, is read under the user's file
     key by key, so a new user's first login is `port49 login` and the sign-in.
   - A config file at plan 9a's `~/.config/port49/` is refused in one line naming the move.
+  - The broker sends its CA bundle (`broker.tls_ca_bundle_file`) on `/v1/config`; each agent keeps
+    it per broker, and a login trusts it beside `broker_ca`, so the broker's TLS CA rotates with no
+    step by a user (ruling 25).
 - **Lab (ruling 23).**
   - **L55:** Keycloak as the client meets it: the redirect registrations, PKCE, the `iss`
     parameter, and the key-binding `nonce` echoed.
@@ -122,6 +126,11 @@ What 9b builds:
   `SystemOwner`, `EnvConfig` (`PORT49_CONFIG`), `LegacyDir` (Task 11).
 - **`internal/hostkeys`:** `Path` stays in plan 9a's directory, through `userconfig.LegacyDir`,
   until 9d (Task 11).
+- **The broker's CA bundle (ruling 25):** `internal/broker/api/cabundle.go` (`ParseCABundle`,
+  `EncodeCABundle`, `CAFingerprints`), `api.Config.BrokerCABundle`, `Broker.CABundle`,
+  `broker.tls_ca_bundle_file`, and port49d's `loadCABundle` (Task 8); `agent.BrokerRoot`,
+  `agent.RotatedCAHint`, `userconfig.CABundlePath`, and `cmd/port49`'s `keepCABundle` and
+  `withKeptBundle` (Task 11).
 - **`cmd/port49`:**
   - `issue.go`: `loginIssued`, `issueCertificate`, `requestCertificate`, `heldCertificate`,
     `startIssued`, `signIn`, `pickProvider`, `browserCommand`, `fetchBrokerConfig`, `warnSkew`;
@@ -252,8 +261,9 @@ Each is the stricter of the options, or the one the spec's own text already chos
   - **A laptop rebuilt:** the same as a new user. The issued key is not backed up, and need not be:
     a sign-in makes a new one.
   - **The issuing CA rotated:** nothing for users; no client holds it (ruling 14).
-  - **The broker's TLS CA rotated:** one file per host, `broker-ca.pem` holding the old and the new
-    CA through the overlap, shipped by whatever shipped it. Nothing per user.
+  - **The broker's TLS CA rotated:** nothing for users either (ruling 25). The broker sends its CA
+    bundle on `/v1/config`; each agent keeps it, and the next login trusts it beside `broker_ca`.
+    A host away through the whole overlap is told the fix in one line.
   - **A certificate expired or late:** the next `port49 login` signs in and writes over the key and
     certificate; a refused one is removed (R6). No file is handled by hand.
   - **50 operators on 4 jump hosts:** one system file per host, not 200 copies of five values.
@@ -268,6 +278,9 @@ Each is the stricter of the options, or the one the spec's own text already chos
     until 9d, and moving the whole directory would leave `port49 ssh` with no pins.
   - **Root alone** may own the system file: it names the broker for every user on the host. A
     directory above it is held to ruling 6's walk, as every config file is.
+- **R10. The CA bundle is kept per broker** (ruling 25), in `~/.port49/broker_ca/<host>_<port>.pem`
+  rather than one `~/.port49/broker_ca.pem` as the brief had it: a person who uses two brokers
+  would otherwise trust each broker's CAs for the other.
 
 ## What carries over from the superseded draft
 
@@ -401,6 +414,29 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49 login: /etc/port49/config.yaml is not owned by root; the system port49 config file names the broker for every user on this host, so it is root's alone: chown root /etc/port49/config.yaml
   ```
+- **A host away through a whole rotation of the broker's CA** (Task 11,
+  `TestTheAgentSaysWhyTheBrokerDoesNotVerify`), in the agent's log the login prints, exit 1:
+
+  ```
+  port49 agent: the broker's certificate at https://port49-broker.example.com:8443 does not verify (x509: certificate signed by unknown authority); check that the trust anchor (--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries; if the broker's operator rotated its CA while this host was away, get the broker's CA from them and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on
+  ```
+- **The agent keeping a new CA bundle** (Task 11, `TestTheAgentKeepsTheBrokersCABundle`), in its
+  log:
+
+  ```
+  port49 agent: kept the broker's CA bundle in /home/alice/.port49/broker_ca/port49-broker.example.com_8443.pem: sha256:3f…, sha256:9c… (was sha256:3f…)
+  ```
+- **The broker's start with a bundle** (Task 8, `TestLoadCABundle`):
+
+  ```
+  port49-broker: broker: tls_ca_bundle_file /etc/port49-broker/ca-bundle.pem, sent to every client: sha256:3f…, sha256:9c…
+  ```
+
+  and with one that does not hold the server certificate's CA:
+
+  ```
+  port49-broker: broker: tls_ca_bundle_file /etc/port49-broker/ca-bundle.pem: it does not hold the CA of the server certificate in tls_cert_file (x509: certificate signed by unknown authority); no CA bundle is sent, so clients keep the CAs they hold
+  ```
 - **A directory above a config file that others can write** (Task 11), exit 2, with no `chmod`
   suggested for a directory that may be shared:
 
@@ -451,8 +487,8 @@ closes.
 
   A new user then runs `port49 login` and signs in; that is all. Each user's `~/.port49/config.yaml`
   (or the file `$PORT49_CONFIG` names) overrides it key by key, and a flag overrides both. The
-  client id, scopes and lifetime come from the broker. To rotate the broker's TLS CA, ship both
-  the old and the new CA in `broker-ca.pem` for the overlap; no user does anything.
+  client id, scopes and lifetime come from the broker, and so do the CAs the broker's certificate
+  will come from (below), so the system file's `broker_ca` only has to be right at install.
 - **`port49 login --oidc`** (or `method: oidc` in a config file) signs in at the provider the broker
   lists, and asks your password and MFA every time (`prompt=login`).
   - It needs `broker` and `broker_ca`, as a certificate login does; the system file gives both.
@@ -482,6 +518,21 @@ closes.
   issued or not), or one with `--cert-issuer DN --cert-serial HEX` from its `issue` record.
 - **A person's ID token is refused at a broker that issues,** except at `POST /v1/certificate`. A
   machine's token is unaffected.
+- **Rotate the broker's TLS CA with no user action** (decision 43 ruling 25). Set
+  `broker.tls_ca_bundle_file` to a PEM file of the CAs clients are to trust for the broker's
+  certificate (1 to 4 CAs, at most 64 KiB); every agent keeps it at its start, per broker, in
+  `~/.port49/broker_ca/`.
+  1. Add the next CA to the bundle and restart every broker. Each start names the bundle's
+     fingerprints; a bundle without the CA of the certificate in use is not sent, and the start
+     says so.
+  2. Wait while people log in: every agent that starts keeps the new bundle (its log says
+     `kept the broker's CA bundle`). A day covers everyone who works daily; wait longer for
+     people away.
+  3. Switch `tls_cert_file` to a certificate the next CA issued, and restart.
+  4. Later, drop the old CA from the bundle, and update `/etc/port49/broker-ca.pem` in the install
+     at your own pace.
+  - **A host away for the whole overlap** gets one line naming the fix: get the broker's current CA
+    and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on.
 
 ## Global Constraints
 
@@ -589,11 +640,13 @@ The five inputs or conditions most likely to bite a person, and the test that pi
   `broker.go` again (`Handler`, `config`, the `CertificateLifetime` field). Task 7 starts after
   Task 6 is committed.
 - **`internal/decision` and `internal/daemon/metrics`:** Task 7 alone.
-- **`internal/config`, `internal/port49d`:** Task 8 alone.
-- **`internal/agent`:** Task 9 alone.
+- **`internal/config`, `internal/port49d`:** Task 8 alone. Task 8 also edits
+  `internal/broker/api/api.go` and `internal/broker/broker.go` (the CA bundle) after Task 7.
+- **`internal/agent`:** Task 9, then Task 11 (`BrokerRoot`, the rotation's hint).
 - **`internal/userconfig`, `cmd/port49`:** Task 10, then Task 11 (`~/.port49`, the system file),
   which edits the same `Load`, `fill` and `TestMain` after Task 10 is committed. Task 11 also edits
-  `internal/hostkeys/hostkeys.go` (`Path`) and `cmd/port49/trust_hint_test.go`.
+  `internal/hostkeys/hostkeys.go` (`Path`), `cmd/port49/trust_hint_test.go`, `login_linux_test.go`
+  and `issue.go`, and creates `cmd/port49/cabundle.go`.
 - **The spec and the design:** Task 1 writes them. Task 12 closes L55 and L56 and fixes any text
   their results contradict.
 - **`tests/lab/`, `Makefile`, `tests/lab/README.md`:** Task 12 alone.
@@ -613,6 +666,9 @@ needs 1–11. Task 13 is last.
 - `internal/broker/api/issue.go`, `issue_test.go`.
 - `internal/broker/issued.go`, `issued_test.go`, `issue.go`, `issue_test.go`.
 - `internal/port49d/issuer.go`, `issuer_test.go`.
+- `internal/broker/api/cabundle.go`, `cabundle_test.go`; `internal/broker/cabundle_test.go`;
+  `internal/port49d/cabundle.go`, `cabundle_test.go` (Task 8).
+- `cmd/port49/cabundle.go`, `cabundle_test.go` (Task 11).
 - `cmd/port49/issue.go`, `issue_test.go`, `issue_login_linux_test.go`, `harden_linux.go`,
   `harden_darwin.go`, `harden_other.go`.
 - `tests/lab/l55_test.go`, `l56_test.go`, `l55_l56_unit_test.go`.
@@ -635,6 +691,8 @@ needs 1–11. Task 13 is last.
   `config_test.go` (Task 10; Task 11 again, with `issue_login_linux_test.go` and
   `trust_hint_test.go`).
 - `internal/hostkeys/hostkeys.go` (Task 11).
+- `internal/broker/api/api.go`, `internal/broker/broker.go`, `internal/config/config.go` (Task 8, the
+  CA bundle); `internal/agent/agent.go`, `cmd/port49/issue.go`, `login_linux_test.go` (Task 11).
 - `Makefile` (`lab-oidc-l55`, `lab-oidc-agent`), `tests/lab/README.md` (Task 12).
 - `docs/superpowers/plans/README.md` (Task 13).
 
@@ -657,7 +715,7 @@ needs 1–11. Task 13 is last.
 
 **Interfaces:**
 - Consumes: the rulings R1–R7 and Q1–Q3 above.
-- Produces: decision 43, rulings 1–24, which every later task cites; the `issue` event and the
+- Produces: decision 43, rulings 1–25, which every later task cites; the `issue` event and the
   `certificate_issued` reason, which Task 7 builds; L55 and L56, which Task 12 measures.
 
 This task is docs only. Each step is an edit with the exact text. Where a step says "replace", the
@@ -856,7 +914,8 @@ certificate while the certificate is valid.
 - **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
   refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
 - **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds}`.
-  Decision 39 ruling 16's `oidc` list is unchanged.
+  Decision 39 ruling 16's `oidc` list is unchanged. A broker with `tls_ca_bundle_file` adds
+  `broker_ca_bundle` (ruling 25).
 - **19. The config file and the flags** (amends decision 42 ruling 6).
   - **The file.** `config.yaml` gains `method` (`x509`, the default, or `oidc`), `oidc_issuer`,
     `oidc_ca` (held to ruling 6's ownership rule as `broker_ca` is, and read once) and
@@ -915,6 +974,30 @@ certificate while the certificate is valid.
     silently passed over.
   - **What a refusal says.** It names the exact path and the owner or mode it needs. It never
     suggests a `chmod` on a directory, which may be shared, as a group-writable `~/.config` is.
+- **25. The broker's TLS CA rotates with no step by a user** (Ryan, 2026-10-10; completes ruling
+  24).
+  - **The bundle.** `broker.tls_ca_bundle_file` names the CAs clients are to trust for the
+    broker's server certificate: the CA in use and, through a rotation, the next. The broker reads
+    it at start and sends it on `GET /v1/config` as `broker_ca_bundle` (PEM). A bundle that cannot
+    be read, holds anything but 1 to 4 CA certificates in at most 64 KiB, or does not verify the
+    server certificate in use is not sent, said in one line, and the start goes on (R4's rule).
+  - **The client.** The agent fetches `/v1/config` on the connection it has just verified, at every
+    start, and keeps the bundle 0600 in `~/.port49/broker_ca/<host>_<port>.pem`, one per broker so
+    no broker's bundle is trusted for another. A login trusts its `broker_ca` and the kept bundle
+    together, and hands both to the agent it starts.
+  - **Refused, and the file left as it was:** a bundle out of those bounds, or one that does not
+    hold the CA this connection was verified to. A change is logged by fingerprint, old and new.
+    A kept file that cannot be used is refused at login, naming it.
+  - **A rotation.** The operator adds the next CA to the bundle and restarts the brokers; waits
+    while people log in (every agent that starts keeps the new bundle: a day covers everyone who
+    works daily, longer covers people away); then switches the server certificate to one the next
+    CA issued; and later drops the old CA from the bundle. No user does anything.
+  - **A host away through the whole overlap** meets a certificate no CA it trusts issued, and the
+    refusal says on the same line: get the broker's CA from its operator and run `port49 login
+    --broker-ca FILE` once; port49 keeps it current from then on.
+  - **What it does not do.** The bundle only adds trust beside `broker_ca`; it never removes the
+    configured CA, which the install updates in its own time. It carries trust only for the broker
+    that sent it, which already holds the server key; it adds no power a compromised broker lacks.
 ```
 
 - [ ] **Step 2: Decision 39 rulings 15 and 16, decision 42 ruling 6, and §12's config file point at decision 43**
@@ -5182,7 +5265,7 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
 
 ---
 
-### Task 8: `broker.identity.issuance`, the CA at start, `init-issuer` and `rotate-issuer`
+### Task 8: `broker.identity.issuance`, the CA at start, `init-issuer` and `rotate-issuer`, and the broker's CA bundle
 
 **Files:**
 - Modify: `internal/oidc/config.go` (`Config.Issuance`, `Issuance`)
@@ -5191,6 +5274,11 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
 - Create: `internal/port49d/issuer.go`, `internal/port49d/issuer_test.go`
 - Modify: `internal/port49d/main.go` (`Main`'s subcommands, `buildBrokerAnchor`),
   `internal/port49d/brokerd.go` (`BrokerMain`'s subcommands)
+- The broker's CA bundle (ruling 25): Create `internal/broker/api/cabundle.go`,
+  `internal/broker/api/cabundle_test.go`, `internal/broker/cabundle_test.go`,
+  `internal/port49d/cabundle.go`, `internal/port49d/cabundle_test.go`; Modify
+  `internal/broker/api/api.go` (`Config.BrokerCABundle`), `internal/broker/broker.go`
+  (`Broker.CABundle`, `config`), `internal/config/config.go` (`BrokerConfig.TLSCABundleFile`)
 
 **Interfaces:**
 - Consumes: Task 5's `issuer.Load`, `issuer.New`, `issuer.Files`, the file names and lifetimes;
@@ -5205,6 +5293,10 @@ git commit -m "feat(broker): POST /v1/certificate exchanges a fresh, key-bound s
   - `func issuerCmd(proc, op, defaultConfig string, load func(string) (config.Config, error), args []string, stdout, stderr io.Writer) int`
   - the subcommands `port49d init-issuer|rotate-issuer [--config FILE]` and
     `port49-broker init-issuer|rotate-issuer [--config FILE]`
+  - for Task 11: `api.ParseCABundle(raw []byte) ([]*x509.Certificate, error)`,
+    `api.EncodeCABundle`, `api.CAFingerprints`, `api.MaxCABundleBytes`, `api.MaxCABundleCerts`,
+    `api.Config.BrokerCABundle`, `Broker.CABundle`; `broker.tls_ca_bundle_file`;
+    `func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) []byte`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5421,10 +5513,193 @@ func TestIssuerCmdUsage(t *testing.T) {
 }
 ```
 
+The broker's CA bundle (ruling 25). Create `internal/broker/api/cabundle_test.go`:
+
+```go
+package api
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/testpki"
+)
+
+// A bundle is CAs alone, at most MaxCABundleCerts of them in at most
+// MaxCABundleBytes; anything else is refused whole (decision 43 ruling 25).
+func TestParseCABundle(t *testing.T) {
+	now := time.Now()
+	ca := func() []byte {
+		c, err := testpki.NewCA("port49 test CA", now.Add(-time.Hour), now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.PEM()
+	}
+	cur, next := ca(), ca()
+	certs, err := ParseCABundle(append(append([]byte{}, cur...), next...))
+	if err != nil || len(certs) != 2 || !bytes.Equal(EncodeCABundle(certs), append(append([]byte{}, cur...), next...)) ||
+		strings.Count(CAFingerprints(certs), "sha256:") != 2 {
+		t.Fatalf("%d %v", len(certs), err)
+	}
+	issuer, err := testpki.NewCA("port49 test CA", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := issuer.Issue(testpki.Leaf{CommonName: "broker", NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafPEM, _, err := testpki.PEMs(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	five := bytes.Repeat(cur, 5)
+	for name, c := range map[string]struct {
+		raw  []byte
+		want string
+	}{
+		"empty":       {nil, "no certificate"},
+		"a leaf":      {leafPEM, "is not a CA"},
+		"five":        {five, "over 4 certificates"},
+		"too large":   {bytes.Repeat([]byte(" "), MaxCABundleBytes+1), "over 65536"},
+		"a key":       {[]byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"), "PRIVATE KEY block"},
+		"trailing":    {append(append([]byte{}, cur...), "junk"...), "other than PEM"},
+		"not parsing": {[]byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), "certificate 1"},
+	} {
+		if _, err := ParseCABundle(c.raw); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+```
+
+Create `internal/broker/cabundle_test.go`:
+
+```go
+package broker
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+)
+
+// GET /v1/config carries the CA bundle the broker was given, and no field
+// at all with none (decision 43 ruling 25).
+func TestConfigCarriesTheCABundle(t *testing.T) {
+	b := &Broker{MaxSessionAge: time.Hour, CABundle: []byte("-----BEGIN CERTIFICATE-----\n")}
+	rec := httptest.NewRecorder()
+	b.config(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
+	var c api.Config
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || c.BrokerCABundle != "-----BEGIN CERTIFICATE-----\n" {
+		t.Fatalf("%v %q", err, rec.Body.String())
+	}
+	b.CABundle = nil
+	rec = httptest.NewRecorder()
+	b.config(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
+	if strings.Contains(rec.Body.String(), "broker_ca_bundle") {
+		t.Fatalf("%q", rec.Body.String())
+	}
+}
+```
+
+Create `internal/port49d/cabundle_test.go`:
+
+```go
+package port49d
+
+import (
+	"crypto/tls"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+)
+
+// The bundle GET /v1/config sends: sent when it holds the server
+// certificate's CA, said by fingerprint; not sent, and said, when it does
+// not, or cannot be read. The start goes on either way (decision 43 ruling
+// 25).
+func TestLoadCABundle(t *testing.T) {
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, testpki.LabServerCert), filepath.Join(dir, testpki.LabServerKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(filepath.Join(dir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := testpki.NewCA("port49 next CA", time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, body []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var said []string
+	say := func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+
+	both := write("both.pem", append(append([]byte{}, cur...), next.PEM()...))
+	got := loadCABundle(both, cert, say)
+	certs, err := api.ParseCABundle(got)
+	if err != nil || len(certs) != 2 || !certs[1].Equal(next.Cert) || len(said) != 1 ||
+		!strings.Contains(said[0], "sent to every client: "+api.CAFingerprints(certs)) {
+		t.Fatalf("%v %v", err, said)
+	}
+	for name, c := range map[string]struct{ path, want string }{
+		"the next CA alone": {write("next.pem", next.PEM()), "does not hold the CA of the server certificate"},
+		"missing":           {filepath.Join(dir, "none.pem"), "no such file"},
+		"a leaf":            {write("leaf.pem", mustRead(t, filepath.Join(dir, testpki.LabServerCert))), "is not a CA"},
+	} {
+		said = nil
+		if got := loadCABundle(c.path, cert, say); got != nil || len(said) != 1 || !strings.Contains(said[0], c.want) ||
+			!strings.Contains(said[0], "no CA bundle is sent, so clients keep the CAs they hold") {
+			t.Errorf("%s: %q %v", name, got, said)
+		}
+	}
+	if got := loadCABundle("", cert, say); got != nil {
+		t.Fatal("no file named sends nothing")
+	}
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/config/ ./internal/port49d/ -run 'Issuance|Issuer|InterruptedPromotion|NoIssuingCA' -count=1`
 Expected: FAIL to build: `unknown field Issuance in struct literal`, `undefined: initIssuer`.
+
+Run: `go test ./internal/broker/... ./internal/port49d/ -run CABundle -count=1`
+Expected: FAIL to build: `undefined: ParseCABundle`, `unknown field CABundle`, `undefined: loadCABundle`.
 
 - [ ] **Step 3: The config**
 
@@ -5767,19 +6042,308 @@ In `internal/port49d/brokerd.go`'s `BrokerMain`, after the `revoke` dispatch, ad
 and replace its usage line `"usage: port49-broker [--config FILE]"` with `"usage: port49-broker [--config
 FILE], or port49-broker revoke|init-issuer|rotate-issuer …"`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 6: The broker's CA bundle (decision 43 ruling 25)**
 
-Run: `gofmt -l internal/ && go test ./internal/oidc/ ./internal/config/ ./internal/port49d/ -count=1`
+`GET /v1/config` sends every client the CAs it is to trust for the broker's server certificate,
+from `broker.tls_ca_bundle_file`: the CA in use and, through a rotation, the next. Read at start;
+a bundle that cannot be read, is out of bounds, or does not verify the server certificate in use is
+not sent, said in one line, and the start goes on (R4's rule). Clients keep what they hold.
+
+Create `internal/broker/api/cabundle.go`, whose bounds and parse both ends use:
+
+```go
+package api
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// The bounds on GET /v1/config's broker_ca_bundle (spec §13 decision 43
+// ruling 25): the CA in use and the next one through a rotation, with room
+// to spare, and never a file of the system's roots.
+const (
+	MaxCABundleBytes = 64 << 10
+	MaxCABundleCerts = 4
+)
+
+// ParseCABundle reads a broker CA bundle: 1 to MaxCABundleCerts PEM
+// certificates, each a CA, in at most MaxCABundleBytes, holding nothing
+// else. Both ends read it so: the broker the file it sends, the client what
+// it is sent.
+func ParseCABundle(raw []byte) ([]*x509.Certificate, error) {
+	if len(raw) > MaxCABundleBytes {
+		return nil, fmt.Errorf("the CA bundle is %d bytes, over %d", len(raw), MaxCABundleBytes)
+	}
+	var out []*x509.Certificate
+	rest := raw
+	for {
+		var b *pem.Block
+		if b, rest = pem.Decode(rest); b == nil {
+			break
+		}
+		if b.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("the CA bundle holds a %s block; it holds certificates alone", b.Type)
+		}
+		c, err := x509.ParseCertificate(b.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("the CA bundle's certificate %d: %w", len(out)+1, err)
+		}
+		if !c.BasicConstraintsValid || !c.IsCA {
+			return nil, fmt.Errorf("the CA bundle's certificate %d (%s) is not a CA", len(out)+1, c.Subject)
+		}
+		if out = append(out, c); len(out) > MaxCABundleCerts {
+			return nil, fmt.Errorf("the CA bundle holds over %d certificates", MaxCABundleCerts)
+		}
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("the CA bundle holds something other than PEM certificates")
+	}
+	if len(out) == 0 {
+		return nil, errors.New("the CA bundle holds no certificate")
+	}
+	return out, nil
+}
+
+// EncodeCABundle is certs as PEM, nothing else.
+func EncodeCABundle(certs []*x509.Certificate) []byte {
+	var b bytes.Buffer
+	for _, c := range certs {
+		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+	}
+	return b.Bytes()
+}
+
+// CAFingerprints names certs as a log line does: "sha256:" and the hex
+// SHA-256 of each one's DER, comma-separated.
+func CAFingerprints(certs []*x509.Certificate) string {
+	fps := make([]string, len(certs))
+	for i, c := range certs {
+		sum := sha256.Sum256(c.Raw)
+		fps[i] = "sha256:" + hex.EncodeToString(sum[:])
+	}
+	return strings.Join(fps, ", ")
+}
+```
+
+In `internal/broker/api/api.go`, replace
+
+```go
+	// Issuance is set when the broker issues a person a certificate over an
+	// OIDC sign-in (plan 9b; spec §13 decision 43 ruling 18).
+	Issuance *Issuance `json:"issuance,omitempty"`
+}
+```
+
+with
+
+```go
+	// Issuance is set when the broker issues a person a certificate over an
+	// OIDC sign-in (plan 9b; spec §13 decision 43 ruling 18).
+	Issuance *Issuance `json:"issuance,omitempty"`
+	// BrokerCABundle is the CAs a client trusts for this broker's server
+	// certificate, PEM: the one in use and, through a rotation, the next
+	// (decision 43 ruling 25). Empty when broker.tls_ca_bundle_file is not
+	// set.
+	BrokerCABundle string `json:"broker_ca_bundle,omitempty"`
+}
+```
+
+In `internal/broker/broker.go`, replace
+
+```go
+	// CertificateLifetime is broker.identity.issuance.certificate_lifetime
+	// (decision 43 ruling 9); zero is issuer.DefaultLifetime.
+	CertificateLifetime time.Duration
+```
+
+with
+
+```go
+	// CertificateLifetime is broker.identity.issuance.certificate_lifetime
+	// (decision 43 ruling 9); zero is issuer.DefaultLifetime.
+	CertificateLifetime time.Duration
+	// CABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET /v1/config
+	// sends every client (decision 43 ruling 25); nil sends none.
+	CABundle []byte
+```
+
+In `internal/broker/broker.go`, replace
+
+```go
+		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
+	}
+	writeJSON(w, http.StatusOK, c)
+```
+
+with
+
+```go
+		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
+	}
+	c.BrokerCABundle = string(b.CABundle)
+	writeJSON(w, http.StatusOK, c)
+```
+
+In `internal/config/config.go`, replace
+
+```go
+type BrokerConfig struct {
+	Listen      string `yaml:"listen"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+```
+
+with
+
+```go
+type BrokerConfig struct {
+	Listen      string `yaml:"listen"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	// TLSCABundleFile is the CAs clients are to trust for the server
+	// certificate, sent on GET /v1/config: the CA in use and, through a
+	// rotation, the next (spec §13 decision 43 ruling 25). Optional; read at
+	// start, and a bundle that does not verify tls_cert_file is not sent.
+	TLSCABundleFile string `yaml:"tls_ca_bundle_file"`
+```
+
+In `internal/port49d/main.go`, replace
+
+```go
+	var anchors []namedAnchor
+	human := namedAnchor{key: "broker.client_ca_file", cert: anchorCert}
+```
+
+with
+
+```go
+	caBundle := loadCABundle(cfg.Broker.TLSCABundleFile, cert, func(format string, args ...any) {
+		fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+	})
+	var anchors []namedAnchor
+	human := namedAnchor{key: "broker.client_ca_file", cert: anchorCert}
+```
+
+In `internal/port49d/main.go`, replace
+
+```go
+		b.CertificateLifetime = id.Issuance.CertificateLifetime
+	}
+```
+
+with
+
+```go
+		b.CertificateLifetime = id.Issuance.CertificateLifetime
+	}
+	b.CABundle = caBundle
+```
+
+Create `internal/port49d/cabundle.go`:
+
+```go
+package port49d
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+)
+
+// loadCABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET
+// /v1/config sends every client (spec §13 decision 43 ruling 25), or nil.
+// A bundle that cannot be read, is out of api.ParseCABundle's bounds, or
+// does not verify the server certificate being served is not sent, and is
+// said in one line; the start goes on, and clients keep the CAs they hold.
+func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) []byte {
+	if path == "" {
+		return nil
+	}
+	certs, err := readCABundle(path)
+	if err == nil {
+		err = verifiesServer(certs, cert)
+	}
+	if err != nil {
+		say("broker: tls_ca_bundle_file %s: %v; no CA bundle is sent, so clients keep the CAs they hold", path, err)
+		return nil
+	}
+	say("broker: tls_ca_bundle_file %s, sent to every client: %s", path, api.CAFingerprints(certs))
+	return api.EncodeCABundle(certs)
+}
+
+func readCABundle(path string) ([]*x509.Certificate, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, api.MaxCABundleBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	return api.ParseCABundle(raw)
+}
+
+// verifiesServer refuses a bundle that does not hold the CA of the server
+// certificate in use: a client would refuse it, and no rotation can start
+// from it.
+func verifiesServer(certs []*x509.Certificate, cert tls.Certificate) error {
+	if len(cert.Certificate) == 0 {
+		return errors.New("no server certificate")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return err
+	}
+	roots, inter := x509.NewCertPool(), x509.NewCertPool()
+	for _, c := range certs {
+		roots.AddCert(c)
+	}
+	for _, der := range cert.Certificate[1:] {
+		if c, err := x509.ParseCertificate(der); err == nil {
+			inter.AddCert(c)
+		}
+	}
+	// Judged inside the leaf's own validity: an expired server certificate
+	// is said on its own line, and is not this bundle's fault.
+	at := leaf.NotBefore.Add(leaf.NotAfter.Sub(leaf.NotBefore) / 2)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: at,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return fmt.Errorf("it does not hold the CA of the server certificate in tls_cert_file (%v)", err)
+	}
+	return nil
+}
+```
+
+The bundle is read beside the server certificate and set on the broker with the issuing CA: the
+first `internal/port49d/main.go` edit above goes after the server certificate's validity lines,
+the second after `b.CertificateLifetime` is set.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `gofmt -l internal/ && go test ./internal/oidc/ ./internal/config/ ./internal/broker/... ./internal/port49d/ -count=1`
 Expected: `gofmt` lists nothing; PASS, every earlier test unchanged.
 
-Run: `go test -race ./internal/port49d/ -run 'Issuer|InterruptedPromotion|NoIssuingCA' -count=1 && go vet ./internal/...`
+Run: `go test -race ./internal/port49d/ -run 'Issuer|InterruptedPromotion|NoIssuingCA|CABundle' -count=1 && go vet ./internal/...`
 Expected: PASS, and vet silent.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/oidc/config.go internal/config/ internal/port49d/
-git commit -m "feat(port49d): broker.identity.issuance, the issuing CA at start, init-issuer and rotate-issuer"
+git add internal/oidc/config.go internal/config/ internal/port49d/ internal/broker/api/cabundle.go \
+  internal/broker/api/cabundle_test.go internal/broker/api/api.go internal/broker/broker.go \
+  internal/broker/cabundle_test.go
+git commit -m "feat(port49d): broker.identity.issuance, the issuing CA at start, init-issuer and rotate-issuer; the broker's CA bundle"
 ```
 
 ---
@@ -7696,14 +8260,16 @@ git commit -m "feat(port49): login --oidc signs in, holds the certificate the br
 
 ---
 
-### Task 11: The client's config home: `~/.port49`, the system file, `PORT49_CONFIG`
+### Task 11: The client's config home: `~/.port49`, the system file, `PORT49_CONFIG`, and the broker's CA bundle kept
 
 Ryan's rulings of 2026-10-10 and the toil audit's H4 (decision 43 ruling 24). The per-user
 directory moves to `~/.port49`, as `~/.ssh` is, and leaves `$XDG_CONFIG_HOME/port49`: on Ubuntu
 `~/.config` is group-writable (0775), and the walk refused every file below it. A root-owned
 `/etc/port49/config.yaml`, which the install ships, is read under the user's file, key by key, so a
 new user's first login is `port49 login` and the sign-in. The pinned host keys stay where 9a put
-them until 9d takes them out of the user's flow.
+them until 9d takes them out of the user's flow. The agent keeps the CA bundle the broker sends
+(Task 8), and a login trusts it beside `broker_ca`, so a rotation of the broker's CA asks nothing of
+the user (decision 43 ruling 25).
 
 **Files:**
 - Modify: `internal/userconfig/userconfig.go` (the package comment, `Dir`, `EnvConfig`, `Path`,
@@ -7714,18 +8280,29 @@ them until 9d takes them out of the user's flow.
 - Modify: `cmd/port49/main.go` (usage, the `--config` help, `fill`), `cmd/port49/main_test.go`
   (`TestMain`, `testSystemConfig`), `cmd/port49/config_test.go`,
   `cmd/port49/issue_login_linux_test.go`, `cmd/port49/trust_hint_test.go`
+- The kept CA bundle (ruling 25): Create `cmd/port49/cabundle.go`, `cmd/port49/cabundle_test.go`;
+  Modify `internal/agent/agent.go` (`Agent.brokerRoot`, `BrokerRoot`, `RotatedCAHint`,
+  `rotatedCA`, `refusal`), `internal/userconfig/userconfig.go` (`CABundlePathIn`,
+  `CABundlePath`), `cmd/port49/main.go` (`brokerPool`, `agentMain`), `cmd/port49/issue.go`
+  (`fetchBrokerConfig`), `cmd/port49/login_linux_test.go`
 
 **Interfaces:**
 - Consumes: Task 10's `userconfig.File` with its eight keys, `Load`, `WithoutCA`, `WithoutOIDCCA`,
-  `IssuedPaths`, `IssuedPathsIn`, and `sessionFlags.fill`; the tests' `newOIDCLab`, `driveBrowser`,
-  `privateSocket`, `stopAgentAt`, `labConfig`, `runningAgent`, `configBroker`, `runCLIEnv`.
+  `IssuedPaths`, `IssuedPathsIn`, and `sessionFlags.fill`; Task 8's `api.ParseCABundle`,
+  `api.EncodeCABundle`, `api.CAFingerprints`, `api.MaxCABundleBytes`, `api.Config.BrokerCABundle`
+  and `Broker.CABundle`; the tests' `newOIDCLab`, `driveBrowser`, `privateSocket`, `stopAgentAt`,
+  `labConfig`, `runningAgent`, `configBroker`, `runCLIEnv`, `newLabBroker`.
 - Produces:
   - `userconfig.Dir() string` (now `~/.port49`), `userconfig.EnvConfig` (`"PORT49_CONFIG"`),
     `userconfig.Path() string`, `userconfig.SystemPath`, `userconfig.SystemOwner`,
     `userconfig.LegacyDir() string`;
   - `userconfig.LoadAll(path string, named bool, opts ...Option) (File, bool, error)`;
   - `hostkeys.Path()` at `LegacyDir`;
-  - the tests' `systemConfig(t, path)` and `testSystemConfig`.
+  - the tests' `systemConfig(t, path)` and `testSystemConfig`;
+  - `userconfig.CABundlePathIn(dir, broker string) (string, error)`, `userconfig.CABundlePath`;
+    `func (a *agent.Agent) BrokerRoot() *x509.Certificate`, `agent.RotatedCAHint`;
+    `keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer)`,
+    `withKeptBundle(broker string, caPEM []byte) ([]byte, error)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -8037,11 +8614,252 @@ with
 scans.Load() != 0 || !strings.Contains(errb.String(), "writable by its owner alone") {
 ```
 
+The kept CA bundle (ruling 25). Create `cmd/port49/cabundle_test.go`:
+
+```go
+package main
+
+import (
+	"bytes"
+	"crypto/x509"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/userconfig"
+)
+
+const bundleBroker = "https://broker.example:8443"
+
+func testCA(t *testing.T) *testpki.CA {
+	t.Helper()
+	ca, err := testpki.NewCA("port49 test CA", time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ca
+}
+
+// The agent keeps a bundle that holds the CA its connection was verified
+// to, 0600, and says so by fingerprint, once; one that drops that CA, or is
+// out of bounds, is refused and the kept file left as it was (decision 43
+// ruling 25).
+func TestKeepCABundle(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	cur, next, other := testCA(t), testCA(t), testCA(t)
+	path, err := userconfig.CABundlePath(bundleBroker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), cur.Cert, &log)
+	raw, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, append(cur.PEM(), next.PEM()...)) ||
+		!strings.Contains(log.String(), "kept the broker's CA bundle in "+path) || !strings.Contains(log.String(), "(was none)") {
+		t.Fatalf("%v %q", err, log.String())
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("%v %v", fi, err)
+	}
+	// The same bundle again is no change, and no line.
+	log.Reset()
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), cur.Cert, &log)
+	if log.Len() != 0 {
+		t.Fatalf("%q", log.String())
+	}
+	for name, c := range map[string]struct {
+		bundle, want string
+	}{
+		"the CA in use dropped": {string(next.PEM()) + string(other.PEM()), "does not hold the CA this connection was verified to"},
+		"five CAs":              {strings.Repeat(string(cur.PEM()), 5), "over 4 certificates"},
+		"junk":                  {string(cur.PEM()) + "junk", "other than PEM"},
+	} {
+		log.Reset()
+		keepCABundle(bundleBroker, c.bundle, cur.Cert, &log)
+		if got, _ := os.ReadFile(path); !bytes.Equal(got, raw) || !strings.Contains(log.String(), c.want) ||
+			!strings.Contains(log.String(), "is left as it was") {
+			t.Errorf("%s: %q", name, log.String())
+		}
+	}
+	// The rotation's end: the old CA leaves the bundle once the server's
+	// certificate is the next CA's, and the change is said.
+	log.Reset()
+	keepCABundle(bundleBroker, string(next.PEM()), next.Cert, &log)
+	if !strings.Contains(log.String(), "(was "+api.CAFingerprints([]*x509.Certificate{cur.Cert, next.Cert})+")") {
+		t.Fatalf("%q", log.String())
+	}
+}
+
+// A login trusts its broker_ca and the bundle the agent kept for that
+// broker, and no other broker's; a kept file that cannot be used is refused
+// naming it.
+func TestALoginTrustsTheKeptBundleBesideItsCA(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	cur, next := testCA(t), testCA(t)
+	keepCABundle(bundleBroker, string(next.PEM()), next.Cert, &bytes.Buffer{})
+	caFile := filepath.Join(privateDir(t), "ca.pem")
+	if err := os.WriteFile(caFile, cur.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := next.Issue(testpki.Leaf{CommonName: "broker", DNSNames: []string{"broker.example"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(srv.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for broker, verifies := range map[string]bool{bundleBroker: true, "https://other.example:8443": false} {
+		sf := sessionFlags{broker: broker, brokerCA: caFile}
+		pool, err := sf.brokerPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "broker.example"}); (err == nil) != verifies {
+			t.Errorf("%s: %v", broker, err)
+		}
+	}
+	path, _ := userconfig.CABundlePath(bundleBroker)
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	sf := sessionFlags{broker: bundleBroker, brokerCA: caFile}
+	if _, err := sf.brokerPool(); err == nil || !strings.Contains(err.Error(), path+", the broker's CA bundle the agent kept") {
+		t.Fatalf("%v", err)
+	}
+}
+```
+
+In `cmd/port49/main_test.go`, replace
+
+```go
+	if code != 1 || !strings.Contains(errb.String(), "does not verify") || !strings.Contains(errb.String(), "--broker-ca") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+```
+
+with
+
+```go
+	// A CA this host does not trust is what a host away through a whole
+	// rotation meets: the line names the fix (decision 43 ruling 25).
+	if code != 1 || !strings.Contains(errb.String(), "does not verify") ||
+		!strings.Contains(errb.String(), "; "+agent.RotatedCAHint) {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+```
+
+In `cmd/port49/login_linux_test.go`, replace
+
+```go
+// The real path: port49 login starts the agent, which logs in to a real
+```
+
+with
+
+```go
+// A broker that sends a CA bundle: the agent the login starts keeps it in
+// ~/.port49/broker_ca/, 0600, and logs it by fingerprint. A later login
+// whose broker_ca is only the next CA still reaches the broker, through the
+// kept bundle: the rotation's first half, with nothing asked of the user
+// (decision 43 ruling 25).
+func TestTheAgentKeepsTheBrokersCABundle(t *testing.T) {
+	l := newLabBroker(t, time.Hour)
+	next, err := testpki.NewCA("port49 lab next CA", time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(filepath.Join(l.dir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.b.CABundle = append(append([]byte{}, cur...), next.PEM()...)
+	t.Setenv("HOME", privateDir(t))
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	path, err := userconfig.CABundlePath(l.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, l.b.CABundle) {
+		t.Fatalf("%v %q", err, raw)
+	}
+	certs, _ := api.ParseCABundle(raw)
+	if log, _ := os.ReadFile(filepath.Join(filepath.Dir(sock), "agent.log")); !strings.Contains(string(log),
+		"kept the broker's CA bundle in "+path+": "+api.CAFingerprints(certs)) {
+		t.Fatalf("the agent's log: %q", log)
+	}
+	stopAgentAt(sock)
+	nextOnly := filepath.Join(privateDir(t), "next.pem")
+	if err := os.WriteFile(nextOnly, next.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags := l.flags(sock)
+	for i := range flags {
+		if flags[i] == "--broker-ca" {
+			flags[i+1] = nextOnly
+		}
+	}
+	out.Reset()
+	if code := run(append([]string{"login"}, flags...), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "port49: logged in to "+l.url) {
+		t.Fatalf("a login on the next CA alone: code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// The real path: port49 login starts the agent, which logs in to a real
+```
+
+In `cmd/port49/login_linux_test.go`, replace
+
+```go
+import (
+	"bytes"
+	"net"
+	"os"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+```
+
+with
+
+```go
+import (
+	"bytes"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/userconfig"
+)
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/userconfig ./cmd/port49`
 Expected: FAIL to build: `undefined: SystemPath`, `SystemOwner`, `LoadAll`, `LegacyDir`,
-`EnvConfig`, and `undefined: userconfig.SystemPath` in `cmd/port49`.
+`EnvConfig`, and `undefined: userconfig.SystemPath`, `keepCABundle`, `agent.RotatedCAHint` in
+`cmd/port49`.
 
 - [ ] **Step 3: `internal/userconfig/userconfig.go`**
 
@@ -8518,23 +9336,307 @@ with
 	os.Setenv(testSystemConfig, userconfig.SystemPath)
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 6: The kept CA bundle (decision 43 ruling 25)**
 
-Run: `go test -race ./internal/userconfig ./internal/hostkeys ./cmd/port49`, then `make test &&
-make vet`, `CGO_ENABLED=0 GOOS=darwin go vet ./internal/userconfig ./cmd/port49`, and `go vet -tags
-lab ./tests/lab/`.
+The agent fetches `/v1/config` on the connection it has just verified (`Connect`, unchanged), and
+keeps the bundle in `~/.port49/broker_ca/<host>_<port>.pem`, 0600, one per broker so no broker's
+bundle is trusted for another. A bundle out of `api.ParseCABundle`'s bounds, or one that drops the
+CA the connection was verified to, is refused and the file left as it was; a change is logged by
+fingerprint. A login trusts its `broker_ca` and the kept bundle together, and hands both to the
+agent it starts. A certificate no CA this host trusts issued, which is what a host away through a
+whole rotation meets, is said with the fix on the same line.
+
+In `internal/agent/agent.go`, replace
+
+```go
+	handshakes   atomic.Int64
+	// fingerprint is the certificate's, as CertFingerprint gives it.
+```
+
+with
+
+```go
+	handshakes   atomic.Int64
+	// brokerRoot is the CA the last handshake verified the broker's
+	// certificate to (BrokerRoot).
+	brokerRoot atomic.Pointer[x509.Certificate]
+	// fingerprint is the certificate's, as CertFingerprint gives it.
+```
+
+In `internal/agent/agent.go`, replace
+
+```go
+			if n := a.handshakes.Add(1); n > 1 {
+```
+
+with
+
+```go
+			if tc, ok := conn.(*tls.Conn); ok {
+				if chains := tc.ConnectionState().VerifiedChains; len(chains) > 0 {
+					a.brokerRoot.Store(chains[0][len(chains[0])-1])
+				}
+			}
+			if n := a.handshakes.Add(1); n > 1 {
+```
+
+In `internal/agent/agent.go`, replace
+
+```go
+// SessionEndsAt is when this session ends; zero before Connect.
+```
+
+with
+
+```go
+// BrokerRoot is the CA the last handshake verified the broker's certificate
+// to; nil before one. A CA bundle the broker sends must hold it (decision 43
+// ruling 25).
+func (a *Agent) BrokerRoot() *x509.Certificate { return a.brokerRoot.Load() }
+
+// RotatedCAHint is the fix for a broker certificate no CA this host trusts
+// issued, said on the same line: a host away through a whole CA rotation
+// (decision 43 ruling 25).
+const RotatedCAHint = "if the broker's operator rotated its CA while this host was away, get the broker's CA from " +
+	"them and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on"
+
+// SessionEndsAt is when this session ends; zero before Connect.
+```
+
+In `internal/agent/agent.go`, replace
+
+```go
+	if errors.As(err, &verify) {
+		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
+			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries",
+			a.broker, verify.Err)
+	}
+```
+
+with
+
+```go
+	if errors.As(err, &verify) {
+		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
+			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries%s",
+			a.broker, verify.Err, rotatedCA(verify.Err))
+	}
+```
+
+In `internal/agent/agent.go`, replace
+
+```go
+// certificateAlerts are the alerts a broker sends about the certificate it
+```
+
+with
+
+```go
+// rotatedCA is RotatedCAHint after "; " for a certificate no CA this host
+// trusts issued, and "" for any other failure.
+func rotatedCA(err error) string {
+	var unknown x509.UnknownAuthorityError
+	if errors.As(err, &unknown) {
+		return "; " + RotatedCAHint
+	}
+	return ""
+}
+
+// certificateAlerts are the alerts a broker sends about the certificate it
+```
+
+In `internal/userconfig/userconfig.go`, replace
+
+```go
+// IssuedPaths is IssuedPathsIn ~/.port49 (Dir).
+```
+
+with
+
+```go
+// CABundlePathIn is where, under dir, the agent keeps the CA bundle a broker
+// sent it (spec §13 decision 43 ruling 25): dir/broker_ca/<host>_<port>.pem,
+// one per broker, so no broker's bundle is trusted for another.
+func CABundlePathIn(dir, broker string) (string, error) {
+	cert, _, err := IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "broker_ca", filepath.Base(cert)), nil
+}
+
+// CABundlePath is CABundlePathIn ~/.port49 (Dir).
+func CABundlePath(broker string) (string, error) { return CABundlePathIn(Dir(), broker) }
+
+// IssuedPaths is IssuedPathsIn ~/.port49 (Dir).
+```
+
+In `cmd/port49/main.go`, replace
+
+```go
+	s.brokerCAPEM = caPEM
+	pool := x509.NewCertPool()
+```
+
+with
+
+```go
+	// The bundle the agent kept for this broker joins the CA named here
+	// (decision 43 ruling 25); the agent the login starts is handed both.
+	if s.brokerCAFD == 0 {
+		if caPEM, err = withKeptBundle(s.broker, caPEM); err != nil {
+			return nil, err
+		}
+	}
+	s.brokerCAPEM = caPEM
+	pool := x509.NewCertPool()
+```
+
+In `cmd/port49/main.go`, replace
+
+```go
+	ln, err := agent.Listen(sf.socket)
+```
+
+with
+
+```go
+	keepCABundle(sf.broker, conf.BrokerCABundle, a.BrokerRoot(), stderr)
+	ln, err := agent.Listen(sf.socket)
+```
+
+In `cmd/port49/issue.go`, replace
+
+```go
+		if errors.As(err, &verify) {
+			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
+				"CA (--broker-ca) is the CA that issued it", broker, verify.Err)
+		}
+```
+
+with
+
+```go
+		if errors.As(err, &verify) {
+			hint := ""
+			var unknown x509.UnknownAuthorityError
+			if errors.As(verify.Err, &unknown) {
+				hint = "; " + agent.RotatedCAHint
+			}
+			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
+				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, hint)
+		}
+```
+
+Create `cmd/port49/cabundle.go`:
+
+```go
+package main
+
+import (
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"slices"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/userconfig"
+)
+
+// keepCABundle keeps the CA bundle the broker sent on the connection the
+// agent verified, in ~/.port49/broker_ca/<host>_<port>.pem, 0600, for the
+// next login to trust beside its broker_ca (spec §13 decision 43 ruling 25).
+// So a rotation of the broker's CA asks nothing of the user. A bundle out of
+// bounds, or one that drops the CA this connection was verified to, is
+// refused and the file left as it was; a change is logged by fingerprint.
+// Nothing here ends the session.
+func keepCABundle(broker, bundle string, root *x509.Certificate, log io.Writer) {
+	if bundle == "" {
+		return
+	}
+	path, err := userconfig.CABundlePath(broker)
+	if err != nil {
+		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)
+		return
+	}
+	certs, err := api.ParseCABundle([]byte(bundle))
+	if err == nil && (root == nil || !slices.ContainsFunc(certs, root.Equal)) {
+		err = errors.New("it does not hold the CA this connection was verified to")
+	}
+	if err != nil {
+		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is refused: %v; %s is left as it was\n", err, path)
+		return
+	}
+	was := "none"
+	if old, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle"); err == nil {
+		if held, err := api.ParseCABundle(old); err == nil {
+			if slices.EqualFunc(held, certs, (*x509.Certificate).Equal) {
+				return
+			}
+			was = api.CAFingerprints(held)
+		}
+	}
+	if err := userconfig.WritePrivate(path, api.EncodeCABundle(certs), "broker CA bundle"); err != nil {
+		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)
+		return
+	}
+	fmt.Fprintf(log, "port49 agent: kept the broker's CA bundle in %s: %s (was %s)\n", path, api.CAFingerprints(certs), was)
+}
+
+// withKeptBundle is caPEM and the bundle the agent kept for broker, which a
+// login trusts together (decision 43 ruling 25). A kept file that cannot be
+// used is refused, naming it: it is the agent's to rewrite, and deleting it
+// loses nothing but what the broker sends again.
+func withKeptBundle(broker string, caPEM []byte) ([]byte, error) {
+	if broker == "" {
+		return caPEM, nil
+	}
+	path, err := userconfig.CABundlePath(broker)
+	if err != nil {
+		return caPEM, nil // the broker URL is refused where it is used
+	}
+	raw, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle")
+	if errors.Is(err, fs.ErrNotExist) {
+		return caPEM, nil
+	}
+	if err == nil {
+		_, err = api.ParseCABundle(raw)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s, the broker's CA bundle the agent kept: %w; remove it, and the next agent keeps "+
+			"the broker's again", path, err)
+	}
+	return append(append(slices.Clip(caPEM), '\n'), raw...), nil
+}
+```
+
+`agentMain`'s `keepCABundle` goes after a successful `Connect`, before the socket listens; its
+lines go to the agent's log. `issue.go` already imports `crypto/x509` and `internal/agent`.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `go test -race ./internal/userconfig ./internal/hostkeys ./internal/agent ./cmd/port49`, then
+`make test && make vet`, `CGO_ENABLED=0 GOOS=darwin go vet ./internal/userconfig ./internal/agent
+./cmd/port49`, and `go vet -tags lab ./tests/lab/`.
 Expected: PASS, with `TestTheDirectories`, `TestLoadAllLayersYoursOverTheSystemFile`,
 `TestLoadAllWithNeitherFile`, `TestASystemFileNotRootsIsRefused`,
 `TestAConfigAtPlan9asPlaceIsRefused`, `TestTheSystemFileIsUnderYoursKeyByKey`,
-`TestAConfigFileAtPlan9asPlaceIsRefused` and `TestTheSystemFileAloneIsAFirstLogin` among them.
-Every earlier test passes unchanged but the two whose message changed (Step 1).
+`TestAConfigFileAtPlan9asPlaceIsRefused`, `TestTheSystemFileAloneIsAFirstLogin`,
+`TestKeepCABundle`, `TestALoginTrustsTheKeptBundleBesideItsCA` and
+`TestTheAgentKeepsTheBrokersCABundle` among them. Every earlier test passes unchanged but the two
+whose message changed (Step 1); `internal/agent`'s `TestARefusedHandshakeNamesTheLikelyCauses`
+still finds "trust anchor", now followed by the rotation's hint.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/userconfig internal/hostkeys/hostkeys.go cmd/port49/main.go cmd/port49/main_test.go \
-  cmd/port49/config_test.go cmd/port49/issue_login_linux_test.go cmd/port49/trust_hint_test.go
-git commit -m "feat(userconfig): the client's config in ~/.port49, over a system-wide /etc/port49/config.yaml"
+git add internal/userconfig internal/hostkeys/hostkeys.go internal/agent/agent.go cmd/port49/main.go \
+  cmd/port49/main_test.go cmd/port49/config_test.go cmd/port49/issue.go cmd/port49/cabundle.go \
+  cmd/port49/cabundle_test.go cmd/port49/issue_login_linux_test.go cmd/port49/login_linux_test.go \
+  cmd/port49/trust_hint_test.go
+git commit -m "feat(userconfig): the client's config in ~/.port49, over a system-wide /etc/port49/config.yaml; the broker's CA bundle kept"
 ```
 
 ---
