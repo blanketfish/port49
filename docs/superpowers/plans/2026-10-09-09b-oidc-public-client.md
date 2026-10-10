@@ -994,8 +994,10 @@ certificate while the certificate is valid.
   lifetime lowered since leaves no certificate unreached), not decision 39's `max_token_age +
   2×clock_skew`, and the recovery's lift time follows it. Every broker on one store configures
   `issuance` alike: one without it keeps the shorter record. A recovery for a logout the store
-  could not write names the shorter path: revoke the sign-in's certificates by serial, from their
-  `issue` records, and lift the principal's mark after `max_token_age`.
+  could not write names the shorter path: revoke by serial every certificate issued to the principal
+  before the logout, by every broker on the store (each broker's `issue` records; a logout by `sid`
+  or by `sub` can cover several sign-ins), and lift the principal's mark after `max_token_age`;
+  waiting out the full lift time stays the default.
 - **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
   refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
 - **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds}`.
@@ -5111,6 +5113,7 @@ func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 	f.b.AdminSocket = "/run/port49/admin.sock"
 	if got := f.b.logoutUnapplied(alicePrincipal, f.b.Now().Add(f.b.logoutRecordTTL())); !strings.Contains(got,
 		"`port49 revoke --cert-issuer DN --cert-serial HEX`") ||
+		!strings.Contains(got, "every certificate issued to "+alicePrincipal+" before the logout, by every broker") ||
 		!strings.Contains(got, f.b.Now().Add(tm.MaxTokenAge+2*tm.ClockSkew).UTC().Format(time.RFC3339)) {
 		t.Fatalf("the recovery names no shorter path: %s", got)
 	}
@@ -5600,10 +5603,11 @@ certificates by serial, then lift after `max_token_age`.
   	}
   	t := b.Identity.Timing
   	sooner := b.Now().Add(t.MaxTokenAge + 2*t.ClockSkew).UTC().Format(time.RFC3339)
-  	return "; or, sooner: revoke each certificate this broker issued " + principal + " on that sign-in with " +
-  		"`port49 revoke --cert-issuer DN --cert-serial HEX` on " + where + ", the DN and serial from the decision " +
-  		"log's issue records for " + principal + ", and lift the principal's mark after " + sooner + " instead, " +
-  		"when no ID token from before the logout can still be presented"
+  	return "; or, sooner: revoke every certificate issued to " + principal + " before the logout, by every " +
+  		"broker on this store, each with `port49 revoke --cert-issuer DN --cert-serial HEX` on " + where +
+  		", the DN and serial from each broker's decision-log issue records for " + principal + ", and lift the " +
+  		"principal's mark after " + sooner + " instead, when no ID token from before the logout can still be " +
+  		"presented; if any broker's issue records cannot be read, wait out the first time"
   }
   ```
 
