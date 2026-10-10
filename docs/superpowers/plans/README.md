@@ -139,6 +139,13 @@ pre-flight questions, Q1–Q5, were ruled as recommended on 2026-10-09 (Plan 9, 
 L53 and L54. Pre-flight review 2026-10-09: 0 Critical, 10 Important, 17 Minor, all folded in; the
 OpenSSH floor rose to 8.5 on a container measurement
 (`tests/ssh-compat/2026-10-09-openssh-askpass.md`). 9b–9d are outlined under "Plan 9".
+**9b written 2026-10-09** (`2026-10-09-09b-oidc-public-client.md`, nine tasks: one spec, six code,
+one lab, one docs). It covers `port49 login --oidc` (the authorization-code flow with PKCE S256 over
+a loopback redirect, `prompt=login` at every sign-in, a pasted address on a host with no browser, no
+device grant), the tokens in the agent's memory alone with the agent non-dumpable, silent renewal
+that keeps `auth_time`, a provider outage said and never a session end, and the OIDC `port49
+refresh`. Decision 43 holds its eighteen rulings; R1–R8 were ruled on recommendation, with no
+questions for Ryan. It opens L55 (Keycloak as the client meets it) and L56 (end to end on vEOS).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5077,7 +5084,8 @@ merges (CLAUDE.md).
     - **Q3:** a sweep may name any declared scope, intersected with the caller's grants.
     - **Q4:** `devices trust` learns the address by one mint, or `--address`.
     - **Q5:** inventory host keys and the Python and Ansible clients go to 9d, after L53.
-- **9b — The OIDC public client** (plan 7h's hand-off).
+- **9b — The OIDC public client** (plan 7h's hand-off; `2026-10-09-09b-oidc-public-client.md`,
+  written 2026-10-09; branch `feature/oidc-public-client`).
   - **Login:** `port49 login --oidc`, an authorization-code flow with PKCE (S256) over a loopback
     redirect (RFC 8252), against `/v1/config`'s `oidc` providers.
   - **What the agent holds:**
