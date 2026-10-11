@@ -3520,7 +3520,7 @@ attribute is complete in four lines:
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, an upper bound measured in the lab (L12), and whether bits travel as `user-permissions` or a `local-user-name` template (below). A session runs the union of its bits' reach. The bit `baseline` is what a class with no bits runs, held by every session and never sent or named in `privilege`. A block may add to a bit's reach, an edit the diff gates as widening (§12), and never take from it, and may not declare a bit the set does not | if `session`-only |
 | `carve_outs` | the commands a bit alone makes available, whatever other bit reaches them: each rule held by that bit's own reach, measured in the lab (L12). The only subtraction from the union: a bit not held removes no command another bit reaches except these. A block may drop one and never add one. A `platforms:` block for a platform the pinned set does not project may not declare `carve_outs` at all, and is refused at load (`command_projection`): only a measured set subtracts reach | optional, with `bits` |
 | `local_user_names` | under `bit_delivery: local_user_name`, each level's template user on the device, whose class `port49 platform export --classes` renders with the level's bits. Each is `p49-<name>`, in the set and in a block alike, and never `remote` or a platform system user such as `root`: a template the device already has under another class would put the session in that class, whatever bits the projection proved | with `local_user_name` |
-| `rpc_entry_denies` | on a projected platform, the denies a reply adds where a wire deny is the only guard beneath a sent bit or the baseline, closing the CLI's ways into a native RPC for that session (decision 44). Set 1.2.0's `juniper_junos` carries `["junoscript **"]`. Each is words and a trailing `**`. A block may drop one, and the platform then renders as set 1.1.0 does; it may never add one the set did not measure | optional |
+| `rpc_entry_denies` | on a projected platform, the denies a reply adds where a wire deny is the only guard beneath a sent bit or the baseline, closing the CLI's ways into a native RPC for that session (decision 44). Set 1.2.0's `juniper_junos` carries `["junoscript **"]`. Each is words and a trailing `**`. A block keeps the whole list or drops it with `[]`, and the platform then renders as set 1.1.0 does; a partial list is refused at load, because it leaves an entry open (`op url` reaches past the `junoscript` deny, L26c-scripts); it may never add one the set did not measure | optional |
 | `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
@@ -8699,9 +8699,11 @@ provisional on L57.
   `policy diff` prints the ones a change brings, since every unchanged warning on every diff is
   noise.
 - **5. The key is adapter data** (§8, "the platform set is pinned"). `rpc_entry_denies` is read
-  only on a projected platform. A block may drop an entry deny, and that platform then renders
-  as set 1.1.0 does: ruling 10's render changes hang on the key too. It may never add one the set
-  did not measure, as with `carve_outs`. `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders
+  only on a projected platform. A block keeps the whole list or drops it with `[]`, and that
+  platform then renders as set 1.1.0 does: ruling 10's render changes hang on the key too. A
+  partial list is refused at load, because it leaves an entry open (L26c-scripts: `op url`
+  reaches past the `junoscript` deny). It may never add one the set did not measure, as with
+  `carve_outs`. `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders
   byte for byte as before.
 - **6. Services** (Ryan's ruling, narrowed for security; data L26c). Under set 1.2.0
   check-config no longer fails NETCONF (ssh, port 830), any non-RPC service, or an ssh option. It
