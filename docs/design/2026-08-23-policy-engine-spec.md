@@ -3951,7 +3951,8 @@ fail-closed reply there, as before (option C).
 the CLI's, checked as an allowlist. `devices check-config` passes it only where nothing under
 `system services` is on but `ssh` and `telnet`, an unknown service included, and `rest`,
 `web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes
-NETCONF (ssh and port 830) per user, as measured, so the check no longer requires it off. It
+NETCONF per user (port 830 measured; the port-22 subsystem *provisional on L26c*), so the check
+no longer requires it off. It
 still fails `web-management`, `extension-service`, `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
 `xnm-clear-text`) and `outbound-ssh`, until a lab cell measures the entry deny closing each
 (*provisional on L26c*; plan 9b1 Task 3 measures `rest`). No measurement shows the entry deny
