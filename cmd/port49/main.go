@@ -355,7 +355,8 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, err
 	}
-	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log}, nil
+	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
+		BundleKept: bundleKept(s.broker)}, nil
 }
 
 // login logs in with the certificate --cert and --key name, or with --oidc

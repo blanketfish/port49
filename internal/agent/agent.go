@@ -50,6 +50,9 @@ type Config struct {
 	// Log receives the agent's own lines — reconnects, the session's end.
 	// Never a token.
 	Log io.Writer
+	// BundleKept is whether port49 has kept a CA bundle for this broker, so
+	// the rotation hint may promise to keep the CA current (RotatedCA).
+	BundleKept bool
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
@@ -129,6 +132,8 @@ type Agent struct {
 	brokerRoot atomic.Pointer[x509.Certificate]
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
+	// bundleKept is Config.BundleKept.
+	bundleKept bool
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -164,7 +169,8 @@ type Agent struct {
 // concurrent asks queue on it rather than opening a second handshake. When it
 // drops, the next ask dials again, which is one more use of the key.
 func New(c Config) *Agent {
-	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{}),
+	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, bundleKept: c.BundleKept,
+		done:            make(chan struct{}),
 		deadlineChanged: make(chan struct{}, 1), wire: make(chan struct{}, 1)}
 	if a.now == nil {
 		a.now = time.Now
@@ -284,8 +290,20 @@ func (a *Agent) BrokerRoot() *x509.Certificate { return a.brokerRoot.Load() }
 // RotatedCAHint is the fix for a broker certificate no CA this host trusts
 // issued, said on the same line: a host away through a whole CA rotation
 // (decision 43 ruling 25).
-const RotatedCAHint = "if the broker's operator rotated its CA while this host was away, get the broker's CA from " +
-	"them and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on"
+//
+// It promises that port49 keeps the CA current only where it can: a broker
+// that sends no CA bundle leaves nothing to keep, so the promise (RotatedCAHintKept)
+// is made only where a bundle was kept for this broker, which is a broker
+// known to send one. Anywhere else the fix is the file the host was given.
+const RotatedCAHint = rotatedCAFix + "; ask for /etc/port49/broker-ca.pem to be updated"
+
+// RotatedCAHintKept is RotatedCAHint for a broker whose CA bundle port49 has
+// kept: the next login keeps the new CA current from the bundle the broker
+// sends.
+const RotatedCAHintKept = rotatedCAFix + "; port49 keeps it current from then on"
+
+const rotatedCAFix = "if the broker's operator rotated its CA while this host was away, get the broker's CA from " +
+	"them and run `port49 login --broker-ca FILE` once"
 
 // SessionEndsAt is when this session ends; zero before Connect.
 func (a *Agent) SessionEndsAt() time.Time {
@@ -983,7 +1001,7 @@ func (a *Agent) refusal(err error) error {
 	if errors.As(err, &verify) {
 		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
 			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries%s",
-			a.broker, verify.Err, RotatedCA(verify.Err))
+			a.broker, verify.Err, RotatedCA(verify.Err, a.bundleKept))
 	}
 	var op *net.OpError
 	if !errors.As(err, &op) || op.Op != "remote error" || !certificateAlerts[op.Err.Error()] {
@@ -1084,10 +1102,14 @@ func (e *hangUpError) Error() string {
 func (e *hangUpError) Unwrap() error { return e.err }
 
 // RotatedCA is RotatedCAHint after "; " for a certificate no CA this host
-// trusts issued, and "" for any other failure.
-func RotatedCA(err error) string {
+// trusts issued, and "" for any other failure. kept is whether port49 has
+// kept a CA bundle for this broker, which makes it RotatedCAHintKept.
+func RotatedCA(err error, kept bool) string {
 	var unknown x509.UnknownAuthorityError
 	if errors.As(err, &unknown) {
+		if kept {
+			return "; " + RotatedCAHintKept
+		}
 		return "; " + RotatedCAHint
 	}
 	return ""

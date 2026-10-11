@@ -109,6 +109,18 @@ func forgetBundle(path string, root *x509.Certificate, log io.Writer) {
 		"verified to: %s (was %s)\n", path, api.CAFingerprints(only), api.CAFingerprints(held))
 }
 
+// bundleKept is whether the agent has kept a CA bundle for broker: a broker
+// known to send one, and so one whose CA port49 keeps current (the rotation
+// hint's promise, agent.RotatedCA).
+func bundleKept(broker string) bool {
+	path, err := userconfig.CABundlePath(broker)
+	if err != nil {
+		return false
+	}
+	_, err = os.Lstat(path)
+	return err == nil
+}
+
 // withKeptBundle is caPEM and the bundle the agent kept for broker, which a
 // login trusts together (decision 43 ruling 25). A kept file that cannot be
 // used is refused, naming it: it is the agent's to rewrite, and deleting it

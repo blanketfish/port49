@@ -188,6 +188,7 @@ func TestAnUnreadableKeptBundle(t *testing.T) {
 // The /v1/config fetch of a login says the rotation's fix for a certificate
 // no CA this host trusts issued, as the agent does, and only for that.
 func TestTheConfigFetchSaysTheRotationFix(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
 	l := newLabBroker(t, time.Hour)
 	pool := x509.NewCertPool()
 	pool.AddCert(testCA(t).Cert)
@@ -195,5 +196,23 @@ func TestTheConfigFetchSaysTheRotationFix(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not verify") ||
 		!strings.Contains(err.Error(), "; "+agent.RotatedCAHint) {
 		t.Fatalf("%v", err)
+	}
+	// M2: "keeps it current" is said only where port49 has kept a bundle for
+	// this broker, so the broker is known to send one.
+	if strings.Contains(err.Error(), "keeps it current") ||
+		!strings.Contains(err.Error(), "ask for /etc/port49/broker-ca.pem to be updated") {
+		t.Fatalf("a promise with no bundle kept: %v", err)
+	}
+	path, perr := userconfig.CABundlePath(l.url)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if werr := userconfig.WritePrivate(path, testCA(t).PEM(), "broker CA bundle"); werr != nil {
+		t.Fatal(werr)
+	}
+	_, err = fetchBrokerConfig(context.Background(), l.url, pool)
+	if err == nil || !strings.Contains(err.Error(), "; "+agent.RotatedCAHintKept) ||
+		strings.Contains(err.Error(), "/etc/port49/broker-ca.pem") {
+		t.Fatalf("with a bundle kept: %v", err)
 	}
 }
