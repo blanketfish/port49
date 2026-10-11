@@ -902,3 +902,52 @@ func TestOnlyASettledPassTellsOnSettled(t *testing.T) {
 		t.Fatalf("the settled pass resets the priors to the policy in force: %+v", rig.r.priors)
 	}
 }
+
+// The reload rig's helpers that name no Linux-only thing, here so the files
+// that use them build wherever this one does (GOOS=darwin go vet).
+
+const twoDevices = `devices:
+  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1], key_ref: lab_key}
+  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2], key_ref: lab_key}
+`
+
+// C3: the key-group move's inventories: with the block and unpinned
+// devices, and without.
+const withGroups = `devices:
+  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2]}
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`
+const withoutGroups = `devices:
+  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2]}
+`
+
+const policyWithGroups = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n"
+
+func (rig *reloadRig) writeInventory(t *testing.T, body string) {
+	t.Helper()
+	if err := os.WriteFile(rig.cfg.InventoryFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (rig *reloadRig) pollTwice() {
+	rig.with(func() {
+		rig.r.poll(context.Background())
+		rig.r.poll(context.Background())
+	})
+}
+
+// sighupWithBound is the operator's path, through the real reload: write
+// inventory.max_removed_percent into port49d.yaml and send SIGHUP (I1).
+// Nothing is set in memory.
+func (rig *reloadRig) sighupWithBound(t *testing.T, percent int) {
+	t.Helper()
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(rig.r.cfgPath, []byte(fmt.Sprintf("inventory: {max_removed_percent: %d}\n", percent)),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+}

@@ -5291,8 +5291,6 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
       (P8);
     - the no-pidfd fallback of the askpass's parent signal has no CI test; `PidfdOpen` needs to be
       injectable (P12);
-    - `GOOS=darwin go vet ./...` fails at `internal/port49d/coldstart_test.go:402`
-      (`fence.FileOwner` undefined); it predates this branch.
   - **9b and 9c:** the OIDC and hardware-key credentials, as outlined above; 9a changes nothing the
     agent holds.
     - **9c** (P4): the agent child reads `--cert` and `--key` by path, with the keyfile checks only.
@@ -5396,8 +5394,6 @@ before Task 1. The rulings are decision 43 of the spec (§13).
     copying; plan 12 weighs it against the key leaving the broker's disk for the store.
   - **Pre-beta review:** retiring plan 7h's bearer path for people (Q1), and its harness
     (`make lab-oidc`) rebuilt on issuance.
-  - **Pre-beta review:** `GOOS=darwin go vet ./...` fails at `internal/port49d/coldstart_test.go:402`
-    (`fence.FileOwner` undefined); it predates this branch (9ebd86a) and 9a's entry carries it too.
   - **Plan 13:** this plan's operator notes as the lab corrected them (below).
   - **L47:** stays unassigned.
 - **Operator-facing notes** (the plan's "Operator notes," as L55 and L56 measured them; plan 13
