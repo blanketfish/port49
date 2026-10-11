@@ -13,12 +13,14 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -436,23 +438,31 @@ func login(args []string, stdout, stderr io.Writer) int {
 // credential_revoked is no use again: it and its key are removed, and the
 // next login signs in (ruling 12; R6).
 func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
+	code, _ := startAgentDown(sf, issued, stdout, stderr)
+	return code
+}
+
+// startAgentDown is startAgent, and says whether the agent could not start
+// because the broker did not answer (said already, for a certificate port49
+// issued), so a caller adds no hint of its own.
+func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (int, bool) {
 	ctx := context.Background()
 	dir := filepath.Dir(sf.socket)
 	if err := agent.PrivateDir(dir); err != nil {
 		fmt.Fprintln(stderr, "port49 login:", unprefixed(err))
-		return 1
+		return 1, false
 	}
 	logPath := filepath.Join(dir, "agent.log")
 	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1
+		return 1, false
 	}
 	defer logf.Close()
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1
+		return 1, false
 	}
 	// The CA this login read goes to the agent on a pipe (descriptor 3, the
 	// first of ExtraFiles), so the agent trusts these bytes and does not read
@@ -460,7 +470,7 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 	caR, caW, err := os.Pipe()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1
+		return 1, false
 	}
 	defer caR.Close()
 	defer caW.Close()
@@ -470,7 +480,7 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(stderr, "port49 login: starting the agent:", err)
-		return 1
+		return 1, false
 	}
 	caR.Close()
 	// A goroutine: the pipe holds 64 KiB and the CA may be larger. An agent
@@ -493,10 +503,21 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 				_ = os.Remove(sf.key)
 				_ = os.Remove(sf.cert)
 				fmt.Fprint(stderr, refusedCertificate(revokedWords(string(tail))))
-				return 1
+				return 1, false
+			}
+			if issued && errors.As(err, &ee) && ee.ExitCode() == exitBrokerDown {
+				// The broker never answered, so nothing judged the
+				// certificate; a sign-in would fail at the same place.
+				until := ""
+				if c, _, herr := heldCertificate(sf.cert, sf.key); herr == nil {
+					until = "; your certificate is valid until " + rfc3339(c.Leaf.NotAfter)
+				}
+				fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer%s; try again when it answers\n",
+					sf.broker, until)
+				return 1, true
 			}
 			fmt.Fprintf(stderr, "port49 login: the agent exited (%v); the end of %s:\n%s", err, logPath, lastLines(string(tail), 10))
-			return 1
+			return 1, false
 		case <-time.After(100 * time.Millisecond):
 		}
 		if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
@@ -512,19 +533,19 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 				_ = os.Remove(sf.key)
 				_ = os.Remove(sf.cert)
 				fmt.Fprint(stderr, refusedCertificate(revoked.Detail))
-				return 1
+				return 1, false
 			case err != nil:
 				fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed:",
 					unprefixed(err))
 			default:
 				printRefresh(stdout, out)
 			}
-			return 0
+			return 0, false
 		}
 	}
 	_ = cmd.Process.Kill()
 	fmt.Fprintf(stderr, "port49 login: the agent did not answer within 15s; see %s\n", logPath)
-	return 1
+	return 1, false
 }
 
 // agentMain is the agent process: open the session, serve the socket, and
@@ -563,6 +584,11 @@ func agentMain(args []string, stderr io.Writer) int {
 		var revoked *agent.RevokedError
 		if errors.As(err, &revoked) {
 			return exitCredentialRevoked
+		}
+		var op *net.OpError
+		var verify *tls.CertificateVerificationError
+		if errors.As(err, &op) && !errors.As(err, &verify) {
+			return exitBrokerDown
 		}
 		return 1
 	}
@@ -620,6 +646,10 @@ func agentMain(args []string, stderr io.Writer) int {
 // its certificate credential_revoked as the connection binds: `port49 login`
 // then removes a certificate port49 issued (R6), as for a refused refresh.
 const exitCredentialRevoked = 3
+
+// exitBrokerDown is the agent's exit status when Connect fails on the wire
+// (a dial or a reset), not on a refusal or a certificate that does not verify.
+const exitBrokerDown = 4
 
 // refusedCertificate is the line for a certificate the broker refused
 // credential_revoked, with the broker's words, after it is removed.

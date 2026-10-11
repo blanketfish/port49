@@ -561,6 +561,22 @@ func TestABrokerThatDoesNotAnswerSaysToTryAgain(t *testing.T) {
 	}
 }
 
+// N1: a fresh held certificate starts the agent without asking the broker
+// first; when the broker is down the agent cannot connect, and the login says
+// what K2 says instead of hinting at a sign-in that would fail the same way.
+func TestAFreshHeldCertificateWithTheBrokerDownSaysToTryAgain(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now(), 12*time.Hour)
+	o.stop()
+	code, out, errb := o.login(t)
+	if code != 1 || strings.Contains(errb, "--sign-in") ||
+		!strings.Contains(errb, "the broker at "+o.url+" did not answer; your certificate is valid until ") ||
+		!strings.Contains(errb, "; try again when it answers") || len(o.as.Authorizations()) != 0 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
 // With nothing held the same broker is said without the certificate clause.
 func TestABrokerThatDoesNotAnswerWithNothingHeld(t *testing.T) {
 	o := newOIDCLab(t, true)

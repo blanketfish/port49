@@ -184,8 +184,8 @@ func (e *brokerDownError) Unwrap() error { return e.err }
 // with, still there, is said: the broker's clock may be past its end.
 func startIssued(sf *sessionFlags, certPath, keyPath string, held bool, stdout, stderr io.Writer) int {
 	sf.cert, sf.key = certPath, keyPath
-	code := startAgent(sf, true, stdout, stderr)
-	if _, err := os.Stat(certPath); code != 0 && held && err == nil {
+	code, down := startAgentDown(sf, true, stdout, stderr)
+	if _, err := os.Stat(certPath); code != 0 && held && !down && err == nil {
 		fmt.Fprintln(stderr, "port49 login: if the broker refused your held certificate, `port49 login --sign-in` "+
 			"signs you in again")
 	}
