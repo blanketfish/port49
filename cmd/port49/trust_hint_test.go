@@ -119,7 +119,7 @@ func TestTrustRefusesAPinsDirectoryBeforeItMints(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "trust", "--socket", sock, "--known-hosts", known, "--fingerprint", "SHA256:x",
 		"leaf1"}, &out, &errb)
-	if code != 1 || mints != 0 || scans.Load() != 0 || !strings.Contains(errb.String(), "chmod go-w") {
+	if code != 1 || mints != 0 || scans.Load() != 0 || !strings.Contains(errb.String(), "writable by its owner alone") {
 		t.Fatalf("code %d mints %d scans %d stderr %q", code, mints, scans.Load(), errb.String())
 	}
 }

@@ -391,3 +391,62 @@ func TestTheWorkloadAnchorIsNotTheRevocationsFile(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// broker.identity.issuance: {} is 12h; certificate_lifetime sets it
+// (decision 43 ruling 9). With none, the broker issues nothing.
+func TestIssuanceLoads(t *testing.T) {
+	for block, want := range map[string]time.Duration{
+		"    issuance: {}\n":                         12 * time.Hour,
+		"    issuance: {certificate_lifetime: 8h}\n": 8 * time.Hour,
+	} {
+		c, err := loadWith(t, brokerWithIdentity(twoLists+block))
+		if err != nil || c.Broker.Identity.Issuance == nil || c.Broker.Identity.Issuance.CertificateLifetime != want {
+			t.Fatalf("%q: %+v %v", block, c.Broker.Identity, err)
+		}
+	}
+	if c, err := loadWith(t, brokerWithIdentity(twoLists)); err != nil || c.Broker.Identity.Issuance != nil {
+		t.Fatalf("no issuance: %v", err)
+	}
+}
+
+func TestIssuanceRefusals(t *testing.T) {
+	machinesOnly := `  identity:
+    machines:
+      - type: oidc
+        issuer: https://sso.corp.example.com/realms/corp
+        audience: "api://port49-svc"
+        clients: [{client_id: oxidized, sub: 5f3c2d1e-0000-4000-8000-000000000049}]
+    issuance: {}
+`
+	for body, want := range map[string]string{
+		brokerWithIdentity(machinesOnly):                                             "list a human oidc verifier",
+		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 30m}\n"): "between 1h0m0s and 24h0m0s",
+		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 48h}\n"): "between 1h0m0s and 24h0m0s",
+		brokerWithIdentity(twoLists + "    issuance: {lifetime: 8h}\n"):              "unknown field",
+	} {
+		if _, err := loadWith(t, body); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v, want %q", err, want)
+		}
+	}
+}
+
+// An issued certificate carries the sign-in's issuer URL, so with issuance
+// configured a human verifier whose issuer URL a certificate cannot carry (a
+// space, non-ASCII) is a load error naming it; without issuance it loads as
+// before.
+func TestIssuanceRefusesAnIssuerACertificateCannotCarry(t *testing.T) {
+	for _, bad := range []string{"https://kc.example.com/realms/my realm", "https://kc.example.com/realms/café"} {
+		lists := strings.Replace(twoLists, "https://sso.corp.example.com/realms/corp\n        client_id", bad+"\n        client_id", 1)
+		if lists == twoLists {
+			t.Fatal("the human verifier's issuer was not replaced")
+		}
+		_, err := loadWith(t, brokerWithIdentity(lists+"    issuance: {}\n"))
+		if err == nil || !strings.Contains(err.Error(), "broker.identity.humans[1]") ||
+			!strings.Contains(err.Error(), "issuance") || !strings.Contains(err.Error(), "printable") {
+			t.Errorf("%q with issuance: %v", bad, err)
+		}
+		if _, err := loadWith(t, brokerWithIdentity(lists)); err != nil {
+			t.Errorf("%q without issuance: %v", bad, err)
+		}
+	}
+}

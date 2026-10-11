@@ -6,10 +6,15 @@ import (
 	"bytes"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 // stopAgentAt sends SIGTERM to whatever process listens on sock, found by
@@ -36,6 +41,61 @@ func stopAgentAt(sock string) {
 		if _, err := os.Stat(sock); err != nil {
 			return
 		}
+	}
+}
+
+// A broker that sends a CA bundle: the agent the login starts keeps it in
+// ~/.port49/broker_ca/, 0600, and logs it by fingerprint. A later login
+// whose broker_ca is only the next CA still reaches the broker, through the
+// kept bundle: the rotation's first half, with nothing asked of the user
+// (decision 43 ruling 25).
+func TestTheAgentKeepsTheBrokersCABundle(t *testing.T) {
+	l := newLabBroker(t, time.Hour)
+	next, err := testpki.NewCA("port49 lab next CA", time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(filepath.Join(l.dir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.b.CABundle = append(append([]byte{}, cur...), next.PEM()...)
+	t.Setenv("HOME", privateDir(t))
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	path, err := userconfig.CABundlePath(l.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, l.b.CABundle) {
+		t.Fatalf("%v %q", err, raw)
+	}
+	certs, _ := api.ParseCABundle(raw)
+	if log, _ := os.ReadFile(filepath.Join(filepath.Dir(sock), "agent.log")); !strings.Contains(string(log),
+		"kept the broker's CA bundle in "+path+": "+api.CAFingerprints(certs)) {
+		t.Fatalf("the agent's log: %q", log)
+	}
+	stopAgentAt(sock)
+	nextOnly := filepath.Join(privateDir(t), "next.pem")
+	if err := os.WriteFile(nextOnly, next.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags := l.flags(sock)
+	for i := range flags {
+		if flags[i] == "--broker-ca" {
+			flags[i+1] = nextOnly
+		}
+	}
+	out.Reset()
+	if code := run(append([]string{"login"}, flags...), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "port49: logged in to "+l.url) {
+		t.Fatalf("a login on the next CA alone: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
 

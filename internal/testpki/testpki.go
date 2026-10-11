@@ -55,6 +55,25 @@ func NewCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
 	return &CA{Cert: cert, Key: key}, nil
 }
 
+// CrossSign is this CA's name and key certified by signer: the certificate a
+// rotation by cross-signing gives out, so a server certificate this CA issued
+// verifies to this CA's own root and, through the cross certificate, to the
+// signer's.
+func (ca *CA) CrossSign(signer *CA) (*x509.Certificate, error) {
+	sn, err := serial()
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{SerialNumber: sn, Subject: ca.Cert.Subject,
+		NotBefore: ca.Cert.NotBefore, NotAfter: ca.Cert.NotAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer.Cert, &ca.Key.PublicKey, signer.Key)
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
+}
+
 // Leaf describes one certificate to issue. Client selects the clientAuth
 // extended key usage; otherwise it is serverAuth. NoExtKeyUsage issues one
 // with no extended key usage at all, which RFC 5280 reads as any purpose, as

@@ -2,6 +2,7 @@ package userconfig
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -96,9 +97,11 @@ func TestADirectoryAboveOthersCanWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(top, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	// The refusal tells the operator what to run.
+	// The refusal says what the directory needs, and no chmod: it may be
+	// shared, as a group-writable ~/.config is.
 	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by others") ||
-		!strings.Contains(err.Error(), "chmod go-w "+top) {
+		!strings.Contains(err.Error(), "writable by its owner alone (mode 0755 or 0700)") ||
+		strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("a world-writable directory two up: %v", err)
 	}
 	if err := os.Chmod(top, 0o777|fs.ModeSticky); err != nil {
@@ -469,6 +472,36 @@ func TestWritePrivateThenReadPrivate(t *testing.T) {
 	}
 }
 
+// WritePrivateAll renames nothing until every file is staged: a second file
+// the walk refuses leaves the first path, and its directory, as they were.
+func TestWritePrivateAllLeavesEveryPathAsItWasWhenOneIsRefused(t *testing.T) {
+	good := privateDir(t)
+	bad := privateDir(t)
+	if err := os.Chmod(bad, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(good, "a.key")
+	if err := os.WriteFile(first, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WritePrivateAll(PrivateFile{first, []byte("new"), "key"}, PrivateFile{filepath.Join(bad, "a.pem"), []byte("new"), "cert"})
+	if err == nil {
+		t.Fatal("a refused directory was written")
+	}
+	if raw, rerr := os.ReadFile(first); rerr != nil || string(raw) != "old" {
+		t.Fatalf("the first path: %q %v", raw, rerr)
+	}
+	if ents, _ := os.ReadDir(good); len(ents) != 1 {
+		t.Fatalf("%d entries left in the good directory, want 1", len(ents))
+	}
+	if err := WritePrivateAll(PrivateFile{first, []byte("new"), "key"}, PrivateFile{filepath.Join(good, "a.pem"), []byte("cert"), "cert"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(first); string(raw) != "new" {
+		t.Fatalf("the first path: %q", raw)
+	}
+}
+
 // WritePrivate creates nothing under a directory it would refuse: not the
 // missing directories, not the temporary file.
 func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
@@ -518,5 +551,234 @@ func TestPrivateDirCreatesAndJudges(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(top, "c")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a refused path created a directory: %v", err)
+	}
+}
+
+// The OIDC keys (decision 43 ruling 19): oidc_ca is resolved and read once
+// through the walk, as broker_ca is.
+func TestTheOIDCKeysAreRead(t *testing.T) {
+	p := private(t, "config.yaml", "method: oidc\noidc_issuer: https://kc.example/r\noidc_ca: idp.pem\n"+
+		"oidc_redirect_port: 18749\n")
+	ca := filepath.Join(filepath.Dir(p), "idp.pem")
+	if err := os.WriteFile(ca, []byte("PEM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, ok, err := Load(p)
+	if err != nil || !ok || f.Method != "oidc" || f.OIDCIssuer != "https://kc.example/r" || f.OIDCCA != ca ||
+		string(f.OIDCCAPEM) != "PEM" || f.OIDCRedirectPort != 18749 {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	if f, _, err := Load(p, WithoutOIDCCA()); err != nil || f.OIDCCAPEM != nil {
+		t.Fatalf("WithoutOIDCCA: %q %v", f.OIDCCAPEM, err)
+	}
+}
+
+func TestAnOIDCCAOthersCanWriteIsRefused(t *testing.T) {
+	p := private(t, "config.yaml", "oidc_ca: idp.pem\n")
+	ca := filepath.Join(filepath.Dir(p), "idp.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ca, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by others") ||
+		!strings.Contains(err.Error(), "oidc_ca in") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestAnUnknownMethodOrABadPortIsRefused(t *testing.T) {
+	for body, want := range map[string]string{
+		"method: saml\n":              `method "saml"`,
+		"oidc_redirect_port: 70000\n": "is not a port",
+		"oidc_redirect_port: -1\n":    "is not a port",
+	} {
+		if _, _, err := Load(private(t, "config.yaml", body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", body, err, want)
+		}
+	}
+}
+
+// An issued certificate is kept per broker, by its host and port, and a
+// broker URL that would not make a plain file name is refused (decision 43
+// ruling 7).
+func TestIssuedPaths(t *testing.T) {
+	for broker, want := range map[string]string{
+		"https://Broker.Example:8443":  "broker.example_8443",
+		"https://broker.example":       "broker.example_443",
+		"https://[2001:db8::1]:8443/x": "2001-db8--1_8443",
+	} {
+		c, k, err := IssuedPathsIn("/d", broker)
+		if err != nil || c != "/d/issued/"+want+".pem" || k != "/d/issued/"+want+".key" {
+			t.Errorf("%s: %s %s %v", broker, c, k, err)
+		}
+	}
+	for _, bad := range []string{"http://broker.example", "https://", "https://u:p@broker.example", "broker.example:8443"} {
+		if _, _, err := IssuedPathsIn("/d", bad); err == nil {
+			t.Errorf("%q made a path", bad)
+		}
+	}
+}
+
+// asSystem stands path in for /etc/port49/config.yaml for the rest of the
+// test, owned by owner in root's place.
+func asSystem(t *testing.T, path string, owner uint32) {
+	t.Helper()
+	oldPath, oldOwner := SystemPath, SystemOwner
+	SystemPath, SystemOwner = path, owner
+	t.Cleanup(func() { SystemPath, SystemOwner = oldPath, oldOwner })
+}
+
+// ~/.port49 is the directory, $PORT49_CONFIG names another file, and plan
+// 9a's directory is kept for the pins alone (decision 43 ruling 24).
+func TestTheDirectories(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv(EnvConfig, "")
+	if Dir() != "/home/alice/.port49" || Path() != "/home/alice/.port49/config.yaml" ||
+		LegacyDir() != "/home/alice/.config/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+	t.Setenv(EnvConfig, "/srv/p49.yaml")
+	t.Setenv("XDG_CONFIG_HOME", "/x")
+	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || LegacyDir() != "/x/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+}
+
+// The personal file is over the system file, key by key; each file's
+// relative paths are its own directory's, and the CA is read from the file
+// whose key won. The system file alone is a config.
+func TestLoadAllLayersYoursOverTheSystemFile(t *testing.T) {
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\nbroker_ca: ca.pem\nmethod: oidc\n"+
+		"oidc_issuer: https://idp.example\noidc_redirect_port: 18000\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(sys), "ca.pem"), []byte("SYSTEM CA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asSystem(t, sys, uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	mine := private(t, "config.yaml", "broker: https://mine.example:8443\noidc_redirect_port: 18001\n")
+	f, ok, err := LoadAll(mine, false)
+	if err != nil || !ok || f.Broker != "https://mine.example:8443" || f.OIDCRedirectPort != 18001 ||
+		f.Method != "oidc" || f.OIDCIssuer != "https://idp.example" ||
+		f.BrokerCA != filepath.Join(filepath.Dir(sys), "ca.pem") || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	f, ok, err = LoadAll(filepath.Join(privateDir(t), "config.yaml"), false)
+	if err != nil || !ok || f.Broker != "https://sys.example:8443" || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("the system file alone: %+v %v %v", f, ok, err)
+	}
+	// A CA the system file names is refused in the system file's name.
+	if err := os.Chmod(filepath.Join(filepath.Dir(sys), "ca.pem"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(mine, false); err == nil || !strings.Contains(err.Error(), "broker_ca in "+sys) {
+		t.Fatalf("a CA others can write: %v", err)
+	}
+}
+
+// Neither file is no config; a named file must be there.
+func TestLoadAllWithNeitherFile(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, ok, err := LoadAll(p, false); ok || err != nil {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	if _, _, err := LoadAll(p, true); err == nil || err.Error() != p+": no such file" {
+		t.Fatalf("named: %v", err)
+	}
+}
+
+// The system file names the broker for every user on the host, so it is
+// root's alone; this user's own is refused, naming the owner it needs.
+func TestASystemFileNotRootsIsRefused(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, this user's file is root's")
+	}
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\n")
+	asSystem(t, sys, 0)
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is not owned by root") || !strings.Contains(err.Error(), "chown root "+sys) {
+		t.Fatalf("%v", err)
+	}
+	// Writable by others, it is refused as any config file is.
+	asSystem(t, sys, uint32(os.Getuid()))
+	if err := os.Chmod(sys, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is writable by others") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A config file at plan 9a's place, with none at the default path, is
+// refused naming the move; with one at the default path it is not read.
+func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	xdg := privateDir(t)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	old := filepath.Join(xdg, "port49", "config.yaml")
+	if err := WritePrivate(old, []byte("broker: https://old.example:8443\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, _, err := LoadAll(p, false); err == nil ||
+		err.Error() != old+" is where plan 9a kept port49's config file; port49 reads "+p+" now: mkdir -m 700 -p "+
+			filepath.Dir(p)+" && mv "+old+" "+p+" (if it holds a certificate login, add `method: x509`)" {
+		t.Fatalf("%v", err)
+	}
+	if err := os.WriteFile(p, []byte("broker: https://new.example:8443\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok, err := LoadAll(p, false); err != nil || !ok || f.Broker != "https://new.example:8443" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+}
+
+// A root-owned file or directory this user cannot read is refused naming the
+// mode it has, the mode it needs and that its installer sets it, never a
+// chmod this user cannot make. /etc/shadow and /root stand in for an
+// installer's file and directory; the mode asserted is the one they have.
+func TestARootFileThisUserCannotReadNamesTheModeItNeeds(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can read them")
+	}
+	fi, err := os.Lstat("/etc/shadow")
+	if _, oerr := os.Open("/etc/shadow"); err != nil || !errors.Is(oerr, fs.ErrPermission) {
+		t.Skip("no unreadable root-owned file to test with")
+	}
+	_, err = ReadPrivate("/etc/shadow", 1<<10, "port49 config file")
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("/etc/shadow is %04o and owned by root", fi.Mode().Perm())) ||
+		!strings.Contains(err.Error(), "installed it must make it 0644") || strings.Contains(err.Error(), "chmod") {
+		t.Fatalf("file: %v", err)
+	}
+	di, err := os.Lstat("/root")
+	if _, derr := os.Stat("/root/x"); err != nil || !errors.Is(derr, fs.ErrPermission) {
+		t.Skip("no unsearchable root-owned directory to test with")
+	}
+	_, err = ReadPrivate("/root/x/config.yaml", 1<<10, "port49 config file")
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("/root is %04o and owned by root", di.Mode().Perm())) ||
+		!strings.Contains(err.Error(), "installed it must make it 0755") || strings.Contains(err.Error(), "chmod") {
+		t.Fatalf("directory: %v", err)
+	}
+}
+
+// Under the user's own home a root-owned file is no installer's: the fix is
+// the user's, with sudo; outside it, the installer's.
+func TestTheFixForARootFileUnderYourHomeIsYours(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	t.Setenv("USER", "alice")
+	if got := fixFor("/home/alice/.port49/config.yaml", "0644"); got !=
+		"make it yours (sudo chown alice /home/alice/.port49/config.yaml) or 0644" {
+		t.Fatalf("%q", got)
+	}
+	if got := fixFor("/etc/port49/config.yaml", "0644"); got != "whoever installed it must make it 0644" {
+		t.Fatalf("%q", got)
+	}
+	if got := fixFor("/home/alicia/x", "0644"); strings.Contains(got, "yours") {
+		t.Fatalf("a sibling of the home directory: %q", got)
 	}
 }

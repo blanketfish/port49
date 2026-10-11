@@ -530,8 +530,9 @@ func oidcNote(row, claim, observation, evidencePath, run, version string) string
 	fmt.Fprintf(&b, "- **Run:** %s\n", run) // the commit and the test run, as 7g's notes carry (pre-flight M-23)
 	fmt.Fprintf(&b, "- **Platform:** Keycloak, as a container on `tests/lab/oidc/compose.yaml` (no network device)\n")
 	fmt.Fprintf(&b, "- **Image version:** %s\n", version)
-	fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per request or token, with the JWS header and claims decoded "+
-		"and the signature dropped (the wire is TLS, so a pcap would be encrypted).\n", evidencePath)
+	fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per observed step, {step, value}: a token's value is its JWS "+
+		"header and claims decoded with the signature dropped, any other value is the observation's text (the wire is "+
+		"TLS, so a pcap would be encrypted).\n", evidencePath)
 	fmt.Fprintf(&b, "- **Credentials:** none here or in the evidence: the admin password is generated per run and never "+
 		"printed; the lab user's password and the service secret are the realm file's published lab values.\n")
 	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)

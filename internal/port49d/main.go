@@ -74,6 +74,9 @@ func Main(args []string) int {
 	if len(args) > 0 && args[0] == "store-roles" {
 		return storeRolesCmd(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
+		return issuerCmd("port49d", args[0], "/etc/port49/port49d.yaml", config.Load, args[1:], os.Stdout, os.Stderr)
+	}
 	fs := flag.NewFlagSet("port49d", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	if err := fs.Parse(args); err != nil {
@@ -86,8 +89,8 @@ func Main(args []string) int {
 	// A subcommand after a flag (port49d --config X init-revocations) would
 	// otherwise start the daemon (pre-flight M20).
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], port49d init-revocations [--config FILE], "+
-			"or port49d store-roles [--config FILE] (a subcommand comes first)")
+		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
+			"port49d init-revocations|init-issuer|rotate-issuer [--config FILE], or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -323,6 +326,9 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		}
 	}
+	caBundle, caBundleRefused := loadCABundle(cfg.Broker.TLSCABundleFile, cert, func(format string, args ...any) {
+		fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+	})
 	var anchors []namedAnchor
 	human := namedAnchor{key: "broker.client_ca_file", cert: anchorCert}
 	if id := cfg.Broker.Identity; id != nil && !id.Shorthand {
@@ -370,6 +376,15 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	b.NoX509 = cfg.Broker.ClientCAFile == ""
 	b.Workload = workload
 	announceIdentity(stderr, proc, cfg, b.Identity)
+	// The issuing CA (plan 9b; decision 43 ruling 14), before the server's
+	// pool is built from it. It never refuses the start.
+	if id := cfg.Broker.Identity; id != nil && id.Issuance != nil {
+		b.Issuer = openIssuer(cfg, m, func(format string, args ...any) {
+			fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+		})
+		b.CertificateLifetime = id.Issuance.CertificateLifetime
+	}
+	b.CABundle, b.CABundleRefused = caBundle, caBundleRefused
 	var anchor *x509.CertPool
 	if anchorCert != nil {
 		anchor = x509.NewCertPool()

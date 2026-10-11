@@ -90,6 +90,7 @@ the policy string are the same string and the subject matcher is a comparison:
 | human x509 | `user:` + the entry's `principal_attribute` (default `userPrincipalName`), lower-cased, from the certificate-to-directory mapping (design document §7); without `broker.directory`, `user:` + the certificate's one email SAN |
 | human OIDC | `user:` + the claim `broker.identity.humans[].principal_claim` names (required, no default: `preferred_username`, `email` only with `email_verified: true`, or `upn`), lower-cased, printable ASCII with an `@`, its domain one of the verifier's `principal_domains` (§13 decision 39 rulings 6, 22, 23) |
 | workload x509 | the leaf's one URI SAN, verbatim: a SPIFFE ID with a path (`spiffe://<trust domain>/<path>`, SPIFFE ID §2), its trust domain one of `broker.identity.machines[].spiffe_trust_domains`; the leaf not a CA. Zero or several URI SANs, another URI, an ID with no path, or an unlisted trust domain is `identity_unmapped` (§13 decision 40 rulings 3 and 4). Its email SANs are never read |
+| port49-issued certificate | the principal the human OIDC verifier gave at the sign-in it was issued on, from the certificate's subject CN, never mapped again; the sign-in's issuer must still be a human verifier's whose `principal_domains` hold it (§13 decision 43 ruling 10) |
 | Kubernetes | `system:serviceaccount:<namespace>:<name>` from the token's `sub` |
 | machine OIDC | `app:` + the token's `azp`, else its `client_id` claim, verbatim: a client the verifier's `clients` lists, the token's `sub` that client's pinned identity; a token carrying a person's session claim (`auth_time`, `sid`, `nonce`, `scp`, `amr`) or an `idtyp` other than `app` is never a machine's (§13 decision 39 ruling 21) |
 
@@ -947,6 +948,13 @@ the credential MUST be valid when the broker resolves it — and not the session
 every hour for no security gain. Session lifetime is port49 policy, held in
 `session_expires` and derived from `auth_time` (§5.6).
 
+**A certificate port49 issued** (plan 9b; §13 decision 43) carries both halves: `method: cert`
+with its fingerprint, issuer (the broker's issuing CA), serial and subject, and the `iss`, `sub`,
+`sid`, `amr` and `acr` of the OIDC sign-in it was issued on, read from its one URI SAN. So a
+back-channel logout naming that `sid` reaches the certificate's sessions, and a revocation by its
+serial reaches them too. Its `notAfter` bounds the mint and the refresh, as any certificate's does,
+and never a session.
+
 **Consequence for the store.** Context now holds identity material — subject DNs, `sub`
 claims, an operator's name. None of it is a credential, but it is PII-adjacent, so **login
 context MUST receive the same encryption-at-rest treatment as tokens** (design document §8).
@@ -1139,7 +1147,9 @@ the cost of a fresh login for a person who ended one session (§13 decision 39 r
 logout by `sid` through `/v1/tokens/revoke` names no `sub`, and ends that session alone. Each
 logout reaches, in order:
 
-- **A logout record**, written first, kept `max_token_age` plus twice `clock_skew`. By `sid`, it
+- **A logout record**, written first, kept `max_token_age` plus twice `clock_skew` (on a broker
+  that issues certificates, `max(max_token_age, 24h)` plus twice `clock_skew`, 24h being the
+  longest certificate it may issue; §13 decision 43 ruling 16). By `sid`, it
   refuses every token naming that issuer and `sid`; by `sub` alone, every token for that issuer
   and `sub` issued at or before the logout token's `iat` plus `clock_skew`. Every bearer
   request reads it; a mint reads it again after its last token write and deletes what it wrote
@@ -1962,6 +1972,22 @@ Whether a provider moves `auth_time` and echoes the `nonce` on `prompt=login` is
 (Keycloak: measured, it does, and a refresh-token grant keeps the last authentication's
 `auth_time`) and L47 (hosted providers, open).
 
+**A certificate port49 issued, as built (plan 9b; §13 decision 43 ruling 11).** After the sign-in
+the agent holds the session on the certificate path, unchanged:
+
+- **The clock.** `auth_time` is the broker's acceptance of the handshake or its verification of a
+  refresh's signature; the provider's `auth_time` bounds issuance alone (5 minutes) and is recorded
+  as `auth.oidc.auth_time`.
+- **The fresh authentication event.** A refresh's key signature on the issued certificate is one,
+  as on any certificate, while the certificate is valid. So `port49 refresh` and a new agent's
+  refresh at login need no browser, and one sign-in gives at most `certificate_lifetime` of mints
+  and refreshes.
+- **The certificate's end** bounds the mint and the refresh, not a device session: what a last
+  refresh extended runs to its own ceiling.
+- **A back-channel logout** refuses the certificate through its `sid` for as long as it lives: on a
+  broker that issues, a logout record stands `max(max_token_age, 24h) + 2×clock_skew`, 24h being
+  the longest `certificate_lifetime` allowed (§13 decision 43 ruling 16).
+
 #### Why `enable: auto` is restricted
 
 Method lists fall through to a later method when the server is unreachable, and not on **FAIL**
@@ -2118,7 +2144,7 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Nine decision events, one at each point a decision is made, plus five report
+One envelope. Ten decision events, one at each point a decision is made, plus five report
 events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
@@ -2132,11 +2158,12 @@ events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; a revocation lifted; or, over HTTP, a principal ending its own sessions (`by: self`) or a `(device, username)` key ended (`by: key`), neither leaving a mark |
 | `identity` | broker | what `GET /v1/identity` resolved the caller to: `permit grants_matched` when its subject holds a grant unexpired now, else `deny no_grants_matched` (design document §17) |
 | `explain` | broker | a hypothetical decision `POST /v1/explain` answered, about the caller or, under `explain_others`, another principal: its verdict and reason are the answer given, or `deny api_right_missing`. It authorizes nothing, and replay passes over it |
+| `issue` | broker | whether a person's OIDC sign-in is exchanged for a port49-issued certificate (`POST /v1/certificate`; §13 decision 43 ruling 8): `permit certificate_issued`, carrying `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc`, or a deny with the refusal's reason. A broker that cannot issue (`issuance_unavailable`) records nothing |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as the eleventh event, `account`, and is specified in
+Device accounting shares this envelope as the twelfth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
-A twelfth, `account_gap`, is a report too: accounting records port49 received and did not write,
+A thirteenth, `account_gap`, is a report too: accounting records port49 received and did not write,
 `{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
 `offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
 and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
@@ -2153,7 +2180,7 @@ yet written, and port49d logs the held counts by stage when it shuts down;
 `port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
 
-A thirteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
+A fourteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
 swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
 "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
@@ -2164,7 +2191,7 @@ addresses are new capture targets. Its `device` block names the device. It is wh
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
-A fourteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
+A fifteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
 <principal>` on the broker's admin socket, deleting the principal's directory membership and with
 it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget":
 {"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket
@@ -2281,11 +2308,11 @@ refused request named; any other path is recorded `mint`.
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device; or, on a sweep page by `scope`, the page holds no device: the scope is not declared, selects no device the principal holds a grant on, or the page is past the end, which are one answer and one record carrying `sweep` and `policy.bundle` and no device (§13 decision 42 ruling 2), after the mint gate has passed. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38); or a workload under a directory mapping whose identity subject declares no username takes from its entry one a subject declares or a second entry holds (§13 decision 41 ruling 4, plan 8b). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds in the mapping's `attribute` any value beginning `spiffe://`, so it is a workload's (§13 decision 41 ruling 4); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain`, `revoke` and `issue`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds in the mapping's `attribute` any value beginning `spiffe://`, so it is a workload's (§13 decision 41 ruling 4); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
 | `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when two entries hold a workload's SPIFFE ID in the workload mapping's `attribute` (§13 decision 41, plan 8b); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two entries matching one identity is an impersonation path. On `refresh`: every context of the principal is revoked |
 | `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38); for a workload under a directory mapping, the membership stored for its SPIFFE ID (§13 decision 41 ruling 7, plan 8b), which `port49 workload` retries within `--deadline` and then exits 75. Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
-| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers, which is final at `port49 workload`, §13 decision 40 ruling 7) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, never a final 401, and to be retried but for an uncovered issuer. A certificate whose verified chains end at both the human and the workload trust anchor, or, on a broker with no human x509 verifier, do not end at the workload anchor (§13 decision 40 ruling 2), is refused at the TLS handshake, which leaves a log line and a `handshake_failures{identity_refused}` count, not a decision record. On `mint`, `refresh`, `identity`, `explain` and `revoke` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`) |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers, which is final at `port49 workload`, §13 decision 40 ruling 7) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, never a final 401, and to be retried but for an uncovered issuer. A certificate whose verified chains end at both the human and the workload trust anchor, or, on a broker with no human x509 verifier, do not end at the workload anchor (§13 decision 40 ruling 2), is refused at the TLS handshake, which leaves a log line and a `handshake_failures{identity_refused}` count, not a decision record. On `mint`, `refresh`, `identity`, `explain`, `revoke` and `issue` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`). On `issue`: a missing bearer, a client certificate presented, a sign-in older than the freshness bound, a nonce not naming the CSR's key, a spent sign-in, a bad CSR, a machine token, or a sign-in that cannot be carried in a certificate (§13 decision 43 ruling 8) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
@@ -2310,9 +2337,10 @@ refused request named; any other path is recorded `mint`.
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`; on every endpoint but the refresh's challenge and refresh, an OIDC token's `auth_time` is; either way the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`, or the principal's directory membership has not been verified for that long (§5.1.3); context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `issue`, a mark on the principal or an OIDC logout refuses the sign-in's token, so nothing is issued; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
+| `certificate_issued` | `issue`: the broker issued a short-lived client certificate for the key the sign-in's `nonce` names (§13 decision 43 ruling 8) |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened, failing authentication (one sealed under a key port49 does not hold is left unrevoked and unrecorded, §5.1.3) — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
@@ -6024,14 +6052,27 @@ over the held connection, and prints one line per device: extended to when, revo
 a mark or a fault; `port49 revoke --list` and the refresh record say which), past its grace window,
 not judged, or on a platform the extension cannot reach. `port49 login` does the same while a
 session is held for the same broker and certificate, and exits 1 naming the running agent's broker
-otherwise; it also refreshes once after a new session connects. `port49 token` warns on stderr when
+otherwise; it also refreshes once after a new session connects. On a certificate port49 issued
+(§13 decision 43 ruling 11) the refresh is the same key signature, with no browser.
+`port49 token` warns on stderr when
 the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
 ceiling on a device.
 
 **`port49 login`** takes `--broker`, `--broker-ca`, `--cert` and `--key` from the per-user config
-file, `$XDG_CONFIG_HOME/port49/config.yaml`, for each one its flags leave out. It reads the file
-only when nobody but the operator or root can write it or any directory above it (§13 decision
-42 ruling 6).
+file, `~/.port49/config.yaml` (or the file `$PORT49_CONFIG` names), for each one its flags leave
+out, and from the system-wide `/etc/port49/config.yaml` the install ships for each one both leave
+out. It reads a file only when nobody but the operator or root can write it or any directory above
+it, and the system file only when it is root's (§13 decision 42 ruling 6, decision 43 ruling 24).
+
+**`port49 login --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser]
+[--sign-in]`**, or `method: oidc` in the config file, gets the person a certificate the broker
+issues (§13 decision 43).
+- **The sign-in.** At the identity provider `/v1/config` lists, by the authorization-code flow
+  with PKCE and `prompt=login`, in a browser, or by pasting back the address it ended on.
+- **The certificate.** For a key generated on this host (`~/.port49/issued/`, 0600),
+  valid `certificate_lifetime`. The agent then holds the session as on the certificate path.
+- **No sign-in** while a held certificate has more than a quarter of its life left, or while the
+  provider does not answer and it is still valid; `--sign-in` forces one.
 
 **`port49 devices trust [--fingerprint SHA256:…] [--address ADDR] [--port N] [--replace] DEVICE`**
 pins the SSH host key the device presents, in `$XDG_CONFIG_HOME/port49/known_hosts` under its
@@ -7673,7 +7714,9 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   said with the manual ends. `Cache-Control: no-store`. Task 12.
 - **13. A logout leaves no mark.** A logout record first (by `sid`: every token naming it; by
   `sub`: every token issued at or before the logout's `iat` + `clock_skew`; kept `max_token_age` +
-  2 × `clock_skew`); then each owner principal's own unspent tokens, only principals in the
+  2 × `clock_skew`, and on a broker that issues certificates `max(max_token_age, 24h)` + 2 ×
+  `clock_skew`, decision 43 ruling 16); then each owner principal's own unspent tokens, only
+  principals in the
   verifier's `principal_domains`; then the contexts twice (by `sid`, or every context of each
   principal by `sub`); the receipts; one `revoke` record by `sid` or `sub`. A `sid` logout
   also ends a certificate-path context an OIDC refresh extended under it: fail closed. A mint
@@ -7691,9 +7734,10 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   issuer the challenge's, its `auth_time` no earlier than the challenge less `clock_skew`; then
   the certificate path's steps with `auth_time` as the clock; the new `sid` indexed beside the
   old, before the extension; a logout read after the writes marks every context extended.
-  Task 11.
+  Task 11. A broker that issues certificates takes a person's ID token at `POST /v1/certificate`
+  alone (decision 43 ruling 13), so there a person refreshes by a key signature.
 - **16. `/v1/config`** lists `methods` and, per human OIDC verifier, `{issuer, client_id,
-  scopes}`. Task 10.
+  scopes}`. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18).
 - **17. The metrics.** `port49_oidc_tokens_total{issuer,outcome}`,
   `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
   `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`; no
@@ -8067,8 +8111,10 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
   - `examples/oxidized` takes `PORT49_SCOPE` in place of `OXIDIZED_NODES`.
   - Task 3.
 - **6. The per-user config file** (plan 3's rulings, 2026-09-24).
-  - **Where and what.** `$XDG_CONFIG_HOME/port49/config.yaml`, else
-    `~/.config/port49/config.yaml`, holding `broker`, `broker_ca`, `cert` and `key`.
+  - **Where and what.** `~/.port49/config.yaml`, over the system-wide `/etc/port49/config.yaml`
+    key by key (decision 43 ruling 24; plan 9a's `$XDG_CONFIG_HOME/port49/config.yaml` is refused,
+    naming the move), holding `broker`, `broker_ca`, `cert` and `key`. Plan 9b adds `method`,
+    `oidc_issuer`, `oidc_ca` and `oidc_redirect_port` (decision 43 ruling 19).
   - **Precedence.** `port49 login` takes from it each value its flags leave out; a flag always
     wins.
   - **Paths.** A relative path is taken from the file's directory, and `~/` is the home
@@ -8202,6 +8248,346 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     to expect.
   - **Until then:** 9a's Netmiko example verifies against port49's own pins, written under the
     address for the one connection (Task 7).
+
+**43. The agent in full, second part: port49-issued user certificates over an OIDC sign-in.**
+*Plan 9b, 2026-10-10, on Ryan's direction of that day: design §7's "the broker MAY issue a
+short-lived client certificate", made v1.* Rulings rest on reasoning unless they say data. Rulings
+4 and 8 are measured on Keycloak (L55 closed) and provisional on L47 (hosted providers, open). Q1–Q3 (rulings 13, 9 and
+12) were ruled as recommended on 2026-10-10 by the controller under Ryan's standing grant: a
+person's bearer outside `/v1/certificate` retires at the pre-beta review, not now; the lifetime is
+broker config, 12h, 1h–24h, per role later if asked; a new agent reuses the held key and
+certificate while the certificate is valid.
+
+- **1. The flow** (data: RFC 6749 §4.1, RFC 7636, RFC 8252, OIDC Core §3.1).
+  - **What it is.** The authorization-code flow with PKCE, `S256` only, as a public client with no
+    client secret.
+  - **Where it runs.** `port49 login` runs it in its own process, never in the agent, which never
+    listens on a TCP port and never holds an ID token.
+  - **The provider's PKCE.** A provider whose discovery lists `code_challenge_methods_supported`
+    without `S256` is refused. One that lists none is used, with `S256` sent. Keycloak (L55, closed)
+    lists `plain` and `S256`, and for port49-cli set to require `S256` it refused a wrong verifier
+    and no verifier (`400 invalid_grant`) and `code_challenge_method=plain`; what it does for a
+    client set to require no method is not measured.
+- **2. The provider** (data: OIDC Discovery §4).
+  - **Which one.** The one `/v1/config`'s `oidc` lists, or the one `--issuer` or `oidc_issuer`
+    names exactly. None listed is "this broker takes no OIDC login". Several and none named is a
+    refusal that lists them.
+  - **Its discovery document.** `issuer` must equal the configured issuer. `authorization_endpoint`
+    and `token_endpoint` must be `https` URLs with a host and no credentials. Each member is read
+    by its exact name.
+  - **Reaching it.** No redirect is followed. `HTTPS_PROXY` is honoured, as the broker's key fetch
+    honours it (decision 39 ruling 4). TLS is against `oidc_ca`, else the system's roots. The
+    broker is never reached through a proxy.
+- **3. The request.** It carries:
+  - `response_type=code`, `client_id`, and `redirect_uri`;
+  - `scope`: the verifier's scopes, `openid` first;
+  - `state`: 32 random bytes;
+  - `nonce`: the key binding, `base64url(SHA-256("port49 issue v1\0" ‖ PKIX(the new key)))`
+    (`api.IssuanceNonce`), so the ID token names the one key it may be exchanged for;
+  - `code_challenge`: S256 of a 32-byte verifier;
+  - `prompt=login`: a sign-in is a fresh authentication.
+- **4. The redirect** (data: RFC 8252 §7.3, RFC 9207; measured on Keycloak, L55 closed).
+  - **The listener.** `http://127.0.0.1:<port>/callback`, on a listener bound to `127.0.0.1`
+    alone. The port is ephemeral, or `oidc_redirect_port` for a provider that registers one. It
+    answers `GET /callback` and nothing else.
+  - **Keycloak's registration** (L55, closed). An ephemeral loopback port is admitted only for a
+    redirect registered as `http://127.0.0.1/callback` or `http://127.0.0.1/*`. A fixed
+    `http://127.0.0.1:<port>/callback` admits that port alone, and `http://127.0.0.1:*/callback`
+    admits none. The client's ephemeral default stands (RFC 8252); a provider registered with a
+    fixed port needs `oidc_redirect_port`.
+  - **Another `state`.** An answer that does not carry this sign-in's `state` is answered 400 and
+    waited past: anyone on the host can reach the port.
+  - **This sign-in's answer.** The first answer carrying the `state` ends the wait. Its `iss`, when
+    present, must be the issuer, and is required when discovery says the provider sends it. An
+    `error` ends the sign-in with the provider's code.
+  - **The page.** It holds no token, with `Cache-Control: no-store` and `Referrer-Policy:
+    no-referrer`.
+  - **The wait.** 5 minutes.
+- **5. No browser.**
+  - **When one is launched.** `$BROWSER` when set. On Linux, `xdg-open` only with `DISPLAY` or
+    `WAYLAND_DISPLAY` set. On macOS, `open` outside an SSH session. `--no-browser` launches none.
+    The authorization URL is always printed on stderr.
+  - **The paste.** When stdin is a terminal, the address the browser ended on may be pasted back,
+    and is not echoed.
+  - **No way back.** With no browser opened, no terminal, and an ephemeral port, that is said at
+    once, naming `ssh -t`, or a fixed port forwarded with `ssh -L`. With a fixed port the sign-in
+    waits, and says how to forward it.
+  - **No device grant.** The device authorization grant (RFC 8628) is not built: the paste covers
+    the browser-less host with every property of the loopback flow; its user code is a phishing
+    route (RFC 8628 §5.4); and a provider must enable it per client.
+- **6. The exchange and the ID token, as the client reads it** (data: OIDC Core §3.1.3.7).
+  - **The exchange.** The token endpoint, form-encoded, with `code_verifier` and no secret. A
+    refresh token in the answer is dropped unread.
+  - **What the client reads:** a compact JWS whose `alg` decision 39 ruling 3 accepts; `iss` exact;
+    `aud` naming `client_id` and `azp` as decision 39 ruling 2 reads it; `nonce` equal to the
+    request's; `sub`, `iat`, `exp` and `auth_time` present, `iat` no later than `exp`; every claim
+    by its exact name.
+  - **No signature check here, and no clock.** It came from the token endpoint over TLS (item 6),
+    and the broker verifies it. A skew over 5 minutes between `iat` and this host's clock is
+    warned, never refused.
+- **7. The key.** `port49 login` generates an ECDSA P-256 key for each sign-in. Plan 9b keeps it
+  in a file, `~/.port49/issued/<broker host>_<port>.key`, written 0600 through
+  `userconfig.WritePrivate`, beside the certificate (`.pem`). Plan 9c generates it in a TPM, the
+  Secure Enclave or a token behind the same `crypto.Signer`. It never leaves the host; the broker
+  sees its public key, in a CSR whose signature proves it.
+- **8. The exchange for a certificate:** `POST /v1/certificate`, the ID token as the bearer, `{csr}`
+  base64url DER as the body, no client certificate. The broker refuses, recording each refusal as an
+  `issue` deny:
+  - a token any of decision 39 rulings 2–6 refuses, a marked principal, or a logged-out session,
+    as a mint is refused;
+  - a machine's token (400);
+  - a sign-in that is not fresh, `401 sign_in_not_fresh`, `trust_domain_unresolved`, judged on two
+    clocks: an `auth_time` more than 5 minutes (plus `clock_skew`) before the token's `iat`, the
+    provider's own clock, which catches a provider that ignored `prompt=login` (measured on
+    Keycloak, L55 closed: `auth_time` +0s from the sign-in, and +15s over a live SSO session); an
+    `iat` more than that before the broker's now, a slow sign-in or two clocks apart, said as
+    such; or an `auth_time` after the `iat` plus `clock_skew`. 5 minutes is the sign-in's own
+    wait;
+  - a CSR that does not parse, whose signature is not its key's, or whose key is not ECDSA
+    P-256/P-384, Ed25519 or RSA 2048–8192 (400);
+  - a `nonce` that is not `api.IssuanceNonce` of the CSR's key: `401 sign_in_not_bound` (measured
+    on Keycloak, L55 closed: the provider echoed the 43-character nonce byte for byte);
+  - a token exchanged already (the store keeps its SHA-256 for `max_token_age`): `401
+    sign_in_spent`;
+  - a sign-in that cannot be carried in a certificate (its principal or claims fail the issuer's
+    rules). The human verifier's own checks keep every person's claim within them, so today the
+    branch is reached only by an operator-configured issuer URL the certificate cannot carry (a
+    space or a non-ASCII character in its path); the broker refuses such an issuer at config load
+    once issuance is configured (plan 9b, Task 8): `401 sign_in_not_certifiable`,
+    `trust_domain_unresolved`, "your sign-in's principal or claims cannot be carried in a
+    certificate; tell the operator".
+
+  Every refusal above comes before the sign-in is spent, so a refused sign-in is exchangeable
+  after the cause is cured. Before the spend the broker also checks that it can issue now (the CA
+  within its validity, the lifetime in range): if not, `503 issuance_unavailable`, unrecorded, and
+  the token stays unspent so a retry may use it.
+
+  Then it writes the owner record (decision 39 ruling 11), issues, and records an `issue` permit
+  `certificate_issued` with the certificate's serial, issuer, fingerprint and end. A broker whose
+  CA cannot issue answers `503 issuance_unavailable`, Retry-After 60, with no record: the fault is
+  the broker's, and its start and its process log say which. A broker with no `issuance` answers
+  `404 not_issuing`.
+- **9. The certificate** (Q2).
+  - Signed by the broker's issuing CA; serial 128 random bits; valid from a minute before issue for
+    `broker.identity.issuance.certificate_lifetime` (default 12h, 1h–24h), never past the CA's end.
+  - Subject CN the principal the human verifier gave; one URI SAN,
+    `port49-sign-in:v1?iss=…&sub=…&sid=…&auth_time=…&iat=…&amr=…&acr=…`, carrying the sign-in, so
+    the `sid` is bound to the serial under the CA's signature (R1); `clientAuth`; no email or DNS
+    SAN.
+  - A per-role lifetime is not built: no policy value varies by role yet, and plan 9c's
+    `per_login_mfa` is where per-device strength arrives.
+- **10. The broker trusts its own certificates, for people alone.**
+  - Its issuing CAs (current, next, previous) join the handshake's pool. A chain ending at one of
+    them is the `humans` domain; one ending there and at another anchor is refused.
+  - The principal is the certificate's CN, never mapped through the directory (membership is still
+    read at mint, as for an OIDC principal). The sign-in must still name an issuer whose human
+    verifier's `principal_domains` hold the principal, or it is refused `trust_domain_unresolved`:
+    a provider removed from the configuration takes its people's certificates with it.
+  - `certificate_status` is not asked: the broker's marks are such a certificate's status.
+  - The credential is `{method: cert, fingerprint, issuer, serial, subject, iss, sub, sid, amr,
+    acr}`: a mint indexes its contexts under the certificate and the `sid`, and its records carry
+    `auth.oidc`.
+- **11. `auth_time`, `session_expires`, and the fresh authentication event** (decision 17;
+  dissolves plan 9b's pre-flight D1).
+  - The session is the held connection, as on every certificate path: `auth_time` is when the
+    broker accepted the handshake, or verified a refresh's signature, and `session_expires =
+    auth_time + max_session_age` (§5.6).
+  - The provider's `auth_time` bounds issuance alone (ruling 8), and is recorded as
+    `auth.oidc.auth_time` on every record the certificate makes.
+  - A key signature on a port49-issued certificate is a fresh authentication event exactly as one
+    on any certificate is, while the certificate is valid. Against today's file-key certificate
+    path it is the same proof, possession of a key in a 0600 file, with a key at most
+    `certificate_lifetime` old, generated at a sign-in that was itself a fresh authentication. Plan
+    9c's hardware key adds presence, and its `per_login_mfa` adds a proof per login to the devices
+    a policy level marks.
+  - `notAfter` bounds the mint and the refresh, never a device session (§5.1.4). So one sign-in
+    gives at most `certificate_lifetime` of mints and refreshes, and the device sessions a last
+    refresh extended run to their own ceilings.
+  - So a new agent refreshes once at login, as on the certificate path, and `port49 refresh` is a
+    key signature with no browser.
+- **12. `port49 login` on the OIDC path** (Q3).
+  - **A held certificate** for this broker, valid, readable through `keyfile`, carrying a sign-in,
+    and with more than a quarter of its life left (`api.LateRenewal`), is used with no sign-in and
+    said. `--sign-in` forces a sign-in.
+  - **Otherwise** it signs in, generates a key, asks `/v1/certificate`, writes the key and then the
+    certificate, and prints whom it signed in as and the certificate's end.
+  - **The provider unreachable:** a held certificate still valid, late or not, is used, saying so.
+    With none, the login says the provider did not answer and that people already logged in are
+    unaffected, and exits 1.
+  - **An agent running** for this broker with the held certificate is refreshed (a key signature).
+    One with another certificate or another broker exits 1 naming it, as today. `--sign-in` with an
+    agent running exits 1: stop the agent first.
+  - **A held certificate refused:** when the new agent's first refresh is answered
+    `credential_revoked`, the login removes the key and certificate, says the broker's words, and
+    exits 1; the next login signs in. When the agent cannot connect with a held certificate, the
+    login says to run `port49 login --sign-in`.
+- **13. One path for people** (Q1). A broker with `issuance` takes a person's ID token at `POST
+  /v1/certificate` alone, and refuses it on every other endpoint, `401 trust_domain_unresolved`,
+  recorded. A machine's token is unaffected. A broker with a human `oidc` verifier and no
+  `issuance` keeps plan 7h's bearer path (decision 39 rulings 8 and 15) as built, which no port49
+  client drives after plan 9b; retiring it is carried to the pre-beta review.
+- **14. The issuing CA.**
+  - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile`'s owner-only rule)
+    in the broker's state directory (`broker.state_dir`, or the directory of
+    `broker.revocations_file`). The broker signs through a `crypto.Signer`, so a KMS or an HSM is
+    a later swap of its source.
+  - **Made once.** `port49d init-issuer` or `port49-broker init-issuer`, as the broker's user: a
+    P-256 key and a self-signed CA certificate valid 5 years. On every further broker on one
+    store, the operator copies both files. Each start prints the CA's fingerprint; a cross-replica
+    check is carried to plan 12.
+  - **Rotation with overlap** (R5). `rotate-issuer`, on one broker, stages `issuing-ca-next.pem`
+    and `.key`. Only the certificate is copied to the other brokers, which trust it from their next
+    start; the key stays on the broker that staged it until the promotion. Run again there, it
+    promotes: the current certificate becomes `issuing-ca-previous.pem`, its key is overwritten,
+    and the next becomes current; the operator copies the three files to the other brokers. A
+    broker trusts every one of the three present and signs with the current. The previous is
+    removed by hand after `certificate_lifetime`; trusting it longer admits nothing, since its key
+    is gone.
+  - **The promotion's guards** (pre-flight 2 m4). It is idempotent, so an interrupted one is
+    finished by running it again. It is refused while an earlier rotation's
+    `issuing-ca-previous.pem` is still there, whose certificates may still be valid, and on a
+    broker that holds the staged certificate without its key. A staged file that is already the
+    current CA, left by a finished promotion or copied from the promoting broker, is removed, and
+    nothing is promoted or said to be.
+  - **At 3am** (R4). A start never fails over these files. A missing or unusable key stops
+    issuance alone: `503 issuance_unavailable`, and the certificates already issued are trusted. A
+    missing or unusable CA certificate also stops their trust. Each is said at start, naming the
+    file and `init-issuer`. `port49_issuing_ca_not_after_timestamp_seconds` is the CA's end, 0
+    when none is loaded.
+- **15. Revocation.** By principal (every certificate the person holds, issued or not) or by
+  certificate (`--cert-issuer` the CA's DN, `--cert-serial` from the `issue` record), as decision
+  32 built it. The short lifetime is the main control. No CRL is published: no device sees the
+  certificate, and the broker trusts its own CA.
+- **16. Back-channel logout** (decision 39 ruling 13). The certificate carries its sign-in's `sid`
+  and `sub`; the owner record is written at issuance and at each mint. A logout by `sid`, or by
+  `sub` for a sign-in whose `iat` is at or before the logout plus `clock_skew`, refuses the
+  certificate's next request and refresh `credential_revoked` in the broker's logout words, and a
+  refresh's own reading after its writes marks what it extended. The `sid` index reaches its device
+  sessions. A logout leaves no mark: a sign-in after it is taken. The certificate carries no mark of
+  its own, so the logout record is what refuses it: on a broker that issues, a logout record stands
+  `max(max_token_age, 24h) + 2×clock_skew` (24h is the longest `certificate_lifetime` allowed, so a
+  lifetime lowered since leaves no certificate unreached), not decision 39's `max_token_age +
+  2×clock_skew`, and the recovery's lift time follows it. Every broker on one store configures
+  `issuance` alike: one without it keeps the shorter record. A recovery for a logout the store
+  could not write names the shorter path: revoke by serial every certificate issued to the principal
+  before the logout, by every broker on the store (each broker's `issue` records; a logout by `sid`
+  or by `sub` can cover several sign-ins), and lift the principal's mark after `max_token_age`;
+  waiting out the full lift time stays the default.
+- **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
+  refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
+- **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds,
+  available}`. `available` (bool) is false when the broker's issuing CA is unusable (ruling 8's
+  `503 issuance_unavailable`): the client then says "the broker cannot issue certificates now (its
+  issuing CA is unavailable); tell its operator" before any sign-in, so nobody types a password and
+  approves MFA for a certain 503, and falls back to a valid held certificate as ruling 17 says. A
+  config without the field (an older broker) means available.
+  Decision 39 ruling 16's `oidc` list is unchanged. A broker with `tls_ca_bundle_file` adds
+  `broker_ca_bundle` (ruling 25).
+- **19. The config file and the flags** (amends decision 42 ruling 6).
+  - **The file.** `config.yaml` gains `method` (`x509`, the default, or `oidc`), `oidc_issuer`,
+    `oidc_ca` (held to ruling 6's ownership rule as `broker_ca` is, and read once) and
+    `oidc_redirect_port`.
+  - **The flags.** `port49 login` takes `--oidc`, `--issuer`, `--oidc-ca`, `--redirect-port`,
+    `--no-browser` and `--sign-in`. `--cert` or `--key` beside `--oidc` is a usage error, and so
+    are the OIDC flags without it. `broker_ca` stays required: it is the broker's TLS, on either
+    path.
+- **20. What is never logged or printed:** the ID token, the code, the verifier, the key, and a
+  token response's body. The authorization URL is printed on the operator's terminal and handed to
+  the browser: it carries `state`, the `nonce` (a public key's hash) and the `code_challenge`. It is
+  not a credential, but its `state` must not leave this user, since whoever holds it can complete
+  this sign-in with their own account (a login CSRF; RFC 6749 §10.12). So the login prints the
+  principal it was issued for.
+- **21. The agent.** Unchanged but in two points. Its process exits at the certificate's end when
+  that comes before `max_session_age`, saying so; a request past it meets the broker's refusal of
+  an expired certificate, as on every certificate path. It makes itself non-dumpable on Linux and
+  denies a debugger on macOS, so no core file or crash report holds the key; one that cannot runs
+  on and says so, since the key is a file this user reads already.
+- **22. The record and the metrics.** The `issue` event (§5.7): a permit `certificate_issued`
+  carries `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc`; a deny carries
+  the refusal's reason. `port49_certificates_issued_total{outcome}` (`issued`, `refused`,
+  `unavailable`) and `port49_issuing_ca_not_after_timestamp_seconds`; no principal and no device.
+- **23. The lab.** L55: Keycloak as this client meets it. L56: issued certificates end to end on
+  Keycloak and vEOS. L47 (hosted providers) stays open. L55 and L56 closed 2026-10-11 (Keycloak 26.4.7;
+  vEOS 4.31.2F).
+- **24. The client's config, with no step per user** (Ryan, 2026-10-10, and the toil audit's H4;
+  amends decision 42 ruling 6).
+  - **The rule** (Ryan's, standing). A step too hard for a user or an operator to do at scale is
+    not in the design, and what can be automated away from the user is. The cases weighed: 1,000
+    devices, 50 operators, a new hire, a laptop rebuilt, and each CA rotated.
+  - **Where.** `~/.port49/`, as `~/.ssh/` is, made 0700 when it is missing. It holds `config.yaml`
+    and `issued/`, and no host-key pins: those stay in plan 9a's
+    `$XDG_CONFIG_HOME/port49/known_hosts` until plan 9d takes them out of the user's flow.
+    `$PORT49_CONFIG`, and over it `--config FILE`, name another personal file, which must exist.
+  - **The system file.** `/etc/port49/config.yaml`, shipped by the install (a package, config
+    management or MDM), takes the same keys, under the personal file key by key. A key the personal
+    file sets wins, and a flag wins over both. The system file must be root's, and neither its group
+    nor others may write it; the walk above it is ruling 6's. It holds what the install knows:
+    `broker`, `broker_ca` (the CA beside it, as `/etc/port49/broker-ca.pem`), `method: oidc`, and
+    where needed `oidc_issuer` and `oidc_ca`. The client id, the scopes and the certificate's
+    lifetime come from the broker's `/v1/config` at each sign-in (decision 39 ruling 16; ruling 18),
+    so no file holds a copy that can drift.
+  - **A new user's first login** is `port49 login` and the sign-in at the provider. Nothing is per
+    user: no file to write, no CA to fetch, no directory to make or `chmod`. Under plan 9a it was a
+    config file of four keys, a CA file fetched, and on Ubuntu `chmod go-w ~/.config`, per user and
+    per host; the OIDC path would have added up to four more keys.
+  - **Each CA rotated, with no step by a user.** The issuing CA (ruling 14) is the broker's alone;
+    no client holds it. The broker's TLS CA rotates through the bundle each agent keeps (ruling 25),
+    and the install's config management ships the old and the new CA in `broker_ca`, one file per
+    host, at the rotation's start, and the new alone at its end. A host config management reaches
+    needs nothing of its user; the by-hand fix is for an unmanaged host alone.
+  - **An expired or late certificate** is replaced by the next `port49 login`, which signs in and
+    writes over the key and the certificate (ruling 12); a refused one is removed. No file is moved
+    or deleted by hand.
+  - **Plan 9a's file.** A `config.yaml` at `$XDG_CONFIG_HOME/port49/` (else `~/.config/port49/`),
+    with none at `~/.port49/`, is refused in one line naming the move; it is never read, and never
+    silently passed over.
+  - **What a refusal says.** It names the exact path and the owner or mode it needs. It never
+    suggests a `chmod` on a directory, which may be shared, as a group-writable `~/.config` is.
+- **25. The broker's TLS CA rotates with no step by a user** (Ryan, 2026-10-10; completes ruling
+  24).
+  - **The bundle.** `broker.tls_ca_bundle_file` names the CAs clients are to trust for the
+    broker's server certificate: the CA in use and, through a rotation, the next. The broker reads
+    it at start and sends it on `GET /v1/config` as `broker_ca_bundle` (PEM). A bundle that cannot
+    be read, holds anything but 1 to 4 CA certificates in at most 64 KiB, or does not verify the
+    server certificate in use is not sent, said in one line, and the start goes on (R4's rule).
+  - **The client.** The agent fetches `/v1/config` on the connection it has just verified, at every
+    start, and keeps the bundle 0600 in `~/.port49/broker_ca/<host>_<port>.pem`, one per broker so
+    no broker's bundle is trusted for another. A login trusts its `broker_ca` and the kept bundle
+    together, and hands both to the agent it starts.
+  - **Refused, and the file left as it was:** a bundle out of those bounds, or one that does not
+    hold the CA this connection was verified to. A change is logged by fingerprint, old and new.
+    A kept file that cannot be used is refused at login, naming it.
+  - **A broker that sends no bundle clears it.** On a verified `/v1/config` with no
+    `broker_ca_bundle`, a kept file that does not hold the CA this connection was verified to is
+    removed, and one that does is cut to that CA alone, each said in one line. So the next login
+    still verifies the broker, and any other CA the file held is gone.
+  - **A broker that refused its own bundle is not one that sends none.** When
+    `tls_ca_bundle_file` is configured and refused at start (unreadable, out of bounds, or without
+    the server certificate's CA), `/v1/config` carries `broker_ca_bundle_refused: true`, and each
+    agent leaves its kept file as it was, saying so in one line. So a typo in the bundle
+    mid-rotation drops no CA a client holds, as the broker's own start line says.
+  - **A rotation.** The operator adds the next CA to the bundle, and the install's config
+    management adds it to every host's `broker_ca` at once (ruling 24); restarts the brokers; waits
+    while people log in (every agent that starts keeps the new bundle: a day covers everyone who
+    works daily, longer covers people away); then switches the server certificate to one the next
+    CA issued; and later drops the old CA from the bundle and from `broker_ca`. No user does
+    anything.
+  - **A host away through the whole overlap** that config management reaches has the new
+    `broker_ca` on its return. An unmanaged one meets a certificate no CA it trusts issued, and the
+    refusal says on the same line: get the broker's CA from its operator and run `port49 login
+    --broker-ca FILE` once; port49 keeps it current from then on. That is the last resort, not the
+    rotation's path.
+  - **What it does not do.** The bundle only adds trust beside `broker_ca`; it never removes the
+    configured CA, which config management updates. So a rotation because the old CA is
+    compromised also pushes the new `broker_ca` to every host at once: until then the old CA stays
+    trusted there.
+  - **What it costs** (pre-flight 2 I1). It carries trust only for the broker that sent it, over a
+    connection verified to a CA the host already trusts, so a plain MITM pins nothing. But whoever
+    holds the broker's server key, even briefly, can send a bundle that adds a CA of their own, and
+    each agent that starts meanwhile trusts it for that broker. That outlives the compromise on a
+    host that does not reconnect to the real broker, since a bundle is replaced only by a later
+    one. The remedy is the real broker's next answer, a bundle or none, which every agent applies
+    at its next start.
 
 ---
 
@@ -8338,7 +8724,7 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the nine decision events, permits included — a corpus
+- **One record per evaluation**, at each of the ten decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
   force gives writes no record, and nor does a pass a store error stops, for the context it
@@ -8671,6 +9057,16 @@ Beyond those already listed in the design document's §14:
   and the scheduled refresh leaves its contexts unstamped; while a workload mapping is configured,
   a person's entry whose workload attribute holds a value beginning `spiffe://` is refused
   `identity_unmapped` on the person path (decision 41 ruling 4).
+- **Port49-issued certificates** (§13 decision 43): a sign-in's ID token whose `nonce` names the
+  CSR's key, `auth_time` within 5 minutes, is issued a certificate once, and a second exchange of
+  the token is refused; a token whose `nonce` names another key, or a stale `auth_time`, is
+  refused and recorded; the certificate mints as the sign-in's principal with `auth.oidc` on its
+  records, never mapped through the directory; a chain ending at the issuing CA and another anchor
+  is refused; a sign-in whose issuer no human verifier takes now is refused; a back-channel logout
+  of its `sid` refuses its next mint and refresh `credential_revoked`, for as long as the certificate
+  lives, and revokes its device sessions; a key signature refreshes it with no sign-in; a person's ID token at any other endpoint
+  of a broker that issues is refused, and a machine's is not; a broker with no issuing CA key
+  starts, answers a sign-in `issuance_unavailable`, and says so.
 - **Staleness ceiling**: with the broker unreachable, a context authorizes until
   `staleness_ceiling` elapses since `refreshed_at`, then denies `context_stale` with a
   `server_msg`, and resumes on the first refresh after the broker returns.
@@ -8881,6 +9277,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L52** | Why a C8000V running IOS-XE 17.13.01a intermittently skips its TACACS+ method for SSH logins (found during L51, Addendum B of tests/lab/results/L51-cisco_iosxe.md): about four good logins, then 40–55 s in which `aaa authentication login default group port49 local` falls straight to `local` with no connection to port49d, `show tacacs` reporting the server alive with no timeouts, and repeating; unchanged without `single-connection`, without `ip tacacs source-interface`, without accounting, and with no keys offered. Whether it reproduces on another IOS-XE image or a hardware platform, and what the device's AAA state is during a failure window. Until it closes, the docs say only what the operator sees (a valid token refused, nothing in port49's log, `SSH2_USERAUTH` for `User ''`) and must not attribute it to port49 or to IOS-XE generally. | The operator docs' IOS-XE troubleshooting (plan 13) | IOS-XE (C8000V 17.13.01a first) | open — added 2026-10-09 |
 | **L53** | The SSH host key each platform presents to `port49 devices trust`'s scan (plan 9a), and what the scan does to the device. The key: the host-key algorithm negotiated with a client offering every algorithm `x/crypto/ssh` knows but DSA, which OpenSSH 10 cannot use; whether a console command shows the same key or a fingerprint of it, which command, and in what form (OpenSSH base64, SHA-256, hex DER, MD5), so an operator can verify it out of band; whether the key is the same after a reload with the configuration saved, the device shown to have gone down and come back. The scan, a key exchange abandoned before authentication: whether it reaches port49 as any TACACS+ exchange, writes a device log line, or counts against the device's login-attempt or ban limits (IOS-XE `login block-for`, NX-OS `aaa authentication rejected`: a limit of two failures set, three scans, then a login; valid only where a control of two refused logins does trip the limit). | §13 decision 42 rulings 9 and 12; the operator docs' "verify the key on the console" (plan 13) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L53-arista_eos.md, L53-cisco_nxos.md, L53-cisco_iosxe.md, L53-juniper_vjunos-router.md, L53-juniper_vsrx.md. The scan gets an RSA key (key type `ssh-rsa`, the key `port49 devices trust` pins) signed with `rsa-sha2-256` on all five, read off the wire against the scan's own offer. Every platform shows that key on a privileged console: EOS `show management ssh hostkey rsa public` and Junos (both) `file show /etc/ssh/ssh_host_rsa_key.pub` as an OpenSSH base64 blob; NX-OS `show ssh key` as the blob and a SHA256 fingerprint; IOS-XE `show ip ssh` as an OpenSSH (SECSH) blob and `show crypto key mypubkey rsa` as hex DER. Only NX-OS prints a SHA256 fingerprint and none prints MD5, so on the other four the operator compares the key, or runs `ssh-keygen -lf` on it. The ed25519 and ECDSA keys the EOS and Junos consoles also show are other keys, not the one scanned. The key is unchanged after a reload with the configuration saved: each device was seen down (no SSH banner) and back, and its uptime (EOS, IOS-XE, NX-OS) or boot time (Junos) shows it rebooted. A scan reaches port49 as no TACACS+ packet and no decision record on any platform, where the good `port49 ssh` login's window on the same count holds 120 to 270 packets. It does not count against IOS-XE `login block-for` or NX-OS `aaa authentication rejected` (each limit's control, two refused logins as the same user, did trip it, so the measurement holds); no other limit was measured. The device's log: each log was first shown to record a refused SSH login as a user that does not exist (the control), and lines are credited to the scan only by their own stamp inside the scan's window. By that: EOS writes `sshd: Connection closed by <scanner> port N [preauth]` to `/var/log/secure`; `show logging` does not record a refused login either, so it showed none; IOS-XE writes `%SSH-4-SSH2_UNEXPECTED_MSG`, `%SSH-5-SSH2_SESSION ... Failed` and `%SSH-5-SSH2_CLOSE` for a session with no user; vJunos-router and vSRX write the same `sshd ... Connection closed by <scanner> port N [preauth]` to `messages` (the lab config's `system syslog` stanza); NX-OS's logfile gains no line, and it does log the control. The IOS-XE `SSH2_USERAUTH: User ''` line is a refused login, not a scan (L52's signature). In the 2026-10-09 run set (harness commit `0a5e9d3`) all five passed their first run. The first vJunos-router run on the earlier harness commit `74ec202` did not serve SSH within 8 minutes of its reboot (the rerun passed; the cause was not investigated; not seen since). |
 | **L54** | `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's askpass answers it once and the login succeeds at the first try; that a command after `--` runs and its exit status is `port49 ssh`'s; that a pinned key the device does not hold is refused by ssh before any TACACS+ exchange, with the minted token never presented. | §13 decision 42 rulings 10 and 11 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L54-arista_eos.md, L54-cisco_nxos.md, L54-cisco_iosxe.md, L54-juniper_vjunos-router.md, L54-juniper_vsrx.md. On all five, `port49 ssh <device> -- show version` exits 0 with the output present; ssh tries `keyboard-interactive` once, the askpass is asked once and answers it, and port49d records one redeem. A pinned key the device does not hold is refused by ssh (`Host key verification failed`, exit 255) before any TACACS+ exchange: 0 TACACS+ packets (the good login's window on the same count holds 120 to 270) and no decision record but `mint` and `blob`, the token never presented. No platform ended a command that ran with exit 255, so the 255 message's policy wording needed no per-platform change. |
+| **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. **`prompt=login` over a live SSO session:** in one browser, a sign-in with no `prompt`, then 15s later, the control, the same session with no `prompt` (whether the form is shown, and `auth_time` against the first), then a `prompt=login` sign-in (whether the form is shown, and whether `auth_time` moves on by 15s or more). | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | closed — measured 2026-10-11; tests/lab/results/L55-keycloak.md. Measured on Keycloak 26.4.7 (a loopback authorization request with the realm's own redirect accepted and another host's refused, so the matcher is shown). The redirect: `http://127.0.0.1:18749/callback` admits port 18749 and refuses 41587; `http://127.0.0.1/callback` and `http://127.0.0.1/*` admit both; `http://127.0.0.1:*/callback` admits neither. PKCE: port49-cli's `pkce.code.challenge.method` is `S256`; the right verifier gets `200` with an `id_token` and `refresh_token`, a wrong one and none each `400 invalid_grant`, and `code_challenge_method=plain` is refused. Discovery lists `[plain S256]` and `authorization_response_iss_parameter_supported: true`, and the authorization response carries `iss`, the issuer. The key binding holds: a 43-character `nonce` came back byte for byte and `auth_time` was +0s from the sign-in. Over a live SSO session the control (no `prompt`, 15s later) showed no form and kept the first `auth_time`, while `prompt=login` showed the form and moved `auth_time` on by 15s. Not measured: a client set to require no PKCE method. |
+| **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA says in `/v1/config` `issuance.available: false`, the CLI says before any sign-in that the broker cannot issue, its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code or private key in the CLI's raw output or the agent's log (the PKCE verifier, which port49 draws and the lab never sees, is checked by the unit tests' `credentialsNowhere`). Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | closed — measured 2026-10-11; tests/lab/results/L56-arista_eos.md. Measured with `bin/port49` on the compose stack, Keycloak 26.4.7 and vEOS 4.31.2F. With no issuing CA the CLI said "the broker cannot issue certificates now (its issuing CA is unavailable); tell its operator" before any sign-in (no password form was shown; the broker's 503 `issuance_unavailable` for an exchange is unit-tested), and the broker's start named the missing CA and `init-issuer`; after `init-issuer` and a restart `port49 login --oidc --no-browser` signed in (the password asked, a control with no `prompt=login` showed no form), wrote the 0600 key and certificate, named `user:alice@corp.example.com`, started the agent and refreshed once (`refreshed at`). `port49 token` was taken by the device over SSH (a token port49 never minted refused); `port49 refresh` extended the device session with no sign-in; `port49 login` after the agent stopped used the held certificate, and `port49 login --sign-in` with the address pasted issued a new one. An administrator's sign-out refused the certificate's next mint in the broker's logout words, ended the agent and removed the certificate at the next `port49 login`, and a sign-in from the named time worked. With Keycloak stopped, `port49 token` (taken by the device), `port49 refresh` and a new agent worked, and `port49 login --sign-in` said the provider did not answer and that `port49 login` without it uses the held certificate, valid until the time it names. No compact JWS, code or private key was in the CLI's raw output, the agent's log or the broker's logs. |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

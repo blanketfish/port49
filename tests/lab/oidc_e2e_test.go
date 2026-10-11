@@ -886,7 +886,9 @@ func (b oidcBroker) challenge(t *testing.T, bearer string) string {
 }
 
 // retryMint calls mint until it gives a token, answers anything but 503
-// identity_provider_unavailable or store_unavailable, or within passes;
+// identity_provider_unavailable or store_unavailable or no answer at all (a
+// restarted broker's published port resets connections until it listens), or
+// within passes;
 // every apart. store_unavailable is the broker's start gate, closed until
 // its runner's first takeover is done (decision 36).
 func retryMint(mint func() (string, string), within, every time.Duration) (string, string) {
@@ -894,7 +896,7 @@ func retryMint(mint func() (string, string), within, every time.Duration) (strin
 	for {
 		tok, said := mint()
 		if tok != "" || !(strings.Contains(said, "identity_provider_unavailable") ||
-			strings.Contains(said, "store_unavailable")) || time.Now().After(deadline) {
+			strings.Contains(said, "store_unavailable") || strings.HasPrefix(said, "no answer:")) || time.Now().After(deadline) {
 			return tok, said
 		}
 		time.Sleep(every)

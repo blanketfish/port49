@@ -81,6 +81,11 @@ const (
 	// device faithfully (spec §8; §13 decision 26). A permit: the session
 	// opens, told less than port49 would permit. `policy test` fails on it.
 	ProjectionFailClosed Reason = "projection_fail_closed"
+
+	// CertificateIssued: the broker issued a short-lived client certificate
+	// for the key a person's sign-in names (spec §5.7; §13 decision 43
+	// ruling 8). A permit on the issue event.
+	CertificateIssued Reason = "certificate_issued"
 )
 
 // Events.
@@ -127,6 +132,11 @@ const EventIdentity = "identity"
 // deny api_right_missing. It never carries the command asked (spec §5.7).
 const EventExplain = "explain"
 
+// EventIssue is POST /v1/certificate: whether a person's OIDC sign-in is
+// exchanged for a certificate the broker issues (spec §5.7; §13 decision
+// 43): permit certificate_issued, or a deny with the refusal's reason.
+const EventIssue = "issue"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
@@ -142,7 +152,7 @@ var reasons = []Reason{
 	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
 	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
-	APIRightMissing,
+	APIRightMissing, CertificateIssued,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

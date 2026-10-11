@@ -20,5 +20,8 @@ func ownStateDir(string) error {
 // writeOwnerOnly refuses off Linux, as ownStateDir does.
 func writeOwnerOnly(string, []byte) error { return ownStateDir("") }
 
+// createOwnerOnly refuses off Linux, as ownStateDir does.
+func createOwnerOnly(string, []byte) error { return ownStateDir("") }
+
 // readOwnerOnly refuses off Linux, as ownStateDir does.
 func readOwnerOnly(string) ([]byte, error) { return nil, ownStateDir("") }

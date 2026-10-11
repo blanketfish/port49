@@ -48,6 +48,10 @@ func BrokerMain(args []string) int {
 	if len(args) > 0 && args[0] == "revoke" {
 		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
+		return issuerCmd("port49-broker", args[0], "/etc/port49/port49-broker.yaml", config.LoadBroker, args[1:],
+			os.Stdout, os.Stderr)
+	}
 	fs := flag.NewFlagSet("port49-broker", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
 	if err := fs.Parse(args); err != nil {
@@ -58,7 +62,7 @@ func BrokerMain(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE]")
+		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer …")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

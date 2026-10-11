@@ -157,6 +157,9 @@ lifetime is set, Q3 the held key reused across agents), each ruled as recommende
 the controller under Ryan's standing grant. It opens
 L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on vEOS). 9e, a
 directory-password sign-in issuing the same certificate, is added to Plan 9.
+**9b executed 2026-10-11** on `feature/oidc-public-client` (base `48a67a3`), each task reviewed,
+closing L55 (Keycloak 26.4.7) and L56 (vEOS 4.31.2F) on 2026-10-11 (Plan 9b — As built, below);
+L47 stays open. Next: 9c.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5288,8 +5291,6 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
       (P8);
     - the no-pidfd fallback of the askpass's parent signal has no CI test; `PidfdOpen` needs to be
       injectable (P12);
-    - `GOOS=darwin go vet ./...` fails at `internal/port49d/coldstart_test.go:402`
-      (`fence.FileOwner` undefined); it predates this branch.
   - **9b and 9c:** the OIDC and hardware-key credentials, as outlined above; 9a changes nothing the
     agent holds.
     - **9c** (P4): the agent child reads `--cert` and `--key` by path, with the keyfile checks only.
@@ -5334,6 +5335,132 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
     --fingerprint SHA256:… DEVICE`. The pin is keyed by the inventory name and authorized by the
     fingerprint you verified, so the forward cannot substitute a key. A scan that cannot dial prints
     this with your device and flags.
+
+### Plan 9b — As built
+
+Executed from `2026-10-09-09b-oidc-public-client.md` on `feature/oidc-public-client` (base
+`48a67a3`), each task reviewed, most through one or two fix rounds. The ledger is
+`.superpowers/sdd/2026-10-09-09b-oidc-public-client/progress.md`. Two pre-flights were applied
+before Task 1. The rulings are decision 43 of the spec (§13).
+
+- **Built** (`git log 48a67a3..HEAD`; `make test` passes on every package, 4,473 passing tests and
+  subtests by `go test ./... -v`, counted as 9a's entry was):
+  - **Spec** (b8f1f42, 3c47758, then fcf625f, 70f5079, d88413d, 7ab7c26 from reviews): decision 43,
+    port49-issued user certificates over an OIDC sign-in, with ruling 8's certifiability check and
+    `issue` among the events that carry `trust_domain_unresolved` and `identity_unmapped`.
+  - **The test authorization server** (b127c57): PKCE, for the public client's tests.
+  - **`internal/oidcclient`** (331ee2e, 1da58ec, 8d7e615, 2b7d2e6): discovery, the code exchange, the
+    loopback sign-in with PKCE S256, `state`, `nonce` and `iss`, and a pasted address. An empty nonce
+    and a repeated `iss`, `state` or `code` are refused, and the code and verifier stay out of errors.
+  - **`internal/issuer` and `POST /v1/certificate`** (52d8cf9, 3fe2af3, 97be208, fd4e3e0, 3b1f1ce,
+    0c20bad, a4d8a5b): the issuing CA, the sign-in a certificate carries, and the exchange of a
+    fresh, key-bound sign-in. `Issue` fails closed on its inputs. A sign-in is checked for
+    certifiability before it is spent (401 `sign_in_not_certifiable`). Issued certificates are
+    trusted for people alone, and a logout reaches them for as long as they live.
+  - **port49d** (f9b6859, 860df6c): `broker.identity.issuance`, the issuing CA at start (a start is
+    never refused over it), `init-issuer` and `rotate-issuer`, and the broker's CA bundle
+    (`tls_ca_bundle_file`).
+  - **The agent and `port49 login --oidc`** (7869356, 4953cf8, c9ca381, 0b65ec9): signs in, holds
+    the certificate the broker issues, and starts the agent on it. Only `credential_revoked` stops a
+    login from using its held certificate; the terminal is restored on a signal.
+  - **userconfig** (db7ebe1, b6e5748, d769ec4): the client's config in `~/.port49`, under a
+    root-owned `/etc/port49/config.yaml`; the broker's CA bundle kept per broker. A root-owned file
+    this user cannot read names the mode it needs, and 9a's file is refused without being read.
+  - **Lab** (4b214fe, 926303c, 56cf438, 8fe45c8, 69cb591, 729f470, e7f808a, 9e89d59): **L55 closed
+    2026-10-11 on Keycloak 26.4.7** (`tests/lab/results/L55-keycloak.md`) and **L56 closed
+    2026-10-11 on vEOS 4.31.2F** (`tests/lab/results/L56-arista_eos.md`). Both were closed in
+    9e89d59. **L47 (hosted providers) stays open.** The lab corrected two things: Keycloak admits an
+    ephemeral loopback port only for a redirect registered as `http://127.0.0.1/callback` or
+    `http://127.0.0.1/*`, and L56's refresh with Keycloak stopped needs a live device session, which
+    the harness now opens first.
+- **Carried:**
+  - **9c:** the issued key moves into the TPM, the Secure Enclave or a token, behind the same
+    `crypto.Signer`, in place of 9b's 0600 file; and `per_login_mfa`.
+  - **9d:** the pins file leaves `userconfig.LegacyDir` with `port49 devices trust`; `LegacyDir` then
+    serves the refusal of plan 9a's config file alone.
+  - **9d:** `port49 ssh` and `devices trust` are refused with no fix on a host whose `~/.config` is
+    group-writable (pre-flight 2 m5); removing the pins file fixes it. The 9d entry above carries it
+    already, and the PR body lists it under known limitations.
+  - **Plan 12:** each deployment shape's client package ships `/etc/port49/config.yaml` and the
+    broker CA beside it, root-owned (decision 43 ruling 24).
+  - **Plan 12:** a check that every broker on one store holds the same issuing CA (each start prints
+    its fingerprint today); the issuing CA's files in each deployment shape's state volume, and
+    `init-issuer` in each shape's setup.
+  - **Plan 12: the issuing CA's custody at broker scale** (pre-flight 2 m7). `init-issuer` and
+    `rotate-issuer` mean copying CA files to each broker by hand, three restart rounds per
+    rotation: fine for 2 to 5 brokers once in five years. A Kubernetes Secret mounted read-only
+    makes `rotate-issuer`'s writes fail, so that shape needs its own rotation (a new Secret per
+    round). Keeping the CA in the shared store, sealed by `internal/store/crypt`, removes the
+    copying; plan 12 weighs it against the key leaving the broker's disk for the store.
+  - **Pre-beta review:** retiring plan 7h's bearer path for people (Q1), and its harness
+    (`make lab-oidc`) rebuilt on issuance.
+  - **Plan 13:** this plan's operator notes as the lab corrected them (below).
+  - **L47:** stays unassigned.
+- **Operator-facing notes** (the plan's "Operator notes," as L55 and L56 measured them; plan 13
+  owns the guide):
+  - Turn issuance on with `broker.identity.issuance: {}` (default `certificate_lifetime: 12h`; 1h to
+    24h). It needs a human `oidc` verifier. Make the issuing CA once per install with `port49d
+    init-issuer` (or `port49-broker init-issuer`) as the broker's user; it writes `issuing-ca.pem`
+    and `issuing-ca.key` (0600) to `broker.state_dir`. Copy both to every further broker on the
+    same store and restart; compare the fingerprints each start prints. Configure `issuance` alike
+    on every broker on one store: a broker without it keeps a logout's record for `max_token_age`
+    alone.
+  - With the key missing or unreadable the broker starts and serves everything else; `/v1/config`
+    says `issuance.available: false`, so `port49 login` says the broker cannot issue before any
+    sign-in (L56 cell 0a; a valid held certificate is still used), an exchange gets 503
+    `issuance_unavailable`, and the start line says what to run. Alert on
+    `port49_certificates_issued_total{outcome="unavailable"}` and on
+    `port49_issuing_ca_not_after_timestamp_seconds` (0, or within 90 days).
+  - Rotate the issuing CA with overlap, running `rotate-issuer` on one broker throughout: (1) stage
+    `issuing-ca-next.pem`, copy it alone to every other broker, restart all; (2) run it again to
+    promote, copy `issuing-ca.pem`, `issuing-ca.key` and `issuing-ca-previous.pem` to the others,
+    remove their staged `issuing-ca-next.pem`, restart all; (3) after `certificate_lifetime`, remove
+    `issuing-ca-previous.pem` and restart. The next promotion is refused until it is gone.
+  - Register port49 at the provider as a public client: no secret, authorization-code flow, PKCE
+    S256 required; its client id is the verifier's `client_id`. Measured on Keycloak 26.4.7 (L55):
+    register `http://127.0.0.1/callback` (or `http://127.0.0.1/*`) to admit any port; a fixed
+    `http://127.0.0.1:<port>/callback` admits that port alone, so set `oidc_redirect_port: <port>`;
+    `http://127.0.0.1:*/callback` admits none. Put the claim the broker maps (`email`, say) in the
+    verifier's `scopes`.
+  - Ship `/etc/port49/config.yaml` with the client, root-owned and writable by root alone, with the
+    broker CA beside it: `broker`, `broker_ca` (relative to the file's directory), `method: oidc`,
+    and `oidc_issuer` or `oidc_ca` only when needed. A new user's first step is `port49 login` and
+    the sign-in. `~/.port49/config.yaml` (or `$PORT49_CONFIG`) overrides it key by key; a flag
+    overrides both.
+  - `port49 login --oidc` asks the password and MFA every time (`prompt=login`; L55 control: the
+    same browser shows no form without it). It needs `broker` and `broker_ca`. With several
+    providers, name one with `--issuer`; a private CA for the provider's TLS needs `oidc_ca`.
+  - The key and certificate live in `~/.port49/issued/<broker host>_<port>.key` and `.pem`, 0600.
+    The key is the session until the certificate ends: never copy it off the host. port49 marks
+    `~/.port49/issued/` excluded from Time Machine and from backup tools that honour CACHEDIR.TAG
+    (borg, restic --exclude-caches, tar --exclude-caches); other backups exclude it by policy,
+    once, fleet-wide.
+  - Check whom you signed in as: the login prints `signed in at … as <you>`. The printed address is
+    not a password, but whoever has it can finish your sign-in with their own account; on a shared
+    host use `--no-browser`. On a host with no browser, open the address on your laptop and paste
+    the `127.0.0.1` address the browser fails to load; with no terminal, use `ssh -t`, or
+    `--redirect-port N` with `ssh -L N:127.0.0.1:N`.
+  - After the sign-in there is no browser: `port49 refresh`, `port49 login` with the agent running,
+    and a new agent after a reboot all use the key (L56 cells 3 and 4a). A new sign-in comes when the
+    certificate has under a quarter of its life left, or with `port49 login --sign-in`.
+  - With the provider down, everyone holding a certificate keeps working: mints, device-session
+    refreshes (needing a live device session) and new agents (L56 cell 6). Only a sign-in fails, and
+    it says so, naming the certificate's end.
+  - A back-channel logout refuses the certificate at its next use in the broker's words and ends its
+    device sessions (L56 cell 5). The next `port49 login` removes the certificate and the one after
+    signs in, from the time the broker names. A broker that issues keeps the logout's record
+    `max(max_token_age, 24h) + 2×clock_skew`.
+  - Revoke a person's certificates with `port49 revoke --principal user:…`, or one with
+    `--cert-issuer DN --cert-serial HEX` from its `issue` record. A person's ID token is refused at
+    a broker that issues, except at `POST /v1/certificate`; a machine's token is unaffected.
+  - Rotate the broker's TLS CA with no user action: set `broker.tls_ca_bundle_file` (1 to 4 CAs, at
+    most 64 KiB) and every agent keeps it per broker in `~/.port49/broker_ca/`. Add the next CA and
+    restart; ship current and next together in `/etc/port49/broker-ca.pem` through config
+    management; wait while people log in; switch `tls_cert_file` and restart; drop the old CA from
+    both. If the old CA is compromised, push the new `broker-ca.pem` at once: the bundle adds trust
+    and never removes it. Removing the bundle once done is safe: each agent's next start cuts what
+    it kept to the CA its connection verified to. An unmanaged host away for the whole overlap runs
+    `port49 login --broker-ca FILE` once.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,

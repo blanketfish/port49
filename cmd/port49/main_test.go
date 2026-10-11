@@ -30,12 +30,16 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 // fakeAgent answers the agent socket's POST /token with a fixed item, or with
@@ -232,7 +236,10 @@ func TestTheAgentSaysWhyTheBrokerDoesNotVerify(t *testing.T) {
 	code := run([]string{"agent", "--broker", broker.URL, "--cert", filepath.Join(dir, testpki.LabClientCert),
 		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA),
 		"--socket", filepath.Join(sockDir, "agent.sock")}, &out, &errb)
-	if code != 1 || !strings.Contains(errb.String(), "does not verify") || !strings.Contains(errb.String(), "--broker-ca") {
+	// A CA this host does not trust is what a host away through a whole
+	// rotation meets: the line names the fix (decision 43 ruling 25).
+	if code != 1 || !strings.Contains(errb.String(), "does not verify") ||
+		!strings.Contains(errb.String(), "; "+agent.RotatedCAHint) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	// One prefix: the agent package's own "agent: " is not repeated after
@@ -277,10 +284,19 @@ func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
 // can start the agent from os.Executable as it does in production.
 const runCLIEnv = "PORT49_TEST_RUN_CLI"
 
+// testSystemConfig carries TestMain's stand-in for /etc/port49/config.yaml
+// to the test binary run as port49.
+const testSystemConfig = "PORT49_TEST_SYSTEM_CONFIG"
+
 // subreaperHook is set by the Linux test that needs a child subreaper.
 var subreaperHook func()
 
 func TestMain(m *testing.M) {
+	// A child the tests start reads the system file the parent named.
+	if p := os.Getenv(testSystemConfig); p != "" {
+		// This user stands in for root, whom no test can make own a file.
+		userconfig.SystemPath, userconfig.SystemOwner = p, uint32(os.Getuid())
+	}
 	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
 		subreaperHook()
 	}
@@ -292,13 +308,23 @@ func TestMain(m *testing.M) {
 	if os.Getenv(runCLIEnv) == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	// No test reads the developer's own ~/.config/port49 (plan 9a): every
-	// default path under it lands in a directory of the test's.
+	// The tests that run the agent in-process (run([]string{"agent", …}))
+	// would make this whole binary non-dumpable, and every later ssh test
+	// would then fail to exec /proc/<pid>/exe as its askpass. A child agent
+	// the login starts takes the branch above, and hardens for real.
+	hardenAgent = func() error { return nil }
+	// No test reads the developer's own ~/.port49, ~/.config/port49 or
+	// /etc/port49 (plans 9a and 9b): every default path lands in a
+	// directory of the test's, 0700 as a home directory is.
 	dir, err := os.MkdirTemp("", "p49cfg")
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("XDG_CONFIG_HOME", dir)
+	os.Setenv("HOME", dir)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	os.Unsetenv(userconfig.EnvConfig)
+	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
+	os.Setenv(testSystemConfig, userconfig.SystemPath)
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -315,6 +341,8 @@ type labBroker struct {
 	st   *memory.Store
 	mu   sync.Mutex
 	skew time.Duration
+	stop func() // closes the broker's server: the broker is down
+	bl   *broker.Listener
 }
 
 func (l *labBroker) now() time.Time {
@@ -336,6 +364,10 @@ func (l *labBroker) flags(socket string) []string {
 }
 
 func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker {
+	return newLabBrokerWith(t, maxAge, nil, false)
+}
+
+func newLabBrokerWith(t *testing.T, maxAge time.Duration, iss *oidctest.Issuer, issue bool) *labBroker {
 	t.Helper()
 	l := &labBroker{dir: t.TempDir()}
 	if err := testpki.WriteLab(l.dir, "alice@example.com", time.Now()); err != nil {
@@ -377,6 +409,25 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		Store:  l.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: l.now,
 		MaxSessionAge: maxAge, BatchMax: 4, Sessions: session.New(l.st, l.now, time.Hour, time.Hour),
 		ContextIdleTTL: time.Hour, CeilingWarning: 30 * time.Minute, GraceWindow: 5 * time.Minute}
+	if iss != nil {
+		ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+			MaxAge: 24 * time.Hour, Now: l.now, M: l.b.Metrics})
+		l.b.NoX509 = true
+		l.b.Identity = &oidc.Set{Timing: oidc.DefaultTiming, Now: l.now, M: l.b.Metrics,
+			Verifiers: []*oidc.Verifier{{VerifierConfig: oidc.VerifierConfig{Domain: oidc.Humans, Issuer: iss.URL,
+				ClientID: "port49-cli", PrincipalClaim: oidc.ClaimPreferredUsername,
+				PrincipalDomains: []string{"example.com"}, Scopes: []string{"openid"},
+				Algorithms: []oidc.Alg{oidc.RS256}}, Keys: ks}}}
+		if issue {
+			// A day back: the CA refuses to issue outside its window, and
+			// tests hold certificates issued hours ago (holdCertificate).
+			ca, err := issuer.Ephemeral(l.now().Add(-24 * time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.b.Issuer = ca
+		}
+	}
 
 	ctx := context.Background()
 	at := l.now()
@@ -400,13 +451,18 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.st.IndexContext(ctx, "user:alice@example.com", "",
-		store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)),
+	certKey, anchor := store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)), pool
+	if iss != nil {
+		// A context before an OIDC login names no certificate; an OIDC-only
+		// broker takes no anchor.
+		certKey, anchor = "", nil
+	}
+	if err := l.st.IndexContext(ctx, "user:alice@example.com", "", certKey,
 		store.ContextRef{NAS: "leaf1", Username: "alice"}, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
-	srv, err := l.b.Server("127.0.0.1:0", srvCert, pool)
+	srv, err := l.b.Server("127.0.0.1:0", srvCert, anchor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,8 +473,14 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
+	l.bl = bl
+	if iss != nil {
+		// As port49d wires it: Caller reads a certificate the broker issued.
+		l.b.Wire(bl)
+	}
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
+	l.stop = func() { _ = srv.Close() }
 	l.url = "https://" + raw.Addr().String()
 	return l
 }

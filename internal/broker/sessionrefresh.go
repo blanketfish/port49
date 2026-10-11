@@ -36,7 +36,7 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, _, cred, err := b.callerOf(r, now)
+	principal, _, cred, _, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
@@ -75,10 +75,16 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, legacy, cred, err := b.callerOf(r, now)
+	principal, legacy, cred, issued, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
+	}
+	// via is the sign-in a certificate this broker issued carries: every
+	// record its refresh makes names it (decision 43 rulings 10, 11).
+	var via *decision.OIDC
+	if issued != nil {
+		via = oidcAuth(*issued)
 	}
 	h := heldOf(r)
 	if h == nil {
@@ -107,7 +113,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
 	sig, _ := base64.RawURLEncoding.DecodeString(req.Signature)
 	if nonce == nil || !now.Before(exp) || subtle.ConstantTimeCompare(nonce, got) != 1 {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, "refresh_challenge_missing",
+		b.refuseRefresh(w, now, principal, cred, via, decision.TrustDomainUnresolved, "refresh_challenge_missing",
 			"no live refresh challenge on this connection; ask for one and answer it within 60s")
 		return
 	}
@@ -115,7 +121,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	ekm, err := r.TLS.ExportKeyingMaterial(api.RefreshExporterLabel, nil, 32)
 	alg, ok := api.RefreshAlgorithm(leaf.PublicKey)
 	if err != nil || !ok || leaf.CheckSignature(alg, api.RefreshMessage(nonce, ekm), sig) != nil {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved),
+		b.refuseRefresh(w, now, principal, cred, via, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved),
 			"the refresh challenge was not answered by this connection's key")
 		return
 	}
@@ -124,12 +130,19 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, principal, cred, nil, refreshEvery,
+		b.refreshStoreError(w, now, principal, cred, via, refreshEvery,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, now, principal, cred, rv)
+		b.refuseRevokedAs(w, decision.EventRefresh, now, principal, cred, via, rv)
+		return
+	}
+	// A certificate this broker issued answers to its sign-in's logouts
+	// (decision 43 ruling 16).
+	if issued != nil && b.issuedLoggedOut(w, r, decision.EventRefresh, "extended nothing", now,
+		caller{principal: principal, cred: cred, oidc: issued}) {
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		return
 	}
 	// The certificate's status, beside the marks (spec §5.1.4): a revoked one
@@ -141,7 +154,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	if ref != nil {
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
 		b.answerRefusal(w, r, ref)
 		return
 	}
@@ -155,7 +168,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
 		b.answerRefusal(w, r, dref)
 		return
 	}
@@ -166,16 +179,22 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, m, answer, cred, at, nil)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via)
 	if errors.Is(err, directory.ErrUsernameTaken) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: at, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
 		b.answerRefusal(w, r, dref)
 		return
 	}
 	if err != nil {
+		if issued != nil {
+			// What the refresh extended before it failed answers to a logout
+			// that landed meanwhile, as on the OIDC path (pre-flight I-2).
+			b.failedRefresh(ctx, w, at, caller{principal: principal, cred: cred, oidc: issued}, rep, partialRefreshText)
+			return
+		}
 		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
 	}
@@ -184,12 +203,26 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// while this refresh extended is answered, not reported as extended.
 	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
-		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText)
+		b.refreshStoreError(w, at, principal, cred, via, refreshEvery, partialRefreshText)
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), principal, cred, rv)
+		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), principal, cred, via, rv)
 		return
+	}
+	// The logouts again, after the extension's writes, as on the OIDC path:
+	// what a logout that landed meanwhile would have missed is marked.
+	if issued != nil {
+		switch l, out, err := b.loggedOut(ctx, *issued); {
+		case err != nil:
+			b.refreshStoreError(w, at, principal, cred, via, refreshEvery, partialRefreshText)
+			return
+		case out:
+			b.markExtended(ctx, caller{principal: principal, cred: cred, oidc: issued}, rep)
+			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+			b.answerLoggedOut(w, l)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, rep.response(b.MaxSessionAge))
 }
@@ -228,7 +261,7 @@ func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.T
 		if errors.Is(err, ErrWorkloadUnmapped) {
 			reason = decision.IdentityUnmapped
 		}
-		b.refuseRefresh(w, now, principal, cred, reason, string(reason), err.Error())
+		b.refuseRefresh(w, now, principal, cred, nil, reason, string(reason), err.Error())
 		return
 	}
 	ref := directoryRefusal(directory.ErrUnavailable)
@@ -241,10 +274,10 @@ func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.T
 // refuseRefresh answers a refresh that proved nothing, and records it
 // without the nonce or the signature.
 func (b *Broker) refuseRefresh(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	reason decision.Reason, code, detail string) {
+	via *decision.OIDC, reason decision.Reason, code, detail string) {
 	b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: reason,
-		Principal: principal, Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
+		Principal: principal, Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint, OIDC: via}})
 	writeError(w, http.StatusUnauthorized, code, detail)
 }
 

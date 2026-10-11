@@ -1,0 +1,560 @@
+package main
+
+import (
+	"bytes"
+	"cmp"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/term"
+
+	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/oidcclient"
+	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/userconfig"
+)
+
+func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+// loginIssued is `port49 login` on the OIDC path (spec §13 decision 43
+// rulings 7, 8, 11, 12 and 17): a certificate the broker issues over a
+// sign-in at the provider it lists. A held one with more than a quarter of
+// its life left is used with no sign-in; otherwise this process signs in,
+// generates a key, and asks the broker for a certificate for it. The agent
+// then holds the session as on the certificate path, so a refresh, and a
+// new agent's extension of the device sessions an earlier login left, are
+// key signatures (ruling 11). With the provider down, a held certificate
+// still valid is used, late or not.
+func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
+	ctx := context.Background()
+	if sf.broker == "" {
+		fmt.Fprintf(stderr, "port49 login: --broker and --broker-ca are required, as flags or in %s\n", sf.configFile)
+		return 2
+	}
+	pool, err := sf.brokerPool()
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 2
+	}
+	certPath, keyPath, err := userconfig.IssuedPaths(sf.broker)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 2
+	}
+	// The key kept here is a session: out of backups, on every login, as the
+	// first one and as the one after an upgrade (idempotent).
+	if err := markIssuedDir(filepath.Dir(certPath)); err != nil {
+		fmt.Fprintf(stderr, "port49 login: warning: %v; exclude %s from your backups\n", err, filepath.Dir(certPath))
+	}
+	held, s, heldErr := heldCertificate(certPath, keyPath)
+	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
+		// As on the certificate path: only the session this certificate
+		// holds is refreshed; another's is someone else's identity.
+		var other string
+		switch {
+		case strings.TrimRight(sf.broker, "/") != st.Broker:
+			other = fmt.Sprintf("an agent logged in to %s", st.Broker)
+		case heldErr != nil || agent.CertFingerprint(held) != st.CertFingerprint:
+			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
+		}
+		if other != "" {
+			fmt.Fprintf(stderr, "port49 login: %s already holds %s; run 'port49 refresh' to extend that session, "+
+				"stop that agent first, or use --socket\n", other, sf.socket)
+			return 1
+		}
+		if sf.signIn {
+			fmt.Fprintf(stderr, "port49 login: an agent already holds your session at %s, with your certificate for %s "+
+				"valid until %s; `port49 refresh` extends it; to sign in again, stop that agent first\n", st.Broker,
+				s.Principal, rfc3339(held.Leaf.NotAfter))
+			return 1
+		}
+		fmt.Fprintf(stdout, "port49: already logged in to %s as %s; refreshing\n", st.Broker, s.Principal)
+		out, err := agent.NewClient(sf.socket).Refresh(ctx)
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
+			return 1
+		}
+		printRefresh(stdout, out)
+		if api.LateRenewal(held.Leaf, time.Now()) {
+			// The agent ends with the certificate, and --sign-in is refused
+			// while it runs: say how to renew before then.
+			fmt.Fprintf(stdout, "port49: your certificate ends at %s, and the agent with it; to renew before then, "+
+				"stop the agent and run `port49 login`\n", rfc3339(held.Leaf.NotAfter))
+		}
+		return 0
+	}
+	now := time.Now()
+	if heldErr != nil && !errors.Is(heldErr, fs.ErrNotExist) {
+		fmt.Fprintf(stderr, "port49 login: your held certificate is not used: %v\n", heldErr)
+	}
+	usable := heldErr == nil && now.Before(held.Leaf.NotAfter)
+	if usable && !sf.signIn && !api.LateRenewal(held.Leaf, now) {
+		fmt.Fprintf(stdout, "port49: using your certificate for %s (signed in at %s at %s), valid until %s; "+
+			"`port49 login --sign-in` signs in again\n", s.Principal, s.Issuer, rfc3339(s.AuthTime),
+			rfc3339(held.Leaf.NotAfter))
+		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
+	}
+	code, err := issueCertificate(ctx, sf, pool, certPath, keyPath, stdout, stderr)
+	if err == nil {
+		return startIssued(sf, certPath, keyPath, false, stdout, stderr)
+	}
+	// A held certificate outlives any failure of the sign-in (ruling 17:
+	// only a sign-in fails), except a revocation or logout: the broker
+	// judges the certificate by the same mark.
+	var refused *refusedError
+	var unreachable *oidcclient.UnreachableError
+	var silent *brokerDownError
+	down := errors.As(err, &unreachable)
+	switch {
+	case errors.As(err, &silent):
+		// The held certificate is judged by this same broker, so there is
+		// nothing to start it against; a sign-in would cost a password and
+		// MFA and fail at the same place.
+		if usable {
+			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; your certificate is valid until %s; "+
+				"try again when it answers\n", sf.broker, rfc3339(held.Leaf.NotAfter))
+		} else {
+			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; try again when it answers\n", sf.broker)
+		}
+		return 1
+	case usable && !sf.signIn && !errors.As(err, &refused):
+		why := ""
+		if down {
+			why = ", until your identity provider answers (a certificate port49 issued needs no identity provider)"
+		}
+		fmt.Fprintf(stderr, "port49 login: %v; using your certificate for %s until %s%s\n", err, s.Principal,
+			rfc3339(held.Leaf.NotAfter), why)
+		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
+	case down:
+		fmt.Fprintf(stderr, "port49 login: %v; port49 cannot sign you in until it answers (anyone already logged "+
+			"in keeps working: a certificate port49 issued needs no identity provider)\n", err)
+		if usable {
+			fmt.Fprintf(stderr, "port49 login: your certificate for %s is valid until %s: `port49 login` without "+
+				"--sign-in uses it\n", s.Principal, rfc3339(held.Leaf.NotAfter))
+		}
+	default:
+		fmt.Fprintln(stderr, "port49 login:", err)
+	}
+	return code
+}
+
+// refusedError is the broker answering the certificate request 401
+// credential_revoked: this person is revoked or logged out, and the held
+// certificate, which the broker judges by the same mark, is not the way
+// round it. Every other failure of a sign-in, a 401 for a stale or spent
+// token included, leaves the held certificate as valid as it was.
+type refusedError struct{ msg string }
+
+func (e *refusedError) Error() string { return e.msg }
+
+// brokerDownError is the broker not answering at all (a transport error, not
+// an HTTP answer): not a problem with the sign-in, so not one a held
+// certificate is started against or a new sign-in is the cure for.
+type brokerDownError struct{ err error }
+
+func (e *brokerDownError) Error() string { return e.err.Error() }
+func (e *brokerDownError) Unwrap() error { return e.err }
+
+// startIssued starts the agent on the issued certificate and its key, as
+// --cert and --key would (ruling 7). A held one the agent could not connect
+// with, still there, is said: the broker's clock may be past its end.
+func startIssued(sf *sessionFlags, certPath, keyPath string, held bool, stdout, stderr io.Writer) int {
+	sf.cert, sf.key = certPath, keyPath
+	code, down := startAgentDown(sf, true, stdout, stderr)
+	if _, err := os.Stat(certPath); code != 0 && held && !down && err == nil {
+		fmt.Fprintln(stderr, "port49 login: if the broker refused your held certificate, `port49 login --sign-in` "+
+			"signs you in again")
+	}
+	return code
+}
+
+// heldCertificate is the certificate a broker issued this user and its key,
+// from certPath and keyPath, with the sign-in it carries. A file not there
+// is fs.ErrNotExist.
+func heldCertificate(certPath, keyPath string) (tls.Certificate, issuer.SignIn, error) {
+	for _, p := range []string{certPath, keyPath} {
+		if _, err := os.Lstat(p); err != nil {
+			return tls.Certificate{}, issuer.SignIn{}, err
+		}
+	}
+	// Refused if the key is a symlink or readable by anyone but its owner
+	// (keyfile; pre-flight F14).
+	c, err := keyfile.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return tls.Certificate{}, issuer.SignIn{}, err
+	}
+	if c.Leaf, err = x509.ParseCertificate(c.Certificate[0]); err != nil {
+		return tls.Certificate{}, issuer.SignIn{}, err
+	}
+	s, err := issuer.ReadSignIn(c.Leaf)
+	if err != nil {
+		return tls.Certificate{}, issuer.SignIn{}, fmt.Errorf("%s is not a certificate port49 issued: %v", certPath, err)
+	}
+	return c, s, nil
+}
+
+// writeIssuedPair keeps the issued key and certificate, a var so a test fails
+// the write.
+var writeIssuedPair = userconfig.WritePrivateAll
+
+// issueCertificate signs in at the provider the broker lists and asks the
+// broker for a certificate for a key generated here (decision 43 rulings 2,
+// 3, 7 and 8), and keeps the key and then the certificate. It prints nothing
+// on failure: the error, with the exit code, is the caller's to say, since a
+// held certificate may carry on past it.
+func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool, certPath, keyPath string,
+	stdout, stderr io.Writer) (code int, err error) {
+	conf, err := fetchBrokerConfig(ctx, sf.broker, pool)
+	if err != nil {
+		return 1, err
+	}
+	if conf.Issuance == nil {
+		return 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
+			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)", sf.broker)
+	}
+	if conf.Issuance.Unavailable() {
+		// Before the sign-in: a password and MFA for a certain 503 is the
+		// 3am cost the config's word spares (ruling 18).
+		return 1, errors.New("the broker cannot issue certificates now (its issuing CA is unavailable); " +
+			"tell its operator")
+	}
+	prov, err := pickProvider(conf, sf.issuer)
+	if err != nil {
+		return 1, err
+	}
+	roots, err := sf.oidcRoots()
+	if err != nil {
+		return 2, err
+	}
+	p := oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
+	failed := func(err error) (int, error) { return 1, err }
+	e, err := oidcclient.Discover(ctx, p)
+	if err != nil {
+		return failed(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return failed(err)
+	}
+	nonce, err := api.IssuanceNonce(key.Public())
+	if err != nil {
+		return failed(err)
+	}
+	tokens, err := signIn(ctx, p, e, nonce, sf.redirectPort, sf.noBrowser, stderr)
+	if err != nil {
+		return failed(err)
+	}
+	warnSkew(stderr, "port49 login", tokens)
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		return failed(err)
+	}
+	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr)
+	if err != nil {
+		return failed(err)
+	}
+	blk, _ := pem.Decode([]byte(resp.Certificate))
+	var leaf *x509.Certificate
+	if blk != nil {
+		leaf, err = x509.ParseCertificate(blk.Bytes)
+	}
+	if blk == nil || err != nil || !key.PublicKey.Equal(leaf.PublicKey) {
+		return failed(errors.New("the broker's answer is not a certificate for the key this login sent"))
+	}
+	// Said from the certificate just checked, not from the broker's JSON.
+	// Every check is made before a file is touched: a held pair is only
+	// ever replaced by one that will load.
+	si, err := issuer.ReadSignIn(leaf)
+	if err != nil {
+		return failed(fmt.Errorf("the broker's certificate carries no sign-in: %v", err))
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return failed(err)
+	}
+	// Both are staged before either is renamed, the key first and the
+	// certificate last: a failure to write leaves the held pair as it was,
+	// and the one that reads the pair never sees a new key beside an old
+	// certificate except across the last rename.
+	if err := writeIssuedPair(
+		userconfig.PrivateFile{Path: keyPath, Data: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
+			What: "port49-issued key"},
+		userconfig.PrivateFile{Path: certPath, Data: []byte(resp.Certificate), What: "port49-issued certificate"},
+	); err != nil {
+		return failed(err)
+	}
+	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
+		si.Principal, sf.broker, rfc3339(leaf.NotAfter))
+	return 0, nil
+}
+
+// requestCertificate is POST /v1/certificate, the sign-in's ID token the
+// bearer, over TLS 1.3 to the broker's CA alone and never through a proxy.
+// The token is in a header, never a URL, and is not kept.
+func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool, idToken string,
+	csr []byte) (api.IssueResponse, error) {
+	body, err := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(csr)})
+	if err != nil {
+		return api.IssueResponse{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(broker, "/")+"/v1/certificate",
+		bytes.NewReader(body))
+	if err != nil {
+		return api.IssueResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+idToken)
+	req.Header.Set("Content-Type", "application/json")
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	resp, err := c.Do(req)
+	if err != nil {
+		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s: %w", broker, err)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		var e api.Error
+		_ = json.Unmarshal(raw, &e)
+		msg := fmt.Sprintf("the broker did not issue your certificate: %s (%s)",
+			printsafe.Line(e.Detail, 400), printsafe.Line(cmp.Or(e.Error, resp.Status), 64))
+		if resp.StatusCode == http.StatusUnauthorized && e.Error == string(decision.CredentialRevoked) {
+			return api.IssueResponse{}, &refusedError{msg}
+		}
+		return api.IssueResponse{}, errors.New(msg)
+	}
+	var out api.IssueResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return api.IssueResponse{}, fmt.Errorf("the broker's answer to the certificate request: %w", err)
+	}
+	return out, nil
+}
+
+// The sign-in's browser and terminal, vars so a test drives them.
+var (
+	// openBrowser opens a URL in this host's browser (launchBrowser).
+	openBrowser = launchBrowser
+	// stdinIsTerminal is whether a pasted address can be read.
+	stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	// readPaste reads one pasted address with echo off.
+	readPaste = func() (string, error) {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		return strings.TrimSpace(string(b)), err
+	}
+)
+
+// signIn runs one sign-in in this process (rulings 3–5): a browser when
+// this host has one, the address on stderr always, and on a terminal a
+// pasted address, not echoed. The terminal is restored when the sign-in
+// ends, and when a signal ends the process while the paste prompt has echo
+// off (guardedPaste): Ctrl-C there must not leave the operator's shell
+// typing blind.
+func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce string, port int,
+	noBrowser bool, stderr io.Writer) (oidcclient.Tokens, error) {
+	o := oidcclient.LoginOptions{Nonce: nonce, Port: port, Out: stderr, Now: time.Now}
+	if !noBrowser {
+		o.Browser = openBrowser
+	}
+	if stdinIsTerminal() {
+		fd := int(os.Stdin.Fd())
+		restore := func() {}
+		if saved, err := term.GetState(fd); err == nil {
+			restore = func() { _ = term.Restore(fd, saved) }
+			defer restore()
+		}
+		o.Paste = func() (string, error) {
+			return guardedPaste(readPaste, restore, os.Exit, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		}
+	}
+	t, err := oidcclient.Login(ctx, p, e, o)
+	if errors.Is(err, oidcclient.ErrNoWayBack) {
+		return t, fmt.Errorf("%w; run the command in a terminal (ssh -t), or log in with --redirect-port N and "+
+			"forward that port to this host (ssh -L N:127.0.0.1:N)", err)
+	}
+	return t, err
+}
+
+// guardedPaste is read with sigs caught: a signal that arrives while read
+// holds the terminal with echo off restores it first, then ends the process
+// as the signal would (exit 128+signal, 130 for SIGINT). Catching stops when
+// read returns. When the browser wins, read does not return: it stays in
+// ReadPassword, so the signals stay caught for the rest of the login, and one
+// still restores the terminal and exits as above.
+func guardedPaste(read func() (string, error), restore func(), exit func(int), sigs ...os.Signal) (string, error) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, sigs...)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(ch)
+		close(done)
+	}()
+	go func() {
+		select {
+		case s := <-ch:
+			restore()
+			code := 1
+			if n, ok := s.(syscall.Signal); ok {
+				code = 128 + int(n)
+			}
+			exit(code)
+		case <-done:
+		}
+	}()
+	return read()
+}
+
+// browserCommand is the command that opens url here, or nil for none (ruling
+// 5): $BROWSER when set; on Linux and the BSDs xdg-open, only with a display,
+// since on a remote shell it falls back to a text browser on the operator's
+// own terminal; on macOS open, outside an SSH session.
+func browserCommand(goos string, env func(string) string, url string) []string {
+	if b := env("BROWSER"); b != "" {
+		return []string{b, url}
+	}
+	switch goos {
+	case "linux", "freebsd", "openbsd", "netbsd":
+		if env("DISPLAY") != "" || env("WAYLAND_DISPLAY") != "" {
+			return []string{"xdg-open", url}
+		}
+	case "darwin":
+		if env("SSH_CONNECTION") == "" && env("SSH_TTY") == "" {
+			return []string{"open", url}
+		}
+	}
+	return nil
+}
+
+// launchBrowser runs browserCommand detached, with no terminal: a browser
+// that falls back to text must not take the operator's.
+func launchBrowser(url string) error {
+	argv := browserCommand(runtime.GOOS, os.Getenv, url)
+	if argv == nil {
+		return errors.New("no browser on this host")
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// pickProvider is the provider a login signs in at (ruling 2): the one the
+// broker lists, or the one issuer names exactly.
+func pickProvider(c api.Config, issuer string) (api.OIDCProvider, error) {
+	var listed []string
+	for _, p := range c.OIDC {
+		listed = append(listed, p.Issuer)
+	}
+	switch {
+	case len(c.OIDC) == 0:
+		return api.OIDCProvider{}, fmt.Errorf("the broker takes no OIDC login: it lists no identity provider "+
+			"(its methods: %s)", strings.Join(c.Methods, ", "))
+	case issuer != "":
+		for _, p := range c.OIDC {
+			if p.Issuer == issuer {
+				return p, nil
+			}
+		}
+		return api.OIDCProvider{}, fmt.Errorf("the broker does not list %s; it lists %s", issuer, strings.Join(listed, ", "))
+	case len(c.OIDC) > 1:
+		return api.OIDCProvider{}, fmt.Errorf("the broker lists %d identity providers (%s); name one with --issuer or "+
+			"oidc_issuer", len(c.OIDC), strings.Join(listed, ", "))
+	}
+	return c.OIDC[0], nil
+}
+
+// fetchBrokerConfig is the broker's GET /v1/config, which needs no
+// credential (design §17), over TLS 1.3 to the broker's CA alone and never
+// through a proxy: the broker is the operator's own.
+func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool) (api.Config, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(broker, "/")+"/v1/config", nil)
+	if err != nil {
+		return api.Config{}, err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		var verify *tls.CertificateVerificationError
+		if errors.As(err, &verify) {
+			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
+				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, agent.RotatedCA(verify.Err, bundleKept(broker)))
+		}
+		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return api.Config{}, fmt.Errorf("%s/v1/config answered %s", broker, resp.Status)
+	}
+	var conf api.Config
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&conf); err != nil {
+		return api.Config{}, fmt.Errorf("%s/v1/config: %w", broker, err)
+	}
+	return conf, nil
+}
+
+// warnSkew says when this host's clock is more than 5 minutes from the
+// provider's (ruling 6): never a refusal, since the broker judges every
+// token by its own clock.
+func warnSkew(stderr io.Writer, what string, t oidcclient.Tokens) {
+	skew, dir := oidcclient.Skew(t), "ahead of"
+	if skew < 0 {
+		skew, dir = -skew, "behind"
+	}
+	if skew <= 5*time.Minute {
+		return
+	}
+	fmt.Fprintf(stderr, "%s: this host's clock is %s %s your identity provider's; the broker judges every token by "+
+		"its own clock, so set this host's clock if the broker refuses yours\n", what, skew.Round(time.Second), dir)
+}
+
+// oidcRoots is the provider's TLS anchor (ruling 19): the config file's
+// oidc_ca, read through its walk; --oidc-ca's file; or nil, the system's
+// roots.
+func (s *sessionFlags) oidcRoots() (*x509.CertPool, error) {
+	caPEM := s.oidcCAPEM
+	if caPEM == nil && s.oidcCA != "" {
+		var err error
+		if caPEM, err = os.ReadFile(s.oidcCA); err != nil {
+			return nil, err
+		}
+	}
+	if caPEM == nil {
+		return nil, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("%s holds no PEM certificate", s.oidcCA)
+	}
+	return pool, nil
+}

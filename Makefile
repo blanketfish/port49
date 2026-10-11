@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-workload lab-oxidized lab-ssh build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-oidc-agent lab-workload lab-oxidized lab-ssh build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -80,6 +80,18 @@ lab-l50:
 # Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".
 lab-oidc:
 	go test -tags lab ./tests/lab/ -run 'TestL45|TestL46' -count=1 -v -timeout 30m
+
+# L55 (plan 9b): Keycloak as port49's OIDC public client meets it. Needs
+# Docker with Compose v2.24.4+; a few minutes. lab-oidc re-measures the closed
+# L45 and L46; this runs L55 alone.
+lab-oidc-l55:
+	go test -tags lab ./tests/lab/ -run 'TestL55' -count=1 -v -timeout 30m
+
+# L56 (plan 9b): port49-issued certificates end to end, bin/port49 against
+# the compose stack's Keycloak, broker and vEOS. Needs the compose stack,
+# containerlab, the EOS image and `make build`.
+lab-oidc-agent:
+	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run 'TestL56' -count=1 -v -timeout 60m
 
 # The workload CA lab (plan 8, L48): step-ca as a container and a local
 # port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;

@@ -299,7 +299,12 @@ func newRigSigned(t *testing.T, foreign bool) *rig { return newRigWith(t, rigOpt
 // certificate from a CA the broker does not trust; expired is one past its
 // NotAfter; wrongAnchor gives the agent a trust anchor that did not issue the
 // broker's certificate. Any of them skips Connect.
-type rigOpts struct{ foreign, expired, wrongAnchor bool }
+type rigOpts struct {
+	foreign, expired, wrongAnchor bool
+	// notAfter, when set, is the client certificate's end; the session
+	// connects.
+	notAfter time.Time
+}
 
 func newRigWith(t *testing.T, o rigOpts) *rig {
 	t.Helper()
@@ -332,6 +337,12 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 	if o.expired {
 		if cli, err = ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
 			NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !o.notAfter.IsZero() {
+		if cli, err = ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+			NotBefore: now.Add(-time.Hour), NotAfter: o.notAfter}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2397,5 +2408,20 @@ func TestStatusCarriesTheLastRefreshsSessions(t *testing.T) {
 	}
 	if st := status(); len(st.Sessions) != 1 || st.Sessions[0] != out.Sessions[0] || st.Sessions[0].Device != "leaf1" {
 		t.Fatalf("after a refresh: %+v, the broker said %+v", st.Sessions, out.Sessions)
+	}
+}
+
+// CertificateEnd is the session certificate's notAfter, which agentMain
+// exits at when it comes before the session's deadline (decision 43 ruling
+// 21). The deadline itself is the broker's, unchanged.
+func TestCertificateEndIsTheCertificatesNotAfter(t *testing.T) {
+	end := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	r := newRigWith(t, rigOpts{notAfter: end})
+	if !r.a.CertificateEnd().Equal(end) || !r.a.SessionEndsAt().After(end) {
+		t.Fatalf("CertificateEnd %s, SessionEndsAt %s, the certificate's end %s", r.a.CertificateEnd(),
+			r.a.SessionEndsAt(), end)
+	}
+	if !(&Agent{}).CertificateEnd().IsZero() {
+		t.Fatal("an agent with no certificate has an end")
 	}
 }

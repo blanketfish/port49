@@ -515,9 +515,10 @@ closes.
      gone.
 - **Register port49 at your provider as a public client:** no secret, the authorization-code flow,
   PKCE with S256 required. Its client id is the broker verifier's `client_id`.
-  - *Its redirect URI: port49 listens on `http://127.0.0.1:<port>/callback`, on a free port each
-    time (RFC 8252). Which registration admits that on Keycloak is L55's; until it closes,
-    register `http://127.0.0.1:<fixed>/callback` and set `oidc_redirect_port: <fixed>`.*
+  - Its redirect URI: port49 listens on `http://127.0.0.1:<port>/callback`, on a free port each
+    time (RFC 8252). Measured on Keycloak 26.4.7 (L55): register `http://127.0.0.1/callback` (or
+    `http://127.0.0.1/*`) to admit any port; a fixed `http://127.0.0.1:<port>/callback` admits that
+    port alone, so set `oidc_redirect_port: <port>`; `http://127.0.0.1:*/callback` admits none.
   - Ask for the claim the broker maps (`email`, say) in the verifier's `scopes`: port49 asks for
     exactly those.
 - **Ship `/etc/port49/config.yaml` with the client** (a package, config management or MDM), owned
@@ -543,9 +544,10 @@ closes.
   - The key and certificate are kept in `~/.port49/issued/<broker host>_<port>.key` and
     `.pem`, 0600. The key is your session until the certificate ends: a reboot or a new agent uses
     it with no sign-in, and whoever copies it holds your session until then, so never copy it off
-    the host, and exclude `~/.port49/issued/` from home-directory backups (Time Machine, rsync and
-    the like): a restore within the certificate's life holds the session. (9c moves it into a TPM,
-    the OS keystore or a hardware key where there is one.)
+    the host. port49 marks `~/.port49/issued/` excluded from Time Machine and from backup tools
+    that honour CACHEDIR.TAG (borg, restic --exclude-caches, tar --exclude-caches); other backups
+    exclude it by policy, once, fleet-wide: a restore within the certificate's life holds the
+    session. (9c moves it into a TPM, the OS keystore or a hardware key where there is one.)
 - **Check whom you signed in as.** The login prints `signed in at … as <you>`. The address port49
   prints is not a password, but keep it to yourself: whoever has it can finish your sign-in with
   their own account. On a shared host a browser port49 launches shows that address to other users
@@ -636,8 +638,8 @@ closes.
   - an issued certificate whose sign-in a logout ended.
 - **Never refuse a start over the issuing CA** (R4): issuance stops, and the start says why.
 - **The lab register rules** (CLAUDE.md 1–4). Task 1 rewords L55 and L56, and Task 12 measures
-  them. Until L55 closes, no doc says which redirect registration Keycloak accepts or that it
-  enforces PKCE.
+  them. L55 and L56 closed 2026-10-11: Keycloak's redirect registrations and PKCE are in
+  spec §13 decision 43, and L56's cells are in `tests/lab/results/L56-arista_eos.md`.
 - Verify with `make test && make vet`, and `make test-race` on every touched package, and report
   the real output.
 - Conventional Commits, on branch `feature/oidc-public-client`. Commit messages end with:

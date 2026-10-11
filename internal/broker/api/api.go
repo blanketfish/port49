@@ -40,6 +40,19 @@ type Config struct {
 	// against (plan 7h; design §17): discovery data, never fleet data.
 	// Machine verifiers are not listed.
 	OIDC []OIDCProvider `json:"oidc,omitempty"`
+	// Issuance is set when the broker issues a person a certificate over an
+	// OIDC sign-in (plan 9b; spec §13 decision 43 ruling 18).
+	Issuance *Issuance `json:"issuance,omitempty"`
+	// BrokerCABundle is the CAs a client trusts for this broker's server
+	// certificate, PEM: the one in use and, through a rotation, the next
+	// (decision 43 ruling 25). Empty when broker.tls_ca_bundle_file is not
+	// set.
+	BrokerCABundle string `json:"broker_ca_bundle,omitempty"`
+	// BrokerCABundleRefused is set when broker.tls_ca_bundle_file is
+	// configured and the broker refused it at start (its log says why): a
+	// client keeps the CAs it holds, and does not read the missing bundle as
+	// the broker sending none.
+	BrokerCABundleRefused bool `json:"broker_ca_bundle_refused,omitempty"`
 }
 
 // OIDCProvider is one human OIDC verifier as GET /v1/config names it.

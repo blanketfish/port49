@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
@@ -139,11 +140,20 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // logoutRecordTTL is how long a logout record stands: while a token issued
-// before it could still be presented. The recovery's lift time is the same
-// quantity.
+// before it could still be presented, and on a broker that issues
+// certificates while one issued on a sign-in before it could (decision 43
+// ruling 16): such a certificate carries no mark of its own, so the record
+// is what refuses it. That is the longest lifetime any broker may issue,
+// issuer.MaxLifetime, not this one's certificate_lifetime: a lifetime
+// lowered since, or a replica configured otherwise, leaves certificates
+// issued for longer. The recovery's lift time is the same quantity.
 func (b *Broker) logoutRecordTTL() time.Duration {
 	t := b.Identity.Timing
-	return t.MaxTokenAge + 2*t.ClockSkew
+	held := t.MaxTokenAge
+	if b.Issuer != nil {
+		held = max(held, issuer.MaxLifetime)
+	}
+	return held + 2*t.ClockSkew
 }
 
 // logoutByHand is how an operator ends what a logout that could not be
@@ -183,20 +193,41 @@ func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied boo
 }
 
 // logoutUnapplied is the recovery for a logout nothing of which was written:
-// no logout record refuses the session's held ID token, so the contexts are
-// ended and the mark is lifted only after lift, when that token has expired.
+// no logout record refuses the session's held ID token, or the certificate
+// issued on its sign-in, so the contexts are ended and the mark is lifted
+// only after lift, when that token or certificate has expired. On a broker
+// that issues, lift is a day off (issuer.MaxLifetime), so it also names the
+// shorter path: each certificate the sign-in got revoked by serial, from its
+// issue record, and the mark lifted once no ID token from before the logout
+// can still be presented.
 func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
 	at := lift.UTC().Format(time.RFC3339)
 	if b.AdminSocket == "" {
 		return b.proc() + " has no admin_socket configured, so end " + principal + "'s contexts: remove " + principal +
 			"'s grants from broker.policy_file (live within two watch intervals), and restore them only after " + at +
-			", when no ID token the logout would have refused can still mint; or configure admin_socket and revoke there"
+			", when no ID token or issued certificate the logout would have refused can still mint; or configure " +
+			"admin_socket and revoke there"
 	}
 	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
 	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
 		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
-		": no logout record refuses the session's held ID token until then; last check that `port49 revoke --list` " +
-		"there shows no mark for " + principal
+		": no logout record refuses the session's held ID token or issued certificate until then; last check that " +
+		"`port49 revoke --list` there shows no mark for " + principal + b.revokeIssuedSooner(principal, where)
+}
+
+// revokeIssuedSooner is logoutUnapplied's shorter path on a broker that
+// issues (decision 43 ruling 16), "" on one that does not.
+func (b *Broker) revokeIssuedSooner(principal, where string) string {
+	if b.Issuer == nil {
+		return ""
+	}
+	t := b.Identity.Timing
+	sooner := b.Now().Add(t.MaxTokenAge + 2*t.ClockSkew).UTC().Format(time.RFC3339)
+	return "; or, sooner: revoke every certificate issued to " + principal + " before the logout, by every " +
+		"broker on this store, each with `port49 revoke --cert-issuer DN --cert-serial HEX` on " + where +
+		", the DN and serial from each broker's decision-log issue records for " + principal + ", and lift the " +
+		"principal's mark after " + sooner + " instead, when no ID token from before the logout can still be " +
+		"presented; if any broker's issue records cannot be read, wait out the first time"
 }
 
 // RevokeSid ends one OIDC session as a back-channel logout by sid does, at

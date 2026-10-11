@@ -51,6 +51,11 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 	if b.CertStatus == nil || cs == nil || len(cs.VerifiedChains) == 0 {
 		return nil
 	}
+	// A certificate this broker issued has no status but the broker's own
+	// marks (decision 43 ruling 15).
+	if issued, _ := b.Issuer.Ends(cs.VerifiedChains); issued {
+		return nil
+	}
 	res := b.CertStatus.Check(ctx, cs.VerifiedChains[0])
 	switch res.Verdict {
 	case certstatus.Revoked:

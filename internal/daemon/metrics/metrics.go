@@ -261,6 +261,14 @@ type Metrics struct {
 	// left, once per 24h per certificate on each broker replica (plan 8;
 	// decision 40 ruling 9). No label: a certificate is a workload's identity.
 	WorkloadRenewalLate prometheus.Counter
+	// port49_certificates_issued_total{outcome}: POST /v1/certificate by
+	// outcome: issued, refused, unavailable (the issuing CA not usable)
+	// (plan 9b; spec §13 decision 43 ruling 22). No principal.
+	CertificatesIssued *prometheus.CounterVec
+	// port49_issuing_ca_not_after_timestamp_seconds: the Unix time the
+	// issuing CA in use expires; 0 when none is loaded. Where issuance is
+	// configured, alert on 0, and on it within 90 days.
+	IssuingCANotAfter prometheus.Gauge
 	// port49_directory_queries_total{server, outcome}: directory queries by
 	// server (host:port) and outcome: ok, fault (the server's), error (the
 	// query's answer), refused (the dial or bind was refused, no fault).
@@ -614,6 +622,11 @@ func New(reg prometheus.Registerer) *Metrics {
 		WorkloadRenewalLate: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_workload_certificates_renewal_late_total",
 			Help: "Workload certificates presented with under a quarter of their validity left, once per certificate " +
 				"per 24h on this replica; alert on its increase."}),
+		CertificatesIssued: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_certificates_issued_total",
+			Help: "Sign-ins exchanged for a port49-issued certificate, by outcome: issued, refused, unavailable."},
+			[]string{"outcome"}),
+		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
+			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
 			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
 			[]string{"server", "outcome"}),
@@ -737,10 +750,15 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
-		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate)
+		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
+		m.CertificatesIssued, m.IssuingCANotAfter)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)
+	// Every issuance outcome exists at 0 from the first scrape.
+	for _, o := range []string{"issued", "refused", "unavailable"} {
+		m.CertificatesIssued.WithLabelValues(o)
+	}
 	// Both outcomes exist at 0 from the first scrape.
 	m.StoreHealthChecks.WithLabelValues("pass")
 	m.StoreHealthChecks.WithLabelValues("fail")

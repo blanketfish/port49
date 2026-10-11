@@ -1,20 +1,24 @@
-// Package userconfig is the operator's own files under
-// $XDG_CONFIG_HOME/port49 (spec §13 decision 42, ruling 6): config.yaml,
-// which gives `port49 login` its broker, broker CA, certificate and key; and
-// the private-file reading and writing it shares with the pinned host keys
-// (internal/hostkeys). Whoever can write these files chooses which broker the
-// operator trusts and which device keys `port49 ssh` accepts, so a file, or a
-// directory holding one, that anyone else can write is refused, never read.
-// It is keyfile's rule for a private key, for writing rather than reading,
-// and unlike internal/fence it holds on macOS too.
+// Package userconfig is the operator's own files under ~/.port49 (spec §13
+// decision 43 ruling 24, amending decision 42 ruling 6): config.yaml, over the
+// system-wide /etc/port49/config.yaml the install ships, which gives `port49
+// login` its broker, broker CA, certificate and key, or its identity provider
+// (decision 43 ruling 19); the certificate the broker issued it
+// (IssuedPaths); and the private-file reading and writing it shares with the
+// pinned host keys (internal/hostkeys). Whoever can write these files chooses
+// which broker the operator trusts and which device keys `port49 ssh`
+// accepts, so a file, or a directory holding one, that anyone else can write
+// is refused, never read. It is keyfile's rule for a private key, for writing
+// rather than reading, and unlike internal/fence it holds on macOS too.
 package userconfig
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +30,45 @@ import (
 // getuid is os.Getuid, swapped in tests: no second uid exists to own a file.
 var getuid = os.Getuid
 
-// Dir is $XDG_CONFIG_HOME/port49, else ~/.config/port49.
+// Dir is ~/.port49, the operator's own port49 directory, as ~/.ssh is
+// OpenSSH's (decision 43 ruling 24): config.yaml, and the certificates
+// brokers issued (IssuedPaths). WritePrivate makes it 0700 when it is
+// missing. It sits in the home directory, so its walk never meets a shared
+// parent such as a group-writable ~/.config.
 func Dir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".port49")
+	}
+	return ".port49"
+}
+
+// EnvConfig names a config file in place of ~/.port49/config.yaml; --config
+// overrides it.
+const EnvConfig = "PORT49_CONFIG"
+
+// Path is the personal config file: $PORT49_CONFIG, else
+// ~/.port49/config.yaml.
+func Path() string {
+	if p := os.Getenv(EnvConfig); p != "" {
+		return p
+	}
+	return filepath.Join(Dir(), "config.yaml")
+}
+
+// SystemPath is the system-wide config file the install ships, under every
+// user's own (LoadAll). Only the tests change it.
+var SystemPath = "/etc/port49/config.yaml"
+
+// SystemOwner is the uid that must own SystemPath: 0, root, as /etc is. Only
+// the tests change it, standing their own uid in for root's, which no test
+// can give a file.
+var SystemOwner uint32
+
+// LegacyDir is plan 9a's directory, $XDG_CONFIG_HOME/port49, else
+// ~/.config/port49. The pinned host keys stay there until plan 9d takes
+// them out of the user's flow; a config.yaml there is refused, naming the
+// move (LoadAll).
+func LegacyDir() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "port49")
 	}
@@ -37,8 +78,46 @@ func Dir() string {
 	return filepath.Join(".config", "port49")
 }
 
-// Path is the config file's default path.
-func Path() string { return filepath.Join(Dir(), "config.yaml") }
+// IssuedPathsIn is where, under dir, `port49 login` keeps the certificate a
+// broker issued it and its key (spec §13 decision 43 ruling 7):
+// dir/issued/<host>_<port>.pem and .key, one pair per broker. A broker URL
+// that is not https with a host, or whose host is not a plain name or
+// address, is refused rather than made a file name.
+func IssuedPathsIn(dir, broker string) (cert, key string, err error) {
+	u, err := url.Parse(broker)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return "", "", fmt.Errorf("broker %q is not an https URL with a host", broker)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	host := strings.ToLower(strings.ReplaceAll(u.Hostname(), ":", "-"))
+	if strings.HasPrefix(host, ".") || strings.IndexFunc(host, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-')
+	}) >= 0 {
+		return "", "", fmt.Errorf("broker %q: its host is not a plain name or address", broker)
+	}
+	base := filepath.Join(dir, "issued", host+"_"+port)
+	return base + ".pem", base + ".key", nil
+}
+
+// CABundlePathIn is where, under dir, the agent keeps the CA bundle a broker
+// sent it (spec §13 decision 43 ruling 25): dir/broker_ca/<host>_<port>.pem,
+// one per broker, so no broker's bundle is trusted for another.
+func CABundlePathIn(dir, broker string) (string, error) {
+	cert, _, err := IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "broker_ca", filepath.Base(cert)), nil
+}
+
+// CABundlePath is CABundlePathIn ~/.port49 (Dir).
+func CABundlePath(broker string) (string, error) { return CABundlePathIn(Dir(), broker) }
+
+// IssuedPaths is IssuedPathsIn ~/.port49 (Dir).
+func IssuedPaths(broker string) (cert, key string, err error) { return IssuedPathsIn(Dir(), broker) }
 
 // File is config.yaml. Every key is optional; `port49 login` takes each one
 // its flags leave out. Paths are resolved by Load: relative to the file's
@@ -48,16 +127,35 @@ type File struct {
 	BrokerCA string `yaml:"broker_ca"`
 	Cert     string `yaml:"cert"`
 	Key      string `yaml:"key"`
+	// Method is how `port49 login` authenticates: x509, the default, or
+	// oidc, a sign-in the broker issues a certificate for (decision 43
+	// ruling 19).
+	Method string `yaml:"method"`
+	// OIDCIssuer names the provider to sign in at when the broker lists
+	// several.
+	OIDCIssuer string `yaml:"oidc_issuer"`
+	// OIDCCA is the CA that issued the provider's TLS certificate; none is
+	// the system's roots.
+	OIDCCA string `yaml:"oidc_ca"`
+	// OIDCRedirectPort is the loopback port a sign-in returns to; 0 picks a
+	// free one.
+	OIDCRedirectPort int `yaml:"oidc_redirect_port"`
 
 	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
 	// through the same ownership walk; nil under WithoutCA or with no CA named.
 	BrokerCAPEM []byte `yaml:"-"`
+	// OIDCCAPEM is OIDCCA's bytes, read as BrokerCAPEM is; nil under
+	// WithoutOIDCCA or with none named.
+	OIDCCAPEM []byte `yaml:"-"`
 }
 
 // Option changes what Load does.
 type Option func(*loadOptions)
 
-type loadOptions struct{ skipCA bool }
+type loadOptions struct{ skipCA, skipOIDCCA bool }
+
+// WithoutOIDCCA is WithoutCA for oidc_ca, which --oidc-ca overrides.
+func WithoutOIDCCA() Option { return func(o *loadOptions) { o.skipOIDCCA = true } }
 
 // WithoutCA is for a caller whose --broker-ca overrides the file's: a CA that
 // is not going to be used is neither read nor checked, so a bad one does not
@@ -73,12 +171,100 @@ const (
 // Load reads config.yaml at path. ok is false, with no error, when there is
 // no file; a file that is there and cannot be used is an error, never a file
 // ignored.
-func Load(path string, opts ...Option) (f File, ok bool, err error) {
+func Load(path string, opts ...Option) (File, bool, error) {
+	f, ok, err := parse(path, "port49 config file", false)
+	if err != nil || !ok {
+		return File{}, false, err
+	}
+	if err := f.readCAs(options(opts), path, path); err != nil {
+		return File{}, false, err
+	}
+	return f, true, nil
+}
+
+// LoadAll is Load over two files, key by key (decision 43 ruling 24): the
+// system-wide file at SystemPath, then path's, every key of which that is
+// set wins. path is the personal file, ~/.port49/config.yaml, or one that
+// --config or $PORT49_CONFIG names (named), which must then be there. ok is
+// false, with no error, when neither file is. The system file must be
+// root's: it names the broker for every user on the host. Each file's
+// relative paths are its own directory's, and each CA is read once, from
+// the file whose key won.
+func LoadAll(path string, named bool, opts ...Option) (File, bool, error) {
+	sys, sysOK, err := parse(SystemPath, "system port49 config file", true)
+	if err != nil {
+		return File{}, false, err
+	}
+	f, ok, err := parse(path, "port49 config file", false)
+	switch {
+	case err != nil:
+		return File{}, false, err
+	case !ok && named:
+		return File{}, false, fmt.Errorf("%s: no such file", path)
+	case !ok:
+		if err := noLegacy(path); err != nil {
+			return File{}, false, err
+		}
+		if !sysOK {
+			return File{}, false, nil
+		}
+	}
+	brokerFrom, oidcFrom := path, path
+	if f.BrokerCA == "" {
+		brokerFrom = SystemPath
+	}
+	if f.OIDCCA == "" {
+		oidcFrom = SystemPath
+	}
+	f = overlay(sys, f)
+	if err := f.readCAs(options(opts), brokerFrom, oidcFrom); err != nil {
+		return File{}, false, err
+	}
+	return f, true, nil
+}
+
+// overlay is base with every key over sets in its place.
+func overlay(base, over File) File {
+	base.Broker = cmp.Or(over.Broker, base.Broker)
+	base.BrokerCA = cmp.Or(over.BrokerCA, base.BrokerCA)
+	base.Cert = cmp.Or(over.Cert, base.Cert)
+	base.Key = cmp.Or(over.Key, base.Key)
+	base.Method = cmp.Or(over.Method, base.Method)
+	base.OIDCIssuer = cmp.Or(over.OIDCIssuer, base.OIDCIssuer)
+	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
+	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
+	return base
+}
+
+// noLegacy refuses a config.yaml at plan 9a's place when path, the default,
+// holds none, and names the move: unread, it would leave the operator logged
+// in to whatever the system file names, or to nothing, with no word why.
+func noLegacy(path string) error {
+	old := filepath.Join(LegacyDir(), "config.yaml")
+	if _, err := os.Lstat(old); err != nil {
+		return nil
+	}
+	// The legacy file is never read (ruling 24), so the clause is fixed: a
+	// certificate login moved under a system file that says method: oidc
+	// would sign in instead, its cert and key unused.
+	return fmt.Errorf("%s is where plan 9a kept port49's config file; port49 reads %s now: "+
+		"mkdir -m 700 -p %s && mv %s %s (if it holds a certificate login, add `method: x509`)",
+		old, path, filepath.Dir(path), old, path)
+}
+
+// options is what opts make of Load's defaults.
+func options(opts []Option) loadOptions {
 	var o loadOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
-	raw, err := ReadPrivate(path, maxFile, "port49 config file")
+	return o
+}
+
+// parse reads and checks one config file, resolving its paths, and reads no
+// CA. With rootOnly the file must be root's (SystemOwner).
+func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
+	raw, err := readPrivate(path, maxFile, what, rootOnly)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, false, nil
 	}
@@ -95,21 +281,44 @@ func Load(path string, opts ...Option) (f File, ok bool, err error) {
 		return File{}, false, fmt.Errorf("%s holds a second YAML document; port49 reads one", path)
 	}
 	base := filepath.Dir(path)
-	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key} {
+	switch f.Method {
+	case "", "x509", "oidc":
+	default:
+		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509 or oidc", path, f.Method)
+	}
+	if f.OIDCRedirectPort < 0 || f.OIDCRedirectPort > 65535 {
+		return File{}, false, fmt.Errorf("%s: oidc_redirect_port %d is not a port", path, f.OIDCRedirectPort)
+	}
+	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
 		if *p, err = resolve(base, *p); err != nil {
 			return File{}, false, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	// The CA this file names pins the broker as the file does, so it is held
-	// to the same line, ReadPrivate's: owned by you or root, nobody else can
-	// write it or the directories above it. It is read here, once, and its
-	// bytes carried, so nothing can be swapped in between a check and a read.
+	return f, true, nil
+}
+
+// readCAs reads the CAs f names; brokerFrom and oidcFrom are the files that
+// named them, for a refusal.
+func (f *File) readCAs(o loadOptions, brokerFrom, oidcFrom string) error {
+	var err error
+	// The CA a config file names pins the broker as the file does, so it is
+	// held to the same line, ReadPrivate's: owned by you or root, nobody
+	// else can write it or the directories above it. It is read here, once,
+	// and its bytes carried, so nothing can be swapped in between a check and
+	// a read.
 	if f.BrokerCA != "" && !o.skipCA {
 		if f.BrokerCAPEM, err = ReadPrivate(f.BrokerCA, maxCA, "broker CA"); err != nil {
-			return File{}, false, fmt.Errorf("broker_ca in %s: %w", path, err)
+			return fmt.Errorf("broker_ca in %s: %w", brokerFrom, err)
 		}
 	}
-	return f, true, nil
+	// The provider's CA decides whose sign-in port49 trusts, as the broker
+	// CA decides the broker: held to the same line, read once.
+	if f.OIDCCA != "" && !o.skipOIDCCA {
+		if f.OIDCCAPEM, err = ReadPrivate(f.OIDCCA, maxCA, "identity provider CA"); err != nil {
+			return fmt.Errorf("oidc_ca in %s: %w", oidcFrom, err)
+		}
+	}
+	return nil
 }
 
 // resolve is p as Load reads it: ~ and ~/ from the home directory, a relative
@@ -142,6 +351,12 @@ func resolve(base, p string) (string, error) {
 // path as written (resolveOwned), and the file is opened by the resolved path,
 // so the file read is the one whose directories were judged.
 func ReadPrivate(path string, max int64, what string) ([]byte, error) {
+	return readPrivate(path, max, what, false)
+}
+
+// readPrivate is ReadPrivate; with rootOnly the file must be root's
+// (SystemOwner), not this user's.
+func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, error) {
 	dir, base, err := splitPath(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
@@ -173,11 +388,20 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 	if err := ownedAlone(file, li, what); err != nil {
 		return nil, err
 	}
+	if st, ok := li.Sys().(*syscall.Stat_t); rootOnly && (!ok || st.Uid != SystemOwner) {
+		return nil, fmt.Errorf("%s is not owned by root; the %s names the broker for every user on this host, "+
+			"so it is root's alone: chown root %s", path, what, path)
+	}
 	f, err := os.OpenFile(file, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {
 		return nil, fmt.Errorf("%s is a symbolic link; the %s is read only as a file of its own", path, what)
 	}
 	if errors.Is(err, fs.ErrPermission) {
+		if st, ok := li.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
+			// Not this user's to chmod: say the mode it needs and whose to set.
+			return nil, fmt.Errorf("%s is %04o and owned by %s; the %s must be readable by you, so %s (%w)",
+				file, li.Mode().Perm(), ownerName(st.Uid), what, fixFor(file, "0644 (and its directory 0755)"), err)
+		}
 		return nil, fmt.Errorf("cannot open %s: permission denied; the %s must be readable by you: chmod u+r %s (%w)",
 			file, what, file, err)
 	}
@@ -213,7 +437,14 @@ func ownedAlone(path string, fi fs.FileInfo, what string) error {
 	if err := ownedBy(path, fi, what); err != nil {
 		return err
 	}
-	if fi.Mode().Perm()&0o022 != 0 && !(fi.IsDir() && fi.Mode()&fs.ModeSticky != 0) {
+	if fi.Mode().Perm()&0o022 != 0 && fi.IsDir() && fi.Mode()&fs.ModeSticky == 0 {
+		// A directory may be shared, as a group-writable ~/.config is, so
+		// the refusal says what it needs, never a chmod that would change it
+		// for everyone else.
+		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
+			"trusts, so port49 needs it writable by its owner alone (mode 0755 or 0700)", path, fi.Mode().Perm(), what)
+	}
+	if fi.Mode().Perm()&0o022 != 0 && !fi.IsDir() {
 		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
 			"trusts: chmod go-w %s", path, fi.Mode().Perm(), what, path)
 	}
@@ -351,11 +582,43 @@ func resolveOwned(dir string, create bool, what string) (string, error) {
 	return prefix, nil
 }
 
+// fixFor is who sets the mode on a file this user does not own: whoever
+// installed it for a path outside the user's home, the user, with sudo, for
+// one inside it (a root-owned ~/.port49 is no installer's).
+func fixFor(path, mode string) string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" && strings.HasPrefix(path, h+"/") {
+		return "make it yours (sudo chown " + getenvUser() + " " + path + ") or " + mode
+	}
+	return "whoever installed it must make it " + mode
+}
+
+// getenvUser is $USER for the advice, else a placeholder.
+func getenvUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "YOU"
+}
+
+// ownerName is root for uid 0, else the uid.
+func ownerName(uid uint32) string {
+	if uid == 0 {
+		return "root"
+	}
+	return fmt.Sprintf("uid %d", uid)
+}
+
 // dirError says which directory port49 could not look inside, and for a
 // refused one what to run. d is the directory that was being searched, not
 // the entry below it that failed.
 func dirError(d string, err error, what string) error {
 	if errors.Is(err, fs.ErrPermission) {
+		if fi, serr := os.Lstat(d); serr == nil {
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
+				return fmt.Errorf("%s is %04o and owned by %s; port49 must look inside it to check who can write the %s, "+
+					"so %s (%w)", d, fi.Mode().Perm(), ownerName(st.Uid), what, fixFor(d, "0755"), err)
+			}
+		}
 		return fmt.Errorf("%s: permission denied; port49 must look inside it to check who can write the %s: "+
 			"chmod u+rx %s (%w)", d, what, d, err)
 	}
@@ -375,42 +638,68 @@ func PrivateDir(dir, what string) (string, error) { return resolveOwned(dir, tru
 // walks it (resolveOwned), top down, and a directory is made only under a
 // prefix that has passed, so a path that would be refused creates nothing.
 func WritePrivate(path string, data []byte, what string) error {
-	dirPart, base, err := splitPath(path)
-	if err != nil {
-		return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+	return WritePrivateAll(PrivateFile{Path: path, Data: data, What: what})
+}
+
+// PrivateFile is one file for WritePrivateAll.
+type PrivateFile struct {
+	Path string
+	Data []byte
+	What string
+}
+
+// WritePrivateAll is WritePrivate for files that only make sense together,
+// such as a key and its certificate: every file is written to a temporary
+// beside its path first, and only when all of them are there are they renamed
+// into place, in the order given. A failure before the first rename leaves
+// every path as it was; the one that remains is a rename failing after an
+// earlier one, which the last file of the order is the least likely to be.
+func WritePrivateAll(files ...PrivateFile) error {
+	type staged struct{ tmp, path, dir string }
+	var all []staged
+	defer func() {
+		for _, s := range all {
+			os.Remove(s.tmp) // after the rename there is nothing at tmp
+		}
+	}()
+	for _, f := range files {
+		dirPart, base, err := splitPath(f.Path)
+		if err != nil {
+			return fmt.Errorf("%s: %w; the %s must be a file", f.Path, err, f.What)
+		}
+		dir, err := resolveOwned(dirPart, true, f.What)
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(dir, "."+base+".*")
+		if err != nil {
+			return err
+		}
+		all = append(all, staged{tmp.Name(), joinPath(dir, base), dir})
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+		if _, err := tmp.Write(f.Data); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
 	}
-	dir, err := resolveOwned(dirPart, true, what)
-	if err != nil {
-		return err
-	}
-	path = joinPath(dir, base)
-	tmp, err := os.CreateTemp(dir, "."+base+".*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name) // after the rename there is nothing at name
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		d.Close()
+	for _, s := range all {
+		if err := os.Rename(s.tmp, s.path); err != nil {
+			return err
+		}
+		if d, err := os.Open(s.dir); err == nil {
+			_ = d.Sync()
+			d.Close()
+		}
 	}
 	return nil
 }

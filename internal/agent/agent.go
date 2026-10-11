@@ -29,6 +29,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,9 @@ type Config struct {
 	// Log receives the agent's own lines — reconnects, the session's end.
 	// Never a token.
 	Log io.Writer
+	// BundleKept is whether port49 has kept a CA bundle for this broker, so
+	// the rotation hint may promise to keep the CA current (RotatedCA).
+	BundleKept bool
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
@@ -124,8 +128,13 @@ type Agent struct {
 	now          func() time.Time
 	log          io.Writer
 	handshakes   atomic.Int64
+	// brokerRoots are the CAs the last handshake verified the broker's
+	// certificate to, one per verified chain (BrokerRoots).
+	brokerRoots atomic.Pointer[[]*x509.Certificate]
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
+	// bundleKept is Config.BundleKept.
+	bundleKept bool
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -161,7 +170,8 @@ type Agent struct {
 // concurrent asks queue on it rather than opening a second handshake. When it
 // drops, the next ask dials again, which is one more use of the key.
 func New(c Config) *Agent {
-	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{}),
+	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, bundleKept: c.BundleKept,
+		done:            make(chan struct{}),
 		deadlineChanged: make(chan struct{}, 1), wire: make(chan struct{}, 1)}
 	if a.now == nil {
 		a.now = time.Now
@@ -183,6 +193,11 @@ func New(c Config) *Agent {
 			conn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				if roots := chainRoots(tc.ConnectionState().VerifiedChains); len(roots) > 0 {
+					a.brokerRoots.Store(&roots)
+				}
 			}
 			if n := a.handshakes.Add(1); n > 1 {
 				fmt.Fprintf(a.log, "port49 agent: reconnected to the broker (handshake %d)\n", n)
@@ -267,6 +282,51 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	a.mu.Unlock()
 	return c, nil
 }
+
+// chainRoots is the root of every verified chain, each once. A rotation by
+// cross-signing verifies the server's certificate to the old root and the new
+// one, and which comes first is not the broker's to choose.
+func chainRoots(chains [][]*x509.Certificate) []*x509.Certificate {
+	var roots []*x509.Certificate
+	for _, chain := range chains {
+		if len(chain) == 0 {
+			continue
+		}
+		root := chain[len(chain)-1]
+		if !slices.ContainsFunc(roots, root.Equal) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// BrokerRoots are the CAs the last handshake verified the broker's
+// certificate to, one per verified chain; nil before one. A CA bundle the
+// broker sends must hold any one of them (decision 43 ruling 25).
+func (a *Agent) BrokerRoots() []*x509.Certificate {
+	if p := a.brokerRoots.Load(); p != nil {
+		return slices.Clone(*p)
+	}
+	return nil
+}
+
+// RotatedCAHint is the fix for a broker certificate no CA this host trusts
+// issued, said on the same line: a host away through a whole CA rotation
+// (decision 43 ruling 25).
+//
+// It promises that port49 keeps the CA current only where it can: a broker
+// that sends no CA bundle leaves nothing to keep, so the promise (RotatedCAHintKept)
+// is made only where a bundle was kept for this broker, which is a broker
+// known to send one. Anywhere else the fix is the file the host was given.
+const RotatedCAHint = rotatedCAFix + "; ask for /etc/port49/broker-ca.pem to be updated"
+
+// RotatedCAHintKept is RotatedCAHint for a broker whose CA bundle port49 has
+// kept: the next login keeps the new CA current from the bundle the broker
+// sends.
+const RotatedCAHintKept = rotatedCAFix + "; port49 keeps it current from then on"
+
+const rotatedCAFix = "if the broker's operator rotated its CA while this host was away, get the broker's CA from " +
+	"them and run `port49 login --broker-ca FILE` once"
 
 // SessionEndsAt is when this session ends; zero before Connect.
 func (a *Agent) SessionEndsAt() time.Time {
@@ -963,8 +1023,8 @@ func (a *Agent) refusal(err error) error {
 	var verify *tls.CertificateVerificationError
 	if errors.As(err, &verify) {
 		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
-			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries",
-			a.broker, verify.Err)
+			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries%s",
+			a.broker, verify.Err, RotatedCA(verify.Err, a.bundleKept))
 	}
 	var op *net.OpError
 	if !errors.As(err, &op) || op.Op != "remote error" || !certificateAlerts[op.Err.Error()] {
@@ -1064,6 +1124,20 @@ func (e *hangUpError) Error() string {
 
 func (e *hangUpError) Unwrap() error { return e.err }
 
+// RotatedCA is RotatedCAHint after "; " for a certificate no CA this host
+// trusts issued, and "" for any other failure. kept is whether port49 has
+// kept a CA bundle for this broker, which makes it RotatedCAHintKept.
+func RotatedCA(err error, kept bool) string {
+	var unknown x509.UnknownAuthorityError
+	if errors.As(err, &unknown) {
+		if kept {
+			return "; " + RotatedCAHintKept
+		}
+		return "; " + RotatedCAHint
+	}
+	return ""
+}
+
 // certificateAlerts are the alerts a broker sends about the certificate it
 // was shown, by crypto/tls's text for them: its alert type is unexported.
 // Any other alert — internal_error, handshake_failure — is a fault on the
@@ -1092,6 +1166,18 @@ func (a *Agent) leaf() *x509.Certificate {
 		return nil
 	}
 	return leaf
+}
+
+// CertificateEnd is the session certificate's notAfter, zero for none (plan
+// 9b; spec §13 decision 43 ruling 21). Past it the broker refuses every
+// request on the connection (Identity), so the agent process exits there
+// (agentMain); a device session a refresh extended runs to its own ceiling
+// (spec §5.1.4).
+func (a *Agent) CertificateEnd() time.Time {
+	if leaf := a.leaf(); leaf != nil {
+		return leaf.NotAfter
+	}
+	return time.Time{}
 }
 
 // TokenRequest is what `port49 token` sends the agent.

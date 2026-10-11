@@ -164,7 +164,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, dref)
 		return
 	case err != nil:
-		b.failedRefresh(ctx, w, now, c, rep)
+		b.failedRefresh(ctx, w, now, c, rep, oidcPartialRefreshText)
 		return
 	}
 	// The marks and the logouts again, after the extension's writes, as on
@@ -180,7 +180,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, oidcPartialRefreshText)
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), c.principal, c.cred, rv)
+		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), c.principal, c.cred, c.auth().OIDC, rv)
 	case out:
 		b.markExtended(ctx, c, rep)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -243,9 +243,10 @@ func (b *Broker) logoutRecovery(principal string) string {
 // failedRefresh answers a refresh whose extension failed part way. The
 // contexts already extended are checked against the logouts again as a
 // finished refresh's are (pre-flight I-2): the provider was answered 200 for
-// its logout and will not send it again.
+// its logout and will not send it again. text is the 503's: the bearer path
+// asks for a new challenge, the certificate path for a retry.
 func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now time.Time, c caller,
-	rep SessionRefreshReport) {
+	rep SessionRefreshReport, text string) {
 	extended := false
 	for _, s := range rep.Sessions {
 		extended = extended || s.Outcome == "extended"
@@ -264,5 +265,5 @@ func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now t
 			return
 		}
 	}
-	b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, oidcPartialRefreshText)
+	b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, text)
 }

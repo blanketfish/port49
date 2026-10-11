@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/spiffe"
 )
@@ -56,6 +57,13 @@ type identityYAML struct {
 	MaxTokenAge         *time.Duration         `yaml:"max_token_age"`
 	JWKSRefreshInterval *time.Duration         `yaml:"jwks_refresh_interval"`
 	JWKSMaxAge          *time.Duration         `yaml:"jwks_max_age"`
+	Issuance            *issuanceYAML          `yaml:"issuance"`
+}
+
+// issuanceYAML is broker.identity.issuance (plan 9b; spec §13 decision 43).
+// `issuance: {}` turns it on with its defaults.
+type issuanceYAML struct {
+	CertificateLifetime *time.Duration `yaml:"certificate_lifetime"`
 }
 
 // checkIdentity resolves broker.identity, or, with none, the shorthand:
@@ -128,6 +136,11 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			}
 		}
 	}
+	if y.Issuance != nil {
+		if out.Issuance, err = checkIssuance(*y.Issuance, out.OIDC, y.Humans); err != nil {
+			return nil, err
+		}
+	}
 	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 {
 		return nil, errors.New("config: broker.identity accepts no one: list at least one verifier under humans " +
 			"or machines")
@@ -146,6 +159,36 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// checkIssuance resolves broker.identity.issuance (plan 9b; spec §13
+// decision 43 rulings 9 and 14): a certificate is issued over an OIDC
+// sign-in, so a human oidc verifier must be listed, and each one's issuer URL
+// must be one an issued certificate can carry (issuer.CarriesIssuer);
+// certificate_lifetime is 12h by default, 1h to 24h.
+func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVerifierYAML) (*oidc.Issuance, error) {
+	if !slices.ContainsFunc(vs, func(v oidc.VerifierConfig) bool { return v.Domain == oidc.Humans }) {
+		return nil, errors.New("config: broker.identity.issuance: a certificate is issued over an OIDC sign-in, so " +
+			"list a human oidc verifier under broker.identity.humans")
+	}
+	for i, h := range humans {
+		if h.Type != "oidc" {
+			continue
+		}
+		if err := issuer.CarriesIssuer(h.Issuer); err != nil {
+			return nil, fmt.Errorf("config: broker.identity.humans[%d].issuer %q: with broker.identity.issuance set, "+
+				"a certificate carries the issuer URL, and %v", i, h.Issuer, err)
+		}
+	}
+	life := issuer.DefaultLifetime
+	if y.CertificateLifetime != nil {
+		life = *y.CertificateLifetime
+	}
+	if life < issuer.MinLifetime || life > issuer.MaxLifetime {
+		return nil, fmt.Errorf("config: broker.identity.issuance.certificate_lifetime must be between %s and %s; got %s",
+			issuer.MinLifetime, issuer.MaxLifetime, life)
+	}
+	return &oidc.Issuance{CertificateLifetime: life}, nil
 }
 
 func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.VerifierConfig, error) {

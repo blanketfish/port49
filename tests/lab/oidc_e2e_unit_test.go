@@ -319,6 +319,16 @@ func TestOIDCRetryMintRetriesOnlyWhileTheProviderIsUnavailable(t *testing.T) {
 		t.Errorf("another refusal was retried: %d calls", calls)
 	}
 	calls = 0
+	if tok, _ := retryMint(func() (string, string) {
+		calls++
+		if calls == 1 {
+			return "", "no answer: Post: read tcp 127.0.0.1:1->127.0.0.1:2: read: connection reset by peer"
+		}
+		return "t0k3n-token", "200 ok"
+	}, time.Minute, time.Millisecond); tok == "" || calls != 2 {
+		t.Errorf("a restarting broker's reset was not retried: %d calls", calls)
+	}
+	calls = 0
 	retryMint(func() (string, string) { calls++; return "", "503 identity_provider_unavailable: x" }, 20*time.Millisecond, 5*time.Millisecond)
 	if calls < 2 || calls > 6 {
 		t.Errorf("a provider that never came up was called %d times in the window", calls)

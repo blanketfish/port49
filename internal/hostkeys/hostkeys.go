@@ -34,8 +34,10 @@ const what = "pinned host keys file"
 // maxFile bounds the file: a line a key, a fleet of them.
 const maxFile = 4 << 20
 
-// Path is the pinned host keys file's default path.
-func Path() string { return filepath.Join(userconfig.Dir(), "known_hosts") }
+// Path is the pinned host keys file's default path. It stays in plan 9a's
+// directory (userconfig.LegacyDir), not ~/.port49, until plan 9d takes the
+// pins out of the user's flow.
+func Path() string { return filepath.Join(userconfig.LegacyDir(), "known_hosts") }
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
 
