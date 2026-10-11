@@ -3,6 +3,8 @@
 package lab
 
 import (
+	"encoding/base64"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +55,46 @@ func TestL56FilesAskForTheEmailScopeAndIssue(t *testing.T) {
 		if !strings.Contains(files["port49-broker.yaml"], want) {
 			t.Fatalf("no %q in %s", want, files["port49-broker.yaml"])
 		}
+	}
+}
+
+// A device token is the whole of `port49 token`'s stdout and nowhere else:
+// not on its stderr, not on any other command's output, not with company on
+// stdout.
+func TestL56TokenAppearsOnlyAsPort49TokensStdout(t *testing.T) {
+	kc := &keycloak{}
+	c := &l56CLI{printed: []string{"state-0123456789"}}
+	const tok = "device-token-0123456789"
+	kc.know(tok)
+	if err := c.tokenLeak(kc, tok, tok+"\n", ""); err != nil {
+		t.Fatalf("the token alone on stdout: %v", err)
+	}
+	if c.tokenLeak(kc, tok, tok+"\n", "port49 token: "+tok) == nil {
+		t.Error("the token on stderr not seen")
+	}
+	if c.tokenLeak(kc, tok, "note: "+tok+"\n", "") == nil {
+		t.Error("the token with company on stdout not seen")
+	}
+	if c.leak(kc, "port49: extended to "+tok) == nil {
+		t.Error("the token in another command's output not seen")
+	}
+}
+
+func TestL56KeySecretsAreTheWholeKeyAndNeverPanic(t *testing.T) {
+	der := make([]byte, 138)
+	for i := range der {
+		der[i] = byte(i)
+	}
+	raw := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	got := l56KeySecrets(raw)
+	if len(got) < 2 || got[0] != base64.StdEncoding.EncodeToString(der) {
+		t.Fatalf("%q", got)
+	}
+	for _, s := range []string{"", "not a pem", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte{1, 2}}))} {
+		l56KeySecrets([]byte(s)) // must not panic
+	}
+	if len(l56KeySecrets([]byte("not a pem"))) != 0 {
+		t.Fatal("secrets from nothing")
 	}
 }
 

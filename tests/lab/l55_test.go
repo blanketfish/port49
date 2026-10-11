@@ -284,7 +284,14 @@ func TestL55PublicClient(t *testing.T) {
 		{"no verifier", "none"}} {
 		code, verifier, _ := k.l55SignIn(t, k.l55Browser(), nil)
 		sent := map[string]string{"right": verifier, "wrong": verifier + "x", "none": ""}[c.how]
-		cell("3. the exchange with "+c.name, l55Said(k.l55Exchange(t, code, sent)))
+		status, out := k.l55Exchange(t, code, sent)
+		// The right verifier is the positive control for the other two: a
+		// refusal means something only where the right one is taken.
+		if _, ok := out["id_token"].(string); c.how == "right" && (status != http.StatusOK || !ok) {
+			t.Fatalf("INVALID: cell 3's exchange with the right verifier was not taken (%s); no note is written",
+				l55Said(status, out))
+		}
+		cell("3. the exchange with "+c.name, l55Said(status, out))
 	}
 	cell("3d. code_challenge_method=plain", l55Word(k.authorizeAccepted(t, kcRedirect,
 		url.Values{"code_challenge_method": {"plain"}, "code_challenge": {randomSecret(t) + randomSecret(t)}})))

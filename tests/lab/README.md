@@ -547,9 +547,15 @@ the end, keeping `keycloak.log`.
 - Each L56 cell asserts, and each assertion has a control that shows it can fail. A control that
   does not hold is INVALID, and no note is written.
 - Keycloak is stopped and started by `docker compose stop|start keycloak`.
-- The CLI runs with `HOME` set to a temporary directory, so its client config and issued key and
-  certificate (`~/.port49/issued/`) are the run's own; the real `/etc/port49` and `~/.port49` are
-  never read or written.
+- The CLI runs with `HOME` set to a temporary directory and `PORT49_CONFIG` and `XDG_CONFIG_HOME`
+  removed, so the issued key and certificate (`~/.port49/issued/`) are the run's own and the real
+  `~/.port49` is never touched. The CLI does read `/etc/port49/config.yaml` when it exists, so L56
+  stops as INVALID, writing no note, if that file exists on the lab host.
+- A device token must be `port49 token`'s whole stdout and is looked for everywhere else (its
+  stderr, every other command's output, the agent's log, and the broker's and port49d's logs at
+  the end); it is never exempt. Only the authorization URL's state, nonce and `code_challenge` are.
+- L55 cell 3's right-verifier exchange must return an `id_token`, or the run is INVALID: the
+  wrong-verifier and no-verifier refusals mean something only beside it.
 
 ## Workload CA and Oxidized (plan 8)
 

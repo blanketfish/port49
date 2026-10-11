@@ -151,8 +151,8 @@ type l56CLI struct {
 	flags           []string
 	// printed is what port49 prints by design among the values the run
 	// registered as secret: each authorization URL's state, nonce and
-	// code_challenge (decision 43 ruling 20), and each device token on
-	// `port49 token`'s stdout. leak exempts these and nothing else.
+	// code_challenge (decision 43 ruling 20). leak exempts these and nothing
+	// else; a device token is never among them (tokenLeak).
 	printed []string
 }
 
@@ -162,13 +162,24 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 	if _, err := os.Stat(bin); err != nil {
 		t.Fatalf("bin/port49 is not built (`make build`): %v", err)
 	}
+	// The CLI reads the system config when it exists, which would change what
+	// is measured.
+	if _, err := os.Stat(userconfig.SystemPath); err == nil {
+		t.Fatalf("INVALID: %s exists on this host, so the CLI would read it; no note is written", userconfig.SystemPath)
+	}
 	home, err := os.MkdirTemp("", "p49l56")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "PORT49_CONFIG=") && !strings.HasPrefix(kv, "XDG_CONFIG_HOME=") {
+			env = append(env, kv)
+		}
+	}
 	c := &l56CLI{bin: bin, home: home, sock: filepath.Join(home, "run", "agent.sock"),
-		env: append(os.Environ(), "HOME="+home, "HTTPS_PROXY=http://"+proxy, "NO_PROXY=127.0.0.1",
+		env: append(env, "HOME="+home, "HTTPS_PROXY=http://"+proxy, "NO_PROXY=127.0.0.1",
 			"BROWSER=", "DISPLAY=", "WAYLAND_DISPLAY=")}
 	c.flags = []string{"--oidc", "--no-browser", "--redirect-port", "18749", "--broker", sliceBrokerURL,
 		"--broker-ca", filepath.Join(root, slicePKIDir, testpki.LabCA), "--oidc-ca", idpCA, "--socket", c.sock}
@@ -195,10 +206,24 @@ func (c *l56CLI) keyNow(kc *keycloak) {
 		return
 	}
 	if raw, err := os.ReadFile(keyPath); err == nil {
-		if blk, _ := pem.Decode(raw); blk != nil {
-			kc.know(base64.StdEncoding.EncodeToString(blk.Bytes)[:64])
+		kc.know(l56KeySecrets(raw)...)
+	}
+}
+
+// l56KeySecrets is what of a PEM private key no output may hold: the whole
+// key (the PKCS#8 DER in base64) and each line of the PEM body.
+func l56KeySecrets(raw []byte) []string {
+	blk, _ := pem.Decode(raw)
+	if blk == nil || len(blk.Bytes) == 0 {
+		return nil
+	}
+	secrets := []string{base64.StdEncoding.EncodeToString(blk.Bytes)}
+	for _, line := range strings.Split(string(pem.EncodeToMemory(&pem.Block{Type: blk.Type, Bytes: blk.Bytes})), "\n") {
+		if line != "" && !strings.HasPrefix(line, "-----") {
+			secrets = append(secrets, line)
 		}
 	}
+	return secrets
 }
 
 // knowKey is keyNow, and the certificate's SHA-256, "" for none.
@@ -311,6 +336,8 @@ func (p *l56Cmd) authURL(c *l56CLI, kc *keycloak) string {
 			c.printed = append(c.printed, v...)
 		}
 		return u
+	case <-p.done:
+		return ""
 	case <-time.After(30 * time.Second):
 		_ = p.cmd.Process.Kill()
 		return ""
@@ -411,7 +438,7 @@ func (k *keycloak) answer(t *testing.T, browser *http.Client, authURL, user, pas
 // the form was shown.
 func (k *keycloak) formWithoutPrompt(t *testing.T, browser *http.Client) bool {
 	t.Helper()
-	resp, err := browser.Get(k.l55Authorize(t, kcRedirect, randomSecret(t)+randomSecret(t), url.Values{"prompt": nil}))
+	resp, err := browser.Get(k.l55Authorize(t, kcRedirect, randomSecret(t)+randomSecret(t), url.Values{"prompt": {""}}))
 	if err != nil {
 		t.Fatalf("authorize: %s", errCause(err))
 	}
@@ -430,9 +457,20 @@ func (c *l56CLI) run(t *testing.T, kc *keycloak, args ...string) l56Run {
 	return c.start(t, nil, args...).wait(c, kc, false)
 }
 
-// token mints device and returns the token, registered as secret and as
-// printed by design. That token is all the leak check exempts: anything
-// else on stdout, and all of stderr, is checked as any output is.
+// tokenLeak is the leak check on `port49 token`'s output once it minted tok:
+// the token's one intended appearance is stdout, exactly one line holding it
+// and nothing else. stderr is checked with every registered secret, the
+// token included, and so is any later command's output (the token is never
+// put in c.printed).
+func (c *l56CLI) tokenLeak(kc *keycloak, tok, stdout, stderr string) error {
+	if stdout != tok+"\n" {
+		return fmt.Errorf("stdout is not the token on a line of its own")
+	}
+	return c.leak(kc, stderr)
+}
+
+// token mints device and returns the token, registered as secret. Nothing
+// exempts it from the check of any other output.
 func (c *l56CLI) token(kc *keycloak, device string) (string, l56Run) {
 	cmd := exec.Command(c.bin, "token", "--socket", c.sock, device)
 	cmd.Env = c.env
@@ -443,11 +481,11 @@ func (c *l56CLI) token(kc *keycloak, device string) (string, l56Run) {
 	tok := strings.TrimSpace(stdout.String())
 	if r.code != 0 {
 		tok, r.stdout = "", scrubbed(stdout.String(), kc.known())
+		r.leak = c.leak(kc, stdout.String()+"\n"+stderr.String())
 	} else {
 		kc.know(tok)
-		c.printed = append(c.printed, tok)
+		r.leak = c.tokenLeak(kc, tok, stdout.String(), stderr.String())
 	}
-	r.leak = c.leak(kc, stdout.String()+"\n"+stderr.String())
 	r.stderr = scrubbed(stderr.String(), kc.known())
 	return tok, r
 }
@@ -544,12 +582,18 @@ func l56(t *testing.T, l *lab) {
 		note := "The CLI reaches Keycloak through a CONNECT proxy in the test (`l56Proxy`), since this host does " +
 			"not resolve keycloak.port49.lab; that is lab plumbing, not part of the claim. The CLI's raw output " +
 			"is checked for a compact JWS or any value the run registered as secret (the issued key's included) " +
-			"before it is scrubbed for this note; the authorization URL's state, nonce and code_challenge, and " +
-			"each device token on `port49 token`'s stdout, are exempt, being printed by design.\n\n" +
+			"before it is scrubbed for this note; only the authorization URL's state, nonce and code_challenge " +
+			"are exempt, being printed by design. A device token must be `port49 token`'s whole stdout and is " +
+			"checked for everywhere else, other commands' output and the broker's and port49d's logs included.\n\n" +
 			"| step | observed |\n|---|---|\n" + obs.String()
 		cli.knowKey(t, kc)
 		if err := leakIn(cli.agentLog(), kc.known()); err != nil {
 			failed = append(failed, "the agent's log: "+err.Error())
+		}
+		if logs, err := c.run("logs", "port49-broker", "port49d"); err != nil {
+			failed = append(failed, "the broker's and port49d's logs could not be read: "+err.Error())
+		} else if err := leakIn(logs, kc.known()); err != nil {
+			failed = append(failed, "the broker's or port49d's log: "+err.Error())
 		}
 		if len(failed) > 0 {
 			note += "\n**Not as the claim says:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
@@ -625,7 +669,11 @@ func l56(t *testing.T, l *lab) {
 	certPath, keyPath := cli.issued(t)
 	for _, p := range []string{certPath, keyPath} {
 		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
-			fail("%s is not 0600: %v %v", p, fi, err)
+			mode := os.FileMode(0)
+			if fi != nil {
+				mode = fi.Mode().Perm()
+			}
+			fail("%s is not 0600: mode %v, error %v", p, mode, err)
 		}
 	}
 	if kc.formWithoutPrompt(t, browser) {
@@ -692,8 +740,13 @@ func l56(t *testing.T, l *lab) {
 	// 5. An administrator's sign-out: the certificate's next mint is refused
 	// in the broker's logout words (its sid recorded against it), the agent
 	// ends, a login over the certificate removes it, and a sign-in from the
-	// time the broker names works. Control for 5a: 2a, a mint on the same
-	// certificate before.
+	// time the broker names works. Control for 5a: a mint on the 4b
+	// certificate before the sign-out, which must work.
+	tok, tr = cli.token(kc, l.p.node)
+	ran("5. control: port49 token on the new certificate, before the sign-out", tr, "")
+	if tok == "" {
+		t.Fatalf("INVALID: the new certificate cannot mint before the sign-out, so 5a cannot tell: %s", tr.cell())
+	}
 	signedOut := time.Now()
 	kc.LogoutUser(t, kc.UserID(t, oidcAlice))
 	ended := false
