@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
@@ -91,6 +92,12 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			return 1
 		}
 		printRefresh(stdout, out)
+		if api.LateRenewal(held.Leaf, time.Now()) {
+			// The agent ends with the certificate, and --sign-in is refused
+			// while it runs: say how to renew before then.
+			fmt.Fprintf(stdout, "port49: your certificate ends at %s, and the agent with it; to renew before then, "+
+				"stop the agent and run `port49 login`\n", rfc3339(held.Leaf.NotAfter))
+		}
 		return 0
 	}
 	now := time.Now()
@@ -104,20 +111,44 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			rfc3339(held.Leaf.NotAfter))
 		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
 	}
-	code, down := issueCertificate(ctx, sf, pool, certPath, keyPath, stdout, stderr)
-	switch {
-	case code == 0:
+	code, err := issueCertificate(ctx, sf, pool, certPath, keyPath, stdout, stderr)
+	if err == nil {
 		return startIssued(sf, certPath, keyPath, false, stdout, stderr)
-	case down && usable && !sf.signIn:
-		fmt.Fprintf(stderr, "port49 login: using your certificate for %s, valid until %s, until your identity "+
-			"provider answers\n", s.Principal, rfc3339(held.Leaf.NotAfter))
+	}
+	// A held certificate outlives any failure of the sign-in (ruling 17:
+	// only a sign-in fails), except the broker's own no: a 401 says this
+	// person is refused, and the certificate is judged by that broker too.
+	var refused *refusedError
+	var unreachable *oidcclient.UnreachableError
+	down := errors.As(err, &unreachable)
+	switch {
+	case usable && !sf.signIn && !errors.As(err, &refused):
+		why := ""
+		if down {
+			why = ", until your identity provider answers (a certificate port49 issued needs no identity provider)"
+		}
+		fmt.Fprintf(stderr, "port49 login: %v; using your certificate for %s until %s%s\n", err, s.Principal,
+			rfc3339(held.Leaf.NotAfter), why)
 		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
-	case down && usable:
-		fmt.Fprintf(stderr, "port49 login: your certificate for %s is valid until %s: `port49 login` without "+
-			"--sign-in uses it\n", s.Principal, rfc3339(held.Leaf.NotAfter))
+	case down:
+		fmt.Fprintf(stderr, "port49 login: %v; port49 cannot sign you in until it answers (anyone already logged "+
+			"in keeps working: a certificate port49 issued needs no identity provider)\n", err)
+		if usable {
+			fmt.Fprintf(stderr, "port49 login: your certificate for %s is valid until %s: `port49 login` without "+
+				"--sign-in uses it\n", s.Principal, rfc3339(held.Leaf.NotAfter))
+		}
+	default:
+		fmt.Fprintln(stderr, "port49 login:", err)
 	}
 	return code
 }
+
+// refusedError is the broker answering the certificate request 401: it has
+// judged this person's sign-in and said no, so a held certificate is not
+// the way round it.
+type refusedError struct{ msg string }
+
+func (e *refusedError) Error() string { return e.msg }
 
 // startIssued starts the agent on the issued certificate and its key, as
 // --cert and --key would (ruling 7). A held one the agent could not connect
@@ -159,41 +190,29 @@ func heldCertificate(certPath, keyPath string) (tls.Certificate, issuer.SignIn, 
 
 // issueCertificate signs in at the provider the broker lists and asks the
 // broker for a certificate for a key generated here (decision 43 rulings 2,
-// 3, 7 and 8), and keeps the key and then the certificate. down is whether
-// the provider did not answer, which a held certificate outlives.
+// 3, 7 and 8), and keeps the key and then the certificate. It prints nothing
+// on failure: the error, with the exit code, is the caller's to say, since a
+// held certificate may carry on past it.
 func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool, certPath, keyPath string,
-	stdout, stderr io.Writer) (code int, down bool) {
+	stdout, stderr io.Writer) (code int, err error) {
 	conf, err := fetchBrokerConfig(ctx, sf.broker, pool)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1, false
+		return 1, err
 	}
 	if conf.Issuance == nil {
-		fmt.Fprintf(stderr, "port49 login: the broker at %s issues no certificates (its broker.identity has no "+
-			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)\n", sf.broker)
-		return 1, false
+		return 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
+			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)", sf.broker)
 	}
 	prov, err := pickProvider(conf, sf.issuer)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1, false
+		return 1, err
 	}
 	roots, err := sf.oidcRoots()
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 login:", err)
-		return 2, false
+		return 2, err
 	}
 	p := oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
-	failed := func(err error) (int, bool) {
-		var u *oidcclient.UnreachableError
-		if errors.As(err, &u) {
-			fmt.Fprintf(stderr, "port49 login: %v; port49 cannot sign you in until it answers (anyone already logged "+
-				"in keeps working: a certificate port49 issued needs no identity provider)\n", err)
-			return 1, true
-		}
-		fmt.Fprintln(stderr, "port49 login:", err)
-		return 1, false
-	}
+	failed := func(err error) (int, error) { return 1, err }
 	e, err := oidcclient.Discover(ctx, p)
 	if err != nil {
 		return failed(err)
@@ -240,9 +259,14 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err := userconfig.WritePrivate(certPath, []byte(resp.Certificate), "port49-issued certificate"); err != nil {
 		return failed(err)
 	}
+	// Said from the certificate just checked, not from the broker's JSON.
+	si, err := issuer.ReadSignIn(leaf)
+	if err != nil {
+		return failed(fmt.Errorf("the broker's certificate carries no sign-in: %v", err))
+	}
 	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
-		resp.Principal, sf.broker, resp.NotAfter)
-	return 0, false
+		si.Principal, sf.broker, rfc3339(leaf.NotAfter))
+	return 0, nil
 }
 
 // requestCertificate is POST /v1/certificate, the sign-in's ID token the
@@ -276,8 +300,12 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		_ = json.Unmarshal(raw, &e)
-		return api.IssueResponse{}, fmt.Errorf("the broker did not issue your certificate: %s (%s)",
+		msg := fmt.Sprintf("the broker did not issue your certificate: %s (%s)",
 			printsafe.Line(e.Detail, 400), printsafe.Line(cmp.Or(e.Error, resp.Status), 64))
+		if resp.StatusCode == http.StatusUnauthorized {
+			return api.IssueResponse{}, &refusedError{msg}
+		}
+		return api.IssueResponse{}, errors.New(msg)
 	}
 	var out api.IssueResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -301,8 +329,10 @@ var (
 
 // signIn runs one sign-in in this process (rulings 3–5): a browser when
 // this host has one, the address on stderr always, and on a terminal a
-// pasted address, not echoed. The terminal is restored however the sign-in
-// ends.
+// pasted address, not echoed. The terminal is restored when the sign-in
+// ends, and when a signal ends the process while the paste prompt has echo
+// off (guardedPaste): Ctrl-C there must not leave the operator's shell
+// typing blind.
 func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce string, port int,
 	noBrowser bool, stderr io.Writer) (oidcclient.Tokens, error) {
 	o := oidcclient.LoginOptions{Nonce: nonce, Port: port, Out: stderr, Now: time.Now}
@@ -311,10 +341,14 @@ func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, 
 	}
 	if stdinIsTerminal() {
 		fd := int(os.Stdin.Fd())
+		restore := func() {}
 		if saved, err := term.GetState(fd); err == nil {
-			defer func() { _ = term.Restore(fd, saved) }()
+			restore = func() { _ = term.Restore(fd, saved) }
+			defer restore()
 		}
-		o.Paste = readPaste
+		o.Paste = func() (string, error) {
+			return guardedPaste(readPaste, restore, os.Exit, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		}
 	}
 	t, err := oidcclient.Login(ctx, p, e, o)
 	if errors.Is(err, oidcclient.ErrNoWayBack) {
@@ -322,6 +356,33 @@ func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, 
 			"forward that port to this host (ssh -L N:127.0.0.1:N)", err)
 	}
 	return t, err
+}
+
+// guardedPaste is read with sigs caught: a signal that arrives while read
+// holds the terminal with echo off restores it first, then ends the process
+// as the signal would (exit 128+signal, 130 for SIGINT). Catching stops when
+// read returns, so a signal after the paste is the default again.
+func guardedPaste(read func() (string, error), restore func(), exit func(int), sigs ...os.Signal) (string, error) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, sigs...)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(ch)
+		close(done)
+	}()
+	go func() {
+		select {
+		case s := <-ch:
+			restore()
+			code := 1
+			if n, ok := s.(syscall.Signal); ok {
+				code = 128 + int(n)
+			}
+			exit(code)
+		case <-done:
+		}
+	}()
+	return read()
 }
 
 // browserCommand is the command that opens url here, or nil for none (ruling

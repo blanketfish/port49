@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -131,5 +132,45 @@ func TestAnAgentThatCannotHardenRunsOn(t *testing.T) {
 		&out, &errb); code != 2 || !strings.Contains(errb.String(), "could not make the agent non-dumpable") ||
 		!strings.Contains(errb.String(), "it runs on") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
+// A signal at the paste prompt restores the terminal before the process
+// exits as the signal would: SIGUSR1 stands in for SIGINT, since SIGINT sent
+// to the test binary would end it. (The real terminal's echo is untested: it
+// needs a pty.)
+func TestASignalAtThePastePromptRestoresTheTerminalFirst(t *testing.T) {
+	var order []string
+	exited := make(chan int, 1)
+	release := make(chan struct{})
+	got := make(chan struct{})
+	go func() {
+		_, _ = guardedPaste(func() (string, error) { close(got); <-release; return "", nil },
+			func() { order = append(order, "restore") },
+			func(code int) { order = append(order, "exit"); exited <- code },
+			syscall.SIGUSR1)
+	}()
+	<-got
+	if err := syscall.Kill(os.Getpid(), syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-exited:
+		if code != 128+int(syscall.SIGUSR1) || strings.Join(order, ",") != "restore,exit" {
+			t.Fatalf("exit %d after %v", code, order)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the signal was not caught")
+	}
+	close(release)
+}
+
+// A paste that returns first leaves no handler behind and restores nothing.
+func TestAPasteThatReturnsRestoresNothing(t *testing.T) {
+	restored := false
+	s, err := guardedPaste(func() (string, error) { return "https://x/cb", nil }, func() { restored = true },
+		func(int) { t.Error("exited") }, syscall.SIGUSR2)
+	if err != nil || s != "https://x/cb" || restored {
+		t.Fatalf("%q %v restored %v", s, err, restored)
 	}
 }

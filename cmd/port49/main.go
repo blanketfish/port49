@@ -30,6 +30,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
 
@@ -494,8 +495,9 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 			case issued && errors.As(err, &revoked):
 				_ = os.Remove(sf.key)
 				_ = os.Remove(sf.cert)
-				fmt.Fprintf(stderr, "port49 login: the broker refused your certificate: %s; it is removed, so "+
-					"`port49 login` signs you in again\n", revoked.Detail)
+				fmt.Fprintf(stderr, "port49 login: the broker refused your certificate: %s; it is removed, and the next "+
+					"`port49 login` signs in if the broker takes you again (a revocation an operator made is theirs "+
+					"to lift)\n", printsafe.Line(revoked.Detail, 400))
 				return 1
 			case err != nil:
 				fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed:",

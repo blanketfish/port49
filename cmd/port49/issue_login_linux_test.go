@@ -211,6 +211,15 @@ func TestLoginOIDCIssuesACertificateAndMints(t *testing.T) {
 		if uid := fi.Sys().(*syscall.Stat_t).Uid; uid == uint32(os.Getuid()) {
 			t.Fatalf("the agent is dumpable: its /proc/<pid>/environ is this user's (uid %d)", uid)
 		}
+		// And it makes no core file whatever the shell's ulimit says.
+		if lim, err := os.ReadFile(fmt.Sprintf("/proc/%d/limits", peerPid(t, sock))); err == nil {
+			for _, line := range strings.Split(string(lim), "\n") {
+				if f := strings.Fields(line); strings.HasPrefix(line, "Max core file size") &&
+					(len(f) < 6 || f[4] != "0" || f[5] != "0") {
+					t.Fatalf("the agent's core limit: %q", line)
+				}
+			}
+		}
 	}
 	o.credentialsNowhere(t, out.String(), errb.String(), terr.String(), agentLog(sock))
 }
@@ -431,5 +440,134 @@ func TestABrokerThatIssuesNothingIsSaid(t *testing.T) {
 	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "issues no certificates") || len(o.as.Authorizations()) != 0 {
 		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
+// loginWithALateCertificate runs a login over a held certificate with an
+// hour left of twelve, so it signs in, and returns what it said. The agent
+// is stopped at the test's end.
+func (o *oidcLab) loginWithALateCertificate(t *testing.T) (code int, out, errb string) {
+	t.Helper()
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var so, se bytes.Buffer
+	code = run(append([]string{"login"}, o.flags(sock)...), &so, &se)
+	return code, so.String(), se.String()
+}
+
+// Ruling 17: a held certificate outlives any failure of the sign-in, not
+// only a provider that does not answer. Discovery up, the login refused.
+func TestAFailedSignInUsesAHeldCertificate(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.as.Deny("access_denied")
+	code, out, errb := o.loginWithALateCertificate(t)
+	if code != 0 || !strings.Contains(errb, "using your certificate for user:alice@example.com until ") ||
+		!strings.Contains(out, "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
+// No browser and no terminal on a restart: the way back is missing, and the
+// held certificate carries on.
+func TestNoWayBackUsesAHeldCertificate(t *testing.T) {
+	o := newOIDCLab(t, true)
+	saved, savedTerm := openBrowser, stdinIsTerminal
+	openBrowser = func(string) error { return fmt.Errorf("no display") }
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { openBrowser, stdinIsTerminal = saved, savedTerm })
+	code, out, errb := o.loginWithALateCertificate(t)
+	if code != 0 || !strings.Contains(errb, "ssh -t") || !strings.Contains(errb, "using your certificate for ") ||
+		!strings.Contains(out, "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
+// The broker's CA unusable (503 issuance_unavailable, the token unspent): the
+// held certificate carries on.
+func TestAnIssuanceOutageUsesAHeldCertificate(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	o.b.Issuer.Unavailable = errors.New("ca expired")
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+		!strings.Contains(errb.String(), "issuance_unavailable") ||
+		!strings.Contains(errb.String(), "using your certificate for ") ||
+		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A 401 is the broker saying no to this person: the held certificate is not
+// the way round it, and no agent starts.
+func TestARefusedSignInDoesNotFallBackToAHeldCertificate(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.as.SetAuthTime(o.now().Add(-time.Hour)) // a provider that did not honour prompt=login
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	sock := privateSocket(t)
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "sign_in_not_fresh") || strings.Contains(errb.String(), "using your certificate") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(sock); err == nil {
+		t.Fatal("an agent started")
+	}
+}
+
+// A certificate with another key's file beside it is not used: the login
+// signs in instead.
+func TestAHeldCertificateWithAnotherKeyIsNotUsed(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now(), 12*time.Hour)
+	certPath, keyPath := o.issuedPaths(t)
+	other, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.holdCertificate(t, time.Now(), 12*time.Hour) // a new certificate and key
+	if err := userconfig.WritePrivate(keyPath, other, "test key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := heldCertificate(certPath, keyPath); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a certificate with another key: %v", err)
+	}
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+		!strings.Contains(errb.String(), "your held certificate is not used") || len(o.as.Authorizations()) != 1 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// An agent running on a late certificate ends with it: the login says when,
+// and how to renew before then.
+func TestALateCertificateUnderARunningAgentSaysWhenItEnds(t *testing.T) {
+	o := newOIDCLab(t, true)
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	o.iss.Close() // the sign-in is down, so the late certificate is what starts the agent
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 {
+		t.Fatalf("first login: %d %q", code, errb.String())
+	}
+	o.step(11 * time.Second)
+	out.Reset()
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "port49: your certificate ends at ") ||
+		!strings.Contains(out.String(), "stop the agent and run `port49 login`") {
+		t.Fatalf("second login: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
