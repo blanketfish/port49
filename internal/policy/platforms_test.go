@@ -731,3 +731,28 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		}
 	}
 }
+
+// A block may drop set 1.2.0's entry deny and never add one the set did not
+// measure (decision 44 ruling 5).
+func TestABlockMayDropTheEntryDenyNotAddOne(t *testing.T) {
+	head := "platform_set: 1.2.0\nplatforms:\n  juniper_junos:\n"
+	for _, c := range []struct {
+		block string
+		ok    bool
+	}{
+		{"    rpc_entry_denies: []\n", true},
+		{"    rpc_entry_denies: [\"junoscript **\"]\n", true},
+		{"    rpc_entry_denies: [\"junoscript **\", \"op **\", \"start **\"]\n", false},
+	} {
+		_, err := Parse([]byte(head+c.block+scopeOK+"roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"]}\n"+
+			subjOK+grantOK), env())
+		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), "rpc_entry_denies") {
+			t.Errorf("%q: %v", c.block, err)
+		}
+	}
+	_, err := Parse([]byte("platform_set: 1.1.0\nplatforms:\n  arista_eos:\n    rpc_entry_denies: [\"x **\"]\n"+
+		scopeOK+"roles:\n  - {name: r, permit: [\"show **\"]}\n"+subjOK+grantOK), env())
+	if err == nil || !strings.Contains(err.Error(), "rpc_entry_denies") {
+		t.Errorf("a platform the set does not project: %v", err)
+	}
+}

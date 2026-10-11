@@ -50,6 +50,7 @@ type Spec struct {
 	CarveOuts            *map[string][]string `yaml:"carve_outs,omitempty"`
 	BitDelivery          *string              `yaml:"bit_delivery,omitempty"`
 	LocalUserNames       *map[string]string   `yaml:"local_user_names,omitempty"`
+	RPCEntryDenies       *[]string            `yaml:"rpc_entry_denies,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -111,6 +112,9 @@ func (s Spec) Over(base Dialect) Dialect {
 		for k, v := range *s.LocalUserNames {
 			d.LocalUserNames[k] = v
 		}
+	}
+	if s.RPCEntryDenies != nil {
+		d.RPCEntryDenies = append([]string{}, *s.RPCEntryDenies...)
 	}
 	if s.CeilingLevels != nil {
 		if d.CeilingLevels == nil {
@@ -690,6 +694,9 @@ func SpecOf(d Dialect) Spec {
 	if d.LocalUserNames != nil {
 		s.LocalUserNames = &d.LocalUserNames
 	}
+	if d.RPCEntryDenies != nil {
+		s.RPCEntryDenies = &d.RPCEntryDenies
+	}
 	if d.CeilingLevels != nil {
 		s.CeilingLevels = &d.CeilingLevels
 	}
@@ -804,7 +811,7 @@ func validateProjection(field func(string) string, d Dialect) error {
 			key string
 			set bool
 		}{{"bits", d.Bits != nil}, {"carve_outs", d.CarveOuts != nil}, {"bit_delivery", d.BitDelivery != ""},
-			{"local_user_names", d.LocalUserNames != nil}} {
+			{"local_user_names", d.LocalUserNames != nil}, {"rpc_entry_denies", d.RPCEntryDenies != nil}} {
 			if k.set {
 				return fmt.Errorf("%s is read only with command_projection; set that, or remove the key", field(k.key))
 			}
@@ -876,6 +883,17 @@ func validateProjection(field func(string) string, d Dialect) error {
 			})
 			if !held {
 				return fmt.Errorf("%s[%d]: the bit's own reach does not hold it", field("carve_outs."+bit), i)
+			}
+		}
+	}
+	for i, rule := range d.RPCEntryDenies {
+		terms, err := engine.ParseRule(rule)
+		if err != nil {
+			return fmt.Errorf("%s[%d]: %w", field("rpc_entry_denies"), i, err)
+		}
+		for j, t := range terms {
+			if t.Kind == engine.Class || t.Kind == engine.Regex {
+				return fmt.Errorf("%s[%d]: term %d: an entry deny is words and `**`", field("rpc_entry_denies"), i, j+1)
 			}
 		}
 	}

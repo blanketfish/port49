@@ -164,12 +164,25 @@ var shipped110 = func() map[string]Dialect {
 	return out
 }()
 
+// shipped120 is set 1.2.0, value for value: 1.1.0 and juniper_junos's entry
+// denies (decision 44 ruling 5; L26c-scripts: `op` reached past `junoscript`).
+var shipped120 = func() map[string]Dialect {
+	out := map[string]Dialect{}
+	for name, d := range shipped110 {
+		out[name] = d.clone()
+	}
+	j := out["juniper_junos"]
+	j.RPCEntryDenies = []string{"junoscript **", "op **"}
+	out["juniper_junos"] = j
+	return out
+}()
+
 func TestTheDefaultSetValueForValue(t *testing.T) {
 	got := Dialects()
-	if len(got) != len(shipped110) {
-		t.Fatalf("%d platforms, want %d", len(got), len(shipped110))
+	if len(got) != len(shipped120) {
+		t.Fatalf("%d platforms, want %d", len(got), len(shipped120))
 	}
-	for name, want := range shipped110 {
+	for name, want := range shipped120 {
 		if !reflect.DeepEqual(got[name], want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got[name], want)
 		}
@@ -181,7 +194,7 @@ func TestTheDefaultSetValueForValue(t *testing.T) {
 // becomes the default, 1.0.0's entry stays here as it is and the new set is
 // added beside it, so a binary upgrade cannot change what a pinned policy
 // renders without this test failing.
-var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110}
+var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110, "1.2.0": shipped120}
 
 func TestEveryReleasedSetIsFrozen(t *testing.T) {
 	for version, want := range released {
@@ -207,6 +220,9 @@ var releasedGeneric = map[string]Dialect{
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
 		EnableUsername: EnablePrincipal},
 	"1.1.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
+		EnableUsername: EnablePrincipal},
+	"1.2.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
 		EnableUsername: EnablePrincipal},
 }
@@ -244,7 +260,7 @@ func TestEmbeddedSetsLoad(t *testing.T) {
 	if _, ok := all[DefaultSet]; !ok {
 		t.Fatalf("no set %s in %v", DefaultSet, Sets())
 	}
-	if !reflect.DeepEqual(Sets(), []string{"1.0.0", "1.1.0"}) {
+	if !reflect.DeepEqual(Sets(), []string{"1.0.0", "1.1.0", "1.2.0"}) {
 		t.Fatalf("sets: %v", Sets())
 	}
 	set, ok := Set(DefaultSet)
@@ -612,5 +628,52 @@ func TestAdapterValuesMarshalSnakeCase(t *testing.T) {
 		if b, err := json.Marshal(tt.v); err != nil || string(b) != tt.want {
 			t.Errorf("%+v: %s, want %s (%v)", tt.v, b, tt.want, err)
 		}
+	}
+}
+
+// Set 1.2.0 is 1.1.0 and one key: juniper_junos's entry deny (decision 44
+// ruling 5). Every other platform, and every other Junos key, is 1.1.0's, so
+// the pin move changes one gated key and nothing else.
+func TestSet120IsSet110AndTheEntryDeny(t *testing.T) {
+	was, ok1 := Set("1.1.0")
+	is, ok2 := Set("1.2.0")
+	if !ok1 || !ok2 || DefaultSet != "1.2.0" {
+		t.Fatalf("sets: %v %v, default %s", ok1, ok2, DefaultSet)
+	}
+	for name, d := range was {
+		got := is[name]
+		if name == "juniper_junos" {
+			if len(got.RPCEntryDenies) == 0 || got.RPCEntryDenies[0] != "junoscript **" {
+				t.Errorf("juniper_junos rpc_entry_denies: %q", got.RPCEntryDenies)
+			}
+			got.RPCEntryDenies = nil
+		}
+		if !reflect.DeepEqual(SpecOf(d), SpecOf(got)) {
+			t.Errorf("%s differs between 1.1.0 and 1.2.0 beyond rpc_entry_denies", name)
+		}
+	}
+	if len(was["juniper_junos"].RPCEntryDenies) != 0 {
+		t.Error("set 1.1.0 was edited: it sends no entry deny")
+	}
+	if KeywordsFor("1.2.0", "juniper_junos") == nil {
+		t.Error("set 1.2.0 ships no keyword tree")
+	}
+}
+
+// rpc_entry_denies is a projected platform's, words and a trailing `**`.
+func TestRPCEntryDeniesIsValidated(t *testing.T) {
+	d := junosProjected(BitDeliveryUserPermissions)
+	d.RPCEntryDenies = []string{"junoscript **"}
+	if err := Validate("juniper_junos", d); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	d.RPCEntryDenies = []string{"/xml.*/ **"}
+	if err := Validate("juniper_junos", d); err == nil || !strings.Contains(err.Error(), "rpc_entry_denies") {
+		t.Errorf("a regex term: %v", err)
+	}
+	eos, _ := DialectFor("arista_eos")
+	eos.RPCEntryDenies = []string{"junoscript **"}
+	if err := Validate("arista_eos", eos); err == nil || !strings.Contains(err.Error(), "command_projection") {
+		t.Errorf("not projected: %v", err)
 	}
 }

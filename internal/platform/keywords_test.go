@@ -395,6 +395,7 @@ func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 // by plan 5b Task 20.
 var releasedKeywords = map[string]string{
 	"1.1.0/juniper_junos": "aa1440897d46146ee4f6ae0b5be8b0ec89643b95f0bd0992b5062c142a4b0168",
+	"1.2.0/juniper_junos": "2017ca9e10d5e3e7c53fb78cd65a5480aa91387212cef7a6924aa87110912688",
 }
 
 func TestReleasedKeywordTreesAreFrozen(t *testing.T) {
@@ -421,5 +422,23 @@ func TestReleasedKeywordTreesAreFrozen(t *testing.T) {
 		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != want {
 			t.Errorf("%s: sha256 %s, released as %s: a released tree is never edited; ship a new set", file, got, want)
 		}
+	}
+}
+
+// Set 1.2.0's Junos tree is 1.1.0's and `save` at the root, which L58 proved
+// on both images (tests/lab/results/L58-juniper_*.md; decision 44 ruling 10):
+// nothing else moves.
+func TestTheSet120JunosTreeIsSet110AndSave(t *testing.T) {
+	was, err1 := fs.ReadFile(platforms.Keywords, "keywords/1.1.0/juniper_junos.yaml")
+	is, err2 := fs.ReadFile(platforms.Keywords, "keywords/1.2.0/juniper_junos.yaml")
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	want := strings.Replace(string(was), `"restart", "scp"`, `"restart", "save", "scp"`, 1)
+	if want == string(was) || string(is) != want {
+		t.Fatal("platforms/keywords/1.2.0/juniper_junos.yaml is not 1.1.0's with `save` at the root")
+	}
+	if !KeywordsFor("1.2.0", "juniper_junos").Keyword(nil, "save") || KeywordsFor("1.1.0", "juniper_junos").Keyword(nil, "save") {
+		t.Error("save is a keyword in 1.2.0's tree only")
 	}
 }

@@ -484,7 +484,7 @@ func (p *Policy) buildPlatforms(f file) error {
 				set bool
 			}{{"command_projection", b.Spec.CommandProjection != nil}, {"bits", b.Spec.Bits != nil},
 				{"carve_outs", b.Spec.CarveOuts != nil}, {"bit_delivery", b.Spec.BitDelivery != nil},
-				{"local_user_names", b.Spec.LocalUserNames != nil}} {
+				{"local_user_names", b.Spec.LocalUserNames != nil}, {"rpc_entry_denies", b.Spec.RPCEntryDenies != nil}} {
 				if k.set {
 					return fmt.Errorf("%s.%s: platform set %s does not project %s, and only a platform the pinned set "+
 						"projects is projected: nothing measured there sets a floor under a bit's reach or measures a "+
@@ -692,6 +692,12 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 					"says the held bits reach less, so a block may drop one, not add one (spec §8, §15 L12)", at, bit,
 					version, shippedAs)
 			}
+		}
+	}
+	for i, rule := range d.RPCEntryDenies {
+		if !slices.Contains(ref.RPCEntryDenies, rule) {
+			return fmt.Errorf("%s.rpc_entry_denies[%d]: platform set %s does not measure this deny closing an RPC "+
+				"entry point on %s; a block may drop one, not add one (spec §8, §15 L26c)", at, i, version, shippedAs)
 		}
 	}
 	return nil
