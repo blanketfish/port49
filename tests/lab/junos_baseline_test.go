@@ -26,12 +26,21 @@ import (
 // `save` unproven, or an entry reached under the deny, is a result: the note
 // records it and Task 3's gates stop the plan.
 
+// The `save` cells run under p49-l58-save (`permissions all`): the first run
+// (2026-10-11) showed a `view` class cannot run `save` at all on either image
+// (syntax error at the subcommand, then permission denied), so its control
+// never reached and `save` read unproven whatever the deny did. Whether `save`
+// is a keyword to deny-commands does not depend on the class; the entries keep
+// the readonly's `view` class.
 var junosL58Class = []string{
 	"set system login class p49-l58-view permissions view",
 	"set system login user p49-l58-view class p49-l58-view",
+	"set system login class p49-l58-save permissions all",
+	"set system login user p49-l58-save class p49-l58-save",
 }
 
-var junosL58Delete = []string{"delete system login user p49-l58-view", "delete system login class p49-l58-view"}
+var junosL58Delete = []string{"delete system login user p49-l58-view", "delete system login class p49-l58-view",
+	"delete system login user p49-l58-save", "delete system login class p49-l58-save"}
 
 // junosL58Deny is the factored alternative naming both words, as set 1.2.0
 // renders a reply's `word **` denies.
@@ -136,15 +145,17 @@ func TestL58JunosBaselineWords(t *testing.T) {
 			}
 		}()
 
-		const class = `"local-user-name=p49-l58-view"`
+		const class, saveClass = `"local-user-name=p49-l58-view"`, `"local-user-name=p49-l58-save"`
 		quote := func(re string) string { return strings.ReplaceAll(re, `\`, `\\`) }
 		control := "[" + class + "]"
 		deny := "[" + class + `, "deny-commands=` + quote(junosL58Deny) + `"]`
+		saveControl := "[" + saveClass + "]"
+		saveDeny := "[" + saveClass + `, "deny-commands=` + quote(junosL58Deny) + `"]`
 		cmds := append([]string{"show version | count"}, junosL58Saves...)
 
 		cells := map[string]map[string]string{"control": {}, "deny": {}}
 		outs := map[string]map[string]string{}
-		for _, s := range []struct{ name, attrs string }{{"control", control}, {"deny", deny}} {
+		for _, s := range []struct{ name, attrs string }{{"control", saveControl}, {"deny", saveDeny}} {
 			o, _, auth := l.l26bSession(t, s.name, s.attrs, cmds, false)
 			// l26bSession says why with t.Errorf; nothing is written after it.
 			if t.Failed() {
@@ -182,7 +193,9 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit), strings.Join(junosL58Class, "\n"))
 		fmt.Fprintf(&b, "Completion over break-glass: `save ?`: %s; `xml-mode ?`: %s.\n\n", listings["save"], listings["xml-mode"])
-		fmt.Fprintf(&b, "| session | reply |\n|---|---|\n| control | `%s` |\n| deny | `%s` |\n\n", tableCell(control), tableCell(deny))
+		fmt.Fprintf(&b, "| session | reply |\n|---|---|\n| control (`save`) | `%s` |\n| deny (`save`) | `%s` |\n"+
+			"| control (entries) | `%s` |\n| deny (entries) | `%s` |\n\n",
+			tableCell(saveControl), tableCell(saveDeny), tableCell(control), tableCell(deny))
 		b.WriteString("| probe | control | deny |\n|---|---|---|\n")
 		for _, p := range append(cmds, junosL58Entries...) {
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", tableCell(p), cells["control"][p], cells["deny"][p])
