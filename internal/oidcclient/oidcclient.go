@@ -151,6 +151,9 @@ var errNoIDToken = errors.New("the token endpoint's answer carries no id_token")
 // *ProviderError; neither holds the form or the body.
 func exchange(ctx context.Context, p Provider, e Endpoints, code, redirect, verifier, nonce string,
 	now func() time.Time) (Tokens, error) {
+	if nonce == "" {
+		return Tokens{}, errors.New("the code exchange needs the request's nonce")
+	}
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect},
 		"client_id": {p.ClientID}, "code_verifier": {verifier}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.Token, strings.NewReader(form.Encode()))
@@ -178,8 +181,22 @@ func exchange(ctx context.Context, p Provider, e Endpoints, code, redirect, veri
 			Description string `json:"error_description"`
 		}
 		_ = json.Unmarshal(body, &oe)
-		return Tokens{}, &ProviderError{Issuer: p.Issuer, Status: resp.StatusCode,
-			Code: printsafe.Line(oe.Error, 64), Description: printsafe.Line(oe.Description, 200)}
+		// A provider's text may echo the code or the verifier: neither is
+		// printed. A body with no error code says the HTTP status instead.
+		scrub := strings.NewReplacer(code, "[redacted]", verifier, "[redacted]").Replace
+		if code == "" || verifier == "" {
+			scrub = func(s string) string { return s }
+		}
+		pe := &ProviderError{Issuer: p.Issuer, Status: resp.StatusCode,
+			Code:        printsafe.Line(scrub(oe.Error), 64),
+			Description: printsafe.Line(scrub(oe.Description), 200)}
+		if pe.Code == "" {
+			pe.Code = strings.ToLower(strings.ReplaceAll(http.StatusText(resp.StatusCode), " ", "_"))
+			if pe.Code == "" {
+				pe.Code = "http_status"
+			}
+		}
+		return Tokens{}, pe
 	}
 	// Only id_token is read: a refresh token in the answer is not kept
 	// (decision 43 ruling 6).

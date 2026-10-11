@@ -38,7 +38,7 @@ func TestReadIDTokenChecksWhatAClientChecks(t *testing.T) {
 	// An expired token is read: the client judges no date by its clock.
 	old := with("exp", now.Add(-time.Hour).Unix())
 	old["iat"] = now.Add(-2 * time.Hour).Unix()
-	if _, err := oidc.ReadIDToken(iss.Token(t, "k1", old), iss.URL, "port49-cli", ""); err != nil {
+	if _, err := oidc.ReadIDToken(iss.Token(t, "k1", old), iss.URL, "port49-cli", "n-1"); err != nil {
 		t.Fatalf("an expired token is the broker's to refuse: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -58,6 +58,9 @@ func TestReadIDTokenChecksWhatAClientChecks(t *testing.T) {
 		"no nonce when one was sent":   {with("nonce", nil), "n-1", "nonce is not"},
 		"a claim named twice in cases": {with("SUB", "x"), "", "twice"},
 	} {
+		if c.nonce == "" {
+			c.nonce = "n-1"
+		}
 		_, err := oidc.ReadIDToken(iss.Token(t, "k1", c.claims), iss.URL, "port49-cli", c.nonce)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
@@ -67,9 +70,14 @@ func TestReadIDTokenChecksWhatAClientChecks(t *testing.T) {
 	body := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"x"}`))
 	for _, alg := range []string{"none", "HS256"} {
 		head := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"` + alg + `"}`))
-		if _, err := oidc.ReadIDToken(head+"."+body+".c2ln", iss.URL, "port49-cli", ""); !errors.Is(err, oidc.ErrAlgorithm) {
+		if _, err := oidc.ReadIDToken(head+"."+body+".c2ln", iss.URL, "port49-cli", "n-1"); !errors.Is(err, oidc.ErrAlgorithm) {
 			t.Errorf("alg %s: %v", alg, err)
 		}
+	}
+	// An empty expected nonce is refused, not skipped (fail closed).
+	if _, err := oidc.ReadIDToken(iss.Token(t, "k1", with("nonce", nil)), iss.URL, "port49-cli", ""); err == nil ||
+		!strings.Contains(err.Error(), "nonce") {
+		t.Errorf("an empty expected nonce: %v", err)
 	}
 	// String withholds the nonce.
 	if s := id.String() + id.GoString(); strings.Contains(s, "n-1") {

@@ -39,9 +39,13 @@ func (t IDToken) GoString() string { return t.String() }
 // ErrAlgorithm); iss exactly issuer; aud naming clientID, and azp as
 // humanAudience reads it; sub, iat, exp and auth_time present and iat no
 // later than exp; every claim by its exact name; and, when nonce is not "",
-// a nonce claim equal to it. It compares no date with a clock: the broker's
+// a nonce claim equal to it (an empty nonce is an error: a nonce is always
+// sent). It compares no date with a clock: the broker's
 // clock judges the token (decision 43 ruling 6).
 func ReadIDToken(raw, issuer, clientID, nonce string) (IDToken, error) {
+	if nonce == "" {
+		return IDToken{}, errors.New("the ID token's nonce cannot be checked: port49 sent none")
+	}
 	j, err := ParseCompact(raw)
 	if err != nil {
 		return IDToken{}, fmt.Errorf("the ID token: %w", err)
@@ -81,7 +85,7 @@ func ReadIDToken(raw, issuer, clientID, nonce string) (IDToken, error) {
 		return IDToken{}, errors.New("the ID token's auth_time is not a NumericDate")
 	case exp.Before(iat):
 		return IDToken{}, errors.New("the ID token expires before it was issued")
-	case nonce != "" && c.Nonce != nonce:
+	case c.Nonce != nonce:
 		return IDToken{}, errors.New("the ID token's nonce is not the one port49 sent")
 	case c.Sid != "" && !printableID(c.Sid):
 		return IDToken{}, errors.New("the ID token's sid is not printable")

@@ -3,8 +3,12 @@ package oidcclient
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -136,5 +140,76 @@ func TestSkew(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0)
 	if s := Skew(Tokens{ID: oidc.IDToken{IssuedAt: at}, Received: at.Add(7 * time.Minute)}); s != 7*time.Minute {
 		t.Fatalf("%v", s)
+	}
+}
+
+func TestAnEmptyNonceIsRefusedBeforeAnyRequest(t *testing.T) {
+	_, as, p := provider(t)
+	e := Endpoints{Token: "https://127.0.0.1:1/token"}
+	if _, err := exchange(context.Background(), p, e, "c", "http://127.0.0.1:1/callback", "v", "", time.Now); err == nil ||
+		!strings.Contains(err.Error(), "nonce") {
+		t.Fatalf("%v", err)
+	}
+	if len(as.Grants()) != 0 {
+		t.Fatalf("a request was made")
+	}
+}
+
+// tokenServer answers every token request with h and is a Provider's anchor.
+func tokenServer(t *testing.T, h http.HandlerFunc) (Provider, Endpoints) {
+	t.Helper()
+	srv := httptest.NewTLSServer(h)
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return Provider{Issuer: "https://idp.example", ClientID: "port49-cli", Roots: pool}, Endpoints{Token: srv.URL}
+}
+
+// Whatever the token endpoint answers, an error holds none of the code, the
+// verifier or the raw ID token, even when the provider echoes them.
+func TestNoExchangeErrorHoldsASecret(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	const code, verifier = "code-canary-8841", "verifier-canary-0123456789-0123456789-0123456789"
+	now := time.Now()
+	raw := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "other", "sub": "s", "iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(), "auth_time": now.Unix(), "nonce": "n"})
+	echo := code + " " + verifier + " " + raw
+	for name, h := range map[string]http.HandlerFunc{
+		"json 4xx": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, `{"error":"invalid_grant","error_description":%q}`, "bad "+code+" and "+verifier)
+		},
+		"json 4xx with the secrets as the code": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, `{"error":%q}`, code)
+		},
+		"non-json 4xx": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); fmt.Fprint(w, echo) },
+		"5xx":          func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502); fmt.Fprint(w, echo) },
+		"oversize":     func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, echo+strings.Repeat("x", maxBody)) },
+		"not json":     func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, echo) },
+		"no id_token":  func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, `{"access_token":%q}`, echo) },
+		"bad id_token": func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, `{"id_token":%q}`, raw) },
+	} {
+		p, e := tokenServer(t, h)
+		p.Issuer = iss.URL
+		_, err := exchange(context.Background(), p, e, code, "http://127.0.0.1:1/callback", verifier, "n", time.Now)
+		if err == nil {
+			t.Errorf("%s: no error", name)
+			continue
+		}
+		for _, s := range []string{code, verifier, raw} {
+			if strings.Contains(err.Error(), s) {
+				t.Errorf("%s: the error holds a secret: %v", name, err)
+			}
+		}
+	}
+}
+
+func TestANonJSONRefusalSaysTheStatus(t *testing.T) {
+	p, e := tokenServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403) })
+	_, err := exchange(context.Background(), p, e, "c", "http://127.0.0.1:1/callback", "v", "n", time.Now)
+	var pe *ProviderError
+	if !errors.As(err, &pe) || pe.Code != "forbidden" || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("%v", err)
 	}
 }
