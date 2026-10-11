@@ -121,8 +121,20 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	// judges the certificate by the same mark.
 	var refused *refusedError
 	var unreachable *oidcclient.UnreachableError
+	var silent *brokerDownError
 	down := errors.As(err, &unreachable)
 	switch {
+	case errors.As(err, &silent):
+		// The held certificate is judged by this same broker, so there is
+		// nothing to start it against; a sign-in would cost a password and
+		// MFA and fail at the same place.
+		if usable {
+			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; your certificate is valid until %s; "+
+				"try again when it answers\n", sf.broker, rfc3339(held.Leaf.NotAfter))
+		} else {
+			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; try again when it answers\n", sf.broker)
+		}
+		return 1
 	case usable && !sf.signIn && !errors.As(err, &refused):
 		why := ""
 		if down {
@@ -152,6 +164,14 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 type refusedError struct{ msg string }
 
 func (e *refusedError) Error() string { return e.msg }
+
+// brokerDownError is the broker not answering at all (a transport error, not
+// an HTTP answer): not a problem with the sign-in, so not one a held
+// certificate is started against or a new sign-in is the cure for.
+type brokerDownError struct{ err error }
+
+func (e *brokerDownError) Error() string { return e.err.Error() }
+func (e *brokerDownError) Unwrap() error { return e.err }
 
 // startIssued starts the agent on the issued certificate and its key, as
 // --cert and --key would (ruling 7). A held one the agent could not connect
@@ -301,12 +321,12 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
 	resp, err := c.Do(req)
 	if err != nil {
-		return api.IssueResponse{}, fmt.Errorf("the broker at %s is unreachable: %w", broker, err)
+		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return api.IssueResponse{}, fmt.Errorf("the broker at %s: %w", broker, err)
+		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s: %w", broker, err)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
@@ -476,7 +496,7 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool) 
 			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
 				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, agent.RotatedCA(verify.Err))
 		}
-		return api.Config{}, fmt.Errorf("the broker at %s is unreachable: %w", broker, err)
+		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

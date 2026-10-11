@@ -341,6 +341,7 @@ type labBroker struct {
 	st   *memory.Store
 	mu   sync.Mutex
 	skew time.Duration
+	stop func() // closes the broker's server: the broker is down
 }
 
 func (l *labBroker) now() time.Time {
@@ -477,6 +478,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	}
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
+	l.stop = func() { _ = srv.Close() }
 	l.url = "https://" + raw.Addr().String()
 	return l
 }

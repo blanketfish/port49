@@ -509,6 +509,35 @@ func TestAFailedSignInUsesAHeldCertificate(t *testing.T) {
 	}
 }
 
+// K2: a broker that does not answer is not a sign-in problem. With a held
+// certificate the login says so and when the certificate ends, starts no
+// agent that cannot connect, and never suggests --sign-in, which would cost a
+// password and MFA to fail at the same broker.
+func TestABrokerThatDoesNotAnswerSaysToTryAgain(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	o.stop()
+	code, out, errb := o.login(t)
+	if code != 1 || out != "" || strings.Contains(errb, "--sign-in") ||
+		!strings.Contains(errb, "the broker at "+o.url+" did not answer; your certificate is valid until ") ||
+		!strings.Contains(errb, "; try again when it answers") || len(o.as.Authorizations()) != 0 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
+// With nothing held the same broker is said without the certificate clause.
+func TestABrokerThatDoesNotAnswerWithNothingHeld(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.stop()
+	code, out, errb := o.login(t)
+	if code != 1 || out != "" || strings.Contains(errb, "--sign-in") || strings.Contains(errb, "your certificate is valid") ||
+		!strings.Contains(errb, "the broker at "+o.url+" did not answer; try again when it answers") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
 // K1: a write of the new pair that fails (a full disk at 3am) leaves the held
 // key and certificate byte for byte as they were, and the fallback runs on
 // them, naming the certificate on disk.
