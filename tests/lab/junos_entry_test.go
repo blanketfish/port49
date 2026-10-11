@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -99,14 +98,12 @@ func entryVerdict(runs map[string]l26cRun, deny []string, control string, canoni
 // entryProbes are TestL26cEntryNetconf's cells, in table order.
 var entryProbes = []string{"show configuration system host-name", "entry: xml-mode netconf need-trailer",
 	"xml-mode netconf need-trailer: get-configuration", "port 830", "port 830: get-configuration",
-	"port 22 subsystem", "port 22 subsystem: get-configuration", "exec channel", "exec channel: get-configuration",
-	"xnm-ssh", "xnm-ssh: get-software-information"}
+	"port 22 subsystem", "port 22 subsystem: get-configuration", "exec channel", "exec channel: get-configuration"}
 
 // entryCanonical are the probes the control must reach, or the run is INVALID:
 // every way in the L26c claim names, so none closes the row unmeasured. If the
 // exec channel cannot be made to reach under C after a harness fix, STOP and
-// report: the claim is then narrowed, never closed past it. The xnm-ssh result
-// joins them where the image took `xnm-ssh`.
+// report: the claim is then narrowed, never closed past it.
 var entryCanonical = []string{"show configuration system host-name", "entry: xml-mode netconf need-trailer",
 	"port 830", "port 22 subsystem", "exec channel"}
 
@@ -141,166 +138,6 @@ func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 	}
 }
 
-// xnmHelloCell reads what the xnm-ssh service sent first: the JUNOScript
-// greeting (hello), a refusal, or nothing readable (not observed).
-func xnmHelloCell(out string) string {
-	greeted := strings.Contains(out, "<junoscript")
-	refused := containsAny(strings.ToLower(out), junosL26cRefusal)
-	switch {
-	case greeted && !refused:
-		return "hello"
-	case refused && !greeted:
-		return "refused"
-	}
-	return "not observed"
-}
-
-// xnmOut collects a JUNOScript session's output as it arrives, so a reader
-// can wait for a marker with a deadline (ssh.Session has no read deadline).
-type xnmOut struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	closed bool
-}
-
-func (o *xnmOut) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.buf.Write(p)
-}
-
-func (o *xnmOut) String() string {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.buf.String()
-}
-
-func (o *xnmOut) isClosed() bool {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.closed
-}
-
-// wait returns the output once it holds one of want, the channel has closed,
-// or d has passed.
-func (o *xnmOut) wait(d time.Duration, want ...string) string {
-	deadline := time.Now().Add(d)
-	for {
-		got := o.String()
-		if containsAny(got, want) || o.isClosed() || time.Now().After(deadline) {
-			return got
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// xnmClientHello opens a JUNOScript session: the XML declaration and the
-// <junoscript> element the client answers the device's greeting with.
-const xnmClientHello = `<?xml version="1.0" encoding="us-ascii"?>` + "\n" +
-	`<junoscript version="1.0" hostname="p49-lab" release="1.0">` + "\n"
-
-// entryXnm opens a JUNOScript session over the device's xnm-ssh service
-// (TCP 3220) with the next token: the SSH connection rides break-glass's
-// direct-tcpip channel to 127.0.0.1:3220 inside the VM, as REST's does, so
-// no port needs forwarding through vrnetlab. It reads the device's greeting,
-// sends the client's and `get-software-information`, and records hello,
-// refused or the result. The tunnel is break-glass's; the session is the
-// class's token.
-func (l *lab) entryXnm(t *testing.T, r l26cRun, on bool, xnmCommit string) {
-	t.Helper()
-	const key, rpcKey = "xnm-ssh", "xnm-ssh: get-software-information"
-	if !on {
-		r.cells[key] = "not measured (the image refused `xnm-ssh`)"
-		r.outs[key] = xnmCommit
-		return
-	}
-	tunnel, err := l.dialHostPort(breakglassUser, breakglassPassword, l.p.addr+":22", 60*time.Second)
-	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", "the tunnel's login: "+oneLine(err.Error())
-		return
-	}
-	defer tunnel.Close()
-	off := l.mark()
-	user, secret := l.nextLogin(t)
-	nc, err := tunnel.Dial("tcp", "127.0.0.1:3220")
-	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", "the tunnel to 3220: "+oneLine(err.Error())
-		return
-	}
-	cfg := labSSHConfig(user, secret)
-	cfg.Timeout = 60 * time.Second
-	sc, chans, reqs, err := ssh.NewClientConn(nc, "127.0.0.1:3220", cfg)
-	if err != nil {
-		nc.Close()
-		cell := "not observed"
-		switch {
-		case isAuthRejection(err):
-			cell = "login refused"
-		case sessionPermitted(l.drainRecords(off, 10*time.Second)):
-			cell = "refused"
-		}
-		r.cells[key], r.outs[key] = cell, oneLine(err.Error())
-		return
-	}
-	c := ssh.NewClient(sc, chans, reqs)
-	defer c.Close()
-	s, err := c.NewSession()
-	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
-		return
-	}
-	defer s.Close()
-	stdin, err := s.StdinPipe()
-	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
-		return
-	}
-	stdout, err := s.StdoutPipe()
-	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
-		return
-	}
-	var out xnmOut
-	go func() {
-		io.Copy(&out, stdout)
-		out.mu.Lock()
-		out.closed = true
-		out.mu.Unlock()
-	}()
-	if err := s.Shell(); err != nil {
-		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
-		return
-	}
-	greeting := out.wait(45*time.Second, append([]string{"<junoscript"}, junosL26cRefusal...)...)
-	r.outs[key] = firstLines(greeting, 8)
-	r.cells[key] = xnmHelloCell(greeting)
-	if r.cells[key] == "not observed" && sessionPermitted(l.drainRecords(off, 10*time.Second)) {
-		r.cells[key] = "refused"
-	}
-	if r.cells[key] != "hello" {
-		return
-	}
-	fmt.Fprint(stdin, xnmClientHello+"<rpc><get-software-information/></rpc>\n")
-	reply := out.wait(60*time.Second, "</rpc-reply>")
-	reply = strings.TrimPrefix(reply, greeting)
-	r.outs[rpcKey], r.cells[rpcKey] = firstLines(reply, 12), l26cRPCCell(reply, "<host-name>")
-	fmt.Fprint(stdin, "</junoscript>\n")
-}
-
-// xnmGate is what W's xnm-ssh cells mean for set 1.2.0's services list (G2):
-// "closed" only where W was refused and the control ran; "reached" where W got
-// a greeting or a result; "" otherwise (handled as reached: it fails closed).
-func xnmGate(readings map[string]string) string {
-	const key, rpcKey = "W xnm-ssh", "W xnm-ssh: get-software-information"
-	switch {
-	case readings[key] == "reached" || readings[rpcKey] == "reached":
-		return "reached"
-	case readings[key] == "deny":
-		return "closed"
-	}
-	return ""
-}
-
 // entryExec runs `xml-mode netconf need-trailer` as an SSH exec command with
 // the next token, writes the client hello and the get-configuration RPC to
 // its stdin, and reads what comes back within 60s.
@@ -327,25 +164,36 @@ func (l *lab) entryExec(t *testing.T, r l26cRun) {
 	s.Stdout, s.Stderr = &out, &out
 	done := make(chan error, 1)
 	go func() { done <- s.Run("xml-mode netconf need-trailer") }()
+	exited := true
 	select {
 	case err = <-done:
 	case <-time.After(60 * time.Second):
+		exited = false
 		err = fmt.Errorf("no exit within 60s")
 	}
 	got := out.String()
 	r.outs[key] = firstLines(got, 12)
-	switch {
-	case strings.Contains(got, "</hello>"):
-		r.cells[key] = "hello"
+	r.cells[key] = execCell(got, exited, exited && sessionPermitted(l.drainRecords(off, 10*time.Second)))
+	if r.cells[key] == "hello" {
 		r.cells[key+": get-configuration"] = l26cRPCCell(got, "<host-name>")
-	case sessionPermitted(l.drainRecords(off, 10*time.Second)) || strings.Contains(got, "unknown command"):
-		r.cells[key] = "refused"
-	default:
-		r.cells[key] = "not observed"
 	}
 	if err != nil && r.cells[key] == "not observed" {
 		r.outs[key] += "\n" + oneLine(err.Error())
 	}
+}
+
+// execCell reads the exec channel: hello where the device greeted; refused
+// only where the command exited and port49d had permitted the session (or the
+// device said unknown command); otherwise not observed. A hang is not a
+// refusal: the channel is still open and the deny has not been seen.
+func execCell(got string, exited, permitted bool) string {
+	switch {
+	case strings.Contains(got, "</hello>"):
+		return "hello"
+	case exited && (permitted || strings.Contains(got, "unknown command")):
+		return "refused"
+	}
+	return "not observed"
 }
 
 func TestL26cEntryNetconf(t *testing.T) {
@@ -357,10 +205,6 @@ func TestL26cEntryNetconf(t *testing.T) {
 		defer stop()
 		commit := l.junosConfigureAdmin(t, append(slices.Clone(junosEntryClass), "set system services netconf ssh"))
 		defer l.junosConfigureAdmin(t, junosEntryDelete)
-		// xnm-ssh is its own commit: an image that refuses it leaves the rest measured.
-		xnmCommit := l.junosConfigureAdmin(t, []string{"set system services xnm-ssh"})
-		defer l.junosConfigureAdmin(t, []string{"delete system services xnm-ssh"})
-		xnmOn := strings.Contains(xnmCommit, "commit complete")
 		defer func() {
 			if std, err := l.configPath(); err == nil {
 				if err := l.restart(std); err != nil {
@@ -389,7 +233,6 @@ func TestL26cEntryNetconf(t *testing.T) {
 			l.entryNetconf(t, r, "port 830", "830")
 			l.entryNetconf(t, r, "port 22 subsystem", "22")
 			l.entryExec(t, r)
-			l.entryXnm(t, r, xnmOn, xnmCommit)
 		}
 		for _, p := range entryProbes {
 			for _, name := range []string{"W", "V", "C"} {
@@ -398,11 +241,7 @@ func TestL26cEntryNetconf(t *testing.T) {
 				}
 			}
 		}
-		canonical := slices.Clone(entryCanonical)
-		if xnmOn {
-			canonical = append(canonical, "xnm-ssh: get-software-information")
-		}
-		readings, unisolated := entryVerdict(runs, []string{"W", "V"}, "C", canonical, entryProbes)
+		readings, unisolated := entryVerdict(runs, []string{"W", "V"}, "C", entryCanonical, entryProbes)
 		if len(unisolated) > 0 {
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))
 		}
@@ -413,28 +252,15 @@ func TestL26cEntryNetconf(t *testing.T) {
 			}
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "The classes were committed: %s. `xnm-ssh`: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
-			commitWord(xnmCommit), strings.Join(junosEntryClass, "\n"))
+		fmt.Fprintf(&b, "The classes were committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
+			strings.Join(junosEntryClass, "\n"))
 		entryTables(&b, runs, readings, junosEntryVariants, entryProbes)
-		fmt.Fprintf(&b, "\n### Gates (plan 9b1)\n\n- G2, `xnm-ssh`: under W the greeting cell reads %s: %s.\n",
-			runs["W"].cells["xnm-ssh"], xnmGateWord(xnmGate(readings)))
-		l.result(t, "L26c-entries", "Whether `deny-commands \"junoscript\"`, sent by TACACS+ beside a deny of `show "+
-			"configuration` under `view view-configuration`, refuses NETCONF as an SSH subsystem on port 22, over the "+
-			"SSH exec channel (`xml-mode netconf need-trailer`) and JUNOScript over the `xnm-ssh` service, as it "+
-			"refuses `xml-mode` from the CLI and port 830; with the same reply less the junoscript deny (the hole) and "+
-			"a control with the same bits and no deny (spec §15 L26c; plan 9b1 Task 3, cell a).", b.String())
+		l.entryResult(t, "L26c-entries", "Whether `deny-commands \"junoscript\"`, sent by TACACS+ beside a deny of `show "+
+			"configuration` under `view view-configuration`, refuses NETCONF as an SSH subsystem on port 22 and "+
+			"over the SSH exec channel (`xml-mode netconf need-trailer`), as it refuses `xml-mode` from the CLI and "+
+			"port 830; with the same reply less the junoscript deny (the hole) and a control with the same bits and "+
+			"no deny (spec §15 L26c; plan 9b1 Task 3, cell a).", b.String())
 	})
-}
-
-// xnmGateWord is what xnmGate's verdict means for set 1.2.0's services list.
-func xnmGateWord(gate string) string {
-	switch gate {
-	case "closed":
-		return "closed by the junoscript deny; `xnm-ssh` may leave set 1.2.0's failing list"
-	case "reached":
-		return "reached past the junoscript deny; `xnm-ssh` stays on set 1.2.0's failing list"
-	}
-	return "not measured; `xnm-ssh` stays on set 1.2.0's failing list (fails closed)"
 }
 
 // entryXMLMode types the CLI entry, and where a hello comes back sends the
@@ -655,8 +481,13 @@ func TestL26cEntryScripts(t *testing.T) {
 		defer stop()
 		commit := l.junosConfigureAdmin(t, junosEntryClass)
 		defer l.junosConfigureAdmin(t, junosEntryDelete)
-		// REST is its own commit: an image that refuses it leaves the rest measured.
-		restCommit := l.junosConfigureAdmin(t, []string{"set system services rest http port 3000"})
+		// REST is its own commit. The plan requires it (REST was taken on both
+		// images, 2026-09-30), so a refusal stops the run; the candidate is
+		// rolled back first, or the cleanup commits would carry the bad line.
+		restCommit, err := l.junosTryConfigure(t, []string{"set system services rest http port 3000"})
+		if err != nil {
+			t.Fatalf("INVALID: REST could not be enabled, so nothing below it was measured: %v", err)
+		}
 		defer l.junosConfigureAdmin(t, []string{"delete system services rest"})
 		restOn := strings.Contains(restCommit, "commit complete")
 		defer func() {
@@ -750,7 +581,7 @@ func TestL26cEntryScripts(t *testing.T) {
 		fmt.Fprintf(&b, "\n### Gates (plan 9b1)\n\n- G1, `op`: under W the script printed %s: %s.\n- G2, `rest`: under "+
 			"W %s: %s.\n", runs["W"].cells["op url: script"], gateWord(readings["W op url: script"], "op"),
 			runs["W"].cells["rest: get-configuration"], gateWord(readings["W rest: get-configuration"], "rest"))
-		l.result(t, "L26c-scripts", "Whether `deny-commands \"junoscript\"` beside a deny of `show configuration` "+
+		l.entryResult(t, "L26c-scripts", "Whether `deny-commands \"junoscript\"` beside a deny of `show configuration` "+
 			"also refuses an `op url` script's `jcs:invoke` RPCs and REST's `/rpc`, and what `scp` of "+
 			"`/config/juniper.conf.gz` reads under each class; against the same reply less the junoscript deny and a "+
 			"control with the same bits and no deny (spec §15 L26c; plan 9b1 Task 3, cells b and e).", b.String())

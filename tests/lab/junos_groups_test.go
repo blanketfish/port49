@@ -162,6 +162,12 @@ func TestL57JunosGroups(t *testing.T) {
 		for _, cmd := range l57Captures {
 			fmt.Fprintf(&b, "\n### `%s` (p49-remote and the group lines)\n\n```\n%s\n```\n", cmd, l57Excerpt(caps[cmd]))
 		}
+		// The fixture is committed too: no capture may hold a pool token.
+		for _, cmd := range l57Captures {
+			if err := leakIn(caps[cmd], l.poolSecrets()); err != nil {
+				t.Fatalf("the capture of %q is withheld, and no fixture or note is written: %v", cmd, err)
+			}
+		}
 		fixture := filepath.Join(root, "internal", "platform", "testdata", "l57-"+l.p.name+".set")
 		if err := os.MkdirAll(filepath.Dir(fixture), 0o755); err != nil {
 			t.Fatal(err)
@@ -169,7 +175,7 @@ func TestL57JunosGroups(t *testing.T) {
 		if err := os.WriteFile(fixture, []byte(caps[inheritedForm]), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		l.result(t, "L57", "What a Junos configuration capture carries for configuration groups that reach port49's "+
+		l.entryResult(t, "L57", "What a Junos configuration capture carries for configuration groups that reach port49's "+
 			"template class p49-remote: a `<*>` and a `<p49-*>` group applied at the top, one kept off the class by "+
 			"`apply-groups-except`, one applied nowhere, one applied from inside another, and a group's idle-timeout "+
 			"beside the class's own; in both inherited set forms, plain set form and the inherited curly form; and "+

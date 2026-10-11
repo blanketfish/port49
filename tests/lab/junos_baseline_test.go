@@ -205,7 +205,7 @@ func TestL58JunosBaselineWords(t *testing.T) {
 				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", e, entryOuts[s+" "+e])
 			}
 		}
-		l.result(t, "L58", "Whether `save` is a keyword to deny-commands, and whether bare `xml-mode` and `xml-mode "+
+		l.entryResult(t, "L58", "Whether `save` is a keyword to deny-commands, and whether bare `xml-mode` and `xml-mode "+
 			"netconf` are refused, under set 1.2.0's factored deny naming `save` and `junoscript`, each against a "+
 			"control with the same class and no deny (spec §15 L58; decision 44 ruling 10).", b.String())
 	})
