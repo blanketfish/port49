@@ -840,7 +840,7 @@ func TestNetconfClosedCountsTheNarrowShape(t *testing.T) {
 	}
 }
 
-// An entry the reply already denes is not added twice: a duplicate
+// An entry the reply already denies is not added twice: a duplicate
 // alternative would count toward the 255 bytes.
 func TestAnEntryAlreadyDeniedIsNotAddedTwice(t *testing.T) {
 	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts,

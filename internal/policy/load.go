@@ -697,7 +697,23 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 	for i, rule := range d.RPCEntryDenies {
 		if !slices.Contains(ref.RPCEntryDenies, rule) {
 			return fmt.Errorf("%s.rpc_entry_denies[%d]: platform set %s does not measure this deny closing an RPC "+
-				"entry point on %s; a block may drop one, not add one (spec §8, §15 L26c)", at, i, version, shippedAs)
+				"entry point on %s; a block may keep the whole list or drop it, not add one (spec §8, §15 L26c)", at, i, version, shippedAs)
+		}
+	}
+	// The whole list or none: a partial list leaves an RPC entry open (`op url`
+	// reaches past the `junoscript` deny, L26c-scripts), and the reply would
+	// still close the rest and call itself closed.
+	if len(d.RPCEntryDenies) > 0 {
+		var left []string
+		for _, rule := range ref.RPCEntryDenies {
+			if !slices.Contains(d.RPCEntryDenies, rule) {
+				left = append(left, rule)
+			}
+		}
+		if len(left) > 0 {
+			return fmt.Errorf("%s.rpc_entry_denies: entries left out: %s; a partial list leaves an RPC entry open, "+
+				"so keep platform set %s's whole list or write `[]` (spec §8, §15 L26c)", at,
+				strings.Join(left, ", "), version)
 		}
 	}
 	return nil
