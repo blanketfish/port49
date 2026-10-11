@@ -185,8 +185,9 @@ type Dialect struct {
 	// RPC (L12-netconf), and these close the CLI's ways into one, per user
 	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44). Set 1.2.0's
 	// juniper_junos carries `junoscript **` and `op **`; empty, the projection
-	// fails such a composition closed (set 1.1.0, option C). A block may drop
-	// one and never add one (spec §8).
+	// fails such a composition closed (set 1.1.0, option C). A block keeps the
+	// whole list or drops it with `[]`, and never adds one: a partial list is
+	// refused at load, since it leaves an entry open (spec §8).
 	RPCEntryDenies []string
 }
 
