@@ -22,7 +22,12 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   is the only guard beneath a sent bit or the baseline, a dialect with `RPCEntryDenies` keeps the
   capability shape and appends those denies (role `rpc_entry`). Today that composition falls to
   the narrow shape or fails closed as `refused_shape`. An allow the reply must send that meets an
-  entry deny still falls back, since an allow beats a deny (L11).
+  entry deny still falls back, since an allow beats a deny (L11). **This reaches only a grant that
+  holds every command the baseline runs** (a `**` grant less some denies, measured against the
+  shipped adapter in pre-flight): any other carries baseline denies, two of which (`save **`,
+  `xml-mode **`) name no keyword the set's tree proves and send it to the narrow shape, and which
+  render 333 bytes on their own. So the realistic readonly (`show **` less `show configuration
+  **`) still fails closed under 1.2.0 (decision 44 ruling 10; its remedy is later work).
 - **Two CI warnings** (`internal/policy`): `projection_netconf_closed` (this subject has no NETCONF
   on these devices) and `projection_deny_beneath_view_configuration` (Ryan: the class grants
   `view-configuration` and the policy denies `show configuration`; a warning, not a refusal).
@@ -32,7 +37,8 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   (group definitions kept). Groups are no longer refused. A group statement that lands on a
   template class or user and adds a privilege statement fails, naming the group. Harmless
   statements pass. A capture that lacks a group's expansion where the configuration applies it is
-  refused as not inherited. Under set 1.2.0 the services allowlist drops NETCONF, the XML API
+  refused as not inherited, and so is one that applies a group to a template without carrying the
+  group's definition. Under set 1.2.0 the services allowlist drops NETCONF, the XML API
   and `outbound-ssh`; `web-management` and `extension-service` (and `rest`, unless Task 3 shows
   the deny closes it) still fail. `--batch FILE...` checks many captures.
 - **Lab:** Task 3 (before code) measures the other ways in under `deny junoscript` and the group
@@ -60,7 +66,7 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
 **Spec:**
 - `docs/design/2026-08-23-policy-engine-spec.md`: §8 ("A wire deny does not bind a native NETCONF
   RPC" through "…is future work"; "Knowing what is shipped" is unchanged and binds Task 4), §12
-  (`devices check-config`, the projection codes table), §13 (new decision 44), §14 (Platform and
+  (`devices check-config`, the projection codes table), §13 (new decision 44, ten rulings), §14 (Platform and
   projection), §15 (L26c; new L57; their detail bullets).
 - Results notes this plan argues from: `tests/lab/results/L26c-junoscript-juniper_vjunos-router.md`,
   `L26c-junoscript-juniper_vsrx.md` (2026-09-30, captures in `tests/lab/evidence/`),
@@ -91,6 +97,19 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
    `apply-groups-except` and nested groups. Positive controls enforced; close L26c and the groups
    row.
 
+## Controller rulings this plan carries (2026-10-11, pre-flight)
+
+1. **`web-management`, `extension-service` and `rest` keep failing check-config under set 1.2.0**
+   unless a lab cell measures the `junoscript` deny closing them: conservative until measured. No
+   cell measures J-Web or JET, so those two always fail; REST is G2's (Task 3).
+2. **The allowlist for statements under a template stands** (R4, decision 44 ruling 9): anything
+   neither privilege nor known-harmless fails.
+3. **Verifying the capture is inherited stands** (R5): a capture missing an applied group's
+   expansion is refused.
+4. **`op **` joins `rpc_entry_denies` only if cell (b) shows an `op url` script reaching an RPC
+   past the `junoscript` deny** (G1 reads "reached" and nothing else; the op cell's control is
+   canonical, so "not measured" ends the run INVALID instead of deciding the list).
+
 ## Rulings this plan makes (recorded as decision 44 in Task 1)
 
 Under the standing grant (security first, keep moving), each on reasoning unless it says data.
@@ -109,8 +128,8 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   dialled out under the same login), every non-RPC service (`dhcp-local-server`, `dns`, `ftp`, …),
   and the ssh option list. It keeps `web-management` and `extension-service` failing, since no
   measurement shows the deny closes J-Web or JET/gRPC, and `rest` unless cell (e) shows the deny
-  closes it. Under set 1.1.0 the allowlist is unchanged. **Reported to Ryan as the one open
-  question.**
+  closes it. Under set 1.1.0 the allowlist is unchanged. The controller ruled this conservative
+  reading on 2026-10-11 (controller ruling 1); it is no longer an open question.
 - **R4.** Template statements in three lists. The privilege list Ryan named fails, naming the
   group. The harmless list passes, on a template or from a group: a class's `idle-timeout`,
   `login-alarms` and `login-tip`, and a user's `full-name`. **Anything else under a template also
@@ -121,18 +140,43 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 - **R5.** The capture is trusted where the device expanded it, and verified where that matters
   (cell d). A group statement that lands on a template, by an `apply-groups` naming its group at
   or above that level with no `apply-groups-except` between, must appear expanded there, unless
-  the template writes that statement itself (a local leaf stands over a group's). If it does not
-  appear, the capture lacks `display inheritance`, and check-config refuses it rather than
-  passing a group it could not see applied. An excepted or unapplied group is not a finding.
-- **R6.** `--batch FILE...` names each device by its file name less its last extension
-  (`srx-01.conf` is `srx-01`; Oxidized writes the name with none). Every file is checked whatever
+  the template writes a harmless leaf of its own there (a local leaf stands over a group's). If it
+  does not appear, the capture lacks `display inheritance`, and check-config refuses it rather
+  than passing a group it could not see applied. Where the template writes a privilege or unlisted
+  statement of the same name itself (`permissions` on a `local_user_name` template), whether Junos
+  adds the group's value beside it is unmeasured, so the group is named at its own line, a
+  finding either way. An `apply-groups` at or above a template naming a group the capture does not
+  define is refused too: a capture filtered with `| except "^set groups "` hides what it brings. An
+  excepted or unapplied group is not a finding. In a group, a `<pattern>` word is read as every
+  word it matches, in check-config's services check as in the template check.
+- **R6.** `--batch FILE...` names each device by its file name as it is where the inventory has
+  that name (Oxidized writes the name with no extension, and an FQDN has dots), else by the name
+  less its last extension (`srx-01.conf` is `srx-01`). Every file is checked whatever
   one before it found. Exit 2 if any file's check was a usage or "nothing checked" outcome, else
   1 if any had a finding or could not be read, else 0.
 - **R7.** `policy diff` prints only the warnings the change brings (present after, absent before):
   every unchanged warning on every diff is noise at 3am, and `policy test` prints them all.
 - **R8.** `projection_netconf_closed` also fires for the narrow shape, whose `.*` refuses
-  `junoscript` (measured: the fail-closed reply's `.*` refused `xml-mode`, `L26c-juniper_*.md`).
-  It is a report only, so a 1.1.0 policy gains warnings, never a different reply.
+  `junoscript` (measured: the fail-closed reply's `.*` refused `xml-mode`, `L26c-juniper_*.md`),
+  and only on a platform whose pinned set carries `rpc_entry_denies`: under 1.1.0 check-config
+  requires NETCONF off on the whole device, so a per-subject "no NETCONF" there is noise on every
+  readonly. It is a report only, never a different reply. Its message names the entry denies the
+  reply carries, so a subject denied `op` by G1 is told so (R2's "reported").
+- **R9.** What the entry deny does not change (pre-flight finding 5, measured against the shipped
+  1.1.0 adapter and keyword tree with the Task 5 code applied). A composition that leaves any
+  baseline command to a deny carries baseline denies. `save **` and `xml-mode **` name no keyword
+  the tree proves, so `capability` returns `narrowOnly` before it reaches the entry deny, and the
+  readonly's baseline denies alone render 333 bytes. The realistic readonly, `show **` less `show
+  configuration **`, fails closed (`refused_shape`) in both sets. So does any readonly with a deny
+  under `show **`. The entry deny reaches the `**`-less-a-deny grants: operator and admin. The
+  remedy is three render changes, each shipped in a later set and none in scope here: (a) read
+  the baseline's `xml-mode **` as closed by the entry deny `junoscript **`, which is measured
+  (`L26c-junoscript-juniper_*.md`: Junos authorizes `xml-mode` as `junoscript`, and a deny of
+  `xml-mode` does not bind); (b) measure `save` into the keyword tree; (c) render a set's
+  `word **` denies as one factored alternative, `^ *(help|quit|…)( .*)? *(\|.*)?$`, about 103 bytes
+  for the readonly's. Even with all three, the readonly also needs view-configuration's whole
+  reach decided (its `monitor **`, `request mpls **` and the rest), or `show **` needs an allow
+  that beats the deny. Recorded as decision 44 ruling 10 and in the roadmap as carried.
 
 ## Global Constraints
 
@@ -170,7 +214,11 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 4. **A template class that writes its own `idle-timeout` under a group that sets another.** The
    device keeps the class's; check-config must not call the capture "not inherited". Test in
    Task 7 ("own leaf").
-5. **One bad file in a CI batch.** A file naming no inventory device, or one that cannot be
+5. **The entry deny's reach on the shipped set.** Unit fixtures (`measuredJunos`) prove every
+   baseline word a keyword and leave `xml-mode` out of the baseline; the shipped tree does not.
+   `TestTheShippedSetsEntryDeny` pins what 1.2.0 really does: operator `**` less a deny projects,
+   the readonly fails closed (decision 44 ruling 10).
+6. **One bad file in a CI batch.** A file naming no inventory device, or one that cannot be
    read, must be reported and must not stop the other files or turn the run green. Test in
    Task 8 (`TestCheckConfigBatch`).
 
@@ -222,6 +270,13 @@ on the device. A subject whose reply carries no such deny keeps them: an automat
 granted everything its bits reach, say. Over NETCONF a native RPC is bounded by the bits alone, so
 no subject has both a deny beneath its bits and NETCONF.
 
+This reaches only a composition whose grant holds every command the baseline runs, a `**` grant
+less some denies. Any other carries baseline denies: `save **` and `xml-mode **` among them name
+no keyword the set's tree proves, which leaves the composition to the narrow shape, and a
+readonly's baseline denies render 333 bytes on their own. So a readonly granted `show **` less
+`show configuration **` gets the fail-closed reply under set 1.2.0 as under 1.1.0 (decision 44
+ruling 10).
+
 Where the reply must send an allow that meets an entry deny, the allow would beat it (L11), so the
 entry is not closed. The composition then falls to the narrow shape, whose `.*` refuses every
 entry point, or to the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
@@ -251,6 +306,17 @@ configuration **` out of `view` is measured on the CLI only. `start` is never de
 need `start shell` and the bits already refuse it.
 ```
 
+- [ ] **Step 1b: The adapter key in §8's Fields table.** Add a row after `local_user_names`:
+
+```markdown
+| `rpc_entry_denies` | on a projected platform, the denies a reply adds where a wire deny is the only guard beneath a sent bit or the baseline, closing the CLI's ways into a native RPC for that session (decision 44). Set 1.2.0's `juniper_junos` carries `["junoscript **"]`. Each is words and a trailing `**`. A block may drop one, and the platform then renders as set 1.1.0 does; it may never add one the set did not measure | optional |
+```
+
+  In the `command_projection` row's list of keys refused where the pinned set does not project
+  the platform (`` `command_projection`, `bits`, `carve_outs`, `bit_delivery` or
+  `local_user_names` ``), add `rpc_entry_denies`; likewise in the list of the same keys at spec line ~5906
+  (`` `command_projection`, `bits`, `bit_delivery`, `carve_outs` and `local_user_names` ``).
+
 - [ ] **Step 2: Replace §12's check-config paragraph's projected part.** In the paragraph beginning
   `**`port49 devices check-config`**`, replace from `On a projected platform it also reads the
   configuration,` through `the uid Junos assigns aside (§8).` with:
@@ -275,21 +341,25 @@ on this device gets it`. It fails too where it adds anything not known harmless.
 The check trusts the inherited capture's expanded lines (L57) and verifies them where it matters.
 Take a group the configuration applies to a template, by an `apply-groups` naming it at or above
 that level with no `apply-groups-except` between. If the capture does not carry its statement
-there, and the template does not write that statement itself, the capture was taken without
-`display inheritance`, and the check refuses it. A capture taken with the earlier `| except "^set
-groups "` still reads, its groups unnamed.
+there, and the template does not write a harmless leaf of that name itself, the capture was taken
+without `display inheritance`, and the check refuses it. Where the template writes a privilege or
+unlisted statement of that name itself, the group is named at its own line. A capture that
+applies a group at or above a template without carrying the group's definition, as one taken
+with the earlier `| except "^set groups "` does where it prints `apply-groups`, is refused. In a
+group's statement a `<pattern>` word is read as every word it matches, in the services check too.
 
 `--batch FILE...` checks many captures in one run, the CI form (decision 44 ruling 8). Each file
-is checked against the inventory device its file name names, the name with its last extension
-removed (`srx-01.conf` is `srx-01`). Every file is checked whatever one before it found. The run
-exits 1 when any file has a finding or cannot be read.
+is checked against the inventory device its file name names: the name as it is where the
+inventory has it (Oxidized's files, an FQDN), else the name with its last extension removed
+(`srx-01.conf` is `srx-01`). Every file is checked whatever one before it found. The run exits 1
+when any file has a finding or cannot be read.
 ```
 
 - [ ] **Step 3: Add the two codes to §12's projection codes table**, after the
   `projection_argument_allow` row:
 
 ```markdown
-| `projection_netconf_closed` | a composition whose Junos reply refuses `junoscript`: set 1.2.0's entry deny beneath a deny, or the narrow shape's `.*`. The subject has no NETCONF, `xml-mode` or XML API session on those devices (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
+| `projection_netconf_closed` | on a platform whose pinned set carries `rpc_entry_denies`, a composition whose Junos reply refuses `junoscript`: the entry deny beneath a deny, or the narrow shape's `.*`. The subject has no NETCONF, `xml-mode` or XML API session on those devices (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
 | `projection_deny_beneath_view_configuration` | a sent deny that meets `show configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but the bit is what grants the configuration; withhold the bit instead (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
 ```
 
@@ -299,7 +369,7 @@ exits 1 when any file has a finding or cannot be read.
 ```markdown
 **44. Junos: a per-user `junoscript` deny, and check-config reads configuration groups.**
 *Plan 9b1, 2026-10-11, on Ryan's rulings of that day.* Rulings rest on reasoning unless they say
-data. Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's Task 9 closes it; ruling 5 is
+data. Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's Task 9 closes it; ruling 7 is
 provisional on L57.
 
 - **1. The entry deny** (data: `tests/lab/results/L26c-junoscript-juniper_*.md`). Take a
@@ -333,27 +403,40 @@ provisional on L57.
   it fails: a group statement whose path, wildcards read as Junos reads them, equals the line.
   Take a group the configuration applies to a template: an `apply-groups` naming it at or above
   the template's level, with no `apply-groups-except` naming it at or below that level. If the
-  template does not write that statement itself and the capture does not carry its statement
-  there, the capture is refused as not inherited. A group applied from inside another group's
-  definition is read as applied at the top (conservative), unless L57 shows Junos does not
-  expand it. Neither `apply-groups` nor `apply-groups-except` is itself a finding.
-- **8. Batch.** `--batch FILE...`, the device named by the file name less its last extension.
-  Every file is checked. Exit 2 if any file's outcome was a usage or "nothing checked" one, else
-  1 if any had a finding or could not be read.
+  template does not write a harmless leaf of that name itself and the capture does not carry its
+  statement there, the capture is refused as not inherited; where the template writes a privilege
+  or unlisted statement of that name, the group is named at its own line. An `apply-groups`
+  reaching a template whose group the capture does not define is refused. A group applied from
+  inside another group's definition is read as applied at the top (conservative), unless L57
+  shows Junos does not expand it. Neither `apply-groups` nor `apply-groups-except` is itself a
+  finding. In a group a `<pattern>` word is read as every word it matches.
+- **8. Batch.** `--batch FILE...`, the device named by the file name where the inventory has it,
+  else by the name less its last extension. Every file is checked. Exit 2 if any file's outcome
+  was a usage or "nothing checked" one, else 1 if any had a finding or could not be read.
 - **9. Unlisted statements fail.** Under a template, a statement on neither ruling 7's privilege
   list nor its harmless list fails, from a group or written there. `allow-hidden-commands`,
   `login-script`, `logical-system`, `tenant` and `security-role` change what a session runs, and
   an allowlist does not fail open on a statement nobody listed (plan 5b pre-flight C1).
+- **10. What the entry deny does not reach** (plan 9b1 pre-flight, measured against the shipped
+  adapter). A composition that leaves a baseline command to a deny carries baseline denies;
+  `save **` and `xml-mode **` name no keyword set 1.2.0's tree proves, and a readonly's baseline
+  denies render 333 bytes alone. So a readonly granted `show **` less `show configuration **`
+  gets the fail-closed reply under 1.2.0 as under 1.1.0, and ruling 4's view-configuration
+  warning reaches only a grant that holds every baseline command. The remedy is a later set:
+  the baseline's `xml-mode` read as closed by the entry deny (measured, L26c-junoscript), `save`
+  measured into the tree, and one factored alternative for a set's `word **` denies.
 ```
 
 - [ ] **Step 5: Add two §14 bullets** under **Platform and projection**, after "Projection shape
   selection":
 
 ```markdown
-- **The entry deny** (decision 44): under set 1.2.0 a readonly denying `show configuration **`
-  renders the capability shape with `junoscript` in `deny-commands`; the device refuses `show
-  configuration`, `xml-mode netconf` and that user's NETCONF on port 830, while a subject with no
-  deny beneath its bits opens NETCONF; under set 1.1.0 the same policy renders as before.
+- **The entry deny** (decision 44): under set 1.2.0 an operator granted `**` less `show
+  configuration **` renders the capability shape with `junoscript` in `deny-commands`; the device
+  refuses `show configuration`, `xml-mode netconf` and that user's NETCONF on port 830, while a
+  subject with no deny beneath its bits opens NETCONF; under set 1.1.0 the same policy fails
+  closed as before. A readonly granted `show **` less `show configuration **` fails closed under
+  both sets (ruling 10).
 - **check-config reads groups** (decision 44): a group adding `permissions` to `p49-remote` fails
   naming the group; a group adding `login-tip` passes; a capture without `display inheritance`
   from a device applying a group to a template is refused; `--batch` checks every file.
@@ -378,7 +461,7 @@ Beside it: whether a deny naming the entry points binds, with their abbreviation
 - [ ] **Step 7: Add L57's row** after L56's:
 
 ```markdown
-| **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's. And whether a TACACS+ session landing in `remote` holds what a group added (`show cli authorization`). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
+| **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's; whether a group's `permissions` is added beside a class's own (a leaf-list). And whether a TACACS+ session landing in `remote` holds what a group added (`show cli authorization`). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
 ```
 
 - [ ] **Step 8: Add L57's detail bullet** after the L26c detail bullet (the one ending `…so a
@@ -430,8 +513,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 The seeded login pool is 16 per platform per `go test` process (`tokenPoolSize`), so each test
 runs in its own invocation (Task 3). `TestL26cEntryNetconf` uses 12 (four per class: the CLI
-session, port 830, port 22, the exec channel). `TestL26cEntryScripts` uses 14 (W, V and C: the CLI
-session, REST's tunnel and request, scp; Vw: the login and scp).
+session, port 830, port 22, the exec channel). `TestL26cEntryScripts` uses 11 (W, V and C: the CLI
+session, REST's request, scp; Vw: the login and scp); REST's tunnel and scp's harness control are
+break-glass's.
 
 - [ ] **Step 1: Write the failing unit tests** (`tests/lab/junos_entry_unit_test.go`):
 
@@ -473,6 +557,16 @@ func TestEntryVerdict(t *testing.T) {
 	runs["W"] = jsdRun(map[string]string{p830: "hello"})
 	if r, _ := entryVerdict(runs, []string{"W"}, "C", nil, []string{p830}); r["W "+p830] != "reached" {
 		t.Errorf("W reached: %v", r)
+	}
+	// A token the device refused, or a cell not observed, says nothing about
+	// the deny: never "deny", even where C reached (G2 must not drop a
+	// service on a spent token).
+	runs["C"] = jsdRun(map[string]string{p830: "hello"})
+	for _, cell := range []string{"login refused", "not observed"} {
+		runs["W"] = jsdRun(map[string]string{p830: cell})
+		if r, _ := entryVerdict(runs, []string{"W"}, "C", nil, []string{p830}); r["W "+p830] != "not observed" {
+			t.Errorf("W %s: %v", cell, r)
+		}
 	}
 }
 
@@ -577,13 +671,17 @@ func jsonEscape(s string) string { return strings.ReplaceAll(s, `\`, `\\`) }
 // entryVerdict reads each deny class's cell against the control: "deny"
 // where the class was refused and the control reached the probe; "runs
 // nowhere" where the control was refused too; "reached" where the class
-// reached it. unisolated lists each canonical probe the control did not
-// reach: the run cannot say the deny closed it, and the run fails.
+// reached it; "not observed" where the class's token was refused or its cell
+// was not observed, which says nothing about the deny. unisolated lists each
+// canonical probe the control did not reach: the run cannot say the deny
+// closed it, and the run fails.
 func entryVerdict(runs map[string]l26cRun, deny []string, control string, canonical, probes []string) (
 	map[string]string, []string) {
 	readings := map[string]string{}
 	var unisolated []string
-	reached := func(c string) bool { return l26cReached(c) || c == "ran" || c == "file read" || strings.HasPrefix(c, "version") }
+	reached := func(c string) bool {
+		return l26cReached(c) || c == "ran" || c == "file read" || strings.HasPrefix(c, "version")
+	}
 	for _, p := range probes {
 		cc := runs[control].cells[p]
 		if slices.Contains(canonical, p) && !reached(cc) {
@@ -597,6 +695,8 @@ func entryVerdict(runs map[string]l26cRun, deny []string, control string, canoni
 			switch {
 			case reached(cell):
 				readings[cls+" "+p] = "reached"
+			case cell == "login refused" || cell == "not observed":
+				readings[cls+" "+p] = "not observed"
 			case reached(cc):
 				readings[cls+" "+p] = "deny"
 			default:
@@ -612,9 +712,12 @@ var entryProbes = []string{"show configuration system host-name", "entry: xml-mo
 	"xml-mode netconf need-trailer: get-configuration", "port 830", "port 830: get-configuration",
 	"port 22 subsystem", "port 22 subsystem: get-configuration", "exec channel", "exec channel: get-configuration"}
 
-// entryCanonical are the probes the control must reach, or the run is INVALID.
+// entryCanonical are the probes the control must reach, or the run is INVALID:
+// every way in the L26c claim names, so none closes the row unmeasured. If the
+// exec channel cannot be made to reach under C after a harness fix, STOP and
+// report: the claim is then narrowed, never closed past it.
 var entryCanonical = []string{"show configuration system host-name", "entry: xml-mode netconf need-trailer",
-	"port 830"}
+	"port 830", "port 22 subsystem", "exec channel"}
 
 const getConfigHost = "<get-configuration><configuration><system><host-name/></system></configuration></get-configuration>"
 
@@ -930,14 +1033,14 @@ func scpRead(c *ssh.Client, path string) (int64, error) {
 
 // entryREST asks the REST API for the configuration's host name, through an
 // SSH connection's direct-tcpip channel to 127.0.0.1:3000 inside the VM (so no
-// port needs forwarding through vrnetlab), with a second token as basic auth.
-// The tunnel is the class's own login, one token; the request is another,
-// since REST authenticates each request (L15).
+// port needs forwarding through vrnetlab), with a token as basic auth. The
+// tunnel is break-glass's: who carries the TCP stream says nothing about the
+// request, and a token spent on it is one fewer for the cells. The request is
+// the class's token, since REST authenticates each request (L15).
 func (l *lab) entryREST(t *testing.T, r l26cRun) {
 	t.Helper()
 	const key = "rest: get-configuration"
-	tu, ts := l.nextLogin(t)
-	tunnel, err := l.dialHostPort(tu, ts, l.p.addr+":22", 60*time.Second)
+	tunnel, err := l.dialHostPort(breakglassUser, breakglassPassword, l.p.addr+":22", 60*time.Second)
 	if err != nil {
 		r.cells[key], r.outs[key] = "not observed", "the tunnel's login: "+oneLine(err.Error())
 		return
@@ -971,7 +1074,9 @@ func (l *lab) entryREST(t *testing.T, r l26cRun) {
 
 // isTokenRejected reports a 401 whose body says the credential was refused,
 // which says nothing about the deny.
-func isTokenRejected(body string) bool { return strings.Contains(strings.ToLower(body), "authentication") }
+func isTokenRejected(body string) bool {
+	return strings.Contains(strings.ToLower(body), "authentication")
+}
 
 var scriptProbes = []string{"op url: script", "rest: get-configuration", "scp /config/juniper.conf.gz"}
 
@@ -1010,6 +1115,18 @@ func TestL26cEntryScripts(t *testing.T) {
 		bg.sendExpect("printf '%s\\n' "+strings.Join(quoted, " ")+" > "+junosEntryOpPath, junosPer, "$ ", "% ")
 		bg.sendExpect("exit", junosPer, junosOpPrompt)
 		bg.Close()
+		// scp's harness control: break-glass reads the file, or a "refused"
+		// in every class could be scpRead's own fault.
+		if bgc, err := l.dialHostPort(breakglassUser, breakglassPassword, l.p.addr+":22", 60*time.Second); err != nil {
+			t.Fatalf("INVALID: no break-glass SSH for scp's control: %v", err)
+		} else {
+			n, err := scpRead(bgc, "/config/juniper.conf.gz")
+			bgc.Close()
+			if scpCell(n, err) != "file read" {
+				t.Fatalf("INVALID: break-glass could not scp /config/juniper.conf.gz (%d bytes, %v): the harness "+
+					"cannot read a file, so no class's refusal says anything", n, err)
+			}
+		}
 
 		runs := map[string]l26cRun{}
 		classes := append(slices.Clone(junosEntryVariants),
@@ -1051,6 +1168,11 @@ func TestL26cEntryScripts(t *testing.T) {
 		readings, unisolated := entryVerdict(runs, []string{"W", "V", "Vw"}, "C", canonical, scriptProbes)
 		if len(unisolated) > 0 {
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))
+		}
+		// G1 is decided by data alone (controller ruling 4): W's op cell is a
+		// deny or a reach, or nothing is written.
+		if v := readings["W op url: script"]; v != "deny" && v != "reached" {
+			t.Fatalf("INVALID: W's op url cell reads %q, so G1 is undecided; no note is written", v)
 		}
 		if runs["Vw"].cells["scp /config/juniper.conf.gz"] == "file read" {
 			t.Errorf("STOP: a class with `view` alone read the configuration file over scp: report to the controller")
@@ -1111,6 +1233,10 @@ var junosGroupsLines = []string{
 	"set groups p49g-excepted system login class <*> permissions clear",
 	"set groups p49g-unapplied system login class <*> permissions all",
 	"set groups p49g-timeout system login class <*> idle-timeout 30",
+	// A class that writes its own permissions, under p49g-perm's <p49-*>:
+	// whether Junos adds a group's leaf-list value beside a local one, as a
+	// local_user_name template would meet it (pre-flight, R5).
+	"set system login class p49-l57own permissions view",
 	"set apply-groups p49g-tip",
 	"set apply-groups p49g-perm",
 	"set apply-groups p49g-excepted",
@@ -1132,6 +1258,7 @@ var junosGroupsDelete = []string{
 	"delete system login class p49-remote apply-groups-except",
 	"delete groups p49g-tip", "delete groups p49g-perm", "delete groups p49g-excepted", "delete groups p49g-unapplied",
 	"delete groups p49g-timeout", "delete groups p49g-outer", "delete groups p49g-inner",
+	"delete system login class p49-l57own",
 }
 
 // l57Reading is what one capture says about p49-remote.
@@ -1140,6 +1267,7 @@ type l57Reading struct {
 	applyLines, groupLines      bool     // `set apply-groups` and `set groups` lines printed
 	tip, perm, excepted, nested bool     // each group's statement expanded under p49-remote
 	ownTimeout                  bool     // idle-timeout is the reference's 720, not the group's 30
+	ownPerm                     bool     // p49g-perm's view-configuration beside p49-l57own's own view
 }
 
 func l57Readings(capture string) l57Reading {
@@ -1159,6 +1287,8 @@ func l57Readings(capture string) l57Reading {
 			r.excepted = r.excepted || rest == "permissions clear"
 			r.nested = r.nested || rest == "permissions network"
 			r.ownTimeout = r.ownTimeout || rest == "idle-timeout 720"
+		case ln == "set system login class p49-l57own permissions view-configuration":
+			r.ownPerm = true
 		}
 	}
 	return r
@@ -1208,11 +1338,16 @@ func TestL57JunosGroups(t *testing.T) {
 			caps[cmd] = redactConfigCapture(labcreds.RedactNote(out))
 		}
 		bg.Close()
-		inherited := l57Readings(caps[l57Captures[0]])
 		// Positive control: p49g-tip has no wildcard but <*>, is applied at the
-		// top, and nothing excepts it. If the inherited capture lacks it, the
-		// groups did not apply, and nothing below says anything.
-		if !inherited.tip && !l57Readings(caps[l57Captures[1]]).tip {
+		// top, and nothing excepts it. If neither inherited capture carries it,
+		// the groups did not apply, and nothing below says anything. The
+		// fixture is the first inherited form that does: the one Task 7's
+		// ConfigCapture becomes.
+		inheritedForm := l57Captures[0]
+		if !l57Readings(caps[inheritedForm]).tip {
+			inheritedForm = l57Captures[1]
+		}
+		if !l57Readings(caps[inheritedForm]).tip {
 			t.Fatalf("INVALID: neither inherited form shows p49g-tip's login-tip under p49-remote; no note is written")
 		}
 		// A session landing in remote: what a group added, the session holds.
@@ -1225,11 +1360,12 @@ func TestL57JunosGroups(t *testing.T) {
 			commitWord(commit), commitWord(nestedCommit), strings.Join(junosGroupsLines, "\n"),
 			strings.Join(junosGroupsNested, "\n"))
 		b.WriteString("| capture | apply-groups lines | set groups lines | p49g-tip | p49g-perm | p49g-excepted | " +
-			"nested | own idle-timeout 720 |\n|---|---|---|---|---|---|---|---|\n")
+			"nested | own idle-timeout 720 | group permission beside own |\n|---|---|---|---|---|---|---|---|---|\n")
 		for _, cmd := range l57Captures {
 			r := l57Readings(caps[cmd])
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), yesNo(r.applyLines),
-				yesNo(r.groupLines), yesNo(r.tip), yesNo(r.perm), yesNo(r.excepted), yesNo(r.nested), yesNo(r.ownTimeout))
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), yesNo(r.applyLines),
+				yesNo(r.groupLines), yesNo(r.tip), yesNo(r.perm), yesNo(r.excepted), yesNo(r.nested), yesNo(r.ownTimeout),
+				yesNo(r.ownPerm))
 		}
 		fmt.Fprintf(&b, "\nA token session with no reply attributes (lands in `remote`), `show cli authorization`:\n\n```\n%s\n```\n",
 			strings.TrimSpace(run.auth))
@@ -1240,7 +1376,7 @@ func TestL57JunosGroups(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(fixture), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(fixture, []byte(caps[l57Captures[0]]), 0o644); err != nil {
+		if err := os.WriteFile(fixture, []byte(caps[inheritedForm]), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		l.result(t, "L57", "What a Junos configuration capture carries for configuration groups that reach port49's "+
@@ -1316,16 +1452,27 @@ no note: fix the harness (a control that cannot reach is a harness or image faul
 `STOP:` failure: stop and report to the controller with the note's table; do not start Task 4.
 
 - [ ] **Step 2: Read the gates** from `tests/lab/results/L26c-scripts-juniper_*.md`, "Gates":
-  - **G1:** if either image says `op` "goes on set 1.2.0's list", or either says "not measured",
-    Task 4's list is `["junoscript **", "op **"]`; otherwise `["junoscript **"]`.
-  - **G2:** if both images say REST is "closed by the junoscript deny", Task 7 drops `rest`
-    from `rpcPastEntryDeny`; otherwise it stays.
+  - **G1** (controller ruling 4): if either image says `op` "goes on set 1.2.0's list" (W
+    reached an RPC through `op url`), Task 4's list is `["junoscript **", "op **"]`; otherwise
+    `["junoscript **"]`. The run cannot end with the op cell undecided: that is INVALID.
+  - **G2** (controller ruling 1): if both images say REST is "closed by the junoscript deny",
+    Task 7 drops `rest` from `rpcPastEntryDeny`; otherwise, "not measured" included, it stays.
   - From `L57-juniper_*.md`: which inherited form shows `p49g-tip` (if only `| display
     inheritance | display set` does, Task 7's `ConfigCapture` is that order); whether nesting
     committed and was expanded (if it committed and `nested` is "no" in the inherited forms, Task
     7 sets `nestedApplies = false`); whether `p49g-excepted` is absent under p49-remote (if it
     is present, Junos ignores the except, and Task 7's `appliesAt` must not honour
     `apply-groups-except`; report that to the controller).
+  - From the same notes: whether the inherited form prints `set apply-groups` lines. Task 7
+    reads where a group applies from them. If the inherited form prints none, STOP and report to
+    the controller before Task 7: naming the group behind an expanded line then needs another
+    reading (the group statements whose path matches it), and an `apply-groups` line becomes
+    itself the sign of a capture taken without `display inheritance`.
+  - "group permission beside own": if `yes`, Junos adds a group's `permissions` beside a class's
+    own, and Task 7's naming of such a group at its own line is what the device does; if `no`,
+    the local leaf-list stands, and the finding is still kept (Ryan's ruling names a group that
+    adds a permission to a template whether or not the template's own value wins today). Record
+    which in the roadmap's as-built.
 
 - [ ] **Step 3: Write the gated words into the spec.** In decision 44 ruling 2 replace "If an
   `op url` script reaches … `["junoscript **", "op **"]`." with the measured sentence (e.g.
@@ -1582,7 +1729,13 @@ cp platforms/keywords/1.1.0/juniper_junos.yaml platforms/keywords/1.2.0/
 Run: `go test ./internal/platform/ ./internal/policy/ -run 'Set120|RPCEntryDenies|EntryDenyNotAddOne' -count=1 && make test`
 Expected: the three PASS. In `make test`, a test that read `DefaultSet` and asserted a value only
 1.1.0 has now fails: pin it to `1.1.0` explicitly (`--set 1.1.0`, `platform.Set("1.1.0")`), never
-loosen the assertion. Repeat until `make test` passes.
+loosen the assertion. Three in `internal/platform/adapter_test.go` are the frozen-set guards and
+take an entry, not a pin: add `shipped120` (`shipped110` with `juniper_junos.RPCEntryDenies =
+[]string{"junoscript **"}`, plus `op **` where G1 put it there, built as `shipped110` is) and put
+it in `released` as `"1.2.0"`; add `"1.2.0"` to `releasedGeneric` (the same value as 1.1.0's);
+point `TestTheDefaultSetValueForValue` at `shipped120`. `released["1.1.0"]` stays as it is: that
+it still passes is the proof 1.1.0 was not edited. `TestSpecOfRoundTrips` counts Dialect fields
+against Spec keys; both gain one. Repeat until `make test` passes.
 
 - [ ] **Step 7: Commit**
 
@@ -1669,12 +1822,30 @@ func TestAnEntryDenyClosesRPCBeneathADeny(t *testing.T) {
 }
 
 // An allow the reply must send that meets an entry deny beats it on the device
-// (L11): the entry is not closed, and the answer is set 1.1.0's.
+// (L11): the entry is not closed, and the answer is set 1.1.0's. The grant
+// holds every baseline word but `op`, so its only baseline deny is `op **`
+// and the reply fits; `op url **` beneath that deny goes out as an allow. With
+// `op **` on the entry list the allow meets it and the composition falls back;
+// with `junoscript **` alone it keeps the capability shape (pre-flight: the
+// earlier form of this test passed with the allow check removed).
 func TestAnAllowMeetingTheEntryDenyKeepsTheFallback(t *testing.T) {
-	in := entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, permit("show **"),
-		permit("clear **"), deny("op **"), permit("op url **")), "op **")
-	in.Keywords = keywordTree(append(reachOf(in.Dialect), "op url **")...)
-	res, err := Project(in)
+	rules := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **"),
+		permit("op url **"), deny("show configuration **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "save", "scp", "ping", "traceroute", "ssh",
+		"telnet", "mtrace", "probe", "monitor"} {
+		rules = append(rules, permit(w+" **"))
+	}
+	in := func(denies ...string) Input {
+		in := entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, rules...), denies...)
+		in.Keywords = keywordTree(append(reachOf(in.Dialect), "op url **")...)
+		return in
+	}
+	res, err := Project(in("junoscript **"))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() ||
+		!slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == "op url **" }) {
+		t.Fatalf("the control: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(in("junoscript **", "op **"))
 	if err != nil || res.EntryDenied() || res.Shape == ShapeCapability {
 		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
@@ -1682,17 +1853,20 @@ func TestAnAllowMeetingTheEntryDenyKeepsTheFallback(t *testing.T) {
 
 // The entry deny counts toward RFC 8907's 255 bytes: a capability shape it
 // pushes over is never sent truncated. Eight keyword denies under `show **`
-// render about 251 bytes of deny-commands, and the entry deny's alternative
-// about 28 more; the narrow shape cannot carry a deny beneath `show **`, so
-// the subject gets the fail-closed reply as an overflow (spec §8, "Generator
-// constraints"). If the rendered lengths differ from this arithmetic, choose
-// the count where the reply fits without the entry deny and not with it.
+// render 251 bytes of deny-commands, and the entry deny's alternative 28
+// more (measured in pre-flight; `measured`'s case classes would render 473);
+// the narrow shape cannot carry a deny beneath `show **`, so the subject gets
+// the fail-closed reply as an overflow (spec §8, "Generator constraints").
 func TestTheEntryDenyCountsTowardTheBudget(t *testing.T) {
 	rules := []engine.Rule{permit("show **")}
 	for _, w := range strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel") {
 		rules = append(rules, deny("show "+w+" **"))
 	}
-	fits, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
+	// JunosFacts with a binding deny: the same rendering (lower-case words),
+	// and no entry deny, so the arithmetic compares like with like.
+	binding := JunosFacts
+	binding.DenyBindsRPCs = true
+	fits, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", binding, rules...))
 	if err != nil || fits.Shape != ShapeCapability {
 		t.Fatalf("without the entry deny the reply fits: %s %+v %v", fits.Shape, fits.Refusal, err)
 	}
@@ -1730,6 +1904,34 @@ func TestADenyBeneathViewConfigurationIsReported(t *testing.T) {
 	}
 }
 
+// What set 1.2.0's entry deny changes, read from the shipped adapter and
+// keyword tree, not a fixture (pre-flight finding 5; decision 44 ruling 10):
+// an operator granted everything but `show configuration` gets the capability
+// shape with the entry deny and the view-configuration warning's rule; a
+// readonly granted `show **` less the same deny still fails closed, its
+// baseline denies (`save **`, `xml-mode **` unproven) leaving it to the
+// narrow shape, which cannot carry a deny beneath `show **`.
+func TestTheShippedSetsEntryDeny(t *testing.T) {
+	set, ok := platform.Set("1.2.0")
+	if !ok {
+		t.Fatal("no set 1.2.0")
+	}
+	d := set["juniper_junos"]
+	in := func(level string, rules ...engine.Rule) Input {
+		return Input{Platform: "juniper_junos", Dialect: d, Level: level, Bits: d.CeilingBits[level], Rules: rules,
+			Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: JunosFacts,
+			Keywords: platform.KeywordsFor("1.2.0", "juniper_junos")}
+	}
+	res, err := Project(in("operator", permit("**"), deny("show configuration **")))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 {
+		t.Fatalf("operator: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(in("readonly", permit("show **"), deny("show configuration **")))
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("readonly: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
 // junoscript is an RPC entry a narrow allow may not open (decision 44 ruling 3).
 func TestJunoscriptIsAnRPCEntry(t *testing.T) {
 	g := newGenerator(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts), nil)
@@ -1757,7 +1959,7 @@ func TestJunoscriptIsAnRPCEntry(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/projection/ -run 'EntryDeny|TheEntryDeny|BeneathViewConfiguration|JunoscriptIsAnRPCEntry|RPCReachRefusal' -count=1`
+Run: `go test ./internal/projection/ -run 'EntryDeny|TheEntryDeny|BeneathViewConfiguration|JunoscriptIsAnRPCEntry|RPCReachRefusal|ShippedSets' -count=1`
 Expected: FAIL (`EntryDenied` undefined).
 
 - [ ] **Step 3: Implement.** In `Result`, after `Unsent`:
@@ -1770,7 +1972,9 @@ Expected: FAIL (`EntryDenied` undefined).
 	ConfigurationBeneath []engine.Rule
 ```
 
-  In `Clone`: `r.ConfigurationBeneath = slices.Clone(r.ConfigurationBeneath)`. After `Clone`:
+  In `Clone`: `r.ConfigurationBeneath = slices.Clone(r.ConfigurationBeneath)`, and in
+  `project_test.go`'s `TestCloneCopiesEverySlice` add `ConfigurationBeneath: []engine.Rule{r}` to
+  `fresh()` (it fails on any slice field it does not set). After `Clone`:
 
 ```go
 // EntryDenied reports whether the reply carries the adapter's RPC entry denies
@@ -1858,7 +2062,11 @@ func (g generator) configurationBeneath(res Result) []engine.Rule {
 ```
 
   `rpcEntries` becomes `[]string{"xml-mode", "junoscript", "op"}`, its comment adding that Junos
-  authorizes `xml-mode` as `junoscript` (L26c-junoscript-juniper_*.md). `rpcWhy` becomes:
+  authorizes `xml-mode` as `junoscript` (L26c-junoscript-juniper_*.md). This touches every set,
+  and spec §8 says a binary upgrade changes no pinned render: under 1.1.0 no reply can carry an
+  allow of `junoscript`, since only `all` reaches it and a reply with an allow never keeps `all`
+  (it enters configuration mode, and render drops it), so nothing 1.1.0 renders moves; Task 4's
+  frozen-set tests and every 1.1.0-pinned test passing unchanged is the check. `rpcWhy` becomes:
 
 ```go
 // rpcWhy is why a wire deny is no boundary on a device it binds no RPC on,
@@ -1908,7 +2116,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `internal/policy/diff.go` (`Diff` after `ProjectionRefusals`, line 70; `Compare`
   ~line 446)
 - Modify: `cmd/port49/policy.go` (`policyDiff`, after the `d.Projections` loop, line ~596)
-- Test: `internal/policy/projection_test.go`
+- Test: `internal/policy/projection_test.go`, `cmd/port49/policy_test.go`
 
 **Interfaces:**
 - Consumes: `projection.Result.NetconfClosed`, `EntryDenied`, `ConfigurationBeneath` (Task 5).
@@ -2011,7 +2219,9 @@ func projectionNote(kind string) bool {
   In `Projections`, after the `for _, u := range pr.Unsent` loop:
 
 ```go
-				if pr.NetconfClosed() {
+				// Only where the pinned set lets NETCONF stay on (R8): under
+				// 1.1.0 check-config has it off on the whole device.
+				if pr.NetconfClosed() && len(p.dialect(d.Platform).RPCEntryDenies) > 0 {
 					reports[i] = append(reports[i], item{FindingProjectionNetconfClosed, netconfClosedMessage(*pr)})
 				}
 				if len(pr.ConfigurationBeneath) > 0 {
@@ -2027,7 +2237,15 @@ func projectionNote(kind string) bool {
 // netconfClosedMessage is a projection_netconf_closed warning after its
 // subject and platform.
 func netconfClosedMessage(pr projection.Result) string {
-	how := "the reply denies `junoscript`"
+	var entry []string
+	for _, d := range pr.Denies {
+		if d.Role == platform.RPCEntryRole {
+			entry = append(entry, "`"+d.Rule+"`")
+		}
+	}
+	// Each entry deny is named, `op **` included where the set carries it:
+	// a subject denied `op` that port49 permits is told so (R2).
+	how := "the reply adds deny " + strings.Join(entry, " and ")
 	if pr.Shape == projection.ShapeNarrow {
 		how = "the narrow reply's `deny-commands .*` refuses `junoscript`"
 	}
@@ -2091,6 +2309,12 @@ func configurationBeneathMessage(pr projection.Result, patterns []platform.Redac
 	}
 ```
 
+  In `cmd/port49/policy_test.go`, beside the existing `policy diff` tests, add an assertion that
+  a diff bringing an entry-deny warning prints a `warning: projection_netconf_closed:` line and
+  still exits 0. The policy pins `1.2.0` (the shipped set, after Task 4) with an operator role
+  granted `["**"]` less `["show configuration **"]` over a `juniper_junos` device, against the
+  same file without the deny; copy the env setup of a `policyDiff` test there.
+
 - [ ] **Step 4: Run**
 
 Run: `go test ./internal/policy/ ./cmd/port49/ -count=1`
@@ -2099,7 +2323,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/policy cmd/port49/policy.go
+git add internal/policy cmd/port49/policy.go cmd/port49/policy_test.go
 git commit -m "feat: projection_netconf_closed and deny-beneath-view-configuration warnings
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -2287,7 +2511,9 @@ Expected: FAIL to compile (`ConfigCapture`, `NetconfForbidden` undefined).
 // configuration in: set form, groups' statements expanded where they apply,
 // and the group definitions kept, so what a group brings is read where it
 // lands and named by its group (decision 44 ruling 7; L57). A capture taken
-// with the earlier `| except "^set groups "` still reads, its groups unnamed.
+// with the earlier `| except "^set groups "` still reads where it applies no
+// group to a template; where it does, the definition is missing and
+// TemplateDrift refuses it.
 const ConfigCapture = `show configuration | display set | display inheritance`
 
 // rpcPastEntryDeny are the services that run RPCs and that no measurement
@@ -2307,22 +2533,30 @@ const entrySays = "a management service that runs RPCs is enabled, and the reply
   (G2: if both images measured REST closed, `rpcPastEntryDeny` is
   `[]string{"web-management", "extension-service"}`.)
 
-  In `CheckServices`: delete the `groups` refusal and the `apply-groups` refusal; strip a leading
-  `groups NAME` with the logical systems:
+  In `CheckServices`: delete the `groups` refusal and the `apply-groups` refusal. Strip a leading
+  `groups NAME` with the logical systems, and read a group's `<pattern>` word as every word it
+  matches (decision 44 ruling 7): a plain capture of `set groups g system <s*> netconf ssh`, or
+  under 1.2.0 `set groups g system services <r*> http`, applied at the top, is otherwise read as
+  nothing while the device runs the service (pre-flight, measured against this code). The reading
+  is held to the levels a service sits at (`services X`, `system X`, `system services X`), so
+  `set groups g interfaces <*> unit 0` stays clean:
 
 ```go
+		inGroup := false
 		for len(path) > 2 && (path[0].keyword("groups") || path[0].keyword("logical-systems") ||
 			path[0].keyword("tenants")) {
+			inGroup = inGroup || path[0].keyword("groups")
 			path = path[2:]
 		}
-```
-
-  and the finding:
-
-```go
+		// In a group a `<pattern>` word stands for every word it matches, as
+		// Junos applies it (decision 44 ruling 7): the statement is a finding
+		// where any reading of it is one, whether or not the capture expanded it.
+		is := func(w word, k string) bool {
+			return w.keyword(k) || inGroup && !w.value && strings.HasPrefix(w.text, "<") && groupWord(w.text, k)
+		}
 		entry := len(d.RPCEntryDenies) > 0
 		offList := false
-		if !entry && len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
+		if !entry && len(path) >= 3 && is(path[0], "system") && is(path[1], "services") {
 			options, ok := cliServices[path[2].text]
 			offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
 		}
@@ -2330,11 +2564,27 @@ const entrySays = "a management service that runs RPCs is enabled, and the reply
 		if entry {
 			anywhere, says = rpcPastEntryDeny, entrySays
 		}
-		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) })
+		// wild is a group's wildcard at path[i] that could be one of anywhere.
+		wild := func(i int) bool {
+			return inGroup && len(path) > i && slices.ContainsFunc(anywhere, func(k string) bool {
+				return !path[i].keyword(k) && is(path[i], k)
+			})
+		}
+		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) }) ||
+			wild(0) || len(path) > 1 && (is(path[0], "services") || is(path[0], "system")) && wild(1) ||
+			len(path) > 2 && is(path[0], "system") && is(path[1], "services") && wild(2)
 		if offList || rpcWord {
 			findings = append(findings, ConfigFinding{Line: n, Text: joinWords(trimmed), Says: says})
 		}
 ```
+
+  (`groupWord` is `classes.go`'s, Step 4.) Add to `TestCheckServicesUnderTheEntryDeny`, or a new
+  test beside it, the cases this was measured on: under set 1.1.0 `set groups g system <s*>
+  netconf ssh`, `set groups g <*> services netconf ssh`, `set groups g system services <*> http`
+  are each one finding; under the entry deny `set groups g system services <r*> http`, `set groups
+  g services <*> control` and `set groups g system <e*> application file a.py` are each one; and
+  `set groups g interfaces <*> unit 0` and `set groups g system login class <*> idle-timeout 5`
+  are none under either.
 
   Rename `ServicesCapture` to `ConfigCapture` in every reference. Rewrite `rpcServicesOff`'s and
   `CheckServices`'s comments: set 1.1.0 keeps the allowlist; set 1.2.0 reads only
@@ -2372,6 +2622,7 @@ type groupStatement struct {
 	group string
 	path  []string
 	line  int
+	text  string
 }
 
 // application is an apply-groups or apply-groups-except statement: the level
@@ -2447,6 +2698,21 @@ func groupWord(pattern, word string) bool {
 	return pattern == word
 }
 
+// groupAt reports whether a group statement's path lands under template
+// path t, each word read as Junos reads a group's (groupWord): a wildcard may
+// stand at any level, `system login <*> p49-readonly` included.
+func groupAt(p, t []string) bool {
+	if len(p) < len(t) {
+		return false
+	}
+	for i, w := range t {
+		if !groupWord(p[i], w) {
+			return false
+		}
+	}
+	return true
+}
+
 // groupSays is the finding for a template line group brings.
 func groupSays(group string, t []string, stmt string) string {
 	who := "every port49 session at that template on this device"
@@ -2480,7 +2746,13 @@ func groupSays(group string, t []string, stmt string) string {
 			inGroup := len(w) > 2 && w[0] == "groups"
 			body := w
 			if inGroup {
+				// A group may write a logical system's or tenant's login
+				// too: read under the templates as the expanded line is.
 				body = w[2:]
+				defined[w[1]] = true
+				for len(body) > 2 && (body[0] == "logical-systems" || body[0] == "tenants") {
+					body = body[2:]
+				}
 			}
 			if a := applications(body, inGroup); a != nil || slices.Contains(body, "apply-groups") ||
 				slices.Contains(body, "apply-groups-except") {
@@ -2488,7 +2760,7 @@ func groupSays(group string, t []string, stmt string) string {
 				return
 			}
 			if inGroup {
-				groups = append(groups, groupStatement{group: w[1], path: body, line: n})
+				groups = append(groups, groupStatement{group: w[1], path: body, line: n, text: line})
 				return
 			}
 			paths[strings.Join(w, " ")] = true
@@ -2502,24 +2774,39 @@ func groupSays(group string, t []string, stmt string) string {
 				if len(w) > len(t) && slices.Contains(harmlessTemplateStatements[t[2]], w[len(t)]) {
 					return
 				}
+				extraAt[strings.Join(w, " ")] = append(extraAt[strings.Join(w, " ")], len(extra))
 				extra = append(extra, ConfigFinding{Line: n, Text: line, Says: templateDriftSays})
-				extraPath = append(extraPath, strings.Join(w, " "))
 				return
 			}
 ```
 
   with, before the loop, `var groups []groupStatement; var apps []application; paths :=
-  map[string]bool{}; var extraPath []string` and `tpaths` the templates' `paths()` (the existing
-  `paths` slice renamed `tpaths`). After the form checks and before the `missing` loop:
+  map[string]bool{}; defined := map[string]bool{}; extraAt := map[string][]int{}` and `tpaths`
+  the templates' `paths()` (the existing `paths` slice renamed `tpaths`, the `deactivate` branch
+  reading `tpaths` too). `extraAt` maps a path to the indexes of its findings in `extra`: the
+  `deactivate` branch appends to `extra` as well, so a parallel slice of paths would misalign.
+  After the form checks and before the `missing` loop:
 
 ```go
+	// A group applied at or above a template whose definition the capture
+	// lacks brings what nothing here shows: a capture filtered with `| except
+	// "^set groups "` would pass it unread (pre-flight).
+	for _, a := range apps {
+		if a.except || defined[a.group] {
+			continue
+		}
+		if slices.ContainsFunc(tpaths, func(t []string) bool { return hasPrefix(t, a.level, false) }) {
+			return nil, nil, fmt.Errorf("group %s is applied where it reaches a port49 template, and the capture "+
+				"does not carry its definition: capture the whole configuration with `%s`", a.group, ConfigCapture)
+		}
+	}
 	// A group statement that lands on a template: named on the template's
 	// line where the capture carries it, and the capture refused as not
-	// inherited where it does not and the template writes no such statement
-	// itself (decision 44 ruling 7).
+	// inherited where it does not and the template writes no harmless leaf of
+	// that name itself (decision 44 ruling 7).
 	for _, gs := range groups {
 		for _, t := range tpaths {
-			if len(gs.path) <= len(t) || !slices.Equal(t[:3], gs.path[:3]) || !groupWord(gs.path[3], t[3]) {
+			if len(gs.path) <= len(t) || !groupAt(gs.path, t) {
 				continue
 			}
 			at := append(slices.Clone(t), gs.path[len(t):]...)
@@ -2527,16 +2814,32 @@ func groupSays(group string, t []string, stmt string) string {
 				continue
 			}
 			stmt := gs.path[len(t)]
+			other := map[string]string{"class": "user", "user": "class"}[t[2]]
+			if known := func(kind string) bool {
+				return slices.Contains(privilegeTemplateStatements[kind], stmt) ||
+					slices.Contains(harmlessTemplateStatements[kind], stmt)
+			}; !known(t[2]) && known(other) {
+				// A `<*>` over both containers: the statement is the other
+				// kind's, and Junos expands it only where it is valid.
+				continue
+			}
 			key := strings.Join(at, " ")
 			own := strings.Join(append(slices.Clone(t), stmt), " ")
 			switch {
 			case paths[key]:
-				if i := slices.Index(extraPath, key); i >= 0 {
+				for _, i := range extraAt[key] {
 					extra[i].Says = groupSays(gs.group, t, stmt)
 				}
 			case slices.ContainsFunc(sortedKeys(paths), func(p string) bool { return p == own || strings.HasPrefix(p, own+" ") }):
-				// The template writes the statement itself: it stands over
-				// or beside the group's, and the capture's lines are checked.
+				// The template writes the statement itself. A harmless leaf
+				// of its own stands over the group's (L57). Anything else is
+				// named at the group's line: whether Junos adds a group's
+				// value beside the template's, as a leaf-list such as
+				// permissions might, is L57's "group permission beside
+				// own", and the group is one Ryan's ruling names either way.
+				if !slices.Contains(harmlessTemplateStatements[t[2]], stmt) {
+					extra = append(extra, ConfigFinding{Line: gs.line, Text: gs.text, Says: groupSays(gs.group, t, stmt)})
+				}
 			default:
 				return nil, nil, fmt.Errorf("line %d: group %s applies to %s %s, and the capture does not carry what it "+
 					"adds there: capture the whole configuration with `%s`", gs.line, gs.group, t[2], t[3], ConfigCapture)
@@ -2559,8 +2862,24 @@ func groupSays(group string, t []string, stmt string) string {
 - [ ] **Step 6: Run**
 
 Run: `go test ./internal/platform/ ./cmd/port49/ -count=1 && go vet -tags lab ./tests/lab/`
-Expected: PASS. `TestTemplateDriftFailsEveryWayToCarryMore` may hold a group case that now reads
-as "not inherited" or as named: keep each case failing (a finding or an error), never passing.
+Expected: PASS once these existing tests are moved to the rulings, each case still failing (a
+finding or an error) unless a ruling says it passes. Measured in pre-flight against this task's
+code, these are the ones that change:
+  - `TestTemplateDriftFailsEveryWayToCarryMore`: "a group applied to the class" (`apply-groups
+    wide`, no definition) now errors, naming `ConfigCapture`: move it to a loop that wants an
+    error. "a group setting a template class", "a wildcard group" and "a wildcard group above"
+    define a group nothing applies, which ruling 7 passes: add `set apply-groups wide` to each
+    and move them to the error loop ("does not carry what it adds"; for "a wildcard group above",
+    the class `p49-readonly` writes its own `permissions`, so it is a named finding at the group's
+    line, `group wide adds `permissions``, not an error). The idle-timeout case now has no extra
+    (`idle-timeout` is harmless; the reference's line is still missing): want `len(extra) == 0`.
+  - `TestTemplateDriftReadsQuotedAndNestedPaths`: `set groups g logical-systems <*> system login
+    class p49-readonly permissions all` gains `set apply-groups g` and is the same named finding.
+  - `TestCheckServicesBypasses`: the group definitions (`set groups g system services netconf
+    ssh`, the quoted, capitalized and logical-system forms) move to the findings list (one
+    finding each); `set apply-groups g`, `set system apply-groups g`, `set logical-systems ls1
+    apply-groups g` and `set logical-systems ls1 Apply-Groups g` pass (no finding, no error); `set
+    system services apply-groups g` is one finding (an unknown word under `system services`).
 
 - [ ] **Step 7: Commit**
 
@@ -2607,7 +2926,9 @@ func TestCheckConfigBatch(t *testing.T) {
 	collides := filepath.Join(sub, "leaf-01")
 	os.WriteFile(collides, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600)
 	unknown := write("nosuch.cfg", "hostname nosuch\n")
-	missing := filepath.Join(dir, "gone.cfg")
+	// A file that cannot be read, named for a device the inventory has, so
+	// the read is what fails (the device is looked up first).
+	missing := filepath.Join(dir, "c", "leaf-01.conf")
 
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch",
@@ -2617,7 +2938,7 @@ func TestCheckConfigBatch(t *testing.T) {
 		"on leaf-01 (arista_eos), 0 findings\n",
 		`COLLISION: ` + collides + `:2: a device-local account "noc"`,
 		`device "nosuch" is not in the inventory`,
-		"gone.cfg",
+		filepath.Join("c", "leaf-01.conf"),
 		"batch: 4 configurations checked, 3 failed\n",
 	} {
 		if !strings.Contains(all, want) {
@@ -2643,6 +2964,10 @@ func TestCheckConfigBatch(t *testing.T) {
 }
 ```
 
+  Add one more case in the same test, with its own inventory (copy `policyFixture`'s and rename
+  the device `leaf-01.example.net`): a file named `leaf-01.example.net`, no extension, as
+  Oxidized writes an FQDN, is checked against that device, not `leaf-01.example`.
+
 - [ ] **Step 2: Run it to see it fail**
 
 Run: `go test ./cmd/port49/ -run TestCheckConfigBatch -count=1`
@@ -2654,7 +2979,7 @@ Expected: FAIL (`flag provided but not defined: -batch`, code 2).
 
 ```go
 	batch := fs.Bool("batch", false, "check each CONFIGFILE against the inventory device its file name names, "+
-		"less its last extension (srx-01.conf is srx-01): the CI form")
+		"as it is or less its last extension (srx-01.conf is srx-01): the CI form")
 	...
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -2681,7 +3006,12 @@ Expected: FAIL (`flag provided but not defined: -batch`, code 2).
 	// ruling 8): a CI run reports the fleet, not its first failure.
 	worst, failed := 0, 0
 	for _, file := range fs.Args() {
-		name := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		// The name as it is where the inventory has it (Oxidized's files,
+		// an FQDN), else less its last extension (decision 44 ruling 8).
+		name := filepath.Base(file)
+		if _, ok := p.Device(name); !ok {
+			name = strings.TrimSuffix(name, filepath.Ext(name))
+		}
 		code := c.one(name, file)
 		if code != 0 {
 			failed++
@@ -2782,7 +3112,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 // grant's and the reply fits: the capability shape with the entry deny, the
 // CLI refusing `show configuration`, NETCONF refused. "operator, all it
 // reaches" has no deny beneath and keeps NETCONF: the control. The last is
-// the realistic readonly, whose baseline denies overflow the wire.
+// the realistic readonly, still fail-closed under 1.2.0 (`refused_shape`:
+// its baseline denies `save **` and `xml-mode **` name no proven keyword,
+// which leaves it to the narrow shape; decision 44 ruling 10).
 var projectionShapes120 = []struct{ name, roles, want string }{
 	{"operator, a deny of show configuration beneath its bits", `  - {name: r, privilege: operator, permit: ["show **", ` +
 		`"clear **", "ping **", "traceroute **", "request **", "test **", "monitor **", "file **", "help **", "set **", ` +
@@ -2790,7 +3122,7 @@ var projectionShapes120 = []struct{ name, roles, want string }{
 		`"exit **", "junoscript **", "xml-mode **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
 	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, projection.ShapeCapability},
 	{"operator, all it reaches", `  - {name: r, privilege: operator, permit: ["**"]}`, projection.ShapeCapability},
-	{"readonly, a deny aligned with a bit", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
+	{"readonly denying show configuration", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
 }
 ```
 
@@ -2800,9 +3132,16 @@ var projectionShapes120 = []struct{ name, roles, want string }{
   the first two must render the capability shape with the entry deny and the third with no deny.
   If they do not, STOP and report: cell (c) would be unmeasured.
 
-  `TestProjectionDifferential` loops over `[]string{"1.1.0", "1.2.0"}` with `projectionShapes`
-  and `projectionShapes120` respectively. It writes `L12-projection` for 1.1.0 as today
-  (`PORT49_LAB_REMEASURE=L12-projection` if the guard refuses it) and `L26c-projected` for 1.2.0.
+  `TestProjectionDifferential` loops over the sets `PORT49_LAB_PROJECTION_SETS` names
+  (comma-separated, default `1.1.0,1.2.0`), with `projectionShapes` and `projectionShapes120`
+  respectively. It writes `L12-projection` for 1.1.0 as today and `L26c-projected` for 1.2.0.
+  Each set's run is its own function, so the NETCONF switch is per set: where
+  `adapter.NetconfForbidden(set)` (1.1.0) the run deletes `netconf ssh` and its `defer` puts it
+  back before the next set starts; under 1.2.0 `netconf ssh` stays configured, so a NETCONF
+  refusal there is the reply's `junoscript` deny and the control's NETCONF opens. (One `defer` at
+  the test's top would leave NETCONF deleted for 1.2.0, and the control would fail.) Task 9 runs
+  1.2.0 only: L12 is closed and this plan changes nothing 1.1.0 renders (Task 4's frozen-set
+  tests), so its note is not rewritten.
 
 - [ ] **Step 2: check-config on the L57 captures with this branch's binary.** The lab policy
   pins no set, so write one that pins 1.2.0, and name each capture for its lab node
@@ -2829,7 +3168,8 @@ cp internal/platform/testdata/l57-juniper_vsrx.set $d/vsrx1.set
 ```bash
 make build
 for p in juniper_vjunos-router juniper_vsrx; do
-  PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ -run '^TestProjectionDifferential$' -count=1 -v -timeout 120m || break
+  PORT49_LAB_PROJECTION_SETS=1.2.0 PORT49_LAB_PLATFORMS=$p \
+    go test -tags lab ./tests/lab/ -run '^TestProjectionDifferential$' -count=1 -v -timeout 120m || break
 done
 make evidence
 ```
@@ -2845,7 +3185,10 @@ make evidence
   L57's Status to `closed — measured <date>; tests/lab/results/L57-juniper_vjunos-router.md,
   L57-juniper_vsrx.md` and what the table showed. Rewrite both detail bullets to the
   observations. Remove "*provisional on L26c*" from §8 and decision 44, and "provisional on L57"
-  from decision 44's head. If a result contradicts a sentence of §8, decision 44 or the adapter
+  from decision 44's head. The row closes only on what was measured: every way in its claim
+  names reached the control and was read against it on both images. If any was not (an image
+  that refused `rest`, say), move that part of the claim to a new open row before closing, and
+  leave what rests on it as it is (G2's `rest` stays a finding). If a result contradicts a sentence of §8, decision 44 or the adapter
   comment, fix that sentence, cite the note, and say so in the commit message (CLAUDE.md rule 4).
 
 - [ ] **Step 5: Commit**
@@ -2870,7 +3213,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `### Plan 9b1 — As built` after `### Plan 9b — As built`)
 
 - [ ] **Step 1: Write "Plan 9b1 — As built"**: the branch and base, each task's commit, what Task
-  3's gates decided (G1, G2, the L57 gates), the rows closed, anything carried. Paste the
+  3's gates decided (G1, G2, the L57 gates, "group permission beside own"), the rows closed,
+  anything carried. Carried in any case: decision 44 ruling 10's remedy, so a readonly with a
+  deny beneath `show **` projects (the baseline's `xml-mode` read as closed by the entry deny,
+  `save` measured into the keyword tree, one factored alternative for `word **` denies), each a
+  render change for a later set; name the plan it is slotted into. Paste the
   Operator notes below, edited to what was built, under it.
 
 - [ ] **Step 2: Verify**
@@ -2895,18 +3242,22 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `rpc_entry_denies: ["junoscript **"]`. A policy pinned to 1.1.0 renders exactly as before.
   `port49 platform upgrade --policy … --to 1.2.0` shows the change; `policy diff` gates it until
   the `acknowledge:` entry for `platforms.juniper_junos.rpc_entry_denies` is added.
-- **Junos subjects with a deny beneath their bits now project.** Under 1.1.0 they got the
-  narrow reply (`deny-commands .*` plus allows) or the fail-closed reply. Under 1.2.0 they get
-  their bits, their denies, and `junoscript` denied. The CLI deny then holds, and `xml-mode`,
+- **Junos subjects granted everything but a few denies now project.** Under 1.1.0 a grant like
+  operator `**` less `show configuration **` got the fail-closed reply. Under 1.2.0 it gets its
+  bits, its denies, and `junoscript` denied. The CLI deny then holds, and `xml-mode`,
   `junoscript netconf` and NETCONF on port 830 are refused **for that user only**. `policy diff`
-  on the pin move lists each such subject's projection change.
+  on the pin move lists each such subject's projection change. **Not yet:** a grant that leaves
+  any baseline command (`help`, `file`, `save`, `xml-mode` …) to a deny, which is every readonly
+  role, still fails closed when it carries a deny beneath its bits: `show **` less `show
+  configuration **` is the common case. Its fix ships in a later platform set.
 - **Who has NETCONF.** A subject whose grant has no deny beneath its bits (an automation account
   granted everything its level reaches) keeps NETCONF. A subject with any such deny does not.
   `policy test` warns `projection_netconf_closed` for each. An Ansible or PyEZ account that needs
   NETCONF needs a grant with no deny beneath its bits.
-- **New warning `projection_deny_beneath_view_configuration`.** A policy that grants
-  `view-configuration` (readonly and operator do) and denies `show configuration` gets a warning,
-  not a refusal. The CLI refuses the command and NETCONF is closed, but the bit is what grants
+- **New warning `projection_deny_beneath_view_configuration`.** A policy whose reply sends
+  `view-configuration` and denies `show configuration` beneath it (an operator or admin granted
+  `**` less that deny) gets a warning, not a refusal. A readonly with that deny still gets the
+  fail-closed reply, as above. The CLI refuses the command and NETCONF is closed, but the bit is what grants
   the configuration, so the real fix is a level without the bit. `policy diff` prints new
   warnings as `warning:` lines and still exits 0 on them.
 - **`devices check-config` reads configuration groups.** Capture with
@@ -2917,11 +3268,14 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `group BASE adds `permissions` to class p49-remote: every port49 session on this device gets
   it`. `idle-timeout`, `login-tip`, `login-alarms` and `full-name` pass. Any other statement
   under a template still fails. A capture without `display inheritance` from a device that
-  applies a group to a template is refused, with the capture command to use.
+  applies a group to a template is refused, with the capture command to use, and so is one that
+  applies a group to a template without the group's definition (the old `| except "^set groups
+  "` capture, where it prints `apply-groups`): change the CI capture command once, fleet-wide.
 - **`devices check-config --batch FILE...`** checks a directory of captures in one run. Each file
-  is checked against the device its file name names (`srx-01.conf` is `srx-01`; Oxidized's
-  extensionless files work as they are). It prints `batch: N configurations checked, M failed`
-  and exits 1 if any failed.
+  is checked against the device its file name names: the name as it is where the inventory has
+  it (Oxidized's extensionless files, FQDNs included), else less its last extension
+  (`srx-01.conf` is `srx-01`). It prints `batch: N configurations checked, M failed` and exits 1
+  if any failed.
 - **Management services under 1.2.0.** NETCONF, the XML API (`xnm-*`), `outbound-ssh` and every
   non-RPC service no longer fail check-config. J-Web (`web-management`) and JET/gRPC
   (`extension-service`) still do, and REST (`rest`) as Task 3 measured. Under 1.1.0 nothing

@@ -164,9 +164,12 @@ L47 stays open. **9b1 written 2026-10-11** on Ryan's three rulings of that day, 
 run before code, five code, one lab run and close, one docs). Set 1.2.0 adds a per-user
 `junoscript` deny where a deny sits beneath a sent Junos bit, so that subject projects instead of
 failing closed and loses only NETCONF; `devices check-config` reads configuration groups, names a
-group that widens a template, and takes `--batch`. Decision 44 holds its nine rulings; one
-security narrowing of Ryan's services ruling (J-Web and JET/gRPC stay findings, REST as measured)
-is reported to him. It opens and closes L57 and closes L26c. Next: 9b1, then 9c.
+group that widens a template, and takes `--batch`. Decision 44 holds its ten rulings; the
+controller ruled the security narrowing of Ryan's services ruling (J-Web and JET/gRPC stay
+findings, REST as measured) at pre-flight. The entry deny reaches grants that hold every
+baseline command (operator or admin `**` less a deny); a readonly with a deny beneath `show **`
+still fails closed (ruling 10), its remedy a later set. It opens and closes L57 and closes L26c.
+Next: 9b1, then 9c.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5163,23 +5166,31 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     refuses a capture missing an applied group's expansion, drops the NETCONF/XML API services
     rule under 1.2.0, and takes `--batch FILE...`.
   - **Spec sections:** §8 (the RPC paragraphs rewritten, management services by set), §12
-    (check-config, the projection codes table), §13 decision 44 (nine rulings), §14 (two
+    (check-config, the projection codes table), §13 decision 44 (ten rulings), §14 (two
     assertions), §15 L26c and the new L57.
   - **Inherits:** plan 5b's projection (option C, `JunosFacts.DenyBindsRPCs` false, the
     management-services allowlist, `TemplateDrift`); the 2026-09-30 `L26c-junoscript` run (the
     `junoscript` deny measured on both images with a control); the L26c, L12-netconf and
     operator SRX notes.
   - **Leaves:** set 1.1.0 untouched (a released set is never edited); J-Web and JET/gRPC still
-    fail check-config under 1.2.0 until measured; a readonly Junos subject whose grant leaves any
-    baseline command denied still has no NETCONF, and its baseline denies can overflow the wire
-    (the class route, `platform export --classes`, is the answer there); `op` scripts for a
-    subject with a deny beneath, if the lab puts `op` on the list.
+    fail check-config under 1.2.0 until measured; `op` scripts for a subject with a deny beneath,
+    if the lab puts `op` on the list. **A Junos grant that leaves any baseline command to a deny
+    still fails closed when it carries a deny beneath its bits** (decision 44 ruling 10, measured
+    against the shipped adapter at pre-flight): the realistic readonly, `show **` less `show
+    configuration **`, is `refused_shape` under 1.2.0 as under 1.1.0. Its baseline denies `save
+    **` and `xml-mode **` name no keyword the tree proves, so the composition goes to the narrow
+    shape, and a readonly's baseline denies render 333 bytes alone. The remedy is a later set: the
+    baseline's `xml-mode` read as closed by the entry deny (measured, L26c-junoscript), `save`
+    measured into the keyword tree, and one factored alternative for a set's `word **` denies
+    (about 103 bytes). Even then the readonly needs view-configuration's whole reach decided.
   - **Lab entries:** opens and closes **L57** (what the inherited capture carries for groups);
     closes **L26c** (Task 3's entry cells: port 22 subsystem, exec channel, `op url`, REST,
     `scp`; Task 9's set 1.2.0 differential). vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15.
-  - **Question for Ryan:** his ruling drops the services allowlist; 9b1 keeps `web-management`
-    and `extension-service` (and `rest` unless measured closed) failing under 1.2.0, since no
-    measurement shows the `junoscript` deny closes them (decision 44 ruling 6).
+  - **Controller rulings at pre-flight (2026-10-11):** `web-management`, `extension-service` and
+    `rest` keep failing check-config under 1.2.0 unless a lab cell measures the `junoscript` deny
+    closing them (decision 44 ruling 6); the allowlist for statements under a template stands;
+    verifying the capture is inherited stands; `op **` joins `rpc_entry_denies` only if cell (b)
+    measures an `op url` script reaching an RPC past the `junoscript` deny.
 - **9c — Hardware-backed client keys, `per_login_mfa`, and the broker certificate's CRL check**
   (plan 3's two hand-offs; `per_login_mfa` added by Ryan, 2026-10-10).
   - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
