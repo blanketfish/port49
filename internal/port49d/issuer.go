@@ -48,7 +48,7 @@ func openIssuer(cfg config.Config, m *metrics.Metrics, say func(string, ...any))
 	}
 	say("issuance: certificates of %s over an OIDC sign-in, from the issuing CA in %s",
 		cfg.Broker.Identity.Issuance.CertificateLifetime, dir)
-	if ca.Cert != nil {
+	if ca.Cert != nil && ca.Unavailable == nil {
 		m.IssuingCANotAfter.Set(float64(ca.Cert.NotAfter.Unix()))
 	}
 	return ca
@@ -81,19 +81,23 @@ func initIssuer(dir string, now time.Time) (created bool, line string, err error
 	case certPEM != nil && keyPEM != nil:
 		ca, _ := issuer.Load(f, now)
 		if ca.Unavailable != nil {
-			return false, "", fmt.Errorf("the issuing CA in %s is there and not usable (%v); init never replaces it",
+			return false, "", fmt.Errorf("the issuing CA in %s is there and not usable (%v); init never replaces it: "+
+				"fix the file, or if the CA has expired run rotate-issuer twice, restarting every broker after each",
 				dir, ca.Unavailable)
 		}
 		return false, fmt.Sprintf("the issuing CA in %s is already there (%s); nothing written", dir,
 			issuer.Fingerprint(ca.Cert)), nil
-	case certPEM != nil || keyPEM != nil:
-		return false, "", fmt.Errorf("one of %s and %s is in %s without the other; restore it, or remove it on purpose",
-			issuer.CertFile, issuer.KeyFile, dir)
+	case certPEM == nil && keyPEM != nil:
+		return false, "", fmt.Errorf("%s is in %s without %s; if init-issuer was interrupted, remove %s and run it "+
+			"again; otherwise restore %s", issuer.KeyFile, dir, issuer.CertFile, issuer.KeyFile, issuer.CertFile)
+	case certPEM != nil:
+		return false, "", fmt.Errorf("%s is in %s without the other, %s; restore it, or remove it on purpose",
+			issuer.CertFile, dir, issuer.KeyFile)
 	}
 	if certPEM, keyPEM, err = issuer.New(now); err != nil {
 		return false, "", err
 	}
-	if err := writeOwnerOnly(filepath.Join(dir, issuer.KeyFile), keyPEM); err != nil {
+	if err := createOwnerOnly(filepath.Join(dir, issuer.KeyFile), keyPEM); err != nil {
 		return false, "", err
 	}
 	if err := writeOwnerOnly(filepath.Join(dir, issuer.CertFile), certPEM); err != nil {
@@ -175,6 +179,16 @@ func rotateIssuer(dir string, now time.Time) (string, error) {
 		return "", fmt.Errorf("%s from an earlier rotation is still in %s, and a promotion would overwrite it while "+
 			"certificates it issued may still be valid: remove it once certificate_lifetime has passed since that "+
 			"promotion, restart each broker, and run rotate-issuer again", issuer.PreviousCertFile, dir)
+	}
+	// The staged pair is checked before anything is written: a promotion
+	// overwrites the working key for good, so a staged certificate that does
+	// not parse, is not a valid CA now, or does not belong to the staged key
+	// (another broker's copied over this one's) is refused with every file as it was.
+	if staged, _ := issuer.Load(issuer.Mem(map[string][]byte{issuer.CertFile: nextCert, issuer.KeyFile: nextKey}),
+		now); staged.Unavailable != nil {
+		return "", fmt.Errorf("the staged %s and %s in %s are not a usable pair (%v); nothing was changed: "+
+			"restage with rotate-issuer on the broker that holds the key, after removing both staged files",
+			issuer.NextCertFile, issuer.NextKeyFile, dir, staged.Unavailable)
 	}
 	if !bytes.Equal(cur, nextCert) {
 		if err := writeOwnerOnly(join(issuer.PreviousCertFile), cur); err != nil {

@@ -89,8 +89,8 @@ func Main(args []string) int {
 	// A subcommand after a flag (port49d --config X init-revocations) would
 	// otherwise start the daemon (pre-flight M20).
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], port49d init-revocations|init-issuer|rotate-issuer [--config FILE], "+
-			"or port49d store-roles [--config FILE] (a subcommand comes first)")
+		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
+			"port49d init-revocations|init-issuer|rotate-issuer [--config FILE], or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -43,16 +43,34 @@ func TestParseCABundle(t *testing.T) {
 		raw  []byte
 		want string
 	}{
-		"empty":       {nil, "no certificate"},
-		"a leaf":      {leafPEM, "is not a CA"},
-		"five":        {five, "over 4 certificates"},
-		"too large":   {bytes.Repeat([]byte(" "), MaxCABundleBytes+1), "over 65536"},
-		"a key":       {[]byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"), "PRIVATE KEY block"},
+		"empty":     {nil, "no certificate"},
+		"a leaf":    {leafPEM, "is not a CA"},
+		"five":      {five, "over 4 certificates"},
+		"too large": {bytes.Repeat([]byte(" "), MaxCABundleBytes+1), "over 65536"},
+		"a key":     {[]byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"), "block 1 is not a CERTIFICATE"},
+		"a key after": {append(append([]byte{}, cur...), "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"...),
+			"block 2 is not a CERTIFICATE"},
 		"trailing":    {append(append([]byte{}, cur...), "junk"...), "other than PEM"},
-		"not parsing": {[]byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), "certificate 1"},
+		"leading":     {append([]byte("junk\n"), cur...), "before block 1"},
+		"between":     {bytes.Join([][]byte{cur, []byte("junk\n"), next}, nil), "before block 2"},
+		"not parsing": {[]byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), "block 1 does not parse"},
+		"corrupt then a good one": {append([]byte("-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n"), cur...),
+			"before block 1"},
+		"corrupt alone": {[]byte("-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n"), "other than PEM"},
 	} {
-		if _, err := ParseCABundle(c.raw); err == nil || !strings.Contains(err.Error(), c.want) {
+		_, err := ParseCABundle(c.raw)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
 		}
+		// An error never quotes the input.
+		if err != nil && (strings.Contains(err.Error(), "PRIVATE KEY") || strings.Contains(err.Error(), "port49 test CA") ||
+			strings.Contains(err.Error(), "junk")) {
+			t.Errorf("%s: the error quotes the input: %v", name, err)
+		}
+	}
+	// Whitespace around and between blocks is fine.
+	if certs, err := ParseCABundle(bytes.Join([][]byte{[]byte("\n\n"), cur, []byte("\n\n"), next, []byte("\n")}, nil)); err != nil ||
+		len(certs) != 2 {
+		t.Errorf("whitespace: %d %v", len(certs), err)
 	}
 }

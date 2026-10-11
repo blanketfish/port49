@@ -91,6 +91,30 @@ func writeOwnerOnly(path string, body []byte) error {
 	return inventory.WriteAtomic(dir, filepath.Base(path), body, 0o600)
 }
 
+// createOwnerOnly is writeOwnerOnly for a file that must not be there yet:
+// it makes path with O_EXCL at mode 0600, so two writers cannot both make it
+// (init-issuer's key), and removes what it made if the write fails.
+func createOwnerOnly(path string, body []byte) error {
+	dir := filepath.Dir(path)
+	if err := ownedHere("broker.state_dir "+dir, dir, true); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(body); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
 // readOwnerOnly reads a kept file the broker wrote itself: a regular file
 // owned by its user or root (ownedHere), or nothing when there is none.
 func readOwnerOnly(path string) ([]byte, error) {
