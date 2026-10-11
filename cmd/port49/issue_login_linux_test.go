@@ -27,6 +27,7 @@ import (
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -504,17 +505,39 @@ func TestAnIssuanceOutageUsesAHeldCertificate(t *testing.T) {
 	}
 }
 
-// A 401 is the broker saying no to this person: the held certificate is not
-// the way round it, and no agent starts.
-func TestARefusedSignInDoesNotFallBackToAHeldCertificate(t *testing.T) {
+// A 401 for a stale sign-in says nothing against the held certificate, which
+// the broker still judges on every use: it carries on.
+func TestAStaleSignInUsesAHeldCertificate(t *testing.T) {
 	o := newOIDCLab(t, true)
 	driveBrowser(t, o.iss)
 	o.as.SetAuthTime(o.now().Add(-time.Hour)) // a provider that did not honour prompt=login
 	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
 	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+		!strings.Contains(errb.String(), "sign_in_not_fresh") ||
+		!strings.Contains(errb.String(), "using your certificate for ") ||
+		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// credential_revoked at the sign-in is the broker saying this person is
+// revoked: the held certificate is not the way round it, and no agent starts.
+func TestARevokedSignInDoesNotFallBackToAHeldCertificate(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	if err := o.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: o.now(), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sock := privateSocket(t)
 	var out, errb bytes.Buffer
 	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
-		!strings.Contains(errb.String(), "sign_in_not_fresh") || strings.Contains(errb.String(), "using your certificate") {
+		!strings.Contains(errb.String(), "credential_revoked") || strings.Contains(errb.String(), "using your certificate") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	if _, err := os.Stat(sock); err == nil {

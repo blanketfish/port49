@@ -29,6 +29,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/oidcclient"
@@ -116,8 +117,8 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		return startIssued(sf, certPath, keyPath, false, stdout, stderr)
 	}
 	// A held certificate outlives any failure of the sign-in (ruling 17:
-	// only a sign-in fails), except the broker's own no: a 401 says this
-	// person is refused, and the certificate is judged by that broker too.
+	// only a sign-in fails), except a revocation or logout: the broker
+	// judges the certificate by the same mark.
 	var refused *refusedError
 	var unreachable *oidcclient.UnreachableError
 	down := errors.As(err, &unreachable)
@@ -143,9 +144,11 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	return code
 }
 
-// refusedError is the broker answering the certificate request 401: it has
-// judged this person's sign-in and said no, so a held certificate is not
-// the way round it.
+// refusedError is the broker answering the certificate request 401
+// credential_revoked: this person is revoked or logged out, and the held
+// certificate, which the broker judges by the same mark, is not the way
+// round it. Every other failure of a sign-in, a 401 for a stale or spent
+// token included, leaves the held certificate as valid as it was.
 type refusedError struct{ msg string }
 
 func (e *refusedError) Error() string { return e.msg }
@@ -302,7 +305,7 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 		_ = json.Unmarshal(raw, &e)
 		msg := fmt.Sprintf("the broker did not issue your certificate: %s (%s)",
 			printsafe.Line(e.Detail, 400), printsafe.Line(cmp.Or(e.Error, resp.Status), 64))
-		if resp.StatusCode == http.StatusUnauthorized {
+		if resp.StatusCode == http.StatusUnauthorized && e.Error == string(decision.CredentialRevoked) {
 			return api.IssueResponse{}, &refusedError{msg}
 		}
 		return api.IssueResponse{}, errors.New(msg)
