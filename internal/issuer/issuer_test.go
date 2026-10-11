@@ -118,9 +118,22 @@ func TestLoadSaysWhatIsMissing(t *testing.T) {
 		t.Fatalf("no key: %v %q", c.Unavailable, lines)
 	}
 	m[KeyFile] = files(t, now)[KeyFile]
-	if c, _ = Load(Mem(m), now); c.Unavailable == nil || !strings.Contains(c.Unavailable.Error(), "not the key of") {
+	c, lines = Load(Mem(m), now)
+	if c.Unavailable == nil || !strings.Contains(c.Unavailable.Error(), "not the key of") {
 		t.Fatalf("another CA's key: %v", c.Unavailable)
 	}
+	// A key that is not the CA's may be a rotation's promotion copied without
+	// its certificate: the start points at the certificate too (M6).
+	if !strings.Contains(strings.Join(lines, "\n"),
+		"if a rotation's promotion was copied here, copy issuing-ca.pem from the promoting broker too") {
+		t.Fatalf("the start for another CA's key: %q", lines)
+	}
+	// Control: a key that is simply missing does not say it.
+	delete(m, KeyFile)
+	if _, lines = Load(Mem(m), now); strings.Contains(strings.Join(lines, "\n"), "promotion was copied") {
+		t.Fatalf("a missing key blamed on a rotation: %q", lines)
+	}
+	m[KeyFile] = files(t, now)[KeyFile]
 	if c, _ = Load(Mem(files(t, now)), now.Add(6*365*24*time.Hour)); c.Unavailable == nil ||
 		!strings.Contains(c.Unavailable.Error(), "expired") || len(c.Trusted) != 0 {
 		t.Fatalf("an expired CA: %v %d", c.Unavailable, len(c.Trusted))

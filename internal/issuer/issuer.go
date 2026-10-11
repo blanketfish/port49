@@ -153,9 +153,16 @@ func Load(f Files, now time.Time) (*CA, []string) {
 		c.Trusted = append(c.Trusted, cert)
 		if c.signer, err = readKey(f, KeyFile, cert); err != nil {
 			c.Unavailable = fmt.Errorf("%s is not usable: %v", KeyFile, err)
-			lines = append(lines, fmt.Sprintf("%s is not usable (%v), so no certificate is issued; the certificates "+
+			line := fmt.Sprintf("%s is not usable (%v), so no certificate is issued; the certificates "+
 				"already issued are trusted; restore it beside %s (0600, the broker's user's) and restart",
-				KeyFile, err, CertFile))
+				KeyFile, err, CertFile)
+			if errors.Is(err, errNotTheKey) {
+				// The key may be the right one, with the certificate left
+				// behind: a rotation's promotion copied in part.
+				line += "; if a rotation's promotion was copied here, copy " + CertFile +
+					" from the promoting broker too"
+			}
+			lines = append(lines, line)
 		}
 	}
 	for _, o := range []struct{ name, what string }{{NextCertFile, "the staged next CA"},
@@ -225,10 +232,13 @@ func readKey(f Files, name string, cert *x509.Certificate) (crypto.Signer, error
 	s, ok := k.(crypto.Signer)
 	pub, okPub := cert.PublicKey.(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !okPub || !pub.Equal(s.Public()) {
-		return nil, fmt.Errorf("it is not the key of %s", CertFile)
+		return nil, errNotTheKey
 	}
 	return s, nil
 }
+
+// errNotTheKey is a key file that parses and is not the CA certificate's.
+var errNotTheKey = errors.New("it is not the key of " + CertFile)
 
 // Ephemeral is a new CA held in memory alone (New, then Load over Mem): for
 // tests.
