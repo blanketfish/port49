@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +39,9 @@ func throwawayCryptHash() (string, error) {
 	return h, nil
 }
 
-// TestL57JunosGroups measures what a configuration capture carries for groups
-// that reach port49's template classes (spec §15 L57; decision 44 ruling 7).
+// TestL57JunosGroups (below) measures what a configuration capture carries for
+// groups that reach port49's template classes (spec §15 L57; decision 44
+// ruling 7).
 var junosGroupsLines = []string{
 	"set groups p49g-tip system login class <*> login-tip",
 	"set groups p49g-perm system login class <p49-*> permissions view-configuration",
@@ -59,17 +61,30 @@ var junosGroupsLines = []string{
 }
 
 // junosGroupsNested is committed apart: whether Junos takes a group applied
-// from inside another's definition is itself a cell.
+// from inside another's definition is itself a cell. The inner group adds
+// `permissions view`, which a session under p49-remote (view-configuration
+// alone) can show by running `show cli authorization`: if the nested group
+// applies at login, that command runs.
 var junosGroupsNested = []string{
-	"set groups p49g-inner system login class <p49-*> permissions network",
+	"set groups p49g-inner system login class <p49-*> permissions view",
 	"set groups p49g-outer apply-groups p49g-inner",
 	"set apply-groups p49g-outer",
+}
+
+// junosGroupsClassLevel is committed apart too: a group applied on the class
+// itself, with a harmless leaf under `<p49-*>`. Whether the inherited capture
+// strips that `apply-groups` line as it strips the top-level ones decides how a
+// capture is tested for "not inherited" (spec §12; ruling 7).
+var junosGroupsClassLevel = []string{
+	"set groups p49g-classlevel system login class <p49-*> login-alarms",
+	"set system login class p49-remote apply-groups p49g-classlevel",
 }
 
 var junosGroupsDelete = []string{
 	"delete apply-groups p49g-tip", "delete apply-groups p49g-perm", "delete apply-groups p49g-excepted",
 	"delete apply-groups p49g-timeout", "delete apply-groups p49g-outer",
 	"delete system login class p49-remote apply-groups-except",
+	"delete system login class p49-remote apply-groups p49g-classlevel", "delete groups p49g-classlevel",
 	"delete groups p49g-tip", "delete groups p49g-perm", "delete groups p49g-excepted", "delete groups p49g-unapplied",
 	"delete groups p49g-timeout", "delete groups p49g-outer", "delete groups p49g-inner",
 	"delete system login class p49-l57own",
@@ -78,7 +93,8 @@ var junosGroupsDelete = []string{
 // l57Reading is what one capture says about p49-remote.
 type l57Reading struct {
 	remote                      []string // every set line under system login class p49-remote
-	applyLines, groupLines      bool     // `set apply-groups` and `set groups` lines printed
+	parsed                      bool     // the capture holds `set` lines at all (the curly form does not)
+	applyLines, groupLines      bool     // an `apply-groups` word at any level (not -except), and `set groups` lines
 	tip, perm, excepted, nested bool     // each group's statement expanded under p49-remote
 	ownTimeout                  bool     // idle-timeout is the reference's 720, not the group's 30
 	ownPerm                     bool     // p49g-perm's view-configuration beside p49-l57own's own view
@@ -88,9 +104,11 @@ func l57Readings(capture string) l57Reading {
 	var r l57Reading
 	for _, ln := range strings.Split(strings.ReplaceAll(capture, "\r", ""), "\n") {
 		ln = strings.TrimSpace(ln)
-		switch {
-		case strings.HasPrefix(ln, "set apply-groups "):
+		r.parsed = r.parsed || strings.HasPrefix(ln, "set ")
+		if slices.Contains(strings.Fields(ln), "apply-groups") {
 			r.applyLines = true
+		}
+		switch {
 		case strings.HasPrefix(ln, "set groups "):
 			r.groupLines = true
 		case strings.HasPrefix(ln, "set system login class p49-remote "):
@@ -99,13 +117,50 @@ func l57Readings(capture string) l57Reading {
 			r.tip = r.tip || strings.HasPrefix(rest, "login-tip")
 			r.perm = r.perm || rest == "permissions view-configuration"
 			r.excepted = r.excepted || rest == "permissions clear"
-			r.nested = r.nested || rest == "permissions network"
+			r.nested = r.nested || rest == "permissions view"
 			r.ownTimeout = r.ownTimeout || rest == "idle-timeout 720"
 		case ln == "set system login class p49-l57own permissions view-configuration":
 			r.ownPerm = true
 		}
 	}
 	return r
+}
+
+// l57Cell is a reading's table cell: the curly form has no `set` lines, so
+// nothing in it was parsed, and "no" would claim a measurement.
+func l57Cell(r l57Reading, v bool) string {
+	if !r.parsed {
+		return "not parsed"
+	}
+	return yesNo(v)
+}
+
+// l57ControlCmd is the nested-group cell's positive control: p49g-perm gives
+// p49-remote view-configuration, so this must run in a session landing there.
+const l57ControlCmd = "show configuration system host-name"
+
+// l57NestedWords are the sentences each nested-group session cell prints.
+var l57NestedWords = map[string]string{
+	"applies": "The nested group APPLIES in a session: `view` reached p49-remote though the inherited capture shows " +
+		"no `set groups` line and does not expand it, so check-config cannot see it (a fail-open).",
+	"not applied": "The nested group is not applied in a session: `show cli authorization` was refused while the " +
+		"control ran.",
+	"not observed": "Not observed: the session did not open, the control did not run, or `show cli authorization` " +
+		"printed nothing readable. L57 does not close on this cell.",
+}
+
+// l57NestedCell reads the nested-group session: "applies" where `show cli
+// authorization` ran and the control ran, "not applied" where it got a refusal
+// beside a control that ran, else "not observed".
+func l57NestedCell(run junosRun, opened bool) string {
+	switch {
+	case !opened, run.loginErr != "", slices.Contains(run.unobserved, "show cli authorization"),
+		slices.Contains(run.unobserved, l57ControlCmd), !run.runs(junosProbe{cmd: l57ControlCmd, evidence: "host-name"}), strings.TrimSpace(run.auth) == "":
+		return "not observed"
+	case containsAny(strings.ToLower(run.auth), junosRefusal):
+		return "not applied"
+	}
+	return "applies"
 }
 
 var l57Captures = []string{
@@ -145,8 +200,9 @@ func TestL57JunosGroups(t *testing.T) {
 			if err != nil {
 				t.Fatalf("INVALID: no throwaway root hash for vSRX's mandatory check: %v", err)
 			}
-			if _, err := l.junosTryConfigure(t, []string{`set system root-authentication encrypted-password "` + hash + `"`}); err != nil {
-				t.Fatalf("INVALID: the throwaway root hash did not commit (output withheld: it echoes the hash)")
+			if err := l.junosTryConfigureWithheld(t, []string{`set system root-authentication encrypted-password "` + hash + `"`},
+				"system root-authentication"); err != nil {
+				t.Fatalf("INVALID: the throwaway root hash did not commit: %v", err)
 			}
 			// Not deleted on teardown: deleting it fails the same mandatory check,
 			// and the lab's vSRX is a fresh container per run, gone afterwards.
@@ -160,6 +216,11 @@ func TestL57JunosGroups(t *testing.T) {
 		if !strings.Contains(nestedCommit, "commit complete") {
 			l.junosConfigureAdmin(t, []string{"delete apply-groups p49g-outer", "delete groups p49g-outer",
 				"delete groups p49g-inner"})
+		}
+		classCommit := l.junosConfigureAdmin(t, junosGroupsClassLevel)
+		if !strings.Contains(classCommit, "commit complete") {
+			l.junosConfigureAdmin(t, []string{"delete system login class p49-remote apply-groups p49g-classlevel",
+				"delete groups p49g-classlevel"})
 		}
 		caps := map[string]string{}
 		bg, err := l.junosCLI(breakglassUser, breakglassPassword)
@@ -187,24 +248,39 @@ func TestL57JunosGroups(t *testing.T) {
 			t.Fatalf("INVALID: neither inherited form shows p49g-tip's login-tip under p49-remote; no note is written")
 		}
 		// A session landing in remote: what a group added, the session holds.
+		// Its login already ran `show cli authorization`. The positive control is
+		// p49g-perm's view-configuration, which must let `show configuration
+		// system host-name` run, or the session says nothing about the nested
+		// group.
 		c, run, _ := l.junosLogin(t, "L57 remote", `[]`)
 		if c != nil {
+			out, err := l.junosProbe(c, junosProbe{cmd: l57ControlCmd})
+			run.outs[l57ControlCmd] = out
+			if err != nil {
+				run.unobserved = append(run.unobserved, l57ControlCmd)
+			}
 			c.Close()
 		}
+		nestedCell := l57NestedCell(run, c != nil)
 		var b strings.Builder
-		fmt.Fprintf(&b, "Reference (set 1.1.0, 12h) applied, then the groups: %s. Nested: %s.\n\n```\n%s\n%s\n```\n\n",
-			commitWord(commit), commitWord(nestedCommit), strings.Join(junosGroupsLines, "\n"),
-			strings.Join(junosGroupsNested, "\n"))
-		b.WriteString("| capture | apply-groups lines | set groups lines | p49g-tip | p49g-perm | p49g-excepted | " +
+		fmt.Fprintf(&b, "Reference (set 1.1.0, 12h) applied, then the groups: %s. Nested: %s. Class-level: %s.\n\n```\n%s\n%s\n%s\n```\n\n",
+			commitWord(commit), commitWord(nestedCommit), commitWord(classCommit), strings.Join(junosGroupsLines, "\n"),
+			strings.Join(junosGroupsNested, "\n"), strings.Join(junosGroupsClassLevel, "\n"))
+		b.WriteString("| capture | `apply-groups` word line (not -except) | set groups lines | p49g-tip | p49g-perm | p49g-excepted | " +
 			"nested | own idle-timeout 720 | group permission beside own |\n|---|---|---|---|---|---|---|---|---|\n")
 		for _, cmd := range l57Captures {
 			r := l57Readings(caps[cmd])
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), yesNo(r.applyLines),
-				yesNo(r.groupLines), yesNo(r.tip), yesNo(r.perm), yesNo(r.excepted), yesNo(r.nested), yesNo(r.ownTimeout),
-				yesNo(r.ownPerm))
+			cell := func(v bool) string { return l57Cell(r, v) }
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), cell(r.applyLines),
+				cell(r.groupLines), cell(r.tip), cell(r.perm), cell(r.excepted), cell(r.nested), cell(r.ownTimeout),
+				cell(r.ownPerm))
 		}
 		fmt.Fprintf(&b, "\nA token session with no reply attributes (lands in `remote`), `show cli authorization`:\n\n```\n%s\n```\n",
 			strings.TrimSpace(run.auth))
+		fmt.Fprintf(&b, "\nNested group in a session: the inner group adds `permissions view`, so `show cli authorization` runs "+
+			"if it was applied at login. Positive control `%s` (p49g-perm's view-configuration):\n\n```\n%s\n```\n\n"+
+			"Nested-group session cell: **%s**. %s\n", l57ControlCmd, strings.TrimSpace(run.outs[l57ControlCmd]), nestedCell,
+			l57NestedWords[nestedCell])
 		for _, cmd := range l57Captures {
 			fmt.Fprintf(&b, "\n### `%s` (p49-remote and the group lines)\n\n```\n%s\n```\n", cmd, l57Excerpt(caps[cmd]))
 		}
@@ -223,7 +299,7 @@ func TestL57JunosGroups(t *testing.T) {
 		}
 		l.entryResult(t, "L57", "What a Junos configuration capture carries for configuration groups that reach port49's "+
 			"template class p49-remote: a `<*>` and a `<p49-*>` group applied at the top, one kept off the class by "+
-			"`apply-groups-except`, one applied nowhere, one applied from inside another, and a group's idle-timeout "+
+			"`apply-groups-except`, one applied nowhere, one applied from inside another, one applied on the class itself, and a group's idle-timeout "+
 			"beside the class's own; in both inherited set forms, plain set form and the inherited curly form; and "+
 			"what a session landing in `remote` holds (spec §15 L57; decision 44 ruling 7).", b.String())
 	})

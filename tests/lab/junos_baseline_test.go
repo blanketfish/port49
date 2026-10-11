@@ -26,12 +26,11 @@ import (
 // `save` unproven, or an entry reached under the deny, is a result: the note
 // records it and Task 3's gates stop the plan.
 
-// The `save` cells run under p49-l58-save (`permissions all`): the first run
-// (2026-10-11) showed a `view` class cannot run `save` at all on either image
-// (syntax error at the subcommand, then permission denied), so its control
-// never reached and `save` read unproven whatever the deny did. Whether `save`
-// is a keyword to deny-commands does not depend on the class; the entries keep
-// the readonly's `view` class.
+// The `save` cells run under p49-l58-save (`permissions all`), so the control
+// can reach `save` and the deny is the only difference between the two
+// sessions; the entries keep the readonly's `view` class. The same save
+// candidates are also typed once in a `view` session with no deny, recorded as
+// "control (view)": information only, never a gate and never INVALID.
 var junosL58Class = []string{
 	"set system login class p49-l58-view permissions view",
 	"set system login user p49-l58-view class p49-l58-view",
@@ -88,7 +87,7 @@ func l58Save(control, deny map[string]string, controlOuts map[string]string, pro
 	}
 	for _, cmd := range junosL58Saves {
 		if deny[cmd] == "refused" && l58PastSave(controlOuts[cmd], promptLen) {
-			return "proven", cmd + "; the control's CLI took `save` and stopped after it"
+			return "proven", cmd + "; the control's CLI took save and stopped after it"
 		}
 	}
 	return "unproven", ""
@@ -96,12 +95,47 @@ func l58Save(control, deny map[string]string, controlOuts map[string]string, pro
 
 // l58PastSave reports whether the control's CLI took `save` and stopped
 // later: a platform refusal of the whole command, or a caret past `save`.
+// out is one command's window (junosProbe: from the command's send, trimmed
+// after its echo, settled before the next command), so the platform-refusal
+// text cannot be an earlier command's spill.
 func l58PastSave(out string, promptLen int) bool {
 	if strings.Contains(strings.ToLower(out), "command is not valid on the") {
 		return true
 	}
 	at := caretAt(out, promptLen)
 	return at != "" && !caretOn(at, "save") && !strings.HasPrefix(at, "save")
+}
+
+// l58ViewControl types the save candidates in a session under attrs (a `view`
+// class, no deny) and reads each cell. It is information for the note: a
+// session or a command that is not observed reads "not observed", and nothing
+// here fails the test or gates a result.
+func (l *lab) l58ViewControl(t *testing.T, attrs string) (cells, outs map[string]string) {
+	t.Helper()
+	cells, outs = map[string]string{}, map[string]string{}
+	c, r, _ := l.junosLogin(t, "control (view)", attrs)
+	if c == nil {
+		for _, cmd := range junosL58Saves {
+			cells[cmd], outs[cmd] = "not observed", "(no session: "+r.loginErr+")"
+		}
+		return cells, outs
+	}
+	defer c.Close()
+	for _, cmd := range junosL58Saves {
+		out, err := l.junosProbe(c, junosProbe{cmd: cmd})
+		outs[cmd] = out
+		cells[cmd] = l26bCell(out, nil)
+		if err != nil {
+			cells[cmd] = "not observed"
+			break // the session's state is unknown past a missed prompt
+		}
+	}
+	for _, cmd := range junosL58Saves {
+		if _, ok := cells[cmd]; !ok {
+			cells[cmd], outs[cmd] = "not observed", ""
+		}
+	}
+	return cells, outs
 }
 
 // l58Entry types entry in a fresh session under attrs and reads the greeting
@@ -210,6 +244,9 @@ func TestL58JunosBaselineWords(t *testing.T) {
 			}
 		}
 
+		// Information only: the save candidates in a view session, no deny.
+		viewCells, viewOuts := l.l58ViewControl(t, control)
+
 		var b strings.Builder
 		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit), strings.Join(junosL58Class, "\n"))
 		fmt.Fprintf(&b, "Completion over break-glass: `save ?`: %s; `xml-mode ?`: %s.\n\n", listings["save"], listings["xml-mode"])
@@ -228,6 +265,14 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		fmt.Fprintf(&b, ".\n- **G4** `xml-mode` under the `junoscript` deny: bare %s, `netconf` %s: **%s**.\n",
 			cells["deny"]["xml-mode"], cells["deny"]["xml-mode netconf need-trailer"],
 			map[bool]string{true: "closed", false: "not closed"}[closed])
+		fmt.Fprintf(&b, "\n### Control (view), information only\n\nThe save candidates typed in a session under `%s` "+
+			"(class p49-l58-view, no deny). Never a gate.\n\n| probe | control (view) |\n|---|---|\n", tableCell(control))
+		for _, p := range junosL58Saves {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", tableCell(p), viewCells[p])
+		}
+		for _, p := range junosL58Saves {
+			fmt.Fprintf(&b, "\n`%s` (control (view)):\n\n```\n%s\n```\n", tableCell(p), viewOuts[p])
+		}
 		b.WriteString("\n### Outputs\n")
 		for _, s := range []string{"control", "deny"} {
 			fmt.Fprintf(&b, "\n#### %s, user `%s`\n\n```\n%s\n```\n", s, outs[s][l26bUserKey], outs[s]["auth"])

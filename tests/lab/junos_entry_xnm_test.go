@@ -29,14 +29,6 @@ var xnmProbes = []string{"xnm-ssh", "xnm-ssh: get-software-information"}
 
 const xnmRPCKey = "xnm-ssh: get-software-information"
 
-// junosTryConfigure is junosConfigureAdmin that reports a refused line or a
-// failed commit instead of failing the test: the candidate is rolled back
-// (`rollback 0`) so the refused line cannot ride into a later commit, and
-// port49d is put back on the lab config either way.
-//
-// The rollback is checked: a candidate still dirty after it would ride into the
-// cleanup commits, so a rollback that does not report "load complete" fails
-// the test, describing the candidate state (no secrets).
 // junosForwardingKnobs name the lab-only SSH TCP forwarding statement, newest
 // release first: vJunos-router 23.4 refused `tcp-forwarding` as a syntax error.
 var junosForwardingKnobs = []string{"system services ssh allow-tcp-forwarding", "system services ssh tcp-forwarding"}
@@ -58,7 +50,50 @@ func (l *lab) junosTryWithForwarding(t *testing.T, lines []string) (string, stri
 	return "", "", fmt.Errorf("no SSH TCP forwarding statement was accepted: %s", strings.Join(errs, "; "))
 }
 
+// junosTryConfigure is junosConfigureAdmin that reports a refused line or a
+// failed commit instead of failing the test: the candidate is rolled back
+// (`rollback 0`) so the refused line cannot ride into a later commit, and
+// port49d is put back on the lab config either way.
+//
+// The rollback is checked: a candidate still dirty after it would ride into the
+// cleanup commits, so a rollback that does not report "load complete" fails
+// the test, describing the candidate state (no secrets).
 func (l *lab) junosTryConfigure(t *testing.T, lines []string) (string, error) {
+	t.Helper()
+	return l.junosTry(t, lines, "")
+}
+
+// junosTryConfigureWithheld is junosTryConfigure for lines that hold a secret:
+// no error it returns, and none the rollback check raises, carries the lines or
+// the device's output (which echoes them). The errors name only path, the
+// statement being configured.
+func (l *lab) junosTryConfigureWithheld(t *testing.T, lines []string, path string) error {
+	t.Helper()
+	_, err := l.junosTry(t, lines, path)
+	return err
+}
+
+// junosTryError is the error for a failed apply. With withheld set it names
+// that statement path and nothing the device or the lines said.
+func junosTryError(lines []string, withheld string, ferr error, out string) error {
+	if withheld != "" {
+		return fmt.Errorf("applying %s: failed (the lines and the device's output are withheld: they hold a secret)", withheld)
+	}
+	return fmt.Errorf("applying %v: %v\n%s", lines, ferr, hideKeys(out))
+}
+
+// junosRollbackError is the error for a rollback that did not report load
+// complete, under the same withholding as junosTryError.
+func junosRollbackError(lines []string, withheld string, ferr, rerr error) error {
+	if withheld != "" {
+		return fmt.Errorf("the candidate may still hold %s after a failed apply: `rollback 0` did not report load "+
+			"complete (lines and output withheld); the device needs a manual `rollback 0` before another commit", withheld)
+	}
+	return fmt.Errorf("the candidate may still hold %v after a failed apply (%v): `rollback 0` did not "+
+		"report load complete (%v); the device needs a manual `rollback 0` before another commit", lines, ferr, rerr)
+}
+
+func (l *lab) junosTry(t *testing.T, lines []string, withheld string) (string, error) {
 	t.Helper()
 	var out string
 	var ferr error
@@ -71,9 +106,7 @@ func (l *lab) junosTryConfigure(t *testing.T, lines []string) (string, error) {
 		}
 		rb, err := c.sendExpect("rollback 0", junosPer, junosCfgPrompt)
 		if err != nil || !strings.Contains(rb, "load complete") {
-			return fmt.Errorf("the candidate may still hold %v after a failed apply (%v): `rollback 0` did not "+
-				"report load complete (%v); the device needs a manual `rollback 0` before another commit",
-				lines, ferr, err)
+			return junosRollbackError(lines, withheld, ferr, err)
 		}
 		if _, err := c.sendExpect("exit", junosPer, junosOpPrompt); err != nil {
 			return fmt.Errorf("leaving configuration mode after the rollback: %w", err)
@@ -81,7 +114,10 @@ func (l *lab) junosTryConfigure(t *testing.T, lines []string) (string, error) {
 		return nil
 	})
 	if ferr != nil {
-		ferr = fmt.Errorf("applying %v: %v\n%s", lines, ferr, hideKeys(out))
+		ferr = junosTryError(lines, withheld, ferr, out)
+	}
+	if withheld != "" {
+		out = "" // it echoes the lines
 	}
 	return out, ferr
 }
@@ -399,7 +435,7 @@ func TestL26cEntryXnm(t *testing.T) {
 		// failure, and the service stays on the failing list.
 		xnmCommit, knob, err := l.junosTryWithForwarding(t, []string{"set system services xnm-ssh"})
 		if err != nil {
-			t.Skipf("xnm-ssh not measured (`set system services xnm-ssh` was refused or did not commit; no "+
+			t.Skipf("xnm-ssh not measured (the setup commit, xnm-ssh or the forwarding knob, was refused; no "+
 				"note is written and the service stays on the failing list): %v", err)
 		}
 		defer l.junosConfigureAdmin(t, []string{"delete system services xnm-ssh", "delete " + knob})

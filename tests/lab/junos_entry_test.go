@@ -666,8 +666,8 @@ func TestL26cEntryScripts(t *testing.T) {
 			t.Errorf("STOP: a class with `view` alone read the configuration file over scp: report to the controller")
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "The classes were committed: %s. REST: %s.\n\nThe op script, at `%s`:\n\n```\n%s\n```\n\n",
-			commitWord(commit), commitWord(restCommit), junosEntryOpPath, strings.Join(junosEntryOpScript, "\n"))
+		fmt.Fprintf(&b, "The classes were committed: %s. REST: %s, with the forwarding knob `%s`.\n\nThe op script, at `%s`:\n\n```\n%s\n```\n\n",
+			commitWord(commit), commitWord(restCommit), knob, junosEntryOpPath, strings.Join(junosEntryOpScript, "\n"))
 		entryTables(&b, runs, readings, classes, scriptProbes)
 		fmt.Fprintf(&b, "\n### Gates (plan 9b1)\n\n- G1, `op`: under W the script printed %s: %s.\n- G2, `rest`: under "+
 			"W %s: %s.\n", runs["W"].cells["op url: script"], gateWord(readings["W op url: script"], "op"),
