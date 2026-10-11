@@ -637,7 +637,15 @@ func TestL26cEntryScripts(t *testing.T) {
 			l.entryScp(t, r, "/config/juniper.conf.gz")
 		}
 		canonical := []string{"op url: script", "rest: get-configuration"}
-		failing, accepted := scriptsNotObserved(runs, scriptProbes)
+		// Where the tunnel could not reach REST even for the control, REST is not
+		// measured in this run: it leaves the control's canonical cells, G2 says
+		// "not measured", and `rest` stays on the failing list (fails closed).
+		restUnmeasured := restTunnelFailed(runs["C"])
+		if restUnmeasured {
+			canonical = canonical[:1]
+			t.Logf("REST not measured: the control's tunnel did not reach it: %s", oneLine(runs["C"].outs["rest: get-configuration"]))
+		}
+		failing, accepted := scriptsNotObserved(runs, scriptProbes, restUnmeasured)
 		for _, m := range accepted {
 			t.Logf("not observed (accepted, fails closed): %s", m)
 		}
@@ -671,6 +679,14 @@ func TestL26cEntryScripts(t *testing.T) {
 	})
 }
 
+// restTunnelFailed reports whether the control's REST cell is not observed
+// because the break-glass tunnel never reached the service: a transport fault,
+// not the device's answer, so REST goes unmeasured rather than INVALID.
+func restTunnelFailed(c l26cRun) bool {
+	return c.cells["rest: get-configuration"] == "not observed" &&
+		strings.HasPrefix(c.outs["rest: get-configuration"], "tunnel: ")
+}
+
 // gateWord is what a W verdict means for set 1.2.0's lists.
 func gateWord(verdict, entry string) string {
 	switch verdict {
@@ -700,14 +716,14 @@ func entryLogControl(t *testing.T, control l26cRun, unisolated []string) {
 // scriptsNotObserved lists the scripts test's cells that read not observed.
 // REST under W or V may: G2 then reports "not measured" and `rest` stays on
 // the failing list (fails closed). Nothing else may, scp and C's cells least.
-func scriptsNotObserved(runs map[string]l26cRun, probes []string) (failing, accepted []string) {
+func scriptsNotObserved(runs map[string]l26cRun, probes []string, restUnmeasured bool) (failing, accepted []string) {
 	for _, p := range probes {
 		for _, name := range []string{"W", "V", "Vw", "C"} {
 			if runs[name].cells[p] != "not observed" {
 				continue
 			}
 			m := p + " in " + name
-			if p == "rest: get-configuration" && (name == "W" || name == "V") {
+			if p == "rest: get-configuration" && (name == "W" || name == "V" || restUnmeasured) {
 				accepted = append(accepted, m)
 			} else {
 				failing = append(failing, m)

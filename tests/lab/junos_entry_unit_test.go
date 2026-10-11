@@ -201,13 +201,44 @@ func TestScriptsNotObserved(t *testing.T) {
 		"Vw": no(map[string]string{scp: "not observed"}),
 		"C":  no(map[string]string{rest: "not observed", scp: "file read", op: "version only"}),
 	}
-	failing, accepted := scriptsNotObserved(runs, []string{op, rest, scp})
+	failing, accepted := scriptsNotObserved(runs, []string{op, rest, scp}, false)
 	if got := strings.Join(accepted, ";"); got != rest+" in W;"+rest+" in V" {
 		t.Errorf("accepted = %q", got)
 	}
 	want := []string{op + " in V", rest + " in C", scp + " in V", scp + " in Vw"}
 	if !slices.Equal(failing, want) {
 		t.Errorf("failing = %q, want %q", failing, want)
+	}
+	// REST unmeasured (the control's tunnel failed): C's REST is accepted too,
+	// and every other cell still fails.
+	failing, accepted = scriptsNotObserved(runs, []string{op, rest, scp}, true)
+	if got := strings.Join(accepted, ";"); got != rest+" in W;"+rest+" in V;"+rest+" in C" {
+		t.Errorf("unmeasured: accepted = %q", got)
+	}
+	if want := []string{op + " in V", scp + " in V", scp + " in Vw"}; !slices.Equal(failing, want) {
+		t.Errorf("unmeasured: failing = %q, want %q", failing, want)
+	}
+}
+
+// Only a tunnel fault leaves REST unmeasured; the device's own answer, or a
+// not-observed reply that reached the service, never does.
+func TestRestTunnelFailed(t *testing.T) {
+	const rest = "rest: get-configuration"
+	run := func(cell, out string) l26cRun {
+		return l26cRun{cells: map[string]string{rest: cell}, outs: map[string]string{rest: out}}
+	}
+	for _, c := range []struct {
+		cell, out string
+		want      bool
+	}{
+		{"not observed", `tunnel: Post "http://127.0.0.1:3000/rpc": ssh: rejected: connect failed`, true},
+		{"not observed", "HTTP 500\n", false},
+		{"result", "HTTP 200\n<host-name>", false},
+		{"login refused", "HTTP 401\n", false},
+	} {
+		if got := restTunnelFailed(run(c.cell, c.out)); got != c.want {
+			t.Errorf("%s / %q: %v, want %v", c.cell, c.out, got, c.want)
+		}
 	}
 }
 
