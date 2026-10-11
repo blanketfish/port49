@@ -8473,7 +8473,12 @@ certificate while the certificate is valid.
   waiting out the full lift time stays the default.
 - **17. The provider down at 3am.** People holding a certificate keep working until it ends: mints,
   refreshes, and new agents (ruling 12). Only a sign-in fails, and says so.
-- **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds}`.
+- **18. `/v1/config`.** A broker with `issuance` adds `issuance: {certificate_lifetime_seconds,
+  available}`. `available` (bool) is false when the broker's issuing CA is unusable (ruling 8's
+  `503 issuance_unavailable`): the client then says "the broker cannot issue certificates now (its
+  issuing CA is unavailable); tell its operator" before any sign-in, so nobody types a password and
+  approves MFA for a certain 503, and falls back to a valid held certificate as ruling 17 says. A
+  config without the field (an older broker) means available.
   Decision 39 ruling 16's `oidc` list is unchanged. A broker with `tls_ca_bundle_file` adds
   `broker_ca_bundle` (ruling 25).
 - **19. The config file and the flags** (amends decision 42 ruling 6).
