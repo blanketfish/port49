@@ -34,8 +34,9 @@ import (
 )
 
 const l56Claim = "Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real port49 " +
-	"CLI: a broker started with broker.identity.issuance and no issuing CA answers a sign-in's exchange 503 " +
-	"issuance_unavailable and its log names init-issuer, and after port49-broker init-issuer and a restart issues; " +
+	"CLI: a broker started with broker.identity.issuance and no issuing CA says in /v1/config " +
+	"issuance.available: false, the CLI says before any sign-in that the broker cannot issue, its log names " +
+	"init-issuer, and after port49-broker init-issuer and a restart issues; " +
 	"port49 login --oidc --no-browser signs in through a scripted browser, asks the password, writes a 0600 key and " +
 	"its certificate, names the principal, starts the agent and refreshes once; port49 token mints and the device " +
 	"takes the token over SSH; port49 refresh extends the device session with no sign-in; port49 login after the " +
@@ -631,15 +632,15 @@ func l56(t *testing.T, l *lab) {
 	browser.Jar, _ = cookiejar.New(nil)
 	login := append([]string{"login"}, cli.flags...)
 
-	// 0. No issuing CA yet: the broker started, says what to run, and answers
-	// a sign-in's exchange 503. Control: 1, the same login once the CA is made.
+	// 0. No issuing CA yet: the broker started, says what to run, and says issuance
+	// is unavailable before any sign-in. Control: 1, the same login once the CA is made.
 	r := cli.signIn(t, kc, browser, login...)
 	ran("0a. port49 login --oidc, the broker with no issuing CA", r, "")
-	// Since /v1/config says issuance.available:false, the CLI says so before
-	// any sign-in; an older broker's 503 says issuance_unavailable.
-	if r.code != 1 || !strings.Contains(r.stderr, "cannot issue certificates now") &&
-		!strings.Contains(r.stderr, "issuance_unavailable") {
-		fail("with no issuing CA: %s", r.cell())
+	// /v1/config says issuance.available:false, so the CLI says so before any
+	// sign-in. The broker's 503 for an exchange is unit-tested; the lab runs
+	// the current CLI, and a regression in that check must fail here.
+	if r.code != 1 || !strings.Contains(r.stderr, "cannot issue certificates now") || r.form {
+		fail("with no issuing CA: %s; password asked %v", r.cell(), r.form)
 	}
 	logs, _ := c.run("logs", "port49-broker")
 	said := strings.Contains(logs, "issuing-ca.pem is missing") && strings.Contains(logs, "init-issuer")
