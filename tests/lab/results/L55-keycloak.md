@@ -4,7 +4,7 @@
 - **Run:** commit `56cf4388e5bc54c16b2608a7a7d14761f700321f`, `PORT49_LAB_PLATFORMS=`, `-run TestL55`
 - **Platform:** Keycloak, as a container on `tests/lab/oidc/compose.yaml` (no network device)
 - **Image version:** Keycloak 26.4.7 JVM: 21.0.9 (Red Hat, Inc. OpenJDK 64-Bit Server VM 21.0.9+10-LTS) OS: Linux 7.0.0-31-generic amd64; image quay.io/keycloak/keycloak@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007
-- **Capture:** `tests/lab/evidence/L55-keycloak.json`: one JSON line per request or token, with the JWS header and claims decoded and the signature dropped (the wire is TLS, so a pcap would be encrypted).
+- **Capture:** `tests/lab/evidence/L55-keycloak.json`: one JSON line per observed step, {step, value}, each value the observation's text as the table below has it; no token is in it (the wire is TLS, so a pcap would be encrypted).
 - **Credentials:** none here or in the evidence: the admin password is generated per run and never printed; the lab user's password and the service secret are the realm file's published lab values.
 
 ## Claim

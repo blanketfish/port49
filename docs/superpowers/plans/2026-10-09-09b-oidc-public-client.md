@@ -638,8 +638,8 @@ closes.
   - an issued certificate whose sign-in a logout ended.
 - **Never refuse a start over the issuing CA** (R4): issuance stops, and the start says why.
 - **The lab register rules** (CLAUDE.md 1–4). Task 1 rewords L55 and L56, and Task 12 measures
-  them. L55 closed 2026-10-11: Keycloak's redirect registrations and PKCE are in
-  spec §13 decision 43.
+  them. L55 and L56 closed 2026-10-11: Keycloak's redirect registrations and PKCE are in
+  spec §13 decision 43, and L56's cells are in `tests/lab/results/L56-arista_eos.md`.
 - Verify with `make test && make vet`, and `make test-race` on every touched package, and report
   the real output.
 - Conventional Commits, on branch `feature/oidc-public-client`. Commit messages end with:
