@@ -31,6 +31,7 @@ type Issuer struct {
 	gate      chan struct{} // non-nil: /jwks waits for it to close (Hold)
 	arrive    func()
 	fetches   atomic.Int64
+	auth      *AuthServer // nil: /authorize and /token answer 404
 }
 
 type held struct {
@@ -45,7 +46,7 @@ func NewIssuer(t testing.TB) *Issuer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		i.mu.Lock()
-		status, hook := i.status, i.discovery
+		status, hook, auth := i.status, i.discovery, i.auth
 		i.mu.Unlock()
 		if status != 0 {
 			w.WriteHeader(status)
@@ -53,6 +54,14 @@ func NewIssuer(t testing.TB) *Issuer {
 		}
 		doc := map[string]any{"issuer": i.URL, "jwks_uri": i.URL + "/jwks",
 			"id_token_signing_alg_values_supported": []string{"RS256"}}
+		if auth != nil {
+			auth.mu.Lock()
+			doc["authorization_endpoint"] = i.URL + "/authorize"
+			doc["token_endpoint"] = i.URL + "/token"
+			doc["code_challenge_methods_supported"] = []string{"S256"}
+			doc["authorization_response_iss_parameter_supported"] = !auth.noIss
+			auth.mu.Unlock()
+		}
 		if hook != nil {
 			hook(doc)
 		}
@@ -91,6 +100,26 @@ func NewIssuer(t testing.TB) *Issuer {
 	})
 	mux.HandleFunc("GET /moved", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, i.URL+"/jwks", http.StatusFound)
+	})
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
+		i.mu.Lock()
+		a := i.auth
+		i.mu.Unlock()
+		if a == nil {
+			http.NotFound(w, r)
+			return
+		}
+		a.authorize(w, r)
+	})
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		i.mu.Lock()
+		a := i.auth
+		i.mu.Unlock()
+		if a == nil {
+			http.NotFound(w, r)
+			return
+		}
+		a.token(w, r)
 	})
 	i.srv = httptest.NewTLSServer(mux)
 	i.URL = i.srv.URL
