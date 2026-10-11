@@ -3516,10 +3516,11 @@ attribute is complete in four lines:
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
-| `command_projection` | how rules render for session-only platforms (below): `junos_regex`, the one this build renders. Where it is set, `privilege` is each level's ceiling in permission bits, never attributes, and is required, and `supports` is `[session]`. Only a platform the pinned set projects is projected: a `platforms:` block, `replace: true` included, or a new platform that sets `command_projection`, `bits`, `carve_outs`, `bit_delivery` or `local_user_names` where the pinned set does not project that platform is refused at load, since no measurement sets a floor under a bit's reach there | if `session`-only |
+| `command_projection` | how rules render for session-only platforms (below): `junos_regex`, the one this build renders. Where it is set, `privilege` is each level's ceiling in permission bits, never attributes, and is required, and `supports` is `[session]`. Only a platform the pinned set projects is projected: a `platforms:` block, `replace: true` included, or a new platform that sets `command_projection`, `bits`, `carve_outs`, `bit_delivery`, `local_user_names` or `rpc_entry_denies` where the pinned set does not project that platform is refused at load, since no measurement sets a floor under a bit's reach there | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, an upper bound measured in the lab (L12), and whether bits travel as `user-permissions` or a `local-user-name` template (below). A session runs the union of its bits' reach. The bit `baseline` is what a class with no bits runs, held by every session and never sent or named in `privilege`. A block may add to a bit's reach, an edit the diff gates as widening (§12), and never take from it, and may not declare a bit the set does not | if `session`-only |
 | `carve_outs` | the commands a bit alone makes available, whatever other bit reaches them: each rule held by that bit's own reach, measured in the lab (L12). The only subtraction from the union: a bit not held removes no command another bit reaches except these. A block may drop one and never add one. A `platforms:` block for a platform the pinned set does not project may not declare `carve_outs` at all, and is refused at load (`command_projection`): only a measured set subtracts reach | optional, with `bits` |
 | `local_user_names` | under `bit_delivery: local_user_name`, each level's template user on the device, whose class `port49 platform export --classes` renders with the level's bits. Each is `p49-<name>`, in the set and in a block alike, and never `remote` or a platform system user such as `root`: a template the device already has under another class would put the session in that class, whatever bits the projection proved | with `local_user_name` |
+| `rpc_entry_denies` | on a projected platform, the denies a reply adds where a wire deny is the only guard beneath a sent bit or the baseline, closing the CLI's ways into a native RPC for that session (decision 44). Set 1.2.0's `juniper_junos` carries `["junoscript **"]`. Each is words and a trailing `**`. A block may drop one, and the platform then renders as set 1.1.0 does; it may never add one the set did not measure | optional |
 | `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
@@ -3875,51 +3876,88 @@ proves fails closed as `configuration_deny`, with a message saying so. `deny-con
 measured over the wire and not sent.
 
 **A wire deny does not bind a native NETCONF RPC** (`tests/lab/results/L12-netconf-juniper_*.md`,
-both images). The token that opens the CLI opens NETCONF with the same
-reply, and there a native RPC ran past every wire deny (`<get-configuration>` past `deny show
-configuration **`); only a `<command>` RPC was refused. So a projected Junos device must run no
-management service but the CLI's, checked as an allowlist: `devices check-config` passes it only
-where nothing under `system services` is on but `ssh` and `telnet`, an unknown service included,
-and `rest`, `web-management` and `extension-service` appear nowhere, reading only `show
-configuration | display set | display inheritance | except "^set groups "` and refusing any
-other input. That rules out NETCONF, the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), REST,
-J-Web, JET/gRPC/gNMI and `outbound-ssh`, outright, since Junos cannot turn them off per user.
+both images). The token that opens the CLI opens NETCONF with the same reply, and there a native
+RPC ran past every wire deny (`<get-configuration>` past `deny show configuration **`); only a
+`<command>` RPC was refused. A CLI session reaches the same RPCs from inside itself:
+`xml-mode netconf` opens NETCONF there, and a native RPC its deny did not name ran
+(`L26c-juniper_*.md`). On SRX hardware `<get-configuration/>` through it returned the whole
+configuration past a deny of `show configuration` beneath `view-configuration`
+(`L26c-operator-juniper_srx.md`, operator-reported). **So `deny-commands` cannot keep the
+configuration from a session that holds `view-configuration` and reaches an RPC.**
 
-Whether that is sufficient is not measured. L26c (open) measured, with `netconf ssh` still
-configured, what a projected CLI session reaches inside itself: `xml-mode netconf need-trailer`
-opens NETCONF and returns a hello; a native RPC the probed deny did not name
-(`<get-software-information/>`) ran; the deny did bind a `<command>…</command>` RPC (as over
-NETCONF, where the deny session refused one the control ran, L12-netconf); and RPC reach there is
-bounded above by the permission bits (`view` without `view-configuration` got an empty
-`<configuration>`, in one RPC's raw output; the note's table records every `get-configuration`
-cell as not observed, and the rerun is owed). `op url` was accepted up to the copy, with no RPC observed through it.
-`start shell` is refused by the bits unless a shell permission is held, and the fail-closed
-reply's `deny-commands .*` refuses `xml-mode` and `op` both. No probe ran with the services off
-that the allowlist leaves, and no native RPC was observed passing a deny that named what it
-reached. **port49 therefore assumes, until L26c closes, that a deny beneath a sent bit is not a
-boundary**, and in set 1.1.0 fails closed on it (`JunosFacts.DenyBindsRPCs` false; option C,
-*provisional on L26c* — the conservative reading, which a measurement can only relax). The owner
-has since seen it hold on SRX hardware (Junos 23.4R2-S8.7; operator-reported, no capture, so the
-row stays open; `tests/lab/results/L26c-operator-juniper_srx.md`): under `view view-configuration` and `deny-commands "show
-configuration"`, the CLI refused `show configuration` while `<get-configuration/>` through
-`xml-mode netconf` returned the whole configuration, secrets masked. A deny of `show version`
-did refuse `<get-software-information/>`, and no deny naming `xml-mode` (`^xml-mode.*`, `xml.*`,
-and others) refused it. **So `deny-commands` cannot keep the configuration from a user who
-holds `view-configuration`**; withholding it means withholding the bit. A composition whose only guard beneath a sent bit, or
-beneath the baseline every session holds, is a wire deny is treated as CLI-only safe: the capability shape
-falls to the narrow one, whose `.*` refuses both entry points, and where that cannot carry it the
-subject gets the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
-allow that would run `xml-mode` or `op` is refused the same way, and the fail-closed reply leaves
-it off. What stays projectable: a deny no sent bit reaches, and a bit a deny aligns with (dropped,
-not denied). **No carve-out leaves a deny off the wire in set 1.1.0.** `view-configuration`'s
-`show configuration **` out of `view` is *provisional on L26c* over RPC — the empty
-`<configuration>` above is one raw output, not a recorded observation — and every other
-carve-out is measured on the CLI at most. So a deny a carve-out would cover is sent, and fails
-closed where it lies beneath a sent bit: a readonly denying `show configuration **` gets the
-fail-closed reply, not `view` alone, until L26c closes and a set records the carve-out as
-holding over RPC. Denying the entry points themselves, `xml-mode` and `op`, is future work
-pending measurement on production devices; `start` is never denied, since admins need `start
-shell` and the bits already refuse it.
+**A deny of `junoscript` closes the RPC entry points, per user** (`tests/lab/results/L26c-junoscript-juniper_*.md`,
+both images, each refusal isolated against a control with the same bits and no deny). Junos
+authorizes `xml-mode` as `junoscript`. `deny-commands "junoscript"`, sent by TACACS+ or set on the
+class, refused `xml-mode netconf` and `junoscript netconf` from the CLI, and refused that user's
+NETCONF on port 830 (`error: unknown command: xml-mode`). `show version` still ran, and the
+control reached `<get-software-information/>` both ways. A deny naming `xml-mode` does not bind,
+and a hidden command does not abbreviate. The deny closes NETCONF for the session whose reply
+carries it and for no one else. *Provisional on L26c* for the other ways in: the NETCONF
+subsystem on port 22, the SSH exec channel, an `op url` script, REST and `scp` (plan 9b1, Task 3),
+and the projected reply end to end (Task 9).
+
+**Set 1.2.0 sends it** (the adapter key `rpc_entry_denies`; decision 44). Take a composition whose
+only guard beneath a sent bit, or beneath the baseline every session holds, is a wire deny. It
+keeps the capability shape, and its `deny-commands` carries the adapter's entry denies beside its
+own. The CLI deny is then the boundary. That subject has no NETCONF, `xml-mode` or XML API session
+on the device. A subject whose reply carries no such deny keeps them: an automation account
+granted everything its bits reach, say. Over NETCONF a native RPC is bounded by the bits alone, so
+no subject has both a deny beneath its bits and NETCONF.
+
+**A readonly with a deny beneath `show **`** (decision 44 ruling 10). A grant that leaves a
+baseline command to a deny carries baseline denies, and a readonly's are fourteen. Set 1.2.0
+carries them beside the entry deny. Each change below renders only where the adapter has
+`rpc_entry_denies`, so a set without it, or a block that drops it, renders as set 1.1.0 does.
+
+- The baseline's `xml-mode **`, which no keyword tree proves, is sent as nothing beside
+  `junoscript **`. Junos authorizes `xml-mode` as `junoscript`, and a deny naming `xml-mode` does
+  not bind (`tests/lab/results/L26c-junoscript-juniper_*.md`). Bare `xml-mode` under the deny is
+  *provisional on L58*.
+- Set 1.2.0's keyword tree proves `save`, *provisional on L58* (L26b proved it on vJunos-router
+  only).
+- A reply's `word **` denies render as one alternative, ` *(help|quit|…)( .*)? *(\|.*)?`, the
+  shape L26b's deny sessions were enforced in (`L26b-juniper_*.md`).
+- A permit the bits reach but for a carve-out of a ceiling bit the reply does not send, where
+  an allow of the permit would beat a deny beneath it, goes out as allows of those carve-outs.
+  Each is within the ceiling and meets no deny. Whether an allow runs a command past the bits is
+  unmeasured, so CI reports each as sent beyond them.
+- Where the capability shape would send an allow its bits do not reach, and the narrow shape
+  carries the grant with every allow reached and leaves off no more, the narrow shape is sent.
+
+So a readonly granted `show **` less `show configuration **` gets `view`, a `deny-commands` of
+170 bytes (its twelve `word **` denies and `junoscript` in one alternative, `set cli` and its
+own deny), and allows of `show log`, `show firewall` and `show policer`, view-configuration's
+other carve-outs. view-configuration is not sent: the grant decides none of its other reach
+(`monitor`, `request mpls` and the rest). A readonly granted `show **` alone keeps the narrow
+shape and both bits, as under set 1.1.0.
+
+Where the reply must send an allow that meets an entry deny, the allow would beat it (L11), so the
+entry is not closed. The composition then falls to the narrow shape, whose `.*` refuses every
+entry point, or to the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
+allow that would run `xml-mode`, `junoscript` or `op` is refused the same way, and the fail-closed
+reply leaves it off.
+
+CI reports two warnings. `projection_netconf_closed` names each subject a reply closes NETCONF
+for. `projection_deny_beneath_view_configuration` names each sent deny that meets `show
+configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but
+the bit is what grants the configuration, so withholding the bit is the real fence.
+
+**Set 1.1.0 is unchanged**, since a released set is never edited. It sends no entry deny, so a
+composition whose only guard beneath a sent bit is a wire deny gets the narrow shape or the
+fail-closed reply there, as before (option C).
+
+**Management services.** Under set 1.1.0 a projected Junos device runs no management service but
+the CLI's, checked as an allowlist. `devices check-config` passes it only where nothing under
+`system services` is on but `ssh` and `telnet`, an unknown service included, and `rest`,
+`web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes
+NETCONF, the XML API and device-initiated NETCONF per user, so the check no longer requires them
+off. It still fails `web-management` and `extension-service`, and `rest` (*provisional on L26c*:
+plan 9b1 Task 3 measures it). No measurement shows the entry deny closes their RPCs. Both sets
+read the capture §12 names.
+
+**No carve-out leaves a deny off the wire in either set**: `view-configuration`'s `show
+configuration **` out of `view` is measured on the CLI only. `start` is never denied, since admins
+need `start shell` and the bits already refuse it.
 
 What the regexes rest on is the device's regex dialect, measured by L9 and read into
 `JunosFacts`: explicit `^` and `$` anchors on every regex; a deny's letters in lower case, since
@@ -5689,6 +5727,8 @@ added here before any code emits it:
 | `projection_refused` | a composition that gets the fail-closed reply, with the subject, every device and the reason (decision 26); for `argument_deny`, "Junos can't deny by argument: `<word>` in `deny <rule>`; deny the whole command (`<keywords>`) or drop the rule", and for `configuration_deny`, that the deny names a configuration statement deny-commands never reaches (decision 27) | yes |
 | `projection_overflow` | a reply attribute past RFC 8907's length, with the class line for an overflowing deny set only (§8) | yes |
 | `projection_argument_allow` | a permit whose allow is left off because Junos would not match it as port49 does: it names an argument, or an argument may be typed among its words (decision 27); the device refuses what port49 permits there | no, a warning |
+| `projection_netconf_closed` | on a platform whose pinned set carries `rpc_entry_denies`, a composition whose Junos reply refuses `junoscript`: the entry deny beneath a deny, or the narrow shape's `.*`. The subject has no NETCONF, `xml-mode` or XML API session on those devices (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
+| `projection_deny_beneath_view_configuration` | a sent deny that meets `show configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but the bit is what grants the configuration; withhold the bit instead (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
@@ -5701,13 +5741,39 @@ line the adapter's `config_checks` name: a command method list falling back to `
 `authentication-order` with `password` in it (L4) — or on a `device_config` line the
 configuration does not carry as a top-level line of its own, the absence no `config_checks`
 entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
-asked about (§6). On a projected platform it also reads the configuration, as `show
-configuration | display set | display inheritance | except "^set groups "` prints it (the one
-capture it takes, refusing any other form; §8), against the reference `platform export --classes`
-writes, and `--config port49d.yaml`, the classes' idle-timeout, is required: a reference line
-the device lacks, and any line under a template class or template user the reference does not
-write — a class `allow-commands`, a permission, a template password — fails it, the uid Junos
-assigns aside (§8). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
+asked about (§6). On a projected platform it also reads the configuration, as `show configuration | display set |
+display inheritance` prints it: groups' statements expanded where they apply, the group
+definitions kept, one capture, refusing any other form (§8). It reads it against the reference
+`platform export --classes` writes, and `--config port49d.yaml`, the classes' idle-timeout, is
+required. A reference line the device lacks fails it. So does any line under a template class or
+template user the reference does not write: a class `allow-commands`, a permission, a template
+password. Exempt are the uid Junos assigns, a class's `idle-timeout`, `login-alarms` and
+`login-tip`, and a user's `full-name`, which change nothing a session runs (decision 44).
+
+**Configuration groups pass where they change no template.** A group whose statement lands under a
+template class or user fails the check, the finding naming the group. "Lands" reads a wildcard
+`<*>` or `<p49-*>` path as Junos does. It fails where it adds a permission, an `allow-` or
+`deny-commands`, an `allow-` or `deny-configuration` (or a `-regexps` form), or a template user's
+authentication or class: `group BASE adds `permissions` to class p49-remote: every port49 session
+on this device gets it`. It fails too where it adds anything not known harmless.
+
+The check trusts the inherited capture's expanded lines (L57) and verifies them where it matters.
+Take a group the configuration applies to a template, by an `apply-groups` naming it at or above
+that level with no `apply-groups-except` between. If the capture does not carry its statement
+there, and the template does not write a harmless leaf of that name itself, the capture was taken
+without `display inheritance`, and the check refuses it. Where the template writes a privilege or
+unlisted statement of that name itself, the group is named at its own line. A capture that
+applies a group at or above a template without carrying the group's definition, as one taken
+with the earlier `| except "^set groups "` does where it prints `apply-groups`, is refused. In a
+group's statement a `<pattern>` word is read as every word it matches, in the services check too.
+
+`--batch FILE...` checks many captures in one run, the CI form (decision 44 ruling 8). Each file
+is checked against the inventory device its file name names: the name as it is where the
+inventory has it (Oxidized's files, an FQDN), else the name with its last extension removed
+(`srx-01.conf` is `srx-01`). Every file is checked whatever one before it found. The run exits 1
+when any file has a finding or cannot be read.
+
+A `platforms:` block adds to the set's `device_config`, `local_accounts` and
 `config_checks` and never takes one away, `replace: true` and `based_on:` included: a block
 that rewrites the set's line ending in `local` to end in `none` still has the set's line
 required and its own reported by the set's check. A device configuration is full of secrets,
@@ -5903,7 +5969,8 @@ to that list. The gated keys therefore include:
 - The normalization keys, which change the vector rules match against: `expands_abbreviations`,
   `splits_interface_names`, `strip_cr`, `pipe_token` and `pipe_authorized`.
 - The rendering keys of session-only platforms, which decide what the device enforces:
-  `command_projection`, `bits`, `bit_delivery`, `carve_outs` and `local_user_names`.
+  `command_projection`, `bits`, `bit_delivery`, `carve_outs`, `local_user_names` and
+  `rpc_entry_denies`.
 - The keys the gate reads: `privilege_attributes`, `inert_attributes` and
   `accepted_attributes`.
 - `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
@@ -8589,6 +8656,74 @@ certificate while the certificate is valid.
     one. The remedy is the real broker's next answer, a bundle or none, which every agent applies
     at its next start.
 
+**44. Junos: a per-user `junoscript` deny, and check-config reads configuration groups.**
+*Plan 9b1, 2026-10-11, on Ryan's rulings of that day.* Rulings rest on reasoning unless they say
+data. Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's Task 9 closes it; ruling 7 is
+provisional on L57; ruling 10's `save` and bare `xml-mode` are *provisional on L58* until plan
+9b1's Task 3 closes it.
+
+- **1. The entry deny** (data: `tests/lab/results/L26c-junoscript-juniper_*.md`). Take a
+  composition whose only guard beneath a sent bit or the baseline is a wire deny. Under a set
+  whose adapter carries `rpc_entry_denies`, it is projected in the capability shape with those
+  denies added to its `deny-commands`, role `rpc_entry`. This replaces option C's narrow-or-closed
+  answer for that set. Set 1.2.0's `juniper_junos` carries `["junoscript **"]`; ruling 2 says
+  when it carries `op **` too.
+- **2. `op`.** If an `op url` script reaches an RPC past the `junoscript` deny (plan 9b1 Task 3,
+  cell b), set 1.2.0's list is `["junoscript **", "op **"]`. Denying `op` to a subject port49
+  permits it is narrower, which is reported, not refused.
+- **3. Who keeps NETCONF.** A subject whose reply carries no deny beneath a sent bit or the
+  baseline. An allow the reply must send that meets an entry deny would beat it (L11), so that
+  composition keeps the narrow or fail-closed answer. `junoscript` joins `xml-mode` and `op` as
+  an entry a narrow allow may not open.
+- **4. Two warnings** (Ryan's ruling). `projection_netconf_closed` and
+  `projection_deny_beneath_view_configuration` (§12). Neither fails `policy test` or `policy diff`.
+  `policy diff` prints the ones a change brings, since every unchanged warning on every diff is
+  noise.
+- **5. The key is adapter data** (§8, "the platform set is pinned"). `rpc_entry_denies` is read
+  only on a projected platform. A block may drop an entry deny, and that platform then renders
+  as set 1.1.0 does: ruling 10's render changes hang on the key too. It may never add one the set
+  did not measure, as with `carve_outs`. `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders
+  byte for byte as before.
+- **6. Services** (Ryan's ruling, narrowed for security; data L26c). Under set 1.2.0
+  check-config no longer fails NETCONF, the XML API, `outbound-ssh`, any non-RPC service, or an
+  ssh option. It still fails `web-management` and `extension-service` anywhere in the hierarchy,
+  and `rest` unless plan 9b1 Task 3 measures the `junoscript` deny closing it. Set 1.1.0's
+  allowlist is unchanged.
+- **7. Groups** (Ryan's ruling; data L57). check-config reads `show configuration | display set
+  | display inheritance` and trusts the expanded lines. It names the group behind a template line
+  it fails: a group statement whose path, wildcards read as Junos reads them, equals the line.
+  Take a group the configuration applies to a template: an `apply-groups` naming it at or above
+  the template's level, with no `apply-groups-except` naming it at or below that level. If the
+  template does not write a harmless leaf of that name itself and the capture does not carry its
+  statement there, the capture is refused as not inherited; where the template writes a privilege
+  or unlisted statement of that name, the group is named at its own line. An `apply-groups`
+  reaching a template whose group the capture does not define is refused. A group applied from
+  inside another group's definition is read as applied at the top (conservative), unless L57
+  shows Junos does not expand it. Neither `apply-groups` nor `apply-groups-except` is itself a
+  finding. In a group a `<pattern>` word is read as every word it matches.
+- **8. Batch.** `--batch FILE...`, the device named by the file name where the inventory has it,
+  else by the name less its last extension. Every file is checked. Exit 2 if any file's outcome
+  was a usage or "nothing checked" one, else 1 if any had a finding or could not be read.
+- **9. Unlisted statements fail.** Under a template, a statement on neither ruling 7's privilege
+  list nor its harmless list fails, from a group or written there. `allow-hidden-commands`,
+  `login-script`, `logical-system`, `tenant` and `security-role` change what a session runs, and
+  an allowlist does not fail open on a statement nobody listed (plan 5b pre-flight C1).
+- **10. A readonly with a deny beneath `show **`** (Ryan's ruling of 2026-10-11, on plan 9b1's
+  pre-flight; data: `L26c-junoscript-juniper_*.md`, `L26b-juniper_*.md`, `L58-juniper_*.md`).
+  Without this ruling such a readonly fails closed under 1.2.0 as under 1.1.0: its baseline
+  denies name `save` and `xml-mode`, which no proven keyword names, they render 333 bytes alone,
+  and view-configuration's carve-outs take `show **` out of `view`'s reach, so `show **` would go
+  out as an allow that beats the deny. Where the adapter carries `rpc_entry_denies`, and only
+  there: the baseline's `xml-mode **` is sent as nothing beside `junoscript **`, which refuses it
+  (Junos authorizes `xml-mode` as `junoscript`; the model reads it refused); set 1.2.0's tree
+  proves `save`; `word **` denies render as one alternative; a permit the bits reach but for a
+  carve-out of an unsent ceiling bit, whose allow would beat a deny beneath it, goes out as allows
+  of those carve-outs, each within the ceiling and meeting no deny, reported as sent beyond the
+  bits; and a capability reply sending an allow its bits do not reach yields to a narrow one
+  that reaches every allow and leaves off no more. view-configuration is not sent to such a
+  readonly, whose grant decides none of its other reach; ruling 4's warning stays an operator's
+  and an admin's.
+
 ---
 
 ## 14. Required test assertions
@@ -8895,6 +9030,17 @@ Beyond those already listed in the design document's §14:
   ceiling; the mixed shape gets that subject the fail-closed reply, and `policy test` and
   `policy diff` exit non-zero naming the grant, both rules, and the platform. A session-only
   platform without `bits:` is a load error.
+- **The entry deny** (decision 44): under set 1.2.0 an operator granted `**` less `show
+  configuration **` renders the capability shape with `junoscript` in `deny-commands`; the device
+  refuses `show configuration`, `xml-mode netconf` and that user's NETCONF on port 830, while a
+  subject with no deny beneath its bits opens NETCONF; under set 1.1.0 the same policy fails
+  closed as before. Under set 1.2.0 a readonly granted `show **` less `show configuration **`
+  renders `view`, its denies with `junoscript` in 170 bytes, and allows of `show log`, `show
+  firewall` and `show policer`; the device refuses `show configuration`, `xml-mode` and
+  `xml-mode netconf`. A readonly granted `show **` alone renders as under 1.1.0 (ruling 10).
+- **check-config reads groups** (decision 44): a group adding `permissions` to `p49-remote` fails
+  naming the group; a group adding `login-tip` passes; a capture without `display inheritance`
+  from a device applying a group to a template is refused; `--batch` checks every file.
 - **A fail-closed composition binds only its subject** (decision 26): on a device where one
   subject's composition gets the fail-closed reply, the daemon loads the policy, the device is
   not quarantined, and every other subject on it is answered with its own projected reply.
@@ -9248,7 +9394,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation, not reproduced. Measured 2026-09-25 on Nexus 9300v 10.4(2)F (`tests/lab/results/L25-cisco_nxos.md`): a network-operator's bare `show interface`, paged to its end, asked for no sudo password on this image, so there was no prompt to cancel and no record under `admin` followed. No system user ships, and plan 5b's Task 15 did not run |
 | **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. Both images were walked twice: vJunos-router's rerun reproduced its first tree byte for byte, and vSRX's runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects every committed run (three trees), 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
 | **L26b** | Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence. Probed: the words after `show` that L26 offered and did not prove (`cli`, `host`, `ingress-replication`, `policy`, `task`), `exit`, `save`, `set cli`, and every `show configuration` hierarchy the image offers. | The L26b overlays laid over L26's trees (`tests/lab/results/L26b-keywords-juniper_*.yaml`), and so set 1.1.0's keyword tree; whether a deny naming a `show configuration` hierarchy may be sent (decision 27; §8) | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26b-juniper_vjunos-router.md`, `L26b-juniper_vsrx.md`. Proven on both images: `show cli`, `show host`, `show ingress-replication`, `show policy`, `show task`, `set cli` and `exit`. `save` is proven on vJunos-router and unproven on vSRX, so it is not a keyword in the set. **A deny naming a `show configuration` hierarchy is not enforced**: every offered hierarchy, 32 on vJunos-router and 25 on vSRX, ran under a deny naming it; see below |
-| **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0 and provisional on this row: port49 assumes a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); whether the management-services allowlist is sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open. The owner reported on 2026-09-25, from SRX hardware (Junos 23.4R2-S8.7, no capture, `tests/lab/results/L26c-operator-juniper_srx.md`): `<get-configuration/>` through `xml-mode netconf` passed a deny of `show configuration` beneath `view-configuration`; a deny of `show version` refused `<get-software-information/>`; no sent deny naming `xml-mode` refused it, while `^.*$` did (with every other command); accounting recorded the entry as `cmd=xml-mode netconf <cr>`; and with the NETCONF service (`netconf ssh`, port 830) deactivated, `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF and `<get-configuration/>` returned the configuration, so the management-services allowlist does not close `xml-mode`. On 2026-09-28 the owner reported the same with the deny set on the local class, and that `deny-commands "junoscript"`, set on the class or sent by TACACS+, refused `xml-mode netconf` while `show version` still ran: Junos appears to authorize `xml-mode` as `junoscript`. Without a capture these do not close the row. Measured 2026-09-30 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-junoscript-juniper_*.md`), the two agreeing and each refusal isolated against a control with the same bits and no deny. `deny-commands "junoscript"`, sent by TACACS+ or set on the local class, refused `xml-mode netconf` and `junoscript netconf` while `show version` ran. It also refused that user's NETCONF on port 830 with `error: unknown command: xml-mode`, where the control reached `<get-software-information/>` both ways. A deny naming `xml-mode` did not bind. The abbreviated forms were refused in every class, so they say nothing about the deny. This confirms the owner's `junoscript` reports. Because the deny also ends that user's NETCONF, port49 does not send it by default (roadmap, 2026-09-30), and option C stands. The rest of the row stays open |
+| **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it: whether a deny naming the entry points binds, with their abbreviations and through a class's own deny list; whether `deny-commands "junoscript"` also refuses NETCONF as an SSH subsystem on port 22 (with `netconf ssh` configured), NETCONF over the SSH exec channel (`ssh <device> xml-mode netconf need-trailer`), an `op url` script's `jcs:invoke` RPCs, REST (`/rpc/…`) and `scp` of `/config/juniper.conf.gz`, each against a control; whether a port49-projected reply under set 1.2.0 carrying the entry deny keeps the CLI deny, refuses NETCONF, and leaves a no-deny subject's NETCONF working. | `JunosFacts.DenyBindsRPCs` (false): a deny beneath a sent bit or the baseline guards the CLI only; set 1.1.0 fails closed on it (§8, option C), and set 1.2.0 adds `rpc_entry_denies` (`junoscript **`) instead (decision 44 rulings 1–3, 6); which management services check-config fails under each set (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open. The owner reported on 2026-09-25, from SRX hardware (Junos 23.4R2-S8.7, no capture, `tests/lab/results/L26c-operator-juniper_srx.md`): `<get-configuration/>` through `xml-mode netconf` passed a deny of `show configuration` beneath `view-configuration`; a deny of `show version` refused `<get-software-information/>`; no sent deny naming `xml-mode` refused it, while `^.*$` did (with every other command); accounting recorded the entry as `cmd=xml-mode netconf <cr>`; and with the NETCONF service (`netconf ssh`, port 830) deactivated, `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF and `<get-configuration/>` returned the configuration, so the management-services allowlist does not close `xml-mode`. On 2026-09-28 the owner reported the same with the deny set on the local class, and that `deny-commands "junoscript"`, set on the class or sent by TACACS+, refused `xml-mode netconf` while `show version` still ran: Junos appears to authorize `xml-mode` as `junoscript`. Without a capture these do not close the row. Measured 2026-09-30 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-junoscript-juniper_*.md`), the two agreeing and each refusal isolated against a control with the same bits and no deny. `deny-commands "junoscript"`, sent by TACACS+ or set on the local class, refused `xml-mode netconf` and `junoscript netconf` while `show version` ran. It also refused that user's NETCONF on port 830 with `error: unknown command: xml-mode`, where the control reached `<get-software-information/>` both ways. A deny naming `xml-mode` did not bind. The abbreviated forms were refused in every class, so they say nothing about the deny. This confirms the owner's `junoscript` reports. Because the deny also ends that user's NETCONF, port49 does not send it by default (roadmap, 2026-09-30), and option C stands. The rest of the row stays open; plan 9b1 (2026-10-11) measures the rest in its Tasks 3 and 9 |
 | **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6c's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | closed — measured 2026-09-30; tests/lab/results/L27-netbox.md, L27-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32 and 2.4.43; fixtures in `tests/lab/sot/fixtures/`. One GraphQL query returned every interface address on all four, each in its own query shape; every webhook signature was HMAC-SHA512 of the body. *Unmeasured:* a non-null pagination `next` (each run held one device) and Nautobot 3.x, split to L30; see below |
 | **L28** | What a device does when port49d cannot validate its key on a connection's first packet. For a key port49d does not hold, one it holds only as retired, and one past its `retire_after`: whether a break-glass login succeeds and how long it takes, how long a command in an open break-glass session takes, and whether a token login is refused. And that a second version accepted beside the current one lets the device work unchanged, and that the device given the current key works at once with no port49d change. Measured first with port49d holding the connection for the per-source backoff and closing it without a reply, then closing it at once with a FIN, then as port49d does now: one record and a strike, the connection reset at once with no reply, and the source's next connections inside its backoff refused at Accept with a reset (§10, "A key miss is closed at once"). An open connection passing its version's `retire_after` is L29's. | Key rotation's no-cutover claim and the retirement lockout's shape (§10 "Retirement is enforced"); the design document's "a key mismatch is indistinguishable from an outage" (§12); whether a key miss should be closed at once, as a quarantine is | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L28-arista_eos.md, L28-cisco_nxos.md, L28-cisco_iosxe.md, L28-juniper_vjunos-router.md. The hold stalled break-glass on all four images (`L28-held-*.md`) and a FIN still stalled the C8000V (`L28-fin-cisco_iosxe.md`), so port49d now resets (branch H). With the reset, break-glass logs in and runs its commands in the time port49d stopped gives on all four, and every token login is refused, for an unknown, a retired and an expired key; a second accepted version logs token users in at v1, and the device given the new key logs in at v2 with no port49d change; see below |
 | **L29** | What a device does when port49d resets a connection it holds open mid-session, at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"): whether the session survives; whether the command in flight fails or falls to the local method, and how long it takes; whether the next command runs; and whether the next token login is refused and break-glass logs in, and how long each takes. The same reset, with a strike, ends an open connection at its first packet past its key version's `retire_after` (§10, "Version sets, and no cutover"). The device sees the same reset either way, so this row measures the device's side of both through the reload case (owner's ruling, 2026-09-30); that port49d resets an open connection at `retire_after` is tested in code with an injected clock (`internal/daemon/server/server_test.go`, `TestAnOpenConnectionDoesNotOutliveItsVersionsDate`, `TestAPacketPastItsDateIsClosedWithAReset`), and the strike's backoff that follows is L28's. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14), and that ending an open connection on a reload costs it what a quarantine's close does (§10; plan 6a final review I1) | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L29-reload-arista_eos.md, L29-reload-cisco_nxos.md, L29-reload-cisco_iosxe.md, L29-reload-juniper_vjunos-router.md. vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F, Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1, each reload a `port49 inventory sync` but the re-key, a policy edit; captures `tests/lab/evidence/L29-reload-<phase>-<platform>.pcap`. The session survived the reset on all four. Where port49d could no longer serve the device (removed, refused, or re-keyed onto a key it does not hold), the next token login was refused and break-glass logged in, in up to 2.1 s on vEOS and vJunos-router and up to 30 s on the C8000V and 41 s on the N9Kv (why: L31, since fixed by `fix/breakglass-reset`); where port49d still served the device (renamed, re-platformed), its FAIL is final on EOS, NX-OS and IOS-XE and break-glass was not let in (L4). vJunos-router held a connection open across some changes and not others: its note measures removed and refused, and its banner marks the three phases in which no connection was open, so no session could be affected. The midnight run was dropped by the same ruling; see below |
@@ -9279,6 +9425,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L54** | `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's askpass answers it once and the login succeeds at the first try; that a command after `--` runs and its exit status is `port49 ssh`'s; that a pinned key the device does not hold is refused by ssh before any TACACS+ exchange, with the minted token never presented. | §13 decision 42 rulings 10 and 11 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L54-arista_eos.md, L54-cisco_nxos.md, L54-cisco_iosxe.md, L54-juniper_vjunos-router.md, L54-juniper_vsrx.md. On all five, `port49 ssh <device> -- show version` exits 0 with the output present; ssh tries `keyboard-interactive` once, the askpass is asked once and answers it, and port49d records one redeem. A pinned key the device does not hold is refused by ssh (`Host key verification failed`, exit 255) before any TACACS+ exchange: 0 TACACS+ packets (the good login's window on the same count holds 120 to 270) and no decision record but `mint` and `blob`, the token never presented. No platform ended a command that ran with exit 255, so the 255 message's policy wording needed no per-platform change. |
 | **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. **`prompt=login` over a live SSO session:** in one browser, a sign-in with no `prompt`, then 15s later, the control, the same session with no `prompt` (whether the form is shown, and `auth_time` against the first), then a `prompt=login` sign-in (whether the form is shown, and whether `auth_time` moves on by 15s or more). | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | closed — measured 2026-10-11; tests/lab/results/L55-keycloak.md. Measured on Keycloak 26.4.7 (a loopback authorization request with the realm's own redirect accepted and another host's refused, so the matcher is shown). The redirect: `http://127.0.0.1:18749/callback` admits port 18749 and refuses 41587; `http://127.0.0.1/callback` and `http://127.0.0.1/*` admit both; `http://127.0.0.1:*/callback` admits neither. PKCE: port49-cli's `pkce.code.challenge.method` is `S256`; the right verifier gets `200` with an `id_token` and `refresh_token`, a wrong one and none each `400 invalid_grant`, and `code_challenge_method=plain` is refused. Discovery lists `[plain S256]` and `authorization_response_iss_parameter_supported: true`, and the authorization response carries `iss`, the issuer. The key binding holds: a 43-character `nonce` came back byte for byte and `auth_time` was +0s from the sign-in. Over a live SSO session the control (no `prompt`, 15s later) showed no form and kept the first `auth_time`, while `prompt=login` showed the form and moved `auth_time` on by 15s. Not measured: a client set to require no PKCE method. |
 | **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA says in `/v1/config` `issuance.available: false`, the CLI says before any sign-in that the broker cannot issue, its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code or private key in the CLI's raw output or the agent's log (the PKCE verifier, which port49 draws and the lab never sees, is checked by the unit tests' `credentialsNowhere`). Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | closed — measured 2026-10-11; tests/lab/results/L56-arista_eos.md. Measured with `bin/port49` on the compose stack, Keycloak 26.4.7 and vEOS 4.31.2F. With no issuing CA the CLI said "the broker cannot issue certificates now (its issuing CA is unavailable); tell its operator" before any sign-in (no password form was shown; the broker's 503 `issuance_unavailable` for an exchange is unit-tested), and the broker's start named the missing CA and `init-issuer`; after `init-issuer` and a restart `port49 login --oidc --no-browser` signed in (the password asked, a control with no `prompt=login` showed no form), wrote the 0600 key and certificate, named `user:alice@corp.example.com`, started the agent and refreshed once (`refreshed at`). `port49 token` was taken by the device over SSH (a token port49 never minted refused); `port49 refresh` extended the device session with no sign-in; `port49 login` after the agent stopped used the held certificate, and `port49 login --sign-in` with the address pasted issued a new one. An administrator's sign-out refused the certificate's next mint in the broker's logout words, ended the agent and removed the certificate at the next `port49 login`, and a sign-in from the named time worked. With Keycloak stopped, `port49 token` (taken by the device), `port49 refresh` and a new agent worked, and `port49 login --sign-in` said the provider did not answer and that `port49 login` without it uses the held certificate, valid until the time it names. No compact JWS, code or private key was in the CLI's raw output, the agent's log or the broker's logs. |
+| **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's; whether a group's `permissions` is added beside a class's own (a leaf-list). And whether a TACACS+ session landing in `remote` holds what a group added (`show cli authorization`). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
+| **L58** | The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save\|junoscript)( .*)?` and the pipe tail), each against a control with the same class (`permissions view`) and no deny. `save`: whether it is a keyword to deny-commands, a `save` command the control runs with `\| count`'s evidence refused under the deny with the caret under `save` (L26b proved it on vJunos-router; on vSRX its control took the hidden `save dhcp-security-snoop` and refused the file name after it, so nothing ran). `xml-mode`: whether bare `xml-mode` (the Junos XML protocol, greeting `<junoscript`) and `xml-mode netconf` are refused under it, where the control is greeted. | Set 1.2.0's keyword tree (`save`); decision 44 ruling 10's `xml-mode **` sent as nothing beside `junoscript **` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -10856,6 +11004,14 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   still owed for each. The run failed four cells since reclassified, and its
   `xml-mode` probes ran before `netconf ssh` was deleted, so a rerun is owed (L26c review I-1,
   I-4).
+- **L57** — added by plan 9b1 (`tests/lab/junos_groups_test.go`); open. Why it is a row:
+  `devices check-config` used to refuse any capture carrying `apply-groups`, and the fleets port49
+  serves template their logins through groups. Decision 44 trusts the device's own expansion,
+  so what `display inheritance` prints in set form is a claim about the device, and is measured.
+- **L58** — added by plan 9b1 (`tests/lab/junos_baseline_test.go`); open. Why it is a row: a
+  readonly's reply carries the baseline's denies, and decision 44 ruling 10 sends `save **` as a
+  proven keyword and `xml-mode **` as nothing. L26b left `save` unproven on vSRX, and L26c typed
+  only `xml-mode netconf` under a `junoscript` deny.
 - **L27** — added by plan 6a and measured 2026-09-30 on beehive, each product's two versions in
   its own Compose stack (`tests/lab/results/L27-netbox.md`, `L27-nautobot.md`; fixtures in
   `tests/lab/sot/fixtures/`, checked by `TestL27FixturesAreWhatTheNotesSay`). Per version: where
