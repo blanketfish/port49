@@ -134,3 +134,68 @@ func TestNothingIsClosedWhereADenyBindsRPCs(t *testing.T) {
 		t.Fatalf("%s %q closed %v %+v %v", res.Shape, res.Attributes, res.Closed, res.Refusal, err)
 	}
 }
+
+// withReach is in with its keyword tree rebuilt from the dialect's bits, as
+// measuredInput builds it, plus the rules proven.
+func withReach(in Input, proven ...string) Input {
+	var reach []string
+	for _, r := range in.Dialect.Bits {
+		reach = append(reach, r...)
+	}
+	in.Keywords = keywordTree(append(reach, proven...)...)
+	return in
+}
+
+// A permit the sent bits do not reach, whose deny beneath it keeps an allow
+// from being sent, is refused, not dropped: `monitor **` is the trace bit's,
+// and with view-configuration unusable only `view` is sent. The witness looks
+// for the device running too much, so it would not see the permit vanish
+// (re-review, reach(held)).
+func TestACarvedPermitTheSentBitsDoNotReachIsRefused(t *testing.T) {
+	rules := []engine.Rule{permit("show **"), permit("request flight-recorder **"), permit("request pppoe **"),
+		permit("request snmp **"), permit("request validation **"), permit("test **"), permit("monitor **"),
+		deny("monitor interface **")}
+	in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, rules...)
+	in.Dialect.Bits["view-configuration"] = append(in.Dialect.Bits["view-configuration"], "clear zzz **")
+	res, err := Project(withReach(entry(in), "monitor interface **"))
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("%s %q allows %v unreached %v beyond %v unsent %v %+v %v", res.Shape, res.Attributes, res.Allows,
+			res.Unreached, res.Beyond, res.Unsent, res.Refusal, err)
+	}
+}
+
+// A bit whose reach names an argument can be wider than the permit by a
+// carve-out the permit does not contain: `show * brief` reaches `show
+// configuration brief`, so an allow of the carve-out `show configuration **`
+// would run more than the permit, and the composition is refused rather than
+// left to the witness (re-review, contains(p, c)).
+func TestACarveOutWiderThanThePermitIsRefused(t *testing.T) {
+	in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show * brief"),
+		deny("show interfaces brief"))
+	in.Dialect.CarveOuts = map[string][]string{"view-configuration": {"show configuration **", "show log **"}}
+	in = withReach(in, "show interfaces brief", "show log **")
+	in.Dialect.Bits["brief"] = []string{"show * brief"}
+	in.Bits = append(slices.Clone(in.Bits), "brief")
+	in.Dialect.CeilingBits["readonly"] = append(slices.Clone(in.Dialect.CeilingBits["readonly"]), "brief")
+	res, err := Project(entry(in))
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// A carve-out of a bit outside the ceiling, held by a deny, is no reason to
+// give up the capability shape: the sent bits carry `show **`, and the narrow
+// shape, which checks the ceiling alone, would put it beyond the level and
+// drop the readonly's whole `show` grant (re-review, Beyond subset).
+func TestTheNarrowPreferenceKeepsTheCapabilityShapeWhereItWouldDropAPermit(t *testing.T) {
+	in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+		permit("monitor **"), deny("show configuration **"), deny("show log **"))
+	in.Dialect.Bits["secret"] = []string{"show log **"}
+	in.Dialect.Bits["view-configuration"] = append(in.Dialect.Bits["view-configuration"], "clear zzz **")
+	in.Dialect.CarveOuts = map[string][]string{"view-configuration": {"show configuration **"}, "secret": {"show log **"}}
+	res, err := Project(withReach(entry(in)))
+	if err != nil || res.Shape != ShapeCapability || len(res.Beyond) != 0 || !res.Device([]string{"show", "version"}) {
+		t.Fatalf("%s %q beyond %v unreached %v %+v %v", res.Shape, res.Attributes, res.Beyond, res.Unreached,
+			res.Refusal, err)
+	}
+}

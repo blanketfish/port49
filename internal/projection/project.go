@@ -799,6 +799,7 @@ func (g generator) carvedAllows(p engine.Rule, bits []string) ([]engine.Rule, bo
 		if !g.mayMeet(p.Rule, c) || slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) }) {
 			continue
 		}
+		// within(c) follows from within(p) and contains(p, c); kept as a guard on what an allow may run.
 		if !g.contains(p.Rule, c) || !g.within(c) || g.unsendableAllow(c) != "" {
 			return nil, false
 		}
