@@ -136,7 +136,7 @@ func TestL57JunosGroups(t *testing.T) {
 		// a group applied under `system` makes its commit re-check that stanza
 		// ("Missing mandatory statement: 'encrypted-password'"); vJunos 23.4 does
 		// not. Only there, root gets a throwaway hash for the run: the hash of a
-		// random password that is never kept or printed, deleted on teardown.
+		// random password that is never kept or printed.
 		if _, err := l.junosTryConfigure(t, junosGroupsLines); err != nil {
 			if !strings.Contains(err.Error(), "Missing mandatory statement: 'encrypted-password'") {
 				t.Fatalf("configuring the groups: %v", err)
@@ -148,7 +148,8 @@ func TestL57JunosGroups(t *testing.T) {
 			if _, err := l.junosTryConfigure(t, []string{`set system root-authentication encrypted-password "` + hash + `"`}); err != nil {
 				t.Fatalf("INVALID: the throwaway root hash did not commit (output withheld: it echoes the hash)")
 			}
-			defer l.junosConfigureAdmin(t, []string{"delete system root-authentication encrypted-password"})
+			// Not deleted on teardown: deleting it fails the same mandatory check,
+			// and the lab's vSRX is a fresh container per run, gone afterwards.
 			t.Logf("root-authentication had no password; a throwaway hash was set for this run")
 		} else {
 			l.junosConfigureAdmin(t, junosGroupsDelete)
