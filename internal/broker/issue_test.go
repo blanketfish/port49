@@ -291,6 +291,24 @@ func TestConfigSaysTheBrokerIssues(t *testing.T) {
 	if json.Unmarshal(w.Body.Bytes(), &c) != nil || c.Issuance == nil || c.Issuance.CertificateLifetimeSeconds != 8*3600 {
 		t.Fatalf("%s", w.Body)
 	}
+	if c.Issuance.Available == nil || !*c.Issuance.Available || c.Issuance.Unavailable() {
+		t.Fatalf("a broker whose CA is usable says it cannot issue: %s", w.Body)
+	}
+	// M1: a CA that cannot issue is said in the config, before anyone signs in.
+	f.b.Issuer.Unavailable = errors.New("issuing-ca.key is not usable: missing")
+	w = httptest.NewRecorder()
+	f.b.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/config", nil))
+	c = api.Config{}
+	if json.Unmarshal(w.Body.Bytes(), &c) != nil || c.Issuance == nil || !c.Issuance.Unavailable() ||
+		!strings.Contains(w.Body.String(), `"available":false`) || strings.Contains(w.Body.String(), "issuing-ca.key") {
+		t.Fatalf("%s", w.Body)
+	}
+	// A config without the field (an older broker) means available.
+	var old api.Config
+	if json.Unmarshal([]byte(`{"issuance":{"certificate_lifetime_seconds":3600}}`), &old) != nil ||
+		old.Issuance == nil || old.Issuance.Unavailable() {
+		t.Fatalf("a config with no available field: %+v", old.Issuance)
+	}
 	f.b.Issuer = nil
 	w = httptest.NewRecorder()
 	f.b.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/config", nil))

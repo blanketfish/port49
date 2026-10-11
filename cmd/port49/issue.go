@@ -236,6 +236,12 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 		return 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
 			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)", sf.broker)
 	}
+	if conf.Issuance.Unavailable() {
+		// Before the sign-in: a password and MFA for a certain 503 is the
+		// 3am cost the config's word spares (ruling 18).
+		return 1, errors.New("the broker cannot issue certificates now (its issuing CA is unavailable); " +
+			"tell its operator")
+	}
 	prov, err := pickProvider(conf, sf.issuer)
 	if err != nil {
 		return 1, err

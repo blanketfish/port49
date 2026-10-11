@@ -635,7 +635,10 @@ func l56(t *testing.T, l *lab) {
 	// a sign-in's exchange 503. Control: 1, the same login once the CA is made.
 	r := cli.signIn(t, kc, browser, login...)
 	ran("0a. port49 login --oidc, the broker with no issuing CA", r, "")
-	if r.code != 1 || !strings.Contains(r.stderr, "issuance_unavailable") {
+	// Since /v1/config says issuance.available:false, the CLI says so before
+	// any sign-in; an older broker's 503 says issuance_unavailable.
+	if r.code != 1 || !strings.Contains(r.stderr, "cannot issue certificates now") &&
+		!strings.Contains(r.stderr, "issuance_unavailable") {
 		fail("with no issuing CA: %s", r.cell())
 	}
 	logs, _ := c.run("logs", "port49-broker")

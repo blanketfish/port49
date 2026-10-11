@@ -46,4 +46,11 @@ type IssueResponse struct {
 // OIDC sign-in (decision 43 ruling 18).
 type Issuance struct {
 	CertificateLifetimeSeconds int `json:"certificate_lifetime_seconds"`
+	// Available is false when the broker's issuing CA is unusable, so a client
+	// says so before a sign-in that would end in a 503. A pointer, so a
+	// config without the field (an older broker) reads as available.
+	Available *bool `json:"available,omitempty"`
 }
+
+// Unavailable is whether the broker said it cannot issue now.
+func (i Issuance) Unavailable() bool { return i.Available != nil && !*i.Available }

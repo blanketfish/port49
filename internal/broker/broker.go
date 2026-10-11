@@ -315,7 +315,9 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	if b.Issuer != nil {
-		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
+		available := b.Issuer.Unavailable == nil
+		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second),
+			Available: &available}
 	}
 	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
 	writeJSON(w, http.StatusOK, c)

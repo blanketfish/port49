@@ -585,7 +585,20 @@ func TestNoWayBackUsesAHeldCertificate(t *testing.T) {
 	}
 }
 
-// The broker's CA unusable (503 issuance_unavailable, the token unspent): the
+// M1: the config says the broker's CA is unusable, so no one signs in for a
+// certain 503: nothing held is said at once (exit 1, no sign-in begun).
+func TestAnIssuanceOutageIsSaidBeforeAnySignIn(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.b.Issuer.Unavailable = errors.New("ca expired")
+	code, out, errb := o.login(t)
+	if code != 1 || out != "" || len(o.as.Authorizations()) != 0 ||
+		!strings.Contains(errb, "the broker cannot issue certificates now (its issuing CA is unavailable); tell its operator") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
+// The broker's CA unusable (said in /v1/config, so before any sign-in): the
 // held certificate carries on.
 func TestAnIssuanceOutageUsesAHeldCertificate(t *testing.T) {
 	o := newOIDCLab(t, true)
@@ -597,7 +610,7 @@ func TestAnIssuanceOutageUsesAHeldCertificate(t *testing.T) {
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
 	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
-		!strings.Contains(errb.String(), "issuance_unavailable") ||
+		!strings.Contains(errb.String(), "tell its operator") || len(o.as.Authorizations()) != 0 ||
 		!strings.Contains(errb.String(), "using your certificate for ") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
