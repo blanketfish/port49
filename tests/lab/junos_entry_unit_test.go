@@ -4,6 +4,7 @@ package lab
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -116,8 +117,11 @@ func TestOpScriptCell(t *testing.T) {
 	for _, c := range []struct{ out, want string }{
 		{"P49OP-VERSION srx1\nP49OP-CONFIG 1\n", "version and configuration"},
 		{"P49OP-VERSION srx1\nP49OP-CONFIG 0\n", "version only"},
+		{"P49OP-VERSION \nP49OP-CONFIG 0\n", "not observed"}, // jcs:invoke answered nothing
+		{"P49OP-VERSION \nP49OP-CONFIG 0\nerror: permission denied\n", "refused"},
 		{"error: permission denied\n", "refused"},
 		{"syntax error, expecting <command>\n", "refused"},
+		{"error: could not open /var/tmp/x.slax\n", "not observed"},
 		{"", "not observed"},
 	} {
 		if got := opScriptCell(c.out); got != c.want {
@@ -134,11 +138,63 @@ func TestScpCell(t *testing.T) {
 	}{
 		{4096, nil, "file read"},
 		{0, errors.New("scp: permission denied"), "refused"},
-		{0, nil, "refused"},
+		{0, fmt.Errorf("wrapped: %w", scpRefusal{"no such file"}), "refused"},
+		{0, errors.New("scp: EOF "), "not observed"},
+		{0, errors.New(`scp: "garbage"`), "not observed"},
+		{0, nil, "not observed"},
 	} {
 		if got := scpCell(c.n, c.err); got != c.want {
 			t.Errorf("%d %v: got %q, want %q", c.n, c.err, got, c.want)
 		}
+	}
+}
+
+func TestRestCell(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{200, "<configuration><system><host-name>x</host-name></system></configuration>", "result"},
+		{401, "", "login refused"},
+		{401, "authentication failed", "login refused"},
+		{403, "", "refused"},
+		{200, "<rpc-error><error-severity>error</error-severity></rpc-error>", "refused"},
+		{200, "<rpc-error><error-severity>warning</error-severity></rpc-error>", "not observed"},
+		{500, "permission denied", "refused"},
+		{500, "", "not observed"},
+		{404, "not found", "not observed"},
+		{200, "<configuration/>", "not observed"},
+	} {
+		if got := restCell(c.status, c.body); got != c.want {
+			t.Errorf("%d %q: got %q, want %q", c.status, c.body, got, c.want)
+		}
+	}
+}
+
+func TestEntryErrRefusal(t *testing.T) {
+	for _, c := range []struct {
+		err  string
+		want bool
+	}{
+		{`u: the device sent no NETCONF hello: the NETCONF channel closed: EOF (sent "error: unknown command: xml-mode")`, true},
+		{"request the netconf subsystem on port 830: ssh: subsystem request failed", true},
+		{"u: the device sent no NETCONF hello: the NETCONF channel closed: EOF ()", false},
+		{"no NETCONF end-of-message marker within 45s", false},
+		{"open session: ssh: unexpected packet", false},
+	} {
+		if got := entryErrRefusal(errors.New(c.err)); got != c.want {
+			t.Errorf("%q: got %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+func TestDialCell(t *testing.T) {
+	if got := dialCell(errors.New("ssh: unable to authenticate")); got != "login refused" {
+		t.Errorf("auth failure: %q", got)
+	}
+	if got := dialCell(errors.New("dial tcp: i/o timeout")); got != "not observed" {
+		t.Errorf("timeout: %q", got)
 	}
 }
 

@@ -84,9 +84,14 @@ func poolSecrets() []string {
 
 // entryResult is l.result after a leak check of the claim and the
 // observation against every token the run minted: on a hit the test fails and
-// no note is written. The matched value is never printed.
+// no note is written. A run that already failed (a cell not observed, a STOP)
+// writes no note either. The matched value is never printed.
 func (l *lab) entryResult(t *testing.T, entry, claim, observation string) {
 	t.Helper()
+	if t.Failed() {
+		t.Logf("%s: no note is written: the run failed", entry)
+		return
+	}
 	if err := leakIn(claim+"\n"+observation, poolSecrets()); err != nil {
 		t.Fatalf("%s: the note is withheld: %v", entry, err)
 	}
@@ -308,6 +313,7 @@ func (l *lab) entryXnm(t *testing.T, r l26cRun) {
 		return
 	}
 	var out xnmOut
+	s.Stderr = &out // a refusal Junos writes to stderr is the device's word too
 	go func() {
 		io.Copy(&out, stdout)
 		out.markClosed()

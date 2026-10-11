@@ -3,12 +3,15 @@
 package lab
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -112,7 +115,8 @@ const getConfigHost = "<get-configuration><configuration><system><host-name/></s
 
 // entryNetconf dials NETCONF on port with the next token and asks for the
 // host name from the configuration. A channel the device closes after
-// port49d permitted the session is "refused".
+// port49d permitted the session and whose error carries the device's refusal
+// is "refused"; a hang or a silent close is not observed.
 func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 	t.Helper()
 	off := l.mark()
@@ -123,7 +127,7 @@ func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 		switch {
 		case isAuthRejection(err):
 			cell = "login refused"
-		case sessionPermitted(l.drainRecords(off, 10*time.Second)):
+		case entryErrRefusal(err) && sessionPermitted(l.drainRecords(off, 10*time.Second)):
 			cell = "refused"
 		}
 		r.cells[key], r.outs[key] = cell, oneLine(err.Error())
@@ -139,6 +143,15 @@ func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 	}
 }
 
+// entryErrRefusal reports a dial error that carries what the device printed:
+// a refusal word (the NETCONF channel's close quotes the device's bytes) or a
+// failed subsystem request. A timeout, an EOF with no text or a parse failure
+// is not one.
+func entryErrRefusal(err error) bool {
+	s := strings.ToLower(err.Error())
+	return containsAny(s, junosL26cRefusal) || strings.Contains(s, "subsystem request failed")
+}
+
 // entryExec runs `xml-mode netconf need-trailer` as an SSH exec command with
 // the next token. Stdin stays open: the client hello goes in once the device
 // has greeted, the get-configuration RPC once the hello is read, and the close
@@ -150,7 +163,7 @@ func (l *lab) entryExec(t *testing.T, r l26cRun) {
 	const key = "exec channel"
 	c, err := l.dialHostPort(user, secret, l.p.addr+":22", 60*time.Second)
 	if err != nil {
-		r.cells[key], r.outs[key] = "login refused", oneLine(err.Error())
+		r.cells[key], r.outs[key] = dialCell(err), oneLine(err.Error())
 		return
 	}
 	defer c.Close()
@@ -190,6 +203,15 @@ func (l *lab) entryExec(t *testing.T, r l26cRun) {
 	if err != nil && r.cells[key] == "not observed" {
 		r.outs[key] += "\n" + oneLine(err.Error())
 	}
+}
+
+// dialCell reads a failed SSH dial: an authentication failure is a login
+// refused; a timeout or reset says nothing, so it is not observed.
+func dialCell(err error) string {
+	if isAuthRejection(err) {
+		return "login refused"
+	}
+	return "not observed"
 }
 
 // execDrive speaks the client side of the exec channel in turn: it waits up to
@@ -371,25 +393,43 @@ var junosEntryOpScript = []string{
 
 const junosEntryOpPath = "/var/tmp/p49-entry-op.slax"
 
-// opScriptCell reads what `op url` printed.
+// opVersionRE is the version marker with a host name after it: the script
+// prints the marker whether or not jcs:invoke was answered.
+var opVersionRE = regexp.MustCompile(`P49OP-VERSION \S`)
+
+// opScriptCell reads what `op url` printed: reached only where the marker
+// carries the host name; refused only where the device printed a refusal.
 func opScriptCell(out string) string {
 	switch {
-	case strings.Contains(out, "P49OP-VERSION") && strings.Contains(out, "P49OP-CONFIG 1"):
+	case opVersionRE.MatchString(out) && strings.Contains(out, "P49OP-CONFIG 1"):
 		return "version and configuration"
-	case strings.Contains(out, "P49OP-VERSION"):
+	case opVersionRE.MatchString(out):
 		return "version only"
-	case strings.TrimSpace(out) == "":
-		return "not observed"
+	case containsAny(strings.ToLower(out), junosL26cRefusal):
+		return "refused"
 	}
-	return "refused"
+	return "not observed"
 }
 
+// scpRefusal is an error line scp itself sent (a \x01 or \x02 byte, then text).
+type scpRefusal struct{ msg string }
+
+func (e scpRefusal) Error() string { return "scp refused: " + e.msg }
+
 // scpCell is what an scp read of a file came to: bytes received, or why not.
+// Refused needs scp's own error line or a refusal word in what the device
+// said; an EOF, a hang or a line it cannot parse is not observed.
 func scpCell(n int64, err error) string {
-	if err == nil && n > 0 {
+	var ref scpRefusal
+	switch {
+	case err == nil && n > 0:
 		return "file read"
+	case err == nil:
+		return "not observed"
+	case errors.As(err, &ref), containsAny(strings.ToLower(err.Error()), junosL26cRefusal):
+		return "refused"
 	}
-	return "refused"
+	return "not observed"
 }
 
 // entryScp reads path over the scp protocol (`scp -f`) with the next token.
@@ -399,7 +439,7 @@ func (l *lab) entryScp(t *testing.T, r l26cRun, path string) {
 	user, secret := l.nextLogin(t)
 	c, err := l.dialHostPort(user, secret, l.p.addr+":22", 60*time.Second)
 	if err != nil {
-		r.cells[key], r.outs[key] = scpCell(0, err), oneLine(err.Error())
+		r.cells[key], r.outs[key] = dialCell(err), oneLine(err.Error())
 		return
 	}
 	defer c.Close()
@@ -416,6 +456,8 @@ func scpRead(c *ssh.Client, path string) (int64, error) {
 		return 0, err
 	}
 	defer s.Close()
+	// A hung scp -f must not hold the run: closing the session fails the reads.
+	defer time.AfterFunc(120*time.Second, func() { s.Close() }).Stop()
 	in, _ := s.StdinPipe()
 	out, _ := s.StdoutPipe()
 	var stderr bytes.Buffer
@@ -434,6 +476,10 @@ func scpRead(c *ssh.Client, path string) (int64, error) {
 			break
 		}
 		line = append(line, buf[0])
+		if len(line) == 1 && (line[0] == 1 || line[0] == 2) {
+			msg, _ := bufio.NewReader(out).ReadString('\n')
+			return 0, scpRefusal{strings.TrimSpace(msg) + " " + oneLine(stderr.String())}
+		}
 	}
 	var mode string
 	var size int64
@@ -478,20 +524,25 @@ func (l *lab) entryREST(t *testing.T, r l26cRun) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	r.outs[key] = fmt.Sprintf("HTTP %d\n%s", resp.StatusCode, firstLines(string(body), 10))
-	switch {
-	case resp.StatusCode == http.StatusOK && strings.Contains(string(body), "<host-name>"):
-		r.cells[key] = "result"
-	case resp.StatusCode == http.StatusUnauthorized && isTokenRejected(string(body)):
-		r.cells[key] = "login refused"
-	default:
-		r.cells[key] = "refused"
-	}
+	r.cells[key] = restCell(resp.StatusCode, string(body))
 }
 
-// isTokenRejected reports a 401 whose body says the credential was refused,
-// which says nothing about the deny.
-func isTokenRejected(body string) bool {
-	return strings.Contains(strings.ToLower(body), "authentication")
+// restCell reads the REST reply: a result; a 401 is the login (it says nothing
+// about the deny); refused only on a 403, an <rpc-error> of severity error, or
+// a refusal word in the body. A 404, a 5xx or a 200 with no host name is not
+// observed.
+func restCell(status int, body string) string {
+	switch {
+	case status == http.StatusOK && strings.Contains(body, "<host-name>"):
+		return "result"
+	case status == http.StatusUnauthorized:
+		return "login refused"
+	case status == http.StatusForbidden,
+		strings.Contains(body, "<rpc-error>") && strings.Contains(body, "<error-severity>error</error-severity>"),
+		containsAny(strings.ToLower(body), junosL26cRefusal):
+		return "refused"
+	}
+	return "not observed"
 }
 
 var scriptProbes = []string{"op url: script", "rest: get-configuration", "scp /config/juniper.conf.gz"}
