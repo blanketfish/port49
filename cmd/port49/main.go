@@ -485,6 +485,16 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 		select {
 		case err := <-exited:
 			tail, _ := os.ReadFile(logPath)
+			var ee *exec.ExitError
+			if issued && errors.As(err, &ee) && ee.ExitCode() == exitCredentialRevoked {
+				// Refused at the bind, before the refresh could be: the same
+				// as a refused refresh (R6), so the pair is not kept to fail
+				// on every later login.
+				_ = os.Remove(sf.key)
+				_ = os.Remove(sf.cert)
+				fmt.Fprint(stderr, refusedCertificate(revokedWords(string(tail))))
+				return 1
+			}
 			fmt.Fprintf(stderr, "port49 login: the agent exited (%v); the end of %s:\n%s", err, logPath, lastLines(string(tail), 10))
 			return 1
 		case <-time.After(100 * time.Millisecond):
@@ -501,9 +511,7 @@ func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
 			case issued && errors.As(err, &revoked):
 				_ = os.Remove(sf.key)
 				_ = os.Remove(sf.cert)
-				fmt.Fprintf(stderr, "port49 login: the broker refused your certificate: %s; it is removed, and the next "+
-					"`port49 login` signs in if the broker takes you again (a revocation an operator made is theirs "+
-					"to lift)\n", printsafe.Line(revoked.Detail, 400))
+				fmt.Fprint(stderr, refusedCertificate(revoked.Detail))
 				return 1
 			case err != nil:
 				fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed:",
@@ -552,6 +560,10 @@ func agentMain(args []string, stderr io.Writer) int {
 	conf, err := a.Connect(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
+		var revoked *agent.RevokedError
+		if errors.As(err, &revoked) {
+			return exitCredentialRevoked
+		}
 		return 1
 	}
 	keepCABundle(sf.broker, conf.BrokerCABundle, conf.BrokerCABundleRefused, a.BrokerRoots(), stderr)
@@ -602,6 +614,31 @@ func agentMain(args []string, stderr io.Writer) int {
 	stop()
 	shutdownSocket(srv, agentShutdownWait)
 	return 0
+}
+
+// exitCredentialRevoked is the agent's exit status when the broker refuses
+// its certificate credential_revoked as the connection binds: `port49 login`
+// then removes a certificate port49 issued (R6), as for a refused refresh.
+const exitCredentialRevoked = 3
+
+// refusedCertificate is the line for a certificate the broker refused
+// credential_revoked, with the broker's words, after it is removed.
+func refusedCertificate(detail string) string {
+	return fmt.Sprintf("port49 login: the broker refused your certificate: %s; it is removed, and the next "+
+		"`port49 login` signs in if the broker takes you again (a revocation an operator made is theirs "+
+		"to lift)\n", printsafe.Line(detail, 400))
+}
+
+// revokedWords is the broker's words in the agent log's last "the session is
+// over: " line, which the agent wrote for a revoked certificate.
+func revokedWords(agentLog string) string {
+	lines := strings.Split(agentLog, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if _, words, ok := strings.Cut(lines[i], "the session is over: "); ok {
+			return words
+		}
+	}
+	return "it was revoked"
 }
 
 // shutdownSocket ends the agent's socket server. Shutdown, not Close: the

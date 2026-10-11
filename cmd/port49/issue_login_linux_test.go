@@ -394,6 +394,36 @@ func TestARevokedHeldCertificateIsRemoved(t *testing.T) {
 	}
 }
 
+// M4: an operator revokes one certificate by serial, and the agent's bind is
+// refused credential_revoked: the same as a refused refresh (R6), the pair is
+// removed and the broker's words said, not kept to fail on each later login.
+func TestAHeldCertificateRevokedBySerialIsRemovedAtBind(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now(), 12*time.Hour)
+	certPath, keyPath := o.issuedPaths(t)
+	held, _, err := heldCertificate(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := store.Revocation{Kind: store.RevocationCert,
+		Key: store.CertKey(held.Leaf.Issuer.String(), held.Leaf.SerialNumber.Text(16)), At: o.now(), Origin: "test"}
+	if err := o.st.PutRevocation(context.Background(), mark); err != nil {
+		t.Fatal(err)
+	}
+	o.bl.Revoked(mark, true) // as port49d's watch hands the listener its marks
+	code, out, errb := o.login(t)
+	if code != 1 || !strings.Contains(errb, "the broker refused your certificate: this certificate was revoked at ") ||
+		!strings.Contains(errb, "it is removed") || strings.Contains(errb, "--sign-in") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+	for _, p := range []string{certPath, keyPath} {
+		if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s is still there: %v", p, err)
+		}
+	}
+}
+
 // A held certificate the broker refuses at the handshake (its clock past the
 // certificate's end, this host's not): the login says to sign in again.
 func TestABrokerThatRefusesAHeldCertificateSaysToSignIn(t *testing.T) {

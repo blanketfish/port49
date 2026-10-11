@@ -342,6 +342,7 @@ type labBroker struct {
 	mu   sync.Mutex
 	skew time.Duration
 	stop func() // closes the broker's server: the broker is down
+	bl   *broker.Listener
 }
 
 func (l *labBroker) now() time.Time {
@@ -472,6 +473,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
+	l.bl = bl
 	if iss != nil {
 		// As port49d wires it: Caller reads a certificate the broker issued.
 		l.b.Wire(bl)
