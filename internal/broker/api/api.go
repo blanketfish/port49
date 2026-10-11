@@ -40,6 +40,9 @@ type Config struct {
 	// against (plan 7h; design §17): discovery data, never fleet data.
 	// Machine verifiers are not listed.
 	OIDC []OIDCProvider `json:"oidc,omitempty"`
+	// Issuance is set when the broker issues a person a certificate over an
+	// OIDC sign-in (plan 9b; spec §13 decision 43 ruling 18).
+	Issuance *Issuance `json:"issuance,omitempty"`
 }
 
 // OIDCProvider is one human OIDC verifier as GET /v1/config names it.
