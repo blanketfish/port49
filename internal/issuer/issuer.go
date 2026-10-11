@@ -139,6 +139,10 @@ func Load(f Files, now time.Time) (*CA, []string) {
 		lines = append(lines, CertFile+" is missing, so no certificate is issued and none it issued is trusted: on a "+
 			"first install run init-issuer once, as the broker's user; on each further broker on this store, copy "+
 			CertFile+" and "+KeyFile+" from the first into its broker.state_dir")
+	case now.Before(cert.NotBefore):
+		c.Unavailable = fmt.Errorf("%s is not valid until %s", CertFile, rfc(cert.NotBefore))
+		lines = append(lines, fmt.Sprintf("%s is not valid until %s, so no certificate is issued and none it issued is "+
+			"trusted: check this broker's clock against the one that ran init-issuer", CertFile, rfc(cert.NotBefore)))
 	case !now.Before(cert.NotAfter):
 		c.Unavailable = fmt.Errorf("%s expired at %s", CertFile, rfc(cert.NotAfter))
 		lines = append(lines, fmt.Sprintf("%s expired at %s, so no certificate is issued and none it issued is "+
@@ -160,6 +164,9 @@ func Load(f Files, now time.Time) (*CA, []string) {
 		switch {
 		case err != nil:
 			lines = append(lines, fmt.Sprintf("%s is not usable (%v), so %s is not trusted", o.name, err, o.what))
+		case cert != nil && !now.Before(cert.NotAfter):
+			lines = append(lines, fmt.Sprintf("%s has expired (%s), so %s is not trusted; remove it and restart",
+				o.name, rfc(cert.NotAfter), o.what))
 		case cert != nil:
 			c.Trusted = append(c.Trusted, cert)
 			line := fmt.Sprintf("trusting %s too, %s (%s), valid until %s", o.what, cert.Subject, Fingerprint(cert),
@@ -244,6 +251,16 @@ func (c *CA) Issue(pub crypto.PublicKey, s SignIn, now time.Time, lifetime time.
 		return nil, errors.New("issuer: no issuing CA")
 	case c.Unavailable != nil:
 		return nil, c.Unavailable
+	case c.Cert == nil:
+		return nil, errors.New("issuer: no issuing CA certificate")
+	case now.Before(c.Cert.NotBefore) || !now.Before(c.Cert.NotAfter):
+		return nil, fmt.Errorf("issuer: now is outside the issuing CA's validity, %s to %s",
+			rfc(c.Cert.NotBefore), rfc(c.Cert.NotAfter))
+	case lifetime < MinLifetime || lifetime > MaxLifetime:
+		return nil, fmt.Errorf("issuer: certificate lifetime %s is outside %s to %s", lifetime, MinLifetime, MaxLifetime)
+	}
+	if err := s.validate(); err != nil {
+		return nil, fmt.Errorf("issuer: the sign-in cannot be certified: %v", err)
 	}
 	serial, err := newSerial()
 	if err != nil {

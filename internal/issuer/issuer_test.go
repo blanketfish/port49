@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"net/url"
 	"reflect"
@@ -62,6 +63,13 @@ func TestNewLoadAndIssue(t *testing.T) {
 		!cert.NotBefore.Equal(now.Add(-time.Minute)) || len(cert.EmailAddresses) != 0 || cert.SerialNumber.Sign() <= 0 {
 		t.Fatalf("CN %q, %s to %s, emails %v, serial %v", cert.Subject.CommonName, cert.NotBefore, cert.NotAfter,
 			cert.EmailAddresses, cert.SerialNumber)
+	}
+	if cert.IsCA || cert.KeyUsage != x509.KeyUsageDigitalSignature || len(cert.ExtKeyUsage) != 1 ||
+		cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Fatalf("leaf profile: CA %v, key usage %v, EKU %v", cert.IsCA, cert.KeyUsage, cert.ExtKeyUsage)
+	}
+	if !c.Cert.MaxPathLenZero || !c.Cert.IsCA {
+		t.Fatalf("CA profile: CA %v, path len zero %v", c.Cert.IsCA, c.Cert.MaxPathLenZero)
 	}
 	got, err := ReadSignIn(cert)
 	if err != nil || got.Principal != s.Principal || got.Issuer != s.Issuer || got.Subject != s.Subject ||
@@ -160,6 +168,92 @@ func TestEndsRefusesAMixedChain(t *testing.T) {
 	}
 }
 
+// Issue refuses what it must not sign: outside the CA's validity, a lifetime
+// out of bounds, and a sign-in its own reader would refuse.
+func TestIssueRefusesWhatItMustNotSign(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	c, err := Ephemeral(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := newKey(t).Public()
+	for name, at := range map[string]time.Time{
+		"an expired CA":      c.Cert.NotAfter.Add(time.Minute),
+		"at the CA's end":    c.Cert.NotAfter,
+		"a not-yet-valid CA": c.Cert.NotBefore.Add(-time.Minute),
+	} {
+		if _, err := c.Issue(k, alice(at), at, time.Hour); err == nil || !strings.Contains(err.Error(), "validity") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, l := range map[string]time.Duration{"zero": 0, "negative": -time.Hour,
+		"below the minimum": MinLifetime - time.Second, "above the maximum": MaxLifetime + time.Second} {
+		if _, err := c.Issue(k, alice(now), now, l); err == nil || !strings.Contains(err.Error(), "lifetime") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := (&CA{}).Issue(k, alice(now), now, time.Hour); err == nil {
+		t.Error("a zero-value CA issued")
+	}
+	for name, edit := range map[string]func(*SignIn){
+		"a non-ASCII principal": func(s *SignIn) { s.Principal = "user:josé@example.com" },
+		"a sid with a space":    func(s *SignIn) { s.Sid = "a b" },
+		"an empty amr member":   func(s *SignIn) { s.AMR = []string{""} },
+		"an http issuer":        func(s *SignIn) { s.Issuer = "http://kc" },
+		"no sub":                func(s *SignIn) { s.Subject = "" },
+	} {
+		s := alice(now)
+		edit(&s)
+		if _, err := c.Issue(k, s, now, time.Hour); err == nil {
+			t.Errorf("%s: issued", name)
+		}
+	}
+	// Crossing the CA's end still issues, clamped to it.
+	late := c.Cert.NotAfter.Add(-time.Hour)
+	cert, err := c.Issue(k, alice(late), late, 12*time.Hour)
+	if err != nil || !cert.NotAfter.Equal(c.Cert.NotAfter) {
+		t.Fatalf("clamp: %v", err)
+	}
+}
+
+// A CA file that is no CA, or no PEM, is refused; an expired staged or
+// previous CA is not trusted and the start says to remove it; a current CA
+// not yet valid is unavailable.
+func TestLoadRefusesWhatIsNoUsableCA(t *testing.T) {
+	now := time.Now()
+	leafCA, _ := Ephemeral(now)
+	leaf, err := leafCA.Issue(newKey(t).Public(), alice(now), now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := files(t, now)
+	m[CertFile] = []byte("garbage")
+	if c, _ := Load(Mem(m), now); c.Unavailable == nil || !strings.Contains(c.Unavailable.Error(), "not usable") {
+		t.Fatalf("garbage: %v", c.Unavailable)
+	}
+	m[CertFile] = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
+	if c, _ := Load(Mem(m), now); c.Unavailable == nil || !strings.Contains(c.Unavailable.Error(), "not a CA") {
+		t.Fatalf("a leaf: %v", c.Unavailable)
+	}
+
+	m = files(t, now)
+	old, oldKey, err := New(now.Add(-6 * 365 * 24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m[PreviousCertFile], m[NextCertFile], m[NextKeyFile] = old, old, oldKey
+	c, lines := Load(Mem(m), now)
+	if c.Unavailable != nil || len(c.Trusted) != 1 || strings.Count(strings.Join(lines, "\n"), "has expired") != 2 ||
+		strings.Contains(strings.Join(lines, "\n"), "trusting") {
+		t.Fatalf("%v %d %q", c.Unavailable, len(c.Trusted), lines)
+	}
+
+	if c, _ := Load(Mem(files(t, now)), now.Add(-2*time.Hour)); c.Unavailable == nil ||
+		!strings.Contains(c.Unavailable.Error(), "not valid until") || len(c.Trusted) != 0 {
+		t.Fatalf("a CA not yet valid: %v %d", c.Unavailable, len(c.Trusted))
+	}
+}
+
 // ReadSignIn reads only what this CA issues.
 func TestReadSignInRefusesWhatItDidNotIssue(t *testing.T) {
 	now := time.Now()
@@ -171,6 +265,11 @@ func TestReadSignInRefusesWhatItDidNotIssue(t *testing.T) {
 		u.RawQuery = q.Encode()
 		return &u
 	}
+	withURL := func(u *url.URL, edit func(*url.URL)) *url.URL {
+		c := *u
+		edit(&c)
+		return &c
+	}
 	mk := func(cn string, uris []*url.URL, emails []string) *x509.Certificate {
 		return &x509.Certificate{Subject: pkix.Name{CommonName: cn}, URIs: uris, EmailAddresses: emails}
 	}
@@ -179,6 +278,8 @@ func TestReadSignInRefusesWhatItDidNotIssue(t *testing.T) {
 		cert *x509.Certificate
 		want string
 	}{
+		"a fragment":             {mk(p, []*url.URL{withURL(good, func(u *url.URL) { u.Fragment = "x" })}, nil), "fragment"},
+		"user info":              {mk(p, []*url.URL{withURL(good, func(u *url.URL) { u.User = url.User("x") })}, nil), "user info"},
 		"an email SAN":           {mk(p, []*url.URL{good}, []string{"alice@example.com"}), "email"},
 		"no URI":                 {mk(p, nil, nil), "no port49-sign-in"},
 		"two URIs":               {mk(p, []*url.URL{good, good}, nil), "more than one"},

@@ -60,6 +60,8 @@ func ReadSignIn(leaf *x509.Certificate) (SignIn, error) {
 		return SignIn{}, errors.New("it carries an email, DNS or IP SAN, which port49 never issues")
 	case len(leaf.URIs) != 1 || leaf.URIs[0].Scheme != signInScheme || leaf.URIs[0].Opaque != "v1":
 		return SignIn{}, errors.New("it carries no port49-sign-in:v1 URI, or more than one URI")
+	case leaf.URIs[0].Fragment != "" || leaf.URIs[0].User != nil:
+		return SignIn{}, errors.New("its sign-in URI carries a fragment or user info")
 	}
 	q, err := url.ParseQuery(leaf.URIs[0].RawQuery)
 	if err != nil {
@@ -77,21 +79,31 @@ func ReadSignIn(leaf *x509.Certificate) (SignIn, error) {
 		ACR: q.Get("acr"), AMR: q["amr"]}
 	at, errAt := strconv.ParseInt(q.Get("auth_time"), 10, 64)
 	iat, errIat := strconv.ParseInt(q.Get("iat"), 10, 64)
-	switch {
-	case !printable(s.Principal) || !strings.HasPrefix(s.Principal, "user:") || !strings.Contains(s.Principal, "@"):
-		return SignIn{}, errors.New("its subject CN is not a principal (user: and an address)")
-	case !printable(s.Issuer) || !strings.HasPrefix(s.Issuer, "https://"):
-		return SignIn{}, errors.New("its sign-in's iss is not an https URL")
-	case !printable(s.Subject):
-		return SignIn{}, errors.New("its sign-in has no usable sub")
-	case errAt != nil || errIat != nil:
+	if errAt != nil || errIat != nil {
 		return SignIn{}, errors.New("its sign-in's auth_time or iat is not a number")
-	case s.Sid != "" && !printable(s.Sid), s.ACR != "" && !printable(s.ACR),
-		slices.ContainsFunc(s.AMR, func(m string) bool { return !printable(m) }):
-		return SignIn{}, errors.New("its sign-in's sid, amr or acr is not printable")
 	}
 	s.AuthTime, s.IssuedAt = time.Unix(at, 0), time.Unix(iat, 0)
+	if err := s.validate(); err != nil {
+		return SignIn{}, err
+	}
 	return s, nil
+}
+
+// validate holds s to what ReadSignIn accepts, so that Issue never signs a
+// sign-in its own reader would refuse on every later use.
+func (s SignIn) validate() error {
+	switch {
+	case !printable(s.Principal) || !strings.HasPrefix(s.Principal, "user:") || !strings.Contains(s.Principal, "@"):
+		return errors.New("its subject CN is not a principal (user: and an address)")
+	case !printable(s.Issuer) || !strings.HasPrefix(s.Issuer, "https://"):
+		return errors.New("its sign-in's iss is not an https URL")
+	case !printable(s.Subject):
+		return errors.New("its sign-in has no usable sub")
+	case s.Sid != "" && !printable(s.Sid), s.ACR != "" && !printable(s.ACR),
+		slices.ContainsFunc(s.AMR, func(m string) bool { return !printable(m) }):
+		return errors.New("its sign-in's sid, amr or acr is not printable")
+	}
+	return nil
 }
 
 // printable is 1 to 1024 bytes of printable ASCII, no space.
