@@ -2,6 +2,7 @@ package userconfig
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -696,7 +697,7 @@ func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
 	p := filepath.Join(privateDir(t), "config.yaml")
 	if _, _, err := LoadAll(p, false); err == nil ||
 		err.Error() != old+" is where plan 9a kept port49's config file; port49 reads "+p+" now: mkdir -m 700 -p "+
-			filepath.Dir(p)+" && mv "+old+" "+p {
+			filepath.Dir(p)+" && mv "+old+" "+p+" (if it holds a certificate login, add `method: x509`)" {
 		t.Fatalf("%v", err)
 	}
 	if err := os.WriteFile(p, []byte("broker: https://new.example:8443\n"), 0o600); err != nil {
@@ -707,45 +708,47 @@ func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
 	}
 }
 
-// A plan 9a file that holds a certificate and key and no method is a
-// certificate login; moved under a system file that says method: oidc it
-// would sign in instead, so the refusal says how to keep it.
-func TestTheLegacyRefusalSaysHowToKeepCertificateLogin(t *testing.T) {
-	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
-	xdg := privateDir(t)
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	old := filepath.Join(xdg, "port49", "config.yaml")
-	if err := WritePrivate(old, []byte("broker: https://old.example:8443\ncert: c.pem\nkey: k.pem\n"), "port49 config file"); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(privateDir(t), "config.yaml")
-	if _, _, err := LoadAll(p, false); err == nil || !strings.HasSuffix(err.Error(), " (add `method: x509` to keep certificate login)") {
-		t.Fatalf("%v", err)
-	}
-}
-
 // A root-owned file or directory this user cannot read is refused naming the
-// mode it needs and that its installer sets it, never a chmod this user
-// cannot make. /etc/shadow and /root stand in for an installer's 0600 file
-// and 0700 directory.
+// mode it has, the mode it needs and that its installer sets it, never a
+// chmod this user cannot make. /etc/shadow and /root stand in for an
+// installer's file and directory; the mode asserted is the one they have.
 func TestARootFileThisUserCannotReadNamesTheModeItNeeds(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root can read them")
 	}
-	if _, err := os.Open("/etc/shadow"); !errors.Is(err, fs.ErrPermission) {
+	fi, err := os.Lstat("/etc/shadow")
+	if _, oerr := os.Open("/etc/shadow"); err != nil || !errors.Is(oerr, fs.ErrPermission) {
 		t.Skip("no unreadable root-owned file to test with")
 	}
-	_, err := ReadPrivate("/etc/shadow", 1<<10, "port49 config file")
-	if err == nil || !strings.Contains(err.Error(), "/etc/shadow is 0640 and owned by root") ||
-		!strings.Contains(err.Error(), "make it 0644") || strings.Contains(err.Error(), "chmod") {
+	_, err = ReadPrivate("/etc/shadow", 1<<10, "port49 config file")
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("/etc/shadow is %04o and owned by root", fi.Mode().Perm())) ||
+		!strings.Contains(err.Error(), "installed it must make it 0644") || strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("file: %v", err)
 	}
-	if _, derr := os.Stat("/root/x"); !errors.Is(derr, fs.ErrPermission) {
+	di, err := os.Lstat("/root")
+	if _, derr := os.Stat("/root/x"); err != nil || !errors.Is(derr, fs.ErrPermission) {
 		t.Skip("no unsearchable root-owned directory to test with")
 	}
 	_, err = ReadPrivate("/root/x/config.yaml", 1<<10, "port49 config file")
-	if err == nil || !strings.Contains(err.Error(), "/root is 0700 and owned by root") ||
-		!strings.Contains(err.Error(), "make it 0755") || strings.Contains(err.Error(), "chmod") {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("/root is %04o and owned by root", di.Mode().Perm())) ||
+		!strings.Contains(err.Error(), "installed it must make it 0755") || strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("directory: %v", err)
+	}
+}
+
+// Under the user's own home a root-owned file is no installer's: the fix is
+// the user's, with sudo; outside it, the installer's.
+func TestTheFixForARootFileUnderYourHomeIsYours(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	t.Setenv("USER", "alice")
+	if got := fixFor("/home/alice/.port49/config.yaml", "0644"); got !=
+		"make it yours (sudo chown alice /home/alice/.port49/config.yaml) or 0644" {
+		t.Fatalf("%q", got)
+	}
+	if got := fixFor("/etc/port49/config.yaml", "0644"); got != "whoever installed it must make it 0644" {
+		t.Fatalf("%q", got)
+	}
+	if got := fixFor("/home/alicia/x", "0644"); strings.Contains(got, "yours") {
+		t.Fatalf("a sibling of the home directory: %q", got)
 	}
 }

@@ -244,14 +244,12 @@ func noLegacy(path string) error {
 	if _, err := os.Lstat(old); err != nil {
 		return nil
 	}
-	hint := ""
-	// A certificate login moved under a system file that says method: oidc
-	// would sign in instead, its cert and key unused: say how to keep it.
-	if f, ok, err := parse(old, "port49 config file", false); err == nil && ok && f.Method == "" && (f.Cert != "" || f.Key != "") {
-		hint = " (add `method: x509` to keep certificate login)"
-	}
+	// The legacy file is never read (ruling 24), so the clause is fixed: a
+	// certificate login moved under a system file that says method: oidc
+	// would sign in instead, its cert and key unused.
 	return fmt.Errorf("%s is where plan 9a kept port49's config file; port49 reads %s now: "+
-		"mkdir -m 700 -p %s && mv %s %s%s", old, path, filepath.Dir(path), old, path, hint)
+		"mkdir -m 700 -p %s && mv %s %s (if it holds a certificate login, add `method: x509`)",
+		old, path, filepath.Dir(path), old, path)
 }
 
 // options is what opts make of Load's defaults.
@@ -401,9 +399,8 @@ func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, er
 	if errors.Is(err, fs.ErrPermission) {
 		if st, ok := li.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
 			// Not this user's to chmod: say the mode it needs and whose to set.
-			return nil, fmt.Errorf("%s is %04o and owned by %s; the %s must be readable by every user, so "+
-				"whoever installed it must make it 0644 (and its directory 0755) (%w)",
-				file, li.Mode().Perm(), ownerName(st.Uid), what, err)
+			return nil, fmt.Errorf("%s is %04o and owned by %s; the %s must be readable by you, so %s (%w)",
+				file, li.Mode().Perm(), ownerName(st.Uid), what, fixFor(file, "0644 (and its directory 0755)"), err)
 		}
 		return nil, fmt.Errorf("cannot open %s: permission denied; the %s must be readable by you: chmod u+r %s (%w)",
 			file, what, file, err)
@@ -585,6 +582,24 @@ func resolveOwned(dir string, create bool, what string) (string, error) {
 	return prefix, nil
 }
 
+// fixFor is who sets the mode on a file this user does not own: whoever
+// installed it for a path outside the user's home, the user, with sudo, for
+// one inside it (a root-owned ~/.port49 is no installer's).
+func fixFor(path, mode string) string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" && strings.HasPrefix(path, h+"/") {
+		return "make it yours (sudo chown " + getenvUser() + " " + path + ") or " + mode
+	}
+	return "whoever installed it must make it " + mode
+}
+
+// getenvUser is $USER for the advice, else a placeholder.
+func getenvUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "YOU"
+}
+
 // ownerName is root for uid 0, else the uid.
 func ownerName(uid uint32) string {
 	if uid == 0 {
@@ -601,7 +616,7 @@ func dirError(d string, err error, what string) error {
 		if fi, serr := os.Lstat(d); serr == nil {
 			if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
 				return fmt.Errorf("%s is %04o and owned by %s; port49 must look inside it to check who can write the %s, "+
-					"so whoever installed it must make it 0755 (%w)", d, fi.Mode().Perm(), ownerName(st.Uid), what, err)
+					"so %s (%w)", d, fi.Mode().Perm(), ownerName(st.Uid), what, fixFor(d, "0755"), err)
 			}
 		}
 		return fmt.Errorf("%s: permission denied; port49 must look inside it to check who can write the %s: "+
