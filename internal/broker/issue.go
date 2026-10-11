@@ -61,7 +61,7 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		b.Metrics.CertificatesIssued.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: b.Now(), Event: decision.EventIssue, Verdict: decision.VerdictDeny,
-			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "oidc"}})
+			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "cert"}})
 		writeError(w, http.StatusBadRequest, "bad_request", "a sign-in is exchanged with no client certificate: its "+
 			"ID token is the one credential")
 		return

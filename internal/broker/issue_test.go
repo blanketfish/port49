@@ -466,8 +466,12 @@ func TestAClientCertificateIsRefusedAtTheExchange(t *testing.T) {
 	if w.Code != 400 {
 		t.Fatalf("%s", shown(w))
 	}
-	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 1 || recs[0]["verdict"] != "deny" {
+	recs := eventsOf(f.records(t), decision.EventIssue)
+	if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "trust_domain_unresolved" {
 		t.Fatalf("%v", recs)
+	}
+	if auth, _ := recs[0]["auth"].(map[string]any); auth["method"] != "cert" {
+		t.Fatalf("the credential presented was a certificate: %v", recs[0]["auth"])
 	}
 	if n := testutil.ToFloat64(f.b.Metrics.CertificatesIssued.WithLabelValues("refused")); n != 1 {
 		t.Fatalf("refused %v", n)
