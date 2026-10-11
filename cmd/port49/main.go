@@ -34,8 +34,11 @@ import (
 )
 
 const usage = `usage:
-  port49 login [--config FILE] [--broker URL] [--cert FILE] [--key FILE] [--broker-ca FILE] [--socket PATH]
-               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml)
+  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--cert FILE --key FILE |
+               --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in]]
+               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml; --oidc
+               signs in at your identity provider and holds the certificate the broker issues, signing in
+               again when it has under a quarter of its life left, or with --sign-in)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
@@ -188,12 +191,32 @@ type sessionFlags struct {
 	// brokerCAFD is an inherited descriptor the CA's bytes come on, to EOF
 	// (the agent child's; hidden: the login sets it). 0 is unset.
 	brokerCAFD int
+	// The OIDC path (plan 9b; spec §13 decision 43 ruling 19).
+	oidc, noBrowser, signIn bool
+	issuer, oidcCA          string
+	redirectPort            int
+	// oidcCAPEM is oidc_ca's bytes, read by userconfig.Load through its walk.
+	oidcCAPEM []byte
 }
+
+// hardenAgent is harden, a var so TestMain makes it a no-op: the tests that
+// run the agent in-process would make the whole test binary non-dumpable,
+// and the ssh tests exec /proc/<pid>/exe as the askpass. An agent the login
+// starts is its own process and hardens for real.
+var hardenAgent = harden
 
 // maxBrokerCA bounds the CA read from the descriptor, as userconfig bounds a file.
 const maxBrokerCA = 1 << 20
 
 func (s *sessionFlags) register(fs *flag.FlagSet) {
+	fs.BoolVar(&s.oidc, "oidc", false, "sign in at the identity provider the broker lists, and hold the certificate "+
+		"the broker issues, in place of your own")
+	fs.StringVar(&s.issuer, "issuer", "", "with --oidc: which provider, when the broker lists several")
+	fs.StringVar(&s.oidcCA, "oidc-ca", "", "with --oidc: the CA that issued your identity provider's certificate "+
+		"(PEM); the system's roots otherwise")
+	fs.IntVar(&s.redirectPort, "redirect-port", 0, "with --oidc: the loopback port the sign-in returns to; 0 picks a free one")
+	fs.BoolVar(&s.noBrowser, "no-browser", false, "with --oidc: open no browser; print the address to sign in at")
+	fs.BoolVar(&s.signIn, "sign-in", false, "with --oidc: sign in again even while your certificate has life left")
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&s.cert, "cert", "", "your client certificate (PEM)")
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
@@ -204,25 +227,29 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 		"key, each overridden by its flag")
 }
 
-// fill takes from the config file each of --broker, --broker-ca, --cert and
-// --key the command line left out (decision 42 ruling 6). A missing file at
-// the default path is no file; one --config names must be there, and is
-// read and checked even when every flag is given.
+// fill takes from the config file each value the command line left out
+// (decision 42 ruling 6; decision 43 ruling 19). A missing file at the
+// default path is no file; one --config names must be there, and is read
+// and checked even when every flag is given. A flag wins: --oidc, or
+// --cert or --key, which make a certificate login, over the file's method.
 func (s *sessionFlags) fill(fs *flag.FlagSet) error {
-	named := false
-	fs.Visit(func(f *flag.Flag) { named = named || f.Name == "config" })
-	if !named && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if !set["config"] && s.complete() {
 		return nil
 	}
 	var opts []userconfig.Option
 	if s.brokerCA != "" {
 		opts = append(opts, userconfig.WithoutCA()) // --broker-ca wins; the file's is unused
 	}
+	if s.oidcCA != "" {
+		opts = append(opts, userconfig.WithoutOIDCCA())
+	}
 	f, ok, err := userconfig.Load(s.configFile, opts...)
 	switch {
 	case err != nil:
 		return err
-	case !ok && named:
+	case !ok && set["config"]:
 		return fmt.Errorf("%s: no such file", s.configFile)
 	case !ok:
 		return nil
@@ -230,13 +257,77 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	if s.brokerCA == "" {
 		s.brokerCA, s.brokerCAPEM = f.BrokerCA, f.BrokerCAPEM
 	}
+	if s.oidcCA == "" {
+		s.oidcCA, s.oidcCAPEM = f.OIDCCA, f.OIDCCAPEM
+	}
 	s.broker = cmp.Or(s.broker, f.Broker)
 	s.cert, s.key = cmp.Or(s.cert, f.Cert), cmp.Or(s.key, f.Key)
+	if !set["oidc"] && !set["cert"] && !set["key"] {
+		s.oidc = f.Method == "oidc"
+	}
+	s.issuer = cmp.Or(s.issuer, f.OIDCIssuer)
+	if !set["redirect-port"] {
+		s.redirectPort = f.OIDCRedirectPort
+	}
 	return nil
+}
+
+// complete is whether the command line names all this command needs, so
+// the config file is not read: the agent child is handed all of it, and a
+// certificate login with all four flags reads no file, as before.
+func (s *sessionFlags) complete() bool {
+	return !s.oidc && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != ""
 }
 
 func (s *sessionFlags) args() []string {
 	return []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA, "--socket", s.socket}
+}
+
+// brokerPool is the broker CA's pool, from the bytes the config file's walk
+// read, the login's descriptor, or --broker-ca's path, in that order. It
+// keeps the bytes in brokerCAPEM for the agent the login starts. Required,
+// not defaulted: with no pool the agent would trust every public CA for a
+// broker whose certificate a private CA issued.
+func (s *sessionFlags) brokerPool() (*x509.CertPool, error) {
+	if s.brokerCA == "" {
+		return nil, errors.New("--broker-ca is required: the CA that issued the broker's certificate; the system's " +
+			"roots are not trusted for the broker")
+	}
+	caPEM := s.brokerCAPEM
+	// source is where the bytes came from, for the message when they hold no
+	// certificate: the path is only read in the default case.
+	source := s.brokerCA
+	var err error
+	switch {
+	case caPEM != nil:
+		source = "the broker CA read for " + s.configFile + " (" + s.brokerCA + ")"
+	case s.brokerCAFD != 0:
+		source = "the broker CA the login passed (from " + s.brokerCA + ")"
+		// The login read the CA once and passed the bytes; the path is not
+		// read again.
+		in := os.NewFile(uintptr(s.brokerCAFD), "broker-ca")
+		if in == nil {
+			return nil, fmt.Errorf("--broker-ca-fd %d is not an open descriptor", s.brokerCAFD)
+		}
+		defer in.Close()
+		if caPEM, err = io.ReadAll(io.LimitReader(in, maxBrokerCA+1)); err != nil {
+			return nil, fmt.Errorf("reading the broker CA from the login: %w", err)
+		}
+		if len(caPEM) > maxBrokerCA {
+			return nil, fmt.Errorf("the broker CA is over %d bytes", maxBrokerCA)
+		}
+	default:
+		// Named by --broker-ca: the operator's own choice of path.
+		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
+			return nil, err
+		}
+	}
+	s.brokerCAPEM = caPEM
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("%s holds no PEM certificate", source)
+	}
+	return pool, nil
 }
 
 func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
@@ -244,8 +335,6 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 		return agent.Config{}, fmt.Errorf("--broker, --cert, --key and --broker-ca are all required, as flags "+
 			"or in %s", s.configFile)
 	}
-	// Required, not defaulted: with no pool the agent would trust every
-	// public CA for a broker whose certificate a private CA issued.
 	if s.brokerCA == "" {
 		return agent.Config{}, errors.New("--broker-ca is required: the CA that issued the broker's certificate; " +
 			"the system's roots are not trusted for the broker")
@@ -256,48 +345,17 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
-	caPEM := s.brokerCAPEM
-	// source is where the bytes came from, for the message when they hold no
-	// certificate: the path is only read in the default case.
-	source := s.brokerCA
-	switch {
-	case caPEM != nil:
-		source = "the broker CA read for " + s.configFile + " (" + s.brokerCA + ")"
-	case s.brokerCAFD != 0:
-		source = "the broker CA the login passed (from " + s.brokerCA + ")"
-		// The login read the CA once and passed the bytes; the path is not
-		// read again.
-		in := os.NewFile(uintptr(s.brokerCAFD), "broker-ca")
-		if in == nil {
-			return agent.Config{}, fmt.Errorf("--broker-ca-fd %d is not an open descriptor", s.brokerCAFD)
-		}
-		defer in.Close()
-		if caPEM, err = io.ReadAll(io.LimitReader(in, maxBrokerCA+1)); err != nil {
-			return agent.Config{}, fmt.Errorf("reading the broker CA from the login: %w", err)
-		}
-		if len(caPEM) > maxBrokerCA {
-			return agent.Config{}, fmt.Errorf("the broker CA is over %d bytes", maxBrokerCA)
-		}
-	default:
-		// Named by --broker-ca: the operator's own choice of path.
-		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
-			return agent.Config{}, err
-		}
-	}
-	s.brokerCAPEM = caPEM
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return agent.Config{}, fmt.Errorf("%s holds no PEM certificate", source)
+	pool, err := s.brokerPool()
+	if err != nil {
+		return agent.Config{}, err
 	}
 	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log}, nil
 }
 
-// login starts the agent in its own session, detached, and waits until its
-// socket answers. The handshake happens in the agent, so an untrusted
-// certificate fails here (plan 3, Decided 3) and the agent's log says why.
-// With an agent already running it refreshes that agent's session instead
-// (spec §5.6; decision 33), and a new agent refreshes once it answers, so
-// the device sessions an earlier login left are extended either way.
+// login logs in with the certificate --cert and --key name, or with --oidc
+// signs in and holds the certificate the broker issues (loginIssued). With
+// an agent already running it refreshes that agent's session instead (spec
+// §5.6; decision 33); otherwise it starts one (startAgent).
 func login(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -306,9 +364,25 @@ func login(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if sf.oidc && (set["cert"] || set["key"]) {
+		fmt.Fprintln(stderr, "port49 login: --cert and --key are a certificate login's; --oidc signs in at your "+
+			"identity provider instead")
+		return 2
+	}
 	if err := sf.fill(fs); err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
+	}
+	if sf.oidc {
+		return loginIssued(&sf, stdout, stderr)
+	}
+	for _, name := range []string{"issuer", "oidc-ca", "redirect-port", "no-browser", "sign-in"} {
+		if set[name] {
+			fmt.Fprintf(stderr, "port49 login: --%s is --oidc's (or method: oidc in %s)\n", name, sf.configFile)
+			return 2
+		}
 	}
 	cfg, err := sf.config(stderr)
 	if err != nil {
@@ -342,6 +416,20 @@ func login(args []string, stdout, stderr io.Writer) int {
 		printRefresh(stdout, out)
 		return 0
 	}
+	return startAgent(&sf, false, stdout, stderr)
+}
+
+// startAgent starts the agent in its own session, detached, and waits until
+// its socket answers. The handshake happens in the agent, so an untrusted
+// certificate fails here (plan 3, Decided 3) and the agent's log says why.
+// The broker CA's bytes go to it on descriptor 3, so it reads the path no
+// second time. It then refreshes once, a key signature, so the device
+// sessions an earlier login left are extended (decision 43 ruling 11). A
+// certificate the broker issued (issued) that the refresh is refused
+// credential_revoked is no use again: it and its key are removed, and the
+// next login signs in (ruling 12; R6).
+func startAgent(sf *sessionFlags, issued bool, stdout, stderr io.Writer) int {
+	ctx := context.Background()
 	dir := filepath.Dir(sf.socket)
 	if err := agent.PrivateDir(dir); err != nil {
 		fmt.Fprintln(stderr, "port49 login:", unprefixed(err))
@@ -398,11 +486,21 @@ func login(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "port49: logged in to %s; the session ends at %s (agent pid %d, log %s)\n",
 				st.Broker, st.SessionEndsAt, cmd.Process.Pid, logPath)
 			// The session is up whatever the refresh does: a failure is
-			// said, and the login still succeeds.
-			if out, err := agent.NewClient(sf.socket).Refresh(ctx); err != nil {
+			// said, and the login still succeeds, unless the broker refused
+			// a certificate it issued.
+			out, err := agent.NewClient(sf.socket).Refresh(ctx)
+			var revoked *agent.RevokedError
+			switch {
+			case issued && errors.As(err, &revoked):
+				_ = os.Remove(sf.key)
+				_ = os.Remove(sf.cert)
+				fmt.Fprintf(stderr, "port49 login: the broker refused your certificate: %s; it is removed, so "+
+					"`port49 login` signs you in again\n", revoked.Detail)
+				return 1
+			case err != nil:
 				fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed:",
 					unprefixed(err))
-			} else {
+			default:
 				printRefresh(stdout, out)
 			}
 			return 0
@@ -424,6 +522,12 @@ func agentMain(args []string, stderr io.Writer) int {
 	sf.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// Before any key is read: no core file or crash report holds it. It runs
+	// on without: the key is a file this user reads already, until plan 9c
+	// puts it in hardware.
+	if err := hardenAgent(); err != nil {
+		fmt.Fprintf(stderr, "port49 agent: could not make the agent non-dumpable (%v); it runs on\n", err)
 	}
 	if err := sf.fill(fs); err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
@@ -455,7 +559,13 @@ func agentMain(args []string, stderr io.Writer) int {
 	// A refresh moves the deadline, so the timer is re-armed on each one
 	// (pre-flight I6).
 	for {
-		timer := time.NewTimer(time.Until(a.SessionEndsAt()))
+		// The certificate's end, when it comes first, ends the agent: past it
+		// the broker takes no request (decision 43 ruling 21).
+		ends, certEnds := a.SessionEndsAt(), false
+		if end := a.CertificateEnd(); !end.IsZero() && end.Before(ends) {
+			ends, certEnds = end, true
+		}
+		timer := time.NewTimer(time.Until(ends))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -466,6 +576,11 @@ func agentMain(args []string, stderr io.Writer) int {
 				a.SessionEndsAt().UTC().Format(time.RFC3339))
 			continue
 		case <-timer.C:
+			if certEnds {
+				fmt.Fprintf(stderr, "port49 agent: your certificate ended at %s, and the session with it; exiting - run "+
+					"`port49 login` (for a certificate port49 issued, it signs you in again)\n", ends.UTC().Format(time.RFC3339))
+				break
+			}
 			fmt.Fprintln(stderr, "port49 agent: the session reached max_session_age; exiting - run `port49 login` to start another")
 		case <-a.Done():
 			timer.Stop()

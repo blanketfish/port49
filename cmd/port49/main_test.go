@@ -30,6 +30,9 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -292,6 +295,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(runCLIEnv) == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
+	// The tests that run the agent in-process (run([]string{"agent", …}))
+	// would make this whole binary non-dumpable, and every later ssh test
+	// would then fail to exec /proc/<pid>/exe as its askpass. A child agent
+	// the login starts takes the branch above, and hardens for real.
+	hardenAgent = func() error { return nil }
 	// No test reads the developer's own ~/.config/port49 (plan 9a): every
 	// default path under it lands in a directory of the test's.
 	dir, err := os.MkdirTemp("", "p49cfg")
@@ -336,6 +344,10 @@ func (l *labBroker) flags(socket string) []string {
 }
 
 func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker {
+	return newLabBrokerWith(t, maxAge, nil, false)
+}
+
+func newLabBrokerWith(t *testing.T, maxAge time.Duration, iss *oidctest.Issuer, issue bool) *labBroker {
 	t.Helper()
 	l := &labBroker{dir: t.TempDir()}
 	if err := testpki.WriteLab(l.dir, "alice@example.com", time.Now()); err != nil {
@@ -377,6 +389,25 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		Store:  l.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: l.now,
 		MaxSessionAge: maxAge, BatchMax: 4, Sessions: session.New(l.st, l.now, time.Hour, time.Hour),
 		ContextIdleTTL: time.Hour, CeilingWarning: 30 * time.Minute, GraceWindow: 5 * time.Minute}
+	if iss != nil {
+		ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+			MaxAge: 24 * time.Hour, Now: l.now, M: l.b.Metrics})
+		l.b.NoX509 = true
+		l.b.Identity = &oidc.Set{Timing: oidc.DefaultTiming, Now: l.now, M: l.b.Metrics,
+			Verifiers: []*oidc.Verifier{{VerifierConfig: oidc.VerifierConfig{Domain: oidc.Humans, Issuer: iss.URL,
+				ClientID: "port49-cli", PrincipalClaim: oidc.ClaimPreferredUsername,
+				PrincipalDomains: []string{"example.com"}, Scopes: []string{"openid"},
+				Algorithms: []oidc.Alg{oidc.RS256}}, Keys: ks}}}
+		if issue {
+			// A day back: the CA refuses to issue outside its window, and
+			// tests hold certificates issued hours ago (holdCertificate).
+			ca, err := issuer.Ephemeral(l.now().Add(-24 * time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.b.Issuer = ca
+		}
+	}
 
 	ctx := context.Background()
 	at := l.now()
@@ -400,13 +431,18 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.st.IndexContext(ctx, "user:alice@example.com", "",
-		store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)),
+	certKey, anchor := store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)), pool
+	if iss != nil {
+		// A context before an OIDC login names no certificate; an OIDC-only
+		// broker takes no anchor.
+		certKey, anchor = "", nil
+	}
+	if err := l.st.IndexContext(ctx, "user:alice@example.com", "", certKey,
 		store.ContextRef{NAS: "leaf1", Username: "alice"}, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
-	srv, err := l.b.Server("127.0.0.1:0", srvCert, pool)
+	srv, err := l.b.Server("127.0.0.1:0", srvCert, anchor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,6 +453,10 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
+	if iss != nil {
+		// As port49d wires it: Caller reads a certificate the broker issued.
+		l.b.Wire(bl)
+	}
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	l.url = "https://" + raw.Addr().String()

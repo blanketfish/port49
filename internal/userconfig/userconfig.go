@@ -1,6 +1,8 @@
 // Package userconfig is the operator's own files under
 // $XDG_CONFIG_HOME/port49 (spec §13 decision 42, ruling 6): config.yaml,
-// which gives `port49 login` its broker, broker CA, certificate and key; and
+// which gives `port49 login` its broker, broker CA, certificate and key, or its
+// identity provider (spec §13 decision 43 ruling 19), and the certificate the
+// broker issued it (IssuedPaths); and
 // the private-file reading and writing it shares with the pinned host keys
 // (internal/hostkeys). Whoever can write these files chooses which broker the
 // operator trusts and which device keys `port49 ssh` accepts, so a file, or a
@@ -15,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +43,33 @@ func Dir() string {
 // Path is the config file's default path.
 func Path() string { return filepath.Join(Dir(), "config.yaml") }
 
+// IssuedPathsIn is where, under dir, `port49 login` keeps the certificate a
+// broker issued it and its key (spec §13 decision 43 ruling 7):
+// dir/issued/<host>_<port>.pem and .key, one pair per broker. A broker URL
+// that is not https with a host, or whose host is not a plain name or
+// address, is refused rather than made a file name.
+func IssuedPathsIn(dir, broker string) (cert, key string, err error) {
+	u, err := url.Parse(broker)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return "", "", fmt.Errorf("broker %q is not an https URL with a host", broker)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	host := strings.ToLower(strings.ReplaceAll(u.Hostname(), ":", "-"))
+	if strings.HasPrefix(host, ".") || strings.IndexFunc(host, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-')
+	}) >= 0 {
+		return "", "", fmt.Errorf("broker %q: its host is not a plain name or address", broker)
+	}
+	base := filepath.Join(dir, "issued", host+"_"+port)
+	return base + ".pem", base + ".key", nil
+}
+
+// IssuedPaths is IssuedPathsIn the config directory (Dir).
+func IssuedPaths(broker string) (cert, key string, err error) { return IssuedPathsIn(Dir(), broker) }
+
 // File is config.yaml. Every key is optional; `port49 login` takes each one
 // its flags leave out. Paths are resolved by Load: relative to the file's
 // directory, and ~/ the home directory.
@@ -48,16 +78,35 @@ type File struct {
 	BrokerCA string `yaml:"broker_ca"`
 	Cert     string `yaml:"cert"`
 	Key      string `yaml:"key"`
+	// Method is how `port49 login` authenticates: x509, the default, or
+	// oidc, a sign-in the broker issues a certificate for (decision 43
+	// ruling 19).
+	Method string `yaml:"method"`
+	// OIDCIssuer names the provider to sign in at when the broker lists
+	// several.
+	OIDCIssuer string `yaml:"oidc_issuer"`
+	// OIDCCA is the CA that issued the provider's TLS certificate; none is
+	// the system's roots.
+	OIDCCA string `yaml:"oidc_ca"`
+	// OIDCRedirectPort is the loopback port a sign-in returns to; 0 picks a
+	// free one.
+	OIDCRedirectPort int `yaml:"oidc_redirect_port"`
 
 	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
 	// through the same ownership walk; nil under WithoutCA or with no CA named.
 	BrokerCAPEM []byte `yaml:"-"`
+	// OIDCCAPEM is OIDCCA's bytes, read as BrokerCAPEM is; nil under
+	// WithoutOIDCCA or with none named.
+	OIDCCAPEM []byte `yaml:"-"`
 }
 
 // Option changes what Load does.
 type Option func(*loadOptions)
 
-type loadOptions struct{ skipCA bool }
+type loadOptions struct{ skipCA, skipOIDCCA bool }
+
+// WithoutOIDCCA is WithoutCA for oidc_ca, which --oidc-ca overrides.
+func WithoutOIDCCA() Option { return func(o *loadOptions) { o.skipOIDCCA = true } }
 
 // WithoutCA is for a caller whose --broker-ca overrides the file's: a CA that
 // is not going to be used is neither read nor checked, so a bad one does not
@@ -95,7 +144,15 @@ func Load(path string, opts ...Option) (f File, ok bool, err error) {
 		return File{}, false, fmt.Errorf("%s holds a second YAML document; port49 reads one", path)
 	}
 	base := filepath.Dir(path)
-	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key} {
+	switch f.Method {
+	case "", "x509", "oidc":
+	default:
+		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509 or oidc", path, f.Method)
+	}
+	if f.OIDCRedirectPort < 0 || f.OIDCRedirectPort > 65535 {
+		return File{}, false, fmt.Errorf("%s: oidc_redirect_port %d is not a port", path, f.OIDCRedirectPort)
+	}
+	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
 		if *p, err = resolve(base, *p); err != nil {
 			return File{}, false, fmt.Errorf("%s: %w", path, err)
 		}
@@ -107,6 +164,13 @@ func Load(path string, opts ...Option) (f File, ok bool, err error) {
 	if f.BrokerCA != "" && !o.skipCA {
 		if f.BrokerCAPEM, err = ReadPrivate(f.BrokerCA, maxCA, "broker CA"); err != nil {
 			return File{}, false, fmt.Errorf("broker_ca in %s: %w", path, err)
+		}
+	}
+	// The provider's CA decides whose sign-in port49 trusts, as the broker
+	// CA decides the broker: held to the same line, read once.
+	if f.OIDCCA != "" && !o.skipOIDCCA {
+		if f.OIDCCAPEM, err = ReadPrivate(f.OIDCCA, maxCA, "identity provider CA"); err != nil {
+			return File{}, false, fmt.Errorf("oidc_ca in %s: %w", path, err)
 		}
 	}
 	return f, true, nil

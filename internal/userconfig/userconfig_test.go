@@ -520,3 +520,70 @@ func TestPrivateDirCreatesAndJudges(t *testing.T) {
 		t.Fatalf("a refused path created a directory: %v", err)
 	}
 }
+
+// The OIDC keys (decision 43 ruling 19): oidc_ca is resolved and read once
+// through the walk, as broker_ca is.
+func TestTheOIDCKeysAreRead(t *testing.T) {
+	p := private(t, "config.yaml", "method: oidc\noidc_issuer: https://kc.example/r\noidc_ca: idp.pem\n"+
+		"oidc_redirect_port: 18749\n")
+	ca := filepath.Join(filepath.Dir(p), "idp.pem")
+	if err := os.WriteFile(ca, []byte("PEM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, ok, err := Load(p)
+	if err != nil || !ok || f.Method != "oidc" || f.OIDCIssuer != "https://kc.example/r" || f.OIDCCA != ca ||
+		string(f.OIDCCAPEM) != "PEM" || f.OIDCRedirectPort != 18749 {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	if f, _, err := Load(p, WithoutOIDCCA()); err != nil || f.OIDCCAPEM != nil {
+		t.Fatalf("WithoutOIDCCA: %q %v", f.OIDCCAPEM, err)
+	}
+}
+
+func TestAnOIDCCAOthersCanWriteIsRefused(t *testing.T) {
+	p := private(t, "config.yaml", "oidc_ca: idp.pem\n")
+	ca := filepath.Join(filepath.Dir(p), "idp.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ca, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by others") ||
+		!strings.Contains(err.Error(), "oidc_ca in") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestAnUnknownMethodOrABadPortIsRefused(t *testing.T) {
+	for body, want := range map[string]string{
+		"method: saml\n":              `method "saml"`,
+		"oidc_redirect_port: 70000\n": "is not a port",
+		"oidc_redirect_port: -1\n":    "is not a port",
+	} {
+		if _, _, err := Load(private(t, "config.yaml", body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", body, err, want)
+		}
+	}
+}
+
+// An issued certificate is kept per broker, by its host and port, and a
+// broker URL that would not make a plain file name is refused (decision 43
+// ruling 7).
+func TestIssuedPaths(t *testing.T) {
+	for broker, want := range map[string]string{
+		"https://Broker.Example:8443":  "broker.example_8443",
+		"https://broker.example":       "broker.example_443",
+		"https://[2001:db8::1]:8443/x": "2001-db8--1_8443",
+	} {
+		c, k, err := IssuedPathsIn("/d", broker)
+		if err != nil || c != "/d/issued/"+want+".pem" || k != "/d/issued/"+want+".key" {
+			t.Errorf("%s: %s %s %v", broker, c, k, err)
+		}
+	}
+	for _, bad := range []string{"http://broker.example", "https://", "https://u:p@broker.example", "broker.example:8443"} {
+		if _, _, err := IssuedPathsIn("/d", bad); err == nil {
+			t.Errorf("%q made a path", bad)
+		}
+	}
+}

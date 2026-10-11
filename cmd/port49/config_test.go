@@ -150,3 +150,22 @@ func TestAConfigFileWithNoBrokerCAIsRefused(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
+
+// method: oidc in the file makes a plain login an OIDC one: against a
+// running agent holding another certificate it is refused, naming it.
+func TestTheConfigFileCanChooseOIDC(t *testing.T) {
+	dir := privateDir(t)
+	cfg := labConfig(t, dir, configBroker)
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("method: oidc\n")
+	f.Close()
+	sock, refreshes := runningAgent(t, dir)
+	var out, errb bytes.Buffer
+	code := run([]string{"login", "--config", cfg, "--socket", sock}, &out, &errb)
+	if code != 1 || refreshes() != 0 || !strings.Contains(errb.String(), "with another certificate") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
