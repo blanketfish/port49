@@ -1094,6 +1094,18 @@ func (a *Agent) leaf() *x509.Certificate {
 	return leaf
 }
 
+// CertificateEnd is the session certificate's notAfter, zero for none (plan
+// 9b; spec §13 decision 43 ruling 21). Past it the broker refuses every
+// request on the connection (Identity), so the agent process exits there
+// (agentMain); a device session a refresh extended runs to its own ceiling
+// (spec §5.1.4).
+func (a *Agent) CertificateEnd() time.Time {
+	if leaf := a.leaf(); leaf != nil {
+		return leaf.NotAfter
+	}
+	return time.Time{}
+}
+
 // TokenRequest is what `port49 token` sends the agent.
 type TokenRequest struct {
 	Device     string `json:"device"`
