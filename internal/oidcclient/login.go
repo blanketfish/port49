@@ -169,6 +169,9 @@ func (w *waiter) judge(q url.Values) (answer, bool) {
 		return answer{}, false
 	}
 	switch iss, has := q.Get("iss"), q.Has("iss"); {
+	case len(q["iss"]) > 1:
+		return answer{err: fmt.Errorf("the sign-in's answer carries %d iss values where RFC 9207 allows one, "+
+			"so it is refused", len(q["iss"]))}, true
 	case has && iss != w.issuer:
 		return answer{err: fmt.Errorf("the sign-in's answer names the issuer %q, not %s: it came from another "+
 			"provider (RFC 9207), so it is refused", printsafe.Line(iss, 200), w.issuer)}, true

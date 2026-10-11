@@ -132,6 +132,78 @@ func TestAnIssParameterNamingAnotherIssuerIsRefused(t *testing.T) {
 	}
 }
 
+// A redirect repeating iss, state or code is refused whichever copy is
+// right, loopback and pasted address alike (RFC 9207: one of each).
+func TestARepeatedParameterIsRefused(t *testing.T) {
+	w := &waiter{state: "s1", issuer: "https://idp.example", requireIss: true,
+		redirect: "http://127.0.0.1:5000/callback"}
+	for name, query := range map[string]string{
+		"iss":   "state=s1&code=c&iss=https%3A%2F%2Fidp.example&iss=https%3A%2F%2Fevil.example",
+		"code":  "state=s1&code=c&code=d&iss=https%3A%2F%2Fidp.example",
+		"state": "state=s1&state=other&code=c&iss=https%3A%2F%2Fidp.example",
+	} {
+		q, _ := url.ParseQuery(query)
+		if a, ours := w.judge(q); ours && a.err == nil {
+			t.Errorf("repeated %s accepted", name)
+		}
+		if a, why := w.pasted("http://127.0.0.1:5000/callback?" + query); why == "" && a.err == nil {
+			t.Errorf("repeated %s accepted by paste", name)
+		}
+	}
+}
+
+// A repeated state over the loopback is answered 400 and waited past.
+func TestARepeatedStateOverTheLoopbackIsIgnored(t *testing.T) {
+	iss, _, p := provider(t)
+	e, _ := Discover(context.Background(), p)
+	var status int
+	browse := func(u string) error {
+		v, _ := url.Parse(u)
+		resp, err := http.Get(fmt.Sprintf("http://%s/callback?state=%s&state=forged&code=x", redirectOf(t, u).Host,
+			url.QueryEscape(v.Query().Get("state"))))
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		status = resp.StatusCode
+		return iss.Browser()(u)
+	}
+	if _, err := Login(context.Background(), p, e, LoginOptions{Browser: browse}); err != nil || status != 400 {
+		t.Fatalf("repeated state %d, then %v", status, err)
+	}
+}
+
+// A repeated iss over the loopback ends the sign-in.
+func TestARepeatedIssOverTheLoopbackIsRefused(t *testing.T) {
+	_, _, p := provider(t)
+	e, _ := Discover(context.Background(), p)
+	browse := func(u string) error {
+		v, _ := url.Parse(u)
+		go func() {
+			resp, err := http.Get(fmt.Sprintf("http://%s/callback?state=%s&code=x&iss=%s&iss=https%%3A%%2F%%2Fevil.example",
+				redirectOf(t, u).Host, url.QueryEscape(v.Query().Get("state")), url.QueryEscape(p.Issuer)))
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+	if _, err := Login(context.Background(), p, e, LoginOptions{Browser: browse}); err == nil ||
+		!strings.Contains(err.Error(), "RFC 9207") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A pasted address with the right host but another sign-in's state is
+// refused, saying why.
+func TestAPastedAddressWithAnotherStateIsRefused(t *testing.T) {
+	w := &waiter{state: "s1", issuer: "https://idp.example", redirect: "http://127.0.0.1:5000/callback"}
+	_, why := w.pasted("http://127.0.0.1:5000/callback?state=other&code=c")
+	if !strings.Contains(why, "another sign-in") {
+		t.Fatalf("%q", why)
+	}
+}
+
 // A provider's refusal is said by its code.
 func TestADeniedSignInSaysTheProvidersCode(t *testing.T) {
 	iss, as, p := provider(t)
