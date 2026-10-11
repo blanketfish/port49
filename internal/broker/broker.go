@@ -88,6 +88,9 @@ type Broker struct {
 	// issues nothing and trusts no port49-issued certificate. Its CAs join
 	// the handshake's pool, for people alone (Server, CertCallerOf).
 	Issuer *issuer.CA
+	// CertificateLifetime is broker.identity.issuance.certificate_lifetime
+	// (decision 43 ruling 9); zero is issuer.DefaultLifetime.
+	CertificateLifetime time.Duration
 	// Workload is the workload certificate verifier (plan 8; decision 40):
 	// x509 under broker.identity.machines. Nil reads every certificate as a
 	// person's, as before plan 8.
@@ -214,6 +217,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/logout", b.logout)
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
+	mux.HandleFunc("POST /v1/certificate", b.issue)
 	mux.HandleFunc("GET /v1/identity", b.identity)
 	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
 	mux.HandleFunc("POST /v1/explain", b.explain)
@@ -303,6 +307,9 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 			}
 			c.OIDC = append(c.OIDC, api.OIDCProvider{Issuer: v.Issuer, ClientID: v.ClientID, Scopes: scopes})
 		}
+	}
+	if b.Issuer != nil {
+		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
 	}
 	writeJSON(w, http.StatusOK, c)
 }

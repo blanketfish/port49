@@ -49,10 +49,23 @@ type Record struct {
 	// record carries no Auth: its Principal is whom it was about, and the
 	// caller's credential is in AskedByFingerprint (decision 34).
 	Explain *Explain `json:"explain,omitempty"`
+	// Certificate is an issue record's certificate (spec §5.7; §13 decision
+	// 43 ruling 22).
+	Certificate *Certificate `json:"certificate,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
 	IndexError string `json:"index_error,omitempty"`
+}
+
+// Certificate is the certificate an issue record names: its serial, as
+// `port49 revoke --cert-serial` takes it, the issuing CA's DN, its
+// fingerprint and its end. Identity, not a secret (spec §5.1.4).
+type Certificate struct {
+	Serial      string `json:"serial"`
+	Issuer      string `json:"issuer"`
+	Fingerprint string `json:"fingerprint"`
+	NotAfter    string `json:"not_after"`
 }
 
 type Auth struct {

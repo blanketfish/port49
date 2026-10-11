@@ -84,3 +84,11 @@ func TestTheDirectoryReasonsAreKnown(t *testing.T) {
 		}
 	}
 }
+
+// certificate_issued is in §5.7's vocabulary (plan 9b), so a policy test may
+// name it, and the issue event is spelled as §5.7 spells it.
+func TestCertificateIssuedIsKnown(t *testing.T) {
+	if !Known(CertificateIssued) || CertificateIssued != "certificate_issued" || EventIssue != "issue" {
+		t.Fatal("certificate_issued or issue is not §5.7's")
+	}
+}
