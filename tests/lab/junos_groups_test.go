@@ -53,6 +53,9 @@ var junosGroupsLines = []string{
 	// whether Junos adds a group's leaf-list value beside a local one, as a
 	// local_user_name template would meet it (pre-flight, R5).
 	"set system login class p49-l57own permissions view",
+	// The user a same-run session logs in as, to land in p49-l57own: the
+	// probe's positive control (`show cli authorization` must run there).
+	"set system login user p49-l57own class p49-l57own",
 	"set apply-groups p49g-tip",
 	"set apply-groups p49g-perm",
 	"set apply-groups p49g-excepted",
@@ -87,7 +90,7 @@ var junosGroupsDelete = []string{
 	"delete system login class p49-remote apply-groups p49g-classlevel", "delete groups p49g-classlevel",
 	"delete groups p49g-tip", "delete groups p49g-perm", "delete groups p49g-excepted", "delete groups p49g-unapplied",
 	"delete groups p49g-timeout", "delete groups p49g-outer", "delete groups p49g-inner",
-	"delete system login class p49-l57own",
+	"delete system login user p49-l57own", "delete system login class p49-l57own",
 }
 
 // l57Reading is what one capture says about p49-remote.
@@ -135,32 +138,50 @@ func l57Cell(r l57Reading, v bool) string {
 	return yesNo(v)
 }
 
-// l57ControlCmd is the nested-group cell's positive control: p49g-perm gives
-// p49-remote view-configuration, so this must run in a session landing there.
+// l57ControlCmd is the remote session's control: p49g-perm gives p49-remote
+// view-configuration, so junosHostProbe must run in a session landing there. Its
+// evidence is the host name, which a refused command's retyped line lacks.
 const l57ControlCmd = "show configuration system host-name"
+
+// l57OwnClass is the class the second session lands in: it holds its own
+// `view`, so `show cli authorization` must run there. That is the probe's
+// positive control.
+const l57OwnClass = "p49-l57own"
 
 // l57NestedWords are the sentences each nested-group session cell prints.
 var l57NestedWords = map[string]string{
 	"applies": "The nested group APPLIES in a session: `view` reached p49-remote though the inherited capture shows " +
 		"no `set groups` line and does not expand it, so check-config cannot see it (a fail-open).",
-	"not applied": "The nested group is not applied in a session: `show cli authorization` was refused while the " +
-		"control ran.",
-	"not observed": "Not observed: the session did not open, the control did not run, or `show cli authorization` " +
-		"printed nothing readable. L57 does not close on this cell.",
+	"not applied": "The nested group is not applied in a session: `show cli authorization` was refused, its caret under " +
+		"`cli`, while the remote session's control ran and the same command printed `Current user` under " + l57OwnClass +
+		".",
+	"not observed": "Not observed: a session did not open, a control did not run, `show cli authorization` printed " +
+		"nothing readable or was refused for another reason. L57 does not close on this cell.",
 }
 
-// l57NestedCell reads the nested-group session: "applies" where `show cli
-// authorization` ran and the control ran, "not applied" where it got a refusal
-// beside a control that ran, else "not observed".
-func l57NestedCell(run junosRun, opened bool) string {
+// l57NestedCell reads the nested-group sessions. The remote session (p49-remote,
+// view-configuration alone) and the own session (p49-l57own, its own `view`)
+// both opened, the remote's control ran with the host name in its output, and
+// the own session printed `Current user`; then the remote's `show cli
+// authorization` is "applies" where it printed `Current user`, "not applied"
+// where it was refused with the caret under `cli`. Anything else is "not
+// observed".
+func l57NestedCell(remote junosRun, remoteOpened bool, own junosRun, ownOpened bool) string {
 	switch {
-	case !opened, run.loginErr != "", slices.Contains(run.unobserved, "show cli authorization"),
-		slices.Contains(run.unobserved, l57ControlCmd), !run.runs(junosProbe{cmd: l57ControlCmd, evidence: "host-name"}), strings.TrimSpace(run.auth) == "":
+	case !remoteOpened, remote.loginErr != "", slices.Contains(remote.unobserved, "show cli authorization"),
+		slices.Contains(remote.unobserved, l57ControlCmd), !remote.runs(junosProbe{cmd: l57ControlCmd, evidence: junosHostProbe.evidence}),
+		strings.TrimSpace(remote.auth) == "":
 		return "not observed"
-	case containsAny(strings.ToLower(run.auth), junosRefusal):
+	case !ownOpened, own.loginErr != "", slices.Contains(own.unobserved, "show cli authorization"),
+		!strings.Contains(own.auth, "Current user"):
+		return "not observed"
+	case strings.Contains(remote.auth, "Current user"):
+		return "applies"
+	case containsAny(strings.ToLower(remote.auth), junosRefusal) &&
+		caretOn(caretAt("show cli authorization\n"+remote.auth, len(remote.user+"@"+junosHost+"> ")), "cli"):
 		return "not applied"
 	}
-	return "applies"
+	return "not observed"
 }
 
 var l57Captures = []string{
@@ -261,7 +282,13 @@ func TestL57JunosGroups(t *testing.T) {
 			}
 			c.Close()
 		}
-		nestedCell := l57NestedCell(run, c != nil)
+		// The probe's positive control: a session landing in p49-l57own, which
+		// holds its own `view`; its login ran `show cli authorization`.
+		oc, own, _ := l.junosLogin(t, "L57 own", `["local-user-name=`+l57OwnClass+`"]`)
+		if oc != nil {
+			oc.Close()
+		}
+		nestedCell := l57NestedCell(run, c != nil, own, oc != nil)
 		var b strings.Builder
 		fmt.Fprintf(&b, "Reference (set 1.1.0, 12h) applied, then the groups: %s. Nested: %s. Class-level: %s.\n\n```\n%s\n%s\n%s\n```\n\n",
 			commitWord(commit), commitWord(nestedCommit), commitWord(classCommit), strings.Join(junosGroupsLines, "\n"),
@@ -278,9 +305,11 @@ func TestL57JunosGroups(t *testing.T) {
 		fmt.Fprintf(&b, "\nA token session with no reply attributes (lands in `remote`), `show cli authorization`:\n\n```\n%s\n```\n",
 			strings.TrimSpace(run.auth))
 		fmt.Fprintf(&b, "\nNested group in a session: the inner group adds `permissions view`, so `show cli authorization` runs "+
-			"if it was applied at login. Positive control `%s` (p49g-perm's view-configuration):\n\n```\n%s\n```\n\n"+
-			"Nested-group session cell: **%s**. %s\n", l57ControlCmd, strings.TrimSpace(run.outs[l57ControlCmd]), nestedCell,
-			l57NestedWords[nestedCell])
+			"if it was applied at login. Session control `%s` (p49g-perm's view-configuration; ran only with the host "+
+			"name in its output):\n\n```\n%s\n```\n\nProbe control, `show cli authorization` under %s (its own `view`; must "+
+			"print `Current user`):\n\n```\n%s\n```\n\n"+
+			"Nested-group session cell: **%s**. %s\n", l57ControlCmd, strings.TrimSpace(run.outs[l57ControlCmd]), l57OwnClass,
+			strings.TrimSpace(own.auth), nestedCell, l57NestedWords[nestedCell])
 		for _, cmd := range l57Captures {
 			fmt.Fprintf(&b, "\n### `%s` (p49-remote and the group lines)\n\n```\n%s\n```\n", cmd, l57Excerpt(caps[cmd]))
 		}

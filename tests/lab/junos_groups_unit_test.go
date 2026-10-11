@@ -49,28 +49,54 @@ func TestL57CurlyIsNotParsed(t *testing.T) {
 }
 
 func TestL57NestedCell(t *testing.T) {
+	const prompt = len("alice01@srx1> ")
 	ok := func(auth string) junosRun {
-		return junosRun{auth: auth, outs: map[string]string{l57ControlCmd: "host-name srx1;"}}
+		return junosRun{user: "alice01", auth: auth, outs: map[string]string{l57ControlCmd: "host-name srx1;"}}
 	}
-	refused := ok("syntax error, expecting <command>.")
-	noControl := ok("Current user: x")
+	// A refusal as Junos prints it: the caret under the word at col.
+	refusal := func(col int) string {
+		return strings.Repeat(" ", col) + "^\nsyntax error, expecting <command>."
+	}
+	atCli := refusal(prompt + len("show "))
+	good, current := ok(atCli), ok("Current user: x")
+	ownOK := ok("Current user: p49-l57own")
+	ownRefused := ok(atCli)
+	ownUnobs := ok("Current user: x")
+	ownUnobs.unobserved = []string{"show cli authorization"}
+	ownLoginErr := ok("")
+	ownLoginErr.loginErr = "refused"
+	// The control's refusal retypes the line, which holds `host-name`.
+	retyped := ok(atCli)
+	retyped.outs[l57ControlCmd] = "\n" + strings.Repeat(" ", 30) + "^\nsyntax error.\nalice01@srx1> show configuration system   host-name"
+	noControl := ok(atCli)
 	noControl.outs[l57ControlCmd] = "error: permission denied"
-	unobs := ok("Current user: x")
+	unobs := ok(atCli)
 	unobs.unobserved = []string{"show cli authorization"}
+	pastCli := ok(refusal(prompt + len("show cli ")))
+	otherRefusal := ok("error: permission denied")
 	for _, c := range []struct {
-		name   string
-		run    junosRun
-		opened bool
-		want   string
+		name      string
+		run       junosRun
+		opened    bool
+		own       junosRun
+		ownOpened bool
+		want      string
 	}{
-		{"applies", ok("Current user: x"), true, "applies"},
-		{"not applied", refused, true, "not applied"},
-		{"control refused", noControl, true, "not observed"},
-		{"unobserved", unobs, true, "not observed"},
-		{"no session", ok("Current user: x"), false, "not observed"},
-		{"empty", ok(" "), true, "not observed"},
+		{"applies", current, true, ownOK, true, "applies"},
+		{"not applied", good, true, ownOK, true, "not applied"},
+		{"control refused, echo holds host-name", retyped, true, ownOK, true, "not observed"},
+		{"control refused", noControl, true, ownOK, true, "not observed"},
+		{"unobserved", unobs, true, ownOK, true, "not observed"},
+		{"no session", good, false, ownOK, true, "not observed"},
+		{"empty", ok(" "), true, ownOK, true, "not observed"},
+		{"own: no session", good, true, ownOK, false, "not observed"},
+		{"own: login error", good, true, ownLoginErr, true, "not observed"},
+		{"own: no Current user", good, true, ownRefused, true, "not observed"},
+		{"own: unobserved", current, true, ownUnobs, true, "not observed"},
+		{"caret past cli", pastCli, true, ownOK, true, "not observed"},
+		{"refused for another reason", otherRefusal, true, ownOK, true, "not observed"},
 	} {
-		if got := l57NestedCell(c.run, c.opened); got != c.want {
+		if got := l57NestedCell(c.run, c.opened, c.own, c.ownOpened); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
