@@ -28,6 +28,9 @@ func TestL26cCells(t *testing.T) {
 		{"shell refused", l26cShellCell("start shell\n      ^\nunknown command.\nalice@srx1> "), "refused"},
 		{"shell neither", l26cShellCell("start shell\nalice@srx1> "), "not observed"},
 		{"cli ran", l26cCLICell("Hostname: srx1\nJunos: 23.4", "Junos:"), "ran"},
+		{"cli refused with the command echoed", l26cCLICell("show configuration system host-name \n^\nsyntax error.\nalice@srx1> ",
+			junosHostProbe.evidence), "refused"},
+		{"cli ran host-name", l26cCLICell("show configuration system host-name \nhost-name srx1;\n", junosHostProbe.evidence), "ran"},
 		{"cli refused", l26cCLICell("show configuration\n^\npermission denied.", "host-name"), "refused"},
 	} {
 		if c.got != c.want {

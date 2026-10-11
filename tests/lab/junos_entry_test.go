@@ -224,7 +224,7 @@ func TestL26cEntryNetconf(t *testing.T) {
 			r.outs["show cli authorization"] = run.auth
 			o, err := l26cSend(c, "show configuration system host-name")
 			r.outs["show configuration system host-name"] = firstLines(o, 6)
-			r.cells["show configuration system host-name"] = l26cCLICell(o, "host-name")
+			r.cells["show configuration system host-name"] = l26cCLICell(o, junosHostProbe.evidence)
 			if err != nil {
 				r.cells["show configuration system host-name"] = "not observed"
 			}
