@@ -799,6 +799,18 @@ func l56(t *testing.T, l *lab) {
 	if tok == "" {
 		fail("a mint with Keycloak stopped: %s", tr.cell())
 	}
+	// A refresh extends a live device session, so open one with 6a's token.
+	if sh, err := l.shell(oidcAlice, tok); err != nil {
+		cell("6a2. SSH as alice with it, Keycloak stopped", "refused: "+err.Error())
+		fail("the device refused 6a's token with Keycloak stopped: %v", err)
+	} else {
+		res := l.runPermitted(sh, "show version", 20*time.Second)
+		sh.Close()
+		cell("6a2. SSH as alice with it, Keycloak stopped", res.cell)
+		if !res.permitted {
+			fail("the device did not run `show version` with Keycloak stopped: %s", res.cell)
+		}
+	}
 	time.Sleep(11 * time.Second)
 	r = cli.run(t, kc, "refresh", "--socket", cli.sock)
 	ran("6b. port49 refresh, Keycloak stopped", r, "")
