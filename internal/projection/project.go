@@ -662,6 +662,9 @@ func (g generator) capability() (Result, error) {
 					return Result{}, err
 				}
 				if more, ok := g.entryDenies(res); ok {
+					// Entry denies deliberately bypass denyProvable: they
+					// were measured on the device (L26c, L58), and
+					// `junoscript` is not a keyword in the tree.
 					res.Denies = append(res.Denies, more...)
 					res.ConfigurationBeneath = g.configurationBeneath(res)
 					return res, nil
@@ -686,7 +689,11 @@ func (g generator) entryDenies(res Result) ([]engine.Rule, bool) {
 	}
 	var out []engine.Rule
 	for _, rule := range g.in.Dialect.RPCEntryDenies {
-		if slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return g.mayMeet(a.Rule, rule) }) {
+		// An allow that opens an RPC entry (`xml-mode`, say) is declined too:
+		// whether it beats a `junoscript` deny is unmeasured.
+		if slices.ContainsFunc(res.Allows, func(a engine.Rule) bool {
+			return g.mayMeet(a.Rule, rule) || g.opensRPC(a.Rule)
+		}) {
 			return nil, false
 		}
 		if !slices.ContainsFunc(res.Denies, func(d engine.Rule) bool { return d.Rule == rule }) {
@@ -865,8 +872,8 @@ func (g generator) narrow() (Result, error) {
 		// it refuses the RPC entry points: an allow running one voids it.
 		if !g.in.Facts.DenyBindsRPCs && g.opensRPC(p.Rule) {
 			return Result{}, refuse(FailRefusedShape, "permit %s (role %q) needs an allow-commands that runs an RPC "+
-				"entry point past the reply's `deny-commands .*`: %s; drop the permit, or narrow it past `op` and "+
-				"`xml-mode`", g.quote(p.Rule), p.Role, g.rpcWhy())
+				"entry point past the reply's `deny-commands .*`: %s; drop the permit, or narrow it past `op`, "+
+				"`junoscript` and `xml-mode`", g.quote(p.Rule), p.Role, g.rpcWhy())
 		}
 		res.Allows = append(res.Allows, p)
 	}
