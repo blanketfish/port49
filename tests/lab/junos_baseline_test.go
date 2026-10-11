@@ -75,14 +75,33 @@ func l58EntryCell(out string) string {
 // l58Save is `save`'s verdict on one image from each candidate's control
 // and deny cells: proven where some candidate is (l26bVerdict, offered:
 // `save` is never absent here, since the image took it in L26b), and the
-// candidate that proved it.
-func l58Save(control, deny map[string]string, controlOuts map[string]string) (string, string) {
+// candidate that proved it. vSRX has no `save` subcommand a session can run
+// to the end (21.4 says "command is not valid on the vsrx", or a syntax error
+// past it), so a candidate also proves the word where the control's CLI took
+// `save` and stopped later, and the deny refused it with its caret under
+// `save` (l26bDenyCell): the deny's refusal is then the word's alone.
+func l58Save(control, deny map[string]string, controlOuts map[string]string, promptLen int) (string, string) {
 	for _, cmd := range junosL58Saves {
 		if l26bVerdict(control[cmd], deny[cmd], true, controlOuts[cmd]) == "proven" {
 			return "proven", cmd
 		}
 	}
+	for _, cmd := range junosL58Saves {
+		if deny[cmd] == "refused" && l58PastSave(controlOuts[cmd], promptLen) {
+			return "proven", cmd + "; the control's CLI took `save` and stopped after it"
+		}
+	}
 	return "unproven", ""
+}
+
+// l58PastSave reports whether the control's CLI took `save` and stopped
+// later: a platform refusal of the whole command, or a caret past `save`.
+func l58PastSave(out string, promptLen int) bool {
+	if strings.Contains(strings.ToLower(out), "command is not valid on the") {
+		return true
+	}
+	at := caretAt(out, promptLen)
+	return at != "" && !caretOn(at, "save") && !strings.HasPrefix(at, "save")
 }
 
 // l58Entry types entry in a fresh session under attrs and reads the greeting
@@ -177,7 +196,8 @@ func TestL58JunosBaselineWords(t *testing.T) {
 					s.name, cells[s.name]["show version | count"])
 			}
 		}
-		save, by := l58Save(cells["control"], cells["deny"], outs["control"])
+		save, by := l58Save(cells["control"], cells["deny"], outs["control"],
+			len(outs["control"][l26bUserKey]+"@"+junosHost+"> "))
 
 		entryOuts := map[string]string{}
 		for _, e := range junosL58Entries {
