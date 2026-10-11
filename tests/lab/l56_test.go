@@ -162,11 +162,6 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 	if _, err := os.Stat(bin); err != nil {
 		t.Fatalf("bin/port49 is not built (`make build`): %v", err)
 	}
-	// The CLI reads the system config when it exists, which would change what
-	// is measured.
-	if _, err := os.Stat(userconfig.SystemPath); err == nil {
-		t.Fatalf("INVALID: %s exists on this host, so the CLI would read it; no note is written", userconfig.SystemPath)
-	}
 	home, err := os.MkdirTemp("", "p49l56")
 	if err != nil {
 		t.Fatal(err)
@@ -197,8 +192,8 @@ func (c *l56CLI) issued(t *testing.T) (string, string) {
 	return cert, key
 }
 
-// keyNow registers the issued key there now, its PEM's first line, as a value
-// no output may hold. finish calls it once the command has ended, so the run
+// keyNow registers the issued key there now, the whole key and each line of
+// its PEM body (l56KeySecrets), as values no output may hold. finish calls it once the command has ended, so the run
 // that wrote a key is checked against that key.
 func (c *l56CLI) keyNow(kc *keycloak) {
 	_, keyPath, err := userconfig.IssuedPathsIn(filepath.Join(c.home, ".port49"), sliceBrokerURL)
@@ -543,6 +538,11 @@ func TestL56IssuedEndToEnd(t *testing.T) {
 // it, through fail, and each assertion has a control that shows it can
 // fail, noted beside the cell (I5, I6).
 func l56(t *testing.T, l *lab) {
+	// The CLI reads the system config when it exists, which would change what
+	// is measured; refuse before anything comes up.
+	if _, err := os.Stat(userconfig.SystemPath); err == nil {
+		t.Fatalf("INVALID: %s exists on this host, so the CLI would read it; no note is written", userconfig.SystemPath)
+	}
 	var failed []string
 	fail := func(format string, args ...any) { failed = append(failed, fmt.Sprintf(format, args...)) }
 	var obs strings.Builder
