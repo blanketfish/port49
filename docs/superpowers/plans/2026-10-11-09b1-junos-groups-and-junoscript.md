@@ -2,11 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Carry Ryan's three rulings of 2026-10-11 for Junos. A subject whose safety rests on a
+**Goal:** Carry Ryan's four rulings of 2026-10-11 for Junos. A subject whose safety rests on a
 deny beneath a sent permission bit is projected with a `junoscript` deny, which makes the CLI deny
-a real boundary and closes NETCONF for that person alone. `port49 devices check-config` reads
-configuration groups instead of refusing them, names a group that widens a template, and takes
-many captures in one run. The lab measures what is still open and closes L26c and a new L57.
+a real boundary and closes NETCONF for that person alone; a readonly with a deny under `show`
+projects too. `port49 devices check-config` reads configuration groups instead of refusing them,
+names a group that widens a template, and takes many captures in one run. The lab measures what
+is still open and closes L26c and the new L57 and L58.
 
 **Why the name `09b1`.** The roadmap names a fix slotted between two plans of a step by the
 earlier plan's number and a digit: `06b1` (`fix/breakglass-reset`) went between 6b and 6c. This
@@ -16,18 +17,26 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
 **What changes, in one screen:**
 - **Set 1.2.0** (a released set is never edited, spec §8 "the platform set is pinned"). It is 1.1.0
   plus one adapter key on `juniper_junos`: `rpc_entry_denies: ["junoscript **"]` (and `"op **"`
-  if Task 3 finds an `op url` script reaching an RPC past the `junoscript` deny). `DefaultSet`
-  moves to 1.2.0. A policy pinned to 1.1.0 renders byte for byte as before.
+  if Task 3 finds an `op url` script reaching an RPC past the `junoscript` deny), and `save` in
+  its Junos keyword tree (if L58 proves it). `DefaultSet` moves to 1.2.0. A policy pinned to
+  1.1.0 renders byte for byte as before.
 - **The projection** (`internal/projection`): where `JunosFacts.DenyBindsRPCs` is false and a deny
   is the only guard beneath a sent bit or the baseline, a dialect with `RPCEntryDenies` keeps the
   capability shape and appends those denies (role `rpc_entry`). Today that composition falls to
   the narrow shape or fails closed as `refused_shape`. An allow the reply must send that meets an
-  entry deny still falls back, since an allow beats a deny (L11). **This reaches only a grant that
-  holds every command the baseline runs** (a `**` grant less some denies, measured against the
-  shipped adapter in pre-flight): any other carries baseline denies, two of which (`save **`,
-  `xml-mode **`) name no keyword the set's tree proves and send it to the narrow shape, and which
-  render 333 bytes on their own. So the realistic readonly (`show **` less `show configuration
-  **`) still fails closed under 1.2.0 (decision 44 ruling 10; its remedy is later work).
+  entry deny still falls back, since an allow beats a deny (L11).
+- **A readonly with a deny beneath `show **` projects** (owner's ruling 4; decision 44 ruling
+  10). Under the entry deny, set 1.2.0 also: sends the baseline's `xml-mode **` as nothing, since
+  the `junoscript` deny refuses it (L26c-junoscript; bare `xml-mode` measured in Task 3, L58);
+  proves `save` a keyword (its tree adds it if L58 proves it on both images); renders a reply's
+  `word **` denies as one alternative, ` *(help|quit|…)( .*)? *(\|.*)?` (89 bytes for the
+  readonly's twelve and `junoscript`); and sends a permit the bits reach but for a carve-out as allows of those
+  carve-outs. So a readonly granted `show **` less `show configuration **` gets `view`, 170 bytes
+  of `deny-commands`, and allows of `show log`, `show firewall` and `show policer`, reported as
+  sent beyond the bits; view-configuration stays unsent. A capability reply that would send an
+  allow its bits do not reach yields to a narrow one that reaches every allow, so a readonly
+  granted `show **` alone renders as under 1.1.0. Each of these renders only where the adapter
+  carries `rpc_entry_denies`.
 - **Two CI warnings** (`internal/policy`): `projection_netconf_closed` (this subject has no NETCONF
   on these devices) and `projection_deny_beneath_view_configuration` (Ryan: the class grants
   `view-configuration` and the policy denies `show configuration`; a warning, not a refusal).
@@ -41,9 +50,10 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   group's definition. Under set 1.2.0 the services allowlist drops NETCONF, the XML API
   and `outbound-ssh`; `web-management` and `extension-service` (and `rest`, unless Task 3 shows
   the deny closes it) still fail. `--batch FILE...` checks many captures.
-- **Lab:** Task 3 (before code) measures the other ways in under `deny junoscript` and the group
-  inheritance; Task 9 (after code) runs the projection differential under set 1.2.0 and
-  check-config on the captured groups, then closes L26c and L57.
+- **Lab:** Task 3 (before code) measures the other ways in under `deny junoscript`, the group
+  inheritance, and `save` and bare `xml-mode` under the factored deny (new row L58, closed there);
+  Task 9 (after code) runs the projection differential under set 1.2.0 and check-config on the
+  captured groups, then closes L26c and L57.
 
 **Architecture:**
 - `internal/platform`: `Dialect.RPCEntryDenies`, `Spec.RPCEntryDenies` (`rpc_entry_denies`),
@@ -54,11 +64,14 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   (`lint.go`), `Diff.ProjectionWarnings` (`diff.go`).
 - `internal/projection`: `generator.entryDenies`, `Result.EntryDenied`, `Result.NetconfClosed`,
   `Result.ConfigurationBeneath`; `rpcEntries` gains `junoscript`; `rpcWhy` states only what is
-  measured.
+  measured. Task 5b: `Result.Closed`, `generator.closesEntries`, `closedByEntry`,
+  `carvedAllows`, `factored`, and `shape` keeping the narrow shape where the capability one sends
+  an allow beyond its bits.
 - `cmd/port49`: `checkConfig` split into a per-file `checkRun.one`, plus `--batch`; `policyDiff`
   prints warnings.
-- `tests/lab`: `junos_entry_test.go`, `junos_entry_unit_test.go`, `junos_groups_test.go`;
-  `projection_test.go` runs under a named set.
+- `tests/lab`: `junos_entry_test.go`, `junos_entry_unit_test.go`, `junos_groups_test.go`,
+  `junos_baseline_test.go`, `junos_baseline_unit_test.go`; `projection_test.go` runs under a
+  named set.
 
 **Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, no cgo, no new module. Containerlab
 with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the lab host).
@@ -67,10 +80,12 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
 - `docs/design/2026-08-23-policy-engine-spec.md`: §8 ("A wire deny does not bind a native NETCONF
   RPC" through "…is future work"; "Knowing what is shipped" is unchanged and binds Task 4), §12
   (`devices check-config`, the projection codes table), §13 (new decision 44, ten rulings), §14 (Platform and
-  projection), §15 (L26c; new L57; their detail bullets).
+  projection), §15 (L26c; new L57 and L58; their detail bullets).
 - Results notes this plan argues from: `tests/lab/results/L26c-junoscript-juniper_vjunos-router.md`,
   `L26c-junoscript-juniper_vsrx.md` (2026-09-30, captures in `tests/lab/evidence/`),
-  `L26c-juniper_*.md`, `L26c-operator-juniper_srx.md`, `L12-netconf-juniper_*.md`.
+  `L26c-juniper_*.md`, `L26c-operator-juniper_srx.md`, `L12-netconf-juniper_*.md`;
+  `L26b-juniper_*.md` (the factored deny's shape, enforced; `save` proven on vJunos-router only)
+  and `L12-bits-juniper_*.md` (view-configuration's carve-outs).
 - The roadmap `docs/superpowers/plans/README.md`, "Plan 9". House style: plans 9a and 9b. Written
   against `main` at `22ada89`.
 
@@ -96,6 +111,14 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
    control's NETCONF works; (d) what `display inheritance` shows for wildcard groups,
    `apply-groups-except` and nested groups. Positive controls enforced; close L26c and the groups
    row.
+4. **A readonly with a show deny works in 9b1** (after pre-flight, on finding 5). The remedy goes
+   into set 1.2.0: (a) the baseline `xml-mode` deny is read as closed by the entry deny
+   `junoscript` (L26c-junoscript: a deny of `xml-mode` does not bind; `junoscript` closes `xml-mode
+   netconf` and port 830); (b) a lab cell in the pre-code lab task measures `save` into the
+   keyword tree, with its control, and gates (b)'s render change; (c) one factored alternative for
+   `word **` denies, with a budget test showing a readonly `show **` less `show configuration **`,
+   and less `show security **`, rendering within 255 as the capability shape. view-configuration
+   stays out of readonly: the spec's undecided reach stands. Spec text first, tests first.
 
 ## Controller rulings this plan carries (2026-10-11, pre-flight)
 
@@ -162,21 +185,44 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   requires NETCONF off on the whole device, so a per-subject "no NETCONF" there is noise on every
   readonly. It is a report only, never a different reply. Its message names the entry denies the
   reply carries, so a subject denied `op` by G1 is told so (R2's "reported").
-- **R9.** What the entry deny does not change (pre-flight finding 5, measured against the shipped
-  1.1.0 adapter and keyword tree with the Task 5 code applied). A composition that leaves any
-  baseline command to a deny carries baseline denies. `save **` and `xml-mode **` name no keyword
-  the tree proves, so `capability` returns `narrowOnly` before it reaches the entry deny, and the
-  readonly's baseline denies alone render 333 bytes. The realistic readonly, `show **` less `show
-  configuration **`, fails closed (`refused_shape`) in both sets. So does any readonly with a deny
-  under `show **`. The entry deny reaches the `**`-less-a-deny grants: operator and admin. The
-  remedy is three render changes, each shipped in a later set and none in scope here: (a) read
-  the baseline's `xml-mode **` as closed by the entry deny `junoscript **`, which is measured
-  (`L26c-junoscript-juniper_*.md`: Junos authorizes `xml-mode` as `junoscript`, and a deny of
-  `xml-mode` does not bind); (b) measure `save` into the keyword tree; (c) render a set's
-  `word **` denies as one factored alternative, `^ *(help|quit|…)( .*)? *(\|.*)?$`, about 103 bytes
-  for the readonly's. Even with all three, the readonly also needs view-configuration's whole
-  reach decided (its `monitor **`, `request mpls **` and the rest), or `show **` needs an allow
-  that beats the deny. Recorded as decision 44 ruling 10 and in the roadmap as carried.
+- **R9 (owner's ruling 4; data: `L26c-junoscript-juniper_*.md`, `L26b-juniper_*.md`, L58).** A
+  readonly with a deny beneath `show **` projects under set 1.2.0. Pre-flight measured why it did
+  not, against the shipped adapter and tree with Task 5 applied: its baseline denies carry `save
+  **` and `xml-mode **`, which no proven keyword names, so `capability` returned `narrowOnly`;
+  they render 333 bytes alone; and, found while building the remedy, view-configuration's other
+  carve-outs (`show log`, `show firewall`, `show policer`) take `show **` out of `view`'s reach, so
+  the capability shape had to send `show **` as an allow, which beats the deny beneath it
+  (`refused_shape`). Five changes, each only where the adapter carries `rpc_entry_denies`, so set
+  1.1.0, or a block that drops the entry deny, renders byte for byte as before (decision 44 ruling
+  5):
+  - (a) The baseline's `xml-mode **` is sent as nothing beside `junoscript **` (`Result.Closed`):
+    Junos authorizes `xml-mode` as `junoscript`, and a deny naming `xml-mode` does not bind. The
+    model reads it refused, so the reply is still proven sound. Bare `xml-mode` (the Junos XML
+    protocol) was never typed under the deny; L58 types it, and gate G4 stops the plan if it runs.
+  - (b) Set 1.2.0's keyword tree adds `save` at the root if L58 proves it on both images (G3).
+    L26b proved it on vJunos-router only: vSRX's control took the hidden `save
+    dhcp-security-snoop` and refused the file name after it, so nothing ran.
+  - (c) A reply's `word **` denies render as one alternative, ` *(w1|w2|…)( .*)? *(\|.*)?`, at
+    the first one's place: the shape L26b's deny sessions were enforced in on both images. The
+    readonly's twelve words and `junoscript` are 89 bytes (the ruling's estimate was about 103).
+  - (d) A permit the bits reach but for a carve-out of a ceiling bit the reply does not send,
+    whose own allow would beat a deny beneath it, goes out as allows of those carve-outs, each
+    within the ceiling, sendable, and meeting no deny (`carvedAllows`). Without it (a)–(c) still
+    leave the readonly `refused_shape`. Whether an allow runs past the bits is unmeasured, so each
+    is reported as sent beyond them (`Unreached`), and Task 9 records what the device does.
+  - (e) A capability reply that sends an allow its bits do not reach yields to a narrow reply
+    that carries the grant with every allow reached and leaves off no more. Without it (a) and
+    (b) move every grant 1.1.0 sent to the narrow shape only for `save` and `xml-mode`, the
+    readonly granted `show **` alone first, to `view` and an allow of `show **` beyond it, where
+    Junos shows no configuration (`L12-bits-juniper_*.md`, carve-outs). With it that readonly
+    keeps both bits and renders as under 1.1.0.
+  The readonly granted `show **` less `show configuration **` then gets `view`, 170 bytes of
+  `deny-commands` and allows of `show log`, `show firewall` and `show policer`. Less `show
+  security **` it gets 165 bytes and also an allow of `show configuration` beyond `view`; under
+  `view` alone Junos does not show the configuration, so in practice that subject reads none
+  (reported). view-configuration stays out of readonly: such a grant decides none of its other
+  reach (`monitor`, `request mpls` and the rest), the spec's undecided reach, which stands.
+  Recorded as decision 44 ruling 10.
 
 ## Global Constraints
 
@@ -216,15 +262,20 @@ Under the standing grant (security first, keep moving), each on reasoning unless
    Task 7 ("own leaf").
 5. **The entry deny's reach on the shipped set.** Unit fixtures (`measuredJunos`) prove every
    baseline word a keyword and leave `xml-mode` out of the baseline; the shipped tree does not.
-   `TestTheShippedSetsEntryDeny` pins what 1.2.0 really does: operator `**` less a deny projects,
-   the readonly fails closed (decision 44 ruling 10).
-6. **One bad file in a CI batch.** A file naming no inventory device, or one that cannot be
+   `TestTheShippedSetsEntryDeny` and `TestAReadonlyWithAShowDenyFitsTheBudget` (Task 5b) pin what
+   1.2.0 really does from the shipped adapter and tree, and that 1.1.0's renders did not move.
+6. **What the readonly remedy sends as nothing or as an allow.** `xml-mode` is closed only beside
+   `junoscript **` and only as the baseline's deny; a carved allow meets no deny and stays within
+   the ceiling; a plain readonly keeps the narrow shape. A wrong step here is wider than port49:
+   the model's witness must still refuse every reply that would run a denied command (Task 5b's
+   mutation checks).
+7. **One bad file in a CI batch.** A file naming no inventory device, or one that cannot be
    read, must be reported and must not stop the other files or turn the run green. Test in
    Task 8 (`TestCheckConfigBatch`).
 
 ---
 
-## Task 1: Spec — decision 44, §8 rewritten, §12 check-config and codes, §14, §15 L26c and L57
+## Task 1: Spec — decision 44, §8 rewritten, §12 check-config and codes, §14, §15 L26c, L57 and L58
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§8 lines ~3877–3922; §12 ~5687–5712;
@@ -234,7 +285,7 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 **Interfaces:** Produces the names every later task uses: adapter key `rpc_entry_denies`, role
 `rpc_entry`, finding kinds `projection_netconf_closed`,
 `projection_deny_beneath_view_configuration`, capture
-`show configuration | display set | display inheritance`, flag `--batch`, row L57.
+`show configuration | display set | display inheritance`, flag `--batch`, rows L57 and L58.
 
 - [ ] **Step 1: Replace §8's RPC paragraphs.** Replace from the paragraph beginning `**A wire deny
   does not bind a native NETCONF RPC**` through the sentence ending `…since admins need `start
@@ -270,12 +321,32 @@ on the device. A subject whose reply carries no such deny keeps them: an automat
 granted everything its bits reach, say. Over NETCONF a native RPC is bounded by the bits alone, so
 no subject has both a deny beneath its bits and NETCONF.
 
-This reaches only a composition whose grant holds every command the baseline runs, a `**` grant
-less some denies. Any other carries baseline denies: `save **` and `xml-mode **` among them name
-no keyword the set's tree proves, which leaves the composition to the narrow shape, and a
-readonly's baseline denies render 333 bytes on their own. So a readonly granted `show **` less
-`show configuration **` gets the fail-closed reply under set 1.2.0 as under 1.1.0 (decision 44
-ruling 10).
+**A readonly with a deny beneath `show **`** (decision 44 ruling 10). A grant that leaves a
+baseline command to a deny carries baseline denies, and a readonly's are fourteen. Set 1.2.0
+carries them beside the entry deny. Each change below renders only where the adapter has
+`rpc_entry_denies`, so a set without it, or a block that drops it, renders as set 1.1.0 does.
+
+- The baseline's `xml-mode **`, which no keyword tree proves, is sent as nothing beside
+  `junoscript **`. Junos authorizes `xml-mode` as `junoscript`, and a deny naming `xml-mode` does
+  not bind (`tests/lab/results/L26c-junoscript-juniper_*.md`). Bare `xml-mode` under the deny is
+  *provisional on L58*.
+- Set 1.2.0's keyword tree proves `save`, *provisional on L58* (L26b proved it on vJunos-router
+  only).
+- A reply's `word **` denies render as one alternative, ` *(help|quit|…)( .*)? *(\|.*)?`, the
+  shape L26b's deny sessions were enforced in (`L26b-juniper_*.md`).
+- A permit the bits reach but for a carve-out of a ceiling bit the reply does not send, where
+  an allow of the permit would beat a deny beneath it, goes out as allows of those carve-outs.
+  Each is within the ceiling and meets no deny. Whether an allow runs a command past the bits is
+  unmeasured, so CI reports each as sent beyond them.
+- Where the capability shape would send an allow its bits do not reach, and the narrow shape
+  carries the grant with every allow reached and leaves off no more, the narrow shape is sent.
+
+So a readonly granted `show **` less `show configuration **` gets `view`, a `deny-commands` of
+170 bytes (its twelve `word **` denies and `junoscript` in one alternative, `set cli` and its
+own deny), and allows of `show log`, `show firewall` and `show policer`, view-configuration's
+other carve-outs. view-configuration is not sent: the grant decides none of its other reach
+(`monitor`, `request mpls` and the rest). A readonly granted `show **` alone keeps the narrow
+shape and both bits, as under set 1.1.0.
 
 Where the reply must send an allow that meets an entry deny, the allow would beat it (L11), so the
 entry is not closed. The composition then falls to the narrow shape, whose `.*` refuses every
@@ -370,7 +441,8 @@ when any file has a finding or cannot be read.
 **44. Junos: a per-user `junoscript` deny, and check-config reads configuration groups.**
 *Plan 9b1, 2026-10-11, on Ryan's rulings of that day.* Rulings rest on reasoning unless they say
 data. Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's Task 9 closes it; ruling 7 is
-provisional on L57.
+provisional on L57; ruling 10's `save` and bare `xml-mode` are *provisional on L58* until plan
+9b1's Task 3 closes it.
 
 - **1. The entry deny** (data: `tests/lab/results/L26c-junoscript-juniper_*.md`). Take a
   composition whose only guard beneath a sent bit or the baseline is a wire deny. Under a set
@@ -391,8 +463,9 @@ provisional on L57.
   noise.
 - **5. The key is adapter data** (§8, "the platform set is pinned"). `rpc_entry_denies` is read
   only on a projected platform. A block may drop an entry deny, and that platform then renders
-  as set 1.1.0 does. It may never add one the set did not measure, as with `carve_outs`.
-  `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders byte for byte as before.
+  as set 1.1.0 does: ruling 10's render changes hang on the key too. It may never add one the set
+  did not measure, as with `carve_outs`. `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders
+  byte for byte as before.
 - **6. Services** (Ryan's ruling, narrowed for security; data L26c). Under set 1.2.0
   check-config no longer fails NETCONF, the XML API, `outbound-ssh`, any non-RPC service, or an
   ssh option. It still fails `web-management` and `extension-service` anywhere in the hierarchy,
@@ -417,14 +490,21 @@ provisional on L57.
   list nor its harmless list fails, from a group or written there. `allow-hidden-commands`,
   `login-script`, `logical-system`, `tenant` and `security-role` change what a session runs, and
   an allowlist does not fail open on a statement nobody listed (plan 5b pre-flight C1).
-- **10. What the entry deny does not reach** (plan 9b1 pre-flight, measured against the shipped
-  adapter). A composition that leaves a baseline command to a deny carries baseline denies;
-  `save **` and `xml-mode **` name no keyword set 1.2.0's tree proves, and a readonly's baseline
-  denies render 333 bytes alone. So a readonly granted `show **` less `show configuration **`
-  gets the fail-closed reply under 1.2.0 as under 1.1.0, and ruling 4's view-configuration
-  warning reaches only a grant that holds every baseline command. The remedy is a later set:
-  the baseline's `xml-mode` read as closed by the entry deny (measured, L26c-junoscript), `save`
-  measured into the tree, and one factored alternative for a set's `word **` denies.
+- **10. A readonly with a deny beneath `show **`** (Ryan's ruling of 2026-10-11, on plan 9b1's
+  pre-flight; data: `L26c-junoscript-juniper_*.md`, `L26b-juniper_*.md`, `L58-juniper_*.md`).
+  Without this ruling such a readonly fails closed under 1.2.0 as under 1.1.0: its baseline
+  denies name `save` and `xml-mode`, which no proven keyword names, they render 333 bytes alone,
+  and view-configuration's carve-outs take `show **` out of `view`'s reach, so `show **` would go
+  out as an allow that beats the deny. Where the adapter carries `rpc_entry_denies`, and only
+  there: the baseline's `xml-mode **` is sent as nothing beside `junoscript **`, which refuses it
+  (Junos authorizes `xml-mode` as `junoscript`; the model reads it refused); set 1.2.0's tree
+  proves `save`; `word **` denies render as one alternative; a permit the bits reach but for a
+  carve-out of an unsent ceiling bit, whose allow would beat a deny beneath it, goes out as allows
+  of those carve-outs, each within the ceiling and meeting no deny, reported as sent beyond the
+  bits; and a capability reply sending an allow its bits do not reach yields to a narrow one
+  that reaches every allow and leaves off no more. view-configuration is not sent to such a
+  readonly, whose grant decides none of its other reach; ruling 4's warning stays an operator's
+  and an admin's.
 ```
 
 - [ ] **Step 5: Add two §14 bullets** under **Platform and projection**, after "Projection shape
@@ -435,8 +515,10 @@ provisional on L57.
   configuration **` renders the capability shape with `junoscript` in `deny-commands`; the device
   refuses `show configuration`, `xml-mode netconf` and that user's NETCONF on port 830, while a
   subject with no deny beneath its bits opens NETCONF; under set 1.1.0 the same policy fails
-  closed as before. A readonly granted `show **` less `show configuration **` fails closed under
-  both sets (ruling 10).
+  closed as before. Under set 1.2.0 a readonly granted `show **` less `show configuration **`
+  renders `view`, its denies with `junoscript` in 170 bytes, and allows of `show log`, `show
+  firewall` and `show policer`; the device refuses `show configuration`, `xml-mode` and
+  `xml-mode netconf`. A readonly granted `show **` alone renders as under 1.1.0 (ruling 10).
 - **check-config reads groups** (decision 44): a group adding `permissions` to `p49-remote` fails
   naming the group; a group adding `login-tip` passes; a capture without `display inheritance`
   from a device applying a group to a template is refused; `--batch` checks every file.
@@ -474,10 +556,23 @@ Beside it: whether a deny naming the entry points binds, with their abbreviation
   so what `display inheritance` prints in set form is a claim about the device, and is measured.
 ```
 
+- [ ] **Step 8b: Add L58's row** after L57's, and its detail bullet after L57's:
+
+```markdown
+| **L58** | The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save\|junoscript)( .*)?` and the pipe tail), each against a control with the same class (`permissions view`) and no deny. `save`: whether it is a keyword to deny-commands, a `save` command the control runs with `\| count`'s evidence refused under the deny with the caret under `save` (L26b proved it on vJunos-router; on vSRX its control took the hidden `save dhcp-security-snoop` and refused the file name after it, so nothing ran). `xml-mode`: whether bare `xml-mode` (the Junos XML protocol, greeting `<junoscript`) and `xml-mode netconf` are refused under it, where the control is greeted. | Set 1.2.0's keyword tree (`save`); decision 44 ruling 10's `xml-mode **` sent as nothing beside `junoscript **` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
+```
+
+```markdown
+- **L58** — added by plan 9b1 (`tests/lab/junos_baseline_test.go`); open. Why it is a row: a
+  readonly's reply carries the baseline's denies, and decision 44 ruling 10 sends `save **` as a
+  proven keyword and `xml-mode **` as nothing. L26b left `save` unproven on vSRX, and L26c typed
+  only `xml-mode netconf` under a `junoscript` deny.
+```
+
 - [ ] **Step 9: Check and commit.**
 
 ```bash
-grep -n 'rpc_entry_denies\|projection_netconf_closed\|L57' docs/design/2026-08-23-policy-engine-spec.md | head
+grep -n 'rpc_entry_denies\|projection_netconf_closed\|L57\|L58' docs/design/2026-08-23-policy-engine-spec.md | head
 git add docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: spec for plan 9b1, a per-user junoscript deny and groups in check-config
 
@@ -486,12 +581,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 2: Lab harness — the entry cells (a, b, c0, e, scp) and the groups cells (d)
+## Task 2: Lab harness — the entry cells (a, b, c0, e, scp), the groups cells (d), and L58
 
 **Files:**
 - Create: `tests/lab/junos_entry_test.go`
 - Create: `tests/lab/junos_entry_unit_test.go`
 - Create: `tests/lab/junos_groups_test.go`
+- Create: `tests/lab/junos_baseline_test.go`, `tests/lab/junos_baseline_unit_test.go` (L58)
 
 **Interfaces:**
 - Consumes (existing, `tests/lab`): `eachPlatform`, `(*lab).capture`, `(*lab).junosConfigureAdmin`,
@@ -502,20 +598,27 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `l26cSend`, `junosSettle`, `junosShow`, `isAuthRejection`, `sessionPermitted`, `(*lab).mark`,
   `(*lab).drainRecords`, `(*lab).result`, `firstLines`, `oneLine`, `tableCell`, `cellOr`,
   `commitWord`, `redactConfigCapture`, `labcreds.RedactNote`, `junosL26cClientHello`,
-  `adapter.Set`, `adapter.ReferenceClasses`, `projectionRestore`.
-- Produces: `TestL26cEntryNetconf`, `TestL26cEntryScripts`, `TestL57JunosGroups`;
+  `adapter.Set`, `adapter.ReferenceClasses`, `projectionRestore`; for L58, L26b's
+  `(*lab).l26bSession`, `l26bUserKey`, `l26bCell`, `l26bDenyCell`, `l26bVerdict`,
+  `junosL26cRefusal`, `keywordWalk`, `junosPrepare`, `containsAny`, `(*cliConn).send`,
+  `(*cliConn).expectFrom`, `(*lab).configPath`, `(*lab).restart`.
+- Produces: `TestL26cEntryNetconf`, `TestL26cEntryScripts`, `TestL57JunosGroups`,
+  `TestL58JunosBaselineWords`;
   pure helpers `entryVerdict(runs map[string]l26cRun, deny []string, control string,
   canonical, probes []string) (readings map[string]string, unisolated []string)`,
   `opScriptCell(out string) string`, `scpCell(n int64, err error) string`,
-  `l57Readings(capture string) l57Reading`.
-  Results entries `L26c-entries` and `L57`; fixture files
+  `l57Readings(capture string) l57Reading`, `l58EntryCell(out string) string`,
+  `l58Save(control, deny, controlOuts map[string]string) (verdict, by string)`.
+  Results entries `L26c-entries`, `L57` and `L58`; fixture files
   `internal/platform/testdata/l57-<platform>.set`.
 
 The seeded login pool is 16 per platform per `go test` process (`tokenPoolSize`), so each test
 runs in its own invocation (Task 3). `TestL26cEntryNetconf` uses 12 (four per class: the CLI
 session, port 830, port 22, the exec channel). `TestL26cEntryScripts` uses 11 (W, V and C: the CLI
 session, REST's request, scp; Vw: the login and scp); REST's tunnel and scp's harness control are
-break-glass's.
+break-glass's. `TestL58JunosBaselineWords` uses 6 (control and deny: the CLI session, bare
+`xml-mode`, `xml-mode netconf`, each entry in its own session since it turns the session into
+XML).
 
 - [ ] **Step 1: Write the failing unit tests** (`tests/lab/junos_entry_unit_test.go`):
 
@@ -1399,9 +1502,272 @@ func l57Excerpt(capture string) string {
 }
 ```
 
+- [ ] **Step 4b: Write L58's cell** (owner's ruling 4: `save` and bare `xml-mode` under the
+  factored deny, each against a control). First the unit tests,
+  `tests/lab/junos_baseline_unit_test.go`:
+
+```go
+//go:build lab
+
+package lab
+
+import "testing"
+
+// These run without a device: L58's entry cell and its `save` verdict.
+
+func TestL58EntryCell(t *testing.T) {
+	for _, c := range []struct{ out, want string }{
+		{"<?xml version=\"1.0\"?>\n<junoscript xmlns=\"http://xml.juniper.net/xnm/1.1/xnm\">", "greeting"},
+		{"<hello xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\"></hello>", "greeting"},
+		{"xml-mode\n^\nunknown command.\nuser@srx1> ", "refused"},
+		{"user@srx1> ", "not observed"},
+	} {
+		if got := l58EntryCell(c.out); got != c.want {
+			t.Errorf("%q: %s, want %s", c.out, got, c.want)
+		}
+	}
+}
+
+// `save` is proven by any candidate the control ran and the deny refused;
+// a control that refused every candidate leaves it unproven, never absent.
+func TestL58Save(t *testing.T) {
+	a, b := junosL58Saves[0], junosL58Saves[1]
+	if v, by := l58Save(map[string]string{a: "refused", b: "ran"}, map[string]string{a: "refused", b: "refused"},
+		nil); v != "proven" || by != b {
+		t.Errorf("the second candidate: %s %q", v, by)
+	}
+	if v, _ := l58Save(map[string]string{a: "refused", b: "refused"}, map[string]string{a: "refused", b: "refused"},
+		map[string]string{a: "unknown command", b: "unknown command"}); v != "unproven" {
+		t.Errorf("the control ran none: %s", v)
+	}
+	if v, _ := l58Save(map[string]string{a: "ran", b: "ran"}, map[string]string{a: "ran", b: "not observed"},
+		nil); v != "unproven" {
+		t.Errorf("the deny refused none: %s", v)
+	}
+}
+```
+
+  Then `tests/lab/junos_baseline_test.go` (pre-flight: `go vet -tags lab` clean and the two unit
+  tests pass against it):
+
+```go
+//go:build lab
+
+package lab
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
+
+// TestL58JunosBaselineWords measures the two baseline words set 1.2.0's
+// readonly reply rests on (spec §15 L58; decision 44 ruling 10). `save`: L26b
+// proved it a keyword on vJunos-router and left it unproven on vSRX, whose
+// control took the hidden `save dhcp-security-snoop` and refused the file
+// name after it; each candidate below is typed in both sessions, and the word
+// is proven where the control ran one with `| count`'s evidence and the deny
+// refused that one, its caret under `save` (l26bVerdict). `xml-mode`: L26c
+// measured `xml-mode netconf` refused under a deny of `junoscript`; bare
+// `xml-mode`, the Junos XML protocol, was not typed. Both are typed under the
+// factored alternative set 1.2.0 renders, ` *(save|junoscript)( .*)? *(\|.*)?`,
+// against a control with the same class and no deny.
+//
+// Positive controls are enforced: a session that does not open, `show
+// version` not running in either CLI session, or the control not reaching
+// the XML greeting for either entry is INVALID, before any note is written.
+// `save` unproven, or an entry reached under the deny, is a result: the note
+// records it and Task 3's gates stop the plan.
+
+var junosL58Class = []string{
+	"set system login class p49-l58-view permissions view",
+	"set system login user p49-l58-view class p49-l58-view",
+}
+
+var junosL58Delete = []string{"delete system login user p49-l58-view", "delete system login class p49-l58-view"}
+
+// junosL58Deny is the factored alternative naming both words, as set 1.2.0
+// renders a reply's `word **` denies.
+const junosL58Deny = `^ *(save|junoscript)( .*)? *(\|.*)?$`
+
+// junosL58Saves are the `save` commands typed: vJunos-router's L26b probe,
+// and the hidden command vSRX took, without the file name it refused.
+var junosL58Saves = []string{
+	"save dhcp-security-snoop /var/tmp/p49-l58.snoop | count",
+	"save dhcp-security-snoop | count",
+}
+
+// junosL58Entries are the commands that turn a CLI session into an XML
+// session: bare `xml-mode` greets with `<junoscript`, `xml-mode netconf` with
+// a NETCONF `<hello>`.
+var junosL58Entries = []string{"xml-mode", "xml-mode netconf need-trailer"}
+
+// l58EntryCell is a CLI's answer to an entry: greeting (`<junoscript` or a
+// NETCONF hello, and no refusal), refused, or not observed.
+func l58EntryCell(out string) string {
+	greeted := strings.Contains(out, "<junoscript") || strings.Contains(out, "</hello>")
+	refused := containsAny(strings.ToLower(out), junosL26cRefusal)
+	switch {
+	case greeted && !refused:
+		return "greeting"
+	case refused && !greeted:
+		return "refused"
+	}
+	return "not observed"
+}
+
+// l58Save is `save`'s verdict on one image from each candidate's control
+// and deny cells: proven where some candidate is (l26bVerdict, offered:
+// `save` is never absent here, since the image took it in L26b), and the
+// candidate that proved it.
+func l58Save(control, deny map[string]string, controlOuts map[string]string) (string, string) {
+	for _, cmd := range junosL58Saves {
+		if l26bVerdict(control[cmd], deny[cmd], true, controlOuts[cmd]) == "proven" {
+			return "proven", cmd
+		}
+	}
+	return "unproven", ""
+}
+
+// l58Entry types entry in a fresh session under attrs and reads the greeting
+// or the refusal; the session is XML afterwards, so it is closed.
+func (l *lab) l58Entry(t *testing.T, name, attrs, entry string) (string, string) {
+	t.Helper()
+	c, r, _ := l.junosLogin(t, name, attrs)
+	if c == nil {
+		t.Fatalf("INVALID: %s: the session did not open: %s", name, r.loginErr)
+	}
+	defer c.Close()
+	from := len(c.out.String())
+	if err := c.send(entry); err != nil {
+		return "not observed", err.Error()
+	}
+	out, err := c.expectFrom(from, junosPer, "<junoscript", "</hello>", junosOpPrompt)
+	if err == nil && !strings.Contains(out, "<junoscript") && !strings.Contains(out, "</hello>") {
+		junosSettle(c)
+		out = c.out.String()[from:]
+	}
+	if err != nil {
+		return "not observed", out
+	}
+	return l58EntryCell(out), out
+}
+
+func TestL58JunosBaselineWords(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
+			t.Skip("Junos only")
+		}
+		stop := l.capture(t, "L58")
+		defer stop()
+
+		// The completions after each word, over break-glass, before any token.
+		listings := map[string]string{}
+		func() {
+			c, err := l.junosCLI(breakglassUser, breakglassPassword)
+			if err != nil {
+				t.Fatalf("INVALID: no break-glass CLI: %v", err)
+			}
+			defer c.Close()
+			if err := junosPrepare(c); err != nil {
+				t.Fatalf("INVALID: set cli screen-length 0 not observed within %s: %v", junosPer, err)
+			}
+			w := &keywordWalk{c: c, logf: t.Logf, prompt: "@" + junosHost + "> "}
+			for _, p := range []string{"save", "xml-mode"} {
+				words, ph, err := w.completion(p)
+				listings[p] = fmt.Sprintf("%s (placeholder %v, err %v)", strings.Join(words, " "), ph, err)
+			}
+		}()
+
+		commit := l.junosConfigureAdmin(t, junosL58Class)
+		defer l.junosConfigureAdmin(t, junosL58Delete)
+		defer func() {
+			if std, err := l.configPath(); err == nil {
+				if err := l.restart(std); err != nil {
+					t.Errorf("could not put port49d back on the lab config: %v", err)
+				}
+			}
+		}()
+
+		const class = `"local-user-name=p49-l58-view"`
+		quote := func(re string) string { return strings.ReplaceAll(re, `\`, `\\`) }
+		control := "[" + class + "]"
+		deny := "[" + class + `, "deny-commands=` + quote(junosL58Deny) + `"]`
+		cmds := append([]string{"show version | count"}, junosL58Saves...)
+
+		cells := map[string]map[string]string{"control": {}, "deny": {}}
+		outs := map[string]map[string]string{}
+		for _, s := range []struct{ name, attrs string }{{"control", control}, {"deny", deny}} {
+			o, _, auth := l.l26bSession(t, s.name, s.attrs, cmds, false)
+			// l26bSession says why with t.Errorf; nothing is written after it.
+			if t.Failed() {
+				t.Fatalf("INVALID: %s: the session did not open, or a command was not observed within %s", s.name, junosPer)
+			}
+			outs[s.name] = o
+			outs[s.name]["auth"] = auth
+			promptLen := len(o[l26bUserKey] + "@" + junosHost + "> ")
+			cells[s.name]["show version | count"] = l26bCell(o["show version | count"], nil)
+			for _, cmd := range junosL58Saves {
+				if s.name == "control" {
+					cells[s.name][cmd] = l26bCell(o[cmd], nil)
+				} else {
+					cells[s.name][cmd] = l26bDenyCell(o[cmd], "save", nil, promptLen)
+				}
+			}
+			if cells[s.name]["show version | count"] != "ran" {
+				t.Fatalf("INVALID: %s: `show version | count` %s, so the session measures nothing",
+					s.name, cells[s.name]["show version | count"])
+			}
+		}
+		save, by := l58Save(cells["control"], cells["deny"], outs["control"])
+
+		entryOuts := map[string]string{}
+		for _, e := range junosL58Entries {
+			for _, s := range []struct{ name, attrs string }{{"control", control}, {"deny", deny}} {
+				cell, out := l.l58Entry(t, s.name+" "+e, s.attrs, e)
+				cells[s.name][e], entryOuts[s.name+" "+e] = cell, out
+			}
+			if cells["control"][e] != "greeting" {
+				t.Fatalf("INVALID: the control's `%s` %s, so the deny's answer is not isolated", e, cells["control"][e])
+			}
+		}
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit), strings.Join(junosL58Class, "\n"))
+		fmt.Fprintf(&b, "Completion over break-glass: `save ?`: %s; `xml-mode ?`: %s.\n\n", listings["save"], listings["xml-mode"])
+		fmt.Fprintf(&b, "| session | reply |\n|---|---|\n| control | `%s` |\n| deny | `%s` |\n\n", tableCell(control), tableCell(deny))
+		b.WriteString("| probe | control | deny |\n|---|---|---|\n")
+		for _, p := range append(cmds, junosL58Entries...) {
+			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", tableCell(p), cells["control"][p], cells["deny"][p])
+		}
+		fmt.Fprintf(&b, "\n### Gates\n\n- **G3** `save`: **%s**", save)
+		if by != "" {
+			fmt.Fprintf(&b, " (by `%s`)", tableCell(by))
+		}
+		closed := cells["deny"]["xml-mode"] == "refused" && cells["deny"]["xml-mode netconf need-trailer"] == "refused"
+		fmt.Fprintf(&b, ".\n- **G4** `xml-mode` under the `junoscript` deny: bare %s, `netconf` %s: **%s**.\n",
+			cells["deny"]["xml-mode"], cells["deny"]["xml-mode netconf need-trailer"],
+			map[bool]string{true: "closed", false: "not closed"}[closed])
+		b.WriteString("\n### Outputs\n")
+		for _, s := range []string{"control", "deny"} {
+			fmt.Fprintf(&b, "\n#### %s, user `%s`\n\n```\n%s\n```\n", s, outs[s][l26bUserKey], outs[s]["auth"])
+			for _, p := range cmds {
+				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", tableCell(p), outs[s][p])
+			}
+			for _, e := range junosL58Entries {
+				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", e, entryOuts[s+" "+e])
+			}
+		}
+		l.result(t, "L58", "Whether `save` is a keyword to deny-commands, and whether bare `xml-mode` and `xml-mode "+
+			"netconf` are refused, under set 1.2.0's factored deny naming `save` and `junoscript`, each against a "+
+			"control with the same class and no deny (spec §15 L58; decision 44 ruling 10).", b.String())
+	})
+}
+```
+
 - [ ] **Step 5: Run the unit tests and vet the lab package**
 
-Run: `go test -tags lab ./tests/lab/ -run 'TestEntryVerdict|TestOpScriptCell|TestScpCell' -count=1 && go vet -tags lab ./tests/lab/ && make lab-unit`
+Run: `go test -tags lab ./tests/lab/ -run 'TestEntryVerdict|TestOpScriptCell|TestScpCell|TestL58EntryCell|TestL58Save' -count=1 && go vet -tags lab ./tests/lab/ && make lab-unit`
 Expected: PASS. (A helper this task names that does not exist under that name — `yesNo`,
 `l26cCLICell`, `l26cReached`, `jsdRun` — is in `tests/lab` today; `grep -n 'func yesNo\|func
 l26cCLICell\|func l26cReached\|func jsdRun' tests/lab/*.go` shows each.)
@@ -1409,27 +1775,30 @@ l26cCLICell\|func l26cReached\|func jsdRun' tests/lab/*.go` shows each.)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/lab/junos_entry_test.go tests/lab/junos_entry_unit_test.go tests/lab/junos_groups_test.go
-git commit -m "test(lab): L26c entry cells and L57 groups harness
+git add tests/lab/junos_entry_test.go tests/lab/junos_entry_unit_test.go tests/lab/junos_groups_test.go \
+  tests/lab/junos_baseline_test.go tests/lab/junos_baseline_unit_test.go
+git commit -m "test(lab): L26c entry cells, L57 groups and L58 baseline words harness
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 3: Lab run — the entry cells and L57, before any code; the gates
+## Task 3: Lab run — the entry cells, L57 and L58, before any code; the gates
 
 **Files:**
 - Create (by the run): `tests/lab/results/L26c-entries-juniper_vjunos-router.md`,
-  `…-juniper_vsrx.md`; `L26c-scripts-juniper_*.md`; `L57-juniper_*.md`;
-  `tests/lab/evidence/L26c-entries-*.pcap`, `L26c-scripts-*.pcap`, `L57-*.pcap` (redacted);
-  `internal/platform/testdata/l57-juniper_vjunos-router.set`, `l57-juniper_vsrx.set`
+  `…-juniper_vsrx.md`; `L26c-scripts-juniper_*.md`; `L57-juniper_*.md`; `L58-juniper_*.md`;
+  `tests/lab/evidence/L26c-entries-*.pcap`, `L26c-scripts-*.pcap`, `L57-*.pcap`, `L58-*.pcap`
+  (redacted); `internal/platform/testdata/l57-juniper_vjunos-router.set`, `l57-juniper_vsrx.set`
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (the gated words of decision 44 rulings
-  2 and 6, and §8's "Management services")
+  2 and 6, and §8's "Management services"; L58's row, bullet and "provisional on L58")
 
-**Interfaces:** Produces the two gates later tasks read: **G1** (does `op` go on set 1.2.0's
+**Interfaces:** Produces the gates later tasks read: **G1** (does `op` go on set 1.2.0's
 `rpc_entry_denies`?) and **G2** (does `rest` stay a services finding under 1.2.0?), each in the
-`L26c-scripts` note's "Gates" section; and the L57 fixtures Task 7's test reads.
+`L26c-scripts` note's "Gates" section; **G3** (is `save` a keyword on both images?) and **G4**
+(is bare `xml-mode` and `xml-mode netconf` refused under the `junoscript` deny?) in the `L58`
+notes' "Gates"; and the L57 fixtures Task 7's test reads.
 
 Arm the stall watchdog before the run (lab-run watchdog rule). The lab is single-occupant. If the
 run is in a worktree, copy `tests/lab/captures/*` to the main checkout before removing it.
@@ -1439,7 +1808,7 @@ run is in a worktree, copy `tests/lab/captures/*` to the main checkout before re
 
 ```bash
 make build
-for t in TestL26cEntryNetconf TestL26cEntryScripts TestL57JunosGroups; do
+for t in TestL26cEntryNetconf TestL26cEntryScripts TestL57JunosGroups TestL58JunosBaselineWords; do
   for p in juniper_vjunos-router juniper_vsrx; do
     PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ -run "^$t\$" -count=1 -v -timeout 90m || break 2
   done
@@ -1447,7 +1816,7 @@ done
 make evidence
 ```
 
-Expected: every run PASS, six notes written, two fixtures written. An `INVALID:` failure writes
+Expected: every run PASS, eight notes written, two fixtures written. An `INVALID:` failure writes
 no note: fix the harness (a control that cannot reach is a harness or image fault) and rerun. A
 `STOP:` failure: stop and report to the controller with the note's table; do not start Task 4.
 
@@ -1473,6 +1842,16 @@ no note: fix the harness (a control that cannot reach is a harness or image faul
     the local leaf-list stands, and the finding is still kept (Ryan's ruling names a group that
     adds a permission to a template whether or not the template's own value wins today). Record
     which in the roadmap's as-built.
+  - From `L58-juniper_*.md`, "Gates" (owner's ruling 4):
+    - **G3** `save`: if both images say **proven**, Task 4 ships set 1.2.0's keyword tree with
+      `save` at the root. If either says unproven, STOP and report to the controller with both
+      notes' tables before Task 4: the readonly then still carries an unprovable `save **` and
+      fails closed under 1.2.0, against the owner's ruling, and Task 5b's shipped tests would
+      assert what the set cannot do.
+    - **G4** `xml-mode`: if both images say **closed** (bare `xml-mode` and `xml-mode netconf`
+      refused under the deny, the control greeted), Task 5b's `closedByEntry` stands. If either
+      says not closed, STOP and report: sending the baseline's `xml-mode **` as nothing would let
+      that form run, which is wider than port49.
 
 - [ ] **Step 3: Write the gated words into the spec.** In decision 44 ruling 2 replace "If an
   `op url` script reaches … `["junoscript **", "op **"]`." with the measured sentence (e.g.
@@ -1480,13 +1859,28 @@ no note: fix the harness (a control that cannot reach is a harness or image faul
   1.2.0's list is `[…]`."). In ruling 6 and §8's "Management services", replace the `rest`
   clause the same way. Leave "*provisional on L26c*" in place: the row closes in Task 9.
 
+- [ ] **Step 3b: Close L58** (CLAUDE.md rule 3), where G3 and G4 passed on both images: edit its
+  Status to `closed — measured <date>; tests/lab/results/L58-juniper_vjunos-router.md,
+  L58-juniper_vsrx.md`, then what each image showed (`save` proven by which candidate; bare
+  `xml-mode` and `xml-mode netconf` refused under the deny, the control greeted). Rewrite its
+  detail bullet to the observation. In decision 44's head remove "ruling 10's `save` and bare
+  `xml-mode` are *provisional on L58* until plan 9b1's Task 3 closes it", and in §8's readonly
+  paragraph replace each "*provisional on L58*" with the citation `L58-juniper_*.md`. If a result contradicts
+  a sentence of §8 or decision 44, fix the sentence, cite the note, and say so in the commit
+  (rule 4).
+
 - [ ] **Step 4: Commit the notes, evidence, fixtures and spec words**
 
 ```bash
 git add tests/lab/results/L26c-entries-juniper_*.md tests/lab/results/L26c-scripts-juniper_*.md \
-  tests/lab/results/L57-juniper_*.md tests/lab/evidence/L26c-entries-* tests/lab/evidence/L26c-scripts-* \
-  tests/lab/evidence/L57-* internal/platform/testdata/l57-*.set docs/design/2026-08-23-policy-engine-spec.md
-git commit -m "test(lab): L26c entry points and L57 groups measured on vJunos-router and vSRX
+  tests/lab/results/L57-juniper_*.md tests/lab/results/L58-juniper_*.md tests/lab/evidence/L26c-entries-* \
+  tests/lab/evidence/L26c-scripts-* tests/lab/evidence/L57-* tests/lab/evidence/L58-* \
+  internal/platform/testdata/l57-*.set
+git commit -m "test(lab): L26c entry points, L57 groups and L58 baseline words on vJunos-router and vSRX
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git add docs/design/2026-08-23-policy-engine-spec.md
+git commit -m "docs: close lab register entries L58; decision 44's gated words from Task 3
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1507,11 +1901,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   after the `carve_outs` loop ~line 696)
 - Create: `platforms/1.2.0/arista_eos.yaml`, `cisco_iosxe.yaml`, `cisco_nxos.yaml` (copies of
   1.1.0's), `platforms/1.2.0/juniper_junos.yaml` (1.1.0's, edited below),
-  `platforms/keywords/1.2.0/juniper_junos.yaml` (copy of 1.1.0's)
-- Test: `internal/platform/adapter_test.go`, `internal/policy/platforms_test.go`
+  `platforms/keywords/1.2.0/juniper_junos.yaml` (1.1.0's with `save` at the root, G3)
+- Test: `internal/platform/adapter_test.go`, `internal/platform/keywords_test.go`,
+  `internal/policy/platforms_test.go`
 
 **Interfaces:**
-- Consumes: G1 from Task 3.
+- Consumes: G1 and G3 from Task 3.
 - Produces: `platform.Dialect.RPCEntryDenies []string`; `platform.Spec.RPCEntryDenies *[]string`
   (yaml `rpc_entry_denies`); `const platform.RPCEntryRole = "rpc_entry"`;
   `platform.DefaultSet == "1.2.0"`.
@@ -1563,6 +1958,28 @@ func TestRPCEntryDeniesIsValidated(t *testing.T) {
 	eos.RPCEntryDenies = []string{"junoscript **"}
 	if err := Validate("arista_eos", eos); err == nil || !strings.Contains(err.Error(), "command_projection") {
 		t.Errorf("not projected: %v", err)
+	}
+}
+```
+
+  In `internal/platform/keywords_test.go` (G3 passed; it fails until Step 5 edits the tree):
+
+```go
+// Set 1.2.0's Junos tree is 1.1.0's and `save` at the root, which L58 proved
+// on both images (tests/lab/results/L58-juniper_*.md; decision 44 ruling 10):
+// nothing else moves.
+func TestTheSet120JunosTreeIsSet110AndSave(t *testing.T) {
+	was, err1 := fs.ReadFile(platforms.Keywords, "keywords/1.1.0/juniper_junos.yaml")
+	is, err2 := fs.ReadFile(platforms.Keywords, "keywords/1.2.0/juniper_junos.yaml")
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	want := strings.Replace(string(was), `"restart", "scp"`, `"restart", "save", "scp"`, 1)
+	if want == string(was) || string(is) != want {
+		t.Fatal("platforms/keywords/1.2.0/juniper_junos.yaml is not 1.1.0's with `save` at the root")
+	}
+	if !KeywordsFor("1.2.0", "juniper_junos").Keyword(nil, "save") || KeywordsFor("1.1.0", "juniper_junos").Keyword(nil, "save") {
+		t.Error("save is a keyword in 1.2.0's tree only")
 	}
 }
 ```
@@ -1724,6 +2141,11 @@ cp platforms/keywords/1.1.0/juniper_junos.yaml platforms/keywords/1.2.0/
   If G1 put `op` on the list, the value is `["junoscript **", "op **"]` and the comment names
   `L26c-scripts-juniper_*.md`'s op row.
 
+  In `platforms/keywords/1.2.0/juniper_junos.yaml`, the root node's words gain `save` between
+  `restart` and `scp` (G3; one edit, no other byte moves: `TestTheSet120JunosTreeIsSet110AndSave`
+  holds it). The tree carries no comment; L58's notes and that test are its provenance, as
+  `TestTheShippedJunosTreeIsTheLabs` is 1.1.0's.
+
 - [ ] **Step 6: Run the new tests, then the whole suite**
 
 Run: `go test ./internal/platform/ ./internal/policy/ -run 'Set120|RPCEntryDenies|EntryDenyNotAddOne' -count=1 && make test`
@@ -1735,7 +2157,15 @@ take an entry, not a pin: add `shipped120` (`shipped110` with `juniper_junos.RPC
 it in `released` as `"1.2.0"`; add `"1.2.0"` to `releasedGeneric` (the same value as 1.1.0's);
 point `TestTheDefaultSetValueForValue` at `shipped120`. `released["1.1.0"]` stays as it is: that
 it still passes is the proof 1.1.0 was not edited. `TestSpecOfRoundTrips` counts Dialect fields
-against Spec keys; both gain one. Repeat until `make test` passes.
+against Spec keys; both gain one. With `"1.2.0"` in `released`,
+`TestReleasedKeywordTreesAreFrozen` needs the tree's entry in `releasedKeywords` (`keywords_test.go`):
+`"1.2.0/juniper_junos": "2017ca9e10d5e3e7c53fb78cd65a5480aa91387212cef7a6924aa87110912688"`, the
+sha256 of 1.1.0's tree with `save` added as Step 5 says (pre-flight computed it; `sha256sum
+platforms/keywords/1.2.0/juniper_junos.yaml` must print it). `TestEmbeddedSetsLoad` lists the sets:
+add `"1.2.0"`. In `cmd/port49/platform_test.go`, `TestPlatformShowAndExportPrintTheAdapter` and
+`TestPlatformExportClasses` read the default set's label (`platform set 1.1.0`): the default is
+what they test, so their wants become `1.2.0`. Pre-flight saw exactly these fail with this step's
+code, and nothing else. Repeat until `make test` passes.
 
 - [ ] **Step 7: Commit**
 
@@ -1904,31 +2334,25 @@ func TestADenyBeneathViewConfigurationIsReported(t *testing.T) {
 	}
 }
 
-// What set 1.2.0's entry deny changes, read from the shipped adapter and
-// keyword tree, not a fixture (pre-flight finding 5; decision 44 ruling 10):
-// an operator granted everything but `show configuration` gets the capability
-// shape with the entry deny and the view-configuration warning's rule; a
-// readonly granted `show **` less the same deny still fails closed, its
-// baseline denies (`save **`, `xml-mode **` unproven) leaving it to the
-// narrow shape, which cannot carry a deny beneath `show **`.
-func TestTheShippedSetsEntryDeny(t *testing.T) {
-	set, ok := platform.Set("1.2.0")
-	if !ok {
-		t.Fatal("no set 1.2.0")
-	}
+// shipped is a composition on set version's juniper_junos, its adapter and
+// keyword tree as shipped.
+func shipped(version, level string, rules ...engine.Rule) Input {
+	set, _ := platform.Set(version)
 	d := set["juniper_junos"]
-	in := func(level string, rules ...engine.Rule) Input {
-		return Input{Platform: "juniper_junos", Dialect: d, Level: level, Bits: d.CeilingBits[level], Rules: rules,
-			Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: JunosFacts,
-			Keywords: platform.KeywordsFor("1.2.0", "juniper_junos")}
-	}
-	res, err := Project(in("operator", permit("**"), deny("show configuration **")))
+	return Input{Platform: "juniper_junos", Dialect: d, Level: level, Bits: d.CeilingBits[level], Rules: rules,
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: JunosFacts,
+		Keywords: platform.KeywordsFor(version, "juniper_junos")}
+}
+
+// What set 1.2.0's entry deny changes, read from the shipped adapter and
+// keyword tree, not a fixture (decision 44 ruling 1): an operator granted
+// everything but `show configuration` gets the capability shape with the
+// entry deny and the view-configuration warning's rule. Task 5b adds the
+// readonly (ruling 10).
+func TestTheShippedSetsEntryDeny(t *testing.T) {
+	res, err := Project(shipped("1.2.0", "operator", permit("**"), deny("show configuration **")))
 	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 {
 		t.Fatalf("operator: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
-	}
-	res, err = Project(in("readonly", permit("show **"), deny("show configuration **")))
-	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
-		t.Fatalf("readonly: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
 }
 
@@ -2101,6 +2525,479 @@ Expected: PASS, the existing `TestACarveOutBeneathASentBitFailsClosed` and
 ```bash
 git add internal/projection
 git commit -m "feat: projection adds rpc_entry_denies beneath a deny instead of failing closed
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task 5b: A readonly with a deny beneath `show **` projects (decision 44 ruling 10)
+
+Owner's ruling 4 and R9. Five changes, each only where the dialect carries `RPCEntryDenies`
+(`closesEntries`), so set 1.1.0 and a block that drops the entry deny render as before. Built and
+measured in pre-flight against the shipped adapter and tree (Tasks 4 and 5 applied, `save` added
+to the 1.2.0 tree): every test below passed, and each fails with its change removed (the mutation
+column of Step 5).
+
+**Files:**
+- Modify: `internal/projection/project.go` (`Result` after `ConfigurationBeneath`; `Clone`;
+  `shape` after its `res, err = g.finish(res, err)`; `capability`'s permit loop, before its
+  `DenyMatchesExpanded` check, and Task 5's `!g.in.Facts.DenyBindsRPCs` block; new functions after
+  Task 5's `entryDenies`; `alternation`)
+- Modify: `internal/projection/model.go` (`model`, the deny program)
+- Modify: `internal/policy/lint.go` (`projectionMessage`, after the `Omitted` clause ~line 871)
+- Test: `internal/projection/project_guard_test.go`, `internal/projection/project_test.go`
+  (`TestCloneCopiesEverySlice`), `internal/policy/projection_test.go`
+
+**Interfaces:**
+- Consumes: Task 4's set 1.2.0 (its tree proves `save`, G3), Task 5's `entryDenies`, `entry`,
+  `shipped`, `TestTheShippedSetsEntryDeny`; G4 from Task 3.
+- Produces: `Result.Closed []engine.Rule`; `generator.closesEntries`, `closedByEntry`,
+  `carvedAllows`, `factored`; `var authorizedAs`.
+
+- [ ] **Step 1: Write the failing tests** in `internal/projection/project_guard_test.go`, and
+  replace Task 5's `TestTheShippedSetsEntryDeny` with the one below:
+
+```go
+// Under the entry deny, the baseline's `xml-mode **`, which no keyword tree
+// proves, is sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+// which the entry deny refuses (decision 44 ruling 10). The model reads it
+// refused; without the entry deny the composition fails closed as before.
+func TestTheEntryDenyClosesTheBaselinesXMLMode(t *testing.T) {
+	ops := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		ops = append(ops, permit(w+" **"))
+	}
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, ops...)
+		// The shipped baseline holds `xml-mode`; the tree measuredInput
+		// proves was built before it, so `xml-mode` is no keyword, as shipped.
+		in.Dialect.Bits[platform.BaselineBit] = append(in.Dialect.Bits[platform.BaselineBit], "xml-mode **")
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.Closed) != 1 ||
+		res.Closed[0].Rule != "xml-mode **" || slices.ContainsFunc(res.Denies, func(d engine.Rule) bool {
+		return d.Rule == "xml-mode **"
+	}) {
+		t.Fatalf("%s %q closed %v %+v %v", res.Shape, res.Attributes, res.Closed, res.Refusal, err)
+	}
+	if strings.Contains(strings.Join(res.Attributes, " "), "xml") {
+		t.Errorf("xml-mode is on the wire: %q", res.Attributes)
+	}
+	for _, v := range [][]string{{"xml-mode", "netconf"}, {"xml-mode"}, {"junoscript", "netconf"}, {"start", "shell"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, `word **` denies render as one alternative; without
+// it each is its own, as set 1.1.0 renders (decision 44 ruling 10).
+func TestWordDeniesRenderAsOneAlternative(t *testing.T) {
+	rules := []engine.Rule{permit("**"), deny("start **"), deny("file **"), deny("show configuration **")}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, rules...)))
+	want := `deny-commands=^( *(start|file|junoscript)( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || res.Shape != ShapeCapability || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	for _, v := range [][]string{{"start", "shell"}, {"file", "list"}, {"junoscript"}, {"show", "configuration"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	binding := JunosFacts
+	binding.DenyBindsRPCs = true
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", binding, rules...))
+	want = `deny-commands=^( *start( .*)? *(\|.*)?| *file( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("no entry deny: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly's `show **` less a deny beneath `view`
+// goes out as `view` and an allow of each of view-configuration's carve-outs
+// it holds and no deny does: an allow of `show **` would beat the deny (L11).
+// The allow runs beyond the bits, unmeasured, so it is reported (Unreached).
+// Without the entry deny the answer is set 1.1.0's refused shape.
+func TestACarvedPermitGoesOutAsItsCarveOuts(t *testing.T) {
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+			deny("show configuration **"))
+		in.Dialect.Bits["view-configuration"] = append(in.Dialect.Bits["view-configuration"], "show log **")
+		in.Dialect.CarveOuts = map[string][]string{"view-configuration": {"show configuration **", "show log **"}}
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+		len(res.Allows) != 1 || res.Allows[0].Rule != "show log **" || len(res.Unreached) != 1 {
+		t.Fatalf("%s %q allows %v unreached %v %+v %v", res.Shape, res.Attributes, res.Allows, res.Unreached,
+			res.Refusal, err)
+	}
+	if res.Device([]string{"show", "configuration"}) || !res.Device([]string{"show", "version"}) ||
+		!res.Device([]string{"show", "log", "messages"}) {
+		t.Errorf("%q", res.Attributes)
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly granted `show **` and no deny keeps the
+// narrow shape and both bits, as under set 1.1.0: the capability shape would
+// send `view` and an allow of `show **` beyond it, and only the bits are
+// measured to show the configuration (decision 44 ruling 10).
+func TestAReadonlyKeepsTheNarrowShapeWhereItsBitsReachIt(t *testing.T) {
+	was, err := Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"))))
+	if err != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) || len(res.Unreached) != 0 {
+		t.Fatalf("%s %q, was %s %q: %v", res.Shape, res.Attributes, was.Shape, was.Attributes, err)
+	}
+}
+
+// What set 1.2.0 renders, read from the shipped adapter and keyword tree,
+// not a fixture (decision 44 rulings 1 and 10), beside set 1.1.0's, which is
+// unchanged: an operator granted everything but `show configuration` keeps
+// the capability shape with the entry deny; a readonly granted `show **`
+// keeps the narrow shape, byte for byte.
+func TestTheShippedSetsEntryDeny(t *testing.T) {
+	res, err := Project(shipped("1.2.0", "operator", permit("**"), deny("show configuration **")))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 {
+		t.Fatalf("operator: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	was, err1 := Project(shipped("1.1.0", "readonly", permit("show **")))
+	res, err = Project(shipped("1.2.0", "readonly", permit("show **")))
+	if err != nil || err1 != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) {
+		t.Fatalf("readonly: %s %q, under 1.1.0 %q: %v %v", res.Shape, res.Attributes, was.Attributes, err, err1)
+	}
+	for _, rules := range [][]engine.Rule{
+		{permit("show **"), deny("show configuration **")},
+		{permit("**"), deny("show configuration **")},
+	} {
+		level := map[bool]string{true: "readonly", false: "operator"}[rules[0].Rule == "show **"]
+		res, err = Project(shipped("1.1.0", level, rules...))
+		if err != nil || res.Shape != ShapeFailClosed || !slices.Equal(res.Attributes, []string{"deny-commands=^.*$"}) {
+			t.Errorf("1.1.0 %s: %s %q %v", level, res.Shape, res.Attributes, err)
+		}
+	}
+}
+
+// RFC 8907's 255 bytes hold a readonly's deny beneath `show **` under set
+// 1.2.0 (decision 44 ruling 10): fourteen baseline denies, `xml-mode` sent as
+// nothing, the twelve `word **` ones in one alternative with the entry deny,
+// `set cli` beside them, and the grant's. Measured in pre-flight: 170 and 165 bytes of deny-commands.
+func TestAReadonlyWithAShowDenyFitsTheBudget(t *testing.T) {
+	for _, c := range []struct {
+		deny   string
+		bytes  int
+		allows []string
+	}{
+		{"show configuration **", 170, []string{"show log **", "show firewall **", "show policer **"}},
+		{"show security **", 165, []string{"show configuration **", "show log **", "show firewall **", "show policer **"}},
+	} {
+		res, err := Project(shipped("1.2.0", "readonly", permit("show **"), deny(c.deny)))
+		if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+			len(res.Closed) != 1 || res.Closed[0].Rule != "xml-mode **" {
+			t.Fatalf("%s: %s %q %+v %v", c.deny, res.Shape, res.Attributes, res.Refusal, err)
+		}
+		var allows []string
+		for _, a := range res.Allows {
+			allows = append(allows, a.Rule)
+		}
+		if !slices.Equal(allows, c.allows) || len(res.Unreached) != len(c.allows) {
+			t.Errorf("%s: allows %v, unreached %v", c.deny, allows, res.Unreached)
+		}
+		i := slices.IndexFunc(res.Attributes, func(a string) bool { return strings.HasPrefix(a, "deny-commands=") })
+		if i < 0 || len(res.Attributes[i]) != c.bytes {
+			t.Errorf("%s: %q", c.deny, res.Attributes)
+		}
+		words := strings.Fields(c.deny)
+		for _, v := range [][]string{words[:2], {"save", "x"}, {"xml-mode", "netconf"}, {"junoscript"}, {"start", "shell"},
+			{"request", "system", "reboot"}} {
+			if res.Device(v) {
+				t.Errorf("%s: the device runs %q", c.deny, v)
+			}
+		}
+		if !res.Device([]string{"show", "version"}) {
+			t.Errorf("%s: show version does not run", c.deny)
+		}
+	}
+}
+```
+
+  In `project_test.go`'s `TestCloneCopiesEverySlice`, add `Closed: []engine.Rule{r}` to `fresh()`.
+  In `internal/policy/projection_test.go`:
+
+```go
+// A baseline deny the entry deny refuses is reported beside the reply, not
+// sent (decision 44 ruling 10).
+func TestTheProjectionMessageNamesWhatTheEntryDenyCloses(t *testing.T) {
+	pr := projection.Result{Shape: projection.ShapeCapability, Bits: []string{"view"},
+		Closed: []engine.Rule{{Verdict: engine.Deny, Rule: "xml-mode **", Role: platform.BaselineBit}}}
+	if msg := projectionMessage(pr, nil, nil); !strings.Contains(msg, "; refused by the entry deny, sent as nothing: xml-mode **") {
+		t.Errorf("%q", msg)
+	}
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go test ./internal/projection/ ./internal/policy/ -run 'XMLMode|OneAlternative|CarvedPermit|KeepsTheNarrowShape|ShippedSets|FitsTheBudget|EntryDenyCloses|CloneCopies' -count=1`
+Expected: FAIL to compile (`Closed` undefined).
+
+- [ ] **Step 3: Implement.** In `Result`, after `ConfigurationBeneath`:
+
+```go
+	// Closed are baseline denies the reply's entry deny refuses on the
+	// device, sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+	// and a deny naming `xml-mode` does not bind
+	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44 ruling 10).
+	Closed []engine.Rule
+```
+
+  In `Clone`: `r.Closed = slices.Clone(r.Closed)`. In `model.go`, the deny program reads closed
+  denies as sent, since the device refuses them: `denies := slices.Concat(res.Denies, res.Closed)`
+  in place of `denies := slices.Clone(res.Denies)`.
+
+  In `capability`'s permit loop, replace
+
+```go
+		if dn, ok := g.allowable(p.Rule); !ok {
+			return Result{}, g.refusedShape(p, dn)
+		}
+```
+
+  with
+
+```go
+		if dn, ok := g.allowable(p.Rule); !ok {
+			// Under the entry deny, a permit the bits reach but for a
+			// carve-out goes out as those carve-outs (carvedAllows).
+			carved, ok := g.carvedAllows(p, bits)
+			if !ok {
+				return Result{}, g.refusedShape(p, dn)
+			}
+			for _, c := range carved {
+				if !slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == c.Rule }) {
+					res.Allows = append(res.Allows, c)
+				}
+			}
+			continue
+		}
+```
+
+  Before `if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {`:
+
+```go
+	// A baseline deny the entry deny refuses is sent as nothing, where the
+	// entry deny goes out (closedByEntry): it is beneath the baseline, so the
+	// loop below adds the entry deny for it.
+	var closed []engine.Rule
+	if _, ok := g.entryDenies(res); ok && !g.in.Facts.DenyBindsRPCs {
+		res.Denies = slices.DeleteFunc(res.Denies, func(dn engine.Rule) bool {
+			if g.closedByEntry(dn) {
+				closed = append(closed, dn)
+				return true
+			}
+			return false
+		})
+	}
+```
+
+  In Task 5's `!g.in.Facts.DenyBindsRPCs` block, the loop reads `for _, dn := range
+  slices.Concat(res.Denies, closed) {`, and after `res.Denies = append(res.Denies, more...)` add
+  `res.Closed = closed`. After `entryDenies`:
+
+```go
+// closesEntries reports whether the dialect closes the RPC entry points
+// (RPCEntryDenies): set 1.2.0. What the entry deny makes possible renders
+// only there, so a set without it, or a block that drops it, renders as set
+// 1.1.0 does (decision 44 ruling 5).
+func (g generator) closesEntries() bool { return len(g.in.Dialect.RPCEntryDenies) > 0 }
+
+// authorizedAs are the commands Junos authorizes as another: a deny of
+// `junoscript` refused `xml-mode netconf` (`unknown command: xml-mode`), and a
+// deny naming `xml-mode` did not bind (tests/lab/results/L26c-junoscript-juniper_*.md,
+// both images; bare `xml-mode` in L58-juniper_*.md).
+var authorizedAs = map[string]string{"xml-mode": "junoscript"}
+
+// closedByEntry reports whether dn is a baseline deny an entry deny refuses
+// on the device, its command read as Junos authorizes it: the baseline's
+// `xml-mode **`, which no keyword tree proves, beside `junoscript **`.
+func (g generator) closedByEntry(dn engine.Rule) bool {
+	words := strings.Fields(dn.Rule)
+	if dn.Role != platform.BaselineBit || len(words) == 0 {
+		return false
+	}
+	as, ok := authorizedAs[words[0]]
+	if !ok {
+		return false
+	}
+	words[0] = as
+	read := strings.Join(words, " ")
+	return slices.ContainsFunc(g.in.Dialect.RPCEntryDenies, func(e string) bool { return g.contains(e, read) })
+}
+
+// carvedAllows are permit p sent as the carve-outs that keep it from the
+// bits, where the bits reach the rest of it: an allow of p would beat a deny
+// beneath it (L11), and an allow of each carve-out p holds meets none. A
+// carve-out a deny holds needs nothing. Each is within the ceiling, sendable
+// and allowable, or there are none (ok false). Only under the entry deny,
+// which lets a deny beneath the bits stand (decision 44 ruling 10): a
+// readonly's `show **` less `show configuration **` sends `view` and allows
+// `show log`, `show firewall` and `show policer`, view-configuration's other
+// carve-outs, whose run beyond the bits is reported (Unreached).
+func (g generator) carvedAllows(p engine.Rule, bits []string) ([]engine.Rule, bool) {
+	if !g.closesEntries() {
+		return nil, false
+	}
+	held := g.held(bits)
+	if !slices.ContainsFunc(g.reach(held), func(r string) bool { return g.contains(r, p.Rule) }) {
+		return nil, false
+	}
+	var out []engine.Rule
+	for _, c := range g.carves(held) {
+		if !g.mayMeet(p.Rule, c) || slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) }) {
+			continue
+		}
+		if !g.contains(p.Rule, c) || !g.within(c) || g.unsendableAllow(c) != "" {
+			return nil, false
+		}
+		if _, ok := g.allowable(c); !ok {
+			return nil, false
+		}
+		out = append(out, engine.Rule{Verdict: engine.Permit, Rule: c, Role: p.Role})
+	}
+	return out, true
+}
+```
+
+  In `shape`, after `res, err = g.finish(res, err)`:
+
+```go
+	// Under the entry deny, a capability reply that sends an allow its bits
+	// do not reach yields to a narrow one whose bits reach every allow and
+	// that leaves off no more: the bits are measured, an allow beyond them is
+	// not (decision 44 ruling 10).
+	if err == nil && len(res.Unreached) > 0 && g.closesEntries() {
+		n, nerr := g.finish(g.narrow())
+		if nerr == nil && len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
+			return !slices.Contains(res.Beyond, p)
+		}) && len(n.Unsent) <= len(res.Unsent) {
+			return n, nil
+		}
+	}
+```
+
+  `alternation` becomes:
+
+```go
+// alternation is rules as one group, `(a|b)`, or one rule bare; empty for
+// none.
+func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
+	var alts, words []string
+	at := -1 // where the factored `word **` denies go: the first one's place
+	for _, r := range rules {
+		if w, ok := g.factored(r.Rule, deny); ok {
+			if at < 0 {
+				at = len(alts)
+				alts = append(alts, "")
+			}
+			if !slices.Contains(words, w) {
+				words = append(words, w)
+			}
+			continue
+		}
+		e, err := ruleERE(r.Rule, g.in.Classes, deny, g.in.Facts)
+		if err != nil {
+			return "", refuse(FailUnwritable, "on %s, %s %s (role %q) cannot be written as the device's regex: %v "+
+				"(spec §8, §15 L9)", g.in.Platform, r.Verdict, g.quote(r.Rule), r.Role, err)
+		}
+		if !slices.Contains(alts, e) {
+			alts = append(alts, e)
+		}
+	}
+	if at >= 0 {
+		group := words[0]
+		if len(words) > 1 {
+			group = "(" + strings.Join(words, "|") + ")"
+		}
+		alts[at] = denyLead + group + "( .*)?" + pipeTail
+	}
+	switch len(alts) {
+	case 0:
+		return "", nil
+	case 1:
+		return alts[0], nil
+	}
+	return "(" + strings.Join(alts, "|") + ")", nil
+}
+
+// factored is a `word **` deny's word as the deny side writes it, where the
+// dialect closes the entry points: such denies render as one alternative,
+// ` *(help|quit|…)( .*)? *(\|.*)?`, the shape L26b's deny sessions were
+// enforced in (tests/lab/results/L26b-juniper_*.md), and a readonly's
+// baseline denies fit the budget (decision 44 ruling 10).
+func (g generator) factored(rule string, deny bool) (string, bool) {
+	if !deny || !g.closesEntries() {
+		return "", false
+	}
+	words, rest, other := keywordShape(rule)
+	if len(words) != 1 || !rest || other != "" {
+		return "", false
+	}
+	w, err := wordERE(words[0], true, g.in.Facts)
+	return w, err == nil
+}
+```
+
+  A single word renders as `ruleERE` renders it (` *w( .*)? *(\|.*)?`), so only its place in the
+  alternation moves. `failClosed` and the allow side never factor.
+
+- [ ] **Step 4: The report.** In `internal/policy/lint.go`'s `projectionMessage`, after the
+  `Omitted` clause:
+
+```go
+	if len(pr.Closed) > 0 {
+		msg += "; refused by the entry deny, sent as nothing: " + rules(pr.Closed)
+	}
+```
+
+- [ ] **Step 5: Run, and check each change is what a test holds**
+
+Run: `go test ./internal/projection/ ./internal/policy/ -count=1 && make test`
+Expected: PASS. Every set-1.1.0-pinned test and Task 4's frozen-set tests pass unchanged. Then
+remove each change in turn and see its tests fail (pre-flight saw exactly this):
+
+| change removed | fails |
+|---|---|
+| `closedByEntry` returns false | `TestTheEntryDenyClosesTheBaselinesXMLMode`, `TestAReadonlyWithAShowDenyFitsTheBudget` |
+| the model reads `res.Denies` only | the same two (the witness finds `xml-mode` running) |
+| `factored` returns false | `TestWordDeniesRenderAsOneAlternative`, `TestACarvedPermitGoesOutAsItsCarveOuts`, `TestAReadonlyWithAShowDenyFitsTheBudget` |
+| `carvedAllows` returns false | `TestACarvedPermitGoesOutAsItsCarveOuts`, `TestAReadonlyWithAShowDenyFitsTheBudget` |
+| `shape`'s narrow preference | `TestAReadonlyKeepsTheNarrowShapeWhereItsBitsReachIt`, `TestTheShippedSetsEntryDeny` |
+
+  Pre-flight also ran Task 6's code and `TestTheEntryDenyWarnings` (its fixture carries an entry
+  deny) on top of this task's: it passes, so Task 6 needs no change for it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/projection internal/policy/lint.go internal/policy/projection_test.go
+git commit -m "feat: a readonly with a deny beneath show projects under set 1.2.0
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -3111,10 +4008,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 // bits and every baseline word permitted, so the only deny beneath is the
 // grant's and the reply fits: the capability shape with the entry deny, the
 // CLI refusing `show configuration`, NETCONF refused. "operator, all it
-// reaches" has no deny beneath and keeps NETCONF: the control. The last is
-// the realistic readonly, still fail-closed under 1.2.0 (`refused_shape`:
-// its baseline denies `save **` and `xml-mode **` name no proven keyword,
-// which leaves it to the narrow shape; decision 44 ruling 10).
+// reaches" has no deny beneath and keeps NETCONF: the control. The readonly
+// rows are decision 44 ruling 10: `view`, the baseline's denies in one
+// alternative with `junoscript` (`xml-mode` sent as nothing, refused through
+// it), and allows of view-configuration's carve-outs the deny does not hold,
+// sent beyond the bits, whose runs the note records as the device's
+// shortfall; "readonly" alone keeps 1.1.0's narrow reply.
 var projectionShapes120 = []struct{ name, roles, want string }{
 	{"operator, a deny of show configuration beneath its bits", `  - {name: r, privilege: operator, permit: ["show **", ` +
 		`"clear **", "ping **", "traceroute **", "request **", "test **", "monitor **", "file **", "help **", "set **", ` +
@@ -3122,15 +4021,23 @@ var projectionShapes120 = []struct{ name, roles, want string }{
 		`"exit **", "junoscript **", "xml-mode **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
 	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, projection.ShapeCapability},
 	{"operator, all it reaches", `  - {name: r, privilege: operator, permit: ["**"]}`, projection.ShapeCapability},
-	{"readonly denying show configuration", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
+	{"readonly denying show configuration", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
+	{"readonly denying show security", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}`, projection.ShapeCapability},
+	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, projection.ShapeNarrow},
 }
 ```
+
+  Each readonly row also types `xml-mode` (bare) at the CLI beside `xml-mode netconf
+  need-trailer`, and fails the shape where it greets under a reply that refuses `junoscript`
+  (`l58EntryCell`, Task 2).
 
   Before the run, check each row's `want` with this branch's `bin/port49 policy test` on the
   shape's policy (`projectionShape` writes it to `tests/lab/logs/projection-<slug>.yaml`). A row
   whose reply differs gets the shape `policy test` reports, and the note says why, except that
-  the first two must render the capability shape with the entry deny and the third with no deny.
-  If they do not, STOP and report: cell (c) would be unmeasured.
+  the first two must render the capability shape with the entry deny, the third with no deny,
+  the two readonly-with-a-deny rows the capability shape with `user-permissions=view` and the
+  entry deny (owner's ruling 4), and "readonly" the narrow shape. If they do not, STOP and
+  report: cell (c), or ruling 10 on the device, would be unmeasured.
 
   `TestProjectionDifferential` loops over the sets `PORT49_LAB_PROJECTION_SETS` names
   (comma-separated, default `1.1.0,1.2.0`), with `projectionShapes` and `projectionShapes120`
@@ -3175,9 +4082,14 @@ make evidence
 ```
 
   Expected: PASS on both; `L26c-projected-juniper_*.md` written. Under 1.2.0 the CLI refuses
-  `show configuration` for the two entry-deny shapes and runs everything else they permit,
-  `xml-mode netconf` and port 830 are refused for them, and "operator, all it reaches" opens
-  NETCONF with every RPC check passing (the control: a failure there is INVALID, not a pass).
+  `show configuration` for the operator, admin and "readonly denying show configuration" shapes
+  (`show security` for its row) and runs everything else their bits reach; `xml-mode`, `xml-mode
+  netconf` and port 830 are refused for every entry-deny shape and for the narrow readonly; and
+  "operator, all it reaches" opens NETCONF with every RPC check passing (the control: a failure
+  there is INVALID, not a pass). Where a readonly's allow beyond `view` (`show log`, `show
+  firewall`, `show policer`, and `show configuration` under the `show security` deny) is refused
+  or shows nothing, that is the device narrower than port49, reported, not a failure: record it
+  in the note and in the roadmap's as-built, since it decides what such a readonly can read.
 
 - [ ] **Step 4: Close the rows.** Per CLAUDE.md rule 3: edit L26c's Status to
   `closed — measured <date>; tests/lab/results/L26c-juniper_*.md, L26c-junoscript-juniper_*.md, L26c-entries-juniper_*.md, L26c-scripts-juniper_*.md, L26c-projected-juniper_*.md`,
@@ -3213,12 +4125,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `### Plan 9b1 — As built` after `### Plan 9b — As built`)
 
 - [ ] **Step 1: Write "Plan 9b1 — As built"**: the branch and base, each task's commit, what Task
-  3's gates decided (G1, G2, the L57 gates, "group permission beside own"), the rows closed,
-  anything carried. Carried in any case: decision 44 ruling 10's remedy, so a readonly with a
-  deny beneath `show **` projects (the baseline's `xml-mode` read as closed by the entry deny,
-  `save` measured into the keyword tree, one factored alternative for `word **` denies), each a
-  render change for a later set; name the plan it is slotted into. Paste the
-  Operator notes below, edited to what was built, under it.
+  3's gates decided (G1, G2, G3, G4, the L57 gates, "group permission beside own"), the rows
+  closed, anything carried. Say what Task 9 saw a readonly's allows beyond `view` do on each
+  image (ran, refused, or ran and showed nothing): that is what a readonly with a show deny can
+  read, and if they are refused it is carried as an open question for Ryan (sending
+  view-configuration with its other reach denied is the alternative his ruling set aside). Paste
+  the Operator notes below, edited to what was built, under it.
 
 - [ ] **Step 2: Verify**
 
@@ -3238,26 +4150,33 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ## Operator notes (for the pull request body)
 
-- **New platform set 1.2.0, and the default.** It is 1.1.0 plus one key on `juniper_junos`:
-  `rpc_entry_denies: ["junoscript **"]`. A policy pinned to 1.1.0 renders exactly as before.
+- **New platform set 1.2.0, and the default.** It is 1.1.0 plus one key on `juniper_junos`,
+  `rpc_entry_denies: ["junoscript **"]`, and `save` in its keyword tree. A policy pinned to
+  1.1.0 renders exactly as before.
   `port49 platform upgrade --policy … --to 1.2.0` shows the change; `policy diff` gates it until
   the `acknowledge:` entry for `platforms.juniper_junos.rpc_entry_denies` is added.
 - **Junos subjects granted everything but a few denies now project.** Under 1.1.0 a grant like
   operator `**` less `show configuration **` got the fail-closed reply. Under 1.2.0 it gets its
   bits, its denies, and `junoscript` denied. The CLI deny then holds, and `xml-mode`,
   `junoscript netconf` and NETCONF on port 830 are refused **for that user only**. `policy diff`
-  on the pin move lists each such subject's projection change. **Not yet:** a grant that leaves
-  any baseline command (`help`, `file`, `save`, `xml-mode` …) to a deny, which is every readonly
-  role, still fails closed when it carries a deny beneath its bits: `show **` less `show
-  configuration **` is the common case. Its fix ships in a later platform set.
+  on the pin move lists each such subject's projection change.
+- **A readonly with a show deny now projects.** Under 1.1.0 `show **` less `show configuration
+  **` (or less `show security **`, or any deny under `show`) got the fail-closed reply. Under 1.2.0
+  it gets `view`, its denies and the baseline's in one regex with `junoscript` (170 bytes for the
+  common case), and allows of `show log`, `show firewall` and `show policer`. The CLI deny holds;
+  `xml-mode` and NETCONF are refused for that user. `view-configuration` is not sent, so `show
+  log`, `show firewall` and `show policer` (and, under a deny elsewhere in `show`, `show
+  configuration`) run only through an allow beyond the bits: `policy test` lists them as allows
+  the bits do not reach, and the as-built records what the lab images did with them. A readonly
+  granted `show **` with no deny renders exactly as under 1.1.0.
 - **Who has NETCONF.** A subject whose grant has no deny beneath its bits (an automation account
   granted everything its level reaches) keeps NETCONF. A subject with any such deny does not.
   `policy test` warns `projection_netconf_closed` for each. An Ansible or PyEZ account that needs
   NETCONF needs a grant with no deny beneath its bits.
 - **New warning `projection_deny_beneath_view_configuration`.** A policy whose reply sends
   `view-configuration` and denies `show configuration` beneath it (an operator or admin granted
-  `**` less that deny) gets a warning, not a refusal. A readonly with that deny still gets the
-  fail-closed reply, as above. The CLI refuses the command and NETCONF is closed, but the bit is what grants
+  `**` less that deny) gets a warning, not a refusal. A readonly with that deny gets no warning:
+  its reply does not send the bit. The CLI refuses the command and NETCONF is closed, but the bit is what grants
   the configuration, so the real fix is a level without the bit. `policy diff` prints new
   warnings as `warning:` lines and still exits 0 on them.
 - **`devices check-config` reads configuration groups.** Capture with
