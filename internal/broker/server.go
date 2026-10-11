@@ -68,7 +68,8 @@ const MaxConns = 256
 // a path that can run with device AAA already serving may end the process.
 //
 // An OIDC-only broker (NoX509, plan 7h) with no workload verifier is served
-// with a nil anchor and requests no certificate.
+// with a nil anchor and requests no certificate, unless it issues certificates
+// (plan 9b), when it requests one against its own issuing CAs.
 //
 // With b.Workload set (plan 8), a nil anchor is accepted: the pool is the
 // workload anchor alone, and certificates are still requested
@@ -85,6 +86,10 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		// People by OIDC, workloads by certificate (plan 8): the one anchor
 		// is the workloads'.
 		pool = x509.NewCertPool()
+	case anchor == nil && b.NoX509 && b.Identity != nil && b.Issuer != nil:
+		// An OIDC-only broker that issues (plan 9b; decision 43 ruling 10):
+		// its one anchor is its own issuing CA's, added below.
+		pool = x509.NewCertPool()
 	case anchor == nil && b.NoX509 && b.Identity != nil:
 		// An OIDC-only broker (Ruling 1): no certificate is requested, and
 		// every caller authenticates by bearer.
@@ -100,6 +105,13 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 	// (CertCallerOf).
 	if b.Workload != nil {
 		pool.AddCert(b.Workload.Anchor)
+	}
+	// A broker that issues trusts its own CAs, for people alone (decision 43
+	// ruling 10): the chain's anchor says which it is (CertCallerOf).
+	if b.Issuer != nil && pool != nil {
+		for _, c := range b.Issuer.Trusted {
+			pool.AddCert(c)
+		}
 	}
 	return &http.Server{
 		Addr:    addr,

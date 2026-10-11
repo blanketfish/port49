@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
@@ -134,9 +135,14 @@ type CertCaller struct {
 	Legacy string
 	Cred   store.Credential
 	Leaf   *x509.Certificate
+	// Issued is the sign-in a certificate this broker issued carries, as an
+	// assertion (plan 9b; decision 43 ruling 10); nil for any other
+	// certificate.
+	Issued *oidc.Assertion
 }
 
-// CertCallerOf reads cs's verified certificate. With no workload verifier it
+// CertCallerOf reads cs's verified certificate. A chain ending at the broker's
+// own issuing CA is read first (issuedCaller). With no workload verifier it
 // is exactly what the broker read before plan 8: Identity, or, under a
 // directory, CertIdentity and the legacy principal. With one, the chain's
 // anchor decides the domain first (machineChain); a person's certificate is
@@ -144,6 +150,19 @@ type CertCaller struct {
 // (WorkloadPrincipal). A refusal of a chain an anchor verified keeps the
 // credential and the leaf, so the record can say whose certificate it was.
 func (b *Broker) CertCallerOf(cs *tls.ConnectionState, now time.Time) (CertCaller, error) {
+	// A chain ending at the broker's own issuing CA is a person's, read from
+	// the sign-in it carries (decision 43 ruling 10); one ending there and at
+	// another anchor is no one's.
+	if cs != nil {
+		switch issued, mixed := b.Issuer.Ends(cs.VerifiedChains); {
+		case mixed:
+			cred, leaf, _ := CertIdentity(cs, now)
+			return CertCaller{Cred: cred, Leaf: leaf}, fmt.Errorf("%w: the certificate chains to this broker's "+
+				"issuing CA and to another trust anchor, so neither may take it", ErrUntrusted)
+		case issued:
+			return b.issuedCaller(cs, now)
+		}
+	}
 	machine, chainErr := b.machineChain(cs)
 	if machine || chainErr != nil {
 		cred, leaf, err := CertIdentity(cs, now)

@@ -346,8 +346,9 @@ func (l *Listener) handshake(c *trackedConn) {
 			return
 		}
 		// A workload is never mapped: its principal is its SPIFFE ID
-		// (decision 40 ruling 5).
-		mapped := l.Map != nil && cc.Domain != DomainMachines
+		// (decision 40 ruling 5). Nor is a certificate the broker issued:
+		// its principal is its sign-in's (decision 43 ruling 10).
+		mapped := l.Map != nil && cc.Domain != DomainMachines && cc.Issued == nil
 		certKey := store.CertKey(cred.Issuer, cred.Serial)
 		// The status is asked first, and bind decides under one lock: a
 		// mark, then the status's refusal, then the hold. A mark lifted while

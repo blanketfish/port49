@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -83,6 +84,10 @@ type Broker struct {
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
 	NoX509 bool
+	// Issuer is the broker's issuing CA (plan 9b; spec §13 decision 43): nil
+	// issues nothing and trusts no port49-issued certificate. Its CAs join
+	// the handshake's pool, for people alone (Server, CertCallerOf).
+	Issuer *issuer.CA
 	// Workload is the workload certificate verifier (plan 8; decision 40):
 	// x509 under broker.identity.machines. Nil reads every certificate as a
 	// person's, as before plan 8.
@@ -599,12 +604,26 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), berr.Error())
 		return caller{}, false
 	case hasBearer:
-		return b.bearerCaller(w, r, event, nothing, raw)
-	case b.NoX509 && !(hasCert && b.Workload != nil):
+		c, ok := b.bearerCaller(w, r, event, nothing, raw)
+		if ok && b.Issuer != nil && c.oidc.Domain == oidc.Humans {
+			// One path for people (decision 43 ruling 13): this broker
+			// exchanges a person's ID token for a certificate, and takes it
+			// nowhere else.
+			b.emit(decision.Record{TS: b.Now(), Event: event, Verdict: decision.VerdictDeny,
+				Reason: decision.TrustDomainUnresolved, Principal: c.principal, Auth: c.auth()})
+			writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), personBearerText)
+			return caller{}, false
+		}
+		return c, ok
+	case b.NoX509 && !(hasCert && (b.Workload != nil || b.Issuer != nil)):
 		// An OIDC-only broker has no anchor and asks for no certificate: say
 		// what it does take rather than blame a certificate.
 		detail := "this broker accepts an OIDC ID token only (Authorization: Bearer); run `port49 login`"
-		if b.Workload != nil {
+		switch {
+		case b.Issuer != nil:
+			detail = "this broker takes the certificate it issues at `port49 login`, or a workload's where " +
+				"broker.identity.machines names one; run `port49 login`"
+		case b.Workload != nil:
 			detail = "this broker accepts an OIDC ID token (Authorization: Bearer), or a workload certificate " +
 				"where broker.identity.machines names one; run `port49 login`"
 		}
@@ -617,7 +636,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	authTime := b.authTime(r)
 	cc, err := b.CertCallerOf(r.TLS, now)
 	principal, legacy, cred := cc.Principal, cc.Legacy, cc.Cred
-	if b.Directory != nil && cc.Domain == DomainHumans {
+	if b.Directory != nil && cc.Domain == DomainHumans && cc.Issued == nil {
 		if h := heldOf(r); h != nil && h.answer != nil {
 			principal = h.answer.Principal // already mapped: it names the refusal's caller
 		}
@@ -682,15 +701,22 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		b.answerRefusal(w, r, ref)
 		return true
 	}
-	// Without a directory, and for a workload, which never reaches one (decision 40 ruling 5):
+	// Without a directory, for a workload, which never reaches one (decision 40 ruling 5), and for
+	// a certificate this broker issued, whose principal its sign-in gave (decision 43 ruling 10):
 	// the principal is the certificate's own.
-	if b.Directory == nil || cc.Domain == DomainMachines {
+	if b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
 		if marked(principal) || status() {
+			return caller{}, false
+		}
+		c := caller{principal: principal, cred: cred, authTime: authTime, oidc: cc.Issued}
+		// A certificate this broker issued answers to its sign-in's
+		// logouts (decision 43 ruling 16).
+		if cc.Issued != nil && b.issuedLoggedOut(w, r, event, nothing, now, c) {
 			return caller{}, false
 		}
 		// Only a certificate that is served is counted late.
 		b.noteRenewal(cc, now)
-		return caller{principal: principal, cred: cred, authTime: authTime}, true
+		return c, true
 	}
 	// Under a directory the certificate's own marks (its key, and the
 	// principal its email SAN gave before a directory: pre-flight I-16) and
@@ -717,21 +743,24 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 }
 
 // callerOf is the caller of a request that does not map: the principal and
-// credential of the connection's verified certificate, and legacy, the
-// principal its email SAN gave before a directory ("" without one). Under a
-// directory the principal is the one pinned to the held connection at bind
-// (Ruling 4), never the email SAN's; a connection with no pin is refused
-// (errNoPin).
-func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential, err error) {
+// credential of the connection's verified certificate, legacy, the
+// principal its email SAN gave before a directory ("" without one), and
+// issued, the sign-in a certificate this broker issued carries (nil for
+// any other; decision 43 ruling 10). Under a directory the principal is
+// the one pinned to the held connection at bind (Ruling 4), never the
+// email SAN's; a connection with no pin is refused (errNoPin). An issued
+// certificate is never mapped.
+func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential,
+	issued *oidc.Assertion, err error) {
 	cc, err := b.CertCallerOf(r.TLS, now)
-	if err != nil || b.Directory == nil || cc.Domain == DomainMachines {
-		return cc.Principal, cc.Legacy, cc.Cred, err
+	if err != nil || b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
+		return cc.Principal, cc.Legacy, cc.Cred, cc.Issued, err
 	}
 	if h := heldOf(r); h != nil && h.answer != nil {
-		return h.answer.Principal, cc.Legacy, cc.Cred, nil
+		return h.answer.Principal, cc.Legacy, cc.Cred, nil, nil
 	}
 	b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
-	return "", cc.Legacy, cc.Cred, errNoPin
+	return "", cc.Legacy, cc.Cred, nil, errNoPin
 }
 
 // errNoPin is a connection under a directory with no principal pinned to it:

@@ -36,7 +36,7 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, _, cred, err := b.callerOf(r, now)
+	principal, _, cred, _, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
@@ -75,7 +75,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, legacy, cred, err := b.callerOf(r, now)
+	principal, legacy, cred, issued, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
@@ -132,6 +132,17 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.refuseRevokedAs(w, decision.EventRefresh, now, principal, cred, rv)
 		return
 	}
+	// A certificate this broker issued answers to its sign-in's logouts, and
+	// its refresh records carry that sign-in (decision 43 rulings 11, 16).
+	var via *decision.OIDC
+	if issued != nil {
+		if b.issuedLoggedOut(w, r, decision.EventRefresh, "extended nothing", now,
+			caller{principal: principal, cred: cred, oidc: issued}) {
+			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+			return
+		}
+		via = oidcAuth(*issued)
+	}
 	// The certificate's status, beside the marks (spec §5.1.4): a revoked one
 	// is answered credential_revoked and closed; one not established is 503,
 	// to be retried, and ends nothing. Either is one refresh deny record.
@@ -166,7 +177,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, m, answer, cred, at, nil)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via)
 	if errors.Is(err, directory.ErrUsernameTaken) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -190,6 +201,20 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), principal, cred, rv)
 		return
+	}
+	// The logouts again, after the extension's writes, as on the OIDC path:
+	// what a logout that landed meanwhile would have missed is marked.
+	if issued != nil {
+		switch l, out, err := b.loggedOut(ctx, *issued); {
+		case err != nil:
+			b.refreshStoreError(w, at, principal, cred, via, refreshEvery, partialRefreshText)
+			return
+		case out:
+			b.markExtended(ctx, caller{principal: principal, cred: cred, oidc: issued}, rep)
+			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+			b.answerLoggedOut(w, l)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, rep.response(b.MaxSessionAge))
 }
