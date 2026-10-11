@@ -525,6 +525,32 @@ the end, keeping `keycloak.log`.
   reuse the session) fails: without it, "prompt=login asked for the password" proves nothing.
 - `PORT49_LAB_DIRECTORY_OUT=<dir>` redirects notes and evidence here too, for a dry run.
 
+## OIDC sign-in and issued certificates (plan 9b): L55 and L56
+
+- `make lab-oidc-l55` measures L55 on the standalone Keycloak. It changes `port49-cli`'s redirect
+  URIs for the run and puts them back. Cell 4b keeps one browser's SSO session across three
+  sign-ins, 15s apart, to see whether `prompt=login` authenticates again.
+- `make build && make lab-oidc-agent` measures L56: `bin/port49 login --oidc --no-browser` on the
+  compose stack, a scripted browser signing in from the address port49 prints.
+- L56 starts the broker with `broker.identity.issuance` and no issuing CA, checks what it says, then
+  runs `docker compose run --rm --no-deps port49-broker init-issuer` and restarts the broker.
+- The CLI reaches `keycloak.port49.lab` through a CONNECT proxy the test runs on loopback
+  (`HTTPS_PROXY`), since the host does not resolve that name. port49 never sends the broker through
+  a proxy.
+- L56 step 4b runs `port49 login --sign-in` with a pty for stdin and types the address Keycloak sent
+  the browser to, as a person on a jump host pastes it.
+- Every CLI command's raw output is checked for a compact JWS or a registered secret (the issued
+  key's PEM included, read once the command has ended, so a run is checked against the key it
+  wrote) before it is scrubbed for the note, and a leak fails the run. Only what port49 prints by
+  design is exempt. The PKCE verifier port49 draws is never seen by the lab; the unit tests check
+  it.
+- Each L56 cell asserts, and each assertion has a control that shows it can fail. A control that
+  does not hold is INVALID, and no note is written.
+- Keycloak is stopped and started by `docker compose stop|start keycloak`.
+- The CLI runs with `HOME` set to a temporary directory, so its client config and issued key and
+  certificate (`~/.port49/issued/`) are the run's own; the real `/etc/port49` and `~/.port49` are
+  never read or written.
+
 ## Workload CA and Oxidized (plan 8)
 
 Two targets measure the workload-certificate path. Build first: both need `bin/port49d` and
