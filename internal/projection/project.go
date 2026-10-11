@@ -395,7 +395,9 @@ func (g generator) shape() (Result, error) {
 		n, nerr := g.finish(g.narrow())
 		if nerr == nil && len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
 			return !slices.Contains(res.Beyond, p)
-		}) && len(n.Unsent) <= len(res.Unsent) {
+		}) && !slices.ContainsFunc(n.Unsent, func(u Unsent) bool {
+			return !slices.ContainsFunc(res.Unsent, func(v Unsent) bool { return v.Rule == u.Rule })
+		}) {
 			return n, nil
 		}
 	}
