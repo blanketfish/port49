@@ -39,6 +39,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 // fakeAgent answers the agent socket's POST /token with a fixed item, or with
@@ -235,7 +236,10 @@ func TestTheAgentSaysWhyTheBrokerDoesNotVerify(t *testing.T) {
 	code := run([]string{"agent", "--broker", broker.URL, "--cert", filepath.Join(dir, testpki.LabClientCert),
 		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA),
 		"--socket", filepath.Join(sockDir, "agent.sock")}, &out, &errb)
-	if code != 1 || !strings.Contains(errb.String(), "does not verify") || !strings.Contains(errb.String(), "--broker-ca") {
+	// A CA this host does not trust is what a host away through a whole
+	// rotation meets: the line names the fix (decision 43 ruling 25).
+	if code != 1 || !strings.Contains(errb.String(), "does not verify") ||
+		!strings.Contains(errb.String(), "; "+agent.RotatedCAHint) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	// One prefix: the agent package's own "agent: " is not repeated after
@@ -280,10 +284,18 @@ func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
 // can start the agent from os.Executable as it does in production.
 const runCLIEnv = "PORT49_TEST_RUN_CLI"
 
+// testSystemConfig carries TestMain's stand-in for /etc/port49/config.yaml
+// to the test binary run as port49.
+const testSystemConfig = "PORT49_TEST_SYSTEM_CONFIG"
+
 // subreaperHook is set by the Linux test that needs a child subreaper.
 var subreaperHook func()
 
 func TestMain(m *testing.M) {
+	// A child the tests start reads the system file the parent named.
+	if p := os.Getenv(testSystemConfig); p != "" {
+		userconfig.SystemPath = p
+	}
 	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
 		subreaperHook()
 	}
@@ -300,13 +312,18 @@ func TestMain(m *testing.M) {
 	// would then fail to exec /proc/<pid>/exe as its askpass. A child agent
 	// the login starts takes the branch above, and hardens for real.
 	hardenAgent = func() error { return nil }
-	// No test reads the developer's own ~/.config/port49 (plan 9a): every
-	// default path under it lands in a directory of the test's.
+	// No test reads the developer's own ~/.port49, ~/.config/port49 or
+	// /etc/port49 (plans 9a and 9b): every default path lands in a
+	// directory of the test's, 0700 as a home directory is.
 	dir, err := os.MkdirTemp("", "p49cfg")
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("XDG_CONFIG_HOME", dir)
+	os.Setenv("HOME", dir)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	os.Unsetenv(userconfig.EnvConfig)
+	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
+	os.Setenv(testSystemConfig, userconfig.SystemPath)
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

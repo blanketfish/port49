@@ -13,6 +13,7 @@ import (
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 const configBroker = "https://broker.example:8443"
@@ -60,26 +61,81 @@ func runningAgent(t *testing.T, dir string) (string, func() int32) {
 }
 
 // login takes what its flags leave out from the config file, at the default
-// path and at --config (decision 42 ruling 6).
+// path, ~/.port49/config.yaml, at $PORT49_CONFIG and at --config (decision 42
+// ruling 6; decision 43 ruling 24).
 func TestLoginTakesWhatItLacksFromTheConfigFile(t *testing.T) {
-	xdg := privateDir(t)
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	dir := filepath.Join(xdg, "port49")
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".port49")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := labConfig(t, dir, configBroker)
-	for name, args := range map[string][]string{
-		"the default path": nil,
-		"--config":         {"--config", cfg},
+	labConfig(t, dir, configBroker)
+	other := privateDir(t)
+	named := labConfig(t, other, configBroker)
+	for _, c := range []struct {
+		name, dir, env string
+		args           []string
+	}{
+		{"the default path", dir, "", nil},
+		{"$PORT49_CONFIG", other, named, nil},
+		{"--config", other, "", []string{"--config", named}},
 	} {
-		sock, refreshes := runningAgent(t, dir)
+		// Each file names its own lab certificate, so only the file the
+		// login should read matches the running agent's.
+		t.Setenv(userconfig.EnvConfig, c.env)
+		sock, refreshes := runningAgent(t, c.dir)
 		var out, errb bytes.Buffer
-		code := run(append(append([]string{"login"}, args...), "--socket", sock), &out, &errb)
+		code := run(append(append([]string{"login"}, c.args...), "--socket", sock), &out, &errb)
 		if code != 0 || refreshes() != 1 ||
 			!strings.HasPrefix(out.String(), "port49: already logged in to "+configBroker+"; refreshing\n") {
-			t.Errorf("%s: code %d stdout %q stderr %q", name, code, out.String(), errb.String())
+			t.Errorf("%s: code %d stdout %q stderr %q", c.name, code, out.String(), errb.String())
 		}
+	}
+}
+
+// systemConfig stands path in for /etc/port49/config.yaml, and this user in
+// for root, for the rest of the test.
+func systemConfig(t *testing.T, path string) {
+	t.Helper()
+	oldPath, oldOwner := userconfig.SystemPath, userconfig.SystemOwner
+	userconfig.SystemPath, userconfig.SystemOwner = path, uint32(os.Getuid())
+	t.Cleanup(func() { userconfig.SystemPath, userconfig.SystemOwner = oldPath, oldOwner })
+}
+
+// The install's file is under the user's, key by key: a user who sets only
+// broker keeps the system file's CA, certificate and key (decision 43
+// ruling 24).
+func TestTheSystemFileIsUnderYoursKeyByKey(t *testing.T) {
+	sys := privateDir(t)
+	systemConfig(t, labConfig(t, sys, "https://elsewhere.example:8443"))
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	if err := userconfig.WritePrivate(filepath.Join(home, ".port49", "config.yaml"),
+		[]byte("broker: "+configBroker+"\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	sock, refreshes := runningAgent(t, sys)
+	var out, errb bytes.Buffer
+	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 || refreshes() != 1 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A config file at plan 9a's place, with none at ~/.port49, is refused in
+// one line naming the move, exit 2, and nothing is asked of the agent.
+func TestAConfigFileAtPlan9asPlaceIsRefused(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	labConfig(t, filepath.Join(home, ".config", "port49"), configBroker)
+	sock, refreshes := runningAgent(t, filepath.Join(home, ".config", "port49"))
+	var out, errb bytes.Buffer
+	code := run([]string{"login", "--socket", sock}, &out, &errb)
+	old, now := filepath.Join(home, ".config", "port49", "config.yaml"), filepath.Join(home, ".port49", "config.yaml")
+	if code != 2 || refreshes() != 0 || strings.Count(errb.String(), "\n") != 1 ||
+		!strings.Contains(errb.String(), "mkdir -m 700 -p "+filepath.Join(home, ".port49")+" && mv "+old+" "+now) {
+		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
 

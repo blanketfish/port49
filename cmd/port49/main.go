@@ -37,9 +37,10 @@ import (
 const usage = `usage:
   port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--cert FILE --key FILE |
                --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in]]
-               (each flag overrides its key in the config file, $XDG_CONFIG_HOME/port49/config.yaml; --oidc
-               signs in at your identity provider and holds the certificate the broker issues, signing in
-               again when it has under a quarter of its life left, or with --sign-in)
+               (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
+               each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity
+               provider and holds the certificate the broker issues, signing in again when it has under a
+               quarter of its life left, or with --sign-in)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
@@ -224,14 +225,15 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
-	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file: broker, broker_ca, cert and "+
-		"key, each overridden by its flag")
+	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
+		"key by key; each flag overrides its key")
 }
 
-// fill takes from the config file each value the command line left out
-// (decision 42 ruling 6; decision 43 ruling 19). A missing file at the
-// default path is no file; one --config names must be there, and is read
-// and checked even when every flag is given. A flag wins: --oidc, or
+// fill takes from the config files each value the command line left out
+// (decision 42 ruling 6; decision 43 rulings 19 and 24): the personal one
+// over the system-wide one, key by key. A missing file at the default path
+// is no file; one --config or $PORT49_CONFIG names must be there, and
+// --config's is read and checked even when every flag is given. A flag wins: --oidc, or
 // --cert or --key, which make a certificate login, over the file's method.
 func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	set := map[string]bool{}
@@ -246,14 +248,10 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	if s.oidcCA != "" {
 		opts = append(opts, userconfig.WithoutOIDCCA())
 	}
-	f, ok, err := userconfig.Load(s.configFile, opts...)
-	switch {
-	case err != nil:
+	named := set["config"] || os.Getenv(userconfig.EnvConfig) != ""
+	f, ok, err := userconfig.LoadAll(s.configFile, named, opts...)
+	if err != nil || !ok {
 		return err
-	case !ok && set["config"]:
-		return fmt.Errorf("%s: no such file", s.configFile)
-	case !ok:
-		return nil
 	}
 	if s.brokerCA == "" {
 		s.brokerCA, s.brokerCAPEM = f.BrokerCA, f.BrokerCAPEM
@@ -320,6 +318,13 @@ func (s *sessionFlags) brokerPool() (*x509.CertPool, error) {
 	default:
 		// Named by --broker-ca: the operator's own choice of path.
 		if caPEM, err = os.ReadFile(s.brokerCA); err != nil {
+			return nil, err
+		}
+	}
+	// The bundle the agent kept for this broker joins the CA named here
+	// (decision 43 ruling 25); the agent the login starts is handed both.
+	if s.brokerCAFD == 0 {
+		if caPEM, err = withKeptBundle(s.broker, caPEM); err != nil {
 			return nil, err
 		}
 	}
@@ -548,6 +553,7 @@ func agentMain(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 1
 	}
+	keepCABundle(sf.broker, conf.BrokerCABundle, conf.BrokerCABundleRefused, a.BrokerRoot(), stderr)
 	ln, err := agent.Listen(sf.socket)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))

@@ -96,9 +96,11 @@ func TestADirectoryAboveOthersCanWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(top, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	// The refusal tells the operator what to run.
+	// The refusal says what the directory needs, and no chmod: it may be
+	// shared, as a group-writable ~/.config is.
 	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by others") ||
-		!strings.Contains(err.Error(), "chmod go-w "+top) {
+		!strings.Contains(err.Error(), "writable by its owner alone (mode 0755 or 0700)") ||
+		strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("a world-writable directory two up: %v", err)
 	}
 	if err := os.Chmod(top, 0o777|fs.ModeSticky); err != nil {
@@ -585,5 +587,122 @@ func TestIssuedPaths(t *testing.T) {
 		if _, _, err := IssuedPathsIn("/d", bad); err == nil {
 			t.Errorf("%q made a path", bad)
 		}
+	}
+}
+
+// asSystem stands path in for /etc/port49/config.yaml for the rest of the
+// test, owned by owner in root's place.
+func asSystem(t *testing.T, path string, owner uint32) {
+	t.Helper()
+	oldPath, oldOwner := SystemPath, SystemOwner
+	SystemPath, SystemOwner = path, owner
+	t.Cleanup(func() { SystemPath, SystemOwner = oldPath, oldOwner })
+}
+
+// ~/.port49 is the directory, $PORT49_CONFIG names another file, and plan
+// 9a's directory is kept for the pins alone (decision 43 ruling 24).
+func TestTheDirectories(t *testing.T) {
+	t.Setenv("HOME", "/home/alice")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv(EnvConfig, "")
+	if Dir() != "/home/alice/.port49" || Path() != "/home/alice/.port49/config.yaml" ||
+		LegacyDir() != "/home/alice/.config/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+	t.Setenv(EnvConfig, "/srv/p49.yaml")
+	t.Setenv("XDG_CONFIG_HOME", "/x")
+	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || LegacyDir() != "/x/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	}
+}
+
+// The personal file is over the system file, key by key; each file's
+// relative paths are its own directory's, and the CA is read from the file
+// whose key won. The system file alone is a config.
+func TestLoadAllLayersYoursOverTheSystemFile(t *testing.T) {
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\nbroker_ca: ca.pem\nmethod: oidc\n"+
+		"oidc_issuer: https://idp.example\noidc_redirect_port: 18000\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(sys), "ca.pem"), []byte("SYSTEM CA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asSystem(t, sys, uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	mine := private(t, "config.yaml", "broker: https://mine.example:8443\noidc_redirect_port: 18001\n")
+	f, ok, err := LoadAll(mine, false)
+	if err != nil || !ok || f.Broker != "https://mine.example:8443" || f.OIDCRedirectPort != 18001 ||
+		f.Method != "oidc" || f.OIDCIssuer != "https://idp.example" ||
+		f.BrokerCA != filepath.Join(filepath.Dir(sys), "ca.pem") || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	f, ok, err = LoadAll(filepath.Join(privateDir(t), "config.yaml"), false)
+	if err != nil || !ok || f.Broker != "https://sys.example:8443" || string(f.BrokerCAPEM) != "SYSTEM CA" {
+		t.Fatalf("the system file alone: %+v %v %v", f, ok, err)
+	}
+	// A CA the system file names is refused in the system file's name.
+	if err := os.Chmod(filepath.Join(filepath.Dir(sys), "ca.pem"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(mine, false); err == nil || !strings.Contains(err.Error(), "broker_ca in "+sys) {
+		t.Fatalf("a CA others can write: %v", err)
+	}
+}
+
+// Neither file is no config; a named file must be there.
+func TestLoadAllWithNeitherFile(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, ok, err := LoadAll(p, false); ok || err != nil {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	if _, _, err := LoadAll(p, true); err == nil || err.Error() != p+": no such file" {
+		t.Fatalf("named: %v", err)
+	}
+}
+
+// The system file names the broker for every user on the host, so it is
+// root's alone; this user's own is refused, naming the owner it needs.
+func TestASystemFileNotRootsIsRefused(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("run as root, this user's file is root's")
+	}
+	sys := private(t, "config.yaml", "broker: https://sys.example:8443\n")
+	asSystem(t, sys, 0)
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is not owned by root") || !strings.Contains(err.Error(), "chown root "+sys) {
+		t.Fatalf("%v", err)
+	}
+	// Writable by others, it is refused as any config file is.
+	asSystem(t, sys, uint32(os.Getuid()))
+	if err := os.Chmod(sys, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
+		!strings.Contains(err.Error(), sys+" is writable by others") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A config file at plan 9a's place, with none at the default path, is
+// refused naming the move; with one at the default path it is not read.
+func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	xdg := privateDir(t)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	old := filepath.Join(xdg, "port49", "config.yaml")
+	if err := WritePrivate(old, []byte("broker: https://old.example:8443\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, _, err := LoadAll(p, false); err == nil ||
+		err.Error() != old+" is where plan 9a kept port49's config file; port49 reads "+p+" now: mkdir -m 700 -p "+
+			filepath.Dir(p)+" && mv "+old+" "+p {
+		t.Fatalf("%v", err)
+	}
+	if err := os.WriteFile(p, []byte("broker: https://new.example:8443\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok, err := LoadAll(p, false); err != nil || !ok || f.Broker != "https://new.example:8443" {
+		t.Fatalf("%+v %v %v", f, ok, err)
 	}
 }

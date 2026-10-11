@@ -465,8 +465,13 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool) 
 	if err != nil {
 		var verify *tls.CertificateVerificationError
 		if errors.As(err, &verify) {
+			hint := ""
+			var unknown x509.UnknownAuthorityError
+			if errors.As(verify.Err, &unknown) {
+				hint = "; " + agent.RotatedCAHint
+			}
 			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
-				"CA (--broker-ca) is the CA that issued it", broker, verify.Err)
+				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, hint)
 		}
 		return api.Config{}, fmt.Errorf("the broker at %s is unreachable: %w", broker, err)
 	}

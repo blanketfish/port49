@@ -225,6 +225,38 @@ func TestLoginOIDCIssuesACertificateAndMints(t *testing.T) {
 	o.credentialsNowhere(t, out.String(), errb.String(), terr.String(), agentLog(sock))
 }
 
+// A new user with nothing but the install's /etc/port49/config.yaml runs
+// `port49 login` and signs in, and that is all: no file of their own, no
+// flag (the socket is the test's), and ~/.port49 and its issued directory
+// made 0700 (decision 43 ruling 24).
+func TestTheSystemFileAloneIsAFirstLogin(t *testing.T) {
+	o := newOIDCLab(t, true)
+	sys := filepath.Join(privateDir(t), "config.yaml")
+	if err := os.WriteFile(sys, []byte("broker: "+o.url+"\nbroker_ca: "+filepath.Join(o.dir, testpki.LabCA)+
+		"\nmethod: oidc\noidc_ca: "+o.idpCA+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemConfig(t, sys)
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "port49: signed in at "+o.iss.URL+" as user:alice@example.com") ||
+		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	certPath, _ := o.issuedPaths(t)
+	for _, d := range []string{filepath.Join(home, ".port49"), filepath.Dir(certPath)} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 || !strings.HasPrefix(certPath, d) {
+			t.Fatalf("%s: %v %v", d, fi, err)
+		}
+	}
+}
+
 // After the sign-in, no browser: a login with the agent running refreshes by
 // the key; a new agent over the held certificate (a reboot) signs in no more
 // and extends the device sessions an earlier login left (D1); `port49

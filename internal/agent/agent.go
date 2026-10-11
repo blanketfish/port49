@@ -124,6 +124,9 @@ type Agent struct {
 	now          func() time.Time
 	log          io.Writer
 	handshakes   atomic.Int64
+	// brokerRoot is the CA the last handshake verified the broker's
+	// certificate to (BrokerRoot).
+	brokerRoot atomic.Pointer[x509.Certificate]
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
 
@@ -183,6 +186,11 @@ func New(c Config) *Agent {
 			conn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				if chains := tc.ConnectionState().VerifiedChains; len(chains) > 0 {
+					a.brokerRoot.Store(chains[0][len(chains[0])-1])
+				}
 			}
 			if n := a.handshakes.Add(1); n > 1 {
 				fmt.Fprintf(a.log, "port49 agent: reconnected to the broker (handshake %d)\n", n)
@@ -267,6 +275,17 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	a.mu.Unlock()
 	return c, nil
 }
+
+// BrokerRoot is the CA the last handshake verified the broker's certificate
+// to; nil before one. A CA bundle the broker sends must hold it (decision 43
+// ruling 25).
+func (a *Agent) BrokerRoot() *x509.Certificate { return a.brokerRoot.Load() }
+
+// RotatedCAHint is the fix for a broker certificate no CA this host trusts
+// issued, said on the same line: a host away through a whole CA rotation
+// (decision 43 ruling 25).
+const RotatedCAHint = "if the broker's operator rotated its CA while this host was away, get the broker's CA from " +
+	"them and run `port49 login --broker-ca FILE` once; port49 keeps it current from then on"
 
 // SessionEndsAt is when this session ends; zero before Connect.
 func (a *Agent) SessionEndsAt() time.Time {
@@ -963,8 +982,8 @@ func (a *Agent) refusal(err error) error {
 	var verify *tls.CertificateVerificationError
 	if errors.As(err, &verify) {
 		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
-			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries",
-			a.broker, verify.Err)
+			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries%s",
+			a.broker, verify.Err, rotatedCA(verify.Err))
 	}
 	var op *net.OpError
 	if !errors.As(err, &op) || op.Op != "remote error" || !certificateAlerts[op.Err.Error()] {
@@ -1063,6 +1082,16 @@ func (e *hangUpError) Error() string {
 }
 
 func (e *hangUpError) Unwrap() error { return e.err }
+
+// rotatedCA is RotatedCAHint after "; " for a certificate no CA this host
+// trusts issued, and "" for any other failure.
+func rotatedCA(err error) string {
+	var unknown x509.UnknownAuthorityError
+	if errors.As(err, &unknown) {
+		return "; " + RotatedCAHint
+	}
+	return ""
+}
 
 // certificateAlerts are the alerts a broker sends about the certificate it
 // was shown, by crypto/tls's text for them: its alert type is unexported.
