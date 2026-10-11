@@ -29,6 +29,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,9 +128,9 @@ type Agent struct {
 	now          func() time.Time
 	log          io.Writer
 	handshakes   atomic.Int64
-	// brokerRoot is the CA the last handshake verified the broker's
-	// certificate to (BrokerRoot).
-	brokerRoot atomic.Pointer[x509.Certificate]
+	// brokerRoots are the CAs the last handshake verified the broker's
+	// certificate to, one per verified chain (BrokerRoots).
+	brokerRoots atomic.Pointer[[]*x509.Certificate]
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
 	// bundleKept is Config.BundleKept.
@@ -194,8 +195,8 @@ func New(c Config) *Agent {
 				return nil, err
 			}
 			if tc, ok := conn.(*tls.Conn); ok {
-				if chains := tc.ConnectionState().VerifiedChains; len(chains) > 0 {
-					a.brokerRoot.Store(chains[0][len(chains[0])-1])
+				if roots := chainRoots(tc.ConnectionState().VerifiedChains); len(roots) > 0 {
+					a.brokerRoots.Store(&roots)
 				}
 			}
 			if n := a.handshakes.Add(1); n > 1 {
@@ -282,10 +283,32 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	return c, nil
 }
 
-// BrokerRoot is the CA the last handshake verified the broker's certificate
-// to; nil before one. A CA bundle the broker sends must hold it (decision 43
-// ruling 25).
-func (a *Agent) BrokerRoot() *x509.Certificate { return a.brokerRoot.Load() }
+// chainRoots is the root of every verified chain, each once. A rotation by
+// cross-signing verifies the server's certificate to the old root and the new
+// one, and which comes first is not the broker's to choose.
+func chainRoots(chains [][]*x509.Certificate) []*x509.Certificate {
+	var roots []*x509.Certificate
+	for _, chain := range chains {
+		if len(chain) == 0 {
+			continue
+		}
+		root := chain[len(chain)-1]
+		if !slices.ContainsFunc(roots, root.Equal) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// BrokerRoots are the CAs the last handshake verified the broker's
+// certificate to, one per verified chain; nil before one. A CA bundle the
+// broker sends must hold any one of them (decision 43 ruling 25).
+func (a *Agent) BrokerRoots() []*x509.Certificate {
+	if p := a.brokerRoots.Load(); p != nil {
+		return slices.Clone(*p)
+	}
+	return nil
+}
 
 // RotatedCAHint is the fix for a broker certificate no CA this host trusts
 // issued, said on the same line: a host away through a whole CA rotation

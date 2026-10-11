@@ -554,7 +554,7 @@ func agentMain(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 1
 	}
-	keepCABundle(sf.broker, conf.BrokerCABundle, conf.BrokerCABundleRefused, a.BrokerRoot(), stderr)
+	keepCABundle(sf.broker, conf.BrokerCABundle, conf.BrokerCABundleRefused, a.BrokerRoots(), stderr)
 	ln, err := agent.Listen(sf.socket)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))

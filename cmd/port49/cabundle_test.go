@@ -39,7 +39,7 @@ func TestKeepCABundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, cur.Cert, &log)
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, []*x509.Certificate{cur.Cert}, &log)
 	raw, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(raw, append(cur.PEM(), next.PEM()...)) ||
 		!strings.Contains(log.String(), "kept the broker's CA bundle in "+path) || !strings.Contains(log.String(), "(was none)") {
@@ -50,7 +50,7 @@ func TestKeepCABundle(t *testing.T) {
 	}
 	// The same bundle again is no change, and no line.
 	log.Reset()
-	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, cur.Cert, &log)
+	keepCABundle(bundleBroker, string(cur.PEM())+string(next.PEM()), false, []*x509.Certificate{cur.Cert}, &log)
 	if log.Len() != 0 {
 		t.Fatalf("%q", log.String())
 	}
@@ -62,7 +62,7 @@ func TestKeepCABundle(t *testing.T) {
 		"junk":                  {string(cur.PEM()) + "junk", "other than PEM"},
 	} {
 		log.Reset()
-		keepCABundle(bundleBroker, c.bundle, false, cur.Cert, &log)
+		keepCABundle(bundleBroker, c.bundle, false, []*x509.Certificate{cur.Cert}, &log)
 		if got, _ := os.ReadFile(path); !bytes.Equal(got, raw) || !strings.Contains(log.String(), c.want) ||
 			!strings.Contains(log.String(), "is left as it was") {
 			t.Errorf("%s: %q", name, log.String())
@@ -71,9 +71,53 @@ func TestKeepCABundle(t *testing.T) {
 	// The rotation's end: the old CA leaves the bundle once the server's
 	// certificate is the next CA's, and the change is said.
 	log.Reset()
-	keepCABundle(bundleBroker, string(next.PEM()), false, next.Cert, &log)
+	keepCABundle(bundleBroker, string(next.PEM()), false, []*x509.Certificate{next.Cert}, &log)
 	if !strings.Contains(log.String(), "(was "+api.CAFingerprints([]*x509.Certificate{cur.Cert, next.Cert})+")") {
 		t.Fatalf("%q", log.String())
+	}
+}
+
+// M3: a rotation by cross-signing verifies the connection to the old root and
+// the new. A bundle that holds only the one the connection did not list first
+// is still the connection's, and a broker that then sends no bundle cuts the
+// kept file to the roots it holds, not to one.
+func TestACrossSignedRotationKeepsABundleHoldingEitherRoot(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	oldCA, newCA, planted := testCA(t), testCA(t), testCA(t)
+	if _, err := newCA.CrossSign(oldCA); err != nil {
+		t.Fatal(err)
+	}
+	roots := []*x509.Certificate{oldCA.Cert, newCA.Cert}
+	path, err := userconfig.CABundlePath(bundleBroker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	// The bundle holds the new root alone: the root the first chain did not end in.
+	keepCABundle(bundleBroker, string(newCA.PEM()), false, roots, &log)
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, newCA.PEM()) {
+		t.Fatalf("a bundle holding one of the roots: %v %q", err, log.String())
+	}
+	// Control: a bundle holding neither is refused.
+	log.Reset()
+	keepCABundle(bundleBroker, string(planted.PEM()), false, roots, &log)
+	if raw, _ := os.ReadFile(path); !bytes.Equal(raw, newCA.PEM()) || !strings.Contains(log.String(), "does not hold the CA") {
+		t.Fatalf("a bundle holding neither root: %q", log.String())
+	}
+	// No bundle sent: the file holding both roots and a planted CA is cut to both roots.
+	both := string(oldCA.PEM()) + string(newCA.PEM())
+	keepCABundle(bundleBroker, both+string(planted.PEM()), false, roots, &bytes.Buffer{})
+	log.Reset()
+	keepCABundle(bundleBroker, "", false, roots, &log)
+	if raw, _ := os.ReadFile(path); !bytes.Equal(raw, []byte(both)) {
+		t.Fatalf("cut to the roots: %q", log.String())
+	}
+	// And a file holding only one of them, nothing else, is left alone.
+	keepCABundle(bundleBroker, string(newCA.PEM()), false, roots, &bytes.Buffer{})
+	log.Reset()
+	keepCABundle(bundleBroker, "", false, roots, &log)
+	if raw, _ := os.ReadFile(path); !bytes.Equal(raw, newCA.PEM()) || log.Len() != 0 {
+		t.Fatalf("a file of one root: %q", log.String())
 	}
 }
 
@@ -90,13 +134,13 @@ func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, []*x509.Certificate{cur.Cert}, &log)
 	if _, err := os.Stat(path); !os.IsNotExist(err) || log.Len() != 0 {
 		t.Fatalf("nothing kept: %v %q", err, log.String())
 	}
-	keepCABundle(bundleBroker, string(cur.PEM())+string(planted.PEM()), false, cur.Cert, &bytes.Buffer{})
+	keepCABundle(bundleBroker, string(cur.PEM())+string(planted.PEM()), false, []*x509.Certificate{cur.Cert}, &bytes.Buffer{})
 	log.Reset()
-	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, []*x509.Certificate{cur.Cert}, &log)
 	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, cur.PEM()) ||
 		!strings.Contains(log.String(), "now holds only the CA this connection was verified to") {
 		t.Fatalf("the CA verified to, kept alone: %v %q", err, log.String())
@@ -104,15 +148,15 @@ func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
 	// A broker that refused its own bundle at start leaves the kept file as it
 	// was: a typo in tls_ca_bundle_file mid-rotation drops no CA a client holds.
 	log.Reset()
-	keepCABundle(bundleBroker, "", true, cur.Cert, &log)
+	keepCABundle(bundleBroker, "", true, []*x509.Certificate{cur.Cert}, &log)
 	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, cur.PEM()) ||
 		!strings.Contains(log.String(), "refused its own tls_ca_bundle_file") ||
 		!strings.Contains(log.String(), path+" is left as it was") {
 		t.Fatalf("a refused bundle: %v %q", err, log.String())
 	}
-	keepCABundle(bundleBroker, string(other.PEM())+string(planted.PEM()), false, other.Cert, &bytes.Buffer{})
+	keepCABundle(bundleBroker, string(other.PEM())+string(planted.PEM()), false, []*x509.Certificate{other.Cert}, &bytes.Buffer{})
 	log.Reset()
-	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, []*x509.Certificate{cur.Cert}, &log)
 	if _, err := os.Stat(path); !os.IsNotExist(err) || !strings.Contains(log.String(), "removed "+path) {
 		t.Fatalf("a bundle the connection did not need: %v %q", err, log.String())
 	}
@@ -124,7 +168,7 @@ func TestABrokerWithNoBundleClearsTheKeptOne(t *testing.T) {
 func TestALoginTrustsTheKeptBundleBesideItsCA(t *testing.T) {
 	t.Setenv("HOME", privateDir(t))
 	cur, next := testCA(t), testCA(t)
-	keepCABundle(bundleBroker, string(next.PEM()), false, next.Cert, &bytes.Buffer{})
+	keepCABundle(bundleBroker, string(next.PEM()), false, []*x509.Certificate{next.Cert}, &bytes.Buffer{})
 	caFile := filepath.Join(privateDir(t), "ca.pem")
 	if err := os.WriteFile(caFile, cur.PEM(), 0o600); err != nil {
 		t.Fatal(err)
@@ -172,13 +216,13 @@ func TestAnUnreadableKeptBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
+	keepCABundle(bundleBroker, "", false, []*x509.Certificate{cur.Cert}, &log)
 	if got, _ := os.ReadFile(path); string(got) != "not a bundle" ||
 		!strings.Contains(log.String(), path+" is left as it was") {
 		t.Fatalf("no bundle sent: %q", log.String())
 	}
 	log.Reset()
-	keepCABundle(bundleBroker, string(cur.PEM()), false, cur.Cert, &log)
+	keepCABundle(bundleBroker, string(cur.PEM()), false, []*x509.Certificate{cur.Cert}, &log)
 	if got, _ := os.ReadFile(path); !bytes.Equal(got, cur.PEM()) ||
 		!strings.Contains(log.String(), "(was unreadable; replaced)") || strings.Contains(log.String(), "was none") {
 		t.Fatalf("a bundle sent: %q", log.String())

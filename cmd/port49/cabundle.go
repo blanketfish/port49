@@ -25,7 +25,11 @@ import (
 // broker's next answer; one that refused its own bundle at start (refused)
 // leaves the kept file as it was, since it sends none by fault, not by
 // choice. Nothing here ends the session.
-func keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, log io.Writer) {
+//
+// roots are the CAs the connection was verified to, one per verified chain: a
+// rotation by cross-signing verifies the server's certificate to both the old
+// root and the new, and a bundle holding either is the connection's.
+func keepCABundle(broker, bundle string, refused bool, roots []*x509.Certificate, log io.Writer) {
 	path, err := userconfig.CABundlePath(broker)
 	if err != nil {
 		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)
@@ -37,11 +41,11 @@ func keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, l
 		return
 	}
 	if bundle == "" {
-		forgetBundle(path, root, log)
+		forgetBundle(path, roots, log)
 		return
 	}
 	certs, err := api.ParseCABundle([]byte(bundle))
-	if err == nil && (root == nil || !slices.ContainsFunc(certs, root.Equal)) {
+	if err == nil && !holdsAny(certs, roots) {
 		err = errors.New("it does not hold the CA this connection was verified to")
 	}
 	if err != nil {
@@ -69,12 +73,17 @@ func keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, l
 	fmt.Fprintf(log, "port49 agent: kept the broker's CA bundle in %s: %s (was %s)\n", path, api.CAFingerprints(certs), was)
 }
 
+// holdsAny is whether certs holds any one of roots.
+func holdsAny(certs, roots []*x509.Certificate) bool {
+	return slices.ContainsFunc(certs, func(c *x509.Certificate) bool { return slices.ContainsFunc(roots, c.Equal) })
+}
+
 // forgetBundle clears the bundle kept at path when the broker, on a verified
-// connection, sends none (decision 43 ruling 25). A kept file that does not
-// hold the CA this connection was verified to is not needed for it, and is
-// removed; one that does is cut to that CA alone, so the next login still
+// connection, sends none (decision 43 ruling 25). A kept file that holds none
+// of the CAs this connection was verified to is not needed for it, and is
+// removed; one that does is cut to those CAs alone, so the next login still
 // verifies the broker while any other CA it held is dropped.
-func forgetBundle(path string, root *x509.Certificate, log io.Writer) {
+func forgetBundle(path string, roots []*x509.Certificate, log io.Writer) {
 	old, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle")
 	if errors.Is(err, fs.ErrNotExist) {
 		return
@@ -83,12 +92,12 @@ func forgetBundle(path string, root *x509.Certificate, log io.Writer) {
 	if err == nil && perr != nil {
 		err = perr
 	}
-	if err != nil || root == nil {
+	if err != nil || len(roots) == 0 {
 		fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is left as it was: %v\n", path,
 			cmp.Or(err, errors.New("no CA was verified")))
 		return
 	}
-	if !slices.ContainsFunc(held, root.Equal) {
+	if !holdsAny(held, roots) {
 		if err := os.Remove(path); err != nil {
 			fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is not removed: %v\n", path, err)
 			return
@@ -97,10 +106,15 @@ func forgetBundle(path string, root *x509.Certificate, log io.Writer) {
 			api.CAFingerprints(held))
 		return
 	}
-	if len(held) == 1 {
+	var only []*x509.Certificate
+	for _, c := range held {
+		if slices.ContainsFunc(roots, c.Equal) {
+			only = append(only, c)
+		}
+	}
+	if len(only) == len(held) {
 		return
 	}
-	only := []*x509.Certificate{root}
 	if err := userconfig.WritePrivate(path, api.EncodeCABundle(only), "broker CA bundle"); err != nil {
 		fmt.Fprintf(log, "port49 agent: the broker sends no CA bundle, and %s is not changed: %v\n", path, err)
 		return
