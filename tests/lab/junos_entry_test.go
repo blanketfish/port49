@@ -510,16 +510,24 @@ func (l *lab) entryREST(t *testing.T, r l26cRun) {
 	}
 	defer tunnel.Close()
 	user, secret := l.nextLogin(t)
+	var dialErr error
 	hc := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
-			return tunnel.Dial("tcp", "127.0.0.1:3000")
+			c, err := tunnel.Dial("tcp", "127.0.0.1:3000")
+			dialErr = err
+			return c, err
 		}}}
 	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:3000/rpc", strings.NewReader(getConfigHost))
 	req.Header.Set("Content-Type", "application/xml")
 	req.SetBasicAuth(user, secret)
 	resp, err := hc.Do(req)
 	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
+		out := oneLine(err.Error())
+		if dialErr != nil {
+			// The tunnel failed, not the device's answer.
+			out = "tunnel: " + out
+		}
+		r.cells[key], r.outs[key] = "not observed", out
 		return
 	}
 	defer resp.Body.Close()
@@ -560,11 +568,19 @@ func TestL26cEntryScripts(t *testing.T) {
 		// REST is its own commit. The plan requires it (REST was taken on both
 		// images, 2026-09-30), so a refusal stops the run; the candidate is
 		// rolled back first, or the cleanup commits would carry the bad line.
-		restCommit, err := l.junosTryConfigure(t, []string{"set system services rest http port 3000"})
+		// ssh tcp-forwarding is a lab-only setting so the break-glass tunnel can
+		// reach a service bound inside the VM; port49 never asks it of a device.
+		restCommit, err := l.junosTryConfigure(t, []string{
+			"set system services rest http port 3000",
+			"set system services ssh tcp-forwarding",
+		})
 		if err != nil {
 			t.Fatalf("INVALID: REST could not be enabled, so nothing below it was measured: %v", err)
 		}
-		defer l.junosConfigureAdmin(t, []string{"delete system services rest"})
+		defer l.junosConfigureAdmin(t, []string{
+			"delete system services rest",
+			"delete system services ssh tcp-forwarding",
+		})
 		defer func() {
 			if std, err := l.configPath(); err == nil {
 				if err := l.restart(std); err != nil {

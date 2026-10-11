@@ -282,7 +282,7 @@ func (l *lab) entryXnm(t *testing.T, r l26cRun) {
 	user, secret := l.nextLogin(t)
 	nc, err := tunnel.Dial("tcp", "127.0.0.1:3220")
 	if err != nil {
-		r.cells[key], r.outs[key] = "not observed", "the tunnel to 3220: "+oneLine(err.Error())
+		r.cells[key], r.outs[key] = "not observed", "tunnel: the tunnel to 3220: "+oneLine(err.Error())
 		return
 	}
 	cfg := labSSHConfig(user, secret)
@@ -375,12 +375,20 @@ func TestL26cEntryXnm(t *testing.T) {
 		}()
 		// xnm-ssh may be refused by the image: that is "not measured", not a
 		// failure, and the service stays on the failing list.
-		xnmCommit, err := l.junosTryConfigure(t, []string{"set system services xnm-ssh"})
+		// ssh tcp-forwarding is a lab-only setting so the break-glass tunnel can
+		// reach a service bound inside the VM; port49 never asks it of a device.
+		xnmCommit, err := l.junosTryConfigure(t, []string{
+			"set system services xnm-ssh",
+			"set system services ssh tcp-forwarding",
+		})
 		if err != nil {
 			t.Skipf("xnm-ssh not measured (`set system services xnm-ssh` was refused or did not commit; no "+
 				"note is written and the service stays on the failing list): %v", err)
 		}
-		defer l.junosConfigureAdmin(t, []string{"delete system services xnm-ssh"})
+		defer l.junosConfigureAdmin(t, []string{
+			"delete system services xnm-ssh",
+			"delete system services ssh tcp-forwarding",
+		})
 
 		// The deny here is the device's own, so port49d holds no deny record to
 		// require. A closed session counts as a deny only if the device is shown
