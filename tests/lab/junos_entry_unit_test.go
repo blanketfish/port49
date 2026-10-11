@@ -179,20 +179,69 @@ func TestXnmFirstCell(t *testing.T) {
 
 func TestExecCell(t *testing.T) {
 	for _, c := range []struct {
-		out               string
-		exited, permitted bool
-		want              string
+		out    string
+		exited bool
+		want   string
 	}{
-		{"<hello></hello>", false, false, "hello"},
-		{"", false, true, "not observed"}, // the 60s hang: the channel is still open
-		{"", true, true, "refused"},
-		{"", true, false, "not observed"},
-		{"unknown command.", true, false, "refused"},
-		{"unknown command.", false, false, "not observed"},
+		{"<hello></hello>", false, "hello"},
+		{"<hello></hello>", true, "hello"},
+		{"", false, "not observed"}, // the hang: the channel is still open
+		{"", true, "not observed"},  // a silent exit, permitted or not, is not a refusal
+		{"unknown command.", true, "refused"},
+		{"error: Permission denied", true, "refused"},
+		{"unknown command.", false, "not observed"},
 	} {
-		if got := execCell(c.out, c.exited, c.permitted); got != c.want {
+		if got := execCell(c.out, c.exited); got != c.want {
 			t.Errorf("%+v: got %q, want %q", c, got, c.want)
 		}
+	}
+}
+
+// fakeStdin records, for each write, what the device had printed by then.
+type fakeStdin struct {
+	out    *xnmOut
+	seen   []string
+	closed bool
+}
+
+func (f *fakeStdin) Write(p []byte) (int, error) {
+	f.seen = append(f.seen, f.out.String()+"|"+string(p))
+	return len(p), nil
+}
+
+func (f *fakeStdin) Close() error { f.closed = true; return nil }
+
+func TestExecDriveWaitsForTheHello(t *testing.T) {
+	var out xnmOut
+	f := &fakeStdin{out: &out}
+	done := make(chan struct{})
+	go func() { execDrive(f, &out, 5*time.Second); close(done) }()
+	time.Sleep(300 * time.Millisecond)
+	out.Write([]byte("<hello></hello>]]>]]>"))
+	time.Sleep(300 * time.Millisecond)
+	out.Write([]byte("<rpc-reply></rpc-reply>"))
+	<-done
+	if len(f.seen) != 3 || !f.closed {
+		t.Fatalf("writes = %d, closed = %v, want 3 and true", len(f.seen), f.closed)
+	}
+	for i, w := range f.seen {
+		if !strings.HasPrefix(w, "<hello></hello>") {
+			t.Errorf("write %d went before the device's hello: %q", i, w)
+		}
+	}
+	if !strings.Contains(f.seen[1], "<get-configuration>") || !strings.HasPrefix(f.seen[2], "<hello></hello>]]>]]><rpc-reply></rpc-reply>|") {
+		t.Errorf("the RPC and the close are out of order: %q", f.seen)
+	}
+}
+
+func TestExecDriveStopsWaitingOnExit(t *testing.T) {
+	var out xnmOut
+	f := &fakeStdin{out: &out}
+	out.markClosed()
+	start := time.Now()
+	execDrive(f, &out, time.Minute)
+	if time.Since(start) > 5*time.Second || !f.closed {
+		t.Errorf("execDrive did not return on an exited command (closed = %v)", f.closed)
 	}
 }
 

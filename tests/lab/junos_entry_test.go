@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -139,11 +140,12 @@ func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 }
 
 // entryExec runs `xml-mode netconf need-trailer` as an SSH exec command with
-// the next token, writes the client hello and the get-configuration RPC to
-// its stdin, and reads what comes back within 60s.
+// the next token. Stdin stays open: the client hello goes in once the device
+// has greeted, the get-configuration RPC once the hello is read, and the close
+// last (execDrive). A stdin at EOF can end the command before it greets, which
+// reads as a refusal that never happened.
 func (l *lab) entryExec(t *testing.T, r l26cRun) {
 	t.Helper()
-	off := l.mark()
 	user, secret := l.nextLogin(t)
 	const key = "exec channel"
 	c, err := l.dialHostPort(user, secret, l.p.addr+":22", 60*time.Second)
@@ -158,22 +160,30 @@ func (l *lab) entryExec(t *testing.T, r l26cRun) {
 		return
 	}
 	defer s.Close()
-	s.Stdin = strings.NewReader(junosL26cClientHello + "\n<rpc>" + getConfigHost + "</rpc>]]>]]>\n" +
-		"<rpc><close-session/></rpc>]]>]]>\n")
-	var out bytes.Buffer
+	stdin, err := s.StdinPipe()
+	if err != nil {
+		r.cells[key], r.outs[key] = "not observed", oneLine(err.Error())
+		return
+	}
+	var out xnmOut
 	s.Stdout, s.Stderr = &out, &out
 	done := make(chan error, 1)
-	go func() { done <- s.Run("xml-mode netconf need-trailer") }()
+	go func() {
+		err := s.Run("xml-mode netconf need-trailer")
+		out.markClosed()
+		done <- err
+	}()
+	go execDrive(stdin, &out, 60*time.Second)
 	exited := true
 	select {
 	case err = <-done:
-	case <-time.After(60 * time.Second):
+	case <-time.After(150 * time.Second):
 		exited = false
-		err = fmt.Errorf("no exit within 60s")
+		err = fmt.Errorf("no exit within 150s")
 	}
 	got := out.String()
 	r.outs[key] = firstLines(got, 12)
-	r.cells[key] = execCell(got, exited, exited && sessionPermitted(l.drainRecords(off, 10*time.Second)))
+	r.cells[key] = execCell(got, exited)
 	if r.cells[key] == "hello" {
 		r.cells[key+": get-configuration"] = l26cRPCCell(got, "<host-name>")
 	}
@@ -182,15 +192,28 @@ func (l *lab) entryExec(t *testing.T, r l26cRun) {
 	}
 }
 
+// execDrive speaks the client side of the exec channel in turn: it waits up to
+// d for the device's </hello> (or the command's exit), sends the client hello
+// and the RPC, waits up to d for </rpc-reply> (or the exit), then sends
+// close-session and closes stdin. Writes after an exit fail and are ignored.
+func execDrive(stdin io.WriteCloser, out *xnmOut, d time.Duration) {
+	defer stdin.Close()
+	out.wait(d, "</hello>")
+	io.WriteString(stdin, junosL26cClientHello+"\n")
+	io.WriteString(stdin, "<rpc>"+getConfigHost+"</rpc>]]>]]>\n")
+	out.wait(d, "</rpc-reply>")
+	io.WriteString(stdin, "<rpc><close-session/></rpc>]]>]]>\n")
+}
+
 // execCell reads the exec channel: hello where the device greeted; refused
-// only where the command exited and port49d had permitted the session (or the
-// device said unknown command); otherwise not observed. A hang is not a
-// refusal: the channel is still open and the deny has not been seen.
-func execCell(got string, exited, permitted bool) string {
+// only where the command exited and printed a refusal; otherwise not
+// observed. A silent exit is not a refusal (a permitted session whose command
+// ended early looks the same), and a hang has not shown the deny either.
+func execCell(got string, exited bool) string {
 	switch {
 	case strings.Contains(got, "</hello>"):
 		return "hello"
-	case exited && (permitted || strings.Contains(got, "unknown command")):
+	case exited && containsAny(strings.ToLower(got), junosL26cRefusal):
 		return "refused"
 	}
 	return "not observed"
@@ -243,6 +266,7 @@ func TestL26cEntryNetconf(t *testing.T) {
 		}
 		readings, unisolated := entryVerdict(runs, []string{"W", "V"}, "C", entryCanonical, entryProbes)
 		if len(unisolated) > 0 {
+			entryLogControl(t, runs["C"], unisolated)
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))
 		}
 		for _, p := range []string{"port 22 subsystem", "exec channel"} {
@@ -555,6 +579,7 @@ func TestL26cEntryScripts(t *testing.T) {
 		canonical := []string{"op url: script", "rest: get-configuration"}
 		readings, unisolated := entryVerdict(runs, []string{"W", "V", "Vw"}, "C", canonical, scriptProbes)
 		if len(unisolated) > 0 {
+			entryLogControl(t, runs["C"], unisolated)
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))
 		}
 		// G1 is decided by data alone (controller ruling 4): W's op cell is a
@@ -588,4 +613,19 @@ func gateWord(verdict, entry string) string {
 		return "reached past the junoscript deny; `" + entry + "` goes on set 1.2.0's list"
 	}
 	return "not measured; `" + entry + "` is handled as reached (fails closed)"
+}
+
+// entryLogControl logs the raw output of each control cell that failed to
+// reach, through RedactNote and the leak check, so an INVALID run can be read.
+func entryLogControl(t *testing.T, control l26cRun, unisolated []string) {
+	t.Helper()
+	for _, u := range unisolated {
+		p, _, _ := strings.Cut(u, ": the control")
+		out := labcreds.RedactNote(control.outs[p])
+		if err := leakIn(out, poolSecrets()); err != nil {
+			t.Logf("control %s: output withheld: %v", p, err)
+			continue
+		}
+		t.Logf("control %s (%s) output:\n%s", p, control.cells[p], out)
+	}
 }
