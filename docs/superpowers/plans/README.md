@@ -5405,8 +5405,10 @@ before Task 1. The rulings are decision 43 of the spec (§13).
     same store and restart; compare the fingerprints each start prints. Configure `issuance` alike
     on every broker on one store: a broker without it keeps a logout's record for `max_token_age`
     alone.
-  - With the key missing or unreadable the broker starts and serves everything else; sign-ins fail
-    503 `issuance_unavailable` and the start line says what to run. Alert on
+  - With the key missing or unreadable the broker starts and serves everything else; `/v1/config`
+    says `issuance.available: false`, so `port49 login` says the broker cannot issue before any
+    sign-in (L56 cell 0a; a valid held certificate is still used), an exchange gets 503
+    `issuance_unavailable`, and the start line says what to run. Alert on
     `port49_certificates_issued_total{outcome="unavailable"}` and on
     `port49_issuing_ca_not_after_timestamp_seconds` (0, or within 90 days).
   - Rotate the issuing CA with overlap, running `rotate-issuer` on one broker throughout: (1) stage
