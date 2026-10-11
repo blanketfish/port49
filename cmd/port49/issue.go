@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -63,6 +64,11 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
+	}
+	// The key kept here is a session: out of backups, on every login, as the
+	// first one and as the one after an upgrade (idempotent).
+	if err := markIssuedDir(filepath.Dir(certPath)); err != nil {
+		fmt.Fprintf(stderr, "port49 login: warning: %v; exclude %s from your backups\n", err, filepath.Dir(certPath))
 	}
 	held, s, heldErr := heldCertificate(certPath, keyPath)
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {

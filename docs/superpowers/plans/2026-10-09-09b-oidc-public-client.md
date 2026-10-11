@@ -544,9 +544,10 @@ closes.
   - The key and certificate are kept in `~/.port49/issued/<broker host>_<port>.key` and
     `.pem`, 0600. The key is your session until the certificate ends: a reboot or a new agent uses
     it with no sign-in, and whoever copies it holds your session until then, so never copy it off
-    the host, and exclude `~/.port49/issued/` from home-directory backups (Time Machine, rsync and
-    the like): a restore within the certificate's life holds the session. (9c moves it into a TPM,
-    the OS keystore or a hardware key where there is one.)
+    the host. port49 marks `~/.port49/issued/` excluded from Time Machine and from backup tools
+    that honour CACHEDIR.TAG (borg, restic --exclude-caches, tar --exclude-caches); other backups
+    exclude it by policy, once, fleet-wide: a restore within the certificate's life holds the
+    session. (9c moves it into a TPM, the OS keystore or a hardware key where there is one.)
 - **Check whom you signed in as.** The login prints `signed in at … as <you>`. The address port49
   prints is not a password, but keep it to yourself: whoever has it can finish your sign-in with
   their own account. On a shared host a browser port49 launches shows that address to other users

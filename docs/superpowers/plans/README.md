@@ -5429,8 +5429,10 @@ before Task 1. The rulings are decision 43 of the spec (§13).
     same browser shows no form without it). It needs `broker` and `broker_ca`. With several
     providers, name one with `--issuer`; a private CA for the provider's TLS needs `oidc_ca`.
   - The key and certificate live in `~/.port49/issued/<broker host>_<port>.key` and `.pem`, 0600.
-    The key is the session until the certificate ends: never copy it off the host, and exclude
-    `~/.port49/issued/` from home-directory backups.
+    The key is the session until the certificate ends: never copy it off the host. port49 marks
+    `~/.port49/issued/` excluded from Time Machine and from backup tools that honour CACHEDIR.TAG
+    (borg, restic --exclude-caches, tar --exclude-caches); other backups exclude it by policy,
+    once, fleet-wide.
   - Check whom you signed in as: the login prints `signed in at … as <you>`. The printed address is
     not a password, but whoever has it can finish your sign-in with their own account; on a shared
     host use `--no-browser`. On a host with no browser, open the address on your laptop and paste

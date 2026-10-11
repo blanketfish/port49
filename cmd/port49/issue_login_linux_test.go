@@ -197,6 +197,11 @@ func TestLoginOIDCIssuesACertificateAndMints(t *testing.T) {
 			t.Fatalf("%s: %v %v", p, fi, err)
 		}
 	}
+	// port49 marks the directory out of backups itself (no step for the user).
+	if raw, err := os.ReadFile(filepath.Join(filepath.Dir(certPath), "CACHEDIR.TAG")); err != nil ||
+		!strings.HasPrefix(string(raw), "Signature: 8a477f597d28d172789f06886806bc55") {
+		t.Fatalf("the issued directory is not marked: %q %v", raw, err)
+	}
 	var tok, terr bytes.Buffer
 	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
