@@ -3895,7 +3895,10 @@ and a hidden command does not abbreviate. The deny closes NETCONF for the sessio
 carries it and for no one else. *Provisional on L26c* for the other ways in: the NETCONF
 subsystem on port 22, the SSH exec channel, an `op url` script, REST, the XML API (`xnm-ssh`,
 `xnm-ssl`, `xnm-clear-text`), `outbound-ssh` and `scp` (plan 9b1, Task 3),
-and the projected reply end to end (Task 9).
+and the projected reply end to end (Task 9). An `op url` script is not closed by it: under the
+deny its `jcs:invoke` reached `get-configuration` on both images, as the control's did
+(`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so set 1.2.0 denies `op` beside it
+(decision 44 ruling 2).
 
 **Set 1.2.0 sends it** (the adapter key `rpc_entry_denies`; decision 44). Take a composition whose
 only guard beneath a sent bit, or beneath the baseline every session holds, is a wire deny. It
@@ -3912,10 +3915,14 @@ carries them beside the entry deny. Each change below renders only where the ada
 
 - The baseline's `xml-mode **`, which no keyword tree proves, is sent as nothing beside
   `junoscript **`. Junos authorizes `xml-mode` as `junoscript`, and a deny naming `xml-mode` does
-  not bind (`tests/lab/results/L26c-junoscript-juniper_*.md`). Bare `xml-mode` under the deny is
-  *provisional on L58*.
-- Set 1.2.0's keyword tree proves `save`, *provisional on L58* (L26b proved it on vJunos-router
-  only).
+  not bind (`tests/lab/results/L26c-junoscript-juniper_*.md`). Bare `xml-mode` and `xml-mode
+  netconf` are refused under the deny on both images, where the control is greeted
+  (`tests/lab/results/L58-juniper_*.md`).
+- Set 1.2.0's keyword tree proves `save` on both images (`L58-juniper_*.md`; L26b proved it on
+  vJunos-router only): the deny refused it with the caret under `save`, where the control ran it
+  (vJunos-router) or its CLI took `save` and stopped after it (vSRX). A `view` class cannot run
+  `save` at all on either image, so a view-only readonly's `save **` deny refuses what its bits
+  already refuse.
 - A reply's `word **` denies render as one alternative, ` *(help|quit|…)( .*)? *(\|.*)?`, the
   shape L26b's deny sessions were enforced in (`L26b-juniper_*.md`).
 - A permit the bits reach but for a carve-out of a ceiling bit the reply does not send, where
@@ -3955,8 +3962,9 @@ NETCONF per user (port 830 measured; the port-22 subsystem *provisional on L26c*
 no longer requires it off. It
 still fails `web-management`, `extension-service`, `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
 `xnm-clear-text`) and `outbound-ssh`, until a lab cell measures the entry deny closing each
-(*provisional on L26c*; plan 9b1 Task 3 measures `rest`). No measurement shows the entry deny
-closes their RPCs. Both sets read the capture §12 names.
+(*provisional on L26c*). Plan 9b1 Task 3 measured `rest` as not reached by the lab's SSH tunnel,
+the control included (`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so `rest`
+stays a finding. No measurement shows the entry deny closes their RPCs. Both sets read the capture §12 names.
 
 **No carve-out leaves a deny off the wire in either set**: `view-configuration`'s `show
 configuration **` out of `view` is measured on the CLI only. `start` is never denied, since admins
@@ -5745,30 +5753,34 @@ line the adapter's `config_checks` name: a command method list falling back to `
 configuration does not carry as a top-level line of its own, the absence no `config_checks`
 entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
 asked about (§6). On a projected platform it also reads the configuration, as `show configuration | display set |
-display inheritance` prints it: groups' statements expanded where they apply, the group
-definitions kept, one capture, refusing any other form (§8). It reads it against the reference
+display inheritance` prints it (the other pipe order expands the same, L57): groups' statements
+expanded where they apply, one capture, refusing any other form (§8). It reads it against the reference
 `platform export --classes` writes, and `--config port49d.yaml`, the classes' idle-timeout, is
 required. A reference line the device lacks fails it. So does any line under a template class or
 template user the reference does not write: a class `allow-commands`, a permission, a template
 password. Exempt are the uid Junos assigns, a class's `idle-timeout`, `login-alarms` and
 `login-tip`, and a user's `full-name`, which change nothing a session runs (decision 44).
 
-**Configuration groups pass where they change no template.** A group whose statement lands under a
-template class or user fails the check, the finding naming the group. "Lands" reads a wildcard
-`<*>` or `<p49-*>` path as Junos does. It fails where it adds a permission, an `allow-` or
-`deny-commands`, an `allow-` or `deny-configuration` (or a `-regexps` form), or a template user's
-authentication or class: `group BASE adds `permissions` to class p49-remote: every port49 session
-on this device gets it`. It fails too where it adds anything not known harmless.
+**Configuration groups are judged by the lines they expand to.** The inherited capture prints a
+group's statement under each class or user it lands on, and prints no `set groups` and no `set
+apply-groups` line (`tests/lab/results/L57-juniper_*.md`, 2026-10-11). So the check judges every
+expanded line under a template as a template line, whether a group or the template wrote it. A
+permission, an `allow-` or `deny-commands`, an `allow-` or `deny-configuration` (or a `-regexps`
+form), a template user's authentication or class, or a statement not known harmless fails; a
+harmless one (`login-tip`) passes. A group widening a template is still caught. The capture
+cannot name the group, so a failing line says it may come from a configuration group and gives
+the pointer `show configuration system login | display inheritance`, whose curly form names the
+group behind each inherited line (`## 'view-configuration' was inherited from group
+'p49g-perm'`).
 
-The check trusts the inherited capture's expanded lines (L57) and verifies them where it matters.
-Take a group the configuration applies to a template, by an `apply-groups` naming it at or above
-that level with no `apply-groups-except` between. If the capture does not carry its statement
-there, and the template does not write a harmless leaf of that name itself, the capture was taken
-without `display inheritance`, and the check refuses it. Where the template writes a privilege or
-unlisted statement of that name itself, the group is named at its own line. A capture that
-applies a group at or above a template without carrying the group's definition, as one taken
-with the earlier `| except "^set groups "` does where it prints `apply-groups`, is refused. In a
-group's statement a `<pattern>` word is read as every word it matches, in the services check too.
+What Junos expands (L57, vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15): a group applied at the
+top lands under a class for a `<*>` and a `<p49-*>` path; `apply-groups-except` at the class keeps
+the group off it; a group applied from inside another group's definition commits and is not
+expanded, so it applies nowhere; a class's own leaf (`idle-timeout`) stands over a group's; a
+group's `permissions` lands beside a class's own. A capture carrying any `set apply-groups` or
+`set groups` line was taken without `display inheritance`, and the check refuses it as not
+inherited. `apply-groups-except` survives inheritance at the class it names, and is neither a
+sign of that nor a finding.
 
 `--batch FILE...` checks many captures in one run, the CI form (decision 44 ruling 8). Each file
 is checked against the inventory device its file name names: the name as it is where the
@@ -8663,17 +8675,18 @@ certificate while the certificate is valid.
 **44. Junos: a per-user `junoscript` deny, and check-config reads configuration groups.**
 *Plan 9b1, 2026-10-11, on Ryan's rulings of that day.* Rulings rest on reasoning unless they say
 data. Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's Task 9 closes it; ruling 7 is
-provisional on L57; ruling 10's `save` and bare `xml-mode` are *provisional on L58* until plan
-9b1's Task 3 closes it.
+provisional on L57.
 
 - **1. The entry deny** (data: `tests/lab/results/L26c-junoscript-juniper_*.md`). Take a
   composition whose only guard beneath a sent bit or the baseline is a wire deny. Under a set
   whose adapter carries `rpc_entry_denies`, it is projected in the capability shape with those
   denies added to its `deny-commands`, role `rpc_entry`. This replaces option C's narrow-or-closed
-  answer for that set. Set 1.2.0's `juniper_junos` carries `["junoscript **"]`; ruling 2 says
-  when it carries `op **` too.
-- **2. `op`.** If an `op url` script reaches an RPC past the `junoscript` deny (plan 9b1 Task 3,
-  cell b), set 1.2.0's list is `["junoscript **", "op **"]`. Denying `op` to a subject port49
+  answer for that set. Set 1.2.0's `juniper_junos` carries `["junoscript **", "op **"]`
+  (ruling 2).
+- **2. `op`.** Measured 2026-10-11 (`tests/lab/results/L26c-scripts-juniper_*.md`, cell b): under
+  the `junoscript` deny an `op url` script's `jcs:invoke` reached `get-software-information` and
+  `get-configuration` on vJunos-router and vSRX, as the control's did; set 1.2.0's list is
+  `["junoscript **", "op **"]`. Denying `op` to a subject port49
   permits it is narrower, which is reported, not refused.
 - **3. Who keeps NETCONF.** A subject whose reply carries no deny beneath a sent bit or the
   baseline. An allow the reply must send that meets an entry deny would beat it (L11), so that
@@ -8692,20 +8705,26 @@ provisional on L57; ruling 10's `save` and bare `xml-mode` are *provisional on L
   check-config no longer fails NETCONF (ssh, port 830), any non-RPC service, or an ssh option. It
   still fails `web-management` and `extension-service` anywhere in the hierarchy, and `rest`, the
   XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh`, each until a lab cell
-  measures the `junoscript` deny closing it (*provisional on L26c*; plan 9b1 Task 3). Set
-  1.1.0's allowlist is unchanged.
-- **7. Groups** (Ryan's ruling; data L57). check-config reads `show configuration | display set
-  | display inheritance` and trusts the expanded lines. It names the group behind a template line
-  it fails: a group statement whose path, wildcards read as Junos reads them, equals the line.
-  Take a group the configuration applies to a template: an `apply-groups` naming it at or above
-  the template's level, with no `apply-groups-except` naming it at or below that level. If the
-  template does not write a harmless leaf of that name itself and the capture does not carry its
-  statement there, the capture is refused as not inherited; where the template writes a privilege
-  or unlisted statement of that name, the group is named at its own line. An `apply-groups`
-  reaching a template whose group the capture does not define is refused. A group applied from
-  inside another group's definition is read as applied at the top (conservative), unless L57
-  shows Junos does not expand it. Neither `apply-groups` nor `apply-groups-except` is itself a
-  finding. In a group a `<pattern>` word is read as every word it matches.
+  measures the `junoscript` deny closing it (*provisional on L26c*). Plan 9b1 Task 3 measured
+  `rest` as not reached by the lab's SSH tunnel on either image, the control included
+  (`L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding. Set 1.1.0's allowlist is
+  unchanged.
+- **7. Groups** (Ryan's rulings; data: `tests/lab/results/L57-juniper_*.md`, measured
+  2026-10-11 on vJunos-router and vSRX). check-config reads `show configuration | display set |
+  display inheritance` (the other pipe order expands the same) and judges the expanded lines under
+  a template as template lines: a privilege or unlisted statement fails and a harmless one passes,
+  whether a group or the template wrote it, so a group widening a template is caught. The
+  inherited set form prints no `set groups` and no `set apply-groups` lines, so check-config cannot
+  name the group: a failing line says it may come from a configuration group and gives the pointer
+  `show configuration system login | display inheritance`, whose curly form names the group per
+  line. A capture with any `set apply-groups` or `set groups` line is refused as not inherited;
+  `apply-groups-except` survives inheritance and is not a sign. Junos honours
+  `apply-groups-except`, commits a group applied from inside another group's definition but does
+  not expand it, and adds a group's `permissions` beside a class's own. Neither `apply-groups` nor
+  `apply-groups-except` is itself a finding. This replaces the ruling's first reading (name the
+  group from its definition, `<pattern>` words matched, at its own line where the template writes
+  the same statement), which assumed the inherited capture keeps the group definitions; L57 shows
+  it keeps none.
 - **8. Batch.** `--batch FILE...`, the device named by the file name where the inventory has it,
   else by the name less its last extension. Every file is checked. Exit 2 if any file's outcome
   was a usage or "nothing checked" one, else 1 if any had a finding or could not be read.
@@ -8714,7 +8733,7 @@ provisional on L57; ruling 10's `save` and bare `xml-mode` are *provisional on L
   `login-script`, `logical-system`, `tenant` and `security-role` change what a session runs, and
   an allowlist does not fail open on a statement nobody listed (plan 5b pre-flight C1).
 - **10. A readonly with a deny beneath `show **`** (Ryan's ruling of 2026-10-11, on plan 9b1's
-  pre-flight; data: `L26c-junoscript-juniper_*.md`, `L26b-juniper_*.md`; the L58 cells are provisional).
+  pre-flight; data: `L26c-junoscript-juniper_*.md`, `L26b-juniper_*.md`, `L58-juniper_*.md`).
   Without this ruling such a readonly fails closed under 1.2.0 as under 1.1.0: its baseline
   denies name `save` and `xml-mode`, which no proven keyword names, they render 333 bytes alone,
   and view-configuration's carve-outs take `show **` out of `view`'s reach, so `show **` would go
@@ -9044,8 +9063,10 @@ Beyond those already listed in the design document's §14:
   firewall` and `show policer`; the device refuses `show configuration`, `xml-mode` and
   `xml-mode netconf`. A readonly granted `show **` alone renders as under 1.1.0 (ruling 10).
 - **check-config reads groups** (decision 44): a group adding `permissions` to `p49-remote` fails
-  naming the group; a group adding `login-tip` passes; a capture without `display inheritance`
-  from a device applying a group to a template is refused; `--batch` checks every file.
+  at its expanded line, the finding pointing at `show configuration system login | display
+  inheritance`; a group adding `login-tip` passes; a capture carrying a `set apply-groups` or
+  `set groups` line is refused as not inherited, and one carrying only `apply-groups-except` is
+  not; `--batch` checks every file.
 - **A fail-closed composition binds only its subject** (decision 26): on a device where one
   subject's composition gets the fail-closed reply, the daemon loads the policy, the device is
   not quarantined, and every other subject on it is answered with its own projected reply.
@@ -9431,7 +9452,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. **`prompt=login` over a live SSO session:** in one browser, a sign-in with no `prompt`, then 15s later, the control, the same session with no `prompt` (whether the form is shown, and `auth_time` against the first), then a `prompt=login` sign-in (whether the form is shown, and whether `auth_time` moves on by 15s or more). | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | closed — measured 2026-10-11; tests/lab/results/L55-keycloak.md. Measured on Keycloak 26.4.7 (a loopback authorization request with the realm's own redirect accepted and another host's refused, so the matcher is shown). The redirect: `http://127.0.0.1:18749/callback` admits port 18749 and refuses 41587; `http://127.0.0.1/callback` and `http://127.0.0.1/*` admit both; `http://127.0.0.1:*/callback` admits neither. PKCE: port49-cli's `pkce.code.challenge.method` is `S256`; the right verifier gets `200` with an `id_token` and `refresh_token`, a wrong one and none each `400 invalid_grant`, and `code_challenge_method=plain` is refused. Discovery lists `[plain S256]` and `authorization_response_iss_parameter_supported: true`, and the authorization response carries `iss`, the issuer. The key binding holds: a 43-character `nonce` came back byte for byte and `auth_time` was +0s from the sign-in. Over a live SSO session the control (no `prompt`, 15s later) showed no form and kept the first `auth_time`, while `prompt=login` showed the form and moved `auth_time` on by 15s. Not measured: a client set to require no PKCE method. |
 | **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA says in `/v1/config` `issuance.available: false`, the CLI says before any sign-in that the broker cannot issue, its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code or private key in the CLI's raw output or the agent's log (the PKCE verifier, which port49 draws and the lab never sees, is checked by the unit tests' `credentialsNowhere`). Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | closed — measured 2026-10-11; tests/lab/results/L56-arista_eos.md. Measured with `bin/port49` on the compose stack, Keycloak 26.4.7 and vEOS 4.31.2F. With no issuing CA the CLI said "the broker cannot issue certificates now (its issuing CA is unavailable); tell its operator" before any sign-in (no password form was shown; the broker's 503 `issuance_unavailable` for an exchange is unit-tested), and the broker's start named the missing CA and `init-issuer`; after `init-issuer` and a restart `port49 login --oidc --no-browser` signed in (the password asked, a control with no `prompt=login` showed no form), wrote the 0600 key and certificate, named `user:alice@corp.example.com`, started the agent and refreshed once (`refreshed at`). `port49 token` was taken by the device over SSH (a token port49 never minted refused); `port49 refresh` extended the device session with no sign-in; `port49 login` after the agent stopped used the held certificate, and `port49 login --sign-in` with the address pasted issued a new one. An administrator's sign-out refused the certificate's next mint in the broker's logout words, ended the agent and removed the certificate at the next `port49 login`, and a sign-in from the named time worked. With Keycloak stopped, `port49 token` (taken by the device), `port49 refresh` and a new agent worked, and `port49 login --sign-in` said the provider did not answer and that `port49 login` without it uses the held certificate, valid until the time it names. No compact JWS, code or private key was in the CLI's raw output, the agent's log or the broker's logs. |
 | **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's; whether a group's `permissions` is added beside a class's own (a leaf-list). And whether a TACACS+ session landing in `remote` holds what a group added (`show cli authorization`). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
-| **L58** | The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save\|junoscript)( .*)?` and the pipe tail), each against a control with the same class (`permissions view`) and no deny. `save`: whether it is a keyword to deny-commands, a `save` command the control runs with `\| count`'s evidence refused under the deny with the caret under `save` (L26b proved it on vJunos-router; on vSRX its control took the hidden `save dhcp-security-snoop` and refused the file name after it, so nothing ran). `xml-mode`: whether bare `xml-mode` (the Junos XML protocol, greeting `<junoscript`) and `xml-mode netconf` are refused under it, where the control is greeted. | Set 1.2.0's keyword tree (`save`); decision 44 ruling 10's `xml-mode **` sent as nothing beside `junoscript **` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 |
+| **L58** | The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save\|junoscript)( .*)?` and the pipe tail), each against a control with the same class and no deny (`permissions view`; the `save` cells `permissions all`, since a `view` class cannot run `save` at all). `save`: whether it is a keyword to deny-commands, a `save` command the control runs with `\| count`'s evidence refused under the deny with the caret under `save` (L26b proved it on vJunos-router; on vSRX its control took the hidden `save dhcp-security-snoop` and refused the file name after it, so nothing ran). `xml-mode`: whether bare `xml-mode` (the Junos XML protocol, greeting `<junoscript`) and `xml-mode netconf` are refused under it, where the control is greeted. | Set 1.2.0's keyword tree (`save`); decision 44 ruling 10's `xml-mode **` sent as nothing beside `junoscript **` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-11; tests/lab/results/L58-juniper_vjunos-router.md, L58-juniper_vsrx.md. `save` proven on both: vJunos-router's control ran `save dhcp-security-snoop /var/tmp/p49-l58.snoop \| count`, vSRX's control's CLI took `save` and stopped after it, and the deny refused it with the caret under `save` on both. Bare `xml-mode` and `xml-mode netconf need-trailer` refused under the deny on both, the control greeted. |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -11305,10 +11326,31 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `devices check-config` used to refuse any capture carrying `apply-groups`, and the fleets port49
   serves template their logins through groups. Decision 44 trusts the device's own expansion,
   so what `display inheritance` prints in set form is a claim about the device, and is measured.
-- **L58** — added by plan 9b1 (`tests/lab/junos_baseline_test.go`); open. Why it is a row: a
+  Measured 2026-10-11 on vJunos-router and vSRX (`tests/lab/results/L57-juniper_*.md`; the row
+  closes in plan 9b1's Task 9): both inherited set forms, either pipe order, expand `p49g-tip`
+  (`<*>`) and `p49g-perm` (`<p49-*>`) under `p49-remote` and print no `set apply-groups` and no
+  `set groups` line; plain `display set` prints both and expands nothing. `p49g-excepted` is kept
+  off `p49-remote` by `apply-groups-except`, whose line survives inheritance. The nested group
+  committed and was expanded nowhere. The class's own `idle-timeout 720` stands over the group's
+  30, and `p49g-perm`'s `view-configuration` lands beside `p49-l57own`'s own `view`. The curly
+  `show configuration system login | display inheritance` names the group per line (`## 'login-tip'
+  was inherited from group 'p49g-tip'`); the note's "no" columns for it are an artifact of the
+  test reading set lines only. A session landing in `remote` got a syntax error for `show cli
+  authorization` on both images, so what it holds was not read there. This contradicted decision
+  44 ruling 7 and §12's first reading, which named the group from the definitions the capture was
+  thought to keep; both now judge the expanded lines.
+- **L58** — added by plan 9b1 (`tests/lab/junos_baseline_test.go`); closed 2026-10-11
+  (`tests/lab/results/L58-juniper_vjunos-router.md`, `L58-juniper_vsrx.md`). Why it was a row: a
   readonly's reply carries the baseline's denies, and decision 44 ruling 10 sends `save **` as a
   proven keyword and `xml-mode **` as nothing. L26b left `save` unproven on vSRX, and L26c typed
-  only `xml-mode netconf` under a `junoscript` deny.
+  only `xml-mode netconf` under a `junoscript` deny. Under `^ *(save|junoscript)( .*)? *(\|.*)?$`
+  the deny refused `save dhcp-security-snoop …` with its caret under `save` on both images, where
+  vJunos-router's control ran it (`Count: 1 lines`) and vSRX's control's CLI took `save` and
+  stopped after it (vSRX 21.4 has no `save` subcommand a session runs to the end); bare `xml-mode`
+  and `xml-mode netconf need-trailer` were refused (`unknown command`), the control greeted
+  (`<junoscript`, `<hello`). The `save` cells ran under a `permissions all` class: a first run
+  under `view` showed a `view` class cannot run `save` at all on either image (commit `56dd91a`),
+  so a view-only readonly's `save **` deny refuses what its bits already refuse.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
