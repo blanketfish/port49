@@ -392,7 +392,9 @@ func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, 
 // guardedPaste is read with sigs caught: a signal that arrives while read
 // holds the terminal with echo off restores it first, then ends the process
 // as the signal would (exit 128+signal, 130 for SIGINT). Catching stops when
-// read returns, so a signal after the paste is the default again.
+// read returns. When the browser wins, read does not return: it stays in
+// ReadPassword, so the signals stay caught for the rest of the login, and one
+// still restores the terminal and exits as above.
 func guardedPaste(read func() (string, error), restore func(), exit func(int), sigs ...os.Signal) (string, error) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, sigs...)
