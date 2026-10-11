@@ -8341,7 +8341,8 @@ certificate while the certificate is valid.
   - a token exchanged already (the store keeps its SHA-256 for `max_token_age`): `401
     sign_in_spent`;
   - a sign-in that cannot be carried in a certificate (its principal or claims fail the issuer's
-    rules, such as an `acr` or `amr` with a space in it): `401 sign_in_not_certifiable`,
+    rules; the human verifier's own checks make this a defence in depth that no token it accepts
+    reaches today): `401 sign_in_not_certifiable`,
     `trust_domain_unresolved`, "your sign-in's principal or claims cannot be carried in a
     certificate; tell the operator".
 
