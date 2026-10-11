@@ -119,4 +119,13 @@ type Config struct {
 	X509Machine *X509Machine
 	OIDC        []VerifierConfig
 	Timing      Timing
+	// Issuance is broker.identity.issuance (plan 9b; spec §13 decision 43
+	// rulings 9 and 14): nil when the broker issues no certificate.
+	Issuance *Issuance
+}
+
+// Issuance is broker.identity.issuance resolved.
+type Issuance struct {
+	// CertificateLifetime is certificate_lifetime: 12h by default, 1h to 24h.
+	CertificateLifetime time.Duration
 }

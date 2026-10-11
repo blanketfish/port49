@@ -183,6 +183,11 @@ type TokenConfig struct {
 type BrokerConfig struct {
 	Listen      string `yaml:"listen"`
 	TLSCertFile string `yaml:"tls_cert_file"`
+	// TLSCABundleFile is the CAs clients are to trust for the server
+	// certificate, sent on GET /v1/config: the CA in use and, through a
+	// rotation, the next (spec §13 decision 43 ruling 25). Optional; read at
+	// start, and a bundle that does not verify tls_cert_file is not sent.
+	TLSCABundleFile string `yaml:"tls_ca_bundle_file"`
 	// TLSKeyFile is loaded through internal/keyfile, which refuses a symlink,
 	// a file not owned by port49's user or root, any group or other mode bit,
 	// and anything over 1 MiB. Keep the key in a directory only its owner can

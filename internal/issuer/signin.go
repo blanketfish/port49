@@ -95,13 +95,24 @@ func (s SignIn) validate() error {
 	switch {
 	case !printable(s.Principal) || !strings.HasPrefix(s.Principal, "user:") || !strings.Contains(s.Principal, "@"):
 		return errors.New("its subject CN is not a principal (user: and an address)")
-	case !printable(s.Issuer) || !strings.HasPrefix(s.Issuer, "https://"):
+	case CarriesIssuer(s.Issuer) != nil:
 		return errors.New("its sign-in's iss is not an https URL")
 	case !printable(s.Subject):
 		return errors.New("its sign-in has no usable sub")
 	case s.Sid != "" && !printable(s.Sid), s.ACR != "" && !printable(s.ACR),
 		slices.ContainsFunc(s.AMR, func(m string) bool { return !printable(m) }):
 		return errors.New("its sign-in's sid, amr or acr is not printable")
+	}
+	return nil
+}
+
+// CarriesIssuer is nil when an issued certificate can carry iss as the
+// sign-in's issuer: an https URL of printable ASCII with no space, at most
+// 1024 bytes. It is the rule validate applies, exposed so that config load
+// can refuse an OIDC verifier whose issuer URL no certificate could carry.
+func CarriesIssuer(iss string) error {
+	if !printable(iss) || !strings.HasPrefix(iss, "https://") {
+		return errors.New("it is not an https URL of printable ASCII (no space, at most 1024 bytes)")
 	}
 	return nil
 }

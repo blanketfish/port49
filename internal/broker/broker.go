@@ -91,6 +91,12 @@ type Broker struct {
 	// CertificateLifetime is broker.identity.issuance.certificate_lifetime
 	// (decision 43 ruling 9); zero is issuer.DefaultLifetime.
 	CertificateLifetime time.Duration
+	// CABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET /v1/config
+	// sends every client (decision 43 ruling 25); nil sends none.
+	CABundle []byte
+	// CABundleRefused is a tls_ca_bundle_file configured and refused at
+	// start: GET /v1/config says so, and clients keep what they hold.
+	CABundleRefused bool
 	// Workload is the workload certificate verifier (plan 8; decision 40):
 	// x509 under broker.identity.machines. Nil reads every certificate as a
 	// person's, as before plan 8.
@@ -311,6 +317,7 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	if b.Issuer != nil {
 		c.Issuance = &api.Issuance{CertificateLifetimeSeconds: int(b.certificateLifetime() / time.Second)}
 	}
+	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
 	writeJSON(w, http.StatusOK, c)
 }
 
