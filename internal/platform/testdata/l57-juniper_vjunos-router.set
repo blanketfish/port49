@@ -1,0 +1,51 @@
+show configuration | display set | display inheritance | no-more 
+set version 23.4R2-S2.1
+set system host-name srx1
+set system root-authentication encrypted-password <removed>
+set system login class p49-l57own idle-timeout 30
+set system login class p49-l57own login-tip
+set system login class p49-l57own permissions view
+set system login class p49-l57own permissions view-configuration
+set system login class p49-l57own permissions clear
+set system login class p49-l57own allow-commands "^show version$"
+set system login class p49-readonly idle-timeout 30
+set system login class p49-readonly login-tip
+set system login class p49-readonly permissions view
+set system login class p49-readonly permissions view-configuration
+set system login class p49-readonly permissions clear
+set system login class p49-readonly allow-commands "^show version$"
+set system login class p49-remote apply-groups-except p49g-excepted
+set system login class p49-remote idle-timeout 720
+set system login class p49-remote login-tip
+set system login class p49-remote permissions view-configuration
+set system login class p49-remote allow-commands "^show version$"
+set system login user admin uid 2000
+set system login user admin class super-user
+set system login user admin authentication encrypted-password <removed>
+set system login user breakglass uid 2002
+set system login user breakglass class super-user
+set system login user breakglass authentication encrypted-password <removed>
+set system login user remote uid 2001
+set system login user remote class p49-remote
+set system services netconf ssh
+set system services ssh root-login allow
+set system management-instance
+set system authentication-order tacplus
+set system authentication-order password
+<removed> system tacplus-server 172.100.100.1 routing-instance mgmt_junos
+set system tacplus-server 172.100.100.1 secret <removed> SECRET-DATA */
+set system tacplus-options strict-authorization
+set system accounting events login
+set system accounting events change-log
+set system accounting events interactive-commands
+set system accounting destination tacplus server 172.100.100.1 routing-instance mgmt_junos
+set system accounting destination tacplus server 172.100.100.1 secret <removed> SECRET-DATA */
+set system syslog file messages any notice
+set system syslog file messages authorization info
+set chassis fpc 0 pic 0 number-of-ports 12
+set interfaces fxp0 unit 0 family inet address 10.0.0.15/24
+set interfaces fxp0 unit 0 family inet6 address 2001:db8::2/64
+set routing-instances mgmt_junos routing-options rib mgmt_junos.inet6.0 static route ::/0 next-hop 2001:db8::1
+set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 10.0.0.2
+
+breakglass@srx1> 
