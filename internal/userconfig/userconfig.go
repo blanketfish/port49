@@ -244,8 +244,14 @@ func noLegacy(path string) error {
 	if _, err := os.Lstat(old); err != nil {
 		return nil
 	}
+	hint := ""
+	// A certificate login moved under a system file that says method: oidc
+	// would sign in instead, its cert and key unused: say how to keep it.
+	if f, ok, err := parse(old, "port49 config file", false); err == nil && ok && f.Method == "" && (f.Cert != "" || f.Key != "") {
+		hint = " (add `method: x509` to keep certificate login)"
+	}
 	return fmt.Errorf("%s is where plan 9a kept port49's config file; port49 reads %s now: "+
-		"mkdir -m 700 -p %s && mv %s %s", old, path, filepath.Dir(path), old, path)
+		"mkdir -m 700 -p %s && mv %s %s%s", old, path, filepath.Dir(path), old, path, hint)
 }
 
 // options is what opts make of Load's defaults.
@@ -393,6 +399,12 @@ func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, er
 		return nil, fmt.Errorf("%s is a symbolic link; the %s is read only as a file of its own", path, what)
 	}
 	if errors.Is(err, fs.ErrPermission) {
+		if st, ok := li.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
+			// Not this user's to chmod: say the mode it needs and whose to set.
+			return nil, fmt.Errorf("%s is %04o and owned by %s; the %s must be readable by every user, so "+
+				"whoever installed it must make it 0644 (and its directory 0755) (%w)",
+				file, li.Mode().Perm(), ownerName(st.Uid), what, err)
+		}
 		return nil, fmt.Errorf("cannot open %s: permission denied; the %s must be readable by you: chmod u+r %s (%w)",
 			file, what, file, err)
 	}
@@ -573,11 +585,25 @@ func resolveOwned(dir string, create bool, what string) (string, error) {
 	return prefix, nil
 }
 
+// ownerName is root for uid 0, else the uid.
+func ownerName(uid uint32) string {
+	if uid == 0 {
+		return "root"
+	}
+	return fmt.Sprintf("uid %d", uid)
+}
+
 // dirError says which directory port49 could not look inside, and for a
 // refused one what to run. d is the directory that was being searched, not
 // the entry below it that failed.
 func dirError(d string, err error, what string) error {
 	if errors.Is(err, fs.ErrPermission) {
+		if fi, serr := os.Lstat(d); serr == nil {
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != getuid() {
+				return fmt.Errorf("%s is %04o and owned by %s; port49 must look inside it to check who can write the %s, "+
+					"so whoever installed it must make it 0755 (%w)", d, fi.Mode().Perm(), ownerName(st.Uid), what, err)
+			}
+		}
 		return fmt.Errorf("%s: permission denied; port49 must look inside it to check who can write the %s: "+
 			"chmod u+rx %s (%w)", d, what, d, err)
 	}

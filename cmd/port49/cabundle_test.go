@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/userconfig"
@@ -152,6 +154,46 @@ func TestALoginTrustsTheKeptBundleBesideItsCA(t *testing.T) {
 	}
 	sf := sessionFlags{broker: bundleBroker, brokerCA: caFile}
 	if _, err := sf.brokerPool(); err == nil || !strings.Contains(err.Error(), path+", the broker's CA bundle the agent kept") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A kept file the agent cannot read is replaced by the broker's bundle and
+// the line says so, not "was none"; with no bundle sent it is left as it was,
+// said with why (decision 43 ruling 25).
+func TestAnUnreadableKeptBundle(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	cur := testCA(t)
+	path, err := userconfig.CABundlePath(bundleBroker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := userconfig.WritePrivate(path, []byte("not a bundle"), "broker CA bundle"); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	keepCABundle(bundleBroker, "", false, cur.Cert, &log)
+	if got, _ := os.ReadFile(path); string(got) != "not a bundle" ||
+		!strings.Contains(log.String(), path+" is left as it was") {
+		t.Fatalf("no bundle sent: %q", log.String())
+	}
+	log.Reset()
+	keepCABundle(bundleBroker, string(cur.PEM()), false, cur.Cert, &log)
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, cur.PEM()) ||
+		!strings.Contains(log.String(), "(was unreadable; replaced)") || strings.Contains(log.String(), "was none") {
+		t.Fatalf("a bundle sent: %q", log.String())
+	}
+}
+
+// The /v1/config fetch of a login says the rotation's fix for a certificate
+// no CA this host trusts issued, as the agent does, and only for that.
+func TestTheConfigFetchSaysTheRotationFix(t *testing.T) {
+	l := newLabBroker(t, time.Hour)
+	pool := x509.NewCertPool()
+	pool.AddCert(testCA(t).Cert)
+	_, err := fetchBrokerConfig(context.Background(), l.url, pool)
+	if err == nil || !strings.Contains(err.Error(), "does not verify") ||
+		!strings.Contains(err.Error(), "; "+agent.RotatedCAHint) {
 		t.Fatalf("%v", err)
 	}
 }

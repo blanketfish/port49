@@ -49,13 +49,18 @@ func keepCABundle(broker, bundle string, refused bool, root *x509.Certificate, l
 		return
 	}
 	was := "none"
-	if old, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle"); err == nil {
-		if held, err := api.ParseCABundle(old); err == nil {
+	old, err := userconfig.ReadPrivate(path, api.MaxCABundleBytes, "broker CA bundle")
+	if err == nil {
+		var held []*x509.Certificate
+		if held, err = api.ParseCABundle(old); err == nil {
 			if slices.EqualFunc(held, certs, (*x509.Certificate).Equal) {
 				return
 			}
 			was = api.CAFingerprints(held)
 		}
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		was = "unreadable; replaced"
 	}
 	if err := userconfig.WritePrivate(path, api.EncodeCABundle(certs), "broker CA bundle"); err != nil {
 		fmt.Fprintf(log, "port49 agent: the broker's CA bundle is not kept: %v\n", err)

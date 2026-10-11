@@ -983,7 +983,7 @@ func (a *Agent) refusal(err error) error {
 	if errors.As(err, &verify) {
 		return fmt.Errorf("agent: the broker's certificate at %s does not verify (%v); check that the trust anchor "+
 			"(--broker-ca) is the CA that issued it, and that the broker URL is a name the certificate carries%s",
-			a.broker, verify.Err, rotatedCA(verify.Err))
+			a.broker, verify.Err, RotatedCA(verify.Err))
 	}
 	var op *net.OpError
 	if !errors.As(err, &op) || op.Op != "remote error" || !certificateAlerts[op.Err.Error()] {
@@ -1083,9 +1083,9 @@ func (e *hangUpError) Error() string {
 
 func (e *hangUpError) Unwrap() error { return e.err }
 
-// rotatedCA is RotatedCAHint after "; " for a certificate no CA this host
+// RotatedCA is RotatedCAHint after "; " for a certificate no CA this host
 // trusts issued, and "" for any other failure.
-func rotatedCA(err error) string {
+func RotatedCA(err error) string {
 	var unknown x509.UnknownAuthorityError
 	if errors.As(err, &unknown) {
 		return "; " + RotatedCAHint

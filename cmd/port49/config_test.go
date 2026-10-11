@@ -95,9 +95,11 @@ func TestLoginTakesWhatItLacksFromTheConfigFile(t *testing.T) {
 }
 
 // systemConfig stands path in for /etc/port49/config.yaml, and this user in
-// for root, for the rest of the test.
+// for root, for the rest of the test, in this process and in a child it
+// starts (TestMain reads testSystemConfig).
 func systemConfig(t *testing.T, path string) {
 	t.Helper()
+	t.Setenv(testSystemConfig, path)
 	oldPath, oldOwner := userconfig.SystemPath, userconfig.SystemOwner
 	userconfig.SystemPath, userconfig.SystemOwner = path, uint32(os.Getuid())
 	t.Cleanup(func() { userconfig.SystemPath, userconfig.SystemOwner = oldPath, oldOwner })

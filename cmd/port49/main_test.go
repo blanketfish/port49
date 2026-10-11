@@ -294,7 +294,8 @@ var subreaperHook func()
 func TestMain(m *testing.M) {
 	// A child the tests start reads the system file the parent named.
 	if p := os.Getenv(testSystemConfig); p != "" {
-		userconfig.SystemPath = p
+		// This user stands in for root, whom no test can make own a file.
+		userconfig.SystemPath, userconfig.SystemOwner = p, uint32(os.Getuid())
 	}
 	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
 		subreaperHook()

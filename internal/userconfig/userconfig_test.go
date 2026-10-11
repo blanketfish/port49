@@ -706,3 +706,46 @@ func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
 		t.Fatalf("%+v %v %v", f, ok, err)
 	}
 }
+
+// A plan 9a file that holds a certificate and key and no method is a
+// certificate login; moved under a system file that says method: oidc it
+// would sign in instead, so the refusal says how to keep it.
+func TestTheLegacyRefusalSaysHowToKeepCertificateLogin(t *testing.T) {
+	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))
+	xdg := privateDir(t)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	old := filepath.Join(xdg, "port49", "config.yaml")
+	if err := WritePrivate(old, []byte("broker: https://old.example:8443\ncert: c.pem\nkey: k.pem\n"), "port49 config file"); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(privateDir(t), "config.yaml")
+	if _, _, err := LoadAll(p, false); err == nil || !strings.HasSuffix(err.Error(), " (add `method: x509` to keep certificate login)") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A root-owned file or directory this user cannot read is refused naming the
+// mode it needs and that its installer sets it, never a chmod this user
+// cannot make. /etc/shadow and /root stand in for an installer's 0600 file
+// and 0700 directory.
+func TestARootFileThisUserCannotReadNamesTheModeItNeeds(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can read them")
+	}
+	if _, err := os.Open("/etc/shadow"); !errors.Is(err, fs.ErrPermission) {
+		t.Skip("no unreadable root-owned file to test with")
+	}
+	_, err := ReadPrivate("/etc/shadow", 1<<10, "port49 config file")
+	if err == nil || !strings.Contains(err.Error(), "/etc/shadow is 0640 and owned by root") ||
+		!strings.Contains(err.Error(), "make it 0644") || strings.Contains(err.Error(), "chmod") {
+		t.Fatalf("file: %v", err)
+	}
+	if _, derr := os.Stat("/root/x"); !errors.Is(derr, fs.ErrPermission) {
+		t.Skip("no unsearchable root-owned directory to test with")
+	}
+	_, err = ReadPrivate("/root/x/config.yaml", 1<<10, "port49 config file")
+	if err == nil || !strings.Contains(err.Error(), "/root is 0700 and owned by root") ||
+		!strings.Contains(err.Error(), "make it 0755") || strings.Contains(err.Error(), "chmod") {
+		t.Fatalf("directory: %v", err)
+	}
+}
