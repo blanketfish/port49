@@ -482,6 +482,12 @@ func TestABrokerThatIssuesNothingIsSaid(t *testing.T) {
 func (o *oidcLab) loginWithALateCertificate(t *testing.T) (code int, out, errb string) {
 	t.Helper()
 	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	return o.login(t)
+}
+
+// login is `port49 login` over whatever certificate is held.
+func (o *oidcLab) login(t *testing.T) (code int, out, errb string) {
+	t.Helper()
 	sock := privateSocket(t)
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
@@ -500,6 +506,33 @@ func TestAFailedSignInUsesAHeldCertificate(t *testing.T) {
 	if code != 0 || !strings.Contains(errb, "using your certificate for user:alice@example.com until ") ||
 		!strings.Contains(out, "port49: logged in to "+o.url) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+}
+
+// K1: a write of the new pair that fails (a full disk at 3am) leaves the held
+// key and certificate byte for byte as they were, and the fallback runs on
+// them, naming the certificate on disk.
+func TestAFailedWriteOfTheNewPairLeavesTheHeldPairWorking(t *testing.T) {
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
+	certPath, keyPath := o.issuedPaths(t)
+	heldCert, _ := os.ReadFile(certPath)
+	heldKey, _ := os.ReadFile(keyPath)
+	saved := writeIssuedPair
+	writeIssuedPair = func(...userconfig.PrivateFile) error { return errors.New("no space left on device") }
+	t.Cleanup(func() { writeIssuedPair = saved })
+	code, out, errb := o.login(t)
+	if code != 0 || !strings.Contains(errb, "no space left on device") ||
+		!strings.Contains(errb, "using your certificate for user:alice@example.com until ") ||
+		!strings.Contains(out, "port49: logged in to "+o.url) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
+	}
+	if c, _ := os.ReadFile(certPath); !bytes.Equal(c, heldCert) {
+		t.Fatal("the held certificate changed")
+	}
+	if k, _ := os.ReadFile(keyPath); !bytes.Equal(k, heldKey) {
+		t.Fatal("the held key changed")
 	}
 }
 

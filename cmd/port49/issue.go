@@ -191,6 +191,10 @@ func heldCertificate(certPath, keyPath string) (tls.Certificate, issuer.SignIn, 
 	return c, s, nil
 }
 
+// writeIssuedPair keeps the issued key and certificate, a var so a test fails
+// the write.
+var writeIssuedPair = userconfig.WritePrivateAll
+
 // issueCertificate signs in at the provider the broker lists and asks the
 // broker for a certificate for a key generated here (decision 43 rulings 2,
 // 3, 7 and 8), and keeps the key and then the certificate. It prints nothing
@@ -249,23 +253,27 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if blk == nil || err != nil || !key.PublicKey.Equal(leaf.PublicKey) {
 		return failed(errors.New("the broker's answer is not a certificate for the key this login sent"))
 	}
+	// Said from the certificate just checked, not from the broker's JSON.
+	// Every check is made before a file is touched: a held pair is only
+	// ever replaced by one that will load.
+	si, err := issuer.ReadSignIn(leaf)
+	if err != nil {
+		return failed(fmt.Errorf("the broker's certificate carries no sign-in: %v", err))
+	}
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return failed(err)
 	}
-	// The key first: a certificate written without it is one no login
-	// loads, and the next login signs in.
-	if err := userconfig.WritePrivate(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
-		"port49-issued key"); err != nil {
+	// Both are staged before either is renamed, the key first and the
+	// certificate last: a failure to write leaves the held pair as it was,
+	// and the one that reads the pair never sees a new key beside an old
+	// certificate except across the last rename.
+	if err := writeIssuedPair(
+		userconfig.PrivateFile{Path: keyPath, Data: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
+			What: "port49-issued key"},
+		userconfig.PrivateFile{Path: certPath, Data: []byte(resp.Certificate), What: "port49-issued certificate"},
+	); err != nil {
 		return failed(err)
-	}
-	if err := userconfig.WritePrivate(certPath, []byte(resp.Certificate), "port49-issued certificate"); err != nil {
-		return failed(err)
-	}
-	// Said from the certificate just checked, not from the broker's JSON.
-	si, err := issuer.ReadSignIn(leaf)
-	if err != nil {
-		return failed(fmt.Errorf("the broker's certificate carries no sign-in: %v", err))
 	}
 	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
 		si.Principal, sf.broker, rfc3339(leaf.NotAfter))

@@ -638,42 +638,68 @@ func PrivateDir(dir, what string) (string, error) { return resolveOwned(dir, tru
 // walks it (resolveOwned), top down, and a directory is made only under a
 // prefix that has passed, so a path that would be refused creates nothing.
 func WritePrivate(path string, data []byte, what string) error {
-	dirPart, base, err := splitPath(path)
-	if err != nil {
-		return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+	return WritePrivateAll(PrivateFile{Path: path, Data: data, What: what})
+}
+
+// PrivateFile is one file for WritePrivateAll.
+type PrivateFile struct {
+	Path string
+	Data []byte
+	What string
+}
+
+// WritePrivateAll is WritePrivate for files that only make sense together,
+// such as a key and its certificate: every file is written to a temporary
+// beside its path first, and only when all of them are there are they renamed
+// into place, in the order given. A failure before the first rename leaves
+// every path as it was; the one that remains is a rename failing after an
+// earlier one, which the last file of the order is the least likely to be.
+func WritePrivateAll(files ...PrivateFile) error {
+	type staged struct{ tmp, path, dir string }
+	var all []staged
+	defer func() {
+		for _, s := range all {
+			os.Remove(s.tmp) // after the rename there is nothing at tmp
+		}
+	}()
+	for _, f := range files {
+		dirPart, base, err := splitPath(f.Path)
+		if err != nil {
+			return fmt.Errorf("%s: %w; the %s must be a file", f.Path, err, f.What)
+		}
+		dir, err := resolveOwned(dirPart, true, f.What)
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(dir, "."+base+".*")
+		if err != nil {
+			return err
+		}
+		all = append(all, staged{tmp.Name(), joinPath(dir, base), dir})
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+		if _, err := tmp.Write(f.Data); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
 	}
-	dir, err := resolveOwned(dirPart, true, what)
-	if err != nil {
-		return err
-	}
-	path = joinPath(dir, base)
-	tmp, err := os.CreateTemp(dir, "."+base+".*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name) // after the rename there is nothing at name
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		d.Close()
+	for _, s := range all {
+		if err := os.Rename(s.tmp, s.path); err != nil {
+			return err
+		}
+		if d, err := os.Open(s.dir); err == nil {
+			_ = d.Sync()
+			d.Close()
+		}
 	}
 	return nil
 }

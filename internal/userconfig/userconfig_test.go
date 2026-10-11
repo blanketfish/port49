@@ -472,6 +472,36 @@ func TestWritePrivateThenReadPrivate(t *testing.T) {
 	}
 }
 
+// WritePrivateAll renames nothing until every file is staged: a second file
+// the walk refuses leaves the first path, and its directory, as they were.
+func TestWritePrivateAllLeavesEveryPathAsItWasWhenOneIsRefused(t *testing.T) {
+	good := privateDir(t)
+	bad := privateDir(t)
+	if err := os.Chmod(bad, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(good, "a.key")
+	if err := os.WriteFile(first, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WritePrivateAll(PrivateFile{first, []byte("new"), "key"}, PrivateFile{filepath.Join(bad, "a.pem"), []byte("new"), "cert"})
+	if err == nil {
+		t.Fatal("a refused directory was written")
+	}
+	if raw, rerr := os.ReadFile(first); rerr != nil || string(raw) != "old" {
+		t.Fatalf("the first path: %q %v", raw, rerr)
+	}
+	if ents, _ := os.ReadDir(good); len(ents) != 1 {
+		t.Fatalf("%d entries left in the good directory, want 1", len(ents))
+	}
+	if err := WritePrivateAll(PrivateFile{first, []byte("new"), "key"}, PrivateFile{filepath.Join(good, "a.pem"), []byte("cert"), "cert"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(first); string(raw) != "new" {
+		t.Fatalf("the first path: %q", raw)
+	}
+}
+
 // WritePrivate creates nothing under a directory it would refuse: not the
 // missing directories, not the temporary file.
 func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
