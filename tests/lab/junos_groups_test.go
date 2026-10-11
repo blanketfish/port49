@@ -3,8 +3,11 @@
 package lab
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +16,27 @@ import (
 	adapter "github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
+
+// throwawayCryptHash is a SHA-512 crypt hash of 32 random bytes that are
+// discarded at once, so nothing can log in with it. The hash goes only to the
+// device, never to a note or a log.
+func throwawayCryptHash() (string, error) {
+	pw := make([]byte, 32)
+	if _, err := rand.Read(pw); err != nil {
+		return "", err
+	}
+	cmd := exec.Command("openssl", "passwd", "-6", "-stdin")
+	cmd.Stdin = strings.NewReader(hex.EncodeToString(pw) + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("openssl passwd: %v", err)
+	}
+	h := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(h, "$6$") {
+		return "", fmt.Errorf("openssl passwd did not print a SHA-512 crypt hash")
+	}
+	return h, nil
+}
 
 // TestL57JunosGroups measures what a configuration capture carries for groups
 // that reach port49's template classes (spec §15 L57; decision 44 ruling 7).
@@ -108,6 +132,27 @@ func TestL57JunosGroups(t *testing.T) {
 		defer stop()
 		l.junosConfigureAdmin(t, reference)
 		defer l.junosConfigureAdmin(t, projectionRestore(reference))
+		// vSRX 21.4's lab image holds a root-authentication with no password, and
+		// a group applied under `system` makes its commit re-check that stanza
+		// ("Missing mandatory statement: 'encrypted-password'"); vJunos 23.4 does
+		// not. Only there, root gets a throwaway hash for the run: the hash of a
+		// random password that is never kept or printed, deleted on teardown.
+		if _, err := l.junosTryConfigure(t, junosGroupsLines); err != nil {
+			if !strings.Contains(err.Error(), "Missing mandatory statement: 'encrypted-password'") {
+				t.Fatalf("configuring the groups: %v", err)
+			}
+			hash, err := throwawayCryptHash()
+			if err != nil {
+				t.Fatalf("INVALID: no throwaway root hash for vSRX's mandatory check: %v", err)
+			}
+			if _, err := l.junosTryConfigure(t, []string{`set system root-authentication encrypted-password "` + hash + `"`}); err != nil {
+				t.Fatalf("INVALID: the throwaway root hash did not commit (output withheld: it echoes the hash)")
+			}
+			defer l.junosConfigureAdmin(t, []string{"delete system root-authentication encrypted-password"})
+			t.Logf("root-authentication had no password; a throwaway hash was set for this run")
+		} else {
+			l.junosConfigureAdmin(t, junosGroupsDelete)
+		}
 		commit := l.junosConfigureAdmin(t, junosGroupsLines)
 		defer l.junosConfigureAdmin(t, junosGroupsDelete)
 		nestedCommit := l.junosConfigureAdmin(t, junosGroupsNested)
