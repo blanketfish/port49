@@ -489,7 +489,6 @@ func TestL26cEntryScripts(t *testing.T) {
 			t.Fatalf("INVALID: REST could not be enabled, so nothing below it was measured: %v", err)
 		}
 		defer l.junosConfigureAdmin(t, []string{"delete system services rest"})
-		restOn := strings.Contains(restCommit, "commit complete")
 		defer func() {
 			if std, err := l.configPath(); err == nil {
 				if err := l.restart(std); err != nil {
@@ -542,12 +541,7 @@ func TestL26cEntryScripts(t *testing.T) {
 					r.cells["op url: script"] = "not observed"
 				}
 				c.Close()
-				if restOn {
-					l.entryREST(t, r)
-				} else {
-					r.cells["rest: get-configuration"] = "not measured (the image refused `rest`)"
-					r.outs["rest: get-configuration"] = restCommit
-				}
+				l.entryREST(t, r)
 			} else {
 				// The login sets port49d's reply for the scp token after it.
 				c, run, _ := l.junosLogin(t, "scripts Vw", v.attrs)
@@ -558,10 +552,7 @@ func TestL26cEntryScripts(t *testing.T) {
 			}
 			l.entryScp(t, r, "/config/juniper.conf.gz")
 		}
-		canonical := []string{"op url: script"}
-		if restOn {
-			canonical = append(canonical, "rest: get-configuration")
-		}
+		canonical := []string{"op url: script", "rest: get-configuration"}
 		readings, unisolated := entryVerdict(runs, []string{"W", "V", "Vw"}, "C", canonical, scriptProbes)
 		if len(unisolated) > 0 {
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))

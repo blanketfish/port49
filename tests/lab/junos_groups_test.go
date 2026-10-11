@@ -164,7 +164,7 @@ func TestL57JunosGroups(t *testing.T) {
 		}
 		// The fixture is committed too: no capture may hold a pool token.
 		for _, cmd := range l57Captures {
-			if err := leakIn(caps[cmd], l.poolSecrets()); err != nil {
+			if err := leakIn(caps[cmd], poolSecrets()); err != nil {
 				t.Fatalf("the capture of %q is withheld, and no fixture or note is written: %v", cmd, err)
 			}
 		}

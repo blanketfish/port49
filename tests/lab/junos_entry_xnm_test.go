@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // TestL26cEntryXnm measures JUNOScript over the device's xnm-ssh service (TCP
@@ -30,58 +32,62 @@ const xnmRPCKey = "xnm-ssh: get-software-information"
 // failed commit instead of failing the test: the candidate is rolled back
 // (`rollback 0`) so the refused line cannot ride into a later commit, and
 // port49d is put back on the lab config either way.
+//
+// The rollback is checked: a candidate still dirty after it would ride into the
+// cleanup commits, so a rollback that does not report "load complete" fails
+// the test, describing the candidate state (no secrets).
 func (l *lab) junosTryConfigure(t *testing.T, lines []string) (string, error) {
 	t.Helper()
-	if err := l.stopDaemon(); err != nil {
-		t.Fatalf("could not stop port49d before opening an admin CLI: %v", err)
-	}
-	restart := func() {
-		if l.splitActive {
-			return
+	var out string
+	var ferr error
+	l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
+		return l.junosCLI(breakglassUser, breakglassPassword)
+	}, func(c *cliConn) error {
+		out, ferr = junosConfigure(c, lines...)
+		if ferr == nil || strings.HasPrefix(ferr.Error(), "entering configuration mode") {
+			return nil // committed, or the candidate was never touched
 		}
-		base, err := l.configPath()
-		if err != nil {
-			t.Fatalf("recovering this platform's standing config: %v", err)
+		rb, err := c.sendExpect("rollback 0", junosPer, junosCfgPrompt)
+		if err != nil || !strings.Contains(rb, "load complete") {
+			return fmt.Errorf("the candidate may still hold %v after a failed apply (%v): `rollback 0` did not "+
+				"report load complete (%v); the device needs a manual `rollback 0` before another commit",
+				lines, ferr, err)
 		}
-		if err := l.startDaemonWith(base, true); err != nil {
-			t.Fatalf("restarting port49d after the admin CLI: %v", err)
+		if _, err := c.sendExpect("exit", junosPer, junosOpPrompt); err != nil {
+			return fmt.Errorf("leaving configuration mode after the rollback: %w", err)
 		}
-	}
-	c, err := l.junosCLI(breakglassUser, breakglassPassword)
-	if err != nil {
-		restart()
-		t.Fatalf("no admin CLI (port49d was stopped for this, so the device should have taken the "+
-			"local password): %v", err)
-	}
-	out, ferr := junosConfigure(c, lines...)
+		return nil
+	})
 	if ferr != nil {
-		c.sendExpect("rollback 0", junosPer, junosCfgPrompt, junosOpPrompt)
-		c.sendExpect("exit", junosPer, junosOpPrompt)
 		ferr = fmt.Errorf("applying %v: %v\n%s", lines, ferr, hideKeys(out))
 	}
-	c.Close()
-	restart()
 	return out, ferr
 }
 
-// poolSecrets are the values no note may hold: every minted token and the
-// break-glass password.
-func (l *lab) poolSecrets() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// runSecrets are the values no note may hold: every token any daemon of this
+// run minted (runSeeds, the run-wide union: l.seeds holds only the current
+// daemon's) and the break-glass password.
+func runSecrets(seeds []labcreds.SeedToken) []string {
 	secrets := []string{breakglassPassword}
-	for _, s := range l.seeds {
+	for _, s := range seeds {
 		secrets = append(secrets, s.Login, s.Enable)
 	}
 	return secrets
 }
 
+func poolSecrets() []string {
+	runSeedsMu.Lock()
+	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
+	runSeedsMu.Unlock()
+	return runSecrets(seeds)
+}
+
 // entryResult is l.result after a leak check of the claim and the
-// observation against the token pool: on a hit the test fails and no note is
-// written. The matched value is never printed.
+// observation against every token the run minted: on a hit the test fails and
+// no note is written. The matched value is never printed.
 func (l *lab) entryResult(t *testing.T, entry, claim, observation string) {
 	t.Helper()
-	if err := leakIn(claim+"\n"+observation, l.poolSecrets()); err != nil {
+	if err := leakIn(claim+"\n"+observation, poolSecrets()); err != nil {
 		t.Fatalf("%s: the note is withheld: %v", entry, err)
 	}
 	l.result(t, entry, claim, observation)
@@ -107,9 +113,45 @@ func xnmHelloCell(out string) string {
 func xnmFirstCell(greeting string, closed, permitted bool) string {
 	cell := xnmHelloCell(greeting)
 	if cell == "not observed" && closed && permitted {
-		return "refused"
+		return xnmClosed
 	}
 	return cell
+}
+
+// xnmClosed is a refusal read from a closed channel alone: the device said
+// nothing, so it is a deny only if the device was demonstrably alive after it
+// (xnmSettle).
+const xnmClosed = "refused (session closed)"
+
+// xnmAlive says whether the device demonstrably stayed up across the xnm-ssh
+// cells: the control got a result after W's cells, and the boot time read
+// before W and after C is the same one. A boot time that cannot be read, or
+// that moved, says no. The string says what was compared.
+func xnmAlive(bootBefore, bootAfter, controlRPC string, elapsed time.Duration) (bool, string) {
+	if controlRPC != "result" {
+		return false, "the control's RPC read " + controlRPC
+	}
+	if !l53BootedRe.MatchString(bootBefore) || !l53BootedRe.MatchString(bootAfter) {
+		return false, "no System booted line in one of the reads"
+	}
+	rebooted, why := l53Rebooted(bootBefore, bootAfter, elapsed)
+	return !rebooted, why
+}
+
+// xnmSettle turns each closed-channel refusal into "not observed" where the
+// device was not shown alive: a session that dropped while the device
+// rebooted is no deny.
+func xnmSettle(runs map[string]l26cRun, alive bool) {
+	if alive {
+		return
+	}
+	for _, r := range runs {
+		for k, c := range r.cells {
+			if c == xnmClosed {
+				r.cells[k] = "not observed"
+			}
+		}
+	}
 }
 
 // xnmRPCCell reads the reply to get-software-information: result (the host
@@ -124,7 +166,7 @@ func xnmRPCCell(reply string, closed bool) string {
 	case strings.Contains(reply, "<rpc-error>") && netconfSeverityError.MatchString(reply):
 		return "refused"
 	case closed && !strings.Contains(reply, "</rpc-reply>"):
-		return "refused"
+		return xnmClosed
 	}
 	return "not observed"
 }
@@ -242,7 +284,7 @@ func (l *lab) entryXnm(t *testing.T, r l26cRun) {
 		case isAuthRejection(err):
 			cell = "login refused"
 		case sessionPermitted(l.drainRecords(off, 10*time.Second)):
-			cell = "refused"
+			cell = xnmClosed
 		}
 		r.cells[key], r.outs[key] = cell, oneLine(err.Error())
 		return
@@ -287,6 +329,22 @@ func (l *lab) entryXnm(t *testing.T, r l26cRun) {
 	fmt.Fprint(stdin, "</junoscript>\n")
 }
 
+// entryUptime is `show system uptime` over break-glass: the "System booted"
+// line is what tells a reboot from a dropped session.
+func (l *lab) entryUptime(t *testing.T) string {
+	t.Helper()
+	c, err := l.junosCLI(breakglassUser, breakglassPassword)
+	if err != nil {
+		t.Fatalf("INVALID: no break-glass CLI to read the boot time: %v", err)
+	}
+	defer c.Close()
+	out, err := junosShow(c, "show system uptime")
+	if err != nil {
+		t.Fatalf("INVALID: show system uptime: %v", err)
+	}
+	return out
+}
+
 func TestL26cEntryXnm(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
@@ -307,11 +365,17 @@ func TestL26cEntryXnm(t *testing.T) {
 		// failure, and the service stays on the failing list.
 		xnmCommit, err := l.junosTryConfigure(t, []string{"set system services xnm-ssh"})
 		if err != nil {
-			t.Skipf("xnm-ssh not measured (the image refused `set system services xnm-ssh`; no note is "+
-				"written and the service stays on the failing list): %v", err)
+			t.Skipf("xnm-ssh not measured (`set system services xnm-ssh` was refused or did not commit; no "+
+				"note is written and the service stays on the failing list): %v", err)
 		}
 		defer l.junosConfigureAdmin(t, []string{"delete system services xnm-ssh"})
 
+		// The deny here is the device's own, so port49d holds no deny record to
+		// require. A closed session counts as a deny only if the device is shown
+		// alive after it: the boot time read now must be the one read after C's
+		// cells (C runs last), and C must have a result.
+		bootBefore := l.entryUptime(t)
+		started := time.Now()
 		runs := map[string]l26cRun{}
 		for _, v := range junosEntryVariants {
 			r := newL26cRun()
@@ -327,6 +391,9 @@ func TestL26cEntryXnm(t *testing.T) {
 			}
 			l.entryXnm(t, r)
 		}
+		bootAfter := l.entryUptime(t)
+		alive, aliveWhy := xnmAlive(bootBefore, bootAfter, runs["C"].cells[xnmRPCKey], time.Since(started))
+		xnmSettle(runs, alive)
 		readings, unisolated := entryVerdict(runs, []string{"W", "V"}, "C", []string{xnmRPCKey}, xnmProbes)
 		if len(unisolated) > 0 {
 			t.Fatalf("INVALID: the control did not reach %s; no note is written", strings.Join(unisolated, "; "))
@@ -335,6 +402,7 @@ func TestL26cEntryXnm(t *testing.T) {
 		fmt.Fprintf(&b, "The classes were committed: %s. `xnm-ssh`: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
 			commitWord(xnmCommit), strings.Join(junosEntryClass, "\n"))
 		entryTables(&b, runs, readings, junosEntryVariants, xnmProbes)
+		fmt.Fprintf(&b, "\nDevice alive across the cells (a closed session counts only then): %v (%s).\n", alive, aliveWhy)
 		fmt.Fprintf(&b, "\n### Gates (plan 9b1)\n\n- G2, `xnm-ssh`: under W the greeting reads %s and the RPC %s: %s.\n",
 			cellOr(runs["W"], "xnm-ssh"), cellOr(runs["W"], xnmRPCKey),
 			xnmGateWord(xnmGate(readings, runs["C"].cells[xnmRPCKey])))

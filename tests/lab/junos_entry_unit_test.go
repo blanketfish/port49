@@ -4,8 +4,72 @@ package lab
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
+
+// The leak check covers every daemon generation of the run, not the last one,
+// and never prints the matched value.
+func TestRunSecretsOutliveAReload(t *testing.T) {
+	const first, second = "tok-first-generation-aaaaaaaa", "tok-second-generation-bbbbbbb"
+	secrets := runSecrets([]labcreds.SeedToken{{Login: first}, {Login: second, Enable: "en-bbbbbbbbbbbbbbbbbb"}})
+	err := leakIn("a note quoting "+first+" by mistake", secrets)
+	if err == nil {
+		t.Fatal("a first-generation token in a note was not caught")
+	}
+	if strings.Contains(err.Error(), first) {
+		t.Errorf("the error prints the value: %v", err)
+	}
+	if leakIn("a clean note", secrets) != nil {
+		t.Error("a clean note was flagged")
+	}
+	if leakIn("the password "+breakglassPassword, secrets) == nil {
+		t.Error("the break-glass password was not caught")
+	}
+}
+
+// A closed session is a deny only while the device is shown alive: a reboot
+// between the reads turns W's closed-channel refusal into "not observed".
+func TestXnmAliveAndSettle(t *testing.T) {
+	const up = "System booted: 2026-10-11 10:00:00 UTC (00:20:00 ago)\n"
+	const rebooted = "System booted: 2026-10-11 10:30:00 UTC (00:01:00 ago)\n"
+	mk := func() map[string]l26cRun {
+		return map[string]l26cRun{
+			"W": jsdRun(map[string]string{"xnm-ssh": "hello", xnmRPCKey: xnmClosed}),
+			"C": jsdRun(map[string]string{"xnm-ssh": "hello", xnmRPCKey: "result"}),
+		}
+	}
+	alive, _ := xnmAlive(up, up, "result", 5*time.Minute)
+	runs := mk()
+	xnmSettle(runs, alive)
+	if !alive || runs["W"].cells[xnmRPCKey] != xnmClosed {
+		t.Errorf("a stable device: alive %v, W %q", alive, runs["W"].cells[xnmRPCKey])
+	}
+	r0, _ := entryVerdict(runs, []string{"W"}, "C", nil, xnmProbes)
+	if g := xnmGate(r0, "result"); g != "closed" {
+		t.Errorf("a closed session on a live device: %q", g)
+	}
+	alive, why := xnmAlive(up, rebooted, "result", 5*time.Minute)
+	runs = mk()
+	xnmSettle(runs, alive)
+	if alive || runs["W"].cells[xnmRPCKey] != "not observed" {
+		t.Errorf("a rebooted device (%s): alive %v, W %v", why, alive, runs["W"].cells)
+	}
+	r, _ := entryVerdict(runs, []string{"W"}, "C", nil, xnmProbes)
+	if g := xnmGate(r, "result"); g == "closed" {
+		t.Errorf("the gate closed on a closed session across a reboot: %q", g)
+	}
+	// No result for the control, or an unreadable boot time, is not alive either.
+	if a, _ := xnmAlive(up, up, "refused", time.Minute); a {
+		t.Error("alive without a control result")
+	}
+	if a, _ := xnmAlive("", up, "result", time.Minute); a {
+		t.Error("alive without a readable boot time")
+	}
+}
 
 // These run without a device: the entry cells' isolation verdict, and the
 // op script's and scp's cells.
@@ -103,7 +167,7 @@ func TestXnmFirstCell(t *testing.T) {
 		want              string
 	}{
 		{"", false, true, "not observed"},
-		{"", true, true, "refused"},
+		{"", true, true, xnmClosed},
 		{"", true, false, "not observed"},
 		{"<junoscript version=\"1.0\">", false, true, "hello"},
 	} {
@@ -141,9 +205,9 @@ func TestXnmRPCCell(t *testing.T) {
 		{"<rpc-reply><software-information><host-name>srx1</host-name></software-information></rpc-reply>", false, "result"},
 		{"<xnm:error xmlns:xnm=\"x\"><message>permission denied</message></xnm:error>", false, "refused"},
 		{"<rpc-reply><rpc-error><error-severity>error</error-severity></rpc-error></rpc-reply>", false, "refused"},
-		{"", true, "refused"},       // the session closed after the RPC with no reply
+		{"", true, xnmClosed},       // the session closed after the RPC with no reply
 		{"", false, "not observed"}, // a hang
-		{"<rpc-reply>", true, "refused"},
+		{"<rpc-reply>", true, xnmClosed},
 		{"<rpc-reply></rpc-reply>", false, "not observed"},
 	} {
 		if got := xnmRPCCell(c.reply, c.closed); got != c.want {
