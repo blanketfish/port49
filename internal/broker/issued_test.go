@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -288,5 +289,211 @@ func TestAPersonsBearerIsRefusedWhereTheBrokerIssues(t *testing.T) {
 	f.b.Issuer = nil
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
 		t.Fatalf("a person's bearer with no issuance: %s", shown(w))
+	}
+}
+
+// The third case of the placing test, by itself: a principal at a domain the
+// verifier does not hold is refused in the broker's words, trust_domain_unresolved.
+func TestAnIssuedCertificateForAnUnheldDomainIsRefusedInWords(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	s := f.aliceSignIn(iss)
+	s.Principal = "user:alice@elsewhere.example"
+	w := f.postAt(context.Background(), f.issuedState(f.issued(t, s)), mintLeaf1, "", f.now)
+	var e api.Error
+	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
+		!strings.Contains(e.Detail, "port49 login --sign-in") {
+		t.Fatalf("a domain the verifier does not hold: %s", shown(w))
+	}
+}
+
+// oidcOf is the auth.oidc block of a record, nil when it has none.
+func oidcOf(rec map[string]any) map[string]any {
+	auth, _ := rec["auth"].(map[string]any)
+	o, _ := auth["oidc"].(map[string]any)
+	return o
+}
+
+// A back-channel logout by sub ends an issued certificate's use of the broker
+// as it ends a sign-in's: the next call is refused credential_revoked, and
+// the refusal's record carries the sign-in (decision 43 rulings 10, 16).
+func TestASubLogoutRefusesAnIssuedCertificate(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	c := f.issued(t, f.aliceSignIn(iss))
+	if w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now); w.Code != 200 {
+		t.Fatalf("%s", shown(w))
+	}
+	f.advance(time.Minute)
+	if _, err := f.b.Logout(context.Background(), oidc.LogoutToken{Issuer: iss.URL, Subject: "sub-alice",
+		IssuedAt: f.b.Now(), Domains: []string{"example.com"}}, "backchannel_logout "+iss.URL); err != nil {
+		t.Fatal(err)
+	}
+	w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "credential_revoked") {
+		t.Fatalf("a mint after a sub logout: %s", shown(w))
+	}
+	recs := eventsOf(f.records(t), decision.EventMint)
+	if r := recs[len(recs)-1]; r["reason"] != "credential_revoked" || oidcOf(r)["sid"] != "s-sub-alice" {
+		t.Fatalf("the refusal's record: %v", r)
+	}
+}
+
+// An operator's revocation, by the certificate's serial or by its principal,
+// refuses an issued certificate, and the record carries the sign-in.
+func TestARevocationRefusesAnIssuedCertificate(t *testing.T) {
+	for name, key := range map[string]func(c tls.Certificate) store.Revocation{
+		"by serial": func(c tls.Certificate) store.Revocation {
+			return store.Revocation{Kind: store.RevocationCert, Key: certKey(c)}
+		},
+		"by principal": func(tls.Certificate) store.Revocation {
+			return store.Revocation{Kind: store.RevocationPrincipal, Key: alicePrincipal}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			iss := f.withIssuance(t)
+			c := f.issued(t, f.aliceSignIn(iss))
+			rv := key(c)
+			rv.At, rv.Origin = f.now, "test"
+			if err := f.st.PutRevocation(context.Background(), rv); err != nil {
+				t.Fatal(err)
+			}
+			w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now)
+			if w.Code != 401 || !strings.Contains(w.Body.String(), "credential_revoked") {
+				t.Fatalf("%s", shown(w))
+			}
+			recs := eventsOf(f.records(t), decision.EventMint)
+			if r := recs[len(recs)-1]; oidcOf(r)["sid"] != "s-sub-alice" {
+				t.Fatalf("the revoked record carries no sign-in: %v", r)
+			}
+		})
+	}
+}
+
+// failingMarks cannot read the marks.
+type failingMarks struct{ store.Store }
+
+func (failingMarks) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	return store.Revocation{}, store.ErrUnavailable
+}
+
+// A mint whose marks cannot be read is a store_unavailable that still names
+// the sign-in.
+func TestAnIssuedCertificatesStoreErrorCarriesItsSignIn(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	c := f.issued(t, f.aliceSignIn(iss))
+	f.b.Store = failingMarks{f.st}
+	w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now)
+	if w.Code != 503 {
+		t.Fatalf("%s", shown(w))
+	}
+	recs := eventsOf(f.records(t), decision.EventMint)
+	if r := recs[len(recs)-1]; r["reason"] != "store_unavailable" || oidcOf(r)["sid"] != "s-sub-alice" {
+		t.Fatalf("the store error's record: %v", r)
+	}
+}
+
+// An issued certificate under a directory is not mapped, but its groups are
+// read at the mint: the directory answering mints, the directory not
+// answering is refused as any mint is.
+func TestAnIssuedCertificateUnderADirectoryReadsMembershipAtMint(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	c := f.issued(t, f.aliceSignIn(iss))
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(alicePrincipal, "corp_alice")}, nil)
+	w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now)
+	if r := decodeMint(t, w); r.Principal != alicePrincipal || r.Results[0].Verdict != "permit" {
+		t.Fatalf("%s", shown(w))
+	}
+	withDirectory(f, nil, directory.ErrUnavailable)
+	if w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now); w.Code != 503 {
+		t.Fatalf("the directory not answering: %s", shown(w))
+	}
+}
+
+// partialIssuedRefresh sets up alice's two live contexts under an issued
+// certificate's key, a held connection with that certificate, and a store
+// whose second RefreshContext fails after onFirst ran at the first.
+func partialIssuedRefresh(t *testing.T, onFirst func(f *fixture, iss *oidctest.Issuer) error, failLogouts *atomic.Bool) (
+	*fixture, *oidctest.Issuer, *tls.Conn, *bufio.Reader, tls.Certificate, time.Time) {
+	t.Helper()
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	c := f.issued(t, f.aliceSignIn(iss))
+	auth := f.now.Add(-time.Hour)
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, certKey(c), auth, auth.Add(12*time.Hour))
+	f.liveContextAt(t, "nx1", "alice", alicePrincipal, certKey(c), auth, auth.Add(12*time.Hour))
+	calls := 0
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"RefreshContext": func() error {
+			calls++
+			if calls == 1 {
+				return onFirst(f, iss)
+			}
+			if failLogouts != nil {
+				failLogouts.Store(true)
+			}
+			return store.ErrUnavailable
+		},
+		"GetLogout": func() error {
+			if failLogouts != nil && failLogouts.Load() {
+				return store.ErrUnavailable
+			}
+			return nil
+		}}}
+	addr, _ := serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) { f.b.Wire(l) })
+	conn, br := held(t, f, addr, c)
+	f.advance(time.Minute)
+	return f, iss, conn, br, c, auth
+}
+
+// Decision 43 ruling 16 on a refresh that fails part way: a logout that
+// landed while the refresh extended marks what it extended, as on the OIDC
+// path (pre-flight I-2), and the refresh's records carry the sign-in.
+func TestAFailedIssuedRefreshStillHonoursALogout(t *testing.T) {
+	f, _, conn, br, c, auth := partialIssuedRefresh(t, func(f *fixture, iss *oidctest.Issuer) error {
+		return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"),
+			At: f.b.Now()}, time.Hour)
+	}, nil)
+	nonce, text := challengeOn(t, conn, br)
+	status, body := answerOn(t, conn, br, conn, c, nonce, text)
+	if status != 401 || !strings.Contains(body, "credential_revoked") {
+		t.Fatalf("a refresh that failed part way after a logout: %d %s", status, body)
+	}
+	extended := 0
+	for _, nas := range []string{"leaf1", "nx1"} {
+		got := f.context(t, nas, "alice")
+		if got.AuthTime.After(auth) {
+			extended++
+			if got.RevokedAt.IsZero() {
+				t.Fatalf("%s: a context the failed refresh extended outlived the logout", nas)
+			}
+		}
+	}
+	if extended == 0 {
+		t.Fatal("the refresh extended nothing, so the test proves nothing")
+	}
+}
+
+// A failed refresh whose logout re-read fails says so, answers the
+// certificate path's retry text, and its record carries the sign-in.
+func TestAFailedIssuedRefreshWhoseLogoutReadFailsSaysSo(t *testing.T) {
+	var failLogouts atomic.Bool
+	f, _, conn, br, c, _ := partialIssuedRefresh(t, func(*fixture, *oidctest.Issuer) error { return nil }, &failLogouts)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	nonce, text := challengeOn(t, conn, br)
+	status, body := answerOn(t, conn, br, conn, c, nonce, text)
+	if status != 503 || !strings.Contains(body, "retry after Retry-After") {
+		t.Fatalf("%d %s", status, body)
+	}
+	if !strings.Contains(said.String(), "failed part way") {
+		t.Fatalf("the operator was told nothing: %q", said.String())
+	}
+	recs := eventsOf(f.records(t), decision.EventRefresh)
+	if r := recs[len(recs)-1]; r["reason"] != "store_unavailable" || oidcOf(r)["sid"] != "s-sub-alice" {
+		t.Fatalf("the refresh's record: %v", r)
 	}
 }

@@ -658,9 +658,15 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(reason), err.Error())
 		return caller{}, false
 	}
+	// via is the sign-in a certificate this broker issued carries: every
+	// record the certificate makes names it (decision 43 rulings 10, 11).
+	var via *decision.OIDC
+	if cc.Issued != nil {
+		via = oidcAuth(*cc.Issued)
+	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method}})
+			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
 		// Closing the connection is what makes the next request a handshake,
 		// and the handshake is the fresh authentication decision 17 requires.
 		w.Header().Set("Connection", "close")
@@ -678,12 +684,12 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		switch {
 		case err != nil:
 			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: named, Auth: &decision.Auth{Method: cred.Method}})
+				Reason: decision.StoreUnavailable, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker could not read the revocations in force, so it "+nothing+"; try again")
 			return true
 		case revoked:
-			b.refuseRevokedAs(w, event, now, named, cred, rv)
+			b.refuseRevokedAs(w, event, now, named, cred, via, rv)
 			return true
 		}
 		return false
@@ -903,9 +909,10 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 // is recorded as a refresh (pre-flight M2), any other call under its
 // endpoint's event (decision 34).
 func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
-	cred store.Credential, rv store.Revocation) {
+	cred store.Credential, via *decision.OIDC, rv store.Revocation) {
 	rec := revokedRecord(now, principal, cred)
 	rec.Event = event
+	rec.Auth.OIDC = via
 	b.emit(rec)
 	answerRevoked(w, rv)
 }
