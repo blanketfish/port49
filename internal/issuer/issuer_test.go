@@ -216,6 +216,43 @@ func TestIssueRefusesWhatItMustNotSign(t *testing.T) {
 	}
 }
 
+// CanIssue tells a sign-in the CA cannot carry (ErrNotCertifiable, the
+// person's) from a CA that cannot issue now (not ErrNotCertifiable, the
+// broker's), and passes what Issue signs.
+func TestCanIssueDistinguishesTheSignInFromTheCA(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	c, err := Ephemeral(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CanIssue(alice(now), now, time.Hour); err != nil {
+		t.Fatalf("a good sign-in: %v", err)
+	}
+	s := alice(now)
+	s.Principal = "user:josé@example.com"
+	if err := c.CanIssue(s, now, time.Hour); !errors.Is(err, ErrNotCertifiable) {
+		t.Errorf("a non-ASCII principal: %v", err)
+	}
+	if _, err := c.Issue(newKey(t).Public(), s, now, time.Hour); !errors.Is(err, ErrNotCertifiable) {
+		t.Errorf("Issue of a non-ASCII principal: %v", err)
+	}
+	late := c.Cert.NotAfter.Add(time.Minute)
+	for name, err := range map[string]error{
+		"an expired CA":      c.CanIssue(alice(late), late, time.Hour),
+		"a lifetime too big": c.CanIssue(alice(now), now, MaxLifetime+time.Second),
+		"a zero-value CA":    (&CA{}).CanIssue(alice(now), now, time.Hour),
+		"a nil CA":           (*CA)(nil).CanIssue(alice(now), now, time.Hour),
+	} {
+		if err == nil || errors.Is(err, ErrNotCertifiable) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// Both faults at once: the CA's is said, as it is the broker's to fix.
+	if err := c.CanIssue(s, late, time.Hour); err == nil || errors.Is(err, ErrNotCertifiable) {
+		t.Errorf("both: %v", err)
+	}
+}
+
 // A CA file that is no CA, or no PEM, is refused; an expired staged or
 // previous CA is not trusted and the start says to remove it; a current CA
 // not yet valid is unavailable.

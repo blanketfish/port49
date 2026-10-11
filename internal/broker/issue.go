@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,6 +59,9 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		b.Metrics.CertificatesIssued.WithLabelValues("refused").Inc()
+		b.emit(decision.Record{TS: b.Now(), Event: decision.EventIssue, Verdict: decision.VerdictDeny,
+			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "oidc"}})
 		writeError(w, http.StatusBadRequest, "bad_request", "a sign-in is exchanged with no client certificate: its "+
 			"ID token is the one credential")
 		return
@@ -142,7 +146,18 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 			"sign in again with the key you send (`port49 login`)")
 		return
 	}
-	if err := b.Issuer.Unavailable; err != nil {
+	// Whether a certificate can be made, before the sign-in is spent: the
+	// person's claims it cannot carry are the person's (a recorded refusal),
+	// the CA's own faults the broker's (unrecorded), and either way the token
+	// stays unspent.
+	sign := issuer.SignIn{Principal: c.principal, Issuer: c.oidc.Issuer, Subject: c.oidc.Subject, Sid: c.oidc.Sid,
+		AMR: c.oidc.AMR, ACR: c.oidc.ACR, AuthTime: c.oidc.AuthTime, IssuedAt: c.oidc.IssuedAt}
+	if err := b.Issuer.CanIssue(sign, now, b.certificateLifetime()); err != nil {
+		if errors.Is(err, issuer.ErrNotCertifiable) {
+			refuse(http.StatusUnauthorized, "sign_in_not_certifiable", "your sign-in's principal or claims cannot be "+
+				"carried in a certificate; tell the operator")
+			return
+		}
 		b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
 		b.sayOnce("issuance_unavailable", sayEvery, "issuance: a sign-in of %s was not issued a certificate: %s",
 			printsafe.Line(c.principal, 300), printsafe.Line(err.Error(), 300))
@@ -176,9 +191,7 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 		storeError()
 		return
 	}
-	cert, err := b.Issuer.Issue(csr.PublicKey, issuer.SignIn{Principal: c.principal, Issuer: c.oidc.Issuer,
-		Subject: c.oidc.Subject, Sid: c.oidc.Sid, AMR: c.oidc.AMR, ACR: c.oidc.ACR, AuthTime: c.oidc.AuthTime,
-		IssuedAt: c.oidc.IssuedAt}, now, b.certificateLifetime())
+	cert, err := b.Issuer.Issue(csr.PublicKey, sign, now, b.certificateLifetime())
 	if err != nil {
 		b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
 		b.say("issuance: a certificate for %s could not be signed: %s", printsafe.Line(c.principal, 300),

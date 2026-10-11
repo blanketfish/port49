@@ -241,26 +241,43 @@ func Ephemeral(now time.Time) (*CA, error) {
 	return c, c.Unavailable
 }
 
+// ErrNotCertifiable is wrapped by the error CanIssue and Issue return for a
+// sign-in whose principal or claims a certificate cannot carry: the person's
+// fault, not the CA's.
+var ErrNotCertifiable = errors.New("issuer: the sign-in cannot be certified")
+
+// CanIssue reports whether Issue would sign a certificate for s now, without
+// signing: the CA's own faults (no CA, unusable, outside its validity, a
+// lifetime out of range) first, then a sign-in it cannot carry, which is an
+// error wrapping ErrNotCertifiable. The broker asks it before it spends a
+// sign-in (decision 43 ruling 8).
+func (c *CA) CanIssue(s SignIn, now time.Time, lifetime time.Duration) error {
+	switch {
+	case c == nil:
+		return errors.New("issuer: no issuing CA")
+	case c.Unavailable != nil:
+		return c.Unavailable
+	case c.Cert == nil:
+		return errors.New("issuer: no issuing CA certificate")
+	case now.Before(c.Cert.NotBefore) || !now.Before(c.Cert.NotAfter):
+		return fmt.Errorf("issuer: now is outside the issuing CA's validity, %s to %s",
+			rfc(c.Cert.NotBefore), rfc(c.Cert.NotAfter))
+	case lifetime < MinLifetime || lifetime > MaxLifetime:
+		return fmt.Errorf("issuer: certificate lifetime %s is outside %s to %s", lifetime, MinLifetime, MaxLifetime)
+	}
+	if err := s.validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrNotCertifiable, err)
+	}
+	return nil
+}
+
 // Issue signs a client certificate for pub over s (decision 43 ruling 9):
 // CN the principal, one URI SAN carrying the sign-in (SignIn.URI),
 // clientAuth, valid from a minute before now for lifetime, and never past
-// the CA's own end.
+// the CA's own end. It fails where CanIssue does.
 func (c *CA) Issue(pub crypto.PublicKey, s SignIn, now time.Time, lifetime time.Duration) (*x509.Certificate, error) {
-	switch {
-	case c == nil:
-		return nil, errors.New("issuer: no issuing CA")
-	case c.Unavailable != nil:
-		return nil, c.Unavailable
-	case c.Cert == nil:
-		return nil, errors.New("issuer: no issuing CA certificate")
-	case now.Before(c.Cert.NotBefore) || !now.Before(c.Cert.NotAfter):
-		return nil, fmt.Errorf("issuer: now is outside the issuing CA's validity, %s to %s",
-			rfc(c.Cert.NotBefore), rfc(c.Cert.NotAfter))
-	case lifetime < MinLifetime || lifetime > MaxLifetime:
-		return nil, fmt.Errorf("issuer: certificate lifetime %s is outside %s to %s", lifetime, MinLifetime, MaxLifetime)
-	}
-	if err := s.validate(); err != nil {
-		return nil, fmt.Errorf("issuer: the sign-in cannot be certified: %v", err)
+	if err := c.CanIssue(s, now, lifetime); err != nil {
+		return nil, err
 	}
 	serial, err := newSerial()
 	if err != nil {

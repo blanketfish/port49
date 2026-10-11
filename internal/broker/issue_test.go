@@ -231,6 +231,10 @@ func TestABadCSRIsRefused(t *testing.T) {
 		!strings.Contains(w.Body.String(), "2048") {
 		t.Fatalf("a 1024-bit key: %s", shown(w))
 	}
+	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 2 || recs[0]["verdict"] != "deny" ||
+		recs[1]["verdict"] != "deny" {
+		t.Fatalf("each bad CSR is a deny record: %v", recs)
+	}
 }
 
 // A machine is issued nothing.
@@ -242,6 +246,10 @@ func TestAMachineIsIssuedNothing(t *testing.T) {
 		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, newECKey(t)), machine); w.Code != 400 {
 		t.Fatalf("%s", shown(w))
+	}
+	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 1 || recs[0]["verdict"] != "deny" ||
+		recs[0]["reason"] != "trust_domain_unresolved" {
+		t.Fatalf("a machine's refusal is a deny record: %v", recs)
 	}
 }
 
@@ -349,5 +357,119 @@ func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 	g.advance(past)
 	if w := g.postAt(context.Background(), g.issuedState(gc), mintLeaf1, "", g.b.Now()); w.Code != 200 {
 		t.Fatalf("the control, a record kept max_token_age alone: %s", shown(w))
+	}
+}
+
+// failOnce is a store whose PutOnce or PutOIDCOwner fails.
+type failOnce struct {
+	store.Store
+	putOnce, owner bool
+}
+
+func (s failOnce) PutOnce(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	if s.putOnce {
+		return false, errors.New("store: connection refused")
+	}
+	return s.Store.PutOnce(ctx, key, value, ttl)
+}
+
+func (s failOnce) PutOIDCOwner(ctx context.Context, key, principal string, ttl time.Duration) error {
+	if s.owner {
+		return errors.New("store: connection refused")
+	}
+	return s.Store.PutOIDCOwner(ctx, key, principal, ttl)
+}
+
+// A CA outside its validity cannot issue: 503, unrecorded, and the same token
+// is exchanged once the CA is cured.
+func TestAnExpiredCAIssuesNothingAndSpendsNothing(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	good := f.b.Issuer
+	old, err := issuer.Ephemeral(f.b.Now().AddDate(-20, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Issuer = old
+	key := newECKey(t)
+	tok := f.signInFor(t, iss, key, nil)
+	w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok)
+	if w.Code != 503 || apiError(w) != "issuance_unavailable" || w.Header().Get("Retry-After") != "60" {
+		t.Fatalf("%s", shown(w))
+	}
+	if n := len(eventsOf(f.records(t), decision.EventIssue)); n != 0 {
+		t.Fatalf("%d issue records for the broker's own fault", n)
+	}
+	f.b.Issuer = good
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok); w.Code != 200 {
+		t.Fatalf("the same sign-in after the CA was cured: %s", shown(w))
+	}
+}
+
+// A sign-in refused for its CSR or its nonce is not spent: a thief without
+// the key cannot burn it, and a retry with the right request succeeds.
+func TestARefusedSignInIsStillExchangeable(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	key, other := newECKey(t), newECKey(t)
+	tok := f.signInFor(t, iss, key, nil)
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, other), tok); w.Code != 401 ||
+		apiError(w) != "sign_in_not_bound" {
+		t.Fatalf("another key's CSR: %s", shown(w))
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", `{"csr":"AAAA"}`, tok); w.Code != 400 {
+		t.Fatalf("a bad CSR: %s", shown(w))
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok); w.Code != 200 {
+		t.Fatalf("the right request after two refusals: %s", shown(w))
+	}
+}
+
+// A store that cannot record the sign-in (the once-only key or the owner
+// record) issues nothing: 503 store_unavailable, recorded, counted refused,
+// and no certificate.
+func TestAStoreThatCannotRecordTheSignInIssuesNothing(t *testing.T) {
+	for name, st := range map[string]failOnce{"the once-only key": {putOnce: true}, "the owner record": {owner: true}} {
+		f := newFixture(t, 8)
+		iss := f.withIssuance(t)
+		st.Store = f.st
+		f.b.Store = st
+		key := newECKey(t)
+		w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), f.signInFor(t, iss, key, nil))
+		if w.Code != 503 || apiError(w) != "store_unavailable" || strings.Contains(w.Body.String(), "BEGIN CERTIFICATE") {
+			t.Errorf("%s: %s", name, shown(w))
+		}
+		recs := eventsOf(f.records(t), decision.EventIssue)
+		if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "store_unavailable" {
+			t.Errorf("%s: %v", name, recs)
+		}
+		if n := testutil.ToFloat64(f.b.Metrics.CertificatesIssued.WithLabelValues("refused")); n != 1 {
+			t.Errorf("%s: refused %v", name, n)
+		}
+		if n := testutil.ToFloat64(f.b.Metrics.CertificatesIssued.WithLabelValues("issued")); n != 0 {
+			t.Errorf("%s: issued %v", name, n)
+		}
+	}
+}
+
+// A sign-in is exchanged with no client certificate: one presented is
+// refused, recorded and counted.
+func TestAClientCertificateIsRefusedAtTheExchange(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	key := newECKey(t)
+	r := httptest.NewRequest("POST", "/v1/certificate", strings.NewReader(csrBody(t, key)))
+	r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{}}}
+	r.Header.Set("Authorization", "Bearer "+f.signInFor(t, iss, key, nil))
+	w := httptest.NewRecorder()
+	f.b.Handler().ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Fatalf("%s", shown(w))
+	}
+	if recs := eventsOf(f.records(t), decision.EventIssue); len(recs) != 1 || recs[0]["verdict"] != "deny" {
+		t.Fatalf("%v", recs)
+	}
+	if n := testutil.ToFloat64(f.b.Metrics.CertificatesIssued.WithLabelValues("refused")); n != 1 {
+		t.Fatalf("refused %v", n)
 	}
 }
