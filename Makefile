@@ -91,7 +91,7 @@ lab-oidc-l55:
 # the compose stack's Keycloak, broker and vEOS. Needs the compose stack,
 # containerlab, the EOS image and `make build`.
 lab-oidc-agent:
-	PORT49_LAB_PLATFORMS=arista_eos go test -tags lab ./tests/lab/ -run 'TestL56' -count=1 -v -timeout 60m
+	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run 'TestL56' -count=1 -v -timeout 60m
 
 # The workload CA lab (plan 8, L48): step-ca as a container and a local
 # port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;
