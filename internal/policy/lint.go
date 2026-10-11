@@ -871,6 +871,9 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 	if len(pr.Omitted) > 0 {
 		msg += "; refused by the bits, sent as nothing: " + rules(pr.Omitted)
 	}
+	if len(pr.Closed) > 0 {
+		msg += "; refused by the entry deny, sent as nothing: " + rules(pr.Closed)
+	}
 	if len(pr.Beyond) > 0 {
 		msg += "; beyond the level's bits, not sent: " + rules(pr.Beyond)
 	}

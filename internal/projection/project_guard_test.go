@@ -777,15 +777,181 @@ func shipped(version, level string, rules ...engine.Rule) Input {
 		Keywords: platform.KeywordsFor(version, "juniper_junos")}
 }
 
-// What set 1.2.0's entry deny changes, read from the shipped adapter and
-// keyword tree, not a fixture (decision 44 ruling 1): an operator granted
-// everything but `show configuration` gets the capability shape with the
-// entry deny and the view-configuration warning's rule. Task 5b adds the
-// readonly (ruling 10).
+// Under the entry deny, the baseline's `xml-mode **`, which no keyword tree
+// proves, is sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+// which the entry deny refuses (decision 44 ruling 10). The model reads it
+// refused; without the entry deny the composition fails closed as before.
+func TestTheEntryDenyClosesTheBaselinesXMLMode(t *testing.T) {
+	ops := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		ops = append(ops, permit(w+" **"))
+	}
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, ops...)
+		// The shipped baseline holds `xml-mode`; the tree measuredInput
+		// proves was built before it, so `xml-mode` is no keyword, as shipped.
+		in.Dialect.Bits[platform.BaselineBit] = append(in.Dialect.Bits[platform.BaselineBit], "xml-mode **")
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.Closed) != 1 ||
+		res.Closed[0].Rule != "xml-mode **" || slices.ContainsFunc(res.Denies, func(d engine.Rule) bool {
+		return d.Rule == "xml-mode **"
+	}) {
+		t.Fatalf("%s %q closed %v %+v %v", res.Shape, res.Attributes, res.Closed, res.Refusal, err)
+	}
+	if strings.Contains(strings.Join(res.Attributes, " "), "xml") {
+		t.Errorf("xml-mode is on the wire: %q", res.Attributes)
+	}
+	for _, v := range [][]string{{"xml-mode", "netconf"}, {"xml-mode"}, {"junoscript", "netconf"}, {"start", "shell"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, `word **` denies render as one alternative; without
+// it each is its own, as set 1.1.0 renders (decision 44 ruling 10).
+func TestWordDeniesRenderAsOneAlternative(t *testing.T) {
+	rules := []engine.Rule{permit("**"), deny("start **"), deny("file **"), deny("show configuration **")}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, rules...)))
+	want := `deny-commands=^( *(start|file|junoscript)( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || res.Shape != ShapeCapability || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	for _, v := range [][]string{{"start", "shell"}, {"file", "list"}, {"junoscript"}, {"show", "configuration"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	binding := JunosFacts
+	binding.DenyBindsRPCs = true
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", binding, rules...))
+	want = `deny-commands=^( *start( .*)? *(\|.*)?| *file( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("no entry deny: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly's `show **` less a deny beneath `view`
+// goes out as `view` and an allow of each of view-configuration's carve-outs
+// it holds and no deny does: an allow of `show **` would beat the deny (L11).
+// The allow runs beyond the bits, unmeasured, so it is reported (Unreached).
+// Without the entry deny the answer is set 1.1.0's refused shape.
+func TestACarvedPermitGoesOutAsItsCarveOuts(t *testing.T) {
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+			deny("show configuration **"))
+		in.Dialect.Bits["view-configuration"] = append(in.Dialect.Bits["view-configuration"], "show log **")
+		in.Dialect.CarveOuts = map[string][]string{"view-configuration": {"show configuration **", "show log **"}}
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+		len(res.Allows) != 1 || res.Allows[0].Rule != "show log **" || len(res.Unreached) != 1 {
+		t.Fatalf("%s %q allows %v unreached %v %+v %v", res.Shape, res.Attributes, res.Allows, res.Unreached,
+			res.Refusal, err)
+	}
+	if res.Device([]string{"show", "configuration"}) || !res.Device([]string{"show", "version"}) ||
+		!res.Device([]string{"show", "log", "messages"}) {
+		t.Errorf("%q", res.Attributes)
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly granted `show **` and no deny keeps the
+// narrow shape and both bits, as under set 1.1.0: the capability shape would
+// send `view` and an allow of `show **` beyond it, and only the bits are
+// measured to show the configuration (decision 44 ruling 10).
+func TestAReadonlyKeepsTheNarrowShapeWhereItsBitsReachIt(t *testing.T) {
+	was, err := Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"))))
+	if err != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) || len(res.Unreached) != 0 {
+		t.Fatalf("%s %q, was %s %q: %v", res.Shape, res.Attributes, was.Shape, was.Attributes, err)
+	}
+}
+
+// What set 1.2.0 renders, read from the shipped adapter and keyword tree,
+// not a fixture (decision 44 rulings 1 and 10), beside set 1.1.0's, which is
+// unchanged: an operator granted everything but `show configuration` keeps
+// the capability shape with the entry deny; a readonly granted `show **`
+// keeps the narrow shape, byte for byte.
 func TestTheShippedSetsEntryDeny(t *testing.T) {
 	res, err := Project(shipped("1.2.0", "operator", permit("**"), deny("show configuration **")))
 	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 {
 		t.Fatalf("operator: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	was, err1 := Project(shipped("1.1.0", "readonly", permit("show **")))
+	res, err = Project(shipped("1.2.0", "readonly", permit("show **")))
+	if err != nil || err1 != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) {
+		t.Fatalf("readonly: %s %q, under 1.1.0 %q: %v %v", res.Shape, res.Attributes, was.Attributes, err, err1)
+	}
+	for _, rules := range [][]engine.Rule{
+		{permit("show **"), deny("show configuration **")},
+		{permit("**"), deny("show configuration **")},
+	} {
+		level := map[bool]string{true: "readonly", false: "operator"}[rules[0].Rule == "show **"]
+		res, err = Project(shipped("1.1.0", level, rules...))
+		if err != nil || res.Shape != ShapeFailClosed || !slices.Equal(res.Attributes, []string{"deny-commands=^.*$"}) {
+			t.Errorf("1.1.0 %s: %s %q %v", level, res.Shape, res.Attributes, err)
+		}
+	}
+}
+
+// RFC 8907's 255 bytes hold a readonly's deny beneath `show **` under set
+// 1.2.0 (decision 44 ruling 10): fourteen baseline denies, `xml-mode` sent as
+// nothing, the twelve `word **` ones in one alternative with the entry deny,
+// `set cli` beside them, and the grant's. Measured in pre-flight: 170 and 165 bytes of deny-commands.
+func TestAReadonlyWithAShowDenyFitsTheBudget(t *testing.T) {
+	for _, c := range []struct {
+		deny   string
+		bytes  int
+		allows []string
+	}{
+		{"show configuration **", 170, []string{"show log **", "show firewall **", "show policer **"}},
+		{"show security **", 165, []string{"show configuration **", "show log **", "show firewall **", "show policer **"}},
+	} {
+		res, err := Project(shipped("1.2.0", "readonly", permit("show **"), deny(c.deny)))
+		if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+			len(res.Closed) != 1 || res.Closed[0].Rule != "xml-mode **" {
+			t.Fatalf("%s: %s %q %+v %v", c.deny, res.Shape, res.Attributes, res.Refusal, err)
+		}
+		var allows []string
+		for _, a := range res.Allows {
+			allows = append(allows, a.Rule)
+		}
+		if !slices.Equal(allows, c.allows) || len(res.Unreached) != len(c.allows) {
+			t.Errorf("%s: allows %v, unreached %v", c.deny, allows, res.Unreached)
+		}
+		i := slices.IndexFunc(res.Attributes, func(a string) bool { return strings.HasPrefix(a, "deny-commands=") })
+		if i < 0 || len(res.Attributes[i]) != c.bytes {
+			t.Errorf("%s: %q", c.deny, res.Attributes)
+		}
+		words := strings.Fields(c.deny)
+		for _, v := range [][]string{words[:2], {"save", "x"}, {"xml-mode", "netconf"}, {"junoscript"}, {"start", "shell"},
+			{"request", "system", "reboot"}} {
+			if res.Device(v) {
+				t.Errorf("%s: the device runs %q", c.deny, v)
+			}
+		}
+		if !res.Device([]string{"show", "version"}) {
+			t.Errorf("%s: show version does not run", c.deny)
+		}
 	}
 }
 

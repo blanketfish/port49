@@ -935,3 +935,13 @@ func TestUnenforcedRules(t *testing.T) {
 		t.Errorf("projected: %d", n)
 	}
 }
+
+// A baseline deny the entry deny refuses is reported beside the reply, not
+// sent (decision 44 ruling 10).
+func TestTheProjectionMessageNamesWhatTheEntryDenyCloses(t *testing.T) {
+	pr := projection.Result{Shape: projection.ShapeCapability, Bits: []string{"view"},
+		Closed: []engine.Rule{{Verdict: engine.Deny, Rule: "xml-mode **", Role: platform.BaselineBit}}}
+	if msg := projectionMessage(pr, nil, nil); !strings.Contains(msg, "; refused by the entry deny, sent as nothing: xml-mode **") {
+		t.Errorf("%q", msg)
+	}
+}

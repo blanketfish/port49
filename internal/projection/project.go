@@ -144,6 +144,11 @@ type Result struct {
 	// refuses them, but the bit is what grants the configuration, and policy
 	// test warns (projection_deny_beneath_view_configuration; decision 44).
 	ConfigurationBeneath []engine.Rule
+	// Closed are baseline denies the reply's entry deny refuses on the
+	// device, sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+	// and a deny naming `xml-mode` does not bind
+	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44 ruling 10).
+	Closed []engine.Rule
 	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
 	// constants; empty otherwise. Refusal says it for the report.
 	FailClosed string
@@ -186,6 +191,7 @@ func (r Result) Clone() Result {
 	r.Beyond, r.Unreached = slices.Clone(r.Beyond), slices.Clone(r.Unreached)
 	r.ConfigurationDropped, r.Unsent = slices.Clone(r.ConfigurationDropped), slices.Clone(r.Unsent)
 	r.ConfigurationBeneath = slices.Clone(r.ConfigurationBeneath)
+	r.Closed = slices.Clone(r.Closed)
 	if r.Refusal != nil {
 		rf := *r.Refusal
 		r.Refusal = &rf
@@ -381,6 +387,18 @@ func (g generator) shape() (Result, error) {
 		return n, nerr
 	}
 	res, err = g.finish(res, err)
+	// Under the entry deny, a capability reply that sends an allow its bits
+	// do not reach yields to a narrow one whose bits reach every allow and
+	// that leaves off no more: the bits are measured, an allow beyond them is
+	// not (decision 44 ruling 10).
+	if err == nil && len(res.Unreached) > 0 && g.closesEntries() {
+		n, nerr := g.finish(g.narrow())
+		if nerr == nil && len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
+			return !slices.Contains(res.Beyond, p)
+		}) && len(n.Unsent) <= len(res.Unsent) {
+			return n, nil
+		}
+	}
 	var r *Refusal
 	if errors.As(err, &r) && r.Category == FailOverflow && r.Attribute == "deny-commands" {
 		n, nerr := g.finish(g.narrow())
@@ -626,7 +644,18 @@ func (g generator) capability() (Result, error) {
 			continue
 		}
 		if dn, ok := g.allowable(p.Rule); !ok {
-			return Result{}, g.refusedShape(p, dn)
+			// Under the entry deny, a permit the bits reach but for a
+			// carve-out goes out as those carve-outs (carvedAllows).
+			carved, ok := g.carvedAllows(p, bits)
+			if !ok {
+				return Result{}, g.refusedShape(p, dn)
+			}
+			for _, c := range carved {
+				if !slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == c.Rule }) {
+					res.Allows = append(res.Allows, c)
+				}
+			}
+			continue
 		}
 		if why := g.unsendableAllow(p.Rule); why != "" {
 			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
@@ -641,6 +670,19 @@ func (g generator) capability() (Result, error) {
 		}
 		res.Denies = append(res.Denies, dn)
 	}
+	// A baseline deny the entry deny refuses is sent as nothing, where the
+	// entry deny goes out (closedByEntry): it is beneath the baseline, so the
+	// loop below adds the entry deny for it.
+	var closed []engine.Rule
+	if _, ok := g.entryDenies(res); ok && !g.in.Facts.DenyBindsRPCs {
+		res.Denies = slices.DeleteFunc(res.Denies, func(dn engine.Rule) bool {
+			if g.closedByEntry(dn) {
+				closed = append(closed, dn)
+				return true
+			}
+			return false
+		})
+	}
 	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
 		return Result{}, &narrowOnly{why: "a deny narrower than every command is walked past by abbreviating it"}
 	}
@@ -652,7 +694,7 @@ func (g generator) capability() (Result, error) {
 		}
 	}
 	if !g.in.Facts.DenyBindsRPCs {
-		for _, dn := range res.Denies {
+		for _, dn := range slices.Concat(res.Denies, closed) {
 			if b, ok := g.beneath(dn.Rule, bits); ok {
 				// The reply's own configuration refusal comes first where
 				// render recovers from it by dropping those bits, which may
@@ -666,6 +708,7 @@ func (g generator) capability() (Result, error) {
 					// were measured on the device (L26c, L58), and
 					// `junoscript` is not a keyword in the tree.
 					res.Denies = append(res.Denies, more...)
+					res.Closed = closed
 					res.ConfigurationBeneath = g.configurationBeneath(res)
 					return res, nil
 				}
@@ -699,6 +742,68 @@ func (g generator) entryDenies(res Result) ([]engine.Rule, bool) {
 		if !slices.ContainsFunc(res.Denies, func(d engine.Rule) bool { return d.Rule == rule }) {
 			out = append(out, engine.Rule{Verdict: engine.Deny, Rule: rule, Role: platform.RPCEntryRole})
 		}
+	}
+	return out, true
+}
+
+// closesEntries reports whether the dialect closes the RPC entry points
+// (RPCEntryDenies): set 1.2.0. What the entry deny makes possible renders
+// only there, so a set without it, or a block that drops it, renders as set
+// 1.1.0 does (decision 44 ruling 5).
+func (g generator) closesEntries() bool { return len(g.in.Dialect.RPCEntryDenies) > 0 }
+
+// authorizedAs are the commands Junos authorizes as another: a deny of
+// `junoscript` refused `xml-mode netconf` (`unknown command: xml-mode`), and a
+// deny naming `xml-mode` did not bind (tests/lab/results/L26c-junoscript-juniper_*.md,
+// both images; bare `xml-mode` in L58-juniper_*.md).
+var authorizedAs = map[string]string{"xml-mode": "junoscript"}
+
+// closedByEntry reports whether dn is a baseline deny an entry deny refuses
+// on the device, its command read as Junos authorizes it: the baseline's
+// `xml-mode **`, which no keyword tree proves, beside `junoscript **`.
+func (g generator) closedByEntry(dn engine.Rule) bool {
+	words := strings.Fields(dn.Rule)
+	if dn.Role != platform.BaselineBit || len(words) == 0 {
+		return false
+	}
+	as, ok := authorizedAs[words[0]]
+	if !ok {
+		return false
+	}
+	words[0] = as
+	read := strings.Join(words, " ")
+	return slices.ContainsFunc(g.in.Dialect.RPCEntryDenies, func(e string) bool { return g.contains(e, read) })
+}
+
+// carvedAllows are permit p sent as the carve-outs that keep it from the
+// bits, where the bits reach the rest of it: an allow of p would beat a deny
+// beneath it (L11), and an allow of each carve-out p holds meets none. A
+// carve-out a deny holds needs nothing. Each is within the ceiling, sendable
+// and allowable, or there are none (ok false). Only under the entry deny,
+// which lets a deny beneath the bits stand (decision 44 ruling 10): a
+// readonly's `show **` less `show configuration **` sends `view` and allows
+// `show log`, `show firewall` and `show policer`, view-configuration's other
+// carve-outs, whose run beyond the bits is reported (Unreached).
+func (g generator) carvedAllows(p engine.Rule, bits []string) ([]engine.Rule, bool) {
+	if !g.closesEntries() {
+		return nil, false
+	}
+	held := g.held(bits)
+	if !slices.ContainsFunc(g.reach(held), func(r string) bool { return g.contains(r, p.Rule) }) {
+		return nil, false
+	}
+	var out []engine.Rule
+	for _, c := range g.carves(held) {
+		if !g.mayMeet(p.Rule, c) || slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) }) {
+			continue
+		}
+		if !g.contains(p.Rule, c) || !g.within(c) || g.unsendableAllow(c) != "" {
+			return nil, false
+		}
+		if _, ok := g.allowable(c); !ok {
+			return nil, false
+		}
+		out = append(out, engine.Rule{Verdict: engine.Permit, Rule: c, Role: p.Role})
 	}
 	return out, true
 }
@@ -1143,8 +1248,19 @@ func (g generator) attributes(res *Result) error {
 // alternation is rules as one group, `(a|b)`, or one rule bare; empty for
 // none.
 func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
-	var alts []string
+	var alts, words []string
+	at := -1 // where the factored `word **` denies go: the first one's place
 	for _, r := range rules {
+		if w, ok := g.factored(r.Rule, deny); ok {
+			if at < 0 {
+				at = len(alts)
+				alts = append(alts, "")
+			}
+			if !slices.Contains(words, w) {
+				words = append(words, w)
+			}
+			continue
+		}
 		e, err := ruleERE(r.Rule, g.in.Classes, deny, g.in.Facts)
 		if err != nil {
 			return "", refuse(FailUnwritable, "on %s, %s %s (role %q) cannot be written as the device's regex: %v "+
@@ -1154,6 +1270,13 @@ func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
 			alts = append(alts, e)
 		}
 	}
+	if at >= 0 {
+		group := words[0]
+		if len(words) > 1 {
+			group = "(" + strings.Join(words, "|") + ")"
+		}
+		alts[at] = denyLead + group + "( .*)?" + pipeTail
+	}
 	switch len(alts) {
 	case 0:
 		return "", nil
@@ -1161,6 +1284,23 @@ func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
 		return alts[0], nil
 	}
 	return "(" + strings.Join(alts, "|") + ")", nil
+}
+
+// factored is a `word **` deny's word as the deny side writes it, where the
+// dialect closes the entry points: such denies render as one alternative,
+// ` *(help|quit|…)( .*)? *(\|.*)?`, the shape L26b's deny sessions were
+// enforced in (tests/lab/results/L26b-juniper_*.md), and a readonly's
+// baseline denies fit the budget (decision 44 ruling 10).
+func (g generator) factored(rule string, deny bool) (string, bool) {
+	if !deny || !g.closesEntries() {
+		return "", false
+	}
+	words, rest, other := keywordShape(rule)
+	if len(words) != 1 || !rest || other != "" {
+		return "", false
+	}
+	w, err := wordERE(words[0], true, g.in.Facts)
+	return w, err == nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

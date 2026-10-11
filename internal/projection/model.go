@@ -56,7 +56,7 @@ func (g generator) model(res Result) (*model, error) {
 	if m.allow, err = prog(allows); err != nil {
 		return nil, err
 	}
-	denies := slices.Clone(res.Denies)
+	denies := slices.Concat(res.Denies, res.Closed)
 	if res.Shape != ShapeCapability {
 		denies = []engine.Rule{{Verdict: engine.Deny, Rule: "**", Role: "projection"}}
 	}

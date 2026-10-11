@@ -558,7 +558,7 @@ func TestCloneCopiesEverySlice(t *testing.T) {
 			Attributes: []string{"a"}, Denies: []engine.Rule{r}, Allows: []engine.Rule{r}, Omitted: []engine.Rule{r},
 			Beyond: []engine.Rule{r}, Unreached: []engine.Rule{r}, ConfigurationDropped: []string{"all"},
 			Unsent: []Unsent{{Rule: r, Why: "why"}}, ConfigurationBeneath: []engine.Rule{r},
-			FailClosed: FailRefusedShape, Refusal: &Refusal{Why: "w"}}
+			Closed: []engine.Rule{r}, FailClosed: FailRefusedShape, Refusal: &Refusal{Why: "w"}}
 	}
 	res := fresh()
 	c := res.Clone()
