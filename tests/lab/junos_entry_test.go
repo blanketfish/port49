@@ -565,22 +565,14 @@ func TestL26cEntryScripts(t *testing.T) {
 		defer stop()
 		commit := l.junosConfigureAdmin(t, junosEntryClass)
 		defer l.junosConfigureAdmin(t, junosEntryDelete)
-		// REST is its own commit. The plan requires it (REST was taken on both
-		// images, 2026-09-30), so a refusal stops the run; the candidate is
-		// rolled back first, or the cleanup commits would carry the bad line.
-		// ssh tcp-forwarding is a lab-only setting so the break-glass tunnel can
-		// reach a service bound inside the VM; port49 never asks it of a device.
-		restCommit, err := l.junosTryConfigure(t, []string{
-			"set system services rest http port 3000",
-			"set system services ssh tcp-forwarding",
-		})
+		// REST is its own commit, with the lab-only forwarding knob the tunnel
+		// needs. The plan requires it, so a refusal stops the run; the candidate
+		// is rolled back first, or the cleanup commits would carry the bad line.
+		restCommit, knob, err := l.junosTryWithForwarding(t, []string{"set system services rest http port 3000"})
 		if err != nil {
 			t.Fatalf("INVALID: REST could not be enabled, so nothing below it was measured: %v", err)
 		}
-		defer l.junosConfigureAdmin(t, []string{
-			"delete system services rest",
-			"delete system services ssh tcp-forwarding",
-		})
+		defer l.junosConfigureAdmin(t, []string{"delete system services rest", "delete " + knob})
 		defer func() {
 			if std, err := l.configPath(); err == nil {
 				if err := l.restart(std); err != nil {

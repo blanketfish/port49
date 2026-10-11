@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,27 @@ const xnmRPCKey = "xnm-ssh: get-software-information"
 // The rollback is checked: a candidate still dirty after it would ride into the
 // cleanup commits, so a rollback that does not report "load complete" fails
 // the test, describing the candidate state (no secrets).
+// junosForwardingKnobs name the lab-only SSH TCP forwarding statement, newest
+// release first: vJunos-router 23.4 refused `tcp-forwarding` as a syntax error.
+var junosForwardingKnobs = []string{"system services ssh allow-tcp-forwarding", "system services ssh tcp-forwarding"}
+
+// junosTryWithForwarding commits lines together with the first forwarding knob
+// the image accepts, so the break-glass tunnel can reach a service bound inside
+// the VM. It returns the commit output and the knob to delete on teardown.
+// Forwarding is a lab-only setting; port49 never asks it of a device.
+func (l *lab) junosTryWithForwarding(t *testing.T, lines []string) (string, string, error) {
+	t.Helper()
+	var errs []string
+	for _, k := range junosForwardingKnobs {
+		commit, err := l.junosTryConfigure(t, append(slices.Clone(lines), "set "+k))
+		if err == nil {
+			return commit, k, nil
+		}
+		errs = append(errs, err.Error())
+	}
+	return "", "", fmt.Errorf("no SSH TCP forwarding statement was accepted: %s", strings.Join(errs, "; "))
+}
+
 func (l *lab) junosTryConfigure(t *testing.T, lines []string) (string, error) {
 	t.Helper()
 	var out string
@@ -375,20 +397,12 @@ func TestL26cEntryXnm(t *testing.T) {
 		}()
 		// xnm-ssh may be refused by the image: that is "not measured", not a
 		// failure, and the service stays on the failing list.
-		// ssh tcp-forwarding is a lab-only setting so the break-glass tunnel can
-		// reach a service bound inside the VM; port49 never asks it of a device.
-		xnmCommit, err := l.junosTryConfigure(t, []string{
-			"set system services xnm-ssh",
-			"set system services ssh tcp-forwarding",
-		})
+		xnmCommit, knob, err := l.junosTryWithForwarding(t, []string{"set system services xnm-ssh"})
 		if err != nil {
 			t.Skipf("xnm-ssh not measured (`set system services xnm-ssh` was refused or did not commit; no "+
 				"note is written and the service stays on the failing list): %v", err)
 		}
-		defer l.junosConfigureAdmin(t, []string{
-			"delete system services xnm-ssh",
-			"delete system services ssh tcp-forwarding",
-		})
+		defer l.junosConfigureAdmin(t, []string{"delete system services xnm-ssh", "delete " + knob})
 
 		// The deny here is the device's own, so port49d holds no deny record to
 		// require. A closed session counts as a deny only if the device is shown
