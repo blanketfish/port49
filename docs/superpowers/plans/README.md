@@ -159,7 +159,14 @@ L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on
 directory-password sign-in issuing the same certificate, is added to Plan 9.
 **9b executed 2026-10-11** on `feature/oidc-public-client` (base `48a67a3`), each task reviewed,
 closing L55 (Keycloak 26.4.7) and L56 (vEOS 4.31.2F) on 2026-10-11 (Plan 9b — As built, below);
-L47 stays open. Next: 9c.
+L47 stays open. **9b1 written 2026-10-11** on Ryan's three rulings of that day, slotted before 9c
+(`2026-10-11-09b1-junos-groups-and-junoscript.md`, ten tasks: one spec, one lab harness, one lab
+run before code, five code, one lab run and close, one docs). Set 1.2.0 adds a per-user
+`junoscript` deny where a deny sits beneath a sent Junos bit, so that subject projects instead of
+failing closed and loses only NETCONF; `devices check-config` reads configuration groups, names a
+group that widens a template, and takes `--batch`. Decision 44 holds its nine rulings; one
+security narrowing of Ryan's services ruling (J-Web and JET/gRPC stay findings, REST as measured)
+is reported to him. It opens and closes L57 and closes L26c. Next: 9b1, then 9c.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5140,6 +5147,39 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     Keycloak and vEOS). L47, the hosted providers, stays unassigned.
   - **Dropped from the 2026-10-09 draft:** tokens in the agent, silent renewal, the browser refresh,
     `id_token_not_renewed`.
+- **9b1 — Junos apply-groups and per-user `junoscript`** (Ryan's rulings, 2026-10-11;
+  `2026-10-11-09b1-junos-groups-and-junoscript.md`, written 2026-10-11; branch
+  `feature/junos-groups-and-junoscript`). Named as `06b1` was: a fix slotted between two plans of
+  one step, numbered after the earlier.
+  - **Builds:** platform set 1.2.0 (1.1.0 plus `juniper_junos`'s `rpc_entry_denies:
+    ["junoscript **"]`, and `op **` if the lab says so), the new default. Where a deny is the only
+    guard beneath a sent bit or the baseline, the projection keeps the capability shape and adds
+    the entry deny, so the CLI deny is the boundary and NETCONF is closed for that subject alone.
+    Two CI warnings, `projection_netconf_closed` and
+    `projection_deny_beneath_view_configuration`, the latter Ryan's "class grants
+    view-configuration, policy denies show configuration"; `policy diff` prints new ones. `devices
+    check-config` reads `show configuration | display set | display inheritance`, passes groups
+    that change no template, names a group that adds a permission, regex or authentication to one,
+    refuses a capture missing an applied group's expansion, drops the NETCONF/XML API services
+    rule under 1.2.0, and takes `--batch FILE...`.
+  - **Spec sections:** §8 (the RPC paragraphs rewritten, management services by set), §12
+    (check-config, the projection codes table), §13 decision 44 (nine rulings), §14 (two
+    assertions), §15 L26c and the new L57.
+  - **Inherits:** plan 5b's projection (option C, `JunosFacts.DenyBindsRPCs` false, the
+    management-services allowlist, `TemplateDrift`); the 2026-09-30 `L26c-junoscript` run (the
+    `junoscript` deny measured on both images with a control); the L26c, L12-netconf and
+    operator SRX notes.
+  - **Leaves:** set 1.1.0 untouched (a released set is never edited); J-Web and JET/gRPC still
+    fail check-config under 1.2.0 until measured; a readonly Junos subject whose grant leaves any
+    baseline command denied still has no NETCONF, and its baseline denies can overflow the wire
+    (the class route, `platform export --classes`, is the answer there); `op` scripts for a
+    subject with a deny beneath, if the lab puts `op` on the list.
+  - **Lab entries:** opens and closes **L57** (what the inherited capture carries for groups);
+    closes **L26c** (Task 3's entry cells: port 22 subsystem, exec channel, `op url`, REST,
+    `scp`; Task 9's set 1.2.0 differential). vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15.
+  - **Question for Ryan:** his ruling drops the services allowlist; 9b1 keeps `web-management`
+    and `extension-service` (and `rest` unless measured closed) failing under 1.2.0, since no
+    measurement shows the `junoscript` deny closes them (decision 44 ruling 6).
 - **9c — Hardware-backed client keys, `per_login_mfa`, and the broker certificate's CRL check**
   (plan 3's two hand-offs; `per_login_mfa` added by Ryan, 2026-10-10).
   - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
