@@ -62,7 +62,8 @@ Spec §15 lists every claim about device behavior with an ID (L1–L12). Rules:
   ```
   Co-Authored-By: Claude <model name> <noreply@anthropic.com>
   ```
-  plus a `Claude-Session:` line when the session provides one.
+  and nothing else: no `Claude-Session:` line and no claude.ai session link, in commits, PR
+  descriptions, issues or comments (this repo is going public).
 
 ## About Ryan
 
