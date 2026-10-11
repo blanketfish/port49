@@ -90,6 +90,12 @@ func (l *lab) entryResult(t *testing.T, entry, claim, observation string) {
 	t.Helper()
 	if t.Failed() {
 		t.Logf("%s: no note is written: the run failed", entry)
+		obs := labcreds.RedactNote(observation)
+		if err := leakIn(obs, poolSecrets()); err != nil {
+			t.Logf("%s: the observation is withheld: %v", entry, err)
+			return
+		}
+		t.Logf("%s: observation of the failed run:\n%s", entry, obs)
 		return
 	}
 	if err := leakIn(claim+"\n"+observation, poolSecrets()); err != nil {

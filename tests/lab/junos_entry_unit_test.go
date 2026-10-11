@@ -5,6 +5,7 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,8 @@ func TestScpCell(t *testing.T) {
 	}{
 		{4096, nil, "file read"},
 		{0, errors.New("scp: permission denied"), "refused"},
-		{0, fmt.Errorf("wrapped: %w", scpRefusal{"no such file"}), "refused"},
+		{0, fmt.Errorf("wrapped: %w", scpRefusal{"permission denied"}), "refused"},
+		{0, fmt.Errorf("wrapped: %w", scpRefusal{"No such file or directory"}), "not observed"},
 		{0, errors.New("scp: EOF "), "not observed"},
 		{0, errors.New(`scp: "garbage"`), "not observed"},
 		{0, nil, "not observed"},
@@ -160,6 +162,7 @@ func TestRestCell(t *testing.T) {
 		{401, "authentication failed", "login refused"},
 		{403, "", "refused"},
 		{200, "<rpc-error><error-severity>error</error-severity></rpc-error>", "refused"},
+		{200, "<rpc-error>\n <error-severity> error </error-severity></rpc-error>", "refused"},
 		{200, "<rpc-error><error-severity>warning</error-severity></rpc-error>", "not observed"},
 		{500, "permission denied", "refused"},
 		{500, "", "not observed"},
@@ -186,6 +189,25 @@ func TestEntryErrRefusal(t *testing.T) {
 		if got := entryErrRefusal(errors.New(c.err)); got != c.want {
 			t.Errorf("%q: got %v, want %v", c.err, got, c.want)
 		}
+	}
+}
+
+func TestScriptsNotObserved(t *testing.T) {
+	no := func(cells map[string]string) l26cRun { return l26cRun{cells: cells} }
+	const rest, scp, op = "rest: get-configuration", "scp /config/juniper.conf.gz", "op url: script"
+	runs := map[string]l26cRun{
+		"W":  no(map[string]string{rest: "not observed", scp: "refused", op: "refused"}),
+		"V":  no(map[string]string{rest: "not observed", scp: "not observed", op: "not observed"}),
+		"Vw": no(map[string]string{scp: "not observed"}),
+		"C":  no(map[string]string{rest: "not observed", scp: "file read", op: "version only"}),
+	}
+	failing, accepted := scriptsNotObserved(runs, []string{op, rest, scp})
+	if got := strings.Join(accepted, ";"); got != rest+" in W;"+rest+" in V" {
+		t.Errorf("accepted = %q", got)
+	}
+	want := []string{op + " in V", rest + " in C", scp + " in V", scp + " in Vw"}
+	if !slices.Equal(failing, want) {
+		t.Errorf("failing = %q, want %q", failing, want)
 	}
 }
 

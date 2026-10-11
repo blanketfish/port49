@@ -4,9 +4,7 @@ package lab
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -146,7 +144,9 @@ func (l *lab) entryNetconf(t *testing.T, r l26cRun, key, port string) {
 // entryErrRefusal reports a dial error that carries what the device printed:
 // a refusal word (the NETCONF channel's close quotes the device's bytes) or a
 // failed subsystem request. A timeout, an EOF with no text or a parse failure
-// is not one.
+// is not one. "subsystem request failed" is the one literal exception to
+// "the device printed a word": a protocol-level refusal, accepted on the
+// jsdPort830 precedent.
 func entryErrRefusal(err error) bool {
 	s := strings.ToLower(err.Error())
 	return containsAny(s, junosL26cRefusal) || strings.Contains(s, "subsystem request failed")
@@ -412,21 +412,22 @@ func opScriptCell(out string) string {
 }
 
 // scpRefusal is an error line scp itself sent (a \x01 or \x02 byte, then text).
+// It reads as a refusal only where the text carries a refusal word: "No such
+// file" is the file's absence, not the deny.
 type scpRefusal struct{ msg string }
 
 func (e scpRefusal) Error() string { return "scp refused: " + e.msg }
 
 // scpCell is what an scp read of a file came to: bytes received, or why not.
-// Refused needs scp's own error line or a refusal word in what the device
-// said; an EOF, a hang or a line it cannot parse is not observed.
+// Refused needs a refusal word in what scp or the device said; an EOF, a
+// hang, a line it cannot parse or an error line without one is not observed.
 func scpCell(n int64, err error) string {
-	var ref scpRefusal
 	switch {
 	case err == nil && n > 0:
 		return "file read"
 	case err == nil:
 		return "not observed"
-	case errors.As(err, &ref), containsAny(strings.ToLower(err.Error()), junosL26cRefusal):
+	case containsAny(strings.ToLower(err.Error()), junosL26cRefusal):
 		return "refused"
 	}
 	return "not observed"
@@ -460,7 +461,7 @@ func scpRead(c *ssh.Client, path string) (int64, error) {
 	defer time.AfterFunc(120*time.Second, func() { s.Close() }).Stop()
 	in, _ := s.StdinPipe()
 	out, _ := s.StdoutPipe()
-	var stderr bytes.Buffer
+	var stderr xnmOut
 	s.Stderr = &stderr
 	if err := s.Start("scp -f " + path); err != nil {
 		return 0, err
@@ -538,7 +539,7 @@ func restCell(status int, body string) string {
 	case status == http.StatusUnauthorized:
 		return "login refused"
 	case status == http.StatusForbidden,
-		strings.Contains(body, "<rpc-error>") && strings.Contains(body, "<error-severity>error</error-severity>"),
+		strings.Contains(body, "<rpc-error>") && netconfSeverityError.MatchString(body),
 		containsAny(strings.ToLower(body), junosL26cRefusal):
 		return "refused"
 	}
@@ -628,6 +629,13 @@ func TestL26cEntryScripts(t *testing.T) {
 			l.entryScp(t, r, "/config/juniper.conf.gz")
 		}
 		canonical := []string{"op url: script", "rest: get-configuration"}
+		failing, accepted := scriptsNotObserved(runs, scriptProbes)
+		for _, m := range accepted {
+			t.Logf("not observed (accepted, fails closed): %s", m)
+		}
+		for _, m := range failing {
+			t.Errorf("not observed: %s", m)
+		}
 		readings, unisolated := entryVerdict(runs, []string{"W", "V", "Vw"}, "C", canonical, scriptProbes)
 		if len(unisolated) > 0 {
 			entryLogControl(t, runs["C"], unisolated)
@@ -679,4 +687,24 @@ func entryLogControl(t *testing.T, control l26cRun, unisolated []string) {
 		}
 		t.Logf("control %s (%s) output:\n%s", p, control.cells[p], out)
 	}
+}
+
+// scriptsNotObserved lists the scripts test's cells that read not observed.
+// REST under W or V may: G2 then reports "not measured" and `rest` stays on
+// the failing list (fails closed). Nothing else may, scp and C's cells least.
+func scriptsNotObserved(runs map[string]l26cRun, probes []string) (failing, accepted []string) {
+	for _, p := range probes {
+		for _, name := range []string{"W", "V", "Vw", "C"} {
+			if runs[name].cells[p] != "not observed" {
+				continue
+			}
+			m := p + " in " + name
+			if p == "rest: get-configuration" && (name == "W" || name == "V") {
+				accepted = append(accepted, m)
+			} else {
+				failing = append(failing, m)
+			}
+		}
+	}
+	return failing, accepted
 }
