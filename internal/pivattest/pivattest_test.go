@@ -327,6 +327,27 @@ func TestAForgedExtensionOnAnUnverifiedSlotIsNotRead(t *testing.T) {
 	}
 }
 
+// The block type is checked, not only what the bytes parse as: a real
+// certificate in a PRIVATE KEY block is a mistake the operator must hear of.
+func TestParseAnchorsRefusesCertificateDERInAKeyBlock(t *testing.T) {
+	both, _, _ := yubicoLikeWithIntermediate(t)
+	blk, _ := pem.Decode(both)
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		t.Fatal("fixture bundle does not open with a certificate")
+	}
+	if _, err := x509.ParseCertificate(blk.Bytes); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: blk.Bytes})
+	if _, err := ParseAnchors(wrapped); err == nil {
+		t.Fatal("certificate DER in a PRIVATE KEY block parsed as anchors")
+	}
+	// Alongside a good bundle too: the bad block is not skipped.
+	if _, err := ParseAnchors(append(append([]byte{}, both...), wrapped...)); err == nil {
+		t.Fatal("a PRIVATE KEY block holding certificate DER, after good certificates, parsed")
+	}
+}
+
 func TestParseAnchors(t *testing.T) {
 	both, _, _ := yubicoLikeWithIntermediate(t)
 	a, err := ParseAnchors(both)
