@@ -6,7 +6,7 @@
 deny beneath a sent permission bit is projected with a `junoscript` deny, which makes the CLI deny
 a real boundary and closes NETCONF for that person alone; a readonly with a deny under `show`
 projects too. `port49 devices check-config` reads configuration groups instead of refusing them,
-names a group that widens a template, and takes many captures in one run. The lab measures what
+catches a group that widens a template, and takes many captures in one run. The lab measures what
 is still open and closes L26c and the new L57 and L58.
 
 **Why the name `09b1`.** The roadmap names a fix slotted between two plans of a step by the
@@ -42,14 +42,16 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   `view-configuration` and the policy denies `show configuration`; a warning, not a refusal).
   `policy test` prints them; `policy diff` prints the new ones as `warning:` lines and still exits 0
   on them.
-- **check-config:** the capture becomes `show configuration | display set | display inheritance`
-  (group definitions kept). Groups are no longer refused. A group statement that lands on a
-  template class or user and adds a privilege statement fails, naming the group. Harmless
-  statements pass. A capture that lacks a group's expansion where the configuration applies it is
-  refused as not inherited, and so is one that applies a group to a template without carrying the
-  group's definition. Under set 1.2.0 the services allowlist drops NETCONF, the XML API
-  and `outbound-ssh`; `web-management` and `extension-service` (and `rest`, unless Task 3 shows
-  the deny closes it) still fail. `--batch FILE...` checks many captures.
+- **check-config:** the capture becomes `show configuration | display set | display inheritance`,
+  which prints each group's statements expanded where they land and no `set groups` or `set
+  apply-groups` line (L57, Task 3). Every expanded line under a template class or user is judged
+  as a template line: a privilege or unlisted statement fails, pointing at `show configuration
+  system login | display inheritance`, which names the group; harmless statements and
+  `apply-groups-except` pass. A capture with a `set groups` line, or `apply-groups` as a word at
+  any level, was taken without `display inheritance` and is refused at that line. Under set
+  1.2.0 the services check drops NETCONF, every non-RPC service and the ssh option list;
+  `rest`, `web-management`, `extension-service`, the XML API (`xnm-*`) and `outbound-ssh` still
+  fail until a lab cell measures the deny closing each. `--batch FILE...` checks many captures.
 - **Lab:** Task 3 (before code) measures the other ways in under `deny junoscript`, the group
   inheritance, and `save` and bare `xml-mode` under the factored deny (new row L58, closed there);
   Task 9 (after code) runs the projection differential under set 1.2.0 and check-config on the
@@ -154,33 +156,37 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   RPC past the `junoscript` deny, set 1.2.0's list is `["junoscript **", "op **"]`. Denying `op`
   to a subject port49 permits it is narrower, which is always allowed, and the report says so;
   failing the whole subject closed is what the ruling replaces.
-- **R3 (security: hold for Ryan if he disagrees).** Ryan's ruling drops the services allowlist.
-  This plan drops what the `junoscript` deny was measured to close: NETCONF (`netconf`, port 830),
-  the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`, the same protocol), `outbound-ssh` (NETCONF
-  dialled out under the same login), every non-RPC service (`dhcp-local-server`, `dns`, `ftp`, …),
-  and the ssh option list. It keeps `web-management` and `extension-service` failing, since no
-  measurement shows the deny closes J-Web or JET/gRPC, and `rest` unless cell (e) shows the deny
-  closes it. Under set 1.1.0 the allowlist is unchanged. The controller ruled this conservative
-  reading on 2026-10-11 (controller ruling 1); it is no longer an open question.
-- **R4.** Template statements in three lists. The privilege list Ryan named fails, naming the
-  group. The harmless list passes, on a template or from a group: a class's `idle-timeout`,
+- **R3 (security: hold for Ryan if he disagrees; amended after Task 1's review).** Ryan's ruling
+  drops the services allowlist. Under set 1.2.0 this plan drops what the `junoscript` deny was
+  measured to close, NETCONF (`netconf`, port 830), and what runs no RPC: every non-RPC service
+  (`dhcp-local-server`, `dns`, `ftp`, …) and the ssh option list. It keeps failing every service
+  that runs RPCs and that no lab cell measured the deny closing: `web-management` and
+  `extension-service` (no cell measures J-Web or JET/gRPC), `rest` (G2: not measured, the lab's
+  tunnel reached it in no cell), and the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and
+  `outbound-ssh` (NETCONF dialled out under the same login), each *provisional on L26c* (decision
+  44 ruling 6). Under set 1.1.0 the allowlist is unchanged. The controller ruled this
+  conservative reading on 2026-10-11 (controller ruling 1); it is no longer an open question.
+- **R4.** Template statements in three lists. The privilege list Ryan named fails. The harmless
+  list passes, on a template or from a group: a class's `idle-timeout`,
   `login-alarms` and `login-tip`, and a user's `full-name`. **Anything else under a template also
   fails**, as drift does today: `allow-hidden-commands`, `login-script`, `logical-system`,
   `tenant` and `security-role` change what a session runs, and an allowlist does not fail open on
   a statement nobody listed (plan 5b pre-flight C1). Ryan's "FAIL only when" is read as "these
   are the named failures"; a statement on neither list is an unlisted one, not a harmless one.
-- **R5.** The capture is trusted where the device expanded it, and verified where that matters
-  (cell d). A group statement that lands on a template, by an `apply-groups` naming its group at
-  or above that level with no `apply-groups-except` between, must appear expanded there, unless
-  the template writes a harmless leaf of its own there (a local leaf stands over a group's). If it
-  does not appear, the capture lacks `display inheritance`, and check-config refuses it rather
-  than passing a group it could not see applied. Where the template writes a privilege or unlisted
-  statement of the same name itself (`permissions` on a `local_user_name` template), whether Junos
-  adds the group's value beside it is unmeasured, so the group is named at its own line, a
-  finding either way. An `apply-groups` at or above a template naming a group the capture does not
-  define is refused too: a capture filtered with `| except "^set groups "` hides what it brings. An
-  excepted or unapplied group is not a finding. In a group, a `<pattern>` word is read as every
-  word it matches, in check-config's services check as in the template check.
+- **R5 (rewritten on L57, 2026-10-11; controller ruling 5).** The capture is trusted where the
+  device expanded it. The inherited capture, in either pipe order, prints each group's statements
+  expanded under the levels they land on, and prints no `set groups` and no `set apply-groups`
+  line (`tests/lab/results/L57-juniper_*.md`). So check-config judges every expanded line under a
+  template as a template line, by R4's lists, whether a group or the template wrote it. It cannot
+  name the group, so a failing line points at `show configuration system login | display
+  inheritance`, whose curly form does. A capture with a `set groups` line, or `apply-groups` as a
+  word at any level (the top, `system`, a class), was taken without `display inheritance`, and
+  check-config refuses it at that line, in the template check and the services check alike.
+  `apply-groups-except` survives inheritance and is neither a sign nor a finding. That
+  inheritance strips a class-level `apply-groups`, and that a nested group (committed, not
+  expanded) does not apply in a session, are *provisional on L57* and close in Task 9. This
+  replaces R5's first reading (name the group from its definition, `<pattern>` words matched, a
+  finding at the group's own line), which assumed the inherited capture kept the definitions.
 - **R6.** `--batch FILE...` names each device by its file name as it is where the inventory has
   that name (Oxidized writes the name with no extension, and an FQDN has dots), else by the name
   less its last extension (`srx-01.conf` is `srx-01`). Every file is checked whatever
@@ -1835,6 +1841,15 @@ no note: fix the harness (a control that cannot reach is a harness or image faul
     `["junoscript **"]`. The run cannot end with the op cell undecided: that is INVALID.
   - **G2** (controller ruling 1): if both images say REST is "closed by the junoscript deny",
     Task 7 drops `rest` from `rpcPastEntryDeny`; otherwise, "not measured" included, it stays.
+  - **L57 gates, superseded by the 2026-10-11 measurement** (controller ruling 5). The run read: both
+    inherited orders show `p49g-tip`, so `ConfigCapture` keeps `| display set | display
+    inheritance`; the nested group committed and was not expanded; `p49g-excepted` is absent
+    under p49-remote; the inherited form prints no `set apply-groups` and no `set groups` line,
+    which is the STOP case below; and "group permission beside own" is `yes`. The STOP was
+    reported and ruled: Task 7 was rewritten to judge the expanded lines, refuse any group line
+    as a capture taken without `display inheritance`, and point at the curly form for the group's
+    name. `nestedApplies`, `appliesAt` and naming a group at its own line no longer exist. The
+    four bullets below are kept as written before the run.
   - From `L57-juniper_*.md`: which inherited form shows `p49g-tip` (if only `| display
     inheritance | display set` does, Task 7's `ConfigCapture` is that order); whether nesting
     committed and was expanded (if it committed and `nested` is "no" in the inherited forms, Task
@@ -4024,17 +4039,38 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 9: Lab run — set 1.2.0 end to end (cell c), check-config on L57; close L26c and L57
+## Task 9: Lab run — set 1.2.0 end to end (cell c), the L57 and L58 reruns, check-config on L57; close L26c and L57
 
 **Files:**
 - Modify: `tests/lab/projection_test.go` (`TestProjectionDifferential` runs per set;
-  `projectionShape` takes the set; `projectionNetconf` expects NETCONF refused where the reply
-  carries the entry deny; a 1.2.0 shape list)
-- Create (by the run): `tests/lab/results/L26c-projected-juniper_*.md`, evidence
-- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 L26c and L57 rows and bullets;
-  decision 44's "provisional"; §8's "*Provisional on L26c*")
+  `projectionShape` takes the set; `projectionNetconf` expects NETCONF refused on port 830 and
+  as the port-22 subsystem where the reply carries the entry deny; a 1.2.0 shape list)
+- Modify: `tests/lab/junos_baseline_test.go` (`TestL58JunosBaselineWords` types the shipped
+  readonly reply's nested deny beside its own factored one; new `l58ShippedReadonlyDeny`)
+- Create (by the run): `tests/lab/results/L26c-projected-juniper_*.md`; rewritten
+  `L57-juniper_*.md`, `L58-juniper_*.md` and `internal/platform/testdata/l57-juniper_*.set`;
+  their evidence
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 L26c and L57 rows and bullets, the
+  L58 bullet; decision 44's "provisional"; §8's "*Provisional on L26c*" and its L58 `save`
+  bullet)
 
 **Interfaces:** Consumes everything above; `make build` first, so `bin/port49` is this branch's.
+Carries from earlier tasks' reviews (the controller's ledger):
+- L57 closes on two cells Task 3's fixes added and its run did not reach: the class-level
+  `apply-groups` (`p49g-classlevel`, `login-alarms`) and the nested-group session cell with its
+  two controls (the remote session's `show configuration system host-name`, which must print the
+  host name, and the same-run `Current user` under `p49-l57own`). Both are in
+  `tests/lab/junos_groups_test.go` already; the rerun reads them.
+- L58 reruns for its "control (view)" `save` cells, which restore or drop the spec's claim about
+  what `view` alone runs.
+- Ruling 1 stays provisional until port 830 and the port-22 NETCONF subsystem are refused under
+  port49's **rendered** reply, not a hand-written `junoscript` deny (Step 1).
+- Ruling 10's readonly deny is measured as shipped: the factored alternative nested inside
+  `^( … | *(a|b)( .*)? *(\|.*)?| …)$`, not only L58's top-level `^ *(save|junoscript)( .*)? *(\|.*)?$`
+  (Step 2, and the differential's readonly rows).
+- If the class-level `apply-groups` line survives inheritance, Task 7's
+  `TestTemplateDriftReadsTheL57Captures` refuses the regenerated fixture at that line. Report
+  it; do not loosen the test.
 
 - [ ] **Step 1: Run the differential under a named set.** Change `projectionShape`'s first line
   to take `set string` and write `"platform_set: " + set + "\n…"`, and `projectionNetconf`'s
@@ -4054,6 +4090,48 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 	}
 	// "open": the existing RPC fail-open checks, unchanged.
 ```
+
+  Under `"refused"` the reply is port49's rendered one, so this is where ruling 1's port 830 and
+  port-22 subsystem cells are measured against what port49 sends. Each port is dialled with the
+  same token, and a refusal counts only with the device's word and port49's permit in the
+  decision log, as `entryNetconf` reads it. Replace the `case "disabled", "refused":` arm above
+  with:
+
+```go
+	case "disabled":
+		if err == nil {
+			n.Close()
+			t.Errorf("%s: NETCONF opened, and the reply runs on a set that requires it disabled", name)
+			return "\nNETCONF opened, which the set requires disabled.\n"
+		}
+		return "\nNETCONF disabled, as the set requires: `" + oneLine(err.Error()) + "`\n"
+	case "refused":
+		if err == nil {
+			n.Close()
+		}
+		var b strings.Builder
+		for _, port := range []string{"830", "22"} {
+			off := l.mark()
+			n, _, err := l.netconfDialPort(sliceUser, tok, port)
+			switch {
+			case err == nil:
+				n.Close()
+				t.Errorf("%s: NETCONF on port %s opened under a reply that denies junoscript", name, port)
+				fmt.Fprintf(&b, "\nNETCONF on port %s opened, which the reply's junoscript deny should refuse.\n", port)
+			case isAuthRejection(err) || !entryErrRefusal(err) || !sessionPermitted(l.drainRecords(off, 10*time.Second)):
+				t.Errorf("%s: NETCONF on port %s not observed: no device refusal after port49's permit: %v", name, port, err)
+				fmt.Fprintf(&b, "\nNETCONF on port %s: not observed, `%s`\n", port, oneLine(err.Error()))
+			default:
+				fmt.Fprintf(&b, "\nNETCONF on port %s refused under the rendered reply: `%s`\n", port, oneLine(err.Error()))
+			}
+		}
+		return b.String()
+```
+
+  Under `"open"` (the control), before the RPC checks, dial the port-22 subsystem too, with
+  `l.netconfDialPort(sliceUser, tok, "22")`: an error there is `t.Errorf("INVALID: %s: the
+  control's port-22 NETCONF subsystem did not open: %v", …)`, since a refusal under the deny
+  says nothing unless the same subsystem opens without it.
 
   In `projectionShape`, pass `want` as `"disabled"` where `adapter.NetconfForbidden(set)`,
   `"refused"` where `res.Projection.NetconfClosed() || res.Projection.FailClosed != ""` (both
@@ -4088,7 +4166,10 @@ var projectionShapes120 = []struct{ name, roles, want string }{
 
   Each readonly row also types `xml-mode` (bare) at the CLI beside `xml-mode netconf
   need-trailer`, and fails the shape where it greets under a reply that refuses `junoscript`
-  (`l58EntryCell`, Task 2).
+  (`l58EntryCell`, Task 2). The two readonly-with-a-deny rows write their rendered
+  `deny-commands=` value into the note, and the shape fails unless it is the nested form, `^(`
+  … `)$` holding one alternative that names `save` and `junoscript` beside the grant's deny:
+  that is the regex those rows' `xml-mode` cells are typed under, end to end.
 
   Before the run, check each row's `want` with this branch's `bin/port49 policy test` on the
   shape's policy (`projectionShape` writes it to `tests/lab/logs/projection-<slug>.yaml`). A row
@@ -4109,48 +4190,170 @@ var projectionShapes120 = []struct{ name, roles, want string }{
   1.2.0 only: L12 is closed and this plan changes nothing 1.1.0 renders (Task 4's frozen-set
   tests), so its note is not rewritten.
 
-- [ ] **Step 2: check-config on the L57 captures with this branch's binary.** The lab policy
-  pins no set, so write one that pins 1.2.0, and name each capture for its lab node
-  (`tests/lab/inventory-lab.yaml`: `srx1` is vJunos-router, `vsrx1` is vSRX):
+- [ ] **Step 2: L58 types the shipped readonly form.** L58 measured `save` and the entries
+  under its own top-level `^ *(save|junoscript)( .*)? *(\|.*)?$`. Set 1.2.0 sends that
+  alternative nested inside `^( … )$` beside the grant's deny. In
+  `tests/lab/junos_baseline_test.go`, add `"os"`, `"path/filepath"`, `"time"`,
+  `"github.com/rhwendt/port49/internal/admission"` and `"github.com/rhwendt/port49/internal/policy"`
+  to the imports, and add:
 
-```bash
-d=$(mktemp -d)
-printf 'platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n  - {name: r, privilege: readonly, permit: ["show **"]}\nsubjects:\n  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}\ngrants:\n  - {subject: s, scope: all_devices, roles: [r]}\n' > $d/policy.yaml
-cp internal/platform/testdata/l57-juniper_vjunos-router.set $d/srx1.set
-cp internal/platform/testdata/l57-juniper_vsrx.set $d/vsrx1.set
-./bin/port49 devices check-config --policy $d/policy.yaml --inventory tests/lab/inventory-lab.yaml \
-  --config tests/lab/port49d-lab.yaml --batch $d/srx1.set $d/vsrx1.set
+```go
+// l58ShippedReadonlyDeny is the deny-commands set 1.2.0 sends this lab node
+// for a readonly granted `show **` less `show configuration **`: the
+// baseline's `word **` denies as one alternative nested inside `^( … )$`
+// beside the grant's deny (decision 44 ruling 10). L58's own deny is that
+// alternative alone; this is the form a device meets. A rendered value that
+// is not nested is INVALID: the session would measure the L58 form again.
+func (l *lab) l58ShippedReadonlyDeny(t *testing.T) string {
+	t.Helper()
+	inv, err := admission.LoadFile(filepath.Join(root, "tests", "lab", "inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" +
+		"  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show configuration **\"]}\n" +
+		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
+		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
+	path := filepath.Join(t.TempDir(), "l58-shipped.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: inv.Devices})
+	if err != nil {
+		t.Fatalf("INVALID: the shipped readonly's policy does not load: %v", err)
+	}
+	device, _ := pol.Device(l.p.node)
+	res, err := pol.ResolveSubject("slice_operator", device, time.Now())
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	for _, a := range res.Blob.Attributes {
+		if v, ok := strings.CutPrefix(a, "deny-commands="); ok {
+			if !strings.HasPrefix(v, "^(") || !strings.HasSuffix(v, ")$") || !strings.Contains(v, " *(") ||
+				!strings.Contains(v, "save") || !strings.Contains(v, "junoscript") {
+				t.Fatalf("INVALID: set 1.2.0's readonly deny is not the nested form: %s", v)
+			}
+			return v
+		}
+	}
+	t.Fatalf("INVALID: set 1.2.0's readonly reply carries no deny-commands: %q", res.Blob.Attributes)
+	return ""
+}
 ```
 
-  Expected: exit 1; each file's findings name `group p49g-perm` on `p49-remote` (and
-  `p49g-inner` where nesting expanded), and `MISSING` lists nothing but what the lab's config
-  lacks of `device_config`. Nothing names p49g-tip, p49g-excepted, p49g-unapplied or
-  p49g-timeout. Paste the output at the end of each `L26c-projected` note as "check-config on
-  L57". If the policy does not load against the lab inventory (a key group, say), add what
-  `policy test` asks for to `$d/policy.yaml`.
+  In `TestL58JunosBaselineWords`, after `saveDeny`:
 
-- [ ] **Step 3: Run per platform**
+```go
+		shipped := l.l58ShippedReadonlyDeny(t)
+		saveShipped := "[" + saveClass + `, "deny-commands=` + quote(shipped) + `"]`
+		entryShipped := "[" + class + `, "deny-commands=` + quote(shipped) + `"]`
+```
+
+  `cells` gains `"shipped": {}`; the `save` sessions loop runs over `{"control", saveControl},
+  {"deny", saveDeny}, {"shipped", saveShipped}`, and the entries loop over `{"control",
+  control}, {"deny", deny}, {"shipped", entryShipped}`. The sessions table gains the rows `|
+  shipped readonly (`save`) | … |` and `| shipped readonly (entries) | … |`, the probe table a
+  `shipped readonly` column, and the outputs loop `"shipped"`. After G4's line add:
+
+```go
+		nested := cells["shipped"]["xml-mode"] == "refused" && cells["shipped"]["xml-mode netconf need-trailer"] == "refused"
+		for _, cmd := range junosL58Saves {
+			if cells["deny"][cmd] == "refused" && cells["shipped"][cmd] != "refused" {
+				nested = false
+			}
+		}
+		fmt.Fprintf(&b, "- **G5** the shipped readonly form (`%s`): **%s**.\n", tableCell(shipped),
+			map[bool]string{true: "enforced as the factored form", false: "NOT enforced as the factored form"}[nested])
+```
+
+  Run: `go vet -tags lab ./tests/lab/` and `go test -tags lab ./tests/lab/ -run
+  '^(TestL58EntryCell|TestL58Save)$' -count=1` (L58's unit tests, which need no device).
+  Expected: PASS.
+
+- [ ] **Step 3: Run per platform.** The differential, then L57's and L58's reruns, each in its
+  own invocation (the seeded pool is 16 per process). Arm the stall watchdog first; the lab is
+  single-occupant.
 
 ```bash
 make build
 for p in juniper_vjunos-router juniper_vsrx; do
   PORT49_LAB_PROJECTION_SETS=1.2.0 PORT49_LAB_PLATFORMS=$p \
     go test -tags lab ./tests/lab/ -run '^TestProjectionDifferential$' -count=1 -v -timeout 120m || break
+  for t in TestL57JunosGroups TestL58JunosBaselineWords; do
+    PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ -run "^$t\$" -count=1 -v -timeout 90m || break 2
+  done
 done
 make evidence
+go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
 ```
 
-  Expected: PASS on both; `L26c-projected-juniper_*.md` written. Under 1.2.0 the CLI refuses
-  `show configuration` for the operator, admin and "readonly denying show configuration" shapes
-  (`show security` for its row) and runs everything else their bits reach; `xml-mode`, `xml-mode
-  netconf` and port 830 are refused for every entry-deny shape and for the narrow readonly; and
-  "operator, all it reaches" opens NETCONF with every RPC check passing (the control: a failure
-  there is INVALID, not a pass). Where a readonly's allow beyond `view` (`show log`, `show
-  firewall`, `show policer`, and `show configuration` under the `show security` deny) is refused
-  or shows nothing, that is the device narrower than port49, reported, not a failure: record it
-  in the note and in the roadmap's as-built, since it decides what such a readonly can read.
+  Expected: PASS on both; `L26c-projected-juniper_*.md` written, `L57-juniper_*.md`,
+  `L58-juniper_*.md` and both `l57-*.set` fixtures rewritten, and Task 7's fixture test PASS on
+  the regenerated captures. An `INVALID:` failure writes no note: fix the harness and rerun.
+  In the differential under 1.2.0 the CLI refuses `show configuration` for the operator, admin
+  and "readonly denying show configuration" shapes (`show security` for its row) and runs
+  everything else their bits reach; `xml-mode`, `xml-mode netconf`, port 830 and the port-22
+  NETCONF subsystem are refused under port49's rendered reply for every entry-deny shape and
+  for the narrow readonly, each with the device's word after port49's permit; and "operator,
+  all it reaches" opens NETCONF on port 830 and as the port-22 subsystem with every RPC check
+  passing (the control: a failure there is INVALID, not a pass). Where a readonly's allow
+  beyond `view` (`show log`, `show firewall`, `show policer`, and `show configuration` under the
+  `show security` deny) is refused or shows nothing, that is the device narrower than port49,
+  reported, not a failure: record it in the note and in the roadmap's as-built, since it decides
+  what such a readonly can read.
 
-- [ ] **Step 4: Close the rows.** Per CLAUDE.md rule 3: edit L26c's Status to
+- [ ] **Step 4: Read the cells** from the rewritten notes, on both images:
+  - **L57, class-level `apply-groups`:** the inherited forms' `apply-groups` word column reads
+    "no", and `login-alarms` is expanded under `p49-remote`: inheritance strips a class-level
+    `apply-groups`, and ruling 7's refusal holds as written. If either image prints the line,
+    `TestTemplateDriftReadsTheL57Captures` refuses that fixture at the line. STOP and report to
+    the controller with both notes' tables. Do not loosen the test or the refusal: a capture
+    the check cannot tell from one taken without `display inheritance` is the hole ruling 7
+    closes, and ruling 7 changes before L57 closes.
+  - **L57, nested-group session cell:** "not applied" on both images, with both controls
+    observed (the remote session's `show configuration system host-name` printed the host name,
+    and `p49-l57own`'s `show cli authorization` printed `Current user`): the nested group commits,
+    is not expanded and is not applied, so check-config misses nothing a session holds. If either
+    reads "applies", STOP and report: a nested group is then a fail-open check-config cannot see,
+    and ruling 7 changes before L57 closes. If either reads "not observed", L57 does not close;
+    fix the harness and rerun.
+  - **L58:** G3 `save` proven and G4 closed, as in Task 3 (L58 stays closed). G5 enforced: the
+    shipped readonly form refuses what the factored form refuses. If G5 reads "NOT enforced",
+    STOP and report: ruling 10 renders a reply whose nested alternative the device does not
+    enforce, and the readonly-with-a-deny shape must not ship as is.
+  - **L58, control (view):** each `save` candidate's cell under `view` with no deny. If every
+    candidate is "refused" on both images, `view` alone runs no `save`, and the readonly's `save`
+    deny is belt and braces there; record it. Anything else is recorded as it reads. It is never
+    a gate.
+
+- [ ] **Step 5: check-config on the regenerated L57 captures with this branch's binary.** The lab
+  policy pins no set, so write one that pins 1.2.0, and name each capture for its lab node
+  (`tests/lab/inventory-lab.yaml`: `srx1` is vJunos-router, `vsrx1` is vSRX). A fixture also
+  holds the command's echo, the closing prompt and a redacted line whose verb is `<removed>`,
+  which the services check refuses as not set statements, so keep only the `set` lines:
+
+```bash
+d=$(mktemp -d)
+printf 'platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n  - {name: r, privilege: readonly, permit: ["show **"]}\nsubjects:\n  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}\ngrants:\n  - {subject: s, scope: all_devices, roles: [r]}\n' > $d/policy.yaml
+grep '^set ' internal/platform/testdata/l57-juniper_vjunos-router.set > $d/srx1.set
+grep '^set ' internal/platform/testdata/l57-juniper_vsrx.set > $d/vsrx1.set
+./bin/port49 devices check-config --policy $d/policy.yaml --inventory tests/lab/inventory-lab.yaml \
+  --config tests/lab/port49d-lab.yaml --batch $d/srx1.set $d/vsrx1.set
+```
+
+  Expected: exit 1, and no refusal. Each file has exactly two `TEMPLATE` findings, `set system
+  login class p49-remote permissions view-configuration` and `set system login class p49-remote
+  allow-commands "^show version$"`. Each points at `show configuration system login | display
+  inheritance`. No finding for `login-tip`, `login-alarms`, `apply-groups-except` or the class's
+  `idle-timeout 720`. No `SERVICE` finding: under 1.2.0 `netconf ssh` and the ssh option pass.
+  Any other finding is the lab's own configuration, such as its `authentication-order password`
+  fallback or a `device_config` line it lacks; list each one. Then run `show configuration
+  system login | display inheritance` over break-glass on each image, and confirm it names
+  `p49g-perm` beside both lines. Paste the check-config output and that excerpt at the end of
+  each `L26c-projected` note as "check-config on L57". If the policy does not load against the
+  lab inventory (a key group, say), add what `policy test` asks for to `$d/policy.yaml`.
+
+- [ ] **Step 6: Close the rows.** Per CLAUDE.md rule 3: edit L26c's Status to
   `closed — measured <date>; tests/lab/results/L26c-juniper_*.md, L26c-junoscript-juniper_*.md, L26c-entries-juniper_*.md, L26c-scripts-juniper_*.md, L26c-projected-juniper_*.md`,
   followed by one paragraph of what each measured (both images agreeing, or the difference). Edit
   L57's Status to `closed — measured <date>; tests/lab/results/L57-juniper_vjunos-router.md,
@@ -4161,12 +4364,22 @@ make evidence
   that refused `rest`, say), move that part of the claim to a new open row before closing, and
   leave what rests on it as it is (G2's `rest` stays a finding). If a result contradicts a sentence of §8, decision 44 or the adapter
   comment, fix that sentence, cite the note, and say so in the commit message (CLAUDE.md rule 4).
+  L57 closes only where Step 4's class-level and nested-group cells read as expected on both
+  images. Its Status names both cells, and decision 44 ruling 7 and §12 lose their two
+  "*provisional on L57*". Ruling 1's port-22 subsystem and port 830 lose "*provisional on
+  L26c*" only where Step 3 measured them refused under the rendered reply on both images. For
+  L58, which stays closed, replace the "will be recorded in the note as \"control (view)\" when
+  Task 9 reruns L58" clauses in §8's `save` bullet and in L58's detail bullet with what the
+  control (view) cells read, citing `L58-juniper_*.md`. Add one sentence on G5: the shipped
+  readonly's nested form was enforced as the factored form.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add tests/lab/projection_test.go tests/lab/results/L26c-projected-juniper_*.md tests/lab/evidence/L26c-projected-*
-git commit -m "test(lab): set 1.2.0's projection end to end on vJunos-router and vSRX
+git add tests/lab/projection_test.go tests/lab/junos_baseline_test.go tests/lab/results/L26c-projected-juniper_*.md \
+  tests/lab/results/L57-juniper_*.md tests/lab/results/L58-juniper_*.md internal/platform/testdata/l57-*.set \
+  tests/lab/evidence/L26c-projected-* tests/lab/evidence/L57-* tests/lab/evidence/L58-*
+git commit -m "test(lab): set 1.2.0's projection end to end, L57 and L58 reruns on vJunos-router and vSRX
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git add docs/design/2026-08-23-policy-engine-spec.md
@@ -4210,7 +4423,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ## Operator notes (for the pull request body)
 
 - **New platform set 1.2.0, and the default.** It is 1.1.0 plus one key on `juniper_junos`,
-  `rpc_entry_denies: ["junoscript **"]`, and `save` in its keyword tree. A policy pinned to
+  `rpc_entry_denies: ["junoscript **", "op **"]` (an `op url` script reached RPCs past the
+  `junoscript` deny alone), and `save` in its keyword tree. A policy pinned to
   1.1.0 renders exactly as before.
   `port49 platform upgrade --policy … --to 1.2.0` shows the change; `policy diff` gates it until
   the `acknowledge:` entry for `platforms.juniper_junos.rpc_entry_denies` is added.
@@ -4239,24 +4453,28 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   the configuration, so the real fix is a level without the bit. `policy diff` prints new
   warnings as `warning:` lines and still exits 0 on them.
 - **`devices check-config` reads configuration groups.** Capture with
-  `show configuration | display set | display inheritance` (the group definitions are now kept;
-  the old `| except "^set groups "` capture still works, its groups unnamed). `apply-groups` no
-  longer fails the check. A group that adds a permission, a command or configuration regex, or
-  authentication to `p49-remote`, `remote` or another port49 template fails, naming the group:
-  `group BASE adds `permissions` to class p49-remote: every port49 session on this device gets
-  it`. `idle-timeout`, `login-tip`, `login-alarms` and `full-name` pass. Any other statement
-  under a template still fails. A capture without `display inheritance` from a device that
-  applies a group to a template is refused, with the capture command to use, and so is one that
-  applies a group to a template without the group's definition (the old `| except "^set groups
-  "` capture, where it prints `apply-groups`): change the CI capture command once, fleet-wide.
+  `show configuration | display set | display inheritance`. Junos prints each group's statements
+  expanded under the classes and users they reach, and no `set groups` or `apply-groups` line, so
+  a device that templates its logins through groups no longer fails for using them. Every
+  expanded line under `p49-remote`, `remote` or another port49 template is judged as the
+  template's own: a permission, a command or configuration regex, authentication, or any
+  statement not on the harmless list fails, whether a group or the template wrote it.
+  `idle-timeout`, `login-tip`, `login-alarms`, `full-name` and `apply-groups-except` pass. The
+  capture cannot say which group brought a line, so the finding tells you to run `show
+  configuration system login | display inheritance`, which names it (`## 'view-configuration'
+  was inherited from group 'BASE'`); fix the group, since loading the reference does not clear
+  what a group adds. A capture holding a `set groups` line, or `apply-groups` anywhere, was taken
+  without `display inheritance` and is refused at that line with the command to use: change the
+  CI capture command once, fleet-wide.
 - **`devices check-config --batch FILE...`** checks a directory of captures in one run. Each file
   is checked against the device its file name names: the name as it is where the inventory has
   it (Oxidized's extensionless files, FQDNs included), else less its last extension
   (`srx-01.conf` is `srx-01`). It prints `batch: N configurations checked, M failed` and exits 1
   if any failed.
-- **Management services under 1.2.0.** NETCONF, the XML API (`xnm-*`), `outbound-ssh` and every
-  non-RPC service no longer fail check-config. J-Web (`web-management`) and JET/gRPC
-  (`extension-service`) still do, and REST (`rest`) as Task 3 measured. Under 1.1.0 nothing
-  changed.
+- **Management services under 1.2.0.** NETCONF, every non-RPC service and every ssh option no
+  longer fail check-config. REST (`rest`), J-Web (`web-management`), JET/gRPC
+  (`extension-service`), the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh`
+  still do, wherever they are written, until a lab cell measures the `junoscript` deny closing
+  each. Under 1.1.0 nothing changed.
 - **No new reason code, metric or config key in `port49d.yaml`.** The decision log records the
   reply as before; the `junoscript` deny appears in it.
