@@ -153,7 +153,7 @@ func TestCheckServicesBypasses(t *testing.T) {
 		}
 		said := words(strings.ReplaceAll(err.Error(), ConfigCapture, ""))
 		for _, w := range words(bad) {
-			if len(w) > 3 && !slices.Contains([]string{"configuration", "display"}, w) && slices.Contains(said, w) {
+			if len(w) > 3 && !slices.Contains([]string{"configuration", "display", "apply-groups"}, w) && slices.Contains(said, w) {
 				t.Errorf("%q: the error quotes %q: %v", bad, w, err)
 			}
 		}
@@ -241,8 +241,8 @@ func TestCheckServicesBypasses(t *testing.T) {
 	}
 }
 
-// Under set 1.2.0's entry deny NETCONF, every non-RPC service and every ssh
-// option pass; REST, J-Web, JET/gRPC, the XML API and outbound-ssh, which no
+// Under set 1.2.0's entry deny NETCONF, the non-RPC services entryServices
+// names and every ssh option pass; REST, J-Web, JET/gRPC, the XML API and outbound-ssh, which no
 // lab cell measured the deny closing, still fail wherever they are written
 // (decision 44 ruling 6). A group line is refused as under set 1.1.0. Set
 // 1.1.0 forbids NETCONF, set 1.2.0 does not.
@@ -325,12 +325,121 @@ func TestCheckServicesReadsCRLFAndTheL57Captures(t *testing.T) {
 	}
 }
 
-// A value spelled apply-groups is refused as a group sign; the message says
-// so, since re-capturing does not help that device.
+// A value spelled apply-groups is refused as a group sign; the message names
+// that word and says to rename the value, since re-capturing does not help
+// that device and display set prints a one-word value bare, so quoting it does
+// nothing. It also tells an operator who did capture with `display
+// inheritance` to remove a switched-off application and capture again (review
+// M4).
 func TestCheckServicesRefusalNamesAValueSpelledApplyGroups(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
 	_, err := CheckServices(d, []byte("set version 1\nset snmp location apply-groups\n"))
-	if err == nil || !strings.Contains(err.Error(), "spelled as that keyword") {
+	if err == nil || !strings.Contains(err.Error(), "spelled apply-groups") ||
+		!strings.Contains(err.Error(), "rename it") || strings.Contains(err.Error(), "quote") ||
+		!strings.Contains(err.Error(), "remove that application, then capture again") {
 		t.Errorf("%v", err)
+	}
+}
+
+// Under set 1.2.0 the services check is an allowlist (decision 44 ruling 6;
+// plan 9b1 controller ruling 6): `netconf`, `ssh` and `telnet` pass with any
+// statement beneath them, and so do the non-RPC services entryServices names.
+// Any other statement under `system services` fails, naming the statement:
+// `service-deployment`, which speaks the JUNOScript XML API, and a name no
+// release has alike. A word that runs RPCs still fails wherever it is written,
+// with the entry deny's reason.
+func TestCheckServicesAllowlistUnderTheEntryDeny(t *testing.T) {
+	set, ok := Set("1.2.0")
+	if !ok || len(set["juniper_junos"].RPCEntryDenies) == 0 {
+		t.Fatal("set 1.2.0's juniper_junos sends no entry deny")
+	}
+	d := set["juniper_junos"]
+	const version = "set version 23.4R2-S2.1\n"
+	for _, line := range []string{
+		"set system services netconf ssh port 830",
+		"set system services netconf traceoptions file nc",
+		"set system services ssh authorized-keys-command /bin/x",
+		"set system services telnet connection-limit 5",
+		"set system services database-replication",
+		"set system services dhcp pool 192.0.2.0/24",
+		"set system services dhcp-local-server group g interface ge-0/0/0.0",
+		"set system services dns dns-proxy",
+		"set system services dynamic-dns client a.example.com",
+		"set system services finger",
+		"set system services ftp",
+		"set system services static-subscribers group g",
+		"set system services subscriber-management enable",
+		"set system services subscriber-management-helper",
+		"set logical-systems ls1 system services dhcp-local-server group g",
+	} {
+		if f, err := CheckServices(d, []byte(version+line+"\n")); len(f) != 0 || err != nil {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{
+		"set system services service-deployment servers 192.0.2.1 port 3333",
+		"set system services service-deployment",
+		"set system services outbound-https client c",
+		"set system services grpc-tunnel",
+		"set system services webapi http",
+		"set system services flow-tap-dtcp ssh",
+		"set system services tftp-server",
+		"set system services no-such-service",
+		"set system services DNS",
+		`set system services "dns proxy"`,
+		"set logical-systems ls1 system services service-deployment",
+		"set tenants t1 system services service-deployment",
+	} {
+		f, err := CheckServices(d, []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Line != 2 || f[0].Text != line || !strings.Contains(f[0].Says, "set 1.2.0") ||
+			strings.Contains(f[0].Says, "junoscript") {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{"set system services rest http", "set services rest control"} {
+		f, err := CheckServices(d, []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Text != line || !strings.Contains(f[0].Says, "junoscript") {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+}
+
+// Every service the lab's devices run passes under set 1.2.0. The L57
+// fixtures are the inherited captures of both lab nodes
+// (tests/lab/results/L57-juniper_*.md), whose `system services` are
+// tests/lab/configs/vjunos-startup.conf's `netconf ssh` and the lab's `ssh
+// root-login allow`; Task 9 regenerates them from the devices. A fixture
+// also holds the command's echo and the prompt, and ends each line in a
+// carriage return, so only its statement lines are read, trimmed.
+func TestCheckServicesPassesTheLabsServices(t *testing.T) {
+	set, _ := Set("1.2.0")
+	files, _ := filepath.Glob("testdata/l57-*.set")
+	if len(files) != 2 {
+		t.Fatalf("want the two L57 captures, got %q", files)
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		services := map[string]bool{}
+		for _, ln := range strings.Split(string(raw), "\n") {
+			ln = strings.TrimRight(ln, "\r")
+			if !strings.HasPrefix(ln, "set ") && !strings.HasPrefix(ln, "deactivate ") && !strings.HasPrefix(ln, "protect ") {
+				continue
+			}
+			lines = append(lines, ln)
+			if rest, ok := strings.CutPrefix(ln, "set system services "); ok {
+				services[strings.Fields(rest)[0]] = true
+			}
+		}
+		if !services["netconf"] || !services["ssh"] {
+			t.Errorf("%s: the capture's services are %v, not the lab's netconf and ssh: read the fixture", f, services)
+		}
+		findings, err := CheckServices(set["juniper_junos"], []byte(strings.Join(lines, "\n")))
+		if err != nil || len(findings) != 0 {
+			t.Errorf("%s: %+v %v", f, findings, err)
+		}
 	}
 }

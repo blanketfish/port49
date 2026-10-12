@@ -3957,13 +3957,22 @@ fail-closed reply there, as before (option C).
 **Management services.** Under set 1.1.0 a projected Junos device runs no management service but
 the CLI's, checked as an allowlist. `devices check-config` passes it only where nothing under
 `system services` is on but `ssh` and `telnet`, an unknown service included, and `rest`,
-`web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes
-NETCONF per user (port 830 measured; the port-22 subsystem *provisional on L26c*), so the check
-no longer requires it off. It
-still fails `web-management`, `extension-service`, `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
+`web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes NETCONF per user (port 830 measured; the port-22 subsystem
+*provisional on L26c*), so the check no longer requires it off, and it is a shorter allowlist.
+Under `system services` it passes `netconf`, `ssh` and `telnet` with any statement beneath them,
+and these services, which serve no management session (Junos's `[edit system services]`
+hierarchy): `database-replication`, `dhcp`, `dhcp-local-server`, `dns`, `dynamic-dns`, `finger`,
+`ftp`, `static-subscribers`, `subscriber-management` and `subscriber-management-helper`. Any other
+statement there fails, the finding quoting it. That covers a service no one listed, such as
+`service-deployment` (which speaks the JUNOScript XML API), `outbound-https`, `grpc-tunnel` or
+`tftp-server`, and a name the list does not know: an allowlist does not fail open on a statement
+nobody listed (plan 5b pre-flight C1). Anywhere in the hierarchy it still fails
+`web-management`, `extension-service`, `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
 `xnm-clear-text`) and `outbound-ssh`, until a lab cell measures the entry deny closing each
 (*provisional on L26c*). REST was not measured: the lab's tunnel did not reach it, the control
-included (`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding. No measurement shows the entry deny closes their RPCs. Both sets read the capture §12 names.
+included (`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding.
+Whether a deny of `show configuration` holds against a file read of `/config` through `ftp` or
+`ssh sftp-server`, which pass, is unmeasured (*provisional on L26c*). Both sets read the capture §12 names.
 
 **No carve-out leaves a deny off the wire in either set**: `view-configuration`'s `show
 configuration **` out of `view` is measured on the CLI only. `start` is never denied, since admins
@@ -8705,13 +8714,18 @@ provisional on L57.
   reaches past the `junoscript` deny). It may never add one the set did not measure, as with
   `carve_outs`. `DefaultSet` is 1.2.0. A policy pinned to 1.1.0 renders
   byte for byte as before.
-- **6. Services** (Ryan's ruling, narrowed for security; data L26c). Under set 1.2.0
-  check-config no longer fails NETCONF (ssh, port 830), any non-RPC service, or an ssh option. It
-  still fails `web-management` and `extension-service` anywhere in the hierarchy, and `rest`, the
-  XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh`, each until a lab cell
-  measures the `junoscript` deny closing it (*provisional on L26c*). REST was not measured: the
-  lab's tunnel did not reach it, the control included (`L26c-scripts-juniper_*.md`, 2026-10-11),
-  so `rest` stays a finding. Set 1.1.0's allowlist is unchanged.
+- **6. Services** (Ryan's ruling, narrowed for security; data L26c; an allowlist, plan 9b1
+  controller ruling of 2026-10-12). Under set 1.2.0 check-config no longer requires NETCONF off.
+  `netconf`, `ssh` and `telnet` pass under `system services` with any statement beneath them, and
+  so do the services §8 names as serving no management session. Any other statement under `system
+  services` fails, the finding quoting it, a service no one listed included: `service-deployment`
+  speaks the JUNOScript XML API, and a denylist passed it. Anywhere in the hierarchy it still fails
+  `web-management` and `extension-service`, and `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
+  `xnm-clear-text`) and `outbound-ssh`, each until a lab cell measures the `junoscript` deny
+  closing it (*provisional on L26c*). REST was not measured: the lab's tunnel did not reach it,
+  the control included (`L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding.
+  Whether a `show configuration` deny holds against a file read of `/config` through `ftp` or
+  `ssh sftp-server` is unmeasured (*provisional on L26c*). Set 1.1.0's allowlist is unchanged.
 - **7. Groups** (Ryan's rulings; data: `tests/lab/results/L57-juniper_*.md`, measured
   2026-10-11 on vJunos-router and vSRX). check-config reads `show configuration | display set |
   display inheritance` (the other pipe order expands the same) and judges the expanded lines under

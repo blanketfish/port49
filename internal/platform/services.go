@@ -34,14 +34,15 @@ import (
 // Under a set whose adapter carries rpc_entry_denies (set 1.2.0) the reply's
 // `junoscript` deny closes NETCONF, port 830 and the CLI's `xml-mode` for the
 // session that carries it (tests/lab/results/L26c-junoscript-juniper_*.md),
-// so the check there fails only the services no lab cell measured it closing
-// (rpcPastEntryDeny; decision 44 ruling 6).
+// so the check there passes NETCONF and is a shorter allowlist: the services
+// entryServices names, and the rpcPastEntryDeny words failing wherever they
+// appear (decision 44 ruling 6).
 var rpcServicesOff = true
 
 // RPCServicesChecked reports whether `port49 devices check-config` reads a
-// device of d's management services (CheckServices): against the allowlist
-// under a set that sends no entry deny, against rpcPastEntryDeny under one
-// that does.
+// device of d's management services (CheckServices): against cliServices
+// under a set that sends no entry deny, against entryServices and
+// rpcPastEntryDeny under one that does.
 func RPCServicesChecked(d Dialect) bool {
 	return rpcServicesOff && d.CommandProjection == ProjectionJunosRegex
 }
@@ -90,8 +91,9 @@ const ConfigCapture = `show configuration | display set | display inheritance`
 // line's number. It quotes nothing of the line.
 const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
 	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
-	"expanded and cannot be checked (a value spelled as that keyword, which display set prints bare, is read the " +
-	"same way: quote or rename it)"
+	"expanded and cannot be checked. If it was taken with it, the device keeps a group application switched off " +
+	"or locked, which reads the same: remove that application, then capture again (a one-word value spelled " +
+	"apply-groups, which display set prints bare, is read the same way: rename it)"
 
 // groupSign reports whether a statement shows its capture was taken without
 // `display inheritance`: a `set groups` line, a logical system's or tenant's
@@ -138,6 +140,41 @@ func NetconfForbidden(d Dialect) bool { return RPCServicesChecked(d) && len(d.RP
 var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "xnm-ssh", "xnm-ssl",
 	"xnm-clear-text", "outbound-ssh"}
 
+// entryServices are the only services under `system services` a checked
+// device may enable under a set whose adapter carries rpc_entry_denies (set
+// 1.2.0), each with any statement beneath it. It is an allowlist, as
+// cliServices is under set 1.1.0: a service no one listed fails, an RPC
+// service no one thought of included (decision 44 ruling 6; plan 9b1
+// controller ruling 6, on `service-deployment`, which speaks the JUNOScript
+// XML API and passed a denylist). `netconf` is closed per subject by the
+// reply's `junoscript` deny (tests/lab/results/L26c-junoscript-juniper_*.md),
+// and `ssh` and `telnet` are the CLI's own transports; the lab's devices run
+// `netconf ssh` and `ssh root-login allow` and nothing else there
+// (tests/lab/configs/vjunos-startup.conf; testdata/l57-*.set). The rest are
+// statements of Junos's `[edit system services]` hierarchy (Juniper's CLI
+// reference, "services (System Services)",
+// https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/system-services.html,
+// read 2026-10-12) that serve no management session: database-replication
+// copies the configuration database between Routing Engines; dhcp and
+// dhcp-local-server serve addresses; dns is a DNS proxy and dynamic-dns a
+// client updating one; finger answers who is logged in; ftp serves files
+// to a user who logs in; static-subscribers, subscriber-management and
+// subscriber-management-helper run broadband subscriber sessions. Whether a
+// `show configuration` deny holds against a file read of /config through
+// ftp, or ssh's sftp-server, is unmeasured (L26c, open). The hierarchy's
+// others stay off it: tftp-server serves files with no login, and
+// service-deployment, outbound-https, grpc-tunnel, webapi, flow-tap-dtcp,
+// jeb, http, netproxy, reverse, resource-monitor, bbe-stats-service and
+// extensible-subscriber-services either run a management session or were
+// not read closely enough to say they do not.
+var entryServices = []string{"netconf", "ssh", "telnet", "database-replication", "dhcp", "dhcp-local-server", "dns",
+	"dynamic-dns", "finger", "ftp", "static-subscribers", "subscriber-management", "subscriber-management-helper"}
+
+const unlistedSays = "a service under `system services` that set 1.2.0's check does not list: only `netconf`, `ssh`, " +
+	"`telnet` and the services it names as serving no management session may be on, so a service no one listed " +
+	"fails rather than passes (decision 44 ruling 6). Disable it, or, if it serves no management session, report " +
+	"it to port49 to be listed with its source"
+
 const entrySays = "a management service that runs RPCs is enabled, and no lab cell measured the reply's " +
 	"`junoscript` deny closing it (decision 44 ruling 6; tests/lab/results/L26c-scripts-juniper_*.md): a session " +
 	"may reach RPCs through it past every deny port49 sends. Disable it, or pin a set that does not project Junos"
@@ -148,8 +185,10 @@ const entrySays = "a management service that runs RPCs is enabled, and no lab ce
 // statement that enables a management service but the CLI's is a finding,
 // since a deny does not bind the RPCs it serves. Under one that does (set
 // 1.2.0) the `junoscript` deny closes NETCONF for the session that carries
-// it, so only the services no lab cell measured it closing are findings,
-// wherever their word appears (rpcPastEntryDeny; decision 44 ruling 6). It
+// it, so a statement under `system services` is a finding where its service
+// is not on entryServices, and the services no lab cell measured the deny
+// closing are findings wherever their word appears (rpcPastEntryDeny;
+// decision 44 ruling 6). It
 // is an error where the input is not in that form, since then a service could
 // be missed: a line that is not a set, deactivate or protect statement, a
 // terminal's prompt or a ## line; a `set groups` line, or `apply-groups` as a
@@ -211,15 +250,22 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 		}
 		entry := !NetconfForbidden(d)
 		offList := false
-		if !entry && len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
-			options, ok := cliServices[path[2].text]
-			offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
+		if len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
+			if entry {
+				offList = path[2].value || !slices.Contains(entryServices, path[2].text)
+			} else {
+				options, ok := cliServices[path[2].text]
+				offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
+			}
 		}
 		anywhere, says := rpcAnywhere, servicesSays
 		if entry {
 			anywhere, says = rpcPastEntryDeny, entrySays
 		}
 		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) })
+		if entry && offList && !rpcWord {
+			says = unlistedSays
+		}
 		if offList || rpcWord {
 			findings = append(findings, ConfigFinding{Line: n, Text: joinWords(trimmed), Says: says})
 		}

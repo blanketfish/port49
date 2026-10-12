@@ -30,8 +30,9 @@ platforms:
     # Set 1.2.0: what the reply denies beside a deny beneath its bits, to close
     # the RPC entry points per user (decision 44). `op **` is on the list
     # because `op` still reached past the `junoscript` deny on both images
-    # (tests/lab/results/L26c-scripts-juniper_*.md, op row). A block may drop
-    # one, never add one.
+    # (tests/lab/results/L26c-scripts-juniper_*.md, op row). A block keeps the
+    # whole list or drops it with `[]`, and never adds one: a partial list is
+    # refused at load, since it leaves an entry open (decision 44 ruling 5).
     rpc_entry_denies: ["junoscript **", "op **"]
     # The keyword tree (platforms/keywords/1.2.0/juniper_junos.yaml) is proven
     # on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 only
@@ -47,9 +48,12 @@ platforms:
     # rest of L26c: L26c-entries-juniper_*.md, L26c-scripts-juniper_*.md). So
     # where a deny is the only guard beneath a sent bit or the baseline, the
     # reply adds rpc_entry_denies and keeps the capability shape; that subject
-    # has no NETCONF. `port49 devices check-config` fails J-Web
-    # (`web-management`) and JET/gRPC/gNMI (`extension-service`), which no
-    # measurement shows the deny closes.
+    # has no NETCONF. Under this set `port49 devices check-config` passes
+    # `netconf`, `ssh`, `telnet` and the non-RPC services it names under
+    # `system services`, and fails any other service there; and it fails REST
+    # (`rest`), J-Web (`web-management`), JET/gRPC/gNMI (`extension-service`),
+    # the XML API (`xnm-*`) and `outbound-ssh` wherever they are written, since
+    # no measurement shows the deny closes them (decision 44 ruling 6).
     #
     # Each bit's reach in rule form: every command a class holding that bit
     # alone ran or completed in the lab, the union of both images, as rules
