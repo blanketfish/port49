@@ -30,6 +30,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/keyfile"
@@ -141,6 +142,11 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; try again when it answers\n", sf.broker)
 		}
 		return 1
+	case refusedByCRL(err) != nil:
+		// The held certificate would meet the same broker certificate in the
+		// agent; going on would only fail one step later.
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 1
 	case usable && !sf.signIn && !errors.As(err, &refused):
 		why := ""
 		if down {
@@ -228,7 +234,11 @@ var writeIssuedPair = userconfig.WritePrivateAll
 // held certificate may carry on past it.
 func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool, certPath, keyPath string,
 	stdout, stderr io.Writer) (code int, err error) {
-	conf, err := fetchBrokerConfig(ctx, sf.broker, pool)
+	verify, err := sf.verifyBroker(stderr)
+	if err != nil {
+		return 2, err
+	}
+	conf, err := fetchBrokerConfig(ctx, sf.broker, pool, verify)
 	if err != nil {
 		return 1, err
 	}
@@ -273,7 +283,7 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err != nil {
 		return failed(err)
 	}
-	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr)
+	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr, verify)
 	if err != nil {
 		return failed(err)
 	}
@@ -316,7 +326,7 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 // bearer, over TLS 1.3 to the broker's CA alone and never through a proxy.
 // The token is in a header, never a URL, and is not kept.
 func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool, idToken string,
-	csr []byte) (api.IssueResponse, error) {
+	csr []byte, verify func(tls.ConnectionState) error) (api.IssueResponse, error) {
 	body, err := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(csr)})
 	if err != nil {
 		return api.IssueResponse{}, err
@@ -330,9 +340,13 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	}
 	req.Header.Set("Authorization", "Bearer "+idToken)
 	req.Header.Set("Content-Type", "application/json")
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool,
+		VerifyConnection: verify}}}
 	resp, err := c.Do(req)
 	if err != nil {
+		if refused := refusedByCRL(err); refused != nil {
+			return api.IssueResponse{}, refused
+		}
 		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
@@ -492,23 +506,44 @@ func pickProvider(c api.Config, issuer string) (api.OIDCProvider, error) {
 	return c.OIDC[0], nil
 }
 
+// refusedByCRL is err's broker CRL refusal (a revoked broker certificate, or
+// one that could not be checked under broker_crl: require), or nil. It is the
+// broker's certificate being refused, not the broker being down: a login must
+// not treat it as an outage.
+func refusedByCRL(err error) error {
+	var revoked *brokercrl.RevokedError
+	var unchecked *brokercrl.UncheckedError
+	switch {
+	case errors.As(err, &revoked):
+		return revoked
+	case errors.As(err, &unchecked):
+		return unchecked
+	}
+	return nil
+}
+
 // fetchBrokerConfig is the broker's GET /v1/config, which needs no
 // credential (design §17), over TLS 1.3 to the broker's CA alone and never
 // through a proxy: the broker is the operator's own.
-func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool) (api.Config, error) {
+func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
+	verify func(tls.ConnectionState) error) (api.Config, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool,
+		VerifyConnection: verify}}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(broker, "/")+"/v1/config", nil)
 	if err != nil {
 		return api.Config{}, err
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		var verify *tls.CertificateVerificationError
-		if errors.As(err, &verify) {
+		if refused := refusedByCRL(err); refused != nil {
+			return api.Config{}, refused
+		}
+		var cv *tls.CertificateVerificationError
+		if errors.As(err, &cv) {
 			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
-				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, agent.RotatedCA(verify.Err, bundleKept(broker)))
+				"CA (--broker-ca) is the CA that issued it%s", broker, cv.Err, agent.RotatedCA(cv.Err, bundleKept(broker)))
 		}
 		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}

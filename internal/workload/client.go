@@ -65,6 +65,10 @@ type Config struct {
 	Now               func() time.Time
 	// Warn says a late renewal; nil says nothing.
 	Warn func(format string, args ...any)
+	// VerifyBroker, when set, is the TLS config's VerifyConnection: it runs
+	// after the broker's chain verified and before a request is written
+	// (brokercrl.Checker.VerifyConnection). Its error is final.
+	VerifyBroker func(tls.ConnectionState) error
 }
 
 // CertError is a certificate the client will not present.
@@ -118,6 +122,15 @@ func (e *TLSError) Error() string {
 }
 
 func (e *TLSError) Unwrap() error { return e.Err }
+
+// BrokerRefusedError is a connection Config.VerifyBroker refused (a revoked
+// broker certificate, or one whose revocation could not be checked under
+// broker_crl: require). Nothing was sent. It is final: the deadline's retries
+// are for a broker that cannot answer, and this one was answered.
+type BrokerRefusedError struct{ Err error }
+
+func (e *BrokerRefusedError) Error() string { return e.Err.Error() }
+func (e *BrokerRefusedError) Unwrap() error { return e.Err }
 
 // TemporaryError is the deadline passing with Unminted not minted; Last is
 // the broker's last answer, or the connection's failure.
@@ -209,7 +222,17 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	var verify func(tls.ConnectionState) error
+	if cfg.VerifyBroker != nil {
+		verify = func(cs tls.ConnectionState) error {
+			if err := cfg.VerifyBroker(cs); err != nil {
+				return &BrokerRefusedError{Err: err}
+			}
+			return nil
+		}
+	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
+		VerifyConnection:     verify,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
 	// A redirect is never followed; its 3xx comes back as a RedirectError.
 	hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
@@ -342,6 +365,10 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			var refused *BrokerRefusedError
+			if errors.As(err, &refused) {
+				return refused
 			}
 			if te := tlsFailure(err); te != nil {
 				return te

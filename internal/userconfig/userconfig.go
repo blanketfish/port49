@@ -140,6 +140,11 @@ type File struct {
 	// OIDCRedirectPort is the loopback port a sign-in returns to; 0 picks a
 	// free one.
 	OIDCRedirectPort int `yaml:"oidc_redirect_port"`
+	// BrokerCRL is whether the broker's certificate is checked against the
+	// CRLs it names, before anything is sent to the broker: check, the
+	// default, refuses a revoked one and says an unobtainable list; require
+	// refuses that too; off checks nothing (plan 9c, ruling 9).
+	BrokerCRL string `yaml:"broker_crl"`
 
 	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
 	// through the same ownership walk; nil under WithoutCA or with no CA named.
@@ -233,6 +238,7 @@ func overlay(base, over File) File {
 	base.OIDCIssuer = cmp.Or(over.OIDCIssuer, base.OIDCIssuer)
 	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
 	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
+	base.BrokerCRL = cmp.Or(over.BrokerCRL, base.BrokerCRL)
 	return base
 }
 
@@ -285,6 +291,11 @@ func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
 	case "", "x509", "oidc":
 	default:
 		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509 or oidc", path, f.Method)
+	}
+	switch f.BrokerCRL {
+	case "", "check", "require", "off":
+	default:
+		return File{}, false, fmt.Errorf("%s: broker_crl %q: it is check, require or off", path, f.BrokerCRL)
 	}
 	if f.OIDCRedirectPort < 0 || f.OIDCRedirectPort > 65535 {
 		return File{}, false, fmt.Errorf("%s: oidc_redirect_port %d is not a port", path, f.OIDCRedirectPort)

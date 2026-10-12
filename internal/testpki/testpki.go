@@ -92,6 +92,8 @@ type Leaf struct {
 	// ExtraExtensions are added as given; one for subjectAltName replaces the
 	// generated one, for a SAN whose bytes crypto/x509 would normalize.
 	ExtraExtensions []pkix.Extension
+	// CRLDistributionPoints are the URLs the certificate names for its CRL.
+	CRLDistributionPoints []string
 }
 
 // Issue signs a leaf and returns it ready for crypto/tls, Leaf set.
@@ -118,6 +120,7 @@ func (ca *CA) Issue(l Leaf) (tls.Certificate, error) {
 		tmpl.ExtKeyUsage = nil
 	}
 	tmpl.ExtraExtensions = l.ExtraExtensions
+	tmpl.CRLDistributionPoints = l.CRLDistributionPoints
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.Key)
 	if err != nil {
 		return tls.Certificate{}, err

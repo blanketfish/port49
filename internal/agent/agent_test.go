@@ -304,6 +304,8 @@ type rigOpts struct {
 	// notAfter, when set, is the client certificate's end; the session
 	// connects.
 	notAfter time.Time
+	// verify is Config.VerifyBroker; the session is not connected.
+	verify func(tls.ConnectionState) error
 }
 
 func newRigWith(t *testing.T, o rigOpts) *rig {
@@ -372,8 +374,8 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 		}}
 	r.srv.StartTLS()
 	t.Cleanup(r.srv.Close)
-	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock})
-	if foreign || o.expired || o.wrongAnchor {
+	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock, VerifyBroker: o.verify})
+	if foreign || o.expired || o.wrongAnchor || o.verify != nil {
 		return r
 	}
 	if _, err := r.a.Connect(context.Background()); err != nil {
@@ -391,6 +393,33 @@ func TestAnUntrustedCertificateFailsConnect(t *testing.T) {
 	r := newRigSigned(t, true)
 	if _, err := r.a.Connect(context.Background()); err == nil {
 		t.Fatal("Connect with a certificate the broker does not trust must fail")
+	}
+}
+
+// A broker certificate Config.VerifyBroker refuses is refused after the chain
+// verified and before the first request: nothing reaches the broker, and the
+// error is the check's own words, not "unreachable" and not a trust failure
+// (plan 9c, ruling 9).
+func TestAConnectRefusedByVerifyBrokerSendsNothing(t *testing.T) {
+	calls := 0
+	r := newRigWith(t, rigOpts{verify: func(cs tls.ConnectionState) error {
+		calls++
+		if len(cs.VerifiedChains) == 0 {
+			t.Error("VerifyBroker ran before the chain verified")
+		}
+		return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+	}})
+	_, err := r.a.Connect(context.Background())
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "is revoked by a CRL") ||
+		strings.Contains(err.Error(), "does not verify") {
+		t.Fatalf("Connect = %v, want a *BrokerRefusedError saying why", err)
+	}
+	r.fb.mu.Lock()
+	reached := len(r.fb.addrs)
+	r.fb.mu.Unlock()
+	if calls != 1 || reached != 0 {
+		t.Fatalf("VerifyBroker ran %d times and the broker saw %d paths, want 1 and 0", calls, reached)
 	}
 }
 

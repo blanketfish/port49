@@ -54,12 +54,26 @@ type Config struct {
 	// BundleKept is whether port49 has kept a CA bundle for this broker, so
 	// the rotation hint may promise to keep the CA current (RotatedCA).
 	BundleKept bool
+	// VerifyBroker, when set, is the dialer's tls.Config.VerifyConnection: it
+	// runs after the broker's chain verified and before a request is written
+	// (brokercrl.Checker.VerifyConnection). Its error ends the connection.
+	VerifyBroker func(tls.ConnectionState) error
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
 // clock or the broker's, or holding a certificate the broker no longer
 // trusts. The answer is `port49 login`.
 var ErrSessionOver = errors.New("agent: the session is over; run `port49 login`")
+
+// BrokerRefusedError is a connection Config.VerifyBroker refused, after the
+// broker's chain verified and before a request was written: a revoked broker
+// certificate, or one whose revocation could not be checked under broker_crl:
+// require. It is not a broker that is down, and not a session that is over:
+// the next connection checks again.
+type BrokerRefusedError struct{ Err error }
+
+func (e *BrokerRefusedError) Error() string { return "agent: " + e.Err.Error() }
+func (e *BrokerRefusedError) Unwrap() error { return e.Err }
 
 // RevokedError is a session an operator's revocation ended (spec §5.1.4).
 // It is ErrSessionOver to errors.Is, but its text does not say to log in:
@@ -182,7 +196,17 @@ func New(c Config) *Agent {
 	a.cert = c.Cert
 	a.fingerprint = CertFingerprint(c.Cert)
 	cert := c.Cert
+	var verify func(tls.ConnectionState) error
+	if c.VerifyBroker != nil {
+		verify = func(cs tls.ConnectionState) error {
+			if err := c.VerifyBroker(cs); err != nil {
+				return &BrokerRefusedError{Err: err}
+			}
+			return nil
+		}
+	}
 	dialer := &tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
+		VerifyConnection: verify,
 		// Always presented. Go's default presents a certificate only when the
 		// broker's CA hint names its issuer, and otherwise sends none — so a
 		// certificate from the wrong CA would log in with no identity at all
@@ -252,6 +276,10 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 		var hup *hangUpError
 		if errors.As(err, &hup) {
 			return api.Config{}, hup
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.Config{}, no
 		}
 		return api.Config{}, fmt.Errorf("agent: connecting to the broker at %s: %w", a.broker, err)
 	}

@@ -214,6 +214,29 @@ func TestAFinalRefusalIsNotRetried(t *testing.T) {
 	}
 }
 
+// A broker certificate VerifyBroker refuses is a final answer, not a broker
+// that cannot answer: no retry, no wait to the deadline, and nothing reached
+// the broker (plan 9c, ruling 9).
+func TestAVerifyBrokerRefusalIsFinalAndSendsNothing(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	why := errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+	calls := 0
+	h.cfg.VerifyBroker = func(tls.ConnectionState) error { calls++; return why }
+	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || !errors.Is(err, why) || errors.Is(err, ErrTemporary) {
+		t.Fatalf("Mint = %v, want a final *BrokerRefusedError", err)
+	}
+	f.mu.Lock()
+	sent := len(f.keys)
+	f.mu.Unlock()
+	if calls != 1 || sent != 0 || len(h.slept) != 0 {
+		t.Fatalf("VerifyBroker ran %d times, the broker saw %d requests, the client slept %v; want 1, 0, none",
+			calls, sent, h.slept)
+	}
+}
+
 // statusUnavailable answers as the broker does when it cannot establish a
 // certificate's status, cause in its detail (certcheck.go).
 func statusUnavailable(cause string) func(http.ResponseWriter, api.MintRequest) {

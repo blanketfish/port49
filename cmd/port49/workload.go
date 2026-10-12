@@ -62,6 +62,7 @@ func workloadCmd(args []string, stdout, stderr io.Writer) int {
 type workloadFlags struct {
 	broker, brokerCA, cert, key string
 	deadline                    time.Duration
+	brokerCRL                   string
 }
 
 func (w *workloadFlags) register(fs *flag.FlagSet) {
@@ -69,6 +70,8 @@ func (w *workloadFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&w.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.StringVar(&w.cert, "cert", "", "the workload's certificate (PEM), read at every run")
 	fs.StringVar(&w.key, "key", "", "its private key (PEM), readable by its owner alone")
+	fs.StringVar(&w.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
+		"(the default) refuses a revoked one, require refuses one that cannot be checked too, off checks nothing")
 	fs.DurationVar(&w.deadline, "deadline", workload.DefaultDeadline, "how long to retry a broker that cannot answer now")
 }
 
@@ -84,8 +87,12 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("%s holds no PEM certificate", w.brokerCA)
 	}
+	verify, err := brokerVerifier(w.brokerCRL, func(m string) { fmt.Fprintf(stderr, "%s: warning: %s\n", cmd, m) })
+	if err != nil {
+		return nil, err
+	}
 	return workload.New(workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
-		Deadline: w.deadline, Warn: func(format string, args ...any) {
+		VerifyBroker: verify, Deadline: w.deadline, Warn: func(format string, args ...any) {
 			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
 		}})
 }

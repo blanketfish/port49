@@ -27,10 +27,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
@@ -202,6 +204,50 @@ type sessionFlags struct {
 	redirectPort            int
 	// oidcCAPEM is oidc_ca's bytes, read by userconfig.Load through its walk.
 	oidcCAPEM []byte
+	// brokerCRL is broker_crl: check (the default), require or off (plan 9c,
+	// ruling 9). verify is the one check every connection this process makes
+	// to the broker shares, made on first use.
+	brokerCRL string
+	verify    func(tls.ConnectionState) error
+	verified  bool
+}
+
+// brokerVerifier is the VerifyConnection that checks the broker's
+// certificate against its CRLs under mode, nil for off. The lists are kept in
+// ~/.port49/crl; a directory that cannot be made is said once and the lists
+// are fetched each run instead. warn says, once, a list that could not be
+// had under check.
+func brokerVerifier(mode string, warn func(string)) (func(tls.ConnectionState) error, error) {
+	m, err := brokercrl.ParseMode(mode)
+	if err != nil || m == brokercrl.ModeOff {
+		return nil, err
+	}
+	var once sync.Once
+	var chk *brokercrl.Checker
+	return func(cs tls.ConnectionState) error {
+		once.Do(func() {
+			dir, err := userconfig.PrivateDir(filepath.Join(userconfig.Dir(), "crl"), "kept CRL directory")
+			if err != nil {
+				warn(fmt.Sprintf("the CRLs cannot be kept (%v); they are fetched again at each run", err))
+				dir = ""
+			}
+			chk = brokercrl.New(dir, m, time.Now, warn)
+		})
+		return chk.VerifyConnection(cs)
+	}, nil
+}
+
+// verifyBroker is the check this session's connections to the broker make,
+// said to log.
+func (s *sessionFlags) verifyBroker(log io.Writer) (func(tls.ConnectionState) error, error) {
+	if !s.verified {
+		v, err := brokerVerifier(s.brokerCRL, func(m string) { fmt.Fprintln(log, "port49: warning:", m) })
+		if err != nil {
+			return nil, err
+		}
+		s.verify, s.verified = v, true
+	}
+	return s.verify, nil
 }
 
 // hardenAgent is harden, a var so TestMain makes it a no-op: the tests that
@@ -227,6 +273,8 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
+	fs.StringVar(&s.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
+		"(the default) refuses a revoked one, require refuses one that cannot be checked too, off checks nothing")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
 		"key by key; each flag overrides its key")
@@ -268,6 +316,7 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 		s.oidc = f.Method == "oidc"
 	}
 	s.issuer = cmp.Or(s.issuer, f.OIDCIssuer)
+	s.brokerCRL = cmp.Or(s.brokerCRL, f.BrokerCRL)
 	if !set["redirect-port"] {
 		s.redirectPort = f.OIDCRedirectPort
 	}
@@ -276,13 +325,16 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 
 // complete is whether the command line names all this command needs, so
 // the config file is not read: the agent child is handed all of it, and a
-// certificate login with all four flags reads no file, as before.
+// certificate login with all four flags reads no file, as before. broker_crl
+// is the exception: without --broker-crl the file is read for it, so a
+// require in the file is not skipped by a command line that names the rest.
 func (s *sessionFlags) complete() bool {
-	return !s.oidc && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != ""
+	return !s.oidc && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" && s.brokerCRL != ""
 }
 
 func (s *sessionFlags) args() []string {
-	return []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA, "--socket", s.socket}
+	return []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA,
+		"--broker-crl", cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck)), "--socket", s.socket}
 }
 
 // brokerPool is the broker CA's pool, from the bytes the config file's walk
@@ -358,8 +410,12 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, err
 	}
+	verify, err := s.verifyBroker(log)
+	if err != nil {
+		return agent.Config{}, err
+	}
 	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
-		BundleKept: bundleKept(s.broker)}, nil
+		BundleKept: bundleKept(s.broker), VerifyBroker: verify}, nil
 }
 
 // login logs in with the certificate --cert and --key name, or with --oidc
