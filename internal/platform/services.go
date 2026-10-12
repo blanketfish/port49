@@ -18,7 +18,7 @@ import (
 // around every deny port49 sends: `<get-configuration>` past `deny show
 // configuration **`.
 //
-// Whether it is sufficient is unmeasured (L26c, open). With `netconf ssh`
+// Whether it is sufficient is unmeasured (L59, open). With `netconf ssh`
 // still configured, a projected CLI session opened NETCONF itself by typing
 // `xml-mode netconf need-trailer` and ran a native RPC its deny did not name,
 // within its bits (`view` without view-configuration got an empty
@@ -137,7 +137,7 @@ func NetconfForbidden(d Dialect) bool { return RPCServicesChecked(d) && len(d.RP
 // appears: REST (the lab's tunnel reached it in no cell, the control's
 // included, so G2 kept it; tests/lab/results/L26c-scripts-juniper_*.md),
 // J-Web and JET/gRPC/gNMI (no cell measures them), the XML API and
-// outbound-ssh (decision 44 ruling 6, *provisional on L26c*).
+// outbound-ssh (decision 44 ruling 6, *provisional on L59*).
 var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "xnm-ssh", "xnm-ssl",
 	"xnm-clear-text", "outbound-ssh"}
 
@@ -165,7 +165,7 @@ var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "
 // to a user who logs in; static-subscribers, subscriber-management and
 // subscriber-management-helper run broadband subscriber sessions. Whether a
 // `show configuration` deny holds against a file read of /config through
-// ftp, or ssh's sftp-server, is unmeasured (L26c, open). The hierarchy's
+// ftp, or ssh's sftp-server, is unmeasured (L59, open). The hierarchy's
 // others stay off it: tftp-server serves files with no login, and
 // service-deployment, outbound-https, grpc-tunnel, webapi, flow-tap-dtcp,
 // jeb, http, netproxy, reverse, resource-monitor, bbe-stats-service and
