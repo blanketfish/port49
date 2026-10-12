@@ -3793,7 +3793,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   (`port49 workload token --key pkcs11:… --touch-key pkcs11:…`). `port49 explain` prints the
   effective requirement and where each part came from; `policy diff` fails on a weakening (a
   method added to `accept`, a longer `reuse_for`, a level removed, `applies_to_machines` turned
-  off) unless a session test asserts the new `per_login_mfa:`, as it does for a privilege raise;
+  off, a requirement removed) unless a session test asserts the new `per_login_mfa:`, as it does for a privilege raise;
   a tightening only prints.
 - **Upgrade first.** Upgrade every broker and daemon before adding `per_login_mfa` to a policy: a
   replica that does not know the key refuses the policy and keeps serving the old one, with no

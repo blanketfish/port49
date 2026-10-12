@@ -930,7 +930,7 @@ credential:
   iss          https://sso.example.com
   sub          a7f3-…              revokes every session of a principal
   sid          9c2b-…              back-channel logout names this
-  amr          ["pwd", "mfa"]      recorded; read only by `idp_mfa` (§5.1.5)
+  amr          ["pwd", "mfa"]      recorded, not acted upon (§5.1.5's `idp_mfa` reads a fresh ID token's)
   acr          urn:…:loa2
 
   # per-login MFA (plan 9c; §5.1.5)
@@ -9177,8 +9177,8 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **24. A weakening is gated like a privilege raise** (controller's Task 1 review ruling,
   2026-10-12; a change from the plan's warning). `policy diff` fails on a `per_login_mfa`
   weakening (§12) unless a passing session test in the new version asserts the new requirement
-  with `per_login_mfa:`: a method added to `accept`, a longer `reuse_for`, a level removed, or
-  `applies_to_machines` turned off. Why: a weakening is the same kind of change as a raise, in
+  with `per_login_mfa:`: a method added to `accept`, a longer `reuse_for`, a level removed,
+  `applies_to_machines` turned off, or a requirement removed. Why: a weakening is the same kind of change as a raise, in
   what a stolen laptop can do, and a warning nobody reads at 3am is no gate. A tightening only
   prints.
 
