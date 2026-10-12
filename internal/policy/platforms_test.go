@@ -740,21 +740,30 @@ func TestABlockKeepsTheWholeEntryDenyListOrDropsIt(t *testing.T) {
 	for _, c := range []struct {
 		block string
 		ok    bool
-		want  string
+		want  []string
 	}{
-		{"    rpc_entry_denies: [\"junoscript **\", \"op **\"]\n", true, ""},
-		{"    rpc_entry_denies: []\n", true, ""},
-		{"    rpc_entry_denies: [\"junoscript **\"]\n", false, "entries left out: op **"},
-		{"    rpc_entry_denies: [\"op **\"]\n", false, "entries left out: junoscript **"},
-		{"    rpc_entry_denies: [\"junoscript **\", \"op **\", \"start **\"]\n", false, "rpc_entry_denies[2]"},
+		{"    rpc_entry_denies: [\"junoscript **\", \"op **\"]\n", true, nil},
+		{"    rpc_entry_denies: []\n", true, nil},
+		{"    rpc_entry_denies: [\"junoscript **\"]\n", false, []string{"entries left out: op **",
+			"partial list leaves an RPC entry open",
+			// What `[]` costs, so the remedy the message offers is not taken blind (F14).
+			"the platform then renders as set 1.1.0 does: a deny beneath a sent bit fails closed, and " +
+				"check-config requires NETCONF off"}},
+		{"    rpc_entry_denies: [\"op **\"]\n", false, []string{"entries left out: junoscript **"}},
+		{"    rpc_entry_denies: [\"junoscript **\", \"op **\", \"start **\"]\n", false, []string{"rpc_entry_denies[2]"}},
+		// A block that adds one and omits one reports both in one load.
+		{"    rpc_entry_denies: [\"junoscript **\", \"start **\"]\n", false, []string{"rpc_entry_denies[1]",
+			"entries left out: op **"}},
 	} {
 		_, err := Parse([]byte(head+c.block+scopeOK+"roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"]}\n"+
 			subjOK+grantOK), env())
-		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), c.want) {
+		if (err == nil) != c.ok {
 			t.Errorf("%q: %v", c.block, err)
 		}
-		if err != nil && c.want == "entries left out: op **" && !strings.Contains(err.Error(), "partial list leaves an RPC entry open") {
-			t.Errorf("%q: %v", c.block, err)
+		for _, w := range c.want {
+			if err == nil || !strings.Contains(err.Error(), w) {
+				t.Errorf("%q: want %q in %v", c.block, w, err)
+			}
 		}
 	}
 	// A dropped list is empty, and the platform renders as set 1.1.0 does: an

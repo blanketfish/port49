@@ -694,10 +694,14 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 			}
 		}
 	}
+	// Both faults are reported in one error: a block that adds an entry and
+	// omits one would otherwise need two load runs to fix.
+	var faults []string
 	for i, rule := range d.RPCEntryDenies {
 		if !slices.Contains(ref.RPCEntryDenies, rule) {
-			return fmt.Errorf("%s.rpc_entry_denies[%d]: platform set %s does not measure this deny closing an RPC "+
-				"entry point on %s; a block may keep the whole list or drop it, not add one (spec §8, §15 L26c)", at, i, version, shippedAs)
+			faults = append(faults, fmt.Sprintf("%s.rpc_entry_denies[%d]: platform set %s does not measure this deny "+
+				"closing an RPC entry point on %s; a block may keep the whole list or drop it, not add one "+
+				"(spec §8, §15 L26c)", at, i, version, shippedAs))
 		}
 	}
 	// The whole list or none: a partial list leaves an RPC entry open (`op url`
@@ -711,10 +715,14 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 			}
 		}
 		if len(left) > 0 {
-			return fmt.Errorf("%s.rpc_entry_denies: entries left out: %s; a partial list leaves an RPC entry open, "+
-				"so keep platform set %s's whole list or write `[]` (spec §8, §15 L26c)", at,
-				strings.Join(left, ", "), version)
+			faults = append(faults, fmt.Sprintf("%s.rpc_entry_denies: entries left out: %s; a partial list leaves an "+
+				"RPC entry open, so keep platform set %s's whole list or write `[]` (the platform then renders as set "+
+				"1.1.0 does: a deny beneath a sent bit fails closed, and check-config requires NETCONF off) "+
+				"(spec §8, §15 L26c)", at, strings.Join(left, ", "), version))
 		}
+	}
+	if len(faults) > 0 {
+		return errors.New(strings.Join(faults, "; "))
 	}
 	return nil
 }
