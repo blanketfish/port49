@@ -1,4 +1,4 @@
-.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static evidence image compose-smoke
+.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -126,6 +126,11 @@ lab-oidc:
 # L45 and L46; this runs L55 alone.
 lab-oidc-l55:
 	go test -tags lab ./tests/lab/ -run 'TestL55' -count=1 -v -timeout 30m
+
+# L61 (plan 9c): Keycloak's amr and acr for idp_mfa, a password-and-OTP realm
+# flow against the same compose Keycloak. Needs Docker with Compose v2.24.4+.
+lab-mfa-idp:
+	go test -tags lab ./tests/lab/ -run 'TestL61' -count=1 -v -timeout 30m
 
 # L56 (plan 9b): port49-issued certificates end to end, bin/port49 against
 # the compose stack's Keycloak, broker and vEOS. Needs the compose stack,
