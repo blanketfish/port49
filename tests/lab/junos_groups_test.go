@@ -381,8 +381,8 @@ func TestL57JunosGroups(t *testing.T) {
 		}
 		l.entryResult(t, "L57", "What a Junos configuration capture carries for configuration groups that reach port49's "+
 			"template class p49-remote: a `<*>` and a `<p49-*>` group applied at the top, one kept off the class by "+
-			"`apply-groups-except`, one applied nowhere, one applied from inside another, one applied on the class itself, and a group's idle-timeout "+
-			"beside the class's own; in both inherited set forms, plain set form and the inherited curly form; and "+
+			"`apply-groups-except`, one applied nowhere, one applied from inside another, one applied on the "+
+			"class itself, and a group's idle-timeout beside the class's own; in both inherited set forms, plain set form and the inherited curly form; and "+
 			"what a session landing in `remote` holds (spec §15 L57; decision 44 ruling 7).", b.String())
 	})
 }

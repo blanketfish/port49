@@ -486,7 +486,8 @@ func TestCheckServicesReadsRoutingInstances(t *testing.T) {
 			t.Errorf("1.1.0 %s: %+v %v", line, f, err)
 		}
 	}
-	if f, err := CheckServices(d11["juniper_junos"], []byte(version+"set routing-instances ri1 system services ssh root-login deny\n")); len(f) != 0 || err != nil {
+	capture := []byte(version + "set routing-instances ri1 system services ssh root-login deny\n")
+	if f, err := CheckServices(d11["juniper_junos"], capture); len(f) != 0 || err != nil {
 		t.Errorf("1.1.0 ssh under a routing instance: %+v %v", f, err)
 	}
 }

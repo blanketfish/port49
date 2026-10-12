@@ -439,7 +439,8 @@ func TestTemplateDriftReadsCRLF(t *testing.T) {
 	if missing, extra, err := TemplateDrift([]byte(clean), d, time.Hour); err != nil || len(missing) != 0 || len(extra) != 0 {
 		t.Errorf("crlf: %q %+v %v", missing, extra, err)
 	}
-	joined := strings.Join(cleanCapture(t, d), "\n") + "\nset system login class p49-readonly login-tip\rset system login class p49-readonly permissions all\n"
+	joined := strings.Join(cleanCapture(t, d), "\n") +
+		"\nset system login class p49-readonly login-tip\rset system login class p49-readonly permissions all\n"
 	line := fmt.Sprintf("line %d ", len(cleanCapture(t, d))+1)
 	if _, _, err := TemplateDrift([]byte(joined), d, time.Hour); err == nil || strings.Contains(err.Error(), "permissions") ||
 		!strings.HasPrefix(err.Error(), line) {

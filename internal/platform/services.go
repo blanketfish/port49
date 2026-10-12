@@ -159,9 +159,10 @@ var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "
 // read 2026-10-12) that serve no management session: database-replication
 // defines the subscriber session database replication process, whose only
 // option is traceoptions (its own page, "database-replication (Subscriber
-// Session Database)", .../statement/database-replication-edit-system-services.html,
-// read 2026-10-12); dhcp and
-// dhcp-local-server serve addresses; dns is a DNS proxy and dynamic-dns a
+// Session Database)",
+// .../statement/database-replication-edit-system-services.html, read
+// 2026-10-12); dhcp and dhcp-local-server serve addresses; dns is a DNS
+// proxy and dynamic-dns a
 // client updating one; finger answers who is logged in; ftp serves files
 // to a user who logs in; static-subscribers, subscriber-management and
 // subscriber-management-helper run broadband subscriber sessions. Whether a
