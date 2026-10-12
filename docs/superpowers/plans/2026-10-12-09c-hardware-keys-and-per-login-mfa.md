@@ -14,7 +14,7 @@ broker certificate against the CRL it names. The key unplugged mid-session never
 **What changes, in one screen:**
 - **Keys** (`internal/hwkey`). `key:` (and `--key`) takes a path, as today, or a key reference:
   `pkcs11:` (RFC 7512), `tpm:` (a TSS2 key file or a persistent handle), `secure-enclave:` (gated on
-  Task 2). `hwkey.Open` returns a `hwkey.Key`, a `crypto.Signer` with `State`, `Unlock` and `Close`,
+  Task 2). `clientkey.Open` returns a `hwkey.Key`, a `crypto.Signer` with `State`, `Unlock` and `Close`,
   which goes into `agent.Config.Cert.PrivateKey` unchanged; `api.SignRefresh` takes it unchanged.
   PKCS#11 through `github.com/ebitengine/purego` v0.11.1, TPM through `github.com/google/go-tpm`
   v0.9.8, no cgo. purego links the binary against the system's dynamic loader, so the purego
@@ -54,10 +54,15 @@ broker certificate against the CRL it names. The key unplugged mid-session never
   SER8's own TPM), L63 (the Secure Enclave from an unsigned binary; Task 2).
 
 **Architecture:**
-- `internal/hwkey`: `Key`, `State`, `Open`, `IsRef`, `LoadPair`, errors. Subpackages
-  `pkcs11` (RFC 7512 URI and the DER conversion in every build; the purego binding, signer and
-  the test harness's generation under `hwkey_dlopen`), `tpm` (go-tpm signer, TSS2 key file,
-  generation; every build), `secureenclave` (darwin, `hwkey_dlopen`, gated).
+- `internal/hwkey`: `Key`, `State`, `IsRef`, errors; a leaf that imports no backend (re-review R3).
+  Subpackages `pkcs11` (RFC 7512 URI and the DER conversion in every build; the purego binding,
+  signer and the test harness's generation under `hwkey_dlopen`), `tpm` (go-tpm signer, TSS2 key
+  file, generation; every build), `secureenclave` (darwin, `hwkey_dlopen`, gated); each imports
+  `hwkey`, never the reverse.
+- `internal/clientkey`: `Open`, `LoadPair`, `HasPKCS11`: a client key from a path or a
+  reference, dispatched to the backends; `open_dlopen.go` and `open_static.go` are its build
+  split. It imports `hwkey`, `pkcs11`, `tpm` and `keyfile`; `cmd/port49` and `internal/workload`
+  import it (re-review R3).
 - `internal/pivattest`: YubiKey PIV attestation, verified against the operator's roots.
 - `internal/brokercrl`: the client's check of the broker chain, over `certstatus.Checker`.
 - `internal/policy`: `PerLoginMFA`, `MFARequirement`, `Resolution.PerLoginMFA`, `defaults:`,
@@ -163,7 +168,10 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   `auto` is a token when `touch_key` and `issued_key` are both set (so the session key sits on the
   token a touch proves from, ruling 12), else the TPM on Linux where a key can be created there,
   the Secure Enclave on macOS once Task 14 lands, else the file; the login says which in one line.
-  A named store that cannot be used refuses before any browser opens, as decision 43 ruling 18
+  `auto` passes over a store this build lacks and says so in that line: in the static build
+  (ruling 22) a fleet's `touch_key` and `issued_key` do not make `auto` pick `pkcs11` and refuse;
+  it says "this port49 was built without PKCS#11 support, so issued_key is not used; use the
+  client release for it" and goes on to the TPM or the file (re-review R10). A named store that cannot be used refuses before any browser opens, as decision 43 ruling 18
   refuses an issuance it cannot make. **For `pkcs11`, port49 never generates a key or writes an
   object on the token**: on a YubiKey both need the PIV management key (`CKU_SO`), and asking every
   user for it at each sign-in is fleet toil and a secret port49 should never hold. `issued_key`
@@ -221,9 +229,18 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   scope core accepts [hardware_key_touch] and role netadmin accepts [idp_mfa] on core-sw01; no
   method meets both". A machine-applying level whose accept leaves only `idp_mfa` for a machine is
   the same error (a machine has no sign-in). **Where it is a load error, and where a quarantine**
-  (pre-flight I4): `port49 policy check`, `policy test` and `policy diff` fail on it, and a reload
-  of an edited policy file is refused with it (the bundle in force keeps serving, as for any
-  refused policy edit). When the policy did not change, at a start, on an inventory reload (a
+  (pre-flight I4; re-review R5): a policy edit is refused only for the MFA entries it
+  *introduces*, entries absent from the in-force policy's `MFADisjoint()` evaluated over the same
+  inventory. A reload of an edited policy file that introduces one is refused with it (the bundle
+  in force keeps serving, as for any refused policy edit); a policy and inventory loaded together
+  (`loadBoth`) are judged by the same rule, against the in-force policy over the new inventory
+  (the `base` `loadBoth` already builds for the admission bound). An entry already in force stays
+  quarantined and does not block an unrelated edit: a grant revocation at 3am loads while
+  core-sw01 is quarantined over MFA. `port49 policy diff` fails on an entry the new version
+  introduces (its existing "quarantined for a new cause" rule), and `port49 policy test` fails on
+  every quarantine, this one included, as it does today for every cause (there is no `policy
+  check` command; `policy test` is the CI gate). When the policy did not change, at a start, on an
+  inventory reload (a
   source-of-truth sync adding `tier: core`) or at a grant's expiry, the device is quarantined with
   that cause, as `checkDevice` quarantines a composition that will not compile: refused at mint,
   closed by the daemon, the rest of the fleet and every later inventory edit still served.
@@ -272,7 +289,15 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 - **R14. How the proof rides the mint.** The mint answers each item under an unmet requirement
   `deny per_login_mfa_required`, with `per_login_mfa: {device, challenge, expires_at, accept,
   methods, reuse_for_seconds, levels}`; one challenge per request, 32 random bytes, kept 5 minutes
-  (`PutOnce`), bound to the principal, the certificate and the agent session. The proof is posted
+  (`PutOnce`), bound to the principal, the certificate and the agent session. **Each record is
+  keyed by its binding** (re-review R1), so a wrong caller's take misses with `ErrNotFound` and
+  spends nothing (`TakeOnce` removes the record whoever asks): the challenge under
+  `plm-challenge/` + hex SHA-256(challenge ‖ 0 ‖ principal), the principal alone because an
+  `idp_mfa` post has no client certificate; the proved record under `plm-proved/` + hex
+  SHA-256(challenge ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ agent_sha256). Each path computes the
+  key from its own caller: bob posting alice's challenge, or minting with it, finds nothing. A
+  touch post from alice's other certificate takes her challenge and is then refused on the
+  fingerprint, spending it; that is the same person, never another's denial. The proof is posted
   to `POST /v1/mfa`: on the held connection for a touch, with a bearer ID token over a fresh
   connection for `idp_mfa` (the agent never holds an ID token, decision 43 ruling 1). The retried
   mint carries `per_login_mfa_challenge`, and the proof made for that challenge covers that
@@ -287,13 +312,21 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   the reservation before the requirement is read, so a spent proof never turns a minted token into
   `per_login_mfa_required` (minor 2). The touch does not hold the wire: the agent reads the
   exporter value with the wire, releases it for the touch (up to the token's touch timeout, about
-  15s), and takes it again to post; a connection that changed meanwhile is refused at the broker
-  (another exporter value) and the CLI says "the connection changed during the touch; run it
-  again". So `port49 revoke` never waits behind a touch (minor 4).
+  15s), and takes it again to post. Having taken it back, the agent reads the exporter value again
+  and compares it with the one it signed over; if the connection changed meanwhile it does not
+  post and says "the connection changed during the touch; run it again" (re-review R6). Posting it
+  would be refused at the broker (another exporter value) as `per_login_mfa_refused`, the alert
+  §5.7 reserves for someone trying another token, and would spend the challenge. So `port49
+  revoke` never waits behind a touch (minor 4), and a reconnect during one fires no alert.
 - **R15. Reuse.** A proof is kept as `(SHA-256(principal ‖ 0 ‖ certificate fingerprint ‖ 0 ‖
-  agent session), method) → proved_at` (`PutMFAProof`, the later kept, 8h). The challenge and
-  proved records (`PutOnce`, which crypt passes through unsealed) keep `SHA-256(agent session)`,
-  never the value (pre-flight minor 16). It covers a later
+  agent_sha256), method) → proved_at` (`PutMFAProof`, the later kept, 8h), where `agent_sha256` is
+  the hex SHA-256 of the agent session. The challenge and
+  proved records (`PutOnce`, which crypt passes through unsealed) keep `agent_sha256`,
+  never the value (pre-flight minor 16). `POST /v1/mfa` takes the binding (principal, fingerprint,
+  `agent_sha256`) from the challenge record for both methods, never from its own request: an
+  `idp_mfa` proof comes from the CLI over a fresh connection with no `Port49-Agent-Session`, and
+  is kept for reuse all the same. A proof is not kept for reuse only when the challenge record's
+  `agent_sha256` is empty (a workload, a 7h bearer) (re-review R2). It covers a later
   login to a device whose effective `accept` holds the method and whose `reuse_for` has not passed
   since. The agent session is 32 random bytes the agent draws at start and sends as
   `Port49-Agent-Session` on every request; never logged. Another agent, or the same person on
@@ -311,7 +344,8 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   after a proof names the proved challenge (`per_login_mfa_challenge` on `POST
   /v1/refresh/challenge` and on the refresh), so `reuse_for: 0m` works there as at the mint, and a
   challenge request naming a challenge proved by this caller is exempt from the connection's
-  10s refresh pacing once: the request takes the single-use proved record for the refresh that
+  10s refresh pacing once: the request takes the single-use proved record, under the key its own
+  caller computes (ruling 14), for the refresh that
   follows, so the pacing still bounds refreshes to one per proof. Without it, the refresh right after a touch would be
   answered `refresh_too_soon` (pre-flight I5).
 - **R17. What people see.** A prompt: `core-sw01 asks for a second factor at each login: scope core
@@ -339,7 +373,7 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 - **R21. Workloads.** A machine meets a requirement only under `applies_to_machines: true`, and only
   by `hardware_key_touch` (`port49 workload token --touch-key REF`, stderr saying "touch the key").
   A workload's key may be a reference too (`--key pkcs11:…`): `workload.LoadCertificate` goes
-  through `hwkey.LoadPair`, the PIN from `pin-source` alone (a workload has no terminal). Since a
+  through `clientkey.LoadPair`, the PIN from `pin-source` alone (a workload has no terminal). Since a
   touch proves only from the token holding the connection key (ruling 12), an
   `applies_to_machines: true` level is met only by a workload whose `--key` and `--touch-key` are on
   one token; `policy test` and explain say "applies to this machine: provable only with a pkcs11
@@ -349,14 +383,17 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   (its fakecgo imports the system loader), and the image's base, `distroless/static`, has no
   loader: a `port49` that imports purego would not exec there, nor on Alpine/musl. So the purego
   backends (`internal/hwkey/pkcs11`'s binding and `secureenclave`) build only under the tag
-  `hwkey_dlopen`. Without it, `hwkey.Open` refuses `pkcs11:` and `secure-enclave:` naming the
+  `hwkey_dlopen`. Without it, `clientkey.Open` refuses `pkcs11:` and `secure-enclave:` naming the
   build: "this port49 was built without PKCS#11 support (the static build, as in the container
-  image); use the client release". The static build (`make build`, the image) keeps
-  `CGO_ENABLED=0` with no tag and stays one of "the four static binaries" (spec §13, the image
-  ruling at line ~7499) and the design's "single static binary" (§ at line ~1958); `make check-static` fails when it is not `statically linked`. The
-  client build (`make build-client`, and plan 12's desktop and client release artifacts, the ones
-  people run `port49 login` from) adds `-tags hwkey_dlopen` and is dynamically linked against the
-  loader every desktop Linux and macOS has. TPM (go-tpm, pure Go) and file keys are in both. No
+  image); use the client release". The static build (`make build`, the image) is built with
+  `CGO_ENABLED=0` and no tag (`make build` sets `CGO_ENABLED=0` from this plan on; before it, it
+  inherited the environment's; re-review R9) and stays one of "the four static binaries" (spec
+  §13, the image ruling at line ~7499) and the design's "single static binary" (§ at line ~1958);
+  `make check-static` fails when it is not `statically linked`. The client build (`make
+  build-client`, writing `bin/port49-client` so it never overwrites `make build`'s `bin/port49`,
+  and plan 12's desktop and client release artifacts, the ones people run `port49 login` from)
+  adds `-tags hwkey_dlopen` and is dynamically linked against the loader every desktop Linux and
+  macOS has. TPM (go-tpm, pure Go) and file keys are in both. No
   route keeps one static binary and PKCS#11: a static binary cannot `dlopen`, and a PKCS#11 module
   is a shared library; a helper binary or p11-kit's RPC would add a process boundary for no gain
   over a second artifact. Which artifact each deployment shape ships is plan 12's (deployment is
@@ -427,13 +464,48 @@ it (Task 1 Step 6). None cuts a spec feature or weakens a check.
 - **Minor 17** swtpm version, AppArmor, CRL retry cost, upgrade order → Tech Stack, the workflow's
   swtpm smoke step, R9's one-minute failed-fetch memory, the operator notes' "Upgrade first".
 
+## Re-review rulings (2026-10-12)
+
+The re-review of the pre-flight fixes (GO on one condition: re-review R1–R5 in before the tasks
+they touch) was ruled as below, each checked against the code at `7917f78`. As with the
+pre-flight rulings, each is folded into the plan ruling it amends, so decision 45 carries it. The
+re-review's numbers (re-review R1–R10) are not the plan's rulings R1–R22.
+
+- **Re-review R1** `TakeOnce` spends another caller's record → R14, R16: the challenge keyed by
+  SHA-256(challenge ‖ 0 ‖ principal), the proved record by SHA-256(challenge ‖ 0 ‖ principal ‖ 0
+  ‖ fingerprint ‖ 0 ‖ agent_sha256); a wrong caller's take misses. Tasks 11, 12.
+- **Re-review R2** an `idp_mfa` proof never kept → R15: `proofKey` over `agent_sha256`, the
+  binding from the challenge record for both methods; Task 11's idp test gains a reuse step.
+- **Re-review R3** import cycles (Ryan's ruling: `hwkey` stays a leaf; the opener in a new
+  package) → `internal/clientkey` holds `Open`, `LoadPair`, `HasPKCS11` and the build split, beside
+  `keyfile`; `keyref` was not taken because `key_ref` already names a device's key in port49d.yaml.
+  Tasks 3, 5, 7, 13, 14.
+- **Re-review R4** test import cycles, counters in `_test.go` files → the counters' readers,
+  `Finalize` and `ResetModules` in `pkcs11/testhooks.go` (`hwkey && hwkey_dlopen`, a non-test
+  file); the SoftHSM tests are `package pkcs11_test`, and the swtpm tests `package tpm_test` for
+  the same cycle through `hwtest.SWTPM`. Tasks 3, 4, 5, 7.
+- **Re-review R5** I4's reload rule freezing policy edits → R11: refuse only entries a policy edit
+  introduces, `loadBoth` by the same rule, `policy diff` on new entries, `policy test` on every
+  quarantine as today. Task 9.
+- **Re-review R6** a reconnect during a touch firing the alert → R14: the agent compares the
+  exporter value after taking the wire back and does not post. Task 13.
+- **Re-review R7** wrong `Resolve` arity → Task 9's test calls `Resolve(principal, d, now)`
+  (resolve.go:102).
+- **Re-review R8** `IssuedPathsIn`'s callers → its signature stays; the TPM pair's paths are a new
+  `IssuedTPMPathsIn`, so `IssuedPaths`, `CABundlePathIn`, `userconfig_test.go` and
+  `tests/lab/l56_test.go:189,200` are untouched. Task 7.
+- **Re-review R9** (Ryan's ruling) → R22: `make build` sets `CGO_ENABLED=0`; `make build-client`
+  writes `bin/port49-client`. Tasks 3, 16, operator notes.
+- **Re-review R10** `auto` picking a store the build lacks → R7: `auto` passes over it and says
+  so; `TestChooseIssuedStore` gains the case. Task 7.
+
 ## Global Constraints
 
 - Go 1.26+, `gofmt` and `go vet` clean, `CGO_ENABLED=0` for every binary; the only new modules are
   `github.com/ebitengine/purego` v0.11.1 and `github.com/google/go-tpm` v0.9.8.
 - Static stays static (ruling 22): nothing outside a `//go:build hwkey_dlopen` file imports
-  purego, directly or through a package; `make check-static` proves it for `bin/port49` built
-  without the tag. `make vet` vets both tag sets.
+  purego, directly or through a package; `make check-static` proves it for `bin/port49-static`,
+  built as `make build` builds `bin/port49` (`CGO_ENABLED=0`, no tag; re-review R9). `make vet` vets both tag sets.
 - snake_case for all data: `per_login_mfa`, `accept`, `reuse_for`, `applies_to_machines`,
   `hardware_key_touch`, `idp_mfa`, `issued_key_store`, `issued_key`, `touch_key`, `broker_crl`,
   `attestation_roots_file`, `amr`, `acr_values`, `per_login_mfa_challenge`, `mfa_method`, `mfa_at`,
@@ -558,10 +630,11 @@ every login, at most 8h. `applies_to_machines` is false unless spelled out.
 or attached), a scope selecting by an attribute (a device class or tag), and a scope selecting by
 `name` (one device). On a device the requirement is the intersection of the `accept` lists of every
 level that applies and the least `reuse_for`; a lower level never weakens a higher. An empty
-intersection is a load error naming both levels: `policy check`, `policy test` and `policy diff`
-fail on it and a reload of an edited policy is refused; where the policy did not change (a start,
-an inventory reload, a grant's expiry) the device is quarantined with that cause (§10), so an
-inventory sync never freezes the fleet's inventory. A machine principal is exempt but from levels
+intersection is a load error naming both levels: `policy test` fails on it, `policy diff` fails
+on one the new version introduces, and a reload of an edited policy that introduces one is
+refused, while one already in force blocks no unrelated edit; where the policy did not change (a
+start, an inventory reload, a grant's expiry) the device is quarantined with that cause (§10), so
+an inventory sync never freezes the fleet's inventory. A machine principal is exempt but from levels
 that set `applies_to_machines: true`, and a machine proves by `hardware_key_touch` alone, from a
 key and touch slot on one token. A scope with a match key other than `name` that sets
 `per_login_mfa` must declare `on_missing` and `security_log: true`; one pinned by `name` alone
@@ -637,7 +710,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   Then rulings 1–23, each one paragraph, from this plan's R1–R22 in order (R1 → 1 … R22 → 22), with
   ruling 23 "**The lab.** L60 (a YubiKey on the SER8; Ryan present), L61 (Keycloak's `amr`), L62 (the
   SER8's TPM), L63 (the Secure Enclave from an unsigned binary)." Copy each R's text as amended by
-  the plan's pre-flight rulings; drop the "(pre-flight X)" tags; replace "this plan" with "plan 9c"
+  the plan's pre-flight and re-review rulings; drop the "(pre-flight X)" and "(re-review RN)" tags; replace "this plan" with "plan 9c"
   and "Task N" with the plan's task name.
 
 - [ ] **Step 7: §14.** Add a group **Hardware keys and per-login MFA** with these bullets:
@@ -781,13 +854,18 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `uri_test.go`, `ecdsa_test.go`, `consts_test.go` (none imports purego, so `make test` runs them)
 - Create, `//go:build hwkey_dlopen` (ruling 22): `internal/hwkey/pkcs11/module.go`, `signer.go`,
   `generate.go`
-- Create: `internal/hwkey/pkcs11/softhsm_test.go`, `ykcs11_test.go`, `main_hwkey_test.go`,
-  `export_hwkey_test.go` (each `//go:build hwkey && hwkey_dlopen`)
+- Create, `//go:build hwkey && hwkey_dlopen`, a non-test file so `hwtest` and `cmd/port49`'s
+  tests see it (re-review R4): `internal/hwkey/pkcs11/testhooks.go` (the call counters' readers,
+  `Finalize`, `ResetModules`). The `hwkey` tag is set only by `make test-hw`, so no release build
+  carries it.
+- Create: `internal/hwkey/pkcs11/softhsm_test.go`, `ykcs11_test.go`, `main_hwkey_test.go` (each
+  `//go:build hwkey && hwkey_dlopen`, each `package pkcs11_test`: they import `hwtest`, which
+  imports `pkcs11`, and an in-package test would be an import cycle; re-review R4)
 - Create: `internal/hwkey/hwtest/hwtest.go` (`//go:build hwkey`: swtpm for tests) and
   `hwtest_pkcs11.go` (`//go:build hwkey && hwkey_dlopen`: SoftHSM2)
 - Create: `.github/workflows/hwkeys.yml`
-- Modify: `Makefile` (targets `test-hw`, `build-client`, `check-static`; `vet` gains the tags),
-  `go.mod`, `go.sum`
+- Modify: `Makefile` (`build` sets `CGO_ENABLED=0`; targets `test-hw`, `build-client`,
+  `check-static`; `vet` gains the tags), `go.mod`, `go.sum`
 - Modify: `internal/userconfig/userconfig.go` (export `CheckOwned(path string) error` for R3's
   module check: the directory walk, the links, the file), with tests in
   `internal/userconfig/userconfig_test.go` (`TestCheckOwnedJudgesTheModuleAndItsDirectories`)
@@ -825,7 +903,15 @@ var (
 type PINError struct{ Low, Final bool }
 
 func (e *PINError) Error() string
+
+// IsRef reports whether s is a key reference (pkcs11:, tpm:, secure-enclave:)
+// rather than a path.
+func IsRef(s string) bool
 ```
+
+  `hwkey` imports no backend: `pkcs11`, `tpm` and `secureenclave` import it for `State`, the
+  errors and `PINError`, and the opener that dispatches to them is Task 5's `internal/clientkey`
+  (re-review R3).
 
 - Produces (`internal/hwkey/pkcs11`):
 
@@ -856,6 +942,16 @@ func (s *Signer) TokenSerial() string // the token's CK_TOKEN_INFO serial, trimm
 // the SoftHSM2 harness calls it: port49 never generates a key or writes an
 // object on a token (decision 45 ruling 7).
 func Generate(u URI, pin []byte) (*Signer, error)
+
+// testhooks.go (//go:build hwkey && hwkey_dlopen; re-review R4). The
+// counters are unexported atomic.Int64s in module.go, bumped at each call
+// site in every hwkey_dlopen build; these read them.
+func LoginCalls() int64           // C_Login
+func OpenCalls() int64            // Open
+func GenerateKeyPairCalls() int64 // C_GenerateKeyPair
+func CreateObjectCalls() int64    // C_CreateObject
+func Finalize(m *Module) uint     // C_Finalize, returning its CK_RV
+func ResetModules()               // empties the one-Module-per-path cache
 ```
 
   Every `pkcs11` function above but `ParseURI` and `URI.String` lives in a `hwkey_dlopen` file.
@@ -1025,13 +1121,19 @@ func (s *Signer) State() hwkey.State
     it needs login, else `Present`.
   - `ecdsa.go`: `rawECDSAToDER(raw []byte, size int) ([]byte, error)` with `cryptobyte`.
   - `internal/hwkey/hwkey.go`: the types above and `IsRef(s string) bool` (prefix `pkcs11:`,
-    `tpm:`, `secure-enclave:`). `Open` and `LoadPair` come in Task 5.
-  - `Makefile`: `build` is unchanged (no tag, the static build); `build-client` builds
-    `bin/port49` with `CGO_ENABLED=0 go build -tags hwkey_dlopen`; `check-static` builds
+    `tpm:`, `secure-enclave:`), importing nothing of port49's. `Open` and `LoadPair` come in Task
+    5, in `internal/clientkey` (re-review R3).
+  - `module.go` keeps unexported `atomic.Int64` counters bumped at `C_Login`, `Open`,
+    `C_GenerateKeyPair` and `C_CreateObject`; `testhooks.go` reads them and exposes `Finalize`
+    and `ResetModules` for the libykcs11 test (re-review R4).
+  - `Makefile`: `build` gains `CGO_ENABLED=0` on each line (no tag, the static build; re-review
+    R9); `build-client` builds `bin/port49-client` with `CGO_ENABLED=0 go build -tags hwkey_dlopen`,
+    never `bin/port49`, so the two builds never overwrite each other; `check-static` builds
     `bin/port49-static` with `CGO_ENABLED=0` and no tag and fails unless `readelf -l` shows no
     program interpreter (`! readelf -l bin/port49-static | grep -q 'program interpreter'`),
     printing `file`'s line on failure; `vet` adds `go vet -tags hwkey_dlopen ./...` and `go vet
-    -tags hwkey,hwkey_dlopen ./internal/hwkey/... ./internal/agent/... ./cmd/port49/...`.
+    -tags hwkey,hwkey_dlopen ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/...
+    ./internal/workload/... ./cmd/port49/...`.
 
 - [ ] **Step 4: Run the unit tests**
 
@@ -1065,15 +1167,18 @@ func SoftHSM(t *testing.T) (module, label string)
   `t.Cleanup` that deletes the token (`softhsm2-util --delete-token --token <label>`). URIs in
   tests name the returned label.
 
-- [ ] **Step 6: Write the integration tests.** `internal/hwkey/pkcs11/main_hwkey_test.go` is
+- [ ] **Step 6: Write the integration tests**, each file `package pkcs11_test` (re-review R4).
+  `internal/hwkey/pkcs11/main_hwkey_test.go` is
   `func TestMain(m *testing.M) { os.Exit(hwtest.SoftHSMMain(m)) }`.
   `internal/hwkey/pkcs11/softhsm_test.go` (`//go:build hwkey && hwkey_dlopen`):
 
 ```go
+package pkcs11_test
+
 func TestASoftHSMKeySignsATLSHandshakeAndARefresh(t *testing.T) {
 	module, label := hwtest.SoftHSM(t)
-	u, _ := ParseURI("pkcs11:token=" + label + ";id=%01?module-path=" + module)
-	s, err := Open(u, []byte("123456"))
+	u, _ := pkcs11.ParseURI("pkcs11:token=" + label + ";id=%01?module-path=" + module)
+	s, err := pkcs11.Open(u, []byte("123456"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1095,8 +1200,8 @@ func TestASoftHSMKeySignsATLSHandshakeAndARefresh(t *testing.T) {
 
 func TestAWrongPINIsTriedOnce(t *testing.T) {
 	module, label := hwtest.SoftHSM(t)
-	u, _ := ParseURI("pkcs11:token=" + label + ";id=%01?module-path=" + module)
-	s, err := Open(u, nil)
+	u, _ := pkcs11.ParseURI("pkcs11:token=" + label + ";id=%01?module-path=" + module)
+	s, err := pkcs11.Open(u, nil)
 	if err != nil {
 		t.Fatalf("Open with no PIN: %v", err)
 	}
@@ -1123,9 +1228,10 @@ func TestTheCertificateComesFromTheToken(t *testing.T) { /* a certificate object
 ```
 
   `hwtest.SoftHSMLoginAttempts(t) int` returns `pkcs11.LoginCalls()`, a counter the package
-  bumps on each `C_Login` (an unexported `loginCalls atomic.Int64`, read through an exported
-  function in `export_hwkey_test.go`, `//go:build hwkey && hwkey_dlopen`), not SoftHSM's logs; the
-  counter is per process, so each test reads it before and after. `assertMutualTLS` runs an
+  bumps on each `C_Login` (an unexported `loginCalls atomic.Int64` in `module.go`, read through
+  `testhooks.go`'s exported `LoginCalls`, a non-test file under `hwkey && hwkey_dlopen`, so
+  `hwtest` can call it; a `_test.go` file would be seen by `pkcs11`'s own tests alone; re-review
+  R4), not SoftHSM's logs; the counter is per process, so each test reads it before and after. `assertMutualTLS` runs an
   `httptest` TLS 1.3 server requiring a client certificate signed by a test CA for `s.Public()`.
 
   `TestAReinsertedTokenIsSeenByState`: open, then delete the token's slot directory under the
@@ -1140,8 +1246,8 @@ func TestTheCertificateComesFromTheToken(t *testing.T) { /* a certificate object
   `TestLibykcs11InitFinalizeUnderPurego` (decision 42 ruling 13's "9c's first task measures it";
   pre-flight I13): needs no token. With `pcscd` running and no card, five rounds of `Load` on
   `$PORT49_TEST_YKCS11_MODULE` (default the first match of
-  `/usr/lib/*/libykcs11.so*`), `C_GetSlotList`, and `C_Finalize` (an unexported `finalize` the
-  export file reaches), each in a fresh `Module` (the per-path cache reset by the export file);
+  `/usr/lib/*/libykcs11.so*`), `C_GetSlotList`, and `C_Finalize` (`pkcs11.Finalize`, from
+  `testhooks.go`), each in a fresh `Module` (the per-path cache emptied by `pkcs11.ResetModules`);
   `/proc/self/task` counted before the first and after the last: no crash, no error but
   `CKR_OK`, and the thread count no higher after than after the first round. The same
   `$PORT49_TEST_HW_REQUIRED` rule. Tasks 5–7 build on purego only after this passes; if it fails,
@@ -1158,7 +1264,7 @@ func TestTheCertificateComesFromTheToken(t *testing.T) { /* a certificate object
 # skip. No -run: the hwkey tag already selects the hardware tests, and a
 # pattern would silently leave a new one out.
 test-hw: check-static
-	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen ./internal/hwkey/... ./internal/agent/... ./cmd/port49/... -count=1 -timeout 20m
+	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/... ./internal/workload/... ./cmd/port49/... -count=1 -timeout 20m
 
 # The static build (the image's, decision 45 ruling 22) must stay static: a
 # purego import outside a hwkey_dlopen file would make it need a loader that
@@ -1221,7 +1327,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `internal/hwkey/tpm/tpm.go`, `tss2.go`, `tss2_test.go`
-- Create: `internal/hwkey/tpm/swtpm_test.go` (`//go:build hwkey`)
+- Create: `internal/hwkey/tpm/swtpm_test.go` (`//go:build hwkey`, `package tpm_test`:
+  `hwtest.SWTPM` sets `tpm.Dial`, so `hwtest` imports `tpm`, and an in-package test importing
+  `hwtest` would be an import cycle; re-review R4)
 - Modify: `internal/hwkey/hwtest/hwtest.go` (add `SWTPM`)
 
 **Interfaces:**
@@ -1250,10 +1358,12 @@ func DecodeTSS2(pemBytes []byte) (tpm2.TPM2BPublic, tpm2.TPM2BPrivate, error)
   `internal/hwkey/tpm/swtpm_test.go` (`//go:build hwkey`):
 
 ```go
+package tpm_test
+
 func TestATPMKeySignsAndSurvivesAReopen(t *testing.T) {
-	hwtest.SWTPM(t) // sets Dial to swtpm over TCP for this test
+	hwtest.SWTPM(t) // sets tpm.Dial to swtpm over TCP for this test
 	path := filepath.Join(t.TempDir(), "k.tpmkey")
-	s, err := Generate(path)
+	s, err := tpm.Generate(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1270,7 +1380,7 @@ func TestATPMKeySignsAndSurvivesAReopen(t *testing.T) {
 		t.Fatal("the signature does not verify")
 	}
 	s.Close()
-	again, err := Open(path)
+	again, err := tpm.Open(path)
 	if err != nil || !again.Public().(*ecdsa.PublicKey).Equal(s.Public()) {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -1279,28 +1389,28 @@ func TestATPMKeySignsAndSurvivesAReopen(t *testing.T) {
 func TestATPMKeyFromAnotherTPMDoesNotLoad(t *testing.T) {
 	hwtest.SWTPM(t)
 	path := filepath.Join(t.TempDir(), "k.tpmkey")
-	if _, err := Generate(path); err != nil {
+	if _, err := tpm.Generate(path); err != nil {
 		t.Fatal(err)
 	}
 	hwtest.SWTPMFresh(t) // a second swtpm with its own state: another machine
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "this machine's TPM") {
+	if _, err := tpm.Open(path); err == nil || !strings.Contains(err.Error(), "this machine's TPM") {
 		t.Fatalf("Open on another TPM = %v, want refused naming this machine's TPM", err)
 	}
 }
 
 func TestATPMGoneIsAbsentAndBackIsPresentWithoutASignature(t *testing.T) {
-	tpm := hwtest.SWTPM(t)
-	s, err := Generate(filepath.Join(t.TempDir(), "k.tpmkey"))
+	sim := hwtest.SWTPM(t)
+	s, err := tpm.Generate(filepath.Join(t.TempDir(), "k.tpmkey"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tpm.Stop()
+	sim.Stop()
 	if _, err := s.Sign(nil, make([]byte, 32), crypto.SHA256); !errors.Is(err, hwkey.ErrKeyAbsent) || s.State() != hwkey.Absent {
 		t.Fatalf("Sign with swtpm stopped = %v, state %v", err, s.State())
 	}
 	// Re-inserted: the same state directory. State re-probes from Absent with
 	// no Sign in between (decision 45 ruling 8; pre-flight C2).
-	tpm.Restart()
+	sim.Restart()
 	if got := s.State(); got != hwkey.Present {
 		t.Fatalf("State after swtpm restarted = %v, want Present with no Sign between", got)
 	}
@@ -1316,7 +1426,8 @@ func TestTheKeyIsFixedToTheTPM(t *testing.T) {
 }
 ```
 
-  (`TestTheKeyIsFixedToTheTPM` needs no TPM and lives in `tss2_test.go`, with no tag.)
+  (`TestTheKeyIsFixedToTheTPM` needs no TPM and reads the unexported `keyTemplate()`, so it
+  lives in `tss2_test.go`, `package tpm`, with no tag and no `hwtest` import.)
 
   `hwtest.SWTPM(t)` starts `swtpm socket --tpm2 --server type=tcp,port=P --ctrl type=tcp,port=P+1
   --tpmstate dir=D --flags not-need-init,startup-clear` on two free ports, sets `tpm.Dial` to
@@ -1371,20 +1482,22 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ## Task 5: Key references in login and the agent; the PIN; `Unlock` and the key's state
 
 **Files:**
-- Modify: `internal/hwkey/hwkey.go` (`Open`, `LoadPair`)
-- Create: `internal/hwkey/open_dlopen.go` (`//go:build hwkey_dlopen`: `pkcs11:` and
-  `secure-enclave:` dispatch) and `internal/hwkey/open_static.go` (`//go:build !hwkey_dlopen`: the
-  refusal naming the build, ruling 22)
+- Create: `internal/clientkey/clientkey.go` (`Open`, `LoadPair`: a path to `keyfile`, `tpm:` to
+  `tpm`), `internal/clientkey/open_dlopen.go` (`//go:build hwkey_dlopen`: `pkcs11:` and
+  `secure-enclave:` dispatch, `HasPKCS11 = true`) and `internal/clientkey/open_static.go`
+  (`//go:build !hwkey_dlopen`: the refusal naming the build, ruling 22; `HasPKCS11 = false`). A
+  package of its own, not `hwkey`: the backends import `hwkey`, so an opener in `hwkey` importing
+  them is an import cycle (re-review R3)
 - Modify: `internal/userconfig/userconfig.go` (fields `TouchKey`, `IssuedKeyStore`, `IssuedKey`,
   `BrokerCRL`; references not resolved as paths; `CheckOwned` is Task 3's)
 - Modify: `internal/broker/api/api.go` (`AgentSessionHeader`, defined here, used by Task 11;
   pre-flight I8)
 - Modify: `cmd/port49/main.go` (`sessionFlags`: `--touch-key`, `--pin-fd`; `config` loads through
-  `hwkey.LoadPair`; `startAgentDown` passes the PIN on descriptor 4; `login` asks the PIN, unlocks a
+  `clientkey.LoadPair`; `startAgentDown` passes the PIN on descriptor 4; `login` asks the PIN, unlocks a
   running agent)
 - Modify: `internal/agent/agent.go` (`Config.TouchKey`; `Status.KeyState`; `POST /unlock`; the
   agent session), `internal/agent/socket.go` (`Client.Unlock`)
-- Test: `internal/hwkey/hwkey_test.go`, `internal/hwkey/open_static_test.go`
+- Test: `internal/clientkey/clientkey_test.go`, `internal/clientkey/open_static_test.go`
   (`//go:build !hwkey_dlopen`), `internal/userconfig/userconfig_test.go`,
   `cmd/port49/login_hw_test.go` and `cmd/port49/main_hwkey_test.go` (`//go:build hwkey &&
   hwkey_dlopen`), `internal/agent/agent_test.go`
@@ -1400,16 +1513,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 // base64url, drawn at the agent's start (decision 45 ruling 15).
 const AgentSessionHeader = "Port49-Agent-Session"
 
-// internal/hwkey
+// internal/clientkey (re-review R3; imports hwkey, pkcs11, tpm, keyfile)
 // Open opens the key a reference names; pin may be nil (the key is then
 // Locked where the token needs one).
-func Open(ref string, pin []byte) (Key, error)
+func Open(ref string, pin []byte) (hwkey.Key, error)
 
 // LoadPair is keyfile.LoadX509KeyPair for a key that may be a reference:
 // a path goes to keyfile unchanged; a reference is opened, and certPath ""
 // takes the token's certificate for a pkcs11 key. The certificate's public
 // key must be the key's.
 func LoadPair(certPath, keyRef string, pin []byte) (tls.Certificate, error)
+
+// HasPKCS11 is whether this build carries the purego backends (the
+// hwkey_dlopen tag, ruling 22): true in open_dlopen.go, false in
+// open_static.go. Task 7's auto reads it (re-review R10).
+const HasPKCS11 bool
 
 // agent
 type Config struct {
@@ -1440,9 +1558,9 @@ func (c *Client) Unlock(ctx context.Context, pin []byte) error // POST /unlock {
     `issued_key_store: tpm`, `broker_crl: require` loads with the references byte for byte (not
     joined to the file's directory); `issued_key_store: floppy` and `broker_crl: maybe` are refused,
     naming the allowed words; the system file's `touch_key` is overridden by the personal file's.
-  - `internal/hwkey/hwkey_test.go`, `TestLoadPairRefusesAMismatchedCertificate` (a file key under
+  - `internal/clientkey/clientkey_test.go`, `TestLoadPairRefusesAMismatchedCertificate` (a file key under
     a certificate for another key is refused, as `keyfile` does today) and
-    `TestOpenRefusesAnUnknownScheme`. `internal/hwkey/open_static_test.go` (`!hwkey_dlopen`),
+    `TestOpenRefusesAnUnknownScheme`. `internal/clientkey/open_static_test.go` (`!hwkey_dlopen`),
     `TestTheStaticBuildSaysItHasNoPKCS11`: `Open("pkcs11:id=%01?module-path=/x.so", nil)` and
     `Open("secure-enclave:label=x", nil)` refuse with "built without PKCS#11 support" and "client
     release" in the text; `tpm:file=` reaches `tpm.Open` (a missing file's error, not the build's).
@@ -1461,13 +1579,14 @@ func (c *Client) Unlock(ctx context.Context, pin []byte) error // POST /unlock {
     exits 1, says "the token refused the PIN", sends no second `C_Login`, never prints the PIN.
     `TestLoginWithTheKeyOutReachesTheAgent` (pre-flight I15): with the agent running and its key
     reported `absent`, `port49 login` (same broker, same `key_ref`) never calls
-    `pkcs11.Open` (the `LoginCalls`/open counter unchanged) and prints "insert your key and run
+    `pkcs11.Open` (`pkcs11.OpenCalls()` and `pkcs11.LoginCalls()` unchanged, read through Task 3's
+    `testhooks.go`; re-review R4) and prints "insert your key and run
     `port49 login` again; your session goes on until …", exit 1; reported `locked`, it asks the PIN
     and calls `Client.Unlock`.
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/userconfig/ ./internal/hwkey/ ./internal/agent/ -run 'KeyReferences|LoadPair|OpenRefuses|StaticBuildSays|StatusSaysTheKeyState|TouchKeyIsReported' -count=1`
+Run: `go test ./internal/userconfig/ ./internal/clientkey/ ./internal/agent/ -run 'KeyReferences|LoadPair|OpenRefuses|StaticBuildSays|StatusSaysTheKeyState|TouchKeyIsReported' -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement.**
@@ -1475,13 +1594,14 @@ Expected: FAIL.
     yaml:"issued_key_store"` (`auto`, `file`, `tpm`, `secure_enclave`, `pkcs11`), `IssuedKey string
     yaml:"issued_key"`, `BrokerCRL string yaml:"broker_crl"` (`check`, `require`, `off`); `overlay`
     takes each; `parse` resolves `Cert` and `Key` as paths only when `!hwkey.IsRef`, and `TouchKey`
-    and `IssuedKey` must be references.
+    and `IssuedKey` must be references. (`userconfig` → `hwkey` is acyclic only because `hwkey`
+    is a leaf: `pkcs11` imports `userconfig` for `CheckOwned`; re-review R3.)
   - `sessionFlags` gains `touchKey`, `pinFD`, `brokerCRL`, `issuedKeyStore`, `issuedKey` with flags
     `--touch-key`, `--pin-fd` (internal), `--broker-crl`; `args()` passes `--touch-key` and
     `--broker-crl`.
-  - `sessionFlags.config` loads with `hwkey.LoadPair(s.cert, s.key, pin)`, where `pin` is read from
+  - `sessionFlags.config` loads with `clientkey.LoadPair(s.cert, s.key, pin)`, where `pin` is read from
     `--pin-fd` (at most 64 bytes, the descriptor closed after) in the agent child, and nil in the
-    login. `hwkey.LoadPair` and `hwkey.Open` dispatch on the scheme: `pkcs11:` →
+    login. `clientkey.LoadPair` and `clientkey.Open` dispatch on the scheme: `pkcs11:` →
     `pkcs11.ParseURI`, then `pin-source` read through `keyfile.ReadSecret` when set; `tpm:file=` →
     `tpm.Open`; `tpm:handle=` → `tpm.OpenHandle`; `secure-enclave:` → an error naming Task 14's gate
     until that task lands. The `pkcs11:` and `secure-enclave:` arms live in `open_dlopen.go`;
@@ -1520,13 +1640,13 @@ Expected: FAIL.
 
 - [ ] **Step 4: Run**
 
-Run: `go test ./internal/userconfig/ ./internal/hwkey/... ./internal/agent/ ./cmd/port49/ -count=1`, then `make test-hw`, then `make test && make vet`.
+Run: `go test ./internal/userconfig/ ./internal/hwkey/... ./internal/clientkey/ ./internal/agent/ ./cmd/port49/ -count=1`, then `make test-hw`, then `make test && make vet`.
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/hwkey internal/userconfig internal/agent internal/broker/api cmd/port49
+git add internal/hwkey internal/clientkey internal/userconfig internal/agent internal/broker/api cmd/port49
 git commit -m "feat: hardware key references in login and the agent, with the PIN asked once
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -1706,15 +1826,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `cmd/port49/issue.go` (`issueCertificate`, `heldCertificate`, `startIssued`)
 - Create: `cmd/port49/issuedkey.go`
-- Modify: `internal/userconfig/userconfig.go` (`IssuedPathsIn` returns the TPM key path too,
-  named for this machine)
+- Modify: `internal/userconfig/userconfig.go` (a new `IssuedTPMPathsIn` and `IssuedTPMPaths`
+  for the TPM pair, named for this machine; `IssuedPathsIn` keeps its signature, so its callers
+  are untouched: `IssuedPaths` and `CABundlePathIn` in `userconfig.go`, `TestIssuedPaths` in
+  `userconfig_test.go:606–618`, `tests/lab/l56_test.go:189,200` (built by `make test` through
+  `lab-unit`), and through `IssuedPaths` `cmd/port49/issue.go:63` and
+  `cmd/port49/issue_login_linux_test.go:67`; re-review R8), with tests in `userconfig_test.go`
 - Test: `cmd/port49/issuedkey_test.go`, `cmd/port49/issuedkey_hw_test.go` (`//go:build hwkey`:
   swtpm) and `cmd/port49/issuedkey_pkcs11_hw_test.go` (`//go:build hwkey && hwkey_dlopen`:
   SoftHSM2)
 
 **Interfaces:**
-- Consumes: `tpm.Generate`, `tpm.Open`, `hwkey.Open` (a `pkcs11:` `issued_key`, opened, never
-  generated: ruling 7), `hwkey.LoadPair`.
+- Consumes: `tpm.Generate`, `tpm.Open`, `clientkey.Open` (a `pkcs11:` `issued_key`, opened, never
+  generated: ruling 7), `clientkey.LoadPair`, `clientkey.HasPKCS11`; under `hwkey &&
+  hwkey_dlopen`, `pkcs11.GenerateKeyPairCalls` and `pkcs11.CreateObjectCalls` (Task 3's
+  `testhooks.go`; re-review R4).
 - Produces:
 
 ```go
@@ -1730,26 +1856,38 @@ func chooseIssuedStore(sf *sessionFlags, stderr io.Writer) (store string, err er
 func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer, func() ([]byte, error), error)
 
 // userconfig
-// IssuedPathsIn's tpmKey is <host>_<port>.<machine>.tpmkey and tpmCert
-// <host>_<port>.<machine>.pem, <machine> the first 8 hex digits of SHA-256
-// of /etc/machine-id (ruling 7), so hosts sharing a home directory keep a
-// pair each.
-func IssuedPathsIn(dir, broker string) (cert, key, tpmCert, tpmKey string, err error)
+// IssuedTPMPathsIn is where, under dir, this machine keeps a TPM-held pair:
+// tpmKey <host>_<port>.<machine>.tpmkey and tpmCert <host>_<port>.<machine>.pem
+// beside IssuedPathsIn's pair, <machine> the first 8 hex digits of SHA-256 of
+// /etc/machine-id (ruling 7), so hosts sharing a home directory keep a pair
+// each. The broker URL is judged as IssuedPathsIn judges it. IssuedPathsIn
+// is unchanged (re-review R8).
+func IssuedTPMPathsIn(dir, broker string) (tpmCert, tpmKey string, err error)
 
-// machineID is that 8-hex-digit name; a var so tests set it.
-var machineID = func() (string, error)
+// IssuedTPMPaths is IssuedTPMPathsIn ~/.port49 (Dir).
+func IssuedTPMPaths(broker string) (tpmCert, tpmKey string, err error)
+
+// MachineID is that 8-hex-digit name; an exported var so cmd/port49's tests
+// set it.
+var MachineID = func() (string, error)
 ```
 
 - [ ] **Step 1: Write the failing tests.** `cmd/port49/issuedkey_test.go`:
   `TestChooseIssuedStore` — `auto` on Linux with `tpm.Dial` failing picks `file` and says "no TPM
   this user can use (…); the key is a file"; `auto` with `touch_key` and `issued_key` both set
-  picks `pkcs11` and says so (pre-flight I6); `tpm` named with the dial failing refuses before any
+  picks `pkcs11` and says so (pre-flight I6) when `clientkey.HasPKCS11`; in the static build
+  (`!clientkey.HasPKCS11`, as `make test` builds it) the same `auto` passes over `pkcs11`, says
+  "built without PKCS#11 support, so issued_key is not used", and picks the TPM or the file,
+  never refusing (re-review R10); `tpm` named with the dial failing refuses before any
   sign-in (the test's fake provider records no authorization request); `pkcs11` without
-  `issued_key` refuses naming `issued_key`; `pkcs11` in the static build refuses naming the client
-  release (ruling 22); `secure_enclave` on Linux refuses. `TestAHeldTPMPairIsFound`:
+  `issued_key` refuses naming `issued_key`; `pkcs11` named in the static build refuses naming the
+  client release (ruling 22); `secure_enclave` on Linux refuses. Each case that depends on the
+  build reads `clientkey.HasPKCS11`, so the test holds under `make test` and `make test-hw`
+  alike. `TestIssuedTPMPaths` (`userconfig_test.go`): the pair is named for `MachineID`, and a
+  broker URL `IssuedPathsIn` refuses is refused. `TestAHeldTPMPairIsFound`:
   with `<host>_<port>.<machine>.tpmkey` and `.pem` present and no `.key`, `heldCertificate` loads
-  through `hwkey.LoadPair`. `TestAnotherMachinesTPMKeyIsNoHeldPair` (pre-flight I12): with
-  `machineID` set to `aaaaaaaa` and only `<host>_<port>.bbbbbbbb.{tpmkey,pem}` present,
+  through `clientkey.LoadPair`. `TestAnotherMachinesTPMKeyIsNoHeldPair` (pre-flight I12): with
+  `userconfig.MachineID` set to `aaaaaaaa` and only `<host>_<port>.bbbbbbbb.{tpmkey,pem}` present,
   `heldCertificate` reports no held pair (a sign-in, never an error), and the sign-in that follows
   writes `….aaaaaaaa.{tpmkey,pem}` and leaves both `bbbbbbbb` files byte for byte. `issuedkey_hw_test.go`: on
   swtpm, `port49 login --oidc` with the test authorization server (plan 9b's) writes
@@ -1758,17 +1896,20 @@ var machineID = func() (string, error)
   one-time `ykman piv keys generate`), and with `issued_key_store: pkcs11` and `issued_key:
   "pkcs11:token=<label>;id=%10?module-path=…"` the login signs the CSR with it, writes the
   certificate to `<host>_<port>.pem` and nothing to the token (the token's object list is the same
-  before and after, and `C_GenerateKeyPair` and `C_CreateObject` are never called: the binding's
-  call counters); an `issued_key` naming no key refuses before the browser, saying to make one with
+  before and after, and `pkcs11.GenerateKeyPairCalls()` and `pkcs11.CreateObjectCalls()` read the
+  same after the harness made `%10` and after the login); an `issued_key` naming no key refuses before the browser, saying to make one with
   the token's own tool (pre-flight I11).
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./cmd/port49/ -run 'ChooseIssuedStore|HeldTPMPair' -count=1`
+Run: `go test ./cmd/port49/ -run 'ChooseIssuedStore|HeldTPMPair|AnotherMachinesTPMKey' -count=1` and `go test ./internal/userconfig/ -run IssuedTPMPaths -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement.** `issueCertificate` calls `chooseIssuedStore` after `fetchBrokerConfig`
-  and before `oidcclient.Discover`; `ecdsa.GenerateKey` becomes `newIssuedKey`; `api.IssuanceNonce`
+  and before `oidcclient.Discover`; `chooseIssuedStore`'s `auto` tries `pkcs11` only when
+  `clientkey.HasPKCS11`, and otherwise says why it passed over a configured `issued_key` in the
+  one line that names the store (re-review R10); the TPM pair's paths come from
+  `userconfig.IssuedTPMPaths`, the file pair's from `IssuedPaths` as today (re-review R8); `ecdsa.GenerateKey` becomes `newIssuedKey`; `api.IssuanceNonce`
   takes the signer's `Public()`; `x509.CreateCertificateRequest` takes the signer; the check
   `key.PublicKey.Equal(leaf.PublicKey)` becomes `signer.Public().(interface{ Equal(crypto.PublicKey)
   bool }).Equal(leaf.PublicKey)`. Writing: for `file` as today; for `tpm` the `.<machine>.tpmkey`
@@ -1989,8 +2130,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `internal/policy/explain.go` (render), `internal/policy/tests.go` (the assertion),
   `internal/policy/diff.go` (the change and the weakening warning), `internal/policy/lint.go`
   (two warnings), `internal/policy/review.go` (each row's levels)
-- Modify: `internal/port49d/reload.go` (a policy-file reload refuses a bundle with an MFA-disjoint
-  entry; an inventory reload does not), `cmd/port49/policy.go` (`policy check` fails on one)
+- Modify: `internal/port49d/reload.go` (`load` and `loadBoth` refuse a bundle with an
+  MFA-disjoint entry the in-force policy over the same inventory does not have; an inventory
+  reload does not; re-review R5), `cmd/port49/policy.go` (`policy diff` fails on an entry the new
+  version introduces; `policy test` already fails on every quarantine)
 - Test: `internal/policy/mfa_test.go`, `internal/policy/member_test.go`,
   `internal/port49d/reload_test.go`
 
@@ -2042,9 +2185,15 @@ var ErrMFADisjoint = errors.New("policy: per_login_mfa levels accept no common m
 
 // MFADisjoint lists the quarantined devices with an entry whose cause is
 // ErrMFADisjoint (or the machine refusal), only those entries kept: what a
-// policy-file reload and `policy check` refuse, and what a start or an
-// inventory reload quarantines (ruling 11).
+// start or an inventory reload quarantines (ruling 11).
 func (p *Policy) MFADisjoint() []Quarantine
+
+// NewMFADisjoint is the entries of after.MFADisjoint() that base's lack,
+// matched by device, subject and cause: what a policy edit introduces, and
+// all a policy-file reload, loadBoth and `policy diff` refuse. base is the
+// in-force policy over the same inventory; nil base is every entry
+// (re-review R5).
+func NewMFADisjoint(base, after *Policy) []Quarantine
 
 // in QuarantineEntry:
 //	MFA bool // the cause is per_login_mfa's (ruling 11)
@@ -2126,7 +2275,7 @@ func TestDisjointLevelsRefuseTheLoad(t *testing.T) {
 		!strings.Contains(err.Error(), "scope core") || !strings.Contains(err.Error(), "core-sw01") {
 		t.Fatalf("load = %v, want ErrMFADisjoint naming both levels and the device", err)
 	}
-	// loadMFA is `policy check`'s reading: a load error. The bundle itself,
+	// loadMFA is `policy test`'s reading: a load error. The bundle itself,
 	// loaded as a start or an inventory reload loads it, quarantines core-sw01
 	// alone with the same cause, and edge-sw01 resolves (ruling 11; pre-flight
 	// I4).
@@ -2134,7 +2283,8 @@ func TestDisjointLevelsRefuseTheLoad(t *testing.T) {
 	if q := p.MFADisjoint(); len(q) != 1 || q[0].Device != "core-sw01" || !strings.Contains(q[0].Entries[0].Cause, "scope core") {
 		t.Fatalf("MFADisjoint = %+v, want core-sw01 alone", q)
 	}
-	if _, err := p.Resolve("alice", "", device(t, p, "edge-sw01"), time.Now()); err != nil {
+	// Resolve(principal, d, now): resolve.go:102 (re-review R7).
+	if _, err := p.Resolve("user:alice@example.com", device(t, p, "edge-sw01"), time.Now()); err != nil {
 		t.Fatalf("edge-sw01 under a disjoint core-sw01: %v", err)
 	}
 	// A machine-applying level that leaves a machine only idp_mfa: a machine
@@ -2296,8 +2446,15 @@ Expected: FAIL (undefined).
   reload moving it to `tier: core` is applied (the new inventory in force, a second new device in
   the same edit served) and core-sw01 is quarantined with the per_login_mfa cause; a policy-file
   edit that makes edge-sw01 disjoint is refused, the bundle in force unchanged,
-  `port49_policy_file_refused` at 1. And `cmd/port49`'s `policy check` on `disjointPolicy` exits 1
-  naming both levels and the device.
+  `port49_policy_file_refused` at 1. Then, with core-sw01 still quarantined over MFA, a policy
+  edit that revokes an unrelated grant (and introduces no MFA entry) is applied,
+  `port49_policy_file_refused` at 0, core-sw01 still quarantined: an entry already in force
+  freezes no edit (re-review R5). And a policy and inventory changed together (`loadBoth`), the
+  inventory moving core-sw01 to `tier: core` and the policy revoking that grant: applied, judged
+  against the in-force policy over the new inventory, which has the core-sw01 entry already.
+  `cmd/port49`'s `policy test` on `disjointPolicy` exits 1 naming both levels and the device;
+  `policy diff --old strictestPolicy --new disjointPolicy` exits 1 on the core-sw01 entry, and a
+  diff whose both sides hold it exits 0 for it.
 
 - [ ] **Step 3: Implement.**
   - `file.go`: `Defaults *fileDefaults yaml:"defaults"` with `PerLoginMFA *fileMFA
@@ -2371,13 +2528,18 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
   - `member.go`: `resolveAll` with `check` wraps an `ErrMFADisjoint` from `resolved` as
     `fmt.Errorf("%w: subjects %s on %s: %v", ErrCompositionRefused, …, err)`, so `mintOne`'s
     existing `ErrCompositionRefused` arm records `deny composition_refused` (pre-flight I3).
-  - Load error versus quarantine (ruling 11; pre-flight I4): `policy.Load` keeps MFA entries in
-    the quarantine like any other, and `MFADisjoint()` lists them. `cmd/port49`'s `policy check`,
-    `policy test` and `policy diff` refuse a policy with any, naming both levels and the device.
-    `port49d/reload.go`: a reload of the policy file refuses a bundle whose `MFADisjoint()` is
-    non-empty (the refusal line, `port49_policy_file_refused`, the bundle in force kept); a start,
-    an inventory reload and an expiry keep the quarantine, said on the existing quarantine line and
-    counted in `port49_devices_quarantined`. A scope with a match key other than `name` and
+  - Load error versus quarantine (ruling 11; pre-flight I4; re-review R5): `policy.Load` keeps MFA
+    entries in the quarantine like any other, and `MFADisjoint()` lists them. `policy test`
+    refuses a policy with any, as it refuses every quarantine today, naming both levels and the
+    device. `policy diff` refuses `NewMFADisjoint(before, after)`, through its existing "a device
+    the new version quarantines for a new cause" rule. `port49d/reload.go`: `load` refuses a
+    bundle when `NewMFADisjoint(old, pol)` is non-empty (`old` is over the same inventory there);
+    `loadBoth` when `NewMFADisjoint(base, pol)` is, `base` being the in-force policy over the new
+    inventory that it already builds for `CheckAdmissionOver` (a `base` that does not parse is
+    nil, so every entry counts). Each refusal is the existing refusal line,
+    `port49_policy_file_refused`, the bundle in force kept. An entry already in force refuses
+    nothing. A start, an inventory reload and an expiry keep the quarantine, said on the existing
+    quarantine line and counted in `port49_devices_quarantined`. A scope with a match key other than `name` and
     `per_login_mfa` must have `onMissingDeclared` and `SecurityLog`; one whose only key is `name`
     needs neither (pre-flight I2).
   - `lint.go`: a warning for `on_missing: exclude` on a `per_login_mfa` scope ("a sync that drops
@@ -2405,7 +2567,8 @@ Expected: PASS. Mutation checks, each restored: make `mfaFor` take the union (se
 `TestTheStrictestLevelWins` and `TestDisjointLevelsRefuseTheLoad` fail); drop the machine filter
 (see `TestMachinesAreExemptUnlessALevelSaysSo` fail); drop `resolveAll`'s wrap (see
 `TestADisjointCompositionIsRefusedNotAFault` fail); make the reloader refuse an inventory edit with
-an MFA entry (see the reload test fail at "applied").
+an MFA entry (see the reload test fail at "applied"); make `load` refuse on `MFADisjoint()` rather
+than `NewMFADisjoint` (see the reload test fail at the unrelated grant revocation).
 
 - [ ] **Step 5: Commit**
 
@@ -2638,7 +2801,7 @@ type MFAProofResponse struct {
 
 ```go
 type MFAProof struct {
-	Key    string // hex SHA-256 of principal, fingerprint and agent session, then "/" and the method
+	Key    string // hex SHA-256 of principal, fingerprint and agent_sha256, then "/" and the method
 	Method string
 	At     time.Time
 }
@@ -2675,8 +2838,21 @@ type MFAVerifiers struct {
 // mfaCovers says whether a proof covers req for this caller now: the
 // challenge's own proof named by the mint (once, whatever reuse_for), else
 // a kept proof whose method req accepts, made within req.ReuseFor.
-func (b *Broker) mfaCovers(ctx context.Context, c caller, agent string, req policy.MFARequirement,
+// agentSHA256 is the hex SHA-256 of the caller's agent session, "" for none.
+func (b *Broker) mfaCovers(ctx context.Context, c caller, agentSHA256 string, req policy.MFARequirement,
 	proved *provedChallenge, now time.Time) (method string, at time.Time, reused bool, err error)
+
+// challengeKey and provedKey are the store keys of a challenge and its
+// proved record, each over its binding, so a caller computing another's
+// key finds nothing and spends nothing (re-review R1):
+// "plm-challenge/" + hex SHA-256(ch ‖ 0 ‖ principal) and
+// "plm-proved/" + hex SHA-256(ch ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ agentSHA256).
+func challengeKey(ch []byte, principal string) string
+func provedKey(ch []byte, principal, fingerprint, agentSHA256 string) string
+
+// proofKey is the reuse key, over agent_sha256, never the raw session
+// (re-review R2).
+func proofKey(principal, fingerprint, agentSHA256 string, m policy.MFAMethod) string
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -2831,6 +3007,15 @@ func TestAnIdPProofCoversTheMint(t *testing.T) {
 	if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Verdict != "permit" {
 		t.Fatalf("retried mint = %+v", it)
 	}
+	// The proof was posted with no Port49-Agent-Session (the CLI's fresh
+	// connection), yet it is kept for this agent: a login within reuse_for
+	// is covered without a second sign-in (re-review R2).
+	f.clock.Advance(5 * time.Minute)
+	if it := f.mint(t, f.alice, "core-sw01", "").Results[0]; it.Verdict != "permit" {
+		t.Fatalf("mint within reuse_for after an idp proof = %+v", it)
+	}
+	f.assertMintRecordMFA(t, "idp_mfa", true)
+	f.clock.Advance(11 * time.Minute) // past reuse_for: each mint below is asked again
 	for _, bad := range []struct {
 		name string
 		opts func(ch string) idTokenOpts
@@ -2917,16 +3102,22 @@ Expected: FAIL.
     unreadable, no PEM certificate or no self-signed root → the start goes on,
     `hardware_key_touch` unavailable, one line naming the file.
   - `mfa.go`:
-    - `agentKey(r *http.Request) string`: the header's 32 bytes, or `""` (a caller without one
-      — a workload, a 7h bearer — keeps no reusable proof: each request proves).
-    - `proofKey(principal, fingerprint, agent string, m policy.MFAMethod) string`.
-    - `issueChallenge(ctx, c caller, agent string) (api challenge bytes, expires, error)`:
-      `PutOnce("plm-challenge/"+hex(SHA-256(ch)), json{principal, fingerprint, agent_sha256}, 5m)`,
+    - `agentKey(r *http.Request) string`: the hex SHA-256 of the header's 32 bytes
+      (`agent_sha256`), or `""` (a caller without one — a workload, a 7h bearer — keeps no
+      reusable proof: each request proves). The raw session is never kept or compared.
+    - `proofKey(principal, fingerprint, agentSHA256 string, m policy.MFAMethod) string`,
+      `challengeKey`, `provedKey` as in Interfaces (re-review R1, R2).
+    - `issueChallenge(ctx, c caller, agentSHA256 string) (api challenge bytes, expires, error)`:
+      `PutOnce(challengeKey(ch, c.principal), json{principal, fingerprint, agent_sha256}, 5m)`,
       `agent_sha256` the hex SHA-256 of the agent session, never the value (`PutOnce` is not
       sealed; pre-flight minor 16).
-    - `POST /v1/mfa` → `b.mfaProve`: decodes `api.MFAProofRequest` (strict, 64 KiB); `TakeOnce`
-      the challenge; for `hardware_key_touch` the caller must be the held connection's and match
-      the challenge's principal, fingerprint and agent; the exporter value from `r.TLS`
+    - `POST /v1/mfa` → `b.mfaProve`: decodes `api.MFAProofRequest` (strict, 64 KiB); finds the
+      caller's principal first (for `hardware_key_touch` the held connection's; for `idp_mfa` the
+      principal the verified ID token maps to), then `TakeOnce(challengeKey(ch, principal))`: a
+      challenge issued to another principal is not found, so bob's post never spends alice's
+      challenge (re-review R1), and is refused 401 as an unknown challenge. For
+      `hardware_key_touch` the caller must be the held connection's and match the record's
+      fingerprint and `agent_sha256`; the exporter value from `r.TLS`
       (`ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)`); `pivattest.Verify` on the touch
       slot and on the session slot, both against the same device certificate (`bytes.Equal` of
       their `Device.Raw`), touch policy `TouchAlways`, session slot key equal to
@@ -2935,16 +3126,20 @@ Expected: FAIL.
       verified as `issue.go` verifies one (`b.Identity`, humans only), its principal the
       challenge's, `nonce` equal to `api.MFANonce(ch)`, `auth_time` fresh (5 minutes plus
       `clock_skew`, against `iat` and now), `amr` holding one of `MFAVerifiers.AMR`, the token's
-      SHA-256 `PutOnce` for `max_token_age` (a second use 401). On success: `PutOnce
-      ("plm-proved/"+hex(SHA-256(ch)), json{method, at, principal, fingerprint, agent_sha256}, 5m)`,
-      `PutMFAProof(MFAProof{Key: proofKey(...), Method, At: now}, 8h)` when `agent != ""`, the
+      SHA-256 `PutOnce` for `max_token_age` (a second use 401). On success, for both methods the
+      binding is the challenge record's (principal, fingerprint, `agent_sha256`), never the
+      request's (an `idp_mfa` post carries no client certificate and no agent session; re-review
+      R2): `PutOnce(provedKey(ch, principal, fingerprint, agent_sha256), json{method, at}, 5m)`,
+      `PutMFAProof(MFAProof{Key: proofKey(principal, fingerprint, agent_sha256, method), Method,
+      At: now}, 8h)` skipped only when the record's `agent_sha256` is empty, the
       record `permit per_login_mfa_proved`, 200 `MFAProofResponse`. Any refusal: 401
       `per_login_mfa_refused` with the cause in `detail`, the record `deny per_login_mfa_refused`
       carrying `challenge_sha256`; a store error 503 `store_unavailable`, recorded.
-    - `mfaCovers` as in Interfaces. On the named path it compares the proved record's principal,
-      fingerprint and `agent_sha256` with the caller's, as the reuse path does: bob's mint naming
-      alice's proved challenge, or alice's with another certificate, is not covered (pre-flight
-      minor 11). The named challenge's proved record is `TakeOnce`d once per request in `tokens`,
+    - `mfaCovers` as in Interfaces. On the named path the caller's own principal, fingerprint and
+      `agent_sha256` compute `provedKey`, so bob's mint naming alice's proved challenge, or
+      alice's with another certificate, finds no record, is not covered, and spends nothing
+      (pre-flight minor 11; re-review R1); alice's own mint then finds it. The named challenge's
+      proved record is `TakeOnce`d once per request in `tokens`,
       **after** `ReserveIdempotency` succeeds (a store error or an in-progress answer before that
       leaves the proof for the retry), and held as `*provedChallenge` for every item. A store
       error from `mfaCovers` or `issueChallenge` is `deny store_unavailable` for that item, never
@@ -2970,8 +3165,11 @@ Expected: PASS. Mutation checks, each restored: drop the same-device check (see
 `TestATouchFromAnotherTokenIsRefused` fail); drop the `TakeOnce` of the challenge (see
 `TestAChallengeIsUsedOnce` fail); skip the exporter value (see `TestATouchProofIsBoundToItsConnection`
 fail); make `mfaCovers` ignore `ReuseFor` (see `TestATouchProofCoversTheRetriedMintAndThenReuses`
-fail); skip the named path's caller comparison (see `TestAChallengeIsUsedOnce` fail at bob's
-mint); read the requirement before replaying a completed reservation (see
+fail); key the challenge by the challenge alone, without the principal (see
+`TestAChallengeIsUsedOnce` fail at "alice after bob's attempt"); key the proved record without the
+caller's binding (see it fail at bob's mint, or at alice's own mint after it); key the reuse proof
+by the request's agent session instead of the challenge record's (see
+`TestAnIdPProofCoversTheMint` fail at "within reuse_for"); read the requirement before replaying a completed reservation (see
 `TestAReplayedMintUnderReuseZeroIsReplayed` fail); treat a store error in `mfaCovers` as "not
 covered" (see `TestAStoreErrorIsNotARefusedProof` fail).
 
@@ -3002,8 +3200,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 11's `mfaCovers`, `issueChallenge`.
 - Produces: `func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer
-  *directory.Answer, cred store.Credential, at time.Time, via *decision.OIDC, agent string,
-  proved *provedChallenge) (SessionRefreshReport, error)` (the held connection's state gains
+  *directory.Answer, cred store.Credential, at time.Time, via *decision.OIDC, agentSHA256 string,
+  proved *provedChallenge) (SessionRefreshReport, error)` (`agentSHA256` is Task 11's
+  `agentKey(r)`, the hex SHA-256 of the agent session) (the held connection's state gains
   `proved *provedChallenge`); outcome `per_login_mfa_required` beside
   `extended`, `revoked`, `past_grace`, `not_judged`; `SessionRefreshReport.Challenge` set when any
   context needed a proof.
@@ -3063,6 +3262,15 @@ func TestRefreshUnderARequirementNeedsAProof(t *testing.T) {
 	if code := f.refreshChallengeNaming(t, f.alice, ch); code != http.StatusTooManyRequests {
 		t.Fatalf("a second exemption from the same proof: %d, want 429", code)
 	}
+	// Another caller naming alice's proved challenge finds nothing and spends
+	// nothing: alice's exemption survives bob's request (re-review R1).
+	f.clock.Advance(16 * time.Minute) // past the pacing and reuse_for: asked again
+	ch2 := f.refresh(t, f.alice).PerLoginMFA.Challenge
+	f.proveTouch(t, f.alice, ch2)
+	_ = f.refreshChallengeNaming(t, f.bob, ch2)
+	if s := f.refreshNaming(t, f.alice, ch2).find("core-sw01"); s.Outcome != "extended" {
+		t.Fatalf("alice's refresh after bob named her challenge = %+v", s)
+	}
 }
 
 func TestRefreshWithinReuseNeedsNoNewProof(t *testing.T) {
@@ -3097,8 +3305,10 @@ Expected: FAIL.
   policy-refresh pass after a reload (`refreshContext` without a session) is unchanged: it never
   reads the requirement, so a reload revokes nothing over it.
   `refreshChallenge` decodes the optional `RefreshChallengeRequest` (strict, 4 KiB, an empty body
-  as today). When it names a challenge, it `TakeOnce`s the proved record, checks it is this
-  caller's (principal, fingerprint, `agent_sha256`, as `tokens` does), and keeps it on the held
+  as today). When it names a challenge, it `TakeOnce`s `provedKey(ch, principal, fingerprint,
+  agentKey(r))` computed from this caller, as `tokens` does: another caller's take misses with
+  `ErrNotFound`, spends nothing, and is paced as any request (re-review R1). A record found is
+  this caller's by its key; it is kept on the held
   connection beside the nonce (`h.proved`, expiring with it); a record taken this way skips the
   pacing check for this one request. `refresh` passes `h.proved` (or, with
   `RefreshRequest.PerLoginMFAChallenge` named and no `h.proved`, the record it takes itself) to
@@ -3111,7 +3321,8 @@ Expected: FAIL.
 Run: `go test ./internal/broker/ -count=1`, then `make test && make vet`.
 Expected: PASS. Mutation checks, each restored: let `extend` extend without the check and see
 `TestRefreshUnderARequirementNeedsAProof` fail at "the ceiling moved"; drop the pacing exemption
-and see it fail at "refresh after a proof" (429).
+and see it fail at "refresh after a proof" (429); key the proved record by the challenge alone in
+`refreshChallenge` and see it fail at "after bob named her challenge".
 
 - [ ] **Step 5: Commit**
 
@@ -3138,10 +3349,14 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `cmd/port49/main.go` (`tokenCmd`), `cmd/port49/ssh.go` (its mint at ~669),
   `cmd/port49/trust.go` (~179), `cmd/port49/refresh.go`
 - Modify: `internal/workload/client.go` (`Config.TouchKey`, the item loop; `LoadCertificate`
-  through `hwkey.LoadPair`), `cmd/port49/workload.go` (`--touch-key`; `--key` a reference)
+  through `clientkey.LoadPair`, so `workload` imports `internal/clientkey`; re-review R3),
+  `cmd/port49/workload.go` (`--touch-key`; `--key` a reference)
+- Test: `internal/agent/mfa_touch_test.go` (`TestAConnectionChangedDuringTheTouchIsNotPosted`;
+  re-review R6), `internal/workload/client_test.go`, and `internal/workload/client_hw_test.go`
+  (`//go:build hwkey && hwkey_dlopen`, with a `TestMain` calling `hwtest.SoftHSMMain`)
 
 **Interfaces:**
-- Consumes: Task 11's API types, Task 5's `Config.TouchKey`, plan 9b's `signIn`,
+- Consumes: Task 11's API types, Task 5's `Config.TouchKey` and `clientkey.LoadPair`, plan 9b's `signIn`,
   `oidcclient.Discover`, `pickProvider`.
 - Produces:
 
@@ -3167,8 +3382,13 @@ func (a *Agent) Refresh(ctx context.Context, challenge string) (api.RefreshRespo
 // ProveTouch signs challenge with the touch key over the held connection's
 // exporter value and posts it with the attestations to POST /v1/mfa. It
 // holds the wire to read the exporter value and to post, never across the
-// touch (ruling 14).
+// touch (ruling 14). Taking the wire back, it reads the exporter value again
+// and posts nothing if it changed: ErrConnectionChanged (re-review R6).
 func (a *Agent) ProveTouch(ctx context.Context, challenge string) error
+
+// ErrConnectionChanged is a touch made over a connection that was replaced
+// before the post: "the connection changed during the touch; run it again".
+var ErrConnectionChanged = errors.New("agent: the connection changed during the touch; run it again")
 
 func (c *Client) ProveTouch(ctx context.Context, challenge string) error
 
@@ -3205,19 +3425,26 @@ func describeMFA(req api.PerLoginMFA) string
     the reason and "this device accepts only hardware_key_touch".
   - `TestRevokeIsNotHeldBehindATouch` (pre-flight minor 4): with the touch key's `Sign` blocking
     until the test releases it, `port49 revoke` in another goroutine completes before the release.
+  - `internal/agent/mfa_touch_test.go`, `TestAConnectionChangedDuringTheTouchIsNotPosted`
+    (re-review R6): with the touch key's `Sign` blocking, the test drops the held connection
+    (`b.closeHeldConnections()`) and lets the agent redial, then releases the touch:
+    `ProveTouch` returns `ErrConnectionChanged`, the broker saw no `/v1/mfa` post, no `deny
+    per_login_mfa_refused` is recorded, and the challenge is unspent (a second `ProveTouch` on the
+    new connection, touched at once, is 200). The CLI prints the error's text, exit 1.
   - `TestNothingSecretIsPrinted`: across the tests above, stderr and stdout hold no challenge, no
     signature, no ID token and no agent session (the test greps for each value).
   - `internal/workload/client_test.go`, `TestAWorkloadProvesWithItsTouchKey`: a page of two
     devices, one under `applies_to_machines: true`: the run mints the other at once, proves the
     touch, and retries only the asked-for item under a new `Idempotency-Key` (pre-flight minor 3:
     the same key with a changed body is a 409, and a retried whole page would mint the other device
-    twice); `TestAWorkloadKeyMayBeAReference`: `LoadCertificate` with a `pkcs11:` key (behind
-    `hwkey && hwkey_dlopen`, on SoftHSM2) takes its PIN from `pin-source` and refuses without one,
+    twice); `TestAWorkloadKeyMayBeAReference` (in `client_hw_test.go`, behind `hwkey &&
+    hwkey_dlopen`, which `make test-hw` runs over `./internal/workload/...`): `LoadCertificate`
+    with a `pkcs11:` key on SoftHSM2 takes its PIN from `pin-source` and refuses without one,
     naming `pin-source` (pre-flight I7).
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./cmd/port49/ ./internal/workload/ -run 'DescribeMFA|ProvesATouch|FallsBackToTheSignIn|ProvesOnceAndRefreshes|TouchKeyThatCannotProve|RevokeIsNotHeld|NothingSecretIsPrinted|WorkloadProves' -count=1`
+Run: `go test ./cmd/port49/ ./internal/workload/ ./internal/agent/ -run 'DescribeMFA|ProvesATouch|FallsBackToTheSignIn|ProvesOnceAndRefreshes|TouchKeyThatCannotProve|RevokeIsNotHeld|NothingSecretIsPrinted|WorkloadProves|ConnectionChangedDuringTheTouch' -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement.**
@@ -3233,10 +3460,11 @@ Expected: FAIL.
     is the session key's; any missing → "your token does not show its attestation certificates";
     provisional on L60) once and keeps it; takes the wire, gets the connection's exporter value as
     `refreshOnce` does, and gives the wire back; signs `api.MFAMessage` (the touch, up to the
-    token's timeout) holding no wire; takes the wire again and posts `/v1/mfa` on the held
-    connection. If the connection changed meanwhile, the broker refuses the signature (another
-    exporter value) and `ProveTouch` says "the connection changed during the touch; run it again"
-    (pre-flight minor 4). A 401 is returned with the broker's detail; `hwkey.ErrKeyAbsent` as Task
+    token's timeout) holding no wire; takes the wire again, reads the exporter value again, and
+    compares it with the one it signed over (`bytes.Equal`). Changed (a reconnect during the
+    touch): it posts nothing and returns `ErrConnectionChanged`, so no `per_login_mfa_refused`
+    fires and the challenge stays unspent (pre-flight minor 4; re-review R6). Unchanged: it posts
+    `/v1/mfa` on the held connection. A 401 is returned with the broker's detail; `hwkey.ErrKeyAbsent` as Task
     6's `KeyAbsentError`.
   - `prove`: prints `describeMFA(req)`; if `hardware_key_touch` is in `req.Methods` and the agent's
     status says `touch_key: true`, prints "touch your key now" and calls `Client.ProveTouch`; when
@@ -3257,7 +3485,7 @@ Expected: FAIL.
     and retries only the items that asked for a proof, once, in a new request under a new
     `Idempotency-Key` naming the challenge (pre-flight minor 3); without a touch key, the item fails
     with the sentence and the run exits as for any refused item. `LoadCertificate(certFile,
-    keyRef, …)` goes through `hwkey.LoadPair`; for a reference, the PIN comes from the URI's
+    keyRef, …)` goes through `clientkey.LoadPair`; for a reference, the PIN comes from the URI's
     `pin-source` alone, and a key that needs one without it is refused naming `pin-source`
     (ruling 21; pre-flight I7). `cmd/port49/workload.go`'s `--key` help says a reference is taken.
 
@@ -3282,7 +3510,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `internal/hwkey/secureenclave/secureenclave_darwin.go`, `secureenclave_other.go`,
   `secureenclave_darwin_test.go`
-- Modify: `internal/hwkey/hwkey.go` (`secure-enclave:` dispatch), `cmd/port49/issuedkey.go`
+- Modify: `internal/clientkey/open_dlopen.go` (`secure-enclave:` dispatch; `secureenclave`
+  imports `hwkey`, so the dispatch lives in `clientkey`, re-review R3), `cmd/port49/issuedkey.go`
   (`secure_enclave` and `auto` on macOS)
 
 **Interfaces:**
@@ -3383,7 +3612,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `https://developers.yubico.com/PIV/Introduction/piv-attestation-ca.pem` and any newer root and
   intermediate Yubico lists), saved as the broker's `attestation_roots_file`. Record the firmware
   (`ykman info`) and `libykcs11`'s version.
-- [ ] **Step 2: The cells** (the harness drives `bin/port49` from `make build-client`, the
+- [ ] **Step 2: The cells** (the harness drives `bin/port49-client` from `make build-client`, the
   `hwkey_dlopen` build, against the compose broker and vEOS;
   Ryan types the PIN and touches when the harness says):
   - (a) `C_Initialize`/`C_Finalize` five times in one process with the token present (Task 3's
@@ -3463,12 +3692,14 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ## Operator notes (for the pull request body)
 
 - **Which `port49` has hardware keys.** There are two builds. The client build (`make
-  build-client`; plan 12's desktop and jump-host release) has PKCS#11 (YubiKeys, smartcards), the
-  TPM and, on macOS, the Secure Enclave; it needs the system's dynamic loader, which every desktop
-  Linux and macOS has. The static build (`make build`, and the container image) has the TPM and
+  build-client`, written as `bin/port49-client`; plan 12's desktop and jump-host release) has
+  PKCS#11 (YubiKeys, smartcards), the TPM and, on macOS, the Secure Enclave; it needs the system's
+  dynamic loader, which every desktop Linux and macOS has. The static build (`make build`, written
+  as `bin/port49` with `CGO_ENABLED=0`, and the container image) has the TPM and
   file keys only; given a `pkcs11:` or `secure-enclave:` key it says "this port49 was built
   without PKCS#11 support (the static build, as in the container image); use the client release",
-  and nothing else changes. Run `port49 login` from the client build.
+  and nothing else changes. Its `issued_key_store: auto` passes over a configured `issued_key`
+  and says so, rather than refusing. Run `port49 login` from the client build.
 - **Your key can live in hardware.** In `/etc/port49/config.yaml` (once, for the fleet) or your own
   `~/.port49/config.yaml`, set `key:` to a reference instead of a path:
   - a YubiKey or smartcard: `key: "pkcs11:id=%01?module-path=/usr/lib/x86_64-linux-gnu/libykcs11.so"`
@@ -3511,10 +3742,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   The strictest level wins: the methods every level accepts, the shortest `reuse_for`. Two levels
-  that share no method are a policy error naming both: `port49 policy check` fails, and a reload
-  of the edited policy is refused (the old one keeps serving). If an inventory change makes them
-  meet (a sync adds `tier: core`), that device alone is quarantined with the cause, and the rest
-  of the inventory change applies; watch `port49_devices_quarantined`. A scope that matches by an
+  that share no method are a policy error naming both: `port49 policy test` fails, `policy diff`
+  fails when your edit introduces it, and a reload of an edited policy that introduces it is
+  refused (the old one keeps serving). If an inventory change makes them meet (a sync adds `tier:
+  core`), that device alone is quarantined with the cause, and the rest of the inventory change
+  applies; watch `port49_devices_quarantined`. While it stays quarantined, policy edits that do
+  not add a new conflict still load: fixing a grant at 3am never waits on it. A scope that matches by an
   attribute needs `on_missing` and `security_log: true` (one matching `name` alone needs neither);
   `on_missing: exclude` there is a lint warning. Machines are exempt unless a level says
   `applies_to_machines: true`, and then prove by a touch from a key and touch slot on one token
