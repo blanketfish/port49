@@ -102,8 +102,8 @@ plus `ykcs11` and `pcscd` for Task 3's thread check.
 1. **Hardware-backed client keys** (plan 3, owner's rulings 2026-09-24): YubiKey through its PIV
    applet over PKCS#11, and platform keystores (TPM, macOS Secure Enclave), with touch and PIN
    policy. FIDO2 alone cannot sign a TLS handshake. Plan 3's PEM file stays as the fallback.
-2. **The broker certificate's CRL check** (plan 3, 2026-09-24): optional, when the certificate names
-   a distribution point; defence in depth, since the CA is the operator's.
+2. **The broker certificate's CRL check** (plan 3, 2026-09-24): optional (`check` checks every link
+   that names a distribution point, `require` refuses one that names none); defence in depth, since the CA is the operator's.
 3. **Routes without cgo** (decision 42 ruling 13, pre-flight Q2 of plan 9a): PKCS#11 through
    purego, TPM through go-tpm, CI against SoftHSM2 and swtpm over the MS-simulator protocol, the
    Secure Enclave behind a spike on a macOS host. A route the spike or the measurement rules out is
@@ -2023,7 +2023,8 @@ func TestBrokerCRLModes(t *testing.T) {
 		{"down under check goes on, said once", ModeCheck, "down", false, false, "could not check the broker certificate's revocation"},
 		{"down under require refuses", ModeRequire, "down", false, true, ""},
 		{"a list another key signed is not a list", ModeCheck, "forged", false, false, "could not check"},
-		{"no distribution point: nothing checked, nothing said", ModeRequire, "down", true, false, ""},
+		{"no distribution point under check: nothing checked, nothing said", ModeCheck, "down", true, false, ""},
+		{"no distribution point under require refuses", ModeRequire, "good", true, true, ""},
 		{"off checks nothing", ModeOff, "revoked", false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2052,25 +2053,40 @@ func TestBrokerCRLModes(t *testing.T) {
 func TestTheLastGoodListOutlivesTheServerUntilItsNextUpdate(t *testing.T) { /* fetched once, server stopped, a new Checker on the same dir is answered from the kept list until NextUpdate, then says it could not check */ }
 
 // An intermediate naming no distribution point (step-ca's default) is passed
-// over; the leaf it issued is still checked (decision 45 ruling 9;
-// pre-flight I10).
-func TestAnIntermediateWithNoDistributionPointIsNotChecked(t *testing.T) {
+// over under check, and the leaf it issued is still checked (decision 45
+// ruling 9; pre-flight I10). Under require it is refused: it is a link with no
+// fetchable list (Ryan, 2026-10-12).
+func TestAnIntermediateWithNoDistributionPoint(t *testing.T) {
 	for _, tc := range []struct {
 		serve   string
 		mode    Mode
 		refused bool
 	}{
-		{"good", ModeRequire, false},   // before the fix: the intermediate is Unknown, refused
-		{"revoked", ModeCheck, true},   // the leaf's own list still refuses
+		{"good", ModeCheck, false},
+		{"revoked", ModeCheck, true}, // the leaf's own list still refuses
+		{"good", ModeRequire, true},  // the intermediate names none
 	} {
 		cs, _ := threeLevelChain(t, tc.serve) // root → intermediate (no DP) → leaf (DP, list by the intermediate)
 		var said []string
-		c := New(t.TempDir(), tc.mode, time.Now, func(s string) { said = append(said, s) })
-		if err := c.VerifyConnection(cs); (err != nil) != tc.refused || len(said) != 0 {
+		c := New(privateDir(t), tc.mode, time.Now, func(s string) { said = append(said, s) })
+		err := c.VerifyConnection(cs)
+		if (err != nil) != tc.refused || len(said) != 0 {
 			t.Fatalf("%s under %s: %v, said %q", tc.serve, tc.mode, err, said)
+		}
+		var ne *NoDistributionPointError
+		if tc.mode == ModeRequire && (!errors.As(err, &ne) || !strings.Contains(err.Error(), "broker intermediate")) {
+			t.Fatalf("require with a DP-less intermediate: %v, want *NoDistributionPointError naming it", err)
 		}
 	}
 }
+
+// A revoked leaf is reported as revoked, not as the missing distribution point
+// of an intermediate above it.
+func TestRevokedBeatsAMissingDistributionPointUnderRequire(t *testing.T) { /* threeLevelChain "revoked", ModeRequire: errors.As *RevokedError */ }
+
+// A one-certificate chain is the trust anchor itself: nothing above it can
+// list it, so require passes it (you revoke it by removing it from the trust file).
+func TestASelfSignedAnchorPassesUnderRequire(t *testing.T) { /* VerifiedChains {{root.Cert}}, ModeRequire: nil */ }
 
 // A down CRL server costs one wait, not one per connection.
 func TestAFailedFetchIsRememberedForAMinute(t *testing.T) { /* serve "down" counting requests: three VerifyConnection calls within a minute make one fetch; after the fixture clock passes a minute, a fourth fetches again */ }
@@ -2112,8 +2128,12 @@ Expected: FAIL (`undefined: New`).
   is down costs login's three connections one wait, not three. The check is link by link
   (pre-flight I10): for each `i` whose `chain[i]` names an http(s) distribution point,
   `Check(ctx, []*x509.Certificate{chain[i], chain[i+1]})`, never `Check(ctx, chain)`, which would
-  read an intermediate with no distribution point as `Unknown` and refuse every login under
-  `require`. Each result: `Revoked` → `*RevokedError` (both modes); `Unknown` → under `check`
+  read an intermediate with no distribution point as `Unknown`. A link with no http(s)
+  distribution point is recorded, not checked: under `check` it is passed over and nothing is
+  said; under `require` the first such link is refused with `*NoDistributionPointError` ("add an
+  HTTP CDP to the CA, or set broker_crl: check"), but only after the other links have been
+  checked, so a revoked link is reported as `*RevokedError` first. The trust anchor is never a
+  link, so a one-certificate chain passes. Each result: `Revoked` → `*RevokedError` (both modes); `Unknown` → under `check`
   `warn(...)` once per `Checker` and nil, under `require` an error naming the list and
   "broker_crl: require". `dir` is
   `~/.port49/crl/`, made 0700 through `userconfig.PrivateDir`. `sessionFlags.config`,
@@ -3786,14 +3806,18 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   working: `port49 token` still mints. `port49 refresh` and anything that needs a new connection say
   "insert your key"; nothing ends. Put the key back and run `port49 login`: it sees the key without
   touching the token first, asks the PIN and carries on.
-- **The broker's certificate is checked against its CRL** when it names a distribution point.
+- **The broker's certificate is checked against its CRL**, link by link, for every link that names a
+  distribution point.
   `broker_crl: check` (default): a revoked broker certificate is refused before anything is sent to
   it; a CRL server that does not answer is said once and the login goes on (tried again after a
-  minute, not at every connection). `require` refuses that too, and refuses any certificate in the
-  chain (the root aside) that names no `http`/`https` distribution point: add an HTTP CDP to the CA,
-  or use `check`, under which such a certificate is not checked. `off` checks nothing. To rotate a
-  broker certificate, issue and load the new one before publishing the revocation; revoke the leaf,
-  not the CA. Under `require`, a revoked certificate with no replacement stops new logins while
+  minute, not at every connection); a link with no distribution point is not checked. `require`
+  refuses that too, and refuses any certificate in the chain (the root aside) that names no
+  `http`/`https` distribution point: add an HTTP CDP to the CA, or use `check`. `off` checks
+  nothing. `require` therefore refuses a stock step-ca broker certificate, and the intermediates of
+  many private PKIs, until the CA adds an HTTP CRL distribution point. To see whether yours has one:
+  `openssl x509 -noout -ext crlDistributionPoints -in broker.pem` (and the same for each
+  intermediate); no output means none. To rotate a broker certificate, issue and load the new one
+  before publishing the revocation; revoke the leaf, not the CA. Under `require`, a revoked certificate with no replacement stops new logins while
   held sessions continue. Lists are kept in `~/.port49/crl/`.
 - **`per_login_mfa`: a second factor at each login to the devices you mark.** Under `defaults:`, a
   role, or a scope (`match: {tier: core}` for a class, `match: {name: core-sw01}` for one device):

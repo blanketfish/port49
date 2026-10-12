@@ -5266,8 +5266,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
   - **The 3am case,** a test: the key unplugged mid-session. The held connection still mints, since
     the key was used at the handshake. `port49 refresh` and a reconnect say "insert your key", and
     never end the session.
-  - **The CRL check:** the broker certificate's, from the distribution point it names (defence in
-    depth: the CA is the operator's).
+  - **The CRL check:** the broker certificate's, from the distribution points its chain names (`check`
+    passes a link that names none; `require` refuses it; defence in depth: the CA is the operator's).
   - **CI and lab:** SoftHSM2 and swtpm in CI; a new row for a real YubiKey on the SER8 (touch, PIN,
     unplug), if one is to hand.
 - **9d — OpenSSH's own host-key handling, and the Python and Ansible clients** (design §17).
@@ -5759,7 +5759,7 @@ each task reviewed, most through one to three fix rounds. The ledger is
 - **Hardware-backed client keys**: YubiKey through its **PIV** applet (PKCS#11), and platform
   keystores (TPM, macOS Secure Enclave), with touch/PIN policy. FIDO2 alone cannot sign a TLS
   handshake; it belongs to the OIDC path. Plan 3's PEM file stays as the fallback.
-- **Optional CRL check of the broker's certificate** when it names a distribution point (the
+- **Optional CRL check of the broker's certificate** against the distribution points its chain names (`require` refuses a link that names none; the
   CA is the operator's own, so this is defence in depth; revocation of *client* certificates
   at the broker is plan 7's, spec §5.1.4).
 
