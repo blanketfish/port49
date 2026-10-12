@@ -194,7 +194,8 @@ func TestTheStrictestLevelWins(t *testing.T) {
 		Levels: []MFALevel{
 			{Level: "defaults", Accept: []MFAMethod{HardwareKeyTouch, IdPMFA}, ReuseFor: 15 * time.Minute},
 			{Level: "role netadmin", Accept: []MFAMethod{HardwareKeyTouch, IdPMFA}, ReuseFor: 30 * time.Minute},
-			{Level: "scope core", Accept: []MFAMethod{HardwareKeyTouch}, ReuseFor: 5 * time.Minute},
+			{Level: "scope core", Accept: []MFAMethod{HardwareKeyTouch}, ReuseFor: 5 * time.Minute,
+				Select: "match {tier in core} on_missing include"},
 		}}
 	if !reflect.DeepEqual(res.PerLoginMFA, want) {
 		t.Fatalf("core-sw01: %+v\nwant %+v", res.PerLoginMFA, want)
@@ -442,6 +443,99 @@ scopes:
 	if out, code := diffRun(t, pinned, byTier+"tests:\n  - {subject: alice, device: core-sw01, per_login_mfa: "+
 		"{accept: [hardware_key_touch], reuse_for: 5m}}\n"); code != 0 {
 		t.Fatalf("an acknowledged replacement failed (exit %d):\n%s", code, out)
+	}
+}
+
+// A level's identity is the scope's selector and on_missing as well as its
+// name: any change to either is a weakening, fail-closed, because no one can
+// prove the new selector covers a superset of devices now and after a later
+// inventory sync (the controller's Task 9 re-review ruling, decision 45
+// ruling 24).
+func TestPolicyDiffGatesAScopeWhoseSelectorMoved(t *testing.T) {
+	const mfa = `per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}`
+	const assertion = "tests:\n  - {subject: alice, device: core-sw01, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}\n"
+	for name, c := range map[string]struct{ old, new string }{
+		"name pin to attribute, same name (P4)": {
+			"scopes:\n  - {name: hot, match: {name: core-sw01}, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {tier: core}, on_missing: exclude, security_log: true, " + mfa + "\n"},
+		"on_missing include to exclude (P5)": {
+			"scopes:\n  - {name: hot, match: {tier: core}, on_missing: include, security_log: true, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {tier: core}, on_missing: exclude, security_log: true, " + mfa + "\n"},
+		"name pin gains an attribute (P9)": {
+			"scopes:\n  - {name: hot, match: {name: core-sw01}, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {name: core-sw01, tier: core}, on_missing: exclude, security_log: true, " + mfa + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, code := diffRun(t, c.old, c.new)
+			if code == 0 || !strings.Contains(out, "per_login_mfa_weakened: alice on core-sw01") {
+				t.Fatalf("a moved selector passed the gate (exit %d):\n%s", code, out)
+			}
+			// The line does not read the same on both sides.
+			if !strings.Contains(out, "scope hot [match {") {
+				t.Fatalf("the line does not say what the scope selects now:\n%s", out)
+			}
+			if out, code := diffRun(t, c.old, c.new+assertion); code != 0 {
+				t.Fatalf("an acknowledged selector change failed (exit %d):\n%s", code, out)
+			}
+		})
+	}
+	// An unchanged scope, and a scope added, are no weakening.
+	const same = "scopes:\n  - {name: hot, match: {tier: core}, on_missing: include, security_log: true, " + mfa + "\n"
+	if out, code := diffRun(t, same, same); code != 0 || out != "" {
+		t.Fatalf("an unchanged scope is a change (exit %d):\n%s", code, out)
+	}
+	if out, code := diffRun(t, "", same); code != 0 {
+		t.Fatalf("a level added failed the gate (exit %d):\n%s", code, out)
+	}
+}
+
+// An unchanged test carried over from the old version is no deliberate act: it
+// does not acknowledge a weakening, only a test new or changed in the new
+// version does (the controller's Task 9 re-review ruling, decision 45
+// ruling 26).
+func TestPolicyDiffAnUnchangedTestDoesNotAcknowledgeAnMFAWeakening(t *testing.T) {
+	const pinned = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}
+scopes:
+  - {name: core-sw01, match: {name: core-sw01}, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}
+`
+	const byTier = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}
+scopes:
+  - {name: core, match: {tier: core}, on_missing: exclude, security_log: true,
+     per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}
+`
+	const kept = "tests:\n  - {subject: alice, device: core-sw01, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}\n"
+	out, code := diffRun(t, pinned+kept, byTier+kept)
+	if code == 0 || !strings.Contains(out, "per_login_mfa_weakened: alice on core-sw01") {
+		t.Fatalf("the old test acknowledged the swap (exit %d):\n%s", code, out)
+	}
+	// A test changed in the new version acknowledges it.
+	const edited = "tests:\n  - {subject: alice, device: core-sw01, command: show version, expect: permit, " +
+		"per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}\n"
+	if out, code := diffRun(t, pinned+kept, byTier+edited); code != 0 {
+		t.Fatalf("a changed test did not acknowledge (exit %d):\n%s", code, out)
+	}
+	// And a test added beside the old one.
+	if out, code := diffRun(t, pinned+kept, byTier+kept+strings.Replace(edited, "tests:\n", "", 1)); code != 0 {
+		t.Fatalf("a new test did not acknowledge (exit %d):\n%s", code, out)
+	}
+}
+
+// policy diff decides a quarantine is new by the reloader's rule, a device and
+// a conflicting level pair, not by the subject its cause names: an emergency
+// grant through the same role onto a device already quarantined fails
+// nothing (decision 45 ruling 25).
+func TestPolicyDiffASameQuarantinePairIsNoNewQuarantine(t *testing.T) {
+	before := mfaBundle(t, disjointPolicy)
+	after := mfaBundle(t, disjointPolicy+`
+subjects:
+  - {name: oncall, identity: ["user:oncall@example.com"], token_ttl: 5m}
+grants:
+  - {subject: oncall, scope: all_devices, roles: [netadmin]}
+`)
+	if d := Compare(before, after, noon); len(d.Quarantined) != 0 {
+		t.Fatalf("a same-pair emergency grant is a new quarantine: %+v", d.Quarantined)
 	}
 }
 

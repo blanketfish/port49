@@ -50,6 +50,37 @@ type MFALevel struct {
 	ReuseFor time.Duration
 	// AppliesToMachines is the level's own applies_to_machines, for explain.
 	AppliesToMachines bool
+	// Select is a scope level's match and on_missing, canonical: part of its
+	// identity, so a scope that keeps its name and moves what it selects is
+	// a different level. Empty for defaults and a role.
+	Select string
+}
+
+// scopeSelect is a scope's match and on_missing as one canonical string.
+func scopeSelect(s *Scope) string {
+	keys := make([]string, 0, len(s.Match))
+	for k := range s.Match {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	terms := make([]string, len(keys))
+	for i, k := range keys {
+		v := s.Match[k]
+		var parts []string
+		if len(v.Equal) > 0 {
+			parts = append(parts, "in "+strings.Join(v.Equal, "|"))
+		}
+		ops := make([]string, 0, len(v.Cmp))
+		for op := range v.Cmp {
+			ops = append(ops, op)
+		}
+		slices.Sort(ops)
+		for _, op := range ops {
+			parts = append(parts, op+" "+v.Cmp[op])
+		}
+		terms[i] = k + " " + strings.Join(parts, " ")
+	}
+	return "match {" + strings.Join(terms, ", ") + "} on_missing " + s.OnMissing
 }
 
 // MFARequirement is a device's effective requirement for one subject:
@@ -273,19 +304,19 @@ func levelsOf(levels []MFALevel) []string {
 func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
 	machine := c.subject.Domain == DomainMachines
 	var levels []MFALevel
-	add := func(name string, m *PerLoginMFA) {
+	add := func(name, sel string, m *PerLoginMFA) {
 		if m == nil || machine && !m.AppliesToMachines {
 			return
 		}
 		levels = append(levels, MFALevel{Level: name, Accept: m.Accept, ReuseFor: m.ReuseFor,
-			AppliesToMachines: m.AppliesToMachines})
+			AppliesToMachines: m.AppliesToMachines, Select: sel})
 	}
-	add("defaults", p.defaults.PerLoginMFA)
+	add("defaults", "", p.defaults.PerLoginMFA)
 	for _, r := range c.roles {
-		add("role "+r, p.roles[r].PerLoginMFA)
+		add("role "+r, "", p.roles[r].PerLoginMFA)
 	}
 	for _, s := range c.scopes {
-		add("scope "+s, p.scopes[s].PerLoginMFA)
+		add("scope "+s, scopeSelect(p.scopes[s]), p.scopes[s].PerLoginMFA)
 	}
 	if len(levels) == 0 {
 		return MFARequirement{Machine: machine}, nil
@@ -356,8 +387,10 @@ func (p *Policy) MFADisjoint() []Quarantine {
 
 // NewMFADisjoint is the entries of after.MFADisjoint() that base's lack,
 // matched by device and conflicting level pair: what a policy edit
-// introduces, and all a policy-file reload, loadBoth and `policy diff`
-// refuse. base is the in-force policy over the same inventory; nil base is
+// introduces, and all a policy-file reload refuses (mfaRefusal). `policy diff`
+// does not call it: it applies the same device-and-pair rule to each
+// instant's entries (comparison.at). base is the in-force policy over the
+// same inventory; nil base is
 // every entry (re-review R5). A grant that only reaches a device already
 // quarantined over the same pair is no new entry, whichever subject holds it:
 // the device is out already, and an emergency grant at 3am must load (the
@@ -404,11 +437,14 @@ type MFAChange struct {
 
 // mfaWeakened is whether new lets a login through that old did not. It
 // compares the effective requirement, and then each old level by identity (its
-// kind and name or scope): a level gone or replaced by another, widened,
-// given a longer reuse_for or turned off for machines is a weakening whatever
-// the level count, so swapping a name-pinned scope for an attribute scope
-// cannot pass (spec §12; decision 45 ruling 24). A rename counts as a
-// removal and needs a session test.
+// kind and name, and for a scope its match and on_missing): a level gone or
+// replaced by another, widened, given a longer reuse_for or turned off for
+// machines is a weakening whatever the level count, so swapping a name-pinned
+// scope for an attribute scope cannot pass (spec §12; decision 45 rulings 24
+// and 26). Any change to a scope's match or on_missing counts as a removal,
+// fail-closed: nothing proves the new selector covers a superset of devices
+// now and after a later inventory sync. A rename counts as a removal too, and
+// both need a session test; a level added is a tightening.
 func mfaWeakened(old, new MFARequirement) bool {
 	switch {
 	case !old.Required():
@@ -425,21 +461,26 @@ func mfaWeakened(old, new MFARequirement) bool {
 			return true
 		}
 		n := new.Levels[i]
-		return !subsetOf(n.Accept, o.Accept) || n.ReuseFor > o.ReuseFor || o.AppliesToMachines && !n.AppliesToMachines
+		return n.Select != o.Select || !subsetOf(n.Accept, o.Accept) || n.ReuseFor > o.ReuseFor ||
+			o.AppliesToMachines && !n.AppliesToMachines
 	})
 }
 
 // detail is the requirement with the levels that set it, `accept [..]
 // reuse_for 5m (defaults ∩ scope core)`, a level that applies to machines
 // marked, so a diff line never reads the same on both sides when only the
-// levels moved.
-func (r MFARequirement) detail() string {
+// levels moved. A scope that keeps its name on the other side and selects
+// otherwise there shows its match and on_missing in brackets.
+func (r MFARequirement) detail(other MFARequirement) string {
 	if !r.Required() {
 		return "none"
 	}
 	levels := make([]string, len(r.Levels))
 	for i, l := range r.Levels {
 		levels[i] = l.Level
+		if slices.ContainsFunc(other.Levels, func(o MFALevel) bool { return o.Level == l.Level && o.Select != l.Select }) {
+			levels[i] += " [" + l.Select + "]"
+		}
 		if l.AppliesToMachines {
 			levels[i] += " (machines)"
 		}
@@ -477,7 +518,7 @@ func (m MFAChange) Line(from string) string {
 			", per_login_mfa: " + assert + "}"
 	}
 	return fmt.Sprintf("%s %s on %s%s: %s -> %s%s", label, m.Subject, strings.Join(m.Devices, ", "), from,
-		m.Old.detail(), m.New.detail(), tail)
+		m.Old.detail(m.New), m.New.detail(m.Old), tail)
 }
 
 func mfaNames(accept []MFAMethod) []string {

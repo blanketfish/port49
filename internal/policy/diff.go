@@ -441,7 +441,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
 		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...),
 		patterns: slices.Concat(before.Redactions(), after.Redactions())}
-	for k := range after.sessionAcks(instants) {
+	for k := range after.sessionAcks(before, instants) {
 		c.acks[k] = true
 	}
 	for k := range after.regexAcks(before, instants) {
@@ -612,7 +612,12 @@ func (c *comparison) at(at time.Time) {
 		was, is := currentEntries(c.before, dev.Name, at), currentEntries(c.after, dev.Name, at)
 		var fresh []QuarantineEntry
 		for _, e := range is {
-			if !slices.ContainsFunc(was, func(w QuarantineEntry) bool { return w.Cause == e.Cause }) &&
+			// A per_login_mfa entry is new by its device and level pair, as the
+			// reloader decides (NewMFADisjoint; decision 45 ruling 25), not by
+			// the subject its cause names.
+			if !slices.ContainsFunc(was, func(w QuarantineEntry) bool {
+				return w.Cause == e.Cause || e.MFA && w.MFA && w.MFAPair == e.MFAPair
+			}) &&
 				c.once("quarantine", dev.Name, e.Cause) {
 				fresh = append(fresh, e)
 			}
@@ -1093,8 +1098,10 @@ func instantKey(at time.Time, parts ...string) string {
 
 // sessionAcks is what each passing test in p asserting a session value
 // acknowledges, at each of instants: the value it resolved, for its subject
-// on its device, at that instant (spec §12).
-func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
+// on its device, at that instant (spec §12). A per_login_mfa assertion
+// acknowledges only from a test that is new or changed against before's: an
+// unchanged old test is no deliberate act (decision 45 ruling 26).
+func (p *Policy) sessionAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
 	for _, at := range instants {
 		for _, r := range p.RunTests(at) {
@@ -1105,7 +1112,7 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 			if subject == "" {
 				subject = p.byID[r.Test.Principal]
 			}
-			if r.Test.MFA != nil {
+			if r.Test.MFA != nil && !slices.ContainsFunc(before.tests, func(old Test) bool { return reflect.DeepEqual(old, r.Test) }) {
 				acks[mfaAckKey(at, subject, r.Test.Device, r.PerLoginMFA)] = true
 			}
 			for field, asserted := range map[string]bool{"level": r.Test.Level != "",
