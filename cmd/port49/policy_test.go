@@ -1677,3 +1677,36 @@ func TestPolicyDiffNamesNoneForAMissingGroup(t *testing.T) {
 		}
 	}
 }
+
+// A diff that brings the entry-deny warning prints it and still exits 0:
+// the warning is reported, never a gate (decision 44 ruling 4).
+func TestPolicyDiffPrintsAProjectionWarningAndExitsZero(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, deny string) string {
+		path := filepath.Join(dir, name)
+		body := "platform_set: 1.2.0\nscopes: [{name: all_devices, match: {}}]\n" +
+			"roles: [{name: op, privilege: operator, permit: [\"**\"]" + deny + "}]\n" +
+			"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n" +
+			"grants: [{subject: noc, scope: all_devices, roles: [op]}]\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	oldPol := write("old.yaml", "")
+	newPol := write("new.yaml", `, deny: ["show configuration **"]`)
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "warning: projection_netconf_closed:") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

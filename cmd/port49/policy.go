@@ -594,6 +594,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 				pc.OldTemplate), projectionText(pc.NewShape, pc.NewBits, pc.NewTemplate),
 			policy.ShortfallText(pc.Narrower, pc.Unreached))
 	}
+	// A warning the change brings (decision 44 ruling 4): reported, and the
+	// exit code is not touched by it.
+	for _, f := range d.ProjectionWarnings {
+		fmt.Fprintf(stdout, "warning: %s: %s\n", f.Kind, f.Message)
+	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
 		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)

@@ -945,3 +945,77 @@ func TestTheProjectionMessageNamesWhatTheEntryDenyCloses(t *testing.T) {
 		t.Errorf("%q", msg)
 	}
 }
+
+// parseEntry is parseProjected under user_permissions with set 1.2.0's entry
+// deny on the test set, and view-configuration reaching `show log` too, so a
+// deny of `show configuration` is sent beneath the bit, not aligned with it.
+func parseEntry(t *testing.T, body string) *Policy {
+	t.Helper()
+	e := projectedEnv(platform.BitDeliveryUserPermissions)
+	d := e.Sets[projectedSet]["juniper_junos"]
+	d.RPCEntryDenies = []string{"junoscript **"}
+	d.Bits["view-configuration"] = []string{"show configuration **", "show log **"}
+	e.Sets[projectedSet]["juniper_junos"] = d
+	p, err := Parse([]byte("platform_set: "+projectedSet+"\n"+body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The entry deny closes NETCONF for that subject, and a deny of `show
+// configuration` beneath view-configuration is Ryan's operator error: each a
+// warning, failing nothing; policy diff prints the ones a change brings
+// (decision 44 ruling 4).
+func TestTheEntryDenyWarnings(t *testing.T) {
+	plain := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"]}
+`+subjOK+grantOK)
+	denies := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	kinds := func(fs []Finding) map[string][]string {
+		out := map[string][]string{}
+		for _, f := range fs {
+			out[f.Kind] = append(out[f.Kind], f.Message)
+		}
+		return out
+	}
+	got := kinds(denies.Projections(noon))
+	if n := got[FindingProjectionNetconfClosed]; len(n) != 1 || !strings.Contains(n[0], "no NETCONF") {
+		t.Errorf("netconf closed: %q", n)
+	}
+	if v := got[FindingProjectionDenyBeneathViewConfiguration]; len(v) != 1 ||
+		!strings.Contains(v[0], "show configuration **") || !strings.Contains(v[0], "withhold view-configuration") {
+		t.Errorf("view-configuration: %q", v)
+	}
+	if ProjectionRefusals(denies.Projections(noon)) != 0 {
+		t.Error("a warning fails policy test")
+	}
+	if p := kinds(plain.Projections(noon)); len(p[FindingProjectionNetconfClosed])+
+		len(p[FindingProjectionDenyBeneathViewConfiguration]) != 0 {
+		t.Errorf("no deny beneath, no warning: %v", p)
+	}
+	d := Compare(plain, denies, noon)
+	if len(d.ProjectionWarnings) != 2 || len(d.ProjectionRefusals) != 0 {
+		t.Errorf("the change brings two warnings: %+v", d.ProjectionWarnings)
+	}
+	if d := Compare(denies, denies, noon); len(d.ProjectionWarnings) != 0 {
+		t.Errorf("an unchanged warning is not repeated: %+v", d.ProjectionWarnings)
+	}
+}
+
+// A set that carries no rpc_entry_denies (1.1.0) leaves NETCONF on whatever
+// the shape: a narrow result there gets no netconf-closed warning (R8).
+func TestNoNetconfClosedWarningWithoutEntryDenies(t *testing.T) {
+	// A grant of `**` less a deny is the narrow shape's case; whichever shape
+	// the reply takes, the set has no entry denies, so no warning.
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjectionNetconfClosed {
+			t.Errorf("a set with no entry denies warned: %s", f.Message)
+		}
+	}
+}
