@@ -1048,6 +1048,18 @@ func (w *wrapped) GetLogout(ctx context.Context, key string) (store.Logout, erro
 	return w.inner.GetLogout(ctx, key)
 }
 
+// PutMFAProof and GetMFAProof pass through unsealed too: the key is a hash
+// of a principal, a fingerprint and an agent session's hash, and the value
+// a method and a clock; there is no identity and no credential to seal
+// (plan 9c, Task 11).
+func (w *wrapped) PutMFAProof(ctx context.Context, p store.MFAProof, ttl time.Duration) error {
+	return w.inner.PutMFAProof(ctx, p, ttl)
+}
+
+func (w *wrapped) GetMFAProof(ctx context.Context, key string) (store.MFAProof, error) {
+	return w.inner.GetMFAProof(ctx, key)
+}
+
 // membershipSecret is a membership's sealed part, bound to its principal.
 // MapKeys and Refused are sealed as well as kept in the clear: the clear
 // copies are the backend's index, the sealed ones the truth.

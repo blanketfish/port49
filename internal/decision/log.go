@@ -52,10 +52,28 @@ type Record struct {
 	// Certificate is an issue record's certificate (spec §5.7; §13 decision
 	// 43 ruling 22).
 	Certificate *Certificate `json:"certificate,omitempty"`
+	// PerLoginMFA is the per-login requirement a mint or refresh record was
+	// judged under, or a proof record's method and challenge hash (spec
+	// §5.7; §13 decision 45 ruling 19).
+	PerLoginMFA *PerLoginMFA `json:"per_login_mfa,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
 	IndexError string `json:"index_error,omitempty"`
+}
+
+// PerLoginMFA is a record's per-login part. A mint or refresh record under a
+// requirement carries accept, reuse_for_seconds, levels and, where a proof
+// covered it, method, proved_at and reused; a per_login_mfa record carries
+// method and challenge_sha256 alone. The challenge itself is never logged.
+type PerLoginMFA struct {
+	Accept          []string `json:"accept,omitempty"`
+	ReuseForSeconds *int     `json:"reuse_for_seconds,omitempty"`
+	Levels          []string `json:"levels,omitempty"`
+	Method          string   `json:"method,omitempty"`
+	ProvedAt        string   `json:"proved_at,omitempty"`
+	Reused          bool     `json:"reused,omitempty"`
+	ChallengeSHA256 string   `json:"challenge_sha256,omitempty"`
 }
 
 // Certificate is the certificate an issue record names: its serial, as

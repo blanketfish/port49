@@ -176,6 +176,12 @@ type Request struct {
 	// Sweep is the sweep this device was minted by, copied onto the permit
 	// record; nil for a mint by name (spec §13 decision 42 ruling 4).
 	Sweep *decision.Sweep
+	// PerLoginMFA is the per-login requirement this mint was made under and
+	// the proof that covered it (the broker judged it); copied onto the
+	// permit record. Nil for a device with no requirement (decision 45
+	// ruling 19). The proof's method and time are also in
+	// Subject.Credential, which the token carries into its context.
+	PerLoginMFA *decision.PerLoginMFA
 	// Log is where Mint writes its permit record; nil is the minter's own
 	// log. The broker passes a per-request decision.Buffer, flushed once
 	// the request lets go of the policy (plan 7e, Ruling 10).
@@ -227,6 +233,48 @@ func (m *Minter) Reserve(ctx context.Context, principal, key string, devices []s
 		}
 	}
 	return res, nil
+}
+
+// replayOf is the result a completed idempotency record replays, and why
+// not ("") when it cannot be: the reason is what Mint carries onto the mint
+// record that is made afresh instead.
+func (m *Minter) replayOf(rec store.Idempotency, supersededAt time.Time) (prev Result, why string) {
+	switch uerr := json.Unmarshal(rec.Response, &prev); {
+	case uerr != nil:
+		// A record that will not decode is a mint that cannot be replayed.
+		// Mint — the caller gets working tokens — and say the replay was
+		// abandoned, or this is silent.
+		return Result{}, "idempotency record did not decode; minted again rather than replayed"
+	case !supersededAt.IsZero() && !prev.MintedAt.After(supersededAt):
+		// Its tokens were deleted since, by a policy change or a
+		// revocation: replayed, the caller would hold a token no device
+		// accepts. A record from before MintedAt was kept has a zero one,
+		// and is not replayed either.
+		return Result{}, "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
+	case !prev.SessionExpiresAt.IsZero() && !m.now().Before(prev.SessionExpiresAt):
+		// Its tokens' ceiling has passed: replayed, the caller would hold a
+		// token for a context born expired. Minted again under this
+		// request's subject, whose ceiling the broker checked.
+		return Result{}, "idempotency record names tokens past their session ceiling; minted again rather than replayed"
+	}
+	return prev, ""
+}
+
+// Replays reports whether Mint of r would answer from a completed
+// idempotency record, minting nothing. The broker asks it before it reads a
+// device's per-login requirement: a retry whose answer was lost is replayed
+// even though the proof that covered it is spent (decision 45 ruling 14).
+func (m *Minter) Replays(r Request) bool {
+	res := r.Reservation
+	if res == nil {
+		return false
+	}
+	rec, ok := res.Found[r.Device]
+	if !ok {
+		return false
+	}
+	_, why := m.replayOf(rec, r.SupersededAt)
+	return why == ""
 }
 
 // releaseTimeout bounds giveBack's store calls, as the broker's holdTimeout
@@ -350,29 +398,12 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		// else may.
 		expect := res.Holder
 		if rec, ok := res.Found[r.Device]; ok {
-			var prev Result
-			uerr := json.Unmarshal(rec.Response, &prev)
-			switch {
-			case uerr != nil:
-				// A record that will not decode is a mint that cannot be
-				// replayed. Mint — the caller gets working tokens — and say
-				// the replay was abandoned, or this is silent.
-				idemErr = "idempotency record did not decode; minted again rather than replayed"
-			case !r.SupersededAt.IsZero() && !prev.MintedAt.After(r.SupersededAt):
-				// Its tokens were deleted since, by a policy change or a
-				// revocation: replayed, the caller would hold a token no
-				// device accepts. A record from before MintedAt was kept has
-				// a zero one, and is not replayed either.
-				idemErr = "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
-			case !prev.SessionExpiresAt.IsZero() && !m.now().Before(prev.SessionExpiresAt):
-				// Its tokens' ceiling has passed: replayed, the caller would
-				// hold a token for a context born expired. Minted again under
-				// this request's subject, whose ceiling the broker checked.
-				idemErr = "idempotency record names tokens past their session ceiling; minted again rather than replayed"
-			default:
+			prev, why := m.replayOf(rec, r.SupersededAt)
+			if why == "" {
 				prev.Replayed = true
 				return prev, nil
 			}
+			idemErr = why
 			expect = rec.Holder
 		}
 		// Hold the record, by compare-and-set, for a fresh ReservationTTL
@@ -498,11 +529,12 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
-		Auth:       &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory, OIDC: r.OIDC},
-		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
-		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
-		Policy:     r.Policy,
-		Sweep:      r.Sweep,
-		IndexError: idemErr})
+		Auth:        &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory, OIDC: r.OIDC},
+		Device:      &decision.Device{Name: r.Device, Platform: r.Platform},
+		Mint:        &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
+		Policy:      r.Policy,
+		Sweep:       r.Sweep,
+		PerLoginMFA: r.PerLoginMFA,
+		IndexError:  idemErr})
 	return out, nil
 }

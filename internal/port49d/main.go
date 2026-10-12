@@ -385,6 +385,11 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
 	b.CABundle, b.CABundleRefused = caBundle, caBundleRefused
+	if id := cfg.Broker.Identity; id != nil {
+		b.PerLoginMFA = loadPerLoginMFA(id.PerLoginMFA, func(format string, args ...any) {
+			fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+		})
+	}
 	var anchor *x509.CertPool
 	if anchorCert != nil {
 		anchor = x509.NewCertPool()

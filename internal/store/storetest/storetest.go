@@ -1085,6 +1085,7 @@ func Run(t *testing.T, b Backend) {
 		{"OIDCOwnerMergesUnderARace", OIDCOwnerMergesUnderARace},
 		{"LogoutKeepsTheLaterAndExpires", LogoutKeepsTheLaterAndExpires},
 		{"LogoutMergesUnderARace", LogoutMergesUnderARace},
+		{"MFAProofKeepsTheLaterAndExpires", MFAProofKeepsTheLaterAndExpires},
 		{"OIDCRecordsRefuseWhatCannotBeKept", OIDCRecordsRefuseWhatCannotBeKept},
 	} {
 		p := p

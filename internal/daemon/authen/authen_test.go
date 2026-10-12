@@ -562,6 +562,12 @@ func (noStore) PutLogout(context.Context, store.Logout, time.Duration) error { p
 
 func (noStore) GetLogout(context.Context, string) (store.Logout, error) { panic("store called") }
 
+func (noStore) PutMFAProof(context.Context, store.MFAProof, time.Duration) error {
+	panic("store called")
+}
+
+func (noStore) GetMFAProof(context.Context, string) (store.MFAProof, error) { panic("store called") }
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {

@@ -200,6 +200,56 @@ func LogoutKeepsTheLaterAndExpires(t *testing.T, b Backend) {
 	}
 }
 
+// MFAProofKeepsTheLaterAndExpires: of two proofs under one key the later At
+// stands, with the longer life; past it the proof is gone, and a key with no
+// life or no name is refused (plan 9c, Task 11).
+func MFAProofKeepsTheLaterAndExpires(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	const key = "0a1b2c3d/hardware_key_touch"
+	if _, err := s.GetMFAProof(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a proof never written: %v", err)
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: key, Method: "hardware_key_touch", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: key, Method: "hardware_key_touch", At: t0.Add(-time.Minute)},
+		3*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.GetMFAProof(ctx, key)
+	if err != nil || !p.At.Equal(t0) || p.Method != "hardware_key_touch" || p.Key != key {
+		t.Fatalf("proof %+v %v: the later At stands", p, err)
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: key, Method: "hardware_key_touch", At: t0.Add(time.Minute)},
+		time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if p, err = s.GetMFAProof(ctx, key); err != nil || !p.At.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("proof %+v %v: a later proof replaces the earlier", p, err)
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Hour)
+	mu.Unlock()
+	if _, err := s.GetMFAProof(ctx, key); err != nil {
+		t.Fatalf("the longer life was not kept: %v", err)
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Hour)
+	mu.Unlock()
+	if _, err := s.GetMFAProof(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a proof past its life: %v", err)
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: "", At: t0}, time.Hour); !errors.Is(err, store.ErrNoKey) {
+		t.Fatalf("a proof with no key: %v", err)
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: key, At: t0}, 0); !errors.Is(err, store.ErrBadTTL) {
+		t.Fatalf("a proof with no life: %v", err)
+	}
+}
+
 // LogoutMergesUnderARace: of concurrent logouts under one key, whatever
 // order they land in, the latest At stands with its origin, and a write that
 // reads, merges and writes without a compare would let an older one win.

@@ -26,9 +26,9 @@ import (
 // (Ruling 15).
 const oidcChallengeTTL = 5 * time.Minute
 
-// challengeKey is a challenge's once-only key: its SHA-256, so the store
+// refreshChallengeKey is a challenge's once-only key: its SHA-256, so the store
 // never holds a nonce that answers it.
-func challengeKey(nonce string) string {
+func refreshChallengeKey(nonce string) string {
 	sum := sha256.Sum256([]byte(nonce))
 	return "refresh_challenge " + hex.EncodeToString(sum[:])
 }
@@ -76,7 +76,7 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	nonce := base64.RawURLEncoding.EncodeToString(raw)
 	rec, _ := json.Marshal(challengeRec{Principal: c.principal, Issuer: c.oidc.Issuer, IssuedAt: now})
-	if ok, err := b.Store.PutOnce(ctx, challengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
+	if ok, err := b.Store.PutOnce(ctx, refreshChallengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
 		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
 		return
 	}
@@ -117,7 +117,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 			"nonce of a prompt=login authentication")
 		return
 	}
-	raw, err := b.Store.TakeOnce(ctx, challengeKey(c.oidc.Nonce))
+	raw, err := b.Store.TakeOnce(ctx, refreshChallengeKey(c.oidc.Nonce))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		refuse("refresh_challenge_missing", "the token's nonce is no live challenge of this broker's: ask for one "+

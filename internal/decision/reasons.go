@@ -86,6 +86,16 @@ const (
 	// for the key a person's sign-in names (spec §5.7; §13 decision 43
 	// ruling 8). A permit on the issue event.
 	CertificateIssued Reason = "certificate_issued"
+
+	// The per-login proof (spec §5.1.5; §5.7; §13 decision 45).
+	// PerLoginMFARequired: a mint or refresh under a requirement no proof
+	// covers. PerLoginMFAProved and PerLoginMFARefused: a proof posted to
+	// POST /v1/mfa verified, or did not. PerLoginMFAUnavailable: the
+	// requirement accepts no method this broker can verify now.
+	PerLoginMFARequired    Reason = "per_login_mfa_required"
+	PerLoginMFAProved      Reason = "per_login_mfa_proved"
+	PerLoginMFARefused     Reason = "per_login_mfa_refused"
+	PerLoginMFAUnavailable Reason = "per_login_mfa_unavailable"
 )
 
 // Events.
@@ -137,6 +147,11 @@ const EventExplain = "explain"
 // 43): permit certificate_issued, or a deny with the refusal's reason.
 const EventIssue = "issue"
 
+// EventPerLoginMFA is POST /v1/mfa: whether a per-login proof is accepted
+// (spec §5.7; §13 decision 45): permit per_login_mfa_proved, or deny
+// per_login_mfa_refused (store_unavailable when the broker could not judge).
+const EventPerLoginMFA = "per_login_mfa"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
@@ -153,6 +168,7 @@ var reasons = []Reason{
 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
 	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
 	APIRightMissing, CertificateIssued,
+	PerLoginMFARequired, PerLoginMFAProved, PerLoginMFARefused, PerLoginMFAUnavailable,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

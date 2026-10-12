@@ -265,6 +265,12 @@ type Metrics struct {
 	// outcome: issued, refused, unavailable (the issuing CA not usable)
 	// (plan 9b; spec §13 decision 43 ruling 22). No principal.
 	CertificatesIssued *prometheus.CounterVec
+	// port49_per_login_mfa_total{method,outcome}: per-login MFA requirements
+	// and proofs (plan 9c; spec §13 decision 45 ruling 19). method is
+	// hardware_key_touch, idp_mfa or none (a mint item with no proof);
+	// outcome is required, proved, refused, reused or unavailable. No
+	// principal and no device.
+	PerLoginMFA *prometheus.CounterVec
 	// port49_issuing_ca_not_after_timestamp_seconds: the Unix time the
 	// issuing CA in use expires; 0 when none is loaded. Where issuance is
 	// configured, alert on 0, and on it within 90 days.
@@ -625,6 +631,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		CertificatesIssued: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_certificates_issued_total",
 			Help: "Sign-ins exchanged for a port49-issued certificate, by outcome: issued, refused, unavailable."},
 			[]string{"outcome"}),
+		PerLoginMFA: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_per_login_mfa_total",
+			Help: "Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome " +
+				"(required, proved, refused, reused, unavailable); alert on a run of refused."},
+			[]string{"method", "outcome"}),
 		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
 			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
@@ -751,13 +761,19 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.IssuingCANotAfter)
+		m.CertificatesIssued, m.PerLoginMFA, m.IssuingCANotAfter)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)
 	// Every issuance outcome exists at 0 from the first scrape.
 	for _, o := range []string{"issued", "refused", "unavailable"} {
 		m.CertificatesIssued.WithLabelValues(o)
+	}
+	// Every per-login outcome exists at 0 from the first scrape.
+	for _, method := range []string{"hardware_key_touch", "idp_mfa", "none"} {
+		for _, o := range []string{"required", "proved", "refused", "reused", "unavailable"} {
+			m.PerLoginMFA.WithLabelValues(method, o)
+		}
 	}
 	// Both outcomes exist at 0 from the first scrape.
 	m.StoreHealthChecks.WithLabelValues("pass")

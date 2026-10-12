@@ -122,6 +122,18 @@ type Config struct {
 	// Issuance is broker.identity.issuance (plan 9b; spec §13 decision 43
 	// rulings 9 and 14): nil when the broker issues no certificate.
 	Issuance *Issuance
+	// PerLoginMFA is broker.identity.per_login_mfa (plan 9c; decision 45):
+	// nil when none is configured.
+	PerLoginMFA *PerLoginMFA
+}
+
+// PerLoginMFA is broker.identity.per_login_mfa resolved: the roots file a
+// hardware_key_touch attestation chains to ("" for none), and an idp_mfa's
+// accepted amr values (empty: ["mfa"]) and the acr_values its sign-in sends.
+type PerLoginMFA struct {
+	AttestationRootsFile string
+	AMR                  []string
+	ACRValues            string
 }
 
 // Issuance is broker.identity.issuance resolved.

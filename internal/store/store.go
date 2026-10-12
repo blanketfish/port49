@@ -95,6 +95,11 @@ type Credential struct {
 	Sid         string
 	ACR         string
 	AMR         []string
+	// MFAMethod and MFAAt are the per-login proof the mint was made under
+	// (spec §5.1.5): its method and when the person proved. Empty when no
+	// requirement applied.
+	MFAMethod string
+	MFAAt     time.Time
 }
 
 type Token struct {
@@ -1044,6 +1049,12 @@ type Store interface {
 	PutLogout(ctx context.Context, l Logout, ttl time.Duration) error
 	// GetLogout is the live logout record under key, or ErrNotFound.
 	GetLogout(ctx context.Context, key string) (Logout, error)
+	// PutMFAProof keeps p for ttl from now, the later At kept as PutLogout
+	// keeps the later logout, and the later expiry. An empty key is
+	// refused.
+	PutMFAProof(ctx context.Context, p MFAProof, ttl time.Duration) error
+	// GetMFAProof is the live proof under key, or ErrNotFound.
+	GetMFAProof(ctx context.Context, key string) (MFAProof, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
@@ -1242,6 +1253,17 @@ type Logout struct {
 	Key    string
 	At     time.Time
 	Origin string
+}
+
+// MFAProof is a per-login proof kept for reuse (spec §5.1.5; decision 45
+// ruling 15): Key is the hex SHA-256 of the principal, the certificate
+// fingerprint and the agent session's SHA-256, then "/" and the method; At
+// is when the person proved. It holds no identity in the clear and no
+// secret.
+type MFAProof struct {
+	Key    string
+	Method string
+	At     time.Time
 }
 
 // ErrNoKey is a record written with an empty key.
