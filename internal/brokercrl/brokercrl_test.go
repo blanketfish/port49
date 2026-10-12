@@ -166,7 +166,8 @@ func TestBrokerCRLModes(t *testing.T) {
 		{"down under check goes on, said once", ModeCheck, "down", false, false, "could not check the broker certificate's revocation"},
 		{"down under require refuses", ModeRequire, "down", false, true, ""},
 		{"a list another key signed is not a list", ModeCheck, "forged", false, false, "could not check"},
-		{"no distribution point: nothing checked, nothing said", ModeRequire, "down", true, false, ""},
+		{"no distribution point under check: nothing checked, nothing said", ModeCheck, "down", true, false, ""},
+		{"no distribution point under require refuses", ModeRequire, "good", true, true, ""},
 		{"off checks nothing", ModeOff, "revoked", false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,23 +234,40 @@ func TestTheLastGoodListOutlivesTheServerUntilItsNextUpdate(t *testing.T) {
 }
 
 // An intermediate naming no distribution point (step-ca's default) is passed
-// over; the leaf it issued is still checked (decision 45 ruling 9;
-// pre-flight I10).
-func TestAnIntermediateWithNoDistributionPointIsNotChecked(t *testing.T) {
+// over under check, and the leaf it issued is still checked (decision 45
+// ruling 9; pre-flight I10). Under require it is refused: it is a link with no
+// fetchable list (Ryan, 2026-10-12).
+func TestAnIntermediateWithNoDistributionPoint(t *testing.T) {
 	for _, tc := range []struct {
 		serve   string
 		mode    Mode
 		refused bool
 	}{
-		{"good", ModeRequire, false}, // before the fix: the intermediate is Unknown, refused
+		{"good", ModeCheck, false},
 		{"revoked", ModeCheck, true}, // the leaf's own list still refuses
+		{"good", ModeRequire, true},  // the intermediate names none
 	} {
 		cs, _ := threeLevelChain(t, tc.serve) // root → intermediate (no DP) → leaf (DP, list by the intermediate)
 		var said []string
 		c := New(privateDir(t), tc.mode, time.Now, func(s string) { said = append(said, s) })
-		if err := c.VerifyConnection(cs); (err != nil) != tc.refused || len(said) != 0 {
+		err := c.VerifyConnection(cs)
+		if (err != nil) != tc.refused || len(said) != 0 {
 			t.Fatalf("%s under %s: %v, said %q", tc.serve, tc.mode, err, said)
 		}
+		var ne *NoDistributionPointError
+		if tc.mode == ModeRequire && (!errors.As(err, &ne) || !strings.Contains(err.Error(), "broker intermediate")) {
+			t.Fatalf("require with a DP-less intermediate: %v, want *NoDistributionPointError naming it", err)
+		}
+	}
+}
+
+// A revoked leaf is reported as revoked, not as the missing distribution point
+// of an intermediate above it.
+func TestRevokedBeatsAMissingDistributionPointUnderRequire(t *testing.T) {
+	cs, _ := threeLevelChain(t, "revoked")
+	var re *RevokedError
+	if err := New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(cs); !errors.As(err, &re) {
+		t.Fatalf("revoked leaf under a DP-less intermediate, require: %v, want *RevokedError", err)
 	}
 }
 
@@ -286,25 +304,66 @@ func TestAFailedFetchIsRememberedForAMinute(t *testing.T) {
 	}
 }
 
-// Only http and https distribution points are fetched. A certificate naming
-// only others (AD CS issues ldap:// by default) names no usable one: it is not
-// checked and nothing is said, even under require (R9).
-func TestADistributionPointThatIsNotHTTPIsSkipped(t *testing.T) {
+// Only http and https distribution points are fetched. A leaf naming only
+// others (AD CS issues ldap:// by default), or none, names no fetchable one:
+// under check it is not checked and nothing is said; under require it is
+// refused, saying what to add (R9, Ryan 2026-10-12).
+func TestALeafWithNoFetchableDistributionPoint(t *testing.T) {
 	now := time.Now()
-	root, err := testpki.NewCA("broker root", now.Add(-time.Hour), now.Add(24*time.Hour))
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name string
+		dps  []string
+	}{
+		{"ldap and file only", []string{"ldap://h.example/CN=x", "file:///x.crl"}},
+		{"none at all", nil},
+	} {
+		root, err := testpki.NewCA("broker root", now.Add(-time.Hour), now.Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := root.Issue(testpki.Leaf{CommonName: "broker", IPs: testpki.Loopback(), NotBefore: now.Add(-time.Hour),
+			NotAfter: now.Add(time.Hour), CRLDistributionPoints: tc.dps})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cs := tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf.Leaf, root.Cert}}}
+
+		var said []string
+		check := New(privateDir(t), ModeCheck, time.Now, func(s string) { said = append(said, s) })
+		for i := 0; i < 2; i++ {
+			if err := check.VerifyConnection(cs); err != nil {
+				t.Fatalf("%s under check: %v, want it to pass", tc.name, err)
+			}
+		}
+		if len(said) > 1 {
+			t.Fatalf("%s under check said %q, want at most one", tc.name, said)
+		}
+
+		err = New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(cs)
+		var ne *NoDistributionPointError
+		if !errors.As(err, &ne) {
+			t.Fatalf("%s under require: %v, want *NoDistributionPointError", tc.name, err)
+		}
+		for _, want := range []string{"names no http(s) CRL distribution point", "broker_crl: require refuses it",
+			"add an HTTP CDP to the CA", "broker_crl: check"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: error %q lacks %q", tc.name, err, want)
+			}
+		}
+		if err := New(privateDir(t), ModeOff, time.Now, nil).VerifyConnection(cs); err != nil {
+			t.Fatalf("%s under off: %v", tc.name, err)
+		}
 	}
-	leaf, err := root.Issue(testpki.Leaf{CommonName: "broker", IPs: testpki.Loopback(), NotBefore: now.Add(-time.Hour),
-		NotAfter: now.Add(time.Hour), CRLDistributionPoints: []string{"ldap://h.example/CN=x", "file:///x.crl"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cs := tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf.Leaf, root.Cert}}}
-	var said []string
-	c := New(privateDir(t), ModeRequire, time.Now, func(s string) { said = append(said, s) })
-	if err := c.VerifyConnection(cs); err != nil || len(said) != 0 {
-		t.Fatalf("a leaf naming only ldap:// and file:// under require: %v, said %q; want neither", err, said)
+}
+
+// A leaf with an http list is still checked under require.
+func TestAnHTTPLeafIsStillCheckedUnderRequire(t *testing.T) {
+	for serve, refused := range map[string]bool{"good": false, "revoked": true} {
+		cs, _ := brokerChain(t, serve, false)
+		err := New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(cs)
+		if (err != nil) != refused {
+			t.Fatalf("%s list under require: %v, refused want %v", serve, err, refused)
+		}
 	}
 }
 

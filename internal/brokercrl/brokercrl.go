@@ -70,6 +70,16 @@ func (e *UncheckedError) Error() string {
 		"refuses it, so nothing was sent to the broker; get the CRL server back, or set broker_crl: check"
 }
 
+// NoDistributionPointError is a certificate of the broker's chain that names
+// no fetchable (http or https) CRL distribution point, refused under
+// broker_crl: require.
+type NoDistributionPointError struct{ Subject string }
+
+func (e *NoDistributionPointError) Error() string {
+	return "broker certificate " + e.Subject + " names no http(s) CRL distribution point; broker_crl: require " +
+		"refuses it, so nothing was sent to the broker — add an HTTP CDP to the CA, or set broker_crl: check"
+}
+
 // Checker checks the broker's verified chain against the CRLs its
 // certificates name, keeping the last good list of each in dir. It is safe
 // for concurrent use; connections wait on one another, so a CRL server that
@@ -130,10 +140,14 @@ func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
 	var links []link
 	var srcs []certstatus.CRLSource
 	urls := map[string]string{}
-	// Link by link (pre-flight I10): an intermediate that names no
-	// distribution point is passed over, and the certificate it issued is
-	// still checked. Check(ctx, chain) would read that intermediate as
-	// unknown and refuse every login under require.
+	// Link by link (pre-flight I10): a certificate that names no fetchable
+	// distribution point is passed over under check, and the certificate it
+	// issued is still checked. Check(ctx, chain) would read it as unknown
+	// under any mode. Under require it is refused instead (Ryan, 2026-10-12):
+	// every link but the trust anchor, which the loop never reaches, must
+	// name a list. A revoked link outranks it, so the first refusal below
+	// is the stronger one.
+	var noDP *NoDistributionPointError
 	for i := 0; i+1 < len(chain); i++ {
 		named := false
 		for _, raw := range chain[i].CRLDistributionPoints {
@@ -149,9 +163,17 @@ func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
 		}
 		if named {
 			links = append(links, link{chain[i], chain[i+1]})
+		} else if noDP == nil {
+			noDP = &NoDistributionPointError{Subject: printsafe.Line(chain[i].Subject.String(), 200)}
 		}
 	}
+	if c.mode != ModeRequire {
+		noDP = nil
+	}
 	if len(links) == 0 {
+		if noDP != nil {
+			return noDP
+		}
 		return nil
 	}
 	c.mu.Lock()
@@ -184,6 +206,9 @@ func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
 	}
 	if rev != nil {
 		return rev
+	}
+	if noDP != nil {
+		return noDP
 	}
 	if unknown == "" {
 		return nil
