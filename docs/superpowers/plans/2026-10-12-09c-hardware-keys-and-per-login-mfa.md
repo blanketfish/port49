@@ -1607,13 +1607,14 @@ Expected: FAIL.
 - [ ] **Step 3: Implement.**
   - `userconfig.File` gains `TouchKey string yaml:"touch_key"`, `IssuedKeyStore string
     yaml:"issued_key_store"` (`auto`, `file`, `tpm`, `secure_enclave`, `pkcs11`), `IssuedKey string
-    yaml:"issued_key"`, `BrokerCRL string yaml:"broker_crl"` (`check`, `require`, `off`); `overlay`
-    takes each; `parse` resolves `Cert` and `Key` as paths only when `!hwkey.IsRef`, and `TouchKey`
+    yaml:"issued_key"`; `BrokerCRL string yaml:"broker_crl"` (`check`, `require`, `off`) is already
+    present (Task 8), as are `sessionFlags.brokerCRL`, `--broker-crl` and its place in `args()`:
+    do not add them again. `overlay` takes each; `parse` resolves `Cert` and `Key` as paths only when `!hwkey.IsRef`, and `TouchKey`
     and `IssuedKey` must be references. (`userconfig` → `hwkey` is acyclic only because `hwkey`
     is a leaf: `pkcs11` imports `userconfig` for `CheckOwned`; re-review R3.)
-  - `sessionFlags` gains `touchKey`, `pinFD`, `brokerCRL`, `issuedKeyStore`, `issuedKey` with flags
-    `--touch-key`, `--pin-fd` (internal), `--broker-crl`; `args()` passes `--touch-key` and
-    `--broker-crl`.
+  - `sessionFlags` gains `touchKey`, `pinFD`, `issuedKeyStore`, `issuedKey` with flags
+    `--touch-key`, `--pin-fd` (internal); `args()` passes `--touch-key`. (`brokerCRL`,
+    `--broker-crl` and its `args()` entry are already present from Task 8.)
   - `sessionFlags.config` loads with `clientkey.LoadPair(s.cert, s.key, pin)`, where `pin` is read from
     `--pin-fd` (at most 64 bytes, the descriptor closed after) in the agent child, and nil in the
     login. `clientkey.LoadPair` and `clientkey.Open` dispatch on the scheme: `pkcs11:` →
@@ -3405,6 +3406,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 11's API types, Task 5's `Config.TouchKey` and `clientkey.LoadPair`, plan 9b's `signIn`,
   `oidcclient.Discover`, `pickProvider`.
+- Task 8's CRL check applies here: the `/v1/mfa` client (the IdP-MFA post and the touch post alike)
+  builds its `tls.Config` with `VerifyConnection: sf.verifyBroker(...)`, as `fetchBrokerConfig` and
+  `requestCertificate` do, and returns the `*agent.BrokerRefusedError` / `*brokercrl.RevokedError`
+  unwrapped, never as "unreachable" and never retried (Task 8 fix: the agent's mint, call and
+  refresh paths already do). A test connects, flips the check to refuse, and asks `ProveTouch`.
 - Produces:
 
 ```go
