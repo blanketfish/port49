@@ -100,9 +100,10 @@ const notInheritedWhy = "applies or defines a configuration group, which a captu
 // `display inheritance`: a `set groups` line, a logical system's or tenant's
 // included, or `apply-groups` as a keyword anywhere in it, at the top, under
 // `system` or on a class. The inherited capture printed neither on either
-// image (L57); that it strips a class-level `apply-groups` as it strips the
-// top-level ones is *provisional on L57*. `apply-groups-except` survives
-// inheritance and is no sign. A line statementWords cannot split is read on
+// image, and it strips a class-level `apply-groups` as it strips the top-level
+// ones (L57, 2026-10-12). `apply-groups-except` survived inheritance in the
+// 2026-10-11 capture, which had no class-level `apply-groups`; both inherited
+// forms strip it beside one (L57-juniper_*.md), so it is no sign. A line statementWords cannot split is read on
 // whitespace with its quotes taken off, so a stray quote hides no group.
 func groupSign(line string) bool {
 	words, ok := statementWords(line)
