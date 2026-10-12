@@ -3934,8 +3934,10 @@ carries them beside the entry deny. Each change below renders only where the ada
   shape L26b's deny sessions were enforced in (`L26b-juniper_*.md`).
 - A permit the bits reach but for a carve-out of a ceiling bit the reply does not send, where
   an allow of the permit would beat a deny beneath it, goes out as allows of those carve-outs.
-  Each is within the ceiling and meets no deny. Whether an allow runs a command past the bits is
-  unmeasured, so CI reports each as sent beyond them.
+  Each is within the ceiling and meets no deny. Under `view` without `view-configuration`, the
+  allows of `show log`, `show firewall` and `show policer` ran and an allow of `show
+  configuration` was refused, on both images (`L26c-projected-juniper_*.md`, the readonly rows).
+  CI predicts each so, and reports any other allow past the bits as unmeasured.
 - Where the capability shape would send an allow its bits do not reach, and the narrow shape
   carries the grant with every allow reached and leaves off no more, the narrow shape is sent.
 

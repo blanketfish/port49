@@ -952,13 +952,14 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 // report prints it: up to three commands port49 permits and the device
 // refuses, each argument made from a value redaction hides printed redacted
 // (probeShown), and beside them the allows sent under bits that do not reach
-// them, which may not run (Result.Unreached), redacted.
+// them that no cell measured, which may not run (Result.UnmeasuredAllows),
+// redacted.
 func shortfall(pr projection.Result, patterns []platform.Redaction, secrets []string) (narrower, unreached []string) {
 	src := pr.ProbeSources()
 	for _, v := range pr.Narrower(3) {
 		narrower = append(narrower, strings.Join(probeShown(v, src, secrets), " "))
 	}
-	for _, u := range pr.Unreached {
+	for _, u := range pr.UnmeasuredAllows() {
 		unreached = append(unreached, u.Rule)
 	}
 	if len(narrower) > 0 {

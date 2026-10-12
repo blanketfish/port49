@@ -60,8 +60,14 @@ const (
 // enforced (tests/lab/results/L9-abbreviations-juniper_*.md). DenyBindsRPCs
 // is false, measured (L12-netconf-juniper_*.md, L26c-juniper_*.md): a wire
 // deny does not bind a native RPC; where the adapter has `RPCEntryDenies` the
-// reply closes the entry points instead (decision 44).
-var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false}
+// reply closes the entry points instead (decision 44). AllowPastCarve is
+// measured for the four carve-outs of view-configuration: under `view`
+// without it, a matching allow of `show configuration` was refused and those
+// of `show log`, `show firewall` and `show policer` ran, on both images
+// (L26c-projected-juniper_*.md, the readonly rows).
+var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false,
+	AllowPastCarve: map[string]bool{"show configuration **": false, "show log **": true,
+		"show firewall **": true, "show policer **": true}}
 
 // FactsFor is what a projection's device was measured doing: the zero Facts,
 // which fail closed, for a projection with no measurement.
@@ -127,9 +133,9 @@ type Result struct {
 	// ceiling").
 	Beyond []engine.Rule
 	// Unreached are allows sent under bits that do not reach them, carve-outs
-	// counted: whether a Junos allow runs a command its bits do not reach is
-	// unmeasured, so the device may refuse what port49 permits there, and CI
-	// says so (Narrower).
+	// counted. What such an allow does is measured for the carve-outs in
+	// Facts.AllowPastCarve and unmeasured elsewhere. It decides the narrow
+	// preference; CI reports only the unmeasured ones (Result.Unmeasured).
 	Unreached []engine.Rule
 	// ConfigurationDropped are the level's bits that enter configuration
 	// mode, left out because the composition is not a grant of every command

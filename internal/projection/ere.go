@@ -45,6 +45,13 @@ type Facts struct {
 	// a native RPC; where the adapter has `RPCEntryDenies` the reply closes
 	// the entry points instead (decision 44).
 	DenyBindsRPCs bool
+	// AllowPastCarve is what a matching allow did, measured, where only a
+	// carve-out keeps a command from the reply's bits: true, it ran; false,
+	// the device refused it. A carve-out not listed is unmeasured, and the
+	// model reads the allow as running there (the wider reading). Junos,
+	// both images, a reply of `view` without view-configuration
+	// (tests/lab/results/L26c-projected-juniper_*.md, the readonly rows).
+	AllowPastCarve map[string]bool
 }
 
 // ereLiteral are the runes ERE reads as operators outside a bracket

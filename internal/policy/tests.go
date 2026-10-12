@@ -163,18 +163,12 @@ func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome, se
 		out = append(out, fmt.Sprintf("port49 permits this and the projection does not carry it to %s: the "+
 			"device refuses it, which fails closed (spec §8)", platformName))
 	}
-	// The model runs an allow its bits do not reach, the reading that errs
-	// toward the device running more; whether it does is unmeasured
-	// (Result.Unreached).
-	if runs && o.Decided != nil {
-		for _, u := range pr.Unreached {
-			if u.Rule == o.Decided.Rule {
-				out = append(out, fmt.Sprintf("the device may refuse it: the allow that carries it, %s, is sent "+
-					"under bits that do not reach it, and whether a Junos allow runs without its bit is unmeasured "+
-					"(spec §8)", platform.QuoteShown(secrets, u.Rule)))
-				break
-			}
-		}
+	// An allow past the bits that no cell measured is read as running, the
+	// wider reading; the carve-outs measured are predicted as they were
+	// measured (Result.Unmeasured, Facts.AllowPastCarve).
+	if runs && pr.Unmeasured(o.Vector) {
+		out = append(out, "the device may refuse it: the allow that carries it is sent under bits that "+
+			"do not reach it, and what a Junos allow does there is unmeasured (spec §8)")
 	}
 	return out
 }

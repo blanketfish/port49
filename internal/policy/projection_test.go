@@ -594,7 +594,7 @@ func TestAnUnreachedAllowIsReported(t *testing.T) {
 	}
 	e, err := p.Explain("s", "", "srx-fw-04", "ping 192.0.2.1", noon)
 	if c := strings.Join(e.Caveats, "\n"); err != nil || !strings.Contains(c, "the device may refuse it: "+
-		`the allow that carries it, "ping **", is sent under bits that do not reach it`) {
+		"the allow that carries it is sent under bits that do not reach it") {
 		t.Fatalf("%q %v", e.Caveats, err)
 	}
 	e, err = p.Explain("s", "", "srx-fw-04", "show version", noon)
@@ -1053,6 +1053,44 @@ func TestTheNetconfClosedRemedyIsTheReplysNotTheGrants(t *testing.T) {
 	}
 	if got := closed(`{name: r, privilege: readonly, permit: ["**"]}`); len(got) != 0 {
 		t.Errorf("a readonly ** keeps NETCONF: %q", got)
+	}
+}
+
+// Under `view` without view-configuration, Task 9 measured on both images
+// that an allow of `show configuration` is refused and the allows of `show
+// log`, `show firewall` and `show policer` run
+// (tests/lab/results/L26c-projected-juniper_*.md, the readonly rows). policy
+// test, explain and the projection finding say so on shipped set 1.2.0; what
+// is sent does not change.
+func TestThePredictionFollowsTheMeasuredAllowsPastTheBits(t *testing.T) {
+	p := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}
+`+subjOK+grantOK)
+	caveats := func(cmd string) string {
+		e, err := p.Explain("s", "", "srx-fw-04", cmd, noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(e.Caveats, "\n")
+	}
+	c := caveats("show configuration system host-name")
+	if !strings.Contains(c, "the device refuses it;") || strings.Contains(c, "may refuse") ||
+		!strings.Contains(c, "port49 permits this and the projection does not carry it") {
+		t.Errorf("show configuration: %q", c)
+	}
+	c = caveats("show log messages")
+	if !strings.Contains(c, "the device runs it;") || strings.Contains(c, "may refuse") {
+		t.Errorf("show log: %q", c)
+	}
+	var msg string
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjection {
+			msg = f.Message
+		}
+	}
+	_, probes, _ := strings.Cut(msg, "these probe commands: ")
+	if probes != "show configuration" || strings.Contains(msg, "unmeasured") || strings.Contains(msg, "may refuse") {
+		t.Errorf("projection finding: %q", msg)
 	}
 }
 
