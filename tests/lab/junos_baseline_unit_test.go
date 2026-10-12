@@ -22,6 +22,51 @@ func TestL58EntryCell(t *testing.T) {
 	}
 }
 
+// G5 reads the shipped readonly's `save` refusals with the caret under `save`,
+// as G3 does: a "refused" cell whose caret sits elsewhere is the image's own
+// refusal, not the deny's.
+func TestL58Nested(t *testing.T) {
+	const prompt = "alice01@srx1> "
+	a, b := junosL58Saves[0], junosL58Saves[1]
+	atSave := "save dhcp-security-snoop\n" + strings.Repeat(" ", len(prompt)) + "^\nunknown command.\n"
+	pastSave := "save dhcp-security-snoop /var/tmp/x\n" + strings.Repeat(" ", len(prompt)+len("save dhcp-security-snoop ")) +
+		"^\nsyntax error, expecting <command>.\n"
+	entries := func(cell string) map[string]string {
+		m := map[string]string{}
+		for _, e := range junosL58Entries {
+			m[e] = cell
+		}
+		return m
+	}
+	with := func(m map[string]string, kv ...string) map[string]string {
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	for _, c := range []struct {
+		name                string
+		deny, shipped, outs map[string]string
+		want                bool
+	}{
+		{"caret under save", with(entries("refused"), a, "refused", b, "refused"),
+			with(entries("refused"), a, "refused", b, "refused"), map[string]string{a: atSave, b: atSave}, true},
+		{"refusal past save is the image's own", with(entries("refused"), a, "refused"),
+			with(entries("refused"), a, "refused"), map[string]string{a: pastSave}, false},
+		{"no output to read the caret in", with(entries("refused"), a, "refused"),
+			with(entries("refused"), a, "refused"), map[string]string{}, false},
+		{"shipped did not refuse where the deny did", with(entries("refused"), a, "refused"),
+			with(entries("refused"), a, "ran"), map[string]string{a: atSave}, false},
+		{"the deny refused no save: none to check", entries("refused"), entries("refused"), nil, true},
+		{"shipped entry greeted", with(entries("refused"), a, "refused"),
+			with(entries("refused"), a, "refused", junosL58Entries[0], "greeting"), map[string]string{a: atSave}, false},
+	} {
+		if got := l58Nested(c.deny, c.shipped, c.outs, len(prompt)); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // `save` is proven by any candidate the control ran and the deny refused;
 // a control that refused every candidate leaves it unproven, never absent.
 func TestL58Save(t *testing.T) {

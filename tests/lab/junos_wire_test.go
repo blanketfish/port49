@@ -53,6 +53,15 @@ const junosPagerMark = "---(more"
 // junosPaged reports whether an output stopped at the pager.
 func junosPaged(out string) bool { return strings.Contains(out, junosPagerMark) }
 
+// junosPagedErr is the INVALID error for a command whose window stopped at the
+// pager, or nil.
+func junosPagedErr(cmd, window string) error {
+	if junosPaged(window) {
+		return fmt.Errorf("INVALID: %s paged; the next keystroke would go to the pager", cmd)
+	}
+	return nil
+}
+
 // junosProbe is one command a variant types, or with complete, whose last
 // word it asks `?` completion for and never runs: `request system reboot` is
 // probed by whether `reboot` completes after `request system`. A complete
@@ -215,20 +224,29 @@ func (l *lab) junosProbe(c *cliConn, p junosProbe) (string, error) {
 		from := len(c.out.String())
 		_, err := c.sendExpect(p.cmd, junosPer, junosOpPrompt, junosCfgPrompt, "(yes)", junosPagerMark)
 		// A paged output must never be typed into: the next keystroke is the
-		// pager's own command (`s` saves the output to a file).
-		if junosPaged(c.out.String()[from:]) {
-			return precReply(l16TrimEcho(c.out.String()[from:], p.cmd)),
-				fmt.Errorf("INVALID: %s paged; the next keystroke would go to the pager", p.cmd)
+		// pager's own command (`s` saves the output to a file). The window is
+		// checked again after each settle and before the return, since a page
+		// can arrive after an early prompt match (review I4).
+		paged := func() error { return junosPagedErr(p.cmd, c.out.String()[from:]) }
+		reply := func() string { return precReply(l16TrimEcho(c.out.String()[from:], p.cmd)) }
+		if perr := paged(); perr != nil {
+			return reply(), perr
 		}
 		if err == nil {
 			err = junosSettle(c)
+		}
+		if perr := paged(); perr != nil {
+			return reply(), perr
 		}
 		if err == nil && strings.Contains(c.out.String()[from:], "(yes)") {
 			if _, err = c.sendExpect("yes", junosPer, junosOpPrompt); err == nil {
 				err = junosSettle(c)
 			}
 		}
-		return precReply(l16TrimEcho(c.out.String()[from:], p.cmd)), err
+		if perr := paged(); perr != nil {
+			return reply(), perr
+		}
+		return reply(), err
 	}
 	send := p.cmd
 	prefix := strings.TrimSuffix(p.cmd, "?")

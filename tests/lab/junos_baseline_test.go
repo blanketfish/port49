@@ -154,6 +154,27 @@ func l58PastSave(out string, promptLen int) bool {
 	return at != "" && !caretOn(at, "save") && !strings.HasPrefix(at, "save")
 }
 
+// l58Nested is G5: the shipped readonly's nested deny is enforced as the
+// factored form where both XML entries read refused, and every `save`
+// candidate the factored deny refused is refused by the shipped form too with
+// the caret under `save`, as G3 reads it: on vSRX the control cannot run `save`,
+// so a refusal anywhere else could be the image's own. shippedOuts are the
+// shipped session's windows; promptLen is its prompt's length.
+func l58Nested(deny, shipped, shippedOuts map[string]string, promptLen int) bool {
+	for _, e := range junosL58Entries {
+		if shipped[e] != "refused" {
+			return false
+		}
+	}
+	for _, cmd := range junosL58Saves {
+		if deny[cmd] == "refused" && (shipped[cmd] != "refused" ||
+			!caretOn(caretAt(shippedOuts[cmd], promptLen), "save")) {
+			return false
+		}
+	}
+	return true
+}
+
 // l58ViewControl types the save candidates in a session under attrs (a `view`
 // class, no deny) and reads each cell. It is information for the note: a
 // session or a command that is not observed reads "not observed", and nothing
@@ -318,12 +339,8 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		fmt.Fprintf(&b, ".\n- **G4** `xml-mode` under the `junoscript` deny: bare %s, `netconf` %s: **%s**.\n",
 			cells["deny"]["xml-mode"], cells["deny"]["xml-mode netconf need-trailer"],
 			map[bool]string{true: "closed", false: "not closed"}[closed])
-		nested := cells["shipped"]["xml-mode"] == "refused" && cells["shipped"]["xml-mode netconf need-trailer"] == "refused"
-		for _, cmd := range junosL58Saves {
-			if cells["deny"][cmd] == "refused" && cells["shipped"][cmd] != "refused" {
-				nested = false
-			}
-		}
+		nested := l58Nested(cells["deny"], cells["shipped"], outs["shipped"],
+			len(outs["shipped"][l26bUserKey]+"@"+junosHost+"> "))
 		// A measurement, not an assertion: Step 4 reads this line and stops the plan on "NOT enforced".
 		fmt.Fprintf(&b, "- G5: the shipped readonly form (`%s`): **%s**.\n", tableCell(shipped),
 			map[bool]string{true: "enforced as the factored form", false: "NOT enforced as the factored form"}[nested])

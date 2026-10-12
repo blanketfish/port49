@@ -393,6 +393,27 @@ var junosEntryOpScript = []string{
 
 const junosEntryOpPath = "/var/tmp/p49-entry-op.slax"
 
+// stageOpScript writes junosEntryOpScript to junosEntryOpPath over a
+// break-glass shell. A shell that does not open fails the run INVALID: no `op
+// url` cell says anything without the script.
+func (l *lab) stageOpScript(t *testing.T) {
+	t.Helper()
+	bg, err := l.junosCLI(breakglassUser, breakglassPassword)
+	if err != nil {
+		t.Fatalf("INVALID: no break-glass CLI: %v", err)
+	}
+	defer bg.Close()
+	if _, err := bg.sendExpect("start shell sh", junosPer, "$ ", "% "); err != nil {
+		t.Fatalf("INVALID: start shell: %v", err)
+	}
+	quoted := make([]string, len(junosEntryOpScript))
+	for i, ln := range junosEntryOpScript {
+		quoted[i] = "'" + ln + "'"
+	}
+	bg.sendExpect("printf '%s\\n' "+strings.Join(quoted, " ")+" > "+junosEntryOpPath, junosPer, "$ ", "% ")
+	bg.sendExpect("exit", junosPer, junosOpPrompt)
+}
+
 // opVersionRE is the version marker with a host name after it: the script
 // prints the marker whether or not jcs:invoke was answered.
 var opVersionRE = regexp.MustCompile(`P49OP-VERSION \S`)
@@ -581,20 +602,7 @@ func TestL26cEntryScripts(t *testing.T) {
 			}
 		}()
 		// The op script, over break-glass.
-		bg, err := l.junosCLI(breakglassUser, breakglassPassword)
-		if err != nil {
-			t.Fatalf("INVALID: no break-glass CLI: %v", err)
-		}
-		if _, err := bg.sendExpect("start shell sh", junosPer, "$ ", "% "); err != nil {
-			t.Fatalf("INVALID: start shell: %v", err)
-		}
-		quoted := make([]string, len(junosEntryOpScript))
-		for i, ln := range junosEntryOpScript {
-			quoted[i] = "'" + ln + "'"
-		}
-		bg.sendExpect("printf '%s\\n' "+strings.Join(quoted, " ")+" > "+junosEntryOpPath, junosPer, "$ ", "% ")
-		bg.sendExpect("exit", junosPer, junosOpPrompt)
-		bg.Close()
+		l.stageOpScript(t)
 		// scp's harness control: break-glass reads the file, or a "refused"
 		// in every class could be scpRead's own fault.
 		if bgc, err := l.dialHostPort(breakglassUser, breakglassPassword, l.p.addr+":22", 60*time.Second); err != nil {
