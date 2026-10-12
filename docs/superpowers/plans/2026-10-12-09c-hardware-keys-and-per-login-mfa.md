@@ -476,7 +476,7 @@ re-review's numbers (re-review R1–R10) are not the plan's rulings R1–R22.
   ‖ fingerprint ‖ 0 ‖ agent_sha256); a wrong caller's take misses. Tasks 11, 12.
 - **Re-review R2** an `idp_mfa` proof never kept → R15: `proofKey` over `agent_sha256`, the
   binding from the challenge record for both methods; Task 11's idp test gains a reuse step.
-- **Re-review R3** import cycles (Ryan's ruling: `hwkey` stays a leaf; the opener in a new
+- **Re-review R3** import cycles (the controller's ruling: `hwkey` stays a leaf; the opener in a new
   package) → `internal/clientkey` holds `Open`, `LoadPair`, `HasPKCS11` and the build split, beside
   `keyfile`; `keyref` was not taken because `key_ref` already names a device's key in port49d.yaml.
   Tasks 3, 5, 7, 13, 14.
@@ -494,7 +494,7 @@ re-review's numbers (re-review R1–R10) are not the plan's rulings R1–R22.
 - **Re-review R8** `IssuedPathsIn`'s callers → its signature stays; the TPM pair's paths are a new
   `IssuedTPMPathsIn`, so `IssuedPaths`, `CABundlePathIn`, `userconfig_test.go` and
   `tests/lab/l56_test.go:189,200` are untouched. Task 7.
-- **Re-review R9** (Ryan's ruling) → R22: `make build` sets `CGO_ENABLED=0`; `make build-client`
+- **Re-review R9** (the controller's ruling) → R22: `make build` sets `CGO_ENABLED=0`; `make build-client`
   writes `bin/port49-client`. Tasks 3, 16, operator notes.
 - **Re-review R10** `auto` picking a store the build lacks → R7: `auto` passes over it and says
   so; `TestChooseIssuedStore` gains the case. Task 7.
