@@ -8,7 +8,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,7 +185,6 @@ func TestVerify(t *testing.T) {
 			notBefore: now.Add(-48 * time.Hour), notAfter: now.Add(-24 * time.Hour)}), roots, now},
 		{"a slot not yet valid", slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: 2,
 			notBefore: now.Add(24 * time.Hour), notAfter: now.Add(48 * time.Hour)}), roots, now},
-		{"a device certificate expired", slot, roots, now.Add(48 * time.Hour)},
 		{"a zero clock", slot, roots, time.Time{}},
 	} {
 		if _, err := Verify(bad.roots, device, bad.slot, bad.now); err == nil {
@@ -198,6 +199,116 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// TestNilRootsAreRefusedBeforeAnyChainCheck: with a nil Roots pool x509.Verify
+// falls back to the system roots, where a public-CA leaf the attacker holds a
+// key for would pass as a "device". Verify must refuse before it gets there.
+func TestNilRootsAreRefusedBeforeAnyChainCheck(t *testing.T) {
+	_, device, deviceKey := yubicoLike(t)
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: TouchAlways})
+	for name, a := range map[string]Anchors{"zero": {}, "intermediates only": {Intermediates: x509.NewCertPool()}} {
+		if _, err := Verify(a, device, slot, time.Now()); !errors.Is(err, errNoRoots) {
+			t.Errorf("%s: err = %v, want errNoRoots", name, err)
+		}
+	}
+}
+
+func TestAZeroClockIsRefusedByName(t *testing.T) {
+	root, device, deviceKey := yubicoLike(t)
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: TouchAlways})
+	if _, err := Verify(Anchors{Roots: root.Pool()}, device, slot, time.Time{}); !errors.Is(err, errNoClock) {
+		t.Errorf("err = %v, want errNoClock", err)
+	}
+}
+
+// TestADuplicateExtensionIsRefused: ParseCertificate rejects duplicates, so the
+// certificate is built by hand; its signature still covers the original TBS.
+func TestADuplicateExtensionIsRefused(t *testing.T) {
+	root, device, deviceKey := yubicoLike(t)
+	roots := Anchors{Roots: root.Pool()}
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: TouchAlways})
+	if _, err := Verify(roots, device, slot, time.Now()); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	dup := *slot
+	dup.Extensions = append(append([]pkix.Extension{}, slot.Extensions...),
+		pkix.Extension{Id: oidPolicy, Value: []byte{PINOnce, TouchNever}})
+	if _, err := Verify(roots, device, &dup, time.Now()); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("err = %v, want the twice error", err)
+	}
+}
+
+// TestTheDeviceCertificateIsCheckedAtTheInjectedClock: the slot stays valid
+// past the device certificate's NotAfter, so only the device check can refuse.
+func TestTheDeviceCertificateIsCheckedAtTheInjectedClock(t *testing.T) {
+	root, device, deviceKey := yubicoLike(t)
+	roots := Anchors{Roots: root.Pool()}
+	now := time.Now()
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: 2, notAfter: now.Add(96 * time.Hour)})
+	if _, err := Verify(roots, device, slot, now); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	_, err := Verify(roots, device, slot, now.Add(48*time.Hour))
+	if err == nil || !strings.Contains(err.Error(), "device certificate") {
+		t.Errorf("err = %v, want the device certificate refused", err)
+	}
+}
+
+func TestTheSlotValidityErrorNamesTheTimes(t *testing.T) {
+	root, device, deviceKey := yubicoLike(t)
+	now := time.Now()
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: 2,
+		notBefore: now.Add(-48 * time.Hour), notAfter: now.Add(-24 * time.Hour)})
+	_, err := Verify(Anchors{Roots: root.Pool()}, device, slot, now)
+	if err == nil {
+		t.Fatal("an expired slot verified")
+	}
+	for _, want := range []time.Time{now, slot.NotBefore, slot.NotAfter} {
+		if !strings.Contains(err.Error(), want.UTC().Format(time.RFC3339)) {
+			t.Errorf("err = %q, missing %s", err, want.UTC().Format(time.RFC3339))
+		}
+	}
+}
+
+func TestASlotMustNameTheDeviceAsItsIssuer(t *testing.T) {
+	root, device, deviceKey := yubicoLike(t)
+	roots := Anchors{Roots: root.Pool()}
+	slot := slotCert(t, device, deviceKey, slotOpts{serial: 1, pin: 2, touch: TouchAlways})
+	if _, err := Verify(roots, device, slot, time.Now()); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	// The signature still covers the original TBS, so only the issuer link refuses.
+	wrong := *slot
+	wrong.RawIssuer = []byte("another issuer")
+	if _, err := Verify(roots, device, &wrong, time.Now()); !errors.Is(err, errIssuerMismatch) {
+		t.Errorf("err = %v, want errIssuerMismatch", err)
+	}
+}
+
+// TestAnAnchorWithoutTheCABitIsStillARoot: trust comes from the operator
+// listing the certificate, not from its basic constraints.
+func TestAnAnchorWithoutTheCABitIsStillARoot(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "no CA bit"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := x509.ParseCertificate(der); c.BasicConstraintsValid {
+		t.Fatal("the certificate has basic constraints; the test means it not to")
+	}
+	a, err := ParseAnchors(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Roots.Subjects()) != 1 || len(a.Intermediates.Subjects()) != 0 { //nolint:staticcheck // counting only
+		t.Errorf("roots %d, intermediates %d; want 1 and 0", len(a.Roots.Subjects()), len(a.Intermediates.Subjects())) //nolint:staticcheck
+	}
+}
+
 // TestAForgedExtensionOnAnUnverifiedSlotIsNotRead: a slot certificate carrying
 // perfect extensions but signed by a key no anchor vouches for is refused, so
 // the extensions are never trusted before the chain verifies.
@@ -205,8 +316,7 @@ func TestAForgedExtensionOnAnUnverifiedSlotIsNotRead(t *testing.T) {
 	root, device, _ := yubicoLike(t)
 	roots := Anchors{Roots: root.Pool()}
 	// The attacker's own "device", self-made, signs a slot claiming touch always.
-	evilRoot, evilDevice, evilKey := yubicoLike(t)
-	_ = evilRoot
+	_, evilDevice, evilKey := yubicoLike(t)
 	slot := slotCert(t, evilDevice, evilKey, slotOpts{serial: 1, pin: 2, touch: TouchAlways})
 	if _, err := Verify(roots, evilDevice, slot, time.Now()); err == nil {
 		t.Fatal("a device under another root verified")
@@ -227,18 +337,29 @@ func TestParseAnchors(t *testing.T) {
 		t.Errorf("roots %d, intermediates %d; want 1 and 1", len(a.Roots.Subjects()), len(a.Intermediates.Subjects())) //nolint:staticcheck
 	}
 	for name, in := range map[string][]byte{
-		"empty":         nil,
-		"no PEM":        []byte("not a certificate"),
-		"a bad body":    pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("junk")}),
-		"a key block":   pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("x")}),
-		"trailing junk": append(append([]byte{}, both...), []byte("junk\n")...),
+		"empty":       nil,
+		"no PEM":      []byte("not a certificate"),
+		"a bad body":  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("junk")}),
+		"a key block": pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("x")}),
+		"a key block after the certificates": append(append([]byte{}, both...),
+			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("x")})...),
 	} {
 		if _, err := ParseAnchors(in); err == nil {
 			t.Errorf("%s: parsed", name)
 		}
 	}
+	// Text outside the PEM blocks is ignored, as openssl does: a comment
+	// appended to the bundle must not take touch away fleet-wide.
+	commented := append([]byte("# Yubico PIV root\n"), both...)
+	commented = append(commented, []byte("# trailing comment\n")...)
+	a, err = ParseAnchors(commented)
+	if err != nil {
+		t.Fatalf("a bundle with comments: %v", err)
+	}
+	if len(a.Roots.Subjects()) != 1 || len(a.Intermediates.Subjects()) != 1 { //nolint:staticcheck // counting only
+		t.Error("comments changed what the bundle holds")
+	}
 	// Only an intermediate: no root, an error.
-	_, _, _ = yubicoLike(t)
 	root, err := testpki.NewCA("r", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)

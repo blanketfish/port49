@@ -25,11 +25,20 @@ const (
 	TouchCached = 0x03
 )
 
-// PIN policies, as the attestation extension encodes them.
+// PIN policies, as the attestation extension encodes them. The set is closed;
+// L60 measures what a YubiKey Bio reports (yubikey-manager's 0x04 and 0x05, PIN
+// match once and always), which would be refused until added here.
 const (
 	PINNever  = 0x01
 	PINOnce   = 0x02
 	PINAlways = 0x03
+)
+
+// Refusals the tests pin by identity.
+var (
+	errNoRoots        = errors.New("pivattest: no attestation roots")
+	errNoClock        = errors.New("pivattest: no clock")
+	errIssuerMismatch = errors.New("pivattest: the slot certificate's issuer is not the device certificate's subject")
 )
 
 // Yubico's PIV attestation extensions (1.3.6.1.4.1.41482.3).
@@ -53,9 +62,11 @@ type Attestation struct {
 // under a newer Yubico root verifies (pre-flight I14).
 type Anchors struct{ Roots, Intermediates *x509.CertPool }
 
-// ParseAnchors reads every PEM certificate in b; none is an error, and so is
-// anything in b that is not a certificate or has no self-signed root among
-// them.
+// ParseAnchors reads every PEM certificate in b. Text outside the PEM blocks
+// (comments before, between or after) is ignored, as openssl does, so a note
+// appended to the bundle cannot take hardware_key_touch away fleet-wide. A PEM
+// block that is not a CERTIFICATE is an error, and so are a certificate that
+// does not parse and a bundle with no self-signed root.
 func ParseAnchors(b []byte) (Anchors, error) {
 	a := Anchors{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
 	roots := 0
@@ -80,9 +91,6 @@ func ParseAnchors(b []byte) (Anchors, error) {
 			a.Intermediates.AddCert(c)
 		}
 	}
-	if len(bytes.TrimSpace(rest)) != 0 {
-		return Anchors{}, errors.New("pivattest: anchors hold text that is not a PEM certificate")
-	}
 	if roots == 0 {
 		return Anchors{}, errors.New("pivattest: anchors hold no self-signed root certificate")
 	}
@@ -104,11 +112,15 @@ func Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestati
 	if device == nil || slot == nil {
 		return Attestation{}, errors.New("pivattest: no attestation certificate")
 	}
+	// A nil pool would make x509.Verify fall back to the system roots.
 	if a.Roots == nil {
-		return Attestation{}, errors.New("pivattest: no attestation roots")
+		return Attestation{}, errNoRoots
 	}
 	if now.IsZero() {
-		return Attestation{}, errors.New("pivattest: no clock")
+		return Attestation{}, errNoClock
+	}
+	if !bytes.Equal(slot.RawIssuer, device.RawSubject) {
+		return Attestation{}, errIssuerMismatch
 	}
 	if _, err := device.Verify(x509.VerifyOptions{Roots: a.Roots, Intermediates: a.Intermediates,
 		CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
@@ -118,7 +130,9 @@ func Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestati
 		return Attestation{}, fmt.Errorf("pivattest: the slot certificate is not signed by the device certificate: %w", err)
 	}
 	if now.Before(slot.NotBefore) || now.After(slot.NotAfter) {
-		return Attestation{}, errors.New("pivattest: the slot certificate is outside its validity")
+		// Certificate times, not secrets: a clock-skewed host shows its cause.
+		return Attestation{}, fmt.Errorf("pivattest: the slot certificate is outside its validity: now %s, not before %s, not after %s",
+			now.UTC().Format(time.RFC3339), slot.NotBefore.UTC().Format(time.RFC3339), slot.NotAfter.UTC().Format(time.RFC3339))
 	}
 	serial, err := readSerial(slot)
 	if err != nil {
