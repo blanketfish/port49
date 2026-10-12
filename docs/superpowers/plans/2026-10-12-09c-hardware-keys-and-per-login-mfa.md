@@ -2120,8 +2120,9 @@ Expected: FAIL (`undefined: New`).
 
 - [ ] **Step 3: Implement.** For each certificate `chain[i]` of `cs.VerifiedChains[0]` but the
   root, each `CRLDistributionPoints` URL with scheme `http` or `https` is a `certstatus.CRLSource{
-  Name: <host>-<first 8 hex of SHA-256(url)>, URL: url, Issuer: chain[i+1]}`; none at all and the
-  check returns nil. `certstatus.New(certstatus.Config{CRLs: srcs, StateDir: dir}, now,
+  Name: <host>-<first 8 hex of SHA-256(url)>, URL: url, Issuer: chain[i+1]}`; none at all and
+  nothing is fetched (under `check` the check returns nil; under `require` it refuses, below).
+  `certstatus.New(certstatus.Config{CRLs: srcs, StateDir: dir}, now,
   metrics.New(prometheus.NewRegistry()), logf)` is built once per distinct source set and kept;
   `LoadPersisted`, then `LoadAll` with a 5s context when no kept list is fresh; a `LoadAll` that
   failed is not tried again for a minute (the `Checker` keeps when it failed), so a CRL server that
@@ -2147,7 +2148,7 @@ Expected: FAIL (`undefined: New`).
 Run: `go test ./internal/brokercrl/ ./internal/agent/ ./internal/workload/ ./cmd/port49/ -count=1`, then `make test && make vet`.
 Expected: PASS. Mutation checks, each restored: return nil for `Revoked` under `check` and see the
 two revoked cases fail; pass the whole chain to `Check` and see
-`TestAnIntermediateWithNoDistributionPointIsNotChecked` fail.
+`TestAnIntermediateWithNoDistributionPoint` fail.
 
 - [ ] **Step 5: Commit**
 
