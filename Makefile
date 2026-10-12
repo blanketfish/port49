@@ -2,11 +2,10 @@
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
+STATIC_CMDS = port49d port49 port49-inventory port49-broker
+
 build:
-	CGO_ENABLED=0 go build -o bin/port49d ./cmd/port49d
-	CGO_ENABLED=0 go build -o bin/port49 ./cmd/port49
-	CGO_ENABLED=0 go build -o bin/port49-inventory ./cmd/port49-inventory
-	CGO_ENABLED=0 go build -o bin/port49-broker ./cmd/port49-broker
+	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build -o bin/$$c ./cmd/$$c; done
 
 # The client build: the PKCS#11 backend through purego, which links the
 # system's dynamic loader. Written beside, never over, bin/port49.
@@ -16,10 +15,21 @@ build-client:
 # The static build (the image's, decision 45 ruling 22) must stay static: a
 # purego import outside a hwkey_dlopen file would make it need a loader that
 # distroless/static does not have.
+#
+# Every binary `build` makes is checked, not only cmd/port49: a leak through a
+# shared package reaches whichever ones import it. It fails closed: a missing
+# readelf is an error, and readelf's own status is read (a pipe would give
+# grep's, which reads a missing readelf as "static").
 check-static:
-	CGO_ENABLED=0 go build -o bin/port49-static ./cmd/port49
-	@if readelf -l bin/port49-static | grep -q 'program interpreter'; then \
-		file bin/port49-static; echo "bin/port49-static is dynamically linked; the image cannot run it"; exit 1; fi
+	@set -e; \
+	command -v readelf >/dev/null || { echo "check-static needs readelf (binutils); without it nothing is checked"; exit 1; }; \
+	mkdir -p bin/static; \
+	for c in $(STATIC_CMDS); do \
+	  CGO_ENABLED=0 go build -o bin/static/$$c ./cmd/$$c; \
+	  out=$$(readelf -l bin/static/$$c); \
+	  if printf '%s\n' "$$out" | grep -q 'program interpreter'; then \
+	    echo "bin/static/$$c is dynamically linked; the image cannot run it"; exit 1; fi; \
+	done
 
 # The packages the hwkey tag adds tests to. internal/clientkey arrives in
 # plan 9c's Task 5; until then a pattern for it would fail the run.

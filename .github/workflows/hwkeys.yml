@@ -17,6 +17,12 @@ jobs:
       # pcscd asks polkit before it lets a process talk to it, and a CI job is
       # no active local session: without this, libykcs11's C_GetSlotList
       # answers CKR_DEVICE_ERROR.
+      #
+      # CI ONLY, on a throwaway runner. This rule answers YES to every
+      # subject, so on a workstation it would give every local account,
+      # service users included, access to a plugged-in YubiKey. Never copy it
+      # to a developer machine as written: scope it there with
+      # `subject.user == "<your user>"` inside the condition.
       - run: |
           sudo tee /etc/polkit-1/rules.d/99-port49-pcscd.rules >/dev/null <<'EOF'
           polkit.addRule(function(action, subject) {
