@@ -31,10 +31,12 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/pivattest"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // Yubico's PIV attestation extensions, as pivattest reads them.
@@ -50,6 +52,7 @@ type mfaOpts struct {
 	machines      bool
 	intermediate  bool // the device certificate is signed by an intermediate under the root
 	listInter     bool // and the operator's roots file lists that intermediate
+	shortCeiling  bool // alice's grant on core carries a one-hour session ceiling
 }
 
 type mfaOpt func(*mfaOpts)
@@ -60,6 +63,7 @@ func withReuseFor(d time.Duration) mfaOpt {
 func withoutAttestationRoots() mfaOpt { return func(o *mfaOpts) { o.noRoots = true } }
 func withTouchOnlyCore() mfaOpt       { return func(o *mfaOpts) { o.touchOnlyCore = true } }
 func withAppliesToMachines() mfaOpt   { return func(o *mfaOpts) { o.machines = true } }
+func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling = true } }
 func withDeviceUnderIntermediate(listed bool) mfaOpt {
 	return func(o *mfaOpts) { o.intermediate, o.listInter = true, listed }
 }
@@ -77,24 +81,29 @@ func mfaPolicy(o mfaOpts) string {
 	if o.machines {
 		machines = ", applies_to_machines: true"
 	}
+	ceilingRole, ceilingGrant := "", ""
+	if o.shortCeiling {
+		ceilingRole = "\n  - {name: short_session, max_session_age: 1h}"
+		ceilingGrant = "\n  - {subject: netops, scope: core, roles: [short_session]}"
+	}
 	return fmt.Sprintf(`
 scopes:
   - {name: core, match: {name: core-sw01}, per_login_mfa: {accept: %s, reuse_for: %s%s}}
   - {name: edge, match: {name: edge-sw01}}
 roles:
-  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: network_admin, privilege: admin, permit: ["**"]}%s
 subjects:
   - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s}
   - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
 grants:
   - {subject: netops, scope: core, roles: [network_admin], max_privilege: admin}
-  - {subject: netops, scope: edge, roles: [network_admin], max_privilege: admin}
+  - {subject: netops, scope: edge, roles: [network_admin], max_privilege: admin}%s
   - {subject: bobs, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: bobs, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
-`, accept, reuse, machines)
+`, accept, reuse, machines, ceilingRole, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
@@ -147,6 +156,33 @@ func (s *failStore) PutMFAProof(ctx context.Context, p store.MFAProof, ttl time.
 		return errInjected
 	}
 	return s.Store.PutMFAProof(ctx, p, ttl)
+}
+
+// stepClock is the minter's clock: the fixture's until armed, then one that
+// advances by step on every read, starting at start. A test arms it so the
+// minter's reads straddle an instant.
+type stepClock struct {
+	mu   sync.Mutex
+	base func() time.Time
+	next time.Time
+	step time.Duration
+}
+
+func (c *stepClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.next.IsZero() {
+		return c.base()
+	}
+	t := c.next
+	c.next = c.next.Add(c.step)
+	return t
+}
+
+func (c *stepClock) arm(start time.Time, step time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.next, c.step = start, step
 }
 
 type mfaClock struct{ f *fixture }
@@ -206,10 +242,11 @@ type mfaActor struct {
 
 type mfaFixture struct {
 	*fixture
-	clock mfaClock
-	store *failStore
-	addr  string
-	iss   *oidctest.Issuer
+	clock       mfaClock
+	minterClock *stepClock // the minter's clock
+	store       *failStore
+	addr        string
+	iss         *oidctest.Issuer
 
 	root      *testpki.CA
 	inter     *testpki.CA
@@ -248,6 +285,8 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 	base := newFixtureWith(t, 16, mfaPolicy(o), devs...)
 	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}}
 	f.b.Log = decision.NewJSONLines(f.logs)
+	f.minterClock = &stepClock{base: f.b.Now}
+	f.b.Minter = token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.minterClock.Now, 16)
 	f.store = &failStore{Store: f.st}
 	f.b.Store = f.store
 	f.iss = f.withOIDC(t)
@@ -324,7 +363,13 @@ func (f *mfaFixture) deviceCert(t *testing.T, parent *x509.Certificate, parentKe
 // device, with the touch policy byte given.
 func (f *mfaFixture) slotCert(t *testing.T, device *x509.Certificate, deviceKey *ecdsa.PrivateKey, pub crypto.PublicKey, touch byte) []byte {
 	t.Helper()
-	serial, err := asn1.Marshal(big.NewInt(12345678))
+	return f.slotCertSerial(t, device, deviceKey, pub, touch, 12345678)
+}
+
+// slotCertSerial is slotCert naming the device serial given.
+func (f *mfaFixture) slotCertSerial(t *testing.T, device *x509.Certificate, deviceKey *ecdsa.PrivateKey, pub crypto.PublicKey, touch byte, deviceSerial int64) []byte {
+	t.Helper()
+	serial, err := asn1.Marshal(big.NewInt(deviceSerial))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,6 +557,7 @@ type idTokenOpts struct {
 	nonceFor  string
 	amr       []string
 	authTime  time.Time
+	issuedAt  time.Time // zero: now
 }
 
 // idToken is a human ID token whose nonce binds nonceFor, a challenge as the
@@ -522,14 +568,26 @@ func (f *mfaFixture) idToken(t *testing.T, o idTokenOpts) string {
 	if err != nil || len(ch) != api.MFAChallengeLen {
 		ch = []byte(o.nonceFor)
 	}
-	return f.iss.IDToken(t, "k1", testClientID, "sub-"+o.principal, f.b.Now(), map[string]any{
-		"preferred_username": o.principal, "amr": o.amr, "nonce": api.MFANonce(ch), "auth_time": o.authTime.Unix()})
+	claims := map[string]any{
+		"preferred_username": o.principal, "amr": o.amr, "nonce": api.MFANonce(ch), "auth_time": o.authTime.Unix()}
+	if !o.issuedAt.IsZero() {
+		claims["iat"] = o.issuedAt.Unix()
+	}
+	return f.iss.IDToken(t, "k1", testClientID, "sub-"+o.principal, f.b.Now(), claims)
 }
 
 func (f *mfaFixture) proveIdP(t *testing.T, tok, ch string) int {
 	t.Helper()
+	code, _ := f.proveIdPDetail(t, tok, ch)
+	return code
+}
+
+// proveIdPDetail is proveIdP with the response body, which names the cause.
+func (f *mfaFixture) proveIdPDetail(t *testing.T, tok, ch string) (int, string) {
+	t.Helper()
 	body, _ := json.Marshal(api.MFAProofRequest{Challenge: ch, Method: "idp_mfa"})
-	return f.bearer(context.Background(), "POST", "/v1/mfa", string(body), tok).Code
+	w := f.bearer(context.Background(), "POST", "/v1/mfa", string(body), tok)
+	return w.Code, w.Body.String()
 }
 
 func (f *mfaFixture) recs(t *testing.T) []map[string]any {
@@ -863,6 +921,129 @@ func TestAReplayedMintUnderReuseZeroIsReplayed(t *testing.T) {
 	}
 }
 
+// The broker decides replay-versus-fresh once. A replay that lapses between
+// that decision and the mint (the clock crosses the first token's session
+// ceiling) is not minted afresh under the requirement it skipped: the
+// requirement is judged, and with no proof, asked.
+func TestAReplayThatLapsesBeforeTheMintIsNotMintedWithoutAProof(t *testing.T) {
+	f := newMFAFixture(t, withReuseFor(0), withShortCeiling())
+	ceiling := f.clock.Now().Add(time.Hour) // alice's connection authenticated now
+	// Minted half a minute before the ceiling, the token (60s) and the
+	// idempotency record that replays it both end at the ceiling.
+	f.clock.Advance(59*time.Minute + 30*time.Second)
+	ch := f.ask(t, f.alice, "core-sw01")
+	if code := f.proveTouch(t, f.alice, ch); code != 200 {
+		t.Fatalf("POST /v1/mfa = %d", code)
+	}
+	if it := f.mintWithKey(t, f.alice, "core-sw01", ch, "idem-1").Results[0]; it.Verdict != "permit" ||
+		it.SessionExpiresAt != ceiling.UTC().Format(time.RFC3339) {
+		t.Fatalf("the first mint = %+v", it)
+	}
+	// A retry on a connection that authenticated later: its own ceiling is
+	// far off, while the first token's passes between the minter's reads.
+	// The minter reads its clock Reserve, Replays, the ceiling check, then
+	// the replay inside Mint. Starting two seconds before the ceiling, the
+	// second read is before it and the fourth is after it.
+	f.clock.Advance(10 * time.Second)
+	retry := f.actor(t, f.alice.cert, true)
+	f.minterClock.arm(ceiling.Add(-2*time.Second), time.Second)
+	it := f.mintWithKey(t, retry, "core-sw01", ch, "idem-1").Results[0]
+	if it.Verdict != "deny" || it.Reason != "per_login_mfa_required" || it.PerLoginMFA == nil {
+		t.Fatalf("a replay that lapsed at the mint = %+v, want asked for a proof", it)
+	}
+	permits := 0
+	for _, r := range f.recs(t) {
+		if r["event"] == "mint" && r["verdict"] == "permit" {
+			permits++
+		}
+	}
+	if permits != 1 {
+		t.Fatalf("%d mint permit records, want only the first", permits)
+	}
+}
+
+// An attacker's own token, with a full chain of its own (touch slot, f9,
+// session slot), posted on someone else's held connection: every chain and
+// same-device check passes, and only the session slot's key not being this
+// connection's client key refuses it.
+func TestAnAttackersOwnTokenOnAnotherConnectionIsRefused(t *testing.T) {
+	f := newMFAFixture(t)
+	ch := f.ask(t, f.alice, "core-sw01")
+	attackerSession, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, atts := f.newToken(t, &attackerSession.PublicKey, pivattest.TouchAlways)
+	code, detail := f.proveTouchDetail(t, f.alice, ch, key, atts)
+	if code != 401 || !strings.Contains(detail, "not this connection's client key") {
+		t.Fatalf("an attacker's token on alice's connection: %d %s, want 401 naming the client key", code, detail)
+	}
+	f.assertRecord(t, "per_login_mfa", "deny", "per_login_mfa_refused")
+	if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Reason != "per_login_mfa_required" {
+		t.Fatalf("mint after the refused proof = %+v", it)
+	}
+}
+
+// The touch slot and the session slot are attested by one device: slot
+// certificates that carry two serials are not one token.
+func TestATouchAndSessionSlotsOfTwoSerialsAreRefused(t *testing.T) {
+	f := newMFAFixture(t)
+	ch := f.ask(t, f.alice, "core-sw01")
+	atts := slices.Clone(f.alice.atts)
+	atts[2] = f.slotCertSerial(t, f.device, f.deviceKey, f.alice.cert.PrivateKey.(crypto.Signer).Public(),
+		pivattest.TouchNever, 87654321)
+	code, detail := f.proveTouchDetail(t, f.alice, ch, f.alice.touchKey, atts)
+	if code != 401 || !strings.Contains(detail, "not attested by the same device") {
+		t.Fatalf("two serials: %d %s, want 401 naming the same device", code, detail)
+	}
+}
+
+// The challenge is bound to the certificate and the agent session it was
+// issued to: a valid touch from another certificate of the same person, or
+// from another agent session, is refused on that binding alone.
+func TestATouchIsBoundToTheCertificateAndAgentTheChallengeWasIssuedTo(t *testing.T) {
+	f := newMFAFixture(t)
+	const want = "not from the certificate and agent session"
+	ch := f.ask(t, f.alice, "core-sw01")
+	sig := f.signWith(t, f.aliceOtherCert.touchKey, ch, f.aliceOtherCert.conn.exporter(t))
+	if code, detail := f.postTouchAs(t, f.aliceOtherCert.conn, f.alice.agent, ch, sig, f.aliceOtherCert.atts); code != 401 ||
+		!strings.Contains(detail, want) {
+		t.Fatalf("another certificate of alice's: %d %s, want 401 naming the binding", code, detail)
+	}
+	ch = f.ask(t, f.alice, "core-sw01")
+	if code, detail := f.postTouchAs(t, f.alice.conn, f.otherAgent, ch, f.touchSign(t, ch, f.alice.conn.exporter(t)),
+		f.alice.atts); code != 401 || !strings.Contains(detail, want) {
+		t.Fatalf("another agent session: %d %s, want 401 naming the binding", code, detail)
+	}
+}
+
+// A store error while judging a requirement is store_unavailable for that
+// item, and its record still names the requirement (decision 45 ruling 19).
+func TestAStoreUnavailableMintRecordCarriesTheRequirement(t *testing.T) {
+	for _, c := range []struct {
+		fail  string
+		named bool
+	}{{"TakeOnce", true}, {"GetMFAProof", false}, {"PutOnce", false}} {
+		f := newMFAFixture(t)
+		ch := ""
+		if c.named {
+			ch = f.ask(t, f.alice, "core-sw01")
+		}
+		f.store.failOn(c.fail)
+		if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Reason != "store_unavailable" {
+			t.Fatalf("%s failing: %+v, want store_unavailable", c.fail, it)
+		}
+		r := f.find(t, "mint", "deny", "store_unavailable")
+		if r == nil {
+			t.Fatalf("%s failing: no store_unavailable mint record in\n%s", c.fail, f.logs.String())
+		}
+		if m, _ := r["per_login_mfa"].(map[string]any); m == nil || m["accept"] == nil || m["levels"] == nil ||
+			m["reuse_for_seconds"] == nil {
+			t.Errorf("%s failing: record per_login_mfa = %v, want the requirement", c.fail, r["per_login_mfa"])
+		}
+	}
+}
+
 func TestAnIdPProofCoversTheMint(t *testing.T) {
 	f := newMFAFixture(t)
 	ch := f.ask(t, f.alice, "core-sw01")
@@ -884,32 +1065,54 @@ func TestAnIdPProofCoversTheMint(t *testing.T) {
 	f.assertMintRecordMFA(t, "idp_mfa", true)
 	f.clock.Advance(11 * time.Minute) // past reuse_for: each mint below is asked again
 	for _, bad := range []struct {
-		name string
-		opts func(ch string) idTokenOpts
+		name  string
+		cause string // a phrase of the refusal that names the check that failed
+		opts  func(ch string) idTokenOpts
 	}{
-		{"another person", func(ch string) idTokenOpts {
+		{"another person", "unknown, spent or expired", func(ch string) idTokenOpts {
 			return idTokenOpts{principal: "bob@example.com", nonceFor: ch, amr: []string{"mfa"}, authTime: f.clock.Now()}
 		}},
-		{"another challenge", func(string) idTokenOpts {
+		{"another challenge", "nonce does not name this challenge", func(string) idTokenOpts {
 			return idTokenOpts{principal: "alice@example.com", nonceFor: "another challenge", amr: []string{"mfa"}, authTime: f.clock.Now()}
 		}},
-		{"no second factor", func(ch string) idTokenOpts {
+		{"no second factor", "amr shows no second factor", func(ch string) idTokenOpts {
 			return idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"pwd"}, authTime: f.clock.Now()}
 		}},
-		{"auth_time six minutes old", func(ch string) idTokenOpts {
-			return idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"}, authTime: f.clock.Now().Add(-6 * time.Minute)}
+		{"auth_time seven minutes old", "last authenticated you at", func(ch string) idTokenOpts {
+			return idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"}, authTime: f.clock.Now().Add(-7 * time.Minute)}
+		}},
+		{"auth_time after iat plus skew", "authenticated after it issued the token", func(ch string) idTokenOpts {
+			// Issued two minutes ago, authenticated now: after iat plus the
+			// skew, though not ahead of the broker's clock.
+			return idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"},
+				authTime: f.clock.Now(), issuedAt: f.clock.Now().Add(-2 * time.Minute)}
 		}},
 	} {
 		ch := f.ask(t, f.alice, "core-sw01")
-		if code := f.proveIdP(t, f.idToken(t, bad.opts(ch)), ch); code != 401 {
-			t.Errorf("%s: %d, want 401", bad.name, code)
+		if code, detail := f.proveIdPDetail(t, f.idToken(t, bad.opts(ch)), ch); code != 401 || !strings.Contains(detail, bad.cause) {
+			t.Errorf("%s: %d %s, want 401 saying %q", bad.name, code, detail, bad.cause)
 		}
 	}
 	f.assertRecord(t, "per_login_mfa", "deny", "per_login_mfa_refused")
-	// The first token, spent above, is refused a second time.
+}
+
+// The freshness limit is 5 minutes plus clock_skew, and a sign-in exactly at
+// it is within it, as at POST /v1/identity/issue (issue.go uses the same
+// boundary): one second past it is not.
+func TestAnIdPSignInAtTheFreshnessLimitIsAccepted(t *testing.T) {
+	f := newMFAFixture(t)
+	limit := 5*time.Minute + oidc.DefaultTiming.ClockSkew
+	ch := f.ask(t, f.alice, "core-sw01")
+	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"},
+		authTime: f.clock.Now().Add(-limit - time.Second)})
+	if code, detail := f.proveIdPDetail(t, tok, ch); code != 401 || !strings.Contains(detail, "last authenticated you at") {
+		t.Fatalf("one second past the limit: %d %s, want 401 on freshness", code, detail)
+	}
 	ch = f.ask(t, f.alice, "core-sw01")
-	if code := f.proveIdP(t, tok, ch); code != 401 {
-		t.Errorf("a spent ID token: %d, want 401", code)
+	tok = f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"},
+		authTime: f.clock.Now().Add(-limit)})
+	if code, detail := f.proveIdPDetail(t, tok, ch); code != 200 {
+		t.Fatalf("exactly at the limit: %d %s, want 200", code, detail)
 	}
 }
 
@@ -925,8 +1128,8 @@ func TestAnIdPTokenIsSpent(t *testing.T) {
 	if ok, err := f.st.PutOnce(context.Background(), mfaTokenKey(tok), nil, time.Hour); err != nil || !ok {
 		t.Fatalf("PutOnce: %v %v", ok, err)
 	}
-	if code := f.proveIdP(t, tok, ch); code != 401 {
-		t.Fatalf("a spent ID token: %d, want 401", code)
+	if code, detail := f.proveIdPDetail(t, tok, ch); code != 401 || !strings.Contains(detail, "used as a proof already") {
+		t.Fatalf("a spent ID token: %d %s, want 401 saying it was used already", code, detail)
 	}
 }
 

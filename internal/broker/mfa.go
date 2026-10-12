@@ -315,8 +315,10 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 			"%s asks for a second factor at each login, and this broker verifies none of the methods it accepts (%s); "+
 				"tell the operator", name, strings.Join(methodNames(req.Accept), ", "))}
 	}
+	// A store error is store_unavailable under the requirement, so its
+	// record names the requirement too (decision 45 ruling 19).
 	if mf.takeErr != nil {
-		return mfaVerdict{reason: decision.StoreUnavailable}
+		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
 	}
 	// Only what is usable now covers: a proof for a method this broker no
 	// longer verifies is no proof.
@@ -324,7 +326,7 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 	narrowed.Accept = usable
 	method, at, reused, err := b.mfaCovers(ctx, c, mf.agentSHA256, narrowed, mf.proved, now)
 	if err != nil {
-		return mfaVerdict{reason: decision.StoreUnavailable}
+		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
 	}
 	if method != "" {
 		rec.Method, rec.ProvedAt, rec.Reused = method, decision.FormatTime(at), reused
@@ -335,7 +337,7 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 	}
 	ch, exp, err := b.requestChallenge(ctx, c, mf)
 	if err != nil {
-		return mfaVerdict{reason: decision.StoreUnavailable}
+		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
 	}
 	count("none", "required")
 	item := &api.PerLoginMFA{Device: name, Challenge: base64.RawURLEncoding.EncodeToString(ch),
@@ -492,7 +494,7 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 			refuse("your identity provider's token says you authenticated after it issued the token; such a " +
 				"token is no sign-in")
 			return
-		case a.IssuedAt.Sub(a.AuthTime) >= issueFresh+skew || now.Sub(a.AuthTime) >= issueFresh+skew:
+		case a.IssuedAt.Sub(a.AuthTime) > issueFresh+skew || now.Sub(a.AuthTime) > issueFresh+skew:
 			refuse(fmt.Sprintf("your identity provider last authenticated you at %s, over %s ago: it did not ask you "+
 				"to sign in again; sign in again", a.AuthTime.UTC().Format(time.RFC3339), issueFresh))
 			return
@@ -623,7 +625,9 @@ func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time
 	if err != nil {
 		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300)
 	}
-	if !bytes.Equal(ta.Device.Raw, sa.Device.Raw) {
+	// Both slots verified against the one device certificate in the proof,
+	// so what can differ is the serial each slot certificate names.
+	if ta.Serial != sa.Serial {
 		return "the touch key and the session key are not attested by the same device"
 	}
 	if ta.TouchPolicy != pivattest.TouchAlways {

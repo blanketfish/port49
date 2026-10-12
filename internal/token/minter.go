@@ -90,6 +90,11 @@ var ErrNoAuthTime = errors.New("token: a mint with a session ceiling needs the s
 // minter's own floor under that check.
 var ErrSessionExpired = errors.New("token: the subject's session ceiling has passed")
 
+// ErrReplayLapsed refuses a ReplayOnly mint whose replay is no longer one:
+// the caller decided, from Replays, to skip a requirement that a fresh mint
+// must meet, and has to decide again.
+var ErrReplayLapsed = errors.New("token: the replay the caller relied on has lapsed")
+
 // ReservedUsername reports whether u is `remote`, a p49-* name, or a
 // platform's system user (platform.ReservedUsername).
 func ReservedUsername(u string) bool { return platform.ReservedUsername(u) }
@@ -164,6 +169,13 @@ type Request struct {
 	// longer exists, so it is not replayed: the mint is made afresh, as for
 	// a record that will not decode, and the record says why.
 	SupersededAt time.Time
+	// ReplayOnly is set by a caller that skipped a requirement because
+	// Replays said this request would be answered from a completed record.
+	// Mint re-reads its clock, so a replay that lapsed in between (the
+	// record's session ceiling passed) is refused with ErrReplayLapsed
+	// instead of minted afresh: a token minted under a requirement must have
+	// passed the check, and this one did not (decision 45 ruling 14).
+	ReplayOnly bool
 	// Policy is the subject and grants that allowed this mint. The minter
 	// judges none of it and copies it onto the mint record (spec §5.7).
 	Policy *decision.Policy
@@ -388,6 +400,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	// failure does not fail the mint, so the only place it can be said is the
 	// record for the mint that lost it.
 	var idemErr string
+	if r.ReplayOnly && r.Reservation == nil {
+		return Result{}, ErrReplayLapsed // nothing to replay from
+	}
 	if res := r.Reservation; res != nil {
 		if res.Holder == "" {
 			return Result{}, errors.New("token: an idempotent mint without a reservation (Minter.Reserve)")
@@ -403,8 +418,13 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 				prev.Replayed = true
 				return prev, nil
 			}
+			if r.ReplayOnly {
+				return Result{}, ErrReplayLapsed
+			}
 			idemErr = why
 			expect = rec.Holder
+		} else if r.ReplayOnly {
+			return Result{}, ErrReplayLapsed
 		}
 		// Hold the record, by compare-and-set, for a fresh ReservationTTL
 		// before minting. Renewed, a reservation taken at the start of a

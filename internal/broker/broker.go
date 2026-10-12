@@ -1257,16 +1257,28 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	// covered it is spent (decision 45 ruling 14).
 	cred := c.cred
 	var perLogin *decision.PerLoginMFA
-	if res.PerLoginMFA.Required() && !b.Minter.Replays(token.Request{Device: name, Reservation: hold, SupersededAt: supersededAt}) {
+	// judge reads the requirement; denied is true when it refuses the item.
+	judge := func() (item api.MintItem, denied bool) {
 		v := b.judgeMFA(ctx, c, mf, name, res.PerLoginMFA, b.Now())
 		mfaRec = v.rec
 		if v.reason != "" {
-			item := deny(v.reason, dev.Platform)
+			item = deny(v.reason, dev.Platform)
 			item.Detail, item.PerLoginMFA = v.detail, v.item
-			return item, nil
+			return item, true
 		}
 		perLogin = v.rec
 		cred.MFAMethod, cred.MFAAt = v.method, v.at
+		return api.MintItem{}, false
+	}
+	// Replay-versus-fresh is decided here once. The mint is told, so one
+	// that finds the replay gone refuses (ErrReplayLapsed) instead of
+	// minting afresh under a requirement nothing judged.
+	replays := res.PerLoginMFA.Required() &&
+		b.Minter.Replays(token.Request{Device: name, Reservation: hold, SupersededAt: supersededAt})
+	if res.PerLoginMFA.Required() && !replays {
+		if item, denied := judge(); denied {
+			return item, nil
+		}
 	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
@@ -1276,15 +1288,26 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	if err := b.putBlob(ctx, buf, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
-	out, err := b.Minter.Mint(ctx, token.Request{
-		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
-			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
-			Credential: cred, AuthTime: c.authTime, VerifiedAt: verifiedAt(answer)},
-		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
-		TTL:         time.Duration(req.TTLSeconds) * time.Second,
-		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-		Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
+	mint := func(replayOnly bool) (token.Result, error) {
+		return b.Minter.Mint(ctx, token.Request{
+			Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
+				Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
+				Credential: cred, AuthTime: c.authTime, VerifiedAt: verifiedAt(answer)},
+			Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
+			TTL:         time.Duration(req.TTLSeconds) * time.Second,
+			Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt, ReplayOnly: replayOnly,
+			Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
+			Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
+	}
+	out, err := mint(replays)
+	if errors.Is(err, token.ErrReplayLapsed) {
+		// The replay the requirement was skipped for is gone: judge the
+		// requirement now, and mint afresh only if it is covered.
+		if item, denied := judge(); denied {
+			return item, nil
+		}
+		out, err = mint(false)
+	}
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):
