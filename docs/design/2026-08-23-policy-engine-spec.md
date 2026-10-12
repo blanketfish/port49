@@ -1228,7 +1228,9 @@ or attached), a scope selecting by an attribute (a device class or tag), and a s
 level that applies and the least `reuse_for`; a lower level never weakens a higher. An empty
 intersection is a load error naming both levels: `policy test` fails on it, `policy diff` fails
 on one the new version introduces, and a reload of an edited policy that introduces one is
-refused, while one already in force blocks no unrelated edit; where the policy did not change (a
+refused ("introduces" means a new device or a new pair of conflicting levels, not a new grant
+reaching a device already quarantined over the same pair), while one already in force blocks no
+unrelated edit and no grant that only reaches the same device; where the policy did not change (a
 start, an inventory reload, a grant's expiry) the device is quarantined with that cause (§10), so
 an inventory sync never freezes the fleet's inventory. A machine principal is exempt except from levels
 that set `applies_to_machines: true`, and a machine proves by `hardware_key_touch` alone, from a
@@ -9014,7 +9016,9 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   by the same rule, against the in-force policy over the new inventory (the `base` `loadBoth`
   already builds for the admission bound). An entry already in force stays quarantined and does
   not block an unrelated edit: a grant revocation at 3am loads while core-sw01 is quarantined over
-  MFA. `port49 policy diff` fails on an entry the new version introduces (its existing
+  MFA. "New" means a new device or a new pair of levels whose intersection is empty (ruling 25),
+  not a new subject: an emergency `all_devices` grant added while core-sw01 is quarantined over
+  the same pair loads, core-sw01 stays quarantined, and the grant applies everywhere else. `port49 policy diff` fails on an entry the new version introduces (its existing
   "quarantined for a new cause" rule), and `port49 policy test` fails on every quarantine, this
   one included, as it does today for every cause (there is no `policy check` command; `policy
   test` is the CI gate). When the policy did not change, at a start, on an inventory reload (a
@@ -9180,7 +9184,19 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   with `per_login_mfa:`: a method added to `accept`, a longer `reuse_for`, a level removed,
   `applies_to_machines` turned off, or a requirement removed. Why: a weakening is the same kind of change as a raise, in
   what a stolen laptop can do, and a warning nobody reads at 3am is no gate. A tightening only
-  prints.
+  prints. The gate compares levels by identity (kind and name or scope), not by count, and the
+  effective requirement per device as well: a level removed or replaced by a different scope
+  (a name-pinned scope swapped for an attribute scope at the same accept and `reuse_for`), a
+  level's `accept` widened, its `reuse_for` lengthened, or its `applies_to_machines` turned off
+  is a weakening (controller's Task 9 review ruling, 2026-10-12). A diff line names the levels
+  on both sides.
+- **25. "New" is a device and a level pair** (controller's Task 9 review ruling, 2026-10-12;
+  operator safety at 3am). A per_login_mfa quarantine entry is new, for ruling 11's refusal of a
+  policy edit, when its device or its pair of conflicting levels is absent from the in-force
+  policy's `MFADisjoint()`; the subject its cause names does not count. An edit that only adds a
+  grant reaching a device already quarantined over the same pair loads (an on-call engineer's
+  emergency `all_devices` grant), the device stays quarantined, and a new conflicting level pair
+  is still refused.
 
 ---
 
