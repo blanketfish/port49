@@ -399,11 +399,7 @@ func (g generator) shape() (Result, error) {
 	// not (decision 44 ruling 10).
 	if err == nil && len(res.Unreached) > 0 && g.closesEntries() {
 		n, nerr := g.finish(g.narrow())
-		if nerr == nil && len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
-			return !slices.Contains(res.Beyond, p)
-		}) && !slices.ContainsFunc(n.Unsent, func(u Unsent) bool {
-			return !slices.ContainsFunc(res.Unsent, func(v Unsent) bool { return v.Rule == u.Rule })
-		}) {
+		if nerr == nil && narrowReplaces(res, n) {
 			return n, nil
 		}
 	}
@@ -421,6 +417,18 @@ func (g generator) shape() (Result, error) {
 		}
 	}
 	return res, err
+}
+
+// narrowReplaces reports whether the narrow reply n yields where the
+// capability reply res sends an allow its bits do not reach: every allow of n
+// is reached (the bits are measured, an allow beyond them is not), and n
+// leaves off no permit and no allow that res sends (decision 44 ruling 10).
+func narrowReplaces(res, n Result) bool {
+	return len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
+		return !slices.Contains(res.Beyond, p)
+	}) && !slices.ContainsFunc(n.Unsent, func(u Unsent) bool {
+		return !slices.ContainsFunc(res.Unsent, func(v Unsent) bool { return v.Rule == u.Rule })
+	})
 }
 
 // recoverable reports whether render recovers from r by dropping the bits

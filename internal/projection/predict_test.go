@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/engine"
 )
 
 // predictInput is a readonly granted `show **` less `show security **`, whose
@@ -75,6 +77,33 @@ func TestACarveOutNoCellMeasuredStaysUnmeasured(t *testing.T) {
 	if err != nil || !res.Device([]string{"show", "configuration", "system"}) ||
 		!res.Unmeasured([]string{"show", "configuration", "system"}) || len(res.UnmeasuredAllows()) != 2 {
 		t.Errorf("no measurement: %v %v", err, res.UnmeasuredAllows())
+	}
+}
+
+// A narrow reply replaces a capability reply that sends an allow its bits do
+// not reach only where every one of its own allows is reached and it leaves
+// off no more (decision 44 ruling 10). The narrow shape's cover reaches every
+// allow today, so the unreached guard cannot be built through Project; it is
+// tested where it is decided (final review F9).
+func TestANarrowReplyReplacesTheCapabilityReplyOnlyWhereItLeavesOffNothingMore(t *testing.T) {
+	a, b, c := permit("ping **"), permit("clear **"), permit("show log **")
+	capability := Result{Shape: ShapeCapability, Unreached: []engine.Rule{a}, Beyond: []engine.Rule{b},
+		Unsent: []Unsent{{Rule: c}}}
+	for _, tc := range []struct {
+		name   string
+		narrow Result
+		want   bool
+	}{
+		{"every allow reached, nothing more left off", Result{Shape: ShapeNarrow, Beyond: []engine.Rule{b}, Unsent: []Unsent{{Rule: c}}}, true},
+		{"leaves off less", Result{Shape: ShapeNarrow}, true},
+		{"an allow of its own stays unreached", Result{Shape: ShapeNarrow, Unreached: []engine.Rule{a}}, false},
+		{"another allow stays unreached", Result{Shape: ShapeNarrow, Unreached: []engine.Rule{c}}, false},
+		{"leaves off a permit beyond the level", Result{Shape: ShapeNarrow, Beyond: []engine.Rule{b, c}}, false},
+		{"leaves off an unsendable allow", Result{Shape: ShapeNarrow, Unsent: []Unsent{{Rule: c}, {Rule: a}}}, false},
+	} {
+		if got := narrowReplaces(capability, tc.narrow); got != tc.want {
+			t.Errorf("%s: %v", tc.name, got)
+		}
 	}
 }
 
