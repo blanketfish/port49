@@ -478,6 +478,59 @@ func TestARevokedBrokerAfterConnectIsRefusedNotUnreachable(t *testing.T) {
 	}
 }
 
+// The refresh's answer is a second ask on a connection the challenge may not
+// share: a broker certificate revoked between the two is refused at the
+// answer, in the check's own words, with the answer never sent and the
+// session kept (plan 9c, ruling 9; Task 8 re-review).
+func TestARevokedBrokerAtTheRefreshAnswerIsRefused(t *testing.T) {
+	var refuse atomic.Bool
+	var calls atomic.Int32
+	r := newRigWith(t, rigOpts{verify: func(tls.ConnectionState) error {
+		calls.Add(1)
+		if refuse.Load() {
+			return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+		}
+		return nil
+	}})
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.fb.mu.Lock()
+	r.fb.order = nil
+	r.fb.mu.Unlock()
+	before := calls.Load()
+	var gets atomic.Int32
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		GetConn: func(string) {
+			if gets.Add(1) == 2 { // the answer's turn: its connection is gone and the broker is revoked
+				refuse.Store(true)
+				r.srv.CloseClientConnections()
+				r.a.client.CloseIdleConnections()
+			}
+		},
+	})
+	_, err := r.a.Refresh(ctx)
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || strings.Contains(err.Error(), "unreachable") ||
+		!strings.Contains(err.Error(), "is revoked by a CRL") {
+		t.Fatalf("Refresh = %v, want a *BrokerRefusedError and not 'unreachable'", err)
+	}
+	if n := calls.Load() - before; n != 1 {
+		t.Fatalf("the check ran %d times, want 1 (no retry)", n)
+	}
+	r.fb.mu.Lock()
+	order := append([]string(nil), r.fb.order...)
+	r.fb.mu.Unlock()
+	if len(order) != 1 || order[0] != "/v1/refresh/challenge" {
+		t.Fatalf("the broker saw %q, want one challenge and no answer", order)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("a CRL refusal ended the session")
+	default:
+	}
+}
+
 // Every ask is a mint: the agent never hands back a token it handed out
 // before, and every mint travels the one connection the handshake opened.
 func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {
