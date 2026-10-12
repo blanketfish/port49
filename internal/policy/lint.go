@@ -880,15 +880,15 @@ func netconfClosedMessage(pr projection.Result) string {
 	// Each entry deny is named, `op **` included where the set carries it:
 	// a subject denied `op` that port49 permits is told so (R2).
 	how := "the reply adds deny " + strings.Join(entry, " and ")
-	// The remedy differs: the narrow shape carries no deny beneath a bit, so
-	// the grant's reach is what closes NETCONF (spec §12 words no remedy).
-	remedy := "an account that needs NETCONF needs a grant with no deny beneath its bits"
 	if pr.Shape == projection.ShapeNarrow {
 		how = "the narrow reply's `deny-commands .*` refuses `junoscript`"
-		remedy = "an account that needs NETCONF needs a grant that reaches whole bits, so the reply takes the capability shape"
 	}
+	// One remedy for both shapes (decision 44 ruling 3): the denies in a reply
+	// come from what the bits reach and the grant does not permit, not from
+	// denies the grant writes. Spec §12 words no remedy.
 	return " " + how + ", so this subject has no NETCONF, `xml-mode` or XML API session there " +
-		"(tests/lab/results/L26c-junoscript-juniper_*.md); " + remedy + " (spec §8; decision 44 ruling 3)"
+		"(tests/lab/results/L26c-junoscript-juniper_*.md); an account keeps NETCONF only where its reply sends " +
+		"no deny: grant everything the level's bits reach (a readonly `**` does) (spec §8; decision 44 ruling 3)"
 }
 
 // configurationBeneathMessage is a projection_deny_beneath_view_configuration

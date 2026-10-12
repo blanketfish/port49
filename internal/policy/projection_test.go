@@ -1025,6 +1025,37 @@ func TestNoNetconfClosedWarningWithoutEntryDenies(t *testing.T) {
 	}
 }
 
+// netconfRemedy is the one remedy both shapes' netconf-closed warnings give
+// (decision 44 ruling 3): the reply's denies come from what the bits reach
+// and the grant does not permit, not from denies the grant writes.
+const netconfRemedy = "an account keeps NETCONF only where its reply sends no deny: " +
+	"grant everything the level's bits reach (a readonly `**` does)"
+
+// On shipped set 1.2.0 a readonly grant of `show **` and `monitor **` has no
+// deny of its own and still takes the entry deny, from the bits' reach: the
+// warning carries the one remedy, which names no deny the grant wrote. A
+// readonly `**` sends no deny and gets no warning.
+func TestTheNetconfClosedRemedyIsTheReplysNotTheGrants(t *testing.T) {
+	closed := func(role string) []string {
+		p := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+"roles:\n  - "+role+"\n"+subjOK+grantOK)
+		var got []string
+		for _, f := range p.Projections(noon) {
+			if f.Kind == FindingProjectionNetconfClosed {
+				got = append(got, f.Message)
+			}
+		}
+		return got
+	}
+	got := closed(`{name: r, privilege: readonly, permit: ["show **", "monitor **"]}`)
+	if len(got) != 1 || !strings.Contains(got[0], netconfRemedy) || !strings.Contains(got[0], "the reply adds deny") ||
+		strings.Contains(got[0], "no deny beneath") || strings.Contains(got[0], "reaches whole bits") {
+		t.Errorf("deny-less grant, entry deny: %q", got)
+	}
+	if got := closed(`{name: r, privilege: readonly, permit: ["**"]}`); len(got) != 0 {
+		t.Errorf("a readonly ** keeps NETCONF: %q", got)
+	}
+}
+
 const narrowRole = `roles:
   - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}
 `
@@ -1043,8 +1074,8 @@ func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
 		}
 	}
 	if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos: the narrow reply's `) ||
-		!strings.Contains(got[0], "reaches whole bits") || strings.Contains(got[0], "no deny beneath") ||
-		strings.Contains(got[0], "; on ") {
+		!strings.Contains(got[0], netconfRemedy) || strings.Contains(got[0], "reaches whole bits") ||
+		strings.Contains(got[0], "no deny beneath") || strings.Contains(got[0], "; on ") {
 		t.Errorf("narrow netconf closed: %q", got)
 	}
 	denies := parseEntry(t, scopeOK+`roles:
