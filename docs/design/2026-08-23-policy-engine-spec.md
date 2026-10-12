@@ -9210,7 +9210,10 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   new or changed in the new version, compared with the old version's tests, and assert the new
   `per_login_mfa:` on a reported device. Why: an unchanged old test is no deliberate act, so
   a swap that leaves the effective requirement as it was would pass silently on any policy that
-  already tests it.
+  already tests it. The whole-test comparison is deliberate, because a weakening that only
+  changes which levels apply leaves the correct assertion identical; and neither rule stops a
+  two-change split (delete the test, then swap and re-add it), so review relies on the printed
+  `per_login_mfa` diff lines.
 
 ---
 
