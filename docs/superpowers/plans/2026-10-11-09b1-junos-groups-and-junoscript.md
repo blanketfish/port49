@@ -132,6 +132,15 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
 4. **`op **` joins `rpc_entry_denies` only if cell (b) shows an `op url` script reaching an RPC
    past the `junoscript` deny** (G1 reads "reached" and nothing else; the op cell's control is
    canonical, so "not measured" ends the run INVALID instead of deciding the list).
+5. **Groups are read by the lines they expand to** (2026-10-11, after Task 3's L57 run; spec
+   decision 44 ruling 7 as Task 3's fixes left it). The inherited capture prints no `set groups`
+   and no `set apply-groups` line, so check-config cannot name a group from its definition.
+   Task 7 was rewritten. It judges expanded lines under a template as template lines, points a
+   failing one at `show configuration system login | display inheritance`, and refuses a
+   capture with a `set groups` line or `apply-groups` as a word at any level, in the template
+   check and the services check alike. R5's verification and naming, and the old Task 7's
+   `applications`, `appliesAt`, `nestedApplies` and `groupWord`, are gone. Under set 1.2.0 the
+   XML API and `outbound-ssh` still fail (ruling 6 as it now stands, superseding R3's list).
 
 ## Rulings this plan makes (recorded as decision 44 in Task 1)
 
@@ -3228,133 +3237,213 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 7: check-config reads groups; the services check by set
+## Task 7: check-config reads groups by their expanded lines; the services check by set
+
+Rewritten on 2026-10-11 after Task 3's L57 run (controller ruling 5). The inherited capture, in
+either pipe order, prints a group's statements expanded under the classes they reach and prints
+no `set groups` and no `set apply-groups` line (`tests/lab/results/L57-juniper_*.md`). So
+check-config cannot name a group from its definition. It judges each expanded line under a template
+as a template line, and points a failing one at the curly form that names the group. A capture
+holding a `set groups` line, or `apply-groups` as a word at any level, was taken without
+`display inheritance`, and both checks refuse it at that line. Spec: §12 "Configuration groups
+are judged by the lines they expand to", decision 44 rulings 6, 7 and 9, §14 "check-config reads
+groups".
 
 **Files:**
-- Modify: `internal/platform/classes.go` (`TemplateDrift`, lines ~162–243, and its doc comment;
-  new helpers below `hasPrefix`)
-- Modify: `internal/platform/services.go` (`rpcServicesOff`'s comment; `RPCServicesChecked`;
-  `ServicesCapture` → `ConfigCapture`; `CheckServices`; `servicesSays`; new `rpcPastEntryDeny`,
-  `entrySays`, `NetconfForbidden`)
-- Modify: every `ServicesCapture` reference (`grep -rn ServicesCapture --include='*.go' .`:
-  `cmd/port49/devices.go`'s comment, `internal/platform/services_test.go`)
-- Modify: `tests/lab/projection_test.go:355` (`netconfForbidden` calls
+- Modify: `internal/platform/services.go` (`rpcServicesOff`'s and `RPCServicesChecked`'s
+  comments; `ServicesCapture` → `ConfigCapture`; `CheckServices` and its doc comment; new
+  `notInheritedWhy`, `groupSign`, `NetconfForbidden`, `rpcPastEntryDeny`, `entrySays`)
+- Modify: `internal/platform/classes.go` (`templateDriftSays`, line 142; `TemplateDrift` and its
+  doc comment, lines 146–243; new `harmlessTemplateStatements` and `templateLinePasses` below
+  `hasPrefix`)
+- Modify: `cmd/port49/devices.go` (the check-config doc comment, lines 31–40, which names
+  `ServicesCapture`)
+- Modify: `tests/lab/projection_test.go:352–355` (`netconfForbidden` calls
   `adapter.NetconfForbidden`)
 - Test: `internal/platform/classes_test.go`, `internal/platform/services_test.go`
 
 **Interfaces:**
-- Consumes: `Dialect.RPCEntryDenies` (Task 4); G2 and the L57 gates and fixtures (Task 3).
-- Produces: `platform.ConfigCapture` (string const); `platform.NetconfForbidden(d Dialect) bool`;
-  `TemplateDrift` keeps its signature `(config []byte, d Dialect, maxSessionAge time.Duration)
-  (missing []string, extra []ConfigFinding, err error)`.
+- Consumes: `Dialect.RPCEntryDenies` (Task 4); `platform.Set` and set 1.2.0's `juniper_junos`
+  carrying `rpc_entry_denies` (Task 4); the L57 notes and fixtures
+  `internal/platform/testdata/l57-juniper_*.set` (Task 3); G2 (Task 3: REST not measured, so
+  `rest` stays a finding, as decision 44 ruling 6 now says).
+- Produces: `platform.ConfigCapture` (string const,
+  `show configuration | display set | display inheritance`); `platform.NetconfForbidden(d
+  Dialect) bool`. `TemplateDrift` keeps its signature `(config []byte, d Dialect, maxSessionAge
+  time.Duration) (missing []string, extra []ConfigFinding, err error)`, and `CheckServices` keeps
+  `(d Dialect, config []byte) ([]ConfigFinding, error)`.
+- Task 9's rerun regenerates the l57 fixtures with a class-level group (`set system login class
+  p49-remote apply-groups p49g-classlevel`, whose group adds `login-alarms`). The fixture test
+  below holds with or without the `login-alarms` line it expands to. If that rerun finds the
+  class-level `apply-groups` line kept by inheritance, the fixture test fails with the refusal
+  at that line. That is the provisional strip of ruling 7 failing: report it, and ruling 7
+  changes before L57 closes (Task 9).
 
-- [ ] **Step 1: Write the failing tests.** In `internal/platform/classes_test.go`:
+- [ ] **Step 1: Write the failing tests.** In `internal/platform/classes_test.go`, add `"fmt"`,
+  `"os"`, `"path/filepath"` and `"slices"` to the imports, then add:
 
 ```go
-// check-config trusts the inherited capture, names the group behind a
-// template line it fails, passes the harmless statements, and refuses a
-// capture that lacks a group's expansion where the configuration applies it
-// (decision 44 rulings 7 and 9).
+// The inherited capture prints a group's statements under each template they
+// land on and nothing of the group itself (tests/lab/results/L57-juniper_*.md),
+// so check-config judges those lines as the template's own: a privilege or
+// unlisted statement fails, its finding pointing at the curly form that names
+// the group; a harmless one and an apply-groups-except pass. A capture with a
+// `set groups` line, or `apply-groups` as a word at any level, was taken
+// without `display inheritance` and is refused at that line, quoting nothing
+// of it (decision 44 rulings 7 and 9).
 func TestTemplateDriftReadsGroups(t *testing.T) {
 	d := junosProjected(BitDeliveryUserPermissions)
 	const base = "set version 23.4R2-S2.1\nset system login class p49-remote idle-timeout 720\n" +
 		"set system login user remote uid 2001\nset system login user remote class p49-remote\n"
+	const pointer = "`show configuration system login | display inheritance`"
 	for _, c := range []struct {
-		name, config string
-		says         []string // each finding's Says holds its entry, in order
-		err          string
+		name, lines string
+		extra       []string // each finding's line, in order, from line 5
 	}{
-		{"privilege, inherited", base + "set groups BASE system login class <*> permissions all\n" +
-			"set apply-groups BASE\nset system login class p49-remote permissions all\n",
-			[]string{"group BASE adds `permissions` to class p49-remote: every port49 session on this device gets it"}, ""},
-		{"harmless, inherited", base + "set groups TIP system login class <*> login-tip\nset apply-groups TIP\n" +
-			"set system login class p49-remote login-tip\n", nil, ""},
-		{"harmless, written there", base + "set system login class p49-remote login-alarms\n" +
-			"set system login user remote full-name \"port49 template\"\n", nil, ""},
-		{"not inherited", base + "set groups BASE system login class <*> permissions all\nset apply-groups BASE\n",
-			nil, "display inheritance"},
-		{"excepted", base + "set groups BASE system login class <*> permissions all\nset apply-groups BASE\n" +
-			"set system login class p49-remote apply-groups-except BASE\n", nil, ""},
-		{"applied nowhere", base + "set groups BASE system login class <*> permissions all\n", nil, ""},
-		{"own leaf", base + "set groups T system login class <*> idle-timeout 30\nset apply-groups T\n", nil, ""},
-		{"not known harmless", base + "set groups H system login class <p49-*> allow-hidden-commands\n" +
-			"set apply-groups H\nset system login class p49-remote allow-hidden-commands\n",
-			[]string{"group H sets `allow-hidden-commands` on class p49-remote, which port49 does not know to be harmless"}, ""},
-		{"authentication", base + "set groups A system login user <*> authentication encrypted-password \"$6$abc\"\n" +
-			"set apply-groups A\nset system login user remote authentication encrypted-password \"$6$abc\"\n",
-			[]string{"group A adds `authentication` to user remote"}, ""},
-		{"nested", base + "set groups INNER system login class <p49-*> permissions view\n" +
-			"set groups OUTER apply-groups INNER\nset apply-groups OUTER\n" +
-			"set system login class p49-remote permissions view\n",
-			[]string{"group INNER adds `permissions` to class p49-remote"}, ""},
-		{"drift, no group", base + "set system login class p49-remote permissions view\n",
-			[]string{templateDriftSays}, ""},
+		{"a group's permission and allow-commands, expanded",
+			"set system login class p49-remote permissions view-configuration\n" +
+				"set system login class p49-remote allow-commands \"^show version$\"\n",
+			[]string{"set system login class p49-remote permissions view-configuration",
+				`set system login class p49-remote allow-commands "^show version$"`}},
+		{"a template user's authentication",
+			"set system login user remote authentication encrypted-password \"$6$abc\"\n",
+			[]string{`set system login user remote authentication encrypted-password "$6$abc"`}},
+		{"a statement on neither list", "set system login class p49-remote allow-hidden-commands\n",
+			[]string{"set system login class p49-remote allow-hidden-commands"}},
+		{"a harmless word in another case", "set system login class p49-remote Login-Tip\n",
+			[]string{"set system login class p49-remote Login-Tip"}},
+		{"a user's harmless word on a class", "set system login class p49-remote full-name x\n",
+			[]string{"set system login class p49-remote full-name x"}},
+		{"harmless", "set system login class p49-remote login-tip\nset system login class p49-remote login-alarms\n" +
+			"set system login user remote full-name \"port49 template\"\n", nil},
+		{"an apply-groups-except", "set system login class p49-remote apply-groups-except BASE\n" +
+			"set system login user remote apply-groups-except BASE\nset system apply-groups-except BASE\n", nil},
+		{"a group word in a value", "set interfaces ge-0/0/0 description \"set groups and apply-groups\"\n", nil},
+		{"another class", "set system login class noc permissions all\n", nil},
 	} {
-		missing, extra, err := TemplateDrift([]byte(c.config), d, 12*time.Hour)
-		if c.err != "" {
-			if err == nil || !strings.Contains(err.Error(), c.err) || !strings.Contains(err.Error(), ConfigCapture) {
-				t.Errorf("%s: want an error naming %q: %v", c.name, c.err, err)
-			}
-			continue
-		}
-		if err != nil || len(missing) != 0 || len(extra) != len(c.says) {
+		missing, extra, err := TemplateDrift([]byte(base+c.lines), d, 12*time.Hour)
+		if err != nil || len(missing) != 0 || len(extra) != len(c.extra) {
 			t.Errorf("%s: %v %q %+v", c.name, err, missing, extra)
 			continue
 		}
-		for i, s := range c.says {
-			if !strings.Contains(extra[i].Says, s) || strings.Contains(extra[i].Says, "$6$") {
-				t.Errorf("%s: finding %d says %q, want %q", c.name, i, extra[i].Says, s)
+		for i, want := range c.extra {
+			if e := extra[i]; e.Line != 5+i || e.Text != want || !strings.Contains(e.Says, pointer) {
+				t.Errorf("%s: finding %d is %+v, want line %d %q pointing at %s", c.name, i, e, 5+i, want, pointer)
 			}
+		}
+	}
+	for _, c := range []struct{ name, lines string }{
+		{"a group definition", "set groups BASE system login class <*> permissions all\n"},
+		{"a harmless group's definition", "set groups BASE system login class <*> login-tip\n"},
+		{"a group quoted", "set \"groups\" BASE system login class <*> login-tip\n"},
+		{"a logical system's group", "set logical-systems ls1 groups BASE system login class <*> permissions all\n"},
+		{"a group applied at the top", "set apply-groups BASE\n"},
+		{"a group applied under system", "set system apply-groups BASE\n"},
+		{"a group applied on the class", "set system login class p49-remote apply-groups BASE\n"},
+		{"a group applied on another class", "set system login class noc apply-groups BASE\n"},
+		{"a group applied in a logical system", "set logical-systems ls1 apply-groups BASE\n"},
+		{"capitalized", "set system Apply-Groups BASE\n"},
+		{"a deactivated application", "deactivate apply-groups BASE\n"},
+		{"a plain capture, its first sign named", "set groups BASE system login class <*> login-tip\nset apply-groups BASE\n"},
+	} {
+		_, _, err := TemplateDrift([]byte(base+c.lines+"set system host-name srx1\n"), d, 12*time.Hour)
+		if err == nil || !strings.HasPrefix(err.Error(), "line 5 ") || !strings.Contains(err.Error(), ConfigCapture) ||
+			!strings.Contains(err.Error(), "without it") || strings.Contains(err.Error(), "BASE") {
+			t.Errorf("%s: want a refusal naming line 5 and %q, quoting nothing of the line: %v", c.name,
+				ConfigCapture, err)
 		}
 	}
 }
 
-// The groups the lab committed (tests/lab/results/L57-juniper_*.md), read
-// from each image's own inherited capture: p49g-perm is named on p49-remote
-// for its permission and its allow-commands, p49g-inner too where the image
-// committed and expanded the nesting, and the harmless, excepted, unapplied
-// and timeout groups pass.
+// The lab's inherited captures (tests/lab/results/L57-juniper_*.md), read as
+// each image printed them: p49g-perm's permission and allow-commands, expanded
+// under p49-remote, are the only findings, each pointing at the curly form
+// that names the group; p49g-tip's login-tip, the excepted group's except
+// line and the class's own idle-timeout pass, and the capture is not refused.
+// It holds whether or not a regenerated capture carries more harmless lines
+// (Task 9 adds a class-level group's login-alarms).
 func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
 	files, _ := filepath.Glob("testdata/l57-*.set")
 	if len(files) != 2 {
 		t.Fatalf("want the two L57 captures, got %q", files)
 	}
 	d := junosProjected(BitDeliveryUserPermissions)
+	want := []string{"set system login class p49-remote permissions view-configuration",
+		`set system login class p49-remote allow-commands "^show version$"`}
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, extra, err := TemplateDrift(raw, d, 12*time.Hour)
-		if err != nil {
-			t.Fatalf("%s: %v", f, err)
+		missing, extra, err := TemplateDrift(raw, d, 12*time.Hour)
+		if err != nil || len(missing) != 0 {
+			t.Fatalf("%s: %q %v", f, missing, err)
 		}
-		perm := 0
+		var got []string
 		for _, e := range extra {
-			switch {
-			case strings.Contains(e.Says, "group p49g-perm"):
-				perm++
-			case strings.Contains(e.Says, "group p49g-inner") && strings.Contains(string(raw), "p49g-outer apply-groups"):
-			default:
-				t.Errorf("%s:%d: %s: %s", f, e.Line, e.Text, e.Says)
+			got = append(got, e.Text)
+			if !strings.Contains(e.Says, "| display inheritance") {
+				t.Errorf("%s:%d: the finding gives no pointer to the group: %s", f, e.Line, e.Says)
 			}
 		}
-		if perm != 2 {
-			t.Errorf("%s: want p49g-perm's permissions and allow-commands on p49-remote, got %d: %+v", f, perm, extra)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: findings %q, want %q", f, got, want)
 		}
 	}
 }
 ```
 
-  In `internal/platform/services_test.go`, rewrite `TestCheckServices`'s `bad` loop and add the
-  set-1.2.0 case:
+  In the same file, move the existing tests to ruling 7:
+  - `TestTemplateDriftFailsEveryWayToCarryMore`: delete the table's four group rows ("a group
+    applied to the class", "a group setting a template class", "a wildcard group", "a wildcard
+    group above"), and in the doc comment replace "a configuration group that sets one," with
+    "a group line, which only a capture taken without display inheritance carries,". After the
+    table's loop add:
 
 ```go
-	// A group is read, not refused: a service a group defines is a finding at
-	// its line, and an apply-groups line is no error (decision 44 ruling 7).
-	f, err := CheckServices(d, []byte(clean+"set groups g system services rest\nset apply-groups g\n"))
-	if err != nil || len(f) != 1 || !strings.HasPrefix(f[0].Text, "set groups g") {
-		t.Errorf("a group's service: %+v %v", f, err)
+	// A group line is a capture taken without `display inheritance`, its
+	// groups unexpanded: refused at that line (decision 44 ruling 7; L57).
+	for _, line := range []string{"set system login class p49-readonly apply-groups wide",
+		`set groups wide system login class p49-readonly allow-commands ".*"`,
+		"set groups wide system login class <p49-*> permissions all",
+		"set groups wide system login <*> p49-readonly permissions all",
+		"set groups wide system login user noc full-name x"} {
+		config := append(cleanCapture(t, d), line)
+		if _, _, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err == nil ||
+			!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(config))) ||
+			!strings.Contains(err.Error(), ConfigCapture) {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+```
+
+    The idle-timeout case: the device's own value is harmless now, and the reference's line is
+    still missing. Its comment becomes "A timeout the reference does not write is the
+    reference's line missing; the device's own value is harmless, so no extra.", and its
+    condition `len(extra) != 1` becomes `len(extra) != 0`. In the `other` slice drop `"set
+    groups wide system login user noc full-name x"`, which the loop above now refuses.
+  - `TestTemplateDriftReadsQuotedAndNestedPaths`: drop `"set groups g logical-systems <*> system
+    login class p49-readonly permissions all"` from the table, and after its loop add:
+
+```go
+	// A group's line is refused, a logical system's included (decision 44
+	// ruling 7).
+	grouped := append(cleanCapture(t, d), "set groups g logical-systems <*> system login class p49-readonly permissions all")
+	if _, _, err := TemplateDrift([]byte(strings.Join(grouped, "\n")), d, time.Hour); err == nil ||
+		!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(grouped))) {
+		t.Errorf("a group's line: %v", err)
+	}
+```
+
+  In `internal/platform/services_test.go`, rename `ServicesCapture` to `ConfigCapture` at each
+  use. In `TestCheckServices`, replace the `bad` loop (lines 42–50) with:
+
+```go
+	// A group line is refused at its line: the inherited capture prints none
+	// (decision 44 ruling 7; L57).
+	if _, err := CheckServices(d, []byte(clean+"set groups g system services rest\n")); err == nil ||
+		!strings.HasPrefix(err.Error(), "line 7 ") || !strings.Contains(err.Error(), ConfigCapture) {
+		t.Errorf("a group definition: %v", err)
 	}
 	for _, bad := range []string{"system {\n    services {\n        rest;\n    }\n}\n", ""} {
 		if _, err := CheckServices(d, []byte(bad)); err == nil || !strings.Contains(err.Error(), ConfigCapture) {
@@ -3363,97 +3452,180 @@ func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
 	}
 ```
 
+  In `TestCheckServicesBypasses`: add `"deactivate system apply-groups g"` and `"protect
+  apply-groups g"` to the refused list. In its loop the condition becomes `err == nil ||
+  !strings.HasPrefix(err.Error(), "line 4 ") || !strings.Contains(err.Error(), ConfigCapture)`:
+  each refused entry is one line after `clean`'s three. Add `"set system login class c
+  apply-groups-except g"` to the passing list. In that list's comment replace "a group's
+  deactivate is what the capture's except leaves" with "a group's deactivate is no `set groups`
+  line". Then add:
+
 ```go
-// Under set 1.2.0's entry deny NETCONF, the XML API, outbound-ssh and every
-// non-RPC service pass; the services no measurement shows the deny closes
-// still fail (decision 44 ruling 6).
+// Under set 1.2.0's entry deny NETCONF, every non-RPC service and every ssh
+// option pass; REST, J-Web, JET/gRPC, the XML API and outbound-ssh, which no
+// lab cell measured the deny closing, still fail wherever they are written
+// (decision 44 ruling 6). A group line is refused as under set 1.1.0. Set
+// 1.1.0 forbids NETCONF, set 1.2.0 does not.
 func TestCheckServicesUnderTheEntryDeny(t *testing.T) {
-	d := junosProjected(BitDeliveryUserPermissions)
-	d.RPCEntryDenies = []string{"junoscript **"}
-	if NetconfForbidden(d) || !RPCServicesChecked(d) {
-		t.Fatal("under the entry deny NETCONF is allowed and the check still runs")
+	for v, forbidden := range map[string]bool{"1.1.0": true, "1.2.0": false} {
+		set, ok := Set(v)
+		if !ok || NetconfForbidden(set["juniper_junos"]) != forbidden || !RPCServicesChecked(set["juniper_junos"]) {
+			t.Errorf("set %s: NetconfForbidden is not %v, or the check does not run", v, forbidden)
+		}
 	}
+	d := junosProjected(BitDeliveryUserPermissions)
+	d.RPCEntryDenies = []string{"junoscript **", "op **"}
 	clean := "set version 23.4R2-S2.1\nset system services ssh\nset system services netconf ssh\n" +
-		"set system services xnm-ssl\nset system services outbound-ssh client c\n" +
-		"set system services dhcp-local-server group g\nset system services ssh sftp-server\n"
+		"set system services netconf rfc-compliant\nset system services dhcp-local-server group g\n" +
+		"set system services ftp\nset system services ssh sftp-server\nset system services ssh tcp-forwarding\n"
 	if f, err := CheckServices(d, []byte(clean)); len(f) != 0 || err != nil {
 		t.Fatalf("clean: %+v %v", f, err)
 	}
-	for _, line := range append([]string{"set system services web-management https interface fxp0",
-		"set system services extension-service request-response grpc"}, rpcPastEntryDenyExtra...) {
+	for _, line := range []string{
+		"set system services rest http port 3000",
+		"set services rest control",
+		"set system services web-management https interface fxp0",
+		"set system services extension-service request-response grpc",
+		"set system extension-service application file a.py",
+		"set system services xnm-ssh",
+		"set system services xnm-ssl",
+		"set system services xnm-clear-text",
+		"set system services outbound-ssh client c",
+		"set logical-systems ls1 system services Web-Management http",
+	} {
 		f, err := CheckServices(d, []byte(clean+line+"\n"))
-		if err != nil || len(f) != 1 || !strings.Contains(f[0].Says, "junoscript") {
+		if err != nil || len(f) != 1 || f[0].Line != 9 || f[0].Text != line || !strings.Contains(f[0].Says, "junoscript") {
 			t.Errorf("%s: %+v %v", line, f, err)
 		}
 	}
+	for _, bad := range []string{"set groups g system services netconf ssh", "set apply-groups g"} {
+		if _, err := CheckServices(d, []byte(clean+bad+"\n")); err == nil ||
+			!strings.HasPrefix(err.Error(), "line 9 ") || !strings.Contains(err.Error(), ConfigCapture) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
 }
-
-// rpcPastEntryDenyExtra is `rest`'s line where Task 3's G2 kept it a finding;
-// empty where the deny was measured closing it.
-var rpcPastEntryDenyExtra = []string{"set system services rest http port 3000"}
 ```
 
-  (If G2 dropped `rest`, `rpcPastEntryDenyExtra` is `nil` and the clean config gains
-  `set system services rest http port 3000`.)
+- [ ] **Step 2: Run them to see them fail, and paste the output**
 
-- [ ] **Step 2: Run them to see them fail**
+Run: `go test ./internal/platform/ -run 'TemplateDrift|CheckServices' -count=1`
+Expected: FAIL to compile, `undefined: ConfigCapture` and `undefined: NetconfForbidden`. Paste
+the output into the task report.
 
-Run: `go test ./internal/platform/ -run 'TemplateDriftReads|CheckServices' -count=1`
-Expected: FAIL to compile (`ConfigCapture`, `NetconfForbidden` undefined).
-
-- [ ] **Step 3: Implement the services side** in `services.go`:
+- [ ] **Step 3: Implement the services side** in `services.go`. Replace `ServicesCapture` and
+  its comment (lines 72–75) with:
 
 ```go
 // ConfigCapture is the one form check-config reads a projected Junos device's
-// configuration in: set form, groups' statements expanded where they apply,
-// and the group definitions kept, so what a group brings is read where it
-// lands and named by its group (decision 44 ruling 7; L57). A capture taken
-// with the earlier `| except "^set groups "` still reads where it applies no
-// group to a template; where it does, the definition is missing and
-// TemplateDrift refuses it.
+// configuration in: set form, each configuration group's statements expanded
+// under the levels they land on. Either pipe order expands the same, and
+// neither prints a `set groups` or a `set apply-groups` line
+// (tests/lab/results/L57-juniper_*.md), so a capture holding one was taken
+// without `display inheritance` and is refused (groupSign; decision 44 ruling
+// 7). The earlier `| except "^set groups "` tail removed nothing from it.
 const ConfigCapture = `show configuration | display set | display inheritance`
 
-// rpcPastEntryDeny are the services that run RPCs and that no measurement
-// shows set 1.2.0's entry deny closing: J-Web and JET/gRPC/gNMI, and REST
-// unless L26c-scripts measured it closed (decision 44 ruling 6).
-var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service"}
+// notInheritedWhy is why a capture with a group line is refused, after the
+// line's number. It quotes nothing of the line.
+const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
+	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
+	"expanded and cannot be checked"
+
+// groupSign reports whether a statement shows its capture was taken without
+// `display inheritance`: a `set groups` line, a logical system's or tenant's
+// included, or `apply-groups` as a keyword anywhere in it, at the top, under
+// `system` or on a class. The inherited capture printed neither on either
+// image (L57); that it strips a class-level `apply-groups` as it strips the
+// top-level ones is *provisional on L57*. `apply-groups-except` survives
+// inheritance and is no sign. A line statementWords cannot split is read on
+// whitespace with its quotes taken off, so a stray quote hides no group.
+func groupSign(line string) bool {
+	words, ok := statementWords(line)
+	if !ok {
+		words = nil
+		for _, f := range strings.Fields(line) {
+			words = append(words, word{text: strings.Trim(f, `"`)})
+		}
+	}
+	if len(words) < 2 {
+		return false
+	}
+	if slices.ContainsFunc(words[1:], func(w word) bool { return w.keyword("apply-groups") }) {
+		return true
+	}
+	path := words[1:]
+	for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
+		path = path[2:]
+	}
+	return words[0].keyword("set") && path[0].keyword("groups")
+}
 
 // NetconfForbidden reports whether check-config fails a device of d for
-// serving NETCONF: a checked device whose set sends no entry deny (set 1.1.0).
+// serving NETCONF: a checked device whose set sends no entry deny (set
+// 1.1.0). Under set 1.2.0 the reply's `junoscript` deny closes NETCONF for
+// the subject it is sent to, and the device keeps it for the rest (decision
+// 44 rulings 1 and 6).
 func NetconfForbidden(d Dialect) bool { return RPCServicesChecked(d) && len(d.RPCEntryDenies) == 0 }
 
-const entrySays = "a management service that runs RPCs is enabled, and the reply's `junoscript` deny was not measured " +
-	"to close it (tests/lab/results/L26c-scripts-juniper_*.md; decision 44 ruling 6): a session walks around every " +
-	"deny port49 sends. Disable it, or pin a set that does not project Junos"
+// rpcPastEntryDeny are the services that run RPCs and that no lab cell
+// measured set 1.2.0's entry deny closing, each a finding wherever its word
+// appears: REST (the lab's tunnel reached it in no cell, the control's
+// included, so G2 kept it; tests/lab/results/L26c-scripts-juniper_*.md),
+// J-Web and JET/gRPC/gNMI (no cell measures them), the XML API and
+// outbound-ssh (decision 44 ruling 6, *provisional on L26c*).
+var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "xnm-ssh", "xnm-ssl",
+	"xnm-clear-text", "outbound-ssh"}
+
+const entrySays = "a management service that runs RPCs is enabled, and no lab cell measured the reply's " +
+	"`junoscript` deny closing it (decision 44 ruling 6; tests/lab/results/L26c-scripts-juniper_*.md): a session " +
+	"may reach RPCs through it past every deny port49 sends. Disable it, or pin a set that does not project Junos"
 ```
 
-  (G2: if both images measured REST closed, `rpcPastEntryDeny` is
-  `[]string{"web-management", "extension-service"}`.)
-
-  In `CheckServices`: delete the `groups` refusal and the `apply-groups` refusal. Strip a leading
-  `groups NAME` with the logical systems, and read a group's `<pattern>` word as every word it
-  matches (decision 44 ruling 7): a plain capture of `set groups g system <s*> netconf ssh`, or
-  under 1.2.0 `set groups g system services <r*> http`, applied at the top, is otherwise read as
-  nothing while the device runs the service (pre-flight, measured against this code). The reading
-  is held to the levels a service sits at (`services X`, `system X`, `system services X`), so
-  `set groups g interfaces <*> unit 0` stays clean:
+  Replace `RPCServicesChecked`'s comment with:
 
 ```go
-		inGroup := false
-		for len(path) > 2 && (path[0].keyword("groups") || path[0].keyword("logical-systems") ||
-			path[0].keyword("tenants")) {
-			inGroup = inGroup || path[0].keyword("groups")
-			path = path[2:]
+// RPCServicesChecked reports whether `port49 devices check-config` reads a
+// device of d's management services (CheckServices): against the allowlist
+// under a set that sends no entry deny, against rpcPastEntryDeny under one
+// that does.
+```
+
+  and append to `rpcServicesOff`'s comment, as its last paragraph:
+
+```go
+//
+// Under a set whose adapter carries rpc_entry_denies (set 1.2.0) the reply's
+// `junoscript` deny closes NETCONF, port 830 and the CLI's `xml-mode` for the
+// session that carries it (tests/lab/results/L26c-junoscript-juniper_*.md),
+// so the check there fails only the services no lab cell measured it closing
+// (rpcPastEntryDeny; decision 44 ruling 6).
+```
+
+  In `CheckServices`, `refuse` names `ConfigCapture`. Replace everything from the verb `switch`
+  to the callback's closing `})` (lines 120–152) with:
+
+```go
+		switch {
+		case words[0].value || words[0].text != "set" && words[0].text != "deactivate" && words[0].text != "protect":
+			refuse(n, "is not a set, deactivate or protect statement")
+			return
+		case groupSign(trimmed):
+			refuse(n, notInheritedWhy)
+			return
+		case words[0].text != "set":
+			return // an inactive or protected statement enables nothing
 		}
-		// In a group a `<pattern>` word stands for every word it matches, as
-		// Junos applies it (decision 44 ruling 7): the statement is a finding
-		// where any reading of it is one, whether or not the capture expanded it.
-		is := func(w word, k string) bool {
-			return w.keyword(k) || inGroup && !w.value && strings.HasPrefix(w.text, "<") && groupWord(w.text, k)
+		if len(words) == 3 && words[1].keyword("version") && !words[2].value {
+			version = true
+		}
+		path := words[1:]
+		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
+			path = path[2:]
 		}
 		entry := len(d.RPCEntryDenies) > 0
 		offList := false
-		if !entry && len(path) >= 3 && is(path[0], "system") && is(path[1], "services") {
+		if !entry && len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
 			options, ok := cliServices[path[2].text]
 			offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
 		}
@@ -3461,328 +3633,215 @@ const entrySays = "a management service that runs RPCs is enabled, and the reply
 		if entry {
 			anywhere, says = rpcPastEntryDeny, entrySays
 		}
-		// wild is a group's wildcard at path[i] that could be one of anywhere.
-		wild := func(i int) bool {
-			return inGroup && len(path) > i && slices.ContainsFunc(anywhere, func(k string) bool {
-				return !path[i].keyword(k) && is(path[i], k)
-			})
-		}
-		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) }) ||
-			wild(0) || len(path) > 1 && (is(path[0], "services") || is(path[0], "system")) && wild(1) ||
-			len(path) > 2 && is(path[0], "system") && is(path[1], "services") && wild(2)
+		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) })
 		if offList || rpcWord {
 			findings = append(findings, ConfigFinding{Line: n, Text: joinWords(trimmed), Says: says})
 		}
+	})
 ```
 
-  (`groupWord` is `classes.go`'s, Step 4.) Add to `TestCheckServicesUnderTheEntryDeny`, or a new
-  test beside it, the cases this was measured on: under set 1.1.0 `set groups g system <s*>
-  netconf ssh`, `set groups g <*> services netconf ssh`, `set groups g system services <*> http`
-  are each one finding; under the entry deny `set groups g system services <r*> http`, `set groups
-  g services <*> control` and `set groups g system <e*> application file a.py` are each one; and
-  `set groups g interfaces <*> unit 0` and `set groups g system login class <*> idle-timeout 5`
-  are none under either.
-
-  Rename `ServicesCapture` to `ConfigCapture` in every reference. Rewrite `rpcServicesOff`'s and
-  `CheckServices`'s comments: set 1.1.0 keeps the allowlist; set 1.2.0 reads only
-  `rpcPastEntryDeny`; a group is read where it is written and where it applies.
-
-- [ ] **Step 4: Implement the groups side** in `classes.go`. Add, below `hasPrefix`:
+  The version error at the end names `ConfigCapture`. Replace `CheckServices`'s doc comment
+  with:
 
 ```go
-// harmlessTemplateStatements change nothing a session may run: a class's
-// idle-timeout (the reference writes one; another value is a missing
-// reference line), banner and alarms, and a user's full name. They pass under
-// a template, written there or from a group (decision 44 ruling 7).
+// CheckServices reads a device's configuration, as ConfigCapture prints it,
+// where RPCServicesChecked(d), a statement under a logical system or tenant
+// included. Under a set whose d sends no entry deny (set 1.1.0) every
+// statement that enables a management service but the CLI's is a finding,
+// since a deny does not bind the RPCs it serves. Under one that does (set
+// 1.2.0) the `junoscript` deny closes NETCONF for the session that carries
+// it, so only the services no lab cell measured it closing are findings,
+// wherever their word appears (rpcPastEntryDeny; decision 44 ruling 6). It
+// is an error where the input is not in that form, since then a service could
+// be missed: a line that is not a set, deactivate or protect statement, a
+// terminal's prompt or a ## line; a `set groups` line, or `apply-groups` as a
+// word at any level, which the inherited capture never prints, so a group's
+// services were not expanded where they land (groupSign; decision 44 ruling
+// 7); a line it cannot split into words; or a capture without the top-level
+// `set version` line a whole display set prints, since a capture of a subtree
+// leaves every service outside it unread. An error names the line by number
+// and quotes nothing from it. A capture cut off before its end cannot be told
+// from a whole one in set form, since display set closes with no last line. A
+// deactivate or protect enables nothing, and a service under one is still a
+// finding, since an activate turns it on. Where d is not checked it reads
+// nothing.
+```
+
+  In `cmd/port49/devices.go`, replace the comment lines from "// On a projected platform it
+  also reads the configuration, in `display set`" through "// platform.ServicesCapture names
+  (platform.CheckServices)." with:
+
+```go
+// On a projected platform it also reads the configuration, as
+// platform.ConfigCapture prints it, groups' statements expanded where they
+// land, against the reference `platform export --classes` writes, whose
+// idle-timeout comes from --config's port49d.yaml, which is then required:
+// every reference line the device lacks, and every line under a template
+// class or user the reference does not write and that is not harmless
+// (templateCheck; plan 5b pre-flight I8; decision 44 rulings 7 and 9). A
+// class carrying more than the reference is every subject at that template
+// running more than port49 proved, so it fails, as does a capture it cannot
+// read or one taken without `display inheritance`. A management service
+// whose RPCs a deny does not bind is a finding too, read from the same
+// capture (platform.CheckServices).
+```
+
+  Run: `go test ./internal/platform/ -run 'TemplateDrift|CheckServices' -count=1` and paste the
+  output into the task report.
+  Expected: the `CheckServices` tests PASS; the `TemplateDrift` tests FAIL on behaviour:
+  - `TestTemplateDriftReadsGroups`: the privilege findings lack the pointer; "harmless" and "an
+    apply-groups-except" report extras; every refusal case reads `<nil>`.
+  - `TestTemplateDriftReadsTheL57Captures`: each file's findings also hold the
+    `apply-groups-except` and `login-tip` lines.
+  - `TestTemplateDriftFailsEveryWayToCarryMore`: the group lines are not refused, and the
+    idle-timeout case has one extra.
+  - `TestTemplateDriftReadsQuotedAndNestedPaths`: the group line is not refused.
+
+- [ ] **Step 4: Implement the groups side** in `classes.go`. Replace `templateDriftSays` (lines
+  140–144) with:
+
+```go
+// templateDriftSays is what a line under a template the reference does not
+// write means. The inherited capture cannot say which group brought a line,
+// so it points at the curly form, which does (L57; decision 44 ruling 7).
+const templateDriftSays = "a line under a port49 template the reference does not write: it changes what every " +
+	"subject at that template runs, or lets the template user log in locally. If a configuration group put it " +
+	"there, `show configuration system login | display inheritance` names the group behind each inherited line " +
+	"(## '...' was inherited from group '...'): remove the statement from that group, or narrow the group's " +
+	"wildcard past the p49- templates, since loading the reference does not clear it. Otherwise load port49 " +
+	"platform export --classes, which replaces the template"
+```
+
+  Add below `hasPrefix`:
+
+```go
+// harmlessTemplateStatements change nothing a session runs: a class's
+// idle-timeout (the reference writes one; another value is the reference's
+// line missing), login banner and alarms, and a user's full name. Under a
+// template they pass, written there or expanded from a group (spec §12;
+// decision 44 ruling 7). Every other statement the reference does not write
+// fails, a privilege one or one on neither list (ruling 9).
 var harmlessTemplateStatements = map[string][]string{
 	"class": {"idle-timeout", "login-alarms", "login-tip"},
 	"user":  {"full-name"},
 }
 
-// privilegeTemplateStatements are the statements a group adding to a template
-// is named for (Ryan's ruling, 2026-10-11): a class's bits and command or
-// configuration regexes, and a template user's authentication or class. Any
-// other statement not harmless fails too (ruling 9).
-var privilegeTemplateStatements = map[string][]string{
-	"class": {"permissions", "allow-commands", "deny-commands", "allow-configuration", "deny-configuration",
-		"allow-commands-regexps", "deny-commands-regexps", "allow-configuration-regexps", "deny-configuration-regexps"},
-	"user": {"authentication", "class"},
-}
-
-// nestedApplies is whether a group applied from inside another group's
-// definition is read as applied at the top (L57; decision 44 ruling 7).
-var nestedApplies = true
-
-// groupStatement is one statement of a group's definition: the group, the
-// path it adds at with `groups NAME` taken off and wildcards kept, its line.
-type groupStatement struct {
-	group string
-	path  []string
-	line  int
-	text  string
-}
-
-// application is an apply-groups or apply-groups-except statement: the level
-// it sits at and the group it names.
-type application struct {
-	level  []string
-	group  string
-	except bool
-}
-
-// unquoted is words with their quotes taken off.
-func unquoted(words []string) []string {
-	out := make([]string, len(words))
-	for i, w := range words {
-		out[i] = strings.Trim(w, `"`)
-	}
-	return out
-}
-
-// applications reads an apply-groups or apply-groups-except statement's path
-// (the words after `set`, logical systems taken off): one per group it names.
-// inGroup is a statement inside a group's definition, applied at the top
-// where nestedApplies holds, and not at all where it does not.
-func applications(path []string, inGroup bool) []application {
-	for k, w := range path {
-		if w != "apply-groups" && w != "apply-groups-except" {
-			continue
-		}
-		level := path[:k]
-		if inGroup {
-			if !nestedApplies {
-				return nil
-			}
-			level = nil
-		}
-		var out []application
-		for _, g := range path[k+1:] {
-			if g = strings.Trim(g, "[]"); g != "" {
-				out = append(out, application{level: slices.Clone(level), group: g, except: w == "apply-groups-except"})
-			}
-		}
-		return out
-	}
-	return nil
-}
-
-// appliesAt reports whether group g's statements land at p: an apply-groups
-// naming g at a level at or above p, and no apply-groups-except naming g at
-// or below that level and at or above p.
-func appliesAt(apps []application, g string, p []string) bool {
-	at := -1
-	for _, a := range apps {
-		if !a.except && a.group == g && hasPrefix(p, a.level, false) && len(a.level) > at {
-			at = len(a.level)
-		}
-	}
-	if at < 0 {
+// templateLinePasses reports whether a line at path, under template path t,
+// passes though the reference does not write it: a harmless statement of t's
+// kind, or an apply-groups-except, which keeps a group off the template,
+// survives inheritance (L57) and is no finding itself (decision 44 ruling 7).
+func templateLinePasses(path, t []string) bool {
+	if len(path) <= len(t) {
 		return false
 	}
-	return !slices.ContainsFunc(apps, func(a application) bool {
-		return a.except && a.group == g && hasPrefix(p, a.level, false) && len(a.level) >= at
-	})
-}
-
-// groupWord reports whether a group's path word matches word as Junos reads
-// it: `<pattern>` a glob, anything else itself. A glob that does not compile
-// matches, failing closed.
-func groupWord(pattern, word string) bool {
-	if len(pattern) > 1 && pattern[0] == '<' && pattern[len(pattern)-1] == '>' {
-		ok, err := path.Match(pattern[1:len(pattern)-1], word)
-		return ok || err != nil
-	}
-	return pattern == word
-}
-
-// groupAt reports whether a group statement's path lands under template
-// path t, each word read as Junos reads a group's (groupWord): a wildcard may
-// stand at any level, `system login <*> p49-readonly` included.
-func groupAt(p, t []string) bool {
-	if len(p) < len(t) {
-		return false
-	}
-	for i, w := range t {
-		if !groupWord(p[i], w) {
-			return false
-		}
-	}
-	return true
-}
-
-// groupSays is the finding for a template line group brings.
-func groupSays(group string, t []string, stmt string) string {
-	who := "every port49 session at that template on this device"
-	if t[3] == RemoteClass || t[3] == remoteUser {
-		who = "every port49 session on this device"
-	}
-	if slices.Contains(privilegeTemplateStatements[t[2]], stmt) {
-		return fmt.Sprintf("group %s adds `%s` to %s %s: %s gets it; remove it from the group, or narrow the group's "+
-			"wildcard past the p49- templates (spec §8; decision 44 ruling 7)", group, stmt, t[2], t[3], who)
-	}
-	return fmt.Sprintf("group %s sets `%s` on %s %s, which port49 does not know to be harmless there: %s gets it; "+
-		"remove it from the group, or narrow the group's wildcard past the p49- templates (decision 44 ruling 9)",
-		group, stmt, t[2], t[3], who)
+	stmt := path[len(t)]
+	return stmt == "apply-groups-except" || slices.Contains(harmlessTemplateStatements[t[2]], stmt)
 }
 ```
 
-  Then in `TemplateDrift`, keep the loop's form checks and the `deactivate`/`protect` branch, and
-  change the `set` branch and the tail. The `set` branch becomes:
+  In `TemplateDrift`, declare `var notInherited error` beside `setForm, curly, version`. In the
+  callback, after `line = strings.Join(words, " ")` and before the `switch`, add:
 
 ```go
-		case "set":
-			setForm = true
-			carried[line] = true
-			if len(words) == 3 && strings.EqualFold(strings.Trim(words[1], `"`), "version") {
-				version = true
-			}
-			w := unquoted(words[1:])
-			for len(w) > 2 && (w[0] == "logical-systems" || w[0] == "tenants") {
-				w = w[2:]
-			}
-			inGroup := len(w) > 2 && w[0] == "groups"
-			body := w
-			if inGroup {
-				// A group may write a logical system's or tenant's login
-				// too: read under the templates as the expanded line is.
-				body = w[2:]
-				defined[w[1]] = true
-				for len(body) > 2 && (body[0] == "logical-systems" || body[0] == "tenants") {
-					body = body[2:]
-				}
-			}
-			if a := applications(body, inGroup); a != nil || slices.Contains(body, "apply-groups") ||
-				slices.Contains(body, "apply-groups-except") {
-				apps = append(apps, a...)
-				return
-			}
-			if inGroup {
-				groups = append(groups, groupStatement{group: w[1], path: body, line: n, text: line})
-				return
-			}
-			paths[strings.Join(w, " ")] = true
-			if slices.Contains(want, line) || uidLine.MatchString(line) {
-				return
-			}
-			for _, t := range tpaths {
-				if !hasPrefix(w, t, false) {
-					continue
-				}
-				if len(w) > len(t) && slices.Contains(harmlessTemplateStatements[t[2]], w[len(t)]) {
-					return
-				}
-				extraAt[strings.Join(w, " ")] = append(extraAt[strings.Join(w, " ")], len(extra))
+		if notInherited == nil && slices.Contains([]string{"set", "deactivate", "protect"}, words[0]) &&
+			groupSign(line) {
+			notInherited = fmt.Errorf("line %d %s: capture the whole configuration with `%s`", n, notInheritedWhy,
+				ConfigCapture)
+		}
+```
+
+  In the `set` branch the template match becomes:
+
+```go
+			if path, wildcards := located(words[1:]); slices.ContainsFunc(paths, func(p []string) bool {
+				return hasPrefix(path, p, wildcards) && !templateLinePasses(path, p)
+			}) {
 				extra = append(extra, ConfigFinding{Line: n, Text: line, Says: templateDriftSays})
-				return
 			}
 ```
 
-  with, before the loop, `var groups []groupStatement; var apps []application; paths :=
-  map[string]bool{}; defined := map[string]bool{}; extraAt := map[string][]int{}` and `tpaths`
-  the templates' `paths()` (the existing `paths` slice renamed `tpaths`, the `deactivate` branch
-  reading `tpaths` too). `extraAt` maps a path to the indexes of its findings in `extra`: the
-  `deactivate` branch appends to `extra` as well, so a parallel slice of paths would misalign.
-  After the form checks and before the `missing` loop:
+  The `deactivate`/`protect` branch and the curly branch stay as they are. After `if err != nil
+  { return nil, nil, err }` add:
 
 ```go
-	// A group applied at or above a template whose definition the capture
-	// lacks brings what nothing here shows: a capture filtered with `| except
-	// "^set groups "` would pass it unread (pre-flight).
-	for _, a := range apps {
-		if a.except || defined[a.group] {
-			continue
-		}
-		if slices.ContainsFunc(tpaths, func(t []string) bool { return hasPrefix(t, a.level, false) }) {
-			return nil, nil, fmt.Errorf("group %s is applied where it reaches a port49 template, and the capture "+
-				"does not carry its definition: capture the whole configuration with `%s`", a.group, ConfigCapture)
-		}
-	}
-	// A group statement that lands on a template: named on the template's
-	// line where the capture carries it, and the capture refused as not
-	// inherited where it does not and the template writes no harmless leaf of
-	// that name itself (decision 44 ruling 7).
-	for _, gs := range groups {
-		for _, t := range tpaths {
-			if len(gs.path) <= len(t) || !groupAt(gs.path, t) {
-				continue
-			}
-			at := append(slices.Clone(t), gs.path[len(t):]...)
-			if !appliesAt(apps, gs.group, at) {
-				continue
-			}
-			stmt := gs.path[len(t)]
-			other := map[string]string{"class": "user", "user": "class"}[t[2]]
-			if known := func(kind string) bool {
-				return slices.Contains(privilegeTemplateStatements[kind], stmt) ||
-					slices.Contains(harmlessTemplateStatements[kind], stmt)
-			}; !known(t[2]) && known(other) {
-				// A `<*>` over both containers: the statement is the other
-				// kind's, and Junos expands it only where it is valid.
-				continue
-			}
-			key := strings.Join(at, " ")
-			own := strings.Join(append(slices.Clone(t), stmt), " ")
-			switch {
-			case paths[key]:
-				for _, i := range extraAt[key] {
-					extra[i].Says = groupSays(gs.group, t, stmt)
-				}
-			case slices.ContainsFunc(sortedKeys(paths), func(p string) bool { return p == own || strings.HasPrefix(p, own+" ") }):
-				// The template writes the statement itself. A harmless leaf
-				// of its own stands over the group's (L57). Anything else is
-				// named at the group's line: whether Junos adds a group's
-				// value beside the template's, as a leaf-list such as
-				// permissions might, is L57's "group permission beside
-				// own", and the group is one Ryan's ruling names either way.
-				if !slices.Contains(harmlessTemplateStatements[t[2]], stmt) {
-					extra = append(extra, ConfigFinding{Line: gs.line, Text: gs.text, Says: groupSays(gs.group, t, stmt)})
-				}
-			default:
-				return nil, nil, fmt.Errorf("line %d: group %s applies to %s %s, and the capture does not carry what it "+
-					"adds there: capture the whole configuration with `%s`", gs.line, gs.group, t[2], t[3], ConfigCapture)
-			}
-		}
+	if notInherited != nil {
+		return nil, nil, notInherited
 	}
 ```
 
-  Add `"path"` to the imports. Update `TemplateDrift`'s doc comment: the capture is
-  `ConfigCapture`; a group is read where it lands and named; the harmless statements pass; a
-  capture lacking an applied group's expansion is an error; its two old error texts name
-  `ConfigCapture` in place of `show configuration | display set`.
+  and the three form errors name the capture:
 
-  Apply the L57 gates from Task 3: `ConfigCapture`'s order; `nestedApplies`.
+```go
+	case !setForm:
+		return nil, nil, errors.New("the configuration has no set line: the template check reads `" + ConfigCapture + "`")
+	case !version:
+		return nil, nil, errors.New("the configuration has no top-level set version line, which a whole `show " +
+			"configuration | display set` prints: a capture of part of it leaves what reaches a template from " +
+			"outside that part unread: capture the whole configuration with `" + ConfigCapture + "`")
+	case curly:
+		return nil, nil, errors.New("the configuration mixes curly-form statements into set form, and the template " +
+			"check cannot read what a curly block carries under a template: capture the whole configuration with `" +
+			ConfigCapture + "`")
+```
 
-- [ ] **Step 5: Point the lab's NETCONF switch at the set.** In `tests/lab/projection_test.go`:
-  `func netconfForbidden(d adapter.Dialect) bool { return adapter.NetconfForbidden(d) }`, its
-  comment saying set 1.1.0 forbids NETCONF and set 1.2.0 does not.
+  Replace `TemplateDrift`'s doc comment with:
+
+```go
+// TemplateDrift reads a projected platform's device configuration, as
+// ConfigCapture prints it, against ReferenceClasses: every reference set line
+// the configuration lacks, and every line under a template class or template
+// user the reference does not write and that is not harmless (spec §8, §12;
+// plan 5b pre-flight I8; decision 44 rulings 7 and 9). A class line the
+// reference lacks — an allow-commands, an extra permission — widens every
+// subject at that template, and a template user's authentication line lets
+// it log in locally, so each is drift; a class's idle-timeout, login-alarms
+// and login-tip, a user's full-name and an apply-groups-except are not
+// (templateLinePasses). The inherited capture prints a configuration group's
+// statements expanded under each template they land on, and nothing of the
+// group itself (tests/lab/results/L57-juniper_*.md), so a line a group brings
+// is judged as the template's own, and its finding points at the curly form
+// that names the group. A capture with a `set groups` line, or `apply-groups`
+// as a word at any level, was taken without `display inheritance`, its
+// groups unexpanded, and is an error naming the first such line (groupSign).
+// So is what reaches a template from beside it: a `deactivate` of a reference
+// line or of any level above one is drift. The device_config lines are
+// Missing's. It is an error where the configuration is not all in set form,
+// since a curly-form part could carry anything under a template unread, and
+// where it lacks the top-level `set version` line a whole display set prints,
+// since a capture of a subtree, `show configuration system login`, leaves a
+// deactivate outside it unread (task 13a review I4).
+```
+
+  `located` keeps its `groups NAME` and wildcard reading: a `set groups` line is now refused
+  before its findings are returned, and a `deactivate groups …` line still reaches a template
+  through it, as before.
+
+- [ ] **Step 5: Point the lab's NETCONF switch at the set.** In `tests/lab/projection_test.go`
+  replace `netconfForbidden` and its comment (lines 352–355) with:
+
+```go
+// netconfForbidden reports whether check-config fails a device of d for
+// serving NETCONF, so the run disables it as the operator must: under set
+// 1.1.0 it does (plan 5b Task 14, branch M); under set 1.2.0 the reply's
+// `junoscript` deny closes NETCONF per subject and the device keeps it
+// (decision 44 rulings 1 and 6; platform.NetconfForbidden).
+func netconfForbidden(d adapter.Dialect) bool { return adapter.NetconfForbidden(d) }
+```
 
 - [ ] **Step 6: Run**
 
-Run: `go test ./internal/platform/ ./cmd/port49/ -count=1 && go vet -tags lab ./tests/lab/`
-Expected: PASS once these existing tests are moved to the rulings, each case still failing (a
-finding or an error) unless a ruling says it passes. Measured in pre-flight against this task's
-code, these are the ones that change:
-  - `TestTemplateDriftFailsEveryWayToCarryMore`: "a group applied to the class" (`apply-groups
-    wide`, no definition) now errors, naming `ConfigCapture`: move it to a loop that wants an
-    error. "a group setting a template class", "a wildcard group" and "a wildcard group above"
-    define a group nothing applies, which ruling 7 passes: add `set apply-groups wide` to each
-    and move them to the error loop ("does not carry what it adds"; for "a wildcard group above",
-    the class `p49-readonly` writes its own `permissions`, so it is a named finding at the group's
-    line, `group wide adds `permissions``, not an error). The idle-timeout case now has no extra
-    (`idle-timeout` is harmless; the reference's line is still missing): want `len(extra) == 0`.
-  - `TestTemplateDriftReadsQuotedAndNestedPaths`: `set groups g logical-systems <*> system login
-    class p49-readonly permissions all` gains `set apply-groups g` and is the same named finding.
-  - `TestCheckServicesBypasses`: the group definitions (`set groups g system services netconf
-    ssh`, the quoted, capitalized and logical-system forms) move to the findings list (one
-    finding each); `set apply-groups g`, `set system apply-groups g`, `set logical-systems ls1
-    apply-groups g` and `set logical-systems ls1 Apply-Groups g` pass (no finding, no error); `set
-    system services apply-groups g` is one finding (an unknown word under `system services`).
+Run: `grep -rn ServicesCapture --include='*.go' . ; gofmt -l internal/platform cmd/port49 tests/lab`
+Expected: no output.
+
+Run: `go test ./internal/platform/ ./cmd/port49/ -count=1 && go vet -tags lab ./tests/lab/ && make test && make vet`
+Expected: PASS. `cmd/port49`'s check-config tests pin set 1.1.0 and no group line, so their
+outcomes do not move. Paste the summary lines into the task report.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add internal/platform cmd/port49/devices.go tests/lab/projection_test.go
-git commit -m "feat: check-config reads configuration groups and checks services by set
+git commit -m "feat: check-config reads groups by their expanded lines and checks services by set
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
