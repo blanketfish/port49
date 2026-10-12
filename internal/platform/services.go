@@ -92,8 +92,9 @@ const ConfigCapture = `show configuration | display set | display inheritance`
 const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
 	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
 	"expanded and cannot be checked. If it was taken with it, the device keeps a group application switched off " +
-	"or locked, which reads the same: remove that application, then capture again (a one-word value spelled " +
-	"apply-groups, which display set prints bare, is read the same way: rename it)"
+	"or locked, which reads the same: remove that application (a protected one: unprotect it and remove it), " +
+	"then capture again (a one-word value spelled apply-groups, which display set prints bare, is read the " +
+	"same way: rename it)"
 
 // groupSign reports whether a statement shows its capture was taken without
 // `display inheritance`: a `set groups` line, a logical system's or tenant's
@@ -155,7 +156,10 @@ var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "
 // reference, "services (System Services)",
 // https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/system-services.html,
 // read 2026-10-12) that serve no management session: database-replication
-// copies the configuration database between Routing Engines; dhcp and
+// defines the subscriber session database replication process, whose only
+// option is traceoptions (its own page, "database-replication (Subscriber
+// Session Database)", .../statement/database-replication-edit-system-services.html,
+// read 2026-10-12); dhcp and
 // dhcp-local-server serve addresses; dns is a DNS proxy and dynamic-dns a
 // client updating one; finger answers who is logged in; ftp serves files
 // to a user who logs in; static-subscribers, subscriber-management and
@@ -180,8 +184,9 @@ const entrySays = "a management service that runs RPCs is enabled, and no lab ce
 	"may reach RPCs through it past every deny port49 sends. Disable it, or pin a set that does not project Junos"
 
 // CheckServices reads a device's configuration, as ConfigCapture prints it,
-// where RPCServicesChecked(d), a statement under a logical system or tenant
-// included. Under a set whose d sends no entry deny (set 1.1.0) every
+// where RPCServicesChecked(d), a statement under a logical system, tenant or
+// routing instance included, in any order (a service there is judged as at the
+// top level). Under a set whose d sends no entry deny (set 1.1.0) every
 // statement that enables a management service but the CLI's is a finding,
 // since a deny does not bind the RPCs it serves. Under one that does (set
 // 1.2.0) the `junoscript` deny closes NETCONF for the session that carries
@@ -245,7 +250,8 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 			version = true
 		}
 		path := words[1:]
-		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
+		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants") ||
+			path[0].keyword("routing-instances")) {
 			path = path[2:]
 		}
 		entry := !NetconfForbidden(d)

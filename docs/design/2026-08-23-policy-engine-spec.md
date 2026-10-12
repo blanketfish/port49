@@ -3957,10 +3957,10 @@ fail-closed reply there, as before (option C).
 **Management services.** Under set 1.1.0 a projected Junos device runs no management service but
 the CLI's, checked as an allowlist. `devices check-config` passes it only where nothing under
 `system services` is on but `ssh` and `telnet`, an unknown service included, and `rest`,
-`web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes NETCONF per user (port 830 measured; the port-22 subsystem
-*provisional on L26c*), so the check no longer requires it off, and it is a shorter allowlist.
-Under `system services` it passes `netconf`, `ssh` and `telnet` with any statement beneath them,
-and these services, which serve no management session (Junos's `[edit system services]`
+`web-management` and `extension-service` appear nowhere. Under set 1.2.0 the entry deny closes
+NETCONF per user (port 830 measured; the port-22 subsystem *provisional on L26c*), so the check no
+longer requires it off, and it is a shorter allowlist. Under `system services` it passes
+`netconf`, `ssh` and `telnet` with any statement beneath them, and these services, which serve no management session (Junos's `[edit system services]`
 hierarchy): `database-replication`, `dhcp`, `dhcp-local-server`, `dns`, `dynamic-dns`, `finger`,
 `ftp`, `static-subscribers`, `subscriber-management` and `subscriber-management-helper`. Any other
 statement there fails, the finding quoting it. That covers a service no one listed, such as
@@ -3972,7 +3972,8 @@ nobody listed (plan 5b pre-flight C1). Anywhere in the hierarchy it still fails
 (*provisional on L26c*). REST was not measured: the lab's tunnel did not reach it, the control
 included (`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding.
 Whether a deny of `show configuration` holds against a file read of `/config` through `ftp` or
-`ssh sftp-server`, which pass, is unmeasured (*provisional on L26c*). Both sets read the capture §12 names.
+`ssh sftp-server`, which pass, is unmeasured (*provisional on L26c*). Both sets read the capture
+§12 names.
 
 **No carve-out leaves a deny off the wire in either set**: `view-configuration`'s `show
 configuration **` out of `view` is measured on the CLI only. `start` is never denied, since admins

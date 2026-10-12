@@ -242,10 +242,10 @@ func TestCheckServicesBypasses(t *testing.T) {
 }
 
 // Under set 1.2.0's entry deny NETCONF, the non-RPC services entryServices
-// names and every ssh option pass; REST, J-Web, JET/gRPC, the XML API and outbound-ssh, which no
-// lab cell measured the deny closing, still fail wherever they are written
-// (decision 44 ruling 6). A group line is refused as under set 1.1.0. Set
-// 1.1.0 forbids NETCONF, set 1.2.0 does not.
+// names and every ssh option pass; REST, J-Web, JET/gRPC, the XML API and
+// outbound-ssh, which no lab cell measured the deny closing, still fail
+// wherever they are written (decision 44 ruling 6). A group line is refused
+// as under set 1.1.0. Set 1.1.0 forbids NETCONF, set 1.2.0 does not.
 func TestCheckServicesUnderTheEntryDeny(t *testing.T) {
 	for v, forbidden := range map[string]bool{"1.1.0": true, "1.2.0": false} {
 		set, ok := Set(v)
@@ -335,8 +335,9 @@ func TestCheckServicesRefusalNamesAValueSpelledApplyGroups(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
 	_, err := CheckServices(d, []byte("set version 1\nset snmp location apply-groups\n"))
 	if err == nil || !strings.Contains(err.Error(), "spelled apply-groups") ||
+		!strings.Contains(err.Error(), "unprotect it and remove it") ||
 		!strings.Contains(err.Error(), "rename it") || strings.Contains(err.Error(), "quote") ||
-		!strings.Contains(err.Error(), "remove that application, then capture again") {
+		!strings.Contains(err.Error(), "remove that application") || !strings.Contains(err.Error(), "then capture again") {
 		t.Errorf("%v", err)
 	}
 }
@@ -385,6 +386,9 @@ func TestCheckServicesAllowlistUnderTheEntryDeny(t *testing.T) {
 		"set system services flow-tap-dtcp ssh",
 		"set system services tftp-server",
 		"set system services no-such-service",
+		"set system services dhcp-foo",
+		"set system services ftpx",
+		"set system services subscriber-management-helperx",
 		"set system services DNS",
 		`set system services "dns proxy"`,
 		"set logical-systems ls1 system services service-deployment",
@@ -441,5 +445,48 @@ func TestCheckServicesPassesTheLabsServices(t *testing.T) {
 		if err != nil || len(findings) != 0 {
 			t.Errorf("%s: %+v %v", f, findings, err)
 		}
+	}
+}
+
+// A routing instance is stripped from a path like a logical system or tenant,
+// in any order, so a service under one is judged as at the top level, under
+// both sets (review M3; fail closed).
+func TestCheckServicesReadsRoutingInstances(t *testing.T) {
+	const version = "set version 23.4R2-S2.1\n"
+	d12, _ := Set("1.2.0")
+	d11, _ := Set("1.1.0")
+	for _, line := range []string{
+		"set routing-instances ri1 system services netconf ssh",
+		"set routing-instances ri1 system services dhcp-local-server group g",
+		"set logical-systems ls1 routing-instances ri1 system services ssh",
+	} {
+		if f, err := CheckServices(d12["juniper_junos"], []byte(version+line+"\n")); len(f) != 0 || err != nil {
+			t.Errorf("1.2.0 %s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{
+		"set routing-instances ri1 system services service-deployment",
+		"set logical-systems ls1 routing-instances ri1 system services service-deployment",
+		"set routing-instances ri1 logical-systems ls1 system services service-deployment",
+		"set tenants t1 routing-instances ri1 logical-systems ls1 system services service-deployment",
+		"set routing-instances ri1 system services rest http",
+	} {
+		f, err := CheckServices(d12["juniper_junos"], []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Line != 2 || f[0].Text != line {
+			t.Errorf("1.2.0 %s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{
+		"set routing-instances ri1 system services dhcp-local-server",
+		"set routing-instances ri1 system services netconf ssh",
+		"set logical-systems ls1 routing-instances ri1 system services dhcp-local-server",
+	} {
+		f, err := CheckServices(d11["juniper_junos"], []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Line != 2 || f[0].Text != line {
+			t.Errorf("1.1.0 %s: %+v %v", line, f, err)
+		}
+	}
+	if f, err := CheckServices(d11["juniper_junos"], []byte(version+"set routing-instances ri1 system services ssh root-login deny\n")); len(f) != 0 || err != nil {
+		t.Errorf("1.1.0 ssh under a routing instance: %+v %v", f, err)
 	}
 }
