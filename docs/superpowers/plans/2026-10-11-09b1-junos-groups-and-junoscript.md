@@ -4911,14 +4911,15 @@ go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
   `deactivate` and `protect`: `^set ` alone would hide a `deactivate` line's drift. The
   committed fixtures also carry a `<removed>` line. That was the lab redactor's `\s+` crossing a
   newline and eating the next line's verb (review M8). `2122e6f` fixed it to `[ \t]+`, and Step
-  3's rerun regenerates both fixtures through the fixed redactor, so the regenerated ones carry
-  no `<removed>` line. If one still does, stop and report: a statement was lost, and the
-  services check would not read it.
+  3's rerun regenerates both fixtures through the fixed redactor, so no regenerated line
+  *starts* with `<removed>` (secret values inside a line are still `<removed>`, as they must
+  be). If a line still starts with it, stop and report: a statement was lost, and the services
+  check would not read it.
 
 ```bash
 d=$(mktemp -d)
 printf 'platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n  - {name: r, privilege: readonly, permit: ["show **"]}\nsubjects:\n  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}\ngrants:\n  - {subject: s, scope: all_devices, roles: [r]}\n' > $d/policy.yaml
-grep -c '<removed>' internal/platform/testdata/l57-*.set   # expect 0 for each file after the rerun
+grep -c '^<removed>' internal/platform/testdata/l57-*.set   # expect 0 for each file after the rerun
 tr -d '\r' < internal/platform/testdata/l57-juniper_vjunos-router.set | grep -E '^(set|deactivate|protect) ' > $d/srx1.set
 tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep -E '^(set|deactivate|protect) ' > $d/vsrx1.set
 ./bin/port49 devices check-config --policy $d/policy.yaml --inventory tests/lab/inventory-lab.yaml \
@@ -4996,8 +4997,10 @@ tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep -E '^(set|de
   **(d) Re-point the spec's L26c markers; remove only what was measured.**
   - Decision 44's head: replace "Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's
     Task 9 closes it; ruling 7 is provisional on L57." with "Ruling 6's `rest`, XML API and
-    `outbound-ssh` clauses, and its file-read note, are *provisional on L59*." (keep "ruling 7 is
-    provisional on L57" if L57 did not close).
+    `outbound-ssh` clauses, and its file-read note, are *provisional on L59*." Keep "ruling 1 is
+    *provisional on L26c*" in the head unless Step 3 measured port 830 **and** the port-22
+    subsystem refused under the rendered reply on both images (the conditional paragraph above
+    decides it), and keep "ruling 7 is provisional on L57" if L57 did not close.
   - Decision 44 ruling 6 (as Task 7b left it): each "*provisional on L26c*" becomes
     "*provisional on L59*".
   - §8's `junoscript` paragraph: replace "*Provisional on L26c* for the other ways in: the
