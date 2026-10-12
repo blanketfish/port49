@@ -158,6 +158,23 @@ func TestABearerRefreshUnderARequirementExtendsAfterAnIdPProof(t *testing.T) {
 	}
 }
 
+// A bearer's proof is not kept for reuse, and the context's recorded proof
+// (agent "") covers no one: one minute is well inside reuse_for, so a kept
+// proof would still cover and the next refresh would extend without asking.
+func TestABearerProofIsNotKeptForReuse(t *testing.T) {
+	f := requireCore(t)
+	f.clock.Advance(time.Hour)
+	ch := f.bearerRefresh(t, "alice", "", "").PerLoginMFA.Challenge
+	f.proveIdPFor(t, "alice", ch)
+	if s := f.bearerRefresh(t, "alice", ch, "").find("core-sw01"); s.Outcome != "extended" {
+		t.Fatalf("a bearer refresh naming its proof = %+v", s)
+	}
+	f.clock.Advance(time.Minute) // past the pacing, inside reuse_for
+	if out := f.bearerRefresh(t, "alice", "", ""); out.find("core-sw01").Outcome != "per_login_mfa_required" {
+		t.Fatalf("a bearer refresh inside reuse_for after a spent proof = %+v", out)
+	}
+}
+
 func TestABearerRefreshNamesItsProofInTheAnswer(t *testing.T) {
 	f := requireCore(t)
 	f.clock.Advance(time.Hour)
