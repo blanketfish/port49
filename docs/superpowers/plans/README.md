@@ -5573,8 +5573,9 @@ each task reviewed, most through one to three fix rounds. The ledger is
   `L57-juniper_*.md`):
   - **G1:** an `op url` script printed version and configuration under the `junoscript` deny alone
     (`L26c-scripts-juniper_vsrx.md:140`), so `op **` joined the list. Under the list's reply, `op
-    url` and `op ur` were refused in all five entry-deny rows of Task 9's differential while the
-    control ran the script (`L26c-projected-juniper_vsrx.md:75-76`, `:145-146`).
+    url` and `op ur` were refused in the four rows carrying the entry deny and in the narrow readonly
+    (five refusing rows) of Task 9's differential, while the control ran the script
+    (`L26c-projected-juniper_vsrx.md:75-76`, `:145-146`).
   - **G2:** REST was not measured: the lab's tunnel reached it in no cell, the control's included
     (`L26c-scripts-juniper_vsrx.md:73`, `:141`). `rest` stays a check-config finding under 1.2.0.
   - **G3:** `save` is a keyword and is refused under view (`L58-juniper_vsrx.md:47`, `:57-58`).
@@ -5585,35 +5586,41 @@ each task reviewed, most through one to three fix rounds. The ledger is
   - **L57's gates** (`L57-juniper_vsrx.md:42-49`, `:104`): a group applied at the top is expanded
     under the class, in either order of the two pipes. The inherited capture prints no `set groups`
     and no top-level `apply-groups` line, so a capture holding one is not inherited. A nested group
-    commits and is not expanded and not applied in a session. A class-level `apply-groups` is
-    stripped by inheritance and its group expanded. `apply-groups-except` beside it is stripped too
-    (decision 44 rule 4 amended the spec). A class's own `idle-timeout` stands over a group's.
+    commits and is not expanded and not applied in a session: measured for one shape, the inner
+    group under `<p49-*>` adding `permissions`, applied from a top-level group's definition;
+    other nestings are unmeasured. A class-level `apply-groups` is stripped by inheritance and its
+    group expanded. `apply-groups-except` beside it is stripped too (lab rule 4 amended the
+    spec). A class's own `idle-timeout` stands over a group's.
   - **Group permission beside own** (carry M7): a group's `permissions` lands beside the class's own
-    (`L57-juniper_vsrx.md:112`), so a `view-configuration` from a group is in the reply's bits'
-    reach, not instead of them.
+    (`L57-juniper_vsrx.md:42-43`, the "group permission beside own" column: yes), so a
+    `view-configuration` from a group is in the reply's bits' reach, not instead of them.
 - **Rows:** **L57** and **L58** opened and closed; **L26c** closed, its `op` part included
-  (`op url` and `op ur` refused in all five entry-deny rows, the control running the script; the
-  isolated cells are the operator and admin rows); **L59** opened for what no cell measured.
+  (`op url` and `op ur` refused in the four rows carrying the entry deny and in the narrow
+  readonly, the control running the script; the isolated cells are the operator and admin rows);
+  **L59** opened for what no cell measured.
 - **What a readonly's allows beyond `view` did** (Task 9, `L26c-projected-juniper_*.md`, the
   sections "readonly denying show configuration" and "readonly denying show security"): this is
   what a readonly with a show deny can read.
   - `show log messages | count` ran on both images in every row, the readonly rows included
     (vJunos `:310`, `:383`, `:455`; vSRX `:298`, `:367`, `:439`).
   - `show firewall | no-more` and `show policer | no-more` ran on both images in the same rows
-    (vJunos `:311-312`; vSRX `:299-300`).
+    (vJunos `:311-312`, `:384-385`, `:456-457`; vSRX `:299-300`, `:368-369`, `:440-441`).
   - `show security zones` and `show security policies` ran on vSRX under a deny of `show
     configuration` (`:296-297`) and were refused under a deny of `show security` (`:365-366`). On
     vJunos-router the device refused them in every row, even the undenied readonly's (`:308-309`,
     `:453-454`), so that is the image, not the allow.
   - **`show configuration`, allowed beyond the bits under a deny of `show security`, was refused by
-    the device on both images** (vJunos `:363-367`; vSRX `:347-351`), where `policy test` predicts
-    it runs. The undenied readonly, which gets `view-configuration`, ran it. Fail closed, but it is
-    the open question below.
+    the device on both images** (vJunos `:363-367`; vSRX `:347-351`). `policy test` now predicts
+    the same: it says the device refuses `show configuration` under that reply, and lists no
+    `show log`, `show firewall` or `show policer` shortfall (what port49 sends is unchanged). The
+    undenied readonly, which gets `view-configuration`, ran it. Fail closed, but it is the open
+    question below.
 - **Open question for Ryan:** a readonly with a deny beneath `show` other than `show configuration`
   (`show security **`, say) cannot read `show configuration`, because the allow beyond `view` does
   not take and the reply does not send `view-configuration`. The alternative the ruling set aside is
-  to send `view-configuration` with its other reach denied. Until ruled, `policy test` lists the
-  allow as one the bits do not reach, and the device is narrower than it says.
+  to send `view-configuration` with its other reach denied. Until ruled, `policy test` says the
+  device refuses `show configuration` for that readonly (measured), and lists it among the probe
+  commands the device refuses.
 - **Carried:**
   - **L59's REST cell and its harness item:** the lab's tunnel reached REST in no cell, the
     control's included. The parked fix is binding REST to the management address the tunnel
@@ -5646,18 +5653,19 @@ each task reviewed, most through one to three fix rounds. The ledger is
     operator `**` less `show configuration **` got the fail-closed reply. Under 1.2.0 it gets its
     bits, its denies, and `junoscript` and `op` denied. The CLI deny then holds, and `xml-mode`,
     `junoscript netconf` and NETCONF on port 830 are refused **for that user only**
-    (`L26c-projected-juniper_vsrx.md:93-97`). `policy diff` on the pin move lists each such
-    subject's projection change.
+    (`L26c-junoscript-juniper_vsrx.md:60` for `junoscript netconf`, `L58-juniper_vsrx.md:42` for
+    bare `xml-mode`; vJunos twins). `policy diff` on the pin move lists each such subject's
+    projection change.
   - **A readonly with a show deny now projects.** Under 1.1.0 `show **` less `show configuration
     **` (or less `show security **`, or any deny under `show`) got the fail-closed reply. Under
     1.2.0 it gets `view`, its denies and the baseline's in one regex with `junoscript` (170 bytes
     for the common case), and allows of `show log`, `show firewall` and `show policer`. The CLI
     deny holds; `xml-mode` and NETCONF are refused for that user. `view-configuration` is not sent.
-    `show log messages | count`, `show firewall` and `show policer` ran through the allows on both
-    lab images. Under a deny elsewhere in `show` (`show security **`), `show configuration` does
-    **not** run through its allow: the device refused it on both images, though `policy test` lists
-    it as an allow the bits do not reach. A readonly granted `show **` with no deny renders exactly
-    as under 1.1.0.
+    `show log messages | count`, `show firewall` and `show policer` ran under the reply on both lab
+    images. Under a deny elsewhere in `show` (`show security **`), `show configuration` does
+    **not** run through its allow: the device refused it on both images, and `policy test` says so
+    (it prints that the device refuses it under that reply, and lists it among the probe commands
+    the device refuses). A readonly granted `show **` with no deny renders exactly as under 1.1.0.
   - **Who has NETCONF.** A subject whose grant has no deny beneath its bits (an automation account
     granted everything its level reaches) keeps NETCONF. A subject with any such deny does not.
     `policy test` warns `projection_netconf_closed` for each. An Ansible or PyEZ account that needs
@@ -5685,7 +5693,8 @@ each task reviewed, most through one to three fix rounds. The ledger is
     line with the command to use: change the CI capture command once, fleet-wide.
     `apply-groups-except` is neither a finding nor a sign: beside a class-level `apply-groups`,
     inheritance strips it too. A group applied from inside another group is not expanded and not
-    applied in a session.
+    applied in a session, measured for one shape (the inner group under `<p49-*>` adding
+    `permissions`, applied from a top-level group's definition); other nestings are unmeasured.
   - **Capture over the SSH exec channel, not a terminal session.** Run `ssh <device> 'show
     configuration | display set | display inheritance | no-more'`, which prints no command echo and
     no prompt. check-config refuses any line that is not a statement, the echo and the prompt
@@ -5700,8 +5709,9 @@ each task reviewed, most through one to three fix rounds. The ledger is
     once; different files for one device are each checked. It prints `batch: N configurations
     checked, M failed`, lists the failed files, and exits 1 if any failed.
   - **Management services under 1.2.0.** NETCONF no longer fails check-config. Under `system
-    services`, `netconf`, `ssh` and `telnet` pass with any option, and so do `database-replication`,
-    `dhcp`, `dhcp-local-server`, `dns`, `dynamic-dns`, `finger`, `ftp`, `static-subscribers`,
+    services`, `netconf`, `ssh` (with any option, `sftp-server` included: provisional on L59) and
+    `telnet` pass with any option, and so do `database-replication`, `dhcp`, `dhcp-local-server`,
+    `dns`, `dynamic-dns`, `finger`, `ftp` (provisional on L59), `static-subscribers`,
     `subscriber-management` and `subscriber-management-helper`. Any other service there fails, and
     the finding quotes it: `service-deployment`, `outbound-https`, `tftp-server` or one port49 has
     never heard of. If one of yours serves no management session, report it and it is added with its
