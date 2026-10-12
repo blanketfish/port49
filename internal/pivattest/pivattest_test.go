@@ -373,6 +373,17 @@ func TestParseAnchorsRefusesAnUnterminatedBlock(t *testing.T) {
 	}
 }
 
+func TestParseAnchorsReadsAFileWithAByteOrderMark(t *testing.T) {
+	both, _, _ := yubicoLikeWithIntermediate(t)
+	a, err := ParseAnchors(append([]byte("\xef\xbb\xbf"), both...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Roots.Subjects()) != 1 || len(a.Intermediates.Subjects()) != 1 { //nolint:staticcheck // counting only
+		t.Errorf("roots %d, intermediates %d; want 1 and 1: the first block was dropped", len(a.Roots.Subjects()), len(a.Intermediates.Subjects())) //nolint:staticcheck
+	}
+}
+
 func TestParseAnchors(t *testing.T) {
 	both, _, _ := yubicoLikeWithIntermediate(t)
 	a, err := ParseAnchors(both)

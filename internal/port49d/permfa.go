@@ -15,7 +15,8 @@ const maxAttestationRootsBytes = 1 << 20
 
 // loadPerLoginMFA is broker.identity.per_login_mfa resolved for the broker
 // (plan 9c; decision 45), or nil when none is configured. A roots file that
-// cannot be read, holds no PEM, or holds no self-signed root never refuses
+// cannot be read, holds no PEM, holds a block that is not a certificate or is
+// not terminated or well formed, or holds no self-signed root never refuses
 // the start: hardware_key_touch is then unavailable, one line names the
 // file, and a mint under a requirement that accepts it alone is answered
 // per_login_mfa_unavailable rather than a broker that will not start.

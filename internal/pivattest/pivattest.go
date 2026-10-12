@@ -71,6 +71,9 @@ type Anchors struct{ Roots, Intermediates *x509.CertPool }
 func ParseAnchors(b []byte) (Anchors, error) {
 	a := Anchors{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
 	roots, blocks := 0, 0
+	// A file saved with a UTF-8 byte order mark would hide its first BEGIN
+	// line from pem.Decode, and that block would be dropped without a word.
+	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
 	rest := b
 	for {
 		var blk *pem.Block
