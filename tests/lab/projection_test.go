@@ -79,11 +79,14 @@ var projectionProbes = []projectionProbe{
 	{junosProbe{cmd: "restart routing", complete: true}, "restart routing"},
 	// The readings (projectionReadings): what a readonly's grant deny and its
 	// allows beyond `view` do on the device.
-	{junosProbe{cmd: "show security zones"}, "show security zones"},
-	{junosProbe{cmd: "show security policies"}, "show security policies"},
-	{junosProbe{cmd: "show log messages"}, "show log messages"},
-	{junosProbe{cmd: "show firewall"}, "show firewall"},
-	{junosProbe{cmd: "show policer"}, "show policer"},
+	// Each is typed `| no-more`: a session without `set cli screen-length 0`
+	// (the narrow readonly's) pages a long output, and the next probe's first
+	// letter would go to the pager (HALT 2: `show log messages` is 1050 lines).
+	{junosProbe{cmd: "show security zones | no-more"}, "show security zones"},
+	{junosProbe{cmd: "show security policies | no-more"}, "show security policies"},
+	{junosProbe{cmd: "show log messages | no-more"}, "show log messages"},
+	{junosProbe{cmd: "show firewall | no-more"}, "show firewall"},
+	{junosProbe{cmd: "show policer | no-more"}, "show policer"},
 	// Configuration mode, typed last: a statement there is governed by the
 	// class's configuration permissions, which no command regex reaches.
 	{junosProbe{cmd: "configure"}, "configure"},
@@ -99,8 +102,8 @@ var projectionProbes = []projectionProbe{
 // recorded in the note as the device's shortfall, not a failure. A device that
 // runs what port49 denies, or what the model says it refuses, still fails.
 var projectionReadings = map[string]bool{
-	"show security zones": true, "show security policies": true, "show log messages": true,
-	"show firewall": true, "show policer": true,
+	"show security zones | no-more": true, "show security policies | no-more": true, "show log messages | no-more": true,
+	"show firewall | no-more": true, "show policer | no-more": true,
 }
 
 // upperCaseTyped reports whether cmd was typed with an upper-case letter. The

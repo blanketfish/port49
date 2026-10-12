@@ -35,6 +35,31 @@ func TestUpperCaseTyped(t *testing.T) {
 	}
 }
 
+// TestJunosPaged pins the pager matcher, and that every reading probe is
+// typed `| no-more`.
+func TestJunosPaged(t *testing.T) {
+	if !junosPaged("Filename: how firewall\nWrote 1050 lines of output to 'how firewall'\n---(more 18%)---") {
+		t.Error("the pager prompt was not read")
+	}
+	if junosPaged("srx> show version\nHostname: x\nsrx> ") {
+		t.Error("an output with no pager prompt was read as paged")
+	}
+	for _, p := range projectionProbes {
+		if projectionReadings[p.cmd] && !strings.HasSuffix(p.cmd, " | no-more") {
+			t.Errorf("reading probe %q is not typed | no-more", p.cmd)
+		}
+	}
+	for cmd := range projectionReadings {
+		found := false
+		for _, p := range projectionProbes {
+			found = found || p.cmd == cmd
+		}
+		if !found {
+			t.Errorf("projectionReadings names %q, which no probe types", cmd)
+		}
+	}
+}
+
 // TestProjectionShapes120Render runs without a device: each row of
 // projectionShapes120 renders, from this branch's code and the lab inventory,
 // the shape its `want` names, so the differential's run is not wasted on a row
