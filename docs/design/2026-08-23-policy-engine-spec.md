@@ -3972,8 +3972,8 @@ NETCONF per user (port 830 measured; the port-22 subsystem measured,
 longer requires it off, and it is a shorter allowlist. Under `system services` it passes
 `netconf`, `ssh` and `telnet` with any statement beneath them, and these services, which serve no
 management session (Junos's `[edit system services]` hierarchy): `database-replication`, `dhcp`,
-`dhcp-local-server`, `dns`, `dynamic-dns`, `finger`, `ftp`, `static-subscribers`, `subscriber-management` and `subscriber-management-helper`. Any other
-statement there fails, the finding quoting it. That covers a service no one listed, such as
+`dhcp-local-server`, `dns`, `dynamic-dns`, `finger`, `ftp`, `static-subscribers`,
+`subscriber-management` and `subscriber-management-helper`. Any other statement there fails, the finding quoting it. That covers a service no one listed, such as
 `service-deployment` (which speaks the JUNOScript XML API), `outbound-https`, `grpc-tunnel` or
 `tftp-server`, and a name the list does not know: an allowlist does not fail open on a statement
 nobody listed (plan 5b pre-flight C1). Anywhere in the hierarchy it still fails

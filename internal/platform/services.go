@@ -162,9 +162,8 @@ var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "
 // Session Database)",
 // .../statement/database-replication-edit-system-services.html, read
 // 2026-10-12); dhcp and dhcp-local-server serve addresses; dns is a DNS
-// proxy and dynamic-dns a
-// client updating one; finger answers who is logged in; ftp serves files
-// to a user who logs in; static-subscribers, subscriber-management and
+// proxy and dynamic-dns a client updating one; finger answers who is logged
+// in; ftp serves files to a user who logs in; static-subscribers, subscriber-management and
 // subscriber-management-helper run broadband subscriber sessions. Whether a
 // `show configuration` deny holds against a file read of /config through
 // ftp, or ssh's sftp-server, is unmeasured (L59, open). The hierarchy's
