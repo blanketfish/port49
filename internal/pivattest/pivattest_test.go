@@ -348,6 +348,31 @@ func TestParseAnchorsRefusesCertificateDERInAKeyBlock(t *testing.T) {
 	}
 }
 
+// A BEGIN line with no matching END is refused with an error that names the
+// problem and none of the block's contents, rather than dropped silently:
+// the certificates before it would otherwise stand as the whole bundle.
+func TestParseAnchorsRefusesAnUnterminatedBlock(t *testing.T) {
+	both, _, _ := yubicoLikeWithIntermediate(t)
+	const secret = "c2VjcmV0LWJvZHktbWFya2Vy"
+	for name, in := range map[string][]byte{
+		"after the certificates": append(append([]byte{}, both...),
+			[]byte("-----BEGIN CERTIFICATE-----\n"+secret+"\n")...),
+		"before the certificates": append([]byte("-----BEGIN CERTIFICATE-----\n"+secret+"\n"), both...),
+	} {
+		_, err := ParseAnchors(in)
+		if err == nil {
+			t.Errorf("%s: an unterminated block was dropped silently", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not terminated") {
+			t.Errorf("%s: error %q does not name the problem", name, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: error carries the block's contents: %q", name, err)
+		}
+	}
+}
+
 func TestParseAnchors(t *testing.T) {
 	both, _, _ := yubicoLikeWithIntermediate(t)
 	a, err := ParseAnchors(both)

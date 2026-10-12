@@ -66,10 +66,11 @@ type Anchors struct{ Roots, Intermediates *x509.CertPool }
 // (comments before, between or after) is ignored, as openssl does, so a note
 // appended to the bundle cannot take hardware_key_touch away fleet-wide. A PEM
 // block that is not a CERTIFICATE is an error, and so are a certificate that
-// does not parse and a bundle with no self-signed root.
+// does not parse, a BEGIN line with no END, and a bundle with no self-signed
+// root.
 func ParseAnchors(b []byte) (Anchors, error) {
 	a := Anchors{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
-	roots := 0
+	roots, blocks := 0, 0
 	rest := b
 	for {
 		var blk *pem.Block
@@ -77,6 +78,7 @@ func ParseAnchors(b []byte) (Anchors, error) {
 		if blk == nil {
 			break
 		}
+		blocks++
 		if blk.Type != "CERTIFICATE" {
 			return Anchors{}, fmt.Errorf("pivattest: anchors hold a %q block, not a certificate", blk.Type)
 		}
@@ -90,6 +92,13 @@ func ParseAnchors(b []byte) (Anchors, error) {
 		} else {
 			a.Intermediates.AddCert(c)
 		}
+	}
+	// pem.Decode steps over a BEGIN line with no matching END, as it does
+	// over any text, so a truncated block would be dropped without a word.
+	// More BEGIN lines than blocks decoded is that block; its contents are
+	// not echoed.
+	if bytes.Count(append([]byte("\n"), b...), []byte("\n-----BEGIN ")) > blocks {
+		return Anchors{}, errors.New("pivattest: anchors hold a PEM block that is not terminated or not well formed")
 	}
 	if roots == 0 {
 		return Anchors{}, errors.New("pivattest: anchors hold no self-signed root certificate")
