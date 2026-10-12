@@ -111,6 +111,9 @@ type composition struct {
 	attached map[string][]string // role → the scopes that attached it, for explain
 	level    string
 	ceiling  string
+	// scopes names every scope that selects the device, sorted, grant or not:
+	// a scope carries a per-login level wherever it selects (spec §5.1.5).
+	scopes []string
 	// incomparable names every selecting scope that selected the device only
 	// because a version could not be compared (spec §5.5: reported, never
 	// silent).
@@ -211,6 +214,7 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 		if !ok {
 			continue
 		}
+		c.scopes = append(c.scopes, name)
 		if byIncomparable && (len(s.Attached[sub.Domain]) > 0 || c.grantsOn(name)) {
 			c.incomparable = append(c.incomparable, name)
 		}

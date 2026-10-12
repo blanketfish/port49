@@ -348,6 +348,10 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 				line += ", api " + yamlList(out.values, r.API)
 				want = append(want, "api "+yamlList(out.values, r.Test.API))
 			}
+			if r.Test.MFA != nil {
+				line += ", per_login_mfa " + r.PerLoginMFA.String()
+				want = append(want, "per_login_mfa "+r.Test.MFA.String())
+			}
 			line += ", want " + strings.Join(want, " ")
 		}
 		fmt.Fprintln(stdout, line)
@@ -405,7 +409,8 @@ func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) 
 // change and exits 1 on a command the old version refused (by a deny, at a
 // pipeline stage, or by quarantining the device) that the new version
 // permits and no policy test in it exercises, on a level or ceiling raise no
-// session test in it asserts, on a regex-constrained widening no policy test
+// session test in it asserts, on a per_login_mfa weakening no session test in it
+// asserts (spec §5.1.5), on a regex-constrained widening no policy test
 // in it exercises, on a principal who gains a subject or a username change no
 // principal session test in it asserts, on a device the new version quarantines for a
 // new cause, on a subject whose mint the new version's
@@ -588,6 +593,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
 			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
+	// A change to what a login is asked for (spec §5.1.5): a weakening no
+	// session test asserts fails like a privilege raise, a tightening only
+	// prints (decision 45 ruling 24).
+	for _, m := range d.MFA {
+		fmt.Fprintln(stdout, m.Line(from(m.At)))
+	}
 	for _, pc := range d.Projections {
 		fmt.Fprintf(stdout, "projection: %s on %s%s: %s -> %s (spec §8; the reply gate above judges it)%s\n",
 			pc.Subject, strings.Join(pc.Devices, ", "), from(pc.At), projectionText(pc.OldShape, pc.OldBits,
@@ -662,16 +673,18 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "REFUSED: %s: %s\n", f.Kind, f.Message)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
+		"%d unacknowledged privilege raises; %d unacknowledged per_login_mfa weakenings; %d unacknowledged "+
+		"regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
 		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals; %d devices newly refused "+
 		"admission\n", len(d.Changes), widen, narrow,
-		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(),
+		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedMFA(), d.UnacknowledgedRegex(),
+		d.UnacknowledgedPrincipals(),
 		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters(),
 		len(d.ProjectionRefusals), len(newlyRefused))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
-		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
-		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 {
+		d.UnacknowledgedMFA() > 0 || d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 ||
+		len(d.Unresolved) > 0 || d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 {
 		return 1
 	}
 	return 0
@@ -901,8 +914,16 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "no grant rows: the subject reaches no device; `port49 grants remove` deletes the block")
 		return 0
 	}
+	// The per-login levels each row carries, shown only where some row has
+	// one: where a requirement is written (spec §5.1.5). The effective
+	// requirement is per device, and `port49 explain` prints it.
+	withMFA := slices.ContainsFunc(rows, func(r policy.ReviewRow) bool { return len(r.PerLoginMFA) > 0 })
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SCOPE\tROLES\tMAX_PRIVILEGE\tEXPIRES\tDEVICES")
+	header := "SCOPE\tROLES\tMAX_PRIVILEGE\tEXPIRES\tDEVICES"
+	if withMFA {
+		header += "\tPER_LOGIN_MFA"
+	}
+	fmt.Fprintln(tw, header)
 	for _, r := range rows {
 		ceiling, expires := r.MaxPrivilege, "never"
 		if ceiling == "" {
@@ -914,7 +935,19 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 				expires += " (expired)"
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", r.Scope, strings.Join(r.Roles, " "), ceiling, expires, r.Devices)
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%d", r.Scope, strings.Join(r.Roles, " "), ceiling, expires, r.Devices)
+		if withMFA {
+			levels := make([]string, len(r.PerLoginMFA))
+			for i, l := range r.PerLoginMFA {
+				names := make([]string, len(l.Accept))
+				for j, m := range l.Accept {
+					names[j] = string(m)
+				}
+				levels[i] = fmt.Sprintf("%s [%s]", l.Level, strings.Join(names, " "))
+			}
+			line += "\t" + orNone(strings.Join(levels, "; "))
+		}
+		fmt.Fprintln(tw, line)
 	}
 	tw.Flush()
 	return 0

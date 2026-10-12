@@ -513,6 +513,7 @@ func (e Explanation) render(w io.Writer, attributes bool) {
 	default:
 		fmt.Fprintf(w, "  session     max_session_age %s (the least of its roles')\n", a.Least)
 	}
+	fmt.Fprintf(w, "%s\n", r.PerLoginMFA.explainLine())
 	for _, s := range r.Incomparable {
 		fmt.Fprintf(w, "  scope       %s selected this device because its version could not be compared (spec §5.5)\n", s)
 	}

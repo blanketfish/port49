@@ -14,6 +14,7 @@ import (
 // because an ignored key is a policy that reads one way and runs another.
 type file struct {
 	PlatformSet     string                  `yaml:"platform_set"`
+	Defaults        *fileDefaults           `yaml:"defaults"`
 	Platforms       map[string]filePlatform `yaml:"platforms"`
 	PrivilegeLevels []fileLevel             `yaml:"privilege_levels"`
 	Scopes          []fileScope             `yaml:"scopes"`
@@ -70,6 +71,7 @@ type fileScope struct {
 	OnMissing     string                `yaml:"on_missing"`
 	SecurityLog   bool                  `yaml:"security_log"`
 	AttachedRoles fileAttached          `yaml:"attached_roles"`
+	PerLoginMFA   *fileMFA              `yaml:"per_login_mfa"`
 }
 
 type fileAttached struct {
@@ -87,7 +89,8 @@ type fileRole struct {
 	Attributes map[string][]string `yaml:"attributes"`
 	// MaxSessionAge is a pointer, so an absent key (nil) is told from an
 	// explicit empty one, which is refused.
-	MaxSessionAge *string `yaml:"max_session_age"`
+	MaxSessionAge *string  `yaml:"max_session_age"`
+	PerLoginMFA   *fileMFA `yaml:"per_login_mfa"`
 }
 
 type filePipe struct {
@@ -133,6 +136,29 @@ type fileTest struct {
 	Reply *[]string `yaml:"reply"`
 	// API is the subject's broker API rights, in any order.
 	API *[]string `yaml:"api"`
+	// PerLoginMFA is the effective per-login requirement on the device:
+	// `none`, or {accept, reuse_for} (spec §5.1.5).
+	PerLoginMFA *fileTestMFA `yaml:"per_login_mfa"`
+}
+
+func (m *fileTestMFA) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		if n.Value != "none" {
+			return fmt.Errorf("line %d: per_login_mfa is none or {accept: [...], reuse_for: ...}", n.Line)
+		}
+		m.None = true
+		return nil
+	}
+	var keys map[string]any
+	if err := n.Decode(&keys); err != nil {
+		return err
+	}
+	for key := range keys {
+		if key != "accept" && key != "reuse_for" {
+			return fmt.Errorf("line %d: a per_login_mfa assertion takes accept and reuse_for", n.Line)
+		}
+	}
+	return n.Decode(&m.fileMFA)
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one

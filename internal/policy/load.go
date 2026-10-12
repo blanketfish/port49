@@ -116,6 +116,9 @@ type Policy struct {
 	hiddenOnce   sync.Once
 	hiddenValues []string
 
+	// defaults is the level that applies on every device (spec §5.1.5).
+	defaults struct{ PerLoginMFA *PerLoginMFA }
+
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
 	scopes  map[string]*Scope
@@ -158,6 +161,9 @@ type Scope struct {
 	// onMissingDeclared is whether the file wrote on_missing rather than
 	// taking the default, which a deny-bearing scope must (spec §5.5).
 	onMissingDeclared bool
+	// PerLoginMFA is the scope's per-login requirement, nil for none (spec
+	// §5.1.5).
+	PerLoginMFA *PerLoginMFA
 }
 
 // Role is a named set of rules, an optional level, and attributes (spec §6).
@@ -173,6 +179,9 @@ type Role struct {
 	// event under this role (spec §5.6): nil names none, and the role takes
 	// session.max_session_age_default; zero is `never`.
 	MaxSessionAge *time.Duration
+	// PerLoginMFA is the role's per-login requirement, nil for none (spec
+	// §5.1.5).
+	PerLoginMFA *PerLoginMFA
 }
 
 // Subject addresses a set of principals (spec §2).
@@ -233,6 +242,9 @@ type Test struct {
 	// one (spec §12).
 	API        []string
 	AssertsAPI bool
+	// MFA is the per-login requirement the test asserts, nil asserting
+	// nothing (spec §12).
+	MFA *MFAAssertion
 }
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
@@ -326,7 +338,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	for _, d := range env.Devices {
 		p.devIndex[d.Name] = d
 	}
-	for _, step := range []func(file) error{p.buildPlatforms, p.buildKeyGroups, p.admit, p.buildLevels, p.checkBlockOrder, p.buildRoles, p.buildScopes, p.buildSubjects,
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildKeyGroups, p.admit, p.buildLevels, p.checkBlockOrder, p.buildDefaults, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -361,10 +373,40 @@ var (
 func refusedKeys(raw []byte) error {
 	var loose struct {
 		Roles     []map[string]any `yaml:"roles"`
+		Scopes    []map[string]any `yaml:"scopes"`
+		Defaults  map[string]any   `yaml:"defaults"`
 		Platforms map[string]any   `yaml:"platforms"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
 		return nil // the strict decode reports it, with a line number
+	}
+	// A per_login_mfa key the file misspells, or writes as another word for
+	// the same ask (`mfa: required`), is named: the strict decode says only
+	// the type (spec §5.1.5; decision 45 ruling 10).
+	for _, key := range sortedKeys(loose.Defaults) {
+		if key != "per_login_mfa" {
+			return fmt.Errorf("defaults: %q is not a key; defaults takes per_login_mfa alone, and a requirement is "+
+				"never spelled mfa: required (spec §5.1.5)", key)
+		}
+	}
+	if v, ok := loose.Defaults["per_login_mfa"]; ok {
+		if err := checkMFAKeys("defaults", v); err != nil {
+			return err
+		}
+	}
+	for i, r := range loose.Roles {
+		if v, ok := r["per_login_mfa"]; ok {
+			if err := checkMFAKeys(fmt.Sprintf("roles[%d]", i), v); err != nil {
+				return err
+			}
+		}
+	}
+	for i, s := range loose.Scopes {
+		if v, ok := s["per_login_mfa"]; ok {
+			if err := checkMFAKeys(fmt.Sprintf("scopes[%d]", i), v); err != nil {
+				return err
+			}
+		}
 	}
 	// A block key written with no value, or null, decodes as unset and
 	// inherits the set's value: it reads as set and means the opposite
@@ -391,6 +433,36 @@ func refusedKeys(raw []byte) error {
 		}
 	}
 	return nil
+}
+
+// checkMFAKeys refuses a per_login_mfa block that is null, which would read as
+// set and mean no requirement, and any key it does not take.
+func checkMFAKeys(at string, v any) error {
+	if v == nil {
+		return fmt.Errorf("%s: per_login_mfa is null: give it accept, or remove the key for no requirement (spec §5.1.5)", at)
+	}
+	block, ok := v.(map[string]any)
+	if !ok {
+		return nil // the strict decode reports it, with a line number
+	}
+	for _, key := range sortedKeys(block) {
+		if key != "accept" && key != "reuse_for" && key != "applies_to_machines" {
+			return fmt.Errorf("%s: per_login_mfa.%s is not a key; the keys are accept, reuse_for and "+
+				"applies_to_machines (spec §5.1.5)", at, key)
+		}
+	}
+	return nil
+}
+
+// buildDefaults reads the `defaults:` block, the per-login level that applies
+// on every device (spec §5.1.5).
+func (p *Policy) buildDefaults(f file) error {
+	if f.Defaults == nil {
+		return nil
+	}
+	m, err := parseMFA("defaults: per_login_mfa", f.Defaults.PerLoginMFA)
+	p.defaults.PerLoginMFA = m
+	return err
 }
 
 // buildPlatforms resolves the platform set the policy pins, or UnpinnedSet
@@ -1001,6 +1073,10 @@ func (p *Policy) buildRoles(f file) error {
 		if err := p.checkAttributes(r.Attributes); err != nil {
 			return fmt.Errorf("role %q: %w", r.Name, err)
 		}
+		var err error
+		if role.PerLoginMFA, err = parseMFA(fmt.Sprintf("role %q: per_login_mfa", r.Name), r.PerLoginMFA); err != nil {
+			return err
+		}
 		p.roles[r.Name] = role
 	}
 	return nil
@@ -1186,6 +1262,12 @@ func (p *Policy) inInventory(platformName string) bool {
 	return false
 }
 
+// pinnedByName reports whether name is a scope's only match key.
+func pinnedByName(match map[string]matchValue) bool {
+	_, ok := match["name"]
+	return ok && len(match) == 1
+}
+
 func (p *Policy) buildScopes(f file) error {
 	p.scopes = map[string]*Scope{}
 	for i, s := range f.Scopes {
@@ -1251,6 +1333,25 @@ func (p *Policy) buildScopes(f file) error {
 			sc.OnMissing = "exclude"
 		default:
 			return fmt.Errorf("scope %q: on_missing is include or exclude", s.Name)
+		}
+		var err error
+		if sc.PerLoginMFA, err = parseMFA(fmt.Sprintf("scope %q: per_login_mfa", s.Name), s.PerLoginMFA); err != nil {
+			return err
+		}
+		// A requirement on devices chosen by an attribute is lifted by whoever
+		// edits the attribute: on_missing is a restriction, read as a deny is
+		// (spec §5.5), and security_log says so. A scope pinned by name alone
+		// has neither problem: name is always present, and a scope with no
+		// match selects every device (decision 45 ruling 11).
+		if sc.PerLoginMFA != nil && len(s.Match) > 0 && !pinnedByName(s.Match) {
+			switch {
+			case !sc.onMissingDeclared:
+				return fmt.Errorf("scope %q carries per_login_mfa: declare on_missing (a restriction, read as a deny "+
+					"is: a device with no value for the match is, with include, held to it; spec §5.5)", s.Name)
+			case !s.SecurityLog:
+				return fmt.Errorf("scope %q carries per_login_mfa: declare security_log: true, so the log says who "+
+					"edits an attribute that lifts the requirement (spec §5.1.5)", s.Name)
+			}
 		}
 		p.scopes[s.Name] = sc
 	}
@@ -1543,9 +1644,9 @@ func (p *Policy) buildTests(f file) error {
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
 		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" &&
-			t.Enable == "" && t.Reply == nil && t.API == nil:
+			t.Enable == "" && t.Reply == nil && t.API == nil && t.PerLoginMFA == nil:
 			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl, enable, "+
-				"reply or api", row)
+				"reply, api or per_login_mfa", row)
 		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
@@ -1589,6 +1690,16 @@ func (p *Policy) buildTests(f file) error {
 			}
 			test.API, test.AssertsAPI = slices.Clone(*t.API), true
 			slices.Sort(test.API)
+		}
+		if t.PerLoginMFA != nil {
+			test.MFA = &MFAAssertion{None: t.PerLoginMFA.None}
+			if !t.PerLoginMFA.None {
+				m, err := parseMFA(row+": per_login_mfa", &t.PerLoginMFA.fileMFA)
+				if err != nil {
+					return err
+				}
+				test.MFA.Accept, test.MFA.ReuseFor = m.Accept, m.ReuseFor
+			}
 		}
 		p.tests = append(p.tests, test)
 	}

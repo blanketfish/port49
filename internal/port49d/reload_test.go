@@ -925,6 +925,114 @@ const withoutGroups = `devices:
 
 const policyWithGroups = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n"
 
+// mfaReloadPolicy: roles asking idp_mfa and a core scope asking
+// hardware_key_touch share no method on a device with tier: core; on any other
+// they compose (no scope asks there). bob's grant is the unrelated one a later
+// edit revokes.
+const mfaReloadPolicy = `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: core, match: {tier: core}, on_missing: include, security_log: true,
+     per_login_mfa: {accept: [hardware_key_touch]}}
+roles:
+  - {name: r, privilege: admin, permit: ["**"], per_login_mfa: {accept: [idp_mfa]}}
+  - {name: ro, privilege: readonly, permit: ["show **"], per_login_mfa: {accept: [idp_mfa]}}
+subjects:
+  - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
+  - {name: b, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [r]}
+  - {subject: b, scope: all_devices, roles: [ro]}
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`
+
+// mfaInventory is two devices; leaf1's tier is the argument.
+func mfaInventory(leaf1Tier, leaf2Tier, third string) string {
+	return "devices:\n" +
+		"  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1], attributes: {tier: " + leaf1Tier + "}}\n" +
+		"  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2], attributes: {tier: " + leaf2Tier + "}}\n" + third
+}
+
+// An inventory sync that moves a device into a tier whose levels share no
+// method is applied, and the device is quarantined with that cause: a
+// source-of-truth edit never freezes the fleet's inventory. A policy edit that
+// makes another device disjoint is refused, the bundle in force kept. Then,
+// with the first device still quarantined over it, an unrelated policy edit
+// (a grant revoked) loads: an entry already in force freezes no edit (decision
+// 45 ruling 11; pre-flight I4; re-review R5).
+func TestAnMFADisjointInventoryEditQuarantinesAndAPolicyEditIsRefused(t *testing.T) {
+	rig := newReloadRig(t, mfaReloadPolicy)
+	rig.r.cfg.MaxRemovedPercent = 100 // a quarantine of one device of three is not what this test is about
+	rig.writeInventory(t, mfaInventory("edge", "edge", ""))
+	rig.pollTwice()
+	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); q || rig.b.Policy.Load().MFADisjoint() != nil {
+		t.Fatal("leaf1 is quarantined before any edit")
+	}
+	// The sync moves leaf1 to tier core and adds leaf3, served.
+	rig.writeInventory(t, mfaInventory("core", "edge", "  - {name: leaf3, platform: arista_eos, addresses: [10.0.0.3], attributes: {tier: edge}}\n"))
+	rig.pollTwice()
+	pol := rig.b.Policy.Load()
+	cause, q := pol.Quarantined("leaf1", rig.now)
+	if !q || !strings.Contains(cause, "per_login_mfa") || !strings.Contains(cause, "scope core") {
+		t.Fatalf("leaf1 was not quarantined over per_login_mfa: %q, %v\n%s", cause, q, rig.out.String())
+	}
+	if _, ok := pol.Device("leaf3"); !ok {
+		t.Fatal("the inventory edit was not applied: leaf3 is not in force")
+	}
+	if _, q := pol.Quarantined("leaf3", rig.now); q || testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("leaf3 quarantined, or an alarm is up:\n%s", rig.out.String())
+	}
+	// A policy edit that makes leaf2 (tier edge) disjoint too: refused.
+	before := pol.Source
+	disjointEdge := strings.Replace(mfaReloadPolicy, "  - {name: core, match: {tier: core}",
+		"  - {name: edge, match: {tier: edge}, on_missing: include, security_log: true,\n"+
+			"     per_login_mfa: {accept: [hardware_key_touch]}}\n  - {name: core, match: {tier: core}", 1)
+	swapTo(t, rig, disjointEdge)
+	if rig.b.Policy.Load().Source != before {
+		t.Fatalf("a policy edit that quarantines leaf2 over per_login_mfa was applied:\n%s", rig.out.String())
+	}
+	if testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 || !strings.Contains(rig.out.String(), "per_login_mfa") {
+		t.Fatalf("port49_policy_file_refused is not 1, or the line does not name per_login_mfa:\n%s", rig.out.String())
+	}
+	// An unrelated edit, bob's grant revoked, loads with leaf1 quarantined.
+	revoked := strings.Replace(mfaReloadPolicy, "  - {subject: b, scope: all_devices, roles: [ro]}\n", "", 1)
+	swapTo(t, rig, revoked)
+	pol = rig.b.Policy.Load()
+	if pol.Source == before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("an unrelated edit was refused because leaf1 is quarantined over per_login_mfa:\n%s", rig.out.String())
+	}
+	if _, q := pol.Quarantined("leaf1", rig.now); !q {
+		t.Fatal("leaf1 is no longer quarantined")
+	}
+}
+
+// A policy and inventory changed together (loadBoth): the inventory moves
+// leaf1 to tier core, which the policy in force already makes disjoint, and
+// the policy revokes an unrelated grant, moving the key group with the
+// re-address. Judged against the in-force policy over the new inventory, which
+// has leaf1's entry already, it is applied (re-review R5).
+func TestAnMFAEntryAlreadyInForceIsNoNewEntryToLoadBoth(t *testing.T) {
+	rig := newReloadRig(t, mfaReloadPolicy)
+	rig.r.cfg.MaxRemovedPercent = 100
+	rig.writeInventory(t, mfaInventory("edge", "edge", ""))
+	rig.pollTwice()
+	moved := strings.Replace(mfaReloadPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1)
+	moved = strings.Replace(moved, "  - {subject: b, scope: all_devices, roles: [ro]}\n", "", 1)
+	rig.write(t, moved)
+	rig.writeInventory(t, strings.ReplaceAll(mfaInventory("core", "edge", ""), "10.0.0.", "11.0.0."))
+	rig.sighupWithBound(t, 100)
+	out := rig.out.String()
+	if !strings.Contains(out, "port49d: policy and inventory reloaded together (SIGHUP)") ||
+		strings.Contains(out, " refused; ") || strings.Contains(out, "refused together") ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("%s", out)
+	}
+	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); !q {
+		t.Fatal("leaf1 is not quarantined over per_login_mfa")
+	}
+}
+
 func (rig *reloadRig) writeInventory(t *testing.T, body string) {
 	t.Helper()
 	if err := os.WriteFile(rig.cfg.InventoryFile, []byte(body), 0o600); err != nil {

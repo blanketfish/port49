@@ -31,9 +31,13 @@ import (
 // subject whose mint the new version's broker refuses where the old did not;
 // and every composition that would not resolve.
 type Diff struct {
-	Changes     []Change
-	Access      []AccessChange
-	Levels      []LevelChange
+	Changes []Change
+	Access  []AccessChange
+	Levels  []LevelChange
+	// MFA are the changes to a subject's effective per-login requirement
+	// (spec §5.1.5, §12); a weakening no session test asserts fails the gate
+	// as a privilege raise does (decision 45 ruling 24).
+	MFA         []MFAChange
 	Regex       []RegexChange
 	Quarantined []Quarantine
 	Released    []Release
@@ -684,6 +688,7 @@ func (c *comparison) at(at time.Time) {
 					Detail: detail})
 			}
 		}
+		c.mfa(subject, at)
 	}
 }
 
@@ -1099,6 +1104,9 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 			subject := r.Test.Subject
 			if subject == "" {
 				subject = p.byID[r.Test.Principal]
+			}
+			if r.Test.MFA != nil {
+				acks[mfaAckKey(at, subject, r.Test.Device, r.PerLoginMFA)] = true
 			}
 			for field, asserted := range map[string]bool{"level": r.Test.Level != "",
 				"max_privilege": r.Test.MaxPrivilege != "", "priv_lvl": r.Test.PrivLvl != "", "enable": r.Test.Enable != "",
