@@ -49,9 +49,11 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   system login | display inheritance`, which names the group; harmless statements and
   `apply-groups-except` pass. A capture with a `set groups` line, or `apply-groups` as a word at
   any level, was taken without `display inheritance` and is refused at that line. Under set
-  1.2.0 the services check drops NETCONF, every non-RPC service and the ssh option list;
-  `rest`, `web-management`, `extension-service`, the XML API (`xnm-*`) and `outbound-ssh` still
-  fail until a lab cell measures the deny closing each. `--batch FILE...` checks many captures.
+  1.2.0 the services check is a shorter allowlist: `netconf`, `ssh` and `telnet` with any
+  statement, and the named non-RPC services (`entryServices`, Task 7b); anything else under
+  `system services` fails, and `rest`, `web-management`, `extension-service`, the XML API
+  (`xnm-*`) and `outbound-ssh` fail anywhere until a lab cell measures the deny closing each.
+  `--batch FILE...` checks many captures.
 - **Lab:** Task 3 (before code) measures the other ways in under `deny junoscript`, the group
   inheritance, and `save` and bare `xml-mode` under the factored deny (new row L58, closed there);
   Task 9 (after code) runs the projection differential under set 1.2.0 and check-config on the
@@ -129,8 +131,9 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
    cell measures J-Web or JET, so those two always fail; REST is G2's (Task 3).
 2. **The allowlist for statements under a template stands** (R4, decision 44 ruling 9): anything
    neither privilege nor known-harmless fails.
-3. **Verifying the capture is inherited stands** (R5): a capture missing an applied group's
-   expansion is refused.
+3. **Superseded by ruling 5.** ~~Verifying the capture is inherited stands (R5): a capture missing
+   an applied group's expansion is refused.~~ The inherited capture prints no `apply-groups` line
+   to verify against (L57), so a capture is refused only where it holds a group line.
 4. **`op **` joins `rpc_entry_denies` only if cell (b) shows an `op url` script reaching an RPC
    past the `junoscript` deny** (G1 reads "reached" and nothing else; the op cell's control is
    canonical, so "not measured" ends the run INVALID instead of deciding the list).
@@ -143,6 +146,20 @@ with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the la
    check and the services check alike. R5's verification and naming, and the old Task 7's
    `applications`, `appliesAt`, `nestedApplies` and `groupWord`, are gone. Under set 1.2.0 the
    XML API and `outbound-ssh` still fail (ruling 6 as it now stands, superseding R3's list).
+6. **Under set 1.2.0 the services check is an allowlist** (2026-10-12, on the plan-rewrite
+   review's I4; Task 7b). Task 7 shipped a denylist under 1.2.0: only the seven
+   `rpcPastEntryDeny` words fail, so an RPC service nobody listed passes
+   (`service-deployment`, which speaks the JUNOScript XML API, passed with no finding). R3 and
+   ruling 2 hold the allowlist principle: an unlisted thing fails, never passes. Under 1.2.0
+   `netconf`, `ssh` and `telnet` pass with any statement beneath them, and so do the named
+   non-RPC services of `entryServices`; anything else under `system services` fails, naming the
+   statement, and the `rpcPastEntryDeny` words still fail anywhere. The owner's "drop the
+   NETCONF-off requirement" is kept: `netconf` passes. Cost if wrong: a finding on a benign
+   unlisted service, visible, and fixed by adding it to the list with its source.
+7. **Task 9 closes only what it measures** (2026-10-12, review I1–I3). The REST, XML API,
+   `outbound-ssh` and `scp` cells, and L26c's own "with the NETCONF service off" `xml-mode`
+   cell, are measured by no Task 9 step. They move to a new open row, L59, and every
+   *provisional on L26c* marker on them is re-pointed to L59, not removed.
 
 ## Rulings this plan makes (recorded as decision 44 in Task 1)
 
@@ -150,8 +167,10 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 
 - **R1 (data: `L26c-junoscript-juniper_*.md`).** The entry deny is adapter data, `rpc_entry_denies`,
   in a new set 1.2.0, not a change to `JunosFacts`: spec §8 forbids a binary upgrade changing what
-  a pinned policy renders. A block may drop an entry deny (that platform then renders as 1.1.0)
-  and never add one the set did not measure, the rule `carve_outs` already has.
+  a pinned policy renders. A block keeps the whole list or drops it with `[]` (that platform then
+  renders as 1.1.0); a partial list is refused at load, since `op url` reaches past the
+  `junoscript` deny alone (Task 5's R-I1; spec §8 Fields table, decision 44 ruling 5). It never
+  adds one the set did not measure, the rule `carve_outs` already has.
 - **R2.** Ryan's ruling names `junoscript`. Cell (b) decides `op`: if an `op url` script reaches an
   RPC past the `junoscript` deny, set 1.2.0's list is `["junoscript **", "op **"]`. Denying `op`
   to a subject port49 permits it is narrower, which is always allowed, and the report says so;
@@ -166,6 +185,8 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   `outbound-ssh` (NETCONF dialled out under the same login), each *provisional on L26c* (decision
   44 ruling 6). Under set 1.1.0 the allowlist is unchanged. The controller ruled this
   conservative reading on 2026-10-11 (controller ruling 1); it is no longer an open question.
+  "Every non-RPC service" is read as a named list, not as whatever is not denied (controller
+  ruling 6, Task 7b): an unlisted service fails under 1.2.0 too.
 - **R4.** Template statements in three lists. The privilege list Ryan named fails. The harmless
   list passes, on a template or from a group: a class's `idle-timeout`,
   `login-alarms` and `login-tip`, and a user's `full-name`. **Anything else under a template also
@@ -270,11 +291,17 @@ Under the standing grant (security first, keep moving), each on reasoning unless
    (L11), so NETCONF would stay open: the composition must not get the capability shape. Test in
    Task 5 (`TestAnAllowMeetingTheEntryDenyKeepsTheFallback`).
 3. **A capture taken with plain `display set` from a device whose group widens `p49-remote`.**
-   The widening is invisible without inheritance: check-config must refuse the capture, never
-   report the device clean. Test in Task 7 (`TestTemplateDriftReadsGroups`, "not inherited").
-4. **A template class that writes its own `idle-timeout` under a group that sets another.** The
-   device keeps the class's; check-config must not call the capture "not inherited". Test in
-   Task 7 ("own leaf").
+   The widening is invisible without inheritance: check-config must refuse the capture at its
+   first group line, never report the device clean. Test in Task 7
+   (`TestTemplateDriftReadsGroups`, the refusal table: "a plain capture, its first sign named"
+   and the rest).
+4. **A template class that writes its own `idle-timeout` under a group that sets another.** An
+   own `idle-timeout 720` beside a group's 30 yields no finding: the device keeps the class's, the
+   inherited capture prints only it, and a class's `idle-timeout` is harmless. Test in Task 7
+   (`TestTemplateDriftReadsTheL57Captures`, on the lab's `p49g-timeout` fixture).
+4b. **An RPC service nobody listed, under set 1.2.0.** It must fail check-config, not pass:
+   `service-deployment` is the case. Test in Task 7b
+   (`TestCheckServicesAllowlistUnderTheEntryDeny`).
 5. **The entry deny's reach on the shipped set.** Unit fixtures (`measuredJunos`) prove every
    baseline word a keyword and leave `xml-mode` out of the baseline; the shipped tree does not.
    `TestTheShippedSetsEntryDeny` and `TestAReadonlyWithAShowDenyFitsTheBudget` (Task 5b) pin what
@@ -291,6 +318,13 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 ---
 
 ## Task 1: Spec — decision 44, §8 rewritten, §12 check-config and codes, §14, §15 L26c, L57 and L58
+
+> **Executed.** The spec as amended by controller ruling 5 (groups read by their expanded lines),
+> Task 5's R-I1 (`rpc_entry_denies`: the whole list or `[]`), Task 3's gated words and Task 7b
+> (the 1.2.0 services allowlist) is authoritative. The blocks below are the text as first
+> written; where they differ from the spec (ruling 6's list, ruling 7, §12's groups paragraph,
+> the §14 groups bullet, "a block may drop one"), the spec stands. Do not reconcile the spec to
+> them: that would revert a narrowing.
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§8 lines ~3877–3922; §12 ~5687–5712;
@@ -1824,7 +1858,7 @@ run is in a worktree, copy `tests/lab/captures/*` to the main checkout before re
 ```bash
 make build
 for t in TestL26cEntryNetconf TestL26cEntryScripts TestL57JunosGroups TestL58JunosBaselineWords; do
-  for p in juniper_vjunos-router juniper_vsrx; do
+  for p in vjunos vsrx; do
     PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ -run "^$t\$" -count=1 -v -timeout 90m || break 2
   done
 done
@@ -1912,6 +1946,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ---
 
 ## Task 4: Set 1.2.0 and the `rpc_entry_denies` adapter key
+
+> **Executed.** Task 5's R-I1 changed "a block may drop one" to "the whole list or `[]`" in
+> `internal/platform/dialect.go` and `internal/policy/load.go`; the code and the spec are
+> authoritative over the blocks below. The two stale comments the set file still ships
+> (`platforms/1.2.0/juniper_junos.yaml`, "A block may drop one" and "check-config fails J-Web
+> and JET") are fixed in Task 7b Step 6.
 
 **Files:**
 - Modify: `internal/platform/dialect.go` (the `Dialect` struct after `CeilingBits`; the
@@ -3254,6 +3294,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ## Task 7: check-config reads groups by their expanded lines; the services check by set
 
+> **Executed** (`d98771a`) from the text below, whose 1.2.0 services check is a denylist. Task 7b
+> makes it an allowlist (controller ruling 6); where the two differ, Task 7b stands.
+
 Rewritten on 2026-10-11 after Task 3's L57 run (controller ruling 5). The inherited capture, in
 either pipe order, prints a group's statements expanded under the classes they reach and prints
 no `set groups` and no `set apply-groups` line (`tests/lab/results/L57-juniper_*.md`). So
@@ -3863,6 +3906,424 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 7b: the 1.2.0 services allowlist
+
+Controller ruling 6 (2026-10-12, on the plan-rewrite review's I4). Task 7 made the 1.2.0 services
+check a denylist: `offList` is skipped under the entry deny, so only the seven `rpcPastEntryDeny`
+words fail, and an RPC service nobody listed passes. `set system services service-deployment
+servers …` (SRC, which speaks the JUNOScript XML API) passes check-config with no finding today.
+Under 1.1.0 an unknown service fails (`cliServices`, plan 5b pre-flight C1), and R3 and controller
+ruling 2 hold that principle. So under 1.2.0 the check becomes a shorter allowlist: `netconf`,
+`ssh` and `telnet` with any statement beneath them, plus a named list of services that serve no
+management session. Anything else under `system services` fails with a finding that quotes the
+statement. The `rpcPastEntryDeny` words still fail anywhere in the hierarchy. The owner's
+"drop the allowlist that requires NETCONF off" is kept: `netconf` passes. Cost if wrong: an
+operator with an unlisted benign service gets a finding to read, not a fail-open.
+
+This task is separate from Task 7 because Task 7 was implemented from the denylist text
+(`d98771a`). It also carries two Minors from the same review: M4's refusal message, and M2's
+stale set-file comments.
+
+**Where the named list comes from.** Juniper's CLI reference, "services (System Services)"
+(<https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/system-services.html>,
+read 2026-10-12), lists these statements directly under `[edit system services]`:
+`bbe-stats-service`, `database-replication`, `dhcp`, `dhcp-local-server`, `dns`, `dtcp-only`,
+`dynamic-dns`, `extensible-subscriber-services`, `extension-service`, `finger`, `flow-tap-dtcp`,
+`ftp`, `grpc-tunnel`, `http`, `jeb`, `netconf`, `netproxy`, `outbound-https`, `outbound-ssh`,
+`resource-monitor`, `rest`, `reverse`, `service-deployment`, `ssh`, `static-subscribers`,
+`subscriber-management`, `subscriber-management-helper`, `telnet`, `tftp-server`, `webapi`,
+`web-management`, `xnm-clear-text`, `xnm-ssl`. The lab's devices run `netconf ssh` and `ssh
+root-login allow`, and nothing else under `system services`
+(`tests/lab/configs/vjunos-startup.conf`; both `internal/platform/testdata/l57-*.set`, the
+inherited captures of `srx1` and `vsrx1`). The lab tests' transient cells also configure
+`rest`, `xnm-ssh` and ssh forwarding options. Those are cells, not device configurations: `rest`
+and `xnm-ssh` stay failures, and the ssh options pass under `ssh`.
+
+| entry | where from | why it passes |
+|---|---|---|
+| `netconf` | hierarchy; lab configs (`netconf ssh`) | closed per subject by the reply's `junoscript` deny (`L26c-junoscript-juniper_*.md`; decision 44 rulings 1 and 6) |
+| `ssh` | hierarchy; lab configs (`ssh root-login allow`) | the CLI's own transport; R3 drops the ssh option list |
+| `telnet` | hierarchy | the CLI's own transport |
+| `database-replication` | hierarchy | copies the configuration database between Routing Engines |
+| `dhcp`, `dhcp-local-server` | hierarchy; the review's list | serve addresses |
+| `dns` | hierarchy; the review's list | a DNS proxy |
+| `dynamic-dns` | hierarchy | a client that updates a DNS provider |
+| `finger` | hierarchy; the review's list | answers who is logged in; runs no command |
+| `ftp` | hierarchy; the review's list | serves files to a user who logs in. Whether a configuration deny holds against a file read of `/config` is unmeasured (review M6; L26c, then L59) |
+| `static-subscribers`, `subscriber-management`, `subscriber-management-helper` | hierarchy | run broadband subscriber sessions, not management |
+
+The review's list also named `ntp`. NTP is configured at `system ntp`, not under `system
+services`, so the services check never reads it, and it is not on the list. These stay unlisted
+and fail: `tftp-server` (serves files with no login); `service-deployment`, `outbound-https`,
+`grpc-tunnel`, `webapi`, `flow-tap-dtcp`, `dtcp-only`, `jeb`, `http` and `netproxy` (each runs, or
+may run, a management session); and `reverse`, `resource-monitor`, `bbe-stats-service` and
+`extensible-subscriber-services` (not read closely enough to say they do not). Each addition
+later names its source in `entryServices`'s comment.
+
+**Files:**
+- Modify: `internal/platform/services.go` (`rpcServicesOff`'s last paragraph,
+  `RPCServicesChecked`'s comment, `notInheritedWhy`; new `entryServices` and `unlistedSays`
+  above `entrySays`; `CheckServices`'s doc comment and its `offList` block)
+- Modify: `platforms/1.2.0/juniper_junos.yaml` (two comments only; no key changes)
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§8 "Management services"; decision
+  44 ruling 6)
+- Test: `internal/platform/services_test.go`
+
+**Interfaces:**
+- Consumes: `CheckServices`, `rpcPastEntryDeny`, `entrySays`, `cliServices`, `word`,
+  `notInheritedWhy` as Task 7 left them (`d98771a`); `Set("1.2.0")`; the L57 fixtures.
+- Produces: `entryServices` (`[]string`), `unlistedSays` (string const). Signatures are
+  unchanged. Task 9 Step 6 re-points `entryServices`'s "(L26c, open)" to L59.
+
+- [ ] **Step 1: Spec first.** In `docs/design/2026-08-23-policy-engine-spec.md`, §8's
+  "**Management services.**" paragraph, replace from "Under set 1.2.0 the entry deny closes"
+  through "No measurement shows the entry deny closes their RPCs." with:
+
+```markdown
+Under set 1.2.0 the entry deny closes NETCONF per user (port 830 measured; the port-22 subsystem
+*provisional on L26c*), so the check no longer requires it off, and it is a shorter allowlist.
+Under `system services` it passes `netconf`, `ssh` and `telnet` with any statement beneath them,
+and these services, which serve no management session (Junos's `[edit system services]`
+hierarchy): `database-replication`, `dhcp`, `dhcp-local-server`, `dns`, `dynamic-dns`, `finger`,
+`ftp`, `static-subscribers`, `subscriber-management` and `subscriber-management-helper`. Any other
+statement there fails, the finding quoting it. That covers a service no one listed, such as
+`service-deployment` (which speaks the JUNOScript XML API), `outbound-https`, `grpc-tunnel` or
+`tftp-server`, and a name the list does not know: an allowlist does not fail open on a statement
+nobody listed (plan 5b pre-flight C1). Anywhere in the hierarchy it still fails
+`web-management`, `extension-service`, `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
+`xnm-clear-text`) and `outbound-ssh`, until a lab cell measures the entry deny closing each
+(*provisional on L26c*). REST was not measured: the lab's tunnel did not reach it, the control
+included (`tests/lab/results/L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding.
+Whether a deny of `show configuration` holds against a file read of `/config` through `ftp` or
+`ssh sftp-server`, which pass, is unmeasured (*provisional on L26c*).
+```
+
+  In decision 44, replace ruling 6 (from `- **6. Services**` through "Set 1.1.0's allowlist is
+  unchanged.") with:
+
+```markdown
+- **6. Services** (Ryan's ruling, narrowed for security; data L26c; an allowlist, plan 9b1
+  controller ruling of 2026-10-12). Under set 1.2.0 check-config no longer requires NETCONF off.
+  `netconf`, `ssh` and `telnet` pass under `system services` with any statement beneath them, and
+  so do the services §8 names as serving no management session. Any other statement under `system
+  services` fails, the finding quoting it, a service no one listed included: `service-deployment`
+  speaks the JUNOScript XML API, and a denylist passed it. Anywhere in the hierarchy it still fails
+  `web-management` and `extension-service`, and `rest`, the XML API (`xnm-ssh`, `xnm-ssl`,
+  `xnm-clear-text`) and `outbound-ssh`, each until a lab cell measures the `junoscript` deny
+  closing it (*provisional on L26c*). REST was not measured: the lab's tunnel did not reach it,
+  the control included (`L26c-scripts-juniper_*.md`, 2026-10-11), so `rest` stays a finding.
+  Whether a `show configuration` deny holds against a file read of `/config` through `ftp` or
+  `ssh sftp-server` is unmeasured (*provisional on L26c*). Set 1.1.0's allowlist is unchanged.
+```
+
+  Run: `grep -n 'service-deployment\|static-subscribers' docs/design/2026-08-23-policy-engine-spec.md`.
+  Expected: two lines in §8, one in ruling 6.
+
+- [ ] **Step 2: Write the failing tests.** In `internal/platform/services_test.go`, add `"os"`
+  and `"path/filepath"` to the imports. In `TestCheckServicesUnderTheEntryDeny`'s doc comment,
+  replace "NETCONF, every non-RPC service and every ssh\n// option pass;" with "NETCONF, the
+  non-RPC services entryServices\n// names and every ssh option pass;". Append:
+
+```go
+// Under set 1.2.0 the services check is an allowlist (decision 44 ruling 6;
+// plan 9b1 controller ruling 6): `netconf`, `ssh` and `telnet` pass with any
+// statement beneath them, and so do the non-RPC services entryServices names.
+// Any other statement under `system services` fails, naming the statement:
+// `service-deployment`, which speaks the JUNOScript XML API, and a name no
+// release has alike. A word that runs RPCs still fails wherever it is written,
+// with the entry deny's reason.
+func TestCheckServicesAllowlistUnderTheEntryDeny(t *testing.T) {
+	set, ok := Set("1.2.0")
+	if !ok || len(set["juniper_junos"].RPCEntryDenies) == 0 {
+		t.Fatal("set 1.2.0's juniper_junos sends no entry deny")
+	}
+	d := set["juniper_junos"]
+	const version = "set version 23.4R2-S2.1\n"
+	for _, line := range []string{
+		"set system services netconf ssh port 830",
+		"set system services netconf traceoptions file nc",
+		"set system services ssh authorized-keys-command /bin/x",
+		"set system services telnet connection-limit 5",
+		"set system services database-replication",
+		"set system services dhcp pool 192.0.2.0/24",
+		"set system services dhcp-local-server group g interface ge-0/0/0.0",
+		"set system services dns dns-proxy",
+		"set system services dynamic-dns client a.example.com",
+		"set system services finger",
+		"set system services ftp",
+		"set system services static-subscribers group g",
+		"set system services subscriber-management enable",
+		"set system services subscriber-management-helper",
+		"set logical-systems ls1 system services dhcp-local-server group g",
+	} {
+		if f, err := CheckServices(d, []byte(version+line+"\n")); len(f) != 0 || err != nil {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{
+		"set system services service-deployment servers 192.0.2.1 port 3333",
+		"set system services service-deployment",
+		"set system services outbound-https client c",
+		"set system services grpc-tunnel",
+		"set system services webapi http",
+		"set system services flow-tap-dtcp ssh",
+		"set system services tftp-server",
+		"set system services no-such-service",
+		"set system services DNS",
+		`set system services "dns proxy"`,
+		"set logical-systems ls1 system services service-deployment",
+		"set tenants t1 system services service-deployment",
+	} {
+		f, err := CheckServices(d, []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Line != 2 || f[0].Text != line || !strings.Contains(f[0].Says, "set 1.2.0") ||
+			strings.Contains(f[0].Says, "junoscript") {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+	for _, line := range []string{"set system services rest http", "set services rest control"} {
+		f, err := CheckServices(d, []byte(version+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Text != line || !strings.Contains(f[0].Says, "junoscript") {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+}
+
+// Every service the lab's devices run passes under set 1.2.0. The L57
+// fixtures are the inherited captures of both lab nodes
+// (tests/lab/results/L57-juniper_*.md), whose `system services` are
+// tests/lab/configs/vjunos-startup.conf's `netconf ssh` and the lab's `ssh
+// root-login allow`; Task 9 regenerates them from the devices. A fixture
+// also holds the command's echo, the prompt and a redacted line, and ends
+// each line in a carriage return, so only its set lines are read, trimmed.
+func TestCheckServicesPassesTheLabsServices(t *testing.T) {
+	set, _ := Set("1.2.0")
+	files, _ := filepath.Glob("testdata/l57-*.set")
+	if len(files) != 2 {
+		t.Fatalf("want the two L57 captures, got %q", files)
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		services := map[string]bool{}
+		for _, ln := range strings.Split(string(raw), "\n") {
+			ln = strings.TrimRight(ln, "\r")
+			if !strings.HasPrefix(ln, "set ") {
+				continue
+			}
+			lines = append(lines, ln)
+			if rest, ok := strings.CutPrefix(ln, "set system services "); ok {
+				services[strings.Fields(rest)[0]] = true
+			}
+		}
+		if !services["netconf"] || !services["ssh"] {
+			t.Errorf("%s: the capture's services are %v, not the lab's netconf and ssh: read the fixture", f, services)
+		}
+		findings, err := CheckServices(set["juniper_junos"], []byte(strings.Join(lines, "\n")))
+		if err != nil || len(findings) != 0 {
+			t.Errorf("%s: %+v %v", f, findings, err)
+		}
+	}
+}
+```
+
+- [ ] **Step 3: Run them to see them fail, and paste the output**
+
+Run: `go test ./internal/platform/ -run 'CheckServices' -count=1`
+Expected: FAIL in `TestCheckServicesAllowlistUnderTheEntryDeny` only, each of its twelve
+unlisted lines reading `[] <nil>` (no finding: the denylist passes them). Among them is
+`set system services service-deployment servers 192.0.2.1 port 3333: [] <nil>`.
+`TestCheckServicesPassesTheLabsServices` already passes: the lab runs only `netconf` and `ssh`.
+That test guards the allowlist against leaving them out, which is what the mutation in Step 5
+shows. Paste the output into the task report.
+
+- [ ] **Step 4: Implement.** In `internal/platform/services.go`:
+
+  Replace the last paragraph of `rpcServicesOff`'s comment, from "// so the check there fails
+  only the services no lab cell measured it closing" through "// (rpcPastEntryDeny; decision 44
+  ruling 6).", with:
+
+```go
+// so the check there passes NETCONF and is a shorter allowlist: the services
+// entryServices names, and the rpcPastEntryDeny words failing wherever they
+// appear (decision 44 ruling 6).
+```
+
+  Replace `RPCServicesChecked`'s comment's last three lines ("// device of d's management
+  services (CheckServices): against the allowlist" through "// that does.") with:
+
+```go
+// device of d's management services (CheckServices): against cliServices
+// under a set that sends no entry deny, against entryServices and
+// rpcPastEntryDeny under one that does.
+```
+
+  Insert above `const entrySays`:
+
+```go
+// entryServices are the only services under `system services` a checked
+// device may enable under a set whose adapter carries rpc_entry_denies (set
+// 1.2.0), each with any statement beneath it. It is an allowlist, as
+// cliServices is under set 1.1.0: a service no one listed fails, an RPC
+// service no one thought of included (decision 44 ruling 6; plan 9b1
+// controller ruling 6, on `service-deployment`, which speaks the JUNOScript
+// XML API and passed a denylist). `netconf` is closed per subject by the
+// reply's `junoscript` deny (tests/lab/results/L26c-junoscript-juniper_*.md),
+// and `ssh` and `telnet` are the CLI's own transports; the lab's devices run
+// `netconf ssh` and `ssh root-login allow` and nothing else there
+// (tests/lab/configs/vjunos-startup.conf; testdata/l57-*.set). The rest are
+// statements of Junos's `[edit system services]` hierarchy (Juniper's CLI
+// reference, "services (System Services)",
+// https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/system-services.html,
+// read 2026-10-12) that serve no management session: database-replication
+// copies the configuration database between Routing Engines; dhcp and
+// dhcp-local-server serve addresses; dns is a DNS proxy and dynamic-dns a
+// client updating one; finger answers who is logged in; ftp serves files
+// to a user who logs in; static-subscribers, subscriber-management and
+// subscriber-management-helper run broadband subscriber sessions. Whether a
+// `show configuration` deny holds against a file read of /config through
+// ftp, or ssh's sftp-server, is unmeasured (L26c, open). The hierarchy's
+// others stay off it: tftp-server serves files with no login, and
+// service-deployment, outbound-https, grpc-tunnel, webapi, flow-tap-dtcp,
+// jeb, http, netproxy, reverse, resource-monitor, bbe-stats-service and
+// extensible-subscriber-services either run a management session or were
+// not read closely enough to say they do not.
+var entryServices = []string{"netconf", "ssh", "telnet", "database-replication", "dhcp", "dhcp-local-server", "dns",
+	"dynamic-dns", "finger", "ftp", "static-subscribers", "subscriber-management", "subscriber-management-helper"}
+
+const unlistedSays = "a service under `system services` that set 1.2.0's check does not list: only `netconf`, `ssh`, " +
+	"`telnet` and the services it names as serving no management session may be on, so a service no one listed " +
+	"fails rather than passes (decision 44 ruling 6). Disable it, or, if it serves no management session, report " +
+	"it to port49 to be listed with its source"
+```
+
+  In `CheckServices`'s doc comment, replace "// it, so only the services no lab cell measured it
+  closing are findings,\n// wherever their word appears (rpcPastEntryDeny; decision 44 ruling 6).
+  It" with:
+
+```go
+// it, so a statement under `system services` is a finding where its service
+// is not on entryServices, and the services no lab cell measured the deny
+// closing are findings wherever their word appears (rpcPastEntryDeny;
+// decision 44 ruling 6). It
+```
+
+  In `CheckServices`'s callback, replace from `if !entry && len(path) >= 3` through `if offList
+  || rpcWord {` with:
+
+```go
+		if len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
+			if entry {
+				offList = path[2].value || !slices.Contains(entryServices, path[2].text)
+			} else {
+				options, ok := cliServices[path[2].text]
+				offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
+			}
+		}
+		anywhere, says := rpcAnywhere, servicesSays
+		if entry {
+			anywhere, says = rpcPastEntryDeny, entrySays
+		}
+		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) })
+		if entry && offList && !rpcWord {
+			says = unlistedSays
+		}
+		if offList || rpcWord {
+```
+
+  A service name is matched case-exact, as `cliServices` is: Junos prints it lower-case, and a
+  capitalized one fails closed. A line that is both unlisted and an RPC word (`set system
+  services rest …`) keeps `entrySays`, the more specific reason.
+
+  **Review M4, the refusal message.** If a real inherited capture prints a parked application
+  (`deactivate apply-groups X`, unmeasured, carried in Task 10), the operator who already used
+  `display inheritance` is refused, and today's message offers no remedy. Replace
+  `notInheritedWhy` with:
+
+```go
+const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
+	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
+	"expanded and cannot be checked. If it was taken with it, the device keeps a group application switched off " +
+	"or locked, which reads the same: remove that application, then capture again"
+```
+
+  It still quotes nothing of the line. `TestCheckServicesBypasses` checks that no word of a
+  refused line (`deactivate`, `protect`, `apply-groups`, `groups`, …) appears in the error, and
+  none of these words is one of them.
+
+  Run: `gofmt -l internal/platform; go test ./internal/platform/ -count=1` and paste the
+  output. Expected: no gofmt output; `ok`.
+
+- [ ] **Step 5: Mutation checks.** Apply each, run `go test ./internal/platform/ -run
+  CheckServices -count=1`, record which test failed, and restore:
+
+| mutation | must fail |
+|---|---|
+| add `"service-deployment"` to `entryServices` | `TestCheckServicesAllowlistUnderTheEntryDeny` |
+| the entry branch's `offList = path[2].value \|\| !slices.Contains(entryServices, path[2].text)` becomes `offList = false` (Task 7's denylist) | `TestCheckServicesAllowlistUnderTheEntryDeny` |
+| drop `"ssh"` from `entryServices` | `TestCheckServicesPassesTheLabsServices` (and the two entry-deny tests) |
+| delete the `if entry && offList && !rpcWord { says = unlistedSays }` block | `TestCheckServicesAllowlistUnderTheEntryDeny` |
+
+  The plan's author ran all four against `d98771a` with this task's code: each failed as listed.
+  After restoring, `go test ./internal/platform/ -count=1` is `ok`.
+
+- [ ] **Step 6: The set file's stale comments** (review M2). In
+  `platforms/1.2.0/juniper_junos.yaml`, replace:
+
+```yaml
+    # (tests/lab/results/L26c-scripts-juniper_*.md, op row). A block may drop
+    # one, never add one.
+```
+
+  with:
+
+```yaml
+    # (tests/lab/results/L26c-scripts-juniper_*.md, op row). A block keeps the
+    # whole list or drops it with `[]`, and never adds one: a partial list is
+    # refused at load, since it leaves an entry open (decision 44 ruling 5).
+```
+
+  and:
+
+```yaml
+    # has no NETCONF. `port49 devices check-config` fails J-Web
+    # (`web-management`) and JET/gRPC/gNMI (`extension-service`), which no
+    # measurement shows the deny closes.
+```
+
+  with:
+
+```yaml
+    # has no NETCONF. Under this set `port49 devices check-config` passes
+    # `netconf`, `ssh`, `telnet` and the non-RPC services it names under
+    # `system services`, and fails any other service there; and it fails REST
+    # (`rest`), J-Web (`web-management`), JET/gRPC/gNMI (`extension-service`),
+    # the XML API (`xnm-*`) and `outbound-ssh` wherever they are written, since
+    # no measurement shows the deny closes them (decision 44 ruling 6).
+```
+
+  Comments only. The adapter's canonical form, which an `acknowledge:` entry hashes, does not
+  carry comments.
+
+- [ ] **Step 7: Run**
+
+Run: `gofmt -l internal/platform cmd/port49 && go test ./internal/... ./cmd/... -count=1 && make test && make vet`
+Expected: no gofmt output; PASS. Paste the summary lines into the task report.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/platform/services.go internal/platform/services_test.go platforms/1.2.0/juniper_junos.yaml \
+  docs/design/2026-08-23-policy-engine-spec.md
+git commit -m "feat: the 1.2.0 services check is an allowlist, an unlisted service fails
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## Task 8: `port49 devices check-config --batch`
 
 **Files:**
@@ -4039,7 +4500,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 9: Lab run — set 1.2.0 end to end (cell c), the L57 and L58 reruns, check-config on L57; close L26c and L57
+## Task 9: Lab run — set 1.2.0 end to end (cell c), the L57 and L58 reruns, check-config on L57; close L26c and L57, open L59
 
 **Files:**
 - Modify: `tests/lab/projection_test.go` (`TestProjectionDifferential` runs per set;
@@ -4047,12 +4508,18 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   as the port-22 subsystem where the reply carries the entry deny; a 1.2.0 shape list)
 - Modify: `tests/lab/junos_baseline_test.go` (`TestL58JunosBaselineWords` types the shipped
   readonly reply's nested deny beside its own factored one; new `l58ShippedReadonlyDeny`)
+- Modify: `tests/lab/junos_groups_test.go` (`l57Reading.classLevel`; a class-level commit that
+  does not complete is INVALID; the table's class-level column), `tests/lab/junos_groups_unit_test.go`
+  (`TestL57ReadsTheClassLevelGroup`) — Step 2b
 - Create (by the run): `tests/lab/results/L26c-projected-juniper_*.md`; rewritten
   `L57-juniper_*.md`, `L58-juniper_*.md` and `internal/platform/testdata/l57-juniper_*.set`;
   their evidence
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 L26c and L57 rows and bullets, the
-  L58 bullet; decision 44's "provisional"; §8's "*Provisional on L26c*" and its L58 `save`
-  bullet)
+  L58 bullet, the new L59 row and bullet; decision 44's "provisional"; §8's "*Provisional on
+  L26c*" markers and its L58 `save` bullet)
+- Modify: `internal/platform/services.go` (the comments that cite L26c or L57 as open:
+  `rpcServicesOff`, `groupSign`, `rpcPastEntryDeny`, `entryServices`) — Step 6, in the docs
+  commit
 
 **Interfaces:** Consumes everything above; `make build` first, so `bin/port49` is this branch's.
 Carries from earlier tasks' reviews (the controller's ledger):
@@ -4190,6 +4657,26 @@ var projectionShapes120 = []struct{ name, roles, want string }{
   1.2.0 only: L12 is closed and this plan changes nothing 1.1.0 renders (Task 4's frozen-set
   tests), so its note is not rewritten.
 
+  The capture is per set too. Today `stop := l.capture(t, "projection")` and its `defer stop()`
+  sit at the test's top, and `tests/lab/evidence/projection-juniper_*.pcap` is the capture the
+  closed L12-projection notes cite: a 1.2.0 run under that name would overwrite it. Remove those
+  two lines from the top, and open the capture inside each set's function, before its first
+  `junosConfigureAdmin`, with the name of the note that set writes:
+
+```go
+		capName := map[string]string{"1.1.0": "projection", "1.2.0": "L26c-projected"}[v]
+		if capName == "" {
+			t.Fatalf("INVALID: no capture name for set %s; L12's evidence must not be overwritten", v)
+		}
+		stop := l.capture(t, capName)
+		defer stop()
+```
+
+  (`v` is the set's version string the loop over `PORT49_LAB_PROJECTION_SETS` passes the
+  function.) After `make evidence`, `git status --short tests/lab/evidence/projection-*` must
+  print nothing, and `tests/lab/evidence/L26c-projected-juniper_*.pcap` must exist for Step 7's
+  `git add`.
+
 - [ ] **Step 2: L58 types the shipped readonly form.** L58 measured `save` and the entries
   under its own top-level `^ *(save|junoscript)( .*)? *(\|.*)?$`. Set 1.2.0 sends that
   alternative nested inside `^( … )$` beside the grant's deny. In
@@ -4270,13 +4757,95 @@ func (l *lab) l58ShippedReadonlyDeny(t *testing.T) string {
   '^(TestL58EntryCell|TestL58Save)$' -count=1` (L58's unit tests, which need no device).
   Expected: PASS.
 
+- [ ] **Step 2b: The class-level cell gets its own gate and column** (review M5). Today a
+  class-level commit that fails is deleted silently and the run goes on, so the "`apply-groups`
+  word: no" reading would be vacuous, and no column reads whether `p49g-classlevel`'s
+  `login-alarms` landed under `p49-remote`.
+
+  In `tests/lab/junos_groups_unit_test.go`, add the failing test first:
+
+```go
+// p49g-classlevel adds login-alarms under <p49-*>, so its expansion is a
+// login-alarms line under p49-remote, and only there.
+func TestL57ReadsTheClassLevelGroup(t *testing.T) {
+	if !l57Readings("set system login class p49-remote login-alarms\n").classLevel {
+		t.Error("p49g-classlevel's login-alarms under p49-remote was not read")
+	}
+	if l57Readings("set system login class noc login-alarms\n").classLevel {
+		t.Error("another class's login-alarms was read as p49-remote's")
+	}
+}
+```
+
+  Run: `go test -tags lab ./tests/lab/ -run '^TestL57ReadsTheClassLevelGroup$' -count=1`.
+  Expected: FAIL to compile, `r.classLevel undefined`. Paste the output into the task report.
+
+  In `tests/lab/junos_groups_test.go`, add a field to `l57Reading` after `ownPerm`:
+
+```go
+	classLevel bool // p49g-classlevel's login-alarms expanded under p49-remote
+```
+
+  In `l57Readings`, after `r.ownTimeout = r.ownTimeout || rest == "idle-timeout 720"`, add:
+
+```go
+			r.classLevel = r.classLevel || rest == "login-alarms"
+```
+
+  Replace the class-level commit's silent delete:
+
+```go
+		classCommit := l.junosConfigureAdmin(t, junosGroupsClassLevel)
+		if !strings.Contains(classCommit, "commit complete") {
+			l.junosConfigureAdmin(t, []string{"delete system login class p49-remote apply-groups p49g-classlevel",
+				"delete groups p49g-classlevel"})
+		}
+```
+
+  with:
+
+```go
+		// The class-level cell reads nothing unless its group committed: a
+		// stripped `apply-groups` line would then say nothing about inheritance.
+		// The deferred junosGroupsDelete removes whatever part did land.
+		classCommit := l.junosConfigureAdmin(t, junosGroupsClassLevel)
+		if !strings.Contains(classCommit, "commit complete") {
+			t.Fatalf("INVALID: the class-level group did not commit, so no capture says whether inheritance strips "+
+				"its apply-groups line; no note is written: %s", oneLine(classCommit))
+		}
+```
+
+  In the table, the header string becomes:
+
+```go
+		b.WriteString("| capture | `apply-groups` word line (not -except) | set groups lines | p49g-tip | p49g-perm | p49g-excepted | " +
+			"nested | own idle-timeout 720 | group permission beside own | p49g-classlevel login-alarms |\n" +
+			"|---|---|---|---|---|---|---|---|---|---|\n")
+```
+
+  and the row:
+
+```go
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), cell(r.applyLines),
+				cell(r.groupLines), cell(r.tip), cell(r.perm), cell(r.excepted), cell(r.nested), cell(r.ownTimeout),
+				cell(r.ownPerm), cell(r.classLevel))
+```
+
+  Mutation check: make the new `if` read `if false && !strings.Contains(…)` and confirm by
+  reading that nothing else in the test stops a failed class-level commit (it does not; that is
+  the hole); then restore. Make `l57Readings` read `rest == "login-tip"` for `classLevel` and
+  confirm `TestL57ReadsTheClassLevelGroup` fails; restore. Record both in the task report.
+
+  Run: `gofmt -l tests/lab; go vet -tags lab ./tests/lab/ && go test -tags lab ./tests/lab/ -run
+  '^TestL57' -count=1`. Expected: no gofmt output; PASS.
+
 - [ ] **Step 3: Run per platform.** The differential, then L57's and L58's reruns, each in its
   own invocation (the seeded pool is 16 per process). Arm the stall watchdog first; the lab is
   single-occupant.
 
 ```bash
 make build
-for p in juniper_vjunos-router juniper_vsrx; do
+for p in vjunos vsrx; do
   PORT49_LAB_PROJECTION_SETS=1.2.0 PORT49_LAB_PLATFORMS=$p \
     go test -tags lab ./tests/lab/ -run '^TestProjectionDifferential$' -count=1 -v -timeout 120m || break
   for t in TestL57JunosGroups TestL58JunosBaselineWords; do
@@ -4286,6 +4855,10 @@ done
 make evidence
 go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
 ```
+
+  `PORT49_LAB_PLATFORMS` takes the harness's selectors, `vjunos` and `vsrx`
+  (`tests/lab/harness_test.go`), not the platform names: a name matches no selector, the first
+  `go test` fails, and `|| break` ends the run with nothing measured.
 
   Expected: PASS on both; `L26c-projected-juniper_*.md` written, `L57-juniper_*.md`,
   `L58-juniper_*.md` and both `l57-*.set` fixtures rewritten, and Task 7's fixture test PASS on
@@ -4303,9 +4876,12 @@ go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
   what such a readonly can read.
 
 - [ ] **Step 4: Read the cells** from the rewritten notes, on both images:
-  - **L57, class-level `apply-groups`:** the inherited forms' `apply-groups` word column reads
-    "no", and `login-alarms` is expanded under `p49-remote`: inheritance strips a class-level
-    `apply-groups`, and ruling 7's refusal holds as written. If either image prints the line,
+  - **L57, class-level `apply-groups`:** the note's head reads "Class-level: commit complete" (Step
+    2b makes anything else INVALID), the inherited forms' `apply-groups` word column reads "no",
+    and their `p49g-classlevel login-alarms` column reads "yes": inheritance expands the
+    class-level group and strips its `apply-groups` line, and ruling 7's refusal holds as
+    written. If the column reads "no" on an inherited form, the group did not land and the
+    stripped line says nothing: L57 does not close; report it. If either image prints the line,
     `TestTemplateDriftReadsTheL57Captures` refuses that fixture at the line. STOP and report to
     the controller with both notes' tables. Do not loosen the test or the refusal: a capture
     the check cannot tell from one taken without `display inheritance` is the hole ruling 7
@@ -4330,13 +4906,15 @@ go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
   policy pins no set, so write one that pins 1.2.0, and name each capture for its lab node
   (`tests/lab/inventory-lab.yaml`: `srx1` is vJunos-router, `vsrx1` is vSRX). A fixture also
   holds the command's echo, the closing prompt and a redacted line whose verb is `<removed>`,
-  which the services check refuses as not set statements, so keep only the `set` lines:
+  which the services check refuses as not set statements, and ends every line in a carriage
+  return, which the services check refuses as a control character. So drop the carriage returns
+  and keep only the `set` lines:
 
 ```bash
 d=$(mktemp -d)
 printf 'platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n  - {name: r, privilege: readonly, permit: ["show **"]}\nsubjects:\n  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}\ngrants:\n  - {subject: s, scope: all_devices, roles: [r]}\n' > $d/policy.yaml
-grep '^set ' internal/platform/testdata/l57-juniper_vjunos-router.set > $d/srx1.set
-grep '^set ' internal/platform/testdata/l57-juniper_vsrx.set > $d/vsrx1.set
+tr -d '\r' < internal/platform/testdata/l57-juniper_vjunos-router.set | grep '^set ' > $d/srx1.set
+tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep '^set ' > $d/vsrx1.set
 ./bin/port49 devices check-config --policy $d/policy.yaml --inventory tests/lab/inventory-lab.yaml \
   --config tests/lab/port49d-lab.yaml --batch $d/srx1.set $d/vsrx1.set
 ```
@@ -4353,37 +4931,137 @@ grep '^set ' internal/platform/testdata/l57-juniper_vsrx.set > $d/vsrx1.set
   each `L26c-projected` note as "check-config on L57". If the policy does not load against the
   lab inventory (a key group, say), add what `policy test` asks for to `$d/policy.yaml`.
 
-- [ ] **Step 6: Close the rows.** Per CLAUDE.md rule 3: edit L26c's Status to
-  `closed — measured <date>; tests/lab/results/L26c-juniper_*.md, L26c-junoscript-juniper_*.md, L26c-entries-juniper_*.md, L26c-scripts-juniper_*.md, L26c-projected-juniper_*.md`,
-  followed by one paragraph of what each measured (both images agreeing, or the difference). Edit
-  L57's Status to `closed — measured <date>; tests/lab/results/L57-juniper_vjunos-router.md,
-  L57-juniper_vsrx.md` and what the table showed. Rewrite both detail bullets to the
-  observations. Remove "*provisional on L26c*" from §8 and decision 44, and "provisional on L57"
-  from decision 44's head. The row closes only on what was measured: every way in its claim
-  names reached the control and was read against it on both images. If any was not (an image
-  that refused `rest`, say), move that part of the claim to a new open row before closing, and
-  leave what rests on it as it is (G2's `rest` stays a finding). If a result contradicts a sentence of §8, decision 44 or the adapter
-  comment, fix that sentence, cite the note, and say so in the commit message (CLAUDE.md rule 4).
-  L57 closes only where Step 4's class-level and nested-group cells read as expected on both
-  images. Its Status names both cells, and decision 44 ruling 7 and §12 lose their two
-  "*provisional on L57*". Ruling 1's port-22 subsystem and port 830 lose "*provisional on
-  L26c*" only where Step 3 measured them refused under the rendered reply on both images. For
-  L58, which stays closed, replace the "will be recorded in the note as \"control (view)\" when
-  Task 9 reruns L58" clauses in §8's `save` bullet and in L58's detail bullet with what the
-  control (view) cells read, citing `L58-juniper_*.md`. Add one sentence on G5: the shipped
-  readonly's nested form was enforced as the factored form.
+- [ ] **Step 6: Close the rows, and open L59 for what Task 9 does not measure.** Per CLAUDE.md
+  rules 1–3 a row closes only on what was measured: every way in its claim names reached the
+  control and was read against it on both images. Task 9 measures none of these five parts of
+  L26c's claim, so they move to a new open row, L59, before L26c closes:
+  - REST: G2 read "not measured" (the lab's tunnel reached it in no cell, the control's
+    included; `L26c-scripts-juniper_*.md`). The harness item is the management-address bind.
+  - The XML API (`xnm-ssl`, `xnm-clear-text`, `xnm-ssh`): no note on either image.
+  - `outbound-ssh`: no cell in `tests/lab/*.go`.
+  - `scp` of `/config/juniper.conf.gz`: refused in every class, the control's included
+    (`L26c-scripts-juniper_*.md`), so not isolated. With it, file reads of `/config` by `sftp`
+    and `ftp` past a configuration deny, which `entryServices` and the ssh options now pass
+    under set 1.2.0 (review M6).
+  - L26c's own "with the NETCONF service off" `xml-mode` cell: the 2026-09-25 probes ran before
+    `netconf ssh` was deleted (L26c review I-4).
+
+  If Step 3 did not measure port 830 or the port-22 subsystem refused under the rendered reply
+  on both images, that part moves to L59 too, and its markers below stay or are re-pointed to
+  L59, never removed.
+
+  **(a) Add L59's row** after L58's:
+
+```markdown
+| **L59** | What plan 9b1 left unmeasured of L26c, under a reply carrying set 1.2.0's entry denies (`junoscript **`, `op **`) beside a deny of `show configuration` beneath `view-configuration`, each against a control with the same bits and no deny that reaches the service first: whether REST (`system services rest`, `/rpc/…`) reaches an RPC (L26c-scripts: the lab's tunnel reached REST in no cell, the control's included; the management-address bind is the harness item); whether the XML API (`xnm-ssl`, `xnm-clear-text`, and `xnm-ssh` where the release has it) reaches an RPC; whether `outbound-ssh` opens a device-initiated NETCONF session under that login; whether a file read of `/config` (`scp`, `sftp` with `ssh sftp-server`, `ftp`) returns the configuration past the deny (L26c-scripts: `scp` was refused in every class, the control's included); and, with the NETCONF service off (`netconf ssh` deleted), whether `xml-mode netconf need-trailer` from a CLI session still opens NETCONF and reaches `<get-configuration/>` (L26c's probes ran before the delete; L26c review I-4). | Decision 44 ruling 6 and §8 "Management services": `rest`, the XML API and `outbound-ssh` fail check-config under set 1.2.0 (`rpcPastEntryDeny`), and `ftp` and `ssh sftp-server` pass (`entryServices`, the ssh options); set 1.1.0's services allowlist being sufficient (`rpcServicesOff`) | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 <date>, carried from L26c |
+```
+
+  and its detail bullet after L58's:
+
+```markdown
+- **L59** — added by plan 9b1 when L26c closed; open. Why it is a row: L26c's claim named these
+  ways in, and no plan 9b1 cell reached them against a working control, so L26c closed on what
+  was measured and left them here (CLAUDE.md rules 1 and 3). Until it closes, check-config fails
+  REST, the XML API and `outbound-ssh` under set 1.2.0; whether a `show configuration` deny holds
+  against a file read of `/config` is unmeasured; and whether set 1.1.0's services allowlist is
+  sufficient with NETCONF off is unmeasured.
+```
+
+  **(b) Close L26c.** In its **Claim** cell, write `(moved to L59)` after "with the NETCONF
+  service off" and after each of "REST (`/rpc/…`)", "the XML API (`xnm-ssh`, `xnm-ssl`,
+  `xnm-clear-text`)", "`outbound-ssh`" and "`scp` of `/config/juniper.conf.gz`"; an entry is
+  never removed. Edit its **Status** to
+  `closed — measured <date>; tests/lab/results/L26c-juniper_*.md, L26c-junoscript-juniper_*.md, L26c-entries-juniper_*.md, L26c-scripts-juniper_*.md, L26c-projected-juniper_*.md; the parts marked "moved to L59" are open there`,
+  followed by one paragraph of what each note measured (both images agreeing, or the
+  difference). That paragraph answers the row's "a rerun is owed (L26c review I-1, I-4)" by
+  name (review M7): I-1, that `view` alone cannot set a deny against RPC reach, is answered by
+  `L26c-entries-juniper_*.md`, whose classes hold `view view-configuration`: under a deny of
+  `show configuration` alone (class V) `<get-configuration/>` returned a result through `xml-mode
+  netconf need-trailer`, port 830, the port-22 subsystem and the exec channel, where the
+  `junoscript` deny (class W) refused each entry; I-4, the NETCONF-off `xml-mode` cell, is L59's.
+  Rewrite L26c's detail bullet to the observations, ending with "The parts no cell measured are
+  L59's."
+
+  **(c) Close L57** only where Step 4's class-level and nested-group cells read as expected on
+  both images: Status `closed — measured <date>; tests/lab/results/L57-juniper_vjunos-router.md,
+  L57-juniper_vsrx.md` and what the table showed, naming both cells. Rewrite its detail bullet
+  to the observations. Decision 44 ruling 7 and §12 lose their "*provisional on L57*" markers.
+
+  **(d) Re-point the spec's L26c markers; remove only what was measured.**
+  - Decision 44's head: replace "Rulings 1, 2 and 6 are *provisional on L26c* until plan 9b1's
+    Task 9 closes it; ruling 7 is provisional on L57." with "Ruling 6's `rest`, XML API and
+    `outbound-ssh` clauses, and its file-read note, are *provisional on L59*." (keep "ruling 7 is
+    provisional on L57" if L57 did not close).
+  - Decision 44 ruling 6 (as Task 7b left it): each "*provisional on L26c*" becomes
+    "*provisional on L59*".
+  - §8's `junoscript` paragraph: replace "*Provisional on L26c* for the other ways in: the
+    NETCONF subsystem on port 22, the SSH exec channel, an `op url` script, REST, the XML API
+    (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), `outbound-ssh` and `scp` (plan 9b1, Task 3), and
+    the projected reply end to end (Task 9)." with "It also refused NETCONF as the SSH subsystem
+    on port 22 and over the SSH exec channel, each against a control
+    (`tests/lab/results/L26c-entries-juniper_*.md`), and port 830 and the port-22 subsystem under
+    port49's rendered set 1.2.0 reply (`L26c-projected-juniper_*.md`). REST, the XML API
+    (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), `outbound-ssh` and `scp` are *provisional on
+    L59*."
+  - §8's "Management services" paragraph (as Task 7b left it): "the port-22 subsystem
+    *provisional on L26c*" becomes "the port-22 subsystem measured,
+    `L26c-entries-juniper_*.md`, `L26c-projected-juniper_*.md`"; every other "*provisional on
+    L26c*" there becomes "*provisional on L59*".
+  - Option C's two markers, §8 ("treats a deny beneath a sent bit or the baseline as guarding
+    the CLI only (*provisional on L26c*, below)") and decision 22's "(option C, *provisional on
+    L26c*; seen to hold for …)": replace "*provisional on L26c*" with "measured,
+    `L26c-entries-juniper_*.md`: a deny of `show configuration` beneath `view-configuration` did
+    not keep `<get-configuration/>` from a session that reached an RPC".
+  - Then `grep -n -i 'provisional on L26c' docs/design/2026-08-23-policy-engine-spec.md` must
+    print nothing; every hit was measured or re-pointed.
+
+  **(e) Re-point the code's markers** in `internal/platform/services.go`:
+  - `rpcServicesOff`: "// Whether it is sufficient is unmeasured (L26c, open). With `netconf
+    ssh`" becomes "// Whether it is sufficient is unmeasured (L59, open). With `netconf ssh`".
+  - `rpcPastEntryDeny`: "// outbound-ssh (decision 44 ruling 6, *provisional on L26c*)."
+    becomes "// outbound-ssh (decision 44 ruling 6, *provisional on L59*)."
+  - `entryServices` (Task 7b): "is unmeasured (L26c, open)" becomes "is unmeasured (L59,
+    open)".
+  - `groupSign`, only where L57 closed: replace
+
+```go
+// `system` or on a class. The inherited capture printed neither on either
+// image (L57); that it strips a class-level `apply-groups` as it strips the
+// top-level ones is *provisional on L57*. `apply-groups-except` survives
+```
+
+    with
+
+```go
+// `system` or on a class. The inherited capture printed neither on either
+// image, a class-level `apply-groups` included (L57, its class-level cell).
+// `apply-groups-except` survives
+```
+
+    and run `gofmt -l internal/platform` (no output) and `grep -n 'L26c, open\|provisional on
+    L26c\|provisional on L57' internal/platform/*.go` (no output where L57 closed).
+
+  **(f) L58**, which stays closed: replace the "will be recorded in the note as \"control
+  (view)\" when Task 9 reruns L58" clauses in §8's `save` bullet and in L58's detail bullet with
+  what the control (view) cells read, citing `L58-juniper_*.md`. Add one sentence on G5: the
+  shipped readonly's nested form was enforced as the factored form.
+
+  If a result contradicts a sentence of §8, decision 44 or the adapter comment, fix that
+  sentence, cite the note, and say so in the commit message (CLAUDE.md rule 4).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add tests/lab/projection_test.go tests/lab/junos_baseline_test.go tests/lab/results/L26c-projected-juniper_*.md \
+git add tests/lab/projection_test.go tests/lab/junos_baseline_test.go tests/lab/junos_groups_test.go \
+  tests/lab/junos_groups_unit_test.go tests/lab/results/L26c-projected-juniper_*.md \
   tests/lab/results/L57-juniper_*.md tests/lab/results/L58-juniper_*.md internal/platform/testdata/l57-*.set \
   tests/lab/evidence/L26c-projected-* tests/lab/evidence/L57-* tests/lab/evidence/L58-*
 git commit -m "test(lab): set 1.2.0's projection end to end, L57 and L58 reruns on vJunos-router and vSRX
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-git add docs/design/2026-08-23-policy-engine-spec.md
-git commit -m "docs: close lab register entries L26c and L57
+go test ./internal/platform/ -count=1
+git add docs/design/2026-08-23-policy-engine-spec.md internal/platform/services.go
+git commit -m "docs: close lab register entries L26c and L57; open L59 for L26c's unmeasured parts
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -4398,7 +5076,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write "Plan 9b1 — As built"**: the branch and base, each task's commit, what Task
   3's gates decided (G1, G2, G3, G4, the L57 gates, "group permission beside own"), the rows
-  closed, anything carried. Say what Task 9 saw a readonly's allows beyond `view` do on each
+  closed and opened (L59), anything carried. Carried at least:
+  - L59's REST cell and its harness item: the lab's tunnel reached REST in no cell, the
+    control's included (G2, `L26c-scripts-juniper_*.md`); the parked fix is binding REST to the
+    management address the tunnel reaches, so the control reaches it first.
+  - L59's other cells: the XML API, `outbound-ssh`, file reads of `/config` (`scp`, `sftp`,
+    `ftp`) past a configuration deny, and the NETCONF-off `xml-mode` cell.
+  - Whether `display inheritance` prints a `deactivate` or `protect apply-groups` line (review
+    M4). check-config refuses one; its message (Task 7b Step 5) names a parked group
+    application as a cause and the remedy, but what the device prints is unmeasured: the cell
+    is `set apply-groups p49g-unapplied` beside `deactivate apply-groups p49g-unapplied`,
+    committed together, after L57's session cells (the group grants `all`).
+  - `entryServices` (Task 7b): an operator's benign service missing from it gets a finding;
+    each addition names its source, as the list's comment does.
+
+  Say what Task 9 saw a readonly's allows beyond `view` do on each
   image (ran, refused, or ran and showed nothing): that is what a readonly with a show deny can
   read, and if they are refused it is carried as an open question for Ryan (sending
   view-configuration with its other reach denied is the alternative his ruling set aside). Paste
@@ -4471,10 +5163,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   it (Oxidized's extensionless files, FQDNs included), else less its last extension
   (`srx-01.conf` is `srx-01`). It prints `batch: N configurations checked, M failed` and exits 1
   if any failed.
-- **Management services under 1.2.0.** NETCONF, every non-RPC service and every ssh option no
-  longer fail check-config. REST (`rest`), J-Web (`web-management`), JET/gRPC
-  (`extension-service`), the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh`
-  still do, wherever they are written, until a lab cell measures the `junoscript` deny closing
-  each. Under 1.1.0 nothing changed.
+- **Management services under 1.2.0.** NETCONF no longer fails check-config. Under `system
+  services`, `netconf`, `ssh` and `telnet` pass with any option, and so do `database-replication`,
+  `dhcp`, `dhcp-local-server`, `dns`, `dynamic-dns`, `finger`, `ftp`, `static-subscribers`,
+  `subscriber-management` and `subscriber-management-helper`. Any other service there fails, and
+  the finding quotes it: `service-deployment`, `outbound-https`, `tftp-server` or one port49 has
+  never heard of. If one of yours serves no management session, report it and it is added with
+  its source. REST (`rest`), J-Web (`web-management`), JET/gRPC (`extension-service`), the XML
+  API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh` still fail wherever they are
+  written, until a lab cell measures the `junoscript` deny closing each (L59). Under 1.1.0
+  nothing changed.
 - **No new reason code, metric or config key in `port49d.yaml`.** The decision log records the
   reply as before; the `junoscript` deny appears in it.
