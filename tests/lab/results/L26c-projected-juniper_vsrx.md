@@ -4,9 +4,9 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-projected-juniper_vsrx.pcap` — 5613 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-projected-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-projected-juniper_vsrx.pcap` — 6222 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-projected-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2590c57adc39770cd125593ed6cfddcfbaa628db`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestProjectionDifferential$`
+- **Run:** commit `627442515bd3e88d386ed11efcfaa83ccf8370be`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestProjectionDifferential$`
 
 ## Claim
 
@@ -72,11 +72,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
 | `show security zones | no-more` | `show security zones` | permit | runs | runs | yes |
 | `show security policies | no-more` | `show security policies` | permit | runs | runs | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
@@ -85,8 +87,6 @@ slice01@srx1>
 reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -142,11 +142,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | permit | refuses | refuses | no |
 | `show security zones | no-more` | `show security zones` | permit | runs | runs | yes |
 | `show security policies | no-more` | `show security policies` | permit | runs | runs | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | permit | refuses | refuses | no |
@@ -155,8 +157,6 @@ slice01@srx1>
 reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -212,11 +212,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | runs | runs | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | runs | runs | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | permit | refuses | refuses | no |
 | `show security zones | no-more` | `show security zones` | permit | runs | runs | yes |
 | `show security policies | no-more` | `show security policies` | permit | runs | runs | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | permit | refuses | refuses | no |
@@ -228,13 +230,15 @@ reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; t
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
 | CLI entry | cell |
 |---|---|
 | `xml-mode netconf need-trailer` | hello |
 
 `get-configuration`: result
+
+NETCONF on port 22 opened (control)
+
+NETCONF on port 830 opened (control)
 
 | NETCONF RPC | as the command | port49 | device |
 |---|---|---|---|
@@ -285,11 +289,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
 | `show security zones | no-more` | `show security zones` | permit | runs | runs | yes |
 | `show security policies | no-more` | `show security policies` | permit | runs | runs | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
@@ -298,8 +304,6 @@ slice01@srx1>
 reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -354,11 +358,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
 | `show security zones | no-more` | `show security zones` | deny | refuses | refuses | yes |
 | `show security policies | no-more` | `show security policies` | deny | refuses | refuses | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
@@ -369,8 +375,6 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -426,11 +430,13 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
 | `show security zones | no-more` | `show security zones` | permit | runs | runs | yes |
 | `show security policies | no-more` | `show security policies` | permit | runs | runs | yes |
-| `show log messages | no-more` | `show log messages` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
 | `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
 | `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
@@ -441,8 +447,6 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages | no-more` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|

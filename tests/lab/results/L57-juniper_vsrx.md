@@ -4,9 +4,9 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L57-juniper_vsrx.pcap` — 1128 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L57-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L57-juniper_vsrx.pcap` — 1230 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L57-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2590c57adc39770cd125593ed6cfddcfbaa628db`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL57JunosGroups$`
+- **Run:** commit `bce25096fda89cf813de926cedceb7c6248d5f29`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL57JunosGroups$`
 
 ## Claim
 
@@ -30,7 +30,7 @@ set apply-groups p49g-perm
 set apply-groups p49g-excepted
 set apply-groups p49g-timeout
 set system login class p49-remote apply-groups-except p49g-excepted
-set groups p49g-inner system login class <p49-*> permissions view
+set groups p49g-inner system login class <p49-*> permissions network
 set groups p49g-outer apply-groups p49g-inner
 set apply-groups p49g-outer
 set groups p49g-classlevel system login class <p49-*> login-alarms
@@ -62,23 +62,7 @@ syntax error, expecting <command>.
 alice01@srx1>
 ```
 
-Nested group in a session: the inner group adds `permissions view`, so `show cli authorization` runs if it was applied at login. Session control `show configuration system host-name` (p49g-perm's view-configuration; ran only with the host name in its output):
-
-```
-show configuration
-                   ^
-syntax error, expecting <command>.
-alice01@srx1> show configuration   system
-                   ^
-syntax error, expecting <command>.
-alice01@srx1> show configurationsystem   host-name
-                   ^
-syntax error, expecting <command>.
-
-alice01@srx1>
-```
-
-Probe control, `show cli authorization` under p49-l57own (its own `view`; must print `Current user`):
+Nested group in a session: the inner group adds `permissions network` under `<p49-*>`. `show cli authorization` under p49-l57own (its own `view`; must print `Current user` and list `clear`, from p49g-excepted, and `view-configuration`, from p49g-perm, the controls that top-level inheritance reached this login):
 
 ```
 Current user: 'p49-l57own' login: 'alice02' class 'p49-l57own'
@@ -95,7 +79,29 @@ Individual command authorization:
 alice02@srx1>
 ```
 
-Nested-group session cell: **not observed**. Not observed: a session did not open, a control did not run, `show cli authorization` printed nothing readable or was refused for another reason. L57 does not close on this cell.
+Second reading, `ping 127.0.0.1 count 1 rapid` (runs only with `network`):
+
+```
+ping
+              ^
+unknown command.
+alice02@srx1> ping   127.0.0.1
+              ^
+unknown command.
+alice02@srx1> ping127.0.0.1   count
+              ^
+unknown command.
+alice02@srx1> ping127.0.0.1count   1
+              ^
+unknown command.
+alice02@srx1> ping127.0.0.1count1   rapid
+              ^
+unknown command.
+
+alice02@srx1>
+```
+
+Nested-group session cell: **not applied**. The nested group is not applied in a session: `show cli authorization` ran and lists `clear` (top-level p49g-excepted) and `view-configuration` (top-level p49g-perm), so top-level inheritance reached the login, but not `network`, and `ping` was refused.
 
 ### `show configuration | display set | display inheritance | no-more` (p49-remote and the group lines)
 
@@ -128,7 +134,7 @@ set groups p49g-perm system login class <p49-*> allow-commands "^show version$"
 set groups p49g-excepted system login class <*> permissions clear
 set groups p49g-unapplied system login class <*> permissions all
 set groups p49g-timeout system login class <*> idle-timeout 30
-set groups p49g-inner system login class <p49-*> permissions view
+set groups p49g-inner system login class <p49-*> permissions network
 set groups p49g-outer apply-groups p49g-inner
 set groups p49g-classlevel system login class <p49-*> login-alarms
 set apply-groups p49g-tip

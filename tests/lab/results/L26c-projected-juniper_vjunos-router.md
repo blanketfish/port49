@@ -4,9 +4,9 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-projected-juniper_vjunos-router.pcap` — 5548 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-projected-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-projected-juniper_vjunos-router.pcap` — 7061 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-projected-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `1426da717ae573af17abb6d8d21b9201d2e05fa2`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestProjectionDifferential$`
+- **Run:** commit `627442515bd3e88d386ed11efcfaa83ccf8370be`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestProjectionDifferential$`
 
 ## Claim
 
@@ -72,13 +72,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
-| `show security zones` | `show security zones` | permit | runs | refuses | no |
-| `show security policies` | `show security policies` | permit | runs | refuses | no |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | permit | runs | refuses | no |
+| `show security policies | no-more` | `show security policies` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
@@ -86,11 +88,9 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show security zones` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security zones | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
-reading: `show security policies` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security policies | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -146,13 +146,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | permit | refuses | refuses | no |
-| `show security zones` | `show security zones` | permit | runs | refuses | no |
-| `show security policies` | `show security policies` | permit | runs | refuses | no |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | permit | runs | refuses | no |
+| `show security policies | no-more` | `show security policies` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
@@ -160,11 +162,9 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show security zones` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security zones | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
-reading: `show security policies` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security policies | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -220,13 +220,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | runs | runs | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | permit | runs | runs | yes |
 | `request system reboot` | `request system reboot` | permit | runs | refuses | no |
 | `restart routing` | `restart routing` | permit | refuses | refuses | no |
-| `show security zones` | `show security zones` | permit | runs | refuses | no |
-| `show security policies` | `show security policies` | permit | runs | refuses | no |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | permit | runs | refuses | no |
+| `show security policies | no-more` | `show security policies` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
@@ -236,17 +238,19 @@ reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; t
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show security zones` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security zones | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
-reading: `show security policies` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security policies | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
 | `xml-mode netconf need-trailer` | hello |
 
 `get-configuration`: result
+
+NETCONF on port 22 opened (control)
+
+NETCONF on port 830 opened (control)
 
 | NETCONF RPC | as the command | port49 | device |
 |---|---|---|---|
@@ -297,13 +301,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
-| `show security zones` | `show security zones` | permit | runs | refuses | no |
-| `show security policies` | `show security policies` | permit | runs | refuses | no |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | permit | runs | refuses | no |
+| `show security policies | no-more` | `show security policies` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
@@ -311,11 +317,9 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show security zones` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security zones | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
-reading: `show security policies` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security policies | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -370,13 +374,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
-| `show security zones` | `show security zones` | deny | refuses | refuses | yes |
-| `show security policies` | `show security policies` | deny | refuses | refuses | yes |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | deny | refuses | refuses | yes |
+| `show security policies | no-more` | `show security policies` | deny | refuses | refuses | yes |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
@@ -385,8 +391,6 @@ reading: `SHOW INTERFACES TERSE`: Junos's CLI is case-sensitive; the device refu
 reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|
@@ -442,13 +446,15 @@ slice01@srx1>
 | `set cli screen-width 200` | `set cli screen-width 200` | deny | refuses | refuses | yes |
 | `show cli` | `show cli` | permit | runs | runs | yes |
 | `file list /var/tmp` | `file list /var/tmp` | deny | refuses | refuses | yes |
+| `op url /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
+| `op ur /var/tmp/p49-entry-op.slax` | `op url /var/tmp/p49-entry-op.slax` | deny | refuses | refuses | yes |
 | `request system reboot` | `request system reboot` | deny | refuses | refuses | yes |
 | `restart routing` | `restart routing` | deny | refuses | refuses | yes |
-| `show security zones` | `show security zones` | permit | runs | refuses | no |
-| `show security policies` | `show security policies` | permit | runs | refuses | no |
-| `show log messages` | `show log messages` | permit | runs | refuses | no |
-| `show firewall` | `show firewall` | permit | runs | runs | yes |
-| `show policer` | `show policer` | permit | runs | runs | yes |
+| `show security zones | no-more` | `show security zones` | permit | runs | refuses | no |
+| `show security policies | no-more` | `show security policies` | permit | runs | refuses | no |
+| `show log messages | count` | `show log messages` | permit | runs | runs | yes |
+| `show firewall | no-more` | `show firewall` | permit | runs | runs | yes |
+| `show policer | no-more` | `show policer` | permit | runs | runs | yes |
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
@@ -458,11 +464,9 @@ reading: `SHOW CONFIGURATION SYSTEM HOST-NAME`: Junos's CLI is case-sensitive; t
 
 reading: `SHOW VERSION`: Junos's CLI is case-sensitive; the device refuses the uppercase form; recorded, not a failure; see L12-projection.
 
-reading: `show security zones` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security zones | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
-reading: `show security policies` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
-
-reading: `show log messages` was refused or showed nothing on this image, and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
+reading: `show security policies | no-more` did not run on this image (a refusal word, or the probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.
 
 | CLI entry | cell |
 |---|---|

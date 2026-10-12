@@ -4,9 +4,9 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L58-juniper_vjunos-router.pcap` — 2329 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L58-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L58-juniper_vjunos-router.pcap` — 3400 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L58-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `1426da717ae573af17abb6d8d21b9201d2e05fa2`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL58JunosBaselineWords$`
+- **Run:** commit `627442515bd3e88d386ed11efcfaa83ccf8370be`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL58JunosBaselineWords$`
 
 ## Claim
 
@@ -186,7 +186,7 @@ alice01@srx1>
 xml-mode 
 <?xml version="1.0" encoding="us-ascii"?>
 <junoscript xmlns="http://xml.juniper.net/xnm/1.1/xnm" xmlns:junos="http://xml.juniper.net/junos/23.4R0/junos" schemaLocation="http://xml.juniper.net/junos/23.4R0/junos junos/23.4R0/junos.xsd" os="JUNOS" release="23.4R2-S2.1" hostname="srx1" version="1.0">
-<!-- session start at 2026-10-12 04:38:01 UTC -->
+<!-- session start at 2026-10-12 05:47:53 UTC -->
 
 ```
 
@@ -214,7 +214,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
     <capability>http://yang.juniper.net/junos/jcmd?module=junos-configuration-metadata&amp;revision=2021-09-01</capability>
   </capabilities>
-  <session-id>15603</session-id>
+  <session-id>15615</session-id>
 </hello>
 ]]>]]>
 

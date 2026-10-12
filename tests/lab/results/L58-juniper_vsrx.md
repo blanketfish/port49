@@ -4,9 +4,9 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L58-juniper_vsrx.pcap` — 2141 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L58-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L58-juniper_vsrx.pcap` — 2164 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L58-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2590c57adc39770cd125593ed6cfddcfbaa628db`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL58JunosBaselineWords$`
+- **Run:** commit `627442515bd3e88d386ed11efcfaa83ccf8370be`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL58JunosBaselineWords$`
 
 ## Claim
 
@@ -194,7 +194,7 @@ alice01@srx1>
 xml-mode 
 <?xml version="1.0" encoding="us-ascii"?>
 <junoscript xmlns="http://xml.juniper.net/xnm/1.1/xnm" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" schemaLocation="http://xml.juniper.net/junos/21.4R0/junos junos/21.4R0/junos.xsd" os="JUNOS" release="21.4R3.15" hostname="srx1" version="1.0">
-<!-- session start at 2026-10-12 05:02:58 UTC -->
+<!-- session start at 2026-10-12 05:59:23 UTC -->
 
 ```
 
@@ -220,7 +220,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29483</session-id>
+  <session-id>29487</session-id>
 </hello>
 ]]>]]>
 
