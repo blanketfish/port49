@@ -671,6 +671,15 @@ func TestRPCEntryDeniesIsValidated(t *testing.T) {
 	if err := Validate("juniper_junos", d); err == nil || !strings.Contains(err.Error(), "rpc_entry_denies") {
 		t.Errorf("a regex term: %v", err)
 	}
+	// An entry deny that is not words then `**` binds less than its name:
+	// `junoscript *` denies one argument, bare `junoscript` only itself, and
+	// `xml-mode netconf` stays open beneath either (final review F10).
+	for _, bad := range []string{"junoscript *", "junoscript", "**", "** junoscript", "junoscript ** op"} {
+		d.RPCEntryDenies = []string{bad}
+		if err := Validate("juniper_junos", d); err == nil || !strings.Contains(err.Error(), "rpc_entry_denies") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
 	eos, _ := DialectFor("arista_eos")
 	eos.RPCEntryDenies = []string{"junoscript **"}
 	if err := Validate("arista_eos", eos); err == nil || !strings.Contains(err.Error(), "command_projection") {

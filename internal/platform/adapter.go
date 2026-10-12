@@ -891,10 +891,19 @@ func validateProjection(field func(string) string, d Dialect) error {
 		if err != nil {
 			return fmt.Errorf("%s[%d]: %w", field("rpc_entry_denies"), i, err)
 		}
+		// Words then a closing `**`: `junoscript *` denies one argument and a
+		// bare `junoscript` only itself, and `xml-mode netconf` stays open
+		// beneath either, while the baseline's `xml-mode **` is judged closed
+		// by what the entry deny contains.
 		for j, t := range terms {
-			if t.Kind == engine.Class || t.Kind == engine.Regex {
-				return fmt.Errorf("%s[%d]: term %d: an entry deny is words and `**`", field("rpc_entry_denies"), i, j+1)
+			last := j == len(terms)-1
+			if last && t.Kind != engine.Rest || !last && t.Kind != engine.Word {
+				return fmt.Errorf("%s[%d]: term %d: an entry deny is words and a closing `**`",
+					field("rpc_entry_denies"), i, j+1)
 			}
+		}
+		if len(terms) < 2 {
+			return fmt.Errorf("%s[%d]: an entry deny is words and a closing `**`", field("rpc_entry_denies"), i)
 		}
 	}
 	switch d.BitDelivery {
