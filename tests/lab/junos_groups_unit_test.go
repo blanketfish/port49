@@ -111,6 +111,12 @@ func TestL57ReadsTheClassLevelGroup(t *testing.T) {
 	if l57Readings("set system login class noc login-alarms\n").classLevel {
 		t.Error("another class's login-alarms was read as p49-remote's")
 	}
+	if !l57Readings("set system login class p49-remote apply-groups p49g-classlevel\n").classApply {
+		t.Error("the class's own apply-groups line was not read")
+	}
+	if l57Readings("set system login class p49-remote apply-groups-except p49g-classlevel\n").classApply {
+		t.Error("an apply-groups-except line was read as the class's apply-groups")
+	}
 }
 
 func TestJunosTryErrorWithholds(t *testing.T) {

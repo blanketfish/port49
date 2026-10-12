@@ -102,6 +102,7 @@ type l57Reading struct {
 	ownTimeout                  bool     // idle-timeout is the reference's 720, not the group's 30
 	ownPerm                     bool     // p49g-perm's view-configuration beside p49-l57own's own view
 	classLevel                  bool     // p49g-classlevel's login-alarms expanded under p49-remote
+	classApply                  bool     // the class's own `apply-groups p49g-classlevel` line is printed
 }
 
 func l57Readings(capture string) l57Reading {
@@ -124,6 +125,7 @@ func l57Readings(capture string) l57Reading {
 			r.nested = r.nested || rest == "permissions view"
 			r.ownTimeout = r.ownTimeout || rest == "idle-timeout 720"
 			r.classLevel = r.classLevel || rest == "login-alarms"
+			r.classApply = r.classApply || rest == "apply-groups p49g-classlevel"
 		case ln == "set system login class p49-l57own permissions view-configuration":
 			r.ownPerm = true
 		}
@@ -307,6 +309,20 @@ func TestL57JunosGroups(t *testing.T) {
 			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), cell(r.applyLines),
 				cell(r.groupLines), cell(r.tip), cell(r.perm), cell(r.excepted), cell(r.nested), cell(r.ownTimeout),
 				cell(r.ownPerm), cell(r.classLevel))
+		}
+		// Step 4 reads these two lines per capture; neither is a pass or a fail.
+		b.WriteString("\n")
+		for _, cmd := range l57Captures {
+			r := l57Readings(caps[cmd])
+			word := "stripped"
+			switch {
+			case !r.parsed:
+				word = "not parsed"
+			case r.classApply:
+				word = "survives"
+			}
+			fmt.Fprintf(&b, "- class_level_apply_groups: `%s`: **%s**; class_level_group_expanded (login-alarms under p49-remote): **%s**\n",
+				tableCell(cmd), word, l57Cell(r, r.classLevel))
 		}
 		fmt.Fprintf(&b, "\nA token session with no reply attributes (lands in `remote`), `show cli authorization`:\n\n```\n%s\n```\n",
 			strings.TrimSpace(run.auth))

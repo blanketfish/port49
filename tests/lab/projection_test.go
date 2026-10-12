@@ -77,10 +77,30 @@ var projectionProbes = []projectionProbe{
 	{junosProbe{cmd: "file list /var/tmp"}, "file list /var/tmp"},
 	{junosProbe{cmd: "request system reboot", complete: true}, "request system reboot"},
 	{junosProbe{cmd: "restart routing", complete: true}, "restart routing"},
+	// The readings (projectionReadings): what a readonly's grant deny and its
+	// allows beyond `view` do on the device.
+	{junosProbe{cmd: "show security zones"}, "show security zones"},
+	{junosProbe{cmd: "show security policies"}, "show security policies"},
+	{junosProbe{cmd: "show log messages"}, "show log messages"},
+	{junosProbe{cmd: "show firewall"}, "show firewall"},
+	{junosProbe{cmd: "show policer"}, "show policer"},
 	// Configuration mode, typed last: a statement there is governed by the
 	// class's configuration permissions, which no command regex reaches.
 	{junosProbe{cmd: "configure"}, "configure"},
 	{junosProbe{cmd: "edit"}, "edit"},
+}
+
+// projectionReadings are probes the run reads rather than gates on the
+// device's side: `show security` (the "readonly denying show security" row's
+// grant deny), and the allows of view-configuration's carve-outs `show log`,
+// `show firewall` and `show policer` that a readonly's reply sends beyond
+// `view`. An image may lack the command (a security hierarchy on
+// vJunos-router) or hold the allow narrower than port49 does; either is
+// recorded in the note as the device's shortfall, not a failure. A device that
+// runs what port49 denies, or what the model says it refuses, still fails.
+var projectionReadings = map[string]bool{
+	"show security zones": true, "show security policies": true, "show log messages": true,
+	"show firewall": true, "show policer": true,
 }
 
 // configEntry reports whether cmd enters configuration mode.
@@ -267,7 +287,9 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 			"subsystem are refused under port49's rendered reply, and the shipped readonly's nested deny " +
 			"(decision 44 rulings 1, 4 and 10; spec §15 L26c, L58)."
 	}
-	l.result(t, entry, claim, b.String())
+	// entryResult writes no note after a failed or INVALID run, and withholds
+	// one that holds a pool token: a note under either set is a valid run's.
+	l.entryResult(t, entry, claim, b.String())
 }
 
 // projectionShape runs one shape and renders its section of the note.
@@ -358,6 +380,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 	fmt.Fprintf(&b, "Reply `%s` (%s). `show cli authorization`:\n\n```\n%s\n```\n\n", strings.Join(res.Blob.Attributes,
 		"`, `"), shape, precReply(l16TrimEcho(auth, "show cli authorization")))
 	b.WriteString("| typed | port49 on | port49 | projection predicts | device | agrees |\n|---|---|---|---|---|---|\n")
+	var shortfalls []string
 	for _, p := range projectionProbes {
 		devOut, err := l.junosProbe(c, p.junosProbe)
 		if err != nil {
@@ -390,7 +413,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		case keepsDeny && configEntry(p.cmd) && ran:
 			t.Errorf("%s: the device entered configuration mode by %q under a reply that carries a deny", name, p.cmd)
 		case keepsDeny && res.Projection.FailClosed == "" && predicts && o.Permit && !ran && !p.complete &&
-			!configEntry(p.cmd):
+			!configEntry(p.cmd) && !projectionReadings[p.cmd]:
 			t.Errorf("%s: the device refused %q, which port49 permits and the reply was proven to let run", name, p.cmd)
 		case ran && !o.Permit:
 			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
@@ -400,6 +423,13 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		}
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
 			verb(predicts), verb(ran), yesNo(ran == o.Permit))
+		if projectionReadings[p.cmd] && o.Permit && !ran {
+			shortfalls = append(shortfalls, p.cmd)
+		}
+	}
+	for _, cmd := range shortfalls {
+		fmt.Fprintf(&b, "\nreading: `%s` was refused or showed nothing on this image, and port49 permits it: the device is "+
+			"narrower than port49 (or lacks the command), recorded, not a failure.\n", cmd)
 	}
 	// Where the set keeps NETCONF configured, the reply's `junoscript` deny
 	// is what refuses the XML entries: "refused" where the reply carries it
@@ -464,6 +494,10 @@ func (l *lab) projectionXMLMode(t *testing.T, name string, c *cliConn, refuses, 
 	entryXMLMode(c, r)
 	cell := r.cells["entry: xml-mode netconf need-trailer"]
 	check("xml-mode netconf need-trailer", cell)
+	if !refuses && cell != "hello" {
+		t.Errorf("INVALID: %s: the control's `xml-mode netconf need-trailer` was %s, so the refusals in the other rows "+
+			"are not isolated", name, cell)
+	}
 	if cell == "hello" {
 		fmt.Fprintf(&b, "\n`get-configuration`: %s\n", r.cells["xml-mode netconf need-trailer: get-configuration"])
 	}

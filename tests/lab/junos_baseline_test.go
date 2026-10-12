@@ -324,7 +324,8 @@ func TestL58JunosBaselineWords(t *testing.T) {
 				nested = false
 			}
 		}
-		fmt.Fprintf(&b, "- **G5** the shipped readonly form (`%s`): **%s**.\n", tableCell(shipped),
+		// A measurement, not an assertion: Step 4 reads this line and stops the plan on "NOT enforced".
+		fmt.Fprintf(&b, "- G5: the shipped readonly form (`%s`): **%s**.\n", tableCell(shipped),
 			map[bool]string{true: "enforced as the factored form", false: "NOT enforced as the factored form"}[nested])
 		fmt.Fprintf(&b, "\n### Control (view), information only\n\nThe save candidates typed in a session under `%s` "+
 			"(class p49-l58-view, no deny). Never a gate.\n\n| probe | control (view) |\n|---|---|\n", tableCell(control))
