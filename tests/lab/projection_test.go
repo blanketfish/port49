@@ -103,6 +103,13 @@ var projectionReadings = map[string]bool{
 	"show firewall": true, "show policer": true,
 }
 
+// upperCaseTyped reports whether cmd was typed with an upper-case letter. The
+// Junos CLI is case-sensitive, so the device refuses it where port49 matches
+// case-insensitively: narrower than port49, the fail-closed direction, which
+// L12-projection already records. The device-refused check skips such a probe;
+// the fail-open check does not.
+func upperCaseTyped(cmd string) bool { return cmd != strings.ToLower(cmd) }
+
 // configEntry reports whether cmd enters configuration mode.
 func configEntry(cmd string) bool { return cmd == "configure" || cmd == "edit" }
 
@@ -413,7 +420,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		case keepsDeny && configEntry(p.cmd) && ran:
 			t.Errorf("%s: the device entered configuration mode by %q under a reply that carries a deny", name, p.cmd)
 		case keepsDeny && res.Projection.FailClosed == "" && predicts && o.Permit && !ran && !p.complete &&
-			!configEntry(p.cmd) && !projectionReadings[p.cmd]:
+			!configEntry(p.cmd) && !projectionReadings[p.cmd] && !upperCaseTyped(p.cmd):
 			t.Errorf("%s: the device refused %q, which port49 permits and the reply was proven to let run", name, p.cmd)
 		case ran && !o.Permit:
 			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
@@ -423,13 +430,17 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		}
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
 			verb(predicts), verb(ran), yesNo(ran == o.Permit))
-		if projectionReadings[p.cmd] && o.Permit && !ran {
-			shortfalls = append(shortfalls, p.cmd)
+		switch {
+		case upperCaseTyped(p.cmd) && o.Permit && !ran:
+			shortfalls = append(shortfalls, fmt.Sprintf("reading: `%s`: Junos's CLI is case-sensitive; the device refuses "+
+				"the uppercase form; recorded, not a failure; see L12-projection.", p.cmd))
+		case projectionReadings[p.cmd] && o.Permit && !ran:
+			shortfalls = append(shortfalls, fmt.Sprintf("reading: `%s` was refused or showed nothing on this image, and "+
+				"port49 permits it: the device is narrower than port49 (or lacks the command), recorded, not a failure.", p.cmd))
 		}
 	}
-	for _, cmd := range shortfalls {
-		fmt.Fprintf(&b, "\nreading: `%s` was refused or showed nothing on this image, and port49 permits it: the device is "+
-			"narrower than port49 (or lacks the command), recorded, not a failure.\n", cmd)
+	for _, s := range shortfalls {
+		fmt.Fprintf(&b, "\n%s\n", s)
 	}
 	// Where the set keeps NETCONF configured, the reply's `junoscript` deny
 	// is what refuses the XML entries: "refused" where the reply carries it

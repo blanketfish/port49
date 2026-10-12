@@ -14,6 +14,27 @@ import (
 	"github.com/rhwendt/port49/internal/projection"
 )
 
+// TestUpperCaseTyped pins which probes the device-refused check skips: every
+// uppercase form in projectionProbes, and none other.
+func TestUpperCaseTyped(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		want bool
+	}{
+		{"SHOW VERSION", true}, {"SHOW INTERFACES TERSE", true}, {"SHOW CONFIGURATION SYSTEM HOST-NAME", true},
+		{"show version", false}, {"sh int ter", false}, {"   show configuration system host-name   ", false},
+	} {
+		if got := upperCaseTyped(c.cmd); got != c.want {
+			t.Errorf("upperCaseTyped(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+	for _, p := range projectionProbes {
+		if upperCaseTyped(p.cmd) != (p.cmd == strings.ToUpper(p.cmd) && p.cmd != strings.ToLower(p.cmd)) {
+			t.Errorf("%q: a probe is partly upper case; the predicate and the probe table disagree", p.cmd)
+		}
+	}
+}
+
 // TestProjectionShapes120Render runs without a device: each row of
 // projectionShapes120 renders, from this branch's code and the lab inventory,
 // the shape its `want` names, so the differential's run is not wasted on a row
