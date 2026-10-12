@@ -28,16 +28,18 @@ import (
 // device; this reads a file a compliance tool fetched (spec §8,
 // "Verification").
 //
-// On a projected platform it also reads the configuration, in `display set`
-// form, against the reference `platform export --classes` writes, whose
+// On a projected platform it also reads the configuration, as
+// platform.ConfigCapture prints it, groups' statements expanded where they
+// land, against the reference `platform export --classes` writes, whose
 // idle-timeout comes from --config's port49d.yaml, which is then required:
 // every reference line the device lacks, and every line under a template
-// class or user the reference does not write (templateCheck; plan 5b
-// pre-flight I8). A class carrying more than the reference is every subject
-// at that template running more than port49 proved, so it fails, as does a
-// capture it cannot read. Where a deny does not bind a management service's
-// RPCs, each service but the CLI's is a finding too, read from the capture
-// platform.ServicesCapture names (platform.CheckServices).
+// class or user the reference does not write and that is not harmless
+// (templateCheck; plan 5b pre-flight I8; decision 44 rulings 7 and 9). A
+// class carrying more than the reference is every subject at that template
+// running more than port49 proved, so it fails, as does a capture it cannot
+// read or one taken without `display inheritance`. A management service
+// whose RPCs a deny does not bind is a finding too, read from the same
+// capture (platform.CheckServices).
 //
 // A device's configuration is full of secrets — communities, keys, enable
 // secrets, a URL's password — so every line of it this prints is redacted by

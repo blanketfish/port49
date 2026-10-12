@@ -39,12 +39,14 @@ func TestCheckServices(t *testing.T) {
 			t.Errorf("%s: %+v %v", line, f, err)
 		}
 	}
-	for _, bad := range []string{
-		clean + "set groups g system services rest\n",
-		"system {\n    services {\n        rest;\n    }\n}\n",
-		"",
-	} {
-		if _, err := CheckServices(d, []byte(bad)); err == nil || !strings.Contains(err.Error(), "display inheritance") {
+	// A group line is refused at its line: the inherited capture prints none
+	// (decision 44 ruling 7; L57).
+	if _, err := CheckServices(d, []byte(clean+"set groups g system services rest\n")); err == nil ||
+		!strings.HasPrefix(err.Error(), "line 7 ") || !strings.Contains(err.Error(), ConfigCapture) {
+		t.Errorf("a group definition: %v", err)
+	}
+	for _, bad := range []string{"system {\n    services {\n        rest;\n    }\n}\n", ""} {
+		if _, err := CheckServices(d, []byte(bad)); err == nil || !strings.Contains(err.Error(), ConfigCapture) {
 			t.Errorf("%.40q: %v", bad, err)
 		}
 	}
@@ -134,9 +136,11 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system services netconf ssh\v",
 		"set Groups g system services netconf ssh",
 		"set logical-systems ls1 Apply-Groups g",
+		"deactivate system apply-groups g",
+		"protect apply-groups g",
 	} {
 		_, err := CheckServices(d, []byte(clean+bad+"\n"))
-		if err == nil || !strings.Contains(err.Error(), ServicesCapture) {
+		if err == nil || !strings.HasPrefix(err.Error(), "line 4 ") || !strings.Contains(err.Error(), ConfigCapture) {
 			t.Errorf("%q: %v", bad, err)
 			continue
 		}
@@ -145,7 +149,7 @@ func TestCheckServicesBypasses(t *testing.T) {
 		words := func(s string) []string {
 			return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && r != '-' })
 		}
-		said := words(strings.ReplaceAll(err.Error(), ServicesCapture, ""))
+		said := words(strings.ReplaceAll(err.Error(), ConfigCapture, ""))
 		for _, w := range words(bad) {
 			if len(w) > 3 && !slices.Contains([]string{"configuration", "display"}, w) && slices.Contains(said, w) {
 				t.Errorf("%q: the error quotes %q: %v", bad, w, err)
@@ -153,8 +157,8 @@ func TestCheckServicesBypasses(t *testing.T) {
 		}
 	}
 	// Neither a deactivate nor a protect enables anything, a terminal's
-	// prompt and a ## line are not configuration, a group's deactivate is
-	// what the capture's except leaves, and a value is not a keyword.
+	// prompt and a ## line are not configuration, a group's deactivate is no
+	// `set groups` line, and a value is not a keyword.
 	for _, ok := range []string{
 		"deactivate system services netconf",
 		"protect system services",
@@ -175,6 +179,7 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system services ssh \"client-alive-count-max\" 3",
 		"set system login class c allow-configuration-regexps \"system services .*\"",
 		"set system apply-groups-except g",
+		"set system login class c apply-groups-except g",
 	} {
 		if f, err := CheckServices(d, []byte(clean+ok+"\n")); len(f) != 0 || err != nil {
 			t.Errorf("%q: %+v %v", ok, f, err)
@@ -219,7 +224,7 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system services ssh\ndeactivate version\n",
 		"set system services ssh\nset version\n",
 	} {
-		if _, err := CheckServices(d, []byte(partial)); err == nil || !strings.Contains(err.Error(), ServicesCapture) {
+		if _, err := CheckServices(d, []byte(partial)); err == nil || !strings.Contains(err.Error(), ConfigCapture) {
 			t.Errorf("%q: %v", partial, err)
 		}
 	}
@@ -231,5 +236,50 @@ func TestCheckServicesBypasses(t *testing.T) {
 	f, err := CheckServices(d, []byte(clean+"deactivate system services netconf\nset system services netconf ssh\n"))
 	if err != nil || len(f) != 1 || f[0].Line != 5 || f[0].Text != "set system services netconf ssh" {
 		t.Errorf("line: %+v %v", f, err)
+	}
+}
+
+// Under set 1.2.0's entry deny NETCONF, every non-RPC service and every ssh
+// option pass; REST, J-Web, JET/gRPC, the XML API and outbound-ssh, which no
+// lab cell measured the deny closing, still fail wherever they are written
+// (decision 44 ruling 6). A group line is refused as under set 1.1.0. Set
+// 1.1.0 forbids NETCONF, set 1.2.0 does not.
+func TestCheckServicesUnderTheEntryDeny(t *testing.T) {
+	for v, forbidden := range map[string]bool{"1.1.0": true, "1.2.0": false} {
+		set, ok := Set(v)
+		if !ok || NetconfForbidden(set["juniper_junos"]) != forbidden || !RPCServicesChecked(set["juniper_junos"]) {
+			t.Errorf("set %s: NetconfForbidden is not %v, or the check does not run", v, forbidden)
+		}
+	}
+	d := junosProjected(BitDeliveryUserPermissions)
+	d.RPCEntryDenies = []string{"junoscript **", "op **"}
+	clean := "set version 23.4R2-S2.1\nset system services ssh\nset system services netconf ssh\n" +
+		"set system services netconf rfc-compliant\nset system services dhcp-local-server group g\n" +
+		"set system services ftp\nset system services ssh sftp-server\nset system services ssh tcp-forwarding\n"
+	if f, err := CheckServices(d, []byte(clean)); len(f) != 0 || err != nil {
+		t.Fatalf("clean: %+v %v", f, err)
+	}
+	for _, line := range []string{
+		"set system services rest http port 3000",
+		"set services rest control",
+		"set system services web-management https interface fxp0",
+		"set system services extension-service request-response grpc",
+		"set system extension-service application file a.py",
+		"set system services xnm-ssh",
+		"set system services xnm-ssl",
+		"set system services xnm-clear-text",
+		"set system services outbound-ssh client c",
+		"set logical-systems ls1 system services Web-Management http",
+	} {
+		f, err := CheckServices(d, []byte(clean+line+"\n"))
+		if err != nil || len(f) != 1 || f[0].Line != 9 || f[0].Text != line || !strings.Contains(f[0].Says, "junoscript") {
+			t.Errorf("%s: %+v %v", line, f, err)
+		}
+	}
+	for _, bad := range []string{"set groups g system services netconf ssh", "set apply-groups g"} {
+		if _, err := CheckServices(d, []byte(clean+bad+"\n")); err == nil ||
+			!strings.HasPrefix(err.Error(), "line 9 ") || !strings.Contains(err.Error(), ConfigCapture) {
+			t.Errorf("%s: %v", bad, err)
+		}
 	}
 }

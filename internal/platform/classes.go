@@ -138,27 +138,38 @@ func (t template) paths() [][]string {
 var uidLine = regexp.MustCompile(`^set system login user \S+ uid [0-9]+$`)
 
 // templateDriftSays is what a line under a template the reference does not
-// write means.
+// write means. The inherited capture cannot say which group brought a line,
+// so it points at the curly form, which does (L57; decision 44 ruling 7).
 const templateDriftSays = "a line under a port49 template the reference does not write: it changes what every " +
-	"subject at that template runs, or lets the template user log in locally; load port49 platform export " +
-	"--classes, which replaces the template"
+	"subject at that template runs, or lets the template user log in locally. If a configuration group put it " +
+	"there, `show configuration system login | display inheritance` names the group behind each inherited line " +
+	"(## '...' was inherited from group '...'): remove the statement from that group, or narrow the group's " +
+	"wildcard past the p49- templates, since loading the reference does not clear it. Otherwise load port49 " +
+	"platform export --classes, which replaces the template"
 
-// TemplateDrift reads a projected platform's device configuration, as `show
-// configuration | display set` prints it, against ReferenceClasses: every
-// reference set line the configuration lacks, and every line under a
-// template class or template user the reference does not write (spec §8; plan
-// 5b pre-flight I8). A class line the reference lacks — an allow-commands,
-// an extra permission — widens every subject at that template, and a template
-// user's authentication line lets it log in locally, so each is drift. So is
-// what reaches a template from beside it: a `deactivate` of a reference line
-// or of any level above one, and a configuration group whose path, wildcards
-// read as matching, lands under one, since display set prints a group's lines
-// where they are written and not where they apply. The device_config lines
-// are Missing's. It is an error where the configuration is not all in set
-// form, since a curly-form part could carry anything under a template unread,
-// and where it lacks the top-level `set version` line a whole display set
+// TemplateDrift reads a projected platform's device configuration, as
+// ConfigCapture prints it, against ReferenceClasses: every reference set line
+// the configuration lacks, and every line under a template class or template
+// user the reference does not write and that is not harmless (spec §8, §12;
+// plan 5b pre-flight I8; decision 44 rulings 7 and 9). A class line the
+// reference lacks — an allow-commands, an extra permission — widens every
+// subject at that template, and a template user's authentication line lets
+// it log in locally, so each is drift; a class's idle-timeout, login-alarms
+// and login-tip, a user's full-name and an apply-groups-except are not
+// (templateLinePasses). The inherited capture prints a configuration group's
+// statements expanded under each template they land on, and nothing of the
+// group itself (tests/lab/results/L57-juniper_*.md), so a line a group brings
+// is judged as the template's own, and its finding points at the curly form
+// that names the group. A capture with a `set groups` line, or `apply-groups`
+// as a word at any level, was taken without `display inheritance`, its
+// groups unexpanded, and is an error naming the first such line (groupSign).
+// So is what reaches a template from beside it: a `deactivate` of a reference
+// line or of any level above one is drift. The device_config lines are
+// Missing's. It is an error where the configuration is not all in set form,
+// since a curly-form part could carry anything under a template unread, and
+// where it lacks the top-level `set version` line a whole display set
 // prints, since a capture of a subtree, `show configuration system login`,
-// leaves a group or deactivate outside it unread (task 13a review I4).
+// leaves a deactivate outside it unread (task 13a review I4).
 func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missing []string, extra []ConfigFinding,
 	err error) {
 	ts, err := templates(d, maxSessionAge)
@@ -175,12 +186,18 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	}
 	carried := map[string]bool{}
 	setForm, curly, version := false, false, false
+	var notInherited error
 	err = eachLine(config, func(n int, line string) {
 		words := strings.Fields(line)
 		if len(words) == 0 {
 			return
 		}
 		line = strings.Join(words, " ")
+		if notInherited == nil && slices.Contains([]string{"set", "deactivate", "protect"}, words[0]) &&
+			groupSign(line) {
+			notInherited = fmt.Errorf("line %d %s: capture the whole configuration with `%s`", n, notInheritedWhy,
+				ConfigCapture)
+		}
 		switch words[0] {
 		case "set":
 			setForm = true
@@ -192,7 +209,7 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 				return
 			}
 			if path, wildcards := located(words[1:]); slices.ContainsFunc(paths, func(p []string) bool {
-				return hasPrefix(path, p, wildcards)
+				return hasPrefix(path, p, wildcards) && !templateLinePasses(path, p)
 			}) {
 				extra = append(extra, ConfigFinding{Line: n, Text: line, Says: templateDriftSays})
 			}
@@ -221,18 +238,20 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	if err != nil {
 		return nil, nil, err
 	}
+	if notInherited != nil {
+		return nil, nil, notInherited
+	}
 	switch {
 	case !setForm:
-		return nil, nil, errors.New("the configuration has no set line: the template check reads `show configuration " +
-			"| display set`")
+		return nil, nil, errors.New("the configuration has no set line: the template check reads `" + ConfigCapture + "`")
 	case !version:
 		return nil, nil, errors.New("the configuration has no top-level set version line, which a whole `show " +
 			"configuration | display set` prints: a capture of part of it leaves what reaches a template from " +
-			"outside that part unread: capture the whole configuration")
+			"outside that part unread: capture the whole configuration with `" + ConfigCapture + "`")
 	case curly:
 		return nil, nil, errors.New("the configuration mixes curly-form statements into set form, and the template " +
-			"check cannot read what a curly block carries under a template: capture the whole `show configuration " +
-			"| display set`")
+			"check cannot read what a curly block carries under a template: capture the whole configuration with `" +
+			ConfigCapture + "`")
 	}
 	for _, l := range want {
 		if !carried[l] {
@@ -278,4 +297,27 @@ func hasPrefix(path, prefix []string, wildcards bool) bool {
 		}
 	}
 	return true
+}
+
+// harmlessTemplateStatements change nothing a session runs: a class's
+// idle-timeout (the reference writes one; another value is the reference's
+// line missing), login banner and alarms, and a user's full name. Under a
+// template they pass, written there or expanded from a group (spec §12;
+// decision 44 ruling 7). Every other statement the reference does not write
+// fails, a privilege one or one on neither list (ruling 9).
+var harmlessTemplateStatements = map[string][]string{
+	"class": {"idle-timeout", "login-alarms", "login-tip"},
+	"user":  {"full-name"},
+}
+
+// templateLinePasses reports whether a line at path, under template path t,
+// passes though the reference does not write it: a harmless statement of t's
+// kind, or an apply-groups-except, which keeps a group off the template,
+// survives inheritance (L57) and is no finding itself (decision 44 ruling 7).
+func templateLinePasses(path, t []string) bool {
+	if len(path) <= len(t) {
+		return false
+	}
+	stmt := path[len(t)]
+	return stmt == "apply-groups-except" || slices.Contains(harmlessTemplateStatements[t[2]], stmt)
 }

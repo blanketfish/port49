@@ -349,10 +349,12 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 	return b.String()
 }
 
-// netconfForbidden reports whether check-config holds a device of d to the
-// management-service allowlist, which fails one serving NETCONF (plan 5b
-// Task 14, branch M; platform.CheckServices).
-func netconfForbidden(d adapter.Dialect) bool { return adapter.RPCServicesChecked(d) }
+// netconfForbidden reports whether check-config fails a device of d for
+// serving NETCONF, so the run disables it as the operator must: under set
+// 1.1.0 it does (plan 5b Task 14, branch M); under set 1.2.0 the reply's
+// `junoscript` deny closes NETCONF per subject and the device keeps it
+// (decision 44 rulings 1 and 6; platform.NetconfForbidden).
+func netconfForbidden(d adapter.Dialect) bool { return adapter.NetconfForbidden(d) }
 
 // projectionNetconf opens NETCONF with the shape's token, which gets the same
 // reply, and sends the RPC equivalents of `show configuration` and `show
