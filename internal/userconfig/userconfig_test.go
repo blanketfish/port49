@@ -783,6 +783,34 @@ func TestTheFixForARootFileUnderYourHomeIsYours(t *testing.T) {
 	}
 }
 
+// The usual install is a link chain (libykcs11.so -> libykcs11.so.2 -> the
+// file): the directory each link's target is in is judged too, or a module
+// whose real file sits where someone else can write would pass (review I2).
+func TestCheckOwnedWalksTheDirectoryOfALinkTarget(t *testing.T) {
+	open := filepath.Join(privateDir(t), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(open, "libmod.so.2")
+	if err := os.WriteFile(real, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(privateDir(t), "libmod.so")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(link); err != nil {
+		t.Fatalf("a link into a 0700 directory: %v", err)
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := CheckOwned(link); err == nil || !strings.Contains(err.Error(), open) {
+		t.Fatalf("a link into a group-writable directory: %v", err)
+	}
+}
+
 // A PKCS#11 module is code the agent runs: the file, the links to it and
 // every directory above it are judged (plan 9c, ruling 3; pre-flight I1).
 func TestCheckOwnedJudgesTheModuleAndItsDirectories(t *testing.T) {

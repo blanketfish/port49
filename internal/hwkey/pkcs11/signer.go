@@ -339,9 +339,7 @@ func (s *Signer) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.state != hwkey.Absent {
-		s.m.closeSession(s.session)
-	}
+	s.dropSession()
 	s.state = hwkey.Absent
 	return nil
 }
@@ -359,8 +357,17 @@ func (s *Signer) State() hwkey.State {
 	return s.state
 }
 
+// dropSession closes the session at the point of loss and forgets its number
+// (CK_INVALID_HANDLE): a module may give a lost session's number to another
+// Signer's new one, which a later close of the stale number would end.
+func (s *Signer) dropSession() {
+	s.m.closeSession(s.session)
+	s.session = 0
+}
+
 // absent records that the token is gone.
 func (s *Signer) absent() {
+	s.dropSession()
 	s.state, s.handle = hwkey.Absent, 0
 }
 
@@ -369,7 +376,6 @@ func (s *Signer) absent() {
 // the token needs login, else Present. A different key under the same URI is
 // not this one: the public half is compared when the token will show it.
 func (s *Signer) reopenLocked() {
-	s.m.closeSession(s.session)
 	slots, err := s.m.slotList()
 	if err != nil {
 		return
@@ -396,7 +402,11 @@ func (s *Signer) reopenLocked() {
 		}
 	}
 	var chosen *candidate
-	if len(loose) == 1 {
+	// One token by its info fields is this one only when its serial says so
+	// (it is the serial the Signer opened on, or the URI names one): a label
+	// alone also fits a stranger's token, and Unlock would spend a PIN try
+	// on it. Any other token must show the key, as Open requires.
+	if len(loose) == 1 && (trimField(loose[0].ti.serial[:]) == s.serial || s.uri.Serial != "") {
 		c := &candidate{slot: loose[0].slot, ti: loose[0].ti, id: s.id,
 			loginRequired: loose[0].ti.flags&ckfLoginRequired != 0}
 		c.session, err = s.m.openSession(c.slot, false)
@@ -426,7 +436,6 @@ func (s *Signer) reopenLocked() {
 		return
 	}
 	if !s.findKeyLocked() {
-		s.m.closeSession(s.session)
 		s.absent()
 		return
 	}

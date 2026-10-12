@@ -1,4 +1,8 @@
-//go:build hwkey_dlopen
+//go:build hwkey && hwkey_dlopen
+
+// Harness only: the hwkey tag is set by `make test-hw` alone, so the release
+// client (hwkey_dlopen) carries no code that generates a key or writes an
+// object (decision 45 ruling 7).
 
 package pkcs11
 

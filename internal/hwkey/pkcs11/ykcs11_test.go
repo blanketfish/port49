@@ -5,6 +5,7 @@ package pkcs11_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/hwkey/hwtest"
@@ -40,6 +41,8 @@ func TestLibykcs11InitFinalizeUnderPurego(t *testing.T) {
 		hwtest.Missing(t, "libykcs11 module "+module+" is not there")
 	}
 	const rounds = 5
+	// The last round leaves a finalized Module in the cache.
+	t.Cleanup(pkcs11.ResetModules)
 	before := threads(t)
 	var afterFirst, afterLast int
 	for i := 1; i <= rounds; i++ {
@@ -50,6 +53,13 @@ func TestLibykcs11InitFinalizeUnderPurego(t *testing.T) {
 		}
 		slots, err := pkcs11.SlotList(m)
 		if err != nil {
+			if strings.Contains(err.Error(), "CKR_DEVICE_ERROR") {
+				t.Fatalf("round %d: C_GetSlotList: %v\n"+
+					"CKR_DEVICE_ERROR with no token usually means pcscd refused this process: polkit "+
+					"(org.debian.pcsc-lite.access_pcsc) answers no to a session that is not an active local one. "+
+					"`journalctl -u pcscd` says so. .github/workflows/hwkeys.yml has the CI-only rule and why it "+
+					"must not be copied to a developer machine as written.", i, err)
+			}
 			t.Fatalf("round %d: C_GetSlotList: %v", i, err)
 		}
 		if rv := pkcs11.Finalize(m); rv != 0 {

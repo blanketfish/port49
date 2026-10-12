@@ -242,8 +242,14 @@ func (m *Module) openSession(slot uint, rw bool) (uint, error) {
 }
 
 // closeSession's result is ignored: a session on a token already gone is
-// already closed.
-func (m *Module) closeSession(h uint) { m.call(fnCloseSession, uintptr(h)) }
+// already closed. Handle 0 is CK_INVALID_HANDLE, a session already let go:
+// the module may have given the number to someone else's, so it is not sent.
+func (m *Module) closeSession(h uint) {
+	if h == 0 {
+		return
+	}
+	m.call(fnCloseSession, uintptr(h))
+}
 
 // login is one C_Login; the caller owns pin and zeroes it.
 func (m *Module) login(session uint, user uint, pin []byte) uint {

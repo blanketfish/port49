@@ -289,3 +289,157 @@ func TestAReinsertedTokenIsSeenByState(t *testing.T) {
 		t.Fatalf("Sign after the return: %v", err)
 	}
 }
+
+// plugged is a token carrying an imported key and its certificate, as a PIV
+// token does, and the means to take it away and bring it back.
+type plugged struct {
+	t      *testing.T
+	module string
+	label  string
+	u      pkcs11.URI
+	key    *ecdsa.PrivateKey
+	cert   *x509.Certificate
+}
+
+func newPlugged(t *testing.T) *plugged {
+	t.Helper()
+	module, label := hwtest.SoftHSMBare(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &plugged{t: t, module: module, label: label, u: uriFor(t, module, label), key: key}
+	p.cert = newCA(t).issue(t, "alice", &key.PublicKey, x509.ExtKeyUsageClientAuth)
+	p.plug()
+	return p
+}
+
+func (p *plugged) plug() {
+	p.t.Helper()
+	hwtest.SoftHSMImport(p.t, p.label, p.key)
+	if err := pkcs11.StoreCertificate(p.u, p.cert, pin()); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+// Two Signers on one token re-probe side by side (touch_key and issued_key,
+// decision 45). A Signer must not close, on a later re-probe, the session
+// handle it lost with the token: the module may have given the number to the
+// other Signer's new session.
+func TestAStaleSessionHandleIsNotClosedAgain(t *testing.T) {
+	p := newPlugged(t)
+	a, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for _, s := range []*pkcs11.Signer{a, b} {
+		if err := s.Unlock(pin()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest := sha256.Sum256([]byte("port49"))
+	hwtest.SoftHSMUnplug(t, p.label)
+	for _, s := range []*pkcs11.Signer{a, b} {
+		if _, err := s.Sign(rand.Reader, digest[:], crypto.SHA256); !errors.Is(err, hwkey.ErrKeyAbsent) {
+			t.Fatalf("Sign with the token gone = %v, want ErrKeyAbsent", err)
+		}
+	}
+	hwtest.SoftHSMReinit(t, p.label)
+	p.plug()
+	// b reopens first, so its new session takes the number a lost; a's
+	// re-probe then holds a stale a.session equal to b's live one.
+	for _, s := range []*pkcs11.Signer{b, a} {
+		if got := s.State(); got != hwkey.Locked {
+			t.Fatalf("the token is back and State says %v, want locked", got)
+		}
+	}
+	if err := b.Unlock(pin()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatalf("b's session was closed by a's re-probe: %v", err)
+	}
+}
+
+// A token that comes back under the label but is not the one that left is
+// not this key's: State must not say Locked for it, or Unlock would spend a
+// PIN try on a stranger (review M6).
+func TestAnotherTokenUnderTheSameLabelIsNotThisKey(t *testing.T) {
+	p := newPlugged(t)
+	s, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Unlock(pin()); err != nil {
+		t.Fatal(err)
+	}
+	hwtest.SoftHSMUnplug(t, p.label)
+	digest := sha256.Sum256([]byte("port49"))
+	if _, err := s.Sign(rand.Reader, digest[:], crypto.SHA256); !errors.Is(err, hwkey.ErrKeyAbsent) {
+		t.Fatalf("Sign with the token gone = %v, want ErrKeyAbsent", err)
+	}
+	// A blank token with the same label: a new serial, no key, no certificate.
+	hwtest.SoftHSMReinit(t, p.label)
+	if got := s.State(); got != hwkey.Absent {
+		t.Fatalf("a blank token with the same label came back and State says %v, want absent", got)
+	}
+	before := hwtest.SoftHSMLoginAttempts(t)
+	if err := s.Unlock(pin()); !errors.Is(err, hwkey.ErrKeyAbsent) {
+		t.Fatalf("Unlock = %v, want ErrKeyAbsent", err)
+	}
+	if got := hwtest.SoftHSMLoginAttempts(t) - before; got != 0 {
+		t.Fatalf("Unlock spent %d PIN tries on another token", got)
+	}
+}
+
+// The PIN is zeroed by the call that was given it, whatever the token said.
+func TestThePINBufferIsZeroedAfterOpenAndUnlock(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	zero := func(what string, b []byte) {
+		t.Helper()
+		for _, c := range b {
+			if c != 0 {
+				t.Fatalf("%s left the PIN buffer as %v", what, b)
+			}
+		}
+	}
+	buf := pin()
+	s, err := pkcs11.Open(uriFor(t, module, label), buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero("Open", buf)
+	s.Close() // the last session closing logs the token out
+
+	// Open with a wrong PIN fails and still zeroes it.
+	bad := []byte("000000")
+	if s2, err := pkcs11.Open(uriFor(t, module, label), bad); err == nil {
+		s2.Close()
+		t.Fatal("Open with a wrong PIN succeeded")
+	}
+	zero("a failed Open", bad)
+
+	s, err = pkcs11.Open(uriFor(t, module, label), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	wrong := []byte("000000")
+	var pe *hwkey.PINError
+	if err := s.Unlock(wrong); !errors.As(err, &pe) {
+		t.Fatalf("Unlock(wrong) = %v, want a *PINError", err)
+	}
+	zero("a failed Unlock", wrong)
+	right := pin()
+	if err := s.Unlock(right); err != nil {
+		t.Fatal(err)
+	}
+	zero("Unlock", right)
+}
