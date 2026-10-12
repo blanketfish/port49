@@ -4093,8 +4093,8 @@ func TestCheckServicesAllowlistUnderTheEntryDeny(t *testing.T) {
 // (tests/lab/results/L57-juniper_*.md), whose `system services` are
 // tests/lab/configs/vjunos-startup.conf's `netconf ssh` and the lab's `ssh
 // root-login allow`; Task 9 regenerates them from the devices. A fixture
-// also holds the command's echo, the prompt and a redacted line, and ends
-// each line in a carriage return, so only its set lines are read, trimmed.
+// also holds the command's echo and the prompt, and ends each line in a
+// carriage return, so only its statement lines are read, trimmed.
 func TestCheckServicesPassesTheLabsServices(t *testing.T) {
 	set, _ := Set("1.2.0")
 	files, _ := filepath.Glob("testdata/l57-*.set")
@@ -4110,7 +4110,7 @@ func TestCheckServicesPassesTheLabsServices(t *testing.T) {
 		services := map[string]bool{}
 		for _, ln := range strings.Split(string(raw), "\n") {
 			ln = strings.TrimRight(ln, "\r")
-			if !strings.HasPrefix(ln, "set ") {
+			if !strings.HasPrefix(ln, "set ") && !strings.HasPrefix(ln, "deactivate ") && !strings.HasPrefix(ln, "protect ") {
 				continue
 			}
 			lines = append(lines, ln)
@@ -4905,16 +4905,22 @@ go test ./internal/platform/ -run 'TemplateDriftReadsTheL57Captures' -count=1 -v
 - [ ] **Step 5: check-config on the regenerated L57 captures with this branch's binary.** The lab
   policy pins no set, so write one that pins 1.2.0, and name each capture for its lab node
   (`tests/lab/inventory-lab.yaml`: `srx1` is vJunos-router, `vsrx1` is vSRX). A fixture also
-  holds the command's echo, the closing prompt and a redacted line whose verb is `<removed>`,
-  which the services check refuses as not set statements, and ends every line in a carriage
-  return, which the services check refuses as a control character. So drop the carriage returns
-  and keep only the `set` lines:
+  holds the command's echo and the closing prompt, which the services check refuses as not
+  statements, and ends every line in a carriage return, which it refuses as a control
+  character. So drop the carriage returns and keep only the statement lines, `set`,
+  `deactivate` and `protect`: `^set ` alone would hide a `deactivate` line's drift. The
+  committed fixtures also carry a `<removed>` line. That was the lab redactor's `\s+` crossing a
+  newline and eating the next line's verb (review M8). `2122e6f` fixed it to `[ \t]+`, and Step
+  3's rerun regenerates both fixtures through the fixed redactor, so the regenerated ones carry
+  no `<removed>` line. If one still does, stop and report: a statement was lost, and the
+  services check would not read it.
 
 ```bash
 d=$(mktemp -d)
 printf 'platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n  - {name: r, privilege: readonly, permit: ["show **"]}\nsubjects:\n  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}\ngrants:\n  - {subject: s, scope: all_devices, roles: [r]}\n' > $d/policy.yaml
-tr -d '\r' < internal/platform/testdata/l57-juniper_vjunos-router.set | grep '^set ' > $d/srx1.set
-tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep '^set ' > $d/vsrx1.set
+grep -c '<removed>' internal/platform/testdata/l57-*.set   # expect 0 for each file after the rerun
+tr -d '\r' < internal/platform/testdata/l57-juniper_vjunos-router.set | grep -E '^(set|deactivate|protect) ' > $d/srx1.set
+tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep -E '^(set|deactivate|protect) ' > $d/vsrx1.set
 ./bin/port49 devices check-config --policy $d/policy.yaml --inventory tests/lab/inventory-lab.yaml \
   --config tests/lab/port49d-lab.yaml --batch $d/srx1.set $d/vsrx1.set
 ```
@@ -5041,9 +5047,18 @@ tr -d '\r' < internal/platform/testdata/l57-juniper_vsrx.set | grep '^set ' > $d
     and run `gofmt -l internal/platform` (no output) and `grep -n 'L26c, open\|provisional on
     L26c\|provisional on L57' internal/platform/*.go` (no output where L57 closed).
 
-  **(f) L58**, which stays closed: replace the "will be recorded in the note as \"control
-  (view)\" when Task 9 reruns L58" clauses in §8's `save` bullet and in L58's detail bullet with
-  what the control (view) cells read, citing `L58-juniper_*.md`. Add one sentence on G5: the
+  **(f) L58**, which stays closed. In §8's `save` bullet, replace the whole sentence from "The
+  `save` cells ran under" through "information only." (it now reads "…the same candidates typed
+  under a `view` class with no deny are will be recorded in the note as \"control (view)\" when
+  Task 9 reruns L58, information only.", with a stray "are") with one whole sentence of the
+  form "The `save` cells ran under a `permissions all` class; the same candidates typed under a
+  `view` class with no deny were <what the control (view) cells read on each image>
+  (`L58-juniper_*.md`), information only." L58's detail bullet has no "will be recorded"
+  clause; its last sentence ends "…the `save` candidates typed under `view` with no deny are
+  recorded in the note as \"control (view)\" when the test next runs, information only." Replace
+  "are recorded in the note as \"control (view)\" when the test next runs" there with "were
+  <what the cells read> (`L58-juniper_*.md`)". Afterwards `grep -n 'recorded in the note as'
+  docs/design/2026-08-23-policy-engine-spec.md` prints nothing. Add one sentence on G5: the
   shipped readonly's nested form was enforced as the factored form.
 
   If a result contradicts a sentence of §8, decision 44 or the adapter comment, fix that
@@ -5158,6 +5173,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   what a group adds. A capture holding a `set groups` line, or `apply-groups` anywhere, was taken
   without `display inheritance` and is refused at that line with the command to use: change the
   CI capture command once, fleet-wide.
+- **Capture over the SSH exec channel, not a terminal session.** Run `ssh <device> 'show
+  configuration | display set | display inheritance | no-more'`, which prints no command echo
+  and no prompt. check-config refuses any line that is not a statement, the echo and the prompt
+  included, naming the line: a check that skipped them could skip a wrapped or mangled
+  `system services` line too, and go green on a device running REST.
 - **`devices check-config --batch FILE...`** checks a directory of captures in one run. Each file
   is checked against the device its file name names: the name as it is where the inventory has
   it (Oxidized's extensionless files, FQDNs included), else less its last extension
