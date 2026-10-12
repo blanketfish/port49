@@ -613,8 +613,8 @@ func TestPolicyDiffGatesAPerLoginMFAWeakening(t *testing.T) {
 	}
 	code, out := diff(strictPol, weakPol)
 	if code != 1 ||
-		!strings.Contains(out, "per_login_mfa_weakened: noc on leaf-01: accept [hardware_key_touch] reuse_for 15m -> "+
-			"accept [hardware_key_touch, idp_mfa] reuse_for 15m; no session test asserts it: add {subject: noc, "+
+		!strings.Contains(out, "per_login_mfa_weakened: noc on leaf-01: accept [hardware_key_touch] reuse_for 15m (defaults) -> "+
+			"accept [hardware_key_touch, idp_mfa] reuse_for 15m (defaults); no session test asserts it: add {subject: noc, "+
 			"device: leaf-01, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}}") ||
 		!strings.Contains(out, "2 unacknowledged per_login_mfa weakenings") {
 		t.Fatalf("unacknowledged: code %d\n%s", code, out)
@@ -636,8 +636,8 @@ func TestPolicyDiffGatesAPerLoginMFAWeakening(t *testing.T) {
 	}
 	// The way back is a tightening: printed, never failing.
 	if code, out := diff(weakPol, strictPol); code != 0 ||
-		!strings.Contains(out, "per_login_mfa: noc on leaf-01: accept [hardware_key_touch, idp_mfa] reuse_for 15m -> "+
-			"accept [hardware_key_touch] reuse_for 15m") || strings.Contains(out, "per_login_mfa_weakened") {
+		!strings.Contains(out, "per_login_mfa: noc on leaf-01: accept [hardware_key_touch, idp_mfa] reuse_for 15m (defaults) -> "+
+			"accept [hardware_key_touch] reuse_for 15m (defaults)") || strings.Contains(out, "per_login_mfa_weakened") {
 		t.Fatalf("a tightening: code %d\n%s", code, out)
 	}
 }
@@ -681,6 +681,32 @@ func TestPolicyToolsFailADisjointPerLoginMFA(t *testing.T) {
 	if code, got := diff(disjointPol, write("disjoint2.yaml", disjoint+"# reviewed\n")); code != 0 ||
 		strings.Contains(got, "QUARANTINES") {
 		t.Fatalf("an entry both versions hold: code %d\n%s", code, got)
+	}
+}
+
+// The access review shows where a requirement is written, in a column that
+// appears only when some row has one.
+func TestAccessReviewShowsThePerLoginMFALevels(t *testing.T) {
+	pol, inv := policyFixture(t)
+	review := func() string {
+		var out, errb bytes.Buffer
+		if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "noc"}, &out,
+			&errb); code != 0 {
+			t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String()
+	}
+	if got := review(); strings.Contains(got, "PER_LOGIN_MFA") {
+		t.Fatalf("a policy with no requirement has the column:\n%s", got)
+	}
+	raw := string(readFile(t, pol))
+	with := strings.Replace(raw, "{name: read_only, privilege: readonly, permit: [show **]}",
+		"{name: read_only, privilege: readonly, permit: [show **], per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}", 1)
+	if err := os.WriteFile(pol, []byte(with), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := review(); !strings.Contains(got, "PER_LOGIN_MFA") || !strings.Contains(got, "role read_only [hardware_key_touch idp_mfa]") {
+		t.Fatalf("the column is missing or does not name the level:\n%s", got)
 	}
 }
 

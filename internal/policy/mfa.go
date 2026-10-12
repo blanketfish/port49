@@ -30,6 +30,11 @@ const (
 	maxMFAReuse     = 8 * time.Hour
 )
 
+// machineMeets is what explain and `policy test` say of a requirement a
+// machine meets (decision 45 ruling 21): a touch proves only from the token
+// holding the connection key.
+const machineMeets = "applies to this machine: provable only with a pkcs11 key and touch key on one token"
+
 // PerLoginMFA is one level's per_login_mfa as written.
 type PerLoginMFA struct {
 	Accept            []MFAMethod
@@ -87,7 +92,7 @@ func (r MFARequirement) explainLine() string {
 	applies := "applies to humans"
 	switch {
 	case r.Machine:
-		applies = "applies to this machine: provable only with a pkcs11 key and touch key on one token"
+		applies = machineMeets
 	case slices.ContainsFunc(r.Levels, func(l MFALevel) bool { return l.AppliesToMachines }):
 		applies = "applies to machines too"
 	}
@@ -126,6 +131,27 @@ var errMFAMachine = errors.New("policy: per_login_mfa: a machine principal prove
 // isMFAError reports whether err is a per_login_mfa composition refusal.
 func isMFAError(err error) bool {
 	return errors.Is(err, ErrMFADisjoint) || errors.Is(err, errMFAMachine)
+}
+
+// mfaPairError is a per_login_mfa refusal that says which levels conflict:
+// Pair names the two whose intersection is empty (for a machine, every level
+// that applies to it). A quarantine entry carries it so a policy edit's
+// "new" is a new device or level pair, whichever subject reaches it.
+type mfaPairError struct {
+	Err  error
+	Pair string
+}
+
+func (e *mfaPairError) Error() string { return e.Err.Error() }
+func (e *mfaPairError) Unwrap() error { return e.Err }
+
+// mfaPair is the level pair err names, "" when it names none.
+func mfaPair(err error) string {
+	var pe *mfaPairError
+	if errors.As(err, &pe) {
+		return pe.Pair
+	}
+	return ""
 }
 
 // fileMFA is a per_login_mfa block as written. ReuseFor is a pointer, so an
@@ -229,12 +255,15 @@ func subsetOf(a, b []MFAMethod) bool {
 }
 
 // levelNames joins the levels' names with ", ".
-func levelNames(levels []MFALevel) string {
+func levelNames(levels []MFALevel) string { return strings.Join(levelsOf(levels), ", ") }
+
+// levelsOf is the levels' names.
+func levelsOf(levels []MFALevel) []string {
 	names := make([]string, len(levels))
 	for i, l := range levels {
 		names[i] = l.Level
 	}
-	return strings.Join(names, ", ")
+	return names
 }
 
 // mfaFor is the requirement on d for c (decision 45 ruling 11): every
@@ -274,8 +303,9 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
 			first := levels[slices.IndexFunc(levels, func(o MFALevel) bool {
 				return !slices.ContainsFunc(o.Accept, func(m MFAMethod) bool { return slices.Contains(l.Accept, m) })
 			})]
-			return MFARequirement{}, fmt.Errorf("%w: %s accepts %v and %s accepts %v", ErrMFADisjoint,
-				first.Level, first.Accept, l.Level, l.Accept)
+			return MFARequirement{}, &mfaPairError{Pair: first.Level + " | " + l.Level,
+				Err: fmt.Errorf("%w: %s accepts %v and %s accepts %v", ErrMFADisjoint,
+					first.Level, first.Accept, l.Level, l.Accept)}
 		}
 		req.Accept = next
 		if l.ReuseFor < req.ReuseFor {
@@ -283,7 +313,8 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
 		}
 	}
 	if machine && !req.Accepts(HardwareKeyTouch) {
-		return MFARequirement{}, fmt.Errorf("%w, and %s leave it %v", errMFAMachine, levelNames(levels), req.Accept)
+		return MFARequirement{}, &mfaPairError{Pair: strings.Join(levelsOf(levels), " | "),
+			Err: fmt.Errorf("%w, and %s leave it %v", errMFAMachine, levelNames(levels), req.Accept)}
 	}
 	return req, nil
 }
@@ -324,11 +355,13 @@ func (p *Policy) MFADisjoint() []Quarantine {
 }
 
 // NewMFADisjoint is the entries of after.MFADisjoint() that base's lack,
-// matched by device, subject and cause: what a policy edit introduces, and
-// all a policy-file reload, loadBoth and `policy diff` refuse. base is the
-// in-force policy over the same inventory; nil base is every entry
-// (re-review R5). The cause names the subject, so device and cause match by
-// device and cause.
+// matched by device and conflicting level pair: what a policy edit
+// introduces, and all a policy-file reload, loadBoth and `policy diff`
+// refuse. base is the in-force policy over the same inventory; nil base is
+// every entry (re-review R5). A grant that only reaches a device already
+// quarantined over the same pair is no new entry, whichever subject holds it:
+// the device is out already, and an emergency grant at 3am must load (the
+// controller's Task 9 review ruling, decision 45 ruling 11).
 func NewMFADisjoint(base, after *Policy) []Quarantine {
 	var had []Quarantine
 	if base != nil {
@@ -340,7 +373,7 @@ func NewMFADisjoint(base, after *Policy) []Quarantine {
 		for _, e := range q.Entries {
 			known := slices.ContainsFunc(had, func(h Quarantine) bool {
 				return h.Device == q.Device && slices.ContainsFunc(h.Entries, func(he QuarantineEntry) bool {
-					return he.Cause == e.Cause
+					return he.MFAPair == e.MFAPair
 				})
 			})
 			if !known {
@@ -369,7 +402,13 @@ type MFAChange struct {
 	Acknowledged bool
 }
 
-// mfaWeakened is whether new lets a login through that old did not.
+// mfaWeakened is whether new lets a login through that old did not. It
+// compares the effective requirement, and then each old level by identity (its
+// kind and name or scope): a level gone or replaced by another, widened,
+// given a longer reuse_for or turned off for machines is a weakening whatever
+// the level count, so swapping a name-pinned scope for an attribute scope
+// cannot pass (spec §12; decision 45 ruling 24). A rename counts as a
+// removal and needs a session test.
 func mfaWeakened(old, new MFARequirement) bool {
 	switch {
 	case !old.Required():
@@ -377,7 +416,35 @@ func mfaWeakened(old, new MFARequirement) bool {
 	case !new.Required():
 		return true
 	}
-	return !subsetOf(new.Accept, old.Accept) || new.ReuseFor > old.ReuseFor || len(new.Levels) < len(old.Levels)
+	if !subsetOf(new.Accept, old.Accept) || new.ReuseFor > old.ReuseFor {
+		return true
+	}
+	return slices.ContainsFunc(old.Levels, func(o MFALevel) bool {
+		i := slices.IndexFunc(new.Levels, func(n MFALevel) bool { return n.Level == o.Level })
+		if i < 0 {
+			return true
+		}
+		n := new.Levels[i]
+		return !subsetOf(n.Accept, o.Accept) || n.ReuseFor > o.ReuseFor || o.AppliesToMachines && !n.AppliesToMachines
+	})
+}
+
+// detail is the requirement with the levels that set it, `accept [..]
+// reuse_for 5m (defaults ∩ scope core)`, a level that applies to machines
+// marked, so a diff line never reads the same on both sides when only the
+// levels moved.
+func (r MFARequirement) detail() string {
+	if !r.Required() {
+		return "none"
+	}
+	levels := make([]string, len(r.Levels))
+	for i, l := range r.Levels {
+		levels[i] = l.Level
+		if l.AppliesToMachines {
+			levels[i] += " (machines)"
+		}
+	}
+	return r.String() + " (" + strings.Join(levels, " ∩ ") + ")"
 }
 
 // mfaKey names a requirement for an acknowledgment: what a session test
@@ -410,7 +477,7 @@ func (m MFAChange) Line(from string) string {
 			", per_login_mfa: " + assert + "}"
 	}
 	return fmt.Sprintf("%s %s on %s%s: %s -> %s%s", label, m.Subject, strings.Join(m.Devices, ", "), from,
-		m.Old, m.New, tail)
+		m.Old.detail(), m.New.detail(), tail)
 }
 
 func mfaNames(accept []MFAMethod) []string {

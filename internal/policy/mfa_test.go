@@ -416,3 +416,160 @@ tests:
 		t.Fatalf("a tightening must print and pass (exit %d):\n%s", code, out)
 	}
 }
+
+// A name-pinned scope swapped for an attribute scope at the same level count
+// and the same accept and reuse_for is a level removed: a sync that drops the
+// attribute lifts what no attribute edit could (spec §12; decision 45 ruling
+// 24). The line names the levels, so before and after read differently.
+func TestPolicyDiffGatesAReplacedLevel(t *testing.T) {
+	const pinned = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}
+scopes:
+  - {name: core-sw01, match: {name: core-sw01}, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}
+`
+	const byTier = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}
+scopes:
+  - {name: core, match: {tier: core}, on_missing: exclude, security_log: true,
+     per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}
+`
+	out, code := diffRun(t, pinned, byTier)
+	if code == 0 || !strings.Contains(out, "per_login_mfa_weakened: alice on core-sw01") ||
+		!strings.Contains(out, "(defaults ∩ scope core-sw01) -> accept [hardware_key_touch] reuse_for 5m (defaults ∩ scope core)") {
+		t.Fatalf("a replaced level passed the gate (exit %d):\n%s", code, out)
+	}
+	// The same swap with a session test asserting the requirement is acknowledged.
+	if out, code := diffRun(t, pinned, byTier+"tests:\n  - {subject: alice, device: core-sw01, per_login_mfa: "+
+		"{accept: [hardware_key_touch], reuse_for: 5m}}\n"); code != 0 {
+		t.Fatalf("an acknowledged replacement failed (exit %d):\n%s", code, out)
+	}
+}
+
+// applies_to_machines turned off on a level while another level takes it up
+// leaves a machine's level count and requirement as they were, and is a
+// weakening all the same.
+func TestPolicyDiffGatesAppliesToMachinesTurnedOff(t *testing.T) {
+	const old = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+`
+	const moved = `
+defaults: {per_login_mfa: {accept: [hardware_key_touch]}}
+roles:
+  - {name: backup, privilege: readonly, permit: ["show **"], per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+`
+	out, code := diffRun(t, old, moved)
+	if code == 0 || !strings.Contains(out, "per_login_mfa_weakened: oxidized on core-sw01, edge-sw01") {
+		t.Fatalf("applies_to_machines turned off passed the gate (exit %d):\n%s", code, out)
+	}
+	// Turned off on a level that stays, with a stricter level above it, no
+	// requirement moves for anyone and the level still counts.
+	const strict = `
+scopes:
+  - {name: core, match: {tier: core}, on_missing: include, security_log: true, per_login_mfa: {accept: [hardware_key_touch]}}
+`
+	if _, code := diffRun(t, old+strict, strings.Replace(old, "applies_to_machines: true", "applies_to_machines: false", 1)+strict); code == 0 {
+		t.Fatal("a level's applies_to_machines turned off passed the gate")
+	}
+}
+
+func TestLintWarnsOfAPerLoginMFAThatAnAttributeLifts(t *testing.T) {
+	p := mfaPolicy(t, `
+defaults: {per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+roles:
+  - {name: netadmin, permit: ["**"], per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+scopes:
+  - {name: core, match: {tier: core}, on_missing: exclude, security_log: true, per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+`)
+	kinds := map[string]string{}
+	for _, f := range p.Lint(noon) {
+		kinds[f.Kind] += f.Message + "\n"
+	}
+	if m := kinds[FindingPerLoginMFAExclude]; !strings.Contains(m, `scope "core"`) || !strings.Contains(m, "tier") {
+		t.Errorf("per_login_mfa_on_missing_exclude: %q", m)
+	}
+	m := kinds[FindingPerLoginMFAMachines]
+	for _, at := range []string{"defaults:", `role "netadmin"`, `scope "core"`} {
+		if !strings.Contains(m, at) || !strings.Contains(m, "pkcs11 key and a touch key on one token") {
+			t.Errorf("per_login_mfa_machines does not name %s: %q", at, m)
+		}
+	}
+	// A name pin loses nothing to a sync, so it is no finding.
+	pinned := mfaPolicy(t, "scopes:\n  - {name: core-sw01, match: {name: core-sw01}, on_missing: exclude, per_login_mfa: {accept: [idp_mfa]}}\n")
+	for _, f := range pinned.Lint(noon) {
+		if f.Kind == FindingPerLoginMFAExclude {
+			t.Errorf("a name-pinned scope is a finding: %s", f.Message)
+		}
+	}
+}
+
+func TestExplainSaysWhatAMachineMeets(t *testing.T) {
+	p := mfaPolicy(t, `
+defaults: {per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+`)
+	for subject, want := range map[string]string{
+		"oxidized": "applies to this machine: provable only with a pkcs11 key and touch key on one token\n",
+		"alice":    "applies to machines too\n",
+	} {
+		e, err := p.Explain(subject, "", "core-sw01", "", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		e.RenderWithoutAttributes(&b)
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("%s: explain says\n%s\nwant %q", subject, b.String(), want)
+		}
+	}
+}
+
+// `policy test` says the same on a machine's session test (decision 45
+// ruling 21), as a note on its line; a human's carries none.
+func TestPolicyTestSaysWhatAMachineMeets(t *testing.T) {
+	p := mfaPolicy(t, `
+defaults: {per_login_mfa: {accept: [hardware_key_touch], applies_to_machines: true}}
+`)
+	notes := func(subject string) []string {
+		q, err := Parse(append(append([]byte(nil), p.raw...), []byte("\ntests:\n  - {subject: "+subject+
+			", device: core-sw01, per_login_mfa: {accept: [hardware_key_touch]}}\n")...), p.env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return q.RunTests(noon)[0].Caveats
+	}
+	if got := strings.Join(notes("oxidized"), "\n"); !strings.Contains(got,
+		"applies to this machine: provable only with a pkcs11 key and touch key on one token") {
+		t.Errorf("a machine's session test: notes %q", got)
+	}
+	if got := strings.Join(notes("alice"), "\n"); strings.Contains(got, "applies to this machine") {
+		t.Errorf("a human's session test says it applies to a machine: %q", got)
+	}
+}
+
+// An entry is new by its device and the level pair that conflicts, not by the
+// subject its cause names: a grant that only reaches a device already
+// quarantined over the same pair introduces nothing (the controller's Task 9
+// review ruling, decision 45 ruling 11).
+func TestNewMFADisjointIsByDeviceAndLevelPair(t *testing.T) {
+	base := mfaBundle(t, disjointPolicy)
+	same := mfaBundle(t, disjointPolicy+`
+subjects:
+  - {name: oncall, identity: ["user:oncall@example.com"], token_ttl: 5m}
+grants:
+  - {subject: oncall, scope: all_devices, roles: [netadmin]}
+`)
+	if got := NewMFADisjoint(base, same); len(got) != 0 {
+		t.Fatalf("a grant reaching a device already quarantined over the same pair is new: %+v", got)
+	}
+	// A level pair on a device the base does not hold, and a new pair on one it does.
+	other := mfaBundle(t, strings.Replace(disjointPolicy, "roles:\n",
+		"roles:\n  - {name: noc, permit: [\"show **\"], per_login_mfa: {accept: [idp_mfa]}}\n", 1)+`
+subjects:
+  - {name: oncall, identity: ["user:oncall@example.com"], token_ttl: 5m}
+grants:
+  - {subject: oncall, scope: all_devices, roles: [noc]}
+`)
+	if got := NewMFADisjoint(base, other); len(got) != 1 || got[0].Device != "core-sw01" ||
+		!strings.Contains(got[0].Entries[0].Cause, "role noc") {
+		t.Fatalf("a new level pair on a quarantined device: %+v, want it new", got)
+	}
+}

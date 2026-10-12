@@ -288,6 +288,9 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
 		if minted {
+			if res.PerLoginMFA.Machine && res.PerLoginMFA.Required() {
+				r.Caveats = append(r.Caveats, "per_login_mfa "+machineMeets)
+			}
 			for _, a := range res.LeftOff {
 				r.Caveats = append(r.Caveats, fmt.Sprintf("%s (%s) is not sent to %s: under `all`, idletime and "+
 					"timeout are left off a projected platform, whose idle limit is the device's login class's "+

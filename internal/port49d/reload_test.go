@@ -963,6 +963,7 @@ func mfaInventory(leaf1Tier, leaf2Tier, third string) string {
 func TestAnMFADisjointInventoryEditQuarantinesAndAPolicyEditIsRefused(t *testing.T) {
 	rig := newReloadRig(t, mfaReloadPolicy)
 	rig.r.cfg.MaxRemovedPercent = 100 // a quarantine of one device of three is not what this test is about
+	watchQuarantine(rig.b.Policy, rig.m, func() time.Time { return rig.now })
 	rig.writeInventory(t, mfaInventory("edge", "edge", ""))
 	rig.pollTwice()
 	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); q || rig.b.Policy.Load().MFADisjoint() != nil {
@@ -975,6 +976,9 @@ func TestAnMFADisjointInventoryEditQuarantinesAndAPolicyEditIsRefused(t *testing
 	cause, q := pol.Quarantined("leaf1", rig.now)
 	if !q || !strings.Contains(cause, "per_login_mfa") || !strings.Contains(cause, "scope core") {
 		t.Fatalf("leaf1 was not quarantined over per_login_mfa: %q, %v\n%s", cause, q, rig.out.String())
+	}
+	if n := testutil.ToFloat64(rig.m.DevicesQuarantined); n != 1 {
+		t.Fatalf("port49_devices_quarantined = %v after the inventory quarantine, want 1", n)
 	}
 	if _, ok := pol.Device("leaf3"); !ok {
 		t.Fatal("the inventory edit was not applied: leaf3 is not in force")
@@ -1004,6 +1008,45 @@ func TestAnMFADisjointInventoryEditQuarantinesAndAPolicyEditIsRefused(t *testing
 	}
 	if _, q := pol.Quarantined("leaf1", rig.now); !q {
 		t.Fatal("leaf1 is no longer quarantined")
+	}
+}
+
+// A device quarantined over a level conflict in force refuses no grant that
+// only reaches it again: an emergency all_devices grant at 3am loads, leaf1
+// stays quarantined, and the grant serves the rest. A new level pair is still
+// refused (decision 45 ruling 11, the controller's Task 9 review ruling).
+func TestAGrantReachingAnMFAQuarantinedDeviceIsNotRefused(t *testing.T) {
+	rig := newReloadRig(t, mfaReloadPolicy)
+	rig.r.cfg.MaxRemovedPercent = 100
+	rig.writeInventory(t, mfaInventory("core", "edge", ""))
+	rig.pollTwice()
+	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); !q {
+		t.Fatal("leaf1 is not quarantined over per_login_mfa")
+	}
+	before := rig.b.Policy.Load().Source
+	emergency := strings.Replace(mfaReloadPolicy, "subjects:\n",
+		"subjects:\n  - {name: e, identity: [\"user:oncall@example.com\"], username: oncall, token_ttl: 60s}\n", 1)
+	emergency = strings.Replace(emergency, "grants:\n",
+		"grants:\n  - {subject: e, scope: all_devices, roles: [r]}\n", 1)
+	swapTo(t, rig, emergency)
+	pol := rig.b.Policy.Load()
+	if pol.Source == before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("an emergency grant was refused because leaf1 is quarantined over per_login_mfa:\n%s", rig.out.String())
+	}
+	if _, q := pol.Quarantined("leaf1", rig.now); !q {
+		t.Fatal("leaf1 is no longer quarantined")
+	}
+	if _, q := pol.Quarantined("leaf2", rig.now); q {
+		t.Fatal("leaf2 is quarantined: the grant did not serve the rest")
+	}
+	// A new conflict: a role of the same name on another level pair.
+	before = pol.Source
+	newPair := strings.Replace(emergency, "  - {name: core, match: {tier: core}",
+		"  - {name: edge, match: {tier: edge}, on_missing: include, security_log: true,\n"+
+			"     per_login_mfa: {accept: [hardware_key_touch]}}\n  - {name: core, match: {tier: core}", 1)
+	swapTo(t, rig, newPair)
+	if rig.b.Policy.Load().Source != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatalf("a new level conflict on leaf2 was applied:\n%s", rig.out.String())
 	}
 }
 

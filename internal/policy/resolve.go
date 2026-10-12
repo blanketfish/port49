@@ -494,6 +494,9 @@ type QuarantineEntry struct {
 	// ruling 11). A policy edit that introduces one is refused; where the
 	// policy did not change it is a quarantine like any other.
 	MFA bool
+	// MFAPair names the levels that conflict, so "new" for an MFA entry is a
+	// new device or level pair, not a new subject reaching the same pair.
+	MFAPair string
 }
 
 // Current reports whether the entry quarantines the device at now.
@@ -596,7 +599,7 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 	var out []QuarantineEntry
 	open := false // whether the last entry is still failing
 	for _, at := range instants {
-		cause, mfa := p.checkDeviceAt(sub, d, at)
+		cause, mfa, pair := p.checkDeviceAt(sub, d, at)
 		if cause != "" {
 			cause = fmt.Sprintf("subject %q: %s", sub.Name, cause)
 		}
@@ -608,7 +611,7 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 		}
 		open = cause != ""
 		if open {
-			out = append(out, QuarantineEntry{From: at, Lapsing: lapsing[at], Cause: cause, MFA: mfa})
+			out = append(out, QuarantineEntry{From: at, Lapsing: lapsing[at], Cause: cause, MFA: mfa, MFAPair: pair})
 		}
 	}
 	return out
@@ -713,15 +716,15 @@ func (p *Policy) deliveredLevel(dialect platform.Dialect, level string, reply []
 
 // checkDeviceAt is one subject's joint checks on one device at one instant;
 // mfa is whether what fails is per_login_mfa's.
-func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) (cause string, mfa bool) {
+func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) (cause string, mfa bool, pair string) {
 	res, err := p.resolve(sub, d, at)
 	if errors.Is(err, ErrNoGrants) {
-		return "", false
+		return "", false, ""
 	}
 	if err != nil {
-		return err.Error(), isMFAError(err)
+		return err.Error(), isMFAError(err), mfaPair(err)
 	}
-	return p.jointCheck(res, d), false
+	return p.jointCheck(res, d), false, ""
 }
 
 // jointCheck is the joint checks of a resolution on its device: "" when it
