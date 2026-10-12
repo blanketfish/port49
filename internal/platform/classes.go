@@ -187,7 +187,14 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	carried := map[string]bool{}
 	setForm, curly, version := false, false, false
 	var notInherited error
+	var strayCR error
 	err = eachLine(config, func(n int, line string) {
+		// eachLine took one trailing carriage return as a line ending; any
+		// other could join two statements into one line.
+		if strayCR == nil && strings.Contains(line, "\r") {
+			strayCR = fmt.Errorf("line %d holds a carriage return that does not end it: capture the configuration "+
+				"with `%s`", n, ConfigCapture)
+		}
 		words := strings.Fields(line)
 		if len(words) == 0 {
 			return
@@ -208,8 +215,9 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 			if slices.Contains(want, line) || uidLine.MatchString(line) {
 				return
 			}
+			arity := statementArity(line)
 			if path, wildcards := located(words[1:]); slices.ContainsFunc(paths, func(p []string) bool {
-				return hasPrefix(path, p, wildcards) && !templateLinePasses(path, p)
+				return hasPrefix(path, p, wildcards) && !templateLinePasses(path, p, arity)
 			}) {
 				extra = append(extra, ConfigFinding{Line: n, Text: line, Says: templateDriftSays})
 			}
@@ -237,6 +245,9 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if strayCR != nil {
+		return nil, nil, strayCR
 	}
 	if notInherited != nil {
 		return nil, nil, notInherited
@@ -305,19 +316,44 @@ func hasPrefix(path, prefix []string, wildcards bool) bool {
 // template they pass, written there or expanded from a group (spec §12;
 // decision 44 ruling 7). Every other statement the reference does not write
 // fails, a privilege one or one on neither list (ruling 9).
-var harmlessTemplateStatements = map[string][]string{
-	"class": {"idle-timeout", "login-alarms", "login-tip"},
-	"user":  {"full-name"},
+//
+// Each maps to the words it takes after the template: a flag is one word, a
+// valued statement two, so nothing rides behind a harmless word on the same
+// line (a space-joined capture could hide a privilege statement there).
+var harmlessTemplateStatements = map[string]map[string]int{
+	"class": {"idle-timeout": 2, "login-alarms": 1, "login-tip": 1},
+	"user":  {"full-name": 2},
 }
 
 // templateLinePasses reports whether a line at path, under template path t,
 // passes though the reference does not write it: a harmless statement of t's
 // kind, or an apply-groups-except, which keeps a group off the template,
 // survives inheritance (L57) and is no finding itself (decision 44 ruling 7).
-func templateLinePasses(path, t []string) bool {
-	if len(path) <= len(t) {
+// arity is the line's path length counting a quoted string as one word, or -1
+// where the line cannot be split into words, which passes nothing.
+func templateLinePasses(path, t []string, arity int) bool {
+	if len(path) <= len(t) || arity < 0 {
 		return false
 	}
 	stmt := path[len(t)]
-	return stmt == "apply-groups-except" || slices.Contains(harmlessTemplateStatements[t[2]], stmt)
+	if stmt == "apply-groups-except" {
+		return arity == len(t)+2
+	}
+	words, ok := harmlessTemplateStatements[t[2]][stmt]
+	return ok && arity == len(t)+words
+}
+
+// statementArity is the length of a statement's path as located reads it,
+// counting a quoted string as one word, or -1 where the line cannot be split.
+func statementArity(line string) int {
+	sw, ok := statementWords(line)
+	if !ok || len(sw) < 2 {
+		return -1
+	}
+	var texts []string
+	for _, w := range sw[1:] {
+		texts = append(texts, w.text)
+	}
+	path, _ := located(texts)
+	return len(path)
 }

@@ -90,7 +90,8 @@ const ConfigCapture = `show configuration | display set | display inheritance`
 // line's number. It quotes nothing of the line.
 const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
 	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
-	"expanded and cannot be checked"
+	"expanded and cannot be checked (a value spelled as that keyword, which display set prints bare, is read the " +
+	"same way: quote or rename it)"
 
 // groupSign reports whether a statement shows its capture was taken without
 // `display inheritance`: a `set groups` line, a logical system's or tenant's
@@ -208,7 +209,7 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
 			path = path[2:]
 		}
-		entry := len(d.RPCEntryDenies) > 0
+		entry := !NetconfForbidden(d)
 		offList := false
 		if !entry && len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
 			options, ok := cliServices[path[2].text]

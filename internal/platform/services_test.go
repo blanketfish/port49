@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -281,5 +283,50 @@ func TestCheckServicesUnderTheEntryDeny(t *testing.T) {
 			!strings.HasPrefix(err.Error(), "line 9 ") || !strings.Contains(err.Error(), ConfigCapture) {
 			t.Errorf("%s: %v", bad, err)
 		}
+	}
+}
+
+// A trailing carriage return is a line ending, so a CRLF capture reads as the
+// same capture; one anywhere else is refused. The lab's fixtures, once the
+// command's echo, the redactor's line and the prompt are dropped, are read
+// without a refusal.
+func TestCheckServicesReadsCRLFAndTheL57Captures(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	clean := "set version 23.4R2-S2.1\r\nset system services ssh\r\nset system host-name srx1\r\n"
+	if f, err := CheckServices(d, []byte(clean)); len(f) != 0 || err != nil {
+		t.Errorf("crlf: %+v %v", f, err)
+	}
+	if _, err := CheckServices(d, []byte(clean+"set system host-name a\rset system services netconf ssh\r\n")); err == nil ||
+		!strings.HasPrefix(err.Error(), "line 4 ") {
+		t.Errorf("a mid-line carriage return: %v", err)
+	}
+	files, _ := filepath.Glob("testdata/l57-*.set")
+	if len(files) != 2 {
+		t.Fatalf("want the two L57 captures, got %q", files)
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kept []string
+		for _, l := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(l, "set ") || strings.HasPrefix(l, "deactivate ") || strings.HasPrefix(l, "protect ") {
+				kept = append(kept, l)
+			}
+		}
+		if _, err := CheckServices(d, []byte(strings.Join(kept, "\n"))); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// A value spelled apply-groups is refused as a group sign; the message says
+// so, since re-capturing does not help that device.
+func TestCheckServicesRefusalNamesAValueSpelledApplyGroups(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	_, err := CheckServices(d, []byte("set version 1\nset snmp location apply-groups\n"))
+	if err == nil || !strings.Contains(err.Error(), "spelled as that keyword") {
+		t.Errorf("%v", err)
 	}
 }

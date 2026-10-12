@@ -339,6 +339,17 @@ func TestTemplateDriftReadsGroups(t *testing.T) {
 			[]string{"set system login class p49-remote Login-Tip"}},
 		{"a user's harmless word on a class", "set system login class p49-remote full-name x\n",
 			[]string{"set system login class p49-remote full-name x"}},
+		{"a privilege hidden behind a harmless flag", "set system login class p49-remote login-tip permissions all\n",
+			[]string{"set system login class p49-remote login-tip permissions all"}},
+		{"a privilege hidden behind a harmless value", "set system login class p49-remote idle-timeout 5 permissions all\n",
+			[]string{"set system login class p49-remote idle-timeout 5 permissions all"}},
+		{"a valueless idle-timeout", "set system login class p49-remote idle-timeout\n",
+			[]string{"set system login class p49-remote idle-timeout"}},
+		{"a privilege hidden behind an apply-groups-except",
+			"set system login class p49-remote apply-groups-except BASE permissions all\n",
+			[]string{"set system login class p49-remote apply-groups-except BASE permissions all"}},
+		{"a bare template line", "set system login class p49-remote\n",
+			[]string{"set system login class p49-remote"}},
 		{"harmless", "set system login class p49-remote login-tip\nset system login class p49-remote login-alarms\n" +
 			"set system login user remote full-name \"port49 template\"\n", nil},
 		{"an apply-groups-except", "set system login class p49-remote apply-groups-except BASE\n" +
@@ -362,6 +373,7 @@ func TestTemplateDriftReadsGroups(t *testing.T) {
 		{"a harmless group's definition", "set groups BASE system login class <*> login-tip\n"},
 		{"a group quoted", "set \"groups\" BASE system login class <*> login-tip\n"},
 		{"a logical system's group", "set logical-systems ls1 groups BASE system login class <*> permissions all\n"},
+		{"a tenant's group", "set tenants t1 groups BASE system login class <*> permissions all\n"},
 		{"a group applied at the top", "set apply-groups BASE\n"},
 		{"a group applied under system", "set system apply-groups BASE\n"},
 		{"a group applied on the class", "set system login class p49-remote apply-groups BASE\n"},
@@ -415,5 +427,20 @@ func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("%s: findings %q, want %q", f, got, want)
 		}
+	}
+}
+
+// A trailing carriage return is a line ending, so a capture saved with CRLF
+// reads as the same capture; a carriage return anywhere else could join two
+// statements and is refused.
+func TestTemplateDriftReadsCRLF(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	clean := strings.Join(cleanCapture(t, d), "\r\n") + "\r\n"
+	if missing, extra, err := TemplateDrift([]byte(clean), d, time.Hour); err != nil || len(missing) != 0 || len(extra) != 0 {
+		t.Errorf("crlf: %q %+v %v", missing, extra, err)
+	}
+	joined := strings.Join(cleanCapture(t, d), "\n") + "\nset system login class p49-readonly login-tip\rset system login class p49-readonly permissions all\n"
+	if _, _, err := TemplateDrift([]byte(joined), d, time.Hour); err == nil || strings.Contains(err.Error(), "permissions") {
+		t.Errorf("a mid-line carriage return: %v", err)
 	}
 }
