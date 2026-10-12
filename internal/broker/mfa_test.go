@@ -973,6 +973,43 @@ func TestAReplayThatLapsesBeforeTheMintIsNotMintedWithoutAProof(t *testing.T) {
 	}
 }
 
+// The same lapse, when a proof still covers the retry (reuse_for > 0, same
+// agent session): the requirement is judged after the lapse, found covered,
+// and the mint is made afresh, with its own permit record naming the proof's
+// method.
+func TestAReplayThatLapsesIsMintedAfreshWhenAProofCoversIt(t *testing.T) {
+	f := newMFAFixture(t, withShortCeiling())
+	ceiling := f.clock.Now().Add(time.Hour)
+	f.clock.Advance(59*time.Minute + 30*time.Second)
+	ch := f.ask(t, f.alice, "core-sw01")
+	if code := f.proveTouch(t, f.alice, ch); code != 200 {
+		t.Fatalf("POST /v1/mfa = %d", code)
+	}
+	if it := f.mintWithKey(t, f.alice, "core-sw01", ch, "idem-1").Results[0]; it.Verdict != "permit" {
+		t.Fatalf("the first mint = %+v", it)
+	}
+	f.clock.Advance(10 * time.Second)
+	retry := f.actor(t, f.alice.cert, true)
+	retry.agent = f.alice.agent
+	// As in the test above: the second minter read is before the ceiling and
+	// the fourth is after it, so the replay lapses at the mint.
+	f.minterClock.arm(ceiling.Add(-2*time.Second), time.Second)
+	it := f.mintWithKey(t, retry, "core-sw01", ch, "idem-1").Results[0]
+	if it.Verdict != "permit" {
+		t.Fatalf("a replay that lapsed under a covering proof = %+v, want a fresh permit", it)
+	}
+	permits := 0
+	for _, r := range f.recs(t) {
+		if r["event"] == "mint" && r["verdict"] == "permit" {
+			permits++
+		}
+	}
+	if permits != 2 {
+		t.Fatalf("%d mint permit records, want the first and the fresh one", permits)
+	}
+	f.assertMintRecordMFA(t, "hardware_key_touch", true)
+}
+
 // An attacker's own token, with a full chain of its own (touch slot, f9,
 // session slot), posted on someone else's held connection: every chain and
 // same-device check passes, and only the session slot's key not being this
