@@ -412,3 +412,85 @@ func TestCheckConfigNamesSubjectsWhoseUsernameIsTheDirectorys(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// --batch checks every capture against the device its file name names, keeps
+// going past one it cannot read or place, and exits 1 where any fails
+// (decision 44 ruling 8).
+func TestCheckConfigBatch(t *testing.T) {
+	pol, inv := policyFixture(t)
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	clean := write("leaf-01.cfg", "hostname leaf-01\nusername breakglass privilege 15 secret 0 x\n"+
+		"aaa authorization exec default group port49 local\naaa authorization commands all default group port49 local\n")
+	sub := filepath.Join(dir, "b")
+	os.Mkdir(sub, 0o700)
+	collides := filepath.Join(sub, "leaf-01")
+	os.WriteFile(collides, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600)
+	unknown := write("nosuch.cfg", "hostname nosuch\n")
+	// A file that cannot be read, named for a device the inventory has, so
+	// the read is what fails (the device is looked up first).
+	missing := filepath.Join(dir, "c", "leaf-01.conf")
+
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch",
+		clean, collides, unknown, missing}, &out, &errb)
+	all := out.String() + errb.String()
+	for _, want := range []string{
+		"on leaf-01 (arista_eos), 0 findings\n",
+		`COLLISION: ` + collides + `:2: a device-local account "noc"`,
+		`device "nosuch" is not in the inventory`,
+		filepath.Join("c", "leaf-01.conf"),
+		"batch: 4 configurations checked, 3 failed\n",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in\n%s", want, all)
+		}
+	}
+	if code != 1 {
+		t.Errorf("code %d", code)
+	}
+	out.Reset()
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", clean},
+		&out, &errb); code != 0 || !strings.Contains(out.String(), "batch: 1 configurations checked, 0 failed") {
+		t.Errorf("clean batch: %d\n%s", code, out.String())
+	}
+	// A failure followed by a clean file still exits 1.
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", collides, clean},
+		&out, &errb); code != 1 {
+		t.Errorf("failure then clean: code %d", code)
+	}
+	for _, args := range [][]string{
+		{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch"},
+		{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", "--device", "leaf-01", clean},
+	} {
+		if code := run(args, &out, &errb); code != 2 {
+			t.Errorf("%q: code %d", args, code)
+		}
+	}
+
+	// A file named for a device with dots in its name, no extension, as
+	// Oxidized writes an FQDN, is that device's, not "leaf-01.example".
+	invFQDN := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(invFQDN, []byte(`
+devices:
+  - {name: leaf-01.example.net, platform: arista_eos, addresses: [10.0.0.1]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fqdn := write("leaf-01.example.net", "hostname leaf-01\nusername breakglass privilege 15 secret 0 x\n"+
+		"aaa authorization exec default group port49 local\naaa authorization commands all default group port49 local\n")
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"devices", "check-config", "--policy", pol, "--inventory", invFQDN, "--batch", fqdn}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "on leaf-01.example.net (arista_eos), 0 findings\n") {
+		t.Errorf("fqdn: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
