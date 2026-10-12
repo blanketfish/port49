@@ -26,8 +26,10 @@ type TPM struct {
 	command string // host:port of the command channel
 	control string // host:port of the platform (control) channel
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	exited  chan struct{} // closed when cmd has exited
+	started bool          // swtpm has come up once: the ports are fixed
 }
 
 var (
@@ -119,26 +121,69 @@ func (s *TPM) Restart() {
 	if s.cmd != nil {
 		return
 	}
+	// The ports were free when picked and swtpm binds them later, so another
+	// process may take one in between: swtpm then exits at once. Before it has
+	// ever run, pick new ports and try again; after, the ports are the ones the
+	// test's tpm.Dial already holds.
+	attempts := 1
+	if !s.started {
+		attempts = 5
+	}
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			s.command, s.control = freeAddr(s.t), freeAddr(s.t)
+		}
+		if s.launch() {
+			s.started = true
+			return
+		}
+	}
+	s.t.Fatalf("hwtest: swtpm did not come up on %s and %s", s.command, s.control)
+}
+
+// launch starts swtpm and reports whether it is running and answering on both
+// ports. A swtpm that exited, as when a port was taken, is not up even if
+// something else answers on the port.
+func (s *TPM) launch() bool {
 	cmd := exec.Command("swtpm", "socket", "--tpm2",
 		"--server", "type=tcp,bindaddr=127.0.0.1,port="+portOf(s.command),
 		"--ctrl", "type=tcp,bindaddr=127.0.0.1,port="+portOf(s.control),
 		"--tpmstate", "dir="+s.dir,
 		"--flags", "not-need-init,startup-clear")
 	cmd.Stderr = os.Stderr
+	// A test binary killed or timed out skips t.Cleanup; the kernel ends swtpm.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {
 		s.t.Fatalf("hwtest: starting swtpm: %v", err)
 	}
-	s.cmd = cmd
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
 	for _, addr := range []string{s.command, s.control} {
-		if !waitListening(addr) {
-			s.t.Fatalf("hwtest: swtpm did not listen on %s", addr)
+		if !waitListening(addr, exited) {
+			_ = cmd.Process.Kill()
+			<-exited
+			return false
 		}
 	}
+	select {
+	case <-exited:
+		return false
+	default:
+	}
+	s.cmd, s.exited = cmd, exited
+	return true
 }
 
-func waitListening(addr string) bool {
+// waitListening is true once addr accepts a connection, false if exited closes
+// first or ten seconds pass.
+func waitListening(addr string, exited <-chan struct{}) bool {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case <-exited:
+			return false
+		default:
+		}
 		if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 			c.Close()
 			return true
@@ -156,13 +201,11 @@ func (s *TPM) Stop() {
 		return
 	}
 	_ = s.cmd.Process.Signal(syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { _ = s.cmd.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-s.exited:
 	case <-time.After(5 * time.Second):
 		_ = s.cmd.Process.Kill()
-		<-done
+		<-s.exited
 	}
 	s.cmd = nil
 }

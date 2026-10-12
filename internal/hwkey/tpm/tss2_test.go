@@ -142,4 +142,29 @@ func TestTheKeyIsFixedToTheTPM(t *testing.T) {
 	if !a.FixedTPM || !a.FixedParent || !a.SensitiveDataOrigin || !a.UserWithAuth || !a.SignEncrypt || a.Decrypt {
 		t.Fatalf("template attributes %+v", a)
 	}
+	// The key has an empty auth, so DA protection guards nothing, and a lockout
+	// tripped by anything else on the machine must not stop port49's keys.
+	if !a.NoDA {
+		t.Fatalf("template attributes %+v: NoDA is clear, a DA lockout would stop the key", a)
+	}
+}
+
+// TestPublicKeyRefusesAKeyThatIsNotBoundToTheTPM: a key whose private half
+// could leave the TPM is not a hardware key.
+func TestPublicKeyRefusesAKeyThatIsNotBoundToTheTPM(t *testing.T) {
+	for _, tc := range []struct {
+		attr string
+		mod  func(*tpm2.TPMAObject)
+	}{
+		{"FixedTPM", func(a *tpm2.TPMAObject) { a.FixedTPM = false }},
+		{"FixedParent", func(a *tpm2.TPMAObject) { a.FixedParent = false }},
+		{"SensitiveDataOrigin", func(a *tpm2.TPMAObject) { a.SensitiveDataOrigin = false }},
+		{"UserWithAuth", func(a *tpm2.TPMAObject) { a.UserWithAuth = false }},
+	} {
+		tpl := keyTemplate()
+		tc.mod(&tpl.ObjectAttributes)
+		if _, err := publicKey(tpm2.New2B(tpl)); err == nil || !strings.Contains(err.Error(), tc.attr) {
+			t.Errorf("publicKey with %s clear = %v, want refused naming it", tc.attr, err)
+		}
+	}
 }

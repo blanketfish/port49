@@ -27,6 +27,7 @@ import (
 	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 
 	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/keyfile"
 )
 
 const devicePath = "/dev/tpmrm0"
@@ -39,8 +40,19 @@ var Dial = func() (transport.TPMCloser, error) { return linuxtpm.Open(devicePath
 var errNoAccess = errors.New("port49 cannot open the TPM (" + devicePath + "): add this user to the tss group, then log in again")
 
 // errForeign is a key file the TPM cannot load because its parent is not this
-// TPM's SRK.
-var errForeign = errors.New("tpm: this key file was made by another machine's TPM, not this machine's TPM; make a key here")
+// TPM's SRK: it was made by another TPM, or this TPM was cleared since, which
+// makes a new SRK. TPM_RC_INTEGRITY says no more than that.
+var errForeign = errors.New("tpm: this key file was made by another TPM, or this machine's TPM was cleared since it was made; make a key here")
+
+// errParentAuth is the TPM refusing the empty auth port49 gives the storage
+// root key.
+var errParentAuth = errors.New("tpm: the TPM refused the empty auth port49 gives its storage root key: the owner hierarchy has a password, " +
+	"which port49 does not supply")
+
+// isAuth is a TPM refusing an authorization value.
+func isAuth(err error) bool {
+	return errors.Is(err, tpm2.TPMRCAuthFail) || errors.Is(err, tpm2.TPMRCBadAuth)
+}
 
 // dial opens the TPM. A TPM that cannot be reached is absent; one the user may
 // not open is a different error.
@@ -69,7 +81,9 @@ func answered(err error) error {
 // keyTemplate is the key made under the SRK: a P-256 ECDSA signing key that
 // cannot leave this TPM (FixedTPM, FixedParent), whose private half the TPM
 // generated (SensitiveDataOrigin), usable with the empty auth (UserWithAuth).
-// It is not a decryption key.
+// NoDA: the auth is empty, so dictionary-attack protection guards nothing, and
+// a lockout tripped by anything else on the machine must not stop port49's
+// keys. It is not a decryption key.
 func keyTemplate() tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
@@ -79,6 +93,7 @@ func keyTemplate() tpm2.TPMTPublic {
 			FixedParent:         true,
 			SensitiveDataOrigin: true,
 			UserWithAuth:        true,
+			NoDA:                true,
 			SignEncrypt:         true,
 		},
 		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
@@ -112,6 +127,8 @@ type Signer struct {
 	key    *ecdsa.PublicKey
 	state  hwkey.State
 	closed bool
+	// refused latches the TPM refusing the key's auth: no further try.
+	refused error
 }
 
 var _ hwkey.Key = (*Signer)(nil)
@@ -129,6 +146,9 @@ func srk(t transport.TPM) (tpm2.AuthHandle, error) {
 		PrimaryHandle: tpm2.TPMRHOwner,
 		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
 	}.Execute(t)
+	if isAuth(err) {
+		return tpm2.AuthHandle{}, errParentAuth
+	}
 	if err != nil {
 		return tpm2.AuthHandle{}, answered(err)
 	}
@@ -141,8 +161,10 @@ func (s *Signer) load(t transport.TPM, parent tpm2.AuthHandle) (tpm2.AuthHandle,
 	switch {
 	case err == nil:
 		return tpm2.AuthHandle{Handle: rsp.ObjectHandle, Name: rsp.Name, Auth: noAuth}, nil
-	case errors.Is(err, tpm2.TPMRCIntegrity), errors.Is(err, tpm2.TPMRCBadAuth), errors.Is(err, tpm2.TPMRCAuthFail):
+	case errors.Is(err, tpm2.TPMRCIntegrity):
 		return tpm2.AuthHandle{}, errForeign
+	case isAuth(err): // only the parent's session: the SRK, with its empty auth
+		return tpm2.AuthHandle{}, errParentAuth
 	}
 	return tpm2.AuthHandle{}, answered(err)
 }
@@ -157,6 +179,11 @@ func (s *Signer) withKey(fn func(transport.TPM, tpm2.AuthHandle) error) error {
 	defer t.Close()
 	if s.handle != 0 {
 		rp, err := tpm2.ReadPublic{ObjectHandle: s.handle}.Execute(t)
+		if errors.Is(err, tpm2.TPMRCHandle) {
+			// Not ErrKeyAbsent: the TPM answers, and no re-probe of it brings
+			// the key back.
+			return fmt.Errorf("tpm: no persistent key at handle %#x on this TPM: it was removed, or the TPM was cleared", uint32(s.handle))
+		}
 		if err != nil {
 			return answered(err)
 		}
@@ -184,6 +211,22 @@ func publicKey(pub tpm2.TPM2BPublic) (*ecdsa.PublicKey, error) {
 	}
 	if c.Type != tpm2.TPMAlgECC || !c.ObjectAttributes.SignEncrypt {
 		return nil, errors.New("tpm: the key is not an ECC signing key; port49 signs with a P-256 key")
+	}
+	// A key port49 did not make must still be bound to this TPM, and usable
+	// with the empty auth port49 gives it.
+	for _, a := range []struct {
+		name string
+		set  bool
+	}{
+		{"FixedTPM", c.ObjectAttributes.FixedTPM},
+		{"FixedParent", c.ObjectAttributes.FixedParent},
+		{"SensitiveDataOrigin", c.ObjectAttributes.SensitiveDataOrigin},
+		{"UserWithAuth", c.ObjectAttributes.UserWithAuth},
+	} {
+		if !a.set {
+			return nil, fmt.Errorf("tpm: the key lacks the %s attribute, so it is not a hardware-bound key port49 can use; "+
+				"make one with port49", a.name)
+		}
 	}
 	parms, err := c.Parameters.ECCDetail()
 	if err != nil {
@@ -255,7 +298,9 @@ func Generate(path string) (*Signer, error) {
 // Open reads a TSS2 key file and loads it once, so a file made by another
 // machine's TPM is refused here and not at the first signature.
 func Open(path string) (*Signer, error) {
-	file, err := os.ReadFile(path)
+	// Owner-only: every port49 user is in tss, and the key has an empty auth, so
+	// the file's mode is all that keeps another user from signing as its owner.
+	file, err := keyfile.ReadSecret(path)
 	if err != nil {
 		return nil, fmt.Errorf("tpm: %w", err)
 	}
@@ -293,6 +338,14 @@ func OpenHandle(handle uint32) (*Signer, error) {
 	if s.key, err = publicKey(s.pub); err != nil {
 		return nil, fmt.Errorf("tpm: handle %#x: %w", handle, err)
 	}
+	// A password is not in the public area, so the one way to know is to try.
+	// One try, here, where the operator is looking: a refusal latches in Sign
+	// and the key is never tried again. Any other failure is not a refusal; it
+	// shows at the first real Sign.
+	digest := make([]byte, 32)
+	if _, err := s.Sign(nil, digest, crypto.SHA256); s.refused != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -310,6 +363,9 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	if s.closed {
 		return nil, hwkey.ErrKeyAbsent
 	}
+	if s.refused != nil {
+		return nil, s.refused
+	}
 	var der []byte
 	err := s.withKey(func(t transport.TPM, key tpm2.AuthHandle) error {
 		rsp, err := tpm2.Sign{
@@ -321,6 +377,13 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 				Hierarchy: tpm2.TPMRHNull,
 			},
 		}.Execute(t)
+		if isAuth(err) {
+			// Every try spends a dictionary-attack try, and three lock the
+			// whole TPM: one is all the key gets.
+			s.refused = fmt.Errorf("tpm: %s has a password, which port49 does not supply (it uses keys with an empty auth); "+
+				"use a key made by port49", s.where())
+			return s.refused
+		}
 		if err != nil {
 			return answered(err)
 		}
@@ -344,6 +407,14 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	}
 	s.state = hwkey.Present
 	return der, nil
+}
+
+// where names the key for an operator.
+func (s *Signer) where() string {
+	if s.handle != 0 {
+		return fmt.Sprintf("the TPM key at handle %#x", uint32(s.handle))
+	}
+	return "the TPM key in " + s.path
 }
 
 // State is Present until a call fails as absent. While it is Absent it
