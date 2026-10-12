@@ -172,7 +172,20 @@ deny beneath `show **` projects too (ruling 10: `xml-mode` closed by the entry d
 measured into the tree, one factored alternative, carved allows, the narrow shape kept where
 its bits reach every allow). It opens and closes L57 and L58, closes L26c, and opens L59 for what
 no cell measured.
-Next: 9c.
+**9c written 2026-10-12** (`2026-10-12-09c-hardware-keys-and-per-login-mfa.md`, seventeen tasks: one
+spec, one macOS spike, eleven code, two lab, one gated code, one docs). The key moves into
+hardware behind the agent's one `crypto.Signer`: PKCS#11 through purego, TPM 2.0 through go-tpm,
+the Secure Enclave only if its spike passes (gate SE1; no macOS host here, so it goes back to Ryan).
+`port49 login --oidc` generates its key in the TPM by default (`issued_key_store: auto`). The key
+unplugged never ends a session. `per_login_mfa` takes four levels (`defaults:`, a role, a scope by
+attribute, a scope by `name`), the strictest winning as an intersection; a proof is a touch on an
+attested always-touch slot of the session key's own token or a fresh IdP sign-in with MFA, posted to
+`POST /v1/mfa` against the mint's challenge and reused for `reuse_for` within one agent session; a
+reload adding a requirement revokes nothing, and a refresh needs a proof. The agent checks the
+broker certificate against its CRL (`broker_crl: check`). SoftHSM2 and swtpm run under `make
+test-hw` and a new `hwkeys` workflow. Decision 45 holds its twenty-two rulings; it opens L60 (a
+YubiKey on the SER8, Ryan present, placed late), L61 (Keycloak's `amr`), L62 (the SER8's TPM) and L63
+(the Secure Enclave).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
