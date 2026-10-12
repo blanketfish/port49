@@ -470,6 +470,33 @@ func TestAnAbandonedReplayIsTakenOverBeforeItMints(t *testing.T) {
 	}
 }
 
+// A ReplayOnly request mints nothing of its own: with no reservation, or a
+// reservation that found no record to replay, it is told the replay lapsed.
+func TestReplayOnlyNeverMintsWithoutARecordToReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(t *testing.T, m *Minter, req Request) Request
+	}{
+		{"no reservation", func(t *testing.T, m *Minter, req Request) Request { return req }},
+		{"no record found", func(t *testing.T, m *Minter, req Request) Request { return reserved(t, m, req, "01J-fresh") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, log := minter(t)
+			ctx := context.Background()
+			req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1", ReplayOnly: true}
+			if _, err := m.Mint(ctx, tc.build(t, m, req)); !errors.Is(err, ErrReplayLapsed) {
+				t.Fatalf("Mint = %v, want ErrReplayLapsed", err)
+			}
+			if c, _ := st.Candidates(ctx, store.TokenKey{NAS: "leaf-01", Username: subject().Username}); len(c) != 0 {
+				t.Fatalf("%d tokens stored by a ReplayOnly mint", len(c))
+			}
+			if strings.Contains(log.String(), `"event":"mint"`) {
+				t.Fatalf("a mint record was written: %s", log.String())
+			}
+		})
+	}
+}
+
 // timingOutStore fails the reservation of one device as a store call whose
 // context ran out does, and ends that context; its releases honour their
 // context, as a networked store's would.
