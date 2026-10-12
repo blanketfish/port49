@@ -1263,7 +1263,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	var perLogin *decision.PerLoginMFA
 	// judge reads the requirement; denied is true when it refuses the item.
 	judge := func() (item api.MintItem, denied bool) {
-		v := b.judgeMFA(ctx, c, mf, name, res.PerLoginMFA, b.Now())
+		v := b.judgeMFA(ctx, c, mf, name, res.PerLoginMFA, b.Now(), nil)
 		mfaRec = v.rec
 		if v.reason != "" {
 			item = deny(v.reason, dev.Platform)

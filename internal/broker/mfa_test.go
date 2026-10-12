@@ -271,6 +271,7 @@ type mfaFixture struct {
 	otherTokenAttestations [][]byte
 
 	logs *lockedBuffer
+	opts mfaOpts // the options the fixture was made with, for a policy reload
 }
 
 func newAgentSession() string {
@@ -293,7 +294,7 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 		devs[0].Platform = "juniper_junos"
 	}
 	base := newFixtureWith(t, 16, mfaPolicy(o), devs...)
-	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}}
+	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}, opts: o}
 	f.b.Log = decision.NewJSONLines(f.logs)
 	f.minterClock = &stepClock{base: f.b.Now}
 	f.b.Minter = token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.minterClock.Now, 16)

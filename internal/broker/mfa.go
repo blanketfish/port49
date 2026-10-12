@@ -302,9 +302,12 @@ func (b *Broker) mfaUsable(req policy.MFARequirement) []policy.MFAMethod {
 
 // judgeMFA judges the requirement req on device name for c: covered by a
 // proof, answered with a challenge, unavailable, or store_unavailable (a
-// store error is never "not covered", pre-flight minor 1).
+// store error is never "not covered", pre-flight minor 1). held is the proof
+// a live context records (a session refresh reads it, spec §5.1.5; nil for a
+// mint): it covers when it was made by a usable method req accepts and
+// reuse_for has not passed since, and only when no named or kept proof does.
 func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name string, req policy.MFARequirement,
-	now time.Time) mfaVerdict {
+	now time.Time, held *provedChallenge) mfaVerdict {
 	secs := int(req.ReuseFor / time.Second)
 	rec := &decision.PerLoginMFA{Accept: methodNames(req.Accept), ReuseForSeconds: &secs, Levels: levelNames(req)}
 	count := func(method, outcome string) { b.Metrics.PerLoginMFA.WithLabelValues(method, outcome).Inc() }
@@ -327,6 +330,10 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 	method, at, reused, err := b.mfaCovers(ctx, c, mf.agentSHA256, narrowed, mf.proved, now)
 	if err != nil {
 		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
+	}
+	if method == "" && held != nil && slices.Contains(narrowed.Accept, held.Method) && req.ReuseFor > 0 &&
+		now.Sub(held.At) < req.ReuseFor {
+		method, at, reused = string(held.Method), held.At, true
 	}
 	if method != "" {
 		rec.Method, rec.ProvedAt, rec.Reused = method, decision.FormatTime(at), reused

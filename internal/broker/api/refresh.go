@@ -84,7 +84,8 @@ type RefreshChallengeRequest struct {
 }
 
 // RefreshedSession is one live context a refresh visited: its outcome
-// (extended, revoked, past_grace, not_judged), its ceiling when extended,
+// (extended, revoked, past_grace, not_judged, per_login_mfa_required,
+// per_login_mfa_unavailable), its ceiling when extended,
 // and whether the device's own session is out of the extension's reach.
 type RefreshedSession struct {
 	Device         string `json:"device"`

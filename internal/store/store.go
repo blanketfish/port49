@@ -500,6 +500,12 @@ type ContextRefresh struct {
 	// write swapped from one a refresh rotated (Task 7b review I-2). Empty
 	// leaves it alone.
 	Sid string
+	// MFAMethod and MFAAt, when MFAMethod is non-empty, replace the context's
+	// Credential.MFAMethod and MFAAt: the per-login proof an extension under
+	// a requirement was covered by (spec §5.1.5, decision 45 ruling 16). Empty
+	// leaves the recorded proof alone.
+	MFAMethod string
+	MFAAt     time.Time
 	// SessionAge, when set, is the ceiling the policy in force gives this
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen

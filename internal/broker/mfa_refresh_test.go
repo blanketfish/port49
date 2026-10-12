@@ -29,7 +29,9 @@ func (r mfaRefreshResp) find(device string) api.RefreshedSession {
 // per_login_mfa: the reload that adds a requirement under live contexts.
 func (f *mfaFixture) setRequirement(t *testing.T, on bool) {
 	t.Helper()
-	f.loadPolicy(t, mfaPolicy(mfaOpts{noRequirement: !on}))
+	o := f.opts
+	o.noRequirement = !on
+	f.loadPolicy(t, mfaPolicy(o))
 }
 
 // loginOnDevice is a live context of who on device, minted with no proof:
@@ -82,6 +84,20 @@ func (f *mfaFixture) refreshChallengeStep(t *testing.T, who *mfaActor, agent, ch
 // instead of the challenge request.
 func (f *mfaFixture) refreshWith(t *testing.T, who *mfaActor, agent, ch string, nameInAnswer bool) mfaRefreshResp {
 	t.Helper()
+	status, body := f.refreshStatus(t, who, agent, ch, nameInAnswer)
+	if status != http.StatusOK {
+		t.Fatalf("POST /v1/refresh = %d %s", status, body)
+	}
+	var out mfaRefreshResp
+	if err := json.Unmarshal(body, &out.RefreshResponse); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// refreshStatus is refreshWith up to the answer's status and body.
+func (f *mfaFixture) refreshStatus(t *testing.T, who *mfaActor, agent, ch string, nameInAnswer bool) (int, []byte) {
+	t.Helper()
 	nameAtChallenge := ch
 	if nameInAnswer {
 		nameAtChallenge = ""
@@ -107,15 +123,7 @@ func (f *mfaFixture) refreshWith(t *testing.T, who *mfaActor, agent, ch string, 
 	if agent != "" {
 		hdr[api.AgentSessionHeader] = agent
 	}
-	status, body := who.conn.post(t, "/v1/refresh", hdr, string(raw))
-	if status != http.StatusOK {
-		t.Fatalf("POST /v1/refresh = %d %s", status, body)
-	}
-	var out mfaRefreshResp
-	if err := json.Unmarshal(body, &out.RefreshResponse); err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return who.conn.post(t, "/v1/refresh", hdr, string(raw))
 }
 
 func (a *mfaActor) refreshExporter(t *testing.T) []byte {
@@ -252,13 +260,14 @@ func TestRefreshWithinReuseNeedsNoNewProof(t *testing.T) {
 	f.setRequirement(t, true)
 	f.proveTouch(t, f.alice, f.mint(t, f.alice, "core-sw01", "").find("core-sw01").PerLoginMFA.Challenge)
 	f.clock.Advance(5 * time.Minute)
+	// Another agent session of alice's is not covered by the kept proof (the
+	// context records none yet, so nothing else covers it).
+	if s := f.refreshAs(t, f.alice, f.otherAgent).find("core-sw01"); s.Outcome != "per_login_mfa_required" {
+		t.Fatalf("another agent's refresh = %+v", s)
+	}
+	f.clock.Advance(11 * time.Second)
 	out := f.refresh(t, f.alice)
 	if s := out.find("core-sw01"); s.Outcome != "extended" || out.PerLoginMFA != nil {
 		t.Fatalf("refresh within reuse_for = %+v", out)
-	}
-	// Another agent session of alice's is not covered by it.
-	f.clock.Advance(11 * time.Second)
-	if s := f.refreshAs(t, f.alice, f.otherAgent).find("core-sw01"); s.Outcome != "per_login_mfa_required" {
-		t.Fatalf("another agent's refresh = %+v", s)
 	}
 }

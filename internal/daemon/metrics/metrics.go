@@ -217,7 +217,10 @@ type Metrics struct {
 	// policy in force withdrew it, or the context could not be judged and was
 	// revoked failing closed), "past_grace" (deleted, its grace window
 	// over) or "not_judged" (the policy did not just judge and keep it: a
-	// quarantined device, a write that lost every race). Per refresh:
+	// quarantined device, a write that lost every race),
+	// "per_login_mfa_required" (the device's per_login_mfa asks a proof the
+	// refresh did not carry) or "per_login_mfa_unavailable" (no method it
+	// accepts is verified here). Per refresh:
 	// "refused" (no live challenge, a bad signature, a mark), "store_error"
 	// or "too_soon" (paced, refresh_too_soon). The label is the outcome only.
 	SessionRefreshes *prometheus.CounterVec
@@ -605,8 +608,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "port49_contexts_reindex_failures_total",
 			Help: "Live login contexts the re-index could not re-index or judge, each left for its next pass."}),
 		SessionRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_session_refreshes_total",
-			Help: "Session refreshes: per context extended, revoked, past_grace or not_judged; per refresh refused, " +
-				"store_error or too_soon."}, []string{"outcome"}),
+			Help: "Session refreshes: per context extended, revoked, past_grace, not_judged, per_login_mfa_required " +
+				"or per_login_mfa_unavailable; per refresh refused, store_error or too_soon."}, []string{"outcome"}),
 		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
 			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
 		CeilingWarnings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_ceiling_warnings_total",

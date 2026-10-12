@@ -61,7 +61,10 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 	// A challenge this caller proved exempts this one request from the
 	// pacing, and is taken here, under this caller's own binding: another
 	// caller's challenge finds nothing, spends nothing, and is paced as any
-	// request. A store error is paced, never an exemption.
+	// request. A store error is paced, never an exemption. A second exempt
+	// request by the same caller replaces h.proved below, so it spends the
+	// first proof: one proof exempts one request, and a new one needs a new
+	// human proof.
 	var proved *provedChallenge
 	if named.PerLoginMFAChallenge != "" {
 		tctx, tcancel := context.WithTimeout(r.Context(), holdTimeout)
@@ -320,7 +323,7 @@ func (b *Broker) refuseRefresh(w http.ResponseWriter, now time.Time, principal s
 // RefreshedContext is one context a session refresh visited.
 type RefreshedContext struct {
 	Ref            store.ContextRef
-	Outcome        string // extended | revoked | past_grace | not_judged
+	Outcome        string // extended | revoked | past_grace | not_judged | per_login_mfa_required | per_login_mfa_unavailable
 	SessionExpires time.Time
 	Unreached      bool
 }
@@ -471,21 +474,34 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		b.emitTo(out, rec)
 		return "past_grace", time.Time{}, nil
 	}
-	age := time.Duration(0)
+	// The judgment above resolved this member for this device with the same
+	// policy, so an error here means the two have diverged: the context is
+	// not judged, never extended on a default (it would skip the requirement).
 	res, rerr := pol.ResolveMember(m, dev, at)
-	if rerr == nil {
-		age = res.SessionAge.Of(b.MaxSessionAge)
-	} else {
-		age = b.MaxSessionAge // a device with no platform: the default, as its mint would have
+	if rerr != nil {
+		return "not_judged", time.Time{}, nil
 	}
+	age := res.SessionAge.Of(b.MaxSessionAge)
 	// A requirement is read here and only here: the extension needs a proof
 	// that covers it, and a reload that added one revoked nothing (the policy
 	// refresh never reads it). An unproved context is named, not extended.
-	if rerr == nil && res.PerLoginMFA.Required() {
-		v := b.judgeMFA(ctx, caller{principal: principal, cred: cred}, &ask.mf, ref.NAS, res.PerLoginMFA, at)
+	// The context's own recorded proof covers like a kept one (spec §5.1.5:
+	// what a session refresh reads), and the covering proof is written back.
+	var mfaMethod string
+	var mfaAt time.Time
+	if res.PerLoginMFA.Required() {
+		var held *provedChallenge
+		if c.Credential.MFAMethod != "" {
+			held = &provedChallenge{Method: policy.MFAMethod(c.Credential.MFAMethod), At: c.Credential.MFAAt}
+		}
+		v := b.judgeMFA(ctx, caller{principal: principal, cred: cred}, &ask.mf, ref.NAS, res.PerLoginMFA, at, held)
 		rec.PerLoginMFA = v.rec
 		switch {
 		case v.reason == decision.StoreUnavailable:
+			// The context judged is recorded, with the requirement, beside the
+			// request's own 503 record: at 3am the log says which read failed.
+			rec.Verdict, rec.Reason = decision.VerdictDeny, v.reason
+			b.emitTo(out, rec)
 			return "", time.Time{}, errMFAStore
 		case v.reason != "":
 			rec.Verdict, rec.Reason = decision.VerdictDeny, v.reason
@@ -496,6 +512,7 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 			ask.items = append(ask.items, v.item)
 			return "per_login_mfa_required", time.Time{}, nil
 		}
+		mfaMethod, mfaAt = v.method, v.at
 	}
 	// The new sid is indexed before the extension (pre-flight I-2): a
 	// logout's RevokeBySid that runs after this reaches the context whether
@@ -508,7 +525,8 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		}
 	}
 	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: refreshedAt(answer, at),
-		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, ExpectRev: c.Rev}, b.ContextIdleTTL); {
+		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, MFAMethod: mfaMethod, MFAAt: mfaAt,
+		ExpectRev: c.Rev}, b.ContextIdleTTL); {
 	case errors.Is(err, store.ErrPastGrace):
 		return "past_grace", time.Time{}, nil
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
