@@ -1,0 +1,72 @@
+// Package hwkey is the one shape every hardware-backed client key has: a
+// crypto.Signer that says whether it can sign now, takes a PIN, and lets go
+// of its token (plan 9c, ruling 1). It is a leaf: the backends (pkcs11, tpm,
+// secureenclave) import it for State, the errors and PINError, and the opener
+// that dispatches to them is internal/clientkey.
+package hwkey
+
+import (
+	"crypto"
+	"errors"
+	"strings"
+)
+
+// State is whether a key can sign now.
+type State int
+
+const (
+	Present State = iota // the key signs
+	Absent               // the token or TPM is gone; insert it
+	Locked               // the token is back and needs its PIN (Unlock)
+)
+
+func (s State) String() string {
+	switch s {
+	case Present:
+		return "present"
+	case Absent:
+		return "absent"
+	case Locked:
+		return "locked"
+	}
+	return "unknown"
+}
+
+// Key is every hardware key: a crypto.Signer that says whether it can sign
+// now, takes a PIN, and lets go of its token.
+type Key interface {
+	crypto.Signer
+	State() State
+	Unlock(pin []byte) error
+	Close() error
+}
+
+var (
+	ErrKeyAbsent = errors.New("hwkey: the key is not present")
+	ErrLocked    = errors.New("hwkey: the key needs its PIN")
+)
+
+// PINError is a PIN the token refused. Low and Final are the token's own
+// flags (CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY).
+type PINError struct{ Low, Final bool }
+
+func (e *PINError) Error() string {
+	switch {
+	case e.Final:
+		return "hwkey: the token refused the PIN; one try left before the key locks"
+	case e.Low:
+		return "hwkey: the token refused the PIN; few tries are left before the key locks"
+	}
+	return "hwkey: the token refused the PIN"
+}
+
+// IsRef reports whether s is a key reference (pkcs11:, tpm:, secure-enclave:)
+// rather than a path.
+func IsRef(s string) bool {
+	for _, p := range []string{"pkcs11:", "tpm:", "secure-enclave:"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}

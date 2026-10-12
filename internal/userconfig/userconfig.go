@@ -354,6 +354,55 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 	return readPrivate(path, max, what, false)
 }
 
+// CheckOwned refuses path as a PKCS#11 module unless the file, every
+// symbolic link on the way to it and every directory above each is held to
+// the rules ReadPrivate applies: owned by this user or root, and not writable
+// by group or others. A module is code the agent runs, so whoever could
+// replace it could run theirs. The base name may be a chain of links (a
+// libykcs11.so usually is): each link must be owned by root or the user, and
+// the directory its target is in is walked again. The final component must
+// be a regular file. Nothing is opened.
+func CheckOwned(path string) error {
+	const what = "PKCS#11 module"
+	links := 0
+	for {
+		dir, base, err := splitPath(path)
+		if err != nil {
+			return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+		}
+		resolved, err := resolveOwned(dir, false, what)
+		if err != nil {
+			return err
+		}
+		file := joinPath(resolved, base)
+		fi, err := os.Lstat(file)
+		if err != nil {
+			return dirError(resolved, err, what)
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			if !fi.Mode().IsRegular() {
+				return fmt.Errorf("%s is not a regular file; the %s must be one", file, what)
+			}
+			return ownedAlone(file, fi, what)
+		}
+		if err := ownedBy(file, fi, what); err != nil {
+			return err
+		}
+		if links++; links > maxLinks {
+			return fmt.Errorf("%s: too many symbolic links (over %d) on the way to the %s; a link loop is refused",
+				path, maxLinks, what)
+		}
+		target, err := os.Readlink(file)
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(target, "/") {
+			target = resolved + "/" + target
+		}
+		path = target
+	}
+}
+
 // readPrivate is ReadPrivate; with rootOnly the file must be root's
 // (SystemOwner), not this user's.
 func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, error) {

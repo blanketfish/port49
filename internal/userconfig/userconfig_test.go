@@ -782,3 +782,66 @@ func TestTheFixForARootFileUnderYourHomeIsYours(t *testing.T) {
 		t.Fatalf("a sibling of the home directory: %q", got)
 	}
 }
+
+// A PKCS#11 module is code the agent runs: the file, the links to it and
+// every directory above it are judged (plan 9c, ruling 3; pre-flight I1).
+func TestCheckOwnedJudgesTheModuleAndItsDirectories(t *testing.T) {
+	dir := privateDir(t)
+	mod := filepath.Join(dir, "libmod.so")
+	if err := os.WriteFile(mod, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err != nil {
+		t.Fatalf("a 0755 module in a 0700 directory: %v", err)
+	}
+
+	if err := os.Chmod(mod, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), mod) ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a group-writable module: %v", err)
+	}
+	if err := os.Chmod(mod, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	open := filepath.Join(privateDir(t), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inOpen := filepath.Join(open, "libmod.so")
+	if err := os.WriteFile(inOpen, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := CheckOwned(inOpen); err == nil || !strings.Contains(err.Error(), open) {
+		t.Fatalf("a module in a group-writable directory: %v", err)
+	}
+
+	// The libykcs11.so chain: a link of the user's to a regular file of the
+	// user's passes.
+	link := filepath.Join(dir, "libmod.so.2")
+	if err := os.Symlink("libmod.so", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(link); err != nil {
+		t.Fatalf("a link to a regular file: %v", err)
+	}
+
+	// A link to a directory is no module.
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dlink := filepath.Join(dir, "libdir.so")
+	if err := os.Symlink("sub", dlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(dlink); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("a link to a directory: %v", err)
+	}
+}

@@ -1,10 +1,38 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-oidc-agent lab-workload lab-oxidized lab-ssh build evidence image compose-smoke
+.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static evidence image compose-smoke
 
+# The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
+# environment says, so these are the four static binaries the image carries.
 build:
-	go build -o bin/port49d ./cmd/port49d
-	go build -o bin/port49 ./cmd/port49
-	go build -o bin/port49-inventory ./cmd/port49-inventory
-	go build -o bin/port49-broker ./cmd/port49-broker
+	CGO_ENABLED=0 go build -o bin/port49d ./cmd/port49d
+	CGO_ENABLED=0 go build -o bin/port49 ./cmd/port49
+	CGO_ENABLED=0 go build -o bin/port49-inventory ./cmd/port49-inventory
+	CGO_ENABLED=0 go build -o bin/port49-broker ./cmd/port49-broker
+
+# The client build: the PKCS#11 backend through purego, which links the
+# system's dynamic loader. Written beside, never over, bin/port49.
+build-client:
+	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+
+# The static build (the image's, decision 45 ruling 22) must stay static: a
+# purego import outside a hwkey_dlopen file would make it need a loader that
+# distroless/static does not have.
+check-static:
+	CGO_ENABLED=0 go build -o bin/port49-static ./cmd/port49
+	@if readelf -l bin/port49-static | grep -q 'program interpreter'; then \
+		file bin/port49-static; echo "bin/port49-static is dynamically linked; the image cannot run it"; exit 1; fi
+
+# The packages the hwkey tag adds tests to. internal/clientkey arrives in
+# plan 9c's Task 5; until then a pattern for it would fail the run.
+HW_PACKAGES = ./internal/hwkey/... $(if $(wildcard internal/clientkey),./internal/clientkey/...) ./internal/agent/... ./internal/workload/... ./cmd/port49/...
+
+# Hardware-key tests against SoftHSM2, swtpm and libykcs11 (plan 9c; decision
+# 42 ruling 13), built with CGO_ENABLED=0 and the client build's tag so
+# purego runs as the client binary does. Needs softhsm2, swtpm, ykcs11 and a
+# running pcscd; PORT49_TEST_HW_REQUIRED makes a missing one a failure, not a
+# skip. No -run: the hwkey tag already selects the hardware tests, and a
+# pattern would silently leave a new one out.
+test-hw: check-static
+	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen $(HW_PACKAGES) -count=1 -timeout 20m
 
 # internal/port49d runs about 9.5 minutes under the full parallel suite, close
 # to go test's 10-minute default, so the limit is set here rather than left to
@@ -36,6 +64,8 @@ vet:
 	gofmt -l . | (! grep .)
 	go vet ./...
 	go vet -tags compose ./tests/compose/...
+	go vet -tags hwkey_dlopen ./...
+	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES)
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
 # unauthenticated connection; CI-sized. keyring is here because Resolve runs
