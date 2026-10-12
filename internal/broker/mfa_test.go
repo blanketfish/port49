@@ -984,7 +984,18 @@ func TestAnAttackersOwnTokenOnAnotherConnectionIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, atts := f.newToken(t, &attackerSession.PublicKey, pivattest.TouchAlways)
+	// The attacker's chain is its own: its own f9 under the root, its own
+	// device serial, its own touch key and session key.
+	device, deviceKey := f.deviceCert(t, f.root.Cert, f.root.Key)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attackerSerial = 99999999
+	atts := [][]byte{
+		f.slotCertSerial(t, device, deviceKey, &key.PublicKey, pivattest.TouchAlways, attackerSerial),
+		device.Raw,
+		f.slotCertSerial(t, device, deviceKey, &attackerSession.PublicKey, pivattest.TouchNever, attackerSerial)}
 	code, detail := f.proveTouchDetail(t, f.alice, ch, key, atts)
 	if code != 401 || !strings.Contains(detail, "not this connection's client key") {
 		t.Fatalf("an attacker's token on alice's connection: %d %s, want 401 naming the client key", code, detail)
