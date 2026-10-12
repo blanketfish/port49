@@ -895,3 +895,51 @@ func TestCheckConfigHoldsAJunosDeviceToTheReference(t *testing.T) {
 		t.Fatalf("netconf: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// Under --batch, --config belongs to the whole run: a projected device reads
+// it, a device on a platform that projects nothing ignores it, and a mixed
+// fleet passes in one run. A projected device without it is still a usage
+// outcome (exit 2).
+func TestCheckConfigBatchTakesConfigForAMixedFleet(t *testing.T) {
+	pol, inv, cfg := junosFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.9]}
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ref, out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &ref, &errb); code != 0 {
+		t.Fatalf("export: code %d\n%s", code, errb.String())
+	}
+	lines := []string{"set version 23.4R2-S2.1", "set system host-name srx-01", "set system services ssh"}
+	for _, l := range strings.Split(ref.String(), "\n") {
+		if strings.HasPrefix(l, "set ") {
+			lines = append(lines, l)
+		}
+	}
+	dir := t.TempDir()
+	srx, leaf := filepath.Join(dir, "srx-01.set"), filepath.Join(dir, "leaf-01.cfg")
+	if err := os.WriteFile(srx, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leaf, []byte("hostname leaf-01\naaa authorization exec default group port49 local\n"+
+		"aaa authorization commands all default group port49 local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch"}
+	if code := run(append(args, "--config", cfg, srx, leaf), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "batch: 2 configurations checked, 0 failed\n") {
+		t.Fatalf("mixed: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, srx, leaf), &out, &errb); code != 2 || !strings.Contains(errb.String(), "pass --config") ||
+		!strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
+		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

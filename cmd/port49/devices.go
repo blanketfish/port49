@@ -34,7 +34,10 @@ import (
 // its file name names, as it is (Oxidized writes an FQDN) or less its last
 // extension (srx-01.conf is srx-01), every file is checked whatever one before
 // it found, and the exit is the worst any file's check exits, with a summary
-// line of the files checked and failed (decision 44 ruling 8).
+// line of the files checked and failed (decision 44 ruling 8). Its --config
+// is the whole run's: a projected device reads it (and without it exits 2), a
+// device on a platform that projects nothing ignores it, so a mixed fleet
+// passes in one run.
 //
 // On a projected platform it also reads the configuration, as
 // platform.ConfigCapture prints it, groups' statements expanded where they
@@ -60,7 +63,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	files.register(fs)
 	device := fs.String("device", "", "the device the configuration is from, by its inventory name")
 	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the template "+
-		"classes' idle-timeout (required on a projected platform)")
+		"classes' idle-timeout (required on a projected platform; under --batch, ignored by the others)")
 	batch := fs.Bool("batch", false, "check each CONFIGFILE against the inventory device its file name names, "+
 		"as it is or less its last extension (srx-01.conf is srx-01): the CI form")
 	if err := fs.Parse(args); err != nil {
@@ -80,7 +83,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	out.learn(p)
 	errOut.learn(p)
-	c := checkRun{p: p, files: files, cfgPath: *cfgPath, stdout: stdout, stderr: stderr}
+	c := checkRun{p: p, files: files, cfgPath: *cfgPath, batch: *batch, stdout: stdout, stderr: stderr}
 	if !*batch {
 		return c.one(*device, fs.Arg(0))
 	}
@@ -109,6 +112,7 @@ type checkRun struct {
 	p              *policy.Policy
 	files          policyFiles
 	cfgPath        string
+	batch          bool // --config is the run's, so a device that projects nothing ignores it
 	stdout, stderr io.Writer
 }
 
@@ -145,7 +149,7 @@ func (c checkRun) one(device, file string) int {
 			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
 			"session.max_session_age_default: pass --config\n", d.Platform)
 		return 2
-	case !dialect.Projected() && c.cfgPath != "":
+	case !dialect.Projected() && c.cfgPath != "" && !c.batch:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
