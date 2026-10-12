@@ -932,6 +932,10 @@ credential:
   sid          9c2b-…              back-channel logout names this
   amr          ["pwd", "mfa"]      recorded, not yet acted upon
   acr          urn:…:loa2
+
+  # per-login MFA (plan 9c; §5.1.5)
+  mfa_method   hardware_key_touch | idp_mfa   the proof the login's mint was covered by
+  mfa_at       2026-10-12T02:11:07Z            when that proof was made
 ```
 
 **`sid` is the most valuable field here.** OIDC back-channel logout delivers a logout token
@@ -941,6 +945,10 @@ operator's live router sessions. Without it, that is not merely slow; it is impo
 **`amr` and `acr` are recorded because they are unrecoverable later.** Nothing can establish
 afterward how someone authenticated. They are not consulted by v1 evaluation; a role that
 requires MFA is a natural extension and would be unimplementable retroactively without them.
+
+**`mfa_method` and `mfa_at`** are the per-login proof the minting login was covered by (§5.1.5):
+what an incident responder asks of a session on a core device, and what a session refresh reads
+(decision 45 ruling 16).
 
 **Certificate `notAfter` and the OIDC `exp` are deliberately absent.** They bound the *mint* —
 the credential MUST be valid when the broker resolves it — and not the session. An ID token's
@@ -1174,6 +1182,72 @@ token carrying both), origin `backchannel_logout <issuer>` (§5.7). With no mark
 context after the second pass writes it unrevoked: one store round trip, as for a self
 revocation. A logout whose store writes fail is answered 503, so the provider may send it
 again; whether it does is the provider's (§15, L45).
+
+### 5.1.5 Per-login MFA
+
+A policy may ask for a second factor at each login to the devices it marks: `per_login_mfa`. It is
+a proof at the login to a matching device, not the daily sign-in, which may already include MFA,
+and it is never spelled `mfa: required` (§13 decision 45).
+
+```yaml
+defaults:
+  per_login_mfa:
+    accept: [hardware_key_touch, idp_mfa]
+    reuse_for: 15m
+roles:
+  - name: netadmin
+    per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}
+scopes:
+  - name: core
+    match: {tier: core}
+    on_missing: include
+    security_log: true
+    per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}
+  - name: core-sw01
+    match: {name: core-sw01}
+    per_login_mfa: {accept: [hardware_key_touch], reuse_for: 0m}
+```
+
+**The keys.** `accept` is an explicit list, one or both of the methods below, each once; leaving
+`per_login_mfa` out is no requirement, and there is no `none`. `reuse_for` is how long one proof
+covers further logins under a requirement that proof satisfies: 15m when left out, `0m` a proof at
+every login, at most 8h. `applies_to_machines` is false unless spelled out.
+
+**The methods.**
+- `hardware_key_touch`: a touch on an always-touch slot of the token that holds the session key,
+  signing a broker challenge bound to the held connection. The broker verifies the token's PIV
+  attestation (decision 45 ruling 12). Instant.
+- `idp_mfa`: a fresh sign-in at the identity provider whose `amr` shows a second factor, its
+  `nonce` binding the challenge (ruling 13). A browser round trip at each such login.
+
+**Four levels, the strictest wins.** `defaults:` (every device), a role (where it composes, granted
+or attached), a scope selecting by an attribute (a device class or tag), and a scope selecting by
+`name` (one device). On a device the requirement is the intersection of the `accept` lists of every
+level that applies and the least `reuse_for`; a lower level never weakens a higher. An empty
+intersection is a load error naming both levels: `policy test` fails on it, `policy diff` fails
+on one the new version introduces, and a reload of an edited policy that introduces one is
+refused, while one already in force blocks no unrelated edit; where the policy did not change (a
+start, an inventory reload, a grant's expiry) the device is quarantined with that cause (§10), so
+an inventory sync never freezes the fleet's inventory. A machine principal is exempt but from levels
+that set `applies_to_machines: true`, and a machine proves by `hardware_key_touch` alone, from a
+key and touch slot on one token. A scope with a match key other than `name` that sets
+`per_login_mfa` must declare `on_missing` and `security_log: true`; one pinned by `name` alone
+needs neither.
+
+**The proof** (ruling 14). A mint item under an unmet requirement is answered `deny
+per_login_mfa_required` with a challenge. The client proves at `POST /v1/mfa` and mints again
+naming the challenge; that proof covers that request's items whose requirement accepts its
+method, and, for `reuse_for`, later logins by the same principal, certificate and agent session
+under a requirement it satisfies.
+
+**A live session** (ruling 16). A requirement gates logins and session refreshes, never a live
+session: a reload that adds one revokes nothing. A refresh extends a context under a requirement
+only when a proof covers it; otherwise it is answered `per_login_mfa_required` and keeps the
+ceiling it holds. On a platform that never asks about a command (decision 21) that ceiling does
+not reach the device, and the record says so (`session.unreached`).
+
+**Unavailable** (ruling 18). A requirement no method this broker can verify satisfies is `deny
+per_login_mfa_unavailable` for that device alone.
 
 ### 5.2 Session authorization (daemon)
 
@@ -2144,26 +2218,27 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Ten decision events, one at each point a decision is made, plus five report
+One envelope. Eleven decision events, one at each point a decision is made, plus five report
 events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
-| `mint` | broker | which grants matched, which roles composed, which blob resulted. A record a sweep page writes through the mint (`POST /v1/tokens` by `scope`) carries `sweep: {scope, after}`; the revocation re-check's records after the mint do not (§13 decision 42 ruling 4) |
+| `mint` | broker | which grants matched, which roles composed, which blob resulted. A record a sweep page writes through the mint (`POST /v1/tokens` by `scope`) carries `sweep: {scope, after}`; the revocation re-check's records after the mint do not (§13 decision 42 ruling 4). A record of a device under a per-login requirement carries `per_login_mfa: {accept, reuse_for_seconds, levels, method, proved_at, reused}` (§5.1.5) |
 | `redeem` | daemon | whether a presented credential is valid, and creates the context |
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
-| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (`/v1/refresh`), whether it is extended, with `session.auth_time` and `session.session_expires` (§5.6); or, on a policy refresh, `session.session_expires` where the ceiling moved earlier. A context on a platform that never asks about a command carries `session.unreached: true` (decision 21) |
+| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (`/v1/refresh`), whether it is extended, with `session.auth_time` and `session.session_expires` (§5.6); or, on a policy refresh, `session.session_expires` where the ceiling moved earlier. A context on a platform that never asks about a command carries `session.unreached: true` (decision 21). On a session refresh, a context under a requirement no proof covers is `deny per_login_mfa_required`, not extended (§5.1.5) |
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; a revocation lifted; or, over HTTP, a principal ending its own sessions (`by: self`) or a `(device, username)` key ended (`by: key`), neither leaving a mark |
 | `identity` | broker | what `GET /v1/identity` resolved the caller to: `permit grants_matched` when its subject holds a grant unexpired now, else `deny no_grants_matched` (design document §17) |
 | `explain` | broker | a hypothetical decision `POST /v1/explain` answered, about the caller or, under `explain_others`, another principal: its verdict and reason are the answer given, or `deny api_right_missing`. It authorizes nothing, and replay passes over it |
 | `issue` | broker | whether a person's OIDC sign-in is exchanged for a port49-issued certificate (`POST /v1/certificate`; §13 decision 43 ruling 8): `permit certificate_issued`, carrying `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc`, or a deny with the refusal's reason. A broker that cannot issue (`issuance_unavailable`) records nothing |
+| `per_login_mfa` | broker | whether a per-login proof posted to `POST /v1/mfa` is accepted (§5.1.5; §13 decision 45): `permit per_login_mfa_proved` or `deny per_login_mfa_refused`, carrying `per_login_mfa: {method, challenge_sha256}`. A proof the broker cannot judge (`store_unavailable`) records that |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as the twelfth event, `account`, and is specified in
+Device accounting shares this envelope as the thirteenth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
-A thirteenth, `account_gap`, is a report too: accounting records port49 received and did not write,
+A fourteenth, `account_gap`, is a report too: accounting records port49 received and did not write,
 `{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
 `offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
 and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
@@ -2180,7 +2255,7 @@ yet written, and port49d logs the held counts by stage when it shuts down;
 `port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
 
-A fourteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
+A fifteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
 swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
 "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
@@ -2191,7 +2266,7 @@ addresses are new capture targets. Its `device` block names the device. It is wh
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
-A fifteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
+A sixteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
 <principal>` on the broker's admin socket, deleting the principal's directory membership and with
 it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget":
 {"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket
@@ -2246,7 +2321,8 @@ Two fields carry what a directory contributed (plan 7g):
   was read. It names no group: `policy.subjects` says which subjects matched.
 - `auth.oidc`: on a broker event whose caller presented an OIDC token, `{issuer, sub, sid, amr,
   acr, auth_time}`, each from the verified token (`sid` the provider's own, not
-  issuer-qualified); `amr` and `acr` are recorded and consulted by nothing (decision 13). A
+  issuer-qualified); `amr` and `acr` are recorded and consulted by nothing (decision 13): the session
+  credential's; a per-login proof reads its own ID token's (decision 45 ruling 13). A
   bearer that did not verify is recorded `auth: {method: oidc}` with no principal: none of its
   claims is a validated value (§13 decision 39).
 
@@ -2341,6 +2417,10 @@ refused request named; any other path is recorded `mint`.
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
 | `certificate_issued` | `issue`: the broker issued a short-lived client certificate for the key the sign-in's `nonce` names (§13 decision 43 ruling 8) |
+| `per_login_mfa_required` | `mint`: the device's per-login requirement (§5.1.5) applies and no proof covers it; the item carries a challenge, and nothing is minted for it. `refresh`: a context under a requirement no proof covers is not extended and keeps its ceiling |
+| `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
+| `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token decision 39 refuses, for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause |
+| `per_login_mfa_unavailable` | `mint`, `refresh`: the device's requirement accepts no method this broker can verify now (no `hardware_key_touch.attestation_roots_file` loaded, no human OIDC verifier). That device alone; alertable: a configuration fault, not a person's |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened, failing authentication (one sealed under a key port49 does not hold is left unrevoked and unrecorded, §5.1.3) — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
@@ -2365,6 +2445,8 @@ at the ceiling every live session denies `context_stale` from a reachable port49
 escapes are `session.staleness_ceiling: 0s` with a port49d restart, or stopping port49d so
 break-glass applies (L4). `session_expired` is a further category: expected, and a signal
 that the re-authentication warning is not reaching operators (§5.6).
+`per_login_mfa_refused` MUST be alertable on its own: a run of them is someone trying another
+token or another person's sign-in.
 
 #### Credentials never appear
 
@@ -5659,7 +5741,10 @@ Policy is reviewable only if reviewers see effect, not text.
 **`port49 explain`** resolves a hypothetical decision and names exactly one reason,
 including which role would grant a denied command. On a platform where the relevant control
 cannot be enforced — `pipe_authorized: false`, or `supports` lacking `config_commands` — it
-MUST say so rather than reporting a decision the device will not honor.
+MUST say so rather than reporting a decision the device will not honor. It prints the effective
+per-login requirement (§5.1.5; §13 decision 45 ruling 17): `per_login_mfa accept
+hardware_key_touch (defaults ∩ role netadmin ∩ scope core); reuse_for 5m (scope core); applies to
+humans`, or `per_login_mfa none`: the default is never invisible.
 
 **Effective-permission diff in CI.** Because evaluation is order-free set algebra over token
 trees, `permits ∖ denies` is a computable object and old-versus-new is an exact difference.
@@ -5677,7 +5762,8 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
   sends after §6 layering, or, where it sends none, the number the platform gives the level
   (`none` where neither says); `enable:`, the subject's escalation mechanism (`none`,
   `auto` or `token`); and `reply:`, the exact session reply as a list, in order, with the
-  placeholders empty (`[]` for none); and `api:`, the subject's broker API rights, which a test
+  placeholders empty (`[]` for none); `per_login_mfa:`, the effective per-login requirement on that
+  device, `{accept: [...], reuse_for: 15m}` or `none` (§5.1.5); and `api:`, the subject's broker API rights, which a test
   may assert alone, on any device, since they do not depend on one. A test with no `command:` is a session test and takes no `expect:`; it
   passes only where the subject would be minted a token for the device, with every value it
   names.
@@ -5858,6 +5944,12 @@ projection's fail-closed reply, new or not (§13, decision 26). `port49 policy t
 non-zero on a device quarantined now or at a later expiry and on every fail-closed
 composition too: the daemon still serves the rest (decision 20), and CI ships neither (plan 5b
 pre-flight I10); `port49 platform upgrade` previews both.
+
+A change to a subject's effective per-login requirement on a device (§5.1.5) is printed by `policy
+diff` as `per_login_mfa:` with the before and after, and a weakening (a method added to `accept`, a
+longer `reuse_for`, a requirement removed) is printed as `warning:`. It never gates: the exit stays
+0 (decision 44 ruling 4), but an empty intersection the new version introduces fails as a newly
+quarantined device does.
 
 **A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
 the device gets and what port49 enforces, not level names, for each subject on each device at
@@ -6365,7 +6457,8 @@ daemon never sees the credential — the command exchange carries only `user`, `
 `rem_addr`, and `priv_lvl` — so a fingerprint cannot tighten per-command comparison. It is
 recorded because it enables actions otherwise impossible: OIDC `sid` makes back-channel logout
 reach live device sessions, and certificate issuer and serial are exactly what a CRL or OCSP
-response names. `amr` and `acr` are recorded but unused, because how someone authenticated
+response names. `amr` and `acr` are recorded but unused (the session credential's; a per-login
+proof reads its own ID token's, decision 45 ruling 13), because how someone authenticated
 cannot be established after the fact. The cost is that context now holds PII-adjacent
 material, so it inherits the encryption-at-rest requirement previously applied only to
 tokens. (§5.1.4)
@@ -7844,7 +7937,7 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   the certificate path's steps with `auth_time` as the clock; the new `sid` indexed beside the
   old, before the extension; a logout read after the writes marks every context extended.
   Task 11. A broker that issues certificates takes a person's ID token at `POST /v1/certificate`
-  alone (decision 43 ruling 13), so there a person refreshes by a key signature.
+  alone (decision 43 ruling 13, as amended by decision 45 ruling 20), so there a person refreshes by a key signature.
 - **16. `/v1/config`** lists `methods` and, per human OIDC verifier, `{issuer, client_id,
   scopes}`. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18).
 - **17. The metrics.** `port49_oidc_tokens_total{issuer,outcome}`,
@@ -8531,7 +8624,7 @@ certificate while the certificate is valid.
     exits 1; the next login signs in. When the agent cannot connect with a held certificate, the
     login says to run `port49 login --sign-in`.
 - **13. One path for people** (Q1). A broker with `issuance` takes a person's ID token at `POST
-  /v1/certificate` alone, and refuses it on every other endpoint, `401 trust_domain_unresolved`,
+  /v1/certificate`, and at `POST /v1/mfa` as an `idp_mfa` proof (decision 45 ruling 20), and refuses it on every other endpoint, `401 trust_domain_unresolved`,
   recorded. A machine's token is unaffected. A broker with a human `oidc` verifier and no
   `issuance` keeps plan 7h's bearer path (decision 39 rulings 8 and 15) as built, which no port49
   client drives after plan 9b; retiring it is carried to the pre-beta review.
@@ -8796,6 +8889,288 @@ data. Ruling 6's `rest`, XML API and `outbound-ssh` clauses, and its file-read n
   readonly, whose grant decides none of its other reach; ruling 4's warning stays an operator's
   and an admin's.
 
+**45. The agent in full, third part: hardware-backed client keys, `per_login_mfa`, and the broker
+certificate's CRL check.** *Plan 9c, 2026-10-12, on plan 3's rulings of 2026-09-24, decision 42
+ruling 13, and Ryan's direction of 2026-10-10.* Rulings rest on reasoning unless they say data.
+Ruling 6 is gated on L63; rulings 3, 4, 8 and 12's PKCS#11 and attestation claims are
+*provisional on L60*; ruling 13's `amr` on Keycloak is *provisional on L61*; ruling 5 on real
+hardware and ruling 7's shared-home naming are *provisional on L62*. Ruling 22 rests on data:
+a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pre-flight C1).
+
+- **1. One signer.** Every backend returns a `hwkey.Key`: `crypto.Signer` plus `State() State`,
+  `Unlock(pin []byte) error` and `Close() error`. It is `agent.Config.Cert.PrivateKey`;
+  `api.SignRefresh`, the TLS handshake and the per-login proof take it as a `crypto.Signer`. The
+  file key stays `keyfile`'s, wrapped in nothing.
+- **2. Key references.** `key:` (`--key`) is a path, or a reference: `pkcs11:` in RFC 7512's form
+  (path attributes `token`, `manufacturer`, `serial`, `model`, `object`, `type`, `id`, `slot-id`;
+  query attributes `module-path` and `pin-source`), `tpm:file=PATH` (a TSS2 key file) or
+  `tpm:handle=0x81xxxxxx` (a persistent handle), `secure-enclave:label=NAME` (if ruling 6 builds
+  it). `pin-value` is refused: a PIN does not live in a config file. `pin-source=file:///path` is
+  read through `keyfile.ReadSecret` (owner-only). A `pkcs11:` key with no `cert:` takes the
+  certificate object with the key's `CKA_ID`, so a fleet's system file names `key:
+  "pkcs11:id=%01?module-path=…"` once and no user writes anything. A reference that matches objects
+  on two tokens is refused, naming both, never resolved to the first. The scheme is
+  `secure-enclave:` while the config word is `secure_enclave`: RFC 3986 allows no `_` in a scheme,
+  and data stays snake_case everywhere else.
+- **3. The module.** The `module-path` must be absolute, a regular file, and owned by root or the
+  user, with it and every directory above it not writable by group or others: it is code the agent
+  runs. `userconfig.CheckOwned(path)` walks the directory with `resolveOwned(filepath.Dir(path),
+  false, what)` (which judges directories only, and refuses a non-directory as "not a
+  directory"), then follows the base name's symbolic links (`libykcs11.so` is usually a chain),
+  each link owned by root or the user, and judges the final regular file by `ownedBy` and a mode
+  with no group or other write bit. One module per process, `C_Initialize` with
+  `CKF_OS_LOCKING_OK` and no mutex callbacks, so the module never calls into Go. Memory the module
+  sees is heap-allocated and pinned with `runtime.Pinner` for the call.
+- **4. The PIN.** Asked by `port49 login` on the terminal only when the token says
+  `CKF_LOGIN_REQUIRED`, with echo off; handed to the agent on descriptor 4 (`--pin-fd 4`), as the
+  broker CA is on 3; dropped (zeroed) after `C_Login`. It is held as bytes, decoded by hand, never
+  as a Go string. One `C_Login` per PIN given: a refused PIN is never retried by port49, and the
+  refusal says when the token reports `CKF_USER_PIN_COUNT_LOW` or `CKF_USER_PIN_FINAL_TRY` ("one
+  try left before the key locks"). No terminal and no `pin-source`: the login refuses, naming
+  `pin-source`.
+- **5. TPM 2.0.** `/dev/tpmrm0` (the kernel's resource manager), never `/dev/tpm0`. Keys are ECC
+  P-256 signing keys under the TCG reference ECC SRK (`tpm2.ECCSRKTemplate`, created in the owner
+  hierarchy at each open, so no persistent handle is needed), with empty auth, kept as a TSS2
+  `PRIVATE KEY` PEM file (the "ASN.1 Specification for TPM 2.0 Key Files" form the OpenSSL tpm2
+  provider and tpm2-tools write), 0600. The file is useless on another machine. Linux only; a
+  user outside the `tss` group is told so in one line naming the group.
+- **6. The Secure Enclave** is built only if the spike shows an unsigned `port49` can create and
+  find again a Secure Enclave key (gate SE1). Otherwise macOS is served through PKCS#11 (a
+  YubiKey) and the choice goes back to Ryan (decision 42 ruling 13); L63 stays open.
+- **7. Issued keys in hardware.** `issued_key_store` in `config.yaml`: `auto` (the default), `tpm`,
+  `secure_enclave`, `pkcs11` (with `issued_key: "pkcs11:…;id=…"` naming the key) or `file`.
+  `auto` is a token when `touch_key` and `issued_key` are both set (so the session key sits on the
+  token a touch proves from, ruling 12), else the TPM on Linux where a key can be created there,
+  the Secure Enclave on macOS once ruling 6 builds it, else the file; the login says which in one
+  line. `auto` passes over a store this build lacks and says so in that line: in the static build
+  (ruling 22) a fleet's `touch_key` and `issued_key` do not make `auto` pick `pkcs11` and refuse;
+  it says "this port49 was built without PKCS#11 support, so issued_key is not used; use the
+  client release for it" and goes on to the TPM or the file. A named store that cannot be used
+  refuses before any browser opens, as decision 43 ruling 18 refuses an issuance it cannot make.
+  **For `pkcs11`, port49 never generates a key or writes an object on the token**: on a YubiKey
+  both need the PIV management key (`CKU_SO`), and asking every user for it at each sign-in is
+  fleet toil and a secret port49 should never hold. `issued_key` names a key the user made once
+  (`ykman piv keys generate`); port49 signs the CSR with it and keeps the issued certificate as
+  `~/.port49/issued/<host>_<port>.pem`. A TPM pair is
+  `~/.port49/issued/<host>_<port>.<machine>.tpmkey` and `.<machine>.pem`, where `<machine>` is the
+  first 8 hex digits of SHA-256 of `/etc/machine-id`: on a bastion pool whose home directories are
+  shared, each host keeps its own pair, another host's reads as no held pair (a sign-in), never as
+  an error, and is never overwritten. A held pair is found by either key file.
+- **8. The key unplugged.** A signing error the backend reads as the key gone (PKCS#11
+  `CKR_DEVICE_REMOVED`, `CKR_TOKEN_NOT_PRESENT`, `CKR_SESSION_HANDLE_INVALID`, `CKR_DEVICE_ERROR`;
+  a TPM transport error) is `hwkey.ErrKeyAbsent` and the key's state `Absent`. The agent never
+  ends a session on it. `crypto/tls` flattens a signer's error into text
+  (`handshake_client_tls13.go:797`, Go 1.26), so the agent reads the key's state after a failed
+  dial, not the error. `port49 refresh` and `port49 token` on a dropped connection say "insert your
+  key …; your session goes on until <end>". **`State()` re-probes while the cached state is
+  `Absent`**, cheaply and without a PIN (PKCS#11: `C_GetSlotList(tokenPresent)` and
+  `C_GetTokenInfo` matched by the URI, then a session reopened; TPM: a dial and a
+  `GetCapability`), so a re-inserted key is seen by the next `GET /status` or `port49 refresh`
+  with nothing signing in between; `Refresh` never refuses on a cached `Absent` without that
+  probe. A key that is back and needs its PIN is `Locked` (PKCS#11 `CKR_USER_NOT_LOGGED_IN` too),
+  and `port49 login` with the agent running asks the PIN and unlocks it over the agent's socket
+  (`POST /unlock`), then refreshes. With a reference key, `login` asks the running agent's `Status`
+  first and, when it holds this broker with the same certificate fingerprint and is `absent` or
+  `locked`, goes to the insert-or-unlock path without opening the token in the login process: an
+  unplugged key never turns into "loading the client certificate: no token matches", and a second
+  process never opens the token under the agent (whether that would drop the agent's PIV login is
+  L60's to measure).
+- **9. The broker certificate's CRL.** `broker_crl` in `config.yaml` (`--broker-crl`): `check`
+  (the default), `require`, `off`. Each certificate of the verified chain but the root is checked
+  against the lists its `http`/`https` distribution points name, through `certstatus.Checker`
+  (verified against the issuer, the IDP scope rules, kept in `~/.port49/crl/`). A list naming a
+  serial refuses the connection under `check` and `require` before any request, a bearer ID token
+  included. A list that cannot be had: under `check` it is said once per process and the login goes
+  on; under `require` it is refused. A certificate naming no usable distribution point is not
+  checked and nothing is said, link by link: an intermediate with none (common under step-ca and
+  private PKI) is passed over while the leaf it issued is still checked. A fetch that failed is
+  remembered for a minute, so a CRL server that is down costs one 5s wait, not one per connection.
+  Login's own TLS connections (`/v1/config`, `/v1/certificate`, `/v1/mfa`), the agent's and
+  `port49 workload`'s all check.
+- **10. Schema.** `per_login_mfa: {accept: [...], reuse_for: 15m, applies_to_machines: false}`
+  under `defaults:` (new top-level key), a role, or a scope. `accept` is required, non-empty, each
+  of `hardware_key_touch` and `idp_mfa` at most once. `reuse_for` 0s to 8h, default 15m.
+  `applies_to_machines` default false, spelled out to be true. Unknown keys refused. The roadmap's
+  "device class or tag" and "one device" levels are scopes: one matching attributes, one matching
+  `name`. The policy has one way to select devices, and a second would be a second place to look at
+  3am. A requirement never lives in the inventory record: a source-of-truth editor could remove it.
+- **11. The strictest wins.** The levels that apply on a device: `defaults`, each role that
+  composes there (granted or attached), each scope that selects the device. For a machine, only
+  those with `applies_to_machines: true`. Effective `accept` is their intersection, `reuse_for`
+  their minimum, each part naming its level. Every subject on every device is checked at load, as
+  the joint check is (§10), at the load's present and at each later grant expiry, as
+  `checkDevices` checks. An empty intersection is a load error naming both levels:
+  "per_login_mfa: scope core accepts [hardware_key_touch] and role netadmin accepts [idp_mfa] on
+  core-sw01; no method meets both". A machine-applying level whose accept leaves only `idp_mfa`
+  for a machine is the same error (a machine has no sign-in). **Where it is a load error, and
+  where a quarantine:** a policy edit is refused only for the MFA entries it *introduces*, entries
+  absent from the in-force policy's `MFADisjoint()` evaluated over the same inventory. A reload of
+  an edited policy file that introduces one is refused with it (the bundle in force keeps serving,
+  as for any refused policy edit); a policy and inventory loaded together (`loadBoth`) are judged
+  by the same rule, against the in-force policy over the new inventory (the `base` `loadBoth`
+  already builds for the admission bound). An entry already in force stays quarantined and does
+  not block an unrelated edit: a grant revocation at 3am loads while core-sw01 is quarantined over
+  MFA. `port49 policy diff` fails on an entry the new version introduces (its existing
+  "quarantined for a new cause" rule), and `port49 policy test` fails on every quarantine, this
+  one included, as it does today for every cause (there is no `policy check` command; `policy
+  test` is the CI gate). When the policy did not change, at a start, on an inventory reload (a
+  source-of-truth sync adding `tier: core`) or at a grant's expiry, the device is quarantined with
+  that cause, as `checkDevice` quarantines a composition that will not compile: refused at mint,
+  closed by the daemon, the rest of the fleet and every later inventory edit still served.
+  Refusing the inventory edit instead would freeze inventory fleet-wide until someone edits the
+  policy (decision 20, §10). A principal matching two subjects is composed only at mint
+  (`resolveAll`); an empty intersection found there is wrapped as `ErrCompositionRefused`, so the
+  item is `deny composition_refused`, recorded, never a `broker_error` fault. A scope with a match
+  key other than `name` that carries `per_login_mfa` must declare `on_missing` (a restriction,
+  read as a deny is, §5.5) and `security_log: true` (whoever edits the attribute lifts the
+  requirement, and the log must say so). A scope whose only match key is `name` needs neither:
+  `name` is always present, so `on_missing` is moot, and no attribute edit lifts a name pin.
+  `on_missing: exclude` on a `per_login_mfa` scope is a lint warning: a sync that drops the
+  attribute lifts the requirement, which `security_log` records.
+- **12. `hardware_key_touch`** is a signature by the touch key over the challenge and the held
+  connection's TLS exporter value (`EXPORTER-port49-per-login-mfa`), with that key's YubiKey PIV
+  attestation, the token's attestation certificate (slot f9), and the session key's attestation.
+  The broker verifies: the f9 certificate to `broker.identity.per_login_mfa.hardware_key_touch.
+  attestation_roots_file`, whose self-signed certificates are the roots and whose others are
+  intermediates (`VerifyOptions.Intermediates`), so a firmware whose attestation hierarchy has an
+  intermediate under a newer Yubico root verifies once the operator lists both (the chain depth
+  per firmware is *provisional on L60*); each slot attestation's signature by f9 (checked
+  directly, since some f9 certificates carry no basic constraints: go-piv v2.6.0
+  `piv/key.go:241-247` documents and works around it); the touch attestation's key is the signing
+  key and its touch policy byte is `0x02` (always; OID 1.3.6.1.4.1.41482.3.8); the session
+  attestation's key is the connection's client certificate key. So the touch is on the token that
+  holds the session key, and an attacker holding a copied session key cannot prove with a token of
+  their own. A TPM, Secure Enclave, file or imported key cannot satisfy it: none carries an
+  attested presence. `touch_key:` in `config.yaml` names the touch slot (`pkcs11:id=%02?module-path=…`),
+  one line in the system file. **A fleet `touch_key` meets users whose session key is elsewhere:**
+  the agent reports `touch_key: true` only when the touch key opened and sits on the same token
+  (module and token serial) as a `pkcs11:` session key; otherwise it reports
+  `touch_key_unusable: "<why>"` ("your session key is in the TPM; a touch proves only from the
+  token that holds it", "no token matches touch_key") and starts anyway. The CLI then never tries
+  a touch that must fail, so no `per_login_mfa_refused` (the alert meant for someone trying another
+  token) fires at an ordinary login; it says why and goes to `idp_mfa` where accepted. A device
+  that accepts only `hardware_key_touch` locks out a user whose session key is not on a token; the
+  operator notes say so.
+- **13. `idp_mfa`** is an ID token from a sign-in run by the CLI as `port49 login --oidc` runs it
+  (PKCE, `prompt=login`, the loopback redirect, the pasted address), with `nonce` =
+  `base64url(SHA-256("port49 per-login v1\0" ‖ challenge))` and the configured `acr_values` when
+  set. The broker verifies it as decision 39 verifies a human ID token, and then: the principal it
+  maps to is the challenge's; `auth_time` within 5 minutes plus `clock_skew` of its `iat` and of
+  now; `amr` holds one of `broker.identity.per_login_mfa.idp_mfa.amr` (default `[mfa]`, RFC 8176);
+  the token unspent (its SHA-256 kept `max_token_age`). Provisional on L61 for Keycloak's `amr`.
+- **14. How the proof rides the mint.** The mint answers each item under an unmet requirement
+  `deny per_login_mfa_required`, with `per_login_mfa: {device, challenge, expires_at, accept,
+  methods, reuse_for_seconds, levels}`; one challenge per request, 32 random bytes, kept 5 minutes
+  (`PutOnce`), bound to the principal, the certificate and the agent session. **Each record is
+  keyed by its binding**, so a wrong caller's take misses with `ErrNotFound` and spends nothing
+  (`TakeOnce` removes the record whoever asks): the challenge under `plm-challenge/` + hex
+  SHA-256(challenge ‖ 0 ‖ principal), the principal alone because an `idp_mfa` post has no client
+  certificate; the proved record under `plm-proved/` + hex SHA-256(challenge ‖ 0 ‖ principal ‖ 0 ‖
+  fingerprint ‖ 0 ‖ agent_sha256). Each path computes the key from its own caller: bob posting
+  alice's challenge, or minting with it, finds nothing. A touch post from alice's other
+  certificate takes her challenge and is then refused on the fingerprint, spending it; that is the
+  same person, never another's denial. The proof is posted to `POST /v1/mfa`: on the held
+  connection for a touch, with a bearer ID token over a fresh connection for `idp_mfa` (the agent
+  never holds an ID token, decision 43 ruling 1). The retried mint carries
+  `per_login_mfa_challenge`, and the proof made for that challenge covers that request's items
+  whose `accept` holds its method, whatever `reuse_for` says, once. So `reuse_for: 0m` is a proof
+  at every login. One endpoint serves the mint, the refresh and both methods. At the mint, the
+  proved record is taken (`TakeOnce`) only after the request's idempotency key is reserved, so a
+  store error or an in-progress answer before that leaves the proof for the retry. A store error
+  while judging a requirement (`mfaCovers`, `issueChallenge`) is `deny store_unavailable` for that
+  item, never "not covered": a challenge that was never stored would make the proof fail as
+  `per_login_mfa_refused` and fire the alert during a store outage. A replay of a completed
+  request (the same `Idempotency-Key`, its response lost) is answered from the reservation before
+  the requirement is read, so a spent proof never turns a minted token into
+  `per_login_mfa_required`. The touch does not hold the wire: the agent reads the exporter value
+  with the wire, releases it for the touch (up to the token's touch timeout, about 15s), and takes
+  it again to post. Having taken it back, the agent reads the exporter value again and compares it
+  with the one it signed over; if the connection changed meanwhile it does not post and says "the
+  connection changed during the touch; run it again". Posting it would be refused at the broker
+  (another exporter value) as `per_login_mfa_refused`, the alert §5.7 reserves for someone trying
+  another token, and would spend the challenge. So `port49 revoke` never waits behind a touch, and
+  a reconnect during one fires no alert.
+- **15. Reuse.** A proof is kept as `(SHA-256(principal ‖ 0 ‖ certificate fingerprint ‖ 0 ‖
+  agent_sha256), method) → proved_at` (`PutMFAProof`, the later kept, 8h), where `agent_sha256` is
+  the hex SHA-256 of the agent session. The challenge and proved records (`PutOnce`, which crypt
+  passes through unsealed) keep `agent_sha256`, never the value. `POST /v1/mfa` takes the binding
+  (principal, fingerprint, `agent_sha256`) from the challenge record for both methods, never from
+  its own request: an `idp_mfa` proof comes from the CLI over a fresh connection with no
+  `Port49-Agent-Session`, and is kept for reuse all the same. A proof is not kept for reuse only
+  when the challenge record's `agent_sha256` is empty (a workload, a 7h bearer). It covers a later
+  login to a device whose effective `accept` holds the method and whose `reuse_for` has not passed
+  since. The agent session is 32 random bytes the agent draws at start and sends as
+  `Port49-Agent-Session` on every request; never logged. Another agent, or the same person on
+  another machine, proves again. The store holds it, so a reconnect to another broker replica keeps
+  it.
+- **16. Held sessions.** A requirement gates logins and refreshes. A policy reload that adds or
+  tightens one revokes nothing, on any platform: on a platform that never asks about a command
+  (decision 21) port49 could not end the session anyway, and on a per-command platform ending it
+  would make a policy edit a fleet-wide logout at 3am. A session refresh extends a context under a
+  requirement only when a proof covers it now; otherwise that context is answered
+  `per_login_mfa_required` (deny, recorded), keeps the ceiling it holds, and the response carries a
+  challenge. On a platform that never asks about a command the record carries `session.unreached:
+  true`, and `port49 refresh` says the device's own session runs until the device closes it. So a
+  session opened before a requirement cannot be extended past it without a proof. The refresh
+  after a proof names the proved challenge (`per_login_mfa_challenge` on `POST
+  /v1/refresh/challenge` and on the refresh), so `reuse_for: 0m` works there as at the mint, and a
+  challenge request naming a challenge proved by this caller is exempt from the connection's 10s
+  refresh pacing once: the request takes the single-use proved record, under the key its own
+  caller computes (ruling 14), for the refresh that follows, so the pacing still bounds refreshes
+  to one per proof. Without it, the refresh right after a touch would be answered
+  `refresh_too_soon`.
+- **17. What people see.** A prompt: `core-sw01 asks for a second factor at each login: scope core
+  accepts hardware_key_touch; role netadmin accepts hardware_key_touch, idp_mfa (reuse 15m, from
+  defaults)`, then `touch your key now` or the sign-in. A refusal names the same and the cause.
+  `port49 explain` prints `per_login_mfa accept hardware_key_touch (defaults ∩ role netadmin ∩
+  scope core); reuse_for 5m (scope core); applies to humans`, or `per_login_mfa none`: the default
+  is never invisible.
+- **18. Unavailable, and 3am.** A requirement whose `accept` holds no method this broker can
+  verify now (no attestation roots for a touch-only device, no human OIDC verifier for an
+  `idp_mfa`-only one) is `deny per_login_mfa_unavailable` for that device alone, said at the
+  broker's start once per policy. The broker never refuses a start over it (decision 43 ruling
+  4's rule). With the IdP down, touch still works where accepted; with no token at hand, idp works
+  where accepted: the operator notes say to accept both where they can. Break-glass is unaffected.
+- **19. Records.** One new event, `per_login_mfa`: a proof posted, `permit per_login_mfa_proved`
+  or `deny per_login_mfa_refused`, carrying `per_login_mfa: {method, challenge_sha256}`. A mint or
+  refresh record under a requirement carries `per_login_mfa: {accept, reuse_for_seconds, levels,
+  method, proved_at, reused}`. Reasons (§5.7 first): `per_login_mfa_required`,
+  `per_login_mfa_proved`, `per_login_mfa_refused`, `per_login_mfa_unavailable`. Metric
+  `port49_per_login_mfa_total{method,outcome}`; no principal, no device. A token's credential
+  carries `mfa_method` and `mfa_at` into the context.
+- **20. Decision 43 ruling 13 amended.** A broker with `issuance` takes a person's ID token at
+  `POST /v1/certificate` and at `POST /v1/mfa` (as an `idp_mfa` proof, never as a caller's
+  credential), and refuses it everywhere else, as before.
+- **21. Workloads.** A machine meets a requirement only under `applies_to_machines: true`, and
+  only by `hardware_key_touch` (`port49 workload token --touch-key REF`, stderr saying "touch the
+  key"). A workload's key may be a reference too (`--key pkcs11:…`): `workload.LoadCertificate`
+  goes through `clientkey.LoadPair`, the PIN from `pin-source` alone (a workload has no terminal).
+  Since a touch proves only from the token holding the connection key (ruling 12), an
+  `applies_to_machines: true` level is met only by a workload whose `--key` and `--touch-key` are
+  on one token; `policy test` and explain say "applies to this machine: provable only with a
+  pkcs11 key and touch key on one token", and `applies_to_machines: true` is a lint warning saying
+  the same.
+- **22. Two builds.** purego makes a `CGO_ENABLED=0` binary dynamically linked (its fakecgo
+  imports the system loader), and the image's base, `distroless/static`, has no loader: a
+  `port49` that imports purego would not exec there, nor on Alpine/musl. So the purego backends
+  (`internal/hwkey/pkcs11`'s binding and `secureenclave`) build only under the tag
+  `hwkey_dlopen`. Without it, `clientkey.Open` refuses `pkcs11:` and `secure-enclave:` naming the
+  build: "this port49 was built without PKCS#11 support (the static build, as in the container
+  image); use the client release". The static build (`make build`, the image) is built with
+  `CGO_ENABLED=0` and no tag (`make build` sets `CGO_ENABLED=0` from plan 9c on; before it, it
+  inherited the environment's) and stays one of "the four static binaries" (§13, the image ruling)
+  and the design's "single static binary"; `make check-static` fails when it is not `statically
+  linked`. The client build (`make build-client`, writing `bin/port49-client` so it never
+  overwrites `make build`'s `bin/port49`, and plan 12's desktop and client release artifacts, the
+  ones people run `port49 login` from) adds `-tags hwkey_dlopen` and is dynamically linked against
+  the loader every desktop Linux and macOS has. TPM (go-tpm, pure Go) and file keys are in both.
+  No route keeps one static binary and PKCS#11: a static binary cannot `dlopen`, and a PKCS#11
+  module is a shared library; a helper binary or p11-kit's RPC would add a process boundary for no
+  gain over a second artifact. Which artifact each deployment shape ships is plan 12's (deployment
+  is not prescriptive); plan 9c's PR and operator notes say which carries hardware keys.
+- **23. The lab.** L60 (a YubiKey on the SER8; Ryan present), L61 (Keycloak's `amr`), L62 (the
+  SER8's TPM), L63 (the Secure Enclave from an unsigned binary).
+
 ---
 
 ## 14. Required test assertions
@@ -8931,7 +9306,7 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the ten decision events, permits included — a corpus
+- **One record per evaluation**, at each of the eleven decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
   force gives writes no record, and nor does a pass a store error stops, for the context it
@@ -9408,6 +9783,27 @@ Beyond those already listed in the design document's §14:
   until `port49 directory forget`. A marked certificate with every DC down is 401
   `credential_revoked`. `/readyz` stays ready with every DC down.
 
+**Hardware keys and per-login MFA**
+
+- **One signer**: a PKCS#11, TPM and file key each sign a TLS 1.3 handshake and a refresh
+  through `crypto.Signer`; CI runs the first two against SoftHSM2 and swtpm with `CGO_ENABLED=0`.
+- **The PIN once**: a refused PIN is never sent again by port49.
+- **The key unplugged**: the held connection mints; a refresh and a reconnect say to insert the
+  key and end no session; a re-inserted key is seen by the next status or refresh with nothing
+  signing between, and unlocked by `port49 login`.
+- **Static stays static**: the build without `hwkey_dlopen` is statically linked.
+- **Strictest wins**: the intersection and the least `reuse_for`; disjoint levels refuse the
+  load naming both, and quarantine the device when only the inventory moved; machines exempt
+  unless `applies_to_machines`.
+- **The touch is the session token's**: an attestation from another token, or not always-touch,
+  is refused; a touch signature over another connection's exporter value is refused.
+- **A challenge once**: a challenge proved twice, or by another caller, is refused.
+- **`reuse_for: 0m`**: a proof covers its own request and no other.
+- **No revocation on reload**: a requirement added under a live session revokes nothing; the
+  refresh does not extend it without a proof.
+- **The broker CRL**: revoked refuses before any request; unavailable goes on under `check`, is
+  refused under `require`.
+
 ---
 
 ## 15. Lab register
@@ -9502,6 +9898,10 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's; whether a group's `permissions` is added beside a class's own (a leaf-list). Whether a group applied on the class itself (class-level `apply-groups`) keeps that line in the inherited capture. And whether a TACACS+ session landing in `remote` holds what a nested group added (the nested-group session cell: the inner group adds `permissions network` under `<p49-*>`, and a session under a class holding its own `view` reads `show cli authorization`, which must list `clear` and `view-configuration` from the top-level groups, and `ping 127.0.0.1 count 1 rapid` as the second reading). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-12; tests/lab/results/L57-juniper_vjunos-router.md, L57-juniper_vsrx.md. The two images agree. Both inherited set forms expand `p49g-tip` and `p49g-perm` under `p49-remote` and print no `apply-groups` or `set groups` line; plain `display set` prints both and expands nothing. The class-level `apply-groups` is stripped by both inherited forms, with `p49g-classlevel`'s `login-alarms` expanded under `p49-remote`; beside it the class's `apply-groups-except` line is stripped too (it survived in the 2026-10-11 capture, which had no class-level `apply-groups`). The nested-group session cell reads "not applied" on both images: the p49-l57own session listed `clear` and `view-configuration` (the controls) and not the inner group's `network`, and `ping 127.0.0.1 count 1 rapid` was refused with "unknown command" |
 | **L58** | The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save\|junoscript)( .*)?` and the pipe tail), each against a control with the same class and no deny (`permissions view`; the `save` cells `permissions all`, with the same candidates also typed under `view` as information). `save`: whether it is a keyword to deny-commands, a `save` command the control runs with `\| count`'s evidence refused under the deny with the caret under `save` (L26b proved it on vJunos-router; on vSRX its control took the hidden `save dhcp-security-snoop` and refused the file name after it, so nothing ran). `xml-mode`: whether bare `xml-mode` (the Junos XML protocol, greeting `<junoscript`) and `xml-mode netconf` are refused under it, where the control is greeted. | Set 1.2.0's keyword tree (`save`); decision 44 ruling 10's `xml-mode **` sent as nothing beside `junoscript **` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-11; tests/lab/results/L58-juniper_vjunos-router.md, L58-juniper_vsrx.md. `save` proven on both: vJunos-router's control ran `save dhcp-security-snoop /var/tmp/p49-l58.snoop \| count`, vSRX's control's CLI took `save` and stopped after it, and the deny refused it with the caret under `save` on both. Bare `xml-mode` and `xml-mode netconf need-trailer` refused under the deny on both, the control greeted. Rerun 2026-10-12: the shipped readonly's nested form (`^( … )$`) refused the same cells on both (G5). |
 | **L59** | What plan 9b1 left unmeasured of L26c, under a reply carrying set 1.2.0's entry denies (`junoscript **`, `op **`) beside a deny of `show configuration` beneath `view-configuration`, each against a control with the same bits and no deny that reaches the service first: whether REST (`system services rest`, `/rpc/…`) reaches an RPC (L26c-scripts: the lab's tunnel reached REST in no cell, the control's included; the management-address bind is the harness item); whether the XML API (`xnm-ssl`, `xnm-clear-text`, and `xnm-ssh` where the release has it) reaches an RPC; whether `outbound-ssh` opens a device-initiated NETCONF session under that login; whether a file read of `/config` (`scp`, `sftp` with `ssh sftp-server`, `ftp`) returns the configuration past the deny (L26c-scripts: `scp` was refused in every class, the control's included); and, with the NETCONF service off (`netconf ssh` deleted), whether `xml-mode netconf need-trailer` from a CLI session still opens NETCONF and reaches `<get-configuration/>` (L26c's probes ran before the delete; L26c review I-4); and whether the CLI pager's save (`s`) or a `| save` pipe writes a file under a readonly reply, against a control (seen once, uncaptured, on vSRX 21.4R3.15 on 2026-10-12: under the narrow readonly a lab probe typed into a `---(more)---` pager and its `s` saved the paged output to a file). Docs must not say a readonly cannot write files until this closes. | Decision 44 ruling 6 and §8 "Management services": `rest`, the XML API and `outbound-ssh` fail check-config under set 1.2.0 (`rpcPastEntryDeny`), and `ftp` and `ssh sftp-server` pass (`entryServices`, the ssh options); set 1.1.0's services allowlist being sufficient (`rpcServicesOff`) | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | open — added by plan 9b1 2026-10-12, carried from L26c |
+| **L60** | A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5). Whether: `C_Initialize` with `CKF_OS_LOCKING_OK` and no callbacks, and `C_Finalize`, run clean with the token present, `libykcs11`'s threads included; a slot 9a key (PIN policy once, touch never, a lab CA's certificate) signs a TLS 1.3 handshake and a refresh with `port49 login` asking the PIN once; the attestation certificates (slot f9 and each slot's) are reachable as certificate objects, chain to Yubico's PIV roots (the chain's depth for this firmware recorded: whether an intermediate sits under the root), and carry the touch policy (1.3.6.1.4.1.41482.3.8) and serial (…3.7) port49 reads; a slot 9c key with touch policy always proves `hardware_key_touch` with a touch, and with no touch within the token's timeout is refused in port49's words; the token unplugged mid-session: `port49 token` mints on the held connection, `port49 refresh` says to insert the key, the session survives, and after re-insertion, with nothing minted between, the agent's `GET /status` says `locked`, `port49 login` asks the PIN and the refresh works; a `port49 login` or `port49 token` in another terminal does not de-authenticate the agent's PIV login; a wrong PIN is sent once and the message says the tries left; a key the user generated with `ykman` and named by `issued_key` (`issued_key_store: pkcs11`) is issued a certificate with port49 writing nothing to the token. Each cell against a control. | §13 decision 45 rulings 3, 4, 8 and 12; the operator notes (plan 13) | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open — added by plan 9c 2026-10-12; needs Ryan present |
+| **L61** | Keycloak's `amr` and `acr` in an ID token for `idp_mfa`. With a realm flow of password and OTP, a `prompt=login` sign-in with both: whether the ID token carries `amr`, and which values, with Keycloak's AMR protocol mapper and with none; the control, a password-only sign-in, and its `amr`; whether `acr_values` changes either. | §13 decision 45 ruling 13 (the default `amr: [mfa]`); the operator notes' provider setup | Keycloak (26.x) | open — added by plan 9c 2026-10-12 |
+| **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
+| **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs a macOS host |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -11439,6 +11839,13 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   REST, the XML API and `outbound-ssh` under set 1.2.0; whether a `show configuration` deny holds
   against a file read of `/config` is unmeasured; and whether set 1.1.0's services allowlist is
   sufficient with NETCONF off is unmeasured.
+- **L60**–**L63** — added by plan 9c. Why each is a row:
+  - **L60**: decision 45's PKCS#11, PIN and touch claims are reasoning from the PKCS#11 and PIV
+    specifications until a real token answers, and Yubico's attestation chain depth on current
+    firmware is recollection, not measurement.
+  - **L61**: `idp_mfa`'s `amr` default is provider data.
+  - **L62**: swtpm is not a TPM's firmware.
+  - **L63**: the entitlement question decides whether the Secure Enclave is built.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
