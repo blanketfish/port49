@@ -1061,8 +1061,8 @@ const narrowRole = `roles:
 `
 
 // The narrow shape closes NETCONF with no deny beneath any bit, so the
-// warning's remedy is a grant that reaches whole bits, not the deny's.
-// Spec §12 words no remedy for it. Each warning is written after its subject
+// warning carries the one remedy (decision 44 ruling 3): the account keeps
+// NETCONF only where its reply sends no deny. Each warning is written after its subject
 // and platform with a colon, its rules quoted, and names no device where it
 // is on every one.
 func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
