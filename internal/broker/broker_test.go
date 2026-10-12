@@ -780,7 +780,7 @@ func TestAStalledLogNeverHoldsAReloadThroughASessionRefresh(t *testing.T) {
 	b.Log = sink
 	done := make(chan error, 1)
 	go func() {
-		_, err := b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, b.Now(), nil)
+		_, err := b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, b.Now(), nil, "", nil)
 		done <- err
 	}()
 	select {
@@ -859,7 +859,7 @@ func TestASessionRefreshWritesEachBlobOnce(t *testing.T) {
 	f.liveContextAt(t, "leaf2", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
 	f.loadPolicy(t, strings.Replace(testPolicy, `deny: ["reload **"]`, `deny: ["reload **", "write erase"]`, 1))
 	f.log.Reset()
-	rep, err := f.b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now(), nil)
+	rep, err := f.b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now(), nil, "", nil)
 	if err != nil || len(rep.Sessions) != 2 {
 		t.Fatalf("the refresh: %+v %v", rep, err)
 	}

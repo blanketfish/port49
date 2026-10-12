@@ -53,6 +53,8 @@ type mfaOpts struct {
 	intermediate  bool // the device certificate is signed by an intermediate under the root
 	listInter     bool // and the operator's roots file lists that intermediate
 	shortCeiling  bool // alice's grant on core carries a one-hour session ceiling
+	noRequirement bool // core carries no per_login_mfa (a policy before the reload that adds one)
+	junosCore     bool // core-sw01 is on juniper_junos, which never asks about a command
 }
 
 type mfaOpt func(*mfaOpts)
@@ -64,6 +66,7 @@ func withoutAttestationRoots() mfaOpt { return func(o *mfaOpts) { o.noRoots = tr
 func withTouchOnlyCore() mfaOpt       { return func(o *mfaOpts) { o.touchOnlyCore = true } }
 func withAppliesToMachines() mfaOpt   { return func(o *mfaOpts) { o.machines = true } }
 func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling = true } }
+func withJunosCore() mfaOpt           { return func(o *mfaOpts) { o.junosCore = true } }
 func withDeviceUnderIntermediate(listed bool) mfaOpt {
 	return func(o *mfaOpts) { o.intermediate, o.listInter = true, listed }
 }
@@ -81,6 +84,10 @@ func mfaPolicy(o mfaOpts) string {
 	if o.machines {
 		machines = ", applies_to_machines: true"
 	}
+	coreMFA := fmt.Sprintf(", per_login_mfa: {accept: %s, reuse_for: %s%s}", accept, reuse, machines)
+	if o.noRequirement {
+		coreMFA = ""
+	}
 	ceilingRole, ceilingGrant := "", ""
 	if o.shortCeiling {
 		ceilingRole = "\n  - {name: short_session, max_session_age: 1h}"
@@ -88,7 +95,7 @@ func mfaPolicy(o mfaOpts) string {
 	}
 	return fmt.Sprintf(`
 scopes:
-  - {name: core, match: {name: core-sw01}, per_login_mfa: {accept: %s, reuse_for: %s%s}}
+  - {name: core, match: {name: core-sw01}%s}
   - {name: edge, match: {name: edge-sw01}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}%s
@@ -103,7 +110,7 @@ grants:
   - {subject: bobs, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
-`, accept, reuse, machines, ceilingRole, ceilingGrant)
+`, coreMFA, ceilingRole, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
@@ -281,6 +288,9 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 	devs := []admission.Device{
 		{Name: "core-sw01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.51")}},
 		{Name: "edge-sw01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.52")}},
+	}
+	if o.junosCore {
+		devs[0].Platform = "juniper_junos"
 	}
 	base := newFixtureWith(t, 16, mfaPolicy(o), devs...)
 	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}}

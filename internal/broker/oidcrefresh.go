@@ -154,7 +154,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, dref)
 		return
 	}
-	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC)
+	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC, "", nil)
 	switch {
 	case errors.Is(err, directory.ErrUsernameTaken):
 		dref := directoryRefusal(err)

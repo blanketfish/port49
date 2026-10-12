@@ -267,6 +267,10 @@ type heldConn struct {
 	nonce       []byte
 	nonceExp    time.Time
 	lastRefresh time.Time
+	// proved is the proof a refresh challenge request took by naming its
+	// challenge, kept beside the nonce and expiring with it; the refresh
+	// that follows spends it (plan 9c, decision 45 ruling 16).
+	proved *provedChallenge
 }
 
 func (h *heldConn) authAt() time.Time {

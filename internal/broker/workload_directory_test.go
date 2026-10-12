@@ -224,7 +224,7 @@ func TestASessionRefreshSettlesAWorkloadsUsernameAsTheMintDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, err := f.b.RefreshSession(context.Background(), m, &a, store.Credential{Method: "cert"}, f.b.Now(), nil)
+	rep, err := f.b.RefreshSession(context.Background(), m, &a, store.Credential{Method: "cert"}, f.b.Now(), nil, "", nil)
 	if err != nil || len(rep.Sessions) != 1 || rep.Sessions[0].Outcome != "extended" {
 		t.Fatalf("its own declared username refused its refresh: %+v %v", rep, err)
 	}
@@ -233,7 +233,7 @@ func TestASessionRefreshSettlesAWorkloadsUsernameAsTheMintDoes(t *testing.T) {
 	om := policy.Member{Principal: other.Principal, Domain: policy.DomainMachines, Directory: true,
 		Username: "svc-oxidized", GroupNames: other.GroupNames}
 	if _, err := f.b.RefreshSession(context.Background(), om, &other, store.Credential{Method: "cert"}, f.b.Now(),
-		nil); !errors.Is(err, directory.ErrUsernameTaken) {
+		nil, "", nil); !errors.Is(err, directory.ErrUsernameTaken) {
 		t.Fatalf("another workload's entry name: %v", err)
 	}
 }
