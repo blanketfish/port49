@@ -8989,9 +8989,19 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   (verified against the issuer, the IDP scope rules, kept in `~/.port49/crl/`). A list naming a
   serial refuses the connection under `check` and `require` before any request, a bearer ID token
   included. A list that cannot be had: under `check` it is said once per process and the login goes
-  on; under `require` it is refused. A certificate naming no usable distribution point is not
-  checked and nothing is said, link by link: an intermediate with none (common under step-ca and
-  private PKI) is passed over while the leaf it issued is still checked. A fetch that failed is
+  on; under `require` it is refused. A certificate naming no fetchable (`http`/`https`)
+  distribution point, such as one with only `ldap://` or `file://` points or none at all, is judged
+  link by link: under `check` it is not checked and nothing is said, and an intermediate with none
+  (common under step-ca and private PKI) is passed over while the leaf it issued is still checked;
+  under `require` it is refused, whether leaf or intermediate (only the trust anchor, which is not
+  checked, is exempt), with "broker certificate <subject> names no http(s) CRL distribution point;
+  broker_crl: require refuses it, so nothing was sent to the broker — add an HTTP CDP to the CA,
+  or set broker_crl: check". A revoked link is reported as revoked before this. *Ruling (Ryan,
+  2026-10-12): `require` means every link is checkable, so a certificate that cannot be is
+  refused, not waved through.* Operator runbook: rotate by issuing and loading the new broker
+  certificate before publishing the revocation; revoke the leaf, not the CA; under `require`, a
+  revoked broker certificate with no replacement stops new logins while held sessions continue.
+  A fetch that failed is
   remembered for a minute, so a CRL server that is down costs one 5s wait, not one per connection.
   Login's own TLS connections (`/v1/config`, `/v1/certificate`, `/v1/mfa`), the agent's and
   `port49 workload`'s all check.

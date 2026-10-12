@@ -207,11 +207,17 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   (verified against the issuer, the IDP scope rules, kept in `~/.port49/crl/`). A list naming a
   serial refuses the connection under `check` and `require` before any request, a bearer ID token
   included. A list that cannot be had: under `check` it is said once per process and the login goes
-  on; under `require` it is refused. A certificate naming no usable distribution point is not
-  checked and nothing is said, link by link: an intermediate with none (common under step-ca and
-  private PKI) is passed over while the leaf it issued is still checked (pre-flight I10). A fetch
-  that failed is remembered for a minute, so a CRL server that is down costs one 5s wait, not one
-  per connection. Login's own TLS connections (`/v1/config`, `/v1/certificate`, `/v1/mfa`), the
+  on; under `require` it is refused. A certificate naming no fetchable (`http`/`https`)
+  distribution point is judged link by link: under `check` it is not checked and nothing is said,
+  and an intermediate with none (common under step-ca and private PKI) is passed over while the
+  leaf it issued is still checked (pre-flight I10); under `require` it is refused, leaf or
+  intermediate (only the trust anchor is exempt), with "broker certificate <subject> names no
+  http(s) CRL distribution point; broker_crl: require refuses it ... add an HTTP CDP to the CA, or
+  set broker_crl: check" (Ryan, 2026-10-12). A revoked link is reported as revoked first. Runbook:
+  rotate by issuing and loading the new broker certificate before publishing the revocation;
+  revoke the leaf, not the CA; under `require`, a revoked broker certificate with no replacement
+  stops new logins while held sessions continue. A fetch that failed is remembered for a minute,
+  so a CRL server that is down costs one 5s wait, not one per connection. Login's own TLS connections (`/v1/config`, `/v1/certificate`, `/v1/mfa`), the
   agent's and `port49 workload`'s all check.
 - **R10. Schema.** `per_login_mfa: {accept: [...], reuse_for: 15m, applies_to_machines: false}`
   under `defaults:` (new top-level key), a role, or a scope. `accept` is required, non-empty, each
@@ -3783,8 +3789,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - **The broker's certificate is checked against its CRL** when it names a distribution point.
   `broker_crl: check` (default): a revoked broker certificate is refused before anything is sent to
   it; a CRL server that does not answer is said once and the login goes on (tried again after a
-  minute, not at every connection). `require` refuses that too; `off` checks nothing. An
-  intermediate naming no distribution point is not checked. Lists are kept in `~/.port49/crl/`.
+  minute, not at every connection). `require` refuses that too, and refuses any certificate in the
+  chain (the root aside) that names no `http`/`https` distribution point: add an HTTP CDP to the CA,
+  or use `check`, under which such a certificate is not checked. `off` checks nothing. To rotate a
+  broker certificate, issue and load the new one before publishing the revocation; revoke the leaf,
+  not the CA. Under `require`, a revoked certificate with no replacement stops new logins while
+  held sessions continue. Lists are kept in `~/.port49/crl/`.
 - **`per_login_mfa`: a second factor at each login to the devices you mark.** Under `defaults:`, a
   role, or a scope (`match: {tier: core}` for a class, `match: {name: core-sw01}` for one device):
 
