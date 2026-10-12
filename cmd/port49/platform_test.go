@@ -896,6 +896,54 @@ func TestCheckConfigHoldsAJunosDeviceToTheReference(t *testing.T) {
 	}
 }
 
+// Under set 1.2.0, NETCONF no longer fails check-config, because the reply
+// closes the entry points; a block that drops the entry denies with `[]`
+// renders the platform as set 1.1.0 does, and check-config holds it to 1.1.0's
+// NETCONF-off allowlist again (decision 44 ruling 5; final review F11).
+func TestCheckConfigWithoutEntryDenyListForbidsNetconf(t *testing.T) {
+	pol, inv, cfg := junosFixture(t)
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := func(block string) {
+		t.Helper()
+		head := "platform_set: 1.2.0\n" + block
+		if err := os.WriteFile(pol, []byte(strings.Replace(string(body), "platform_set: 1.1.0\n", head, 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(extra string) (int, string) {
+		t.Helper()
+		var ref, out, errb bytes.Buffer
+		if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+			"juniper_junos"}, &ref, &errb); code != 0 {
+			t.Fatalf("export: code %d\n%s", code, errb.String())
+		}
+		lines := []string{"set version 23.4R2-S2.1", "set system host-name srx-01", "set system services ssh", extra}
+		for _, l := range strings.Split(ref.String(), "\n") {
+			if strings.HasPrefix(l, "set ") {
+				lines = append(lines, l)
+			}
+		}
+		device := filepath.Join(t.TempDir(), "srx-01.set")
+		if err := os.WriteFile(device, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "srx-01",
+			"--config", cfg, device}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	pin("")
+	if code, out := check("set system services netconf ssh"); code != 0 {
+		t.Fatalf("1.2.0, NETCONF on: code %d\n%s", code, out)
+	}
+	pin("platforms:\n  juniper_junos:\n    rpc_entry_denies: []\n")
+	if code, out := check("set system services netconf ssh"); code != 1 || !strings.Contains(out, "SERVICE: ") {
+		t.Fatalf("1.2.0 with rpc_entry_denies []: code %d\n%s", code, out)
+	}
+}
+
 // Under --batch, --config belongs to the whole run: a projected device reads
 // it, a device on a platform that projects nothing ignores it, and a mixed
 // fleet passes in one run. A projected device without it is still a usage
