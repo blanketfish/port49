@@ -89,8 +89,9 @@ platforms:
     # probe ran them (the same notes, "Reading"), so view-configuration's
     # reach above holds them too: an upper bound, since neither bit alone
     # offers them. Only a listed carve-out lets the projection leave a deny
-    # off the wire, and on Junos, where a deny binds no RPC, only `show
-    # configuration **`, the one measured holding over RPC too (L26c).
+    # off the wire, and on Junos, where a deny binds no RPC, no carve-out
+    # does: none was measured holding over RPC (rpcCarves is empty), so set
+    # 1.2.0 closes the entry points with rpc_entry_denies instead.
     carve_outs:
       view-configuration: ["show configuration **", "show log **", "show firewall **", "show policer **"]
     # Each level's ceiling in bits. readonly is show and info, operator adds

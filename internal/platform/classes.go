@@ -327,8 +327,10 @@ var harmlessTemplateStatements = map[string]map[string]int{
 
 // templateLinePasses reports whether a line at path, under template path t,
 // passes though the reference does not write it: a harmless statement of t's
-// kind, or an apply-groups-except, which keeps a group off the template,
-// survives inheritance (L57) and is no finding itself (decision 44 ruling 7).
+// kind, or an apply-groups-except, which keeps a group off the template, is
+// no finding where it survives inheritance (L57; both inherited forms strip it
+// beside a class-level apply-groups) and is no finding itself (decision 44
+// ruling 7).
 // arity is the line's path length counting a quoted string as one word, or -1
 // where the line cannot be split into words, which passes nothing.
 func templateLinePasses(path, t []string, arity int) bool {
