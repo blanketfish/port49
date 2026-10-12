@@ -1008,14 +1008,58 @@ func TestTheEntryDenyWarnings(t *testing.T) {
 // A set that carries no rpc_entry_denies (1.1.0) leaves NETCONF on whatever
 // the shape: a narrow result there gets no netconf-closed warning (R8).
 func TestNoNetconfClosedWarningWithoutEntryDenies(t *testing.T) {
-	// A grant of `**` less a deny is the narrow shape's case; whichever shape
-	// the reply takes, the set has no entry denies, so no warning.
-	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
-  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}
-`+subjOK+grantOK)
+	// Two show commands are narrower than any whole bit: the narrow shape, on
+	// the test set, which carries no rpc_entry_denies.
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+narrowRole+subjOK+grantOK)
+	narrow := false
 	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjection && strings.Contains(f.Message, "narrow shape") {
+			narrow = true
+		}
 		if f.Kind == FindingProjectionNetconfClosed {
 			t.Errorf("a set with no entry denies warned: %s", f.Message)
 		}
+	}
+	if !narrow {
+		t.Errorf("the fixture is no longer the narrow shape: %v", p.Projections(noon))
+	}
+}
+
+const narrowRole = `roles:
+  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}
+`
+
+// The narrow shape closes NETCONF with no deny beneath any bit, so the
+// warning's remedy is a grant that reaches whole bits, not the deny's.
+// Spec §12 words no remedy for it. Each warning is written after its subject
+// and platform with a colon, its rules quoted, and names no device where it
+// is on every one.
+func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
+	p := parseEntry(t, scopeOK+narrowRole+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjectionNetconfClosed {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos: the narrow reply's `) ||
+		!strings.Contains(got[0], "reaches whole bits") || strings.Contains(got[0], "no deny beneath") ||
+		strings.Contains(got[0], "; on ") {
+		t.Errorf("narrow netconf closed: %q", got)
+	}
+	denies := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **", "show configuration"]}
+`+subjOK+grantOK)
+	found := false
+	for _, f := range denies.Projections(noon) {
+		if f.Kind == FindingProjectionDenyBeneathViewConfiguration {
+			found = true
+			if !strings.Contains(f.Message, `: deny "show configuration", "show configuration **" is sent beneath`) {
+				t.Errorf("beneath rules quoted and joined: %q", f.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no beneath warning: %v", denies.Projections(noon))
 	}
 }

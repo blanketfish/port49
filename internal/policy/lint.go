@@ -710,7 +710,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 				}
 				if len(pr.ConfigurationBeneath) > 0 {
 					reports[i] = append(reports[i], item{FindingProjectionDenyBeneathViewConfiguration,
-						configurationBeneathMessage(*pr, patterns)})
+						configurationBeneathMessage(*pr, patterns, secrets)})
 				}
 			}
 			for i := range replies {
@@ -880,22 +880,29 @@ func netconfClosedMessage(pr projection.Result) string {
 	// Each entry deny is named, `op **` included where the set carries it:
 	// a subject denied `op` that port49 permits is told so (R2).
 	how := "the reply adds deny " + strings.Join(entry, " and ")
+	// The remedy differs: the narrow shape carries no deny beneath a bit, so
+	// the grant's reach is what closes NETCONF (spec §12 words no remedy).
+	remedy := "an account that needs NETCONF needs a grant with no deny beneath its bits"
 	if pr.Shape == projection.ShapeNarrow {
 		how = "the narrow reply's `deny-commands .*` refuses `junoscript`"
+		remedy = "an account that needs NETCONF needs a grant that reaches whole bits, so the reply takes the capability shape"
 	}
 	return " " + how + ", so this subject has no NETCONF, `xml-mode` or XML API session there " +
-		"(tests/lab/results/L26c-junoscript-juniper_*.md); an account that needs NETCONF needs a grant with no deny " +
-		"beneath its bits (spec §8; decision 44 ruling 3)"
+		"(tests/lab/results/L26c-junoscript-juniper_*.md); " + remedy + " (spec §8; decision 44 ruling 3)"
 }
 
 // configurationBeneathMessage is a projection_deny_beneath_view_configuration
 // warning after its subject and platform, each rule redacted.
-func configurationBeneathMessage(pr projection.Result, patterns []platform.Redaction) string {
+func configurationBeneathMessage(pr projection.Result, patterns []platform.Redaction, secrets []string) string {
 	var rules []string
 	for _, r := range pr.ConfigurationBeneath {
 		rules = append(rules, r.Rule)
 	}
-	return " deny " + strings.Join(redacted(patterns, rules), "; ") + " is sent beneath view-configuration, " +
+	var quoted []string
+	for _, r := range redacted(patterns, rules) {
+		quoted = append(quoted, platform.QuoteShown(secrets, r))
+	}
+	return " deny " + strings.Join(quoted, ", ") + " is sent beneath view-configuration, " +
 		"which the reply holds: the CLI refuses it and NETCONF is closed, but the bit is what grants the " +
 		"configuration; withhold view-configuration instead (spec §8; decision 44 ruling 4)"
 }
