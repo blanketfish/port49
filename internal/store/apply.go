@@ -58,7 +58,7 @@ func ApplyRefresh(c *Context, r ContextRefresh) (moved bool, err error) {
 		c.Credential.Sid = r.Sid
 	}
 	if r.MFAMethod != "" {
-		c.Credential.MFAMethod, c.Credential.MFAAt = r.MFAMethod, r.MFAAt
+		c.Credential.MFAMethod, c.Credential.MFAAt, c.Credential.MFAAgentSHA256 = r.MFAMethod, r.MFAAt, r.MFAAgentSHA256
 	}
 	return moved, nil
 }

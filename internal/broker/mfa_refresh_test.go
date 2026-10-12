@@ -260,14 +260,13 @@ func TestRefreshWithinReuseNeedsNoNewProof(t *testing.T) {
 	f.setRequirement(t, true)
 	f.proveTouch(t, f.alice, f.mint(t, f.alice, "core-sw01", "").find("core-sw01").PerLoginMFA.Challenge)
 	f.clock.Advance(5 * time.Minute)
-	// Another agent session of alice's is not covered by the kept proof (the
-	// context records none yet, so nothing else covers it).
-	if s := f.refreshAs(t, f.alice, f.otherAgent).find("core-sw01"); s.Outcome != "per_login_mfa_required" {
-		t.Fatalf("another agent's refresh = %+v", s)
-	}
-	f.clock.Advance(11 * time.Second)
 	out := f.refresh(t, f.alice)
 	if s := out.find("core-sw01"); s.Outcome != "extended" || out.PerLoginMFA != nil {
 		t.Fatalf("refresh within reuse_for = %+v", out)
+	}
+	// Another agent session of alice's is not covered by it.
+	f.clock.Advance(11 * time.Second)
+	if s := f.refreshAs(t, f.alice, f.otherAgent).find("core-sw01"); s.Outcome != "per_login_mfa_required" {
+		t.Fatalf("another agent's refresh = %+v", s)
 	}
 }

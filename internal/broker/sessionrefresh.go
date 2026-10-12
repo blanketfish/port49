@@ -487,12 +487,13 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 	// refresh never reads it). An unproved context is named, not extended.
 	// The context's own recorded proof covers like a kept one (spec §5.1.5:
 	// what a session refresh reads), and the covering proof is written back.
-	var mfaMethod string
+	var mfaMethod, mfaAgent string
 	var mfaAt time.Time
 	if res.PerLoginMFA.Required() {
 		var held *provedChallenge
 		if c.Credential.MFAMethod != "" {
-			held = &provedChallenge{Method: policy.MFAMethod(c.Credential.MFAMethod), At: c.Credential.MFAAt}
+			held = &provedChallenge{Method: policy.MFAMethod(c.Credential.MFAMethod), At: c.Credential.MFAAt,
+				AgentSHA256: c.Credential.MFAAgentSHA256}
 		}
 		v := b.judgeMFA(ctx, caller{principal: principal, cred: cred}, &ask.mf, ref.NAS, res.PerLoginMFA, at, held)
 		rec.PerLoginMFA = v.rec
@@ -512,7 +513,7 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 			ask.items = append(ask.items, v.item)
 			return "per_login_mfa_required", time.Time{}, nil
 		}
-		mfaMethod, mfaAt = v.method, v.at
+		mfaMethod, mfaAt, mfaAgent = v.method, v.at, v.agent
 	}
 	// The new sid is indexed before the extension (pre-flight I-2): a
 	// logout's RevokeBySid that runs after this reaches the context whether
@@ -526,7 +527,7 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 	}
 	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: refreshedAt(answer, at),
 		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, MFAMethod: mfaMethod, MFAAt: mfaAt,
-		ExpectRev: c.Rev}, b.ContextIdleTTL); {
+		MFAAgentSHA256: mfaAgent, ExpectRev: c.Rev}, b.ContextIdleTTL); {
 	case errors.Is(err, store.ErrPastGrace):
 		return "past_grace", time.Time{}, nil
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):

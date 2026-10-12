@@ -177,6 +177,9 @@ type provedRecord struct {
 type provedChallenge struct {
 	Method policy.MFAMethod
 	At     time.Time
+	// AgentSHA256 is the agent hash of the binding that proved. It is set
+	// only on the proof a context records (the held proof of a refresh).
+	AgentSHA256 string
 }
 
 // mfaRequest is one mint request's per-login state: the caller's agent
@@ -283,9 +286,11 @@ type mfaVerdict struct {
 	reason decision.Reason
 	detail string
 	item   *api.PerLoginMFA
-	// method and at are the proof that covered it.
+	// method and at are the proof that covered it; agent is the request's
+	// agent hash, the binding that proved ("" for a bearer).
 	method string
 	at     time.Time
+	agent  string
 }
 
 // mfaUsable is req.Accept narrowed to what this broker verifies now, and a
@@ -304,8 +309,10 @@ func (b *Broker) mfaUsable(req policy.MFARequirement) []policy.MFAMethod {
 // proof, answered with a challenge, unavailable, or store_unavailable (a
 // store error is never "not covered", pre-flight minor 1). held is the proof
 // a live context records (a session refresh reads it, spec §5.1.5; nil for a
-// mint): it covers when it was made by a usable method req accepts and
-// reuse_for has not passed since, and only when no named or kept proof does.
+// mint): it covers when it was made by a usable method req accepts, reuse_for
+// has not passed since, and the request's agent session is the one that
+// proved (a bearer, or a context recording none, is never covered: ruling 15),
+// and only when no named or kept proof does.
 func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name string, req policy.MFARequirement,
 	now time.Time, held *provedChallenge) mfaVerdict {
 	secs := int(req.ReuseFor / time.Second)
@@ -332,7 +339,7 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
 	}
 	if method == "" && held != nil && slices.Contains(narrowed.Accept, held.Method) && req.ReuseFor > 0 &&
-		now.Sub(held.At) < req.ReuseFor {
+		now.Sub(held.At) < req.ReuseFor && mf.agentSHA256 != "" && mf.agentSHA256 == held.AgentSHA256 {
 		method, at, reused = string(held.Method), held.At, true
 	}
 	if method != "" {
@@ -340,7 +347,7 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 		if reused {
 			count(method, "reused")
 		}
-		return mfaVerdict{rec: rec, method: method, at: at}
+		return mfaVerdict{rec: rec, method: method, at: at, agent: mf.agentSHA256}
 	}
 	ch, exp, err := b.requestChallenge(ctx, c, mf)
 	if err != nil {

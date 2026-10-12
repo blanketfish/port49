@@ -97,9 +97,13 @@ type Credential struct {
 	AMR         []string
 	// MFAMethod and MFAAt are the per-login proof the mint was made under
 	// (spec §5.1.5): its method and when the person proved. Empty when no
-	// requirement applied.
-	MFAMethod string
-	MFAAt     time.Time
+	// requirement applied. MFAAgentSHA256 is the hex SHA-256 of the agent
+	// session of the binding that proved, empty for a bearer proof or a
+	// context stored before it was recorded: only that agent's refresh is
+	// covered by the recorded proof (decision 45 ruling 15).
+	MFAMethod      string
+	MFAAt          time.Time
+	MFAAgentSHA256 string
 }
 
 type Token struct {
@@ -503,9 +507,11 @@ type ContextRefresh struct {
 	// MFAMethod and MFAAt, when MFAMethod is non-empty, replace the context's
 	// Credential.MFAMethod and MFAAt: the per-login proof an extension under
 	// a requirement was covered by (spec §5.1.5, decision 45 ruling 16). Empty
-	// leaves the recorded proof alone.
-	MFAMethod string
-	MFAAt     time.Time
+	// leaves the recorded proof alone. MFAAgentSHA256 is the proving
+	// binding's agent hash, replaced with them ("" for a bearer proof).
+	MFAMethod      string
+	MFAAt          time.Time
+	MFAAgentSHA256 string
 	// SessionAge, when set, is the ceiling the policy in force gives this
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen
