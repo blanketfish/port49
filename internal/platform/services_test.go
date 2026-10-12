@@ -300,6 +300,10 @@ func TestCheckServicesReadsCRLFAndTheL57Captures(t *testing.T) {
 		!strings.HasPrefix(err.Error(), "line 4 ") {
 		t.Errorf("a mid-line carriage return: %v", err)
 	}
+	if _, err := CheckServices(d, []byte("set version 1\r\r\nset system services ssh\r\n")); err == nil ||
+		!strings.HasPrefix(err.Error(), "line 1 ") {
+		t.Errorf("a doubled carriage return: %v", err)
+	}
 	files, _ := filepath.Glob("testdata/l57-*.set")
 	if len(files) != 2 {
 		t.Fatalf("want the two L57 captures, got %q", files)

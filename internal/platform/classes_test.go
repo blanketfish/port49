@@ -443,4 +443,9 @@ func TestTemplateDriftReadsCRLF(t *testing.T) {
 	if _, _, err := TemplateDrift([]byte(joined), d, time.Hour); err == nil || strings.Contains(err.Error(), "permissions") {
 		t.Errorf("a mid-line carriage return: %v", err)
 	}
+	// Exactly one trailing carriage return is a line ending: two are refused.
+	doubled := strings.Join(cleanCapture(t, d), "\n") + "\r\r\n"
+	if _, _, err := TemplateDrift([]byte(doubled), d, time.Hour); err == nil || !strings.HasPrefix(err.Error(), "line ") {
+		t.Errorf("a doubled carriage return: %v", err)
+	}
 }
