@@ -91,10 +91,16 @@ func flushKey(c transport.TPM, k tpm2.AuthHandle) {
 	_, _ = tpm2.FlushContext{FlushHandle: k.Handle}.Execute(c)
 }
 
-// persist makes a key and keeps it at the persistent handle.
+// persist makes a key and keeps it at the persistent handle. It is NoDA unless
+// mod says otherwise, as a key made with tpm2_create -a noda|... is.
 func persist(t *testing.T, c transport.TPM, mod func(*tpm2.TPMTPublic), auth []byte) {
 	t.Helper()
-	_, _, key := rawKey(t, c, mod, auth)
+	_, _, key := rawKey(t, c, func(p *tpm2.TPMTPublic) {
+		p.ObjectAttributes.NoDA = true
+		if mod != nil {
+			mod(p)
+		}
+	}, auth)
 	if _, err := (tpm2.EvictControl{
 		Auth:             tpm2.TPMRHOwner,
 		ObjectHandle:     &tpm2.NamedHandle{Handle: key.Handle, Name: key.Name},
@@ -169,44 +175,98 @@ func TestAPersistentKeySignsAndSurvivesAStop(t *testing.T) {
 	verifies(t, s)
 }
 
-func TestAPersistentKeyWithAPasswordIsRefusedAfterOneTry(t *testing.T) {
-	hwtest.SWTPM(t)
-	onTPM(t, func(c transport.TPM) { persist(t, c, nil, []byte("hunter2")) })
-	if _, err := tpm.OpenHandle(uint32(persistent)); err == nil || !strings.Contains(err.Error(), "password") {
-		t.Fatalf("OpenHandle on a key with a password = %v, want refused naming the password", err)
-	}
+func wantDACounter(t *testing.T, want uint32) {
+	t.Helper()
 	onTPM(t, func(c transport.TPM) {
-		if n := daCounter(t, c); n > 1 {
-			t.Fatalf("the DA counter is %d: port49 spent more than one try on a key it cannot unlock", n)
+		if n := daCounter(t, c); n != want {
+			t.Fatalf("the DA counter is %d, want %d: port49 spent a lockout try", n, want)
 		}
 	})
 }
 
-func TestAKeyThatTakesAPasswordLaterIsLatchedAfterOneTry(t *testing.T) {
+func TestAPersistentKeyWithAPasswordIsRefusedWithoutSpendingATry(t *testing.T) {
+	hwtest.SWTPM(t)
+	onTPM(t, func(c transport.TPM) { persist(t, c, nil, []byte("hunter2")) })
+	for i := 0; i < 5; i++ {
+		if _, err := tpm.OpenHandle(uint32(persistent)); err == nil || !strings.Contains(err.Error(), "password") {
+			t.Fatalf("OpenHandle %d on a key with a password = %v, want refused naming the password", i, err)
+		}
+	}
+	wantDACounter(t, 0)
+}
+
+func TestAPersistentKeyWithoutNoDAIsRefusedBeforeAnyTry(t *testing.T) {
+	hwtest.SWTPM(t)
+	onTPM(t, func(c transport.TPM) {
+		persist(t, c, func(p *tpm2.TPMTPublic) { p.ObjectAttributes.NoDA = false }, []byte("hunter2"))
+	})
+	for i := 0; i < 5; i++ {
+		_, err := tpm.OpenHandle(uint32(persistent))
+		if err == nil || !strings.Contains(err.Error(), "0x81000010") || !strings.Contains(err.Error(), "noda|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign") {
+			t.Fatalf("OpenHandle %d on a DA-protected key = %v, want refused naming the handle and the attributes", i, err)
+		}
+	}
+	wantDACounter(t, 0)
+}
+
+func TestANoDAPersistentKeyWithAnEmptyAuthOpensAndSigns(t *testing.T) {
 	hwtest.SWTPM(t)
 	onTPM(t, func(c transport.TPM) { persist(t, c, nil, nil) })
 	s, err := tpm.OpenHandle(uint32(persistent))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Someone replaces the key at the handle with one that has a password.
-	var before uint32
+	verifies(t, s)
+	wantDACounter(t, 0)
+}
+
+func TestAPersistentKeyReplacedByAnotherIsRefusedBeforeAnyTry(t *testing.T) {
+	hwtest.SWTPM(t)
+	onTPM(t, func(c transport.TPM) { persist(t, c, nil, nil) })
+	s, err := tpm.OpenHandle(uint32(persistent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Someone replaces the key at the handle with a different one, here with a
+	// password.
 	onTPM(t, func(c transport.TPM) {
 		evict(t, c)
 		persist(t, c, nil, []byte("hunter2"))
-		before = daCounter(t, c)
 	})
 	digest := sha256.Sum256([]byte("x"))
 	for i := 0; i < 3; i++ {
-		if _, err := s.Sign(nil, digest[:], crypto.SHA256); err == nil || !strings.Contains(err.Error(), "password") {
-			t.Fatalf("Sign %d = %v, want the password message", i, err)
+		if _, err := s.Sign(nil, digest[:], crypto.SHA256); err == nil || !strings.Contains(err.Error(), "changed since port49 opened it") {
+			t.Fatalf("Sign %d = %v, want the changed-key message", i, err)
 		}
 	}
+	wantDACounter(t, 0)
+}
+
+func TestARestrictedKeyIsRefused(t *testing.T) {
+	hwtest.SWTPM(t)
+	restricted := func(p *tpm2.TPMTPublic) { p.ObjectAttributes.Restricted = true }
+	onTPM(t, func(c transport.TPM) { persist(t, c, restricted, nil) })
+	if _, err := tpm.OpenHandle(uint32(persistent)); err == nil || !strings.Contains(err.Error(), "restricted") {
+		t.Fatalf("OpenHandle on a restricted key = %v, want refused naming restricted", err)
+	}
+	var pub tpm2.TPM2BPublic
+	var priv tpm2.TPM2BPrivate
 	onTPM(t, func(c transport.TPM) {
-		if got := daCounter(t, c); got != before+1 {
-			t.Fatalf("DA counter %d -> %d over three Signs, want exactly one try spent", before, got)
-		}
+		var key tpm2.AuthHandle
+		pub, priv, key = rawKey(t, c, restricted, nil)
+		flushKey(c, key)
 	})
+	file, err := tpm.EncodeTSS2(pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "r.tpmkey")
+	if err := os.WriteFile(path, file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tpm.Open(path); err == nil || !strings.Contains(err.Error(), "restricted") {
+		t.Fatalf("Open on a restricted key = %v, want refused naming restricted", err)
+	}
 }
 
 func TestAMissingPersistentHandleIsNamedAndNotAbsent(t *testing.T) {

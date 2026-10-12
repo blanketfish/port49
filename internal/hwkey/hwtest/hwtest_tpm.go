@@ -3,10 +3,14 @@
 package hwtest
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -29,6 +33,7 @@ type TPM struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	exited  chan struct{} // closed when cmd has exited
+	pidFile string        // this swtpm's record in pidDir
 	started bool          // swtpm has come up once: the ports are fixed
 }
 
@@ -63,6 +68,7 @@ func SWTPM(t *testing.T) *TPM {
 	if _, err := exec.LookPath("swtpm"); err != nil {
 		Missing(t, "swtpm is not installed (apt-get install swtpm swtpm-tools)")
 	}
+	reapOnce.Do(func() { reapStale(pidDir()) })
 	s := &TPM{t: t, dir: t.TempDir(), command: freeAddr(t), control: freeAddr(t)}
 	s.Restart()
 	currentMu.Lock()
@@ -151,26 +157,29 @@ func (s *TPM) launch() bool {
 		"--tpmstate", "dir="+s.dir,
 		"--flags", "not-need-init,startup-clear")
 	cmd.Stderr = os.Stderr
-	// A test binary killed or timed out skips t.Cleanup; the kernel ends swtpm.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {
 		s.t.Fatalf("hwtest: starting swtpm: %v", err)
 	}
+	// A test binary killed or timed out skips t.Cleanup: the next harness start
+	// finds this record and reaps the swtpm (reapStale).
+	pidFile := recordPid(cmd.Process.Pid)
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
 	for _, addr := range []string{s.command, s.control} {
 		if !waitListening(addr, exited) {
 			_ = cmd.Process.Kill()
 			<-exited
+			removePidFile(pidFile)
 			return false
 		}
 	}
 	select {
 	case <-exited:
+		removePidFile(pidFile)
 		return false
 	default:
 	}
-	s.cmd, s.exited = cmd, exited
+	s.cmd, s.exited, s.pidFile = cmd, exited, pidFile
 	return true
 }
 
@@ -207,7 +216,78 @@ func (s *TPM) Stop() {
 		_ = s.cmd.Process.Kill()
 		<-s.exited
 	}
+	removePidFile(s.pidFile)
 	s.cmd = nil
+}
+
+func removePidFile(file string) {
+	if file != "" {
+		_ = os.Remove(file)
+	}
+}
+
+// pidDir is where each running swtpm is recorded, one file per swtpm named by
+// its pid and holding the pid of the test binary that started it. A test binary
+// that dies (a timeout panic, kill -9) skips t.Cleanup and leaves its swtpm
+// running; Pdeathsig does not help, as swtpm's AppArmor profile clears it at
+// exec. The next harness start reaps what is left.
+func pidDir() string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("port49-swtpm-%d", os.Getuid()))
+}
+
+var reapOnce sync.Once
+
+// reapStale kills every swtpm recorded in dir whose test binary is gone, and
+// removes the record of any whose process is gone or is no longer a swtpm (the
+// pid was reused). A swtpm whose test binary is alive belongs to a package
+// running in parallel and is left alone.
+func reapStale(dir string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		file := filepath.Join(dir, e.Name())
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		owner, _ := os.ReadFile(file)
+		if opid, err := strconv.Atoi(strings.TrimSpace(string(owner))); err == nil && alive(opid) {
+			continue
+		}
+		if isSwtpm(pid) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		_ = os.Remove(file)
+	}
+}
+
+// alive is true when a process with pid exists.
+func alive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// isSwtpm is true when pid's command is swtpm.
+func isSwtpm(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	argv0, _, _ := strings.Cut(string(b), "\x00")
+	return filepath.Base(argv0) == "swtpm"
+}
+
+// recordPid notes a running swtpm in the pid directory and returns the file,
+// "" if it could not be written.
+func recordPid(pid int) string {
+	dir := pidDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	file := filepath.Join(dir, strconv.Itoa(pid))
+	if os.WriteFile(file, []byte(strconv.Itoa(os.Getpid())), 0o600) != nil {
+		return ""
+	}
+	return file
 }
 
 func (s *TPM) String() string { return fmt.Sprintf("swtpm %s (state %s)", s.command, s.dir) }

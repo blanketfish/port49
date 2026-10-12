@@ -10,6 +10,7 @@
 package tpm
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"errors"
@@ -122,6 +123,7 @@ type Signer struct {
 	mu     sync.Mutex
 	path   string // the TSS2 file, "" for a persistent handle
 	handle tpm2.TPMHandle
+	name   []byte // the persistent key's Name at open; nil while opening
 	pub    tpm2.TPM2BPublic
 	priv   tpm2.TPM2BPrivate
 	key    *ecdsa.PublicKey
@@ -187,6 +189,12 @@ func (s *Signer) withKey(fn func(transport.TPM, tpm2.AuthHandle) error) error {
 		if err != nil {
 			return answered(err)
 		}
+		// The Name is the hash of the public area. A different key at the handle
+		// would sign under a public key nobody trusts, and might take a password,
+		// which a Sign would spend a lockout try finding out.
+		if s.name != nil && !bytes.Equal(s.name, rp.Name.Buffer) {
+			return fmt.Errorf("tpm: the key at handle %#x changed since port49 opened it: it was replaced; restart port49 to use the new key", uint32(s.handle))
+		}
 		return fn(t, tpm2.AuthHandle{Handle: s.handle, Name: rp.Name, Auth: noAuth})
 	}
 	root, err := srk(t)
@@ -211,6 +219,11 @@ func publicKey(pub tpm2.TPM2BPublic) (*ecdsa.PublicKey, error) {
 	}
 	if c.Type != tpm2.TPMAlgECC || !c.ObjectAttributes.SignEncrypt {
 		return nil, errors.New("tpm: the key is not an ECC signing key; port49 signs with a P-256 key")
+	}
+	// TPM2_Sign with no hash-check ticket fails on a restricted key, so every
+	// Sign would.
+	if c.ObjectAttributes.Restricted {
+		return nil, errors.New("tpm: the key is restricted, which only signs TPM-made digests; port49 needs an unrestricted signing key")
 	}
 	// A key port49 did not make must still be bound to this TPM, and usable
 	// with the empty auth port49 gives it.
@@ -330,6 +343,7 @@ func OpenHandle(handle uint32) (*Signer, error) {
 			return answered(err)
 		}
 		s.pub = rp.OutPublic
+		s.name = bytes.Clone(rp.Name.Buffer)
 		return nil
 	})
 	if err != nil {
@@ -338,10 +352,19 @@ func OpenHandle(handle uint32) (*Signer, error) {
 	if s.key, err = publicKey(s.pub); err != nil {
 		return nil, fmt.Errorf("tpm: handle %#x: %w", handle, err)
 	}
-	// A password is not in the public area, so the one way to know is to try.
-	// One try, here, where the operator is looking: a refusal latches in Sign
-	// and the key is never tried again. Any other failure is not a refusal; it
-	// shows at the first real Sign.
+	// A password is not in the public area, and the only way to find one is a
+	// Sign, which on a DA-protected key spends a lockout try: a process that
+	// starts from a timer would lock the whole TPM out after a few starts, every
+	// other key on the host with it. So only a NoDA key is probed, where the
+	// probe costs nothing; and with an empty auth, DA protection guards nothing.
+	if c, err := s.pub.Contents(); err != nil || !c.ObjectAttributes.NoDA {
+		return nil, fmt.Errorf("tpm: the key at handle %#x is subject to dictionary-attack lockout (NoDA is clear): "+
+			"port49 cannot check it for a password without spending a lockout try, and a lockout caused by anything on this machine would stop it; "+
+			"make the key with the attributes noda|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign and an empty auth "+
+			"(tpm2_create -a, then tpm2_evictcontrol)", handle)
+	}
+	// A refusal latches in Sign and the key is never tried again. Any other
+	// failure is not a refusal; it shows at the first real Sign.
 	digest := make([]byte, 32)
 	if _, err := s.Sign(nil, digest, crypto.SHA256); s.refused != nil {
 		return nil, err
@@ -378,8 +401,8 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 			},
 		}.Execute(t)
 		if isAuth(err) {
-			// Every try spends a dictionary-attack try, and three lock the
-			// whole TPM: one is all the key gets.
+			// A NoDA key's refusal costs no lockout try, but it is still no use
+			// to repeat it.
 			s.refused = fmt.Errorf("tpm: %s has a password, which port49 does not supply (it uses keys with an empty auth); "+
 				"use a key made by port49", s.where())
 			return s.refused
