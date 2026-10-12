@@ -224,16 +224,29 @@ func brokerVerifier(mode string, warn func(string)) (func(tls.ConnectionState) e
 	}
 	var once sync.Once
 	var chk *brokercrl.Checker
+	// keepNote is why the CRLs are not kept, said only with a check that had
+	// no answer (a kept list is what would have answered), not on every run.
+	var keepNote string
 	return func(cs tls.ConnectionState) error {
 		once.Do(func() {
 			dir, err := userconfig.PrivateDir(filepath.Join(userconfig.Dir(), "crl"), "kept CRL directory")
 			if err != nil {
-				warn(fmt.Sprintf("the CRLs cannot be kept (%v); they are fetched again at each run", err))
+				keepNote = fmt.Sprintf("the CRLs cannot be kept (%v); they are fetched again at each run", err)
 				dir = ""
 			}
-			chk = brokercrl.New(dir, m, time.Now, warn)
+			chk = brokercrl.New(dir, m, time.Now, func(msg string) {
+				if keepNote != "" {
+					msg += "; " + keepNote
+				}
+				warn(msg)
+			})
 		})
-		return chk.VerifyConnection(cs)
+		err := chk.VerifyConnection(cs)
+		var unchecked *brokercrl.UncheckedError
+		if keepNote != "" && errors.As(err, &unchecked) {
+			return fmt.Errorf("%w; %s", err, keepNote)
+		}
+		return err
 	}, nil
 }
 

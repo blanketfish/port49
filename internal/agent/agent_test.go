@@ -423,6 +423,61 @@ func TestAConnectRefusedByVerifyBrokerSendsNothing(t *testing.T) {
 	}
 }
 
+// A broker certificate revoked after Connect is refused on the reconnect, and
+// every path says so in the check's own words: not "unreachable", not retried
+// (so the check runs once per ask), and the session stays alive, since a CRL
+// blip must not end it (plan 9c, ruling 9).
+func TestARevokedBrokerAfterConnectIsRefusedNotUnreachable(t *testing.T) {
+	var refuse atomic.Bool
+	var calls atomic.Int32
+	r := newRigWith(t, rigOpts{verify: func(tls.ConnectionState) error {
+		calls.Add(1)
+		if refuse.Load() {
+			return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+		}
+		return nil
+	}})
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	refuse.Store(true)
+	for _, tc := range []struct {
+		name string
+		ask  func() error
+	}{
+		{"mint", func() error { _, err := r.a.Mint(context.Background(), "leaf1", false, 0); return err }},
+		{"identity", func() error { _, err := r.a.Identity(context.Background()); return err }},
+		{"refresh", func() error { _, err := r.a.Refresh(context.Background()); return err }},
+	} {
+		r.srv.CloseClientConnections()
+		r.a.client.CloseIdleConnections()
+		before := calls.Load()
+		err := tc.ask()
+		var refused *BrokerRefusedError
+		if !errors.As(err, &refused) || strings.Contains(err.Error(), "unreachable") ||
+			!strings.Contains(err.Error(), "is revoked by a CRL") {
+			t.Fatalf("%s: %v, want a *BrokerRefusedError and not 'unreachable'", tc.name, err)
+		}
+		if n := calls.Load() - before; n != 1 {
+			t.Fatalf("%s: the check ran %d times, want 1 (no retry)", tc.name, n)
+		}
+		select {
+		case <-r.a.Done():
+			t.Fatalf("%s: a CRL refusal ended the session", tc.name)
+		default:
+		}
+	}
+	refuse.Store(false)
+	r.srv.CloseClientConnections()
+	r.a.client.CloseIdleConnections()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("the ask after the list is fine again: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("the refused asks reached the broker: %d mints seen, want 1", n)
+	}
+}
+
 // Every ask is a mint: the agent never hands back a token it handed out
 // before, and every mint travels the one connection the handshake opened.
 func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {

@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"flag"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -152,5 +154,60 @@ func TestARevokedBrokerIsNotABrokerThatIsDown(t *testing.T) {
 	}
 	if reached.Load() != 0 {
 		t.Fatalf("the broker's handler ran %d times", reached.Load())
+	}
+}
+
+// With ~/.port49/crl unmakeable, "the CRLs cannot be kept" is said only when
+// the check had no answer and needed a kept list: not on every run that
+// merely fetched a fine list. Under require it rides on the refusal.
+func TestTheCRLsCannotBeKeptIsSaidOnlyWhenItMatters(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.WriteFile(home, []byte("a file, not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	ca := testCA(t)
+	now := time.Now()
+	crl, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(1),
+		ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour)}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serveGood atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveGood.Load() {
+			w.Write(crl)
+			return
+		}
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	leaf, err := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: testpki.Loopback(), NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(time.Hour), CRLDistributionPoints: []string{srv.URL + "/ca.crl"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf.Leaf, ca.Cert}}}
+	run := func(mode string, good bool) ([]string, error) {
+		serveGood.Store(good)
+		var said []string
+		v, err := brokerVerifier(mode, func(m string) { said = append(said, m) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = v(cs)
+		_ = v(cs)
+		return said, err
+	}
+	if said, err := run("check", true); err != nil || len(said) != 0 {
+		t.Fatalf("a fine list with nowhere to keep it: %v, said %q; want neither", err, said)
+	}
+	said, err := run("check", false)
+	if err != nil || len(said) != 1 || !strings.Contains(said[0], "could not check") || !strings.Contains(said[0], "cannot be kept") {
+		t.Fatalf("no list under check: %v, said %q; want one warning that also says the CRLs cannot be kept", err, said)
+	}
+	said, err = run("require", false)
+	if err == nil || len(said) != 0 || !strings.Contains(err.Error(), "cannot be kept") {
+		t.Fatalf("no list under require: %v, said %q; want a refusal that says the CRLs cannot be kept", err, said)
 	}
 }

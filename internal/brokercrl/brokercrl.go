@@ -114,7 +114,16 @@ func New(dir string, mode Mode, now func() time.Time, warn func(string)) *Checke
 // VerifyConnection is a tls.Config.VerifyConnection: it runs after the
 // chain verified and before any request is written.
 func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
-	if c.mode == ModeOff || len(cs.VerifiedChains) == 0 {
+	if c.mode == ModeOff {
+		return nil
+	}
+	if len(cs.VerifiedChains) == 0 {
+		// Not reachable while every tls.Config sets RootCAs; if it ever
+		// were, there is nothing to check, and require reads that as
+		// unchecked.
+		if c.mode == ModeRequire {
+			return &UncheckedError{Detail: "the connection has no verified certificate chain"}
+		}
 		return nil
 	}
 	chain := cs.VerifiedChains[0]
@@ -135,7 +144,7 @@ func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
 			named = true
 			sum := sha256.Sum256([]byte(raw))
 			name := strings.ToLower(u.Host) + "-" + hex.EncodeToString(sum[:4])
-			srcs = append(srcs, certstatus.CRLSource{Name: name, URL: raw, Issuer: chain[i+1]})
+			srcs = append(srcs, certstatus.CRLSource{Name: name, URL: raw, Issuer: chain[i+1], IssuerWord: "the issuing CA's"})
 			urls[name] = say(u)
 		}
 		if named {
@@ -161,12 +170,17 @@ func (c *Checker) VerifyConnection(cs tls.ConnectionState) error {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchWait)
 		errs := s.chk.LoadAll(ctx)
 		cancel()
-		if len(errs) > 0 {
-			s.failedAt, s.failure = c.now(), errs[0].Error()
-		} else {
-			s.failedAt, s.failure = time.Time{}, ""
-		}
 		rev, unknown = s.check(links)
+		s.failedAt, s.failure = time.Time{}, ""
+		if len(errs) > 0 {
+			s.failure = errs[0].Error()
+		}
+		// A list that loaded but cannot answer (past its next update, or
+		// scoped away) is remembered like a failed fetch: a stuck publisher
+		// must not cost a download per connection.
+		if len(errs) > 0 || rev == nil && unknown != "" {
+			s.failedAt = c.now()
+		}
 	}
 	if rev != nil {
 		return rev

@@ -492,6 +492,12 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 		if over := a.refusedReconnect(err); over != nil {
 			return nil, over
 		}
+		// The check refused the broker's certificate: said as that, not
+		// retried, and the session stays up (a CRL blip must not end it).
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return nil, no
+		}
 		if attempt == 2 {
 			// A hang-up right after the handshake with a certificate still
 			// in date is a refusal whose alert was lost or a broker that
@@ -662,6 +668,10 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 		a.client.CloseIdleConnections()
 		if over := a.refusedReconnect(err); over != nil {
 			return over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return no
 		}
 		if unanswered != nil && sent.Load() {
 			return unanswered(err)
@@ -916,6 +926,10 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
 		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.RefreshResponse{}, false, no
+		}
 		// Anything else is tried once more on a new connection, as a mint
 		// is: a held connection the broker closed as the challenge went out
 		// on it is the network or a restarting broker, not an answer.
@@ -968,6 +982,10 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	if err != nil {
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.RefreshResponse{}, false, no
 		}
 		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}

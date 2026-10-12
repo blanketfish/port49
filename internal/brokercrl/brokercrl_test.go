@@ -77,6 +77,18 @@ func signCRL(t *testing.T, signer *testpki.CA, revoked ...*big.Int) []byte {
 	return der
 }
 
+// signStaleCRL is a list whose next update has passed.
+func signStaleCRL(t *testing.T, signer *testpki.CA) []byte {
+	t.Helper()
+	now := time.Now()
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(1),
+		ThisUpdate: now.Add(-3 * time.Hour), NextUpdate: now.Add(-2 * time.Hour)}, signer.Cert, signer.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
+}
+
 // newFixture serves, at the leaf's one distribution point, serve: "good" (a
 // list naming nothing), "revoked" (naming the leaf), "forged" (a good list
 // another key signed), "error" (a 500 each time) or "down" (a server that is
@@ -108,6 +120,8 @@ func newFixture(t *testing.T, serve string, noDP, intermediate bool) *fixture {
 			w.Write(signCRL(t, f.signer, leafSerial))
 		case "forged":
 			w.Write(signCRL(t, other))
+		case "stale":
+			w.Write(signStaleCRL(t, f.signer))
 		default:
 			http.Error(w, "no", http.StatusInternalServerError)
 		}
@@ -239,6 +253,16 @@ func TestAnIntermediateWithNoDistributionPointIsNotChecked(t *testing.T) {
 	}
 }
 
+// A forged list is said in words a client user knows: they have no issuer_file.
+func TestAForgedListIsNotSaidToBeIssuerFiles(t *testing.T) {
+	cs, _ := brokerChain(t, "forged", false)
+	err := New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(cs)
+	if err == nil || !strings.Contains(err.Error(), "is not signed by the issuing CA's certificate") ||
+		strings.Contains(err.Error(), "issuer_file") {
+		t.Fatalf("a forged list under require: %v, want it not signed by the issuing CA's certificate, with no issuer_file", err)
+	}
+}
+
 // A down CRL server costs one wait, not one per connection.
 func TestAFailedFetchIsRememberedForAMinute(t *testing.T) {
 	cs, f := brokerChain(t, "error", false)
@@ -262,10 +286,69 @@ func TestAFailedFetchIsRememberedForAMinute(t *testing.T) {
 	}
 }
 
+// Only http and https distribution points are fetched. A certificate naming
+// only others (AD CS issues ldap:// by default) names no usable one: it is not
+// checked and nothing is said, even under require (R9).
+func TestADistributionPointThatIsNotHTTPIsSkipped(t *testing.T) {
+	now := time.Now()
+	root, err := testpki.NewCA("broker root", now.Add(-time.Hour), now.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := root.Issue(testpki.Leaf{CommonName: "broker", IPs: testpki.Loopback(), NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(time.Hour), CRLDistributionPoints: []string{"ldap://h.example/CN=x", "file:///x.crl"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf.Leaf, root.Cert}}}
+	var said []string
+	c := New(privateDir(t), ModeRequire, time.Now, func(s string) { said = append(said, s) })
+	if err := c.VerifyConnection(cs); err != nil || len(said) != 0 {
+		t.Fatalf("a leaf naming only ldap:// and file:// under require: %v, said %q; want neither", err, said)
+	}
+}
+
+// A list that fetches fine but cannot answer (past its next update, as a stuck
+// publisher leaves it) is remembered for a minute like a failed fetch, not
+// downloaded again on every connection.
+func TestAStaleListIsRememberedForAMinute(t *testing.T) {
+	cs, f := brokerChain(t, "stale", false)
+	clock := &fakeClock{t: time.Now()}
+	c := New(privateDir(t), ModeCheck, clock.Now, func(string) {})
+	for i := 0; i < 3; i++ {
+		if err := c.VerifyConnection(cs); err != nil {
+			t.Fatal(err)
+		}
+		clock.Advance(10 * time.Second)
+	}
+	if n := f.hits.Load(); n != 1 {
+		t.Fatalf("three connections within a minute made %d fetches of a stale list, want 1", n)
+	}
+	clock.Advance(time.Minute)
+	if err := c.VerifyConnection(cs); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.hits.Load(); n != 2 {
+		t.Fatalf("after a minute there were %d fetches, want 2", n)
+	}
+}
+
+// A state with no verified chain cannot happen with RootCAs set; if it ever
+// did, require must not read it as a pass.
+func TestNoVerifiedChainIsRefusedUnderRequire(t *testing.T) {
+	var ue *UncheckedError
+	if err := New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(tls.ConnectionState{}); !errors.As(err, &ue) {
+		t.Fatalf("require with no verified chain: %v, want *UncheckedError", err)
+	}
+	if err := New(privateDir(t), ModeCheck, time.Now, nil).VerifyConnection(tls.ConnectionState{}); err != nil {
+		t.Fatalf("check with no verified chain: %v", err)
+	}
+}
+
 func TestNoBearerTokenReachesARevokedBroker(t *testing.T) {
-	cs, f := brokerChain(t, "revoked", false)
-	called := false
-	broker := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	_, f := brokerChain(t, "revoked", false)
+	var called atomic.Bool
+	broker := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called.Store(true) }))
 	broker.TLS = &tls.Config{Certificates: []tls.Certificate{f.leaf}} // the revoked leaf
 	broker.StartTLS()
 	defer broker.Close()
@@ -282,10 +365,9 @@ func TestNoBearerTokenReachesARevokedBroker(t *testing.T) {
 	if !errors.As(err, &re) {
 		t.Fatalf("the refusal is %T (%v), want one that wraps *RevokedError", err, err)
 	}
-	if called {
+	if called.Load() {
 		t.Fatal("the revoked broker's handler saw the request, bearer token and all")
 	}
-	_ = cs
 }
 
 func TestParseMode(t *testing.T) {
