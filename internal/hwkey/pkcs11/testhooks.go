@@ -21,6 +21,15 @@ func GenerateKeyPairCalls() int64 { return generateKeyPairCalls.Load() }
 // CreateObjectCalls is how many C_CreateObject calls the process has made.
 func CreateObjectCalls() int64 { return createObjectCalls.Load() }
 
+// SessionHandle is the session number s holds (0 when it holds none), so a
+// test can check that the module reused a lost Signer's number for another's
+// new session instead of assuming it.
+func SessionHandle(s *Signer) uint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.session
+}
+
 // Finalize calls C_Finalize on m and returns its CK_RV.
 func Finalize(m *Module) uint { return m.call(fnFinalize, 0) }
 

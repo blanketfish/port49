@@ -343,6 +343,7 @@ func TestAStaleSessionHandleIsNotClosedAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	lost := pkcs11.SessionHandle(a)
 	digest := sha256.Sum256([]byte("port49"))
 	hwtest.SoftHSMUnplug(t, p.label)
 	for _, s := range []*pkcs11.Signer{a, b} {
@@ -362,8 +363,103 @@ func TestAStaleSessionHandleIsNotClosedAgain(t *testing.T) {
 	if err := b.Unlock(pin()); err != nil {
 		t.Fatal(err)
 	}
+	if got := pkcs11.SessionHandle(b); got != lost {
+		t.Fatalf("precondition: b's new session is %d, not the %d a lost; the module did not reuse the number, so this test checks nothing", got, lost)
+	}
 	if _, err := b.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 		t.Fatalf("b's session was closed by a's re-probe: %v", err)
+	}
+}
+
+// A Signer that learns of the loss late, after another has reopened under the
+// number it lost, must neither use nor close that session (re-review I1).
+func TestALateLearnerDoesNotTouchAnotherSignersSession(t *testing.T) {
+	p := newPlugged(t)
+	a, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for _, s := range []*pkcs11.Signer{a, b} {
+		if err := s.Unlock(pin()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lost := pkcs11.SessionHandle(a)
+	digest := sha256.Sum256([]byte("port49"))
+	hwtest.SoftHSMUnplug(t, p.label)
+	// Only b signs during the outage, so only b sees the loss.
+	if _, err := b.Sign(rand.Reader, digest[:], crypto.SHA256); !errors.Is(err, hwkey.ErrKeyAbsent) {
+		t.Fatalf("b's Sign with the token gone = %v, want ErrKeyAbsent", err)
+	}
+	hwtest.SoftHSMReinit(t, p.label)
+	p.plug()
+	if got := b.State(); got != hwkey.Locked {
+		t.Fatalf("the token is back and b's State says %v, want locked", got)
+	}
+	if err := b.Unlock(pin()); err != nil {
+		t.Fatal(err)
+	}
+	if got := pkcs11.SessionHandle(b); got != lost {
+		t.Fatalf("precondition: b's new session is %d, not the %d a lost; the module did not reuse the number, so this test checks nothing", got, lost)
+	}
+	// a knows nothing of the outage: it must see that its number is b's now and
+	// reopen on a session of its own (Locked), not send a call on b's.
+	_, err = a.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if !errors.Is(err, hwkey.ErrLocked) {
+		t.Fatalf("a's late Sign = %v, want ErrLocked (the token is back and a is not logged in)", err)
+	}
+	if got := pkcs11.SessionHandle(a); got == pkcs11.SessionHandle(b) {
+		t.Fatalf("a and b both hold session %d", got)
+	}
+	if _, err := b.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatalf("b's session was used or closed by a's late detection: %v", err)
+	}
+}
+
+// A stranger's token under the same label, with a different key and
+// certificate under the same id, is not this key: State stays Absent and
+// Unlock spends no PIN try on it.
+func TestAStrangersKeyUnderTheSameLabelAndIDIsNotThisKey(t *testing.T) {
+	p := newPlugged(t)
+	s, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Unlock(pin()); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("port49"))
+	hwtest.SoftHSMUnplug(t, p.label)
+	if _, err := s.Sign(rand.Reader, digest[:], crypto.SHA256); !errors.Is(err, hwkey.ErrKeyAbsent) {
+		t.Fatalf("Sign with the token gone = %v, want ErrKeyAbsent", err)
+	}
+	// Another token with the label and id 01, holding another key.
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hwtest.SoftHSMReinit(t, p.label)
+	hwtest.SoftHSMImport(t, p.label, other)
+	cert := newCA(t).issue(t, "mallory", &other.PublicKey, x509.ExtKeyUsageClientAuth)
+	if err := pkcs11.StoreCertificate(p.u, cert, pin()); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.State(); got != hwkey.Absent {
+		t.Fatalf("another key came back under the label and id and State says %v, want absent", got)
+	}
+	before := hwtest.SoftHSMLoginAttempts(t)
+	if err := s.Unlock(pin()); !errors.Is(err, hwkey.ErrKeyAbsent) {
+		t.Fatalf("Unlock = %v, want ErrKeyAbsent", err)
+	}
+	if got := hwtest.SoftHSMLoginAttempts(t) - before; got != 0 {
+		t.Fatalf("Unlock spent %d PIN tries on another key's token", got)
 	}
 }
 

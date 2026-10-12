@@ -81,6 +81,13 @@ type Module struct {
 	path   string
 	handle uintptr
 	list   ckFunctionList
+
+	// owners records who holds each session number the module gave out: a
+	// Signer, or nil while a probe's candidate has not been claimed. A module
+	// may give a lost session's number to another session, so a Signer acts on
+	// its number only while the entry still names it. Guarded by sessMu.
+	sessMu sync.Mutex
+	owners map[uint]*Signer
 }
 
 var (
@@ -121,7 +128,7 @@ func Load(path string) (*Module, error) {
 	if r != ckrOK || out.list == nil {
 		return nil, &rvError{"C_GetFunctionList", uint(r)}
 	}
-	m := &Module{path: path, handle: h, list: *(*ckFunctionList)(out.list)}
+	m := &Module{path: path, handle: h, list: *(*ckFunctionList)(out.list), owners: map[uint]*Signer{}}
 	if m.list.fns[fnInitialize] == 0 {
 		return nil, fmt.Errorf("pkcs11: %s has no C_Initialize", path)
 	}
@@ -238,16 +245,47 @@ func (m *Module) openSession(slot uint, rw bool) (uint, error) {
 	if rv := m.call(fnOpenSession, uintptr(slot), uintptr(flags), 0, 0, p.ptr(h, unsafe.Pointer(h))); rv != ckrOK {
 		return 0, &rvError{"C_OpenSession", rv}
 	}
+	m.sessMu.Lock()
+	m.owners[*h] = nil // a number the module reuses is no longer its old holder's
+	m.sessMu.Unlock()
 	return *h, nil
 }
 
-// closeSession's result is ignored: a session on a token already gone is
-// already closed. Handle 0 is CK_INVALID_HANDLE, a session already let go:
-// the module may have given the number to someone else's, so it is not sent.
-func (m *Module) closeSession(h uint) {
+// claim hands the unclaimed session h to s.
+func (m *Module) claim(h uint, s *Signer) {
+	m.sessMu.Lock()
+	defer m.sessMu.Unlock()
+	if owner, ok := m.owners[h]; ok && owner == nil {
+		m.owners[h] = s
+	}
+}
+
+// holds reports whether s still owns session h.
+func (m *Module) holds(h uint, s *Signer) bool {
+	m.sessMu.Lock()
+	defer m.sessMu.Unlock()
+	owner, ok := m.owners[h]
+	return h != 0 && ok && owner == s
+}
+
+// closeSession closes a session no Signer has claimed (a probe's candidate, or
+// the harness's own).
+func (m *Module) closeSession(h uint) { m.closeOwned(h, nil) }
+
+// closeOwned closes session h only while owner still holds it; the result is
+// ignored: a session on a token already gone is already closed. Handle 0 is
+// CK_INVALID_HANDLE, and a number someone else holds now is not the caller's
+// to close, so neither is sent.
+func (m *Module) closeOwned(h uint, owner *Signer) {
+	m.sessMu.Lock()
+	defer m.sessMu.Unlock()
 	if h == 0 {
 		return
 	}
+	if o, ok := m.owners[h]; !ok || o != owner {
+		return
+	}
+	delete(m.owners, h)
 	m.call(fnCloseSession, uintptr(h))
 }
 

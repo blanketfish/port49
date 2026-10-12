@@ -84,6 +84,7 @@ type candidate struct {
 	handle        uint
 	id            []byte
 	loginRequired bool
+	shown         crypto.PublicKey // the public half a locked token shows for the id, if it does
 }
 
 func (c *candidate) name() string { return fmt.Sprintf("%q", trimField(c.ti.label[:])) }
@@ -121,12 +122,32 @@ func (m *Module) probe(u URI, slot uint, ti *ckTokenInfo) (*candidate, error) {
 				if id, err := m.attrValue(session, objs[0], ckaID); err == nil && len(id) > 0 {
 					c.id = id
 				}
+				c.shown = m.shownPublic(session, class, objs[0])
 				return c, nil
 			}
 		}
 	}
 	m.closeSession(session)
 	return nil, nil
+}
+
+// shownPublic is the public key a public key object or a certificate shows,
+// or nil when it cannot be read.
+func (m *Module) shownPublic(session, class, obj uint) crypto.PublicKey {
+	if class == ckoPublicKey {
+		if pub, _, err := m.publicFromKeyObject(session, obj); err == nil {
+			return pub
+		}
+		return nil
+	}
+	der, err := m.attrValue(session, obj, ckaValue)
+	if err != nil {
+		return nil
+	}
+	if c, err := x509.ParseCertificate(der); err == nil {
+		return c.PublicKey
+	}
+	return nil
 }
 
 // blankToken reports whether err says the slot's token cannot be opened
@@ -194,18 +215,19 @@ func Open(u URI, pin []byte) (*Signer, error) {
 	s := &Signer{m: m, uri: u, slot: c.slot, session: c.session, handle: c.handle, id: c.id,
 		loginRequired: c.loginRequired, serial: trimField(c.ti.serial[:]), label: trimField(c.ti.label[:]),
 		state: hwkey.Present}
+	m.claim(s.session, s)
 	if s.loginRequired {
 		// Even a token that shows the key without login, as a PIV applet
 		// does, wants the PIN to sign.
 		s.state = hwkey.Locked
 	}
 	if err := s.readPublic(); err != nil {
-		m.closeSession(s.session)
+		s.dropSession()
 		return nil, err
 	}
 	if len(pin) > 0 && s.state == hwkey.Locked {
 		if err := s.unlock(pin); err != nil {
-			m.closeSession(s.session)
+			s.dropSession()
 			return nil, err
 		}
 	}
@@ -351,18 +373,28 @@ func (s *Signer) Close() error {
 func (s *Signer) State() hwkey.State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.checkSession()
 	if s.state == hwkey.Absent && !s.closed {
 		s.reopenLocked()
 	}
 	return s.state
 }
 
-// dropSession closes the session at the point of loss and forgets its number
+// dropSession closes the session while s still owns it and forgets its number
 // (CK_INVALID_HANDLE): a module may give a lost session's number to another
-// Signer's new one, which a later close of the stale number would end.
+// Signer's new one, which a close of the stale number would end.
 func (s *Signer) dropSession() {
-	s.m.closeSession(s.session)
+	s.m.closeOwned(s.session, s)
 	s.session = 0
+}
+
+// checkSession turns a Signer whose session number another Signer now holds
+// (or the module no longer knows) into an Absent one with no module call: the
+// number is not its to use or close. The caller holds s.mu.
+func (s *Signer) checkSession() {
+	if s.state != hwkey.Absent && !s.m.holds(s.session, s) {
+		s.session, s.handle, s.state = 0, 0, hwkey.Absent
+	}
 }
 
 // absent records that the token is gone.
@@ -416,6 +448,12 @@ func (s *Signer) reopenLocked() {
 	} else {
 		for _, c := range loose {
 			if p, err := s.m.probe(s.uri, c.slot, c.ti); err == nil && p != nil {
+				// A token that shows another key under the id is a
+				// stranger's: no PIN try is spent on it.
+				if s.pub != nil && p.shown != nil && !samePublic(p.shown, s.pub) {
+					s.m.closeSession(p.session)
+					continue
+				}
 				if chosen != nil {
 					s.m.closeSession(chosen.session)
 					s.m.closeSession(p.session)
@@ -429,6 +467,7 @@ func (s *Signer) reopenLocked() {
 		return
 	}
 	s.slot, s.session, s.handle = chosen.slot, chosen.session, 0
+	s.m.claim(s.session, s)
 	s.loginRequired = chosen.loginRequired
 	s.serial, s.label = trimField(chosen.ti.serial[:]), trimField(chosen.ti.label[:])
 	if s.loginRequired {
@@ -476,6 +515,7 @@ func (s *Signer) Unlock(pin []byte) error {
 }
 
 func (s *Signer) unlock(pin []byte) error {
+	s.checkSession()
 	if s.state == hwkey.Absent && !s.closed {
 		s.reopenLocked()
 	}
@@ -562,6 +602,7 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	if s.closed {
 		return nil, hwkey.ErrKeyAbsent
 	}
+	s.checkSession()
 	if s.state == hwkey.Absent {
 		s.reopenLocked()
 	}
@@ -644,6 +685,7 @@ func (s *Signer) readyLocked() error {
 	if s.closed {
 		return hwkey.ErrKeyAbsent
 	}
+	s.checkSession()
 	if s.state == hwkey.Absent {
 		s.reopenLocked()
 	}
