@@ -312,7 +312,7 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   the reservation before the requirement is read, so a spent proof never turns a minted token into
   `per_login_mfa_required` (minor 2). The touch does not hold the wire: the agent reads the
   exporter value with the wire, releases it for the touch (up to the token's touch timeout, about
-  15s), and takes it again to post. Having taken it back, the agent reads the exporter value again
+  15s, provisional on L60), and takes it again to post. Having taken it back, the agent reads the exporter value again
   and compares it with the one it signed over; if the connection changed meanwhile it does not
   post and says "the connection changed during the touch; run it again" (re-review R6). Posting it
   would be refused at the broker (another exporter value) as `per_login_mfa_refused`, the alert
@@ -347,7 +347,7 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   10s refresh pacing once: the request takes the single-use proved record, under the key its own
   caller computes (ruling 14), for the refresh that
   follows, so the pacing still bounds refreshes to one per proof. Without it, the refresh right after a touch would be
-  answered `refresh_too_soon` (pre-flight I5).
+  answered 429 `refresh_too_soon` (pre-flight I5).
 - **R17. What people see.** A prompt: `core-sw01 asks for a second factor at each login: scope core
   accepts hardware_key_touch; role netadmin accepts hardware_key_touch, idp_mfa (reuse 15m, from
   defaults)`, then `touch your key now` or the sign-in. A refusal names the same and the cause.
@@ -357,7 +357,7 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 - **R18. Unavailable, and 3am.** A requirement whose `accept` holds no method this broker can
   verify now (no attestation roots for a touch-only device, no human OIDC verifier for an
   `idp_mfa`-only one) is `deny per_login_mfa_unavailable` for that device alone, said at the
-  broker's start once per policy. The broker never refuses a start over it (decision 43 R4's rule).
+  broker's start once per policy. The broker never refuses a start over it (decision 43 ruling 14's rule).
   With the IdP down, touch still works where accepted; with no token at hand, idp works where
   accepted: the operator notes say to accept both where they can. Break-glass is unaffected.
 - **R19. Records.** One new event, `per_login_mfa`: a proof posted, `permit per_login_mfa_proved`
@@ -457,8 +457,9 @@ it (Task 1 Step 6). None cuts a spec feature or weakens a check.
   test.
 - **Minor 14** `on_missing: exclude` → R11: a lint warning (refusing it would cut a legitimate
   scope shape; `security_log` records the lift).
-- **Minor 15** diff exit and access review → Task 9: the warning never gates (exit 0, decision 44
-  ruling 4); review rows show the levels each grant row carries.
+- **Minor 15** diff exit and access review → Task 9: a weakening is gated like a privilege raise
+  (controller's Task 1 review ruling 2026-10-12, decision 45 ruling 24; it was a warning with exit
+  0); review rows show the levels each grant row carries.
 - **Minor 16** `omitzero`, unsealed agent session → Task 11: `omitzero`; `agent_sha256` in
   `PutOnce` records.
 - **Minor 17** swtpm version, AppArmor, CRL retry cost, upgrade order → Tech Stack, the workflow's
@@ -517,7 +518,7 @@ re-review's numbers (re-review R1–R10) are not the plan's rulings R1–R22.
 - No device identity in metric labels.
 - No per-user step at fleet scale: every new key (`key`, `touch_key`, `issued_key_store`,
   `broker_crl`) is settable once in the root-owned `/etc/port49/config.yaml`.
-- A start never fails over a hardware or attestation file (decision 43 R4's rule); the start line
+- A start never fails over a hardware or attestation file (decision 43 ruling 14's rule); the start line
   says what is unavailable.
 - Lab: positive controls enforced, a failed control is `INVALID` before any note is written;
   results notes per CLAUDE.md; captures redacted into `tests/lab/evidence/`. The YubiKey row (L60)
@@ -634,7 +635,7 @@ intersection is a load error naming both levels: `policy test` fails on it, `pol
 on one the new version introduces, and a reload of an edited policy that introduces one is
 refused, while one already in force blocks no unrelated edit; where the policy did not change (a
 start, an inventory reload, a grant's expiry) the device is quarantined with that cause (§10), so
-an inventory sync never freezes the fleet's inventory. A machine principal is exempt but from levels
+an inventory sync never freezes the fleet's inventory. A machine principal is exempt except from levels
 that set `applies_to_machines: true`, and a machine proves by `hardware_key_touch` alone, from a
 key and touch slot on one token. A scope with a match key other than `name` that sets
 `per_login_mfa` must declare `on_missing` and `security_log: true`; one pinned by `name` alone
@@ -682,8 +683,14 @@ per_login_mfa_unavailable` for that device alone.
   (ruling 17's form). Under "Policy tests", add the key `per_login_mfa:` to a session test's
   assertions: `{accept: [...], reuse_for: 15m}` or `none`. Under `policy diff`, add: "a change to a
   subject's effective per-login requirement on a device is printed as `per_login_mfa:` with the
-  before and after, and a weakening (a method added to `accept`, a longer `reuse_for`, a
-  requirement removed) is printed as `warning:`."
+  before and after, and a weakening (a method added to `accept`, a longer `reuse_for`, a level
+  removed, `applies_to_machines` turned off, a requirement removed) fails the gate like a
+  privilege raise: it fails unless a passing session test in the new version, on a device it is
+  reported on, asserts the new `per_login_mfa:`. A tightening is printed and never fails. An empty
+  intersection the new version introduces fails too, as a newly quarantined device does." Under
+  "Policy tests", also: "A session test is what acknowledges a privilege raise, and a
+  `per_login_mfa` weakening, to the gate." Add decision 45 ruling 24 (the controller's Task 1
+  review ruling: a weakening is gated like a raise)."
 
 - [ ] **Step 5: Amend decision 43 ruling 13.** Replace "takes a person's ID token at `POST
   /v1/certificate` alone" with "takes a person's ID token at `POST /v1/certificate`, and at `POST
@@ -736,7 +743,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - [ ] **Step 8: §15 rows.** After L59's row add:
 
 ```markdown
-| **L60** | A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5). Whether: `C_Initialize` with `CKF_OS_LOCKING_OK` and no callbacks, and `C_Finalize`, run clean with the token present, `libykcs11`'s threads included; a slot 9a key (PIN policy once, touch never, a lab CA's certificate) signs a TLS 1.3 handshake and a refresh with `port49 login` asking the PIN once; the attestation certificates (slot f9 and each slot's) are reachable as certificate objects, chain to Yubico's PIV roots (the chain's depth for this firmware recorded: whether an intermediate sits under the root), and carry the touch policy (1.3.6.1.4.1.41482.3.8) and serial (…3.7) port49 reads; a slot 9c key with touch policy always proves `hardware_key_touch` with a touch, and with no touch within the token's timeout is refused in port49's words; the token unplugged mid-session: `port49 token` mints on the held connection, `port49 refresh` says to insert the key, the session survives, and after re-insertion, with nothing minted between, the agent's `GET /status` says `locked`, `port49 login` asks the PIN and the refresh works; a `port49 login` or `port49 token` in another terminal does not de-authenticate the agent's PIV login; a wrong PIN is sent once and the message says the tries left; a key the user generated with `ykman` and named by `issued_key` (`issued_key_store: pkcs11`) is issued a certificate with port49 writing nothing to the token. Each cell against a control. | §13 decision 45 rulings 3, 4, 8 and 12; the operator notes (plan 13) | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open — added by plan 9c 2026-10-12; needs Ryan present |
+| **L60** | A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5). Whether: `C_Initialize` with `CKF_OS_LOCKING_OK` and no callbacks, and `C_Finalize`, run clean with the token present, `libykcs11`'s threads included; a slot 9a key (PIN policy once, touch never, a lab CA's certificate) signs a TLS 1.3 handshake and a refresh with `port49 login` asking the PIN once; the attestation certificates (slot f9 and each slot's) are reachable as certificate objects, chain to Yubico's PIV roots (the chain's depth for this firmware recorded: whether an intermediate sits under the root), and carry the touch policy (1.3.6.1.4.1.41482.3.8) and serial (…3.7) port49 reads; a slot 9c key with touch policy always proves `hardware_key_touch` with a touch, and with no touch within the token's timeout is refused in port49's words, and the timeout is recorded (decision 45 ruling 14 says about 15s); the token unplugged mid-session: `port49 token` mints on the held connection, `port49 refresh` says to insert the key, the session survives, and after re-insertion, with nothing minted between, the agent's `GET /status` says `locked`, `port49 login` asks the PIN and the refresh works; a `port49 login` or `port49 token` in another terminal does not de-authenticate the agent's PIV login; a wrong PIN is sent once and the message says the tries left; a key the user generated with `ykman` and named by `issued_key` (`issued_key_store: pkcs11`) is issued a certificate with port49 writing nothing to the token. Each cell against a control. | §13 decision 45 rulings 3, 4, 8 and 12; the operator notes (plan 13) | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open — added by plan 9c 2026-10-12; needs Ryan present |
 | **L61** | Keycloak's `amr` and `acr` in an ID token for `idp_mfa`. With a realm flow of password and OTP, a `prompt=login` sign-in with both: whether the ID token carries `amr`, and which values, with Keycloak's AMR protocol mapper and with none; the control, a password-only sign-in, and its `amr`; whether `acr_values` changes either. | §13 decision 45 ruling 13 (the default `amr: [mfa]`); the operator notes' provider setup | Keycloak (26.x) | open — added by plan 9c 2026-10-12 |
 | **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
 | **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs a macOS host |
@@ -2128,11 +2135,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   (`Resolution.PerLoginMFA`; `checkDevices`'s quarantine cause), `internal/policy/member.go`
   (`resolveAll` wraps a disjoint composition as `ErrCompositionRefused`),
   `internal/policy/explain.go` (render), `internal/policy/tests.go` (the assertion),
-  `internal/policy/diff.go` (the change and the weakening warning), `internal/policy/lint.go`
+  `internal/policy/diff.go` (the change and the weakening gate), `internal/policy/lint.go`
   (two warnings), `internal/policy/review.go` (each row's levels)
 - Modify: `internal/port49d/reload.go` (`load` and `loadBoth` refuse a bundle with an
   MFA-disjoint entry the in-force policy over the same inventory does not have; an inventory
-  reload does not; re-review R5), `cmd/port49/policy.go` (`policy diff` fails on an entry the new
+  reload does not; re-review R5), `cmd/port49/policy.go` (`policy diff` fails on an unacknowledged weakening, `d.UnacknowledgedMFA() > 0`, and on an entry the new
   version introduces; `policy test` already fails on every quarantine)
 - Test: `internal/policy/mfa_test.go`, `internal/policy/member_test.go`,
   `internal/port49d/reload_test.go`
@@ -2418,27 +2425,50 @@ func TestPolicyTestAssertsTheRequirement(t *testing.T) {
 	}
 }
 
-func TestPolicyDiffWarnsOnAWeakening(t *testing.T) {
+func TestPolicyDiffGatesAWeakening(t *testing.T) {
 	weaker := strings.Replace(strictestPolicy, "accept: [hardware_key_touch], reuse_for: 5m",
 		"accept: [hardware_key_touch, idp_mfa], reuse_for: 5m", 1)
-	out := diffText(t, strictestPolicy, weaker)
+	out, code := diffRun(t, strictestPolicy, weaker)
 	if !strings.Contains(out, "per_login_mfa:") || !strings.Contains(out, "core-sw01") ||
-		!strings.Contains(out, "warning: per_login_mfa_weakened:") {
-		t.Fatalf("a weakening:\n%s", out)
+		!strings.Contains(out, "per_login_mfa_weakened:") || code == 0 {
+		t.Fatalf("an unacknowledged weakening must print and fail (exit %d):\n%s", code, out)
+	}
+	// A session test asserting the new requirement acknowledges it, as for a privilege raise.
+	acked := weaker + `
+tests:
+  - {subject: alice, device: core-sw01, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 5m}}
+`
+	if out, code := diffRun(t, strictestPolicy, acked); code != 0 {
+		t.Fatalf("an acknowledged weakening failed (exit %d):\n%s", code, out)
+	}
+	// A test asserting the old requirement does not acknowledge the new one.
+	stale := weaker + `
+tests:
+  - {subject: alice, device: core-sw01, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}}
+`
+	if _, code := diffRun(t, strictestPolicy, stale); code == 0 {
+		t.Fatal("a test asserting the old requirement acknowledged the weakening")
+	}
+	// A longer reuse_for is a weakening too.
+	longer := strings.Replace(strictestPolicy, "reuse_for: 5m", "reuse_for: 30m", 1)
+	if _, code := diffRun(t, strictestPolicy, longer); code == 0 {
+		t.Fatal("a longer reuse_for passed the gate")
 	}
 	tighter := strings.Replace(strictestPolicy, "reuse_for: 5m", "reuse_for: 1m", 1)
-	if out := diffText(t, strictestPolicy, tighter); !strings.Contains(out, "per_login_mfa:") || strings.Contains(out, "warning:") {
-		t.Fatalf("a tightening:\n%s", out)
+	if out, code := diffRun(t, strictestPolicy, tighter); !strings.Contains(out, "per_login_mfa:") || code != 0 {
+		t.Fatalf("a tightening must print and pass (exit %d):\n%s", code, out)
 	}
 }
 ```
 
-  (`runSessionTest` and `diffText` are thin helpers over the package's existing test-runner and
-  diff entry points, named for what they return.)
+  (`runSessionTest` and `diffRun` are thin helpers over the package's existing test-runner and
+  diff entry points; `diffRun` returns the printed diff and the exit code `cmd/port49`'s `policy
+  diff` would give, so Task 9's `cmd/port49/policy_test.go` also runs one weakening through the
+  command.)
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/policy/ -run 'StrictestLevel|OneDeviceIsAScope|DisjointLevels|DisjointComposition|MachinesAreExempt|PerLoginMFASchema|ExplainPrintsTheEffective|PolicyTestAssertsTheRequirement|PolicyDiffWarnsOnAWeakening' -count=1`
+Run: `go test ./internal/policy/ -run 'StrictestLevel|OneDeviceIsAScope|DisjointLevels|DisjointComposition|MachinesAreExempt|PerLoginMFASchema|ExplainPrintsTheEffective|PolicyTestAssertsTheRequirement|PolicyDiffGatesAWeakening' -count=1`
 Expected: FAIL (undefined).
 
   Also `internal/port49d/reload_test.go`, `TestAnMFADisjointInventoryEditQuarantinesAndAPolicyEditIsRefused`
@@ -2551,10 +2581,19 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
     machine: provable only with a pkcs11 key and touch key on one token").
   - `tests.go`: the assertion compares `Accept` as a set and `ReuseFor`; `none` passes only when
     `!Required()`.
-  - `diff.go`: per subject and device, the requirement before and after; printed when it differs;
-    a `warning: per_login_mfa_weakened:` when after's `Accept` is not a subset of before's, after's
-    `ReuseFor` is longer, or after is not `Required()` and before was. Like every diff warning it
-    is reported, never a gate: exit 0 (decision 44 ruling 4; pre-flight minor 15).
+  - `diff.go`: per subject and device, the requirement before and after; printed when it differs.
+    A new `Diff.MFA []MFAChange` (`Subject`, `Devices`, `At`, `Old`, `New MFARequirement`,
+    `Weakened, Acknowledged bool`), built like `LevelChange`: `Weakened` when after's `Accept` is
+    not a subset of before's, after's `ReuseFor` is longer, a level is gone (after has fewer
+    levels), `applies_to_machines` went off, or after is not `Required()` and before was.
+    `Acknowledged` is a passing session test in the new version, at `At`, on one of `Devices`,
+    asserting the new `per_login_mfa:`. `func (d Diff) UnacknowledgedMFA() int` counts
+    `Weakened && !Acknowledged`, as `UnacknowledgedLevels` counts `Raise && !Acknowledged`;
+    `cmd/port49/policy.go` adds it to the summary line ("%d unacknowledged per_login_mfa
+    weakenings") and to the `return 1` condition beside `d.UnacknowledgedLevels() > 0`. A
+    weakening is printed `per_login_mfa_weakened:` (not `warning:`). A tightening is printed and
+    never fails. (Controller's Task 1 review ruling 2026-10-12, decision 45 ruling 24, replacing
+    pre-flight minor 15's warning.)
   - `review.go`: `ReviewRow` gains `PerLoginMFA []MFALevel`, the levels its scope and roles carry
     (and `defaults`), so the access review shows where requirements are written; the effective
     requirement is per device, and explain is where it is read (the roadmap's "policy tooling
@@ -3752,8 +3791,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `on_missing: exclude` there is a lint warning. Machines are exempt unless a level says
   `applies_to_machines: true`, and then prove by a touch from a key and touch slot on one token
   (`port49 workload token --key pkcs11:… --touch-key pkcs11:…`). `port49 explain` prints the
-  effective requirement and where each part came from; `policy diff` warns on a weakening (a
-  warning, exit 0, as every diff warning).
+  effective requirement and where each part came from; `policy diff` fails on a weakening (a
+  method added to `accept`, a longer `reuse_for`, a level removed, `applies_to_machines` turned
+  off) unless a session test asserts the new `per_login_mfa:`, as it does for a privilege raise;
+  a tightening only prints.
 - **Upgrade first.** Upgrade every broker and daemon before adding `per_login_mfa` to a policy: a
   replica that does not know the key refuses the policy and keeps serving the old one, with no
   requirement; `port49_policy_file_refused` is 1 there and `port49_policy_bundle_matches_runner`
