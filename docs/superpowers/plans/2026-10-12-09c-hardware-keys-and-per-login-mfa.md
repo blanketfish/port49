@@ -505,8 +505,9 @@ re-review's numbers (re-review R1–R10) are not the plan's rulings R1–R22.
 - Go 1.26+, `gofmt` and `go vet` clean, `CGO_ENABLED=0` for every binary; the only new modules are
   `github.com/ebitengine/purego` v0.11.1 and `github.com/google/go-tpm` v0.9.8.
 - Static stays static (ruling 22): nothing outside a `//go:build hwkey_dlopen` file imports
-  purego, directly or through a package; `make check-static` proves it for `bin/port49-static`,
-  built as `make build` builds `bin/port49` (`CGO_ENABLED=0`, no tag; re-review R9). `make vet` vets both tag sets.
+  purego, directly or through a package; `make check-static` proves it for all four
+  `STATIC_CMDS` (`port49d port49 port49-inventory port49-broker`), built as `bin/static/<cmd>`
+  with `CGO_ENABLED=0` and no tag (re-review R9). `make vet` vets both tag sets.
 - snake_case for all data: `per_login_mfa`, `accept`, `reuse_for`, `applies_to_machines`,
   `hardware_key_touch`, `idp_mfa`, `issued_key_store`, `issued_key`, `touch_key`, `broker_crl`,
   `attestation_roots_file`, `amr`, `acr_values`, `per_login_mfa_challenge`, `mfa_method`, `mfa_at`,
@@ -1136,9 +1137,10 @@ func (s *Signer) State() hwkey.State
   - `Makefile`: `build` gains `CGO_ENABLED=0` on each line (no tag, the static build; re-review
     R9); `build-client` builds `bin/port49-client` with `CGO_ENABLED=0 go build -tags hwkey_dlopen`,
     never `bin/port49`, so the two builds never overwrite each other; `check-static` builds
-    `bin/port49-static` with `CGO_ENABLED=0` and no tag and fails unless `readelf -l` shows no
-    program interpreter (`! readelf -l bin/port49-static | grep -q 'program interpreter'`),
-    printing `file`'s line on failure; `vet` adds `go vet -tags hwkey_dlopen ./...` and `go vet
+    each of `STATIC_CMDS` as `bin/static/<cmd>` with `CGO_ENABLED=0` and no tag and fails
+    unless `readelf -l` shows no program interpreter. It fails closed: a missing `readelf` is an
+    error, and `readelf`'s own status is read (`out=$(readelf -l ...)` under `set -e`; a pipe
+    would give grep's status); `vet` adds `go vet -tags hwkey_dlopen ./...` and `go vet
     -tags hwkey,hwkey_dlopen ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/...
     ./internal/workload/... ./cmd/port49/...`.
 
@@ -1277,9 +1279,15 @@ test-hw: check-static
 # purego import outside a hwkey_dlopen file would make it need a loader that
 # distroless/static does not have.
 check-static:
-	CGO_ENABLED=0 go build -o bin/port49-static ./cmd/port49
-	@if readelf -l bin/port49-static | grep -q 'program interpreter'; then \
-		file bin/port49-static; echo "bin/port49-static is dynamically linked; the image cannot run it"; exit 1; fi
+	@set -e; \
+	command -v readelf >/dev/null || { echo "check-static needs readelf (binutils); without it nothing is checked"; exit 1; }; \
+	mkdir -p bin/static; \
+	for c in $(STATIC_CMDS); do \
+	  CGO_ENABLED=0 go build -o bin/static/$$c ./cmd/$$c; \
+	  out=$$(readelf -l bin/static/$$c); \
+	  if printf '%s\n' "$$out" | grep -q 'program interpreter'; then \
+	    echo "bin/static/$$c is dynamically linked; the image cannot run it"; exit 1; fi; \
+	done
 ```
 
   `.PHONY` gains `test-hw build-client check-static`.
