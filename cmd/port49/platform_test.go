@@ -939,7 +939,23 @@ key_groups:
 	out.Reset()
 	errb.Reset()
 	if code := run(append(args, srx, leaf), &out, &errb); code != 2 || !strings.Contains(errb.String(), "pass --config") ||
+		!strings.Contains(errb.String(), srx+": juniper_junos projects") ||
 		!strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
 		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Ruling 8: the exit is 2 where any file is a usage outcome, whatever
+	// order a finding comes in, and every file is still checked.
+	bad := filepath.Join(dir, "leaf-01.txt")
+	if err := os.WriteFile(bad, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, files := range [][]string{{bad, srx, leaf}, {srx, bad, leaf}} {
+		out.Reset()
+		errb.Reset()
+		if code := run(append(args, files...), &out, &errb); code != 2 ||
+			!strings.Contains(out.String(), "COLLISION: "+bad) ||
+			!strings.Contains(out.String(), "batch: 3 configurations checked, 2 failed\n") {
+			t.Fatalf("%q: code %d\n%s%s", files, code, out.String(), errb.String())
+		}
 	}
 }

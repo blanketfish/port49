@@ -89,21 +89,44 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	// Every file is checked whatever one before it found (decision 44
 	// ruling 8): a CI run reports the fleet, not its first failure.
-	worst, failed := 0, 0
+	worst, checked := 0, 0
+	var failed []string
+	seen := map[string]bool{}
 	for _, file := range fs.Args() {
+		// A path given twice is one capture; two paths that name the same
+		// device are two.
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
+		checked++
 		// The name as it is where the inventory has it (Oxidized's files,
 		// an FQDN), else less its last extension.
-		name := filepath.Base(file)
+		asIs := filepath.Base(file)
+		name := asIs
 		if _, ok := p.Device(name); !ok {
-			name = strings.TrimSuffix(name, filepath.Ext(name))
+			name = strings.TrimSuffix(asIs, filepath.Ext(asIs))
 		}
-		code := c.one(name, file)
+		code := 0
+		if _, ok := p.Device(name); !ok {
+			tried := fmt.Sprintf("%q", asIs)
+			if name != asIs {
+				tried += fmt.Sprintf(" or %q", name)
+			}
+			fmt.Fprintf(stderr, "port49 devices check-config: %s: no inventory device %s\n", file, tried)
+			code = 1
+		} else {
+			code = c.one(name, file)
+		}
 		if code != 0 {
-			failed++
+			failed = append(failed, file)
 		}
 		worst = max(worst, code)
 	}
-	fmt.Fprintf(stdout, "batch: %d configurations checked, %d failed\n", fs.NArg(), failed)
+	fmt.Fprintf(stdout, "batch: %d configurations checked, %d failed\n", checked, len(failed))
+	if len(failed) > 0 {
+		fmt.Fprintf(stdout, "batch: failed: %s\n", strings.Join(failed, " "))
+	}
 	return worst
 }
 
@@ -133,19 +156,25 @@ func (c checkRun) one(device, file string) int {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
+	// Under --batch every line about a file names it: in a CI log of a fleet
+	// a line that does not is one nobody can place.
+	who := "port49 devices check-config:"
+	if c.batch {
+		who += " " + file + ":"
+	}
 	served, groups, err := p.ServedUsernames(device, time.Now())
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 devices check-config:", err)
+		fmt.Fprintln(stderr, who, err)
 		return 1
 	}
 	dialect, err := p.ConfigDialect(d.Platform)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 devices check-config:", err)
+		fmt.Fprintln(stderr, who, err)
 		return 1
 	}
 	switch {
 	case dialect.Projected() && c.cfgPath == "":
-		fmt.Fprintf(stderr, "port49 devices check-config: %s projects the policy into its session reply, so its "+
+		fmt.Fprintf(stderr, who+" %s projects the policy into its session reply, so its "+
 			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
 			"session.max_session_age_default: pass --config\n", d.Platform)
 		return 2
@@ -158,7 +187,7 @@ func (c checkRun) one(device, file string) int {
 	// every device clean: at 3am "0 findings" reads as no collision, where
 	// nothing was looked for (final review I4).
 	if len(dialect.LocalAccounts) == 0 && len(dialect.DeviceConfig) == 0 && len(dialect.ConfigChecks) == 0 {
-		fmt.Fprintf(stderr, "port49 devices check-config: nothing checked: %s has no config checks: its adapter has "+
+		fmt.Fprintf(stderr, who+" nothing checked: %s has no config checks: its adapter has "+
 			"no local_accounts, device_config or config_checks, so no collision or forbidden line could be found; "+
 			"give the platform a platforms: block that says how its configuration names an account (spec §5.6)\n",
 			d.Platform)
@@ -178,7 +207,7 @@ func (c checkRun) one(device, file string) int {
 	var drift, services []platform.ConfigFinding
 	if dialect.Projected() {
 		if templateMissing, drift, err = templateCheck(dialect, c.cfgPath, file, config); err != nil {
-			fmt.Fprintln(stderr, "port49 devices check-config:", err)
+			fmt.Fprintln(stderr, who, err)
 			return 1
 		}
 		// Where a deny does not bind the RPCs a management service serves,

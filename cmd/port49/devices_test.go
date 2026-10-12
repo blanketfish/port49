@@ -429,9 +429,13 @@ func TestCheckConfigBatch(t *testing.T) {
 	clean := write("leaf-01.cfg", "hostname leaf-01\nusername breakglass privilege 15 secret 0 x\n"+
 		"aaa authorization exec default group port49 local\naaa authorization commands all default group port49 local\n")
 	sub := filepath.Join(dir, "b")
-	os.Mkdir(sub, 0o700)
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	collides := filepath.Join(sub, "leaf-01")
-	os.WriteFile(collides, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600)
+	if err := os.WriteFile(collides, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	unknown := write("nosuch.cfg", "hostname nosuch\n")
 	// A file that cannot be read, named for a device the inventory has, so
 	// the read is what fails (the device is looked up first).
@@ -444,9 +448,10 @@ func TestCheckConfigBatch(t *testing.T) {
 	for _, want := range []string{
 		"on leaf-01 (arista_eos), 0 findings\n",
 		`COLLISION: ` + collides + `:2: a device-local account "noc"`,
-		`device "nosuch" is not in the inventory`,
+		unknown + `: no inventory device "nosuch.cfg" or "nosuch"`,
 		filepath.Join("c", "leaf-01.conf"),
 		"batch: 4 configurations checked, 3 failed\n",
+		"batch: failed: " + collides + " " + unknown + " " + missing + "\n",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %q in\n%s", want, all)
@@ -464,6 +469,35 @@ func TestCheckConfigBatch(t *testing.T) {
 	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", collides, clean},
 		&out, &errb); code != 1 {
 		t.Errorf("failure then clean: code %d", code)
+	}
+	// A file that cannot be read, then a clean one: 1, and the clean one is
+	// still checked.
+	out.Reset()
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", missing, clean},
+		&out, &errb); code != 1 || !strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") ||
+		!strings.Contains(out.String(), "on leaf-01 (arista_eos), 0 findings\n") {
+		t.Errorf("unreadable then clean: code %d\n%s", code, out.String())
+	}
+	// A file no inventory device names is exit 1, as in single-file mode, and
+	// a name with no extension is named once.
+	out.Reset()
+	errb.Reset()
+	bare := write("nosuch", "hostname nosuch\n")
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", bare},
+		&out, &errb); code != 1 || !strings.Contains(errb.String(), bare+`: no inventory device "nosuch"`+"\n") {
+		t.Errorf("unplaceable: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// A path given twice is one capture; two paths for one device are two.
+	out.Reset()
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", clean, clean,
+		collides, collides}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
+		t.Errorf("duplicates: code %d\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", clean, collides},
+		&out, &errb); code != 1 || !strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
+		t.Errorf("one device, two captures: code %d\n%s", code, out.String())
 	}
 	for _, args := range [][]string{
 		{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch"},
