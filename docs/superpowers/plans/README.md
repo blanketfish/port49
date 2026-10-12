@@ -5639,6 +5639,20 @@ each task reviewed, most through one to three fix rounds. The ledger is
     session cells (the group grants `all`).
   - **`entryServices`** (Task 7b): an operator's benign service missing from it gets a finding; each
     addition names its source, as the list's comment does.
+  - **L59 harness, xnm cells** (Task 2 re-review M1): an mgd crash or restart before the C cell
+    could misread a closed xnm cell. The xnm cells closed nothing in this plan (the XML API moved
+    to L59 and still fails check-config), so the risk lands only when L59 runs them.
+  - **REST reachability harness:** REST binds the management address, not 127.0.0.1 (see the REST
+    item above); `rest` fails check-config meanwhile, which is fail-closed.
+  - **The redundant `set +cli` alternative** (Task 5b M4, 24 B beside `set` in the readonly deny):
+    removing it changes what 1.2.0 sends, and that exact reply is what Task 9 measured end to end
+    (`L26c-projected-*`, L58 G5). It fits the budget (170 B). Fold it into the next lab rerun of
+    the differential.
+  - **Flake watch:** `TestAFailedRescanHookReloadsNothing` in `internal/store` failed once and did
+    not recur (the package is outside this plan's diff); `cmd/port49` had one unexplained FAIL and
+    then nine clean runs (`-count=3` here, `-count=6` earlier). Watch, don't block.
+  - **Deny-row transcripts:** Task 9's deny rows have verdicts and pcaps (lab rule 3 holds) but no
+    transcripts; add them at the next differential rerun.
   - **Lab lessons:** the Junos CLI is case-sensitive (an uppercase probe is refused, a reading and
     not a failure; `L12-projection`), and a paged probe is INVALID, never typed into.
 - **Operator-facing notes** (the plan's "Operator notes," edited to what was built; plan 13 builds
