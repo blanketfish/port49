@@ -195,7 +195,7 @@ func TestTheStrictestLevelWins(t *testing.T) {
 			{Level: "defaults", Accept: []MFAMethod{HardwareKeyTouch, IdPMFA}, ReuseFor: 15 * time.Minute},
 			{Level: "role netadmin", Accept: []MFAMethod{HardwareKeyTouch, IdPMFA}, ReuseFor: 30 * time.Minute},
 			{Level: "scope core", Accept: []MFAMethod{HardwareKeyTouch}, ReuseFor: 5 * time.Minute,
-				Select: "match {tier in core} on_missing include"},
+				Select: `match {"tier" in ["core"]} on_missing "include"`},
 		}}
 	if !reflect.DeepEqual(res.PerLoginMFA, want) {
 		t.Fatalf("core-sw01: %+v\nwant %+v", res.PerLoginMFA, want)
@@ -464,6 +464,11 @@ func TestPolicyDiffGatesAScopeWhoseSelectorMoved(t *testing.T) {
 		"name pin gains an attribute (P9)": {
 			"scopes:\n  - {name: hot, match: {name: core-sw01}, " + mfa + "\n",
 			"scopes:\n  - {name: hot, match: {name: core-sw01, tier: core}, on_missing: exclude, security_log: true, " + mfa + "\n"},
+		// Values that contain the old encoding's separators must not collide
+		// with the same text split into separate values (E1e).
+		"a value with a separator becomes two values (E1e)": {
+			"scopes:\n  - {name: hot, match: {tier: [core, \"a|b\"]}, on_missing: include, security_log: true, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {tier: [core, a, b]}, on_missing: include, security_log: true, " + mfa + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, code := diffRun(t, c.old, c.new)
@@ -478,6 +483,36 @@ func TestPolicyDiffGatesAScopeWhoseSelectorMoved(t *testing.T) {
 				t.Fatalf("an acknowledged selector change failed (exit %d):\n%s", code, out)
 			}
 		})
+	}
+	// Edits that change nothing a device can see are no weakening: the order
+	// and repeats of a value list carry no meaning (scope.go matches by
+	// membership), and on_missing is never read when no key can be missing.
+	for name, c := range map[string]struct{ old, new string }{
+		"value list reordered (E1c)": {
+			"scopes:\n  - {name: hot, match: {tier: [core, edge]}, on_missing: include, security_log: true, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {tier: [edge, core]}, on_missing: include, security_log: true, " + mfa + "\n"},
+		"duplicate value removed (E1d)": {
+			"scopes:\n  - {name: hot, match: {tier: [core, core]}, on_missing: include, security_log: true, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {tier: core}, on_missing: include, security_log: true, " + mfa + "\n"},
+		"on_missing flipped on an empty match (E1f)": {
+			"scopes:\n  - {name: hot, match: {}, on_missing: include, security_log: true, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {}, on_missing: exclude, security_log: true, " + mfa + "\n"},
+		"on_missing flipped on a name-only match": {
+			"scopes:\n  - {name: hot, match: {name: core-sw01}, on_missing: include, " + mfa + "\n",
+			"scopes:\n  - {name: hot, match: {name: core-sw01}, on_missing: exclude, " + mfa + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out, code := diffRun(t, c.old, c.new); code != 0 || strings.Contains(out, "_weakened") {
+				t.Fatalf("an edit that changes nothing is a weakening (exit %d):\n%s", code, out)
+			}
+		})
+	}
+	// A real narrowing, a value dropped, still fails (edge-sw01 loses its level).
+	if out, code := diffRun(t,
+		"scopes:\n  - {name: hot, match: {tier: [core, edge]}, on_missing: include, security_log: true, "+mfa+"\n",
+		"scopes:\n  - {name: hot, match: {tier: core}, on_missing: include, security_log: true, "+mfa+"\n"); code == 0 ||
+		!strings.Contains(out, "per_login_mfa_weakened: alice on edge-sw01") {
+		t.Fatalf("a narrowed value list passed the gate (exit %d):\n%s", code, out)
 	}
 	// An unchanged scope, and a scope added, are no weakening.
 	const same = "scopes:\n  - {name: hot, match: {tier: core}, on_missing: include, security_log: true, " + mfa + "\n"
@@ -536,6 +571,17 @@ grants:
 `)
 	if d := Compare(before, after, noon); len(d.Quarantined) != 0 {
 		t.Fatalf("a same-pair emergency grant is a new quarantine: %+v", d.Quarantined)
+	}
+	// A new conflicting pair on the already-quarantined device is still new.
+	pair := mfaBundle(t, strings.Replace(disjointPolicy, "scopes:\n",
+		"  - {name: emerg, permit: [\"show **\"], per_login_mfa: {accept: [idp_mfa]}}\nscopes:\n", 1)+`
+subjects:
+  - {name: oncall, identity: ["user:oncall@example.com"], token_ttl: 5m}
+grants:
+  - {subject: oncall, scope: all_devices, roles: [emerg]}
+`)
+	if d := Compare(before, pair, noon); len(d.Quarantined) != 1 {
+		t.Fatalf("a new conflicting pair on a quarantined device is not one new quarantine: %+v", d.Quarantined)
 	}
 }
 

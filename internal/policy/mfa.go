@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,12 @@ type MFALevel struct {
 	Select string
 }
 
-// scopeSelect is a scope's match and on_missing as one canonical string.
+// scopeSelect is a scope's match and on_missing as one canonical string, used
+// both to compare two levels and to print them. Every key, value and pattern
+// is quoted, so no value can read as a separator and two different selectors
+// never encode alike. Value lists are sorted and deduplicated, since matching
+// is set membership (scope.go), and on_missing is left out when no key can be
+// missing: an empty match reads no key, and `name` is always present.
 func scopeSelect(s *Scope) string {
 	keys := make([]string, 0, len(s.Match))
 	for k := range s.Match {
@@ -64,11 +70,20 @@ func scopeSelect(s *Scope) string {
 	}
 	slices.Sort(keys)
 	terms := make([]string, len(keys))
+	missable := false
 	for i, k := range keys {
+		missable = missable || k != "name"
 		v := s.Match[k]
 		var parts []string
 		if len(v.Equal) > 0 {
-			parts = append(parts, "in "+strings.Join(v.Equal, "|"))
+			vals := slices.Clone(v.Equal)
+			slices.Sort(vals)
+			vals = slices.Compact(vals)
+			quoted := make([]string, len(vals))
+			for j, val := range vals {
+				quoted[j] = strconv.Quote(val)
+			}
+			parts = append(parts, "in ["+strings.Join(quoted, ", ")+"]")
 		}
 		ops := make([]string, 0, len(v.Cmp))
 		for op := range v.Cmp {
@@ -76,11 +91,15 @@ func scopeSelect(s *Scope) string {
 		}
 		slices.Sort(ops)
 		for _, op := range ops {
-			parts = append(parts, op+" "+v.Cmp[op])
+			parts = append(parts, op+" "+strconv.Quote(v.Cmp[op]))
 		}
-		terms[i] = k + " " + strings.Join(parts, " ")
+		terms[i] = strconv.Quote(k) + " " + strings.Join(parts, " ")
 	}
-	return "match {" + strings.Join(terms, ", ") + "} on_missing " + s.OnMissing
+	sel := "match {" + strings.Join(terms, ", ") + "}"
+	if missable {
+		sel += " on_missing " + strconv.Quote(s.OnMissing)
+	}
+	return sel
 }
 
 // MFARequirement is a device's effective requirement for one subject:
