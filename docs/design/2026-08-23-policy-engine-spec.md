@@ -5952,9 +5952,11 @@ pre-flight I10); `port49 platform upgrade` previews both.
 A change to a subject's effective per-login requirement on a device (§5.1.5) is printed by `policy
 diff` as `per_login_mfa:` with the before and after, and a weakening (a method added to `accept`, a
 longer `reuse_for`, a level removed, `applies_to_machines` turned off, a requirement removed)
-**fails the gate like a privilege raise** (below; decision 45 ruling 24): it fails unless a passing
-session test in the new version, on a device it is reported on, asserts the new `per_login_mfa:`.
-A tightening is printed and never fails. An empty intersection the new version introduces fails
+**fails the gate like a privilege raise** (below; decision 45 rulings 24 and 26): it fails unless a
+passing session test that is new or changed in the new version (against the old version's tests), on
+a device it is reported on, asserts the new `per_login_mfa:`; an unchanged test carried over from
+the old version does not. A scope's `match` and `on_missing` are part of its level, so any change to
+either is a weakening. A tightening (a level added among them) is printed and never fails. An empty intersection the new version introduces fails
 too, as a newly quarantined device does.
 
 **A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
@@ -9184,19 +9186,31 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   with `per_login_mfa:`: a method added to `accept`, a longer `reuse_for`, a level removed,
   `applies_to_machines` turned off, or a requirement removed. Why: a weakening is the same kind of change as a raise, in
   what a stolen laptop can do, and a warning nobody reads at 3am is no gate. A tightening only
-  prints. The gate compares levels by identity (kind and name or scope), not by count, and the
+  prints. The test must be new or changed in the new version (ruling 26). The gate compares levels by identity (kind and name or scope), not by count, and the
   effective requirement per device as well: a level removed or replaced by a different scope
   (a name-pinned scope swapped for an attribute scope at the same accept and `reuse_for`), a
   level's `accept` widened, its `reuse_for` lengthened, or its `applies_to_machines` turned off
-  is a weakening (controller's Task 9 review ruling, 2026-10-12). A diff line names the levels
-  on both sides.
+  is a weakening (controller's Task 9 review ruling, 2026-10-12). A scope's identity includes
+  its `match` and its `on_missing`, not only its name: any change to either is a weakening, a
+  scope added is a tightening (controller's Task 9 re-review ruling, 2026-10-12; no one can
+  prove a changed selector covers a superset of devices now and after a later inventory sync, so
+  the gate fails closed). A diff line names the levels on both sides, and the selector of a
+  scope that kept its name and moved it.
 - **25. "New" is a device and a level pair** (controller's Task 9 review ruling, 2026-10-12;
   operator safety at 3am). A per_login_mfa quarantine entry is new, for ruling 11's refusal of a
   policy edit, when its device or its pair of conflicting levels is absent from the in-force
   policy's `MFADisjoint()`; the subject its cause names does not count. An edit that only adds a
   grant reaching a device already quarantined over the same pair loads (an on-call engineer's
   emergency `all_devices` grant), the device stays quarantined, and a new conflicting level pair
-  is still refused.
+  is still refused. `policy diff` decides "new" by the same device and level-pair rule, not by
+  cause text, so a same-pair emergency grant fails no gate there either; a new conflicting pair on
+  a device already quarantined still refuses the edit.
+- **26. Only a new or changed test acknowledges a `per_login_mfa` weakening** (controller's Task 9
+  re-review ruling, 2026-10-12; a tightening of ruling 24). The acknowledging session test must be
+  new or changed in the new version, compared with the old version's tests, and assert the new
+  `per_login_mfa:` on a reported device. Why: an unchanged old test is no deliberate act, so
+  a swap that leaves the effective requirement as it was would pass silently on any policy that
+  already tests it.
 
 ---
 
