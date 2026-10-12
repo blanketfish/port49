@@ -936,6 +936,7 @@ credential:
   # per-login MFA (plan 9c; §5.1.5)
   mfa_method   hardware_key_touch | idp_mfa   the proof the login's mint was covered by
   mfa_at       2026-10-12T02:11:07Z            when that proof was made
+  mfa_agent_sha256  9d1e…                      the agent session hash of the binding that proved; empty for a bearer
 ```
 
 **`sid` is the most valuable field here.** OIDC back-channel logout delivers a logout token
@@ -948,9 +949,13 @@ requires MFA is a natural extension and would be unimplementable retroactively w
 (§5.1.5's per-login MFA reads its own proof, not these; only `idp_mfa` reads a fresh ID token's
 `amr`).
 
-**`mfa_method` and `mfa_at`** are the per-login proof the minting login was covered by (§5.1.5):
-what an incident responder asks of a session on a core device, and what a session refresh reads
-(decision 45 ruling 16).
+**`mfa_method`, `mfa_at` and `mfa_agent_sha256`** are the per-login proof the minting login was
+covered by (§5.1.5): what an incident responder asks of a session on a core device, and what a
+session refresh reads (decision 45 ruling 16). `mfa_agent_sha256` is the agent session hash of the
+binding that proved, and it is empty for a bearer. A session refresh's recorded proof covers only
+the same non-empty agent (decision 45 ruling 15), so a bearer's recorded proof covers no refresh.
+An extension under a proof rewrites all three with the covering proof's own values, never "now":
+extending cannot make a proof younger than it is.
 
 **Certificate `notAfter` and the OIDC `exp` are deliberately absent.** They bound the *mint* —
 the credential MUST be valid when the broker resolves it — and not the session. An ID token's
