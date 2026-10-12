@@ -287,6 +287,23 @@ key_groups:
 		strings.Contains(out.String(), "0 findings") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
+	// Under --batch the line names the file, literally even where its path
+	// holds a format verb.
+	odd := filepath.Join(t.TempDir(), "p%s")
+	if err := os.Mkdir(odd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oddCfg := filepath.Join(odd, "fw-01.cfg")
+	if err := os.WriteFile(oddCfg, []byte("hostname fw-01\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch", oddCfg}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "port49 devices check-config: "+oddCfg+
+		": nothing checked: fortinet_fortios has no config checks") {
+		t.Fatalf("batch: code %d\n%s%s", code, out.String(), errb.String())
+	}
 	// Half an adapter checks half, and says which half it could not.
 	raw := readFile(t, pol)
 	block := "platforms:\n  fortinet_fortios:\n    config_checks: [{match: '^set admin-lockout', says: a test check}]\n"

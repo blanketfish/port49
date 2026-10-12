@@ -943,6 +943,37 @@ key_groups:
 		!strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
 		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
 	}
+	// A path with a format verb in it is named literally, and the platform
+	// is not lost to it.
+	odd := filepath.Join(dir, "p%s")
+	if err := os.Mkdir(odd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oddSrx := filepath.Join(odd, "srx-01")
+	if err := os.WriteFile(oddSrx, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, oddSrx), &out, &errb); code != 2 ||
+		!strings.Contains(errb.String(), oddSrx+": juniper_junos projects") {
+		t.Fatalf("verb in path: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// An error that leads with the file is not given the file twice.
+	grouped := filepath.Join(dir, "g", "srx-01.set")
+	if err := os.Mkdir(filepath.Dir(grouped), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(grouped, []byte(strings.Join(append(lines, "set groups g1 system services ssh"), "\n")+"\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, "--config", cfg, grouped), &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), grouped+": ") || strings.Contains(errb.String(), grouped+": "+grouped) {
+		t.Fatalf("grouped: code %d\n%s%s", code, out.String(), errb.String())
+	}
 	// Ruling 8: the exit is 2 where any file is a usage outcome, whatever
 	// order a finding comes in, and every file is still checked.
 	bad := filepath.Join(dir, "leaf-01.txt")

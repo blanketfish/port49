@@ -174,9 +174,9 @@ func (c checkRun) one(device, file string) int {
 	}
 	switch {
 	case dialect.Projected() && c.cfgPath == "":
-		fmt.Fprintf(stderr, who+" %s projects the policy into its session reply, so its "+
+		fmt.Fprintf(stderr, "%s %s projects the policy into its session reply, so its "+
 			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
-			"session.max_session_age_default: pass --config\n", d.Platform)
+			"session.max_session_age_default: pass --config\n", who, d.Platform)
 		return 2
 	case !dialect.Projected() && c.cfgPath != "" && !c.batch:
 		fmt.Fprint(stderr, usage)
@@ -187,10 +187,10 @@ func (c checkRun) one(device, file string) int {
 	// every device clean: at 3am "0 findings" reads as no collision, where
 	// nothing was looked for (final review I4).
 	if len(dialect.LocalAccounts) == 0 && len(dialect.DeviceConfig) == 0 && len(dialect.ConfigChecks) == 0 {
-		fmt.Fprintf(stderr, who+" nothing checked: %s has no config checks: its adapter has "+
+		fmt.Fprintf(stderr, "%s nothing checked: %s has no config checks: its adapter has "+
 			"no local_accounts, device_config or config_checks, so no collision or forbidden line could be found; "+
 			"give the platform a platforms: block that says how its configuration names an account (spec §5.6)\n",
-			d.Platform)
+			who, d.Platform)
 		return 2
 	}
 	accounts, findings, err := dialect.ReadConfig(config)
@@ -207,7 +207,9 @@ func (c checkRun) one(device, file string) int {
 	var drift, services []platform.ConfigFinding
 	if dialect.Projected() {
 		if templateMissing, drift, err = templateCheck(dialect, c.cfgPath, file, config); err != nil {
-			fmt.Fprintln(stderr, who, err)
+			// The error leads with the file (or port49d.yaml), so it takes
+			// no file prefix of its own.
+			fmt.Fprintln(stderr, "port49 devices check-config:", err)
 			return 1
 		}
 		// Where a deny does not bind the RPCs a management service serves,
