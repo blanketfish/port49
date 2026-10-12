@@ -287,7 +287,7 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
 	fs.StringVar(&s.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
-		"(the default) refuses a revoked one, require refuses one that cannot be checked too, off checks nothing")
+		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
 		"key by key; each flag overrides its key")

@@ -71,7 +71,7 @@ func (w *workloadFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&w.cert, "cert", "", "the workload's certificate (PEM), read at every run")
 	fs.StringVar(&w.key, "key", "", "its private key (PEM), readable by its owner alone")
 	fs.StringVar(&w.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
-		"(the default) refuses a revoked one, require refuses one that cannot be checked too, off checks nothing")
+		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
 	fs.DurationVar(&w.deadline, "deadline", workload.DefaultDeadline, "how long to retry a broker that cannot answer now")
 }
 

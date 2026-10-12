@@ -271,6 +271,16 @@ func TestRevokedBeatsAMissingDistributionPointUnderRequire(t *testing.T) {
 	}
 }
 
+// A one-certificate chain is the trust anchor itself. Nothing above it can list
+// it (you revoke it by removing it from the trust file), so require passes it.
+func TestASelfSignedAnchorPassesUnderRequire(t *testing.T) {
+	f := newFixture(t, "good", true, false)
+	cs := tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{f.root.Cert}}}
+	if err := New(privateDir(t), ModeRequire, time.Now, nil).VerifyConnection(cs); err != nil {
+		t.Fatalf("a self-signed trusted certificate alone under require: %v, want nil", err)
+	}
+}
+
 // A forged list is said in words a client user knows: they have no issuer_file.
 func TestAForgedListIsNotSaidToBeIssuerFiles(t *testing.T) {
 	cs, _ := brokerChain(t, "forged", false)
