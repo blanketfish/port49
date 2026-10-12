@@ -101,6 +101,7 @@ type l57Reading struct {
 	tip, perm, excepted, nested bool     // each group's statement expanded under p49-remote
 	ownTimeout                  bool     // idle-timeout is the reference's 720, not the group's 30
 	ownPerm                     bool     // p49g-perm's view-configuration beside p49-l57own's own view
+	classLevel                  bool     // p49g-classlevel's login-alarms expanded under p49-remote
 }
 
 func l57Readings(capture string) l57Reading {
@@ -122,6 +123,7 @@ func l57Readings(capture string) l57Reading {
 			r.excepted = r.excepted || rest == "permissions clear"
 			r.nested = r.nested || rest == "permissions view"
 			r.ownTimeout = r.ownTimeout || rest == "idle-timeout 720"
+			r.classLevel = r.classLevel || rest == "login-alarms"
 		case ln == "set system login class p49-l57own permissions view-configuration":
 			r.ownPerm = true
 		}
@@ -238,10 +240,13 @@ func TestL57JunosGroups(t *testing.T) {
 			l.junosConfigureAdmin(t, []string{"delete apply-groups p49g-outer", "delete groups p49g-outer",
 				"delete groups p49g-inner"})
 		}
+		// The class-level cell reads nothing unless its group committed: a
+		// stripped `apply-groups` line would then say nothing about inheritance.
+		// The deferred junosGroupsDelete removes whatever part did land.
 		classCommit := l.junosConfigureAdmin(t, junosGroupsClassLevel)
 		if !strings.Contains(classCommit, "commit complete") {
-			l.junosConfigureAdmin(t, []string{"delete system login class p49-remote apply-groups p49g-classlevel",
-				"delete groups p49g-classlevel"})
+			t.Fatalf("INVALID: the class-level group did not commit, so no capture says whether inheritance strips "+
+				"its apply-groups line; no note is written: %s", oneLine(classCommit))
 		}
 		caps := map[string]string{}
 		bg, err := l.junosCLI(breakglassUser, breakglassPassword)
@@ -294,13 +299,14 @@ func TestL57JunosGroups(t *testing.T) {
 			commitWord(commit), commitWord(nestedCommit), commitWord(classCommit), strings.Join(junosGroupsLines, "\n"),
 			strings.Join(junosGroupsNested, "\n"), strings.Join(junosGroupsClassLevel, "\n"))
 		b.WriteString("| capture | `apply-groups` word line (not -except) | set groups lines | p49g-tip | p49g-perm | p49g-excepted | " +
-			"nested | own idle-timeout 720 | group permission beside own |\n|---|---|---|---|---|---|---|---|---|\n")
+			"nested | own idle-timeout 720 | group permission beside own | p49g-classlevel login-alarms |\n" +
+			"|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, cmd := range l57Captures {
 			r := l57Readings(caps[cmd])
 			cell := func(v bool) string { return l57Cell(r, v) }
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), cell(r.applyLines),
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", tableCell(cmd), cell(r.applyLines),
 				cell(r.groupLines), cell(r.tip), cell(r.perm), cell(r.excepted), cell(r.nested), cell(r.ownTimeout),
-				cell(r.ownPerm))
+				cell(r.ownPerm), cell(r.classLevel))
 		}
 		fmt.Fprintf(&b, "\nA token session with no reply attributes (lands in `remote`), `show cli authorization`:\n\n```\n%s\n```\n",
 			strings.TrimSpace(run.auth))

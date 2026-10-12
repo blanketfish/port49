@@ -4,9 +4,57 @@ package lab
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/policy"
 )
+
+// l58ShippedReadonlyDeny is the deny-commands set 1.2.0 sends this lab node
+// for a readonly granted `show **` less `show configuration **`: the
+// baseline's `word **` denies as one alternative nested inside `^( … )$`
+// beside the grant's deny (decision 44 ruling 10). L58's own deny is that
+// alternative alone; this is the form a device meets. A rendered value that
+// is not nested is INVALID: the session would measure the L58 form again.
+func (l *lab) l58ShippedReadonlyDeny(t *testing.T) string {
+	t.Helper()
+	inv, err := admission.LoadFile(filepath.Join(root, "tests", "lab", "inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" +
+		"  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show configuration **\"]}\n" +
+		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
+		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
+	path := filepath.Join(t.TempDir(), "l58-shipped.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: inv.Devices})
+	if err != nil {
+		t.Fatalf("INVALID: the shipped readonly's policy does not load: %v", err)
+	}
+	device, _ := pol.Device(l.p.node)
+	res, err := pol.ResolveSubject("slice_operator", device, time.Now())
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	for _, a := range res.Blob.Attributes {
+		if v, ok := strings.CutPrefix(a, "deny-commands="); ok {
+			if !strings.HasPrefix(v, "^(") || !strings.HasSuffix(v, ")$") || !strings.Contains(v, " *(") ||
+				!strings.Contains(v, "save") || !strings.Contains(v, "junoscript") {
+				t.Fatalf("INVALID: set 1.2.0's readonly deny is not the nested form: %s", v)
+			}
+			return v
+		}
+	}
+	t.Fatalf("INVALID: set 1.2.0's readonly reply carries no deny-commands: %q", res.Blob.Attributes)
+	return ""
+}
 
 // TestL58JunosBaselineWords measures the two baseline words set 1.2.0's
 // readonly reply rests on (spec §15 L58; decision 44 ruling 10). `save`: L26b
@@ -204,11 +252,14 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		deny := "[" + class + `, "deny-commands=` + quote(junosL58Deny) + `"]`
 		saveControl := "[" + saveClass + "]"
 		saveDeny := "[" + saveClass + `, "deny-commands=` + quote(junosL58Deny) + `"]`
+		shipped := l.l58ShippedReadonlyDeny(t)
+		saveShipped := "[" + saveClass + `, "deny-commands=` + quote(shipped) + `"]`
+		entryShipped := "[" + class + `, "deny-commands=` + quote(shipped) + `"]`
 		cmds := append([]string{"show version | count"}, junosL58Saves...)
 
-		cells := map[string]map[string]string{"control": {}, "deny": {}}
+		cells := map[string]map[string]string{"control": {}, "deny": {}, "shipped": {}}
 		outs := map[string]map[string]string{}
-		for _, s := range []struct{ name, attrs string }{{"control", saveControl}, {"deny", saveDeny}} {
+		for _, s := range []struct{ name, attrs string }{{"control", saveControl}, {"deny", saveDeny}, {"shipped", saveShipped}} {
 			o, _, auth := l.l26bSession(t, s.name, s.attrs, cmds, false)
 			// l26bSession says why with t.Errorf; nothing is written after it.
 			if t.Failed() {
@@ -235,7 +286,7 @@ func TestL58JunosBaselineWords(t *testing.T) {
 
 		entryOuts := map[string]string{}
 		for _, e := range junosL58Entries {
-			for _, s := range []struct{ name, attrs string }{{"control", control}, {"deny", deny}} {
+			for _, s := range []struct{ name, attrs string }{{"control", control}, {"deny", deny}, {"shipped", entryShipped}} {
 				cell, out := l.l58Entry(t, s.name+" "+e, s.attrs, e)
 				cells[s.name][e], entryOuts[s.name+" "+e] = cell, out
 			}
@@ -251,11 +302,13 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit), strings.Join(junosL58Class, "\n"))
 		fmt.Fprintf(&b, "Completion over break-glass: `save ?`: %s; `xml-mode ?`: %s.\n\n", listings["save"], listings["xml-mode"])
 		fmt.Fprintf(&b, "| session | reply |\n|---|---|\n| control (`save`) | `%s` |\n| deny (`save`) | `%s` |\n"+
-			"| control (entries) | `%s` |\n| deny (entries) | `%s` |\n\n",
-			tableCell(saveControl), tableCell(saveDeny), tableCell(control), tableCell(deny))
-		b.WriteString("| probe | control | deny |\n|---|---|---|\n")
+			"| shipped readonly (`save`) | `%s` |\n| control (entries) | `%s` |\n| deny (entries) | `%s` |\n"+
+			"| shipped readonly (entries) | `%s` |\n\n",
+			tableCell(saveControl), tableCell(saveDeny), tableCell(saveShipped), tableCell(control), tableCell(deny),
+			tableCell(entryShipped))
+		b.WriteString("| probe | control | deny | shipped readonly |\n|---|---|---|---|\n")
 		for _, p := range append(cmds, junosL58Entries...) {
-			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", tableCell(p), cells["control"][p], cells["deny"][p])
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", tableCell(p), cells["control"][p], cells["deny"][p], cells["shipped"][p])
 		}
 		fmt.Fprintf(&b, "\n### Gates\n\n- **G3** `save`: **%s**", save)
 		if by != "" {
@@ -265,6 +318,14 @@ func TestL58JunosBaselineWords(t *testing.T) {
 		fmt.Fprintf(&b, ".\n- **G4** `xml-mode` under the `junoscript` deny: bare %s, `netconf` %s: **%s**.\n",
 			cells["deny"]["xml-mode"], cells["deny"]["xml-mode netconf need-trailer"],
 			map[bool]string{true: "closed", false: "not closed"}[closed])
+		nested := cells["shipped"]["xml-mode"] == "refused" && cells["shipped"]["xml-mode netconf need-trailer"] == "refused"
+		for _, cmd := range junosL58Saves {
+			if cells["deny"][cmd] == "refused" && cells["shipped"][cmd] != "refused" {
+				nested = false
+			}
+		}
+		fmt.Fprintf(&b, "- **G5** the shipped readonly form (`%s`): **%s**.\n", tableCell(shipped),
+			map[bool]string{true: "enforced as the factored form", false: "NOT enforced as the factored form"}[nested])
 		fmt.Fprintf(&b, "\n### Control (view), information only\n\nThe save candidates typed in a session under `%s` "+
 			"(class p49-l58-view, no deny). Never a gate.\n\n| probe | control (view) |\n|---|---|\n", tableCell(control))
 		for _, p := range junosL58Saves {
@@ -274,7 +335,7 @@ func TestL58JunosBaselineWords(t *testing.T) {
 			fmt.Fprintf(&b, "\n`%s` (control (view)):\n\n```\n%s\n```\n", tableCell(p), viewOuts[p])
 		}
 		b.WriteString("\n### Outputs\n")
-		for _, s := range []string{"control", "deny"} {
+		for _, s := range []string{"control", "deny", "shipped"} {
 			fmt.Fprintf(&b, "\n#### %s, user `%s`\n\n```\n%s\n```\n", s, outs[s][l26bUserKey], outs[s]["auth"])
 			for _, p := range cmds {
 				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", tableCell(p), outs[s][p])

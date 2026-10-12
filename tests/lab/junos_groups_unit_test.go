@@ -102,6 +102,17 @@ func TestL57NestedCell(t *testing.T) {
 	}
 }
 
+// p49g-classlevel adds login-alarms under <p49-*>, so its expansion is a
+// login-alarms line under p49-remote, and only there.
+func TestL57ReadsTheClassLevelGroup(t *testing.T) {
+	if !l57Readings("set system login class p49-remote login-alarms\n").classLevel {
+		t.Error("p49g-classlevel's login-alarms under p49-remote was not read")
+	}
+	if l57Readings("set system login class noc login-alarms\n").classLevel {
+		t.Error("another class's login-alarms was read as p49-remote's")
+	}
+}
+
 func TestJunosTryErrorWithholds(t *testing.T) {
 	const hash = "$6$saltsalt$ABCDEFsecretsecret"
 	lines := []string{`set system root-authentication encrypted-password "` + hash + `"`}
