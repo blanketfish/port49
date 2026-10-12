@@ -182,7 +182,8 @@ func l57Permissions(auth string) []string {
 		case in && strings.TrimSpace(ln) == "":
 			return names
 		case in && strings.Contains(ln, "--"):
-			names = append(names, strings.Fields(ln)[0])
+			// A name that fills the column has no space before the dashes.
+			names = append(names, strings.TrimSpace(ln[:strings.Index(ln, "--")]))
 		case in:
 			return names
 		}

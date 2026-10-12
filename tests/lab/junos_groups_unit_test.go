@@ -131,6 +131,14 @@ func TestL57Permissions(t *testing.T) {
 	if strings.Join(got, ",") != "clear,view,network" {
 		t.Errorf("permissions %v", got)
 	}
+	// Measured 2026-10-12 on both images: a name that fills the column is
+	// printed with no space before the dashes.
+	real := "Current user: 'x' login: 'y' class 'z'\nPermissions:\n    clear       -- Can clear learned network info\n" +
+		"    view        -- Can view current values and statistics\n" +
+		"    view-configuration-- Can view all configuration (not including secrets)\nIndividual command authorization:\n"
+	if got := strings.Join(l57Permissions(real), ","); got != "clear,view,view-configuration" {
+		t.Errorf("permissions of the device's own listing: %s", got)
+	}
 	if len(l57Permissions("syntax error")) != 0 {
 		t.Error("a refusal read as holding permissions")
 	}
