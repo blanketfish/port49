@@ -68,6 +68,11 @@ type Diff struct {
 	// and why (Policy.Projections). Every one fails the diff, new or not:
 	// spec §8's "CI MUST refuse the policy" (§13 decision 26).
 	ProjectionRefusals []Finding
+	// ProjectionWarnings are the projection warnings the new version has and
+	// the old did not (projection_netconf_closed,
+	// projection_deny_beneath_view_configuration): reported, never failing the
+	// diff (decision 44 ruling 4).
+	ProjectionWarnings []Finding
 }
 
 // ProjectionChange is one composition's projection before and after, on the
@@ -443,9 +448,21 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	c.principals(now)
 	c.adapters()
+	warning := func(k string) bool {
+		return k == FindingProjectionNetconfClosed || k == FindingProjectionDenyBeneathViewConfiguration
+	}
+	var had []Finding
+	for _, f := range before.Projections(now) {
+		if warning(f.Kind) {
+			had = append(had, f)
+		}
+	}
 	for _, f := range after.Projections(now) {
-		if f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow {
+		switch {
+		case f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow:
 			c.d.ProjectionRefusals = append(c.d.ProjectionRefusals, f)
+		case warning(f.Kind) && !slices.Contains(had, f):
+			c.d.ProjectionWarnings = append(c.d.ProjectionWarnings, f)
 		}
 	}
 	for _, a := range after.acked {

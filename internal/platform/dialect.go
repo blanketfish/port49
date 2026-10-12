@@ -180,6 +180,15 @@ type Dialect struct {
 	// CeilingBits maps a level to the permission bits that are its ceiling on
 	// a projected platform: the `privilege` key of such an adapter.
 	CeilingBits map[string][]string
+	// RPCEntryDenies are the denies a reply adds where a deny is the only
+	// guard beneath a sent bit or the baseline: a wire deny binds no native
+	// RPC (L12-netconf), and these close the CLI's ways into one, per user
+	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44). Set 1.2.0's
+	// juniper_junos carries `junoscript **` and `op **`; empty, the projection
+	// fails such a composition closed (set 1.1.0, option C). A block keeps the
+	// whole list or drops it with `[]`, and never adds one: a partial list is
+	// refused at load, since it leaves an entry open (spec §8).
+	RPCEntryDenies []string
 }
 
 // The command projections port49 renders (spec §8).
@@ -194,6 +203,10 @@ const (
 // BaselineBit names, in Bits, what a class with no bits runs: held by every
 // session on the platform, and never in a level's ceiling (spec §8).
 const BaselineBit = "baseline"
+
+// RPCEntryRole is the role of a deny the projection adds from RPCEntryDenies:
+// none of the grant's, as BaselineBit's is none (decision 44).
+const RPCEntryRole = "rpc_entry"
 
 // projectionOwned is every attribute a projection's platform reads as a
 // login class's template, bits or command or configuration regex, numbered
@@ -292,6 +305,9 @@ var generics = map[string]Dialect{
 	// 1.1.0 changes no generic value: the Junos projection is juniper_junos's.
 	"1.1.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+	// 1.2.0 changes no generic value: the entry deny is juniper_junos's.
+	"1.2.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
 }
 
 // Generic returns set version's generic adapter, copied, and whether the
@@ -385,6 +401,7 @@ func (d Dialect) clone() Dialect {
 	d.Bits = cloneLists(d.Bits)
 	d.CarveOuts = cloneLists(d.CarveOuts)
 	d.CeilingBits = cloneLists(d.CeilingBits)
+	d.RPCEntryDenies = slices.Clone(d.RPCEntryDenies)
 	if d.LocalUserNames != nil {
 		d.LocalUserNames = maps.Clone(d.LocalUserNames)
 	}

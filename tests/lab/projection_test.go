@@ -47,6 +47,24 @@ type projectionProbe struct {
 
 const hostEvidence = "host-name " + junosHost
 
+// The `op url` probes run the staged script (stageOpScript), whose output
+// carries the host name only where jcs:invoke was answered. The first is the
+// canonical form; the second is its abbreviation, which the entry deny must
+// refuse too (L26c: "with their abbreviations"). The control row's run of the
+// canonical form is the positive control (opControlMissing).
+const (
+	opURLCmd      = "op url " + junosEntryOpPath
+	opAbbrevCmd   = "op ur " + junosEntryOpPath
+	opURLEvidence = "P49OP-VERSION " + junosHost
+)
+
+// opControlMissing reports whether row is set 1.2.0's control, whose reply
+// carries no entry deny, and the canonical `op url` did not run in it: every
+// `op` refusal in the other rows is then unisolated, and the run is INVALID.
+func opControlMissing(set, row, cmd string, ran bool) bool {
+	return set == "1.2.0" && row == "operator, all it reaches" && cmd == opURLCmd && !ran
+}
+
 var projectionProbes = []projectionProbe{
 	{junosProbe{cmd: "show version"}, "show version"},
 	{junosProbe{cmd: "show system uptime"}, "show system uptime"},
@@ -75,13 +93,54 @@ var projectionProbes = []projectionProbe{
 	{junosProbe{cmd: "set cli screen-width 200"}, "set cli screen-width 200"},
 	{junosProbe{cmd: "show cli"}, "show cli"},
 	{junosProbe{cmd: "file list /var/tmp"}, "file list /var/tmp"},
+	// The op script's jcs:invoke RPCs are an entry past the CLI deny: set 1.2.0's
+	// `op **` entry deny must refuse them (decision 44 ruling 2; L26c).
+	{junosProbe{cmd: opURLCmd, evidence: opURLEvidence}, opURLCmd},
+	{junosProbe{cmd: opAbbrevCmd, evidence: opURLEvidence}, opURLCmd},
 	{junosProbe{cmd: "request system reboot", complete: true}, "request system reboot"},
 	{junosProbe{cmd: "restart routing", complete: true}, "restart routing"},
+	// The readings (projectionReadings): what a readonly's grant deny and its
+	// allows beyond `view` do on the device.
+	// Each is typed `| no-more`: a session without `set cli screen-length 0`
+	// (the narrow readonly's) pages a long output, and the next probe's first
+	// letter would go to the pager (HALT 2: `show log messages` is 1050 lines).
+	{junosProbe{cmd: "show security zones | no-more"}, "show security zones"},
+	{junosProbe{cmd: "show security policies | no-more"}, "show security policies"},
+	// `show log messages` prints the syslog, which in a lab that has just refused
+	// a stream of commands holds the refusal words: it is read by `| count`, whose
+	// "Count: " line proves the command ran and which cannot page (review I2).
+	{junosProbe{cmd: "show log messages | count", evidence: "Count: "}, "show log messages"},
+	{junosProbe{cmd: "show firewall | no-more"}, "show firewall"},
+	{junosProbe{cmd: "show policer | no-more"}, "show policer"},
 	// Configuration mode, typed last: a statement there is governed by the
 	// class's configuration permissions, which no command regex reaches.
 	{junosProbe{cmd: "configure"}, "configure"},
 	{junosProbe{cmd: "edit"}, "edit"},
 }
+
+// projectionReadings are probes the run reads rather than gates on the
+// device's side: `show security` (the "readonly denying show security" row's
+// grant deny), and the allows of view-configuration's carve-outs `show log`,
+// `show firewall` and `show policer` that a readonly's reply sends beyond
+// `view`. An image may lack the command (a security hierarchy on
+// vJunos-router) or hold the allow narrower than port49 does; either is
+// recorded in the note as the device's shortfall, not a failure. A device that
+// runs what port49 denies, or what the model says it refuses, still fails.
+// Only `show log messages` can print a refusal word on a command that ran (it
+// is the syslog), so it alone is read by evidence (`| count`); the others print
+// zone, policy, filter and policer configuration, which holds none, and an
+// empty output is a command that ran.
+var projectionReadings = map[string]bool{
+	"show security zones | no-more": true, "show security policies | no-more": true, "show log messages | count": true,
+	"show firewall | no-more": true, "show policer | no-more": true,
+}
+
+// upperCaseTyped reports whether cmd was typed with an upper-case letter. The
+// Junos CLI is case-sensitive, so the device refuses it where port49 matches
+// case-insensitively: narrower than port49, the fail-closed direction, which
+// L12-projection already records. The device-refused check skips such a probe;
+// the fail-open check does not.
+func upperCaseTyped(cmd string) bool { return cmd != strings.ToLower(cmd) }
 
 // configEntry reports whether cmd enters configuration mode.
 func configEntry(cmd string) bool { return cmd == "configure" || cmd == "edit" }
@@ -149,76 +208,137 @@ var projectionShapes = []struct {
 	{"a deny of a value under an incomplete command", `  - {name: r, privilege: operator, permit: ["show **", "ping **"], deny: ["ping routing-instance mgmt_junos **"]}`, projection.ShapeFailClosed},
 }
 
+// projectionShapes120 are cell (c): set 1.2.0's answer for a deny beneath a
+// sent bit. The first two carry a deny of `show configuration` beneath their
+// bits and every baseline word permitted, so the only deny beneath is the
+// grant's and the reply fits: the capability shape with the entry deny, the
+// CLI refusing `show configuration`, NETCONF refused. "operator, all it
+// reaches" has no deny beneath and keeps NETCONF: the control. The readonly
+// rows are decision 44 ruling 10: `view`, the baseline's denies in one
+// alternative with `junoscript` (`xml-mode` sent as nothing, refused through
+// it), and allows of view-configuration's carve-outs the deny does not hold,
+// sent beyond the bits, whose runs the note records as the device's
+// shortfall; "readonly" alone keeps 1.1.0's narrow reply.
+var projectionShapes120 = []struct{ name, roles, want string }{
+	{"operator, a deny of show configuration beneath its bits", `  - {name: r, privilege: operator, permit: ["show **", ` +
+		`"clear **", "ping **", "traceroute **", "request **", "test **", "monitor **", "file **", "help **", "set **", ` +
+		`"start **", "op **", "save **", "load **", "scp **", "ssh **", "telnet **", "mtrace **", "probe **", "quit **", ` +
+		`"exit **", "junoscript **", "xml-mode **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
+	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, projection.ShapeCapability},
+	{"operator, all it reaches", `  - {name: r, privilege: operator, permit: ["**"]}`, projection.ShapeCapability},
+	{"readonly denying show configuration", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
+	{"readonly denying show security", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}`, projection.ShapeCapability},
+	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, projection.ShapeNarrow},
+}
+
+// TestProjectionDifferential runs the differential once per set
+// PORT49_LAB_PROJECTION_SETS names (comma-separated, default 1.1.0,1.2.0):
+// 1.1.0 with projectionShapes into L12-projection, 1.2.0 with
+// projectionShapes120 into L26c-projected (plan 9b1 Task 9, cell c).
 func TestProjectionDifferential(t *testing.T) {
+	sets := os.Getenv("PORT49_LAB_PROJECTION_SETS")
+	if sets == "" {
+		sets = "1.1.0,1.2.0"
+	}
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
 			t.Skip("Junos only")
 		}
-		port49 := filepath.Join(root, "bin", "port49")
-		if _, err := os.Stat(port49); err != nil {
-			t.Fatalf("%s is missing: run `make build` first (%v)", port49, err)
+		for _, v := range strings.Split(sets, ",") {
+			l.projectionSet(t, strings.TrimSpace(v))
 		}
-		set, ok := adapter.Set("1.1.0")
-		if !ok || !set["juniper_junos"].Projected() {
-			t.Fatal("set 1.1.0 does not project juniper_junos (plan 5b, Task 14)")
-		}
-		reference, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
-		if err != nil {
-			t.Fatal(err)
-		}
-		stop := l.capture(t, "projection")
-		defer stop()
-		l.junosConfigureAdmin(t, reference)
-		defer l.junosConfigureAdmin(t, projectionRestore(reference))
-		// Where set 1.1.0 requires NETCONF disabled (plan 5b Task 14, branch
-		// M), the run disables it as the operator must, and puts the lab's
-		// `netconf ssh` back after.
-		netconfOff := netconfForbidden(set["juniper_junos"])
-		if netconfOff {
-			l.junosConfigureAdmin(t, []string{"delete system services netconf"})
-			defer l.junosConfigureAdmin(t, []string{"set system services netconf ssh"})
-		}
-		pki := filepath.Join(root, slicePKIDir)
-		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		inv, err := admission.LoadFile(filepath.Join(root, "tests", "lab", "inventory-lab.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if std, err := l.configPath(); err == nil {
-				if err := l.restart(std); err != nil {
-					t.Errorf("could not put port49d back on the lab config: %v", err)
-				}
-			}
-		}()
-		var b strings.Builder
-		fmt.Fprintf(&b, "The reference configuration applied, as `port49 platform export --classes` prints it for set "+
-			"1.1.0 with a 12h max_session_age:\n\n```\n%s\n```\n", strings.Join(reference, "\n"))
-		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
-		var rendered []string
-		for _, shape := range projectionShapes {
-			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
-			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
-				netconfOff, &rendered))
-		}
-		b.WriteString("\n### the commit checker (L9)\n\n")
-		b.WriteString(l.projectionCommitCheck(t, rendered))
-		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
-			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
-			"type it — abbreviated, in upper case, piped — compared with port49's own decision on the command as the "+
-			"device expands it: never more; and, for a composition the projection cannot carry, that the subject "+
-			"gets the fail-closed reply and the device is not quarantined (spec §8, \"Verification\"; §13 decisions "+
-			"22 and 26; §15 L9, L12).", b.String())
 	})
 }
 
+// projectionSet is one set's run. Its NETCONF switch, capture and restore are
+// its own, so 1.1.0's deleted `netconf ssh` is back before 1.2.0 starts.
+func (l *lab) projectionSet(t *testing.T, v string) {
+	t.Helper()
+	shapes, entry := projectionShapes, "L12-projection"
+	capName := map[string]string{"1.1.0": "projection", "1.2.0": "L26c-projected"}[v]
+	if capName == "" {
+		t.Fatalf("INVALID: no capture name for set %s; L12's evidence must not be overwritten", v)
+	}
+	if v == "1.2.0" {
+		shapes, entry = projectionShapes120, "L26c-projected"
+	}
+	port49 := filepath.Join(root, "bin", "port49")
+	if _, err := os.Stat(port49); err != nil {
+		t.Fatalf("%s is missing: run `make build` first (%v)", port49, err)
+	}
+	set, ok := adapter.Set(v)
+	if !ok || !set["juniper_junos"].Projected() {
+		t.Fatalf("set %s does not project juniper_junos (plan 5b, Task 14)", v)
+	}
+	reference, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := l.capture(t, capName)
+	defer stop()
+	l.junosConfigureAdmin(t, reference)
+	defer l.junosConfigureAdmin(t, projectionRestore(reference))
+	// The `op url` probes run this script; the control row's run is their
+	// positive control (opControlMissing).
+	l.stageOpScript(t)
+	// Where set 1.1.0 requires NETCONF disabled (plan 5b Task 14, branch
+	// M), the run disables it as the operator must, and puts the lab's
+	// `netconf ssh` back after.
+	netconfOff := netconfForbidden(set["juniper_junos"])
+	if netconfOff {
+		l.junosConfigureAdmin(t, []string{"delete system services netconf"})
+		defer l.junosConfigureAdmin(t, []string{"set system services netconf ssh"})
+	}
+	pki := filepath.Join(root, slicePKIDir)
+	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := admission.LoadFile(filepath.Join(root, "tests", "lab", "inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if std, err := l.configPath(); err == nil {
+			if err := l.restart(std); err != nil {
+				t.Errorf("could not put port49d back on the lab config: %v", err)
+			}
+		}
+	}()
+	var b strings.Builder
+	fmt.Fprintf(&b, "The reference configuration applied, as `port49 platform export --classes` prints it for set "+
+		"%s with a 12h max_session_age:\n\n```\n%s\n```\n", v, strings.Join(reference, "\n"))
+	fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
+	var rendered []string
+	for _, shape := range shapes {
+		fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
+		b.WriteString(l.projectionShape(t, v, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
+			netconfOff, &rendered))
+	}
+	b.WriteString("\n### the commit checker (L9)\n\n")
+	b.WriteString(l.projectionCommitCheck(t, rendered))
+	claim := "Decisions 22 and 26's projection, differentially: for each rule shape the " +
+		"generator produces, what the device runs under the reply port49 renders, typed as an operator might " +
+		"type it — abbreviated, in upper case, piped — compared with port49's own decision on the command as the " +
+		"device expands it: never more; and, for a composition the projection cannot carry, that the subject " +
+		"gets the fail-closed reply and the device is not quarantined (spec §8, \"Verification\"; §13 decisions " +
+		"22 and 26; §15 L9, L12)."
+	if v == "1.2.0" {
+		claim = "Set 1.2.0's projection end to end (plan 9b1 Task 9, cell c): for each shape, the reply port49 " +
+			"renders carrying the entry deny (`junoscript **`, `op **`) beside the grant's deny, what the CLI " +
+			"runs and refuses, whether `xml-mode`, `xml-mode netconf`, port 830 and the port-22 NETCONF " +
+			"subsystem are refused under port49's rendered reply, and the shipped readonly's nested deny " +
+			"(decision 44 rulings 1, 4 and 10; spec §15 L26c, L58)."
+	}
+	// entryResult writes no note after a failed or INVALID run, and withholds
+	// one that holds a pool token: a note under either set is a valid run's.
+	l.entryResult(t, entry, claim, b.String())
+}
+
 // projectionShape runs one shape and renders its section of the note.
-func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
+func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []admission.Device, name, roles string,
 	want string, netconfOff bool, rendered *[]string) string {
 	t.Helper()
-	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
+	body := "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
 		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
 		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
 	path := filepath.Join(root, "tests", "lab", "logs", "projection-"+l16Slug(name)+".yaml")
@@ -302,6 +422,7 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 	fmt.Fprintf(&b, "Reply `%s` (%s). `show cli authorization`:\n\n```\n%s\n```\n\n", strings.Join(res.Blob.Attributes,
 		"`, `"), shape, precReply(l16TrimEcho(auth, "show cli authorization")))
 	b.WriteString("| typed | port49 on | port49 | projection predicts | device | agrees |\n|---|---|---|---|---|---|\n")
+	var shortfalls []string
 	for _, p := range projectionProbes {
 		devOut, err := l.junosProbe(c, p.junosProbe)
 		if err != nil {
@@ -325,6 +446,10 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 			t.Fatalf("%s: %v", name, err)
 		}
 		predicts := res.Projection.Device(strings.Fields(p.canonical))
+		if opControlMissing(set, name, p.cmd, ran) {
+			t.Errorf("INVALID: %s: the control's `%s` did not run the script, so no `op` refusal in the other "+
+				"rows is isolated; no note is written: %s", name, p.cmd, oneLine(devOut))
+		}
 		// The proof rests on the model holding every command the device runs:
 		// a command it runs and the model says it refuses is a model defect
 		// even where port49 permits it. The device refusing what the model
@@ -334,7 +459,7 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 		case keepsDeny && configEntry(p.cmd) && ran:
 			t.Errorf("%s: the device entered configuration mode by %q under a reply that carries a deny", name, p.cmd)
 		case keepsDeny && res.Projection.FailClosed == "" && predicts && o.Permit && !ran && !p.complete &&
-			!configEntry(p.cmd):
+			!configEntry(p.cmd) && !projectionReadings[p.cmd] && !upperCaseTyped(p.cmd):
 			t.Errorf("%s: the device refused %q, which port49 permits and the reply was proven to let run", name, p.cmd)
 		case ran && !o.Permit:
 			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
@@ -342,43 +467,189 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 			t.Errorf("%s: the device ran %q, and the projection's model says it refuses it: the model the proof "+
 				"rests on is short of the device", name, p.cmd)
 		}
+		// The entry deny is the projection's alone: port49's decision on `op url`
+		// is the role's (a permit where it permits `op **`), and the model is
+		// what predicts the refusal, so a run past it is `ran && !predicts`.
+		expected := o.Permit
+		if p.canonical == opURLCmd {
+			expected = o.Permit && predicts
+		}
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
-			verb(predicts), verb(ran), yesNo(ran == o.Permit))
+			verb(predicts), verb(ran), yesNo(ran == expected))
+		switch {
+		case upperCaseTyped(p.cmd) && o.Permit && !ran:
+			shortfalls = append(shortfalls, fmt.Sprintf("reading: `%s`: Junos's CLI is case-sensitive; the device refuses "+
+				"the uppercase form; recorded, not a failure; see L12-projection.", p.cmd))
+		case projectionReadings[p.cmd] && o.Permit && !ran:
+			shortfalls = append(shortfalls, fmt.Sprintf("reading: `%s` did not run on this image (a refusal word, or the "+
+				"probe's evidence absent), and port49 permits it: the device is narrower than port49 (or lacks the "+
+				"command), recorded, not a failure.", p.cmd))
+		}
 	}
-	b.WriteString(l.projectionNetconf(t, name, pol, device, tok, netconfOff))
+	for _, s := range shortfalls {
+		fmt.Fprintf(&b, "\n%s\n", s)
+	}
+	// Where the set keeps NETCONF configured, the reply's `junoscript` deny
+	// is what refuses the XML entries: "refused" where the reply carries it
+	// (the entry deny, the narrow shape's `.*`, or the fail-closed reply),
+	// else "open", the control.
+	netconf := "open"
+	switch {
+	case netconfOff:
+		netconf = "disabled"
+	case res.Projection.NetconfClosed() || res.Projection.FailClosed != "":
+		netconf = "refused"
+	}
+	if netconf != "disabled" {
+		readonly := strings.Contains(roles, "privilege: readonly")
+		b.WriteString(l.projectionXMLMode(t, name, c, netconf == "refused", readonly))
+		if readonly && strings.Contains(roles, "deny:") && res.Projection.FailClosed == "" {
+			b.WriteString(projectionNestedDeny(t, name, res.Blob.Attributes))
+		}
+	}
+	b.WriteString(l.projectionNetconf(t, name, pol, device, tok, netconf))
 	return b.String()
 }
 
-// netconfForbidden reports whether check-config holds a device of d to the
-// management-service allowlist, which fails one serving NETCONF (plan 5b
-// Task 14, branch M; platform.CheckServices).
-func netconfForbidden(d adapter.Dialect) bool { return adapter.RPCServicesChecked(d) }
+// projectionXMLMode types the XML entries at the CLI after the probes. A
+// readonly row types bare `xml-mode` first (L58's cell, under the shipped
+// nested deny), and every row types `xml-mode netconf need-trailer` last,
+// through entryXMLMode, since a greeting leaves the session in XML mode. Under
+// a reply that refuses `junoscript` a greeting, or an entry the device did not
+// answer, fails the shape.
+func (l *lab) projectionXMLMode(t *testing.T, name string, c *cliConn, refuses, readonly bool) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("\n| CLI entry | cell |\n|---|---|\n")
+	check := func(entry, cell string) {
+		fmt.Fprintf(&b, "| `%s` | %s |\n", entry, cell)
+		if refuses && cell != "refused" {
+			t.Errorf("%s: `%s` was %s under a reply that refuses junoscript", name, entry, cell)
+		}
+	}
+	if readonly {
+		from := len(c.out.String())
+		cell := "not observed"
+		if err := c.send("xml-mode"); err == nil {
+			out, err := c.expectFrom(from, junosPer, "<junoscript", "</hello>", junosOpPrompt)
+			if err == nil && !strings.Contains(out, "<junoscript") && !strings.Contains(out, "</hello>") {
+				junosSettle(c)
+				out = c.out.String()[from:]
+			}
+			if err == nil {
+				cell = l58EntryCell(out)
+			}
+		}
+		check("xml-mode", cell)
+		if cell != "refused" {
+			// The session may be in XML mode: the next entry would read
+			// the XML protocol, not the CLI.
+			b.WriteString("| `xml-mode netconf need-trailer` | not typed: the session is no longer at the CLI |\n")
+			return b.String()
+		}
+	}
+	r := newL26cRun()
+	entryXMLMode(c, r)
+	cell := r.cells["entry: xml-mode netconf need-trailer"]
+	check("xml-mode netconf need-trailer", cell)
+	if !refuses && cell != "hello" {
+		t.Errorf("INVALID: %s: the control's `xml-mode netconf need-trailer` was %s, so the refusals in the other rows "+
+			"are not isolated", name, cell)
+	}
+	if cell == "hello" {
+		fmt.Fprintf(&b, "\n`get-configuration`: %s\n", r.cells["xml-mode netconf need-trailer: get-configuration"])
+	}
+	return b.String()
+}
+
+// projectionNestedDeny writes the rendered deny-commands of a readonly row
+// that carries a deny of its own, and fails the shape unless it is the nested
+// form, `^( … )$` holding the alternative that names `save` and `junoscript`:
+// the regex the row's `xml-mode` cells are typed under (decision 44 ruling 10).
+func projectionNestedDeny(t *testing.T, name string, attrs []string) string {
+	t.Helper()
+	for _, a := range attrs {
+		v, ok := strings.CutPrefix(a, "deny-commands=")
+		if !ok {
+			continue
+		}
+		if !strings.HasPrefix(v, "^(") || !strings.HasSuffix(v, ")$") || !strings.Contains(v, "save") ||
+			!strings.Contains(v, "junoscript") {
+			t.Errorf("%s: the readonly's deny is not the nested form naming save and junoscript: %s", name, v)
+		}
+		return "\nRendered `deny-commands=` (the regex the `xml-mode` cells above are typed under): `" +
+			tableCell(v) + "`\n"
+	}
+	t.Errorf("%s: the readonly's reply carries no deny-commands: %q", name, attrs)
+	return "\nNo `deny-commands=` in the reply.\n"
+}
+
+// netconfForbidden reports whether check-config fails a device of d for
+// serving NETCONF, so the run disables it as the operator must: under set
+// 1.1.0 it does (plan 5b Task 14, branch M); under set 1.2.0 the reply's
+// `junoscript` deny closes NETCONF per subject and the device keeps it
+// (decision 44 rulings 1 and 6; platform.NetconfForbidden).
+func netconfForbidden(d adapter.Dialect) bool { return adapter.NetconfForbidden(d) }
 
 // projectionNetconf opens NETCONF with the shape's token, which gets the same
 // reply, and sends the RPC equivalents of `show configuration` and `show
 // version` (TestL12JunosNetconf's): an RPC the device runs where port49
 // denies its command fails the test, as the CLI's fail-open check does (plan
-// 5b pre-flight B1). Where the set requires NETCONF disabled, the session
-// must not open. Each RPC has its deadline; a reply that is neither output
+// 5b pre-flight B1). want is "disabled" (the set requires NETCONF off, so the
+// session must not open), "refused" (the reply denies junoscript, so ports 830
+// and 22 must refuse) or "open" (the control). Each RPC has its deadline; a reply that is neither output
 // nor an `<rpc-error>` is not observed.
 func (l *lab) projectionNetconf(t *testing.T, name string, pol *policy.Policy, device admission.Device, tok string,
-	off bool) string {
+	want string) string {
 	t.Helper()
-	n, hello, err := l.netconfDial(sliceUser, tok)
-	if off {
+	switch want {
+	case "disabled":
+		n, _, err := l.netconfDial(sliceUser, tok)
 		if err == nil {
 			n.Close()
-			t.Errorf("%s: NETCONF opened, and set 1.1.0 requires it disabled", name)
-			return "\nNETCONF opened, although set 1.1.0 requires it disabled.\n"
+			t.Errorf("%s: NETCONF opened, and the reply runs on a set that requires it disabled", name)
+			return "\nNETCONF opened, which the set requires disabled.\n"
 		}
-		return "\nNETCONF is disabled, as set 1.1.0 requires: `" + oneLine(err.Error()) + "`\n"
+		return "\nNETCONF disabled, as the set requires: `" + oneLine(err.Error()) + "`\n"
+	case "refused":
+		// The reply is port49's rendered one, so this is where ruling 1's
+		// port 830 and port-22 subsystem cells are measured against what
+		// port49 sends. A refusal counts only with the device's word and
+		// port49's permit in the decision log, as entryNetconf reads it.
+		var b strings.Builder
+		for _, port := range []string{"830", "22"} {
+			off := l.mark()
+			n, _, err := l.netconfDialPort(sliceUser, tok, port)
+			switch {
+			case err == nil:
+				n.Close()
+				t.Errorf("%s: NETCONF on port %s opened under a reply that denies junoscript", name, port)
+				fmt.Fprintf(&b, "\nNETCONF on port %s opened, which the reply's junoscript deny should refuse.\n", port)
+			case isAuthRejection(err) || !entryErrRefusal(err) || !sessionPermitted(l.drainRecords(off, 10*time.Second)):
+				t.Errorf("%s: NETCONF on port %s not observed: no device refusal after port49's permit: %v", name, port, err)
+				fmt.Fprintf(&b, "\nNETCONF on port %s: not observed, `%s`\n", port, oneLine(err.Error()))
+			default:
+				fmt.Fprintf(&b, "\nNETCONF on port %s refused under the rendered reply: `%s`\n", port, oneLine(err.Error()))
+			}
+		}
+		return b.String()
 	}
+	// "open", the control: the port-22 subsystem opens too, since a refusal
+	// under the deny says nothing unless the same subsystem opens without it.
+	var b strings.Builder
+	if n22, _, err22 := l.netconfDialPort(sliceUser, tok, "22"); err22 != nil {
+		t.Errorf("INVALID: %s: the control's port-22 NETCONF subsystem did not open: %v", name, err22)
+	} else {
+		n22.Close()
+		b.WriteString("\nNETCONF on port 22 opened (control)\n")
+	}
+	n, hello, err := l.netconfDial(sliceUser, tok)
 	if err != nil {
 		t.Errorf("%s: the NETCONF session did not open: %v (%s)", name, err, oneLine(hello))
-		return "\nNETCONF: not observed, `" + oneLine(err.Error()) + "`\n"
+		return b.String() + "\nNETCONF: not observed, `" + oneLine(err.Error()) + "`\n"
 	}
 	defer n.Close()
-	var b strings.Builder
+	fmt.Fprintf(&b, "\nNETCONF on port %s opened (control)\n", netconfPort(l.p))
 	b.WriteString("\n| NETCONF RPC | as the command | port49 | device |\n|---|---|---|---|\n")
 	for k, r := range junosNetconfRPCs {
 		reply, err := n.rpc(k+1, r.rpc)

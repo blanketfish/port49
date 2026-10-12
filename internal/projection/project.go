@@ -58,13 +58,16 @@ const (
 // lengths and depths, piped and ambiguous, was refused or not run under the
 // deny, the control ran every unambiguous one, and the rendered shape was
 // enforced (tests/lab/results/L9-abbreviations-juniper_*.md). DenyBindsRPCs
-// is false, provisional on L26c (open; option C, spec §8): on both images a
-// projected CLI session opened NETCONF with `xml-mode netconf need-trailer`
-// and ran a native RPC its deny did not name, within its bits
-// (tests/lab/results/L26c-juniper_*.md). Whether a deny binds such an RPC is
-// unmeasured, so port49 assumes one may reach whatever the bits reach, and
-// fails closed.
-var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false}
+// is false, measured (L12-netconf-juniper_*.md, L26c-juniper_*.md): a wire
+// deny does not bind a native RPC; where the adapter has `RPCEntryDenies` the
+// reply closes the entry points instead (decision 44). AllowPastCarve is
+// measured for the four carve-outs of view-configuration: under `view`
+// without it, a matching allow of `show configuration` was refused and those
+// of `show log`, `show firewall` and `show policer` ran, on both images
+// (L26c-projected-juniper_*.md, the readonly rows).
+var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false,
+	AllowPastCarve: map[string]bool{"show configuration **": false, "show log **": true,
+		"show firewall **": true, "show policer **": true}}
 
 // FactsFor is what a projection's device was measured doing: the zero Facts,
 // which fail closed, for a projection with no measurement.
@@ -130,9 +133,9 @@ type Result struct {
 	// ceiling").
 	Beyond []engine.Rule
 	// Unreached are allows sent under bits that do not reach them, carve-outs
-	// counted: whether a Junos allow runs a command its bits do not reach is
-	// unmeasured, so the device may refuse what port49 permits there, and CI
-	// says so (Narrower).
+	// counted. What such an allow does is measured for the carve-outs in
+	// Facts.AllowPastCarve and unmeasured elsewhere. It decides the narrow
+	// preference; CI reports only the unmeasured ones (Result.Unmeasured).
 	Unreached []engine.Rule
 	// ConfigurationDropped are the level's bits that enter configuration
 	// mode, left out because the composition is not a grant of every command
@@ -142,6 +145,16 @@ type Result struct {
 	// does, left off the wire: the device refuses what port49 permits there,
 	// and `policy test` warns (projection_argument_allow; decision 27).
 	Unsent []Unsent
+	// ConfigurationBeneath are the grant's sent denies that meet `show
+	// configuration` while the session holds view-configuration: the CLI
+	// refuses them, but the bit is what grants the configuration, and policy
+	// test warns (projection_deny_beneath_view_configuration; decision 44).
+	ConfigurationBeneath []engine.Rule
+	// Closed are baseline denies the reply's entry deny refuses on the
+	// device, sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+	// and a deny naming `xml-mode` does not bind
+	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44 ruling 10).
+	Closed []engine.Rule
 	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
 	// constants; empty otherwise. Refusal says it for the report.
 	FailClosed string
@@ -183,11 +196,25 @@ func (r Result) Clone() Result {
 	r.Denies, r.Allows, r.Omitted = slices.Clone(r.Denies), slices.Clone(r.Allows), slices.Clone(r.Omitted)
 	r.Beyond, r.Unreached = slices.Clone(r.Beyond), slices.Clone(r.Unreached)
 	r.ConfigurationDropped, r.Unsent = slices.Clone(r.ConfigurationDropped), slices.Clone(r.Unsent)
+	r.ConfigurationBeneath = slices.Clone(r.ConfigurationBeneath)
+	r.Closed = slices.Clone(r.Closed)
 	if r.Refusal != nil {
 		rf := *r.Refusal
 		r.Refusal = &rf
 	}
 	return r
+}
+
+// EntryDenied reports whether the reply carries the adapter's RPC entry denies
+// (decision 44): the subject has no NETCONF there.
+func (r Result) EntryDenied() bool {
+	return slices.ContainsFunc(r.Denies, func(d engine.Rule) bool { return d.Role == platform.RPCEntryRole })
+}
+
+// NetconfClosed reports whether the reply refuses `junoscript` short of the
+// fail-closed reply: the entry deny, or the narrow shape's `.*`.
+func (r Result) NetconfClosed() bool {
+	return r.FailClosed == "" && (r.EntryDenied() || r.Shape == ShapeNarrow)
 }
 
 func refuse(category, format string, args ...any) error {
@@ -366,6 +393,16 @@ func (g generator) shape() (Result, error) {
 		return n, nerr
 	}
 	res, err = g.finish(res, err)
+	// Under the entry deny, a capability reply that sends an allow its bits
+	// do not reach yields to a narrow one whose bits reach every allow and
+	// that leaves off no more: the bits are measured, an allow beyond them is
+	// not (decision 44 ruling 10).
+	if err == nil && len(res.Unreached) > 0 && g.closesEntries() {
+		n, nerr := g.finish(g.narrow())
+		if nerr == nil && narrowReplaces(res, n) {
+			return n, nil
+		}
+	}
 	var r *Refusal
 	if errors.As(err, &r) && r.Category == FailOverflow && r.Attribute == "deny-commands" {
 		n, nerr := g.finish(g.narrow())
@@ -380,6 +417,18 @@ func (g generator) shape() (Result, error) {
 		}
 	}
 	return res, err
+}
+
+// narrowReplaces reports whether the narrow reply n yields where the
+// capability reply res sends an allow its bits do not reach: every allow of n
+// is reached (the bits are measured, an allow beyond them is not), and n
+// leaves off no permit and no allow that res sends (decision 44 ruling 10).
+func narrowReplaces(res, n Result) bool {
+	return len(n.Unreached) == 0 && !slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool {
+		return !slices.Contains(res.Beyond, p)
+	}) && !slices.ContainsFunc(n.Unsent, func(u Unsent) bool {
+		return !slices.ContainsFunc(res.Unsent, func(v Unsent) bool { return v.Rule == u.Rule })
+	})
 }
 
 // recoverable reports whether render recovers from r by dropping the bits
@@ -611,7 +660,18 @@ func (g generator) capability() (Result, error) {
 			continue
 		}
 		if dn, ok := g.allowable(p.Rule); !ok {
-			return Result{}, g.refusedShape(p, dn)
+			// Under the entry deny, a permit the bits reach but for a
+			// carve-out goes out as those carve-outs (carvedAllows).
+			carved, ok := g.carvedAllows(p, bits)
+			if !ok {
+				return Result{}, g.refusedShape(p, dn)
+			}
+			for _, c := range carved {
+				if !slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == c.Rule }) {
+					res.Allows = append(res.Allows, c)
+				}
+			}
+			continue
 		}
 		if why := g.unsendableAllow(p.Rule); why != "" {
 			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
@@ -626,6 +686,19 @@ func (g generator) capability() (Result, error) {
 		}
 		res.Denies = append(res.Denies, dn)
 	}
+	// A baseline deny the entry deny refuses is sent as nothing, where the
+	// entry deny goes out (closedByEntry): it is beneath the baseline, so the
+	// loop below adds the entry deny for it.
+	var closed []engine.Rule
+	if _, ok := g.entryDenies(res); ok && !g.in.Facts.DenyBindsRPCs {
+		res.Denies = slices.DeleteFunc(res.Denies, func(dn engine.Rule) bool {
+			if g.closedByEntry(dn) {
+				closed = append(closed, dn)
+				return true
+			}
+			return false
+		})
+	}
 	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
 		return Result{}, &narrowOnly{why: "a deny narrower than every command is walked past by abbreviating it"}
 	}
@@ -637,7 +710,7 @@ func (g generator) capability() (Result, error) {
 		}
 	}
 	if !g.in.Facts.DenyBindsRPCs {
-		for _, dn := range res.Denies {
+		for _, dn := range slices.Concat(res.Denies, closed) {
 			if b, ok := g.beneath(dn.Rule, bits); ok {
 				// The reply's own configuration refusal comes first where
 				// render recovers from it by dropping those bits, which may
@@ -646,12 +719,129 @@ func (g generator) capability() (Result, error) {
 				if err := g.configuration(res); errors.As(err, &cr) && g.recoverable(cr) {
 					return Result{}, err
 				}
+				if more, ok := g.entryDenies(res); ok {
+					// Entry denies deliberately bypass denyProvable: they
+					// were measured on the device (L26c, L58), and
+					// `junoscript` is not a keyword in the tree.
+					res.Denies = append(res.Denies, more...)
+					res.Closed = closed
+					res.ConfigurationBeneath = g.configurationBeneath(res)
+					return res, nil
+				}
 				return Result{}, &narrowOnly{why: "a deny beneath a sent bit guards the CLI alone",
 					refusal: g.rpcReach(dn, b), beyond: res.Beyond}
 			}
 		}
 	}
+	res.ConfigurationBeneath = g.configurationBeneath(res)
 	return res, nil
+}
+
+// entryDenies are the adapter's RPC entry denies a reply adds where a deny is
+// the only guard beneath a sent bit or the baseline (decision 44): each one
+// res does not already send. None where the adapter has none (set 1.1.0), or
+// where an allow res sends meets one, since on the device an allow beats a
+// deny (L11) and the entry would stay open.
+func (g generator) entryDenies(res Result) ([]engine.Rule, bool) {
+	if len(g.in.Dialect.RPCEntryDenies) == 0 {
+		return nil, false
+	}
+	var out []engine.Rule
+	for _, rule := range g.in.Dialect.RPCEntryDenies {
+		// An allow that opens an RPC entry (`xml-mode`, say) is declined too:
+		// whether it beats a `junoscript` deny is unmeasured.
+		if slices.ContainsFunc(res.Allows, func(a engine.Rule) bool {
+			return g.mayMeet(a.Rule, rule) || g.opensRPC(a.Rule)
+		}) {
+			return nil, false
+		}
+		if !slices.ContainsFunc(res.Denies, func(d engine.Rule) bool { return d.Rule == rule }) {
+			out = append(out, engine.Rule{Verdict: engine.Deny, Rule: rule, Role: platform.RPCEntryRole})
+		}
+	}
+	return out, true
+}
+
+// closesEntries reports whether the dialect closes the RPC entry points
+// (RPCEntryDenies): set 1.2.0. What the entry deny makes possible renders
+// only there, so a set without it, or a block that drops it, renders as set
+// 1.1.0 does (decision 44 ruling 5).
+func (g generator) closesEntries() bool { return len(g.in.Dialect.RPCEntryDenies) > 0 }
+
+// authorizedAs are the commands Junos authorizes as another: a deny of
+// `junoscript` refused `xml-mode netconf` (`unknown command: xml-mode`), and a
+// deny naming `xml-mode` did not bind (tests/lab/results/L26c-junoscript-juniper_*.md,
+// both images; bare `xml-mode` in L58-juniper_*.md).
+var authorizedAs = map[string]string{"xml-mode": "junoscript"}
+
+// closedByEntry reports whether dn is a baseline deny an entry deny refuses
+// on the device, its command read as Junos authorizes it: the baseline's
+// `xml-mode **`, which no keyword tree proves, beside `junoscript **`.
+func (g generator) closedByEntry(dn engine.Rule) bool {
+	words := strings.Fields(dn.Rule)
+	if dn.Role != platform.BaselineBit || len(words) == 0 {
+		return false
+	}
+	as, ok := authorizedAs[words[0]]
+	if !ok {
+		return false
+	}
+	words[0] = as
+	read := strings.Join(words, " ")
+	return slices.ContainsFunc(g.in.Dialect.RPCEntryDenies, func(e string) bool { return g.contains(e, read) })
+}
+
+// carvedAllows are permit p sent as the carve-outs that keep it from the
+// bits, where the bits reach the rest of it: an allow of p would beat a deny
+// beneath it (L11), and an allow of each carve-out p holds meets none. A
+// carve-out a deny holds needs nothing. Each is within the ceiling, sendable
+// and allowable, or there are none (ok false). Only under the entry deny,
+// which lets a deny beneath the bits stand (decision 44 ruling 10): a
+// readonly's `show **` less `show configuration **` sends `view` and allows
+// `show log`, `show firewall` and `show policer`, view-configuration's other
+// carve-outs, whose run beyond the bits is reported (Unreached).
+func (g generator) carvedAllows(p engine.Rule, bits []string) ([]engine.Rule, bool) {
+	if !g.closesEntries() {
+		return nil, false
+	}
+	held := g.held(bits)
+	if !slices.ContainsFunc(g.reach(held), func(r string) bool { return g.contains(r, p.Rule) }) {
+		return nil, false
+	}
+	var out []engine.Rule
+	for _, c := range g.carves(held) {
+		if !g.mayMeet(p.Rule, c) || slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) }) {
+			continue
+		}
+		// within(c) follows from within(p) and contains(p, c); kept as a guard on what an allow may run.
+		if !g.contains(p.Rule, c) || !g.within(c) || g.unsendableAllow(c) != "" {
+			return nil, false
+		}
+		if _, ok := g.allowable(c); !ok {
+			return nil, false
+		}
+		out = append(out, engine.Rule{Verdict: engine.Permit, Rule: c, Role: p.Role})
+	}
+	return out, true
+}
+
+// viewConfiguration is the bit that grants the configuration, and
+// configurationRead the command it reads it with.
+const viewConfiguration, configurationRead = "view-configuration", "show configuration **"
+
+// configurationBeneath is every grant deny res sends that meets `show
+// configuration` while the session holds view-configuration.
+func (g generator) configurationBeneath(res Result) []engine.Rule {
+	if !slices.Contains(g.held(res.Bits), viewConfiguration) {
+		return nil
+	}
+	var out []engine.Rule
+	for _, dn := range res.Denies {
+		if dn.Role != platform.BaselineBit && dn.Role != platform.RPCEntryRole && g.mayMeet(configurationRead, dn.Rule) {
+			out = append(out, dn)
+		}
+	}
+	return out
 }
 
 // beneath is the first bit a session sent bits holds whose reach meets rule,
@@ -675,26 +865,30 @@ func (g generator) beneath(rule string, bits []string) (string, bool) {
 	return "", false
 }
 
-// rpcEntries are the operational commands through which port49 assumes a
-// Junos CLI session may reach RPCs with whatever its bits reach, a wire deny
-// not binding them there: `xml-mode` (hidden, so no keyword tree lists it),
-// which opened NETCONF in a projected session, and `op`, whose `url` runs a
-// script (tests/lab/results/L26c-juniper_*.md). Whether a deny binds them is
-// unmeasured (L26c, open; option C), so the projection fails closed.
-var rpcEntries = []string{"xml-mode", "op"}
+// rpcEntries are the operational commands through which a Junos CLI session
+// reaches RPCs with whatever its bits reach, a wire deny not binding them
+// there: `xml-mode` (hidden, so no keyword tree lists it), which opened
+// NETCONF in a projected session, `junoscript`, which Junos authorizes
+// `xml-mode` as (tests/lab/results/L26c-junoscript-juniper_*.md), and `op`,
+// whose `url` runs a script (tests/lab/results/L26c-juniper_*.md).
+var rpcEntries = []string{"xml-mode", "junoscript", "op"}
 
 // opensRPC reports whether an allow of rule would run an RPC entry point.
 func (g generator) opensRPC(rule string) bool {
 	return slices.ContainsFunc(rpcEntries, func(e string) bool { return g.mayMeet(rule, e+" **") })
 }
 
-// rpcWhy is why port49 treats a wire deny as no boundary on a device not
-// measured to bind RPCs with it: an assumption, provisional on L26c.
+// rpcWhy is why a wire deny is no boundary on a device it binds no RPC on,
+// where the reply cannot close the entry points: only what is measured.
 func (g generator) rpcWhy() string {
-	return fmt.Sprintf("on %s port49 assumes a native RPC may reach whatever the bits reach: a CLI session "+
-		"reaches RPCs through `xml-mode` (and possibly `op url`), and whether a wire deny binds them there is "+
-		"unmeasured (tests/lab/results/L26c-juniper_*.md, open; option C, spec §8), so port49 fails the "+
-		"composition closed", g.in.Platform)
+	if len(g.in.Dialect.RPCEntryDenies) > 0 {
+		return fmt.Sprintf("on %s a wire deny does not bind a native RPC (tests/lab/results/L12-netconf-juniper_*.md), "+
+			"and an allow the reply sends would beat its rpc_entry_denies (%s; L11), so port49 fails the composition "+
+			"closed", g.in.Platform, strings.Join(g.in.Dialect.RPCEntryDenies, ", "))
+	}
+	return fmt.Sprintf("on %s a wire deny does not bind a native RPC a CLI session reaches through `xml-mode` "+
+		"(tests/lab/results/L12-netconf-juniper_*.md, L26c-juniper_*.md), and this platform set sends no "+
+		"rpc_entry_denies (set 1.2.0 does; spec §8), so port49 fails the composition closed", g.in.Platform)
 }
 
 // rpcReach is the refusal of a deny that is the only guard beneath bit b.
@@ -737,12 +931,8 @@ func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule
 // one of these: any other carve-out is measured on the CLI at most, so the
 // deny is sent, and a deny beneath a sent bit fails closed.
 //
-// It is empty until L26c closes (final review I-3). `view` without
-// `view-configuration` got an empty `<configuration>` from one projected CLI
-// session's RPC, but the note's own table reads "not observed" for every
-// `get-configuration` cell, and its reruns are owed
-// (tests/lab/results/L26c-juniper_*.md, open): so `show configuration **` is
-// provisional on L26c, and no deny is left off the wire on its strength.
+// It is empty: set 1.2.0 closes the entry instead (RPCEntryDenies), and no
+// carve-out was measured over RPC.
 var rpcCarves []string
 
 // configuration refuses a reply that enters configuration mode for a grant
@@ -804,8 +994,8 @@ func (g generator) narrow() (Result, error) {
 		// it refuses the RPC entry points: an allow running one voids it.
 		if !g.in.Facts.DenyBindsRPCs && g.opensRPC(p.Rule) {
 			return Result{}, refuse(FailRefusedShape, "permit %s (role %q) needs an allow-commands that runs an RPC "+
-				"entry point past the reply's `deny-commands .*`: %s; drop the permit, or narrow it past `op` and "+
-				"`xml-mode`", g.quote(p.Rule), p.Role, g.rpcWhy())
+				"entry point past the reply's `deny-commands .*`: %s; drop the permit, or narrow it past `op`, "+
+				"`junoscript` and `xml-mode`", g.quote(p.Rule), p.Role, g.rpcWhy())
 		}
 		res.Allows = append(res.Allows, p)
 	}
@@ -1075,8 +1265,19 @@ func (g generator) attributes(res *Result) error {
 // alternation is rules as one group, `(a|b)`, or one rule bare; empty for
 // none.
 func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
-	var alts []string
+	var alts, words []string
+	at := -1 // where the factored `word **` denies go: the first one's place
 	for _, r := range rules {
+		if w, ok := g.factored(r.Rule, deny); ok {
+			if at < 0 {
+				at = len(alts)
+				alts = append(alts, "")
+			}
+			if !slices.Contains(words, w) {
+				words = append(words, w)
+			}
+			continue
+		}
 		e, err := ruleERE(r.Rule, g.in.Classes, deny, g.in.Facts)
 		if err != nil {
 			return "", refuse(FailUnwritable, "on %s, %s %s (role %q) cannot be written as the device's regex: %v "+
@@ -1086,6 +1287,13 @@ func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
 			alts = append(alts, e)
 		}
 	}
+	if at >= 0 {
+		group := words[0]
+		if len(words) > 1 {
+			group = "(" + strings.Join(words, "|") + ")"
+		}
+		alts[at] = denyLead + group + "( .*)?" + pipeTail
+	}
 	switch len(alts) {
 	case 0:
 		return "", nil
@@ -1093,6 +1301,23 @@ func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
 		return alts[0], nil
 	}
 	return "(" + strings.Join(alts, "|") + ")", nil
+}
+
+// factored is a `word **` deny's word as the deny side writes it, where the
+// dialect closes the entry points: such denies render as one alternative,
+// ` *(help|quit|…)( .*)? *(\|.*)?`, the shape L26b's deny sessions were
+// enforced in (tests/lab/results/L26b-juniper_*.md), and a readonly's
+// baseline denies fit the budget (decision 44 ruling 10).
+func (g generator) factored(rule string, deny bool) (string, bool) {
+	if !deny || !g.closesEntries() {
+		return "", false
+	}
+	words, rest, other := keywordShape(rule)
+	if len(words) != 1 || !rest || other != "" {
+		return "", false
+	}
+	w, err := wordERE(words[0], true, g.in.Facts)
+	return w, err == nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

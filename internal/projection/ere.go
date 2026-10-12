@@ -38,11 +38,20 @@ type Facts struct {
 	// rule 4).
 	DenyMatchesExpanded bool
 	// DenyBindsRPCs: a wire deny binds every RPC a CLI session reaches, by
-	// `xml-mode` or `op url`. Where it is false, the zero value, port49
-	// assumes an RPC may reach whatever the sent bits reach, so a deny beneath
-	// a sent bit is no boundary, and a composition resting on one fails
-	// closed (spec §8, option C; provisional on L26c for Junos).
+	// `xml-mode` or `op url`. Where it is false, the zero value, a
+	// deny beneath a sent bit is no boundary, and a composition resting on one
+	// fails closed. Junos is measured
+	// (L12-netconf-juniper_*.md, L26c-juniper_*.md): a wire deny does not bind
+	// a native RPC; where the adapter has `RPCEntryDenies` the reply closes
+	// the entry points instead (decision 44).
 	DenyBindsRPCs bool
+	// AllowPastCarve is what a matching allow did, measured, where only a
+	// carve-out keeps a command from the reply's bits: true, it ran; false,
+	// the device refused it. A carve-out not listed is unmeasured, and the
+	// model reads the allow as running there (the wider reading). Junos,
+	// both images, a reply of `view` without view-configuration
+	// (tests/lab/results/L26c-projected-juniper_*.md, the readonly rows).
+	AllowPastCarve map[string]bool
 }
 
 // ereLiteral are the runes ERE reads as operators outside a bracket

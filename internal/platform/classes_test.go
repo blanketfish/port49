@@ -1,7 +1,11 @@
 package platform
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +162,7 @@ func cleanCapture(t *testing.T, d Dialect) []string {
 // reaches, whatever port49 proved. Each way a device can carry more under a
 // template is drift: an extra bit, a different idle-timeout, a template user
 // moved to another class, a deactivated reference line or an ancestor of one,
-// a configuration group that sets one, and a curly-form section a capture
+// a group line, which only a capture taken without display inheritance carries, and a curly-form section a capture
 // mixes in, which the set-form reader cannot see into.
 func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
@@ -170,11 +174,6 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 		{"an extra bit on remote", "set system login class p49-remote permissions view", false},
 		{"a class deny beside", `set system login class p49-admin deny-commands "^request"`, false},
 		{"a template in another class", "set system login user p49-readonly class super-user", false},
-		{"a group applied to the class", "set system login class p49-readonly apply-groups wide", false},
-		{"a group setting a template class", `set groups wide system login class p49-readonly allow-commands ".*"`,
-			false},
-		{"a wildcard group", "set groups wide system login class <p49-*> permissions all", false},
-		{"a wildcard group above", "set groups wide system login <*> p49-readonly permissions all", false},
 		{"a deactivated idle-timeout", "deactivate system login class p49-admin idle-timeout", false},
 		{"a deactivated class", "deactivate system login class p49-readonly", false},
 		{"a deactivated login", "deactivate system login", false},
@@ -185,8 +184,22 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 			t.Errorf("%s: %q %+v %v", c.name, missing, extra, err)
 		}
 	}
-	// A timeout the reference does not write is both: the reference's line
-	// missing and the device's extra.
+	// A group line is a capture taken without `display inheritance`, its
+	// groups unexpanded: refused at that line (decision 44 ruling 7; L57).
+	for _, line := range []string{"set system login class p49-readonly apply-groups wide",
+		`set groups wide system login class p49-readonly allow-commands ".*"`,
+		"set groups wide system login class <p49-*> permissions all",
+		"set groups wide system login <*> p49-readonly permissions all",
+		"set groups wide system login user noc full-name x"} {
+		config := append(cleanCapture(t, d), line)
+		if _, _, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err == nil ||
+			!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(config))) ||
+			!strings.Contains(err.Error(), ConfigCapture) {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	// A timeout the reference does not write is the reference's line missing;
+	// the device's own value is harmless, so no extra.
 	config := cleanCapture(t, d)
 	for i, l := range config {
 		if l == "set system login class p49-admin idle-timeout 60" {
@@ -195,12 +208,12 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	}
 	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
 	if err != nil || !reflect.DeepEqual(missing, []string{"set system login class p49-admin idle-timeout 60"}) ||
-		len(extra) != 1 {
+		len(extra) != 0 {
 		t.Errorf("idle-timeout: %q %+v %v", missing, extra, err)
 	}
 	// Lines under other classes, users and groups are not the check's.
 	other := append(cleanCapture(t, d), "set system login class noc permissions all",
-		"set system login user noc class super-user", "set groups wide system login user noc full-name x",
+		"set system login user noc class super-user",
 		"deactivate system login user noc", "set system login class p49-readonly-extra permissions all")
 	if missing, extra, err := TemplateDrift([]byte(strings.Join(other, "\n")), d, time.Hour); err != nil ||
 		len(missing) != 0 || len(extra) != 0 {
@@ -275,7 +288,6 @@ func TestTemplateDriftReadsQuotedAndNestedPaths(t *testing.T) {
 		`deactivate "system" login`,
 		"set logical-systems ls1 system login class p49-readonly permissions all",
 		"set tenants t1 system login class p49-remote permissions all",
-		"set groups g logical-systems <*> system login class p49-readonly permissions all",
 	} {
 		config := append(cleanCapture(t, d), line)
 		if _, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err != nil ||
@@ -286,5 +298,157 @@ func TestTemplateDriftReadsQuotedAndNestedPaths(t *testing.T) {
 	mixed := append(cleanCapture(t, d), `system { login { class p49-readonly { allow-commands ".*"; } } } ## x`)
 	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, time.Hour); err == nil {
 		t.Error("an annotated one-line curly statement read as nothing")
+	}
+	// A group's line is refused, a logical system's included (decision 44
+	// ruling 7).
+	grouped := append(cleanCapture(t, d), "set groups g logical-systems <*> system login class p49-readonly permissions all")
+	if _, _, err := TemplateDrift([]byte(strings.Join(grouped, "\n")), d, time.Hour); err == nil ||
+		!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(grouped))) {
+		t.Errorf("a group's line: %v", err)
+	}
+}
+
+// The inherited capture prints a group's statements under each template they
+// land on and nothing of the group itself (tests/lab/results/L57-juniper_*.md),
+// so check-config judges those lines as the template's own: a privilege or
+// unlisted statement fails, its finding pointing at the curly form that names
+// the group; a harmless one and an apply-groups-except pass. A capture with a
+// `set groups` line, or `apply-groups` as a word at any level, was taken
+// without `display inheritance` and is refused at that line, quoting nothing
+// of it (decision 44 rulings 7 and 9).
+func TestTemplateDriftReadsGroups(t *testing.T) {
+	d := junosProjected(BitDeliveryUserPermissions)
+	const base = "set version 23.4R2-S2.1\nset system login class p49-remote idle-timeout 720\n" +
+		"set system login user remote uid 2001\nset system login user remote class p49-remote\n"
+	const pointer = "`show configuration system login | display inheritance`"
+	for _, c := range []struct {
+		name, lines string
+		extra       []string // each finding's line, in order, from line 5
+	}{
+		{"a group's permission and allow-commands, expanded",
+			"set system login class p49-remote permissions view-configuration\n" +
+				"set system login class p49-remote allow-commands \"^show version$\"\n",
+			[]string{"set system login class p49-remote permissions view-configuration",
+				`set system login class p49-remote allow-commands "^show version$"`}},
+		{"a template user's authentication",
+			"set system login user remote authentication encrypted-password \"$6$abc\"\n",
+			[]string{`set system login user remote authentication encrypted-password "$6$abc"`}},
+		{"a statement on neither list", "set system login class p49-remote allow-hidden-commands\n",
+			[]string{"set system login class p49-remote allow-hidden-commands"}},
+		{"a harmless word in another case", "set system login class p49-remote Login-Tip\n",
+			[]string{"set system login class p49-remote Login-Tip"}},
+		{"a user's harmless word on a class", "set system login class p49-remote full-name x\n",
+			[]string{"set system login class p49-remote full-name x"}},
+		{"a privilege hidden behind a harmless flag", "set system login class p49-remote login-tip permissions all\n",
+			[]string{"set system login class p49-remote login-tip permissions all"}},
+		{"a privilege hidden behind a harmless value", "set system login class p49-remote idle-timeout 5 permissions all\n",
+			[]string{"set system login class p49-remote idle-timeout 5 permissions all"}},
+		{"a valueless idle-timeout", "set system login class p49-remote idle-timeout\n",
+			[]string{"set system login class p49-remote idle-timeout"}},
+		{"a privilege hidden behind an apply-groups-except",
+			"set system login class p49-remote apply-groups-except BASE permissions all\n",
+			[]string{"set system login class p49-remote apply-groups-except BASE permissions all"}},
+		{"a bare template line", "set system login class p49-remote\n",
+			[]string{"set system login class p49-remote"}},
+		{"harmless", "set system login class p49-remote login-tip\nset system login class p49-remote login-alarms\n" +
+			"set system login user remote full-name \"port49 template\"\n", nil},
+		{"an apply-groups-except", "set system login class p49-remote apply-groups-except BASE\n" +
+			"set system login user remote apply-groups-except BASE\nset system apply-groups-except BASE\n", nil},
+		{"a group word in a value", "set interfaces ge-0/0/0 description \"set groups and apply-groups\"\n", nil},
+		{"another class", "set system login class noc permissions all\n", nil},
+	} {
+		missing, extra, err := TemplateDrift([]byte(base+c.lines), d, 12*time.Hour)
+		if err != nil || len(missing) != 0 || len(extra) != len(c.extra) {
+			t.Errorf("%s: %v %q %+v", c.name, err, missing, extra)
+			continue
+		}
+		for i, want := range c.extra {
+			if e := extra[i]; e.Line != 5+i || e.Text != want || !strings.Contains(e.Says, pointer) {
+				t.Errorf("%s: finding %d is %+v, want line %d %q pointing at %s", c.name, i, e, 5+i, want, pointer)
+			}
+		}
+	}
+	for _, c := range []struct{ name, lines string }{
+		{"a group definition", "set groups BASE system login class <*> permissions all\n"},
+		{"a harmless group's definition", "set groups BASE system login class <*> login-tip\n"},
+		{"a group quoted", "set \"groups\" BASE system login class <*> login-tip\n"},
+		{"a logical system's group", "set logical-systems ls1 groups BASE system login class <*> permissions all\n"},
+		{"a tenant's group", "set tenants t1 groups BASE system login class <*> permissions all\n"},
+		{"a group applied at the top", "set apply-groups BASE\n"},
+		{"a group applied under system", "set system apply-groups BASE\n"},
+		{"a group applied on the class", "set system login class p49-remote apply-groups BASE\n"},
+		{"a group applied on another class", "set system login class noc apply-groups BASE\n"},
+		{"a group applied in a logical system", "set logical-systems ls1 apply-groups BASE\n"},
+		{"capitalized", "set system Apply-Groups BASE\n"},
+		{"a deactivated application", "deactivate apply-groups BASE\n"},
+		{"a group line with a stray quote", "set groups BASE system login class <*> login-tip \"x\n"},
+		{"a plain capture, its first sign named", "set groups BASE system login class <*> login-tip\nset apply-groups BASE\n"},
+	} {
+		_, _, err := TemplateDrift([]byte(base+c.lines+"set system host-name srx1\n"), d, 12*time.Hour)
+		if err == nil || !strings.HasPrefix(err.Error(), "line 5 ") || !strings.Contains(err.Error(), ConfigCapture) ||
+			!strings.Contains(err.Error(), "without it") || strings.Contains(err.Error(), "BASE") {
+			t.Errorf("%s: want a refusal naming line 5 and %q, quoting nothing of the line: %v", c.name,
+				ConfigCapture, err)
+		}
+	}
+}
+
+// The lab's inherited captures (tests/lab/results/L57-juniper_*.md), read as
+// each image printed them: p49g-perm's permission and allow-commands, expanded
+// under p49-remote, are the only findings, each pointing at the curly form
+// that names the group; p49g-tip's login-tip, the excepted group's except
+// line and the class's own idle-timeout pass, and the capture is not refused.
+// It holds whether or not a regenerated capture carries more harmless lines
+// (Task 9 adds a class-level group's login-alarms).
+func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
+	files, _ := filepath.Glob("testdata/l57-*.set")
+	if len(files) != 2 {
+		t.Fatalf("want the two L57 captures, got %q", files)
+	}
+	d := junosProjected(BitDeliveryUserPermissions)
+	want := []string{"set system login class p49-remote permissions view-configuration",
+		`set system login class p49-remote allow-commands "^show version$"`}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing, extra, err := TemplateDrift(raw, d, 12*time.Hour)
+		if err != nil || len(missing) != 0 {
+			t.Fatalf("%s: %q %v", f, missing, err)
+		}
+		var got []string
+		for _, e := range extra {
+			got = append(got, e.Text)
+			if !strings.Contains(e.Says, "| display inheritance") {
+				t.Errorf("%s:%d: the finding gives no pointer to the group: %s", f, e.Line, e.Says)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: findings %q, want %q", f, got, want)
+		}
+	}
+}
+
+// A trailing carriage return is a line ending, so a capture saved with CRLF
+// reads as the same capture; a carriage return anywhere else could join two
+// statements and is refused.
+func TestTemplateDriftReadsCRLF(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	clean := strings.Join(cleanCapture(t, d), "\r\n") + "\r\n"
+	if missing, extra, err := TemplateDrift([]byte(clean), d, time.Hour); err != nil || len(missing) != 0 || len(extra) != 0 {
+		t.Errorf("crlf: %q %+v %v", missing, extra, err)
+	}
+	joined := strings.Join(cleanCapture(t, d), "\n") +
+		"\nset system login class p49-readonly login-tip\rset system login class p49-readonly permissions all\n"
+	line := fmt.Sprintf("line %d ", len(cleanCapture(t, d))+1)
+	if _, _, err := TemplateDrift([]byte(joined), d, time.Hour); err == nil || strings.Contains(err.Error(), "permissions") ||
+		!strings.HasPrefix(err.Error(), line) {
+		t.Errorf("a mid-line carriage return: %v", err)
+	}
+	// Exactly one trailing carriage return is a line ending: two are refused.
+	doubled := strings.Join(cleanCapture(t, d), "\n") + "\r\r\n"
+	if _, _, err := TemplateDrift([]byte(doubled), d, time.Hour); err == nil || !strings.HasPrefix(err.Error(), "line ") {
+		t.Errorf("a doubled carriage return: %v", err)
 	}
 }

@@ -194,7 +194,9 @@ var checkConfigShows = map[string][]string{
 
 // secretWord is a configuration word followed by a secret: the value (and an
 // encryption-type word before it) is replaced before a capture is committed.
-var secretWord = regexp.MustCompile(`(?i)\b(secret|key|password|passphrase|community)(\s+(?:\d+|sha512|md5)\b)?(\s+)("[^"]*"|\S+)`)
+// The gaps are `[ \t]+`, never `\s+`: a word ending its line (Junos's
+// `authentication-order password`) must not take the next line's first word.
+var secretWord = regexp.MustCompile(`(?i)\b(secret|key|password|passphrase|community)([ \t]+(?:\d+|sha512|md5)\b)?([ \t]+)("[^"]*"|\S+)`)
 
 // redactConfigCapture hides every secret-bearing value in a configuration
 // capture: the lab's are published constants, but a committed capture is
@@ -206,7 +208,7 @@ func redactConfigCapture(s string) string {
 
 // snmpKey is an SNMPv3 user's localized auth or priv key, which NX-OS prints
 // in hex after the algorithm: derived from the user's password, so a secret.
-var snmpKey = regexp.MustCompile(`(?i)\b((?:auth|priv)\s+(?:md5|sha\S*|aes-?\d*|des|3des))(\s+)(\S+)`)
+var snmpKey = regexp.MustCompile(`(?i)\b((?:auth|priv)[ \t]+(?:md5|sha\S*|aes-?\d*|des|3des))([ \t]+)(\S+)`)
 
 // cleanShow is a show command's output with the echoed command line, the
 // trailing prompt and carriage returns removed.

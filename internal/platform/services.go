@@ -18,7 +18,7 @@ import (
 // around every deny port49 sends: `<get-configuration>` past `deny show
 // configuration **`.
 //
-// Whether it is sufficient is unmeasured (L26c, open). With `netconf ssh`
+// Whether it is sufficient is unmeasured (L59, open). With `netconf ssh`
 // still configured, a projected CLI session opened NETCONF itself by typing
 // `xml-mode netconf need-trailer` and ran a native RPC its deny did not name,
 // within its bits (`view` without view-configuration got an empty
@@ -30,10 +30,19 @@ import (
 // permitted bit rests on a deny (internal/projection, FailRefusedShape naming
 // RPC reach); this check closes only the services around the CLI. The
 // NETCONF subsystem on port 22 was refused with `netconf ssh` deleted (L26c).
+//
+// Under a set whose adapter carries rpc_entry_denies (set 1.2.0) the reply's
+// `junoscript` deny closes NETCONF, port 830 and the CLI's `xml-mode` for the
+// session that carries it (tests/lab/results/L26c-junoscript-juniper_*.md),
+// so the check there passes NETCONF and is a shorter allowlist: the services
+// entryServices names, and the rpcPastEntryDeny words failing wherever they
+// appear (decision 44 ruling 6).
 var rpcServicesOff = true
 
-// RPCServicesChecked reports whether `port49 devices check-config` holds a
-// device of d to the management-service allowlist (CheckServices).
+// RPCServicesChecked reports whether `port49 devices check-config` reads a
+// device of d's management services (CheckServices): against cliServices
+// under a set that sends no entry deny, against entryServices and
+// rpcPastEntryDeny under one that does.
 func RPCServicesChecked(d Dialect) bool {
 	return rpcServicesOff && d.CommandProjection == ProjectionJunosRegex
 }
@@ -69,25 +78,136 @@ var telnetOptions = []string{"authentication-order", "connection-limit", "rate-l
 // appear: the REST API, J-Web, and JET/gRPC/gNMI.
 var rpcAnywhere = []string{"rest", "web-management", "extension-service"}
 
-// ServicesCapture is the one form CheckServices reads: set form, groups'
-// statements expanded where they apply, and the group definitions left out,
-// so no statement is hidden behind a group the check cannot resolve.
-const ServicesCapture = `show configuration | display set | display inheritance | except "^set groups "`
+// ConfigCapture is the one form check-config reads a projected Junos device's
+// configuration in: set form, each configuration group's statements expanded
+// under the levels they land on. Either pipe order expands the same, and
+// neither prints a `set groups` or a `set apply-groups` line
+// (tests/lab/results/L57-juniper_*.md), so a capture holding one was taken
+// without `display inheritance` and is refused (groupSign; decision 44 ruling
+// 7). The earlier `| except "^set groups "` tail removed nothing from it.
+const ConfigCapture = `show configuration | display set | display inheritance`
 
-// CheckServices reads a device's configuration, as ServicesCapture prints
-// it, where RPCServicesChecked(d): every statement that enables a management
-// service but the CLI's is a finding, one under a logical system or tenant
-// included. It is an error where the input is not in that form, since then
-// a service could be missed: a line that is not a set, deactivate or protect
-// statement, a terminal's prompt or a ## line; a `set groups` or apply-groups
-// statement whose group the check cannot resolve; a line it cannot split into
-// words; or a capture without the top-level `set version` line a whole
-// display set prints, since a capture of a subtree leaves every service
-// outside it unread. An error names the line by number and quotes nothing
-// from it. A capture cut off before its end cannot be told from a whole one
-// in set form, since display set closes with no last line. A deactivate or protect enables nothing, and a service
-// under one is still a finding, since an activate turns it on. Where d is
-// not checked it reads nothing.
+// notInheritedWhy is why a capture with a group line is refused, after the
+// line's number. It quotes nothing of the line.
+const notInheritedWhy = "applies or defines a configuration group, which a capture taken with `display " +
+	"inheritance` never prints: this capture was taken without it, so what a group adds where it lands was not " +
+	"expanded and cannot be checked. If it was taken with it, the device keeps a group application switched off " +
+	"or locked, which reads the same: remove that application (a protected one: unprotect it and remove it), " +
+	"then capture again (a one-word value spelled apply-groups, which display set prints bare, is read the " +
+	"same way: rename it)"
+
+// groupSign reports whether a statement shows its capture was taken without
+// `display inheritance`: a `set groups` line, a logical system's or tenant's
+// included, or `apply-groups` as a keyword anywhere in it, at the top, under
+// `system` or on a class. The inherited capture printed neither on either
+// image, and it strips a class-level `apply-groups` as it strips the top-level
+// ones (L57, 2026-10-12). `apply-groups-except` survived inheritance in the
+// 2026-10-11 capture, which had no class-level `apply-groups`; both inherited
+// forms strip it beside one (L57-juniper_*.md), so it is no sign. A line statementWords cannot split is read on
+// whitespace with its quotes taken off, so a stray quote hides no group.
+func groupSign(line string) bool {
+	words, ok := statementWords(line)
+	if !ok {
+		words = nil
+		for _, f := range strings.Fields(line) {
+			words = append(words, word{text: strings.Trim(f, `"`)})
+		}
+	}
+	if len(words) < 2 {
+		return false
+	}
+	if slices.ContainsFunc(words[1:], func(w word) bool { return w.keyword("apply-groups") }) {
+		return true
+	}
+	path := words[1:]
+	for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
+		path = path[2:]
+	}
+	return words[0].keyword("set") && path[0].keyword("groups")
+}
+
+// NetconfForbidden reports whether check-config fails a device of d for
+// serving NETCONF: a checked device whose set sends no entry deny (set
+// 1.1.0). Under set 1.2.0 the reply's `junoscript` deny closes NETCONF for
+// the subject it is sent to, and the device keeps it for the rest (decision
+// 44 rulings 1 and 6).
+func NetconfForbidden(d Dialect) bool { return RPCServicesChecked(d) && len(d.RPCEntryDenies) == 0 }
+
+// rpcPastEntryDeny are the services that run RPCs and that no lab cell
+// measured set 1.2.0's entry deny closing, each a finding wherever its word
+// appears: REST (the lab's tunnel reached it in no cell, the control's
+// included, so G2 kept it; tests/lab/results/L26c-scripts-juniper_*.md),
+// J-Web and JET/gRPC/gNMI (no cell measures them), the XML API and
+// outbound-ssh (decision 44 ruling 6, *provisional on L59*).
+var rpcPastEntryDeny = []string{"rest", "web-management", "extension-service", "xnm-ssh", "xnm-ssl",
+	"xnm-clear-text", "outbound-ssh"}
+
+// entryServices are the only services under `system services` a checked
+// device may enable under a set whose adapter carries rpc_entry_denies (set
+// 1.2.0), each with any statement beneath it. It is an allowlist, as
+// cliServices is under set 1.1.0: a service no one listed fails, an RPC
+// service no one thought of included (decision 44 ruling 6; plan 9b1
+// controller ruling 6, on `service-deployment`, which speaks the JUNOScript
+// XML API and passed a denylist). `netconf` is closed per subject by the
+// reply's `junoscript` deny (tests/lab/results/L26c-junoscript-juniper_*.md),
+// and `ssh` and `telnet` are the CLI's own transports; the lab's devices run
+// `netconf ssh` and `ssh root-login allow` and nothing else there
+// (tests/lab/configs/vjunos-startup.conf; testdata/l57-*.set). The rest are
+// statements of Junos's `[edit system services]` hierarchy (Juniper's CLI
+// reference, "services (System Services)",
+// https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/system-services.html,
+// read 2026-10-12) that serve no management session: database-replication
+// defines the subscriber session database replication process, whose only
+// option is traceoptions (its own page, "database-replication (Subscriber
+// Session Database)",
+// .../statement/database-replication-edit-system-services.html, read
+// 2026-10-12); dhcp and dhcp-local-server serve addresses; dns is a DNS
+// proxy and dynamic-dns a client updating one; finger answers who is logged
+// in; ftp serves files to a user who logs in; static-subscribers, subscriber-management and
+// subscriber-management-helper run broadband subscriber sessions. Whether a
+// `show configuration` deny holds against a file read of /config through
+// ftp, or ssh's sftp-server, is unmeasured (L59, open). The hierarchy's
+// others stay off it: tftp-server serves files with no login, and
+// service-deployment, outbound-https, grpc-tunnel, webapi, flow-tap-dtcp,
+// jeb, http, netproxy, reverse, resource-monitor, bbe-stats-service and
+// extensible-subscriber-services either run a management session or were
+// not read closely enough to say they do not.
+var entryServices = []string{"netconf", "ssh", "telnet", "database-replication", "dhcp", "dhcp-local-server", "dns",
+	"dynamic-dns", "finger", "ftp", "static-subscribers", "subscriber-management", "subscriber-management-helper"}
+
+const unlistedSays = "a service under `system services` that set 1.2.0's check does not list: only `netconf`, `ssh`, " +
+	"`telnet` and the services it names as serving no management session may be on, so a service no one listed " +
+	"fails rather than passes (decision 44 ruling 6). Disable it, or, if it serves no management session, report " +
+	"it to port49 to be listed with its source"
+
+const entrySays = "a management service that runs RPCs is enabled, and no lab cell measured the reply's " +
+	"`junoscript` deny closing it (decision 44 ruling 6; tests/lab/results/L26c-scripts-juniper_*.md): a session " +
+	"may reach RPCs through it past every deny port49 sends. Disable it, or pin a set that does not project Junos"
+
+// CheckServices reads a device's configuration, as ConfigCapture prints it,
+// where RPCServicesChecked(d), a statement under a logical system, tenant or
+// routing instance included, in any order (a service there is judged as at the
+// top level). Under a set whose d sends no entry deny (set 1.1.0) every
+// statement that enables a management service but the CLI's is a finding,
+// since a deny does not bind the RPCs it serves. Under one that does (set
+// 1.2.0) the `junoscript` deny closes NETCONF for the session that carries
+// it, so a statement under `system services` is a finding where its service
+// is not on entryServices, and the services no lab cell measured the deny
+// closing are findings wherever their word appears (rpcPastEntryDeny;
+// decision 44 ruling 6). It
+// is an error where the input is not in that form, since then a service could
+// be missed: a line that is not a set, deactivate or protect statement, a
+// terminal's prompt or a ## line; a `set groups` line, or `apply-groups` as a
+// word at any level, which the inherited capture never prints, so a group's
+// services were not expanded where they land (groupSign; decision 44 ruling
+// 7); a line it cannot split into words; or a capture without the top-level
+// `set version` line a whole display set prints, since a capture of a subtree
+// leaves every service outside it unread. An error names the line by number
+// and quotes nothing from it. A capture cut off before its end cannot be told
+// from a whole one in set form, since display set closes with no last line. A
+// deactivate or protect enables nothing, and a service under one is still a
+// finding, since an activate turns it on. Where d is not checked it reads
+// nothing.
 func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 	if !RPCServicesChecked(d) {
 		return nil, nil
@@ -96,7 +216,7 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 	var formErr error
 	version := false
 	refuse := func(n int, why string) {
-		formErr = fmt.Errorf("line %d %s: capture the configuration with `%s`", n, why, ServicesCapture)
+		formErr = fmt.Errorf("line %d %s: capture the configuration with `%s`", n, why, ConfigCapture)
 	}
 	err := eachLine(config, func(n int, line string) {
 		if formErr != nil {
@@ -121,6 +241,9 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 		case words[0].value || words[0].text != "set" && words[0].text != "deactivate" && words[0].text != "protect":
 			refuse(n, "is not a set, deactivate or protect statement")
 			return
+		case groupSign(trimmed):
+			refuse(n, notInheritedWhy)
+			return
 		case words[0].text != "set":
 			return // an inactive or protected statement enables nothing
 		}
@@ -128,26 +251,30 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 			version = true
 		}
 		path := words[1:]
-		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants")) {
+		for len(path) > 2 && (path[0].keyword("logical-systems") || path[0].keyword("tenants") ||
+			path[0].keyword("routing-instances")) {
 			path = path[2:]
 		}
-		if len(path) > 0 && path[0].keyword("groups") {
-			refuse(n, "holds a group definition, whose statements the check cannot resolve")
-			return
-		}
-		if slices.ContainsFunc(words, func(w word) bool { return w.keyword("apply-groups") }) {
-			refuse(n, "applies a group, and the check cannot tell whether that group's statements were "+
-				"expanded where it applies")
-			return
-		}
+		entry := !NetconfForbidden(d)
 		offList := false
 		if len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services") {
-			options, ok := cliServices[path[2].text]
-			offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
+			if entry {
+				offList = path[2].value || !slices.Contains(entryServices, path[2].text)
+			} else {
+				options, ok := cliServices[path[2].text]
+				offList = path[2].value || !ok || len(path) >= 4 && (path[3].value || !slices.Contains(options, path[3].text))
+			}
 		}
-		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(rpcAnywhere, w.keyword) })
+		anywhere, says := rpcAnywhere, servicesSays
+		if entry {
+			anywhere, says = rpcPastEntryDeny, entrySays
+		}
+		rpcWord := slices.ContainsFunc(words, func(w word) bool { return slices.ContainsFunc(anywhere, w.keyword) })
+		if entry && offList && !rpcWord {
+			says = unlistedSays
+		}
 		if offList || rpcWord {
-			findings = append(findings, ConfigFinding{Line: n, Text: joinWords(trimmed), Says: servicesSays})
+			findings = append(findings, ConfigFinding{Line: n, Text: joinWords(trimmed), Says: says})
 		}
 	})
 	if err != nil {
@@ -159,7 +286,7 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 	if !version {
 		return nil, errors.New("the configuration has no top-level set version line, which a whole display set " +
 			"prints: a capture of part of it leaves every service outside that part unread: capture it with `" +
-			ServicesCapture + "`")
+			ConfigCapture + "`")
 	}
 	return findings, nil
 }

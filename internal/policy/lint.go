@@ -631,6 +631,26 @@ func (p *Policy) onGeneric(name string) bool {
 // `policy test` or `policy diff` (ProjectionRefusals does not count it).
 const FindingProjectionArgumentAllow = "projection_argument_allow"
 
+// FindingProjectionNetconfClosed is a composition whose Junos reply refuses
+// `junoscript`: set 1.2.0's entry deny beneath a deny, or the narrow shape's
+// `.*`. That subject has no NETCONF, `xml-mode` or XML API session on those
+// devices (spec §8; decision 44). A warning: it fails neither policy test nor
+// policy diff, which prints the ones a change brings.
+const FindingProjectionNetconfClosed = "projection_netconf_closed"
+
+// FindingProjectionDenyBeneathViewConfiguration is a sent deny that meets
+// `show configuration` beneath a held view-configuration: the CLI refuses it
+// and NETCONF is closed, but the bit grants the configuration (decision 44
+// ruling 4). A warning.
+const FindingProjectionDenyBeneathViewConfiguration = "projection_deny_beneath_view_configuration"
+
+// projectionNote reports whether a projection finding is a report or warning
+// written after its subject and platform with a colon, rather than a refusal.
+func projectionNote(kind string) bool {
+	return kind == FindingProjection || kind == FindingProjectionArgumentAllow ||
+		kind == FindingProjectionNetconfClosed || kind == FindingProjectionDenyBeneathViewConfiguration
+}
+
 // Projections reports each composition on a projected platform (spec §8,
 // "CI reports which shape each grant rendered under, the bit set it chose"):
 // once per subject, platform, reply and moment, at now and at every later
@@ -682,6 +702,15 @@ func (p *Policy) Projections(now time.Time) []Finding {
 				}
 				for _, u := range pr.Unsent {
 					reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns, secrets)})
+				}
+				// Only where the pinned set lets NETCONF stay on (R8): under
+				// 1.1.0 check-config has it off on the whole device.
+				if pr.NetconfClosed() && len(p.dialect(d.Platform).RPCEntryDenies) > 0 {
+					reports[i] = append(reports[i], item{FindingProjectionNetconfClosed, netconfClosedMessage(*pr)})
+				}
+				if len(pr.ConfigurationBeneath) > 0 {
+					reports[i] = append(reports[i], item{FindingProjectionDenyBeneathViewConfiguration,
+						configurationBeneathMessage(*pr, patterns, secrets)})
 				}
 			}
 			for i := range replies {
@@ -736,7 +765,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 		if g.moment != "" {
 			msg += ", " + g.moment
 		}
-		if g.kind == FindingProjection || g.kind == FindingProjectionArgumentAllow {
+		if projectionNote(g.kind) {
 			msg += ":" + g.msg
 		} else {
 			if g.moment != "" {
@@ -744,7 +773,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 			}
 			msg += g.msg
 		}
-		named := g.kind == FindingProjection || g.kind == FindingProjectionArgumentAllow
+		named := projectionNote(g.kind)
 		if !named || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
 			slices.Sort(g.devices)
 			noun := "devices"
@@ -839,6 +868,45 @@ func unsentMessage(u projection.Unsent, patterns []platform.Redaction, secrets [
 		platform.QuoteShown(secrets, strings.Join(redacted(patterns, []string{u.Rule.Rule}), "")), u.Rule.Role, u.Why)
 }
 
+// netconfClosedMessage is a projection_netconf_closed warning after its
+// subject and platform.
+func netconfClosedMessage(pr projection.Result) string {
+	var entry []string
+	for _, d := range pr.Denies {
+		if d.Role == platform.RPCEntryRole {
+			entry = append(entry, "`"+d.Rule+"`")
+		}
+	}
+	// Each entry deny is named, `op **` included where the set carries it:
+	// a subject denied `op` that port49 permits is told so (R2).
+	how := "the reply adds deny " + strings.Join(entry, " and ")
+	if pr.Shape == projection.ShapeNarrow {
+		how = "the narrow reply's `deny-commands .*` refuses `junoscript`"
+	}
+	// One remedy for both shapes (decision 44 ruling 3): the denies in a reply
+	// come from what the bits reach and the grant does not permit, not from
+	// denies the grant writes. Spec §12 words no remedy.
+	return " " + how + ", so this subject has no NETCONF, `xml-mode` or XML API session there " +
+		"(tests/lab/results/L26c-junoscript-juniper_*.md); an account keeps NETCONF only where its reply sends " +
+		"no deny: grant everything the level's bits reach (a readonly `**` does) (spec §8; decision 44 ruling 3)"
+}
+
+// configurationBeneathMessage is a projection_deny_beneath_view_configuration
+// warning after its subject and platform, each rule redacted.
+func configurationBeneathMessage(pr projection.Result, patterns []platform.Redaction, secrets []string) string {
+	var rules []string
+	for _, r := range pr.ConfigurationBeneath {
+		rules = append(rules, r.Rule)
+	}
+	var quoted []string
+	for _, r := range redacted(patterns, rules) {
+		quoted = append(quoted, platform.QuoteShown(secrets, r))
+	}
+	return " deny " + strings.Join(quoted, ", ") + " is sent beneath view-configuration, " +
+		"which the reply holds: the CLI refuses it and NETCONF is closed, but the bit is what grants the " +
+		"configuration; withhold view-configuration instead (spec §8; decision 44 ruling 4)"
+}
+
 // projectionMessage is a composition's finding after its subject, platform
 // and moment, which Projections writes before it. The commands it gives
 // where the device is narrower are probes, each argument made from a value
@@ -871,6 +939,9 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 	if len(pr.Omitted) > 0 {
 		msg += "; refused by the bits, sent as nothing: " + rules(pr.Omitted)
 	}
+	if len(pr.Closed) > 0 {
+		msg += "; refused by the entry deny, sent as nothing: " + rules(pr.Closed)
+	}
 	if len(pr.Beyond) > 0 {
 		msg += "; beyond the level's bits, not sent: " + rules(pr.Beyond)
 	}
@@ -881,13 +952,14 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 // report prints it: up to three commands port49 permits and the device
 // refuses, each argument made from a value redaction hides printed redacted
 // (probeShown), and beside them the allows sent under bits that do not reach
-// them, which may not run (Result.Unreached), redacted.
+// them that no cell measured, which may not run (Result.UnmeasuredAllows),
+// redacted.
 func shortfall(pr projection.Result, patterns []platform.Redaction, secrets []string) (narrower, unreached []string) {
 	src := pr.ProbeSources()
 	for _, v := range pr.Narrower(3) {
 		narrower = append(narrower, strings.Join(probeShown(v, src, secrets), " "))
 	}
-	for _, u := range pr.Unreached {
+	for _, u := range pr.UnmeasuredAllows() {
 		unreached = append(unreached, u.Rule)
 	}
 	if len(narrower) > 0 {

@@ -81,7 +81,8 @@ const usage = `usage:
   port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR |
                          --classes --config PORT49D_YAML PLATFORM)
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
-  port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
+  port49 devices check-config --policy FILE --inventory FILE [--config PORT49D_YAML]
+                              (--device NAME CONFIGFILE | --batch CONFIGFILE...)
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
                        [--socket PATH] DEVICE

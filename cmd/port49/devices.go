@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	daemonconfig "github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/username"
 )
 
@@ -28,16 +30,27 @@ import (
 // device; this reads a file a compliance tool fetched (spec §8,
 // "Verification").
 //
-// On a projected platform it also reads the configuration, in `display set`
-// form, against the reference `platform export --classes` writes, whose
+// --batch is the CI form: each CONFIGFILE is read against the inventory device
+// its file name names, as it is (Oxidized writes an FQDN) or less its last
+// extension (srx-01.conf is srx-01), every file is checked whatever one before
+// it found, and the exit is the worst any file's check exits, with a summary
+// line of the files checked and failed (decision 44 ruling 8). Its --config
+// is the whole run's: a projected device reads it (and without it exits 2), a
+// device on a platform that projects nothing ignores it, so a mixed fleet
+// passes in one run.
+//
+// On a projected platform it also reads the configuration, as
+// platform.ConfigCapture prints it, groups' statements expanded where they
+// land, against the reference `platform export --classes` writes, whose
 // idle-timeout comes from --config's port49d.yaml, which is then required:
 // every reference line the device lacks, and every line under a template
-// class or user the reference does not write (templateCheck; plan 5b
-// pre-flight I8). A class carrying more than the reference is every subject
-// at that template running more than port49 proved, so it fails, as does a
-// capture it cannot read. Where a deny does not bind a management service's
-// RPCs, each service but the CLI's is a finding too, read from the capture
-// platform.ServicesCapture names (platform.CheckServices).
+// class or user the reference does not write and that is not harmless
+// (templateCheck; plan 5b pre-flight I8; decision 44 rulings 7 and 9). A
+// class carrying more than the reference is every subject at that template
+// running more than port49 proved, so it fails, as does a capture it cannot
+// read or one taken without `display inheritance`. A management service
+// whose RPCs a deny does not bind is a finding too, read from the same
+// capture (platform.CheckServices).
 //
 // A device's configuration is full of secrets — communities, keys, enable
 // secrets, a URL's password — so every line of it this prints is redacted by
@@ -50,11 +63,13 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	files.register(fs)
 	device := fs.String("device", "", "the device the configuration is from, by its inventory name")
 	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the template "+
-		"classes' idle-timeout (required on a projected platform)")
+		"classes' idle-timeout (required on a projected platform; under --batch, ignored by the others)")
+	batch := fs.Bool("batch", false, "check each CONFIGFILE against the inventory device its file name names, "+
+		"as it is or less its last extension (srx-01.conf is srx-01): the CI form")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if files.missing() || *device == "" || fs.NArg() != 1 {
+	if files.missing() || *batch && (*device != "" || fs.NArg() == 0) || !*batch && (*device == "" || fs.NArg() != 1) {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -66,37 +81,104 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
-	rules := p.Redactions()
 	out.learn(p)
 	errOut.learn(p)
+	c := checkRun{p: p, files: files, cfgPath: *cfgPath, batch: *batch, stdout: stdout, stderr: stderr}
+	if !*batch {
+		return c.one(*device, fs.Arg(0))
+	}
+	// Every file is checked whatever one before it found (decision 44
+	// ruling 8): a CI run reports the fleet, not its first failure.
+	worst, checked := 0, 0
+	var failed []string
+	seen := map[string]bool{}
+	for _, file := range fs.Args() {
+		// A path given twice is one capture; two paths that name the same
+		// device are two.
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
+		checked++
+		// The name as it is where the inventory has it (Oxidized's files,
+		// an FQDN), else less its last extension.
+		asIs := filepath.Base(file)
+		name := asIs
+		if _, ok := p.Device(name); !ok {
+			name = strings.TrimSuffix(asIs, filepath.Ext(asIs))
+		}
+		code := 0
+		if _, ok := p.Device(name); !ok {
+			tried := fmt.Sprintf("%q", asIs)
+			if name != asIs {
+				tried += fmt.Sprintf(" or %q", name)
+			}
+			fmt.Fprintf(stderr, "port49 devices check-config: %s: no inventory device %s\n", file, tried)
+			code = 1
+		} else {
+			code = c.one(name, file)
+		}
+		if code != 0 {
+			failed = append(failed, file)
+		}
+		worst = max(worst, code)
+	}
+	fmt.Fprintf(stdout, "batch: %d configurations checked, %d failed\n", checked, len(failed))
+	if len(failed) > 0 {
+		fmt.Fprintf(stdout, "batch: failed: %s\n", strings.Join(failed, " "))
+	}
+	return worst
+}
+
+// checkRun is what every file of one check-config run is read against.
+type checkRun struct {
+	p              *policy.Policy
+	files          policyFiles
+	cfgPath        string
+	batch          bool // --config is the run's, so a device that projects nothing ignores it
+	stdout, stderr io.Writer
+}
+
+// one checks file as device's configuration and prints its findings: 0 clean,
+// 1 a finding or a file it could not read, 2 a usage or nothing-checked
+// outcome, as a single check-config exits.
+func (c checkRun) one(device, file string) int {
+	p, stdout, stderr := c.p, c.stdout, c.stderr
+	rules := p.Redactions()
 	redact := func(line string) string { return platform.RedactConfigLine(rules, line) }
-	d, ok := p.Device(*device)
+	d, ok := p.Device(device)
 	if !ok {
-		fmt.Fprintf(stderr, "port49 devices check-config: device %q is not in the inventory\n", *device)
+		fmt.Fprintf(stderr, "port49 devices check-config: device %q is not in the inventory\n", device)
 		return 1
 	}
-	config, err := os.ReadFile(fs.Arg(0))
+	config, err := os.ReadFile(file)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
-	served, groups, err := p.ServedUsernames(*device, time.Now())
+	// Under --batch every line about a file names it: in a CI log of a fleet
+	// a line that does not is one nobody can place.
+	who := "port49 devices check-config:"
+	if c.batch {
+		who += " " + file + ":"
+	}
+	served, groups, err := p.ServedUsernames(device, time.Now())
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 devices check-config:", err)
+		fmt.Fprintln(stderr, who, err)
 		return 1
 	}
 	dialect, err := p.ConfigDialect(d.Platform)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 devices check-config:", err)
+		fmt.Fprintln(stderr, who, err)
 		return 1
 	}
 	switch {
-	case dialect.Projected() && *cfgPath == "":
-		fmt.Fprintf(stderr, "port49 devices check-config: %s projects the policy into its session reply, so its "+
+	case dialect.Projected() && c.cfgPath == "":
+		fmt.Fprintf(stderr, "%s %s projects the policy into its session reply, so its "+
 			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
-			"session.max_session_age_default: pass --config\n", d.Platform)
+			"session.max_session_age_default: pass --config\n", who, d.Platform)
 		return 2
-	case !dialect.Projected() && *cfgPath != "":
+	case !dialect.Projected() && c.cfgPath != "" && !c.batch:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -105,26 +187,28 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	// every device clean: at 3am "0 findings" reads as no collision, where
 	// nothing was looked for (final review I4).
 	if len(dialect.LocalAccounts) == 0 && len(dialect.DeviceConfig) == 0 && len(dialect.ConfigChecks) == 0 {
-		fmt.Fprintf(stderr, "port49 devices check-config: nothing checked: %s has no config checks: its adapter has "+
+		fmt.Fprintf(stderr, "%s nothing checked: %s has no config checks: its adapter has "+
 			"no local_accounts, device_config or config_checks, so no collision or forbidden line could be found; "+
 			"give the platform a platforms: block that says how its configuration names an account (spec §5.6)\n",
-			d.Platform)
+			who, d.Platform)
 		return 2
 	}
 	accounts, findings, err := dialect.ReadConfig(config)
 	if err != nil {
-		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", file, err)
 		return 1
 	}
 	missing, err := platform.Missing(config, dialect.DeviceConfig)
 	if err != nil {
-		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", file, err)
 		return 1
 	}
 	var templateMissing []string
 	var drift, services []platform.ConfigFinding
 	if dialect.Projected() {
-		if templateMissing, drift, err = templateCheck(dialect, *cfgPath, fs.Arg(0), config); err != nil {
+		if templateMissing, drift, err = templateCheck(dialect, c.cfgPath, file, config); err != nil {
+			// The error leads with the file (or port49d.yaml), so it takes
+			// no file prefix of its own.
 			fmt.Fprintln(stderr, "port49 devices check-config:", err)
 			return 1
 		}
@@ -132,7 +216,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		// every such service but the CLI's fails the device (plan 5b
 		// Task 14, branch M).
 		if services, err = platform.CheckServices(dialect, config); err != nil {
-			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", file, err)
 			return 1
 		}
 	}
@@ -141,15 +225,15 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		failed++
 		fmt.Fprintf(stdout, "TEMPLATE: %s: %s: the configuration does not carry this line of the reference "+
 			"(port49 platform export --classes): a session under that template is not what the projection "+
-			"proved (spec §8)\n", fs.Arg(0), line)
+			"proved (spec §8)\n", file, line)
 	}
 	for _, f := range drift {
 		failed++
-		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", file, f.Line, redact(f.Text), f.Says)
 	}
 	for _, f := range services {
 		failed++
-		fmt.Fprintf(stdout, "SERVICE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+		fmt.Fprintf(stdout, "SERVICE: %s:%d: %s: %s\n", file, f.Line, redact(f.Text), f.Says)
 	}
 	for _, a := range accounts {
 		// The daemon looks a context up by the canonical form of the username
@@ -159,7 +243,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 			failed++
 			fmt.Fprintf(stdout, "COLLISION: %s:%d: a device-local account %q is the username port49 serves subject %s "+
 				"on %s: a session under it inherits that context's level, and the spec forbids the collision (spec "+
-				"§5.6); rename the local account\n", fs.Arg(0), a.Line, a.Name, subject, *device)
+				"§5.6); rename the local account\n", file, a.Line, a.Name, subject, device)
 		}
 	}
 	for _, f := range findings {
@@ -168,7 +252,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		if platform.ShippedConfigCheck(check) {
 			// A set's check reads a method list or an authentication order:
 			// the line is echoed, redacted.
-			fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), check.Says)
+			fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", file, f.Line, redact(f.Text), check.Says)
 			continue
 		}
 		// A block's check may match any line, and the patterns are
@@ -176,14 +260,14 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		// key and index in the block's list. The operator has the file.
 		key := fmt.Sprintf("platforms.%s.config_checks[%d]", d.Platform,
 			slices.Index(p.Dialect(d.Platform).ConfigChecks, check))
-		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, key,
+		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", file, f.Line, key,
 			platform.RedactConfigCheck(rules, check).Says)
 	}
 	for _, line := range missing {
 		failed++
 		fmt.Fprintf(stdout, "MISSING: %s: %s: the configuration does not carry this line, and the %s adapter's "+
 			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; %s)\n",
-			fs.Arg(0), redact(line), d.Platform, whereWritten(files, p.PlatformSet(), d.Platform, line))
+			file, redact(line), d.Platform, whereWritten(c.files, p.PlatformSet(), d.Platform, line))
 	}
 	// A partial capture, `| section aaa`, reads every line outside it as
 	// missing (task 17 review, parked). A whole running-config names its
@@ -204,10 +288,10 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "note: subject %s reaches %s; its usernames come from its directory entries, "+
-			"so they are not checked\n", g, *device)
+			"so they are not checked\n", g, device)
 	}
 	fmt.Fprintf(stdout, "%d local accounts, %d usernames served on %s (%s), %d findings\n", len(accounts), len(served),
-		*device, d.Platform, failed)
+		device, d.Platform, failed)
 	if failed > 0 {
 		return 1
 	}

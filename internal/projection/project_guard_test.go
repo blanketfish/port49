@@ -487,12 +487,12 @@ func TestAVariantOfConfigureEntersConfiguration(t *testing.T) {
 	}
 }
 
-// On Junos port49 assumes a native RPC may reach whatever the bits reach: a
-// CLI session opened NETCONF through `xml-mode`, and whether a wire deny
-// binds an RPC there is unmeasured (tests/lab/results/L26c-juniper_*.md, open;
-// option C, spec §8). So a composition whose only guard beneath a sent bit is
-// a deny — a grant's or the baseline's — fails closed, saying so; one the
-// narrow shape's `.*` carries does not, since `.*` refuses both entry points.
+// On Junos a wire deny does not bind a native RPC a CLI session reaches
+// through `xml-mode` (tests/lab/results/L12-netconf-juniper_*.md,
+// L26c-juniper_*.md). Without rpc_entry_denies, a composition whose only
+// guard beneath a sent bit is a deny — a grant's or the baseline's — fails
+// closed, saying so; one the narrow shape's `.*` carries does not, since `.*`
+// refuses both entry points.
 func TestACarveOutBeneathASentBitFailsClosed(t *testing.T) {
 	rpc := func(res Result) bool {
 		return res.Shape == ShapeFailClosed && res.FailClosed == FailRefusedShape &&
@@ -571,9 +571,9 @@ func reachOf(d platform.Dialect) []string {
 }
 
 // A deny is left off the wire through a carve-out only where that carve-out
-// was measured holding over RPC too, and until L26c closes none was: even
-// `show configuration **`, whose empty `<configuration>` the note's table
-// does not record, is provisional (final review I-3). So on Junos each deny a
+// was measured holding over RPC too, and none was: even `show configuration
+// **`, whose empty `<configuration>` the note's table does not record, is
+// unmeasured over RPC (final review I-3). So on Junos each deny a
 // carve-out holds is sent, and where it guards the CLI alone beneath `view`
 // the subject fails closed (review I-1). Where a deny binds RPCs, the
 // carve-outs omit both.
@@ -605,19 +605,18 @@ func TestOnlyACarveOutMeasuredOverRPCOmitsADeny(t *testing.T) {
 		t.Fatalf("show configuration: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
 	if len(rpcCarves) != 0 {
-		t.Fatalf("a carve-out omits a deny over RPC before L26c closes: %q", rpcCarves)
+		t.Fatalf("a carve-out omits a deny over RPC: %q", rpcCarves)
 	}
 }
 
-// The refusal an operator reads states RPC reach as port49's assumption,
-// provisional on the open L26c, never as a measurement (Task 20 re-review
-// R-I1).
-func TestTheRPCReachRefusalSaysItIsAnAssumption(t *testing.T) {
+// The refusal an operator reads states only what is measured (Task 20
+// re-review R-I1).
+func TestTheRPCReachRefusalSaysOnlyWhatIsMeasured(t *testing.T) {
 	why := generator{in: Input{Platform: "juniper_junos"}}.rpcWhy()
 	for _, want := range []string{
-		"on juniper_junos port49 assumes a native RPC may reach whatever the bits reach",
-		"whether a wire deny binds them there is unmeasured",
-		"L26c-juniper_*.md, open; option C, spec §8",
+		"on juniper_junos a wire deny does not bind a native RPC",
+		"tests/lab/results/L12-netconf-juniper_*.md",
+		"rpc_entry_denies",
 		"so port49 fails the composition closed",
 	} {
 		if !strings.Contains(why, want) {
@@ -628,5 +627,413 @@ func TestTheRPCReachRefusalSaysItIsAnAssumption(t *testing.T) {
 		if strings.Contains(why, overclaim) {
 			t.Errorf("rpcWhy asserts the unmeasured %q: %s", overclaim, why)
 		}
+	}
+}
+
+// entry is in with set 1.2.0's entry deny on its dialect.
+func entry(in Input, denies ...string) Input {
+	if len(denies) == 0 {
+		denies = []string{"junoscript **"}
+	}
+	in.Dialect.RPCEntryDenies = denies
+	return in
+}
+
+func entryDenied(res Result, rule string) bool {
+	return slices.ContainsFunc(res.Denies, func(d engine.Rule) bool {
+		return d.Rule == rule && d.Role == platform.RPCEntryRole
+	})
+}
+
+// Where a deny is the only guard beneath a sent bit or the baseline, a dialect
+// with RPCEntryDenies keeps the capability shape and adds them; the device
+// then refuses junoscript, which is narrower than port49, never wider. With no
+// entry deny the answer is set 1.1.0's, unchanged (decision 44 ruling 1).
+func TestAnEntryDenyClosesRPCBeneathADeny(t *testing.T) {
+	admin := []engine.Rule{permit("**"), deny("request security **")}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, admin...)))
+	if err != nil || res.Shape != ShapeCapability || !entryDenied(res, "junoscript **") || !res.EntryDenied() ||
+		!res.NetconfClosed() {
+		t.Fatalf("admin: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	if !strings.Contains(res.Attributes[len(res.Attributes)-1], "junoscript( .*)?") {
+		t.Errorf("the entry deny is on the wire: %q", res.Attributes)
+	}
+	if res.Device([]string{"junoscript", "netconf"}) || res.Device([]string{"request", "security", "pki"}) {
+		t.Error("the device runs what the reply denies")
+	}
+	if res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, admin...)); err != nil ||
+		res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("set 1.1.0, unchanged: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+	// The baseline's deny: operator, everything its bits and the baseline
+	// reach but `start`.
+	ops := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		ops = append(ops, permit(w+" **"))
+	}
+	res, err = Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, ops...)))
+	if err != nil || res.Shape != ShapeCapability || !entryDenied(res, "junoscript **") ||
+		!slices.ContainsFunc(res.Denies, func(d engine.Rule) bool { return d.Rule == "start **" }) {
+		t.Fatalf("baseline: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	// No deny beneath a sent bit: no entry deny, NETCONF stays.
+	res, err = Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts,
+		append(ops, permit("start **"))...)))
+	if err != nil || res.EntryDenied() || res.NetconfClosed() {
+		t.Fatalf("no deny beneath: %s %q %v", res.Shape, res.Attributes, err)
+	}
+}
+
+// An allow the reply must send that meets an entry deny beats it on the device
+// (L11): the entry is not closed, and the answer is set 1.1.0's. The grant
+// holds every baseline word but `op`, so its only baseline deny is `op **`
+// and the reply fits; `op url **` beneath that deny goes out as an allow. With
+// `op **` on the entry list the allow meets it and the composition falls back;
+// so it does with `junoscript **` alone, since the allow opens an RPC entry
+// (TestAnAllowOpeningAnRPCEntryKeepsTheFallback). Without the allow the entry
+// deny is added.
+func TestAnAllowMeetingTheEntryDenyKeepsTheFallback(t *testing.T) {
+	in := func(withAllow bool, denies ...string) Input {
+		rules := append(operatorGrant("op"), deny("show configuration **"))
+		if withAllow {
+			rules = append(rules, permit("op url **"))
+		}
+		in := entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, rules...), denies...)
+		in.Keywords = keywordTree(append(reachOf(in.Dialect), "op url **")...)
+		return in
+	}
+	res, err := Project(in(false, "junoscript **", "op **"))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() {
+		t.Fatalf("the control: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(in(true, "junoscript **", "op **"))
+	if err != nil || res.EntryDenied() || res.Shape == ShapeCapability {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// The entry deny counts toward RFC 8907's 255 bytes: a capability shape it
+// pushes over is never sent truncated. Eight keyword denies under `show **`
+// render 251 bytes of deny-commands, and the entry deny's alternative 28
+// more (measured in pre-flight; `measured`'s case classes would render 473);
+// the narrow shape cannot carry a deny beneath `show **`, so the subject gets
+// the fail-closed reply as an overflow (spec §8, "Generator constraints").
+func TestTheEntryDenyCountsTowardTheBudget(t *testing.T) {
+	rules := []engine.Rule{permit("show **")}
+	for _, w := range strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel") {
+		rules = append(rules, deny("show "+w+" **"))
+	}
+	// JunosFacts with a binding deny: the same rendering (lower-case words),
+	// and no entry deny, so the arithmetic compares like with like.
+	binding := JunosFacts
+	binding.DenyBindsRPCs = true
+	fits, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", binding, rules...))
+	if err != nil || fits.Shape != ShapeCapability {
+		t.Fatalf("without the entry deny the reply fits: %s %+v %v", fits.Shape, fits.Refusal, err)
+	}
+	res, err := Project(entry(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, rules...)))
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailOverflow {
+		t.Fatalf("over: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	for _, a := range res.Attributes {
+		if len(a) > engine.MaxAttribute {
+			t.Errorf("%d bytes: %s", len(a), a)
+		}
+	}
+	res, err = Project(entry(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, rules[:3]...)))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() {
+		t.Fatalf("under: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// A deny meeting `show configuration` sent beneath a held view-configuration
+// is what policy test warns of (decision 44 ruling 4).
+func TestADenyBeneathViewConfigurationIsReported(t *testing.T) {
+	in := entry(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+		deny("show configuration **")))
+	in.Dialect.Bits["view-configuration"] = []string{"show configuration **", "show log **"}
+	in.Keywords = keywordTree("show log **", "show configuration **")
+	res, err := Project(in)
+	if err != nil || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 ||
+		res.ConfigurationBeneath[0].Rule != "show configuration **" {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Bits, res.ConfigurationBeneath, err)
+	}
+	c := res.Clone()
+	c.ConfigurationBeneath[0].Rule = "x"
+	if res.ConfigurationBeneath[0].Rule == "x" {
+		t.Error("Clone shares ConfigurationBeneath")
+	}
+}
+
+// shipped is a composition on set version's juniper_junos, its adapter and
+// keyword tree as shipped.
+func shipped(version, level string, rules ...engine.Rule) Input {
+	set, _ := platform.Set(version)
+	d := set["juniper_junos"]
+	return Input{Platform: "juniper_junos", Dialect: d, Level: level, Bits: d.CeilingBits[level], Rules: rules,
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: JunosFacts,
+		Keywords: platform.KeywordsFor(version, "juniper_junos")}
+}
+
+// Under the entry deny, the baseline's `xml-mode **`, which no keyword tree
+// proves, is sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
+// which the entry deny refuses (decision 44 ruling 10). The model reads it
+// refused; without the entry deny the composition fails closed as before.
+func TestTheEntryDenyClosesTheBaselinesXMLMode(t *testing.T) {
+	ops := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		ops = append(ops, permit(w+" **"))
+	}
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, ops...)
+		// The shipped baseline holds `xml-mode`; the tree measuredInput
+		// proves was built before it, so `xml-mode` is no keyword, as shipped.
+		in.Dialect.Bits[platform.BaselineBit] = append(in.Dialect.Bits[platform.BaselineBit], "xml-mode **")
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.Closed) != 1 ||
+		res.Closed[0].Rule != "xml-mode **" || slices.ContainsFunc(res.Denies, func(d engine.Rule) bool {
+		return d.Rule == "xml-mode **"
+	}) {
+		t.Fatalf("%s %q closed %v %+v %v", res.Shape, res.Attributes, res.Closed, res.Refusal, err)
+	}
+	if strings.Contains(strings.Join(res.Attributes, " "), "xml") {
+		t.Errorf("xml-mode is on the wire: %q", res.Attributes)
+	}
+	for _, v := range [][]string{{"xml-mode", "netconf"}, {"xml-mode"}, {"junoscript", "netconf"}, {"start", "shell"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, `word **` denies render as one alternative; without
+// it each is its own, as set 1.1.0 renders (decision 44 ruling 10).
+func TestWordDeniesRenderAsOneAlternative(t *testing.T) {
+	rules := []engine.Rule{permit("**"), deny("start **"), deny("file **"), deny("show configuration **")}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, rules...)))
+	want := `deny-commands=^( *(start|file|junoscript)( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || res.Shape != ShapeCapability || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	for _, v := range [][]string{{"start", "shell"}, {"file", "list"}, {"junoscript"}, {"show", "configuration"}} {
+		if res.Device(v) {
+			t.Errorf("the device runs %q", v)
+		}
+	}
+	binding := JunosFacts
+	binding.DenyBindsRPCs = true
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", binding, rules...))
+	want = `deny-commands=^( *start( .*)? *(\|.*)?| *file( .*)? *(\|.*)?| *show +configuration( .*)? *(\|.*)?)$`
+	if err != nil || !slices.Contains(res.Attributes, want) {
+		t.Fatalf("no entry deny: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly's `show **` less a deny beneath `view`
+// goes out as `view` and an allow of each of view-configuration's carve-outs
+// it holds and no deny does: an allow of `show **` would beat the deny (L11).
+// The allow runs beyond the bits, unmeasured, so it is reported (Unreached).
+// Without the entry deny the answer is set 1.1.0's refused shape.
+func TestACarvedPermitGoesOutAsItsCarveOuts(t *testing.T) {
+	in := func(entries bool) Input {
+		in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+			deny("show configuration **"))
+		in.Dialect.Bits["view-configuration"] = append(in.Dialect.Bits["view-configuration"], "show log **")
+		in.Dialect.CarveOuts = map[string][]string{"view-configuration": {"show configuration **", "show log **"}}
+		if entries {
+			in = entry(in)
+		}
+		return in
+	}
+	res, err := Project(in(true))
+	if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+		len(res.Allows) != 1 || res.Allows[0].Rule != "show log **" || len(res.Unreached) != 1 {
+		t.Fatalf("%s %q allows %v unreached %v %+v %v", res.Shape, res.Attributes, res.Allows, res.Unreached,
+			res.Refusal, err)
+	}
+	if res.Device([]string{"show", "configuration"}) || !res.Device([]string{"show", "version"}) ||
+		!res.Device([]string{"show", "log", "messages"}) {
+		t.Errorf("%q", res.Attributes)
+	}
+	if res, err = Project(in(false)); err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape {
+		t.Fatalf("without the entry deny: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+// Under the entry deny, a readonly granted `show **` and no deny keeps the
+// narrow shape and both bits, as under set 1.1.0: the capability shape would
+// send `view` and an allow of `show **` beyond it, and only the bits are
+// measured to show the configuration (decision 44 ruling 10).
+func TestAReadonlyKeepsTheNarrowShapeWhereItsBitsReachIt(t *testing.T) {
+	was, err := Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"))))
+	if err != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) || len(res.Unreached) != 0 {
+		t.Fatalf("%s %q, was %s %q: %v", res.Shape, res.Attributes, was.Shape, was.Attributes, err)
+	}
+}
+
+// What set 1.2.0 renders, read from the shipped adapter and keyword tree,
+// not a fixture (decision 44 rulings 1 and 10), beside set 1.1.0's, which is
+// unchanged: an operator granted everything but `show configuration` keeps
+// the capability shape with the entry deny; a readonly granted `show **`
+// keeps the narrow shape, byte for byte.
+func TestTheShippedSetsEntryDeny(t *testing.T) {
+	res, err := Project(shipped("1.2.0", "operator", permit("**"), deny("show configuration **")))
+	if err != nil || res.Shape != ShapeCapability || !res.EntryDenied() || len(res.ConfigurationBeneath) != 1 {
+		t.Fatalf("operator: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	was, err1 := Project(shipped("1.1.0", "readonly", permit("show **")))
+	res, err = Project(shipped("1.2.0", "readonly", permit("show **")))
+	if err != nil || err1 != nil || res.Shape != ShapeNarrow || !slices.Equal(res.Attributes, was.Attributes) {
+		t.Fatalf("readonly: %s %q, under 1.1.0 %q: %v %v", res.Shape, res.Attributes, was.Attributes, err, err1)
+	}
+	for _, rules := range [][]engine.Rule{
+		{permit("show **"), deny("show configuration **")},
+		{permit("**"), deny("show configuration **")},
+	} {
+		level := map[bool]string{true: "readonly", false: "operator"}[rules[0].Rule == "show **"]
+		res, err = Project(shipped("1.1.0", level, rules...))
+		if err != nil || res.Shape != ShapeFailClosed || !slices.Equal(res.Attributes, []string{"deny-commands=^.*$"}) {
+			t.Errorf("1.1.0 %s: %s %q %v", level, res.Shape, res.Attributes, err)
+		}
+	}
+}
+
+// RFC 8907's 255 bytes hold a readonly's deny beneath `show **` under set
+// 1.2.0 (decision 44 ruling 10): fourteen baseline denies, `xml-mode` sent as
+// nothing, the twelve `word **` ones in one alternative with the entry deny,
+// `set cli` beside them, and the grant's. Measured in pre-flight: 170 and 165 bytes of deny-commands.
+func TestAReadonlyWithAShowDenyFitsTheBudget(t *testing.T) {
+	for _, c := range []struct {
+		deny   string
+		bytes  int
+		allows []string
+	}{
+		{"show configuration **", 170, []string{"show log **", "show firewall **", "show policer **"}},
+		{"show security **", 165, []string{"show configuration **", "show log **", "show firewall **", "show policer **"}},
+	} {
+		res, err := Project(shipped("1.2.0", "readonly", permit("show **"), deny(c.deny)))
+		if err != nil || res.Shape != ShapeCapability || !slices.Equal(res.Bits, []string{"view"}) || !res.EntryDenied() ||
+			len(res.Closed) != 1 || res.Closed[0].Rule != "xml-mode **" {
+			t.Fatalf("%s: %s %q %+v %v", c.deny, res.Shape, res.Attributes, res.Refusal, err)
+		}
+		var allows []string
+		for _, a := range res.Allows {
+			allows = append(allows, a.Rule)
+		}
+		if !slices.Equal(allows, c.allows) || len(res.Unreached) != len(c.allows) {
+			t.Errorf("%s: allows %v, unreached %v", c.deny, allows, res.Unreached)
+		}
+		i := slices.IndexFunc(res.Attributes, func(a string) bool { return strings.HasPrefix(a, "deny-commands=") })
+		if i < 0 || len(res.Attributes[i]) != c.bytes {
+			t.Errorf("%s: %q", c.deny, res.Attributes)
+		}
+		words := strings.Fields(c.deny)
+		for _, v := range [][]string{words[:2], {"save", "x"}, {"xml-mode", "netconf"}, {"junoscript"}, {"start", "shell"},
+			{"request", "system", "reboot"}} {
+			if res.Device(v) {
+				t.Errorf("%s: the device runs %q", c.deny, v)
+			}
+		}
+		if !res.Device([]string{"show", "version"}) {
+			t.Errorf("%s: show version does not run", c.deny)
+		}
+	}
+}
+
+// junoscript is an RPC entry a narrow allow may not open (decision 44 ruling 3).
+func TestJunoscriptIsAnRPCEntry(t *testing.T) {
+	g := newGenerator(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts), nil)
+	for _, r := range []string{"junoscript **", "xml-mode netconf", "op url **"} {
+		if !g.opensRPC(r) {
+			t.Errorf("%s opens no RPC entry", r)
+		}
+	}
+}
+
+// operatorGrant is an operator granted every baseline word but those in
+// without, the grant the entry-deny tests below start from.
+func operatorGrant(without ...string) []engine.Rule {
+	rules := []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		if !slices.Contains(without, w) {
+			rules = append(rules, permit(w+" **"))
+		}
+	}
+	return rules
+}
+
+// view-configuration is what grants the configuration: a deny of `show
+// configuration` is reported only while the session holds it (decision 44
+// ruling 4).
+func TestNoViewConfigurationNoConfigurationWarning(t *testing.T) {
+	in := entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts,
+		append(operatorGrant(), deny("show configuration **"))...))
+	delete(in.Dialect.Bits, "view-configuration")
+	in.Bits = slices.DeleteFunc(slices.Clone(in.Bits), func(b string) bool { return b == "view-configuration" })
+	res, err := Project(in)
+	if err != nil || !res.EntryDenied() || len(res.ConfigurationBeneath) != 0 {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Bits, res.ConfigurationBeneath, err)
+	}
+}
+
+// NetconfClosed counts the narrow shape, whose `.*` refuses junoscript, and
+// never the fail-closed reply.
+func TestNetconfClosedCountsTheNarrowShape(t *testing.T) {
+	res, err := Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **")))
+	if err != nil || res.Shape != ShapeNarrow || res.EntryDenied() || !res.NetconfClosed() {
+		t.Fatalf("narrow: %s %q %v", res.Shape, res.Attributes, err)
+	}
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts,
+		permit("**"), deny("request security **")))
+	if err != nil || res.Shape != ShapeFailClosed || res.NetconfClosed() {
+		t.Fatalf("fail closed: %s %q %v", res.Shape, res.Attributes, err)
+	}
+}
+
+// An entry the reply already denies is not added twice: a duplicate
+// alternative would count toward the 255 bytes.
+func TestAnEntryAlreadyDeniedIsNotAddedTwice(t *testing.T) {
+	res, err := Project(entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts,
+		operatorGrant("op")...), "junoscript **", "op **"))
+	if err != nil || res.Shape != ShapeCapability || !entryDenied(res, "junoscript **") {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	n := 0
+	for _, d := range res.Denies {
+		if d.Rule == "op **" {
+			n++
+		}
+	}
+	if n != 1 || entryDenied(res, "op **") {
+		t.Errorf("op ** denied %d times, entry copy %v: %+v", n, entryDenied(res, "op **"), res.Denies)
+	}
+}
+
+// An allow that opens an RPC entry the list does not name still keeps the
+// fallback: whether it beats a junoscript deny is unmeasured. `op url` is
+// one, with `junoscript **` alone on the list.
+func TestAnAllowOpeningAnRPCEntryKeepsTheFallback(t *testing.T) {
+	rules := append(operatorGrant("op"), permit("op url **"), deny("show configuration **"))
+	in := entry(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, rules...))
+	in.Keywords = keywordTree(append(reachOf(in.Dialect), "op url **")...)
+	res, err := Project(in)
+	if err != nil || res.EntryDenied() || res.Shape == ShapeCapability {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
 }

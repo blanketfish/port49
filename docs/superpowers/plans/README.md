@@ -159,7 +159,20 @@ L55 (Keycloak as the client meets it) and L56 (issued certificates end to end on
 directory-password sign-in issuing the same certificate, is added to Plan 9.
 **9b executed 2026-10-11** on `feature/oidc-public-client` (base `48a67a3`), each task reviewed,
 closing L55 (Keycloak 26.4.7) and L56 (vEOS 4.31.2F) on 2026-10-11 (Plan 9b — As built, below);
-L47 stays open. Next: 9c.
+L47 stays open. **9b1 written 2026-10-11, executed 2026-10-12** on `feature/junos-groups-and-junoscript`
+(Plan 9b1 — As built, below), on Ryan's four rulings of that day, slotted before 9c
+(`2026-10-11-09b1-junos-groups-and-junoscript.md`, eleven tasks: one spec, one lab harness, one
+lab run before code, six code, one lab run and close, one docs). Set 1.2.0 adds a per-user
+`junoscript` deny where a deny sits beneath a sent Junos bit, so that subject projects instead of
+failing closed and loses only NETCONF; `devices check-config` reads configuration groups, names a
+group that widens a template, and takes `--batch`. Decision 44 holds its ten rulings; the
+controller ruled the security narrowing of Ryan's services ruling (J-Web and JET/gRPC stay
+findings, REST as measured) at pre-flight. On Ryan's ruling after pre-flight, a readonly with a
+deny beneath `show **` projects too (ruling 10: `xml-mode` closed by the entry deny, `save`
+measured into the tree, one factored alternative, carved allows, the narrow shape kept where
+its bits reach every allow). It opens and closes L57 and L58, closes L26c, and opens L59 for what
+no cell measured.
+Next: 9c.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5140,6 +5153,53 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     Keycloak and vEOS). L47, the hosted providers, stays unassigned.
   - **Dropped from the 2026-10-09 draft:** tokens in the agent, silent renewal, the browser refresh,
     `id_token_not_renewed`.
+- **9b1 — Junos apply-groups and per-user `junoscript`** (Ryan's rulings, 2026-10-11;
+  `2026-10-11-09b1-junos-groups-and-junoscript.md`, written 2026-10-11; branch
+  `feature/junos-groups-and-junoscript`). Named as `06b1` was: a fix slotted between two plans of
+  one step, numbered after the earlier.
+  - **Builds:** platform set 1.2.0 (1.1.0 plus `juniper_junos`'s `rpc_entry_denies:
+    ["junoscript **", "op **"]`, `op **` as the lab said), the new default. Where a deny is the only
+    guard beneath a sent bit or the baseline, the projection keeps the capability shape and adds
+    the entry deny, so the CLI deny is the boundary and NETCONF is closed for that subject alone.
+    Two CI warnings, `projection_netconf_closed` and
+    `projection_deny_beneath_view_configuration`, the latter Ryan's "class grants
+    view-configuration, policy denies show configuration"; `policy diff` prints new ones. `devices
+    check-config` reads `show configuration | display set | display inheritance`, passes groups
+    that change no template, names a group that adds a permission, regex or authentication to one,
+    refuses a capture missing an applied group's expansion, drops the NETCONF/XML API services
+    rule under 1.2.0, and takes `--batch FILE...`. A readonly with a deny beneath `show **`
+    (`show **` less `show configuration **`) projects under 1.2.0 (Ryan's fourth ruling, Task
+    5b): `view`, 170 bytes of `deny-commands` with the baseline's `word **` denies in one
+    alternative and `xml-mode` sent as nothing beside `junoscript`, allows of `show log`, `show
+    firewall` and `show policer` beyond the bits; view-configuration stays out. Set 1.2.0's tree
+    adds `save`.
+  - **Spec sections:** §8 (the RPC paragraphs rewritten, management services by set, the
+    readonly paragraph), §12 (check-config, the projection codes table), §13 decision 44 (ten
+    rulings), §14 (two assertions), §15 L26c and the new L57 and L58.
+  - **Inherits:** plan 5b's projection (option C, `JunosFacts.DenyBindsRPCs` false, the
+    management-services allowlist, `TemplateDrift`); the 2026-09-30 `L26c-junoscript` run (the
+    `junoscript` deny measured on both images with a control); the L26c, L12-netconf and
+    operator SRX notes.
+  - **Leaves:** set 1.1.0 untouched (a released set is never edited); J-Web and JET/gRPC still
+    fail check-config under 1.2.0 until measured. A readonly with a show deny gets `show log`,
+    `show firewall` and `show policer` only through allows beyond `view`; Task 9 measured them
+    running, and `show configuration` refused under a deny elsewhere in `show` (Plan 9b1 — As
+    built: the open question for Ryan). view-configuration's whole reach stays undecided.
+  - **Lab entries:** opens and closes **L57** (what the inherited capture carries for groups) and
+    **L58** (`save` a keyword, bare `xml-mode` refused under the factored `junoscript` deny; Task
+    3, gates G3 and G4 stop the plan if not); closes **L26c** (Task 3's entry cells: port 22
+    subsystem, exec channel, `op url`, REST, `scp`; Task 9's set 1.2.0 differential).
+    vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15.
+  - **Controller rulings at pre-flight (2026-10-11):** `web-management`, `extension-service` and
+    `rest` keep failing check-config under 1.2.0 unless a lab cell measures the `junoscript` deny
+    closing them (decision 44 ruling 6); the allowlist for statements under a template stands;
+    verifying the capture is inherited stands; `op **` joins `rpc_entry_denies` only if cell (b)
+    measures an `op url` script reaching an RPC past the `junoscript` deny.
+  - **Ryan's ruling after pre-flight (2026-10-11):** pre-flight finding 5's remedy goes into 9b1,
+    in set 1.2.0, view-configuration kept out of readonly. Building it found the ruling's three
+    changes leave the readonly `refused_shape` (view-configuration's carve-outs need `show **`
+    as an allow, which beats the deny), so 9b1 adds carved allows and keeps the narrow shape
+    where its bits reach every allow (decision 44 ruling 10, R9).
 - **9c — Hardware-backed client keys, `per_login_mfa`, and the broker certificate's CRL check**
   (plan 3's two hand-offs; `per_login_mfa` added by Ryan, 2026-10-10).
   - **Keys:** behind one `crypto.Signer`, so `agent.Config.Cert.PrivateKey` and the refresh
@@ -5461,6 +5521,221 @@ before Task 1. The rulings are decision 43 of the spec (§13).
     and never removes it. Removing the bundle once done is safe: each agent's next start cuts what
     it kept to the CA its connection verified to. An unmanaged host away for the whole overlap runs
     `port49 login --broker-ca FILE` once.
+
+### Plan 9b1 — As built
+
+Executed from `2026-10-11-09b1-junos-groups-and-junoscript.md` on
+`feature/junos-groups-and-junoscript` (base `b80dc84`, the plan's last pre-flight commit on `main`),
+each task reviewed, most through one to three fix rounds. The ledger is
+`.superpowers/sdd/2026-10-11-09b1-junos-groups-and-junoscript/progress.md`. The rulings are decision
+44 of the spec (§13). Lab images: vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15, measured
+2026-10-11 and 2026-10-12.
+
+- **Built** (`git log b80dc84..HEAD`; `make test && make vet` pass on every package at the Task 10
+  commit):
+  - **Task 1, spec** (f68b49f, 8f0a12f, aeb37bc): decision 44, §8, §12, §14, §15 L26c, and the new
+    L57 and L58 rows.
+  - **Task 2, lab harness** (4aea0e7, 4331d5f, 1010b64, then 8057428, e5b23df, 7852220, 3cb39d2,
+    eca3cbc, 23626ec, 3ec6d64 from the Task 3 run): the entry cells (port-22 subsystem, exec channel,
+    `op url`, REST, `scp`, `xnm-ssh`), L57's groups and L58's baseline words. A refusal needs the
+    device's word in every entry cell; a silent exit is not a refusal.
+  - **Task 3, the lab run before code** (53b477c, 8c0448e, 56dd91a, abbf4ae, e4cb5f7, 05f5d1d, then
+    ab5fc59, 743dbce, 460cfc6, f5cd0e0 from review): the gates below.
+  - **Task 4, platform set 1.2.0** (2387124): `juniper_junos` `rpc_entry_denies: ["junoscript **",
+    "op **"]`, `save` in the keyword tree, the new default; 1.1.0 is untouched.
+  - **Task 5, projection with entry denies** (bb4baba, d2c0976, df12708, 090b701, 4517b13): where a
+    deny sits beneath a sent bit or the baseline, the projection keeps the capability shape and adds
+    the list. An allow that opens an RPC entry makes the projection decline the entry deny (fail
+    closed). `policy load` refuses a partial `rpc_entry_denies`: a block keeps the set's whole list
+    or drops it.
+  - **Task 5b, the readonly with a show deny** (989387b, 6e81e22, e2fbd92): `view`, one factored
+    alternative, carved allows beyond the bits, the narrow shape kept where its bits reach every
+    allow.
+  - **Task 6, warnings** (78b4c18, 7748e15, 8b5d6e2, 2fb5551): `projection_netconf_closed` and
+    `projection_deny_beneath_view_configuration`, one remedy for both shapes.
+  - **Plan text** (7e6b21d, 7fdcd82, 8ad7715, 88a2e43, 36cab30): Task 7 was rewritten after Task 3
+    measured groups, and Task 7b added.
+  - **Task 7, check-config reads groups** (d98771a, d78ae1c, 33e58b0, 2122e6f): expanded lines under a
+    template are judged as the template's own; a capture with `apply-groups` as a word or any `set
+    groups` line is refused as not inherited. 2122e6f fixes the lab redactor, which had crossed a
+    newline and dropped a real set line from the L57 fixtures.
+  - **Task 7b, services by set** (9e5cfbe, 777be18): under 1.2.0 an allowlist, an unlisted service
+    fails; routing-instances services are judged like top-level ones under both sets.
+  - **Task 8, `devices check-config --batch`** (06edd14, 7dbecaa, c35650b, 068ec95): `--config` is
+    run-wide (projected devices use it, others ignore it); a file naming no inventory device exits 1;
+    a repeated path is checked once; batch lines name their file; the summary lists the failed
+    files.
+  - **Task 9, the lab run and close** (9b1f1b6, 1635060, 1426da7, 2590c57, 56c5a52, e9b5063,
+    6274425, bce2509, 58afbf9, 823c6f4, ee05c6f): set 1.2.0's differential on both images, the
+    reruns of L57 and L58, and the register edits.
+  - **Task 10, this entry.**
+- **What Task 3's gates decided** (`L26c-scripts-juniper_*.md`, `L58-juniper_*.md`,
+  `L57-juniper_*.md`):
+  - **G1:** an `op url` script printed version and configuration under the `junoscript` deny alone
+    (`L26c-scripts-juniper_vsrx.md:140`), so `op **` joined the list. Under the list's reply, `op
+    url` and `op ur` were refused in the four rows carrying the entry deny and in the narrow readonly
+    (five refusing rows) of Task 9's differential, while the control ran the script
+    (`L26c-projected-juniper_vsrx.md:75-76`, `:145-146`).
+  - **G2:** REST was not measured: the lab's tunnel reached it in no cell, the control's included
+    (`L26c-scripts-juniper_vsrx.md:73`, `:141`). `rest` stays a check-config finding under 1.2.0.
+  - **G3:** `save` is a keyword and is refused under view (`L58-juniper_vsrx.md:47`, `:57-58`).
+  - **G4:** bare `xml-mode` and `xml-mode netconf` are refused under the factored `junoscript` deny
+    (`L58-juniper_vsrx.md:42-43`, `:48`).
+  - **G5:** the shipped readonly's nested deny is enforced as the factored form
+    (`L58-juniper_vsrx.md:49`).
+  - **L57's gates** (`L57-juniper_vsrx.md:42-49`, `:104`): a group applied at the top is expanded
+    under the class, in either order of the two pipes. The inherited capture prints no `set groups`
+    and no top-level `apply-groups` line, so a capture holding one is not inherited. A nested group
+    commits and is not expanded and not applied in a session: measured for one shape, the inner
+    group under `<p49-*>` adding `permissions`, applied from a top-level group's definition;
+    other nestings are unmeasured. A class-level `apply-groups` is stripped by inheritance and its
+    group expanded. `apply-groups-except` beside it is stripped too (lab rule 4 amended the
+    spec). A class's own `idle-timeout` stands over a group's.
+  - **Group permission beside own** (carry M7): a group's `permissions` lands beside the class's own
+    (`L57-juniper_vsrx.md:42-43`, the "group permission beside own" column: yes), so a
+    `view-configuration` from a group is in the reply's bits' reach, not instead of them.
+- **Rows:** **L57** and **L58** opened and closed; **L26c** closed, its `op` part included
+  (`op url` and `op ur` refused in the four rows carrying the entry deny and in the narrow
+  readonly, the control running the script; the isolated cells are the operator and admin rows);
+  **L59** opened for what no cell measured.
+- **What a readonly's allows beyond `view` did** (Task 9, `L26c-projected-juniper_*.md`, the
+  sections "readonly denying show configuration" and "readonly denying show security"): this is
+  what a readonly with a show deny can read.
+  - `show log messages | count` ran on both images in every row, the readonly rows included
+    (vJunos `:310`, `:383`, `:455`; vSRX `:298`, `:367`, `:439`).
+  - `show firewall | no-more` and `show policer | no-more` ran on both images in the same rows
+    (vJunos `:311-312`, `:384-385`, `:456-457`; vSRX `:299-300`, `:368-369`, `:440-441`).
+  - `show security zones` and `show security policies` ran on vSRX under a deny of `show
+    configuration` (`:296-297`) and were refused under a deny of `show security` (`:365-366`). On
+    vJunos-router the device refused them in every row, even the undenied readonly's (`:308-309`,
+    `:453-454`), so that is the image, not the allow.
+  - **`show configuration`, allowed beyond the bits under a deny of `show security`, was refused by
+    the device on both images** (vJunos `:363-367`; vSRX `:347-351`). `policy test` now predicts
+    the same: it says the device refuses `show configuration` under that reply, and lists no
+    `show log`, `show firewall` or `show policer` shortfall (what port49 sends is unchanged). The
+    undenied readonly, which gets `view-configuration`, ran it. Fail closed, but it is the open
+    question below.
+- **Open question for Ryan:** a readonly with a deny beneath `show` other than `show configuration`
+  (`show security **`, say) cannot read `show configuration`, because the allow beyond `view` does
+  not take and the reply does not send `view-configuration`. The alternative the ruling set aside is
+  to send `view-configuration` with its other reach denied. Until ruled, `policy test` says the
+  device refuses `show configuration` for that readonly (measured), and lists it among the probe
+  commands the device refuses.
+- **Carried:**
+  - **L59's REST cell and its harness item:** the lab's tunnel reached REST in no cell, the
+    control's included. The parked fix is binding REST to the management address the tunnel
+    reaches (not 127.0.0.1), so the control reaches it first. `rest` stays failing.
+  - **L59's other cells:** the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), `outbound-ssh`,
+    file reads of `/config` (`scp`, `sftp`, `ftp`) past a configuration deny, and the NETCONF-off
+    `xml-mode` cell. Unmeasured: nothing here asserts them closed.
+  - **L59's pager save:** under the narrow readonly on vSRX 21.4R3.15 a probe typed into a
+    `---(more)---` pager and its `s` saved the paged output to a file. Seen once and uncaptured;
+    `s` or a `| save` pipe writing under a readonly is unmeasured. Docs must not say a readonly
+    cannot write files until L59 closes.
+  - **`display inheritance` and a parked group:** whether it prints a `deactivate` or `protect
+    apply-groups` line is unmeasured (review M4). check-config refuses one; its message names a
+    parked group application as a cause and the remedy. The cell is `set apply-groups
+    p49g-unapplied` beside `deactivate apply-groups p49g-unapplied`, committed together, after L57's
+    session cells (the group grants `all`).
+  - **`entryServices`** (Task 7b): an operator's benign service missing from it gets a finding; each
+    addition names its source, as the list's comment does.
+  - **L59 harness, xnm cells** (Task 2 re-review M1): an mgd crash or restart before the C cell
+    could misread a closed xnm cell. The xnm cells closed nothing in this plan (the XML API moved
+    to L59 and still fails check-config), so the risk lands only when L59 runs them.
+  - **REST reachability harness:** REST binds the management address, not 127.0.0.1 (see the REST
+    item above); `rest` fails check-config meanwhile, which is fail-closed.
+  - **The redundant `set +cli` alternative** (Task 5b M4, 24 B beside `set` in the readonly deny):
+    removing it changes what 1.2.0 sends, and that exact reply is what Task 9 measured end to end
+    (`L26c-projected-*`, L58 G5). It fits the budget (170 B). Fold it into the next lab rerun of
+    the differential.
+  - **Flake watch:** `TestAFailedRescanHookReloadsNothing` in `internal/store` failed once and did
+    not recur (the package is outside this plan's diff); `cmd/port49` had one unexplained FAIL and
+    then nine clean runs (`-count=3` here, `-count=6` earlier). Watch, don't block.
+  - **Deny-row transcripts:** Task 9's deny rows have verdicts and pcaps (lab rule 3 holds) but no
+    transcripts; add them at the next differential rerun.
+  - **Lab lessons:** the Junos CLI is case-sensitive (an uppercase probe is refused, a reading and
+    not a failure; `L12-projection`), and a paged probe is INVALID, never typed into.
+- **Operator-facing notes** (the plan's "Operator notes," edited to what was built; plan 13 builds
+  the docs from these):
+  - **New platform set 1.2.0, and the default.** It is 1.1.0 plus one key on `juniper_junos`,
+    `rpc_entry_denies: ["junoscript **", "op **"]` (an `op url` script reached RPCs past the
+    `junoscript` deny alone: `L26c-scripts-juniper_vsrx.md:140`), and `save` in its keyword tree. A
+    policy pinned to 1.1.0 renders exactly as before. `port49 platform upgrade --policy … --to
+    1.2.0` shows the change; `policy diff` gates it until the `acknowledge:` entry for
+    `platforms.juniper_junos.rpc_entry_denies` is added. A block keeps the whole list or drops it.
+  - **Junos subjects granted everything but a few denies now project.** Under 1.1.0 a grant like
+    operator `**` less `show configuration **` got the fail-closed reply. Under 1.2.0 it gets its
+    bits, its denies, and `junoscript` and `op` denied. The CLI deny then holds, and `xml-mode`,
+    `junoscript netconf` and NETCONF on port 830 are refused **for that user only**
+    (`L26c-junoscript-juniper_vsrx.md:60` for `junoscript netconf`, `L58-juniper_vsrx.md:42` for
+    bare `xml-mode`; vJunos twins). `policy diff` on the pin move lists each such subject's
+    projection change.
+  - **A readonly with a show deny now projects.** Under 1.1.0 `show **` less `show configuration
+    **` (or less `show security **`, or any deny under `show`) got the fail-closed reply. Under
+    1.2.0 it gets `view`, its denies and the baseline's in one regex with `junoscript` (170 bytes
+    for the common case), and allows of `show log`, `show firewall` and `show policer`. The CLI
+    deny holds; `xml-mode` and NETCONF are refused for that user. `view-configuration` is not sent.
+    `show log messages | count`, `show firewall` and `show policer` ran under the reply on both lab
+    images. Under a deny elsewhere in `show` (`show security **`), `show configuration` does
+    **not** run through its allow: the device refused it on both images, and `policy test` says so
+    (it prints that the device refuses it under that reply, and lists it among the probe commands
+    the device refuses). A readonly granted `show **` with no deny renders exactly as under 1.1.0.
+  - **Who has NETCONF.** A subject whose grant has no deny beneath its bits (an automation account
+    granted everything its level reaches) keeps NETCONF. A subject with any such deny does not.
+    `policy test` warns `projection_netconf_closed` for each. An Ansible or PyEZ account that needs
+    NETCONF needs a grant with no deny beneath its bits.
+  - **New warning `projection_deny_beneath_view_configuration`.** A policy whose reply sends
+    `view-configuration` and denies `show configuration` beneath it (an operator or admin granted
+    `**` less that deny) gets a warning, not a refusal. A readonly with that deny gets no warning:
+    its reply does not send the bit. The CLI refuses the command and NETCONF is closed, but the bit
+    is what grants the configuration, so the real fix is a level without the bit. `policy diff`
+    prints new warnings as `warning:` lines and still exits 0 on them.
+  - **`devices check-config` reads configuration groups.** Capture with `show configuration |
+    display set | display inheritance`. Junos prints each group's statements expanded under the
+    classes and users they reach, and no `set groups` or top-level `apply-groups` line
+    (`L57-juniper_vsrx.md:42`), so a device that templates its logins through groups no longer
+    fails for using them. Every expanded line under `p49-remote`, `remote` or another port49
+    template is judged as the template's own: a permission, a command or configuration regex,
+    authentication, or any statement not on the harmless list fails, whether a group or the
+    template wrote it. `idle-timeout`, `login-tip`, `login-alarms` and `full-name` pass. A group's
+    `permissions` lands beside the class's own, so a group that adds `view-configuration` widens
+    the template. The capture cannot say which group brought a line, so the finding tells you to
+    run `show configuration system login | display inheritance`, which names it (`## 'clear' was
+    inherited from group 'p49g-excepted'`); fix the group, since loading the reference does not
+    clear what a group adds. A capture holding a `set groups` line, or `apply-groups` anywhere
+    (a class-level one included), was taken without `display inheritance` and is refused at that
+    line with the command to use: change the CI capture command once, fleet-wide.
+    `apply-groups-except` is neither a finding nor a sign: beside a class-level `apply-groups`,
+    inheritance strips it too. A group applied from inside another group is not expanded and not
+    applied in a session, measured for one shape (the inner group under `<p49-*>` adding
+    `permissions`, applied from a top-level group's definition); other nestings are unmeasured.
+  - **Capture over the SSH exec channel, not a terminal session.** Run `ssh <device> 'show
+    configuration | display set | display inheritance | no-more'`, which prints no command echo and
+    no prompt. check-config refuses any line that is not a statement, the echo and the prompt
+    included, naming the line: a check that skipped them could skip a wrapped or mangled `system
+    services` line too, and go green on a device running REST.
+  - **`devices check-config --batch FILE...`** checks a directory of captures in one run. Each file
+    is checked against the device its file name names: the name as it is where the inventory has it
+    (Oxidized's extensionless files, FQDNs included), else less its last extension (`srx-01.conf` is
+    `srx-01`). Every output line names its file. `--config` is run-wide: projected devices use it
+    and the others ignore it, so a mixed Junos and Arista directory is one run. A file that names no
+    inventory device exits 1, as a single file does. A path repeated on the command line is checked
+    once; different files for one device are each checked. It prints `batch: N configurations
+    checked, M failed`, lists the failed files, and exits 1 if any failed.
+  - **Management services under 1.2.0.** NETCONF no longer fails check-config. Under `system
+    services`, `netconf`, `ssh` (with any option, `sftp-server` included: provisional on L59) and
+    `telnet` pass with any option, and so do `database-replication`, `dhcp`, `dhcp-local-server`,
+    `dns`, `dynamic-dns`, `finger`, `ftp` (provisional on L59), `static-subscribers`,
+    `subscriber-management` and `subscriber-management-helper`. Any other service there fails, and
+    the finding quotes it: `service-deployment`, `outbound-https`, `tftp-server` or one port49 has
+    never heard of. If one of yours serves no management session, report it and it is added with its
+    source. A service under `routing-instances` is judged like a top-level one, under both sets
+    (under 1.1.0 it was not read before). REST (`rest`), J-Web (`web-management`), JET/gRPC
+    (`extension-service`), the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`) and `outbound-ssh`
+    still fail wherever they are written. REST and the XML API are unmeasured (L59, open); they stay
+    findings until a lab cell measures the `junoscript` deny closing each.
+  - **No new reason code, metric or config key in `port49d.yaml`.** The decision log records the
+    reply as before; the `junoscript` deny appears in it.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,

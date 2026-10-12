@@ -731,3 +731,73 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		}
 	}
 }
+
+// A block keeps set 1.2.0's whole entry deny list or drops it with `[]`, and
+// never adds one the set did not measure; a partial list leaves an RPC entry
+// open and is refused, naming what it left out (decision 44 ruling 5).
+func TestABlockKeepsTheWholeEntryDenyListOrDropsIt(t *testing.T) {
+	head := "platform_set: 1.2.0\nplatforms:\n  juniper_junos:\n"
+	for _, c := range []struct {
+		block string
+		ok    bool
+		want  []string
+	}{
+		{"    rpc_entry_denies: [\"junoscript **\", \"op **\"]\n", true, nil},
+		{"    rpc_entry_denies: []\n", true, nil},
+		{"    rpc_entry_denies: [\"junoscript **\"]\n", false, []string{"entries left out: op **",
+			"partial list leaves an RPC entry open",
+			// What `[]` costs, so the remedy the message offers is not taken blind (F14).
+			"the platform then renders as set 1.1.0 does: a deny beneath a sent bit fails closed, and " +
+				"check-config requires NETCONF off"}},
+		{"    rpc_entry_denies: [\"op **\"]\n", false, []string{"entries left out: junoscript **"}},
+		{"    rpc_entry_denies: [\"junoscript **\", \"op **\", \"start **\"]\n", false, []string{"rpc_entry_denies[2]"}},
+		// A block that adds one and omits one reports both in one load.
+		{"    rpc_entry_denies: [\"junoscript **\", \"start **\"]\n", false, []string{"rpc_entry_denies[1]",
+			"entries left out: op **"}},
+	} {
+		_, err := Parse([]byte(head+c.block+scopeOK+"roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"]}\n"+
+			subjOK+grantOK), env())
+		if (err == nil) != c.ok {
+			t.Errorf("%q: %v", c.block, err)
+		}
+		for _, w := range c.want {
+			if err == nil || !strings.Contains(err.Error(), w) {
+				t.Errorf("%q: want %q in %v", c.block, w, err)
+			}
+		}
+	}
+	// A dropped list is empty, and the platform renders as set 1.1.0 does: an
+	// operator granted everything but `show configuration` fails closed.
+	for _, c := range []struct {
+		block string
+		shape string
+	}{
+		{"", projection.ShapeCapability},
+		{"    rpc_entry_denies: []\n", projection.ShapeFailClosed},
+	} {
+		p, err := Parse([]byte(head+c.block+scopeOK+"roles:\n  - {name: r, privilege: operator, permit: [\"**\"], "+
+			"deny: [\"show configuration **\"]}\n"+subjOK+grantOK), env())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.dialect("juniper_junos").RPCEntryDenies; (c.block == "") != (len(got) > 0) {
+			t.Errorf("%q: list %q", c.block, got)
+		}
+		d, ok := p.device("srx-fw-04")
+		if !ok {
+			t.Fatal("srx-fw-04")
+		}
+		res, err := p.ResolveSubject("s", d, noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Projection.Shape != c.shape {
+			t.Errorf("%q: %s %q", c.block, res.Projection.Shape, res.Projection.Attributes)
+		}
+	}
+	_, err := Parse([]byte("platform_set: 1.1.0\nplatforms:\n  arista_eos:\n    rpc_entry_denies: [\"x **\"]\n"+
+		scopeOK+"roles:\n  - {name: r, permit: [\"show **\"]}\n"+subjOK+grantOK), env())
+	if err == nil || !strings.Contains(err.Error(), "rpc_entry_denies") {
+		t.Errorf("a platform the set does not project: %v", err)
+	}
+}

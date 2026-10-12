@@ -27,6 +27,9 @@ import (
 // widest reading, which for the reach errs toward the device running more.
 type model struct {
 	port, allow, deny, reach, carve *engine.Program
+	// carveHolds are the carve-outs a matching allow was measured not to run
+	// past, carveOpen those no cell measured (Facts.AllowPastCarve).
+	carveHolds, carveOpen *engine.Program
 	// held is every bit the session holds, `all` expanded and the baseline
 	// in: what configuration mode, which no probe reaches, is read from.
 	held []string
@@ -56,7 +59,7 @@ func (g generator) model(res Result) (*model, error) {
 	if m.allow, err = prog(allows); err != nil {
 		return nil, err
 	}
-	denies := slices.Clone(res.Denies)
+	denies := slices.Concat(res.Denies, res.Closed)
 	if res.Shape != ShapeCapability {
 		denies = []engine.Rule{{Verdict: engine.Deny, Rule: "**", Role: "projection"}}
 	}
@@ -69,6 +72,20 @@ func (g generator) model(res Result) (*model, error) {
 		return nil, err
 	}
 	if m.carve, err = prog(parsed(g.carves(held), "carve")); err != nil {
+		return nil, err
+	}
+	var holds, open []string
+	for _, c := range g.carves(held) {
+		if ran, ok := g.in.Facts.AllowPastCarve[c]; !ok {
+			open = append(open, c)
+		} else if !ran {
+			holds = append(holds, c)
+		}
+	}
+	if m.carveHolds, err = prog(parsed(holds, "carve")); err != nil {
+		return nil, err
+	}
+	if m.carveOpen, err = prog(parsed(open, "carve")); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -92,6 +109,22 @@ func (m *model) device(vector []string) bool {
 		return false
 	}
 	return len(m.reach.Command(r).Denies) > 0 && len(m.carve.Command(r).Denies) == 0
+}
+
+// predicts is whether the device runs vector under the reply as measured:
+// device's reading, less a command only an allow runs past a carve-out
+// measured to hold against it. device stays the witness's reading.
+func (m *model) predicts(vector []string) bool {
+	return m.device(vector) && !(m.allowOnly(vector) && len(m.carveHolds.Command(raw(vector)).Denies) > 0)
+}
+
+// unmeasured reports whether only an allow runs vector and no cell measured
+// what an allow does there: no held bit reaches it, or an unmeasured
+// carve-out takes it out.
+func (m *model) unmeasured(vector []string) bool {
+	r := raw(vector)
+	return len(m.allow.Command(r).Permits) > 0 &&
+		(len(m.reach.Command(r).Denies) == 0 || len(m.carveOpen.Command(r).Denies) > 0)
 }
 
 // probes is one vector per way the rules can be told apart (engine.Probes),
@@ -179,8 +212,8 @@ func (m *model) unsound() ([]string, bool) {
 }
 
 // Narrower lists up to max commands port49 permits and the device, under the
-// reply, does not, or may not: an allow runs one its bits do not reach,
-// which is unmeasured (Result.Unreached). It is what CI reports as the
+// reply, does not, or may not: an allow runs one its bits do not reach and
+// no cell measured it (Result.Unmeasured). It is what CI reports as the
 // reply's shortfall (spec §8).
 func (r Result) Narrower(max int) [][]string {
 	if r.model == nil {
@@ -191,7 +224,7 @@ func (r Result) Narrower(max int) [][]string {
 		if len(v) == 0 || slices.Contains(v, engine.OtherArgument) {
 			continue
 		}
-		if r.model.port.Command(raw(v)).Permit && (!r.model.device(v) || r.model.allowOnly(v)) {
+		if r.model.port.Command(raw(v)).Permit && (!r.model.predicts(v) || r.model.unmeasured(v)) {
 			out = append(out, v)
 			if len(out) == max {
 				break
@@ -203,9 +236,45 @@ func (r Result) Narrower(max int) [][]string {
 
 // Device reports whether the device runs vector under the reply: what
 // explain and a policy test say beside port49's own answer on a projected
-// platform (spec §8, "Verification").
+// platform (spec §8, "Verification"). An allow past a carve-out measured to
+// hold is read as refused (Facts.AllowPastCarve); the soundness witness and
+// Widens keep the wider reading.
 func (r Result) Device(vector []string) bool {
-	return r.model != nil && len(vector) > 0 && r.model.device(vector)
+	return r.model != nil && len(vector) > 0 && r.model.predicts(vector)
+}
+
+// Unmeasured reports whether the device's run of vector rests on an allow
+// past its bits that no cell measured (Unreached), for a caveat beside it.
+func (r Result) Unmeasured(vector []string) bool {
+	return r.model != nil && len(vector) > 0 && r.model.unmeasured(vector)
+}
+
+// UnmeasuredAllows are the Unreached allows that run some probe command no
+// cell measured, for the report's clause (policy.shortfall). They are read
+// from the model's own probes, so no generator is needed after Project. A
+// result with no model, which Project never returns, cannot say which were
+// measured, and lists every one.
+func (r Result) UnmeasuredAllows() []engine.Rule {
+	if r.model == nil {
+		return r.Unreached
+	}
+	type key struct{ rule, role string }
+	hit := map[key]bool{}
+	for _, v := range r.model.probes() {
+		if len(v) == 0 || slices.Contains(v, engine.OtherArgument) || !r.model.unmeasured(v) {
+			continue
+		}
+		for _, p := range r.model.allow.Command(raw(v)).Permits {
+			hit[key{p.Rule, p.Role}] = true
+		}
+	}
+	var out []engine.Rule
+	for _, u := range r.Unreached {
+		if hit[key{u.Rule, u.Role}] {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // allowOnly reports whether only an allow runs vector: no held bit reaches it,

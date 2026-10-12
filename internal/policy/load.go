@@ -484,7 +484,7 @@ func (p *Policy) buildPlatforms(f file) error {
 				set bool
 			}{{"command_projection", b.Spec.CommandProjection != nil}, {"bits", b.Spec.Bits != nil},
 				{"carve_outs", b.Spec.CarveOuts != nil}, {"bit_delivery", b.Spec.BitDelivery != nil},
-				{"local_user_names", b.Spec.LocalUserNames != nil}} {
+				{"local_user_names", b.Spec.LocalUserNames != nil}, {"rpc_entry_denies", b.Spec.RPCEntryDenies != nil}} {
 				if k.set {
 					return fmt.Errorf("%s.%s: platform set %s does not project %s, and only a platform the pinned set "+
 						"projects is projected: nothing measured there sets a floor under a bit's reach or measures a "+
@@ -693,6 +693,36 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 					version, shippedAs)
 			}
 		}
+	}
+	// Both faults are reported in one error: a block that adds an entry and
+	// omits one would otherwise need two load runs to fix.
+	var faults []string
+	for i, rule := range d.RPCEntryDenies {
+		if !slices.Contains(ref.RPCEntryDenies, rule) {
+			faults = append(faults, fmt.Sprintf("%s.rpc_entry_denies[%d]: platform set %s does not measure this deny "+
+				"closing an RPC entry point on %s; a block may keep the whole list or drop it, not add one "+
+				"(spec §8, §15 L26c)", at, i, version, shippedAs))
+		}
+	}
+	// The whole list or none: a partial list leaves an RPC entry open (`op url`
+	// reaches past the `junoscript` deny, L26c-scripts), and the reply would
+	// still close the rest and call itself closed.
+	if len(d.RPCEntryDenies) > 0 {
+		var left []string
+		for _, rule := range ref.RPCEntryDenies {
+			if !slices.Contains(d.RPCEntryDenies, rule) {
+				left = append(left, rule)
+			}
+		}
+		if len(left) > 0 {
+			faults = append(faults, fmt.Sprintf("%s.rpc_entry_denies: entries left out: %s; a partial list leaves an "+
+				"RPC entry open, so keep platform set %s's whole list or write `[]` (the platform then renders as set "+
+				"1.1.0 does: a deny beneath a sent bit fails closed, and check-config requires NETCONF off) "+
+				"(spec §8, §15 L26c)", at, strings.Join(left, ", "), version))
+		}
+	}
+	if len(faults) > 0 {
+		return errors.New(strings.Join(faults, "; "))
 	}
 	return nil
 }

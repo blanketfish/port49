@@ -98,7 +98,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	if code := run([]string{"platform", "show", "cisco_iosxe"}, &out, &errb); code != 0 {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
-	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.1.0\n", "      operator:\n        - priv-lvl=7\n",
+	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.2.0\n", "      operator:\n        - priv-lvl=7\n",
 		"    accepted_attributes:\n      - priv-lvl\n", "      - privilege exec level 7 clear counters\n",
 		"    verified: containerlab\n",
 		"#   {match: ['**'], after: secret}\n"} {
@@ -652,11 +652,11 @@ func TestPlatformExportClasses(t *testing.T) {
 	}
 	out.Reset()
 	if code := run([]string{"platform", "export", "--classes", "--config", cfg, "juniper_junos"}, &out, &errb); code != 0 ||
-		!strings.Contains(out.String(), "platform set 1.1.0") ||
+		!strings.Contains(out.String(), "platform set 1.2.0") ||
 		!strings.Contains(out.String(), "delete system login class p49-remote\n"+
 			"set system login class p49-remote idle-timeout 480\n") ||
 		!strings.Contains(out.String(), "set system login user remote class p49-remote\n") {
-		t.Fatalf("1.1.0: code %d\n%s%s", code, out.String(), errb.String())
+		t.Fatalf("1.2.0: code %d\n%s%s", code, out.String(), errb.String())
 	}
 	// Each level's template, where the delivery is one, is a replace too.
 	if d, _ := platform.DialectFor("juniper_junos"); d.BitDelivery == platform.BitDeliveryLocalUserName &&
@@ -893,5 +893,148 @@ func TestCheckConfigHoldsAJunosDeviceToTheReference(t *testing.T) {
 	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "SERVICE: "+device+":") {
 		t.Fatalf("netconf: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// Under set 1.2.0, NETCONF no longer fails check-config, because the reply
+// closes the entry points; a block that drops the entry denies with `[]`
+// renders the platform as set 1.1.0 does, and check-config holds it to 1.1.0's
+// NETCONF-off allowlist again (decision 44 ruling 5; final review F11).
+func TestCheckConfigWithoutEntryDenyListForbidsNetconf(t *testing.T) {
+	pol, inv, cfg := junosFixture(t)
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := func(block string) {
+		t.Helper()
+		head := "platform_set: 1.2.0\n" + block
+		if err := os.WriteFile(pol, []byte(strings.Replace(string(body), "platform_set: 1.1.0\n", head, 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(extra string) (int, string) {
+		t.Helper()
+		var ref, out, errb bytes.Buffer
+		if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+			"juniper_junos"}, &ref, &errb); code != 0 {
+			t.Fatalf("export: code %d\n%s", code, errb.String())
+		}
+		lines := []string{"set version 23.4R2-S2.1", "set system host-name srx-01", "set system services ssh", extra}
+		for _, l := range strings.Split(ref.String(), "\n") {
+			if strings.HasPrefix(l, "set ") {
+				lines = append(lines, l)
+			}
+		}
+		device := filepath.Join(t.TempDir(), "srx-01.set")
+		if err := os.WriteFile(device, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "srx-01",
+			"--config", cfg, device}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	pin("")
+	if code, out := check("set system services netconf ssh"); code != 0 {
+		t.Fatalf("1.2.0, NETCONF on: code %d\n%s", code, out)
+	}
+	pin("platforms:\n  juniper_junos:\n    rpc_entry_denies: []\n")
+	if code, out := check("set system services netconf ssh"); code != 1 || !strings.Contains(out, "SERVICE: ") {
+		t.Fatalf("1.2.0 with rpc_entry_denies []: code %d\n%s", code, out)
+	}
+}
+
+// Under --batch, --config belongs to the whole run: a projected device reads
+// it, a device on a platform that projects nothing ignores it, and a mixed
+// fleet passes in one run. A projected device without it is still a usage
+// outcome (exit 2).
+func TestCheckConfigBatchTakesConfigForAMixedFleet(t *testing.T) {
+	pol, inv, cfg := junosFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.9]}
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ref, out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &ref, &errb); code != 0 {
+		t.Fatalf("export: code %d\n%s", code, errb.String())
+	}
+	lines := []string{"set version 23.4R2-S2.1", "set system host-name srx-01", "set system services ssh"}
+	for _, l := range strings.Split(ref.String(), "\n") {
+		if strings.HasPrefix(l, "set ") {
+			lines = append(lines, l)
+		}
+	}
+	dir := t.TempDir()
+	srx, leaf := filepath.Join(dir, "srx-01.set"), filepath.Join(dir, "leaf-01.cfg")
+	if err := os.WriteFile(srx, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leaf, []byte("hostname leaf-01\naaa authorization exec default group port49 local\n"+
+		"aaa authorization commands all default group port49 local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--batch"}
+	if code := run(append(args, "--config", cfg, srx, leaf), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "batch: 2 configurations checked, 0 failed\n") {
+		t.Fatalf("mixed: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, srx, leaf), &out, &errb); code != 2 || !strings.Contains(errb.String(), "pass --config") ||
+		!strings.Contains(errb.String(), srx+": juniper_junos projects") ||
+		!strings.Contains(out.String(), "batch: 2 configurations checked, 1 failed\n") {
+		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// A path with a format verb in it is named literally, and the platform
+	// is not lost to it.
+	odd := filepath.Join(dir, "p%s")
+	if err := os.Mkdir(odd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oddSrx := filepath.Join(odd, "srx-01")
+	if err := os.WriteFile(oddSrx, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, oddSrx), &out, &errb); code != 2 ||
+		!strings.Contains(errb.String(), oddSrx+": juniper_junos projects") {
+		t.Fatalf("verb in path: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// An error that leads with the file is not given the file twice.
+	grouped := filepath.Join(dir, "g", "srx-01.set")
+	if err := os.Mkdir(filepath.Dir(grouped), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(grouped, []byte(strings.Join(append(lines, "set groups g1 system services ssh"), "\n")+"\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, "--config", cfg, grouped), &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), grouped+": ") || strings.Contains(errb.String(), grouped+": "+grouped) {
+		t.Fatalf("grouped: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Ruling 8: the exit is 2 where any file is a usage outcome, whatever
+	// order a finding comes in, and every file is still checked.
+	bad := filepath.Join(dir, "leaf-01.txt")
+	if err := os.WriteFile(bad, []byte("hostname leaf-01\nusername noc privilege 1 secret 0 y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, files := range [][]string{{bad, srx, leaf}, {srx, bad, leaf}} {
+		out.Reset()
+		errb.Reset()
+		if code := run(append(args, files...), &out, &errb); code != 2 ||
+			!strings.Contains(out.String(), "COLLISION: "+bad) ||
+			!strings.Contains(out.String(), "batch: 3 configurations checked, 2 failed\n") {
+			t.Fatalf("%q: code %d\n%s%s", files, code, out.String(), errb.String())
+		}
 	}
 }

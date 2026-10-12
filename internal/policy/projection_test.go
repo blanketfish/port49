@@ -594,7 +594,7 @@ func TestAnUnreachedAllowIsReported(t *testing.T) {
 	}
 	e, err := p.Explain("s", "", "srx-fw-04", "ping 192.0.2.1", noon)
 	if c := strings.Join(e.Caveats, "\n"); err != nil || !strings.Contains(c, "the device may refuse it: "+
-		`the allow that carries it, "ping **", is sent under bits that do not reach it`) {
+		"the allow that carries it is sent under bits that do not reach it") {
 		t.Fatalf("%q %v", e.Caveats, err)
 	}
 	e, err = p.Explain("s", "", "srx-fw-04", "show version", noon)
@@ -933,5 +933,202 @@ func TestUnenforcedRules(t *testing.T) {
 	}
 	if n := count(parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)); n != 0 {
 		t.Errorf("projected: %d", n)
+	}
+}
+
+// A baseline deny the entry deny refuses is reported beside the reply, not
+// sent (decision 44 ruling 10).
+func TestTheProjectionMessageNamesWhatTheEntryDenyCloses(t *testing.T) {
+	pr := projection.Result{Shape: projection.ShapeCapability, Bits: []string{"view"},
+		Closed: []engine.Rule{{Verdict: engine.Deny, Rule: "xml-mode **", Role: platform.BaselineBit}}}
+	if msg := projectionMessage(pr, nil, nil); !strings.Contains(msg, "; refused by the entry deny, sent as nothing: xml-mode **") {
+		t.Errorf("%q", msg)
+	}
+}
+
+// parseEntry is parseProjected under user_permissions with set 1.2.0's entry
+// deny on the test set, and view-configuration reaching `show log` too, so a
+// deny of `show configuration` is sent beneath the bit, not aligned with it.
+func parseEntry(t *testing.T, body string) *Policy {
+	t.Helper()
+	e := projectedEnv(platform.BitDeliveryUserPermissions)
+	d := e.Sets[projectedSet]["juniper_junos"]
+	d.RPCEntryDenies = []string{"junoscript **"}
+	d.Bits["view-configuration"] = []string{"show configuration **", "show log **"}
+	e.Sets[projectedSet]["juniper_junos"] = d
+	p, err := Parse([]byte("platform_set: "+projectedSet+"\n"+body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The entry deny closes NETCONF for that subject, and a deny of `show
+// configuration` beneath view-configuration is Ryan's operator error: each a
+// warning, failing nothing; policy diff prints the ones a change brings
+// (decision 44 ruling 4).
+func TestTheEntryDenyWarnings(t *testing.T) {
+	plain := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"]}
+`+subjOK+grantOK)
+	denies := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	kinds := func(fs []Finding) map[string][]string {
+		out := map[string][]string{}
+		for _, f := range fs {
+			out[f.Kind] = append(out[f.Kind], f.Message)
+		}
+		return out
+	}
+	got := kinds(denies.Projections(noon))
+	if n := got[FindingProjectionNetconfClosed]; len(n) != 1 || !strings.Contains(n[0], "no NETCONF") {
+		t.Errorf("netconf closed: %q", n)
+	}
+	if v := got[FindingProjectionDenyBeneathViewConfiguration]; len(v) != 1 ||
+		!strings.Contains(v[0], "show configuration **") || !strings.Contains(v[0], "withhold view-configuration") {
+		t.Errorf("view-configuration: %q", v)
+	}
+	if ProjectionRefusals(denies.Projections(noon)) != 0 {
+		t.Error("a warning fails policy test")
+	}
+	if p := kinds(plain.Projections(noon)); len(p[FindingProjectionNetconfClosed])+
+		len(p[FindingProjectionDenyBeneathViewConfiguration]) != 0 {
+		t.Errorf("no deny beneath, no warning: %v", p)
+	}
+	d := Compare(plain, denies, noon)
+	if len(d.ProjectionWarnings) != 2 || len(d.ProjectionRefusals) != 0 {
+		t.Errorf("the change brings two warnings: %+v", d.ProjectionWarnings)
+	}
+	if d := Compare(denies, denies, noon); len(d.ProjectionWarnings) != 0 {
+		t.Errorf("an unchanged warning is not repeated: %+v", d.ProjectionWarnings)
+	}
+}
+
+// A set that carries no rpc_entry_denies (1.1.0) leaves NETCONF on whatever
+// the shape: a narrow result there gets no netconf-closed warning (R8).
+func TestNoNetconfClosedWarningWithoutEntryDenies(t *testing.T) {
+	// Two show commands are narrower than any whole bit: the narrow shape, on
+	// the test set, which carries no rpc_entry_denies.
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+narrowRole+subjOK+grantOK)
+	narrow := false
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjection && strings.Contains(f.Message, "narrow shape") {
+			narrow = true
+		}
+		if f.Kind == FindingProjectionNetconfClosed {
+			t.Errorf("a set with no entry denies warned: %s", f.Message)
+		}
+	}
+	if !narrow {
+		t.Errorf("the fixture is no longer the narrow shape: %v", p.Projections(noon))
+	}
+}
+
+// netconfRemedy is the one remedy both shapes' netconf-closed warnings give
+// (decision 44 ruling 3): the reply's denies come from what the bits reach
+// and the grant does not permit, not from denies the grant writes.
+const netconfRemedy = "an account keeps NETCONF only where its reply sends no deny: " +
+	"grant everything the level's bits reach (a readonly `**` does)"
+
+// On shipped set 1.2.0 a readonly grant of `show **` and `monitor **` has no
+// deny of its own and still takes the entry deny, from the bits' reach: the
+// warning carries the one remedy, which names no deny the grant wrote. A
+// readonly `**` sends no deny and gets no warning.
+func TestTheNetconfClosedRemedyIsTheReplysNotTheGrants(t *testing.T) {
+	closed := func(role string) []string {
+		p := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+"roles:\n  - "+role+"\n"+subjOK+grantOK)
+		var got []string
+		for _, f := range p.Projections(noon) {
+			if f.Kind == FindingProjectionNetconfClosed {
+				got = append(got, f.Message)
+			}
+		}
+		return got
+	}
+	got := closed(`{name: r, privilege: readonly, permit: ["show **", "monitor **"]}`)
+	if len(got) != 1 || !strings.Contains(got[0], netconfRemedy) || !strings.Contains(got[0], "the reply adds deny") ||
+		strings.Contains(got[0], "no deny beneath") || strings.Contains(got[0], "reaches whole bits") {
+		t.Errorf("deny-less grant, entry deny: %q", got)
+	}
+	if got := closed(`{name: r, privilege: readonly, permit: ["**"]}`); len(got) != 0 {
+		t.Errorf("a readonly ** keeps NETCONF: %q", got)
+	}
+}
+
+// Under `view` without view-configuration, Task 9 measured on both images
+// that an allow of `show configuration` is refused and the allows of `show
+// log`, `show firewall` and `show policer` run
+// (tests/lab/results/L26c-projected-juniper_*.md, the readonly rows). policy
+// test, explain and the projection finding say so on shipped set 1.2.0; what
+// is sent does not change.
+func TestThePredictionFollowsTheMeasuredAllowsPastTheBits(t *testing.T) {
+	p := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}
+`+subjOK+grantOK)
+	caveats := func(cmd string) string {
+		e, err := p.Explain("s", "", "srx-fw-04", cmd, noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(e.Caveats, "\n")
+	}
+	c := caveats("show configuration system host-name")
+	if !strings.Contains(c, "the device refuses it;") || strings.Contains(c, "may refuse") ||
+		!strings.Contains(c, "port49 permits this and the projection does not carry it") {
+		t.Errorf("show configuration: %q", c)
+	}
+	c = caveats("show log messages")
+	if !strings.Contains(c, "the device runs it;") || strings.Contains(c, "may refuse") {
+		t.Errorf("show log: %q", c)
+	}
+	var msg string
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjection {
+			msg = f.Message
+		}
+	}
+	_, probes, _ := strings.Cut(msg, "these probe commands: ")
+	if probes != "show configuration" || strings.Contains(msg, "unmeasured") || strings.Contains(msg, "may refuse") {
+		t.Errorf("projection finding: %q", msg)
+	}
+}
+
+const narrowRole = `roles:
+  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}
+`
+
+// The narrow shape closes NETCONF with no deny beneath any bit, so the
+// warning carries the one remedy (decision 44 ruling 3): the account keeps
+// NETCONF only where its reply sends no deny. Each warning is written after its subject
+// and platform with a colon, its rules quoted, and names no device where it
+// is on every one.
+func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
+	p := parseEntry(t, scopeOK+narrowRole+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Projections(noon) {
+		if f.Kind == FindingProjectionNetconfClosed {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos: the narrow reply's `) ||
+		!strings.Contains(got[0], netconfRemedy) || strings.Contains(got[0], "reaches whole bits") ||
+		strings.Contains(got[0], "no deny beneath") || strings.Contains(got[0], "; on ") {
+		t.Errorf("narrow netconf closed: %q", got)
+	}
+	denies := parseEntry(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **", "show configuration"]}
+`+subjOK+grantOK)
+	found := false
+	for _, f := range denies.Projections(noon) {
+		if f.Kind == FindingProjectionDenyBeneathViewConfiguration {
+			found = true
+			if !strings.Contains(f.Message, `: deny "show configuration", "show configuration **" is sent beneath`) {
+				t.Errorf("beneath rules quoted and joined: %q", f.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no beneath warning: %v", denies.Projections(noon))
 	}
 }
