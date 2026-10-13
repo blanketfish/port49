@@ -14,10 +14,11 @@ L60*.
   loaded by port49's purego PKCS#11 layer (`internal/hwkey/pkcs11`)
 - **Roots:** Yubico's PIV root, `https://developers.yubico.com/PKI/yubico-piv-ca-1.pem`
 - **Capture:** `tests/lab/l60/probe_test.go`, the attestation probe as it ran (build tag
-  `l60probe`, so it never builds in `make test`; its header says how it ran). The touch probes
-  were scratch test binaries whose source was not kept; their numbers below are copied from their
-  output at the time. The probes' output names the device serial and is kept locally, not here.
-  No PIN, PUK or management key was typed into the harness or written to any file it read.
+  `l60probe`, so it never builds in `make test`; its header says how it ran), and the touch probes
+  `tests/lab/l60/touch_test.go` and `touch2_test.go`, built and run the same way; their numbers
+  below are copied from their output at the time. The probes' output names the device serial and
+  is kept locally, not here. The touch probes read the PIN from Ryan's own terminal with echo off;
+  no PIN, PUK or management key was typed into the Claude session or written to any file.
 
 ## Claim
 
