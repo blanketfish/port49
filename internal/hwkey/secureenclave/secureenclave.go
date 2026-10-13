@@ -3,9 +3,9 @@
 // experimental and opt-in: it was built without a Mac to run it on, and L63
 // (whether an unsigned port49 may make and keep such a key at all) is open.
 // It is chosen only by name, a secure-enclave:label=NAME reference or
-// issued_key_store: secure_enclave, and each open or generate says so in one
-// line. Every Security.framework failure is a refusal naming its OSStatus;
-// nothing here falls back to another store.
+// issued_key_store: secure_enclave, and a process that opens or makes a key
+// says so in one line, once. Every Security.framework failure is a refusal
+// naming its OSStatus; nothing here falls back to another store.
 //
 // The backend is secureenclave_darwin.go, built on macOS under hwkey_dlopen
 // (ruling 22); everywhere else secureenclave_other.go refuses. The calls
@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // RefPrefix starts every Secure Enclave key reference (ruling 2: the scheme is
@@ -28,7 +29,8 @@ const RefPrefix = "secure-enclave:"
 // port49's prefix fit with room to spare.
 const maxLabel = 255
 
-// ExperimentalWords is the line every open and generate prints (ruling 6).
+// ExperimentalWords is the line the first open or generate in a process
+// prints (ruling 6).
 const ExperimentalWords = "the Secure Enclave backend is experimental and untested (L63); report results at the " +
 	"port49 issue tracker"
 
@@ -85,7 +87,7 @@ func Open(label string) (*Signer, error) {
 	if err := available(); err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(Warnings, ExperimentalWords)
+	sayExperimental()
 	return openKey(label)
 }
 
@@ -98,8 +100,42 @@ func Generate(label string) (*Signer, error) {
 	if err := available(); err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(Warnings, ExperimentalWords)
+	sayExperimental()
 	return generateKey(label)
+}
+
+// experimental is ExperimentalWords said once per process (ruling 6): a login
+// that opens the held key, opens it again and makes one says it once, and the
+// agent, its own process, once in its log. A pointer, so a test starts afresh.
+var experimental = new(sync.Once)
+
+func sayExperimental() {
+	experimental.Do(func() { fmt.Fprintln(Warnings, ExperimentalWords) })
+}
+
+// DuplicateError is Count keys, two or more, under Label: refused, never a
+// choice of one (as a pkcs11: reference that matches two keys is refused,
+// ruling 2). The caller that knows whose label it is names how to remove them.
+type DuplicateError struct {
+	Label string
+	Count int
+}
+
+func (e *DuplicateError) Error() string {
+	return fmt.Sprintf("secureenclave: %d Secure Enclave keys are labeled %s; port49 uses one, and will not choose",
+		e.Count, e.Label)
+}
+
+// Delete removes every Secure Enclave key labeled label. None is ErrNotFound.
+// port49's sign-in never calls it; `port49 login --delete-key` does.
+func Delete(label string) error {
+	if err := CheckLabel(label); err != nil {
+		return err
+	}
+	if err := available(); err != nil {
+		return err
+	}
+	return deleteKey(label)
 }
 
 // platformRefusal is why goos, in a build without the darwin backend, cannot

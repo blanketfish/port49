@@ -2,14 +2,22 @@ package main
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/hwfake"
@@ -137,11 +145,13 @@ func TestTheSecureEnclaveKeyIsOpenedOrMadeOnce(t *testing.T) {
 		wantGeneratedKey bool
 	}{
 		{name: "held", opened: 1},
-		{name: "none yet", openErr: notFound, opened: 1, made: 1, wantGeneratedKey: true},
-		{name: "none, and the Enclave refuses", openErr: notFound, genErr: osStatus, opened: 1, made: 1, wantErr: osStatus},
+		// None is looked for again under the lock before one is made.
+		{name: "none yet", openErr: notFound, opened: 2, made: 1, wantGeneratedKey: true},
+		{name: "none, and the Enclave refuses", openErr: notFound, genErr: osStatus, opened: 2, made: 1, wantErr: osStatus},
 		{name: "an open that fails otherwise", openErr: osStatus, opened: 1, wantErr: osStatus},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("HOME", privateDir(t))
 			held, made := fakeSEKey(t), fakeSEKey(t)
 			var opened, generated []string
 			playMac(t, "aaaaaaaa",
@@ -182,6 +192,167 @@ func TestTheSecureEnclaveKeyIsOpenedOrMadeOnce(t *testing.T) {
 				t.Fatalf("key %v bytes %v err %v", key, keyBytes != nil, err)
 			}
 		})
+	}
+}
+
+// Two first sign-ins at once on one Mac make one key, not two under one label
+// (which would refuse every sign-in after): making it is serialised by a lock
+// beside the held pair, and the second, once it holds the lock, looks again
+// and opens the key the first made.
+func TestTwoFirstSignInsAtOnceMakeOneKey(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	const label = "port49.broker.example_8443.aaaaaaaa"
+	sf := &sessionFlags{broker: "https://broker.example:8443", issuedKeyStore: "secure_enclave"}
+	spare := []hwkey.Key{fakeSEKey(t), fakeSEKey(t)}
+	var (
+		mu       sync.Mutex
+		keychain []hwkey.Key
+		opens    atomic.Int32
+		looked   sync.WaitGroup
+	)
+	looked.Add(2)
+	playMac(t, "aaaaaaaa",
+		func(l string) (hwkey.Key, error) {
+			if opens.Add(1) <= 2 {
+				// Both sign-ins have looked and found none before either makes one.
+				looked.Done()
+				looked.Wait()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			switch len(keychain) {
+			case 0:
+				return nil, fmt.Errorf("%w: %s", secureenclave.ErrNotFound, l)
+			case 1:
+				return keychain[0], nil
+			}
+			return nil, &secureenclave.DuplicateError{Label: l, Count: len(keychain)}
+		},
+		func(l string) (hwkey.Key, error) {
+			// The window in which a second sign-in would make a second key.
+			time.Sleep(100 * time.Millisecond)
+			mu.Lock()
+			defer mu.Unlock()
+			k := spare[len(keychain)]
+			keychain = append(keychain, k)
+			return k, nil
+		})
+	var wg sync.WaitGroup
+	keys := make([]crypto.Signer, 2)
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Go(func() { keys[i], _, errs[i] = newIssuedKey(storeEncl, sf, "") })
+	}
+	wg.Wait()
+	if len(keychain) != 1 || errs[0] != nil || errs[1] != nil || keys[0] != keys[1] || keys[0] != any(keychain[0]) {
+		t.Fatalf("%d keys made; errors %v; keys the same: %v", len(keychain), errs, keys[0] == keys[1])
+	}
+	lock := filepath.Join(home, ".port49", "issued", label+".lock")
+	if fi, err := os.Lstat(lock); err != nil || fi.Mode() != 0o600 {
+		t.Fatalf("the lock beside the held pair: %v %v", fi, err)
+	}
+}
+
+// Keys found under this broker's label anyway (made before the lock, or by
+// another tool) are refused naming the label, the count and port49's own way
+// to remove them, never a tool whose behavior with these keys is unmeasured.
+func TestKeysUnderTheIssuedLabelNamePort49sRemedy(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	const label = "port49.broker.example_8443.aaaaaaaa"
+	sf := &sessionFlags{broker: "https://broker.example:8443", issuedKeyStore: "secure_enclave"}
+	dup := &secureenclave.DuplicateError{Label: label, Count: 2}
+	var generated int
+	playMac(t, "aaaaaaaa",
+		func(string) (hwkey.Key, error) { return nil, dup },
+		func(string) (hwkey.Key, error) { generated++; return nil, errors.New("not called") })
+	key, _, err := newIssuedKey(storeEncl, sf, "")
+	if key != nil || err == nil || generated != 0 {
+		t.Fatalf("key %v err %v generated %d", key, err, generated)
+	}
+	for _, w := range []string{label, "2 Secure Enclave keys", "port49 login --delete-key", "log in again"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("%q is not in %q", w, err.Error())
+		}
+	}
+	if strings.Contains(err.Error(), "Keychain Access") {
+		t.Errorf("an unmeasured remedy: %q", err.Error())
+	}
+}
+
+// `port49 login --delete-key` deletes this Mac's Secure Enclave keys for the
+// broker, and the certificate held for them, after one line asking; the next
+// sign-in makes one key. No is no, and a store that is not secure_enclave is
+// refused before anything is asked.
+func TestLoginDeleteKeyRemovesThisMacsKeysAfterAsking(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	const broker = "https://broker.example:8443"
+	const label = "port49.broker.example_8443.aaaaaaaa"
+	playMac(t, "aaaaaaaa", nil, nil)
+	pd := deleteSE
+	t.Cleanup(func() { deleteSE = pd })
+	defer func(in io.Reader, tty func() bool) { confirmIn, confirmTTY = in, tty }(confirmIn, confirmTTY)
+	confirmTTY = func() bool { return true }
+	var deleted []string
+	var deleteErr error
+	deleteSE = func(l string) error { deleted = append(deleted, l); return deleteErr }
+	conf := func(store string) string {
+		cfg := filepath.Join(privateDir(t), "config.yaml")
+		if err := os.WriteFile(cfg, []byte("broker: "+broker+"\nissued_key_store: "+store+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	cert, _ := userconfig.IssuedTokenPaths(broker, secureenclave.Ref(label))
+	held := func() bool { _, err := os.Lstat(cert); return err == nil }
+	login := func(answer, store string) (int, string, string) {
+		t.Helper()
+		confirmIn = strings.NewReader(answer)
+		var out, errb bytes.Buffer
+		code := run([]string{"login", "--delete-key", "--config", conf(store)}, &out, &errb)
+		return code, out.String(), errb.String()
+	}
+
+	writePair(t, cert, cert+".unused")
+	if code, out, errb := login("n\n", "secure_enclave"); code != 1 || len(deleted) != 0 || !held() ||
+		!strings.Contains(errb, label) || !strings.Contains(errb, "[y/N]") || out != "" {
+		t.Fatalf("no: code %d deleted %v held %v stdout %q stderr %q", code, deleted, held(), out, errb)
+	}
+	if code, out, errb := login("y\n", "secure_enclave"); code != 0 || len(deleted) != 1 || deleted[0] != label ||
+		held() || !strings.Contains(out, label) {
+		t.Fatalf("yes: code %d deleted %v held %v stdout %q stderr %q", code, deleted, held(), out, errb)
+	}
+	// None there is not a failure: the certificate held for them goes too.
+	writePair(t, cert, cert+".unused")
+	deleted, deleteErr = nil, fmt.Errorf("%w: %s", secureenclave.ErrNotFound, label)
+	if code, out, errb := login("y\n", "secure_enclave"); code != 0 || len(deleted) != 1 || held() {
+		t.Fatalf("none: code %d deleted %v held %v stdout %q stderr %q", code, deleted, held(), out, errb)
+	}
+	// A refusal keeps the certificate and says the OSStatus.
+	writePair(t, cert, cert+".unused")
+	deleted, deleteErr = nil, errors.New("secureenclave: SecItemDelete: OSStatus -34018 A required entitlement isn't present.")
+	if code, _, errb := login("y\n", "secure_enclave"); code != 1 || !held() || !strings.Contains(errb, "-34018") {
+		t.Fatalf("refused: code %d held %v stderr %q", code, held(), errb)
+	}
+	deleted, deleteErr = nil, nil
+	for _, store := range []string{"file", "auto", "tpm"} {
+		if code, _, errb := login("y\n", store); code != 2 || len(deleted) != 0 ||
+			!strings.Contains(errb, "issued_key_store: secure_enclave") || strings.Contains(errb, "[y/N]") {
+			t.Fatalf("%s: code %d deleted %v stderr %q", store, code, deleted, errb)
+		}
+	}
+}
+
+// On a Mac, a named secure_enclave whose label cannot be made (gethostuuid
+// failing) is that error, not "no held pair" and a sign-in prompt wasted
+// before the same error refuses it. Only "this is not macOS" reads as none.
+func TestASecureEnclavePairOnAMacThatCannotBeNamedIsAnError(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	playMac(t, "aaaaaaaa", nil, nil)
+	seHostID = func() (string, error) { return "", errors.New("secureenclave: gethostuuid did not name this Mac") }
+	sf := &sessionFlags{broker: "https://broker.example:8443", issuedKeyStore: "secure_enclave"}
+	if got, err := pickHeldPair(sf); err == nil || !strings.Contains(err.Error(), "gethostuuid") {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
 

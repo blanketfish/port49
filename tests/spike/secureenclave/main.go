@@ -2,17 +2,23 @@
 
 // Command secureenclave is plan 9c's spike for L63: can an unsigned port49,
 // built with CGO_ENABLED=0, create a Secure Enclave key, find it again from a
-// second process, and sign with it? It is the check a Mac user runs (decision
-// 45 ruling 6, gate SE1), with no arguments:
+// second process and from a rebuilt binary, and sign with it? It is the check
+// a Mac user runs (decision 45 ruling 6, gate SE1). From the root of a port49
+// checkout, with Go installed, run:
 //
 //	go run ./tests/spike/secureenclave
 //
-// It runs every cell in order, printing `cell <name>: pass` or `cell <name>:
-// fail OSStatus <n> <description>` for each, then `SE1: pass` or `SE1: fail`.
-// It prints no key bytes and no signature, and deletes the key it made. The
-// calls are the backend's own (internal/hwkey/secureenclave/secapi).
+// and then, for the locked-screen cell (it asks you to lock the screen):
 //
-// The cells:
+//	go run ./tests/spike/secureenclave locked
+//
+// and report both outputs, with your macOS version and Mac model. Each prints
+// `cell <name>: pass` or `cell <name>: fail OSStatus <n> <description>` for
+// each cell, and the first ends `SE1: pass` or `SE1: fail`. Neither prints
+// key bytes or a signature, and each deletes the keys it made. The calls are
+// the backend's own (internal/hwkey/secureenclave/secapi).
+//
+// The cells, with no arguments:
 //   - control: a software P-256 key, not kept, made and signed with by the
 //     same calls with no kSecAttrTokenID. It must pass, or the run is invalid:
 //     the calls themselves are wrong, and nothing else here means anything.
@@ -21,10 +27,24 @@
 //   - find: a second process (this program run again) finds that key by its
 //     label, as port49's agent would find the key its login made.
 //   - sign: a third process signs with it, and the signature verifies.
+//   - find-rebuilt: a copy of this program built again with another
+//     buildMark (`go build -ldflags=-X main.buildMark=...`, which this program
+//     runs and prints), so its code signature differs as a port49 upgrade's
+//     does, finds the key and signs with it. Port49 keeps the issued key
+//     across sign-ins, so a key an upgrade cannot see would be leaked and
+//     remade at every upgrade.
+//   - held-after-delete (an observation, not part of SE1): a key reference
+//     held while the key's keychain item is deleted, as an agent holds one
+//     when its key is removed under it: does it still sign?
 //   - create-ephemeral: a Secure Enclave key not kept, signed with in this
 //     process (the fallback ruling 6 would weigh if keeping a key is refused).
 //
-// SE1 passes when create-permanent, find and sign pass.
+// SE1 passes when create-permanent, find, sign and find-rebuilt pass.
+//
+// With `locked`: a key is made, you lock the screen, and while it is locked a
+// held reference signs (locked-sign-held, as the agent's refresh signs) and a
+// new process finds and signs (locked-find-sign). The keys are made
+// kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly so both should pass.
 package main
 
 import (
@@ -37,10 +57,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rhwendt/port49/internal/hwkey/secureenclave/secapi"
 )
+
+// buildMark tells one build of this program from another: find-rebuilt sets
+// it with -ldflags -X, so the rebuilt binary, and its code signature, differ.
+var buildMark = "first"
+
+// spikePackage is this program, which find-rebuilt builds again.
+const spikePackage = "github.com/rhwendt/port49/tests/spike/secureenclave"
+
+// lockWait is how long the locked cells wait for the screen to be locked.
+const lockWait = 45 * time.Second
 
 func main() {
 	if err := secapi.Load(); err != nil {
@@ -65,21 +97,40 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "locked" {
+		os.Exit(runLocked())
+	}
 	if len(os.Args) != 1 {
-		fmt.Println("usage: go run ./tests/spike/secureenclave  (no arguments)")
+		fmt.Println("usage: go run ./tests/spike/secureenclave [locked]")
 		os.Exit(2)
 	}
 	os.Exit(runAll())
 }
 
-// runAll runs every cell in order and reads gate SE1.
-func runAll() int {
+// newLabel is a label of this run's own.
+func newLabel() (string, error) {
 	var rnd [6]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
+		return "", err
+	}
+	return "port49-l63-" + hex.EncodeToString(rnd[:]), nil
+}
+
+// cleanup deletes the keys labeled label, and says so when it cannot.
+func cleanup(label string) {
+	if err := secapi.DeleteKeys(label, true); err != nil && !secapi.NotFound(err) {
+		fmt.Printf("cleanup: the key labeled %s was not deleted: %v; report this line with the output\n", label, err)
+	}
+}
+
+// runAll runs every cell in order and reads gate SE1.
+func runAll() int {
+	label, err := newLabel()
+	if err != nil {
 		fmt.Println("random:", err)
 		return 1
 	}
-	label := "port49-l63-" + hex.EncodeToString(rnd[:])
+	fmt.Println("build", buildMark)
 
 	control := report("control", control())
 	if !control {
@@ -88,20 +139,113 @@ func runAll() int {
 		return 1
 	}
 	created := report("create-permanent", createPermanent(label))
-	found := created && again("find", label)
-	signed := created && again("sign", label)
+	self, err := os.Executable()
+	if err != nil {
+		report("find", err)
+		created = false
+	}
+	found := created && again(self, "find", "find", label)
+	signed := created && again(self, "sign", "sign", label)
+	rebuilt := created && fromRebuild(self, label)
 	if created {
+		heldAfterDelete(label)
 		// The key is removed whatever the cells said.
-		if err := secapi.DeleteKeys(label, true); err != nil {
-			fmt.Printf("cleanup: the key labeled %s was not deleted: %v; remove it with Keychain Access\n", label, err)
-		}
+		cleanup(label)
 	}
 	report("create-ephemeral", createEphemeral())
-	if created && found && signed {
+	if created && found && signed && rebuilt {
 		fmt.Println("SE1: pass")
 		return 0
 	}
 	fmt.Println("SE1: fail")
+	return 1
+}
+
+// fromRebuild is the cell find-rebuilt: this program built again with another
+// buildMark, and so another code signature, finds the key labeled label and
+// signs with it.
+func fromRebuild(self, label string) bool {
+	dir, err := os.MkdirTemp("", "port49-l63-")
+	if err != nil {
+		return report("find-rebuilt", err)
+	}
+	defer os.RemoveAll(dir)
+	exe := filepath.Join(dir, "secureenclave-rebuilt")
+	args := []string{"build", "-ldflags=-X main.buildMark=rebuilt-" + label, "-o", exe, spikePackage}
+	fmt.Println("running: go", strings.Join(args, " "))
+	if out, err := exec.Command("go", args...).CombinedOutput(); err != nil {
+		return report("find-rebuilt", fmt.Errorf("the rebuild failed (%v; run from a port49 checkout, with go on "+
+			"PATH): %s", err, strings.TrimSpace(string(out))))
+	}
+	a, errA := fileSum(self)
+	b, errB := fileSum(exe)
+	if err := errors.Join(errA, errB); err != nil {
+		return report("find-rebuilt", err)
+	}
+	if a == b {
+		return report("find-rebuilt", errors.New("the rebuilt copy is this program byte for byte, so the cell "+
+			"measures nothing"))
+	}
+	return again(exe, "sign", "find-rebuilt", label)
+}
+
+// fileSum is the SHA-256 of the file at path.
+func fileSum(path string) ([32]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(b), nil
+}
+
+// heldAfterDelete is the observation held-after-delete: a reference to the
+// key labeled label, held while every key with that label is deleted, then
+// asked to sign. Either answer is a measurement; it is not part of SE1.
+func heldAfterDelete(label string) {
+	k, err := only(label)
+	if err != nil {
+		fmt.Printf("observe held-after-delete: not run (%v)\n", err)
+		return
+	}
+	defer secapi.Release(k)
+	if err := secapi.DeleteKeys(label, true); err != nil {
+		fmt.Printf("observe held-after-delete: not run (the delete: %v)\n", err)
+		return
+	}
+	if err := signAndVerify(k); err != nil {
+		fmt.Printf("observe held-after-delete: refused (%v)\n", err)
+		return
+	}
+	fmt.Println("observe held-after-delete: signs")
+}
+
+// runLocked is the locked cells: a key is made, the user locks the screen,
+// and while it is locked a held reference and a new process each sign.
+func runLocked() int {
+	label, err := newLabel()
+	if err != nil {
+		fmt.Println("random:", err)
+		return 1
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Println("cell locked: fail", err)
+		return 1
+	}
+	k, err := secapi.CreateKey(label, true, true)
+	if !report("locked-create", err) {
+		return 1
+	}
+	defer cleanup(label)
+	defer secapi.Release(k)
+	fmt.Printf("lock the screen now (Control-Command-Q) and leave it locked; the cells run in %v, and you may "+
+		"unlock it a minute from now\n", lockWait)
+	time.Sleep(lockWait)
+	held := report("locked-sign-held", signAndVerify(k))
+	fresh := again(self, "sign", "locked-find-sign", label)
+	if held && fresh {
+		return 0
+	}
 	return 1
 }
 
@@ -120,19 +264,17 @@ func report(cell string, err error) bool {
 	return false
 }
 
-// again runs cell as a second process of this program and relays its line.
-func again(cell, label string) bool {
-	exe, err := os.Executable()
-	if err != nil {
-		return report(cell, err)
-	}
+// again runs cell in a second process, exe (this program, or its rebuilt
+// copy), and relays its line as the cell shown.
+func again(exe, cell, shown, label string) bool {
 	out, err := exec.Command(exe, cell, label).CombinedOutput()
 	line := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(line, "cell "+cell+": ") {
-		return report(cell, fmt.Errorf("the second process said %q (%v)", line, err))
+	rest, ok := strings.CutPrefix(line, "cell "+cell+": ")
+	if !ok {
+		return report(shown, fmt.Errorf("the second process said %q (%v)", line, err))
 	}
-	fmt.Println(line)
-	return err == nil && strings.HasSuffix(line, ": pass")
+	fmt.Printf("cell %s: %s\n", shown, rest)
+	return err == nil && rest == "pass"
 }
 
 // signAndVerify signs a digest with k and checks the signature against k's

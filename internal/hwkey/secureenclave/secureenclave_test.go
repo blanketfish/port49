@@ -3,8 +3,10 @@ package secureenclave
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -75,19 +77,22 @@ func fakeBackend(t *testing.T, err error) (opened, generated *[]string) {
 	return opened, generated
 }
 
-// warnings captures the experimental line for the test.
+// warnings captures the experimental line for the test, and starts it as a
+// fresh process would, with the line not yet said.
 func warnings(t *testing.T) *bytes.Buffer {
 	t.Helper()
-	prev := Warnings
+	prev, prevOnce := Warnings, experimental
 	var b bytes.Buffer
-	Warnings = &b
-	t.Cleanup(func() { Warnings = prev })
+	Warnings, experimental = &b, new(sync.Once)
+	t.Cleanup(func() { Warnings, experimental = prev, prevOnce })
 	return &b
 }
 
-// Every open and every generate says, once, that the backend is experimental
-// and untested (decision 45 ruling 6), whether it then succeeds or fails.
-func TestEachOpenAndGenerateSaysItIsExperimentalOnce(t *testing.T) {
+// A process that opens or makes a key says, once in total, that the backend
+// is experimental and untested (decision 45 ruling 6), whether the call then
+// succeeds or fails: a login opens the held key, may open it again and make
+// one, and says it once.
+func TestAnOpenAndAGenerateSayItIsExperimentalOnceInTotal(t *testing.T) {
 	for _, fail := range []error{nil, errors.New("secureenclave: OSStatus -34018 a required entitlement isn't present")} {
 		w := warnings(t)
 		opened, generated := fakeBackend(t, fail)
@@ -100,12 +105,21 @@ func TestEachOpenAndGenerateSaysItIsExperimentalOnce(t *testing.T) {
 		if _, err := Generate("p49"); (err != nil) != (fail != nil) {
 			t.Fatalf("Generate: %v", err)
 		}
-		if got := w.String(); got != strings.Repeat(ExperimentalWords+"\n", 2) {
-			t.Fatalf("after an open and a generate: %q", got)
+		if _, err := Open("p49"); (err != nil) != (fail != nil) {
+			t.Fatalf("Open again: %v", err)
 		}
-		if len(*opened) != 1 || len(*generated) != 1 || (*opened)[0] != "p49" || (*generated)[0] != "p49" {
+		if got := w.String(); got != ExperimentalWords+"\n" {
+			t.Fatalf("after an open, a generate and an open: %q", got)
+		}
+		if len(*opened) != 2 || len(*generated) != 1 || (*opened)[0] != "p49" || (*generated)[0] != "p49" {
 			t.Fatalf("opened %v generated %v", *opened, *generated)
 		}
+	}
+	// Generate first says it too.
+	w := warnings(t)
+	fakeBackend(t, nil)
+	if _, err := Generate("p49"); err != nil || w.String() != ExperimentalWords+"\n" {
+		t.Fatalf("a generate alone: %v said %q", err, w.String())
 	}
 	for _, w := range []string{"experimental", "untested", "L63", "issue tracker"} {
 		if !strings.Contains(ExperimentalWords, w) {
@@ -145,6 +159,9 @@ func TestOffMacOSItRefusesNamingMacOS(t *testing.T) {
 			t.Errorf("%s: %v %v", name, s, err)
 		}
 	}
+	if err := Delete("p49"); err == nil || !strings.Contains(err.Error(), "macOS") {
+		t.Errorf("Delete: %v", err)
+	}
 	if err := Available(); err == nil || !strings.Contains(err.Error(), "macOS") {
 		t.Errorf("Available: %v", err)
 	}
@@ -153,6 +170,43 @@ func TestOffMacOSItRefusesNamingMacOS(t *testing.T) {
 	}
 	if w.Len() != 0 {
 		t.Errorf("said %q", w.String())
+	}
+}
+
+// Two or more keys under one label are a refusal naming the label and the
+// count, never a choice of one, and name no remedy port49 has not measured:
+// the caller that knows the label's owner names port49's own.
+func TestKeysUnderOneLabelAreRefusedNamingTheCount(t *testing.T) {
+	err := error(&DuplicateError{Label: "port49.broker.example_8443.aaaaaaaa", Count: 2})
+	for _, w := range []string{"2 Secure Enclave keys", "port49.broker.example_8443.aaaaaaaa", "will not choose"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("%q is not in %q", w, err.Error())
+		}
+	}
+	if strings.Contains(err.Error(), "Keychain Access") {
+		t.Errorf("an unmeasured remedy: %q", err.Error())
+	}
+	var dup *DuplicateError
+	if !errors.As(fmt.Errorf("wrapped: %w", err), &dup) || dup.Count != 2 {
+		t.Fatalf("errors.As: %v", dup)
+	}
+}
+
+// Delete checks the label before the backend is asked anything.
+func TestDeleteRefusesABadLabelFirst(t *testing.T) {
+	pd, pa := deleteKey, available
+	t.Cleanup(func() { deleteKey, available = pd, pa })
+	var deleted []string
+	available = func() error { return nil }
+	deleteKey = func(label string) error { deleted = append(deleted, label); return nil }
+	if err := Delete("a/b"); err == nil {
+		t.Error("Delete(a/b) succeeded")
+	}
+	if err := Delete("p49"); err != nil {
+		t.Errorf("Delete(p49): %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != "p49" {
+		t.Fatalf("deleted %v", deleted)
 	}
 }
 

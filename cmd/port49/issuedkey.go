@@ -123,6 +123,7 @@ var (
 		}
 		return s, nil
 	}
+	deleteSE = secureenclave.Delete
 )
 
 // tpmRefused is a TPM that is absent or will not make a key, the one failure
@@ -343,20 +344,9 @@ func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer
 		}
 		return k, nil, nil
 	case storeEncl:
-		// The key labeled for this broker and Mac, made once when no key has
-		// the label and kept across sign-ins, as a token's is: port49 never
-		// removes one, so no failed sign-in costs the held pair its key. Any
-		// other failure is a refusal, never another store (ruling 6).
-		label, err := seLabel(sf)
+		k, err := issuedSEKey(sf)
 		if err != nil {
-			return nil, nil, fmt.Errorf("issued_key_store is secure_enclave, and %v", err)
-		}
-		k, err := openSE(label)
-		if errors.Is(err, secureenclave.ErrNotFound) {
-			k, err = generateSE(label)
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("issued_key_store is secure_enclave, and the Secure Enclave refused: %w", err)
+			return nil, nil, err
 		}
 		return k, nil, nil
 	}
@@ -463,12 +453,7 @@ func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 		}
 		return tokenPair()
 	case storeEncl:
-		// Off macOS there is no label to look for: no held pair, and the
-		// sign-in refuses, naming macOS.
-		if p, _, err := issuedTarget(storeEncl, sf); err == nil {
-			return p, nil
-		}
-		return issuedPair{store: storeEncl}, nil
+		return heldSEPair(sf)
 	case storeFile:
 		return issuedPair{storeFile, fc, fk}, nil
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -26,27 +27,33 @@ const childLabelEnv = "PORT49_SE_TEST_CHILD_LABEL"
 func TestMain(m *testing.M) {
 	if label := os.Getenv(childLabelEnv); label != "" {
 		Warnings = io.Discard
-		s, err := Open(label)
-		if err != nil {
-			fmt.Println("open:", err)
-			os.Exit(1)
-		}
-		defer s.Close()
-		msg := api.RefreshMessage([]byte("nonce"), []byte("ekm"))
-		sig, err := api.SignRefresh(s, msg)
-		if err != nil {
-			fmt.Println("sign:", err)
-			os.Exit(1)
-		}
-		sum := sha256.Sum256(msg)
-		if !ecdsa.VerifyASN1(s.Public().(*ecdsa.PublicKey), sum[:], sig) {
-			fmt.Println("sign: the signature does not verify")
-			os.Exit(1)
-		}
-		fmt.Println("public", pubSum(s.Public().(*ecdsa.PublicKey)))
-		os.Exit(0)
+		os.Exit(child(label))
 	}
 	os.Exit(m.Run())
+}
+
+// child is the second process's work, its exit code: a func of its own so
+// the key is closed (deferred) before os.Exit, which runs no defers.
+func child(label string) int {
+	s, err := Open(label)
+	if err != nil {
+		fmt.Println("open:", err)
+		return 1
+	}
+	defer s.Close()
+	msg := api.RefreshMessage([]byte("nonce"), []byte("ekm"))
+	sig, err := api.SignRefresh(s, msg)
+	if err != nil {
+		fmt.Println("sign:", err)
+		return 1
+	}
+	sum := sha256.Sum256(msg)
+	if !ecdsa.VerifyASN1(s.Public().(*ecdsa.PublicKey), sum[:], sig) {
+		fmt.Println("sign: the signature does not verify")
+		return 1
+	}
+	fmt.Println("public", pubSum(s.Public().(*ecdsa.PublicKey)))
+	return 0
 }
 
 func pubSum(p *ecdsa.PublicKey) string {
@@ -66,7 +73,7 @@ func TestGenerateSignAndOpenFromASecondProcess(t *testing.T) {
 	}
 	label := "port49-test-" + hex.EncodeToString(rnd[:])
 	var said strings.Builder
-	Warnings = &said
+	Warnings, experimental = &said, new(sync.Once)
 	t.Cleanup(func() { Warnings = os.Stderr })
 
 	s, err := Generate(label)

@@ -32,11 +32,11 @@ var (
 	openKey     = openLabel
 	generateKey = generateLabel
 	hostID      = secapi.HostID
+	deleteKey   = deleteLabel
 )
 
 // only is the one key labeled label: none is ErrNotFound, two or more are a
-// refusal naming the count, never the first one (as a pkcs11: reference that
-// matches two keys is refused, ruling 2).
+// *DuplicateError, never the first one.
 func only(label string) (secapi.Key, *ecdsa.PublicKey, error) {
 	keys, err := secapi.FindKeys(label, true)
 	if secapi.NotFound(err) {
@@ -49,8 +49,7 @@ func only(label string) (secapi.Key, *ecdsa.PublicKey, error) {
 		for _, k := range keys {
 			secapi.Release(k)
 		}
-		return 0, nil, fmt.Errorf("secureenclave: %d Secure Enclave keys are labeled %s; port49 uses one, and will not "+
-			"choose: remove the others with Keychain Access", len(keys), label)
+		return 0, nil, &DuplicateError{Label: label, Count: len(keys)}
 	}
 	pub, err := secapi.PublicKey(keys[0])
 	if err != nil {
@@ -88,19 +87,25 @@ func generateLabel(label string) (*Signer, error) {
 	}
 	pub, err := secapi.PublicKey(ref)
 	if err != nil {
+		// The key is kept in the keychain already: left there, every later
+		// open would fail the same way, so it goes.
 		secapi.Release(ref)
+		if derr := secapi.DeleteKeys(label, true); derr != nil {
+			return nil, fmt.Errorf("%w; and the key just made could not be deleted: %v", err, derr)
+		}
 		return nil, err
 	}
 	return &Signer{label: label, ref: ref, pub: pub}, nil
 }
 
-// Delete removes the Secure Enclave key labeled label, for the darwin test
-// and an operator's own cleanup; port49's login never calls it.
-func Delete(label string) error {
-	if err := CheckLabel(label); err != nil {
-		return err
+// deleteLabel removes every Secure Enclave key labeled label; none is
+// ErrNotFound.
+func deleteLabel(label string) error {
+	err := secapi.DeleteKeys(label, true)
+	if secapi.NotFound(err) {
+		return fmt.Errorf("%w: %s (%v)", ErrNotFound, label, err)
 	}
-	return secapi.DeleteKeys(label, true)
+	return err
 }
 
 // Label is the key's label.

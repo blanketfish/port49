@@ -152,7 +152,7 @@ var (
 	kSecClass, kSecClassKey, kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyType,
 	kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeySizeInBits, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave,
 	kSecAttrIsPermanent, kSecAttrLabel, kSecPrivateKeyAttrs, kSecAttrAccessControl, kSecReturnRef,
-	kSecMatchLimit, kSecMatchLimitAll, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+	kSecMatchLimit, kSecMatchLimitAll, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
 	kSecUseDataProtectionKeychain uintptr
 	// Security/SecKey.h: const SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA256 (and 384, 512)
 	kSecKeyAlgorithmECDSASignatureDigestX962SHA256, kSecKeyAlgorithmECDSASignatureDigestX962SHA384,
@@ -247,7 +247,7 @@ func load() error {
 		{sec, &kSecReturnRef, "kSecReturnRef", true},
 		{sec, &kSecMatchLimit, "kSecMatchLimit", true},
 		{sec, &kSecMatchLimitAll, "kSecMatchLimitAll", true},
-		{sec, &kSecAttrAccessibleWhenUnlockedThisDeviceOnly, "kSecAttrAccessibleWhenUnlockedThisDeviceOnly", true},
+		{sec, &kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly", true},
 		{sec, &kSecUseDataProtectionKeychain, "kSecUseDataProtectionKeychain", true},
 		{sec, &kSecKeyAlgorithmECDSASignatureDigestX962SHA256, "kSecKeyAlgorithmECDSASignatureDigestX962SHA256", true},
 		{sec, &kSecKeyAlgorithmECDSASignatureDigestX962SHA384, "kSecKeyAlgorithmECDSASignatureDigestX962SHA384", true},
@@ -345,22 +345,31 @@ func newDict() *dict {
 func (d *dict) set(key, value uintptr) { cfDictionarySetValue(d.ref, key, value) }
 
 // setOwned sets value and releases this package's reference to it: the
-// dictionary holds its own.
-func (d *dict) setOwned(key, value uintptr) {
+// dictionary holds its own. A NULL value (a Create that ran out of memory) is
+// refused, not handed to CFRetain, which would crash; op names that Create.
+func (d *dict) setOwned(op string, key, value uintptr) error {
+	if value == 0 {
+		return &Error{Op: op, Description: "returned NULL (out of memory?)"}
+	}
 	d.set(key, value)
 	release(value)
+	return nil
 }
 
 func (d *dict) close() { release(d.ref) }
 
 // keyQuery is the query for the private keys labeled label: in the Secure
-// Enclave, or (enclave false, the spike's control) in software.
-func keyQuery(label string, enclave bool) *dict {
+// Enclave, or (enclave false, the spike's control) in software. The caller
+// closes it.
+func keyQuery(label string, enclave bool) (*dict, error) {
 	q := newDict()
 	q.set(kSecClass, kSecClassKey)
 	q.set(kSecAttrKeyClass, kSecAttrKeyClassPrivate)
 	q.set(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom)
-	q.setOwned(kSecAttrLabel, cfString(label))
+	if err := q.setOwned("CFStringCreateWithCString", kSecAttrLabel, cfString(label)); err != nil {
+		q.close()
+		return nil, err
+	}
 	if enclave {
 		// A Secure Enclave key is kept in the data protection keychain, not
 		// the file-based one (Apple TN3137); without this key, macOS searches
@@ -368,7 +377,7 @@ func keyQuery(label string, enclave bool) *dict {
 		q.set(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave)
 		q.set(kSecUseDataProtectionKeychain, kCFBooleanTrue)
 	}
-	return q
+	return q, nil
 }
 
 // CreateKey makes a P-256 key labeled label: in the Secure Enclave when
@@ -386,24 +395,33 @@ func CreateKey(label string, enclave, permanent bool) (Key, error) {
 
 	var size int32 = 256
 	params.set(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom)
-	params.setOwned(kSecAttrKeySizeInBits, cfNumberCreate(0, kCFNumberSInt32Type, &size))
+	if err := params.setOwned("CFNumberCreate", kSecAttrKeySizeInBits, cfNumberCreate(0, kCFNumberSInt32Type, &size)); err != nil {
+		return 0, err
+	}
 	if enclave {
 		params.set(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave)
 		params.set(kSecUseDataProtectionKeychain, kCFBooleanTrue)
+		// AfterFirstUnlock, not WhenUnlocked: the agent's refresh signs in
+		// the background, and must sign while the screen is locked (ruling 6;
+		// L63 measures it).
 		var cfErr uintptr
-		ac := secAccessControlCreateWithFlags(0, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+		ac := secAccessControlCreateWithFlags(0, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
 			kSecAccessControlPrivateKeyUsage, &cfErr)
 		if ac == 0 {
 			return 0, cfError("SecAccessControlCreateWithFlags", cfErr)
 		}
-		priv.setOwned(kSecAttrAccessControl, ac)
+		if err := priv.setOwned("SecAccessControlCreateWithFlags", kSecAttrAccessControl, ac); err != nil {
+			return 0, err
+		}
 	}
 	if permanent {
 		priv.set(kSecAttrIsPermanent, kCFBooleanTrue)
 	} else {
 		priv.set(kSecAttrIsPermanent, kCFBooleanFalse)
 	}
-	priv.setOwned(kSecAttrLabel, cfString(label))
+	if err := priv.setOwned("CFStringCreateWithCString", kSecAttrLabel, cfString(label)); err != nil {
+		return 0, err
+	}
 	params.set(kSecPrivateKeyAttrs, priv.ref)
 
 	var cfErr uintptr
@@ -421,7 +439,10 @@ func FindKeys(label string, enclave bool) ([]Key, error) {
 	if err := Load(); err != nil {
 		return nil, err
 	}
-	q := keyQuery(label, enclave)
+	q, err := keyQuery(label, enclave)
+	if err != nil {
+		return nil, err
+	}
 	defer q.close()
 	q.set(kSecReturnRef, kCFBooleanTrue)
 	q.set(kSecMatchLimit, kSecMatchLimitAll)
@@ -449,7 +470,10 @@ func DeleteKeys(label string, enclave bool) error {
 	if err := Load(); err != nil {
 		return err
 	}
-	q := keyQuery(label, enclave)
+	q, err := keyQuery(label, enclave)
+	if err != nil {
+		return err
+	}
 	defer q.close()
 	if st := secItemDelete(q.ref); st != 0 {
 		return statusError("SecItemDelete", st)

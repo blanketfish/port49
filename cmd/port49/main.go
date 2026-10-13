@@ -47,6 +47,9 @@ const usage = `usage:
                each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity
                provider and holds the certificate the broker issues, signing in again when it has under a
                quarter of its life left, or with --sign-in)
+  port49 login [--config FILE] [--broker URL] --delete-key
+               (issued_key_store: secure_enclave: deletes this Mac's Secure Enclave keys for the broker and
+               the certificate held for them, after asking; the next login makes one key)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
@@ -501,11 +504,20 @@ func login(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var sf sessionFlags
 	sf.register(fs)
+	deleteKey := fs.Bool("delete-key", false, "with issued_key_store: secure_enclave: delete this Mac's Secure Enclave "+
+		"keys for the broker, and the certificate held for them, after asking; logs in to nothing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if *deleteKey {
+		if err := sf.fill(fs); err != nil {
+			fmt.Fprintln(stderr, "port49 login:", err)
+			return 2
+		}
+		return deleteSecureEnclaveKey(&sf, stdout, stderr)
+	}
 	if sf.oidc && (set["cert"] || set["key"]) {
 		fmt.Fprintln(stderr, "port49 login: --cert and --key are a certificate login's; --oidc signs in at your "+
 			"identity provider instead")

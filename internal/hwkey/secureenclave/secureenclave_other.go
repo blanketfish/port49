@@ -17,4 +17,5 @@ var (
 	openKey     = func(string) (*Signer, error) { return nil, available() }
 	generateKey = func(string) (*Signer, error) { return nil, available() }
 	hostID      = func() (string, error) { return "", available() }
+	deleteKey   = func(string) error { return available() }
 )
