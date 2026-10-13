@@ -329,6 +329,8 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		return keyErrorFromCode(e.Error, e.Detail)
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "revocation_running":
 		return &RevocationRunningError{Detail: e.Detail}
+	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == codeBrokerUnavailable:
+		return &BrokerUnavailableError{errors.New(e.Detail)}
 	case e.Error != "":
 		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}

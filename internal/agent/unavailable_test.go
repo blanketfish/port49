@@ -53,3 +53,37 @@ func TestTheSocketCarriesABrokerOutageWithItsOwnCode(t *testing.T) {
 		})
 	}
 }
+
+// A touch proof that meets a broker outage is the same typed error as a mint
+// that does (so `port49 token --json` never tells the person to prove a second
+// factor when the broker is the problem); one the broker refused is an
+// *APIError; both across the socket.
+func TestATouchProofMeetsABrokerOutageAndARefusalWithTheirOwnErrors(t *testing.T) {
+	t.Run("unreachable", func(t *testing.T) {
+		r := newRealRigWith(t, realOpts{mfa: true})
+		ch, _ := mfaChallenge(t, r)
+		c := socketFor(t, r.a)
+		r.a.broker = "https://127.0.0.1:1" // nothing listens: a broker that is down
+		r.a.client.CloseIdleConnections()
+		r.a.mfaClient.CloseIdleConnections()
+		err := c.ProveTouch(context.Background(), ch)
+		var down *BrokerUnavailableError
+		if !errors.As(err, &down) {
+			t.Fatalf("%v, want a *BrokerUnavailableError", err)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		r := newRealRigWith(t, realOpts{mfa: true})
+		ch, _ := mfaChallenge(t, r)
+		c := socketFor(t, r.a)
+		if err := c.ProveTouch(context.Background(), ch); err != nil {
+			t.Fatal(err)
+		}
+		err := c.ProveTouch(context.Background(), ch) // a challenge already proved: the broker refuses it
+		var refused *APIError
+		var down *BrokerUnavailableError
+		if !errors.As(err, &refused) || errors.As(err, &down) || refused.Status >= 500 {
+			t.Fatalf("%v, want a 4xx *APIError", err)
+		}
+	})
+}

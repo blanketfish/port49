@@ -71,6 +71,7 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 	var crlRevoked *brokercrl.RevokedError
 	var crlUnchecked *brokercrl.UncheckedError
 	var down *agent.BrokerUnavailableError
+	var answered *agent.APIError
 	switch {
 	case err == nil && item.Verdict != "" && item.Verdict != "permit":
 		f.Verdict, f.Reason = item.Verdict, item.Reason
@@ -99,6 +100,12 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 		f.Error = failNoAgent
 	case errors.Is(err, agent.ErrSessionOver):
 		f.Error = failSessionOver
+	case errors.As(err, &answered) && answered.Status < 500:
+		// The broker refused a proof the CLI sent through the agent (a 4xx):
+		// nothing for the person to prove again.
+		f.Error = failBrokerRefused
+	case errors.As(err, &answered):
+		f.Error = failAgent // a broker fault; a 503 is an outage and is caught above
 	case errors.As(err, &unproved):
 		f.Error, f.PerLoginMFA = failMFARequired, requirementOf(unproved.Requirement)
 	case errors.As(err, &need):

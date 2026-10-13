@@ -1317,7 +1317,7 @@ func (a *Agent) ProveTouch(ctx context.Context, challenge string) error {
 		if errors.As(err, &hup) {
 			return hup
 		}
-		return fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		return &BrokerUnavailableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode == http.StatusOK {
@@ -1380,7 +1380,7 @@ func (a *Agent) probeExporter(ctx context.Context) ([]byte, error) {
 		if errors.As(err, &hup) {
 			return nil, &unreachableError{hup}
 		}
-		return nil, &unreachableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
+		return nil, &unreachableError{&BrokerUnavailableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}}
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -2016,6 +2016,9 @@ func answer(w http.ResponseWriter, out any, err error) {
 		writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 	case errors.As(err, new(*RevocationRunningError)):
 		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
+	case errors.As(err, new(*BrokerUnavailableError)):
+		// An outage: the client rebuilds it as one (as POST /token does).
+		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeBrokerUnavailable, Detail: err.Error()})
 	case errors.As(err, &refused):
 		status := refused.Status
 		if status == http.StatusGone {
