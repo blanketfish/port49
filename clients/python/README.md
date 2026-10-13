@@ -85,9 +85,13 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 | `per_login_mfa_required` | `MFARequired` (`.requirement`) | Run `port49 token DEVICE` at a terminal; one proof covers this agent's further logins for the requirement's `reuse_for_seconds`. |
 | `touch_timeout`, `key_locked`, `key_absent` | `KeyUnavailable` | Touch the key, unlock it, or plug it in; not retried. |
 | `broker_refused` | `BrokerRefused` | The broker refused a proof, or its certificate was refused; not retried. |
-| `revocation_running`, `connection_changed`, `broker_unavailable` | `Temporary` | Retried; see below. |
+| `revocation_running`, `connection_changed`, `broker_unavailable` | `Temporary` | Retried by `Agent`; see below. `Workload` never reruns a run: run it again later. |
 | `device_unconfigured`, `attribute_too_long`, `attribute_unsafe`, `broker_error`, `no_token` | `DeviceFault` | The broker could not decide this one device (or minted it no token). Fix its inventory entry (`device_unconfigured`, `attribute_*`), or read the broker's log (`broker_error`, `no_token`). Other devices are unaffected. |
 | `agent_error`, `exit_N`, `timeout` | `Port49Error` | Read `.detail`. |
+| `answer_too_large` | `Port49Error` | The CLI's answer passed the library's 64 MiB cap: the tokens may be minted but are not read. Split the sweep, or use `port49 workload token --out`. |
+
+An error the runner raised before reading an answer (`not_installed`, `timeout`,
+`answer_too_large`) has no `.results`: what was minted is unknown, not empty.
 
 `tokens()` collects what belongs to one device (a deny, a second factor, a `DeviceFault`) into
 `refused`, so one device never stops a sweep. Test a refusal with `r.per_login_mfa is not None` or
