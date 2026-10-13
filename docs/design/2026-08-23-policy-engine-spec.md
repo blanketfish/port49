@@ -8955,8 +8955,9 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   process, once in its log). It fails
   closed: any Security.framework error, an `errSecMissingEntitlement` (-34018) among them, is a
   refusal that names the OSStatus, never a fallback to another store. Its keys are made
-  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not `WhenUnlocked`, so the agent's
-  background refresh signs while the screen is locked (L63 measures it). The issued key is kept
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not `WhenUnlocked`, so that the agent's
+  background refresh can sign while the screen is locked; whether it does is unmeasured
+  (*provisional on L63*). The issued key is kept
   across sign-ins, so making it is serialised by a lock beside the held pair, and keys found
   under its label anyway are refused naming `port49 login --delete-key`, which deletes them.
   Its code is cross-compiled
