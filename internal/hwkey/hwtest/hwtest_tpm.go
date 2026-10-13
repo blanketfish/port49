@@ -166,7 +166,13 @@ func (s *TPM) launch() bool {
 	// finds this record and reaps the swtpm (reapStale). Recorded once the
 	// process shows swtpm's own command line: a harness that starts between
 	// the fork and the exec would take it for a stranger and drop the record.
-	waitSwtpm(cmd.Process.Pid, 2*time.Second)
+	// One that never does is no swtpm to record: it is killed, and launch is
+	// not up.
+	if !waitSwtpmFor(cmd.Process.Pid, 2*time.Second) {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return false
+	}
 	pidFile := recordPid(cmd.Process.Pid)
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
@@ -245,6 +251,14 @@ var reapOnce sync.Once
 // getuid is os.Getuid, a var so a test can be another user.
 var getuid = os.Getuid
 
+// renameRecord and waitSwtpmFor are the rename that makes a pid record whole
+// and the wait for swtpm's own command line, vars so a test sees the one and
+// refuses the other.
+var (
+	renameRecord = os.Rename
+	waitSwtpmFor = waitSwtpm
+)
+
 // EnvSWTPM names the running swtpm's two addresses ("command control") to a
 // process the test starts, such as the agent a login starts, which is the test
 // binary again and so imports this package: init points tpm.Dial at them.
@@ -293,7 +307,10 @@ func waitSwtpm(pid int, d time.Duration) bool {
 // left for the next start.
 func reapStale(dir string) {
 	fi, err := os.Stat(dir)
-	if st, ok := fi.Sys().(*syscall.Stat_t); err != nil || !ok || getuid() == 0 || int(st.Uid) != getuid() {
+	if err != nil {
+		return // no directory yet: nothing was ever recorded
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || getuid() == 0 || int(st.Uid) != getuid() {
 		return
 	}
 	entries, _ := os.ReadDir(dir)
@@ -350,7 +367,7 @@ func recordPid(pid int) string {
 		return ""
 	}
 	file := filepath.Join(dir, strconv.Itoa(pid))
-	if os.Rename(tmp.Name(), file) != nil {
+	if renameRecord(tmp.Name(), file) != nil {
 		os.Remove(tmp.Name())
 		return ""
 	}

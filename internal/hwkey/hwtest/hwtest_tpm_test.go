@@ -128,6 +128,51 @@ func TestRecordPidLeavesOnlyTheWholeRecord(t *testing.T) {
 	}
 }
 
+// The first harness start on a fresh /tmp has no pid directory yet: that is
+// nothing to reap, not a crash.
+func TestReapOnAMissingDirectoryDoesNothing(t *testing.T) {
+	reapStale(filepath.Join(t.TempDir(), "no-such-dir"))
+}
+
+// A record is made by a rename: a direct write would leave a half record
+// where a reader looks, so the final name must arrive through renameRecord.
+func TestRecordPidArrivesByRename(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	var from, to string
+	saved := renameRecord
+	renameRecord = func(oldpath, newpath string) error {
+		from, to = oldpath, newpath
+		return saved(oldpath, newpath)
+	}
+	defer func() { renameRecord = saved }()
+	file := recordPid(os.Getpid())
+	if file == "" || to != file || from == file || filepath.Dir(from) != filepath.Dir(file) {
+		t.Fatalf("record %q was renamed from %q to %q", file, from, to)
+	}
+}
+
+// A swtpm that never shows its own command line is not recorded: it is
+// killed, and launch says it is not up, so the harness tries again.
+func TestLaunchKillsASwtpmItCannotConfirm(t *testing.T) {
+	swtpmAvailable(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	var started int
+	saved := waitSwtpmFor
+	waitSwtpmFor = func(pid int, _ time.Duration) bool { started = pid; return false }
+	defer func() { waitSwtpmFor = saved }()
+	s := &TPM{t: t, dir: t.TempDir(), command: freeAddr(t), control: freeAddr(t)}
+	if s.launch() {
+		s.Stop()
+		t.Fatal("launch reported a swtpm it could not confirm as up")
+	}
+	if started == 0 || alive(started) {
+		t.Fatalf("the swtpm (pid %d) is still running", started)
+	}
+	if left, _ := filepath.Glob(filepath.Join(pidDir(), "*")); len(left) != 0 {
+		t.Fatalf("a record was made for it: %v", left)
+	}
+}
+
 // A process just started shows its parent's command line until it execs, so a
 // record made then would name nothing; the harness waits for swtpm's own.
 func TestWaitSwtpmCmdline(t *testing.T) {
