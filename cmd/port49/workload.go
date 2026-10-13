@@ -18,6 +18,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/workload"
 )
@@ -177,6 +178,7 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	resp, err := c.Mint(context.Background(), workload.MintOptions{Devices: devices, Scope: *scope, Enable: *enable,
 		TTL: *ttl, Purpose: *purpose})
 	code := mintOutcome(stderr, cmd, *scope, devices, resp, err)
+	stop := stopOf(err, devices, resp.Results)
 	switch {
 	case err == nil && *scope != "" && len(resp.Results) == 0:
 		// One message for an undeclared scope and an ungranted one: the
@@ -185,8 +187,9 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 			cmd, safe(*scope))
 		if *format == "json" && *out == "" {
 			// "Nothing selected", told apart from a failure (decision 46
-			// ruling 10): {"principal": …, "results": [], "refused": []}.
-			if body, err := render("json", resp, nil, *enable); err == nil {
+			// ruling 10): {"principal": …, "subject": …, "results": [],
+			// "refused": []}, with no "stopped".
+			if body, err := render("json", resp, nil, *enable, nil); err == nil {
 				_, _ = stdout.Write(body)
 			}
 		}
@@ -231,10 +234,11 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	if len(permitted) == 0 {
 		// Nothing to write: the last output stays as it was. Temporary, or
 		// final until someone acts.
-		if *format == "json" && *out == "" && len(resp.Results) > 0 {
-			// The broker answered: say which and why on stdout too (decision 46
-			// ruling 10). A file named by --out keeps its last contents.
-			if body, err := render("json", resp, nil, *enable); err == nil {
+		if *format == "json" && *out == "" && (len(resp.Results) > 0 || stop != nil) {
+			// The broker answered, or the run stopped: say which and why on
+			// stdout too (decision 46 ruling 10). A file named by --out keeps
+			// its last contents.
+			if body, err := render("json", resp, nil, *enable, stop); err == nil {
 				_, _ = stdout.Write(body)
 			}
 		}
@@ -243,7 +247,7 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitFinal
 	}
-	body, err := render(*format, resp, permitted, *enable)
+	body, err := render(*format, resp, permitted, *enable, stop)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, safe(err.Error()))
 		return exitTemporary
@@ -291,13 +295,58 @@ type refusedItem struct {
 
 // workloadJSON is --format json's object: the broker's answer with only the
 // minted items in results, and every other in refused (decision 46 ruling 10).
+// Stopped is present only when the run ended before it finished (exits 75, 77
+// and 1 mid-run): the CLI code that stopped it. A scope sweep that stopped does
+// not know which devices it left, so Stopped is what tells it from a finished one.
 type workloadJSON struct {
 	api.MintResponse
 	Refused []refusedItem `json:"refused"`
+	Stopped string        `json:"stopped,omitempty"`
 }
 
-// refusedOf is the items not minted, in refused's form.
-func refusedOf(items []api.MintItem) []refusedItem {
+// stoppedRun is how a run ended before it finished: the CLI code that stopped
+// it, and the devices it left unminted when they are known.
+type stoppedRun struct {
+	code, detail string
+	left         []string
+}
+
+// stopOf is why a Mint that returned err stopped, or nil for a finished run.
+// The detail is fixed words and a status number, never the broker's body.
+func stopOf(err error, devices []string, answered []api.MintItem) *stoppedRun {
+	if err == nil {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, it := range answered {
+		have[it.Device] = true
+	}
+	s := &stoppedRun{}
+	for _, d := range devices {
+		if !have[d] {
+			s.left = append(s.left, d)
+		}
+	}
+	var te *workload.TemporaryError
+	var ae *workload.APIError
+	switch {
+	case errors.As(err, &te):
+		s.code, s.detail = failBrokerUnavailable, fmt.Sprintf("the broker did not answer within %s", te.Deadline)
+	case errors.Is(err, mfatouch.ErrConnectionChanged):
+		s.code, s.detail = failConnectionChanged, "the connection changed during the touch; run again"
+	case errors.As(err, &ae) && ae.Status < 500:
+		s.code, s.detail = failBrokerRefused, fmt.Sprintf("the broker answered %d", ae.Status)
+	case errors.As(err, &ae):
+		s.code, s.detail = failAgent, fmt.Sprintf("the broker answered %d", ae.Status)
+	default:
+		s.code, s.detail = failAgent, "the run stopped on an error; see stderr"
+	}
+	return s
+}
+
+// refusedOf is the items not minted, in refused's form, then every device a
+// stopped run left, each under the code that stopped it.
+func refusedOf(items []api.MintItem, stop *stoppedRun) []refusedItem {
 	out := []refusedItem{}
 	for _, it := range items {
 		if it.Verdict == "permit" && it.Login != "" {
@@ -310,15 +359,20 @@ func refusedOf(items []api.MintItem) []refusedItem {
 		}
 		out = append(out, r)
 	}
+	if stop != nil {
+		for _, d := range stop.left {
+			out = append(out, refusedItem{Device: safe(d), Error: stop.code, Detail: stop.detail})
+		}
+	}
 	return out
 }
 
 // render is the permitted items as format says: TSV with no header, one line
 // each, or the broker's answer as JSON with only the permitted results and the
 // refused beside them.
-func render(format string, resp api.MintResponse, permitted []api.MintItem, enable bool) ([]byte, error) {
+func render(format string, resp api.MintResponse, permitted []api.MintItem, enable bool, stop *stoppedRun) ([]byte, error) {
 	if format == "json" {
-		refused := refusedOf(resp.Results)
+		refused := refusedOf(resp.Results, stop)
 		resp.Results = permitted
 		if resp.Results == nil {
 			// "results": [], never null: MintResponse.Results has no
@@ -326,7 +380,11 @@ func render(format string, resp api.MintResponse, permitted []api.MintItem, enab
 			// (pre-flight I3).
 			resp.Results = []api.MintItem{}
 		}
-		return json.Marshal(workloadJSON{MintResponse: resp, Refused: refused})
+		j := workloadJSON{MintResponse: resp, Refused: refused}
+		if stop != nil {
+			j.Stopped = stop.code
+		}
+		return json.Marshal(j)
 	}
 	var b strings.Builder
 	for _, it := range permitted {

@@ -6334,7 +6334,9 @@ person abandoned, stays `per_login_mfa_required`.
 **`port49 workload token --format json`** prints the broker's answer with only the minted items
 in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, `error`, `detail`,
 `per_login_mfa` without its challenge). Without `--out` the object is printed whenever the broker
-answered, on exit 75 and 77 too (§13 decision 46 ruling 10).
+answered, on exit 75 and 77 too (§13 decision 46 ruling 10). A run that stopped early also lists
+each device it left in `refused` and has a top-level `stopped` holding the CLI code that stopped
+it (`broker_unavailable`, `broker_refused`, `agent_error`); `stopped` is absent on a finished run.
 
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
 prints what a change to the inventory does to the bundle: devices added, removed and changed,
@@ -9388,7 +9390,14 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   Its `error` codes are the CLI's (§12), not reason codes; a deny's `reason` is §5.7's as the
   broker sent it; `detail` is made printable; a requirement's challenge is never printed.
 - **10. `port49 workload token --format json`** adds `refused`, and without `--out` prints its
-  object whenever the broker answered. With `--out`, decision 40 ruling 10 stands.
+  object whenever the broker answered. With `--out`, decision 40 ruling 10 stands. `results` and
+  `refused` are `[]`, never `null`. A run that stops before it finishes (exits 75, 77 and 1
+  mid-run) never looks like a finished one: every device left unminted is in `refused` with the
+  CLI code that stopped the run (`broker_unavailable` for 75, `broker_refused` for a 4xx,
+  `agent_error` otherwise; a detail of fixed words, never the broker's body), and the object has
+  a top-level `"stopped"` holding that code. `stopped` is absent on a run that finished. A
+  `--scope` sweep that stops cannot name what it left, so `stopped` is how it is told from a
+  finished one.
 - **11. The library's errors and retries.** An exception class per kind of code. `Agent.token`
   retries `revocation_running` and `connection_changed` alone (the CLI sent nothing to mint with),
   three attempts by default, waiting 1s then 2s; never a deny, a requirement, a key error or a touch
