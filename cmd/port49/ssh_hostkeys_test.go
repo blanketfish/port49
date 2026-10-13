@@ -44,7 +44,7 @@ func TestAKeyOfAnotherTypeUnderAKnownNameIsRefused(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, rpub)
 	code, out, errb := r.run(t, "leaf1", "--", "show", "version")
 	if code != 255 || len(dev.attempts()) != 0 || !strings.Contains(errb, "so it was never sent") ||
-		!strings.Contains(errb, "ssh-keygen -R leaf1") {
+		!strings.Contains(errb, "ssh-keygen -f "+r.known+" -R leaf1") {
 		t.Fatalf("code %d stderr %q attempts %q", code, errb, dev.attempts())
 	}
 	if got := r.filed(t, "leaf1"); len(got) != 1 || !strings.Contains(got[0], "ssh-rsa") {
@@ -140,7 +140,8 @@ func TestTheOperatorsStrictYesStands(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, nil, "StrictHostKeyChecking yes")
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || len(dev.attempts()) != 0 || len(r.filed(t, "leaf1")) != 0 ||
-		!strings.Contains(errb, "ssh_config says StrictHostKeyChecking yes") {
+		!strings.Contains(errb, "ssh_config says StrictHostKeyChecking yes") ||
+		!strings.Contains(errb, "then add the key you verified") || strings.Contains(errb, "connect again") {
 		t.Fatalf("code %d stderr %q attempts %q", code, errb, dev.attempts())
 	}
 }

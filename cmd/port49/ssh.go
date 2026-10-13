@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -104,6 +105,28 @@ type sshTrust struct {
 	alias   string // HostKeyAlias to pass; "" when the operator's own stands
 	keyName string // the name the device's keys are filed under: alias, or the operator's own
 	strict  string // StrictHostKeyChecking: "yes" or "accept-new", never "no"
+	known   string // the first UserKnownHostsFile ssh -G printed: where ssh files and looks up keys
+}
+
+// passwdHome is the home directory in the passwd entry, which is what ssh's
+// `~` is; "" when it cannot be read. $HOME is the caller's to set and is not it.
+func passwdHome() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.HomeDir
+}
+
+// keygenCommand is the ssh-keygen command that removes the keys filed under
+// t.keyName: with -f when the first known_hosts file is not ~/.ssh/known_hosts,
+// since ssh-keygen edits that one alone.
+func keygenCommand(t sshTrust) string {
+	cmd := "ssh-keygen"
+	if home := passwdHome(); t.known != "" && (home == "" || t.known != filepath.Join(home, ".ssh", "known_hosts")) {
+		cmd += " -f " + shellWord(t.known)
+	}
+	return cmd + " -R " + shellWord(t.keyName)
 }
 
 var validSSHName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
@@ -198,7 +221,10 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 	if o.port != 0 {
 		args = append(args, "-p", strconv.Itoa(o.port))
 	}
-	args = append(args, "--", o.device)
+	// With the command the real run gets: OpenSSH evaluates `Match
+	// sessiontype` and `Match command` against it, and the file the real run
+	// uses can differ from the one -G reads without it (re-review I1).
+	args = append(append(args, "--", o.device), o.command...)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
@@ -228,6 +254,7 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 			userFiles = v
 		}
 	}
+	t.known, _, _ = strings.Cut(strings.TrimSpace(userFiles), " ")
 	if t.strict != "yes" {
 		if why := knownHostsCannotKeep(userFiles); why != "" {
 			return sshTrust{}, fmt.Errorf("your ssh_config keeps no host keys for %s (UserKnownHostsFile %s%s): every "+
@@ -255,10 +282,15 @@ func knownHostsCannotKeep(userFiles string) string {
 	if first == "" || first == "none" {
 		return ": it names no file"
 	}
-	home, _ := os.UserHomeDir()
-	if rest, ok := strings.CutPrefix(first, "~/"); ok && home != "" {
-		first = filepath.Join(home, rest)
+	// -G prints a path with a space unquoted, so a value is told from a
+	// path that holds a space only if every field is an absolute path (-G
+	// expands ~ and %d): anything else is refused (re-review I2).
+	for _, f := range strings.Fields(userFiles) {
+		if !strings.HasPrefix(f, "/") {
+			return ": a path with a space, or a relative path, cannot be told from a list; use absolute paths without spaces"
+		}
 	}
+	home := passwdHome()
 	at := func(resolved string) string {
 		if resolved == first {
 			return ""
@@ -987,14 +1019,14 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			"its message is above). Your ssh_config says StrictHostKeyChecking yes: if ssh says no host key is known, "+
 			"no key is filed under %s, so add the device's key to your known_hosts after checking it on its console; "+
 			"if it says the key changed, the key filed under %s is not the one %s presents, so verify it on the "+
-			"console and run ssh-keygen -R %s and connect again\n",
-			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, shellWord(opts.trust.keyName))
+			"console and run %s, then add the key you verified\n",
+			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, keygenCommand(opts.trust))
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
 			"its message is above). If it says Host key verification failed, the key your known_hosts files under "+
 			"%s is not the one %s presents: either the device's key changed, or the address inventory gives for %s "+
-			"is not the device. Verify the key on its console, then run ssh-keygen -R %s and connect again\n",
-			cmd, device, opts.trust.keyName, item.Address, device, shellWord(opts.trust.keyName))
+			"is not the device. Verify the key on its console, then run %s and connect again\n",
+			cmd, device, opts.trust.keyName, item.Address, device, keygenCommand(opts.trust))
 	}
 	return code
 }

@@ -120,7 +120,7 @@ func (r *sshRig) filed(t *testing.T, name string) []string {
 // a known_hosts kept. The lines after it are the fake's real run.
 const fakeSSHHead = "#!/bin/sh\n" +
 	"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
-	"if [ \"$1\" = -G ]; then echo 'userknownhostsfile ~/.ssh/known_hosts'; exit 0; fi\n"
+	"if [ \"$1\" = -G ]; then echo 'userknownhostsfile /tmp/port49_fake_known_hosts'; exit 0; fi\n"
 
 func testHostKey(t *testing.T) ssh.PublicKey {
 	t.Helper()
@@ -221,7 +221,7 @@ func TestAHostWithAnotherKeyNeverSeesTheToken(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, testHostKey(t))
 	code, out, errb := r.run(t, "leaf1", "--", "show", "version")
 	if code != 255 || len(dev.attempts()) != 0 || !strings.Contains(errb, "Host key verification failed") ||
-		!strings.Contains(errb, "so it was never sent") || !strings.Contains(errb, "run ssh-keygen -R leaf1 and") {
+		!strings.Contains(errb, "so it was never sent") || !strings.Contains(errb, "run ssh-keygen -f "+r.known+" -R leaf1 and") {
 		t.Fatalf("code %d stdout %q stderr %q attempts %q", code, out, errb, dev.attempts())
 	}
 	tokenNowhere(t, out, errb)

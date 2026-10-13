@@ -9309,7 +9309,8 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   untouched. Why host keys matter at all: the device password is a one-time token, and an impostor
   that takes it can replay it to the real device within its lifetime.
 - **2. `port49 ssh`'s host-key options.** After the mint it runs `ssh -G` with the `-F`,
-  `HostName`, `-l` and `-p` it will run ssh with. `stricthostkeychecking true` (the operator's
+  `HostName`, `-l`, `-p` and remote command it will run ssh with (`Match sessiontype` and `Match
+  command` blocks are evaluated against the command; measured on 10.2p1, task 3 re-review I1). `stricthostkeychecking true` (the operator's
   `yes`) stands; any other value is passed as `StrictHostKeyChecking=accept-new`; `no` is never
   passed. An operator's `HostKeyAlias` stands; otherwise `HostKeyAlias` is the device's inventory
   name, lowercased. ssh's prompt names the alias, so the askpass answers the device's prompt
@@ -9328,7 +9329,10 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   10.2p1 (task 3 review C1): a link to `/dev/null`, `/dev/null` before a real file, `/dev//null` and a
   missing directory each let a second host take the token. The first file, resolved through links,
   must be a regular file the user can write, or absent in a directory the user can write (ssh also
-  makes `~/.ssh`); under the operator's `yes` it stands. Nothing else about host keys is passed.
+  makes `~/.ssh` in the passwd home, not `$HOME`). `ssh -G` prints a path with a space unquoted, so a
+  value with any field that is not an absolute path is refused as ambiguous (task 3 re-review I2).
+  Under the operator's `yes` it stands, and a changed key's message says to add the verified key.
+  The `ssh-keygen` hint names `-f` with the first file when it is not `~/.ssh/known_hosts`. Nothing else about host keys is passed.
   `ssh -G` failing refuses the run before ssh starts. These refusals follow the mint, since `ssh
   -G` reads its address; that token is unused and expires. The alias files a key under the name,
   so an address added to a device in the source of truth meets the key already known under its
