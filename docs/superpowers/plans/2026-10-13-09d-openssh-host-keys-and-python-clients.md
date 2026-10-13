@@ -227,8 +227,10 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   one of the client codes: `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
   `revocation_running`, `per_login_mfa_required` (with `per_login_mfa: {accept,
   reuse_for_seconds, reuse_from, levels}`, never the challenge), `touch_timeout`, `key_locked`,
-  `key_absent`, `broker_refused`, `broker_unavailable` (the broker unreachable or answering 503:
-  temporary), `connection_changed`, `no_token` (a permit with no token), and `agent_error` (any
+  `key_absent`, `broker_refused` (the broker refused a proof with a 4xx, or the CRL check refused
+  the broker's certificate: not to be tried again as it is), `broker_unavailable` (the broker
+  unreachable or answering 503, on /token or in a touch or sign-in proof: temporary; a proof's 500
+  is `agent_error`), `connection_changed`, `no_token` (a permit with no token), and `agent_error` (any
   other; an item's own `error`, e.g. the broker's `broker_error`, is passed through as sent). These are the CLI's codes, like design §17's API error codes, not
   §5.7 reason codes; the deny's `reason` is §5.7's, as the broker sent it. `detail` is made
   printable (`printsafe.Line`, 512).

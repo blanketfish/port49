@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // A broker the agent could not reach, or one that answered 503, is its own
@@ -51,6 +54,19 @@ func TestTheSocketCarriesABrokerOutageWithItsOwnCode(t *testing.T) {
 				t.Errorf("status %d, want 503", resp.StatusCode)
 			}
 		})
+	}
+}
+
+// A key error under an outage wrapper (the race in ProveTouch's post) is still
+// the key's code, as POST /token has it: key_locked, not broker_unavailable.
+func TestAnswerSaysAKeyErrorBeforeAnOutage(t *testing.T) {
+	err := &BrokerUnavailableError{fmt.Errorf("agent: the broker at x is unreachable: %w", &KeyError{Err: hwkey.ErrLocked})}
+	w := httptest.NewRecorder()
+	answer(w, struct{}{}, err)
+	var e api.Error
+	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	if e.Error != "key_locked" {
+		t.Fatalf("status %d code %q, want key_locked", w.Code, e.Error)
 	}
 }
 

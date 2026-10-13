@@ -244,8 +244,10 @@ func postIdPProof(ctx context.Context, broker string, pool *x509.CertPool, verif
 	var e api.Error
 	_ = json.Unmarshal(raw, &e)
 	if e.Error == "" {
-		return fmt.Errorf("the broker did not take your sign-in as the second factor: it answered %s", resp.Status)
+		return &brokerStatusError{Status: resp.StatusCode,
+			msg: fmt.Sprintf("the broker did not take your sign-in as the second factor: it answered %s", resp.Status)}
 	}
-	return fmt.Errorf("the broker did not take your sign-in as the second factor: %s (%s)",
-		printsafe.Line(e.Detail, 400), printsafe.Line(e.Error, 64))
+	return &brokerStatusError{Status: resp.StatusCode, msg: fmt.Sprintf(
+		"the broker did not take your sign-in as the second factor: %s (%s)",
+		printsafe.Line(e.Detail, 400), printsafe.Line(e.Error, 64))}
 }

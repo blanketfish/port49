@@ -6319,14 +6319,17 @@ broker's item (`verdict`, `reason`, `detail`; no token); an item the broker coul
 item (`error`, `detail`); anything else is `{"device", "error", "detail"}`, `error` one of the
 CLI's codes `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
 `revocation_running`, `per_login_mfa_required` (with `per_login_mfa`, never its challenge),
-`touch_timeout`, `key_locked`, `key_absent`, `broker_refused` (the broker CRL check refused its
-certificate, in the agent or in a proof), `broker_unavailable` (the broker could not be reached or
+`touch_timeout`, `key_locked`, `key_absent`, `broker_refused` (the broker refused a proof with a
+4xx, or the CRL check refused the broker's certificate, in the agent or in a proof: not to be tried
+again as it is), `broker_unavailable` (the broker could not be reached or
 answered 503: an outage to try again), `connection_changed`, `no_token`, `agent_error`. Two share a
 §5.7 name, `credential_revoked` and `per_login_mfa_required`, and mean what the broker's reason
 means; the rest are the CLI's alone. `broker_error` in an item's `error` is the broker's own code
 for a device it could not decide (it answered, and failed on that one device); the agent's socket
 code of the same name, for a broker fault it cannot tell further, is `agent_error` here, and a
-broker outage is `broker_unavailable`.
+broker outage is `broker_unavailable`. A proof (touch or sign-in) maps alike: down or 503 is
+`broker_unavailable`, a 4xx `broker_refused`, a 500 `agent_error`; no terminal, or a sign-in the
+person abandoned, stays `per_login_mfa_required`.
 
 **`port49 workload token --format json`** prints the broker's answer with only the minted items
 in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, `error`, `detail`,

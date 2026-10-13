@@ -698,7 +698,7 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
 		return api.Config{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return api.Config{}, fmt.Errorf("%s/v1/config answered %s", broker, resp.Status)
+		return api.Config{}, &brokerStatusError{Status: resp.StatusCode, msg: fmt.Sprintf("%s/v1/config answered %s", broker, resp.Status)}
 	}
 	var conf api.Config
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&conf); err != nil {

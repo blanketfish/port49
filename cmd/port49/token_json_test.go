@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -113,6 +116,81 @@ func TestTokenJSONOnADeny(t *testing.T) {
 		strings.Count(out.String(), "\n") != 1 || !strings.Contains(errb.String(), "deny no_grants_matched") ||
 		strings.Contains(out.String(), "LOGINTOKEN") || strings.Contains(errb.String(), "LOGINTOKEN") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// The IdP proof path's real producers (postIdPProof and fetchBrokerConfig,
+// against a TLS broker) map as the touch path and /token do: an outage (down or
+// 503, store_unavailable included) is broker_unavailable, a 4xx refusal is
+// broker_refused, a 500 is agent_error. A hand-built error would only prove the
+// switch, not the producers.
+func TestTheIdPProofPathMapsAsTheTouchPathDoes(t *testing.T) {
+	need := api.PerLoginMFA{Device: "core1", Challenge: "CHALLENGE", Accept: []string{"idp_mfa"}}
+	code := func(err error) string {
+		f := tokenFailureOf("core1", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: err})
+		if strings.Contains(f.Detail, "IDTOKEN") || strings.Contains(f.Detail, "CHALLENGE") {
+			t.Errorf("a secret in %q", f.Detail)
+		}
+		return f.Error
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   api.Error
+		want   string
+	}{
+		{"503 store_unavailable", 503, api.Error{Error: "store_unavailable", Detail: "ask again and prove again"}, "broker_unavailable"},
+		{"500", 500, api.Error{Error: "internal", Detail: "x"}, "agent_error"},
+		{"401 refused", 401, api.Error{Error: "per_login_mfa_refused", Detail: "acr"}, "broker_refused"},
+		{"no API error", 502, api.Error{}, "agent_error"},
+	} {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_ = json.NewEncoder(w).Encode(tc.body)
+		}))
+		pool := x509.NewCertPool()
+		pool.AddCert(srv.Certificate())
+		if got := code(postIdPProof(context.Background(), srv.URL, pool, nil, "IDTOKEN", "CHALLENGE")); got != tc.want {
+			t.Errorf("/v1/mfa %s: %s, want %s", tc.name, got, tc.want)
+		}
+		if tc.status == 503 || tc.status == 500 {
+			_, err := fetchBrokerConfig(context.Background(), srv.URL, pool, nil)
+			if got := code(err); got != tc.want {
+				t.Errorf("/v1/config %s: %s, want %s", tc.name, got, tc.want)
+			}
+		}
+		srv.Close()
+	}
+	pool := x509.NewCertPool()
+	if got := code(postIdPProof(context.Background(), "https://127.0.0.1:1", pool, nil, "IDTOKEN", "CHALLENGE")); got != "broker_unavailable" {
+		t.Errorf("/v1/mfa unreachable: %s", got)
+	}
+	_, err := fetchBrokerConfig(context.Background(), "https://127.0.0.1:1", pool, nil)
+	if got := code(err); got != "broker_unavailable" {
+		t.Errorf("/v1/config unreachable: %s", got)
+	}
+}
+
+// A broker fault the agent can only call broker_error crosses the socket on the
+// touch path as 502, and is agent_error, never a requirement to prove again.
+func TestATouchProofBrokerFaultIsAgentError(t *testing.T) {
+	sock := agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.WriteHeader(428)
+			_ = json.NewEncoder(w).Encode(api.PerLoginMFA{Device: "leaf1", Challenge: "CHALLENGE", Accept: []string{"hardware_key_touch"}})
+		case "/status":
+			_ = json.NewEncoder(w).Encode(agent.Status{TouchKey: true})
+		case "/mfa/touch":
+			w.WriteHeader(502)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "broker_error", Detail: "agent: the broker answered 500 Internal Server Error: x y"})
+		}
+	}))
+	var out, errb lockedBuffer
+	code := run([]string{"token", "--json", "--socket", sock, "leaf1"}, &out, &errb)
+	var f tokenFailure
+	if code != 1 || json.Unmarshal([]byte(out.String()), &f) != nil || f.Error != "agent_error" || f.PerLoginMFA != nil {
+		t.Fatalf("code %d stdout %q", code, out.String())
 	}
 }
 

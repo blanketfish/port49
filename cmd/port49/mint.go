@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
@@ -49,6 +50,17 @@ const (
 	failAgent             = "agent_error"
 )
 
+// brokerStatusError is a broker answer the CLI made itself (an IdP proof's
+// POST, a config fetch) that was not a 200. Its text is the message it always
+// had; Status lets tokenFailureOf sort it as it sorts the agent's own proof
+// paths: 503 an outage, under 500 a refusal, else a fault.
+type brokerStatusError struct {
+	Status int
+	msg    string
+}
+
+func (e *brokerStatusError) Error() string { return e.msg }
+
 func requirementOf(r api.PerLoginMFA) *mfaRequirement {
 	return &mfaRequirement{Accept: r.Accept, ReuseForSeconds: r.ReuseForSeconds, ReuseFrom: r.ReuseFrom, Levels: r.Levels}
 }
@@ -72,6 +84,9 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 	var crlUnchecked *brokercrl.UncheckedError
 	var down *agent.BrokerUnavailableError
 	var answered *agent.APIError
+	var downCLI *brokerDownError
+	var status *brokerStatusError
+	var fault *agent.BrokerFaultError
 	switch {
 	case err == nil && item.Verdict != "" && item.Verdict != "permit":
 		f.Verdict, f.Reason = item.Verdict, item.Reason
@@ -88,8 +103,12 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 		// The CRL check refused the broker's certificate, in the agent or in
 		// an IdP proof the CLI posted itself.
 		f.Error = failBrokerRefused
-	case errors.As(err, &down):
+	case errors.As(err, &down), errors.As(err, &downCLI), errors.As(err, &status) && status.Status == http.StatusServiceUnavailable:
 		f.Error = failBrokerUnavailable
+	case errors.As(err, &status) && status.Status < 500:
+		f.Error = failBrokerRefused
+	case errors.As(err, &status), errors.As(err, &fault):
+		f.Error = failAgent
 	case errors.As(err, &revoked):
 		f.Error = failRevoked
 	case errors.As(err, &running):

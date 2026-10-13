@@ -125,6 +125,14 @@ type BrokerUnavailableError struct{ Err error }
 func (e *BrokerUnavailableError) Error() string { return e.Err.Error() }
 func (e *BrokerUnavailableError) Unwrap() error { return e.Err }
 
+// BrokerFaultError is a broker failure the agent could say no more of than
+// "broker_error" (its 502 on the socket): a fault, not an outage and not a
+// refusal. Its text is the agent's own.
+type BrokerFaultError struct{ Err error }
+
+func (e *BrokerFaultError) Error() string { return e.Err.Error() }
+func (e *BrokerFaultError) Unwrap() error { return e.Err }
+
 // RevokedError is a session an operator's revocation ended (spec §5.1.4).
 // It is ErrSessionOver to errors.Is, but its text does not say to log in:
 // a login is refused the same way until the revocation is lifted. Detail is
@@ -2016,9 +2024,6 @@ func answer(w http.ResponseWriter, out any, err error) {
 		writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 	case errors.As(err, new(*RevocationRunningError)):
 		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
-	case errors.As(err, new(*BrokerUnavailableError)):
-		// An outage: the client rebuilds it as one (as POST /token does).
-		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeBrokerUnavailable, Detail: err.Error()})
 	case errors.As(err, &refused):
 		status := refused.Status
 		if status == http.StatusGone {
@@ -2031,6 +2036,10 @@ func answer(w http.ResponseWriter, out any, err error) {
 	case KeyCode(err) != "":
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 	case writeRefusal(w, err):
+	case errors.As(err, new(*BrokerUnavailableError)):
+		// An outage, after the key's own code and a refusal (as POST /token
+		// orders them): the client rebuilds it as one.
+		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeBrokerUnavailable, Detail: err.Error()})
 	case errors.Is(err, mfatouch.ErrNoAttestation):
 		// The touch was never made: the client may fall back to idp_mfa.
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeNoAttestation, Detail: err.Error()})

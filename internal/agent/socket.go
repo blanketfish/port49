@@ -322,7 +322,7 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 	case resp.StatusCode == http.StatusNotFound && e.Error == "":
 		return ErrAgentTooOld
 	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
-		return errors.New(e.Detail)
+		return &BrokerFaultError{errors.New(e.Detail)}
 	case resp.StatusCode == http.StatusConflict && e.Error == "connection_changed":
 		return ErrConnectionChanged
 	case keyErrorFromCode(e.Error, e.Detail) != nil:
