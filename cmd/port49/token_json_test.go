@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -166,8 +167,36 @@ func TestTheIdPProofPathMapsAsTheTouchPathDoes(t *testing.T) {
 		t.Errorf("/v1/mfa unreachable: %s", got)
 	}
 	_, err := fetchBrokerConfig(context.Background(), "https://127.0.0.1:1", pool, nil)
-	if got := code(err); got != "broker_unavailable" {
+	if got := code(configFault(err)); got != "broker_unavailable" {
 		t.Errorf("/v1/config unreachable: %s", got)
+	}
+	// A redirect, a body that is not a config, and a certificate the CA does not
+	// verify are faults, as on the touch path (Task 5 re-review 2, N1).
+	for _, tc := range []struct {
+		name string
+		h    http.HandlerFunc
+		pool bool
+	}{
+		{"302", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "https://elsewhere.example/", http.StatusFound)
+		}, true},
+		{"html 200", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, "<html>")
+		}, true},
+		{"wrong CA", func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(api.Config{})
+		}, false},
+	} {
+		srv := httptest.NewTLSServer(tc.h)
+		pool := x509.NewCertPool()
+		if tc.pool {
+			pool.AddCert(srv.Certificate())
+		}
+		_, err := fetchBrokerConfig(context.Background(), srv.URL, pool, nil)
+		if got := code(configFault(err)); got != "agent_error" {
+			t.Errorf("/v1/config %s: %s, want agent_error", tc.name, got)
+		}
+		srv.Close()
 	}
 }
 

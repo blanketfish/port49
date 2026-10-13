@@ -17,6 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/oidcclient"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -157,6 +158,23 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 	return fmt.Errorf("this broker verifies none of the methods this device accepts (%s)", methodList(req.Accept))
 }
 
+// configFault is a /v1/config error as the proof reports it: an outage, a
+// broker answer and a CRL refusal keep their own types, and anything else (a
+// redirect, a body that is not a config, a certificate the CA does not verify)
+// is a broker fault, agent_error, as the touch path says (Task 5 re-review 2,
+// N1), never a requirement to prove again.
+func configFault(err error) error {
+	var down *brokerDownError
+	var status *brokerStatusError
+	var revoked *brokercrl.RevokedError
+	var unchecked *brokercrl.UncheckedError
+	if err == nil || errors.As(err, &down) || errors.As(err, &status) ||
+		errors.As(err, &revoked) || errors.As(err, &unchecked) {
+		return err
+	}
+	return &agent.BrokerFaultError{Err: err}
+}
+
 // proveBySignIn is the idp_mfa proof: a sign-in at the provider the broker
 // lists, prompt=login, the broker's acr_values, and nonce = api.MFANonce of
 // the challenge; its ID token goes to POST /v1/mfa as the bearer, once, with
@@ -177,7 +195,7 @@ func proveBySignIn(ctx context.Context, sf *sessionFlags, st agent.Status, req a
 	}
 	conf, err := fetchBrokerConfig(ctx, sf.broker, pool, verify)
 	if err != nil {
-		return err
+		return configFault(err)
 	}
 	prov, err := pickProvider(conf, sf.issuer)
 	if err != nil {
