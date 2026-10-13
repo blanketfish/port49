@@ -1,4 +1,4 @@
-.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -61,8 +61,20 @@ test-hw: check-static
 # internal/port49d runs about 9.5 minutes under the full parallel suite, close
 # to go test's 10-minute default, so the limit is set here rather than left to
 # turn a slow machine into a timeout panic.
-test: lab-unit
+test: lab-unit test-python
 	go test ./... -count=1 -timeout 20m
+
+# The Python library and the Ansible lookup (plan 9d), stdlib unittest. A
+# missing python3 fails it: make test runs it (decision 46 ruling 14).
+PYTHON ?= python3
+
+test-python:
+	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { \
+	  echo "make test needs python3 3.10 or later (decision 46 ruling 14)"; exit 1; }
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s clients/python/tests -v
+	@if [ -d clients/ansible/ansible_collections/port49/client/tests/unit ]; then \
+	  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python/src:clients/ansible $(PYTHON) -m unittest discover \
+	    -s clients/ansible/ansible_collections/port49/client/tests/unit -v; fi
 
 # The race detector over the daemon's packages. On the memory store a split
 # between a login's mark check and its write that never yields between the

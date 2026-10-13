@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "port49"
+version = "0.1.0"
+description = "port49 device tokens for Python: identity, mint, sweep, retry, and Netmiko over the port49 CLI"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+netmiko = ["netmiko>=4.7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
