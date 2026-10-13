@@ -943,6 +943,22 @@ func TestAStoreErrorWhileProvingIsStoreUnavailable(t *testing.T) {
 	}
 }
 
+// A proof whose proved record is written but whose reuse record is not is
+// answered 503, and, as that answer says, the mint naming the challenge is
+// still covered by it (final review broker minor 4).
+func TestAProofKeptForThisChallengeOnlyStillCoversItsMint(t *testing.T) {
+	f := newMFAFixture(t)
+	ch := f.ask(t, f.alice, "core-sw01")
+	f.store.failOn("PutMFAProof")
+	if code := f.proveTouch(t, f.alice, ch); code != 503 {
+		t.Fatalf("POST /v1/mfa with the reuse record failing = %d, want 503", code)
+	}
+	f.store.failOn()
+	if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Verdict != "permit" {
+		t.Fatalf("the mint naming the challenge = %+v, want covered by the proved record", it)
+	}
+}
+
 // A retried request whose answer was lost replays the token it minted, even
 // though the proof that covered it is spent (pre-flight minor 2).
 func TestAReplayedMintUnderReuseZeroIsReplayed(t *testing.T) {

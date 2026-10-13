@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -172,6 +173,42 @@ func TestABearerProofIsNotKeptForReuse(t *testing.T) {
 	f.clock.Advance(time.Minute) // past the pacing, inside reuse_for
 	if out := f.bearerRefresh(t, "alice", "", ""); out.find("core-sw01").Outcome != "per_login_mfa_required" {
 		t.Fatalf("a bearer refresh inside reuse_for after a spent proof = %+v", out)
+	}
+}
+
+// A bearer that sends an agent session header anyway is still a bearer: the
+// header is ignored, its proof is not kept, and its next mint inside reuse_for
+// is asked again (ruling 15; final review broker minor 2).
+func TestABearerCarryingAnAgentSessionKeepsNoProof(t *testing.T) {
+	f := requireCore(t)
+	agent := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	mint := func(ch string) api.MintItem {
+		t.Helper()
+		body, err := json.Marshal(api.MintRequest{Devices: []string{"core-sw01"}, Purpose: "test", PerLoginMFAChallenge: ch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptestRequest("POST", "/v1/tokens", string(body))
+		r.Header.Set("Authorization", "Bearer "+f.bearerToken(t, "alice", nil))
+		r.Header.Set(api.AgentSessionHeader, agent)
+		w := httptestServe(f.fixture, r)
+		var out api.MintResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Results) != 1 {
+			t.Fatalf("bearer mint = %d %s", w.Code, w.Body.String())
+		}
+		return out.Results[0]
+	}
+	it := mint("")
+	if it.Reason != "per_login_mfa_required" || it.PerLoginMFA == nil {
+		t.Fatalf("the first bearer mint = %+v", it)
+	}
+	f.proveIdPFor(t, "alice", it.PerLoginMFA.Challenge)
+	if it := mint(it.PerLoginMFA.Challenge); it.Verdict != "permit" {
+		t.Fatalf("the bearer mint naming its proof = %+v", it)
+	}
+	f.clock.Advance(time.Minute) // inside reuse_for
+	if it := mint(""); it.Reason != "per_login_mfa_required" {
+		t.Fatalf("a bearer mint inside reuse_for = %+v: the bearer's proof was kept under its header", it)
 	}
 }
 

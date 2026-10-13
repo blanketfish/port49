@@ -541,7 +541,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// gate's 503 among them, spends no proof, and another caller's challenge
 	// is not found (decision 45 ruling 14; re-review R1; final review broker
 	// I2).
-	mf := &mfaRequest{agentSHA256: agentKey(r)}
+	mf := &mfaRequest{agentSHA256: callerAgentKey(c, r)}
 	if req.PerLoginMFAChallenge != "" {
 		mf.proved, mf.takeErr = b.takeProved(ctx, c, mf.agentSHA256, req.PerLoginMFAChallenge)
 	}

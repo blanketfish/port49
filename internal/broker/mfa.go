@@ -203,6 +203,15 @@ func agentKey(r *http.Request) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// callerAgentKey is agentKey for c's request, and "" for a bearer whatever
+// header it sends: a bearer keeps no reusable proof (ruling 15).
+func callerAgentKey(c caller, r *http.Request) string {
+	if c.oidc != nil {
+		return ""
+	}
+	return agentKey(r)
+}
+
 // challengeRecord is what a challenge's once-only record holds: its
 // binding. agent_sha256 is the hash of the agent session, never the value
 // (PutOnce is not sealed).
@@ -516,11 +525,13 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 			Reason: decision.PerLoginMFARefused, Principal: c.principal, Auth: c.auth(), PerLoginMFA: part})
 		writeError(w, http.StatusUnauthorized, string(decision.PerLoginMFARefused), cause)
 	}
-	storeDown := func() {
+	storeDownSaying := func(detail string) {
 		b.emit(decision.Record{TS: now, Event: decision.EventPerLoginMFA, Verdict: decision.VerdictDeny,
 			Reason: decision.StoreUnavailable, Principal: c.principal, Auth: c.auth(), PerLoginMFA: part})
-		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-			"the broker could not judge your proof, so it recorded none; ask again and prove again")
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), detail)
+	}
+	storeDown := func() {
+		storeDownSaying("the broker could not judge your proof, so it recorded none; ask again and prove again")
 	}
 	if decodeErr != nil || len(ch) != api.MFAChallengeLen {
 		refuse("the challenge is not one this broker issued")
@@ -587,7 +598,7 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 	if method == policy.HardwareKeyTouch {
 		// The post must come from the connection's own certificate and the
 		// agent the challenge was issued to.
-		if bind.Fingerprint != c.cred.Fingerprint || bind.AgentSHA256 != agentKey(r) {
+		if bind.Fingerprint != c.cred.Fingerprint || bind.AgentSHA256 != callerAgentKey(c, r) {
 			refuse("the proof is not from the certificate and agent session the challenge was issued to")
 			return
 		}
@@ -619,7 +630,11 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 		if err := b.Store.PutMFAProof(ctx, store.MFAProof{
 			Key: proofKey(c.principal, bind.Fingerprint, bind.AgentSHA256, method), Method: string(method), At: now},
 			mfaProofTTL); err != nil {
-			storeDown()
+			// The proved record is written: it covers the mint that names
+			// this challenge, once, and nothing after it (final review
+			// broker minor 4).
+			storeDownSaying("the broker recorded your proof for this challenge but could not keep it for reuse; " +
+				"mint again naming the challenge, and a later login proves again")
 			return
 		}
 	}

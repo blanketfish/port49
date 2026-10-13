@@ -714,6 +714,42 @@ grants:
 	}
 }
 
+// applies_to_machines turned off changes nothing for a person, so it is no
+// weakening of a person's requirement; for a machine it still is (final
+// review broker minor 11).
+func TestAppliesToMachinesOffWeakensOnlyAMachine(t *testing.T) {
+	req := func(machine, applies bool) MFARequirement {
+		return MFARequirement{Accept: []MFAMethod{HardwareKeyTouch}, ReuseFor: 5 * time.Minute, Machine: machine,
+			Levels: []MFALevel{{Level: "scope core", Accept: []MFAMethod{HardwareKeyTouch}, ReuseFor: 5 * time.Minute,
+				AppliesToMachines: applies}}}
+	}
+	if mfaWeakened(req(false, true), req(false, false)) {
+		t.Error("a person's requirement read as weakened by applies_to_machines turned off")
+	}
+	if !mfaWeakened(req(true, true), req(true, false)) {
+		t.Error("a machine's requirement did not read as weakened by applies_to_machines turned off")
+	}
+}
+
+// A selector prints in ASCII, so a value in NFC and the same value in NFD,
+// which select different devices, never read alike on the two sides of a diff
+// line (final review broker minor 9).
+func TestScopeSelectPrintsInASCII(t *testing.T) {
+	nfc, nfd := "café", "café"
+	a := scopeSelect(&Scope{Match: map[string]matchValue{"site": {Equal: []string{nfc}}}, OnMissing: "exclude"})
+	b := scopeSelect(&Scope{Match: map[string]matchValue{"site": {Equal: []string{nfd}}}, OnMissing: "exclude"})
+	for _, s := range []string{a, b} {
+		for _, r := range s {
+			if r > 0x7e {
+				t.Fatalf("%q prints a non-ASCII character", s)
+			}
+		}
+	}
+	if a == b {
+		t.Fatalf("NFC and NFD print alike: %q", a)
+	}
+}
+
 // MetBy: a login under prior meets r when r asks nothing, or prior asked a
 // proof from methods r accepts, reusable no longer than r allows.
 func TestMFARequirementMetBy(t *testing.T) {

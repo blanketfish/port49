@@ -59,8 +59,8 @@ type MFALevel struct {
 
 // scopeSelect is a scope's match and on_missing as one canonical string, used
 // both to compare two levels and to print them. Every key, value and pattern
-// is quoted, so no value can read as a separator and two different selectors
-// never encode alike. Value lists are sorted and deduplicated, since matching
+// is quoted in ASCII, so no value can read as a separator and two different
+// selectors never encode or print alike (an NFC and an NFD value included). Value lists are sorted and deduplicated, since matching
 // is set membership (scope.go), and on_missing is left out when no key can be
 // missing: an empty match reads no key, and `name` is always present.
 func scopeSelect(s *Scope) string {
@@ -81,7 +81,7 @@ func scopeSelect(s *Scope) string {
 			vals = slices.Compact(vals)
 			quoted := make([]string, len(vals))
 			for j, val := range vals {
-				quoted[j] = strconv.Quote(val)
+				quoted[j] = strconv.QuoteToASCII(val)
 			}
 			parts = append(parts, "in ["+strings.Join(quoted, ", ")+"]")
 		}
@@ -91,13 +91,13 @@ func scopeSelect(s *Scope) string {
 		}
 		slices.Sort(ops)
 		for _, op := range ops {
-			parts = append(parts, op+" "+strconv.Quote(v.Cmp[op]))
+			parts = append(parts, op+" "+strconv.QuoteToASCII(v.Cmp[op]))
 		}
-		terms[i] = strconv.Quote(k) + " " + strings.Join(parts, " ")
+		terms[i] = strconv.QuoteToASCII(k) + " " + strings.Join(parts, " ")
 	}
 	sel := "match {" + strings.Join(terms, ", ") + "}"
 	if missable {
-		sel += " on_missing " + strconv.Quote(s.OnMissing)
+		sel += " on_missing " + strconv.QuoteToASCII(s.OnMissing)
 	}
 	return sel
 }
@@ -487,8 +487,8 @@ type MFAChange struct {
 // mfaWeakened is whether new lets a login through that old did not. It
 // compares the effective requirement, and then each old level by identity (its
 // kind and name, and for a scope its match and on_missing): a level gone or
-// replaced by another, widened, given a longer reuse_for or turned off for
-// machines is a weakening whatever the level count, so swapping a name-pinned
+// replaced by another, widened, given a longer reuse_for or (for a machine)
+// turned off for machines is a weakening whatever the level count, so swapping a name-pinned
 // scope for an attribute scope cannot pass (spec §12; decision 45 rulings 24
 // and 26). Any change to a scope's match or on_missing counts as a removal,
 // fail-closed: nothing proves the new selector covers a superset of devices
@@ -510,8 +510,9 @@ func mfaWeakened(old, new MFARequirement) bool {
 			return true
 		}
 		n := new.Levels[i]
+		// applies_to_machines turned off changes nothing for a person.
 		return n.Select != o.Select || !subsetOf(n.Accept, o.Accept) || n.ReuseFor > o.ReuseFor ||
-			o.AppliesToMachines && !n.AppliesToMachines
+			old.Machine && o.AppliesToMachines && !n.AppliesToMachines
 	})
 }
 
