@@ -246,7 +246,7 @@ func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
-	script := fakeSSHHead + "echo 'remote username contains invalid characters' >&2\nexit 255\n"
+	script := fakeSSHHead(r.known) + "echo 'remote username contains invalid characters' >&2\nexit 255\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
 		!strings.Contains(errb, "If it says Host key verification failed") ||
-		!strings.Contains(errb, "run ssh-keygen -f /tmp/port49_fake_known_hosts -R leaf1 and") || strings.Contains(errb, "devices trust") {
+		!strings.Contains(errb, "run ssh-keygen -f "+r.known+" -R leaf1 and") || strings.Contains(errb, "devices trust") {
 		t.Fatalf("code %d stderr %q", code, errb)
 	}
 }
@@ -266,7 +266,7 @@ func TestSSHsStderrIsTheCallersOwn(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
-	script := fakeSSHHead + "sleep 3 >&2 &\nexit 0\n"
+	script := fakeSSHHead(r.known) + "sleep 3 >&2 &\nexit 0\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

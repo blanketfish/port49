@@ -117,10 +117,13 @@ func (r *sshRig) filed(t *testing.T, name string) []string {
 
 // fakeSSHHead is a fake ssh's first lines: OpenSSH 10.2p1 to -V, and to -G
 // what a real `ssh -G` prints for the one setting sshPolicy needs to go on,
-// a known_hosts kept. The lines after it are the fake's real run.
-const fakeSSHHead = "#!/bin/sh\n" +
-	"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
-	"if [ \"$1\" = -G ]; then echo 'userknownhostsfile /tmp/port49_fake_known_hosts'; exit 0; fi\n"
+// a known_hosts kept (known, the rig's own). The lines after it are the
+// fake's real run.
+func fakeSSHHead(known string) string {
+	return "#!/bin/sh\n" +
+		"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
+		"if [ \"$1\" = -G ]; then echo 'userknownhostsfile " + known + "'; exit 0; fi\n"
+}
 
 func testHostKey(t *testing.T) ssh.PublicKey {
 	t.Helper()
@@ -182,7 +185,7 @@ func TestTheTokenIsNeverInArgvOrTheEnvironment(t *testing.T) {
 	at := func(name string) string { return filepath.Join(dir, name) }
 	// The askpass is forked, not exec'd: its parent is then the "ssh" port49
 	// started, as a real ssh's askpass's is (pre-flight N3).
-	script := fakeSSHHead +
+	script := fakeSSHHead(r.known) +
 		"printf '%s\\n' \"$@\" > '" + at("argv") + "'\n" +
 		"env > '" + at("env") + "'\n" +
 		"\"$SSH_ASKPASS\" \"alice@leaf1's password: \" > '" + at("answer") + "'\n" +

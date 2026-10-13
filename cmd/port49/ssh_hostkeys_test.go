@@ -241,7 +241,7 @@ func TestAProxyJumpHopsPromptNeverGetsTheToken(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	dir := t.TempDir()
 	answer := filepath.Join(dir, "answer")
-	script := fakeSSHHead +
+	script := fakeSSHHead(r.known) +
 		"sh -c '" + setsid + " -w \"$SSH_ASKPASS\" \"$1\" < /dev/null > \"$2\" 2>&1; echo' _ \"(alice@leaf1) Password: \" '" + answer + "'\n" +
 		"exit 255\n"
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {

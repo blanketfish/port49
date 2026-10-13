@@ -119,7 +119,7 @@ func TestSSHRestoresTheTerminalWhenItEnds(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
-	script := fakeSSHHead + "stty -echo\nexit 0\n"
+	script := fakeSSHHead(r.known) + "stty -echo\nexit 0\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

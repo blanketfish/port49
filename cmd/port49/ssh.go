@@ -98,6 +98,7 @@ type sshOptions struct {
 	port                              int
 	verbose                           bool
 	command                           []string
+	env                               []string // the environment ssh and ssh -G run in; nil is the caller's own
 }
 
 // sshTrust is what port49 ssh passes about host keys (decision 46 ruling 2).
@@ -120,13 +121,29 @@ func passwdHome() string {
 
 // keygenCommand is the ssh-keygen command that removes the keys filed under
 // t.keyName: with -f when the first known_hosts file is not ~/.ssh/known_hosts,
-// since ssh-keygen edits that one alone.
+// since ssh-keygen edits that one alone. "" when that file keeps no key (under
+// the operator's yes it may be /dev/null, none or a split value): the advice
+// then points at the file ssh names (keygenAdvice).
 func keygenCommand(t sshTrust) string {
 	cmd := "ssh-keygen"
-	if home := passwdHome(); t.known != "" && (home == "" || t.known != filepath.Join(home, ".ssh", "known_hosts")) {
+	home := passwdHome()
+	switch {
+	case t.known == "" || home != "" && t.known == filepath.Join(home, ".ssh", "known_hosts"):
+	case knownHostsCannotKeep(t.known) == "":
 		cmd += " -f " + shellWord(t.known)
+	default:
+		return ""
 	}
 	return cmd + " -R " + shellWord(t.keyName)
+}
+
+// keygenAdvice is what to do about an old key under t.keyName, as the end of
+// a sentence that follows "then".
+func keygenAdvice(t sshTrust) string {
+	if c := keygenCommand(t); c != "" {
+		return "run " + c
+	}
+	return "remove the key filed under " + shellWord(t.keyName) + " from the file ssh names above"
 }
 
 var validSSHName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
@@ -209,8 +226,9 @@ func sshArgs(o sshOptions) []string {
 // ruling 2). The operator's StrictHostKeyChecking yes stands, and every other
 // value is accept-new, never no; the operator's HostKeyAlias stands, and
 // otherwise the alias is the device's name, lowercased as ssh files it.
-// Under accept-new, a UserKnownHostsFile that keeps nothing (/dev/null, none)
-// is refused: every connection would be a first contact, accepted silently.
+// Under accept-new, a first UserKnownHostsFile that cannot keep a key
+// (knownHostsCannotKeep says why) is refused: every connection would be a
+// first contact, accepted silently.
 // Nothing about trust is decided here that OpenSSH does not decide itself.
 func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) {
 	args := []string{"-G"}
@@ -228,6 +246,7 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	c.Env = o.env
 	// A descendant holding ssh -G's stderr cannot keep port49 ssh waiting
 	// past ssh itself (pre-flight I2).
 	c.WaitDelay = time.Second
@@ -273,10 +292,18 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 // connects anyway when it cannot write, so what matters is the file that
 // first name resolves to, not how the setting is spelled: it must be a regular
 // file the user can write, or one that does not exist yet in a directory the
-// user can write (ssh creates the file, and ~/.ssh itself, but no other
-// directory). A device node (/dev/null, however written or linked), a missing
-// directory, a dangling link and an unwritable file keep nothing (decision 46
-// ruling 2; task 3 review C1).
+// user can write (ssh creates the file, and ~/.ssh in the passwd home, but no
+// other directory). Anything but a regular file (/dev/null however written or
+// linked, a FIFO, a directory), a missing directory, a dangling link and an
+// unwritable file keep nothing (decision 46 ruling 2; task 3 review C1). A
+// value with a field that is not an absolute path is refused as ambiguous
+// (re-review I2).
+//
+// Residuals, not detected: a directory whose name ends in a space, followed by
+// '/', reads as two absolute paths, and ssh -G prints the default
+// "~/.ssh/known_hosts ~/.ssh/known_hosts2" in the same shape, so no rule can
+// refuse it without refusing the default (re-review 2, R1); and a `Match exec`
+// whose answer changes between ssh -G and the run (the network, the time).
 func knownHostsCannotKeep(userFiles string) string {
 	first, _, _ := strings.Cut(strings.TrimSpace(userFiles), " ")
 	if first == "" || first == "none" {
@@ -913,14 +940,6 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			cmd, device)
 		return 1
 	}
-	opts := sshOptions{config: *sshConfig, device: device, address: item.Address, username: item.Username,
-		port: *port, verbose: *verbose, command: command}
-	if opts.trust, err = sshPolicy(context.Background(), path, opts); err != nil {
-		fmt.Fprintf(stderr, "%s: %v; nothing was sent to %s\n", cmd, err, device)
-		return 1
-	}
-	warn := ceilingWarning(*socket)
-	warnNearCeiling(stderr, device, item, warn)
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
@@ -939,6 +958,18 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	defer os.Remove(sockPath)
 	defer ln.Close()
+	// ssh -G gets the environment the run gets, so a Match exec that tests it
+	// is decided alike (re-review 2, R2). The token is in neither.
+	env := append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+askpassPath(self), "SSH_ASKPASS_REQUIRE=force",
+		askpassEnv+"="+sockPath)
+	opts := sshOptions{config: *sshConfig, device: device, address: item.Address, username: item.Username,
+		port: *port, verbose: *verbose, command: command, env: env}
+	if opts.trust, err = sshPolicy(context.Background(), path, opts); err != nil {
+		fmt.Fprintf(stderr, "%s: %v; nothing was sent to %s\n", cmd, err, device)
+		return 1
+	}
+	warn := ceilingWarning(*socket)
+	warnNearCeiling(stderr, device, item, warn)
 	expiresAt, _ := time.Parse(time.RFC3339, item.ExpiresAt)
 	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device,
 		keyName: opts.trust.keyName, askerParent: askerParent, expiresAt: expiresAt,
@@ -949,8 +980,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		}}
 
 	c := exec.Command(path, sshArgs(opts)...)
-	c.Env = append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+askpassPath(self), "SSH_ASKPASS_REQUIRE=force",
-		askpassEnv+"="+sockPath)
+	c.Env = env
 	// ssh's stderr is the caller's own: ssh acts on whether it is a terminal,
 	// and no descendant holding it can keep this from returning.
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
@@ -1019,14 +1049,14 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			"its message is above). Your ssh_config says StrictHostKeyChecking yes: if ssh says no host key is known, "+
 			"no key is filed under %s, so add the device's key to your known_hosts after checking it on its console; "+
 			"if it says the key changed, the key filed under %s is not the one %s presents, so verify it on the "+
-			"console and run %s, then add the key you verified\n",
-			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, keygenCommand(opts.trust))
+			"console and %s, then add the key you verified\n",
+			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, keygenAdvice(opts.trust))
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
 			"its message is above). If it says Host key verification failed, the key your known_hosts files under "+
 			"%s is not the one %s presents: either the device's key changed, or the address inventory gives for %s "+
-			"is not the device. Verify the key on its console, then run %s and connect again\n",
-			cmd, device, opts.trust.keyName, item.Address, device, keygenCommand(opts.trust))
+			"is not the device. Verify the key on its console, then %s and connect again\n",
+			cmd, device, opts.trust.keyName, item.Address, device, keygenAdvice(opts.trust))
 	}
 	return code
 }

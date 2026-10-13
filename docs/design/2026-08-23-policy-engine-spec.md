@@ -6296,9 +6296,11 @@ token through the agent and logs in with the operator's OpenSSH (8.5 or later).
   `no`) and the device's inventory name as `HostKeyAlias` (unless the operator's ssh_config sets
   one). A first connection is accepted and saved by ssh; a changed key, or a key of another type
   under a name that holds one, stops ssh before the token is sent, and `port49 ssh` names
-  `ssh-keygen -R`. A first `UserKnownHostsFile` that cannot keep a key (`none`, or a path
-  that resolves to a device node such as `/dev/null`, a missing directory, a dangling link or a file
-  the user cannot write) is refused under accept-new, naming the setting and where it resolves. Why it matters: the token is the
+  `ssh-keygen -R` (with `-f` when the first file is not `~/.ssh/known_hosts`). A first
+  `UserKnownHostsFile` that cannot keep a key (`none`; a path that resolves to anything but a
+  regular file, such as `/dev/null` or a FIFO; a missing directory, a dangling link or a file the
+  user cannot write; or a value holding a space or a relative path, which `ssh -G` prints
+  ambiguously) is refused under accept-new, naming the setting and where it resolves. Why it matters: the token is the
   device's password for its lifetime, and a host that takes it can replay it to the real device.
   The window this leaves is the first contact, per device and per operator; a shop that wants
   that verified too uses a managed `GlobalKnownHostsFile` or `@cert-authority`, which apply
@@ -9332,7 +9334,14 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   makes `~/.ssh` in the passwd home, not `$HOME`). `ssh -G` prints a path with a space unquoted, so a
   value with any field that is not an absolute path is refused as ambiguous (task 3 re-review I2).
   Under the operator's `yes` it stands, and a changed key's message says to add the verified key.
-  The `ssh-keygen` hint names `-f` with the first file when it is not `~/.ssh/known_hosts`. Nothing else about host keys is passed.
+  The `ssh-keygen` hint names `-f` with the first file when it is not `~/.ssh/known_hosts` and can
+  keep a key; under the operator's `yes` with `/dev/null`, `none` or a split value it names no file
+  and points at the one ssh names. `ssh -G` runs with the environment the run gets
+  (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `PORT49_ASKPASS`; never the token), so a `Match exec` on
+  them is decided alike (task 3 re-review 2, R2). Two residuals are not detected: a directory whose
+  name ends in a space, followed by `/`, still reads as two absolute paths (`ssh -G` prints the
+  default two-file value in that shape, so nothing can refuse it without refusing the default;
+  R1), and a `Match exec` whose answer changes between `ssh -G` and the run. Nothing else about host keys is passed.
   `ssh -G` failing refuses the run before ssh starts. These refusals follow the mint, since `ssh
   -G` reads its address; that token is unused and expires. The alias files a key under the name,
   so an address added to a device in the source of truth meets the key already known under its

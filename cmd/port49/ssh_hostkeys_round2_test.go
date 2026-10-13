@@ -18,6 +18,8 @@ func TestAMatchBlockOnTheCommandIsEvaluated(t *testing.T) {
 	for name, match := range map[string]string{
 		"sessiontype exec": "Match sessiontype exec",
 		"command":          `Match command "show*"`,
+		// Round 2 R2: ssh -G has the environment the real run gets.
+		"exec on the askpass environment": `Match exec "test -n \"$SSH_ASKPASS_REQUIRE\""`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
@@ -85,7 +87,34 @@ func TestKeygenHintNamesANonDefaultFile(t *testing.T) {
 	if got := keygenCommand(sshTrust{keyName: "leaf1", known: def}); got != "ssh-keygen -R leaf1" {
 		t.Errorf("default: %q", got)
 	}
-	if got := keygenCommand(sshTrust{keyName: "a b", known: "/x y/kh"}); got != "ssh-keygen -f '/x y/kh' -R 'a b'" {
+	kh := filepath.Join(t.TempDir(), "kh")
+	if err := os.WriteFile(kh, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := keygenCommand(sshTrust{keyName: "a b", known: kh}); got != "ssh-keygen -f "+shellWord(kh)+" -R 'a b'" {
 		t.Errorf("other: %q", got)
+	}
+}
+
+// Round 2 R3: a first file that holds no key (the managed-GlobalKnownHostsFile
+// shape under the operator's yes, `/dev/null`; `none`; a split value) is never
+// named with -f; the hint points at the file ssh names instead.
+func TestKeygenHintNeverNamesAFileThatKeepsNothing(t *testing.T) {
+	for _, known := range []string{"/dev/null", "none", "y/kh"} {
+		got := keygenCommand(sshTrust{keyName: "leaf1", known: known, strict: "yes"})
+		if got != "" {
+			t.Errorf("%q: got %q, want no command", known, got)
+		}
+	}
+	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, testHostKey(t), "StrictHostKeyChecking yes")
+	if err := os.WriteFile(r.config, []byte("UserKnownHostsFile /dev/null\nGlobalKnownHostsFile "+r.known+
+		"\nStrictHostKeyChecking yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errb := r.run(t, "leaf1")
+	if code != 255 || strings.Contains(errb, "-f /dev/null") || strings.Contains(errb, "-f none") ||
+		!strings.Contains(errb, "from the file ssh names above") {
+		t.Fatalf("code %d stderr %q", code, errb)
 	}
 }
