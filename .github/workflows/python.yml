@@ -1,0 +1,22 @@
+# The Python library's and the Ansible lookup's unit tests (plan 9d), on the
+# floor (3.10, decision 46 ruling 14) and the newest stable Python. No YubiKey,
+# TPM or broker: test_real_cli builds ./cmd/port49 and stubs the agent socket.
+name: python
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python: ["3.10", "3.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ matrix.python }}"}
+      - run: make test-python

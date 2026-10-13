@@ -12,12 +12,18 @@ sys.path.insert(0, os.path.join(HERE, "..", "src"))
 import fakeport49 as fake  # noqa: E402
 from port49 import (Agent, BrokerRefused, Denied, KeyUnavailable, MFARequired, NoAgent,  # noqa: E402
                     NotInstalled, Port49Error, Refusal, SessionOver, Temporary)
+from port49 import DeviceFault  # noqa: E402
 from port49 import client  # noqa: E402
 
 REPO = os.path.join(HERE, "..", "..", "..")
 
 PERMIT = fake.item(device="leaf1", verdict="permit", address="10.0.0.11", platform="arista_eos",
                    username="alice", login="LOGINTOKEN", enable="ENABLETOKEN", expires_at="2026-10-13T10:00:00Z")
+
+
+def eval_item(line):
+    import json
+    return json.loads(line)
 
 
 def spec_codes():
@@ -34,7 +40,10 @@ def spec_codes():
 def go_codes():
     """The fail* code constants of cmd/port49/mint.go."""
     with open(os.path.join(REPO, "cmd", "port49", "mint.go"), encoding="utf-8") as f:
-        return set(re.findall(r'^\s*fail[A-Za-z]+\s*=\s*"([a-z_]+)"', f.read(), re.M))
+        codes = set(re.findall(r'^\s*fail[A-Za-z]+\s*=\s*"([a-z_]+)"', f.read(), re.M))
+    with open(os.path.join(REPO, "internal", "agent", "keyerror.go"), encoding="utf-8") as f:
+        # the key codes agent.KeyCode returns
+        return codes | set(re.findall(r'^\s*code[A-Z][A-Za-z]+\s*=\s*"([a-z_]+)"', f.read(), re.M))
 
 
 class AgentTest(unittest.TestCase):
@@ -80,9 +89,11 @@ class AgentTest(unittest.TestCase):
         codes = spec_codes() | go_codes()
         self.assertIn("broker_unavailable", codes)  # the read found the table
         self.assertIn("touch_timeout", codes)
-        # no_token and agent_error are the plain Port49Error on purpose: nothing a caller can do differently.
+        # agent_error is the plain Port49Error on purpose, no_token a DeviceFault: both are decided in error_for.
         plain = {"no_token", "agent_error"}
         missing = sorted(c for c in codes if c not in client.CLASSES and c not in plain)
+        self.assertIsInstance(client.error_for({"device": "d", "error": "no_token"}), DeviceFault)
+        self.assertIs(type(client.error_for({"device": "d", "error": "agent_error"})), Port49Error)
         self.assertEqual(missing, [], "codes with no class in client.CLASSES")
         self.assertLessEqual(set(client.CLASSES), codes, "a class for a code the CLI does not print")
         self.assertLessEqual(client.RETRIED, set(client.CLASSES))
@@ -155,6 +166,60 @@ class AgentTest(unittest.TestCase):
         with self.assertRaises(MFARequired) as cm:
             res.raise_for_refused()
         self.assertEqual(cm.exception.requirement["accept"], ["idp_mfa"])
+
+    def test_one_device_the_broker_could_not_decide_does_not_stop_the_sweep(self):
+        for code in ["device_unconfigured", "attribute_too_long", "attribute_unsafe", "broker_error", "no_token"]:
+            fault = {"stdout": fake.item(device="leaf1", error=code, detail="d"), "code": 1}
+            res = self.agent(fault, {"stdout": fake.item(**{**eval_item(PERMIT), "device": "leaf2"})}).tokens(["leaf1", "leaf2"])
+            self.assertEqual((list(res.tokens), list(res.refused)), (["leaf2"], ["leaf1"]), code)
+            self.assertEqual(res.refused["leaf1"].error, code)
+            with self.assertRaises(DeviceFault) as cm:
+                res.raise_for_refused()
+            self.assertEqual(cm.exception.code, code)
+
+    def test_a_stopped_sweep_keeps_what_it_minted(self):
+        gone = {"stdout": fake.item(device="leaf2", error="session_over"), "code": 1}
+        with self.assertRaises(SessionOver) as cm:
+            self.agent({"stdout": PERMIT}, gone).tokens(["leaf1", "leaf2"])
+        self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
+
+    def test_a_traceback_with_locals_holds_no_token(self):
+        import traceback
+        a = self.agent({"stdout": fake.item(verdict="permit", login="LOGINTOKEN", extra=1), "code": 1})
+        try:
+            a.token("leaf1")
+        except Port49Error as e:
+            text = "".join(traceback.TracebackException(type(e), e, e.__traceback__, capture_locals=True).format())
+        self.assertNotIn("LOGINTOKEN", text)
+
+    def test_a_wrapper_that_leaves_a_grandchild_does_not_hold_the_timeout(self):
+        import time
+        wrap = os.path.join(self.dir, "wrap")
+        with open(wrap, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nsleep 8 &\nsleep 8\n")
+        os.chmod(wrap, 0o700)
+        began = time.monotonic()
+        with self.assertRaises(Port49Error) as cm:
+            Agent(port49=wrap, stderr=self.err, timeout=0.3).token("leaf1")
+        self.assertEqual(cm.exception.code, "timeout")
+        self.assertLess(time.monotonic() - began, 4)
+
+    def test_a_sink_that_takes_no_text_does_not_stall_the_run(self):
+        noisy = {"stdout": PERMIT, "stderr": "x" * 300000}
+        with open(os.path.join(self.dir, "sink"), "wb") as sink:
+            tok = Agent(port49=fake.make(self.dir, [noisy]), stderr=sink, timeout=20).token("leaf1")
+        self.assertEqual(tok.login, "LOGINTOKEN")
+
+    def test_an_answer_larger_than_a_megabyte_is_no_answer(self):
+        big = {"stdout": PERMIT.rstrip("\n")[:-1] + ', "pad": "' + "x" * (1 << 21) + '"}\n'}
+        with self.assertRaises(Port49Error) as cm:
+            self.agent(big).token("leaf1")
+        self.assertEqual(cm.exception.code, "exit_0")
+
+    def test_a_character_across_two_reads_is_whole(self):
+        word = "€" * 5000  # 3 bytes each: a 4096-byte read splits one
+        self.agent({"stdout": PERMIT, "stderr": word}).token("leaf1")
+        self.assertEqual(self.err.getvalue(), word)
 
     def test_stderr_reaches_the_person(self):
         self.agent({"stdout": PERMIT, "stderr": "port49: touch your key now\n"}).token("leaf1")

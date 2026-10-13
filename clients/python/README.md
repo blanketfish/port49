@@ -46,7 +46,14 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 | `touch_timeout`, `key_locked`, `key_absent` | `KeyUnavailable` | Touch the key, unlock it, or plug it in; not retried. |
 | `broker_refused` | `BrokerRefused` | The broker refused a proof, or its certificate was refused; not retried. |
 | `revocation_running`, `connection_changed`, `broker_unavailable` | `Temporary` | Retried; see below. |
-| `agent_error`, `no_token`, `exit_N`, `timeout` | `Port49Error` | Read `.detail`. |
+| `device_unconfigured`, `attribute_too_long`, `attribute_unsafe`, `broker_error`, `no_token` | `DeviceFault` | The broker could not decide this one device (or minted it no token); fix its inventory entry. Other devices are unaffected. |
+| `agent_error`, `exit_N`, `timeout` | `Port49Error` | Read `.detail`. |
+
+`tokens()` collects what belongs to one device (a deny, a second factor, a `DeviceFault`) into
+`refused`, so one device never stops a sweep. Test a refusal with `r.per_login_mfa is not None` or
+`isinstance(r.exception(), MFARequired)`, not `r.error`: the same second-factor condition comes
+from the CLI's code (`error`) or from a broker deny (`reason`). Anything else stops the sweep, and
+the exception's `.results` holds the tokens minted so far, so a rerun need not mint them again.
 
 ## What is retried, and why
 

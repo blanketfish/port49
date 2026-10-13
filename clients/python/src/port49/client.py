@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import _run
-from .errors import (BrokerRefused, Denied, KeyUnavailable, MFARequired, NoAgent, Port49Error, SessionOver,
+from .errors import (BrokerRefused, Denied, DeviceFault, KeyUnavailable, MFARequired, NoAgent, Port49Error, SessionOver,
                      Temporary)
 
 # The CLI's codes (spec §12) to their classes; any other is a Port49Error (no_token and
@@ -88,7 +88,9 @@ def error_for(obj, device=None):
                                reason=reason)
         return Denied(reason or verdict, detail, device, reason=reason, verdict=verdict)
     code = obj.get("error") or "agent_error"
-    cls = CLASSES.get(code, Port49Error)
+    # A code that is not one of the CLI's is the broker's own fault code for this device (its item
+    # says "error", "detail"); no_token is per-device too. agent_error is the agent's, not a device's.
+    cls = CLASSES.get(code, Port49Error if code == "agent_error" else DeviceFault)
     if cls is MFARequired:
         return MFARequired(code, detail, device, requirement=obj.get("per_login_mfa"))
     return cls(code, detail, device)
@@ -106,6 +108,8 @@ def refusal_of(err, device):
         if err.reason:  # the broker's deny
             return Refusal(device, "deny", err.reason, None, err.detail, err.requirement or None)
         return Refusal(device, None, None, err.code, err.detail, err.requirement or None)
+    if isinstance(err, DeviceFault):
+        return Refusal(device, None, None, err.code, err.detail)
     return Refusal(device, err.verdict, err.reason, None, err.detail)
 
 
@@ -133,25 +137,36 @@ class Agent:
         args = ["token", "--json"] + (["--enable"] if enable else []) + (["--ttl", f"{int(ttl)}s"] if ttl else [])
         argv = self._argv(*args) + ["--", device]
         for attempt in range(self.attempts):
-            ran = _run.run(argv, timeout=self.timeout, stderr=self.stderr)
-            obj = answer(ran)
-            if ran.code == 0 and obj and obj.get("verdict") == "permit" and obj.get("login"):
-                return Token.of(obj, device)
-            if obj is None or ran.code == 0:
-                raise failed(ran, device, "port49 token")
-            err = error_for(obj, device)
-            if err.code not in RETRIED or attempt + 1 == self.attempts:
-                raise err
+            got = self._once(argv, device)
+            if isinstance(got, Token):
+                return got
+            if got.code not in RETRIED or attempt + 1 == self.attempts:
+                raise got
             self._sleep(2 ** attempt)
         raise Port49Error("agent_error", "no attempts were made", device)
 
+    def _once(self, argv, device):
+        """One run: a Token or an exception (not raised). The answer, which may hold a token,
+        stays in this frame, so no traceback of the caller's can carry it in its locals."""
+        ran = _run.run(argv, timeout=self.timeout, stderr=self.stderr)
+        obj = answer(ran)
+        if ran.code == 0 and obj and obj.get("verdict") == "permit" and obj.get("login"):
+            return Token.of(obj, device)
+        if obj is None or ran.code == 0:
+            return failed(ran, device, "port49 token")
+        return error_for(obj, device)
+
     def tokens(self, devices, enable=False, ttl=None):
-        """One mint per device, in turn. A deny, or a second factor one device wants, is collected;
-        anything else stops the run."""
+        """One mint per device, in turn. What belongs to one device is collected: a deny, a second
+        factor it wants, a fault the broker had deciding it. Anything else stops the run, and the
+        error's .results holds the tokens minted so far."""
         res = MintResults({}, {})
         for d in devices:
             try:
                 res.tokens[d] = self.token(d, enable, ttl)
-            except (Denied, MFARequired) as e:
+            except (Denied, MFARequired, DeviceFault) as e:
                 res.refused[d] = refusal_of(e, d)
+            except Port49Error as e:
+                e.results = res
+                raise
         return res

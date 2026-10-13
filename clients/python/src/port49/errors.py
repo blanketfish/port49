@@ -67,6 +67,11 @@ class Temporary(Port49Error):
         super().__init__(code, detail, device)
 
 
+class DeviceFault(Port49Error):
+    """The broker could not decide this one device (device_unconfigured, attribute_too_long,
+    attribute_unsafe, broker_error) or minted it no token (no_token): the other devices are unaffected."""
+
+
 class Final(Port49Error):
     """A workload run that cannot mint until someone acts (exit 77 with no answer)."""
 

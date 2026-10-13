@@ -1,22 +1,71 @@
 """The library against the real port49 binary, built here: no hand-written JSON for what it can print.
 
-With no agent listening the CLI answers for itself, so these need no broker. A host with no Go
-toolchain skips them; make test has one."""
+With no agent listening the CLI answers for itself. For the rest, a stdlib stub stands in for the
+agent's Unix socket (the CLI calls only POST /token and GET /status), so the real CLI renders the
+permit and every failure shape the library reads. A host with no Go toolchain skips these; make
+test has one."""
 
+import http.server
 import io
+import json
 import os
 import shutil
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from port49 import Agent, NoAgent, Port49Error  # noqa: E402
+from port49 import (Agent, Denied, DeviceFault, KeyUnavailable, NoAgent, Port49Error,  # noqa: E402
+                    SessionOver, Temporary)
 
 REPO = os.path.join(HERE, "..", "..", "..")
+
+PERMIT = {"device": "leaf1", "verdict": "permit", "address": "10.0.0.11", "platform": "arista_eos",
+          "username": "alice", "login": "LOGINTOKEN", "enable": "ENABLETOKEN",
+          "expires_at": "2026-10-13T10:00:00Z", "session_expires_at": "2026-10-13T18:00:00Z"}
+
+ANSWERS = {  # name: (HTTP status, JSON body) the stub agent gives POST /token
+    "permit": (200, PERMIT),
+    "deny": (200, {"device": "leaf1", "verdict": "deny", "reason": "no_grants_matched", "detail": "d"}),
+    "item_fault": (200, {"device": "leaf1", "error": "device_unconfigured", "detail": "no such device"}),
+    "session_over": (410, {"error": "session_over", "detail": "ended"}),
+    "revoked": (410, {"error": "credential_revoked", "detail": "since x"}),
+    "revocation_running": (503, {"error": "revocation_running", "detail": "busy"}),
+    "broker_unavailable": (503, {"error": "broker_unavailable", "detail": "down"}),
+    "touch_timeout": (409, {"error": "touch_timeout", "detail": "no touch"}),
+}
+
+
+class StubHandler(http.server.BaseHTTPRequestHandler):
+    def address_string(self):
+        return "unix"
+
+    def log_message(self, *args):
+        pass
+
+    def _answer(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        status, obj = self.server.answer if self.path == "/token" else (404, {"error": "not_found"})
+        data = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    do_GET = do_POST = _answer
+
+
+class StubAgent(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+    answer = ANSWERS["permit"]
 
 
 class RealCLI(unittest.TestCase):
@@ -32,13 +81,22 @@ class RealCLI(unittest.TestCase):
         if built.returncode != 0:
             raise AssertionError("go build ./cmd/port49 failed:\n" + built.stderr)
         cls.socket = os.path.join(cls.dir, "no-agent.sock")
+        cls.stub_socket = os.path.join(cls.dir, "stub.sock")
+        cls.stub = StubAgent(cls.stub_socket, StubHandler)
+        threading.Thread(target=cls.stub.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
+        cls.stub.shutdown()
+        cls.stub.server_close()
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def agent(self):
         return Agent(port49=self.binary, socket=self.socket, stderr=io.StringIO())
+
+    def stubbed(self, name, attempts=1):
+        self.stub.answer = ANSWERS[name]
+        return Agent(port49=self.binary, socket=self.stub_socket, stderr=io.StringIO(), attempts=attempts)
 
     def test_no_agent_is_no_agent(self):
         with self.assertRaises(NoAgent) as cm:
@@ -54,6 +112,31 @@ class RealCLI(unittest.TestCase):
         with self.assertRaises(Port49Error) as cm:
             self.agent().identity()
         self.assertIn("no agent", cm.exception.detail)
+
+    def test_the_real_permit_is_a_token(self):
+        tok = self.stubbed("permit").token("leaf1", enable=True)
+        self.assertEqual((tok.device, tok.address, tok.platform, tok.username),
+                         ("leaf1", "10.0.0.11", "arista_eos", "alice"))
+        self.assertEqual((tok.login, tok.enable), ("LOGINTOKEN", "ENABLETOKEN"))
+        self.assertEqual((tok.expires_at, tok.session_expires_at), ("2026-10-13T10:00:00Z", "2026-10-13T18:00:00Z"))
+        self.assertNotIn("LOGINTOKEN", repr(tok))
+
+    def test_the_real_failure_shapes_are_their_classes(self):
+        for name, cls, code in [("deny", Denied, "no_grants_matched"),
+                                ("item_fault", DeviceFault, "device_unconfigured"),
+                                ("session_over", SessionOver, "session_over"),
+                                ("revoked", SessionOver, "credential_revoked"),
+                                ("revocation_running", Temporary, "revocation_running"),
+                                ("broker_unavailable", Temporary, "broker_unavailable"),
+                                ("touch_timeout", KeyUnavailable, "touch_timeout")]:
+            with self.assertRaises(cls, msg=name) as cm:
+                self.stubbed(name).token("leaf1")
+            self.assertEqual((cm.exception.code, cm.exception.device), (code, "leaf1"), name)
+
+    def test_a_real_item_fault_does_not_stop_a_sweep(self):
+        res = self.stubbed("item_fault").tokens(["leaf1", "leaf2"])
+        self.assertEqual((list(res.tokens), sorted(res.refused)), ([], ["leaf1", "leaf2"]))
+        self.assertEqual(res.refused["leaf1"].error, "device_unconfigured")
 
 
 if __name__ == "__main__":
