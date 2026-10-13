@@ -428,6 +428,13 @@ type labOpts struct {
 
 func newLabBrokerOpts(t *testing.T, o labOpts) *labBroker {
 	t.Helper()
+	// A home of the lab's own, which the agent a login starts inherits: the
+	// issued pairs, kept CA bundles and CRLs are named by host and port
+	// alone, and a port an earlier lab used would hand this one that lab's
+	// pair, signed by another CA (final review client I3).
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	maxAge, iss, issue := o.maxAge, o.iss, o.issue
 	l := &labBroker{dir: t.TempDir()}
 	if err := testpki.WriteLab(l.dir, "alice@example.com", time.Now()); err != nil {
