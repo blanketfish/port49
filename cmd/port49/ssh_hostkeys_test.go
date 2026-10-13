@@ -326,6 +326,11 @@ func TestThe9aPinsFileIsNamedNotRead(t *testing.T) {
 // fix to run. Nothing port49 ssh reads is under it now.
 func TestAGroupWritableConfigStopsNothing(t *testing.T) {
 	home := t.TempDir()
+	// Under umask 002 the TempDir is 0775 too: HOME must be private, so that
+	// ~/.config is the only group-writable component.
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(home, ".config", "port49"), 0o775); err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,7 @@ import (
 var labScanTimeout = 15 * time.Second
 
 // errLabScanned ends the handshake once the key is read.
-var errLabScanned = errors.New("hostkeys: the key is read; the connection goes no further")
+var errLabScanned = errors.New("lab scan: the key is read; the connection goes no further")
 
 // labFingerprint is k's SHA256 fingerprint, as ssh-keygen -lf prints it.
 func labFingerprint(k ssh.PublicKey) string { return ssh.FingerprintSHA256(k) }
@@ -26,8 +26,11 @@ func labFingerprint(k ssh.PublicKey) string { return ssh.FingerprintSHA256(k) }
 // labScan connects to addr (host:port), reads the host key the server presents
 // in the key exchange, and closes the connection before authentication: no
 // username is offered and no credential is sent. Every algorithm x/crypto/ssh
-// knows is offered, the insecure ones included, except certificates and DSA.
-// Moved from internal/hostkeys by plan 9d: the scan is L53's instrument now,
+// knows is offered, the insecure ones included, since a scan only reads a
+// public key. Two host-key algorithms are not: certificates, since the scan
+// reads plain keys, and DSA, since OpenSSH 10 has none and the key could never
+// be accepted. A DSA-only device is refused at the scan: no common host-key
+// algorithm. Moved from internal/hostkeys by plan 9d: the scan is L53's instrument now,
 // not a product path.
 func labScan(ctx context.Context, addr string) (ssh.PublicKey, error) {
 	sup, weak := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
