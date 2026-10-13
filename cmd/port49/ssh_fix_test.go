@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hostkeys"
+	"golang.org/x/crypto/ssh"
 )
 
 // OpenSSH lowercases the HostKeyAlias it puts in a prompt and keeps the
@@ -44,7 +44,8 @@ func TestPortSSHLogsInToADeviceNamedWithCapitals(t *testing.T) {
 		item := sshPermit
 		item.Device = "Leaf1"
 		r := newSSHRig(t, dev, item, 0, nil)
-		if err := hostkeys.Pin(r.known, "Leaf1", dev.key, false); err != nil {
+		// Under Leaf1, the case a fold must match.
+		if err := os.WriteFile(r.known, []byte("Leaf1 "+string(ssh.MarshalAuthorizedKey(dev.key))), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		code, out, errb := r.run(t, "Leaf1", "--", "show", "version")
@@ -245,17 +246,15 @@ func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
-	script := "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
-		"echo 'remote username contains invalid characters' >&2\nexit 255\n"
+	script := fakeSSHHead + "echo 'remote username contains invalid characters' >&2\nexit 255\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r.flags[3] = fake
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
-		!strings.Contains(errb, "if ssh's message above says Host key verification failed") ||
-		!strings.Contains(errb, "port49 devices trust --known-hosts "+r.known+" --socket "+r.sock+
-			" --port "+strconv.Itoa(dev.port)+" --replace leaf1") {
+		!strings.Contains(errb, "If it says Host key verification failed") ||
+		!strings.Contains(errb, "run 'ssh-keygen -R leaf1'") || strings.Contains(errb, "devices trust") {
 		t.Fatalf("code %d stderr %q", code, errb)
 	}
 }
@@ -267,8 +266,7 @@ func TestSSHsStderrIsTheCallersOwn(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	fake := filepath.Join(t.TempDir(), "ssh")
-	script := "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
-		"sleep 3 >&2 &\nexit 0\n"
+	script := fakeSSHHead + "sleep 3 >&2 &\nexit 0\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

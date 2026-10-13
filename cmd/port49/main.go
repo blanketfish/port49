@@ -53,10 +53,10 @@ const usage = `usage:
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
-  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [--known-hosts FILE] [-v]
+  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [-v]
              [--socket PATH] DEVICE [-- COMMAND...]
-             (mints through your agent and runs your OpenSSH, 8.5 or later; DEVICE's key must be pinned
-             first with port49 devices trust; exits with ssh's status)
+             (mints through your agent and runs your OpenSSH, 8.5 or later; host keys are your OpenSSH
+             known_hosts', accepted at first contact and refused if changed; exits with ssh's status)
   port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
                         [--deadline DURATION] [--scope NAME | DEVICE...]

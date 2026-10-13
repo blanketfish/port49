@@ -72,21 +72,6 @@ func trustCommand(h trustHint, device string) string {
 	return strings.Join(append(parts, device), " ")
 }
 
-// shellWord quotes s for a shell when it holds anything but characters a
-// shell leaves alone, so a hint can be pasted.
-func shellWord(s string) string {
-	plain := s != ""
-	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./:@%+=,-…", r)) {
-			plain = false
-		}
-	}
-	if plain {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // forwardAdvice is what a scan that could not dial adds: trust connects
 // directly, so a device behind a jump host is scanned through a forwarded
 // port. The pin is keyed by the inventory name and authorized by the

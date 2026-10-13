@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -38,17 +37,6 @@ func TestTrustCommandCarriesOnlyWhatDiffersFromTheDefaults(t *testing.T) {
 	}
 	if got := trustCommand(trustHint{knownHosts: "/my pins/k", socket: agent.SocketPath()}, "leaf1"); !strings.Contains(got, "--known-hosts '/my pins/k' ") {
 		t.Errorf("a path with a space is quoted for the shell: %q", got)
-	}
-}
-
-// ssh's no-pin hint names the pins file and socket the operator gave.
-func TestTheNoPinHintCarriesTheOperatorsFlags(t *testing.T) {
-	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
-	r := newSSHRig(t, dev, sshPermit, 0, nil)
-	code, _, errb := r.run(t, "leaf1")
-	want := "port49 devices trust --known-hosts " + r.known + " --socket " + r.sock + " --port " + strconv.Itoa(dev.port) + " leaf1'"
-	if code != 1 || !strings.Contains(errb, want) {
-		t.Fatalf("code %d stderr %q, want it to contain %q", code, errb, want)
 	}
 }
 

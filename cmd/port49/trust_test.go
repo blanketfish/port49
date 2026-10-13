@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"io"
 	"net/http"
@@ -19,19 +17,6 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/hostkeys"
 )
-
-func testHostKey(t *testing.T) ssh.PublicKey {
-	t.Helper()
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
-}
 
 // trustRig swaps the scan for one that presents key and counts its calls,
 // the terminal for tty and answer, and returns the pins file to use.

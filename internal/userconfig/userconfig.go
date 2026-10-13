@@ -82,6 +82,10 @@ func LegacyDir() string {
 	return filepath.Join(".config", "port49")
 }
 
+// LegacyPinsPath is plan 9a's pins file. Nothing reads it since plan 9d
+// (decision 46 ruling 5); port49 ssh names it while it exists.
+func LegacyPinsPath() string { return filepath.Join(LegacyDir(), "known_hosts") }
+
 // IssuedPathsIn is where, under dir, `port49 login` keeps the certificate a
 // broker issued it and its key (spec §13 decision 43 ruling 7):
 // dir/issued/<host>_<port>.pem and .key, one pair per broker. A broker URL
