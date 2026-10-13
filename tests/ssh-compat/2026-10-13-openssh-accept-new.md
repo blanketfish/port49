@@ -117,8 +117,9 @@ so the operator's own `~/.ssh/known_hosts` was never consulted.
 
 On every version the hop's password prompt has the hop's ssh (top + 1, a child of the top ssh, its
 `-W` command line shown) as parent, never the top ssh; the device's own prompt has the top ssh as
-parent. The pid of the asker's parent therefore tells a hop's prompt from the device's, password and
-host-key question alike.
+parent. The pid of the asker's parent therefore tells a hop's password prompt from the device's; a
+hop's prompt, password or host-key question, never has the top ssh as parent. The device's own
+host-key question was not measured.
 
 ## `ssh -G`: the forms
 
