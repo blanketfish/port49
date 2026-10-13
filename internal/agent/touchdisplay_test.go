@@ -27,10 +27,13 @@ func TestAKeyFailureAtTheHandshakeIsTheKeysOwnErrorAndIsNotRetried(t *testing.T)
 		name string
 		err  error
 		code string
+		// words is what the operator reads: the key's own for a touch
+		// timeout, Task 6's for a key that is gone or locked.
+		words string
 	}{
-		{"a touch timeout", hwkey.ErrTouchTimeout, "touch_timeout"},
-		{"a locked key", hwkey.ErrLocked, "key_locked"},
-		{"a key that is gone", hwkey.ErrKeyAbsent, "key_absent"},
+		{"a touch timeout", hwkey.ErrTouchTimeout, "touch_timeout", hwkey.ErrTouchTimeout.Error()},
+		{"a locked key", hwkey.ErrLocked, "key_locked", "run `port49 login`"},
+		{"a key that is gone", hwkey.ErrKeyAbsent, "key_absent", "insert your key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRigWith(t, rigOpts{hw: true})
@@ -64,8 +67,8 @@ func TestAKeyFailureAtTheHandshakeIsTheKeysOwnErrorAndIsNotRetried(t *testing.T)
 				if !errors.As(err, &ke) || !errors.Is(err, tc.err) || KeyCode(err) != tc.code {
 					t.Fatalf("%s: %v, want a *KeyError for %v (code %s)", ask.name, err, tc.err, tc.code)
 				}
-				if !strings.Contains(err.Error(), tc.err.Error()) {
-					t.Errorf("%s: %q does not carry the key's words %q", ask.name, err, tc.err)
+				if !strings.Contains(err.Error(), tc.words) {
+					t.Errorf("%s: %q does not carry the words %q", ask.name, err, tc.words)
 				}
 				for _, bad := range []string{"unreachable", "broker_error", "refresh_failed", "internal error"} {
 					if strings.Contains(err.Error(), bad) {
@@ -102,12 +105,13 @@ func TestAKeyFailureAtTheHandshakeIsTheKeysOwnErrorAndIsNotRetried(t *testing.T)
 // broker_error.
 func TestTheSocketAnswersAKeyFailureWithItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
-		err  error
-		code string
+		err   error
+		code  string
+		words string
 	}{
-		{hwkey.ErrTouchTimeout, "touch_timeout"},
-		{hwkey.ErrLocked, "key_locked"},
-		{hwkey.ErrKeyAbsent, "key_absent"},
+		{hwkey.ErrTouchTimeout, "touch_timeout", hwkey.ErrTouchTimeout.Error()},
+		{hwkey.ErrLocked, "key_locked", "run `port49 login`"},
+		{hwkey.ErrKeyAbsent, "key_absent", "insert your key"},
 	} {
 		r := newRigWith(t, rigOpts{hw: true})
 		if _, err := r.a.Connect(context.Background()); err != nil {
@@ -130,7 +134,7 @@ func TestTheSocketAnswersAKeyFailureWithItsOwnCode(t *testing.T) {
 			var e api.Error
 			_ = json.NewDecoder(resp.Body).Decode(&e)
 			resp.Body.Close()
-			if e.Error != tc.code || !strings.Contains(e.Detail, tc.err.Error()) {
+			if e.Error != tc.code || !strings.Contains(e.Detail, tc.words) {
 				t.Errorf("%s with %v: code %q detail %q, want %s", path, tc.err, e.Error, e.Detail, tc.code)
 			}
 		}

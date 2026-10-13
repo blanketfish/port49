@@ -37,6 +37,22 @@ type fakeKey struct {
 	// blocked is a token whose PIN is blocked: Unlock answers as a
 	// CKR_PIN_LOCKED does, and PINBlocked says so.
 	blocked bool
+	// backFree is a key that comes back from Absent needing no PIN; by
+	// default it comes back Locked. probes counts State() calls.
+	backFree bool
+	probes   int
+}
+
+func (k *fakeKey) nSigns() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.signs
+}
+
+func (k *fakeKey) nProbes() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.probes
 }
 
 func (k *fakeKey) PINBlocked() bool {
@@ -63,11 +79,15 @@ func (k *fakeKey) setPresent(p bool) {
 func (k *fakeKey) State() hwkey.State {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.probes++
 	switch {
 	case !k.present:
 		k.state = hwkey.Absent
 	case k.state == hwkey.Absent:
 		k.state = hwkey.Locked // back, and wants its PIN
+		if k.backFree {
+			k.state = hwkey.Present
+		}
 	}
 	return k.state
 }

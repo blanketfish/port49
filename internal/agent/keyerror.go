@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/rhwendt/port49/internal/hwkey"
 )
@@ -36,6 +37,65 @@ func (e *KeyError) Error() string {
 }
 
 func (e *KeyError) Unwrap() error { return e.Err }
+
+// KeyAbsentError is a request that needed the key while it was gone or locked:
+// a refresh, or a reconnect's handshake. It ends nothing. It is a KeyError
+// (Unwrap) that knows the state and says when the session ends, so the one
+// typed path, the KeyError and its socket code, serves it too: the code is
+// key_absent or key_locked and the client rebuilds a KeyError carrying these
+// words. A touch timeout is not one of these: the key is there and unlocked,
+// and it keeps its own words.
+type KeyAbsentError struct {
+	State       hwkey.State // Absent or Locked
+	SessionEnds time.Time   // zero when the session has no end yet
+	KeyErr      *KeyError
+}
+
+func (e *KeyAbsentError) Error() string {
+	until := ""
+	if !e.SessionEnds.IsZero() {
+		until = e.SessionEnds.UTC().Format(time.RFC3339)
+	}
+	if e.State == hwkey.Locked {
+		words := "agent: your key is back and needs its PIN: run `port49 login`"
+		if until != "" {
+			words += "; your session goes on until " + until
+		}
+		return words
+	}
+	words := "agent: insert your key"
+	if until != "" {
+		words += "; your session goes on until " + until +
+			" (tokens are still minted on the held connection while it stays up)"
+	}
+	return words
+}
+
+func (e *KeyAbsentError) Unwrap() error {
+	if e.KeyErr == nil {
+		return nil // not a typed nil: errors.As would call Unwrap on it
+	}
+	return e.KeyErr
+}
+
+// absentOrLocked is err as a KeyAbsentError when it is a KeyError for a key
+// that is gone or locked, and err itself for any other error (a touch timeout
+// included).
+func (a *Agent) absentOrLocked(err error) error {
+	var already *KeyAbsentError
+	var ke *KeyError
+	if errors.As(err, &already) || !errors.As(err, &ke) {
+		return err
+	}
+	state := hwkey.Absent
+	switch {
+	case errors.Is(ke.Err, hwkey.ErrLocked):
+		state = hwkey.Locked
+	case !errors.Is(ke.Err, hwkey.ErrKeyAbsent):
+		return err
+	}
+	return &KeyAbsentError{State: state, SessionEnds: a.SessionEndsAt(), KeyErr: ke}
+}
 
 // Socket codes for a KeyError, snake_case like the socket's others.
 const (

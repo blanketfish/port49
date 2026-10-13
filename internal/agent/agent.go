@@ -852,7 +852,7 @@ func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 func (a *Agent) refusedReconnect(err error) error {
 	var ke *KeyError
 	if errors.As(err, &ke) {
-		return ke
+		return a.absentOrLocked(ke)
 	}
 	if refused := a.refusal(err); refused != nil {
 		// A reconnect whose handshake failed: the certificate expired
@@ -968,6 +968,12 @@ func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 	if !ok {
 		return api.RefreshResponse{}, errors.New("agent: the session's key cannot sign a refresh")
 	}
+	// A key that is out is said before anything is sent. keyState probes
+	// while the key is Absent (decision 45 ruling 8), so this is never a
+	// cached Absent: a key that came back is seen here with no signature.
+	if a.key != nil && a.key.State() == hwkey.Absent {
+		return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent})
+	}
 	for attempt := 1; ; attempt++ {
 		out, retry, err := a.refreshOnce(ctx, signer)
 		if err == nil || !retry || attempt == 2 {
@@ -1039,7 +1045,7 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	sig, err := api.SignRefresh(signer, api.RefreshMessage(nonce, ekm))
 	if err != nil {
 		if keyFault(err) != nil {
-			return api.RefreshResponse{}, false, &KeyError{Err: err}
+			return api.RefreshResponse{}, false, a.absentOrLocked(&KeyError{Err: err})
 		}
 		return api.RefreshResponse{}, false, fmt.Errorf("agent: signing the refresh: %w", err)
 	}
