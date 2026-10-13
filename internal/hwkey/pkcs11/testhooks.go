@@ -2,7 +2,10 @@
 
 package pkcs11
 
-import "unsafe"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 // The test harness's view of the module (re-review R4). The hwkey tag is set
 // only by `make test-hw`, so no release build carries these. They are a
@@ -35,7 +38,7 @@ func SessionHandle(s *Signer) uint {
 // entry under the lock and call C_CloseSession after releasing it. The
 // returned func removes the probe.
 func SessMuHeldDuringClose(fn func(held bool)) (restore func()) {
-	closeProbe = func(m *Module) {
+	probe := func(m *Module) {
 		if m.sessMu.TryLock() {
 			m.sessMu.Unlock()
 			fn(false)
@@ -43,7 +46,19 @@ func SessMuHeldDuringClose(fn func(held bool)) (restore func()) {
 		}
 		fn(true)
 	}
-	return func() { closeProbe = nil }
+	closeProbeFn.Store(&probe)
+	return func() { closeProbeFn.Store(nil) }
+}
+
+// closeProbeFn is the probe SessMuHeldDuringClose sets; atomic, since a
+// Signer may close on any goroutine while a test sets or removes it.
+var closeProbeFn atomic.Pointer[func(m *Module)]
+
+// closeProbe runs the probe, if one is set, just before C_CloseSession.
+func closeProbe(m *Module) {
+	if p := closeProbeFn.Load(); p != nil {
+		(*p)(m)
+	}
 }
 
 // Finalize calls C_Finalize on m and returns its CK_RV.

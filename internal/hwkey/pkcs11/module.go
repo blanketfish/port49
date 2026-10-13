@@ -292,15 +292,9 @@ func (m *Module) closeOwned(h uint, owner *Signer) {
 	}
 	delete(m.owners, h)
 	m.sessMu.Unlock()
-	if closeProbe != nil {
-		closeProbe(m)
-	}
+	closeProbe(m)
 	m.call(fnCloseSession, uintptr(h))
 }
-
-// closeProbe, set only by the test harness (SessMuHeldDuringClose), runs
-// just before C_CloseSession.
-var closeProbe func(m *Module)
 
 // login is one C_Login; the caller owns pin and zeroes it.
 func (m *Module) login(session uint, user uint, pin []byte) uint {
