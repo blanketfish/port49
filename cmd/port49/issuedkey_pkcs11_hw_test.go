@@ -61,7 +61,11 @@ func TestLoginOIDCSignsWithTheTokensKeyAndWritesNothingToIt(t *testing.T) {
 	if prompts.Load() != 1 {
 		t.Fatalf("the PIN was asked %d times", prompts.Load())
 	}
-	certPath, keyPath := o.issuedPaths(t)
+	_, keyPath := o.issuedPaths(t)
+	certPath, err := userconfig.IssuedTokenPaths(o.url, pkcs11Name(ref))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(certPath); err != nil {
 		t.Fatal(err)
 	}
@@ -139,17 +143,72 @@ func TestAnIssuedKeyThatNamesNoKeyRefusesBeforeTheBrowser(t *testing.T) {
 // A token that is not plugged in says to insert it, and never to generate a
 // key: `ykman piv keys generate` on a slot that holds the key replaces it.
 func TestAnIssuedKeyOnATokenThatIsOutSaysToInsertIt(t *testing.T) {
-	ref, _ := tokenKey(t)
-	out := strings.Replace(ref, "token=", "token=unplugged", 1) // no token has this label
+	ref, label := tokenKey(t)
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	hwtest.SoftHSMUnplug(t, label) // no token is present
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	code, stdout, errb := o.loginOn(t, sock, "--config", issuedKeyConfig(t, ref))
+	if code == 0 || !strings.Contains(errb, "insert the token holding pkcs11:token="+label) ||
+		strings.Contains(errb, "ykman") || strings.Contains(errb, "(present:") || n(o) != 0 {
+		t.Fatalf("code %d stdout %q stderr %q (%d sign-ins)", code, stdout, errb, n(o))
+	}
+}
+
+// With other tokens in and none matching, the error names what is present
+// (label, serial, manufacturer: no PIN, no object) and says the reference may
+// be wrong, instead of only "insert the token": a typo pushed to a fleet reads
+// as a missing token otherwise.
+func TestAnIssuedKeyMatchingNoPresentTokenNamesThePresentOnes(t *testing.T) {
+	ref, label := tokenKey(t)
+	typo := strings.Replace(ref, "token="+label, "token="+label+"-typo", 1)
 	o := newOIDCLab(t, true)
 	driveBrowser(t, o.iss)
 	sock := privateSocket(t)
 	t.Cleanup(func() { stopAgentAt(sock) })
-	code, stdout, errb := o.loginOn(t, sock, "--config", issuedKeyConfig(t, out))
-	if code == 0 || !strings.Contains(errb, "insert the token holding pkcs11:token=unplugged") ||
-		strings.Contains(errb, "ykman") || n(o) != 0 {
+	code, stdout, errb := o.loginOn(t, sock, "--config", issuedKeyConfig(t, typo))
+	if code == 0 || !strings.Contains(errb, "no token present matches pkcs11:token="+label+"-typo") ||
+		!strings.Contains(errb, "present: token="+label+" serial=") || !strings.Contains(errb, "reference may be wrong") ||
+		strings.Contains(errb, hwtest.SoftHSMUserPIN) || strings.Contains(errb, "ykman") || n(o) != 0 {
 		t.Fatalf("code %d stdout %q stderr %q (%d sign-ins)", code, stdout, errb, n(o))
 	}
+}
+
+// A token host (`pkcs11`) and a file host sharing a home each sign in once and
+// log in again with neither forced to sign in again: the token's certificate
+// is named for its key, so the file host's is not overwritten (decision 45
+// ruling 7, amended).
+func TestATokenHostAndAFileHostSharingAHomeSignInOnce(t *testing.T) {
+	ref, _ := tokenKey(t)
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	pinPty(t, hwtest.SoftHSMUserPIN, hwtest.SoftHSMUserPIN, hwtest.SoftHSMUserPIN)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	tokenCfg := issuedKeyConfig(t, ref)
+	fileCfg := filepath.Join(privateDir(t), "file.yaml")
+	if err := os.WriteFile(fileCfg, []byte("issued_key_store: file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	login := func(cfg string, signIns int, wantStore string) {
+		t.Helper()
+		stopAgentAt(sock)
+		o.step(11 * time.Second)
+		code, out, errb := o.loginOn(t, sock, "--config", cfg)
+		if code != 0 || n(o) != signIns {
+			t.Fatalf("%s: code %d stdout %q stderr %q (%d sign-ins, want %d)", wantStore, code, out, errb, n(o), signIns)
+		}
+		sf := &sessionFlags{broker: o.url, issuedKeyStore: wantStore, issuedKey: ref}
+		if pair, _, _, err := findHeld(sf); err != nil || pair.store != wantStore {
+			t.Fatalf("%s: the held pair %+v %v", wantStore, pair, err)
+		}
+	}
+	login(tokenCfg, 1, "pkcs11")
+	login(fileCfg, 2, "file")
+	login(tokenCfg, 2, "pkcs11")
+	login(fileCfg, 2, "file")
+	login(tokenCfg, 2, "pkcs11")
 }
 
 // A wrong PIN is found before the browser, costs one try, is not retried, and
@@ -173,7 +232,7 @@ func TestAWrongPINForTheIssuedKeyEndsTheLoginBeforeTheSignIn(t *testing.T) {
 			t.Fatal("the PIN was shown")
 		}
 	}
-	certPath, _ := o.issuedPaths(t)
+	certPath, _ := userconfig.IssuedTokenPaths(o.url, pkcs11Name(ref))
 	if _, err := os.Lstat(certPath); err == nil {
 		t.Fatal("a certificate was kept")
 	}

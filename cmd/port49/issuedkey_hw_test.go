@@ -242,6 +242,45 @@ func TestATPMHostAndAFileHostSharingAHomeSignInOnce(t *testing.T) {
 	login(tpmHost, 2, "tpm")
 }
 
+// Switching one host from `file` to a named `tpm` makes it sign in once, says
+// why, and then logs in without signing in: the file key is never what it runs
+// on (decision 45 ruling 7, amended).
+func TestSwitchingAHostFromFileToTPMSignsInOnce(t *testing.T) {
+	hwtest.SWTPM(t)
+	machineIs(t, "aaaaaaaa")
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	conf := func(store string) string {
+		cfg := filepath.Join(privateDir(t), store+".yaml")
+		if err := os.WriteFile(cfg, []byte("issued_key_store: "+store+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	login := func(store string, signIns int) string {
+		t.Helper()
+		stopAgentAt(sock)
+		o.step(11 * time.Second)
+		code, out, errb := o.loginOn(t, sock, "--config", conf(store))
+		if code != 0 || n(o) != signIns {
+			t.Fatalf("%s: code %d stdout %q stderr %q (%d sign-ins, want %d)", store, code, out, errb, n(o), signIns)
+		}
+		return errb
+	}
+	login("file", 1)
+	_, fk := o.issuedPaths(t)
+	fileKey := readPair(t, fk)
+	if said := login("tpm", 2); !strings.Contains(said, "no TPM key for this machine yet") {
+		t.Fatalf("the switch did not say why it signed in: %q", said)
+	}
+	login("tpm", 2)
+	if now := readPair(t, fk); !bytes.Equal(now[0], fileKey[0]) {
+		t.Fatal("the file key was changed by the TPM host")
+	}
+}
+
 // Under `auto`, a lone issued_key without touch_key is ignored, and the line
 // that says which store the key went to says so.
 func TestAutoSaysALoneIssuedKeyIsIgnored(t *testing.T) {

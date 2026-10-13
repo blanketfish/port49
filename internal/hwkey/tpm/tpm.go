@@ -87,9 +87,40 @@ func Available() error {
 // Refused is whether err from Generate is the TPM being absent or refusing to
 // make a key: a device that is missing or that the user may not open, or an
 // authorization, hierarchy or lockout refusal.
-func Refused(err error) bool {
-	return errors.Is(err, hwkey.ErrKeyAbsent) || errors.Is(err, errNoAccess) || errors.Is(err, errParentAuth) ||
-		isAuth(err) || errors.Is(err, tpm2.TPMRCHierarchy) || errors.Is(err, tpm2.TPMRCLockout)
+func Refused(err error) bool { return RefusalOf(err) != NotRefused }
+
+// DevicePath is the TPM device port49 opens.
+const DevicePath = devicePath
+
+// Refusal is why a TPM would not make a key, for a caller whose advice differs
+// by cause.
+type Refusal int
+
+const (
+	NotRefused Refusal = iota
+	// RefusedOwnerAuth is the TPM refusing an authorization or hierarchy: the
+	// owner hierarchy has a password.
+	RefusedOwnerAuth
+	// RefusedLockout is dictionary-attack lockout.
+	RefusedLockout
+	// RefusedDevice is a device that is missing, stopped answering, or that
+	// the user may not open.
+	RefusedDevice
+)
+
+// RefusalOf is why err from Generate is Refused, or NotRefused.
+func RefusalOf(err error) Refusal {
+	switch {
+	case err == nil:
+		return NotRefused
+	case errors.Is(err, tpm2.TPMRCLockout):
+		return RefusedLockout
+	case errors.Is(err, errParentAuth) || isAuth(err) || errors.Is(err, tpm2.TPMRCHierarchy):
+		return RefusedOwnerAuth
+	case errors.Is(err, hwkey.ErrKeyAbsent) || errors.Is(err, errNoAccess):
+		return RefusedDevice
+	}
+	return NotRefused
 }
 
 // answered turns an error from a TPM command into the error a caller sees.

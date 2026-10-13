@@ -119,6 +119,29 @@ func TestRefusedIsAbsenceOrRefusalToMakeAKey(t *testing.T) {
 	}
 }
 
+// A refusal is told by its cause, for the advice that differs: an owner
+// password, a lockout, a device that is missing or closed to the user.
+func TestRefusalOfNamesTheCause(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want Refusal
+	}{
+		"owner auth": {errParentAuth, RefusedOwnerAuth},
+		"auth fail":  {fmt.Errorf("create: %w", tpm2.TPMRCAuthFail), RefusedOwnerAuth},
+		"bad auth":   {fmt.Errorf("create: %w", tpm2.TPMRCBadAuth), RefusedOwnerAuth},
+		"hierarchy":  {fmt.Errorf("create: %w", tpm2.TPMRCHierarchy), RefusedOwnerAuth},
+		"lockout":    {fmt.Errorf("create: %w", tpm2.TPMRCLockout), RefusedLockout},
+		"absent":     {fmt.Errorf("%w: gone", hwkey.ErrKeyAbsent), RefusedDevice},
+		"no access":  {errNoAccess, RefusedDevice},
+		"internal":   {fmt.Errorf("create: %w", tpm2.TPMRCFailure), NotRefused},
+		"nil":        {nil, NotRefused},
+	} {
+		if got := RefusalOf(tc.err); got != tc.want {
+			t.Errorf("%s: RefusalOf = %d, want %d", name, got, tc.want)
+		}
+	}
+}
+
 func TestGenerateWithNoTPMWritesNoFile(t *testing.T) {
 	dialing(t, errors.New("no tpm"))
 	path := filepath.Join(t.TempDir(), "new.tpmkey")

@@ -124,6 +124,26 @@ func IssuedTPMPathsIn(dir, broker string) (tpmCert, tpmKey string, err error) {
 	return base + ".pem", base + ".tpmkey", nil
 }
 
+// IssuedTokenPathsIn is where, under dir, the certificate for a token-held
+// issued key is kept (decision 45 ruling 7): <host>_<port>.<k>.pem, <k> the
+// first 8 hex digits of SHA-256 of ref, the canonical issued_key reference.
+// The name follows the key, so it needs no token to find, and a token host and
+// a file host sharing a home never name the same certificate. The broker URL
+// is judged as IssuedPathsIn judges it.
+func IssuedTokenPathsIn(dir, broker, ref string) (cert string, err error) {
+	cert, _, err = IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(ref))
+	return strings.TrimSuffix(cert, ".pem") + "." + hex.EncodeToString(sum[:])[:8] + ".pem", nil
+}
+
+// IssuedTokenPaths is IssuedTokenPathsIn ~/.port49 (Dir).
+func IssuedTokenPaths(broker, ref string) (cert string, err error) {
+	return IssuedTokenPathsIn(Dir(), broker, ref)
+}
+
 // IssuedTPMPaths is IssuedTPMPathsIn ~/.port49 (Dir).
 func IssuedTPMPaths(broker string) (tpmCert, tpmKey string, err error) {
 	return IssuedTPMPathsIn(Dir(), broker)

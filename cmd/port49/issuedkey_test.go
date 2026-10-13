@@ -388,7 +388,7 @@ func TestANamedTPMStoreNeverFallsBackToAFile(t *testing.T) {
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
 	code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
-	for _, want := range []string{"issued_key_store is tpm", "the TPM could not make a key", "issued_key_store: file"} {
+	for _, want := range []string{"issued_key_store is tpm", "the TPM could not make a key", tpm.DevicePath, "tss"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("%q is not in %q", want, errb.String())
 		}
@@ -411,15 +411,147 @@ func TestAHeldPKCS11PairIsTheReference(t *testing.T) {
 	t.Setenv("HOME", home)
 	const broker = "https://broker.example:8443"
 	fc, _, _ := userconfig.IssuedPaths(broker)
-	writePair(t, fc, filepath.Join(filepath.Dir(fc), "unrelated"))
+	tc, _ := userconfig.IssuedTokenPaths(broker, pkcs11Name(tokenRef))
+	writePair(t, tc, filepath.Join(filepath.Dir(tc), "unrelated"))
 	sf := &sessionFlags{broker: broker, issuedKeyStore: "pkcs11", issuedKey: tokenRef}
 	got, err := pickHeldPair(sf)
-	if err != nil || got.store != "pkcs11" || got.cert != fc || got.key != tokenRef {
+	if err != nil || got.store != "pkcs11" || got.cert != tc || got.cert == fc || got.key != tokenRef {
 		t.Fatalf("the held pair: %+v %v", got, err)
 	}
-	// Without the store named, the certificate alone is no pair.
+	// The query (a module path, a pin-source) does not name the key.
+	sf.issuedKey = tokenRef + "&pin-source=file:/x"
+	if got, err = pickHeldPair(sf); err != nil || got.cert != tc {
+		t.Fatalf("with another query: %+v %v", got, err)
+	}
+	// Without the store named, the token's certificate is no pair.
 	if _, _, _, err := findHeld(&sessionFlags{broker: broker}); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a certificate with no key: %v", err)
+	}
+}
+
+// A named issued_key_store looks only for its own pair (decision 45 ruling 7,
+// amended): a named tpm never runs on the file .key, nor a named file on the
+// TPM's key, and the pair that is not there reads as no held pair. Under
+// `auto` the file .key is acceptable.
+func TestANamedStoreLooksOnlyForItsOwnPair(t *testing.T) {
+	machineIs(t, "aaaaaaaa")
+	t.Setenv("HOME", privateDir(t))
+	const broker = "https://broker.example:8443"
+	fc, fk, _ := userconfig.IssuedPaths(broker)
+	writePair(t, fc, fk)
+	for _, store := range []string{"tpm", "pkcs11"} {
+		sf := &sessionFlags{broker: broker, issuedKeyStore: store, issuedKey: tokenRef}
+		got, _, _, err := findHeld(sf)
+		if !errors.Is(err, fs.ErrNotExist) || got.store != store {
+			t.Errorf("%s named with only a .key: %+v %v, want no held pair in that store", store, got, err)
+		}
+	}
+	if got, err := pickHeldPair(&sessionFlags{broker: broker, issuedKeyStore: "auto"}); err != nil || got.store != "file" {
+		t.Errorf("auto with a .key: %+v %v", got, err)
+	}
+	// With this machine's TPM pair too, tpm is the TPM pair and file the file pair.
+	tc, tk, _ := userconfig.IssuedTPMPaths(broker)
+	writePair(t, tc, tk)
+	if got, err := pickHeldPair(&sessionFlags{broker: broker, issuedKeyStore: "tpm"}); err != nil || got.store != "tpm" || got.key != "tpm:file="+tk {
+		t.Errorf("tpm named with both: %+v %v", got, err)
+	}
+	if got, err := pickHeldPair(&sessionFlags{broker: broker, issuedKeyStore: "file"}); err != nil || got.store != "file" || got.key != fk {
+		t.Errorf("file named with both: %+v %v", got, err)
+	}
+}
+
+// A named tpm host that holds no TPM key for this machine but sees a file
+// key on its home signs in and says why in one line, not "your held
+// certificate is not used" (decision 45 ruling 7, amended).
+func TestANamedTPMHostWithNoTPMKeySaysSo(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the TPM is Linux's")
+	}
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	dialTPM(t, nil)
+	machineIs(t, "aaaaaaaa")
+	fc, fk := o.issuedPaths(t)
+	writePair(t, fc, fk) // a file host's pair on the shared home
+	generateTPMReturns(t, hwkey.ErrKeyAbsent)
+	cfg := filepath.Join(privateDir(t), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("issued_key_store: tpm\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+	if !strings.Contains(errb.String(), "no TPM key for this machine yet") ||
+		strings.Contains(errb.String(), "your held certificate is not used") ||
+		strings.Contains(out.String(), "using your certificate") {
+		t.Fatalf("stdout %q stderr %q", out.String(), errb.String())
+	}
+}
+
+// generateTPMReturns makes the TPM key generation fail with err.
+func generateTPMReturns(t *testing.T, err error) {
+	t.Helper()
+	prev := generateTPM
+	generateTPM = func(string) (*tpm.Signer, error) { return nil, err }
+	t.Cleanup(func() { generateTPM = prev })
+}
+
+// The named-tpm refusal gives the advice for its cause: an owner password is
+// cleared, a lockout is waited out or reset, a device that is missing or
+// closed names the device and the tss group, and anything else is the error
+// itself, with none of those hints.
+func TestANamedTPMRefusalAdviceFollowsTheCause(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the TPM is Linux's")
+	}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		want     []string
+		wantNone []string
+	}{
+		{"owner auth", fmt.Errorf("create: %w", tpm2.TPMRCAuthFail),
+			[]string{"owner hierarchy has a password", "clear it", "issued_key_store: auto or file"}, []string{"tpm2_dictionarylockout", "tss"}},
+		{"hierarchy", fmt.Errorf("create: %w", tpm2.TPMRCHierarchy),
+			[]string{"owner hierarchy has a password", "clear it"}, []string{"tpm2_dictionarylockout", "tss"}},
+		{"lockout", fmt.Errorf("create: %w", tpm2.TPMRCLockout),
+			[]string{"dictionary-attack lockout", "wait", "tpm2_dictionarylockout -c"}, []string{"clear it", "tss"}},
+		{"device", fmt.Errorf("%w: gone", hwkey.ErrKeyAbsent),
+			[]string{tpm.DevicePath, "tss"}, []string{"clear it", "tpm2_dictionarylockout"}},
+		{"other", errors.New("tpm: something unforeseen"),
+			[]string{"something unforeseen"}, []string{"clear it", "tpm2_dictionarylockout", "tss"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := newOIDCLab(t, true)
+			driveBrowser(t, o.iss)
+			dialTPM(t, nil)
+			machineIs(t, "aaaaaaaa")
+			generateTPMReturns(t, tc.err)
+			cfg := filepath.Join(privateDir(t), "config.yaml")
+			if err := os.WriteFile(cfg, []byte("issued_key_store: tpm\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sock := privateSocket(t)
+			t.Cleanup(func() { stopAgentAt(sock) })
+			t.Setenv(runCLIEnv, "1")
+			var out, errb bytes.Buffer
+			code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+			if code == 0 || len(o.as.Authorizations()) != 0 {
+				t.Fatalf("code %d stderr %q (%d sign-ins)", code, errb.String(), len(o.as.Authorizations()))
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(errb.String(), w) {
+					t.Errorf("%q is not in %q", w, errb.String())
+				}
+			}
+			for _, w := range tc.wantNone {
+				if strings.Contains(errb.String(), w) {
+					t.Errorf("%q is in %q", w, errb.String())
+				}
+			}
+		})
 	}
 }
 

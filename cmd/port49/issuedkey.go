@@ -22,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
 
@@ -178,6 +179,24 @@ func chooseIssuedStore(sf *sessionFlags, stderr io.Writer) (store string, err er
 	return storeTPM, nil
 }
 
+// tpmRefusalAdvice is what to do about a TPM that refused to make a key, by
+// the cause: an owner password is cleared (or the store is not named), a
+// lockout is waited out or reset, a device that is missing or closed to the
+// user is named with its group.
+func tpmRefusalAdvice(err error) string {
+	switch tpm.RefusalOf(err) {
+	case tpm.RefusedOwnerAuth:
+		return "the owner hierarchy has a password, which port49 does not supply: clear it with the TPM's own tools, " +
+			"or use issued_key_store: auto or file"
+	case tpm.RefusedLockout:
+		return "the TPM is in dictionary-attack lockout: wait for it to clear, or reset it with `tpm2_dictionarylockout -c`"
+	case tpm.RefusedDevice:
+		return fmt.Sprintf("the TPM device %s is missing, has stopped answering, or this user may not open it: "+
+			"check that it is there and that this user is in the tss group", tpm.DevicePath)
+	}
+	return unprefixed(err)
+}
+
 // issuedTarget is where a pair kept in store is written for broker: the
 // certificate, the key file (none for a token's key: port49 writes nothing to
 // the token), and the reference the agent opens the key by.
@@ -194,7 +213,11 @@ func issuedTarget(store string, sf *sessionFlags) (pair issuedPair, keyFile stri
 		}
 		return issuedPair{storeTPM, tc, tpmRef(tk)}, tk, nil
 	case storePKCS:
-		return issuedPair{storePKCS, fc, sf.issuedKey}, "", nil
+		tc, err := tokenTarget(sf)
+		if err != nil {
+			return issuedPair{}, "", err
+		}
+		return issuedPair{storePKCS, tc, sf.issuedKey}, "", nil
 	}
 	return issuedPair{storeFile, fc, fk}, fk, nil
 }
@@ -238,7 +261,14 @@ func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer
 		k, err := clientkey.Open(sf.issuedKey, nil)
 		if errors.Is(err, hwkey.ErrKeyAbsent) {
 			// Out, not missing: the slot may hold the key, and generating one
-			// there would replace it.
+			// there would replace it. With other tokens in, the reference may be
+			// the thing that is wrong, and they are named so the difference is
+			// seen (label, serial and manufacturer only).
+			var nm *hwkey.NoMatchError
+			if errors.As(err, &nm) && len(nm.Present) > 0 {
+				return nil, nil, fmt.Errorf("issued_key: no token present matches %s (present: %s); the reference may be wrong, "+
+					"or insert the token holding it and log in again", pkcs11Name(sf.issuedKey), presentTokens(nm.Present))
+			}
 			return nil, nil, fmt.Errorf("issued_key: the token is not present: insert the token holding %s and log in again",
 				pkcs11Name(sf.issuedKey))
 		}
@@ -262,6 +292,18 @@ func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer
 	}, nil
 }
 
+// presentTokens lists tokens for a message, each as the selectors a pkcs11:
+// reference would use. The fields come from the device, so they are printed
+// safe.
+func presentTokens(ts []hwkey.TokenInfo) string {
+	parts := make([]string, len(ts))
+	for i, t := range ts {
+		parts[i] = fmt.Sprintf("token=%s serial=%s manufacturer=%s", printsafe.Line(t.Label, 64),
+			printsafe.Line(t.Serial, 32), printsafe.Line(t.Manufacturer, 64))
+	}
+	return strings.Join(parts, "; ")
+}
+
 // pkcs11Name is a pkcs11: reference with its query dropped (it may carry a
 // pin-source path), for a message.
 func pkcs11Name(ref string) string {
@@ -272,27 +314,66 @@ func pkcs11Name(ref string) string {
 	return name
 }
 
-// pickHeldPair is the pair this login looks for: this machine's TPM pair when
-// its key file is there, else, with a token named for the issued key, the
+// tokenTarget is the certificate kept for the token key sf.issuedKey names,
+// named for the key (decision 45 ruling 7, amended): its pkcs11: name without
+// the query, which may carry a module path or a pin-source.
+func tokenTarget(sf *sessionFlags) (string, error) {
+	return userconfig.IssuedTokenPaths(sf.broker, pkcs11Name(sf.issuedKey))
+}
+
+// pickHeldPair is the pair this login looks for. When issued_key_store names a
+// store, only that store's pair (decision 45 ruling 7, amended): a named tpm
+// host with no TPM pair of its own is not run on the file .key, which is the
+// operator's choice of hardware bypassed, and a pair that is not there reads
+// as no held pair (a sign-in). Under `auto`: this machine's TPM pair when its
+// key file is there, else, with a token named for the issued key, the
 // certificate beside that reference, else the file pair when its key is. The
-// unnamed .key comes last (decision 45 ruling 7): on a home shared by a TPM
-// host and a file host it is the file host's, and the TPM host must not pick
-// it up or remove it, or each sign-in of one forces the other to sign in.
-// Another machine's .tpmkey is not looked at, so it reads as no pair and is
-// never removed or overwritten (pre-flight I12). With none, the file pair,
-// which findHeld reports as not there.
+// unnamed .key comes last: on a home shared by a TPM host and a file host it
+// is the file host's, and the TPM host must not pick it up or remove it, or
+// each sign-in of one forces the other to sign in. Another machine's .tpmkey
+// is not looked at, so it reads as no pair and is never removed or overwritten
+// (pre-flight I12). With none, the file pair, which findHeld reports as not
+// there.
 func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 	fc, fk, err := userconfig.IssuedPaths(sf.broker)
 	if err != nil {
 		return issuedPair{}, err
 	}
-	if tc, tk, err := userconfig.IssuedTPMPaths(sf.broker); err == nil {
-		if _, err := os.Lstat(tk); err == nil {
-			return issuedPair{storeTPM, tc, tpmRef(tk)}, nil
+	// A TPM pair whose key file is not there carries the plain path, not a
+	// reference, so findHeld reads it as no held pair.
+	tpmPair := func() issuedPair {
+		tc, tk, err := userconfig.IssuedTPMPaths(sf.broker)
+		if err != nil {
+			return issuedPair{store: storeTPM}
 		}
+		if _, err := os.Lstat(tk); err != nil {
+			return issuedPair{storeTPM, tc, tk}
+		}
+		return issuedPair{storeTPM, tc, tpmRef(tk)}
 	}
-	if sf.issuedKey != "" && (sf.issuedKeyStore == storePKCS || pkcs11Wanted(sf) && clientkey.HasPKCS11) {
-		return issuedPair{storePKCS, fc, sf.issuedKey}, nil
+	tokenPair := func() (issuedPair, error) {
+		tc, err := tokenTarget(sf)
+		if err != nil {
+			return issuedPair{}, err
+		}
+		return issuedPair{storePKCS, tc, sf.issuedKey}, nil
+	}
+	switch sf.issuedKeyStore {
+	case storeTPM:
+		return tpmPair(), nil
+	case storePKCS:
+		if sf.issuedKey == "" {
+			return issuedPair{store: storePKCS}, nil
+		}
+		return tokenPair()
+	case storeFile, storeEncl:
+		return issuedPair{storeFile, fc, fk}, nil
+	}
+	if p := tpmPair(); hwkey.IsRef(p.key) {
+		return p, nil
+	}
+	if sf.issuedKey != "" && pkcs11Wanted(sf) && clientkey.HasPKCS11 {
+		return tokenPair()
 	}
 	return issuedPair{storeFile, fc, fk}, nil
 }

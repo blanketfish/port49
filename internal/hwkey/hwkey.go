@@ -70,6 +70,18 @@ func (e *PINError) Error() string {
 	return "hwkey: the token refused the PIN"
 }
 
+// TokenInfo is the public description of a token that is present: what its
+// own fields say, never a PIN or an object.
+type TokenInfo struct{ Label, Serial, Manufacturer string }
+
+// NoMatchError is a key reference that no present token matches, with the
+// tokens that are present (none when none is in any slot). It is
+// ErrKeyAbsent: the key is to be put back, or the reference is wrong.
+type NoMatchError struct{ Present []TokenInfo }
+
+func (e *NoMatchError) Error() string { return ErrKeyAbsent.Error() }
+func (e *NoMatchError) Unwrap() error { return ErrKeyAbsent }
+
 // PINBlockedWords is what the operator is told when a PIN is blocked: the way
 // out, and that another try is not it.
 const PINBlockedWords = "the key's PIN is blocked; unblock it with its PUK (ykman piv access unblock-pin) before trying again"

@@ -1,6 +1,8 @@
 package userconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -618,6 +620,29 @@ func TestIssuedPaths(t *testing.T) {
 		if _, _, err := IssuedPathsIn("/d", bad); err == nil {
 			t.Errorf("%q made a path", bad)
 		}
+	}
+}
+
+// A token-held key's certificate is named for the key, the first 8 hex digits
+// of SHA-256 of its reference, beside the file pair's, so a token host and a
+// file host sharing a home never name the same certificate (decision 45
+// ruling 7); a broker URL IssuedPathsIn refuses is refused.
+func TestIssuedTokenPaths(t *testing.T) {
+	const ref = "pkcs11:token=lab;id=%10"
+	sum := sha256.Sum256([]byte(ref))
+	k := hex.EncodeToString(sum[:])[:8]
+	c, err := IssuedTokenPathsIn("/d", "https://Broker.Example:8443", ref)
+	if err != nil || c != "/d/issued/broker.example_8443."+k+".pem" {
+		t.Fatalf("%s %v", c, err)
+	}
+	if file, _, _ := IssuedPathsIn("/d", "https://Broker.Example:8443"); c == file {
+		t.Fatalf("the token's certificate is the file pair's, %s", c)
+	}
+	if other, _ := IssuedTokenPathsIn("/d", "https://Broker.Example:8443", "pkcs11:token=lab;id=%11"); other == c {
+		t.Fatalf("two keys share %s", c)
+	}
+	if _, err := IssuedTokenPathsIn("/d", "http://broker.example", ref); err == nil {
+		t.Error("a refused broker made a path")
 	}
 }
 

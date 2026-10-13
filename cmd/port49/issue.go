@@ -122,6 +122,9 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		if !sf.signIn {
 			return 1
 		}
+	case errors.Is(heldErr, fs.ErrNotExist) && sf.issuedKeyStore == storeTPM:
+		// A file key on this home is not used: the operator named the TPM.
+		fmt.Fprintln(stderr, "port49 login: no TPM key for this machine yet; signing in to make one")
 	case heldErr != nil && !errors.Is(heldErr, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "port49 login: your held certificate is not used: %v\n", heldErr)
 	}
@@ -344,8 +347,8 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 			ignoredClause(sf), unprefixed(refused.err), keyFile)
 		key, keyBytes, err = newIssuedKey(store, sf, keyFile)
 	case errors.As(err, &refused):
-		return failed(fmt.Errorf("issued_key_store is tpm, and the TPM could not make a key (%v): if its owner "+
-			"password is set, clear it with the TPM's own tools; or set issued_key_store: file", unprefixed(refused.err)))
+		return failed(fmt.Errorf("issued_key_store is tpm, and the TPM could not make a key (%v): %s",
+			unprefixed(refused.err), tpmRefusalAdvice(refused.err)))
 	case err == nil && store == storeTPM && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto:
 		// Said once the key is made, so it is never contradicted by a second line.
 		fmt.Fprintf(stderr, "port49 login: %sthe key is made in this machine's TPM\n", ignoredClause(sf))

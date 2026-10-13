@@ -37,6 +37,32 @@ func uriFor(t *testing.T, module, label string) pkcs11.URI {
 
 func pin() []byte { return []byte(hwtest.SoftHSMUserPIN) }
 
+// A URI no present token matches is ErrKeyAbsent that carries what is present
+// (label, serial, manufacturer: never a PIN or an object), so the caller can
+// tell a token that is out from a reference that is wrong; with the token
+// unplugged nothing is present.
+func TestOpenWithNoMatchingTokenSaysWhatIsPresent(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	wrong := uriFor(t, module, label+"-typo")
+	_, err := pkcs11.Open(wrong, nil)
+	var nm *hwkey.NoMatchError
+	if !errors.Is(err, hwkey.ErrKeyAbsent) || !errors.As(err, &nm) {
+		t.Fatalf("Open = %v, want ErrKeyAbsent carrying the tokens present", err)
+	}
+	found := false
+	for _, ti := range nm.Present {
+		found = found || ti.Label == label && ti.Serial != ""
+	}
+	if !found {
+		t.Fatalf("the tokens present %+v do not include %q with its serial", nm.Present, label)
+	}
+	hwtest.SoftHSMUnplug(t, label)
+	_, err = pkcs11.Open(uriFor(t, module, label), nil)
+	if !errors.As(err, &nm) || len(nm.Present) != 0 {
+		t.Fatalf("with the token out: %v, present %+v", err, nm)
+	}
+}
+
 type testCA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey

@@ -208,9 +208,16 @@ func Open(u URI, pin []byte) (*Signer, error) {
 		}
 	}
 	present := false // a token the URI's selectors match is in a slot
+	var others []hwkey.TokenInfo
 	for _, slot := range slots {
 		ti, err := m.tokenInfo(slot)
-		if err != nil || !u.matches(slot, ti) {
+		if err != nil {
+			continue
+		}
+		if !u.matches(slot, ti) {
+			if l, s := trimField(ti.label[:]), trimField(ti.serial[:]); l != "" || s != "" {
+				others = append(others, hwkey.TokenInfo{Label: l, Serial: s, Manufacturer: trimField(ti.manufacturer[:])})
+			}
 			continue
 		}
 		present = true
@@ -230,8 +237,9 @@ func Open(u URI, pin []byte) (*Signer, error) {
 	case 0:
 		if !present {
 			// No token the URI names is in any slot: to be put back, which is
-			// no reason to make a key.
-			return nil, fmt.Errorf("pkcs11: no token matching %s is present: %w", u, hwkey.ErrKeyAbsent)
+			// no reason to make a key. The tokens that are present ride along,
+			// so a wrong reference can be told from a token that is out.
+			return nil, fmt.Errorf("pkcs11: no token matching %s is present: %w", u, &hwkey.NoMatchError{Present: others})
 		}
 		return nil, fmt.Errorf("pkcs11: no token holds a key matching %s", u)
 	case 1:
