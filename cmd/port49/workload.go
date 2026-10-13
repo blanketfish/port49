@@ -176,28 +176,9 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	}
 	resp, err := c.Mint(context.Background(), workload.MintOptions{Devices: devices, Scope: *scope, Enable: *enable,
 		TTL: *ttl, Purpose: *purpose})
-	code := 0
-	var te *workload.TemporaryError
+	code := mintOutcome(stderr, cmd, *scope, devices, resp, err)
 	switch {
-	case errors.As(err, &te) && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted; run again\n", cmd,
-			safe(err.Error()), safe(*scope), mintedCount(resp.Results))
-		code = exitTemporary
-	case errors.As(err, &te):
-		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted; run again\n", cmd, safe(err.Error()),
-			len(te.Unminted), len(devices))
-		code = exitTemporary
-	case err != nil && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted\n", cmd, safe(err.Error()),
-			safe(*scope), mintedCount(resp.Results))
-		code = 1
-	case err != nil:
-		// A final answer, perhaps after earlier pages minted: those are
-		// still written (pre-flight I-1).
-		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted\n", cmd, safe(err.Error()),
-			len(devices)-len(resp.Results), len(devices))
-		code = 1
-	case *scope != "" && len(resp.Results) == 0:
+	case err == nil && *scope != "" && len(resp.Results) == 0:
 		// One message for an undeclared scope and an ungranted one: the
 		// broker never tells them apart (decision 42 ruling 2).
 		fmt.Fprintf(stderr, "%s: scope %s: no device it selects is one you hold a grant on, or no scope has that name\n",

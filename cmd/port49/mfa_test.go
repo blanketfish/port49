@@ -178,7 +178,7 @@ func newMFALab(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string) *
 	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(ca)
-	cfg := agent.Config{BrokerURL: m.url, Cert: cert, BrokerCA: pool, Now: time.Now}
+	cfg := agent.Config{BrokerURL: m.url, Cert: cert, BrokerCA: pool, BrokerCAPEM: ca, Now: time.Now}
 	if withTouch {
 		sessionKey := cert.PrivateKey.(*ecdsa.PrivateKey)
 		m.session = hwfake.New(sessionKey, "/fake/module.so", "TOKEN1")

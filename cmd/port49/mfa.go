@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -116,8 +115,22 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 	}
 	touch, idp := slices.Contains(methods, "hardware_key_touch"), slices.Contains(methods, "idp_mfa")
 	if touch && st.TouchKey {
-		fmt.Fprintln(stderr, "port49: touch your key now")
-		return c.ProveTouch(ctx, req.Challenge)
+		// The key's state is checked first, then the prompt (ruling 18): a key
+		// that is out, locked or without attestations is never asked to blink.
+		why := touchUnavailable(st.TouchKeyState)
+		if why == "" {
+			fmt.Fprintln(stderr, "port49: touch your key now")
+			err := c.ProveTouch(ctx, req.Challenge)
+			if !errors.Is(err, mfatouch.ErrNoAttestation) || !idp || !stdinIsTerminal() {
+				return err
+			}
+			why = touchUnavailable("no_attestation") // the state changed under the prompt
+		} else if !idp || !stdinIsTerminal() {
+			// No fallback to take: the agent's own words (insert your key).
+			return c.ProveTouch(ctx, req.Challenge)
+		}
+		fmt.Fprintf(stderr, "port49: %s; falling back to idp_mfa (a sign-in at your identity provider)\n", why)
+		return proveBySignIn(ctx, sf, st, req, stderr)
 	}
 	if touch && st.TouchKeyUnusable != "" {
 		fmt.Fprintf(stderr, "port49: %s\n", printsafe.Line(st.TouchKeyUnusable, 300))
@@ -139,15 +152,14 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 // the challenge; its ID token goes to POST /v1/mfa as the bearer, once, with
 // no client certificate.
 func proveBySignIn(ctx context.Context, sf *sessionFlags, st agent.Status, req api.PerLoginMFA, stderr io.Writer) error {
-	if sf.broker == "" || sf.brokerCA == "" {
-		if err := sf.fill(flag.NewFlagSet("port49", flag.ContinueOnError)); err != nil {
-			return err
-		}
+	adoptAgentSession(sf, st)
+	if err := sf.fill(flag.NewFlagSet("port49", flag.ContinueOnError)); err != nil {
+		return err
 	}
-	sf.broker = cmp.Or(sf.broker, st.Broker)
 	pool, err := sf.brokerPool()
 	if err != nil {
-		return fmt.Errorf("the sign-in needs the broker's CA (broker_ca in %s): %w", sf.configFile, err)
+		return fmt.Errorf("the sign-in needs the broker's CA (the agent's session has none to give; broker_ca in %s): %w",
+			sf.configFile, err)
 	}
 	verify, err := sf.verifyBroker(stderr)
 	if err != nil {

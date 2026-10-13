@@ -459,7 +459,8 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 		return agent.Config{}, err
 	}
 	cfg := agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
-		BundleKept: bundleKept(s.broker), VerifyBroker: verify}
+		BundleKept: bundleKept(s.broker), VerifyBroker: verify, BrokerCAPEM: s.brokerCAPEM,
+		BrokerCRL: cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck))}
 	if hwkey.IsRef(s.key) {
 		cfg.KeyRef = clientkey.CanonicalRef(s.key)
 	}

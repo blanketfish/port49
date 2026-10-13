@@ -20,6 +20,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/mfatouch"
 )
 
 // ErrNoAgent is a socket nothing answers on. The answer is `port49 login`.
@@ -190,8 +191,11 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	default:
-		var e api.Error
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		var e refusalBody
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		if refused := e.refused(); refused != nil {
+			return api.MintItem{}, refused
+		}
 		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
 			return api.MintItem{}, ke
 		}
@@ -223,7 +227,7 @@ func (c *Client) Refresh(ctx context.Context, challenge string) (api.RefreshResp
 		return api.RefreshResponse{}, fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
 	}
 	defer resp.Body.Close()
-	var e api.Error
+	var e refusalBody
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var out api.RefreshResponse
@@ -248,7 +252,10 @@ func (c *Client) Refresh(ctx context.Context, challenge string) (api.RefreshResp
 	default:
 		// refresh_failed's detail is the agent's own error, already saying
 		// what the broker answered.
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		if refused := e.refused(); refused != nil {
+			return api.RefreshResponse{}, refused
+		}
 		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
 			return api.RefreshResponse{}, ke
 		}
@@ -298,9 +305,13 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		}
 		return nil
 	}
-	var e api.Error
+	var e refusalBody
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
 	switch {
+	case e.refused() != nil:
+		return e.refused()
+	case e.Error == codeNoAttestation:
+		return fmt.Errorf("agent: %w", mfatouch.ErrNoAttestation)
 	case resp.StatusCode == http.StatusGone && e.Error == "credential_revoked":
 		return &RevokedError{Detail: e.Detail}
 	case resp.StatusCode == http.StatusGone:

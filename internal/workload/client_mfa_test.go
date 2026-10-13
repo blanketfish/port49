@@ -174,6 +174,35 @@ func TestAWorkloadsMissedTouchKeepsWhatWasMinted(t *testing.T) {
 	}
 }
 
+// The line before the touch names devices the broker sent: control bytes in
+// a name reach no terminal or cron mail.
+func TestTheTouchPromptNamesDevicesSafely(t *testing.T) {
+	challenge := base64.RawURLEncoding.EncodeToString(make([]byte, api.MFAChallengeLen))
+	const evil = "leaf1\x1b[2J\r\nnot-a-line"
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		func(w http.ResponseWriter, req api.MintRequest) {
+			resp := api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01", Subject: "svc_oxidized"}
+			for _, d := range req.Devices {
+				if req.PerLoginMFAChallenge == "" {
+					resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "per_login_mfa_required",
+						PerLoginMFA: &api.PerLoginMFA{Device: d, Challenge: challenge, Accept: []string{"hardware_key_touch"},
+							Methods: []string{"hardware_key_touch"}}})
+					continue
+				}
+				resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "permit", Username: "svc", Login: "T"})
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		}}}
+	h, _ := touchHarness(t, f)
+	var s said
+	h.cfg.Say = s.say
+	_, _ = h.client(t).Mint(context.Background(), MintOptions{Devices: []string{evil}})
+	text := s.text()
+	if !strings.Contains(text, "touch the key for leaf1") || strings.ContainsAny(text, "\x1b\r") || strings.Contains(text, "\n") {
+		t.Fatalf("said: %q", text)
+	}
+}
+
 // The broker refusing the proof is final: the refusal's code and detail, no
 // second mint.
 func TestAWorkloadsRefusedProofIsFinal(t *testing.T) {

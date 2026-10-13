@@ -394,7 +394,7 @@ func (c *Client) proveTouch(ctx context.Context, challenge string, devices []str
 		return err
 	}
 	if c.cfg.Say != nil {
-		c.cfg.Say("touch the key for %s", strings.Join(devices, ", "))
+		c.cfg.Say("touch the key for %s", safeNames(devices))
 	}
 	sig, err := mfatouch.Sign(c.cfg.TouchKey, ch, ekm)
 	if err != nil {

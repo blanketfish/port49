@@ -71,7 +71,14 @@ type Config struct {
 	// certificate from --cert or from the token.
 	Cert     tls.Certificate
 	BrokerCA *x509.CertPool
-	Now      func() time.Time
+	// BrokerCAPEM and BrokerCRL are BrokerCA's bytes and the broker_crl mode
+	// the session was started with. Neither is secret; Status hands them to a
+	// command that must reach this same broker without the agent (the
+	// sign-in's proof), so it trusts the CA and checks the CRL the session
+	// does, whether the login was made with flags or a config file.
+	BrokerCAPEM []byte
+	BrokerCRL   string
+	Now         func() time.Time
 	// Log receives the agent's own lines — reconnects, the session's end.
 	// Never a token.
 	Log io.Writer
@@ -198,7 +205,11 @@ type Agent struct {
 	// nil; touchUnusable says why not when touch_key is configured.
 	touch         hwkey.Key
 	touchUnusable string
-	keyRef        string
+	// brokerCAPEM and brokerCRL are the session's broker CA and CRL mode, for
+	// Status: what a sign-in proof to this broker must be checked with.
+	brokerCAPEM string
+	brokerCRL   string
+	keyRef      string
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -251,6 +262,7 @@ func New(c Config) *Agent {
 	a.keyRef = c.KeyRef
 	a.key, _ = c.Cert.PrivateKey.(hwkey.Key)
 	a.touchUnusable = c.TouchKeyUnusable
+	a.brokerCAPEM, a.brokerCRL = string(c.BrokerCAPEM), c.BrokerCRL
 	if c.TouchKey != nil {
 		if ok, why := SameToken(c.Cert.PrivateKey, c.TouchKey); ok {
 			a.touch = c.TouchKey
@@ -1214,18 +1226,9 @@ func (a *Agent) ProveTouch(ctx context.Context, challenge string) error {
 	}
 	// The attestations are read before the touch: a token that shows none is
 	// said before the key blinks for nothing.
-	certs, ok := a.touch.(mfatouch.Certificates)
-	session, sok := a.cert.PrivateKey.(crypto.Signer)
-	if !ok || !sok {
-		return errors.New("agent: " + mfatouch.ErrNoAttestation.Error())
-	}
-	list, err := certs.Certificates()
+	chain, err := a.touchChain()
 	if err != nil {
-		return fmt.Errorf("agent: reading the token's attestation certificates: %w", err)
-	}
-	chain, err := mfatouch.Chain(list, a.touch.Public(), session.Public())
-	if err != nil {
-		return fmt.Errorf("agent: %w", err)
+		return err
 	}
 	ekm, err := a.heldExporter(ctx)
 	if err != nil {
@@ -1616,6 +1619,15 @@ type Status struct {
 	// TouchKeyUnusable says why not when touch_key is configured.
 	TouchKey         bool   `json:"touch_key"`
 	TouchKeyUnusable string `json:"touch_key_unusable,omitempty"`
+	// TouchKeyState is the touch key's state now (present, absent or locked;
+	// no_attestation for a present key whose token shows none), "" when the
+	// agent has no usable touch key: what `port49 token` checks before it says
+	// "touch your key".
+	TouchKeyState string `json:"touch_key_state,omitempty"`
+	// BrokerCAPEM and BrokerCRL are the session's broker CA (public) and
+	// broker_crl mode.
+	BrokerCAPEM string `json:"broker_ca_pem,omitempty"`
+	BrokerCRL   string `json:"broker_crl,omitempty"`
 	// KeyRef is the session key's reference in canonical form (never a PIN),
 	// "" for a file key: what login compares before it opens a token.
 	KeyRef string `json:"key_ref,omitempty"`
@@ -1687,6 +1699,9 @@ func (a *Agent) Handler() http.Handler {
 		case KeyCode(err) != "":
 			// The key's own failure, not the broker's: its own code.
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+		case writeRefusal(w, err):
+			// The CRL check refused the broker: broker_refused, for the client
+			// to rebuild; never retried and never "unreachable".
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 		default:
@@ -1694,10 +1709,9 @@ func (a *Agent) Handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("POST /refresh", func(w http.ResponseWriter, r *http.Request) {
-		var req RefreshRequest
-		// The body is optional and lenient: an older client sends none.
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not a refresh request"})
+		req, err := decodeRefresh(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not a refresh request: " + err.Error()})
 			return
 		}
 		out, err := a.Refresh(r.Context(), req.PerLoginMFAChallenge)
@@ -1711,6 +1725,7 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
 		case KeyCode(err) != "":
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+		case writeRefusal(w, err):
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "refresh_failed", Detail: err.Error()})
 		default:
@@ -1722,6 +1737,7 @@ func (a *Agent) Handler() http.Handler {
 		warn, sessions := a.ceilingWarning, a.refreshed
 		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
+			TouchKeyState: a.touchKeyState(), BrokerCAPEM: a.brokerCAPEM, BrokerCRL: a.brokerCRL,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
 			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions,
 			KeyState: a.keyState(), TouchKey: a.touch != nil, TouchKeyUnusable: a.touchUnusable, KeyRef: a.keyRef})
@@ -1763,6 +1779,41 @@ func (a *Agent) Handler() http.Handler {
 		answer(w, out, err)
 	})
 	return mux
+}
+
+// touchChain is the attestation chain a touch proof carries, read from the
+// token: no touch is needed. A token that shows none is
+// mfatouch.ErrNoAttestation, said before the key blinks for nothing.
+func (a *Agent) touchChain() ([]string, error) {
+	certs, ok := a.touch.(mfatouch.Certificates)
+	session, sok := a.cert.PrivateKey.(crypto.Signer)
+	if !ok || !sok {
+		return nil, fmt.Errorf("agent: %w", mfatouch.ErrNoAttestation)
+	}
+	list, err := certs.Certificates()
+	if err != nil {
+		return nil, fmt.Errorf("agent: reading the token's attestation certificates: %w", err)
+	}
+	chain, err := mfatouch.Chain(list, a.touch.Public(), session.Public())
+	if err != nil {
+		return nil, fmt.Errorf("agent: %w", err)
+	}
+	return chain, nil
+}
+
+// touchKeyState is the touch key's State now, or codeNoAttestation for a
+// present key whose token shows no attestations; "" with no usable touch key.
+func (a *Agent) touchKeyState() string {
+	if a.touch == nil {
+		return ""
+	}
+	state := a.touch.State()
+	if state == hwkey.Present {
+		if _, err := a.touchChain(); errors.Is(err, mfatouch.ErrNoAttestation) {
+			return codeNoAttestation
+		}
+	}
+	return state.String()
 }
 
 // keyState is the session key's State, "present" for a file key.
@@ -1925,6 +1976,10 @@ func answer(w http.ResponseWriter, out any, err error) {
 		writeJSON(w, status, api.Error{Error: refused.Code, Detail: refused.Detail})
 	case KeyCode(err) != "":
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+	case writeRefusal(w, err):
+	case errors.Is(err, mfatouch.ErrNoAttestation):
+		// The touch was never made: the client may fall back to idp_mfa.
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeNoAttestation, Detail: err.Error()})
 	default:
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 	}

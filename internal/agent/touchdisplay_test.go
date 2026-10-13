@@ -127,6 +127,9 @@ func TestTheSocketAnswersAKeyFailureWithItsOwnCode(t *testing.T) {
 			r.srv.CloseClientConnections()
 			r.a.client.CloseIdleConnections()
 			body := strings.NewReader(`{"device":"leaf1"}`)
+			if path == "/refresh" {
+				body = strings.NewReader(`{}`) // /refresh takes no device
+			}
 			resp, err := hc.Post("http://agent"+path, "application/json", body)
 			if err != nil {
 				t.Fatal(err)
