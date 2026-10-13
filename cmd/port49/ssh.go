@@ -940,6 +940,9 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			cmd, device)
 		return 1
 	}
+	// Asked before the signal trap, so a ^C while the agent is slow to answer
+	// ends the run before anything is sent (Task 3 re-review 3, N1).
+	warn := ceilingWarning(*socket)
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
@@ -968,7 +971,6 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v; nothing was sent to %s\n", cmd, err, device)
 		return 1
 	}
-	warn := ceilingWarning(*socket)
 	warnNearCeiling(stderr, device, item, warn)
 	expiresAt, _ := time.Parse(time.RFC3339, item.ExpiresAt)
 	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device,
