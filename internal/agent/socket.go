@@ -189,6 +189,9 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		if e.Error == "revocation_running" {
 			return api.MintItem{}, &RevocationRunningError{Detail: e.Detail}
 		}
+		if e.Error == codeBrokerUnavailable {
+			return api.MintItem{}, &BrokerUnavailableError{errors.New(e.Detail)}
+		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	default:
 		var e refusalBody

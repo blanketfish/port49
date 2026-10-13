@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -43,6 +44,7 @@ const (
 	failMFARequired       = "per_login_mfa_required"
 	failConnectionChanged = "connection_changed"
 	failBrokerRefused     = "broker_refused"
+	failBrokerUnavailable = "broker_unavailable"
 	failNoToken           = "no_token"
 	failAgent             = "agent_error"
 )
@@ -66,6 +68,9 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 	var revoked *agent.RevokedError
 	var running *agent.RevocationRunningError
 	var refused *agent.BrokerRefusedError
+	var crlRevoked *brokercrl.RevokedError
+	var crlUnchecked *brokercrl.UncheckedError
+	var down *agent.BrokerUnavailableError
 	switch {
 	case err == nil && item.Verdict != "" && item.Verdict != "permit":
 		f.Verdict, f.Reason = item.Verdict, item.Reason
@@ -78,8 +83,12 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 		f.Error = agent.KeyCode(err)
 	case errors.Is(err, agent.ErrConnectionChanged):
 		f.Error = failConnectionChanged
-	case errors.As(err, &refused):
+	case errors.As(err, &refused), errors.As(err, &crlRevoked), errors.As(err, &crlUnchecked):
+		// The CRL check refused the broker's certificate, in the agent or in
+		// an IdP proof the CLI posted itself.
 		f.Error = failBrokerRefused
+	case errors.As(err, &down):
+		f.Error = failBrokerUnavailable
 	case errors.As(err, &revoked):
 		f.Error = failRevoked
 	case errors.As(err, &running):

@@ -234,7 +234,7 @@ func postIdPProof(ctx context.Context, broker string, pool *x509.CertPool, verif
 		if refused := refusedByCRL(err); refused != nil {
 			return refused
 		}
-		return fmt.Errorf("the broker at %s is unreachable: %w", broker, err)
+		return &agent.BrokerUnavailableError{Err: fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

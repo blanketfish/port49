@@ -10,6 +10,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/hwkey"
 )
 
@@ -53,6 +54,22 @@ func TestTokenFailureCodes(t *testing.T) {
 			Err: fmt.Errorf("%w at /s: refused", agent.ErrNoAgent)}, tokenFailure{Device: "core1", Error: "no_agent"}},
 		{"proof: too old", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: agent.ErrAgentTooOld},
 			tokenFailure{Device: "core1", Error: "agent_too_old"}},
+		// A broker that is down is temporary; a broker whose certificate the CRL
+		// check refused is not; neither is a requirement to prove (review I1, I2).
+		{"unreachable", api.MintItem{}, &agent.BrokerUnavailableError{Err: errors.New("agent: the broker at https://b is unreachable")},
+			tokenFailure{Device: "core1", Error: "broker_unavailable"}},
+		{"proof: unreachable", api.MintItem{}, &mfaUnprovedError{Requirement: need,
+			Err: &agent.BrokerUnavailableError{Err: errors.New("the broker at https://b is unreachable")}},
+			tokenFailure{Device: "core1", Error: "broker_unavailable"}},
+		{"proof: crl revoked", api.MintItem{}, &mfaUnprovedError{Requirement: need,
+			Err: &brokercrl.RevokedError{Subject: "CN=broker", Serial: "7", List: "l"}},
+			tokenFailure{Device: "core1", Error: "broker_refused"}},
+		{"proof: crl unchecked", api.MintItem{}, &mfaUnprovedError{Requirement: need,
+			Err: &brokercrl.UncheckedError{Detail: "d"}}, tokenFailure{Device: "core1", Error: "broker_refused"}},
+		{"key locked", api.MintItem{}, &agent.KeyError{Err: hwkey.ErrLocked}, tokenFailure{Device: "core1", Error: "key_locked"}},
+		{"key absent", api.MintItem{}, &agent.KeyError{Err: hwkey.ErrKeyAbsent}, tokenFailure{Device: "core1", Error: "key_absent"}},
+		{"proof: key locked", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: &agent.KeyError{Err: hwkey.ErrLocked}},
+			tokenFailure{Device: "core1", Error: "key_locked"}},
 		{"refused", api.MintItem{}, &agent.BrokerRefusedError{Err: errors.New("revoked")},
 			tokenFailure{Device: "core1", Error: "broker_refused"}},
 		{"no token", api.MintItem{Device: "core1", Verdict: "permit"}, nil, tokenFailure{Device: "core1", Error: "no_token"}},
@@ -75,13 +92,16 @@ func TestTokenFailureCodes(t *testing.T) {
 // stderr line as before, and no token anywhere.
 func TestTokenJSONOnADeny(t *testing.T) {
 	sock := agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(api.MintItem{Device: "leaf1", Verdict: "deny", Reason: "no_grants_matched"})
+		// A faulty broker's token beside a deny: it must reach no stream.
+		_ = json.NewEncoder(w).Encode(api.MintItem{Device: "leaf1", Verdict: "deny", Reason: "no_grants_matched",
+			Login: "LOGINTOKEN"})
 	}))
 	var out, errb lockedBuffer
 	code := run([]string{"token", "--json", "--socket", sock, "leaf1"}, &out, &errb)
 	var f tokenFailure
 	if code != 1 || json.Unmarshal([]byte(out.String()), &f) != nil || f.Reason != "no_grants_matched" ||
-		strings.Count(out.String(), "\n") != 1 || !strings.Contains(errb.String(), "deny no_grants_matched") {
+		strings.Count(out.String(), "\n") != 1 || !strings.Contains(errb.String(), "deny no_grants_matched") ||
+		strings.Contains(out.String(), "LOGINTOKEN") || strings.Contains(errb.String(), "LOGINTOKEN") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
