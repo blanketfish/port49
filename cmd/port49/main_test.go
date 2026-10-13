@@ -254,6 +254,10 @@ func TestUsage(t *testing.T) {
 	if code := run(nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "port49 token") {
 		t.Fatalf("code %d %q", code, errb.String())
 	}
+	// touch_key is a fleet setting, so the login line names its flag.
+	if !strings.Contains(errb.String(), "[--touch-key REF]") {
+		t.Errorf("the usage does not name --touch-key: %q", errb.String())
+	}
 }
 
 // login prints the agent package's refusals under its own prefix, once.

@@ -41,7 +41,7 @@ import (
 )
 
 const usage = `usage:
-  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--cert FILE --key FILE |
+  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--touch-key REF] [--cert FILE --key FILE |
                --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in]]
                (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
                each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity

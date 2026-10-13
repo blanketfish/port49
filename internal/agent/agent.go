@@ -44,8 +44,11 @@ import (
 // Config is what opens a session.
 type Config struct {
 	BrokerURL string
-	// Cert is the operator's certificate and key. Load it with
-	// keyfile.LoadX509KeyPair, which refuses a key file others could read.
+	// Cert is the operator's certificate chain and its key: a file key, or a
+	// hwkey.Key as PrivateKey for a hardware key. Load it with
+	// clientkey.LoadPair, which opens the key from its --key value (a path,
+	// refused if others could read it, or a key reference) and takes the
+	// certificate from --cert or from the token.
 	Cert     tls.Certificate
 	BrokerCA *x509.CertPool
 	Now      func() time.Time
