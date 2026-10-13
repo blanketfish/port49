@@ -1821,6 +1821,12 @@ func (a *Agent) keyState() hwkey.State {
   `Refresh` whose `keyState()` is `Absent` after the probe returns the `KeyAbsentError` without
   signing; it never refuses on a cached state.
 
+  **Built differently (task 5):** the socket answers 409 `key_absent` on `/unlock`, and 502 with
+  `touch_timeout`, `key_locked` or `key_absent` on mint and refresh, not `503 key_absent`. A 503
+  would land in the `StatusServiceUnavailable` arms of `Client.Token` and `Client.Refresh`, which
+  know only `revocation_running` and would lose the `*KeyError`; 503 also means "retry later",
+  which a key failure is not. The client rebuilds the error from the code. Ledgered deviation.
+
 - [ ] **Step 4: Run**
 
 Run: `go test ./internal/agent/ ./cmd/port49/ -count=1`, `make test-hw`, then `make test && make vet`.
