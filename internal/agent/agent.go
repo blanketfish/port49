@@ -1461,6 +1461,10 @@ type UnlockRefusal struct {
 	Detail string `json:"detail"`
 	Low    bool   `json:"low,omitempty"`
 	Final  bool   `json:"final,omitempty"`
+	// Blocked is the token's CKF_USER_PIN_LOCKED, sent as the code
+	// pin_blocked rather than pin_refused: a blocked PIN takes no more tries
+	// and is never reported as a refusal that invites another.
+	Blocked bool `json:"blocked,omitempty"`
 }
 
 // unlock is POST /unlock {"pin": "…"}: the PIN goes to the session key and,
@@ -1487,12 +1491,15 @@ func (a *Agent) unlock(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(a.log, "port49 agent: the touch key stayed locked: %v\n", terr)
 		}
 	}
-	var pe *hwkey.PINError
+	pe := hwkey.MarkBlocked(a.key, err)
 	switch {
 	case err == nil:
 		fmt.Fprintf(a.log, "port49 agent: the key was unlocked\n")
 		writeJSON(w, http.StatusOK, struct{}{})
-	case errors.As(err, &pe):
+	case pe != nil && pe.Blocked:
+		fmt.Fprintf(a.log, "port49 agent: the key's PIN is blocked\n")
+		writeJSON(w, http.StatusUnauthorized, UnlockRefusal{Error: "pin_blocked", Detail: hwkey.PINBlockedWords, Blocked: true})
+	case pe != nil:
 		detail := "the token refused the PIN"
 		switch {
 		case pe.Final:

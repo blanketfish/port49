@@ -9,7 +9,10 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +34,15 @@ type fakeKey struct {
 	// signErr, when set, is what every Sign returns; signs counts the calls.
 	signErr error
 	signs   int
+	// blocked is a token whose PIN is blocked: Unlock answers as a
+	// CKR_PIN_LOCKED does, and PINBlocked says so.
+	blocked bool
+}
+
+func (k *fakeKey) PINBlocked() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.blocked
 }
 
 func newFakeKey(t *testing.T, state hwkey.State) *fakeKey {
@@ -87,6 +99,10 @@ func (k *fakeKey) Unlock(pin []byte) error {
 	defer clear(pin)
 	if !k.present {
 		return hwkey.ErrKeyAbsent
+	}
+	if k.blocked {
+		// As pkcs11.Signer answers CKR_PIN_LOCKED: the PINError wrapped.
+		return fmt.Errorf("pkcs11: the token's PIN is locked; it needs the token's own unblock procedure: %w", &hwkey.PINError{})
 	}
 	if string(pin) != "123456" {
 		return &hwkey.PINError{Low: true}
@@ -188,6 +204,38 @@ func TestAWrongPINComesBackAsAPINError(t *testing.T) {
 	}
 	if got := key.tried(); len(got) != 2 || got[1] != `a"b\c` {
 		t.Fatalf("the escaped PIN arrived as %q", got)
+	}
+}
+
+// A blocked PIN comes back as a *hwkey.PINError with Blocked set, under its
+// own code, and the agent's words never call it a refusal that invites another
+// try. The key's own state is untouched.
+func TestABlockedPINComesBackAsBlocked(t *testing.T) {
+	key := newFakeKey(t, hwkey.Locked)
+	key.blocked = true
+	var log bytes.Buffer
+	_, c := agentWith(t, Config{Cert: tls.Certificate{PrivateKey: key, Certificate: [][]byte{{1}}}, Log: &log})
+	err := c.Unlock(context.Background(), []byte("123456"))
+	var pe *hwkey.PINError
+	if !errors.As(err, &pe) || !pe.Blocked {
+		t.Fatalf("%v, want a blocked *hwkey.PINError", err)
+	}
+	if strings.Contains(err.Error(), "refused the PIN; ") || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("the error invites another try: %v", err)
+	}
+	if strings.Contains(log.String(), "123456") {
+		t.Fatalf("the agent's log holds the PIN: %q", log.String())
+	}
+	if st, _ := c.Status(context.Background()); st.KeyState != "locked" {
+		t.Fatalf("%+v", st)
+	}
+	// The raw answer carries its own code and the way out.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/unlock", strings.NewReader(`{"pin":"123456"}`))
+	New(Config{Cert: tls.Certificate{PrivateKey: key, Certificate: [][]byte{{1}}}}).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"error":"pin_blocked"`) ||
+		!strings.Contains(rec.Body.String(), "PUK") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
 

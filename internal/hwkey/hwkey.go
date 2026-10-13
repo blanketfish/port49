@@ -52,17 +52,44 @@ var (
 )
 
 // PINError is a PIN the token refused. Low and Final are the token's own
-// flags (CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY).
-type PINError struct{ Low, Final bool }
+// flags (CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY). Blocked is the
+// token's CKF_USER_PIN_LOCKED: the PIN can take no more tries, this one
+// included, and only the token's own unblock procedure (its PUK) clears it.
+// A blocked PIN is never an invitation to try again.
+type PINError struct{ Low, Final, Blocked bool }
 
 func (e *PINError) Error() string {
 	switch {
+	case e.Blocked:
+		return "hwkey: the key's PIN is blocked; unblock it with its PUK before trying again"
 	case e.Final:
 		return "hwkey: the token refused the PIN; one try left before the key locks"
 	case e.Low:
 		return "hwkey: the token refused the PIN; few tries are left before the key locks"
 	}
 	return "hwkey: the token refused the PIN"
+}
+
+// PINBlockedWords is what the operator is told when a PIN is blocked: the way
+// out, and that another try is not it.
+const PINBlockedWords = "the key's PIN is blocked; unblock it with its PUK (ykman piv access unblock-pin) before trying again"
+
+// Blocker is a key that can say its token's PIN is blocked (pkcs11.Signer).
+type Blocker interface{ PINBlocked() bool }
+
+// MarkBlocked sets Blocked on err's *PINError when k reports its PIN blocked,
+// which the token says (CKF_USER_PIN_LOCKED) both when a login is refused as
+// CKR_PIN_LOCKED and when the wrong PIN that just failed was the last try.
+// It returns err's PINError, or nil when err is not one.
+func MarkBlocked(k any, err error) *PINError {
+	var pe *PINError
+	if !errors.As(err, &pe) {
+		return nil
+	}
+	if b, ok := k.(Blocker); ok && b.PINBlocked() {
+		pe.Blocked = true
+	}
+	return pe
 }
 
 // IsRef reports whether s is a key reference (pkcs11:, tpm:, secure-enclave:)

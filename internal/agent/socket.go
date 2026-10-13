@@ -383,6 +383,8 @@ func (c *Client) Unlock(ctx context.Context, pin []byte) error {
 	switch {
 	case resp.StatusCode == http.StatusNotFound && e.Error == "":
 		return ErrAgentTooOld
+	case resp.StatusCode == http.StatusUnauthorized && e.Error == "pin_blocked":
+		return &hwkey.PINError{Blocked: true}
 	case resp.StatusCode == http.StatusUnauthorized && e.Error == "pin_refused":
 		return &hwkey.PINError{Low: e.Low, Final: e.Final}
 	case resp.StatusCode == http.StatusConflict && e.Error == "key_absent":

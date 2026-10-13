@@ -132,6 +132,7 @@ const (
 	ckfSerialSession = 0x04
 	ckfOSLockingOK   = 0x02
 	ckfLoginRequired = 0x04
+	ckfUserPINLocked = 0x40 // CKF_USER_PIN_LOCKED
 	ckfPINCountLow   = 0x10000
 	ckfPINFinalTry   = 0x20000
 	ckuUser          = 1

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -26,6 +27,23 @@ func TestAPINTheTokenRefusedSaysTriesLeft(t *testing.T) {
 	} {
 		if got := pinRefusedWords(&tc.e); !strings.Contains(got, tc.want) {
 			t.Errorf("%+v said %q, want %q", tc.e, got, tc.want)
+		}
+	}
+}
+
+// A blocked PIN is told with the way out and never as a refusal: whatever
+// tries-left flags ride with it, the words do not invite another try.
+func TestABlockedPINSaysHowToUnblockIt(t *testing.T) {
+	for _, e := range []hwkey.PINError{{Blocked: true}, {Blocked: true, Low: true, Final: true}} {
+		var stderr bytes.Buffer
+		// As the signer wraps a CKR_PIN_LOCKED: the PINError under a message.
+		pinFailure(fmt.Errorf("pkcs11: the token's PIN is locked: %w", &e), &stderr)
+		got := stderr.String()
+		if got != "port49 login: the key's PIN is blocked; unblock it with its PUK (ykman piv access unblock-pin) before trying again\n" {
+			t.Errorf("%+v said %q", e, got)
+		}
+		if strings.Contains(got, "refused") || strings.Contains(got, "tries") {
+			t.Errorf("%+v invites another try: %q", e, got)
 		}
 	}
 }

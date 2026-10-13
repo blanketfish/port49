@@ -68,6 +68,34 @@ func SessMuHeldDuringClose(fn func(held bool)) (restore func()) {
 	return func() { closeProbeFn.Store(nil) }
 }
 
+// BlockPIN makes every token read as one whose user PIN is blocked: its
+// token info carries CKF_USER_PIN_LOCKED, which is all a wrong PIN that was
+// the last try shows; and, with answerLocked, C_Login answers CKR_PIN_LOCKED
+// without reaching the token, as a blocked token does even for the right PIN.
+// SoftHSM2 never blocks a PIN however many are refused, so this stands in for
+// a token that has. The returned func removes it.
+func BlockPIN(answerLocked bool) (restore func()) {
+	pinBlockedFake.Store(true)
+	loginLockedFake.Store(answerLocked)
+	return func() { pinBlockedFake.Store(false); loginLockedFake.Store(false) }
+}
+
+var pinBlockedFake, loginLockedFake atomic.Bool
+
+func fakeTokenFlags() uint {
+	if pinBlockedFake.Load() {
+		return ckfUserPINLocked
+	}
+	return 0
+}
+
+func fakeLoginRV() (uint, bool) {
+	if loginLockedFake.Load() {
+		return ckrPINLocked, true
+	}
+	return 0, false
+}
+
 // closeProbeFn is the probe SessMuHeldDuringClose sets; atomic, since a
 // Signer may close on any goroutine while a test sets or removes it.
 var closeProbeFn atomic.Pointer[func(m *Module)]

@@ -231,6 +231,7 @@ func (m *Module) tokenInfo(slot uint) (*ckTokenInfo, error) {
 	if rv := m.call(fnGetTokenInfo, uintptr(slot), p.ptr(ti, unsafe.Pointer(ti))); rv != ckrOK {
 		return nil, &rvError{"C_GetTokenInfo", rv}
 	}
+	ti.flags |= fakeTokenFlags()
 	return ti, nil
 }
 
@@ -301,6 +302,9 @@ func (m *Module) login(session uint, user uint, pin []byte) uint {
 	var p pins
 	defer p.Unpin()
 	loginCalls.Add(1)
+	if rv, ok := fakeLoginRV(); ok {
+		return rv
+	}
 	return m.call(fnLogin, uintptr(session), uintptr(user), p.bytes(pin), uintptr(len(pin)))
 }
 

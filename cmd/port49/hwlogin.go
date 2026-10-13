@@ -88,9 +88,16 @@ func askPIN(label string) ([]byte, error) {
 	return pin, nil
 }
 
+// pinBlockedWords is what a token whose PIN is blocked says to do.
+const pinBlockedWords = hwkey.PINBlockedWords
+
 // pinRefusedWords is what a PIN the token refused says, with the token's own
 // tries-left flags.
 func pinRefusedWords(pe *hwkey.PINError) string {
+	if pe.Blocked {
+		// Not a refusal that invites another try: the token takes no PIN.
+		return pinBlockedWords
+	}
 	s := "the token refused the PIN"
 	switch {
 	case pe.Final:
@@ -136,6 +143,7 @@ func unlockForAgent(sf *sessionFlags, k hwkey.Key, stderr io.Writer) bool {
 		}
 		if err := k.Unlock(slices.Clone(pin)); err != nil {
 			clear(pin)
+			hwkey.MarkBlocked(k, err) // the token says whether this PIN can be tried again
 			pinFailure(err, stderr)
 			return false
 		}
