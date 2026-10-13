@@ -295,8 +295,14 @@ func (s *Signer) readPublic() error {
 			return s.setPublic(pub, kt)
 		}
 	}
-	if certs, err := s.certificatesLocked(s.id); err == nil && len(withoutAttestations(certs)) > 0 {
-		certs = withoutAttestations(certs)
+	if certs, err := s.certificatesLocked(s.id); err == nil && len(certs) > 0 {
+		// A slot attestation is never the client certificate (Certificate
+		// skips it), but its public key is this slot's own key, so it may
+		// still say the key's type when nothing else on the token does. A
+		// real certificate, if there is one, is preferred.
+		if real := withoutAttestations(certs); len(real) > 0 {
+			certs = real
+		}
 		switch pub := certs[0].PublicKey.(type) {
 		case *ecdsa.PublicKey:
 			return s.setPublic(pub, ckkEC)
