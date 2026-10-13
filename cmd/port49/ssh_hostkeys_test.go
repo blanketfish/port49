@@ -77,6 +77,8 @@ func TestAnAddressMovedToAnotherHostNeverSeesTheToken(t *testing.T) {
 // accept-new is refused; under their yes it stands.
 func TestSSHPolicyReadsTheOperatorsConfig(t *testing.T) {
 	bin := sshTestBin(t)
+	// A known_hosts that can keep a key, for the rows that do not name one.
+	good := filepath.Join(privateDir(t), "known_hosts")
 	for _, tc := range []struct{ cfg, device, strict, alias, keyName, err string }{
 		{"", "leaf1", "accept-new", "leaf1", "leaf1", ""},
 		{"StrictHostKeyChecking yes", "leaf1", "yes", "leaf1", "leaf1", ""},
@@ -91,7 +93,11 @@ func TestSSHPolicyReadsTheOperatorsConfig(t *testing.T) {
 		{"UserKnownHostsFile /dev/null\nStrictHostKeyChecking yes", "leaf1", "yes", "leaf1", "leaf1", ""},
 	} {
 		cfg := filepath.Join(privateDir(t), "ssh_config")
-		if err := os.WriteFile(cfg, []byte(tc.cfg+"\n"), 0o600); err != nil {
+		text := tc.cfg + "\n"
+		if !strings.Contains(tc.cfg, "UserKnownHostsFile") {
+			text = "UserKnownHostsFile " + good + "\n" + text
+		}
+		if err := os.WriteFile(cfg, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got, err := sshPolicy(context.Background(), bin, sshOptions{config: cfg, device: tc.device,

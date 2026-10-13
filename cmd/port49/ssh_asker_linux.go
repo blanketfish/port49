@@ -38,6 +38,11 @@ func askerParent(c net.Conn) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return parentFromStat(stat)
+}
+
+// parentFromStat is the parent pid in the text of /proc/<pid>/stat.
+func parentFromStat(stat []byte) (int, error) {
 	// "pid (comm) S ppid ...": comm may hold spaces and ')', so count from the last ')'.
 	i := bytes.LastIndexByte(stat, ')')
 	if i < 0 {

@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
 	"github.com/rhwendt/port49/internal/agent"
@@ -214,7 +215,6 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 	}
 	t := sshTrust{alias: strings.ToLower(o.device), keyName: strings.ToLower(o.device), strict: "accept-new"}
 	var userFiles string
-	kept := false
 	for _, line := range strings.Split(string(out), "\n") {
 		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
 		switch k {
@@ -226,18 +226,76 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 			}
 		case "userknownhostsfile":
 			userFiles = v
-			for _, f := range strings.Fields(v) {
-				kept = kept || f != "/dev/null" && f != "none"
-			}
 		}
 	}
-	if !kept && t.strict != "yes" {
-		return sshTrust{}, fmt.Errorf("your ssh_config keeps no host keys for %s (UserKnownHostsFile %s): every "+
-			"connection would be a first contact, and a host at the device's address would get the token; remove "+
-			"that line for port49 devices, or set StrictHostKeyChecking yes with a managed GlobalKnownHostsFile",
-			o.device, printsafe.Line(cmp.Or(userFiles, "none"), 200))
+	if t.strict != "yes" {
+		if why := knownHostsCannotKeep(userFiles); why != "" {
+			return sshTrust{}, fmt.Errorf("your ssh_config keeps no host keys for %s (UserKnownHostsFile %s%s): every "+
+				"connection would be a first contact, and a host at the device's address would get the token; point "+
+				"the first UserKnownHostsFile for port49 devices at a file you can write, or set StrictHostKeyChecking "+
+				"yes with a managed GlobalKnownHostsFile",
+				o.device, printsafe.Line(cmp.Or(userFiles, "none"), 200), why)
+		}
 	}
 	return t, nil
+}
+
+// knownHostsCannotKeep is why the first of userFiles (ssh -G's
+// userknownhostsfile, already expanded) cannot keep the key accept-new files
+// on a first contact, or "". Accept-new writes to the first file only, and
+// connects anyway when it cannot write, so what matters is the file that
+// first name resolves to, not how the setting is spelled: it must be a regular
+// file the user can write, or one that does not exist yet in a directory the
+// user can write (ssh creates the file, and ~/.ssh itself, but no other
+// directory). A device node (/dev/null, however written or linked), a missing
+// directory, a dangling link and an unwritable file keep nothing (decision 46
+// ruling 2; task 3 review C1).
+func knownHostsCannotKeep(userFiles string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(userFiles), " ")
+	if first == "" || first == "none" {
+		return ": it names no file"
+	}
+	home, _ := os.UserHomeDir()
+	if rest, ok := strings.CutPrefix(first, "~/"); ok && home != "" {
+		first = filepath.Join(home, rest)
+	}
+	at := func(resolved string) string {
+		if resolved == first {
+			return ""
+		}
+		return ", which is " + printsafe.Line(resolved, 200)
+	}
+	resolved, err := filepath.EvalSymlinks(first)
+	if err == nil {
+		fi, err := os.Stat(resolved)
+		switch {
+		case err != nil:
+			return at(resolved) + ": " + unprefixed(err)
+		case !fi.Mode().IsRegular():
+			return at(resolved) + ": that is not a regular file"
+		case unix.Access(resolved, unix.W_OK) != nil:
+			return at(resolved) + ": you cannot write it"
+		}
+		return ""
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return ": " + unprefixed(err)
+	}
+	if _, err := os.Lstat(first); err == nil {
+		return ": it is a link to nothing"
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(first))
+	if err != nil {
+		// ssh makes ~/.ssh when it files the first key, if it can write the home directory.
+		if home != "" && filepath.Dir(first) == filepath.Join(home, ".ssh") && unix.Access(home, unix.W_OK) == nil {
+			return ""
+		}
+		return ": its directory does not exist"
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() || unix.Access(dir, unix.W_OK|unix.X_OK) != nil {
+		return at(filepath.Join(dir, filepath.Base(first))) + ": you cannot create it in " + printsafe.Line(dir, 200)
+	}
+	return ""
 }
 
 // legacyPinsHint says, while plan 9a's pins file exists, that port49 no
@@ -277,7 +335,11 @@ func ownPrompt(prompt, username, device string) bool {
 // token is within askpassMargin of expiresAt, or past it, is answered with a
 // fresh mint's token from remint, or not at all (pre-flight I-3). The token
 // goes only to an asker whose parent is the ssh port49 started: a ProxyJump
-// hop's askpass has the hop's ssh for a parent (pre-flight N3).
+// hop's askpass has the hop's ssh for a parent (pre-flight N3). The check is
+// not a boundary against code of the operator's own: any direct child of the
+// ssh port49 started (a ProxyCommand program, LocalCommand, KnownHostsCommand,
+// a Match exec) inherits SSH_ASKPASS and the socket and passes it, and the
+// same uid can already ask the agent for a token (task 3 review M3).
 type askpassServer struct {
 	ln               net.Listener
 	token            string
@@ -925,13 +987,13 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			"its message is above). Your ssh_config says StrictHostKeyChecking yes: if ssh says no host key is known, "+
 			"no key is filed under %s, so add the device's key to your known_hosts after checking it on its console; "+
 			"if it says the key changed, the key filed under %s is not the one %s presents, so verify it on the "+
-			"console and run 'ssh-keygen -R %s'\n",
+			"console and run ssh-keygen -R %s and connect again\n",
 			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, shellWord(opts.trust.keyName))
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
 			"its message is above). If it says Host key verification failed, the key your known_hosts files under "+
 			"%s is not the one %s presents: either the device's key changed, or the address inventory gives for %s "+
-			"is not the device. Verify the key on its console, then run 'ssh-keygen -R %s' and connect again\n",
+			"is not the device. Verify the key on its console, then run ssh-keygen -R %s and connect again\n",
 			cmd, device, opts.trust.keyName, item.Address, device, shellWord(opts.trust.keyName))
 	}
 	return code

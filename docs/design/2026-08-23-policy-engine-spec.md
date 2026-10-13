@@ -6296,8 +6296,9 @@ token through the agent and logs in with the operator's OpenSSH (8.5 or later).
   `no`) and the device's inventory name as `HostKeyAlias` (unless the operator's ssh_config sets
   one). A first connection is accepted and saved by ssh; a changed key, or a key of another type
   under a name that holds one, stops ssh before the token is sent, and `port49 ssh` names
-  `ssh-keygen -R`. An ssh_config that keeps no host keys (`UserKnownHostsFile /dev/null` or
-  `none`) is refused under accept-new, naming the setting. Why it matters: the token is the
+  `ssh-keygen -R`. A first `UserKnownHostsFile` that cannot keep a key (`none`, or a path
+  that resolves to a device node such as `/dev/null`, a missing directory, a dangling link or a file
+  the user cannot write) is refused under accept-new, naming the setting and where it resolves. Why it matters: the token is the
   device's password for its lifetime, and a host that takes it can replay it to the real device.
   The window this leaves is the first contact, per device and per operator; a shop that wants
   that verified too uses a managed `GlobalKnownHostsFile` or `@cert-authority`, which apply
@@ -9320,10 +9321,14 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   terminal, and a pid or parent that cannot be read, or an OS without the check, fails closed:
   nothing is sent, ssh is ended, and `port49 ssh` says it could not tell which process asked. Gate
   G1c measures the parent on 8.5p1 (`tests/ssh-compat/2026-10-13-openssh-accept-new.md`). Under
-  accept-new, a
-  `UserKnownHostsFile` naming only `/dev/null` or `none` is refused, naming the setting: it files
-  nothing, so every connection would be a first contact (fail closed, never a silent
-  accept-all); under the operator's `yes` it stands. Nothing else about host keys is passed.
+  accept-new, a first
+  `UserKnownHostsFile` that cannot keep a key is refused, naming the setting and where it resolves:
+  accept-new files a first contact in the first file only and connects anyway when it cannot, so
+  every connection would be a first contact (fail closed, never a silent accept-all). Measured on
+  10.2p1 (task 3 review C1): a link to `/dev/null`, `/dev/null` before a real file, `/dev//null` and a
+  missing directory each let a second host take the token. The first file, resolved through links,
+  must be a regular file the user can write, or absent in a directory the user can write (ssh also
+  makes `~/.ssh`); under the operator's `yes` it stands. Nothing else about host keys is passed.
   `ssh -G` failing refuses the run before ssh starts. These refusals follow the mint, since `ssh
   -G` reads its address; that token is unused and expires. The alias files a key under the name,
   so an address added to a device in the source of truth meets the key already known under its
@@ -10038,7 +10043,7 @@ Beyond those already listed in the design document's §14:
 
 - **Never `no`**: whatever the operator's ssh_config says, `port49 ssh` passes
   `StrictHostKeyChecking=accept-new`, or the operator's own `yes`, never `no`; under accept-new a
-  `UserKnownHostsFile` of only `/dev/null` or `none` is refused before ssh starts, and the Python
+  first `UserKnownHostsFile` that cannot keep a key is refused before ssh starts, and the Python
   client refuses it too.
 - **A ProxyJump hop never gets the token**: a hop's prompt under the device's alias is not
   answered, since the asker's parent is not the ssh `port49 ssh` started; an unreadable pid or

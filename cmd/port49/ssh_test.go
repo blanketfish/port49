@@ -221,7 +221,7 @@ func TestAHostWithAnotherKeyNeverSeesTheToken(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, testHostKey(t))
 	code, out, errb := r.run(t, "leaf1", "--", "show", "version")
 	if code != 255 || len(dev.attempts()) != 0 || !strings.Contains(errb, "Host key verification failed") ||
-		!strings.Contains(errb, "so it was never sent") || !strings.Contains(errb, "run 'ssh-keygen -R leaf1'") {
+		!strings.Contains(errb, "so it was never sent") || !strings.Contains(errb, "run ssh-keygen -R leaf1 and") {
 		t.Fatalf("code %d stdout %q stderr %q attempts %q", code, out, errb, dev.attempts())
 	}
 	tokenNowhere(t, out, errb)
