@@ -28,6 +28,9 @@ type fakeKey struct {
 	state   hwkey.State
 	pins    []string
 	closed  bool
+	// signErr, when set, is what every Sign returns; signs counts the calls.
+	signErr error
+	signs   int
 }
 
 func newFakeKey(t *testing.T, state hwkey.State) *fakeKey {
@@ -59,7 +62,12 @@ func (k *fakeKey) State() hwkey.State {
 
 func (k *fakeKey) Sign(rd io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	k.mu.Lock()
+	k.signs++
 	switch {
+	case k.signErr != nil:
+		err := k.signErr
+		k.mu.Unlock()
+		return nil, err
 	case !k.present:
 		k.state = hwkey.Absent
 		k.mu.Unlock()

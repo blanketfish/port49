@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
@@ -33,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -273,6 +275,7 @@ type rig struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 	now time.Time
+	key *fakeKey // the agent's key, when rigOpts.hw
 	// refuse makes the broker refuse every new handshake, as it does a
 	// certificate that expired or a trust anchor that changed.
 	refuse atomic.Bool
@@ -311,6 +314,12 @@ type rigOpts struct {
 	notAfter time.Time
 	// verify is Config.VerifyBroker; the session is not connected.
 	verify func(tls.ConnectionState) error
+	// hw gives the agent the certificate's own key as a fake hardware key,
+	// the rig's key field.
+	hw bool
+	// signErr is what that key's Sign returns from the start; the session is
+	// not connected.
+	signErr error
 }
 
 func newRigWith(t *testing.T, o rigOpts) *rig {
@@ -362,6 +371,11 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 		anchor = other.Pool()
 	}
 	r := &rig{fb: &fakeBroker{}, now: now}
+	if o.hw {
+		r.key = &fakeKey{PrivateKey: cli.PrivateKey.(*ecdsa.PrivateKey), present: true, state: hwkey.Present}
+		r.key.signErr = o.signErr
+		cli.PrivateKey = r.key
+	}
 	r.srv = httptest.NewUnstartedServer(r.fb)
 	r.srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
 		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13,
@@ -380,7 +394,7 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 	r.srv.StartTLS()
 	t.Cleanup(r.srv.Close)
 	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock, VerifyBroker: o.verify})
-	if foreign || o.expired || o.wrongAnchor || o.verify != nil {
+	if foreign || o.expired || o.wrongAnchor || o.verify != nil || o.signErr != nil {
 		return r
 	}
 	if _, err := r.a.Connect(context.Background()); err != nil {

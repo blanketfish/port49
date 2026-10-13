@@ -311,6 +311,9 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	defer a.giveWire(false)
 	resp, err := a.do(req)
 	if err != nil {
+		if te := touchTimeout(err); te != nil {
+			return api.Config{}, te
+		}
 		if refused := a.refusal(err); refused != nil {
 			return api.Config{}, refused
 		}
@@ -821,9 +824,28 @@ func (e *UnansweredRevokeError) Error() string {
 
 func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 
+// touchTimeout is hwkey.ErrTouchTimeout when a failed handshake was a key
+// that was not touched in time, and nil for any other error. crypto/tls
+// flattens the signer's error to text ("tls: failed to sign handshake: …"),
+// so it is found by its words. It is the key's own message, shown as it is:
+// the broker was not unreachable, the key does not need its PIN, and a retry
+// would make the key blink again for a touch nobody was there for. It ends
+// nothing: the key is unlocked and the next ask may be touched in time.
+func touchTimeout(err error) error {
+	if err == nil || !strings.Contains(err.Error(), hwkey.ErrTouchTimeout.Error()) {
+		return nil
+	}
+	return fmt.Errorf("agent: %w", hwkey.ErrTouchTimeout)
+}
+
 // refusedReconnect ends the session on a transport error that means no
-// reconnect will be accepted, and returns why; nil for any other error.
+// reconnect will be accepted, and returns why; nil for any other error. A
+// touch timeout is returned as it is, without ending the session, and the
+// callers' retry is skipped.
 func (a *Agent) refusedReconnect(err error) error {
+	if te := touchTimeout(err); te != nil {
+		return te
+	}
 	if refused := a.refusal(err); refused != nil {
 		// A reconnect whose handshake failed: the certificate expired
 		// or the trust changed under the session, and no retry will
