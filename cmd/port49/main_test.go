@@ -325,10 +325,14 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(userconfig.EnvConfig)
 	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
 	os.Setenv(testSystemConfig, userconfig.SystemPath)
-	code := m.Run()
+	code := runTests(m)
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// runTests runs the package's tests: m.Run, or, under the hwkey tags
+// (main_hwkey_test.go), SoftHSM's setup around it.
+var runTests = func(m *testing.M) int { return m.Run() }
 
 // labBroker is a real broker behind its own Listener, as port49d serves it,
 // on the lab PKI WriteLab wrote to dir, with one live context for alice on

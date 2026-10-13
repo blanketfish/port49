@@ -38,6 +38,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // Config is what opens a session.
@@ -58,6 +59,16 @@ type Config struct {
 	// runs after the broker's chain verified and before a request is written
 	// (brokercrl.Checker.VerifyConnection). Its error ends the connection.
 	VerifyBroker func(tls.ConnectionState) error
+	// TouchKey is the touch_key slot, nil when none is configured or it did
+	// not open. It is the agent's only when it sits on the session key's own
+	// token (SameToken); Status says whether it is.
+	TouchKey hwkey.Key
+	// TouchKeyUnusable is why TouchKey is nil though touch_key is configured
+	// (it did not open), for Status.
+	TouchKeyUnusable string
+	// KeyRef is the session key's reference in canonical form, never a PIN;
+	// "" for a file key. `port49 login` compares it before it opens a token.
+	KeyRef string
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
@@ -149,6 +160,17 @@ type Agent struct {
 	fingerprint string
 	// bundleKept is Config.BundleKept.
 	bundleKept bool
+	// session is the agent's session: 32 random bytes drawn at New, base64url,
+	// sent as api.AgentSessionHeader on every broker request (decision 45
+	// ruling 15). It is a credential of sorts: never logged, never in Status.
+	session string
+	// key is the session key when it is a hardware key, nil for a file key.
+	key hwkey.Key
+	// touch is the touch key when it is usable (same token as key), else
+	// nil; touchUnusable says why not when touch_key is configured.
+	touch         hwkey.Key
+	touchUnusable string
+	keyRef        string
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -193,8 +215,24 @@ func New(c Config) *Agent {
 	if a.log == nil {
 		a.log = io.Discard
 	}
+	var session [32]byte
+	_, _ = rand.Read(session[:]) // crypto/rand.Read does not return an error (Go 1.24)
+	a.session = base64.RawURLEncoding.EncodeToString(session[:])
 	a.cert = c.Cert
 	a.fingerprint = CertFingerprint(c.Cert)
+	a.keyRef = c.KeyRef
+	a.key, _ = c.Cert.PrivateKey.(hwkey.Key)
+	a.touchUnusable = c.TouchKeyUnusable
+	if c.TouchKey != nil {
+		if ok, why := SameToken(c.Cert.PrivateKey, c.TouchKey); ok {
+			a.touch = c.TouchKey
+		} else {
+			a.touchUnusable = why
+			// A touch key that is not the session's token's is not used and
+			// holds nothing open.
+			_ = c.TouchKey.Close()
+		}
+	}
 	cert := c.Cert
 	var verify func(tls.ConnectionState) error
 	if c.VerifyBroker != nil {
@@ -1124,6 +1162,7 @@ func (a *Agent) do(req *http.Request) (*http.Response, error) { return a.doOn(a.
 
 // doOn is do on client c, which shares a.client's transport.
 func (a *Agent) doOn(c *http.Client, req *http.Request) (*http.Response, error) {
+	req.Header.Set(api.AgentSessionHeader, a.session)
 	var conn *watchedConn
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
 		conn, _ = i.Conn.(*watchedConn)
@@ -1247,6 +1286,42 @@ type Status struct {
 	// one: what `port49 ssh` reads when its in-session warning is due, so a
 	// `port49 refresh` in another terminal moves it (decision 42 ruling 11).
 	Sessions []api.RefreshedSession `json:"sessions,omitempty"`
+	// KeyState is whether the session key can sign now: present, absent or
+	// locked; "present" for a file key.
+	KeyState string `json:"key_state"`
+	// TouchKey is true only when the touch key opened and sits on the same
+	// token (module and token serial) as a pkcs11 session key (ruling 12);
+	// TouchKeyUnusable says why not when touch_key is configured.
+	TouchKey         bool   `json:"touch_key"`
+	TouchKeyUnusable string `json:"touch_key_unusable,omitempty"`
+	// KeyRef is the session key's reference in canonical form (never a PIN),
+	// "" for a file key: what login compares before it opens a token.
+	KeyRef string `json:"key_ref,omitempty"`
+}
+
+// TokenKey is a key on a PKCS#11 token: the module it was opened through and
+// the token's serial name the token (pkcs11.Signer's methods).
+type TokenKey interface {
+	ModulePath() string
+	TokenSerial() string
+}
+
+// SameToken reports whether touch sits on the same token as session, the
+// session key, by module and token serial (decision 45 ruling 12). When it
+// does not, why says so. The PIN is only ever sent to a key for which this is
+// true: another token's PIN tries are not the agent's to spend.
+func SameToken(session any, touch hwkey.Key) (ok bool, why string) {
+	s, sok := session.(TokenKey)
+	t, tok := touch.(TokenKey)
+	switch {
+	case !sok:
+		return false, "touch_key needs a pkcs11 session key: this session's key is not on a PKCS#11 token"
+	case !tok:
+		return false, "touch_key is not a PKCS#11 key"
+	case s.ModulePath() != t.ModulePath() || s.TokenSerial() != t.TokenSerial():
+		return false, "touch_key is on another token than the session key; it must be on the same token"
+	}
+	return true, ""
 }
 
 // Handler is the agent's socket: POST /token mints one device and answers the
@@ -1310,8 +1385,10 @@ func (a *Agent) Handler() http.Handler {
 		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
-			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions})
+			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions,
+			KeyState: a.keyState(), TouchKey: a.touch != nil, TouchKeyUnusable: a.touchUnusable, KeyRef: a.keyRef})
 	})
+	mux.HandleFunc("POST /unlock", a.unlock)
 	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
 		out, err := a.Identity(r.Context())
 		answer(w, out, err)
@@ -1335,6 +1412,112 @@ func (a *Agent) Handler() http.Handler {
 		answer(w, out, err)
 	})
 	return mux
+}
+
+// keyState is the session key's State, "present" for a file key.
+func (a *Agent) keyState() string {
+	if a.key == nil {
+		return hwkey.Present.String()
+	}
+	return a.key.State().String()
+}
+
+// Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most
+// maxUnlockBody.
+const (
+	maxPIN        = 64
+	maxUnlockBody = 256
+)
+
+// UnlockRefusal is POST /unlock's 401 pin_refused body: the token's own
+// tries-left flags, which the client rebuilds as a *hwkey.PINError.
+type UnlockRefusal struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail"`
+	Low    bool   `json:"low,omitempty"`
+	Final  bool   `json:"final,omitempty"`
+}
+
+// unlock is POST /unlock {"pin": "…"}: the PIN goes to the session key and,
+// when it is on the same token, the touch key. The body and the PIN are read
+// as bytes and zeroed: a Go string cannot be, and the PIN is in nothing the
+// agent logs or returns.
+func (a *Agent) unlock(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxUnlockBody+1))
+	defer clear(body)
+	pin, ok := unlockPIN(body, err)
+	defer clear(pin)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "send {\"pin\": \"…\"}, a PIN of 1 to 64 bytes"})
+		return
+	}
+	if a.key == nil {
+		writeJSON(w, http.StatusOK, struct{}{}) // a file key has nothing to unlock
+		return
+	}
+	// Each Unlock zeroes the PIN it is given, so each gets its own copy.
+	err = a.key.Unlock(slices.Clone(pin))
+	if err == nil && a.touch != nil {
+		if terr := a.touch.Unlock(slices.Clone(pin)); terr != nil {
+			fmt.Fprintf(a.log, "port49 agent: the touch key stayed locked: %v\n", terr)
+		}
+	}
+	var pe *hwkey.PINError
+	switch {
+	case err == nil:
+		fmt.Fprintf(a.log, "port49 agent: the key was unlocked\n")
+		writeJSON(w, http.StatusOK, struct{}{})
+	case errors.As(err, &pe):
+		detail := "the token refused the PIN"
+		switch {
+		case pe.Final:
+			detail += "; one try is left before the key locks"
+		case pe.Low:
+			detail += "; fewer tries are left"
+		}
+		writeJSON(w, http.StatusUnauthorized, UnlockRefusal{Error: "pin_refused", Detail: detail, Low: pe.Low, Final: pe.Final})
+	case errors.Is(err, hwkey.ErrKeyAbsent):
+		writeJSON(w, http.StatusConflict, api.Error{Error: "key_absent", Detail: "the key is not present: insert it"})
+	default:
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: "unlock_failed", Detail: err.Error()})
+	}
+}
+
+// unlockPIN reads the pin field of {"pin": "…"} out of body as bytes: the
+// JSON string is cut from a json.RawMessage and unescaped by hand, since
+// decoding into a Go string would leave a copy that cannot be zeroed. Only
+// the escapes \" and \\ are understood, which are the two Client.Unlock
+// writes. The caller zeroes the returned PIN.
+func unlockPIN(body []byte, readErr error) (pin []byte, ok bool) {
+	if readErr != nil || len(body) > maxUnlockBody {
+		return nil, false
+	}
+	var f struct {
+		PIN json.RawMessage `json:"pin"`
+	}
+	err := json.Unmarshal(body, &f)
+	raw := f.PIN
+	defer clear(raw)
+	if err != nil || len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, false
+	}
+	for i := 1; i < len(raw)-1; i++ {
+		c := raw[i]
+		if c == '\\' {
+			i++
+			if i >= len(raw)-1 || (raw[i] != '"' && raw[i] != '\\') {
+				clear(pin)
+				return nil, false
+			}
+			c = raw[i]
+		}
+		if len(pin) == maxPIN {
+			clear(pin)
+			return nil, false
+		}
+		pin = append(pin, c)
+	}
+	return pin, len(pin) > 0
 }
 
 // decodeOne reads one JSON object, with no unknown fields and nothing after

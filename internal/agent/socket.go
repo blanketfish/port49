@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // ErrNoAgent is a socket nothing answers on. The answer is `port49 login`.
@@ -341,6 +342,56 @@ type badAnswerError struct{ err error }
 
 func (e *badAnswerError) Error() string { return e.err.Error() }
 func (e *badAnswerError) Unwrap() error { return e.err }
+
+// Unlock gives the agent's key its PIN: POST /unlock {"pin": "…"}. The body
+// is built in a []byte, zeroed after the write, and pin is zeroed too. A PIN
+// the token refused is a *hwkey.PINError with the token's tries-left flags.
+func (c *Client) Unlock(ctx context.Context, pin []byte) error {
+	defer clear(pin)
+	body := make([]byte, 0, len(pin)+16)
+	defer func() { clear(body) }()
+	body = append(body, `{"pin":"`...)
+	for _, b := range pin {
+		switch {
+		case b == '"' || b == '\\':
+			body = append(body, '\\', b)
+		case b < 0x20:
+			return errors.New("agent: a PIN holds no control characters")
+		default:
+			body = append(body, b)
+		}
+	}
+	body = append(body, `"}`...)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/unlock", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := c.checkDir(); err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	var e UnlockRefusal
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&e)
+	switch {
+	case resp.StatusCode == http.StatusNotFound && e.Error == "":
+		return ErrAgentTooOld
+	case resp.StatusCode == http.StatusUnauthorized && e.Error == "pin_refused":
+		return &hwkey.PINError{Low: e.Low, Final: e.Final}
+	case resp.StatusCode == http.StatusConflict && e.Error == "key_absent":
+		return hwkey.ErrKeyAbsent
+	case e.Error != "":
+		return fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
+	}
+	return fmt.Errorf("agent: the agent at %s answered %s", c.socket, resp.Status)
+}
 
 // Status asks the agent whose session it holds.
 func (c *Client) Status(ctx context.Context) (Status, error) {

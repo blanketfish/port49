@@ -678,6 +678,41 @@ func TestLoadAllLayersYoursOverTheSystemFile(t *testing.T) {
 	}
 }
 
+// A key reference is not a path (plan 9c): it is carried byte for byte, not
+// joined to the file's directory, and the words issued_key_store and
+// broker_crl take are checked.
+func TestKeyReferencesAreNotPaths(t *testing.T) {
+	key := "pkcs11:id=%01?module-path=/usr/lib/libykcs11.so"
+	touch := "pkcs11:id=%02?module-path=/usr/lib/libykcs11.so"
+	p := private(t, "config.yaml", "key: \""+key+"\"\ntouch_key: \""+touch+"\"\n"+
+		"issued_key_store: tpm\nissued_key: \"tpm:file=/var/lib/p/issued.tss\"\nbroker_crl: require\n")
+	f, ok, err := Load(p)
+	if err != nil || !ok {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	if f.Key != key || f.TouchKey != touch || f.IssuedKeyStore != "tpm" ||
+		f.IssuedKey != "tpm:file=/var/lib/p/issued.tss" || f.BrokerCRL != "require" {
+		t.Fatalf("%+v", f)
+	}
+	for body, want := range map[string]string{
+		"issued_key_store: floppy\n": "auto, file, tpm, secure_enclave or pkcs11",
+		"broker_crl: maybe\n":        "check, require or off",
+		"touch_key: /k.pem\n":        "touch_key",
+		"issued_key: /k.pem\n":       "issued_key",
+	} {
+		if _, _, err := Load(private(t, "config.yaml", body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", body, err, want)
+		}
+	}
+	sys := private(t, "config.yaml", "touch_key: \"pkcs11:id=%09\"\nissued_key_store: file\n")
+	asSystem(t, sys, uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	f, ok, err = LoadAll(p, false)
+	if err != nil || !ok || f.TouchKey != touch || f.IssuedKeyStore != "tpm" {
+		t.Fatalf("the personal file's touch_key must win: %+v %v %v", f, ok, err)
+	}
+}
+
 // Neither file is no config; a named file must be there.
 func TestLoadAllWithNeitherFile(t *testing.T) {
 	asSystem(t, filepath.Join(t.TempDir(), "none.yaml"), uint32(os.Getuid()))

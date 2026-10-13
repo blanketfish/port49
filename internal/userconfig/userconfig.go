@@ -25,6 +25,8 @@ import (
 	"syscall"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // getuid is os.Getuid, swapped in tests: no second uid exists to own a file.
@@ -145,6 +147,14 @@ type File struct {
 	// default, refuses a revoked one and says an unobtainable list; require
 	// refuses that too; off checks nothing (plan 9c, ruling 9).
 	BrokerCRL string `yaml:"broker_crl"`
+	// TouchKey is the touch_key slot: a key reference on the same token as
+	// Key, whose touch the agent may use (plan 9c, ruling 12).
+	TouchKey string `yaml:"touch_key"`
+	// IssuedKeyStore is where the key of a certificate the broker issues
+	// lives: auto, file, tpm, secure_enclave or pkcs11. IssuedKey names the
+	// reference for tpm and pkcs11.
+	IssuedKeyStore string `yaml:"issued_key_store"`
+	IssuedKey      string `yaml:"issued_key"`
 
 	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
 	// through the same ownership walk; nil under WithoutCA or with no CA named.
@@ -239,6 +249,9 @@ func overlay(base, over File) File {
 	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
 	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
 	base.BrokerCRL = cmp.Or(over.BrokerCRL, base.BrokerCRL)
+	base.TouchKey = cmp.Or(over.TouchKey, base.TouchKey)
+	base.IssuedKeyStore = cmp.Or(over.IssuedKeyStore, base.IssuedKeyStore)
+	base.IssuedKey = cmp.Or(over.IssuedKey, base.IssuedKey)
 	return base
 }
 
@@ -297,10 +310,27 @@ func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
 	default:
 		return File{}, false, fmt.Errorf("%s: broker_crl %q: it is check, require or off", path, f.BrokerCRL)
 	}
+	switch f.IssuedKeyStore {
+	case "", "auto", "file", "tpm", "secure_enclave", "pkcs11":
+	default:
+		return File{}, false, fmt.Errorf("%s: issued_key_store %q: it is auto, file, tpm, secure_enclave or pkcs11",
+			path, f.IssuedKeyStore)
+	}
+	for name, ref := range map[string]string{"touch_key": f.TouchKey, "issued_key": f.IssuedKey} {
+		if ref != "" && !hwkey.IsRef(ref) {
+			return File{}, false, fmt.Errorf("%s: %s %q is not a key reference: it starts with pkcs11:, tpm: or secure-enclave:",
+				path, name, ref)
+		}
+	}
 	if f.OIDCRedirectPort < 0 || f.OIDCRedirectPort > 65535 {
 		return File{}, false, fmt.Errorf("%s: oidc_redirect_port %d is not a port", path, f.OIDCRedirectPort)
 	}
+	// A key reference is not a path: it is carried as written, never joined to
+	// the file's directory.
 	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
+		if hwkey.IsRef(*p) {
+			continue
+		}
 		if *p, err = resolve(base, *p); err != nil {
 			return File{}, false, fmt.Errorf("%s: %w", path, err)
 		}

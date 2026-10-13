@@ -77,6 +77,7 @@ type fakeBroker struct {
 	revoked    bool
 
 	addrs           map[string][]string
+	sessions        map[string][]string // api.AgentSessionHeader as each path saw it
 	order           []string
 	dropRefresh     int
 	nonce           []byte
@@ -105,6 +106,10 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.addrs = map[string][]string{}
 	}
 	fb.addrs[r.URL.Path] = append(fb.addrs[r.URL.Path], r.RemoteAddr)
+	if fb.sessions == nil {
+		fb.sessions = map[string][]string{}
+	}
+	fb.sessions[r.URL.Path] = append(fb.sessions[r.URL.Path], r.Header.Get(api.AgentSessionHeader))
 	if strings.HasPrefix(r.URL.Path, "/v1/refresh") {
 		fb.order = append(fb.order, r.URL.Path)
 	}

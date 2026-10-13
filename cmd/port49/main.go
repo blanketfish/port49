@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,7 +34,8 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/brokercrl"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -210,6 +212,17 @@ type sessionFlags struct {
 	brokerCRL string
 	verify    func(tls.ConnectionState) error
 	verified  bool
+	// touchKey is touch_key, a key reference on the session key's token
+	// (plan 9c, ruling 12). pinFD is an inherited descriptor the PIN comes on
+	// (the agent child's; hidden: the login sets it). 0 is unset.
+	touchKey string
+	pinFD    int
+	// issuedKeyStore and issuedKey are issued_key_store and issued_key, from
+	// the config file alone.
+	issuedKeyStore, issuedKey string
+	// pin is the key's PIN while it is held: read from pinFD in the agent,
+	// asked in the login. Never logged; zeroed by whoever sets it.
+	pin []byte
 }
 
 // brokerVerifier is the VerifyConnection that checks the broker's
@@ -288,6 +301,9 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
 	fs.StringVar(&s.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
 		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
+	fs.StringVar(&s.touchKey, "touch-key", "", "a key reference on the same token as --key, whose touch the agent may use "+
+		"(touch_key in the config file)")
+	fs.IntVar(&s.pinFD, "pin-fd", 0, "internal: the descriptor the login passes the key's PIN on")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
 		"key by key; each flag overrides its key")
@@ -330,6 +346,8 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	}
 	s.issuer = cmp.Or(s.issuer, f.OIDCIssuer)
 	s.brokerCRL = cmp.Or(s.brokerCRL, f.BrokerCRL)
+	s.touchKey = cmp.Or(s.touchKey, f.TouchKey)
+	s.issuedKeyStore, s.issuedKey = f.IssuedKeyStore, f.IssuedKey
 	if !set["redirect-port"] {
 		s.redirectPort = f.OIDCRedirectPort
 	}
@@ -342,12 +360,17 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 // is the exception: without --broker-crl the file is read for it, so a
 // require in the file is not skipped by a command line that names the rest.
 func (s *sessionFlags) complete() bool {
-	return !s.oidc && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != "" && s.brokerCRL != ""
+	return !s.oidc && s.broker != "" && (s.cert != "" || strings.HasPrefix(s.key, "pkcs11:")) && s.key != "" &&
+		s.brokerCA != "" && s.brokerCRL != ""
 }
 
 func (s *sessionFlags) args() []string {
-	return []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA,
+	a := []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA,
 		"--broker-crl", cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck)), "--socket", s.socket}
+	if s.touchKey != "" {
+		a = append(a, "--touch-key", s.touchKey)
+	}
+	return a
 }
 
 // brokerPool is the broker CA's pool, from the bytes the config file's walk
@@ -405,7 +428,8 @@ func (s *sessionFlags) brokerPool() (*x509.CertPool, error) {
 }
 
 func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
-	if s.broker == "" || s.cert == "" || s.key == "" {
+	// A key on a PKCS#11 token may hold its certificate: --cert is then optional.
+	if s.broker == "" || (s.cert == "" && !strings.HasPrefix(s.key, "pkcs11:")) || s.key == "" {
 		return agent.Config{}, fmt.Errorf("--broker, --cert, --key and --broker-ca are all required, as flags "+
 			"or in %s", s.configFile)
 	}
@@ -415,7 +439,9 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	}
 	// Refused if the key is a symlink or readable by anyone but its owner
 	// (keyfile; pre-flight F14).
-	cert, err := keyfile.LoadX509KeyPair(s.cert, s.key)
+	// A key reference is opened (clientkey.LoadPair); LoadPair zeroes the PIN
+	// it is given, so it gets a copy.
+	cert, err := clientkey.LoadPair(s.cert, s.key, slices.Clone(s.pin))
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
@@ -427,8 +453,37 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, err
 	}
-	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
-		BundleKept: bundleKept(s.broker), VerifyBroker: verify}, nil
+	cfg := agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
+		BundleKept: bundleKept(s.broker), VerifyBroker: verify}
+	if hwkey.IsRef(s.key) {
+		cfg.KeyRef = clientkey.CanonicalRef(s.key)
+	}
+	return cfg, nil
+}
+
+// openTouchKey is the agent's touch_key: opened with no PIN, and given the
+// PIN only once it is known to sit on the session key's own token, so a
+// reference to another token never spends that token's PIN tries (ruling 12;
+// pre-flight I6). Whatever goes wrong is the key's reason (TouchKeyUnusable)
+// and never a start failure.
+func (s *sessionFlags) openTouchKey(cfg *agent.Config, log io.Writer) {
+	if s.touchKey == "" {
+		return
+	}
+	tk, err := clientkey.Open(s.touchKey, nil)
+	if err != nil {
+		cfg.TouchKeyUnusable = "touch_key did not open: " + unprefixed(err)
+		fmt.Fprintln(log, "port49 agent: touch_key unusable:", cfg.TouchKeyUnusable)
+		return
+	}
+	if ok, why := agent.SameToken(cfg.Cert.PrivateKey, tk); ok && len(s.pin) > 0 && tk.State() == hwkey.Locked {
+		if err := tk.Unlock(slices.Clone(s.pin)); err != nil {
+			fmt.Fprintln(log, "port49 agent: the touch key stayed locked:", unprefixed(err))
+		}
+	} else if !ok {
+		fmt.Fprintln(log, "port49 agent: touch_key unusable:", why)
+	}
+	cfg.TouchKey = tk // agent.New keeps it only on the session key's token
 }
 
 // login logs in with the certificate --cert and --key name, or with --oidc
@@ -463,12 +518,23 @@ func login(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	ctx := context.Background()
+	// A hardware key is not opened while the agent that holds this login's key
+	// is running: that agent is asked first, so a token pulled out and put
+	// back costs a PIN and no second look at the token (pre-flight I15).
+	if hwkey.IsRef(sf.key) {
+		if code, done := loginToHeldKey(ctx, &sf, stdout, stderr); done {
+			return code
+		}
+	}
 	cfg, err := sf.config(stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
-	ctx := context.Background()
+	if k, ok := cfg.Cert.PrivateKey.(hwkey.Key); ok {
+		defer k.Close() // the agent opens its own
+	}
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
 		// Only the session these flags name is refreshed. Another broker's,
 		// or another certificate's, is someone else's identity: refreshing
@@ -486,16 +552,25 @@ func login(args []string, stdout, stderr io.Writer) int {
 				"stop that agent first, or use --socket\n", other, sf.socket)
 			return 1
 		}
-		fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
-		out, err := agent.NewClient(sf.socket).Refresh(ctx)
-		if err != nil {
-			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
-			return 1
-		}
-		printRefresh(stdout, out)
-		return 0
+		return refreshRunning(ctx, &sf, st, stdout, stderr)
 	}
+	if k, ok := cfg.Cert.PrivateKey.(hwkey.Key); ok && !unlockForAgent(&sf, k, stderr) {
+		return 1
+	}
+	defer clear(sf.pin)
 	return startAgent(&sf, false, stdout, stderr)
+}
+
+// refreshRunning refreshes the session of the agent that is already logged in.
+func refreshRunning(ctx context.Context, sf *sessionFlags, st agent.Status, stdout, stderr io.Writer) int {
+	fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
+	out, err := agent.NewClient(sf.socket).Refresh(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
+		return 1
+	}
+	printRefresh(stdout, out)
+	return 0
 }
 
 // startAgent starts the agent in its own session, detached, and waits until
@@ -544,9 +619,32 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 	}
 	defer caR.Close()
 	defer caW.Close()
-	cmd := exec.Command(self, append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")...)
+	argv := append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")
+	extra := []*os.File{caR}
+	// The PIN the login asked goes on a pipe as descriptor 4, never argv or
+	// the environment, and is zeroed once written.
+	var pinR *os.File
+	if len(sf.pin) > 0 {
+		var pinW *os.File
+		if pinR, pinW, err = os.Pipe(); err != nil {
+			fmt.Fprintln(stderr, "port49 login:", err)
+			return 1, false
+		}
+		defer pinR.Close()
+		_, werr := pinW.Write(sf.pin)
+		pinW.Close()
+		clear(sf.pin)
+		sf.pin = nil
+		if werr != nil {
+			fmt.Fprintln(stderr, "port49 login: passing the PIN to the agent:", werr)
+			return 1, false
+		}
+		extra = append(extra, pinR)
+		argv = append(argv, "--pin-fd", "4")
+	}
+	cmd := exec.Command(self, argv...)
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.ExtraFiles = []*os.File{caR}
+	cmd.ExtraFiles = extra
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(stderr, "port49 login: starting the agent:", err)
@@ -640,11 +738,21 @@ func agentMain(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
+	// The PIN, if the login passed one, is read from its descriptor and held
+	// only until the keys are open.
+	if err := sf.readPINFD(); err != nil {
+		fmt.Fprintln(stderr, "port49 agent:", err)
+		return 2
+	}
+	defer func() { clear(sf.pin) }()
 	cfg, err := sf.config(stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
+	sf.openTouchKey(&cfg, stderr)
+	clear(sf.pin)
+	sf.pin = nil
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a := agent.New(cfg)

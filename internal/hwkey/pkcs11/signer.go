@@ -352,6 +352,18 @@ func (s *Signer) TokenSerial() string {
 	return s.serial
 }
 
+// TokenLabel is the token's CK_TOKEN_INFO label, trimmed: what a PIN prompt
+// names the token by.
+func (s *Signer) TokenLabel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.label
+}
+
+// ModulePath is the PKCS#11 module the key was opened through: with
+// TokenSerial, which token it is on (the agent's same-token check).
+func (s *Signer) ModulePath() string { return s.m.path }
+
 // Close lets go of the token's session. The module stays loaded: it is the
 // process's.
 func (s *Signer) Close() error {
