@@ -6032,13 +6032,17 @@ measured, and nothing here says otherwise.**
   `/etc/polkit-1/rules.d/99-port49-pcscd.rules`).
 - **Secure Enclave (macOS, experimental).** Built without a Mac to run it on, so untested (L63
   open). Opt-in only: `key: "secure-enclave:label=NAME"` or `issued_key_store: secure_enclave` in
-  the client build; `auto` never picks it. Every open and every key made prints "the Secure Enclave
-  backend is experimental and untested (L63); report results at the port49 issue tracker". Any
+  the client build; `auto` never picks it. Each process that opens or makes a key prints, once,
+  "the Secure Enclave backend is experimental and untested (L63); report results at the port49
+  issue tracker". Any
   Security.framework error, `errSecMissingEntitlement` (-34018) among them, is a refusal naming the
   OSStatus, never a fallback to a file or another store. The issued key is labeled
-  `port49.<host>_<port>.<machine>` and made once, then kept across sign-ins; port49 never removes
-  it (Keychain Access does). To help: `go run ./tests/spike/secureenclave` on a Mac and report its
-  output.
+  `port49.<host>_<port>.<machine>` and made once, under a lock in `~/.port49/issued/`, then kept
+  across sign-ins; a sign-in never removes it. Two keys under that label refuse every sign-in, and
+  `port49 login --delete-key` deletes them (and the certificate held for them) after asking; the
+  next login makes one. To help: `go run ./tests/spike/secureenclave` and
+  `go run ./tests/spike/secureenclave locked` on a Mac, from a port49 checkout, and report both
+  outputs.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
