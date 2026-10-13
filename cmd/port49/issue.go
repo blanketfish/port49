@@ -330,16 +330,25 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 		return failed(err)
 	}
 	key, keyBytes, err := newIssuedKey(store, sf, keyFile)
-	if err != nil && store == storeTPM && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto {
-		// `auto` goes where a key can be made: a TPM that opens but will not
-		// make one (an owner password on its hierarchy) must not stop every
-		// login.
-		fmt.Fprintf(stderr, "port49 login: the TPM could not make a key (%v); the key is a file\n", unprefixed(err))
+	var refused *tpmRefused
+	switch {
+	case errors.As(err, &refused) && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto:
+		// `auto` goes where a key can be made: a TPM that is gone or will
+		// not make one (an owner password on its hierarchy) must not stop
+		// every login. Any other failure is an error. This is the one line.
 		if target, keyFile, err = issuedTarget(storeFile, sf); err != nil {
 			return failed(err)
 		}
 		store = storeFile
+		fmt.Fprintf(stderr, "port49 login: %sthe TPM could not make a key (%v); the key is a file (%s)\n",
+			ignoredClause(sf), unprefixed(refused.err), keyFile)
 		key, keyBytes, err = newIssuedKey(store, sf, keyFile)
+	case errors.As(err, &refused):
+		return failed(fmt.Errorf("issued_key_store is tpm, and the TPM could not make a key (%v): if its owner "+
+			"password is set, clear it with the TPM's own tools; or set issued_key_store: file", unprefixed(refused.err)))
+	case err == nil && store == storeTPM && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto:
+		// Said once the key is made, so it is never contradicted by a second line.
+		fmt.Fprintf(stderr, "port49 login: %sthe key is made in this machine's TPM\n", ignoredClause(sf))
 	}
 	if err != nil {
 		return failed(err)
@@ -402,13 +411,9 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err := writeIssuedPair(files...); err != nil {
 		return failed(err)
 	}
-	if store != storeFile {
-		// The older file pair's key is no use beside the new certificate when
-		// it is the same name (a token's), and is a second key otherwise.
-		if _, fk, err := userconfig.IssuedPaths(sf.broker); err == nil {
-			_ = os.Remove(fk)
-		}
-	}
+	// The unnamed .key is never removed here, whatever the store: on a home
+	// shared with a file host it is that host's (decision 45 ruling 7), and
+	// pickHeldPair looks for this machine's own pair before it.
 	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
 		si.Principal, sf.broker, rfc3339(leaf.NotAfter))
 	return target, 0, nil

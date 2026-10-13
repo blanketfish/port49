@@ -174,25 +174,91 @@ func TestASecondMachineLeavesTheFirstsTPMPairAlone(t *testing.T) {
 	}
 }
 
-// A file pair left by an older port49 is replaced: the sign-in makes its key
-// in the TPM and the old .key goes, so the held pair is found by one key file.
-func TestATPMSignInRemovesTheOlderKeyFile(t *testing.T) {
+// A TPM sign-in never removes the unnamed .key: on a shared home it may be
+// another machine's, and this machine's own TPM pair is looked for first, so
+// an older .key is inert beside it (decision 45 ruling 7).
+func TestATPMSignInLeavesTheFileKeyAlone(t *testing.T) {
 	hwtest.SWTPM(t)
 	machineIs(t, "aaaaaaaa")
 	o := newOIDCLab(t, true)
 	driveBrowser(t, o.iss)
 	o.holdCertificate(t, time.Now().Add(-11*time.Hour), 12*time.Hour)
 	_, fileKey := o.issuedPaths(t)
+	before := readPair(t, fileKey)
 	sock := privateSocket(t)
 	t.Cleanup(func() { stopAgentAt(sock) })
 	if code, out, errb := o.loginOn(t, sock); code != 0 || n(o) != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
 	}
-	if _, err := os.Lstat(fileKey); err == nil {
-		t.Fatal("the older .key is still there")
+	if after := readPair(t, fileKey); !bytes.Equal(before[0], after[0]) {
+		t.Fatal("the .key changed")
 	}
 	if pair, _, _, err := findHeld(&sessionFlags{broker: o.url}); err != nil || pair.store != "tpm" {
 		t.Fatalf("the held pair: %+v %v", pair, err)
+	}
+}
+
+// A TPM host and a file host share a home. Each signs in, then each logs in
+// again, and neither is made to sign in again: the TPM host uses its TPM key
+// and never the file key, and the file host's .key survives the TPM host's
+// sign-in (decision 45 ruling 7).
+func TestATPMHostAndAFileHostSharingAHomeSignInOnce(t *testing.T) {
+	hwtest.SWTPM(t)
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	fileCfg := filepath.Join(privateDir(t), "file.yaml")
+	if err := os.WriteFile(fileCfg, []byte("issued_key_store: file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		tpmHost  = "aaaaaaaa"
+		fileHost = "bbbbbbbb"
+	)
+	login := func(host string, signIns int, wantStore string) {
+		t.Helper()
+		machineIs(t, host)
+		stopAgentAt(sock)
+		o.step(11 * time.Second)
+		extra := []string{}
+		if host == fileHost {
+			extra = []string{"--config", fileCfg}
+		}
+		code, out, errb := o.loginOn(t, sock, extra...)
+		if code != 0 || n(o) != signIns {
+			t.Fatalf("%s: code %d stdout %q stderr %q (%d sign-ins, want %d)", host, code, out, errb, n(o), signIns)
+		}
+		pair, _, _, err := findHeld(&sessionFlags{broker: o.url})
+		if err != nil || pair.store != wantStore {
+			t.Fatalf("%s: the held pair %+v %v, want the %s pair", host, pair, err, wantStore)
+		}
+	}
+	login(tpmHost, 1, "tpm")
+	login(fileHost, 2, "file")
+	// Each logs in again with no sign-in, on its own key.
+	login(tpmHost, 2, "tpm")
+	login(fileHost, 2, "file")
+	login(tpmHost, 2, "tpm")
+}
+
+// Under `auto`, a lone issued_key without touch_key is ignored, and the line
+// that says which store the key went to says so.
+func TestAutoSaysALoneIssuedKeyIsIgnored(t *testing.T) {
+	hwtest.SWTPM(t)
+	machineIs(t, "aaaaaaaa")
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	cfg := filepath.Join(privateDir(t), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("issued_key: \""+tokenRef+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errb := o.loginOn(t, sock, "--config", cfg)
+	if code != 0 || strings.Count(errb, "the key is made in this machine's TPM") != 1 ||
+		!strings.Contains(errb, "issued_key is used only with touch_key, or with issued_key_store: pkcs11") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errb)
 	}
 }
 

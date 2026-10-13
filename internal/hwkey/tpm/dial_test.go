@@ -2,6 +2,7 @@ package tpm
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/rhwendt/port49/internal/hwkey"
@@ -77,6 +79,45 @@ type closer struct{ closed *bool }
 
 func (c *closer) Send([]byte) ([]byte, error) { return nil, errors.New("unused") }
 func (c *closer) Close() error                { *c.closed = true; return nil }
+
+// Refused is a TPM that is absent or will not make a key: a missing or
+// unopenable device, an authorization or hierarchy refusal. A key file that
+// cannot be written, or a TPM failing inside, is not.
+func TestRefusedIsAbsenceOrRefusalToMakeAKey(t *testing.T) {
+	for name, err := range map[string]error{
+		"absent":     fmt.Errorf("%w: gone", hwkey.ErrKeyAbsent),
+		"no access":  errNoAccess,
+		"owner auth": errParentAuth,
+		"auth fail":  fmt.Errorf("create: %w", tpm2.TPMRCAuthFail),
+		"bad auth":   fmt.Errorf("create: %w", tpm2.TPMRCBadAuth),
+		"hierarchy":  fmt.Errorf("create: %w", tpm2.TPMRCHierarchy),
+		"lockout":    fmt.Errorf("create: %w", tpm2.TPMRCLockout),
+	} {
+		if !Refused(err) {
+			t.Errorf("%s: %v is not Refused", name, err)
+		}
+	}
+	for name, err := range map[string]error{
+		"nil":      nil,
+		"I/O":      fmt.Errorf("tpm: writing the key file: %w", syscall.EIO),
+		"disk":     fmt.Errorf("tpm: writing the key file: %w", syscall.ENOSPC),
+		"internal": fmt.Errorf("create: %w", tpm2.TPMRCFailure),
+		"other":    errors.New("tpm: the key's point: bad"),
+	} {
+		if Refused(err) {
+			t.Errorf("%s: %v is Refused", name, err)
+		}
+	}
+	// The device itself: permission denied and missing, as Generate sees them.
+	for _, derr := range []error{&fs.PathError{Op: "open", Path: "/dev/tpmrm0", Err: syscall.EACCES},
+		&fs.PathError{Op: "stat", Path: "/dev/tpmrm0", Err: syscall.ENOENT}} {
+		dialing(t, derr)
+		_, err := Generate(filepath.Join(t.TempDir(), "k.tpmkey"))
+		if !Refused(err) {
+			t.Errorf("Generate with %v = %v, not Refused", derr, err)
+		}
+	}
+}
 
 func TestGenerateWithNoTPMWritesNoFile(t *testing.T) {
 	dialing(t, errors.New("no tpm"))

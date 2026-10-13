@@ -136,6 +136,22 @@ func TestAnIssuedKeyThatNamesNoKeyRefusesBeforeTheBrowser(t *testing.T) {
 	}
 }
 
+// A token that is not plugged in says to insert it, and never to generate a
+// key: `ykman piv keys generate` on a slot that holds the key replaces it.
+func TestAnIssuedKeyOnATokenThatIsOutSaysToInsertIt(t *testing.T) {
+	ref, _ := tokenKey(t)
+	out := strings.Replace(ref, "token=", "token=unplugged", 1) // no token has this label
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	code, stdout, errb := o.loginOn(t, sock, "--config", issuedKeyConfig(t, out))
+	if code == 0 || !strings.Contains(errb, "insert the token holding pkcs11:token=unplugged") ||
+		strings.Contains(errb, "ykman") || n(o) != 0 {
+		t.Fatalf("code %d stdout %q stderr %q (%d sign-ins)", code, stdout, errb, n(o))
+	}
+}
+
 // A wrong PIN is found before the browser, costs one try, is not retried, and
 // leaves no certificate.
 func TestAWrongPINForTheIssuedKeyEndsTheLoginBeforeTheSignIn(t *testing.T) {

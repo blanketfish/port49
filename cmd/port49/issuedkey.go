@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -90,6 +91,40 @@ func tpmUsable() error {
 	return nil
 }
 
+// generateTPM is tpm.Generate, a var so a test makes the TPM fail as it
+// chooses.
+var generateTPM = tpm.Generate
+
+// tpmRefused is a TPM that is absent or will not make a key, the one failure
+// `auto` goes on from to a file (decision 45 ruling 7); any other is an error.
+type tpmRefused struct{ err error }
+
+func (e *tpmRefused) Error() string { return e.err.Error() }
+func (e *tpmRefused) Unwrap() error { return e.err }
+
+// ignoredClause is what `auto` says it passed over, to lead the store's line:
+// "" when it passed over nothing. It passes over a token's issued_key in the
+// static build, and a lone issued_key, one without touch_key, in any build.
+func ignoredClause(sf *sessionFlags) string {
+	switch {
+	case !strings.HasPrefix(sf.issuedKey, "pkcs11:"):
+		return ""
+	case sf.touchKey == "":
+		return "issued_key is used only with touch_key, or with issued_key_store: pkcs11; "
+	case !clientkey.HasPKCS11:
+		return "this port49 was built without PKCS#11 support, so issued_key is not used; use the client release for it; "
+	}
+	return ""
+}
+
+// fileKeyPath is where a file key for sf's broker goes, for a message.
+func fileKeyPath(sf *sessionFlags) string {
+	if _, fk, err := userconfig.IssuedPaths(sf.broker); err == nil {
+		return fk
+	}
+	return "its .key file"
+}
+
 // pkcs11Wanted is whether issued_key is a token's key `auto` may use: both
 // touch_key and issued_key set, so the session key sits on the token a touch
 // proves from (ruling 12), and issued_key a pkcs11: reference.
@@ -100,8 +135,11 @@ func pkcs11Wanted(sf *sessionFlags) bool {
 // chooseIssuedStore is the store a sign-in's key goes into (decision 45 ruling
 // 7), chosen before the sign-in so a store that cannot be used costs no
 // password: "file", "tpm", "secure_enclave" or "pkcs11". A named store that
-// cannot be used is a refusal. `auto` passes over one that cannot be used
-// and says which it took in one line; a store that is named says nothing.
+// cannot be used is a refusal. `auto` that passes over a store and takes a
+// file says why and which file in one line, here; when it takes the TPM or the
+// token the line is the caller's, said once the key is made, so a TPM that
+// then refuses to make one does not leave two lines that contradict. A store
+// that is named says nothing.
 func chooseIssuedStore(sf *sessionFlags, stderr io.Writer) (store string, err error) {
 	switch named := cmp.Or(sf.issuedKeyStore, storeAuto); named {
 	case storeFile:
@@ -128,19 +166,15 @@ func chooseIssuedStore(sf *sessionFlags, stderr io.Writer) (store string, err er
 		return "", errors.New("issued_key_store is secure_enclave, and the Secure Enclave is macOS's: this port49 " +
 			"cannot keep a key there; use auto, tpm, file or pkcs11")
 	}
-	var passed string
-	if pkcs11Wanted(sf) {
-		if clientkey.HasPKCS11 {
-			fmt.Fprintf(stderr, "port49 login: the key is the one issued_key names, on your token\n")
-			return storePKCS, nil
-		}
-		passed = "this port49 was built without PKCS#11 support, so issued_key is not used; use the client release for it; "
+	if pkcs11Wanted(sf) && clientkey.HasPKCS11 {
+		fmt.Fprintf(stderr, "port49 login: the key is the one issued_key names, on your token\n")
+		return storePKCS, nil
 	}
 	if err := tpmUsable(); err != nil {
-		fmt.Fprintf(stderr, "port49 login: %sno TPM this user can use (%v); the key is a file\n", passed, err)
+		fmt.Fprintf(stderr, "port49 login: %sno TPM this user can use (%v); the key is a file (%s)\n",
+			ignoredClause(sf), err, fileKeyPath(sf))
 		return storeFile, nil
 	}
-	fmt.Fprintf(stderr, "port49 login: %sthe key is made in this machine's TPM\n", passed)
 	return storeTPM, nil
 }
 
@@ -177,11 +211,21 @@ func issuedTarget(store string, sf *sessionFlags) (pair issuedPair, keyFile stri
 func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer, func() ([]byte, error), error) {
 	switch store {
 	case storeTPM:
-		staged := tpmPath + ".new"
-		_ = os.Remove(staged) // ours, from a login that died
-		s, err := tpm.Generate(staged)
+		// A name of this login's own, so two logins on one machine never
+		// remove each other's. Generate wants a path that does not exist.
+		f, err := os.CreateTemp(filepath.Dir(tpmPath), filepath.Base(tpmPath)+".new-*")
 		if err != nil {
 			return nil, nil, err
+		}
+		staged := f.Name()
+		f.Close()
+		_ = os.Remove(staged)
+		s, err := generateTPM(staged)
+		if err != nil {
+			if tpm.Refused(err) {
+				return nil, nil, &tpmRefused{err}
+			}
+			return nil, nil, fmt.Errorf("the TPM could not make a key: %w", err)
 		}
 		raw, err := os.ReadFile(staged)
 		_ = os.Remove(staged)
@@ -192,6 +236,12 @@ func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer
 		return s, func() ([]byte, error) { return raw, nil }, nil
 	case storePKCS:
 		k, err := clientkey.Open(sf.issuedKey, nil)
+		if errors.Is(err, hwkey.ErrKeyAbsent) {
+			// Out, not missing: the slot may hold the key, and generating one
+			// there would replace it.
+			return nil, nil, fmt.Errorf("issued_key: the token is not present: insert the token holding %s and log in again",
+				pkcs11Name(sf.issuedKey))
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("issued_key %s: %s; port49 never makes a key on a token: make one with the "+
 				"token's own tool (for a YubiKey, `ykman piv keys generate`) and name it with issued_key",
@@ -222,9 +272,12 @@ func pkcs11Name(ref string) string {
 	return name
 }
 
-// pickHeldPair is the pair this login looks for: the file pair when its key
-// is there, else this machine's TPM pair when its key file is, else, with a
-// token named for the issued key, the certificate beside that reference.
+// pickHeldPair is the pair this login looks for: this machine's TPM pair when
+// its key file is there, else, with a token named for the issued key, the
+// certificate beside that reference, else the file pair when its key is. The
+// unnamed .key comes last (decision 45 ruling 7): on a home shared by a TPM
+// host and a file host it is the file host's, and the TPM host must not pick
+// it up or remove it, or each sign-in of one forces the other to sign in.
 // Another machine's .tpmkey is not looked at, so it reads as no pair and is
 // never removed or overwritten (pre-flight I12). With none, the file pair,
 // which findHeld reports as not there.
@@ -232,9 +285,6 @@ func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 	fc, fk, err := userconfig.IssuedPaths(sf.broker)
 	if err != nil {
 		return issuedPair{}, err
-	}
-	if _, err := os.Lstat(fk); err == nil {
-		return issuedPair{storeFile, fc, fk}, nil
 	}
 	if tc, tk, err := userconfig.IssuedTPMPaths(sf.broker); err == nil {
 		if _, err := os.Lstat(tk); err == nil {

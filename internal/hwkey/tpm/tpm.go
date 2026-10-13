@@ -84,6 +84,14 @@ func Available() error {
 	return fmt.Errorf("no TPM answers at %s: %v", devicePath, err)
 }
 
+// Refused is whether err from Generate is the TPM being absent or refusing to
+// make a key: a device that is missing or that the user may not open, or an
+// authorization, hierarchy or lockout refusal.
+func Refused(err error) bool {
+	return errors.Is(err, hwkey.ErrKeyAbsent) || errors.Is(err, errNoAccess) || errors.Is(err, errParentAuth) ||
+		isAuth(err) || errors.Is(err, tpm2.TPMRCHierarchy) || errors.Is(err, tpm2.TPMRCLockout)
+}
+
 // answered turns an error from a TPM command into the error a caller sees.
 // A response code is the TPM answering, so it stays as it is; anything else
 // is the transport failing, which is the TPM gone.

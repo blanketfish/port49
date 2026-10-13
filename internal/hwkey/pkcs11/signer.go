@@ -207,11 +207,13 @@ func Open(u URI, pin []byte) (*Signer, error) {
 			m.closeSession(c.session)
 		}
 	}
+	present := false // a token the URI's selectors match is in a slot
 	for _, slot := range slots {
 		ti, err := m.tokenInfo(slot)
 		if err != nil || !u.matches(slot, ti) {
 			continue
 		}
+		present = true
 		c, err := m.probe(u, slot, ti)
 		if blankToken(err) {
 			continue // a slot whose token is blank or gone holds no key
@@ -226,6 +228,11 @@ func Open(u URI, pin []byte) (*Signer, error) {
 	}
 	switch len(found) {
 	case 0:
+		if !present {
+			// No token the URI names is in any slot: to be put back, which is
+			// no reason to make a key.
+			return nil, fmt.Errorf("pkcs11: no token matching %s is present: %w", u, hwkey.ErrKeyAbsent)
+		}
 		return nil, fmt.Errorf("pkcs11: no token holds a key matching %s", u)
 	case 1:
 	default:

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,9 +12,11 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -68,8 +71,10 @@ func TestChooseIssuedStore(t *testing.T) {
 	}
 	cases := []tc{
 		{name: "auto with no TPM is a file", dialErr: noTPM, want: "file",
-			say: []string{"no TPM this user can use (", "no TPM answers", "); the key is a file"}},
-		{name: "auto with a TPM is the TPM", want: "tpm", say: []string{"the key is made in this machine's TPM"}},
+			say: []string{"no TPM this user can use (", "no TPM answers", "); the key is a file ("}},
+		{name: "auto with a TPM is the TPM and says nothing yet", want: "tpm"},
+		{name: "auto with a lone issued_key says it is ignored", sf: sessionFlags{issuedKey: tokenRef}, dialErr: noTPM, want: "file",
+			say: []string{"issued_key is used only with touch_key", "the key is a file"}},
 		{name: "auto with a TPM the user may not open names the group", dialErr: &fs.PathError{Op: "open", Err: syscall.EACCES},
 			want: "file", say: []string{"add this user to the tss group", "the key is a file"}},
 		{name: "file is a file and says nothing", sf: sessionFlags{issuedKeyStore: "file"}, want: "file"},
@@ -92,8 +97,7 @@ func TestChooseIssuedStore(t *testing.T) {
 	} else {
 		cases = append(cases,
 			tc{name: "auto with touch_key and issued_key passes over pkcs11 and uses the TPM",
-				sf: sessionFlags{touchKey: tokenRef, issuedKey: tokenRef}, want: "tpm",
-				say: []string{"built without PKCS#11 support, so issued_key is not used", "use the client release", "TPM"}},
+				sf: sessionFlags{touchKey: tokenRef, issuedKey: tokenRef}, want: "tpm"},
 			tc{name: "auto with touch_key and issued_key passes over pkcs11 and uses the file",
 				sf: sessionFlags{touchKey: tokenRef, issuedKey: tokenRef}, dialErr: noTPM, want: "file",
 				say: []string{"built without PKCS#11 support, so issued_key is not used", "the key is a file"}},
@@ -219,12 +223,184 @@ func TestAHeldTPMPairIsFound(t *testing.T) {
 	if err != nil || got.store != "tpm" || got.cert != tc || got.key != "tpm:file="+tk {
 		t.Fatalf("the held pair: %+v %v", got, err)
 	}
-	// A .key beside it comes first: the file pair is the older one, and a login
-	// that issues into the TPM removes it.
+	// A .key beside it is another machine's on a shared home, or an older
+	// one's: this machine's own pair comes first and the .key is left alone
+	// (decision 45 ruling 7).
 	fc, fk, _ := userconfig.IssuedPaths(broker)
 	writePair(t, fc, fk)
-	if got, err = pickHeldPair(&sessionFlags{broker: broker}); err != nil || got.store != "file" || got.key != fk {
+	if got, err = pickHeldPair(&sessionFlags{broker: broker}); err != nil || got.store != "tpm" || got.key != "tpm:file="+tk {
 		t.Fatalf("with a .key too: %+v %v", got, err)
+	}
+	// Without a TPM pair of its own, the file pair is the one.
+	if err := os.Remove(tk); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = pickHeldPair(&sessionFlags{broker: broker}); err != nil || got.store != "file" || got.key != fk {
+		t.Fatalf("with the .key alone: %+v %v", got, err)
+	}
+}
+
+// A token named for the issued key is this login's pair before a .key that
+// sits beside the certificate, as the TPM's is.
+func TestAHeldTokenPairComesBeforeTheFileKey(t *testing.T) {
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	const broker = "https://broker.example:8443"
+	fc, fk, _ := userconfig.IssuedPaths(broker)
+	writePair(t, fc, fk)
+	sf := &sessionFlags{broker: broker, issuedKeyStore: "pkcs11", issuedKey: tokenRef}
+	if got, err := pickHeldPair(sf); err != nil || got.store != "pkcs11" || got.key != tokenRef {
+		t.Fatalf("the held pair: %+v %v", got, err)
+	}
+}
+
+// A lone issued_key under `auto` is ignored, and the line says so in a clause
+// (ruling 7), where touch_key with it is used or, in the static build, said to
+// be passed over.
+func TestAutoSaysWhenALoneIssuedKeyIsIgnored(t *testing.T) {
+	if got := ignoredClause(&sessionFlags{issuedKey: tokenRef}); !strings.Contains(got, "issued_key is used only with touch_key") ||
+		!strings.Contains(got, "issued_key_store: pkcs11") {
+		t.Errorf("a lone issued_key: %q", got)
+	}
+	if got := ignoredClause(&sessionFlags{}); got != "" {
+		t.Errorf("no issued_key: %q", got)
+	}
+	if got := ignoredClause(&sessionFlags{issuedKey: "tpm:handle=0x81000001"}); got != "" {
+		t.Errorf("a TPM issued_key is not a token's: %q", got)
+	}
+	if clientkey.HasPKCS11 {
+		if got := ignoredClause(&sessionFlags{issuedKey: tokenRef, touchKey: tokenRef}); got != "" {
+			t.Errorf("touch_key and issued_key are used: %q", got)
+		}
+	} else if got := ignoredClause(&sessionFlags{issuedKey: tokenRef, touchKey: tokenRef}); !strings.Contains(got, "built without PKCS#11 support") {
+		t.Errorf("the static build: %q", got)
+	}
+}
+
+// Two logins on one machine stage their TPM key under names of their own, and
+// neither removes what the other staged.
+func TestTPMKeyStagingNamesAreUniquePerLogin(t *testing.T) {
+	dir := privateDir(t)
+	tk := filepath.Join(dir, "b_1.aaaaaaaa.tpmkey")
+	var staged []string
+	prev := generateTPM
+	generateTPM = func(path string) (*tpm.Signer, error) {
+		staged = append(staged, path)
+		return nil, errors.New("stop here")
+	}
+	t.Cleanup(func() { generateTPM = prev })
+	other := tk + ".new" // a login that died, or one still running
+	if err := os.WriteFile(other, []byte("another login's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, _, _ = newIssuedKey("tpm", &sessionFlags{}, tk)
+	}
+	if len(staged) != 2 || staged[0] == staged[1] || staged[0] == other || staged[1] == other {
+		t.Fatalf("staged at %v", staged)
+	}
+	for _, p := range staged {
+		if filepath.Dir(p) != dir || !strings.HasPrefix(filepath.Base(p), filepath.Base(tk)) {
+			t.Errorf("%s is not staged beside %s", p, tk)
+		}
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s was left behind", p)
+		}
+	}
+	if b, err := os.ReadFile(other); err != nil || string(b) != "another login's" {
+		t.Errorf("another login's staged file: %q %v", b, err)
+	}
+}
+
+// A refused TPM key is an `auto` fallback only when the TPM is absent or
+// refuses to make a key; any other failure is an error, and the login says so
+// once and signs in for nothing.
+func TestAutoFallsBackToAFileOnlyWhenTheTPMRefuses(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the TPM is Linux's")
+	}
+	cases := []struct {
+		name string
+		err  error
+		file bool // the key is a file; false is an error
+	}{
+		{"absent", fmt.Errorf("%w: connection refused", hwkey.ErrKeyAbsent), true},
+		{"authorization failure", fmt.Errorf("tpm: create: %w", tpm2.TPMRCAuthFail), true},
+		{"bad auth", fmt.Errorf("tpm: create: %w", tpm2.TPMRCBadAuth), true},
+		{"hierarchy", fmt.Errorf("tpm: create: %w", tpm2.TPMRCHierarchy), true},
+		{"lockout", fmt.Errorf("tpm: create: %w", tpm2.TPMRCLockout), true},
+		{"an I/O error", errors.New("tpm: writing the key file: input/output error"), false},
+		{"a TPM internal error", fmt.Errorf("tpm: create: %w", tpm2.TPMRCFailure), false},
+		{"a corrupt key file", errors.New("tpm: the key file is corrupt"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := newOIDCLab(t, true)
+			driveBrowser(t, o.iss)
+			dialTPM(t, nil)
+			machineIs(t, "aaaaaaaa")
+			prev := generateTPM
+			generateTPM = func(string) (*tpm.Signer, error) { return nil, c.err }
+			t.Cleanup(func() { generateTPM = prev })
+			sock := privateSocket(t)
+			t.Cleanup(func() { stopAgentAt(sock) })
+			t.Setenv(runCLIEnv, "1")
+			var out, errb bytes.Buffer
+			code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb)
+			certPath, keyPath := o.issuedPaths(t)
+			lines := strings.Count(errb.String(), "the key is a file") + strings.Count(errb.String(), "the key is made in")
+			if c.file {
+				if code != 0 || lines != 1 || !strings.Contains(errb.String(), "the key is a file ("+keyPath+")") ||
+					!strings.Contains(errb.String(), "the TPM could not make a key") {
+					t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+				}
+				return
+			}
+			if code == 0 || lines != 0 || !strings.Contains(errb.String(), "TPM") || len(o.as.Authorizations()) != 0 {
+				t.Fatalf("code %d stderr %q (%d sign-ins)", code, errb.String(), len(o.as.Authorizations()))
+			}
+			for _, p := range []string{certPath, keyPath} {
+				if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s: %v", p, err)
+				}
+			}
+		})
+	}
+}
+
+// A named issued_key_store: tpm is the TPM or an error, never a file (decision
+// 45 ruling 7): a TPM that opens but cannot make a key refuses, naming the TPM
+// and the fix, before the sign-in.
+func TestANamedTPMStoreNeverFallsBackToAFile(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the TPM is Linux's")
+	}
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	dialTPM(t, nil) // opens, and answers no command: no key can be made
+	machineIs(t, "aaaaaaaa")
+	cfg := filepath.Join(privateDir(t), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("issued_key_store: tpm\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	t.Setenv(runCLIEnv, "1")
+	var out, errb bytes.Buffer
+	code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+	for _, want := range []string{"issued_key_store is tpm", "the TPM could not make a key", "issued_key_store: file"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("%q is not in %q", want, errb.String())
+		}
+	}
+	if code == 0 || strings.Contains(errb.String(), "the key is a file") || len(o.as.Authorizations()) != 0 {
+		t.Fatalf("code %d stdout %q stderr %q (%d sign-ins)", code, out.String(), errb.String(), len(o.as.Authorizations()))
+	}
+	certPath, keyPath := o.issuedPaths(t)
+	for _, p := range []string{certPath, keyPath} {
+		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: %v", p, err)
+		}
 	}
 }
 

@@ -1942,10 +1942,15 @@ Expected: FAIL.
   `key.PublicKey.Equal(leaf.PublicKey)` becomes `signer.Public().(interface{ Equal(crypto.PublicKey)
   bool }).Equal(leaf.PublicKey)`. Writing: for `file` as today; for `tpm` the `.<machine>.tpmkey`
   was written by `tpm.Generate` (to a staged name, renamed with the certificate through
-  `WritePrivateAll`'s order: key first, certificate last) and any old `.key` removed; for `pkcs11`
+  `WritePrivateAll`'s order: key first, certificate last) and the unnamed `.key` left alone (a TPM
+  or token sign-in never removes it: on a shared home it may be a file host's; controller ruling,
+  Task 7 fix 1, replacing the earlier "any old `.key` removed"); for `pkcs11`
   the certificate alone, to `.pem` (port49 writes nothing to the token). `startIssued` passes
-  `--key` as the path or reference. `heldCertificate` looks for `.key`, then this machine's
-  `.<machine>.tpmkey` (`tpm:file=…`), then, with `issued_key_store: pkcs11`, the reference; another
+  `--key` as the path or reference. `heldCertificate` looks for this machine's
+  `.<machine>.tpmkey` (`tpm:file=…`) first, then, with `issued_key_store: pkcs11`, the reference,
+  then the unnamed `.key` last (controller ruling, Task 7 fix 1, replacing the earlier
+  `.key`-first order, which made a TPM host and a file host on one shared home force each other to
+  sign in again); another
   machine's `.tpmkey` is not looked at, so it reads as no held pair and is never removed or
   overwritten. A held pair whose key is absent says "your key (<store>) is not present: insert it,
   or `port49 login --sign-in` signs in for a new one". A TPM pair's certificate is named for the
