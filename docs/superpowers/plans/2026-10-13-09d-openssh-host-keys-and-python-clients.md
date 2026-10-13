@@ -23,7 +23,8 @@ example's strict pins.
   one. An ssh_config that keeps no host keys (`UserKnownHostsFile /dev/null` or `none`) is refused
   under accept-new, naming the setting, since every connection would be a first contact. The
   askpass answers the device's prompt under the inventory name or under the alias `ssh -G`
-  reports, since ssh's prompt names the alias.
+  reports, since ssh's prompt names the alias, and only to the ssh `port49 ssh` started: a
+  ProxyJump hop's prompt under the same alias goes to the terminal.
 - **Removed:** `port49 devices trust` (it now answers one line naming the change, exit 2),
   `internal/hostkeys`, `port49 ssh --known-hosts` (refused, naming `UserKnownHostsFile`). The 9a
   pins file is never read; while it exists, `port49 ssh` names it and says how to carry its keys
@@ -141,6 +142,19 @@ Under the standing grant (security first, keep moving), each on reasoning unless
     otherwise port49 passes `HostKeyAlias=<device>` lowercased (OpenSSH lowercases an alias).
     ssh's password prompt names the alias, so the askpass answers the device's prompt naming the
     inventory name or the alias `ssh -G` reported (pre-flight I1).
+    That widening must not reach a ProxyJump hop: a `Match user` block can give the hop the same
+    alias (measured on 10.2p1: `ssh -G -l alice jump1` prints the alias the device's block sets), and
+    ssh runs the hop with the same `-F`, `-l` and `SSH_ASKPASS`, so the hop's prompt
+    `(alice@<alias>) Password:` would match. So the askpass server answers a device prompt only to
+    an asker whose parent is the ssh process `port49 ssh` started (pre-flight N3, ruled must-fix).
+    ssh forks the askpass directly, so the asker's parent is the ssh that is asking, and a hop's is
+    the hop's own ssh, which is never the one port49 started. The server reads the asker's pid from
+    the socket, never from what the asker says: `SO_PEERCRED` on Linux, `LOCAL_PEERPID` on macOS.
+    It then reads that process's parent: `/proc/<pid>/stat` field 4 on Linux, `kern.proc.pid`'s
+    `Eproc.Ppid` on macOS. A pid that is not ssh's is answered `N` (the terminal is asked, as ssh
+    would have). A pid or parent that cannot be read, or any other OS, fails closed: nothing is
+    sent, ssh is ended as `refuse` ends it, and `port49 ssh` says it could not tell which process
+    asked. This holds for every hop and every alias, with or without a `Match` block.
   - `userknownhostsfile`: under accept-new, when every file it names is `/dev/null` or `none`,
     the run is refused before ssh starts, naming `UserKnownHostsFile`: such a config files
     nothing, so every connection is a first contact and accept-new would be accept-all, silently
@@ -257,7 +271,10 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   a managed `GlobalKnownHostsFile` revokes a compromised device key that users' own files still
   hold from accept-new (pre-flight C1). If that leaves none where some were filed, it refuses
   (`host_key_revoked`). A `RevokedHostKeys` that `ssh-keygen -Q` cannot read (measured on 10.2p1:
-  exit 255 for a file that is not a KRL) is refused (`host_key_uncheckable`), never passed. Then:
+  exit 255 for a file that is not a KRL) is refused (`host_key_uncheckable`), never passed. ssh
+  itself honours a plain public-key list as `RevokedHostKeys` (ssh_config(5)), which `ssh-keygen
+  -Q` cannot read, so the refusal says the file is not broken for ssh: this client needs a KRL
+  (`ssh-keygen -k`); R13's README text says the same (pre-flight N5). Then:
   - keys left: Netmiko connects with them alone, written under the address (or
     `[address]:port`) to a private temporary file, and `ssh_strict=True`. Paramiko, holding a key
     for the address, raises `BadHostKeyException` for a changed key and for a key of another type
@@ -276,8 +293,9 @@ Under the standing grant (security first, keep moving), each on reasoning unless
     first-contact accept by this client (Q6). An `@revoked` line alone is no longer such a
     refusal: its keys are checked against the presented one, as above.
   A refusal after the mint leaves its token unused, to expire; the README says so (pre-flight
-  M14). `connect` refuses `ssh_config_file`, `sock` and `auto_connect` among the caller's Netmiko
-  arguments, since the first two could steer Paramiko to another host than the address checked
+  M14). `connect` refuses `ssh_config_file`, `sock`, `ip` and `auto_connect` among the caller's
+  Netmiko arguments (`ip` is Netmiko's other name for `host`: pre-flight N4), since the first
+  three could steer Paramiko to another host than the address checked
   (pre-flight M16). `port49 ssh` and the Python client share the entry: whichever reaches a
   device first files its key, and the other verifies against it. The Paramiko claims are
   provisional on L65 until it closes (pre-flight M9).
@@ -753,6 +771,8 @@ fi
 echo "client: $(ssh -V 2>&1)"
 mkdir -p /run/sshd && ssh-keygen -A >/dev/null
 useradd -m -s /bin/sh tuser
+# The jump hop of cell g1c: it asks for a password, which its askpass never has.
+useradd -m -s /bin/sh jumpuser && echo jumpuser:x | chpasswd
 mkdir -p /root/.ssh /home/tuser/.ssh
 ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/ctl
 cp /root/.ssh/ctl.pub /home/tuser/.ssh/authorized_keys
@@ -779,37 +799,48 @@ sh /work/keys.sh
 # container's /etc/ssh; a copy for the host's client), CTL the client key,
 # P22 and P2222 the two servers' ports.
 KEYS=${KEYS:-/etc/ssh} CTL=${CTL:-/root/.ssh/ctl} P22=${P22:-22} P2222=${P2222:-2222}
+T=$(mktemp -d) # a rerun meets no earlier run's keys (pre-flight nit)
 k() { cut -d' ' -f1,2 "$KEYS/ssh_host_$1_key.pub"; }
 cell() { # name port kh-contents [ssh options...]
   name=$1 port=$2 lines=$3; shift 3
-  printf '%s' "$lines" > /tmp/kh
+  printf '%s' "$lines" > "$T/kh"
   ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=leaf1 \
-      -o UserKnownHostsFile=/tmp/kh -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$CTL" \
-      -o PreferredAuthentications=publickey -p "$port" "$@" tuser@127.0.0.1 true 2>/tmp/err
+      -o UserKnownHostsFile="$T/kh" -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$CTL" \
+      -o PreferredAuthentications=publickey -p "$port" "$@" tuser@127.0.0.1 true 2>"$T/err"
   echo "== $name: exit $?"
-  tail -n 3 /tmp/err | sed 's/^/  stderr: /'
-  sed 's/^/  kh: /' /tmp/kh
+  tail -n 3 "$T/err" | sed 's/^/  stderr: /'
+  sed 's/^/  kh: /' "$T/kh"
 }
-ssh-keygen -q -t ed25519 -N '' -f /tmp/other
+ssh-keygen -q -t ed25519 -N '' -f "$T/other"
 cell g1 "$P2222" "leaf1 $(k ecdsa)
 "
 cell g1-control "$P2222" ""
 cell g1b "$P22" "leaf1 $(k ecdsa)
 " -o HostKeyAlgorithms=ssh-ed25519
-cell changed-same-type "$P22" "leaf1 $(cut -d' ' -f1,2 /tmp/other.pub)
+cell changed-same-type "$P22" "leaf1 $(cut -d' ' -f1,2 "$T/other.pub")
 "
 cell hashed "$P22" "" -o HashKnownHosts=yes
-echo "  hashed found: $(ssh-keygen -F leaf1 -f /tmp/kh | grep -vc '^#')"
-ssh-keygen -q -k -f /tmp/krl /tmp/other.pub
+echo "  hashed found: $(ssh-keygen -F leaf1 -f "$T/kh" | grep -vc '^#')"
+# g1c (pre-flight N3): who is the askpass's parent when a ProxyJump hop asks? SSH_ASKPASS logs its own
+# parent pid, then fails. The top ssh is this shell's background job, so $top is its pid.
+printf '#!/bin/sh\necho "$PPID" >> "%s/askers"\nexit 1\n' "$T" > "$T/ap" && chmod +x "$T/ap" && : > "$T/askers"
+SSH_ASKPASS="$T/ap" SSH_ASKPASS_REQUIRE=force ssh -F /dev/null -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$T/kh-pj" -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$CTL" \
+    -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+    -J "jumpuser@127.0.0.1:$P22" -p "$P2222" tuser@127.0.0.1 true 2>"$T/err-pj" &
+top=$!; wait "$top"
+echo "== g1c: top ssh $top; askpass parents: $(sort -u "$T/askers" | tr '\n' ' ')"
+if [ -s "$T/askers" ] && ! grep -qx "$top" "$T/askers"; then echo "  g1c: PASS"; else echo "  g1c: FAIL"; fi
+ssh-keygen -q -k -f "$T/krl" "$T/other.pub"
 for cfg in "" "StrictHostKeyChecking yes" "StrictHostKeyChecking no" "StrictHostKeyChecking ask" \
     "StrictHostKeyChecking accept-new" "StrictHostKeyChecking off" "Host leaf1
   HostKeyAlias Corp-Leaf1" "UserKnownHostsFile /dev/null" "UserKnownHostsFile none" \
-    "RevokedHostKeys /tmp/krl" "KnownHostsCommand /bin/true %H" "Match user alice
+    "RevokedHostKeys $T/krl" "KnownHostsCommand /bin/true %H" "Match user alice
   HostKeyAlias alice-leaf1"; do
-  printf '%s\n' "$cfg" > /tmp/cfg
+  printf '%s\n' "$cfg" > "$T/cfg"
   for dest in leaf1 Leaf1; do
     echo "== g-forms [$(echo "$cfg" | tr '\n' ';')] $dest:"
-    ssh -G -F /tmp/cfg -o 'HostName="fe80::1%%eth0"' -l alice -- "$dest" |
+    ssh -G -F "$T/cfg" -o 'HostName="fe80::1%%eth0"' -l alice -- "$dest" |
       grep -E '^(stricthostkeychecking|hostkeyalias|userknownhostsfile|revokedhostkeys|knownhostscommand) ' |
       sed 's/^/  /'
   done
@@ -822,6 +853,11 @@ done
     255, "has changed" or "verification failed") and `kh` is unchanged.
   - **g1-control:** `kh` empty, against 2222: ssh accepts and files `leaf1` (exit 0). Without it
     G1 is INVALID.
+  - **g1c (gate G1c, pre-flight N3):** a `-J` hop that asks for a password, with an askpass that
+    logs its parent's pid and fails. **Gate G1c:** passes when the askpass ran and no logged
+    parent is the top ssh's pid, which is what lets `port49 ssh` tell a hop's prompt from the
+    device's by the asker's parent (decision 46 ruling 2). It is required on 8.5p1, the floor,
+    and measured on every client.
   - **g1b:** the client-side form kept from the first draft: `kh` holds the ECDSA key, against
     every host key, the client forced to `HostKeyAlgorithms=ssh-ed25519`; refused.
   - **changed-same-type:** `kh` holds `leaf1 <another Ed25519 key>`; refused.
@@ -852,14 +888,17 @@ sg docker -c "docker run --rm -v $d:/work:ro ubuntu:24.04 sh /work/run.sh distro
 - [ ] **Step 4: Write the note** in the 2026-10-09 note's form: date, what it is for (decision 46
   rulings 2 and 6), where, the clients table, the 8.5p1 tarball's SHA-256 and how it was checked,
   the impostor's control (port 2222's key types), one table per cell (client × exit, stderr,
-  `kh`), the g-forms table, and the gate (G1, and G1b beside it).
+  `kh`), the g-forms table, and the gates (G1, with G1b and G1c beside it).
 - [ ] **Step 5: Read G1.** If it passes on 8.5p1, the floor stays; say so in the note. If 8.5p1
   accepts the other type, set `minSSH` in `cmd/port49/ssh.go` to the earliest measured version that
   refuses, update its comment and the message in `sshCmd` ("port49 ssh needs 8.5 or later") and
   decision 42 ruling 10's "Why 8.5" and decision 46 ruling 6 to cite the note, and run `go test
   ./cmd/port49/ -run 'TestAnOldOpenSSHIsRefusedBeforeAMint' -count=1`. Expected: PASS. If a g-forms
   line differs from what `sshPolicy` (Task 3) or `port49.hostkeys.lookup` (Task 9) parse, those
-  tasks follow the note, not this plan's expectation.
+  tasks follow the note, not this plan's expectation. **Read G1c** the same way: if it fails on
+  8.5p1 (a hop's askpass has the top ssh as its parent), the pid check of Task 3 cannot tell the
+  hop from the device on that version. Stop and take it to Ryan before Task 3; do not weaken
+  the check.
 - [ ] **Step 6: Commit**
 
 ```bash
@@ -880,12 +919,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `keyName`) and its `answer`, `minSSH`'s comment; new `sshTrust`, `sshPolicy`, `sshName`,
   `legacyPinsHint`; `shellWord` moved here from `cmd/port49/trust.go`)
 - Modify: `cmd/port49/trust.go` (delete `shellWord`, now in `ssh.go`; the rest goes in Task 4)
+- Create: `cmd/port49/ssh_asker_linux.go`, `cmd/port49/ssh_asker_darwin.go`,
+  `cmd/port49/ssh_asker_other.go` (`askerParent`, per OS; pre-flight N3)
 - Modify: `internal/userconfig/userconfig.go` (add `LegacyPinsPath`)
 - Modify: `cmd/port49/main.go` (usage: the `port49 ssh` lines)
 - Test: `cmd/port49/ssh_test.go` (the rig; `fakeSSHHead`; `TestSSHArgs`; the host-key tests;
   `TestTheTokenIsNeverInArgvOrTheEnvironment`'s fake), `cmd/port49/ssh_fix_test.go`
   (`TestPortSSHLogsInToADeviceNamedWithCapitals`, `TestTheHostKeyHintIsConditionalOnSSHsMessage`,
-  `TestSSHsStderrIsTheCallersOwn`), `cmd/port49/ssh_pty_linux_test.go`
+  `TestSSHsStderrIsTheCallersOwn`), `cmd/port49/trust_hint_test.go` (one test deleted),
+  `cmd/port49/ssh_pty_linux_test.go`
   (`TestSSHRestoresTheTerminalWhenItEnds`'s fake), new `cmd/port49/ssh_hostkeys_test.go`
 
 **Interfaces:**
@@ -910,7 +952,17 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error)
 func sshName(device string) bool
 
 // askpassServer gains, beside device:
-//	keyName string // the alias ssh names in its prompt: sshTrust.keyName
+//	keyName     string // the alias ssh names in its prompt: sshTrust.keyName
+//	askerParent func(net.Conn) (int, error) // the parent pid of the process on c; nil only in a test
+//	                                        // that builds a server by hand
+//	sshPid      int    // the ssh port49 started (setSSHPid, once it has started)
+//	unverified  string // why an asker's parent could not be read, for sshCmd to report
+
+// askerParent is the parent pid of the process that dialled c (pre-flight N3), in
+// ssh_asker_{linux,darwin,other}.go. Linux: SO_PEERCRED's pid, then field 4 of
+// /proc/<pid>/stat. macOS: LOCAL_PEERPID, then kern.proc.pid's Eproc.Ppid.
+// Any other OS, and any read that fails, is an error.
+func askerParent(c net.Conn) (int, error)
 
 // userconfig
 // LegacyPinsPath is plan 9a's pins file, which nothing reads since plan 9d
@@ -1206,6 +1258,83 @@ func TestTheAskpassAnswersThePromptNamingTheAlias(t *testing.T) {
 	}
 }
 
+// The device's prompt is answered only to the ssh port49 started: a ProxyJump
+// hop's askpass has the hop's ssh for a parent, and its prompt can carry the same
+// alias (pre-flight N3). The test process is the asker, over a real Unix
+// socket; its parent is the "ssh" and its own pid is a "hop".
+func TestTheAskpassAnswersOnlyTheSSHItStarted(t *testing.T) {
+	ask := func(t *testing.T, sshPid int) (reply string, killed bool) {
+		t.Helper()
+		ln, err := net.Listen("unix", filepath.Join(t.TempDir(), "a.sock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		s := &askpassServer{token: "LOGINTOKEN", username: "alice", device: "leaf1", keyName: "corp-leaf1",
+			askerParent: askerParent}
+		s.setSSHPid(sshPid)
+		s.setKill(func() { killed = true })
+		go s.serve()
+		c, err := net.Dial("unix", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		_, _ = io.WriteString(c, strconv.Quote("(alice@corp-leaf1) Password: ")+"\n")
+		reply, _ = bufio.NewReader(c).ReadString('\n')
+		return reply, killed
+	}
+	if reply, _ := ask(t, os.Getppid()); reply != "T LOGINTOKEN\n" {
+		t.Errorf("the asker's parent is the ssh: answered %q", reply)
+	}
+	if reply, killed := ask(t, os.Getpid()); reply != "N\n" || killed {
+		t.Errorf("a hop (the asker's parent is another process): answered %q, killed %v", reply, killed)
+	}
+}
+
+// A hop's prompt through a fake ssh: the askpass is run by a shell the "ssh"
+// script started (the trailing echo keeps sh from exec'ing it), not by the
+// script, so its parent is not the ssh pid port49 holds, and the token does
+// not leave (pre-flight N3). TestTheTokenIsNeverInArgvOrTheEnvironment, whose
+// fake execs the askpass itself, is the control: there the token is answered.
+func TestAProxyJumpHopsPromptNeverGetsTheToken(t *testing.T) {
+	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
+	dir := t.TempDir()
+	answer := filepath.Join(dir, "answer")
+	script := fakeSSHHead +
+		"sh -c '\"$SSH_ASKPASS\" \"$1\" < /dev/null > \"$2\" 2>&1; echo' _ \"(alice@leaf1) Password: \" '" + answer + "'\n" +
+		"exit 255\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.flags[3] = filepath.Join(dir, "ssh")
+	_, out, errb := r.run(t, "leaf1")
+	if b, _ := os.ReadFile(answer); strings.Contains(string(b), "LOGINTOKEN") {
+		t.Fatalf("a hop's askpass was answered with the token: %q", b)
+	}
+	tokenNowhere(t, out, errb)
+}
+
+// When the asker's pid or its parent cannot be read (a net.Pipe has no peer
+// credentials; neither does an OS this reads none on), nothing is sent and
+// ssh is ended, as refuse ends it: never the token, never "not ours".
+func TestAnAskerWhoseParentCannotBeReadGetsNothing(t *testing.T) {
+	var killed bool
+	s := &askpassServer{token: "LOGINTOKEN", username: "alice", device: "leaf1", keyName: "leaf1",
+		askerParent: askerParent}
+	s.setSSHPid(os.Getppid())
+	s.setKill(func() { killed = true })
+	a, b := net.Pipe()
+	go s.answer(a)
+	_, _ = io.WriteString(b, strconv.Quote("(alice@leaf1) Password: ")+"\n")
+	reply, _ := bufio.NewReader(b).ReadString('\n')
+	b.Close()
+	if reply != "X\n" || !killed || s.unverified == "" {
+		t.Errorf("answered %q, killed %v, unverified %q", reply, killed, s.unverified)
+	}
+}
+
 // Decision 42 ruling 8, moved with sshName from hostkeys.ValidName
 // (pre-flight M2).
 func TestSSHName(t *testing.T) {
@@ -1251,6 +1380,12 @@ func TestThe9aPinsFileIsNamedNotRead(t *testing.T) {
 }
 ```
 
+  Move `testHostKey` unchanged (with the `crypto/ed25519`, `crypto/rand` and `ssh` imports it
+  needs) from `cmd/port49/trust_test.go` into `cmd/port49/ssh_test.go`: Task 4 deletes
+  `trust_test.go`, and the test below still calls it (pre-flight N1). Delete
+  `TestTheNoPinHintCarriesTheOperatorsFlags` from `cmd/port49/trust_hint_test.go`: it runs
+  `port49 ssh` with no pin and expects the refusal this task removes, so Step 5's `Operators`
+  pattern would run it red; the rest of that file goes with `trust.go` in Task 4 (pre-flight N2).
   Rewrite `TestAHostWithAnotherKeyNeverSeesTheToken` (its rig's `known` is `testHostKey(t)`, as
   today) to expect `ssh-keygen -R leaf1` in place of the `port49 devices trust … --replace leaf1`
   hint. Rewrite `TestSSHArgs`:
@@ -1284,9 +1419,11 @@ func TestSSHArgs(t *testing.T) {
 
 - [ ] **Step 3: Run them to see them fail**
 
-Run: `go test ./cmd/port49/ -run 'TestFirstContact|TestAKeyOfAnotherType|TestAnAddressMoved|TestSSHPolicy|TestAKnownHostsFile|TestTheOperators|TestTheAskpass|TestSSHName|TestTheKnownHostsFlag|TestThe9aPins|TestSSHArgs|TestAHostWithAnotherKey|TestTheHostKeyHint' -count=1`
+Run: `go test ./cmd/port49/ -run 'TestFirstContact|TestAKeyOfAnotherType|TestAnAddressMoved|TestSSHPolicy|TestAKnownHostsFile|TestTheOperators|TestTheAskpass|TestAProxyJump|TestAnAsker|TestSSHName|TestTheKnownHostsFlag|TestThe9aPins|TestSSHArgs|TestAHostWithAnotherKey|TestTheHostKeyHint' -count=1`
 Expected: FAIL to compile (`sshPolicy`, `sshTrust`, `sshOptions.trust`, `sshName`,
-`askpassServer.keyName` undefined).
+`askpassServer.keyName`, `askpassServer.askerParent`, `setSSHPid`, `askerParent` undefined).
+Without the asker check, `TestAProxyJumpHopsPromptNeverGetsTheToken` would fail on its assertion
+(the hop's askpass is answered with the token).
 
 - [ ] **Step 4: Implement.** In `cmd/port49/ssh.go`:
   - Replace `hostkeys.ValidName` with `sshName` (same regexp, moved here with its comment, ruling 8
@@ -1454,20 +1591,92 @@ func legacyPinsHint(stderr io.Writer) {
 
 ```go
 	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device,
-		keyName: opts.trust.keyName, expiresAt: expiresAt, remint: …as today…}
+		keyName: opts.trust.keyName, askerParent: askerParent, expiresAt: expiresAt, remint: …as today…}
 ```
 
     with, in `askpassServer`, beside `device`:
 
 ```go
 	keyName          string // the HostKeyAlias ssh names in its prompt (decision 46 ruling 2)
+	askerParent      func(net.Conn) (int, error) // see askerParent; nil only where a test builds the server by hand
+	sshPid           int    // the ssh port49 started; set under mu by setSSHPid
+	unverified       string // why an asker's parent could not be read
 ```
 
-    and in `answer`, the first case:
+    `setSSHPid(pid int)` sets `sshPid` under `mu`; `sshCmd` calls it with `c.Process.Pid` beside
+    `srv.setKill(...)`, before `go srv.serve()`. In `answer`, after the prompt is parsed and before
+    the `switch`, the asker is checked for a device prompt (pre-flight N3):
 
 ```go
-	case !ownPrompt(prompt, s.username, s.device) && !ownPrompt(prompt, s.username, s.keyName):
-		_, _ = io.WriteString(c, "N\n")
+	own := ownPrompt(prompt, s.username, s.device) || ownPrompt(prompt, s.username, s.keyName)
+	if own && s.askerParent != nil {
+		ppid, err := s.askerParent(c)
+		switch {
+		case err != nil:
+			// Fail closed: the prompt may be the device's, and nothing says which ssh asked.
+			s.unverified = err.Error()
+			s.refuse(c)
+			return
+		case ppid != s.sshPid:
+			// A ProxyJump hop's askpass: its parent is the hop's ssh, never the one started here.
+			_, _ = io.WriteString(c, "N\n")
+			return
+		}
+	}
+```
+
+    (`answer` already holds `s.mu` there, as `refuse` needs.) The first case of the `switch`
+    becomes `case !own:`, answering `N`. `sshCmd` reports `s.unverified` where it reports
+    `expired`: "%s: could not tell which process asked for the token (%s), so it was not sent and
+    ssh was ended".
+
+    `askerParent` per OS. `cmd/port49/ssh_asker_linux.go`:
+
+```go
+// SO_PEERCRED names the process that dialled (the askpass, whatever it claims); its parent is
+// ssh, which forks the askpass directly (pre-flight N3).
+func askerParent(c net.Conn) (int, error) {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return 0, errors.New("the askpass connection is not a Unix socket")
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var cred *unix.Ucred
+	var cerr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return 0, err
+	}
+	if cerr != nil {
+		return 0, cerr
+	}
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(int(cred.Pid)) + "/stat")
+	if err != nil {
+		return 0, err
+	}
+	// "pid (comm) S ppid ...": comm may hold spaces and ')', so count from the last ')'.
+	i := bytes.LastIndexByte(stat, ')')
+	f := strings.Fields(string(stat[i+1:]))
+	if i < 0 || len(f) < 2 {
+		return 0, errors.New("/proc/<pid>/stat is not in the form read")
+	}
+	return strconv.Atoi(f[1])
+}
+```
+
+    `cmd/port49/ssh_asker_darwin.go` is the same shape, with
+    `unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)` for the pid and
+    `unix.SysctlKinfoProc("kern.proc.pid", pid)` for the parent (`kp.Eproc.Ppid`).
+    `cmd/port49/ssh_asker_other.go` (`//go:build !linux && !darwin`) returns
+    `errors.New("this OS has no way to read the asker's parent")`, so there `port49 ssh` ends
+    before it sends a token rather than send one unchecked. `TestTheAskpassAnswersOnlyTheSSHItStarted`
+    `t.Skip`s on an OS other than Linux and macOS; `TestAnAskerWhoseParentCannotBeReadGetsNothing`
+    runs everywhere. L64 (a) and (c) also record, per platform, that the askpass was answered
+    (the pid check passes on the platform's own `port49 ssh`).
 ```
 
     `ownPrompt`'s comment gains: "Under an operator's own HostKeyAlias the prompt names that alias
@@ -1506,14 +1715,14 @@ func LegacyPinsPath() string { return filepath.Join(LegacyDir(), "known_hosts") 
 
 - [ ] **Step 5: Run the tests to see them pass**
 
-Run: `go test ./cmd/port49/ -run 'SSH|Askpass|Ceiling|Token|FirstContact|KeyOfAnotherType|AddressMoved|KnownHosts|Operators|9aPins|HostKeyHint' -count=1`
+Run: `go test ./cmd/port49/ -run 'SSH|Askpass|ProxyJump|Asker|Ceiling|Token|FirstContact|KeyOfAnotherType|AddressMoved|KnownHosts|Operators|9aPins|HostKeyHint' -count=1`
 Expected: PASS (each host-key test runs the real OpenSSH; on a host with none they skip, as
 `sshTestBin` says).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/port49/ssh.go cmd/port49/trust.go cmd/port49/main.go cmd/port49/ssh_test.go cmd/port49/ssh_fix_test.go cmd/port49/ssh_pty_linux_test.go cmd/port49/ssh_hostkeys_test.go internal/userconfig/userconfig.go
+git add cmd/port49/ssh.go cmd/port49/ssh_asker_linux.go cmd/port49/ssh_asker_darwin.go cmd/port49/ssh_asker_other.go cmd/port49/trust.go cmd/port49/trust_hint_test.go cmd/port49/main.go cmd/port49/ssh_test.go cmd/port49/ssh_fix_test.go cmd/port49/ssh_pty_linux_test.go cmd/port49/ssh_hostkeys_test.go internal/userconfig/userconfig.go
 git commit -m "feat: port49 ssh uses the operator's known_hosts under accept-new, filed under the inventory name
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -3440,8 +3649,8 @@ class NetmikoTest(unittest.TestCase):
             self.connect(known(), device="leaf*", agent=agent)
         self.assertEqual((cm.exception.code, agent.asked), ("device_name", []))
 
-    def test_the_security_options_cannot_be_overridden(self):  # pre-flight M16 adds sock and ssh_config_file
-        for kw in ("ssh_strict", "sock", "ssh_config_file", "auto_connect"):
+    def test_the_security_options_cannot_be_overridden(self):  # pre-flight M16 adds sock and ssh_config_file; N4 ip
+        for kw in ("ssh_strict", "sock", "ssh_config_file", "auto_connect", "ip"):
             with self.assertRaises(ValueError, msg=kw):
                 self.connect(known("ssh-ed25519 AAAA1"), **{kw: None})
 ```
@@ -3606,7 +3815,8 @@ def is_revoked(kh, keytype, key_b64, *, ssh_keygen="ssh-keygen"):
     if r is not None:
         why = _run.printable(r.stderr.strip(), 300) or f"exit {r.returncode}"
     raise HostKeyError("host_key_uncheckable", f"{ssh_keygen} -Q could not read your RevokedHostKeys {kh.krl} "
-                       f"({why}), so no key can be checked against it: use port49 ssh for this device")
+                       f"({why}), so no key can be checked against it. ssh honours a plain key list there, but "
+                       f"this client needs a KRL (ssh-keygen -k); or use port49 ssh for this device")
 
 
 def hashed(name, salt=None):
@@ -3654,9 +3864,10 @@ DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_i
 
 # What connect sets and a caller may not: host keys, and no key offered (L51: every refused key counts
 # against the device's login-attempt limit); and ssh_config_file and sock, either of which could steer
-# Paramiko to another host than the address the key was checked for (pre-flight M16).
+# Paramiko to another host than the address the key was checked for (pre-flight M16); and ip, which Netmiko
+# sets self.host from before host (base_connection.py:346-349), so a caller's ip= would do the same (N4).
 OWNED = {"ssh_strict", "system_host_keys", "alt_host_keys", "alt_key_file", "use_keys", "allow_agent", "host",
-         "username", "password", "secret", "device_type", "auto_connect", "ssh_config_file", "sock"}
+         "username", "password", "secret", "device_type", "auto_connect", "ssh_config_file", "sock", "ip"}
 
 
 class FirstContact:
@@ -3780,8 +3991,9 @@ finally:
   what is refused, and why: a device name known_hosts would read as a pattern (before the mint);
   a `KnownHostsCommand` (use `port49 ssh`); a `UserKnownHostsFile /dev/null` under accept-new; a
   key an `@revoked` line or `RevokedHostKeys` names, filed or presented at first contact; a
-  `RevokedHostKeys` `ssh-keygen -Q` cannot read (a plain key list: make it a KRL with `ssh-keygen
-  -k`). A refusal after the mint leaves that token unused; it expires (pre-flight M14). The
+  `RevokedHostKeys` `ssh-keygen -Q` cannot read (a plain key list, which ssh itself honours and
+  this client does not: your file is not broken, make a KRL from it with `ssh-keygen -k`;
+  pre-flight N5). A refusal after the mint leaves that token unused; it expires (pre-flight M14). The
   claims that Paramiko refuses before authentication are marked provisional on L65 until Task 11
   closes it (pre-flight M9).
 
