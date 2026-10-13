@@ -186,6 +186,9 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 	default:
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
+			return api.MintItem{}, ke
+		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	}
 }
@@ -231,6 +234,9 @@ func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 		// refresh_failed's detail is the agent's own error, already saying
 		// what the broker answered.
 		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
+			return api.RefreshResponse{}, ke
+		}
 		if e.Error == "refresh_failed" {
 			return api.RefreshResponse{}, errors.New(e.Detail)
 		}
@@ -288,6 +294,8 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		return ErrAgentTooOld
 	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
 		return errors.New(e.Detail)
+	case keyErrorFromCode(e.Error, e.Detail) != nil:
+		return keyErrorFromCode(e.Error, e.Detail)
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "revocation_running":
 		return &RevocationRunningError{Detail: e.Detail}
 	case e.Error != "":

@@ -38,7 +38,7 @@ func TestAnUntouchedSignThatTook14sIsATouchTimeoutAndTheKeyStaysUnlocked(t *test
 	if s.State() != hwkey.Present {
 		t.Fatalf("state %v after a touch timeout, want Present", s.State())
 	}
-	if got, want := err.Error(), "no touch within 15s; touch the key when it blinks and try again"; got != want {
+	if got, want := err.Error(), "hwkey: no touch within 15s; touch the key when it blinks and try again"; got != want {
 		t.Fatalf("message %q, want %q", got, want)
 	}
 	// The next Sign asks the token again instead of refusing at once.

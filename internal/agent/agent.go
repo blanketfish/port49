@@ -237,6 +237,13 @@ func New(c Config) *Agent {
 		}
 	}
 	cert := c.Cert
+	// A hardware key's Sign errors are recorded, so the dialer can tell a key
+	// that failed from a broker that did not answer (crypto/tls flattens them).
+	var rec *signRecorder
+	if s, ok := cert.PrivateKey.(crypto.Signer); ok && a.key != nil {
+		rec = &signRecorder{Signer: s}
+		cert.PrivateKey = rec
+	}
 	var verify func(tls.ConnectionState) error
 	if c.VerifyBroker != nil {
 		verify = func(cs tls.ConnectionState) error {
@@ -255,8 +262,16 @@ func New(c Config) *Agent {
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
 	tr := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if rec != nil {
+				rec.reset()
+			}
 			conn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
+				if rec != nil {
+					if ke := rec.keyError(); ke != nil {
+						return nil, ke
+					}
+				}
 				return nil, err
 			}
 			if tc, ok := conn.(*tls.Conn); ok {
@@ -311,8 +326,9 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	defer a.giveWire(false)
 	resp, err := a.do(req)
 	if err != nil {
-		if te := touchTimeout(err); te != nil {
-			return api.Config{}, te
+		var ke *KeyError
+		if errors.As(err, &ke) {
+			return api.Config{}, ke
 		}
 		if refused := a.refusal(err); refused != nil {
 			return api.Config{}, refused
@@ -824,27 +840,14 @@ func (e *UnansweredRevokeError) Error() string {
 
 func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 
-// touchTimeout is hwkey.ErrTouchTimeout when a failed handshake was a key
-// that was not touched in time, and nil for any other error. crypto/tls
-// flattens the signer's error to text ("tls: failed to sign handshake: …"),
-// so it is found by its words. It is the key's own message, shown as it is:
-// the broker was not unreachable, the key does not need its PIN, and a retry
-// would make the key blink again for a touch nobody was there for. It ends
-// nothing: the key is unlocked and the next ask may be touched in time.
-func touchTimeout(err error) error {
-	if err == nil || !strings.Contains(err.Error(), hwkey.ErrTouchTimeout.Error()) {
-		return nil
-	}
-	return fmt.Errorf("agent: %w", hwkey.ErrTouchTimeout)
-}
-
 // refusedReconnect ends the session on a transport error that means no
 // reconnect will be accepted, and returns why; nil for any other error. A
-// touch timeout is returned as it is, without ending the session, and the
-// callers' retry is skipped.
+// *KeyError (the dialer's record of the key's own failure) is returned as it
+// is, without ending the session, and the callers' retry is skipped.
 func (a *Agent) refusedReconnect(err error) error {
-	if te := touchTimeout(err); te != nil {
-		return te
+	var ke *KeyError
+	if errors.As(err, &ke) {
+		return ke
 	}
 	if refused := a.refusal(err); refused != nil {
 		// A reconnect whose handshake failed: the certificate expired
@@ -1030,6 +1033,9 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	}
 	sig, err := api.SignRefresh(signer, api.RefreshMessage(nonce, ekm))
 	if err != nil {
+		if keyFault(err) != nil {
+			return api.RefreshResponse{}, false, &KeyError{Err: err}
+		}
 		return api.RefreshResponse{}, false, fmt.Errorf("agent: signing the refresh: %w", err)
 	}
 	body, err := json.Marshal(api.RefreshRequest{Nonce: ch.Nonce, Signature: base64.RawURLEncoding.EncodeToString(sig)})
@@ -1382,6 +1388,9 @@ func (a *Agent) Handler() http.Handler {
 			// Not the broker failing: the operator's own revocation is still
 			// running, and nothing was minted.
 			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
+		case KeyCode(err) != "":
+			// The key's own failure, not the broker's: its own code.
+			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 		default:
@@ -1398,6 +1407,8 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 		case errors.As(err, new(*RevocationRunningError)):
 			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
+		case KeyCode(err) != "":
+			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "refresh_failed", Detail: err.Error()})
 		default:
@@ -1597,6 +1608,8 @@ func answer(w http.ResponseWriter, out any, err error) {
 			w.Header().Set("Retry-After", strconv.Itoa(int(refused.RetryAfter/time.Second)))
 		}
 		writeJSON(w, status, api.Error{Error: refused.Code, Detail: refused.Detail})
+	case KeyCode(err) != "":
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 	default:
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 	}
