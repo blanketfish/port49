@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -299,6 +300,36 @@ func TestAutoPassesOverAHeldTPMPairWhenTheTPMIsGone(t *testing.T) {
 	sf.issuedKeyStore = "tpm"
 	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
 		t.Fatalf("tpm named without a TPM: %+v %v", got, err)
+	}
+}
+
+// Under `auto` a held TPM pair that would need a sign-in anyway is passed over
+// for a file pair that would not: a TPM that opens but will not make a key
+// leaves the file pair the fallback wrote, and that pair is found next time
+// (task 7 A3). With no such file pair the TPM pair is still the one, and a
+// named tpm never looks at the file pair.
+func TestAutoPassesOverAHeldTPMPairThatWouldNeedASignIn(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the TPM is Linux's")
+	}
+	t.Setenv("HOME", privateDir(t))
+	o := newOIDCLab(t, true)
+	dialTPM(t, nil)
+	machineIs(t, "aaaaaaaa")
+	tc, tk, _ := userconfig.IssuedTPMPaths(o.url)
+	writePair(t, tc, tk) // a TPM pair whose certificate does not load
+	sf := &sessionFlags{broker: o.url}
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("with no file pair: %+v %v", got, err)
+	}
+	o.holdCertificate(t, time.Now(), 12*time.Hour)
+	_, fk := o.issuedPaths(t)
+	if got, err := pickHeldPair(sf); err != nil || got.store != "file" || got.key != fk {
+		t.Fatalf("with a valid file pair: %+v %v", got, err)
+	}
+	sf.issuedKeyStore = "tpm"
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("tpm named: %+v %v", got, err)
 	}
 }
 

@@ -7,14 +7,18 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
+
 	"github.com/rhwendt/port49/internal/hwkey/hwtest"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
 
@@ -354,5 +358,68 @@ func TestAutoWithTheTPMGoneSignsInForAFileKey(t *testing.T) {
 	o.step(1 * time.Second)
 	if code, out, errb := o.loginOn(t, sock); code != 0 || !strings.Contains(out, "using your certificate") || n(o) != 2 {
 		t.Fatalf("the next login: code %d stdout %q stderr %q (%d sign-ins)", code, out, errb, n(o))
+	}
+}
+
+// Under `auto`, a TPM that opens but will not make a key (a lockout), with a
+// held TPM pair in late renewal: the login signs in once for a file key, and
+// the logins after it use that file pair, not the stale TPM pair, so no two
+// logins in a row sign in (task 7 A3). Nothing is removed. When the TPM makes
+// keys again and the file pair is late too, the next sign-in makes a TPM key,
+// and that is the pair used after it.
+func TestAutoWithATPMThatWillNotMakeAKeySignsInOnce(t *testing.T) {
+	hwtest.SWTPM(t)
+	machineIs(t, "aaaaaaaa")
+	o := newOIDCLab(t, true)
+	driveBrowser(t, o.iss)
+	sock := privateSocket(t)
+	t.Cleanup(func() { stopAgentAt(sock) })
+	login := func(signIns int, said string) string {
+		t.Helper()
+		stopAgentAt(sock)
+		o.step(11 * time.Second)
+		code, out, errb := o.loginOn(t, sock)
+		if code != 0 || n(o) != signIns || !strings.Contains(out, said) {
+			t.Fatalf("code %d stdout %q stderr %q (%d sign-ins, want %d)", code, out, errb, n(o), signIns)
+		}
+		return errb
+	}
+	login(1, "port49: signed in at ")
+	// The TPM pair goes late: its certificate is reissued for the same TPM key
+	// as if the sign-in were 11 hours ago.
+	tc, tk, _ := userconfig.IssuedTPMPaths(o.url)
+	leaf, err := readLeaf(tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-11 * time.Hour)
+	late, err := o.b.Issuer.Issue(leaf.PublicKey, issuer.SignIn{Principal: "user:alice@example.com", Issuer: o.iss.URL,
+		Subject: "sub-alice", Sid: "s-sub-alice", AuthTime: at, IssuedAt: at}, at, 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := userconfig.WritePrivate(tc, o.b.Issuer.PEM(late), "test certificate"); err != nil {
+		t.Fatal(err)
+	}
+	generate := generateTPM
+	generateTPM = func(string) (*tpm.Signer, error) { return nil, fmt.Errorf("tpm: create: %w", tpm2.TPMRCLockout) }
+	t.Cleanup(func() { generateTPM = generate })
+	if said := login(2, "port49: signed in at "); !strings.Contains(said, "the key is a file (") {
+		t.Fatalf("the fallback was not said: %q", said)
+	}
+	login(2, "using your certificate")
+	login(2, "using your certificate")
+	if _, err := os.Stat(tk); err != nil {
+		t.Fatalf("the TPM key file: %v", err)
+	}
+	// The TPM makes keys again, and the file pair is late too.
+	generateTPM = generate
+	o.holdCertificate(t, at, 12*time.Hour)
+	if said := login(3, "port49: signed in at "); !strings.Contains(said, "the key is made in this machine's TPM") {
+		t.Fatalf("the sign-in did not make a TPM key: %q", said)
+	}
+	login(3, "using your certificate")
+	if pair, _, _, err := findHeld(&sessionFlags{broker: o.url}); err != nil || pair.store != "tpm" {
+		t.Fatalf("the held pair: %+v %v", pair, err)
 	}
 }

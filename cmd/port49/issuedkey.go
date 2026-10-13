@@ -17,7 +17,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
@@ -341,7 +343,8 @@ func tokenTarget(sf *sessionFlags) (string, error) {
 // as no held pair (a sign-in). Under `auto`, the pair of the store `auto`
 // would choose now: the token's certificate when a token is wanted and that
 // file is there, else this machine's TPM pair when the TPM is usable and its
-// key file is there, else the file pair when its key is. The
+// key file is there, unless that pair would need a sign-in and the file pair
+// would need less, else the file pair when its key is. The
 // unnamed .key comes last: on a home shared by a TPM host and a file host it
 // is the file host's, and the TPM host must not pick it up or remove it, or
 // each sign-in of one forces the other to sign in. Another machine's .tpmkey
@@ -395,12 +398,42 @@ func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 			return p, nil
 		}
 	}
+	// A TPM pair that would need a sign-in anyway gives way to a file pair
+	// that needs less: a TPM that opens but will not make a key leaves the
+	// file pair `auto` fell back to, and taking the stale TPM pair again would
+	// sign in at every login (task 7 A3). When the file pair needs a sign-in
+	// too, the TPM pair is kept, and that sign-in tries the TPM again.
+	file := issuedPair{storeFile, fc, fk}
 	if tpmUsable() == nil {
 		if p := tpmPair(); hwkey.IsRef(p.key) {
-			return p, nil
+			now := time.Now()
+			if s := heldStanding(p, now); s == heldValid || s >= heldStanding(file, now) {
+				return p, nil
+			}
 		}
 	}
-	return issuedPair{storeFile, fc, fk}, nil
+	return file, nil
+}
+
+// How much a held pair is worth to a login: none (not there, not loadable, or
+// expired), a certificate in late renewal, which signs in but is used if the
+// sign-in fails, or a valid one, used with no sign-in. These are the tests
+// login makes of the pair it holds.
+const (
+	heldNone = iota
+	heldLate
+	heldValid
+)
+
+func heldStanding(p issuedPair, now time.Time) int {
+	c, _, err := heldCertificate(p.cert, p.key)
+	switch {
+	case err != nil || !now.Before(c.Leaf.NotAfter):
+		return heldNone
+	case api.LateRenewal(c.Leaf, now):
+		return heldLate
+	}
+	return heldValid
 }
 
 // findHeld is the pair a broker issued this user, with the sign-in its
