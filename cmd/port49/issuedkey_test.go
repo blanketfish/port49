@@ -560,6 +560,7 @@ func TestAHeldPKCS11PairIsTheReference(t *testing.T) {
 // `auto` the file .key is acceptable.
 func TestANamedStoreLooksOnlyForItsOwnPair(t *testing.T) {
 	machineIs(t, "aaaaaaaa")
+	dialTPM(t, nil) // never this machine's TPM
 	t.Setenv("HOME", privateDir(t))
 	const broker = "https://broker.example:8443"
 	fc, fk, _ := userconfig.IssuedPaths(broker)
