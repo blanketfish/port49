@@ -20,6 +20,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -314,20 +315,33 @@ func pkcs11Name(ref string) string {
 	return name
 }
 
+// tokenKeyName is the canonical form of an issued_key reference, without its
+// query (which may carry a module path or a pin-source): one key in any
+// spelling, so a changed spelling does not cost a sign-in. A reference that
+// does not parse (Open would refuse it) is named as written.
+func tokenKeyName(ref string) string {
+	if u, err := pkcs11.ParseURI(ref); err == nil {
+		name, _, _ := strings.Cut(u.String(), "?")
+		return name
+	}
+	return pkcs11Name(ref)
+}
+
 // tokenTarget is the certificate kept for the token key sf.issuedKey names,
-// named for the key (decision 45 ruling 7, amended): its pkcs11: name without
-// the query, which may carry a module path or a pin-source.
+// named for the key (decision 45 ruling 7, amended): its canonical pkcs11:
+// name without the query.
 func tokenTarget(sf *sessionFlags) (string, error) {
-	return userconfig.IssuedTokenPaths(sf.broker, pkcs11Name(sf.issuedKey))
+	return userconfig.IssuedTokenPaths(sf.broker, tokenKeyName(sf.issuedKey))
 }
 
 // pickHeldPair is the pair this login looks for. When issued_key_store names a
 // store, only that store's pair (decision 45 ruling 7, amended): a named tpm
 // host with no TPM pair of its own is not run on the file .key, which is the
 // operator's choice of hardware bypassed, and a pair that is not there reads
-// as no held pair (a sign-in). Under `auto`: this machine's TPM pair when its
-// key file is there, else, with a token named for the issued key, the
-// certificate beside that reference, else the file pair when its key is. The
+// as no held pair (a sign-in). Under `auto`, the pair of the store `auto`
+// would choose now: the token's certificate when a token is wanted and that
+// file is there, else this machine's TPM pair when the TPM is usable and its
+// key file is there, else the file pair when its key is. The
 // unnamed .key comes last: on a home shared by a TPM host and a file host it
 // is the file host's, and the TPM host must not pick it up or remove it, or
 // each sign-in of one forces the other to sign in. Another machine's .tpmkey
@@ -369,11 +383,22 @@ func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 	case storeFile, storeEncl:
 		return issuedPair{storeFile, fc, fk}, nil
 	}
-	if p := tpmPair(); hwkey.IsRef(p.key) {
-		return p, nil
+	// The pair of the store `auto` would choose now comes first, or a host
+	// whose old pair is not usable signs in at every login: the token when it
+	// is wanted and its certificate is there, then the TPM when it is usable.
+	if pkcs11Wanted(sf) && clientkey.HasPKCS11 {
+		p, err := tokenPair()
+		if err != nil {
+			return issuedPair{}, err
+		}
+		if _, err := os.Lstat(p.cert); err == nil {
+			return p, nil
+		}
 	}
-	if sf.issuedKey != "" && pkcs11Wanted(sf) && clientkey.HasPKCS11 {
-		return tokenPair()
+	if tpmUsable() == nil {
+		if p := tpmPair(); hwkey.IsRef(p.key) {
+			return p, nil
+		}
 	}
 	return issuedPair{storeFile, fc, fk}, nil
 }

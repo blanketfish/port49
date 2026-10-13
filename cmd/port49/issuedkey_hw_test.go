@@ -331,9 +331,10 @@ func TestATPMKeyFromAnotherTPMIsReplacedBySigningIn(t *testing.T) {
 	}
 }
 
-// A TPM unplugged after the sign-in: the held pair's key is out, and the
-// login says to put it back instead of calling the certificate another's.
-func TestAHeldTPMKeyThatIsOutSaysToInsertIt(t *testing.T) {
+// A TPM gone after the sign-in, under `auto`: the held TPM pair is passed over
+// as a new sign-in would pass over the TPM, so the login signs in for a file
+// key at once and says so, and the next login does not need --sign-in.
+func TestAutoWithTheTPMGoneSignsInForAFileKey(t *testing.T) {
 	tp := hwtest.SWTPM(t)
 	machineIs(t, "aaaaaaaa")
 	o := newOIDCLab(t, true)
@@ -346,8 +347,12 @@ func TestAHeldTPMKeyThatIsOutSaysToInsertIt(t *testing.T) {
 	stopAgentAt(sock)
 	tp.Stop()
 	code, out, errb := o.loginOn(t, sock)
-	if code != 1 || !strings.Contains(errb, "your key (tpm) is not present: insert it, or `port49 login --sign-in` signs in for a new one") ||
-		n(o) != 1 {
+	if code != 0 || !strings.Contains(errb, "the key is a file (") || n(o) != 2 {
 		t.Fatalf("code %d stdout %q stderr %q (%d sign-ins)", code, out, errb, n(o))
+	}
+	stopAgentAt(sock)
+	o.step(1 * time.Second)
+	if code, out, errb := o.loginOn(t, sock); code != 0 || !strings.Contains(out, "using your certificate") || n(o) != 2 {
+		t.Fatalf("the next login: code %d stdout %q stderr %q (%d sign-ins)", code, out, errb, n(o))
 	}
 }

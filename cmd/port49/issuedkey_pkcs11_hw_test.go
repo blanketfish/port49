@@ -62,7 +62,7 @@ func TestLoginOIDCSignsWithTheTokensKeyAndWritesNothingToIt(t *testing.T) {
 		t.Fatalf("the PIN was asked %d times", prompts.Load())
 	}
 	_, keyPath := o.issuedPaths(t)
-	certPath, err := userconfig.IssuedTokenPaths(o.url, pkcs11Name(ref))
+	certPath, err := userconfig.IssuedTokenPaths(o.url, tokenKeyName(ref))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestAWrongPINForTheIssuedKeyEndsTheLoginBeforeTheSignIn(t *testing.T) {
 			t.Fatal("the PIN was shown")
 		}
 	}
-	certPath, _ := userconfig.IssuedTokenPaths(o.url, pkcs11Name(ref))
+	certPath, _ := userconfig.IssuedTokenPaths(o.url, tokenKeyName(ref))
 	if _, err := os.Lstat(certPath); err == nil {
 		t.Fatal("a certificate was kept")
 	}

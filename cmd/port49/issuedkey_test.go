@@ -211,6 +211,7 @@ func writePair(t *testing.T, cert, key string) {
 // "a held pair is found by either key file"), and read as a reference.
 func TestAHeldTPMPairIsFound(t *testing.T) {
 	machineIs(t, "aaaaaaaa")
+	dialTPM(t, nil)
 	home := privateDir(t)
 	t.Setenv("HOME", home)
 	const broker = "https://broker.example:8443"
@@ -237,6 +238,99 @@ func TestAHeldTPMPairIsFound(t *testing.T) {
 	}
 	if got, err = pickHeldPair(&sessionFlags{broker: broker}); err != nil || got.store != "file" || got.key != fk {
 		t.Fatalf("with the .key alone: %+v %v", got, err)
+	}
+}
+
+// Under `auto` the held pair is the one of the store `auto` would choose now
+// (decision 45 ruling 7): a host that gained touch_key and issued_key while
+// holding a TPM pair resolves to its token certificate once that exists, so it
+// does not sign in at every login.
+func TestAutoLooksForTheHeldPairOfTheStoreItWouldChoose(t *testing.T) {
+	if !clientkey.HasPKCS11 {
+		t.Skip("the token store is in the client build only (make test-hw)")
+	}
+	machineIs(t, "aaaaaaaa")
+	dialTPM(t, nil)
+	t.Setenv("HOME", privateDir(t))
+	const broker = "https://broker.example:8443"
+	tc, tk, _ := userconfig.IssuedTPMPaths(broker)
+	writePair(t, tc, tk)
+	sf := &sessionFlags{broker: broker, touchKey: tokenRef, issuedKey: tokenRef}
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("with only the TPM pair: %+v %v", got, err)
+	}
+	tokc, err := tokenTarget(sf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePair(t, tokc, filepath.Join(filepath.Dir(tokc), "unrelated"))
+	got, err := pickHeldPair(sf)
+	if err != nil || got.store != "pkcs11" || got.cert != tokc || got.key != tokenRef {
+		t.Fatalf("with both: %+v %v", got, err)
+	}
+	// Without touch_key the token is not what auto would choose.
+	sf.touchKey = ""
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("without touch_key: %+v %v", got, err)
+	}
+}
+
+// Under `auto` a held TPM pair is passed over when the TPM cannot be used, as
+// a new sign-in would pass over it: the file pair, so --sign-in is not needed
+// at every login.
+func TestAutoPassesOverAHeldTPMPairWhenTheTPMIsGone(t *testing.T) {
+	machineIs(t, "aaaaaaaa")
+	t.Setenv("HOME", privateDir(t))
+	const broker = "https://broker.example:8443"
+	tc, tk, _ := userconfig.IssuedTPMPaths(broker)
+	writePair(t, tc, tk)
+	fc, fk, _ := userconfig.IssuedPaths(broker)
+	writePair(t, fc, fk)
+	sf := &sessionFlags{broker: broker}
+	dialTPM(t, nil)
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("with a TPM: %+v %v", got, err)
+	}
+	dialTPM(t, &fs.PathError{Op: "stat", Path: "/dev/tpmrm0", Err: syscall.ENOENT})
+	if got, err := pickHeldPair(sf); err != nil || got.store != "file" || got.key != fk {
+		t.Fatalf("without a TPM: %+v %v", got, err)
+	}
+	// A named tpm is still the TPM pair: the operator chose it.
+	sf.issuedKeyStore = "tpm"
+	if got, err := pickHeldPair(sf); err != nil || got.store != "tpm" {
+		t.Fatalf("tpm named without a TPM: %+v %v", got, err)
+	}
+}
+
+// One key is one certificate name, however its reference is spelled.
+func TestOneTokenKeyIsOneCertificateName(t *testing.T) {
+	t.Setenv("HOME", privateDir(t))
+	const broker = "https://broker.example:8443"
+	var first string
+	for _, ref := range []string{
+		"pkcs11:token=lab;id=%10?module-path=/x.so",
+		"pkcs11:id=%10;token=lab?module-path=/x.so",
+		"pkcs11:token=%6c%61%62;id=%10?module-path=/x.so",
+		"pkcs11:token=lab;id=%10;?module-path=/x.so",
+		"pkcs11:token=lab;id=%10?module-path=/y.so&pin-source=file:/x",
+	} {
+		got, err := tokenTarget(&sessionFlags{broker: broker, issuedKey: ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == "" {
+			first = got
+		} else if got != first {
+			t.Errorf("%s: %s, want %s", ref, got, first)
+		}
+	}
+	other, _ := tokenTarget(&sessionFlags{broker: broker, issuedKey: "pkcs11:token=lab;id=%11?module-path=/x.so"})
+	if other == first {
+		t.Errorf("another key shares %s", first)
+	}
+	// A reference that does not parse is still named, by its text.
+	if bad, err := tokenTarget(&sessionFlags{broker: broker, issuedKey: "pkcs11:id=%zz"}); err != nil || bad == first {
+		t.Errorf("an unparsable reference: %q %v", bad, err)
 	}
 }
 
@@ -411,7 +505,7 @@ func TestAHeldPKCS11PairIsTheReference(t *testing.T) {
 	t.Setenv("HOME", home)
 	const broker = "https://broker.example:8443"
 	fc, _, _ := userconfig.IssuedPaths(broker)
-	tc, _ := userconfig.IssuedTokenPaths(broker, pkcs11Name(tokenRef))
+	tc, _ := userconfig.IssuedTokenPaths(broker, tokenKeyName(tokenRef))
 	writePair(t, tc, filepath.Join(filepath.Dir(tc), "unrelated"))
 	sf := &sessionFlags{broker: broker, issuedKeyStore: "pkcs11", issuedKey: tokenRef}
 	got, err := pickHeldPair(sf)

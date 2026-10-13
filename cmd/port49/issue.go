@@ -124,7 +124,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		}
 	case errors.Is(heldErr, fs.ErrNotExist) && sf.issuedKeyStore == storeTPM:
 		// A file key on this home is not used: the operator named the TPM.
-		fmt.Fprintln(stderr, "port49 login: no TPM key for this machine yet; signing in to make one")
+		fmt.Fprintln(stderr, "port49 login: no TPM key for this machine yet")
 	case heldErr != nil && !errors.Is(heldErr, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "port49 login: your held certificate is not used: %v\n", heldErr)
 	}
