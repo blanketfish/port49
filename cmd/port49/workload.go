@@ -183,6 +183,13 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 		// broker never tells them apart (decision 42 ruling 2).
 		fmt.Fprintf(stderr, "%s: scope %s: no device it selects is one you hold a grant on, or no scope has that name\n",
 			cmd, safe(*scope))
+		if *format == "json" && *out == "" {
+			// "Nothing selected", told apart from a failure (decision 46
+			// ruling 10): {"principal": …, "results": [], "refused": []}.
+			if body, err := render("json", resp, nil, *enable); err == nil {
+				_, _ = stdout.Write(body)
+			}
+		}
 		return exitFinal
 	}
 	var permitted []api.MintItem
@@ -224,6 +231,13 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	if len(permitted) == 0 {
 		// Nothing to write: the last output stays as it was. Temporary, or
 		// final until someone acts.
+		if *format == "json" && *out == "" && len(resp.Results) > 0 {
+			// The broker answered: say which and why on stdout too (decision 46
+			// ruling 10). A file named by --out keeps its last contents.
+			if body, err := render("json", resp, nil, *enable); err == nil {
+				_, _ = stdout.Write(body)
+			}
+		}
 		if code == exitTemporary {
 			return exitTemporary
 		}
@@ -265,12 +279,54 @@ func hasControl(it api.MintItem, enable bool) bool {
 	return false
 }
 
+// refusedItem is one item --format json did not mint: its words, never a token.
+type refusedItem struct {
+	Device      string          `json:"device"`
+	Verdict     string          `json:"verdict,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Detail      string          `json:"detail,omitempty"`
+	PerLoginMFA *mfaRequirement `json:"per_login_mfa,omitempty"`
+}
+
+// workloadJSON is --format json's object: the broker's answer with only the
+// minted items in results, and every other in refused (decision 46 ruling 10).
+type workloadJSON struct {
+	api.MintResponse
+	Refused []refusedItem `json:"refused"`
+}
+
+// refusedOf is the items not minted, in refused's form.
+func refusedOf(items []api.MintItem) []refusedItem {
+	out := []refusedItem{}
+	for _, it := range items {
+		if it.Verdict == "permit" && it.Login != "" {
+			continue
+		}
+		r := refusedItem{Device: it.Device, Verdict: it.Verdict, Reason: it.Reason, Error: it.Error,
+			Detail: safe(it.Detail)}
+		if it.PerLoginMFA != nil {
+			r.PerLoginMFA = requirementOf(*it.PerLoginMFA)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // render is the permitted items as format says: TSV with no header, one line
-// each, or the broker's answer as JSON with only the permitted results.
+// each, or the broker's answer as JSON with only the permitted results and the
+// refused beside them.
 func render(format string, resp api.MintResponse, permitted []api.MintItem, enable bool) ([]byte, error) {
 	if format == "json" {
+		refused := refusedOf(resp.Results)
 		resp.Results = permitted
-		return json.Marshal(resp)
+		if resp.Results == nil {
+			// "results": [], never null: MintResponse.Results has no
+			// omitempty, and a reader iterating it must not meet a null
+			// (pre-flight I3).
+			resp.Results = []api.MintItem{}
+		}
+		return json.Marshal(workloadJSON{MintResponse: resp, Refused: refused})
 	}
 	var b strings.Builder
 	for _, it := range permitted {

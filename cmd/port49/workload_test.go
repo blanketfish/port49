@@ -629,3 +629,99 @@ func TestAScopeAndDevicesTogetherIsUsage(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
+
+// mixedMFA is mixed, with core1 denied under a per-login requirement whose
+// challenge must never be printed.
+func mixedMFA(w http.ResponseWriter, req api.MintRequest) {
+	resp := api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01", Subject: "svc_oxidized"}
+	for _, d := range req.Devices {
+		switch d {
+		case "fw1":
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "no_grants_matched"})
+		case "core1":
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "per_login_mfa_required",
+				PerLoginMFA: &api.PerLoginMFA{Device: d, Challenge: "CHALLENGE", Accept: []string{"hardware_key_touch"},
+					ReuseForSeconds: 900}})
+		default:
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "permit", Address: "10.0.0.1",
+				Platform: "arista_eos", Username: "svc-oxidized", Login: "TOKEN-" + d, ExpiresAt: "2026-10-08T03:00:00Z"})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// --format json lists the refused beside the minted, with no token and no
+// challenge, and exits 1 as before.
+func TestWorkloadJSONListsTheRefused(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "leaf1", "fw1", "core1"),
+		&out, &errb)
+	var got workloadJSON
+	if code != 1 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 1 || len(got.Refused) != 2 ||
+		got.Refused[0].Reason != "no_grants_matched" || got.Refused[1].PerLoginMFA == nil ||
+		got.Refused[1].PerLoginMFA.ReuseForSeconds != 900 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), "CHALLENGE") || strings.Count(out.String(), "TOKEN-") != 1 {
+		t.Fatalf("stdout %q", out.String())
+	}
+}
+
+// goldenJSON fails t unless stdout is the golden file the Python library's
+// tests are fed (pre-flight I3): the two sides read the same bytes.
+func goldenJSON(t *testing.T, name string, stdout []byte) {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("..", "..", "clients", "python", "tests", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.TrimSpace(stdout); !bytes.Equal(got, bytes.TrimSpace(want)) {
+		t.Fatalf("stdout\n%s\nis not %s\n%s", got, name, want)
+	}
+}
+
+// Every device denied: exit 77 as before, and stdout says which and why,
+// with "results": [] (never null).
+func TestWorkloadJSONOnEveryDeviceDenied(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "fw1"), &out, &errb)
+	var got workloadJSON
+	if code != 77 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 0 || len(got.Refused) != 1 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	goldenJSON(t, "workload_every_device_denied.json", out.Bytes())
+}
+
+// A scope selecting nothing: exit 77 as before, and stdout says nothing was
+// selected, told apart from a failure.
+func TestWorkloadJSONOnAnEmptySweep(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Subject: "svc_oxidized"})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "--scope", "none"),
+		&out, &errb)
+	if code != 77 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	goldenJSON(t, "workload_empty_sweep.json", out.Bytes())
+}
+
+// With --out, nothing is written when nothing was minted (decision 40 ruling
+// 10), and stdout stays empty.
+func TestWorkloadJSONOutStillWritesOnlyAPermit(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	if err := os.WriteFile(path, []byte("LAST"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json", "--out", path}, flags...), "fw1"),
+		&out, &errb)
+	if b, _ := os.ReadFile(path); code != 77 || string(b) != "LAST" || out.Len() != 0 {
+		t.Fatalf("code %d file %q stdout %q", code, b, out.String())
+	}
+}
