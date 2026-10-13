@@ -29,7 +29,7 @@ func TestARevocationEndsTheAgentsSession(t *testing.T) {
 			if _, err := a.Connect(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := a.Mint(ctx, "leaf1", false, 0); err != nil {
+			if _, err := a.Mint(ctx, "leaf1", false, 0, ""); err != nil {
 				t.Fatalf("a mint before the revocation: %v", err)
 			}
 			req := RevokeRequest{Principal: "user:alice@example.com", Origin: "t"}
@@ -41,7 +41,7 @@ func TestARevocationEndsTheAgentsSession(t *testing.T) {
 			if err != nil || rep.Connections != 1 {
 				t.Fatalf("revoke: %+v %v", rep, err)
 			}
-			_, err = a.Mint(ctx, "leaf1", false, 0)
+			_, err = a.Mint(ctx, "leaf1", false, 0, "")
 			if !errors.Is(err, agent.ErrSessionOver) || !strings.Contains(err.Error(), " was revoked at ") {
 				t.Fatalf("the mint after the revocation: %v", err)
 			}

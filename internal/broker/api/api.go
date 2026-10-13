@@ -53,6 +53,9 @@ type Config struct {
 	// client keeps the CAs it holds, and does not read the missing bundle as
 	// the broker sending none.
 	BrokerCABundleRefused bool `json:"broker_ca_bundle_refused,omitempty"`
+	// PerLoginMFA is set when this broker verifies at least one per-login
+	// method (plan 9c; decision 45): the methods it verifies now.
+	PerLoginMFA *MFAConfig `json:"per_login_mfa,omitempty"`
 }
 
 // OIDCProvider is one human OIDC verifier as GET /v1/config names it.
@@ -72,6 +75,10 @@ type MintRequest struct {
 	Enable     bool     `json:"enable"`
 	TTLSeconds int      `json:"ttl_seconds"`
 	Purpose    string   `json:"purpose"`
+	// PerLoginMFAChallenge names the challenge whose proof (POST /v1/mfa)
+	// covers this request's items whose requirement accepts its method,
+	// once (plan 9c; decision 45 ruling 14).
+	PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
 }
 
 // MintItem is one device's answer. Verdict and Reason use the decision log's
@@ -95,6 +102,9 @@ type MintItem struct {
 	// authorized: the connection's authentication plus the device's
 	// max_session_age (spec §5.6). Empty when the roles say never.
 	SessionExpiresAt string `json:"session_expires_at,omitempty"`
+	// PerLoginMFA is the requirement this item is denied under
+	// per_login_mfa_required (or unavailable), with the challenge to prove.
+	PerLoginMFA *PerLoginMFA `json:"per_login_mfa,omitempty"`
 	// Replayed is the broker's own, never on the wire: this permit is an
 	// idempotent replay, which recorded no permit of its own.
 	Replayed bool `json:"-"`

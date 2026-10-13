@@ -328,7 +328,9 @@ func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation
 // policy, the bundle aside: every policy file has its own bundle, so comparing
 // it would supersede every token at every edit. ttl is the subject's
 // token_ttl, the longest the token can live; age is the device's
-// max_session_age, zero for never.
+// max_session_age, zero for never. mfa is the per-login requirement the
+// token was minted under: it is in no blob, and a token minted under a weaker
+// one than the policy in force is a login nobody proved (final review I1).
 type minted struct {
 	username string
 	blob     []byte
@@ -336,6 +338,7 @@ type minted struct {
 	enable   string
 	ttl      time.Duration
 	age      time.Duration
+	mfa      policy.MFARequirement
 }
 
 // mintedBy is what p would mint for m on d at at, and false when it
@@ -357,17 +360,18 @@ func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Tim
 		return minted{}, false
 	}
 	return minted{username: res.Username, blob: body, ceiling: res.MaxPrivilege, enable: res.Enable,
-		ttl: res.TokenTTL, age: res.SessionAge.Of(def)}, true
+		ttl: res.TokenTTL, age: res.SessionAge.Of(def), mfa: res.PerLoginMFA}, true
 }
 
 // keeps reports whether a token m describes is one o would have minted: the
-// same answer, and a life no longer than o allows. A shortened token_ttl or
-// max_session_age — an incident's response, say — supersedes the tokens
-// minted under the longer one; a lengthened one does not, since those tokens
-// live less than allowed.
+// same answer, a life no longer than o allows, and a per-login requirement o's
+// meets. A shortened token_ttl or max_session_age, or a per_login_mfa added
+// or tightened — an incident's response, say — supersedes the tokens minted
+// under the looser one; a lengthened or loosened one does not, since those
+// tokens already meet it.
 func (m minted) keeps(o minted) bool {
 	return m.username == o.username && bytes.Equal(m.blob, o.blob) && m.ceiling == o.ceiling &&
-		m.enable == o.enable && m.ttl <= o.ttl && !longerAge(m.age, o.age)
+		m.enable == o.enable && m.ttl <= o.ttl && !longerAge(m.age, o.age) && o.mfa.MetBy(m.mfa)
 }
 
 // longerAge reports whether a ceiling of a outlasts one of b, zero being

@@ -14,6 +14,8 @@ package userconfig
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +27,8 @@ import (
 	"syscall"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // getuid is os.Getuid, swapped in tests: no second uid exists to own a file.
@@ -102,6 +106,67 @@ func IssuedPathsIn(dir, broker string) (cert, key string, err error) {
 	return base + ".pem", base + ".key", nil
 }
 
+// IssuedTPMPathsIn is where, under dir, this machine keeps a TPM-held pair:
+// tpmKey <host>_<port>.<machine>.tpmkey and tpmCert <host>_<port>.<machine>.pem
+// beside IssuedPathsIn's pair, <machine> the first 8 hex digits of SHA-256 of
+// /etc/machine-id (decision 45 ruling 7), so hosts sharing a home directory
+// keep a pair each. The broker URL is judged as IssuedPathsIn judges it.
+func IssuedTPMPathsIn(dir, broker string) (tpmCert, tpmKey string, err error) {
+	cert, _, err := IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", "", err
+	}
+	machine, err := MachineID()
+	if err != nil {
+		return "", "", err
+	}
+	base := strings.TrimSuffix(cert, ".pem") + "." + machine
+	return base + ".pem", base + ".tpmkey", nil
+}
+
+// IssuedTokenPathsIn is where, under dir, the certificate for a token-held
+// issued key is kept (decision 45 ruling 7): <host>_<port>.<k>.pem, <k> the
+// first 8 hex digits of SHA-256 of ref, the canonical issued_key reference.
+// The name follows the key, so it needs no token to find, and a token host and
+// a file host sharing a home never name the same certificate. The broker URL
+// is judged as IssuedPathsIn judges it.
+func IssuedTokenPathsIn(dir, broker, ref string) (cert string, err error) {
+	cert, _, err = IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(ref))
+	return strings.TrimSuffix(cert, ".pem") + "." + hex.EncodeToString(sum[:])[:8] + ".pem", nil
+}
+
+// IssuedTokenPaths is IssuedTokenPathsIn ~/.port49 (Dir).
+func IssuedTokenPaths(broker, ref string) (cert string, err error) {
+	return IssuedTokenPathsIn(Dir(), broker, ref)
+}
+
+// IssuedTPMPaths is IssuedTPMPathsIn ~/.port49 (Dir).
+func IssuedTPMPaths(broker string) (tpmCert, tpmKey string, err error) {
+	return IssuedTPMPathsIn(Dir(), broker)
+}
+
+// machineIDFile is what MachineID names this machine from.
+var machineIDFile = "/etc/machine-id"
+
+// MachineID is this machine's 8-hex-digit name: the first 8 digits of the
+// SHA-256 of /etc/machine-id as the file is, so `sha256sum /etc/machine-id`
+// says it. A var so cmd/port49's tests set it.
+var MachineID = func() (string, error) {
+	raw, err := os.ReadFile(machineIDFile)
+	if err != nil {
+		return "", fmt.Errorf("this machine has no readable %s to name its TPM key by: %w", machineIDFile, err)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", fmt.Errorf("%s is empty, so it cannot name this machine's TPM key", machineIDFile)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:8], nil
+}
+
 // CABundlePathIn is where, under dir, the agent keeps the CA bundle a broker
 // sent it (spec §13 decision 43 ruling 25): dir/broker_ca/<host>_<port>.pem,
 // one per broker, so no broker's bundle is trusted for another.
@@ -140,6 +205,19 @@ type File struct {
 	// OIDCRedirectPort is the loopback port a sign-in returns to; 0 picks a
 	// free one.
 	OIDCRedirectPort int `yaml:"oidc_redirect_port"`
+	// BrokerCRL is whether the broker's certificate is checked against the
+	// CRLs it names, before anything is sent to the broker: check, the
+	// default, refuses a revoked one and says an unobtainable list; require
+	// refuses that too; off checks nothing (plan 9c, ruling 9).
+	BrokerCRL string `yaml:"broker_crl"`
+	// TouchKey is the touch_key slot: a key reference on the same token as
+	// Key, whose touch the agent may use (plan 9c, ruling 12).
+	TouchKey string `yaml:"touch_key"`
+	// IssuedKeyStore is where the key of a certificate the broker issues
+	// lives: auto, file, tpm, secure_enclave or pkcs11. IssuedKey names the
+	// reference for tpm and pkcs11.
+	IssuedKeyStore string `yaml:"issued_key_store"`
+	IssuedKey      string `yaml:"issued_key"`
 
 	// BrokerCAPEM is the bytes of the file BrokerCA names, read once by Load
 	// through the same ownership walk; nil under WithoutCA or with no CA named.
@@ -233,6 +311,10 @@ func overlay(base, over File) File {
 	base.OIDCIssuer = cmp.Or(over.OIDCIssuer, base.OIDCIssuer)
 	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
 	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
+	base.BrokerCRL = cmp.Or(over.BrokerCRL, base.BrokerCRL)
+	base.TouchKey = cmp.Or(over.TouchKey, base.TouchKey)
+	base.IssuedKeyStore = cmp.Or(over.IssuedKeyStore, base.IssuedKeyStore)
+	base.IssuedKey = cmp.Or(over.IssuedKey, base.IssuedKey)
 	return base
 }
 
@@ -286,10 +368,32 @@ func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
 	default:
 		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509 or oidc", path, f.Method)
 	}
+	switch f.BrokerCRL {
+	case "", "check", "require", "off":
+	default:
+		return File{}, false, fmt.Errorf("%s: broker_crl %q: it is check, require or off", path, f.BrokerCRL)
+	}
+	switch f.IssuedKeyStore {
+	case "", "auto", "file", "tpm", "secure_enclave", "pkcs11":
+	default:
+		return File{}, false, fmt.Errorf("%s: issued_key_store %q: it is auto, file, tpm, secure_enclave or pkcs11",
+			path, f.IssuedKeyStore)
+	}
+	for name, ref := range map[string]string{"touch_key": f.TouchKey, "issued_key": f.IssuedKey} {
+		if ref != "" && !hwkey.IsRef(ref) {
+			return File{}, false, fmt.Errorf("%s: %s %q is not a key reference: it starts with pkcs11:, tpm: or secure-enclave:",
+				path, name, ref)
+		}
+	}
 	if f.OIDCRedirectPort < 0 || f.OIDCRedirectPort > 65535 {
 		return File{}, false, fmt.Errorf("%s: oidc_redirect_port %d is not a port", path, f.OIDCRedirectPort)
 	}
+	// A key reference is not a path: it is carried as written, never joined to
+	// the file's directory.
 	for _, p := range []*string{&f.BrokerCA, &f.Cert, &f.Key, &f.OIDCCA} {
+		if hwkey.IsRef(*p) {
+			continue
+		}
 		if *p, err = resolve(base, *p); err != nil {
 			return File{}, false, fmt.Errorf("%s: %w", path, err)
 		}
@@ -352,6 +456,55 @@ func resolve(base, p string) (string, error) {
 // so the file read is the one whose directories were judged.
 func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 	return readPrivate(path, max, what, false)
+}
+
+// CheckOwned refuses path as a PKCS#11 module unless the file, every
+// symbolic link on the way to it and every directory above each is held to
+// the rules ReadPrivate applies: owned by this user or root, and not writable
+// by group or others. A module is code the agent runs, so whoever could
+// replace it could run theirs. The base name may be a chain of links (a
+// libykcs11.so usually is): each link must be owned by root or the user, and
+// the directory its target is in is walked again. The final component must
+// be a regular file. Nothing is opened.
+func CheckOwned(path string) error {
+	const what = "PKCS#11 module"
+	links := 0
+	for {
+		dir, base, err := splitPath(path)
+		if err != nil {
+			return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+		}
+		resolved, err := resolveOwned(dir, false, what)
+		if err != nil {
+			return err
+		}
+		file := joinPath(resolved, base)
+		fi, err := os.Lstat(file)
+		if err != nil {
+			return dirError(resolved, err, what)
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			if !fi.Mode().IsRegular() {
+				return fmt.Errorf("%s is not a regular file; the %s must be one", file, what)
+			}
+			return ownedAlone(file, fi, what)
+		}
+		if err := ownedBy(file, fi, what); err != nil {
+			return err
+		}
+		if links++; links > maxLinks {
+			return fmt.Errorf("%s: too many symbolic links (over %d) on the way to the %s; a link loop is refused",
+				path, maxLinks, what)
+		}
+		target, err := os.Readlink(file)
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(target, "/") {
+			target = resolved + "/" + target
+		}
+		path = target
+	}
 }
 
 // readPrivate is ReadPrivate; with rootOnly the file must be root's

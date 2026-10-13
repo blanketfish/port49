@@ -11,6 +11,7 @@ package workload
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,6 +23,7 @@ import (
 	rand2 "math/rand/v2"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"slices"
 	"strconv"
@@ -29,7 +31,9 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/mfatouch"
 )
 
 // DefaultDeadline is how long a run retries a broker that cannot answer now.
@@ -65,6 +69,19 @@ type Config struct {
 	Now               func() time.Time
 	// Warn says a late renewal; nil says nothing.
 	Warn func(format string, args ...any)
+	// VerifyBroker, when set, is the TLS config's VerifyConnection: it runs
+	// after the broker's chain verified and before a request is written
+	// (brokercrl.Checker.VerifyConnection). Its error is final.
+	VerifyBroker func(tls.ConnectionState) error
+	// TouchKey, when set, proves a per-login requirement (decision 45): an
+	// item the broker denies per_login_mfa_required is proved with it and
+	// minted again. It must sit on the same token as the workload's key, so
+	// the token lists both slots' attestations. Without it such an item is
+	// reported as the broker answered it.
+	TouchKey hwkey.Key
+	// Say tells the operator a touch is wanted, while the key waits for it;
+	// nil says nothing. It is never given a challenge, token or PIN.
+	Say func(format string, args ...any)
 }
 
 // CertError is a certificate the client will not present.
@@ -119,6 +136,15 @@ func (e *TLSError) Error() string {
 
 func (e *TLSError) Unwrap() error { return e.Err }
 
+// BrokerRefusedError is a connection Config.VerifyBroker refused (a revoked
+// broker certificate, or one whose revocation could not be checked under
+// broker_crl: require). Nothing was sent. It is final: the deadline's retries
+// are for a broker that cannot answer, and this one was answered.
+type BrokerRefusedError struct{ Err error }
+
+func (e *BrokerRefusedError) Error() string { return e.Err.Error() }
+func (e *BrokerRefusedError) Unwrap() error { return e.Err }
+
 // TemporaryError is the deadline passing with Unminted not minted; Last is
 // the broker's last answer, or the connection's failure.
 type TemporaryError struct {
@@ -137,11 +163,16 @@ func (e *TemporaryError) Unwrap() error { return ErrTemporary }
 // the two do not match (a renewal writes one file, then the other), and
 // refuses one outside its validity before anything connects. One with under
 // a quarter of its validity left is said through warn (decision 40 ruling 9).
+//
+// keyFile is a path, or a key reference (pkcs11:, tpm:), opened through
+// clientkey.LoadPair. A workload has no terminal and no agent to ask for a
+// PIN: it comes from the reference's pin-source alone, and a key that wants
+// one without it is refused, naming pin-source.
 func LoadCertificate(certFile, keyFile string, now time.Time, warn func(string, ...any)) (tls.Certificate, error) {
 	var cert tls.Certificate
 	var err error
 	for i := range 3 {
-		if cert, err = keyfile.LoadX509KeyPair(certFile, keyFile); err == nil ||
+		if cert, err = clientkey.LoadPair(certFile, keyFile, nil); err == nil ||
 			!strings.Contains(err.Error(), "private key does not match public key") {
 			break
 		}
@@ -151,6 +182,11 @@ func LoadCertificate(certFile, keyFile string, now time.Time, warn func(string, 
 	}
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("the certificate %s and key %s: %w", certFile, keyFile, err)
+	}
+	if k, ok := cert.PrivateKey.(hwkey.Key); ok && k.State() == hwkey.Locked {
+		_ = k.Close()
+		return tls.Certificate{}, errors.New("the key needs a PIN and a workload has no terminal to ask for it: add " +
+			"pin-source=file:///path (an owner-only file holding the PIN) to the key reference")
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
@@ -184,6 +220,9 @@ type Client struct {
 	cfg   Config
 	http  *http.Client
 	sleep func(ctx context.Context, d time.Duration) error
+	// session is the workload certificate's public key: the attestation of
+	// its slot is the second one a touch proof carries.
+	session crypto.PublicKey
 }
 
 // New reads the certificate (LoadCertificate) and makes the run's client.
@@ -209,12 +248,22 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	var verify func(tls.ConnectionState) error
+	if cfg.VerifyBroker != nil {
+		verify = func(cs tls.ConnectionState) error {
+			if err := cfg.VerifyBroker(cs); err != nil {
+				return &BrokerRefusedError{Err: err}
+			}
+			return nil
+		}
+	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
+		VerifyConnection:     verify,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
 	// A redirect is never followed; its 3xx comes back as a RedirectError.
 	hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return &Client{cfg: cfg, http: hc, sleep: sleepCtx}, nil
+	return &Client{cfg: cfg, http: hc, sleep: sleepCtx, session: cert.Leaf.PublicKey}, nil
 }
 
 // MintOptions is one run's mint: Devices by name, or every device Scope
@@ -244,25 +293,187 @@ func (c *Client) Mint(ctx context.Context, o MintOptions) (api.MintResponse, err
 	var out api.MintResponse
 	for i := 0; i < len(o.Devices); i += page {
 		devs := o.Devices[i:min(i+page, len(o.Devices))]
-		body, err := json.Marshal(api.MintRequest{Devices: devs, Enable: o.Enable,
-			TTLSeconds: int(o.TTL / time.Second), Purpose: o.Purpose})
-		if err != nil {
-			return out, err
-		}
-		key, err := newKey()
-		if err != nil {
-			return out, err
-		}
-		var resp api.MintResponse
-		if err := c.do(ctx, deadline, http.MethodPost, "/v1/tokens", body, key, &resp); err != nil {
-			return out, unminted(err, o.Devices[i:])
-		}
+		resp, err := c.page(ctx, deadline, api.MintRequest{Devices: devs, Enable: o.Enable,
+			TTLSeconds: int(o.TTL / time.Second), Purpose: o.Purpose}, o.Devices[i:])
 		if out.Principal == "" {
 			out.Principal, out.Subject, out.Subjects = resp.Principal, resp.Subject, resp.Subjects
 		}
 		out.Results = append(out.Results, resp.Results...)
+		if err != nil {
+			return out, err
+		}
 	}
 	return out, nil
+}
+
+// page posts one mint request under a key of its own, with do's retries. If
+// the answer holds items denied per_login_mfa_required and a touch key is
+// configured, it proves the one challenge they share and posts just those
+// items again under a new key: the same key with a changed body is a 409, and
+// the page again would mint the others twice. The response it returns holds
+// what was minted whatever the error. rest is what a first request that
+// fails leaves unminted.
+func (c *Client) page(ctx context.Context, deadline time.Time, req api.MintRequest, rest []string) (api.MintResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return api.MintResponse{}, err
+	}
+	key, err := newKey()
+	if err != nil {
+		return api.MintResponse{}, err
+	}
+	var resp api.MintResponse
+	if err := c.do(ctx, deadline, http.MethodPost, "/v1/tokens", body, key, &resp); err != nil {
+		return api.MintResponse{}, unminted(err, rest)
+	}
+	var need []int
+	for i, it := range resp.Results {
+		if it.Reason == "per_login_mfa_required" && it.PerLoginMFA != nil && it.PerLoginMFA.Challenge != "" {
+			need = append(need, i)
+		}
+	}
+	if len(need) == 0 || c.cfg.TouchKey == nil {
+		return resp, nil
+	}
+	challenge := resp.Results[need[0]].PerLoginMFA.Challenge
+	var devs []string
+	for _, i := range need {
+		devs = append(devs, resp.Results[i].Device)
+	}
+	if err := c.proveTouch(ctx, challenge, devs); err != nil {
+		return resp, err
+	}
+	again := req
+	again.Devices, again.Scope, again.After, again.PerLoginMFAChallenge = devs, "", "", challenge
+	if body, err = json.Marshal(again); err != nil {
+		return resp, err
+	}
+	if key, err = newKey(); err != nil {
+		return resp, err
+	}
+	var second api.MintResponse
+	if err := c.do(ctx, deadline, http.MethodPost, "/v1/tokens", body, key, &second); err != nil {
+		return resp, unminted(err, devs)
+	}
+	for _, it := range second.Results {
+		for _, i := range need {
+			if resp.Results[i].Device == it.Device {
+				resp.Results[i] = it
+			}
+		}
+	}
+	return resp, nil
+}
+
+// proveTouch proves challenge with the touch key on one held connection: the
+// exporter value is read off a GET /v1/config, the key signs it (the touch
+// happens here, with no request in flight), and the proof is posted only if
+// the connection the transport takes is still that one. A touch not made is
+// the key's own error; a connection that changed meanwhile is
+// mfatouch.ErrConnectionChanged, with nothing posted. Neither is retried: a
+// retry would blink the key again for a touch nobody was there for.
+func (c *Client) proveTouch(ctx context.Context, challenge string, devices []string) error {
+	ch, err := mfatouch.Challenge(challenge)
+	if err != nil {
+		return err
+	}
+	certs, ok := c.cfg.TouchKey.(mfatouch.Certificates)
+	if !ok {
+		return fmt.Errorf("the touch key: %w", mfatouch.ErrNoAttestation)
+	}
+	list, err := certs.Certificates()
+	if err != nil {
+		return fmt.Errorf("reading the token's attestation certificates: %w", err)
+	}
+	chain, err := mfatouch.Chain(list, c.cfg.TouchKey.Public(), c.session)
+	if err != nil {
+		return err
+	}
+	ekm, err := c.exporter(ctx)
+	if err != nil {
+		return err
+	}
+	if c.cfg.Say != nil {
+		c.cfg.Say("touch the key for %s", safeNames(devices))
+	}
+	sig, err := mfatouch.Sign(c.cfg.TouchKey, ch, ekm)
+	if err != nil {
+		return fmt.Errorf("proving the touch for %s: %w", strings.Join(devices, ", "), err)
+	}
+	body, err := mfatouch.Request(challenge, sig, chain)
+	if err != nil {
+		return err
+	}
+	resp, err := mfatouch.Post(ctx, c.http.Do, c.cfg.Broker+"/v1/mfa", body, ekm, func(conn net.Conn) (tls.ConnectionState, bool) {
+		tc, ok := conn.(*tls.Conn)
+		if !ok {
+			return tls.ConnectionState{}, false
+		}
+		return tc.ConnectionState(), true
+	})
+	if err != nil {
+		return c.connError(ctx, err)
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return nil
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		return &RedirectError{Status: resp.StatusCode}
+	}
+	var e api.Error
+	_ = json.Unmarshal(raw, &e)
+	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
+}
+
+// exporter is the exporter value of the connection a GET /v1/config comes
+// back on; the connection stays in the transport's pool for the post.
+func (c *Client) exporter(ctx context.Context) ([]byte, error) {
+	var state tls.ConnectionState
+	var have bool
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		if tc, ok := i.Conn.(*tls.Conn); ok {
+			state, have = tc.ConnectionState(), true
+		}
+	}}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodGet, c.cfg.Broker+"/v1/config", http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, c.connError(ctx, err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{Status: resp.StatusCode, Code: "config_unavailable",
+			Detail: "the broker did not answer /v1/config, so there is no connection to prove on"}
+	}
+	if !have {
+		return nil, errors.New("the connection to the broker is not a TLS connection")
+	}
+	return mfatouch.Exporter(state)
+}
+
+// connError is err as the client says a failed connection: the context's, a
+// refused broker certificate, a TLS verification failure, or no answer.
+func (c *Client) connError(ctx context.Context, err error) error {
+	if errors.Is(err, mfatouch.ErrConnectionChanged) {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var refused *BrokerRefusedError
+	if errors.As(err, &refused) {
+		return refused
+	}
+	if te := tlsFailure(err); te != nil {
+		return te
+	}
+	return fmt.Errorf("no answer: %w", err)
 }
 
 // sweep mints o.Scope's pages, each under its own Idempotency-Key, following
@@ -275,23 +486,15 @@ func (c *Client) sweep(ctx context.Context, deadline time.Time, o MintOptions) (
 	out := api.MintResponse{Results: []api.MintItem{}}
 	after := ""
 	for {
-		body, err := json.Marshal(api.MintRequest{Scope: o.Scope, After: after, Enable: o.Enable,
-			TTLSeconds: int(o.TTL / time.Second), Purpose: o.Purpose})
-		if err != nil {
-			return out, err
-		}
-		key, err := newKey()
-		if err != nil {
-			return out, err
-		}
-		var resp api.MintResponse
-		if err := c.do(ctx, deadline, http.MethodPost, "/v1/tokens", body, key, &resp); err != nil {
-			return out, err
-		}
+		resp, err := c.page(ctx, deadline, api.MintRequest{Scope: o.Scope, After: after, Enable: o.Enable,
+			TTLSeconds: int(o.TTL / time.Second), Purpose: o.Purpose}, nil)
 		if out.Principal == "" {
 			out.Principal, out.Subject, out.Subjects = resp.Principal, resp.Subject, resp.Subjects
 		}
 		out.Results = append(out.Results, resp.Results...)
+		if err != nil {
+			return out, err
+		}
 		if resp.Next == "" {
 			return out, nil
 		}
@@ -342,6 +545,10 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			var refused *BrokerRefusedError
+			if errors.As(err, &refused) {
+				return refused
 			}
 			if te := tlsFailure(err); te != nil {
 				return te

@@ -1,0 +1,50 @@
+# Hardware-key tests (plan 9c): SoftHSM2 and swtpm, no lab captures needed,
+# so they run here as well as on the lab machine.
+name: hwkeys
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  hw:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: sudo apt-get update && sudo apt-get install -y softhsm2 swtpm swtpm-tools ykcs11 pcscd
+      # pcscd asks polkit before it lets a process talk to it, and a CI job is
+      # no active local session: without this, libykcs11's C_GetSlotList
+      # answers CKR_DEVICE_ERROR.
+      #
+      # CI ONLY, on a throwaway runner. This rule answers YES to every
+      # subject, so on a workstation it would give every local account,
+      # service users included, access to a plugged-in YubiKey. Never copy it
+      # to a developer machine as written: scope it there with
+      # `subject.user == "<your user>"` inside the condition.
+      - run: |
+          sudo tee /etc/polkit-1/rules.d/99-port49-pcscd.rules >/dev/null <<'EOF'
+          polkit.addRule(function(action, subject) {
+            if (action.id == "org.debian.pcsc-lite.access_pcsc" ||
+                action.id == "org.debian.pcsc-lite.access_card") {
+              return polkit.Result.YES;
+            }
+          });
+          EOF
+      - run: sudo systemctl start pcscd.socket
+      # Fails fast if swtpm cannot run here (an AppArmor profile refusing its
+      # state directory, say), before twenty minutes of tests say it slowly.
+      - run: swtpm --version && d=$(mktemp -d) && timeout 5 swtpm socket --tpm2 --tpmstate dir=$d --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init --daemon && pkill swtpm
+      - run: make test-hw
+  # The Secure Enclave backend and its L63 spike, cross-compiled and vetted
+  # for macOS (arm64 and amd64, CGO_ENABLED=0, the client build's tag): no
+  # Mac runs them here (decision 45 ruling 6).
+  darwin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: make check-darwin

@@ -11,13 +11,13 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -26,9 +26,9 @@ import (
 // (Ruling 15).
 const oidcChallengeTTL = 5 * time.Minute
 
-// challengeKey is a challenge's once-only key: its SHA-256, so the store
+// refreshChallengeKey is a challenge's once-only key: its SHA-256, so the store
 // never holds a nonce that answers it.
-func challengeKey(nonce string) string {
+func refreshChallengeKey(nonce string) string {
 	sum := sha256.Sum256([]byte(nonce))
 	return "refresh_challenge " + hex.EncodeToString(sum[:])
 }
@@ -41,6 +41,9 @@ type challengeRec struct {
 	Principal string    `json:"principal"`
 	Issuer    string    `json:"issuer"`
 	IssuedAt  time.Time `json:"issued_at"`
+	// Proved is the per-login proof the challenge request named, for the
+	// refresh that answers this challenge (decision 45 ruling 16).
+	Proved *provedRecord `json:"proved,omitempty"`
 }
 
 // oidcChallenge is POST /v1/refresh/challenge with a bearer (Ruling 15):
@@ -55,19 +58,39 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "a machine has no session to refresh: fetch a new token")
 		return
 	}
+	var named api.RefreshChallengeRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&named); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh challenge request")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	defer cancel()
 	now := b.Now()
-	first, err := b.Store.PutOnce(ctx, paceKey(c.principal), nil, refreshEvery)
-	switch {
-	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
-		return
-	case !first:
-		b.Metrics.SessionRefreshes.WithLabelValues("too_soon").Inc()
-		w.Header().Set("Retry-After", strconv.Itoa(int(refreshEvery/time.Second)))
-		writeError(w, http.StatusTooManyRequests, "refresh_too_soon", "you asked for a challenge moments ago; wait and retry")
-		return
+	// A challenge this caller proved exempts this one request from the
+	// pacing and is kept with the nonce for the refresh that answers it
+	// (decision 45 ruling 16), taken under the bearer's own binding: another
+	// principal's challenge finds nothing, spends nothing, and is paced as
+	// any request. A store error is paced, never an exemption. A second
+	// exempt request by the same caller spends the first proof: one proof
+	// exempts one request.
+	var proved *provedChallenge
+	if named.PerLoginMFAChallenge != "" {
+		proved, _ = b.takeProved(ctx, c, "", named.PerLoginMFAChallenge)
+	}
+	if proved == nil {
+		first, err := b.Store.PutOnce(ctx, paceKey(c.principal), nil, refreshEvery)
+		switch {
+		case err != nil:
+			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
+			return
+		case !first:
+			b.Metrics.SessionRefreshes.WithLabelValues("too_soon").Inc()
+			w.Header().Set("Retry-After", strconv.Itoa(int(refreshEvery/time.Second)))
+			writeError(w, http.StatusTooManyRequests, "refresh_too_soon", "you asked for a challenge moments ago; wait and retry")
+			return
+		}
 	}
 	raw := make([]byte, api.RefreshNonceLen)
 	if _, err := rand.Read(raw); err != nil {
@@ -75,8 +98,12 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nonce := base64.RawURLEncoding.EncodeToString(raw)
-	rec, _ := json.Marshal(challengeRec{Principal: c.principal, Issuer: c.oidc.Issuer, IssuedAt: now})
-	if ok, err := b.Store.PutOnce(ctx, challengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
+	cr := challengeRec{Principal: c.principal, Issuer: c.oidc.Issuer, IssuedAt: now}
+	if proved != nil {
+		cr.Proved = &provedRecord{Method: string(proved.Method), At: proved.At}
+	}
+	rec, _ := json.Marshal(cr)
+	if ok, err := b.Store.PutOnce(ctx, refreshChallengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
 		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
 		return
 	}
@@ -94,10 +121,16 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<10))
-	if t := strings.TrimSpace(string(body)); err != nil || (t != "" && t != "{}") {
-		writeError(w, http.StatusBadRequest, "bad_request", "an OIDC refresh's body is empty: the new ID token is "+
-			"its bearer, and its nonce answers the challenge")
+	// The body is empty, or names the per-login proof (decision 45 ruling
+	// 16): the new ID token is the bearer, and its nonce answers the challenge.
+	var req struct {
+		PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "bad_request", "an OIDC refresh's body is empty or names the "+
+			"per_login_mfa_challenge you proved: the new ID token is its bearer, and its nonce answers the challenge")
 		return
 	}
 	if c.oidc.Domain != oidc.Humans {
@@ -117,7 +150,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 			"nonce of a prompt=login authentication")
 		return
 	}
-	raw, err := b.Store.TakeOnce(ctx, challengeKey(c.oidc.Nonce))
+	raw, err := b.Store.TakeOnce(ctx, refreshChallengeKey(c.oidc.Nonce))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		refuse("refresh_challenge_missing", "the token's nonce is no live challenge of this broker's: ask for one "+
@@ -154,7 +187,23 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, dref)
 		return
 	}
-	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC)
+	// The proof the challenge request kept, else the one the answer names,
+	// taken under the bearer's own binding. It has no agent session, so it
+	// covers this refresh once and is not kept for reuse (ruling 15).
+	var proved *provedChallenge
+	switch {
+	case ch.Proved != nil:
+		proved = &provedChallenge{Method: policy.MFAMethod(ch.Proved.Method), At: ch.Proved.At}
+	case req.PerLoginMFAChallenge != "":
+		p, err := b.takeProved(ctx, c, "", req.PerLoginMFAChallenge)
+		if err != nil {
+			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not read the "+
+				"proof you named, so it extended nothing; ask for a new challenge (run `port49 refresh` again)")
+			return
+		}
+		proved = p
+	}
+	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC, "", proved)
 	switch {
 	case errors.Is(err, directory.ErrUsernameTaken):
 		dref := directoryRefusal(err)

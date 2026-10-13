@@ -515,6 +515,20 @@ func RefreshMovesTheWindow(t *testing.T, b Backend) {
 		t.Fatalf("an empty blob hash must leave the hash alone: %+v", got)
 	}
 
+	// A recorded proof lands with the agent that made it and survives a
+	// refresh that names none.
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now,
+		MFAMethod: "hardware_key_touch", MFAAt: now, MFAAgentSHA256: "ab12"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.Credential.MFAMethod != "hardware_key_touch" ||
+		!got.Credential.MFAAt.Equal(now) || got.Credential.MFAAgentSHA256 != "ab12" {
+		t.Fatalf("the recorded proof and its agent must persist: %+v", got.Credential)
+	}
+
 	now = now.Add(2 * time.Minute)
 	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("refreshing an expired context must say so, not resurrect it: %v", err)

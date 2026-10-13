@@ -183,3 +183,46 @@ func (s *Store) GetLogout(ctx context.Context, key string) (store.Logout, error)
 	}
 	return store.Logout{Key: key, At: r.At, Origin: r.Origin}, nil
 }
+
+// mfaProofRec is mp/<key> (plan 9c).
+type mfaProofRec struct {
+	Method    string    `json:"method"`
+	At        time.Time `json:"at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// PutMFAProof keeps the later At and the later expiry, by a compare on the
+// record's revision, as PutLogout does.
+func (s *Store) PutMFAProof(ctx context.Context, p store.MFAProof, ttl time.Duration) error {
+	if p.Key == "" {
+		return store.ErrNoKey
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
+	}
+	now := s.now()
+	return casAs(ctx, s.tok, s.tokLeases, s.k.mfaProof(p.Key), "per-login proof", func(r mfaProofRec) bool { return now.Before(r.ExpiresAt) },
+		func(r *mfaProofRec, found bool) (bool, time.Time, bool, error) {
+			next := mfaProofRec{Method: p.Method, At: p.At, ExpiresAt: now.Add(ttl)}
+			if found {
+				if r.At.After(p.At) {
+					next.Method, next.At = r.Method, r.At
+				}
+				next.ExpiresAt = laterOf(next.ExpiresAt, r.ExpiresAt)
+			}
+			*r = next
+			return true, next.ExpiresAt, false, nil
+		})
+}
+
+func (s *Store) GetMFAProof(ctx context.Context, key string) (store.MFAProof, error) {
+	var r mfaProofRec
+	_, ok, err := getJSONAs(ctx, s.tok, s.k.mfaProof(key), "per-login proof", &r)
+	switch {
+	case err != nil:
+		return store.MFAProof{}, err
+	case !ok || !s.now().Before(r.ExpiresAt):
+		return store.MFAProof{}, store.ErrNotFound
+	}
+	return store.MFAProof{Key: key, Method: r.Method, At: r.At}, nil
+}

@@ -58,6 +58,41 @@ type identityYAML struct {
 	JWKSRefreshInterval *time.Duration         `yaml:"jwks_refresh_interval"`
 	JWKSMaxAge          *time.Duration         `yaml:"jwks_max_age"`
 	Issuance            *issuanceYAML          `yaml:"issuance"`
+	PerLoginMFA         *perLoginMFAYAML       `yaml:"per_login_mfa"`
+}
+
+// perLoginMFAYAML is broker.identity.per_login_mfa (plan 9c; spec §13
+// decision 45): what the broker verifies for a policy's per_login_mfa.
+type perLoginMFAYAML struct {
+	HardwareKeyTouch *struct {
+		AttestationRootsFile string `yaml:"attestation_roots_file"`
+	} `yaml:"hardware_key_touch"`
+	IdPMFA *struct {
+		AMR       []string `yaml:"amr"`
+		ACRValues string   `yaml:"acr_values"`
+	} `yaml:"idp_mfa"`
+}
+
+// checkPerLoginMFA resolves broker.identity.per_login_mfa. The roots file
+// is read at start (port49d), not here.
+func checkPerLoginMFA(y perLoginMFAYAML) (*oidc.PerLoginMFA, error) {
+	out := &oidc.PerLoginMFA{}
+	if t := y.HardwareKeyTouch; t != nil {
+		if t.AttestationRootsFile == "" {
+			return nil, errors.New("config: broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file " +
+				"is required: the PEM roots a touch key's attestation chains to")
+		}
+		out.AttestationRootsFile = t.AttestationRootsFile
+	}
+	if m := y.IdPMFA; m != nil {
+		for i, v := range m.AMR {
+			if v == "" {
+				return nil, fmt.Errorf("config: broker.identity.per_login_mfa.idp_mfa.amr[%d] is empty", i)
+			}
+		}
+		out.AMR, out.ACRValues = m.AMR, m.ACRValues
+	}
+	return out, nil
 }
 
 // issuanceYAML is broker.identity.issuance (plan 9b; spec §13 decision 43).
@@ -138,6 +173,11 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 	}
 	if y.Issuance != nil {
 		if out.Issuance, err = checkIssuance(*y.Issuance, out.OIDC, y.Humans); err != nil {
+			return nil, err
+		}
+	}
+	if y.PerLoginMFA != nil {
+		if out.PerLoginMFA, err = checkPerLoginMFA(*y.PerLoginMFA); err != nil {
 			return nil, err
 		}
 	}

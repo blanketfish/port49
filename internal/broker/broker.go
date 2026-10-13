@@ -100,7 +100,11 @@ type Broker struct {
 	// Workload is the workload certificate verifier (plan 8; decision 40):
 	// x509 under broker.identity.machines. Nil reads every certificate as a
 	// person's, as before plan 8.
-	Workload      *Workload
+	Workload *Workload
+	// PerLoginMFA is what this broker verifies for per_login_mfa (plan 9c;
+	// decision 45): nil verifies hardware_key_touch never, and idp_mfa while
+	// a human OIDC verifier is configured.
+	PerLoginMFA   *MFAVerifiers
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -220,6 +224,7 @@ func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/config", b.config)
 	mux.HandleFunc("POST /v1/tokens", b.tokens)
+	mux.HandleFunc("POST /v1/mfa", b.mfaProve)
 	mux.HandleFunc("POST /v1/logout", b.logout)
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
@@ -262,6 +267,10 @@ type heldConn struct {
 	nonce       []byte
 	nonceExp    time.Time
 	lastRefresh time.Time
+	// proved is the proof a refresh challenge request took by naming its
+	// challenge, kept beside the nonce and expiring with it; the refresh
+	// that follows spends it (plan 9c, decision 45 ruling 16).
+	proved *provedChallenge
 }
 
 func (h *heldConn) authAt() time.Time {
@@ -320,6 +329,7 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 			Available: &available}
 	}
 	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
+	c.PerLoginMFA = b.mfaConfig()
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -525,10 +535,20 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// new Hold, so a nested one would wait on the swap that waits on this.
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	defer cancel()
+	// The challenge a retried mint names is taken only now that the request
+	// holds its reservation and has passed the collision and the mint gate,
+	// and under this caller's own binding: a request refused above, the
+	// gate's 503 among them, spends no proof, and another caller's challenge
+	// is not found (decision 45 ruling 14; re-review R1; final review broker
+	// I2).
+	mf := &mfaRequest{agentSHA256: callerAgentKey(c, r)}
+	if req.PerLoginMFAChallenge != "" {
+		mf.proved, mf.takeErr = b.takeProved(ctx, c, mf.agentSHA256, req.PerLoginMFAChallenge)
+	}
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, resp.Subjects = subjectNames(pol, m)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, buf, pol, m, answer, c, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, m, answer, c, name, req, res, bodyHash, mf)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -1126,13 +1146,16 @@ func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time,
 // (tokens).
 func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, m policy.Member,
 	answer *directory.Answer, c caller, name string, req api.MintRequest, hold *token.Reservation,
-	bodyHash string) (api.MintItem, error) {
+	bodyHash string, mf *mfaRequest) (api.MintItem, error) {
 	principal := m.Principal
 	var res policy.Resolution
+	// mfaRec is the per-login requirement's part of this item's records: set
+	// once the requirement is judged, so a deny after it carries it too.
+	var mfaRec *decision.PerLoginMFA
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
-			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req)}
+			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req), PerLoginMFA: mfaRec}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
 		}
@@ -1226,6 +1249,41 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
 		return item, nil
 	}
+	var supersededAt time.Time
+	if hold != nil { // only a request under an Idempotency-Key can be replayed
+		var err error
+		if supersededAt, err = b.supersededAt(ctx, store.TokenKey{NAS: name, Username: res.Username}); err != nil {
+			return deny(decision.StoreUnavailable, dev.Platform), nil
+		}
+	}
+	// A replay is answered before the requirement is read: a retry whose
+	// answer was lost returns the token it minted, though the proof that
+	// covered it is spent (decision 45 ruling 14).
+	cred := c.cred
+	var perLogin *decision.PerLoginMFA
+	// judge reads the requirement; denied is true when it refuses the item.
+	judge := func() (item api.MintItem, denied bool) {
+		v := b.judgeMFA(ctx, c, mf, name, res.PerLoginMFA, b.Now(), nil)
+		mfaRec = v.rec
+		if v.reason != "" {
+			item = deny(v.reason, dev.Platform)
+			item.Detail, item.PerLoginMFA = v.detail, v.item
+			return item, true
+		}
+		perLogin = v.rec
+		cred.MFAMethod, cred.MFAAt, cred.MFAAgentSHA256 = v.method, v.at, v.agent
+		return api.MintItem{}, false
+	}
+	// Replay-versus-fresh is decided here once. The mint is told, so one
+	// that finds the replay gone refuses (ErrReplayLapsed) instead of
+	// minting afresh under a requirement nothing judged.
+	replays := res.PerLoginMFA.Required() &&
+		b.Minter.Replays(token.Request{Device: name, Reservation: hold, SupersededAt: supersededAt})
+	if res.PerLoginMFA.Required() && !replays {
+		if item, denied := judge(); denied {
+			return item, nil
+		}
+	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
@@ -1234,22 +1292,26 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	if err := b.putBlob(ctx, buf, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
-	var supersededAt time.Time
-	if hold != nil { // only a request under an Idempotency-Key can be replayed
-		var err error
-		if supersededAt, err = b.supersededAt(ctx, store.TokenKey{NAS: name, Username: res.Username}); err != nil {
-			return deny(decision.StoreUnavailable, dev.Platform), nil
-		}
+	mint := func(replayOnly bool) (token.Result, error) {
+		return b.Minter.Mint(ctx, token.Request{
+			Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
+				Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
+				Credential: cred, AuthTime: c.authTime, VerifiedAt: verifiedAt(answer)},
+			Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
+			TTL:         time.Duration(req.TTLSeconds) * time.Second,
+			Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt, ReplayOnly: replayOnly,
+			Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
+			Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
 	}
-	out, err := b.Minter.Mint(ctx, token.Request{
-		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
-			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
-			Credential: c.cred, AuthTime: c.authTime, VerifiedAt: verifiedAt(answer)},
-		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
-		TTL:         time.Duration(req.TTLSeconds) * time.Second,
-		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-		Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req)})
+	out, err := mint(replays)
+	if errors.Is(err, token.ErrReplayLapsed) {
+		// The replay the requirement was skipped for is gone: judge the
+		// requirement now, and mint afresh only if it is covered.
+		if item, denied := judge(); denied {
+			return item, nil
+		}
+		out, err = mint(false)
+	}
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):

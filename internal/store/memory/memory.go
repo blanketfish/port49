@@ -52,6 +52,8 @@ type Store struct {
 	once   map[string]onceEntry
 	owners map[string]map[string]store.OwnerPrincipal // key, then principal
 	logout map[string]logoutEntry
+	// mfaProof is plan 9c's kept per-login proofs.
+	mfaProof map[string]mfaProofEntry
 
 	// tokensByPrincipal and tokensByCert are the token indexes (plan 7a):
 	// each key's set of TokenKeys, each with the expiry of the longest token
@@ -174,6 +176,7 @@ func New(now func() time.Time) *Store {
 		once:                make(map[string]onceEntry),
 		owners:              make(map[string]map[string]store.OwnerPrincipal),
 		logout:              make(map[string]logoutEntry),
+		mfaProof:            make(map[string]mfaProofEntry),
 		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
 		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
 		revocations:         make(map[[2]string]store.Revocation),
@@ -300,6 +303,11 @@ func (s *Store) sweepLocked() {
 	for k, e := range s.logout {
 		if !now.Before(e.exp) {
 			delete(s.logout, k)
+		}
+	}
+	for k, e := range s.mfaProof {
+		if !now.Before(e.exp) {
+			delete(s.mfaProof, k)
 		}
 	}
 
@@ -1840,4 +1848,43 @@ func (s *Store) GetLogout(_ context.Context, key string) (store.Logout, error) {
 		return store.Logout{}, store.ErrNotFound
 	}
 	return e.l, nil
+}
+
+type mfaProofEntry struct {
+	p   store.MFAProof
+	exp time.Time
+}
+
+func (s *Store) PutMFAProof(_ context.Context, p store.MFAProof, ttl time.Duration) error {
+	if p.Key == "" {
+		return store.ErrNoKey
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	next := mfaProofEntry{p: p, exp: now.Add(ttl)}
+	if e, ok := s.mfaProof[p.Key]; ok && now.Before(e.exp) {
+		if e.p.At.After(p.At) {
+			next.p = e.p
+		}
+		if e.exp.After(next.exp) {
+			next.exp = e.exp
+		}
+	}
+	s.mfaProof[p.Key] = next
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) GetMFAProof(_ context.Context, key string) (store.MFAProof, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.mfaProof[key]
+	if !ok || !s.now().Before(e.exp) {
+		return store.MFAProof{}, store.ErrNotFound
+	}
+	return e.p, nil
 }

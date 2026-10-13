@@ -46,15 +46,38 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "a refresh is made on the held connection")
 		return
 	}
+	var named api.RefreshChallengeRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&named); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh challenge request")
+		return
+	}
 	nonce := make([]byte, api.RefreshNonceLen)
 	if _, err := rand.Read(nonce); err != nil {
 		writeError(w, http.StatusInternalServerError, "broker_error", "no randomness for a challenge")
 		return
 	}
+	// A challenge this caller proved exempts this one request from the
+	// pacing, and is taken here, under this caller's own binding: another
+	// caller's challenge finds nothing, spends nothing, and is paced as any
+	// request. A store error is paced, never an exemption. A second exempt
+	// request by the same caller replaces h.proved below, so it spends the
+	// first proof: one proof exempts one request, and a new one needs a new
+	// human proof.
+	var proved *provedChallenge
+	if named.PerLoginMFAChallenge != "" {
+		tctx, tcancel := context.WithTimeout(r.Context(), holdTimeout)
+		proved, _ = b.takeProved(tctx, caller{principal: principal, cred: cred}, agentKey(r), named.PerLoginMFAChallenge)
+		tcancel()
+	}
 	h.mu.Lock()
 	wait := h.lastRefresh.Add(refreshEvery).Sub(now)
+	if proved != nil {
+		wait = 0
+	}
 	if wait <= 0 {
-		h.nonce, h.nonceExp = nonce, now.Add(refreshNonceTTL)
+		h.nonce, h.nonceExp, h.proved = nonce, now.Add(refreshNonceTTL), proved
 	}
 	h.mu.Unlock()
 	if wait > 0 {
@@ -105,9 +128,12 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// its new challenge; it can come only once per refreshNonceTTL anyway.
 	h.mu.Lock()
 	nonce, exp := h.nonce, h.nonceExp
-	h.nonce = nil
+	proved := h.proved
+	h.nonce, h.proved = nil, nil // one proof exempts once, whatever the outcome
 	if nonce != nil && now.Before(exp) {
 		h.lastRefresh = now
+	} else {
+		proved = nil // expired with its nonce
 	}
 	h.mu.Unlock()
 	got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
@@ -172,6 +198,19 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, dref)
 		return
 	}
+	// A challenge named in the answer is taken here, once the signature has
+	// verified, when the challenge request did not already take one.
+	if proved == nil && req.PerLoginMFAChallenge != "" {
+		tctx, tcancel := context.WithTimeout(r.Context(), holdTimeout)
+		p, err := b.takeProved(tctx, caller{principal: principal, cred: cred}, agentKey(r), req.PerLoginMFAChallenge)
+		tcancel()
+		if err != nil {
+			b.refreshStoreError(w, b.Now(), principal, cred, via, refreshEvery,
+				"the broker could not read the proof you named, so it extended nothing; try again")
+			return
+		}
+		proved = p
+	}
 	at := b.Now() // the broker's verification time: the one clock §5.6 gives it
 	// The connection's clock moves before the extension, and stays moved if
 	// the extension fails: the signature and the marks verified, so this was
@@ -179,7 +218,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via, agentKey(r), proved)
 	if errors.Is(err, directory.ErrUsernameTaken) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -284,7 +323,7 @@ func (b *Broker) refuseRefresh(w http.ResponseWriter, now time.Time, principal s
 // RefreshedContext is one context a session refresh visited.
 type RefreshedContext struct {
 	Ref            store.ContextRef
-	Outcome        string // extended | revoked | past_grace | not_judged
+	Outcome        string // extended | revoked | past_grace | not_judged | per_login_mfa_required | per_login_mfa_unavailable
 	SessionExpires time.Time
 	Unreached      bool
 }
@@ -293,6 +332,38 @@ type RefreshedContext struct {
 type SessionRefreshReport struct {
 	At       time.Time
 	Sessions []RefreshedContext
+	// Challenge is the one challenge to prove when any context needed a
+	// proof (outcome per_login_mfa_required), nil otherwise.
+	Challenge *api.PerLoginMFA
+}
+
+// errMFAStore is a per-login proof the store could not read: the refresh
+// fails closed as store_unavailable, never as "not covered".
+var errMFAStore = errors.New("broker: the store could not be read for a per-login proof")
+
+// refreshAsk is one session refresh's per-login state: the request-wide
+// proof and challenge (as a mint's), and the items it asked.
+type refreshAsk struct {
+	mf    mfaRequest
+	items []*api.PerLoginMFA
+}
+
+// strictest is the item that asks the most: the fewest methods, then the
+// shortest reuse. Its Device is cleared: the challenge is the refresh's.
+func (a *refreshAsk) strictest() *api.PerLoginMFA {
+	var best *api.PerLoginMFA
+	for _, it := range a.items {
+		if best == nil || len(it.Methods) < len(best.Methods) ||
+			(len(it.Methods) == len(best.Methods) && it.ReuseForSeconds < best.ReuseForSeconds) {
+			best = it
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	out := *best
+	out.Device = ""
+	return &out
 }
 
 // RefreshSession carries a fresh authentication at at into every live
@@ -310,8 +381,10 @@ type SessionRefreshReport struct {
 // must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
 // after a reload, holds no policy and writes at once.
 func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *directory.Answer,
-	cred store.Credential, at time.Time, via *decision.OIDC) (SessionRefreshReport, error) {
+	cred store.Credential, at time.Time, via *decision.OIDC, agentSHA256 string,
+	proved *provedChallenge) (SessionRefreshReport, error) {
 	principal := m.Principal
+	ask := &refreshAsk{mf: mfaRequest{agentSHA256: agentSHA256, proved: proved}}
 	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
 	defer func() {
@@ -351,7 +424,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 			visit.Outcome = "not_judged"
 		}
 		if visit.Outcome == "" {
-			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached, via)
+			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached, via, ask)
 			if err != nil {
 				return rep, err
 			}
@@ -362,6 +435,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 		b.Metrics.SessionRefreshes.WithLabelValues(visit.Outcome).Inc()
 		rep.Sessions = append(rep.Sessions, visit)
 	}
+	rep.Challenge = ask.strictest()
 	return rep, nil
 }
 
@@ -371,7 +445,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 // no longer the caller's.
 func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, m policy.Member,
 	answer *directory.Answer, cred store.Credential, ref store.ContextRef, dev admission.Device, at time.Time,
-	unreached bool, via *decision.OIDC) (string, time.Time, error) {
+	unreached bool, via *decision.OIDC, ask *refreshAsk) (string, time.Time, error) {
 	principal := m.Principal
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	c, err := b.Store.GetContext(ctx, k)
@@ -400,11 +474,46 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		b.emitTo(out, rec)
 		return "past_grace", time.Time{}, nil
 	}
-	age := time.Duration(0)
-	if res, err := pol.ResolveMember(m, dev, at); err == nil {
-		age = res.SessionAge.Of(b.MaxSessionAge)
-	} else {
-		age = b.MaxSessionAge // a device with no platform: the default, as its mint would have
+	// The judgment above resolved this member for this device with the same
+	// policy, so an error here means the two have diverged: the context is
+	// not judged, never extended on a default (it would skip the requirement).
+	res, rerr := pol.ResolveMember(m, dev, at)
+	if rerr != nil {
+		return "not_judged", time.Time{}, nil
+	}
+	age := res.SessionAge.Of(b.MaxSessionAge)
+	// A requirement is read here and only here: the extension needs a proof
+	// that covers it, and a reload that added one revoked nothing (the policy
+	// refresh never reads it). An unproved context is named, not extended.
+	// The context's own recorded proof covers like a kept one (spec §5.1.5:
+	// what a session refresh reads), and the covering proof is written back.
+	var mfaMethod, mfaAgent string
+	var mfaAt time.Time
+	if res.PerLoginMFA.Required() {
+		var held *provedChallenge
+		if c.Credential.MFAMethod != "" {
+			held = &provedChallenge{Method: policy.MFAMethod(c.Credential.MFAMethod), At: c.Credential.MFAAt,
+				AgentSHA256: c.Credential.MFAAgentSHA256}
+		}
+		v := b.judgeMFA(ctx, caller{principal: principal, cred: cred}, &ask.mf, ref.NAS, res.PerLoginMFA, at, held)
+		rec.PerLoginMFA = v.rec
+		switch {
+		case v.reason == decision.StoreUnavailable:
+			// The context judged is recorded, with the requirement, beside the
+			// request's own 503 record: at 3am the log says which read failed.
+			rec.Verdict, rec.Reason = decision.VerdictDeny, v.reason
+			b.emitTo(out, rec)
+			return "", time.Time{}, errMFAStore
+		case v.reason != "":
+			rec.Verdict, rec.Reason = decision.VerdictDeny, v.reason
+			b.emitTo(out, rec)
+			if v.item == nil { // unavailable: no method here to prove with
+				return string(v.reason), time.Time{}, nil
+			}
+			ask.items = append(ask.items, v.item)
+			return "per_login_mfa_required", time.Time{}, nil
+		}
+		mfaMethod, mfaAt, mfaAgent = v.method, v.at, v.agent
 	}
 	// The new sid is indexed before the extension (pre-flight I-2): a
 	// logout's RevokeBySid that runs after this reaches the context whether
@@ -417,7 +526,8 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		}
 	}
 	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: refreshedAt(answer, at),
-		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, ExpectRev: c.Rev}, b.ContextIdleTTL); {
+		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, MFAMethod: mfaMethod, MFAAt: mfaAt,
+		MFAAgentSHA256: mfaAgent, ExpectRev: c.Rev}, b.ContextIdleTTL); {
 	case errors.Is(err, store.ErrPastGrace):
 		return "past_grace", time.Time{}, nil
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
@@ -480,5 +590,6 @@ func (rep SessionRefreshReport) response(connAge time.Duration) api.RefreshRespo
 		}
 		out.Sessions = append(out.Sessions, s)
 	}
+	out.PerLoginMFA = rep.Challenge
 	return out
 }

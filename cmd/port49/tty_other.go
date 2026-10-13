@@ -1,8 +1,12 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package main
 
 import "os"
+
+// echoOff is Linux's and macOS's (tty_linux.go, tty_darwin.go): elsewhere
+// term.ReadPassword turns echo off after the prompt is written.
+func echoOff(int) {}
 
 // isTerminal is whether f is a character device: port49 is built and
 // tested on Linux (tty_linux.go); elsewhere this is the best plain check.

@@ -588,6 +588,128 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 	}
 }
 
+// A per_login_mfa weakening fails `port49 policy diff` until a session test in
+// the new version asserts the new requirement, as a privilege raise does; a
+// tightening only prints (decision 45 ruling 24; spec §12). The exit code and
+// the printing live here, not in internal/policy.
+func TestPolicyDiffGatesAPerLoginMFAWeakening(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	strict := "defaults:\n  per_login_mfa: {accept: [hardware_key_touch]}\n" + raw
+	weak := "defaults:\n  per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}\n" + raw
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	strictPol, weakPol := write("strict.yaml", strict), write("weak.yaml", weak)
+	diff := func(old, new string) (int, string) {
+		var out, errb bytes.Buffer
+		code := run([]string{"policy", "diff", "--old", old, "--new", new, "--inventory", inv}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	code, out := diff(strictPol, weakPol)
+	if code != 1 ||
+		!strings.Contains(out, "per_login_mfa_weakened: noc on leaf-01: accept [hardware_key_touch] reuse_for 15m (defaults) -> "+
+			"accept [hardware_key_touch, idp_mfa] reuse_for 15m (defaults); no session test asserts it: add {subject: noc, "+
+			"device: leaf-01, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}}") ||
+		!strings.Contains(out, "2 unacknowledged per_login_mfa weakenings") {
+		t.Fatalf("unacknowledged: code %d\n%s", code, out)
+	}
+	// A test asserting the new requirement, for each subject, acknowledges it.
+	test := func(subject string) string {
+		return "  - {subject: " + subject + ", device: leaf-01, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}}\n"
+	}
+	ackedPol := write("acked.yaml", weak+test("noc")+test("ops"))
+	if code, out := diff(strictPol, ackedPol); code != 0 ||
+		!strings.Contains(out, "per_login_mfa: noc on leaf-01") || !strings.Contains(out, "a session test asserts it") ||
+		!strings.Contains(out, "0 unacknowledged per_login_mfa weakenings") {
+		t.Fatalf("acknowledged: code %d\n%s", code, out)
+	}
+	// One subject acknowledged leaves the other failing.
+	if code, out := diff(strictPol, write("half.yaml", weak+test("noc"))); code != 1 ||
+		!strings.Contains(out, "1 unacknowledged per_login_mfa weakenings") {
+		t.Fatalf("half acknowledged: code %d\n%s", code, out)
+	}
+	// The way back is a tightening: printed, never failing.
+	if code, out := diff(weakPol, strictPol); code != 0 ||
+		!strings.Contains(out, "per_login_mfa: noc on leaf-01: accept [hardware_key_touch, idp_mfa] reuse_for 15m (defaults) -> "+
+			"accept [hardware_key_touch] reuse_for 15m (defaults)") || strings.Contains(out, "per_login_mfa_weakened") {
+		t.Fatalf("a tightening: code %d\n%s", code, out)
+	}
+}
+
+// Levels that accept no common method quarantine the device: `policy test`
+// fails on it naming both levels and the device, `policy diff` on an entry the
+// new version introduces, and not on one both versions hold (decision 45
+// ruling 11; re-review R5).
+func TestPolicyToolsFailADisjointPerLoginMFA(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	ok := strings.Replace(raw, "{name: read_only, privilege: readonly, permit: [show **]}",
+		"{name: read_only, privilege: readonly, permit: [show **], per_login_mfa: {accept: [idp_mfa]}}", 1)
+	disjoint := strings.Replace(ok, "scopes: [{name: all_devices, match: {}}]",
+		"scopes:\n  - {name: all_devices, match: {}}\n  - {name: leaf, match: {name: leaf-01}, per_login_mfa: {accept: [hardware_key_touch]}}", 1)
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	okPol, disjointPol := write("ok.yaml", ok), write("disjoint.yaml", disjoint)
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", disjointPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "quarantine: leaf-01") || !strings.Contains(out.String(), "role read_only") ||
+		!strings.Contains(out.String(), "scope leaf") {
+		t.Fatalf("policy test: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	diff := func(old, new string) (int, string) {
+		var out, errb bytes.Buffer
+		code := run([]string{"policy", "diff", "--old", old, "--new", new, "--inventory", inv}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	if code, got := diff(okPol, disjointPol); code != 1 || !strings.Contains(got, "QUARANTINES: leaf-01") ||
+		!strings.Contains(got, "scope leaf") {
+		t.Fatalf("an introduced entry: code %d\n%s", code, got)
+	}
+	// Both sides hold it: an edit that changes nothing about it passes.
+	if code, got := diff(disjointPol, write("disjoint2.yaml", disjoint+"# reviewed\n")); code != 0 ||
+		strings.Contains(got, "QUARANTINES") {
+		t.Fatalf("an entry both versions hold: code %d\n%s", code, got)
+	}
+}
+
+// The access review shows where a requirement is written, in a column that
+// appears only when some row has one.
+func TestAccessReviewShowsThePerLoginMFALevels(t *testing.T) {
+	pol, inv := policyFixture(t)
+	review := func() string {
+		var out, errb bytes.Buffer
+		if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "noc"}, &out,
+			&errb); code != 0 {
+			t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String()
+	}
+	if got := review(); strings.Contains(got, "PER_LOGIN_MFA") {
+		t.Fatalf("a policy with no requirement has the column:\n%s", got)
+	}
+	raw := string(readFile(t, pol))
+	with := strings.Replace(raw, "{name: read_only, privilege: readonly, permit: [show **]}",
+		"{name: read_only, privilege: readonly, permit: [show **], per_login_mfa: {accept: [hardware_key_touch, idp_mfa]}}", 1)
+	if err := os.WriteFile(pol, []byte(with), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := review(); !strings.Contains(got, "PER_LOGIN_MFA") || !strings.Contains(got, "role read_only [hardware_key_touch idp_mfa]") {
+		t.Fatalf("the column is missing or does not name the level:\n%s", got)
+	}
+}
+
 // A regex-constrained widening fails `port49 policy diff` until a policy test
 // in the new version exercises it (owner's ruling 2026-09-24; spec §12).
 func TestPolicyDiffGatesARegexConstrainedWidening(t *testing.T) {

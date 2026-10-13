@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
@@ -33,6 +35,9 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/hwkey/hwfake"
+	"github.com/rhwendt/port49/internal/pivattest"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -77,6 +82,7 @@ type fakeBroker struct {
 	revoked    bool
 
 	addrs           map[string][]string
+	sessions        map[string][]string // api.AgentSessionHeader as each path saw it
 	order           []string
 	dropRefresh     int
 	nonce           []byte
@@ -85,6 +91,9 @@ type fakeBroker struct {
 	certStatus      bool
 	answers         map[string]refusal
 	revokeDelay     time.Duration
+	// redirect answers every path but /landed 307 to /landed, as a front
+	// proxy's rule might: a client that follows it is seen at /landed.
+	redirect bool
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
@@ -105,10 +114,20 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.addrs = map[string][]string{}
 	}
 	fb.addrs[r.URL.Path] = append(fb.addrs[r.URL.Path], r.RemoteAddr)
+	if fb.sessions == nil {
+		fb.sessions = map[string][]string{}
+	}
+	fb.sessions[r.URL.Path] = append(fb.sessions[r.URL.Path], r.Header.Get(api.AgentSessionHeader))
 	if strings.HasPrefix(r.URL.Path, "/v1/refresh") {
 		fb.order = append(fb.order, r.URL.Path)
 	}
+	redirect := fb.redirect
 	fb.mu.Unlock()
+	if redirect && r.URL.Path != "/landed" {
+		w.Header().Set("Location", "/landed")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return
+	}
 	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
 		w.Header().Set("Retry-After", "60") // as the broker's writeRefusal answers it
 		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",
@@ -268,6 +287,7 @@ type rig struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 	now time.Time
+	key *fakeKey // the agent's key, when rigOpts.hw
 	// refuse makes the broker refuse every new handshake, as it does a
 	// certificate that expired or a trust anchor that changed.
 	refuse atomic.Bool
@@ -304,6 +324,14 @@ type rigOpts struct {
 	// notAfter, when set, is the client certificate's end; the session
 	// connects.
 	notAfter time.Time
+	// verify is Config.VerifyBroker; the session is not connected.
+	verify func(tls.ConnectionState) error
+	// hw gives the agent the certificate's own key as a fake hardware key,
+	// the rig's key field.
+	hw bool
+	// signErr is what that key's Sign returns from the start; the session is
+	// not connected.
+	signErr error
 }
 
 func newRigWith(t *testing.T, o rigOpts) *rig {
@@ -355,6 +383,11 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 		anchor = other.Pool()
 	}
 	r := &rig{fb: &fakeBroker{}, now: now}
+	if o.hw {
+		r.key = &fakeKey{PrivateKey: cli.PrivateKey.(*ecdsa.PrivateKey), present: true, state: hwkey.Present}
+		r.key.signErr = o.signErr
+		cli.PrivateKey = r.key
+	}
 	r.srv = httptest.NewUnstartedServer(r.fb)
 	r.srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
 		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13,
@@ -372,8 +405,8 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 		}}
 	r.srv.StartTLS()
 	t.Cleanup(r.srv.Close)
-	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock})
-	if foreign || o.expired || o.wrongAnchor {
+	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock, VerifyBroker: o.verify})
+	if foreign || o.expired || o.wrongAnchor || o.verify != nil || o.signErr != nil {
 		return r
 	}
 	if _, err := r.a.Connect(context.Background()); err != nil {
@@ -394,15 +427,150 @@ func TestAnUntrustedCertificateFailsConnect(t *testing.T) {
 	}
 }
 
+// A broker certificate Config.VerifyBroker refuses is refused after the chain
+// verified and before the first request: nothing reaches the broker, and the
+// error is the check's own words, not "unreachable" and not a trust failure
+// (plan 9c, ruling 9).
+func TestAConnectRefusedByVerifyBrokerSendsNothing(t *testing.T) {
+	calls := 0
+	r := newRigWith(t, rigOpts{verify: func(cs tls.ConnectionState) error {
+		calls++
+		if len(cs.VerifiedChains) == 0 {
+			t.Error("VerifyBroker ran before the chain verified")
+		}
+		return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+	}})
+	_, err := r.a.Connect(context.Background())
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "is revoked by a CRL") ||
+		strings.Contains(err.Error(), "does not verify") {
+		t.Fatalf("Connect = %v, want a *BrokerRefusedError saying why", err)
+	}
+	r.fb.mu.Lock()
+	reached := len(r.fb.addrs)
+	r.fb.mu.Unlock()
+	if calls != 1 || reached != 0 {
+		t.Fatalf("VerifyBroker ran %d times and the broker saw %d paths, want 1 and 0", calls, reached)
+	}
+}
+
+// A broker certificate revoked after Connect is refused on the reconnect, and
+// every path says so in the check's own words: not "unreachable", not retried
+// (so the check runs once per ask), and the session stays alive, since a CRL
+// blip must not end it (plan 9c, ruling 9).
+func TestARevokedBrokerAfterConnectIsRefusedNotUnreachable(t *testing.T) {
+	var refuse atomic.Bool
+	var calls atomic.Int32
+	r := newRigWith(t, rigOpts{verify: func(tls.ConnectionState) error {
+		calls.Add(1)
+		if refuse.Load() {
+			return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+		}
+		return nil
+	}})
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	refuse.Store(true)
+	for _, tc := range []struct {
+		name string
+		ask  func() error
+	}{
+		{"mint", func() error { _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); return err }},
+		{"identity", func() error { _, err := r.a.Identity(context.Background()); return err }},
+		{"refresh", func() error { _, err := r.a.Refresh(context.Background(), ""); return err }},
+	} {
+		r.srv.CloseClientConnections()
+		r.a.client.CloseIdleConnections()
+		before := calls.Load()
+		err := tc.ask()
+		var refused *BrokerRefusedError
+		if !errors.As(err, &refused) || strings.Contains(err.Error(), "unreachable") ||
+			!strings.Contains(err.Error(), "is revoked by a CRL") {
+			t.Fatalf("%s: %v, want a *BrokerRefusedError and not 'unreachable'", tc.name, err)
+		}
+		if n := calls.Load() - before; n != 1 {
+			t.Fatalf("%s: the check ran %d times, want 1 (no retry)", tc.name, n)
+		}
+		select {
+		case <-r.a.Done():
+			t.Fatalf("%s: a CRL refusal ended the session", tc.name)
+		default:
+		}
+	}
+	refuse.Store(false)
+	r.srv.CloseClientConnections()
+	r.a.client.CloseIdleConnections()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
+		t.Fatalf("the ask after the list is fine again: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("the refused asks reached the broker: %d mints seen, want 1", n)
+	}
+}
+
+// The refresh's answer is a second ask on a connection the challenge may not
+// share: a broker certificate revoked between the two is refused at the
+// answer, in the check's own words, with the answer never sent and the
+// session kept (plan 9c, ruling 9; Task 8 re-review).
+func TestARevokedBrokerAtTheRefreshAnswerIsRefused(t *testing.T) {
+	var refuse atomic.Bool
+	var calls atomic.Int32
+	r := newRigWith(t, rigOpts{verify: func(tls.ConnectionState) error {
+		calls.Add(1)
+		if refuse.Load() {
+			return errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+		}
+		return nil
+	}})
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.fb.mu.Lock()
+	r.fb.order = nil
+	r.fb.mu.Unlock()
+	before := calls.Load()
+	var gets atomic.Int32
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		GetConn: func(string) {
+			if gets.Add(1) == 2 { // the answer's turn: its connection is gone and the broker is revoked
+				refuse.Store(true)
+				r.srv.CloseClientConnections()
+				r.a.client.CloseIdleConnections()
+			}
+		},
+	})
+	_, err := r.a.Refresh(ctx, "")
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || strings.Contains(err.Error(), "unreachable") ||
+		!strings.Contains(err.Error(), "is revoked by a CRL") {
+		t.Fatalf("Refresh = %v, want a *BrokerRefusedError and not 'unreachable'", err)
+	}
+	if n := calls.Load() - before; n != 1 {
+		t.Fatalf("the check ran %d times, want 1 (no retry)", n)
+	}
+	r.fb.mu.Lock()
+	order := append([]string(nil), r.fb.order...)
+	r.fb.mu.Unlock()
+	if len(order) != 1 || order[0] != "/v1/refresh/challenge" {
+		t.Fatalf("the broker saw %q, want one challenge and no answer", order)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("a CRL refusal ended the session")
+	default:
+	}
+}
+
 // Every ask is a mint: the agent never hands back a token it handed out
 // before, and every mint travels the one connection the handshake opened.
 func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {
 	r := newRig(t)
-	a, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	a, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	b, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,11 +587,11 @@ func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {
 // which on a hardware key is one more touch (design §7).
 func TestADroppedConnectionIsReestablished(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	r.srv.CloseClientConnections()
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("the ask after a drop must reconnect and mint: %v", err)
 	}
 	if n := r.a.Handshakes(); n != 2 {
@@ -438,7 +606,7 @@ func TestALostResponseIsRetriedUnderTheSameKey(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.dropFirst = true
 	r.fb.mu.Unlock()
-	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +627,7 @@ func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.inProgress = 2
 	r.fb.mu.Unlock()
-	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err != nil || item.Verdict != "permit" || item.Device != "leaf1" {
 		t.Fatalf("Mint: %+v %v", item, err)
 	}
@@ -472,7 +640,7 @@ func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.inProgress = 1 << 30
 	r.fb.mu.Unlock()
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil ||
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err == nil ||
 		!strings.Contains(err.Error(), "idempotency_in_progress") {
 		t.Fatalf("a mint still in progress past the wait: %v", err)
 	}
@@ -494,7 +662,7 @@ func TestMintWaitsByTheBrokersRetryAfter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	if item, err := r.a.Mint(ctx, "leaf1", false, 0); err != nil || item.Verdict != "permit" {
+	if item, err := r.a.Mint(ctx, "leaf1", false, 0, ""); err != nil || item.Verdict != "permit" {
 		t.Fatalf("Mint (waited %v): %+v %v", time.Since(start), item, err)
 	}
 	if waited := time.Since(start); waited < 900*time.Millisecond {
@@ -532,7 +700,7 @@ func TestRetryAfterIsHonouredUpToACap(t *testing.T) {
 func TestTheSessionEndsAtTheCeiling(t *testing.T) {
 	r := newRig(t)
 	r.advance(61 * time.Second)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("past the ceiling: %v", err)
 	}
 	if len(r.fb.seen()) != 0 {
@@ -545,7 +713,7 @@ func TestTheBrokersSessionExpiredEndsTheSession(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.expired = true
 	r.fb.mu.Unlock()
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("401 session_expired: %v", err)
 	}
 	select {
@@ -565,7 +733,7 @@ func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.untrusted = true
 	r.fb.mu.Unlock()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
 		t.Fatalf("401 trust_domain_unresolved: %v", err)
 	}
@@ -574,7 +742,7 @@ func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
 	default:
 		t.Fatal("Done must close")
 	}
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("an ended session: %v", err)
 	}
 	if n := len(r.fb.seen()); n != 1 {
@@ -590,7 +758,7 @@ func TestARevocationEndsTheSession(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.revoked = true
 	r.fb.mu.Unlock()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "this principal was revoked at") {
 		t.Fatalf("401 credential_revoked: %v", err)
 	}
@@ -604,7 +772,7 @@ func TestARevocationEndsTheSession(t *testing.T) {
 	default:
 		t.Fatal("Done must close")
 	}
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("an ended session: %v", err)
 	}
 	if n := len(r.fb.seen()); n != 1 {
@@ -809,7 +977,7 @@ func TestARefusedHandshakeNamesTheLikelyCauses(t *testing.T) {
 // and not reported as an unreachable broker.
 func TestARefusedReconnectEndsTheSession(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	r.refuse.Store(true)
@@ -819,7 +987,7 @@ func TestARefusedReconnectEndsTheSession(t *testing.T) {
 	// until an alert is read. Five asks make a loss on every one negligible.
 	var err error
 	for i := 0; i < 5; i++ {
-		_, err = r.a.Mint(context.Background(), "leaf1", false, 0)
+		_, err = r.a.Mint(context.Background(), "leaf1", false, 0, "")
 		var hup *hangUpError
 		if errors.Is(err, ErrSessionOver) || !errors.As(err, &hup) {
 			break
@@ -844,7 +1012,7 @@ func TestAnUnreachableBrokerLeavesTheSession(t *testing.T) {
 	r := newRig(t)
 	r.srv.Listener.Close()
 	r.srv.CloseClientConnections()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("an unreachable broker: %v", err)
 	}
@@ -863,7 +1031,7 @@ func TestAnItemErrorReachesTheOperator(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.itemError = "device_unconfigured"
 	r.fb.mu.Unlock()
-	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	var ie *ItemError
 	if !errors.As(err, &ie) || ie.Code != "device_unconfigured" || item.Error != "device_unconfigured" {
 		t.Fatalf("Mint: %+v %v", item, err)
@@ -914,7 +1082,7 @@ func TestAnItemWithNoVerdictIsAnError(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.hollow = true
 	r.fb.mu.Unlock()
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err == nil {
 		t.Fatal("an item with no verdict and no error must be an error")
 	}
 }
@@ -971,7 +1139,7 @@ func TestATransientAlertLeavesTheSession(t *testing.T) {
 	r := newRig(t)
 	r.fault.Store(true)
 	r.srv.CloseClientConnections()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("an internal_error alert: %v", err)
 	}
@@ -981,7 +1149,7 @@ func TestATransientAlertLeavesTheSession(t *testing.T) {
 	default:
 	}
 	r.fault.Store(false)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("the ask after the broker recovers: %v", err)
 	}
 }
@@ -1162,7 +1330,7 @@ func TestAHangUpOnReconnectLeavesTheSession(t *testing.T) {
 	if _, err := a.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	_, err := a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "right after the handshake") {
 		t.Fatalf("a hang-up on reconnect: %v", err)
 	}
@@ -1189,7 +1357,7 @@ func TestAResetLaterInTheSessionIsNotACertificateProblem(t *testing.T) {
 	if _, err := a.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("a reset on an answered connection must be retried, not diagnosed: %v", err)
 	}
 	select {
@@ -1222,7 +1390,7 @@ func TestAHangUpWithAnExpiredCertificateEndsTheSession(t *testing.T) {
 	mu.Lock()
 	now = now.Add(25 * time.Hour) // the client certificate is good for a day
 	mu.Unlock()
-	_, err := a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := a.Mint(context.Background(), "leaf1", false, 0, "")
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
 		t.Fatalf("a hang-up with an expired certificate: %v", err)
 	}
@@ -1243,6 +1411,9 @@ type realRig struct {
 	alice tls.Certificate
 	mu    sync.Mutex
 	now   time.Time
+	logs  *logBuffer
+	// session and touch are the mfa rig's keys, on one fake token.
+	session, touch *hwfake.Key
 }
 
 func (r *realRig) clock() time.Time {
@@ -1264,11 +1435,57 @@ subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, toke
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
 
-func newRealRig(t *testing.T) *realRig {
+func newRealRig(t *testing.T) *realRig { return newRealRigWith(t, realOpts{}) }
+
+// realOpts are the real rig's variations. mfa puts a per_login_mfa
+// requirement on every device, gives the broker the test PIV root, and gives
+// the agent a hardware session key and a touch key on the same fake token,
+// with the attestations the broker verifies. verify is Config.VerifyBroker.
+type realOpts struct {
+	mfa    bool
+	verify func(tls.ConnectionState) error
+	// redirectMFA, when set, makes the broker answer POST /v1/mfa with a 303
+	// to this address, as a misconfigured proxy might: the one redirect Go
+	// follows for a POST whose body it cannot replay, as a GET with the
+	// request's custom headers (the agent session among them).
+	redirectMFA string
+}
+
+// realMFAPolicy asks for a second factor at each login, on every device.
+const realMFAPolicy = `
+scopes: [{name: all_devices, match: {}, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 15m}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+
+// logBuffer is a decision log an agent goroutine and the test both touch.
+type logBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func newRealRigWith(t *testing.T, o realOpts) *realRig {
 	t.Helper()
-	r := &realRig{now: time.Now().Truncate(time.Second)}
+	r := &realRig{now: time.Now().Truncate(time.Second), logs: &logBuffer{}}
+	polText := realPolicy
+	if o.mfa {
+		polText = realMFAPolicy
+	}
 	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(realPolicy), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(polText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	leaf1 := admission.Device{Name: "leaf1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.11")}}
@@ -1290,12 +1507,43 @@ func newRealRig(t *testing.T) *realRig {
 		t.Fatal(err)
 	}
 	r.st = memory.New(r.clock)
-	log := decision.NewJSONLines(io.Discard)
+	log := decision.NewJSONLines(r.logs)
 	r.b = &broker.Broker{Policy: policy.NewLive(pol),
 		Minter: token.NewMinter(r.st, log, rand.Reader, token.TagKey([]byte("k")), r.clock, 8),
 		Store:  r.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: r.clock,
 		MaxSessionAge: time.Hour, BatchMax: 4, Sessions: session.New(r.st, r.clock, time.Hour, time.Hour),
 		ContextIdleTTL: time.Hour, CeilingWarning: 30 * time.Minute, GraceWindow: 5 * time.Minute}
+	cfg := Config{Cert: r.alice, BrokerCA: ca.Pool(), Now: r.clock, VerifyBroker: o.verify}
+	if o.mfa {
+		// The session key is on a fake token with the touch key, and the PIV
+		// root signs the attestation of each slot.
+		piv, err := testpki.NewPIV(r.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		anchors, err := pivattest.ParseAnchors(piv.Anchors())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.b.PerLoginMFA = &broker.MFAVerifiers{Anchors: &anchors}
+		touchKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.session = hwfake.New(r.alice.PrivateKey.(*ecdsa.PrivateKey), "/fake/module.so", "TOKEN1")
+		r.touch = hwfake.New(touchKey, "/fake/module.so", "TOKEN1")
+		touchAtt, err := piv.Slot(&touchKey.PublicKey, pivattest.TouchAlways)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionAtt, err := piv.Slot(r.session.Public(), pivattest.TouchNever)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.touch.SetCertificates(sessionAtt, piv.Device, touchAtt) // in no order the agent relies on
+		r.alice.PrivateKey = r.session
+		cfg.Cert, cfg.TouchKey = r.alice, r.touch
+	}
 
 	// alice's live context on leaf1, as a device login with her token left
 	// it: authenticated now, its ceiling an hour out.
@@ -1326,6 +1574,16 @@ func newRealRig(t *testing.T) *realRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if o.redirectMFA != "" {
+		inner := srv.Handler
+		srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/v1/mfa" {
+				http.Redirect(w, req, o.redirectMFA, http.StatusSeeOther)
+				return
+			}
+			inner.ServeHTTP(w, req)
+		})
+	}
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1335,7 +1593,8 @@ func newRealRig(t *testing.T) *realRig {
 	bl.Refused = r.b.RefusedAtBind
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	r.a = New(Config{BrokerURL: "https://" + raw.Addr().String(), Cert: r.alice, BrokerCA: ca.Pool(), Now: r.clock})
+	cfg.BrokerURL = "https://" + raw.Addr().String()
+	r.a = New(cfg)
 	if _, err := r.a.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -1360,7 +1619,7 @@ func TestARefreshMovesTheDeadlineToTheBrokers(t *testing.T) {
 	default:
 	}
 	r.advance(30 * time.Minute)
-	out, err := r.a.Refresh(context.Background())
+	out, err := r.a.Refresh(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -1377,7 +1636,7 @@ func TestARefreshMovesTheDeadlineToTheBrokers(t *testing.T) {
 		t.Fatal("a refresh must signal DeadlineChanged")
 	}
 	r.advance(40 * time.Minute) // past the first deadline, inside the new one
-	if item, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil || item.Verdict != "permit" {
+	if item, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil || item.Verdict != "permit" {
 		t.Fatalf("a mint past the first deadline: %+v %v", item.Verdict, err)
 	}
 	if n := r.a.Handshakes(); n != 1 {
@@ -1394,7 +1653,7 @@ func TestARevokedRefreshEndsTheSession(t *testing.T) {
 		Key: "user:alice@example.com", At: r.clock(), Origin: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := r.a.Refresh(context.Background())
+	_, err := r.a.Refresh(context.Background(), "")
 	var revoked *RevokedError
 	if !errors.As(err, &revoked) || !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("a revoked refresh: %v", err)
@@ -1407,7 +1666,7 @@ func TestARevokedRefreshEndsTheSession(t *testing.T) {
 	if !r.a.SessionEndsAt().Equal(first) {
 		t.Fatal("a refused refresh moved the deadline")
 	}
-	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Refresh(context.Background(), ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("a refresh of an ended session: %v", err)
 	}
 }
@@ -1417,7 +1676,7 @@ func TestARevokedRefreshEndsTheSession(t *testing.T) {
 // else (decision 33).
 func TestTheChallengeAndTheAnswerShareTheConnection(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.a.Refresh(context.Background()); err != nil {
+	if _, err := r.a.Refresh(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	r.fb.mu.Lock()
@@ -1441,7 +1700,7 @@ func TestAMissingChallengeIsTriedOnce(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.refreshRefusals = []refusal{missing}
 	r.fb.mu.Unlock()
-	if _, err := r.a.Refresh(context.Background()); err != nil {
+	if _, err := r.a.Refresh(context.Background(), ""); err != nil {
 		t.Fatalf("one missing challenge, then a good one: %v", err)
 	}
 
@@ -1450,7 +1709,7 @@ func TestAMissingChallengeIsTriedOnce(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.refreshRefusals = []refusal{missing, missing, missing}
 	r.fb.mu.Unlock()
-	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "refresh_challenge_missing") {
+	if _, err := r.a.Refresh(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "refresh_challenge_missing") {
 		t.Fatalf("two missing challenges: %v", err)
 	}
 	r.fb.mu.Lock()
@@ -1494,10 +1753,10 @@ func TestABrokerUnableToAnswerEndsNothing(t *testing.T) {
 	r.fb.mu.Unlock()
 	const certText = "agent: the broker cannot establish this certificate's revocation status " +
 		"(OCSP http://ocsp.example.com: no answer within 2s); try again; retry in 60s"
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil || !strings.Contains(err.Error(), certText) {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err == nil || !strings.Contains(err.Error(), certText) {
 		t.Fatalf("a mint: %v", err)
 	}
-	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), certText) {
+	if _, err := r.a.Refresh(context.Background(), ""); err == nil || !strings.Contains(err.Error(), certText) {
 		t.Fatalf("a refresh: %v", err)
 	}
 	open(t, r)
@@ -1522,7 +1781,7 @@ func TestABrokerUnableToAnswerEndsNothing(t *testing.T) {
 			r.fb.mu.Lock()
 			r.fb.refreshRefusals = []refusal{ref}
 			r.fb.mu.Unlock()
-			_, err := r.a.Refresh(context.Background())
+			_, err := r.a.Refresh(context.Background(), "")
 			if err == nil || !strings.Contains(err.Error(), ref.e.Detail) || !strings.Contains(err.Error(), "store_unavailable") ||
 				!strings.Contains(err.Error(), "retry in 10s") {
 				t.Fatalf("%v", err)
@@ -1538,7 +1797,7 @@ func TestABrokerUnableToAnswerEndsNothing(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.tooSoon = true
 	r.fb.mu.Unlock()
-	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "refresh_too_soon") ||
+	if _, err := r.a.Refresh(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "refresh_too_soon") ||
 		!strings.Contains(err.Error(), "retry in 7s") {
 		t.Fatalf("a paced refresh: %v", err)
 	}
@@ -1564,7 +1823,7 @@ func TestTheClientRefreshesOverTheSocket(t *testing.T) {
 		st.CertFingerprint != CertFingerprint(r.a.cert) || !strings.HasPrefix(st.CertFingerprint, "sha256:") {
 		t.Fatalf("status %+v %v", st, err)
 	}
-	out, err := c.Refresh(context.Background())
+	out, err := c.Refresh(context.Background(), "")
 	if err != nil || out.SessionEndsAt == "" {
 		t.Fatalf("%+v %v", out, err)
 	}
@@ -1575,7 +1834,7 @@ func TestTheClientRefreshesOverTheSocket(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.tooSoon = true
 	r.fb.mu.Unlock()
-	if _, err := c.Refresh(context.Background()); err == nil || errors.Is(err, ErrSessionOver) ||
+	if _, err := c.Refresh(context.Background(), ""); err == nil || errors.Is(err, ErrSessionOver) ||
 		!strings.HasPrefix(err.Error(), "agent: the broker refused a refresh challenge:") {
 		t.Fatalf("a paced refresh through the socket: %v", err)
 	}
@@ -1584,7 +1843,7 @@ func TestTheClientRefreshesOverTheSocket(t *testing.T) {
 	r.fb.refreshRefusals = []refusal{{status: 401, e: api.Error{Error: "credential_revoked",
 		Detail: "this principal was revoked at 2026-10-01T00:00:00Z"}}}
 	r.fb.mu.Unlock()
-	_, err = c.Refresh(context.Background())
+	_, err = c.Refresh(context.Background(), "")
 	var revoked *RevokedError
 	if !errors.As(err, &revoked) || strings.Contains(err.Error(), "port49 login") {
 		t.Fatalf("a revoked refresh through the socket: %v", err)
@@ -1600,7 +1859,7 @@ func TestALostRefreshAnswerIsTriedOnANewConnection(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.dropRefresh = 1
 	r.fb.mu.Unlock()
-	if _, err := r.a.Refresh(context.Background()); err != nil {
+	if _, err := r.a.Refresh(context.Background(), ""); err != nil {
 		t.Fatalf("a lost answer, then a good one: %v", err)
 	}
 	r.fb.mu.Lock()
@@ -1643,7 +1902,7 @@ func TestAConnectionSwappedUnderARefreshIsTriedAgain(t *testing.T) {
 			}
 		},
 	})
-	out, err := r.a.Refresh(ctx)
+	out, err := r.a.Refresh(ctx, "")
 	if err != nil || len(out.Sessions) != 1 || out.Sessions[0].Outcome != "extended" {
 		t.Fatalf("Refresh: %+v %v", out.Sessions, err)
 	}
@@ -1664,7 +1923,7 @@ func TestConcurrentRefreshesRunOneAtATime(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := r.a.Refresh(context.Background())
+			_, err := r.a.Refresh(context.Background(), "")
 			errs <- err
 		}()
 	}
@@ -1701,10 +1960,10 @@ func TestARefreshOfAnEndedSessionAsksNothing(t *testing.T) {
 		Detail: "this principal was revoked at 2026-10-01T00:00:00Z"}}}
 	r.fb.mu.Unlock()
 	var revoked *RevokedError
-	if _, err := r.a.Refresh(context.Background()); !errors.As(err, &revoked) {
+	if _, err := r.a.Refresh(context.Background(), ""); !errors.As(err, &revoked) {
 		t.Fatalf("a revoked refresh: %v", err)
 	}
-	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Refresh(context.Background(), ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("a refresh of an ended session: %v", err)
 	}
 	r.fb.mu.Lock()
@@ -1716,7 +1975,7 @@ func TestARefreshOfAnEndedSessionAsksNothing(t *testing.T) {
 
 	r = newRig(t)
 	r.advance(61 * time.Second)
-	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+	if _, err := r.a.Refresh(context.Background(), ""); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("a refresh past the deadline: %v", err)
 	}
 	r.fb.mu.Lock()
@@ -1766,7 +2025,7 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 			mu.Lock()
 			now = now.Add(25 * time.Hour) // the client certificate is good for a day
 			mu.Unlock()
-			_, err := a.Refresh(context.Background())
+			_, err := a.Refresh(context.Background(), "")
 			if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
 				t.Fatalf("an expired hang-up: %v", err)
 			}
@@ -1817,7 +2076,7 @@ func TestAResetOnTheHeldConnectionDuringARefreshIsTriedOnANewOne(t *testing.T) {
 	mu.Lock()
 	now = now.Add(25 * time.Hour) // the client certificate is good for a day
 	mu.Unlock()
-	_, err := a.Refresh(context.Background())
+	_, err := a.Refresh(context.Background(), "")
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
 		t.Fatalf("a reset on the held connection, then an expired hang-up: %v", err)
 	}
@@ -1950,7 +2209,7 @@ func TestABusyRevocationIsAnAPIErrorAndEndsNothing(t *testing.T) {
 	check("the agent", err)
 	_, err = socketFor(t, r.a).Revoke(context.Background(), api.RevokeRequest{Mine: true})
 	check("through the socket", err)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("a mint after a busy revocation: %v", err)
 	}
 }
@@ -2259,7 +2518,7 @@ func TestAMintBehindARunningRevocationSaysSo(t *testing.T) {
 	if err := <-revoked; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("a mint after the revocation: %v", err)
 	}
 }
@@ -2274,7 +2533,7 @@ func TestEveryCallBehindARunningRevocationSaysSo(t *testing.T) {
 	revoked := revokeHolding(t, r, 2*time.Second)
 	c := socketFor(t, r.a)
 	for name, call := range map[string]func() error{
-		"refresh":  func() error { _, err := c.Refresh(context.Background()); return err },
+		"refresh":  func() error { _, err := c.Refresh(context.Background(), ""); return err },
 		"identity": func() error { _, err := c.Identity(context.Background()); return err },
 		"explain": func() error {
 			_, err := c.Explain(context.Background(), api.ExplainRequest{Device: "leaf1", Command: "show version"})
@@ -2308,7 +2567,7 @@ func TestARevocationIsNotQueuedBehindAMintsWait(t *testing.T) {
 	r.fb.mu.Unlock()
 	minted := make(chan error, 1)
 	go func() {
-		_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+		_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 		minted <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2402,7 +2661,7 @@ func TestStatusCarriesTheLastRefreshsSessions(t *testing.T) {
 		t.Fatalf("before any refresh: %+v", st.Sessions)
 	}
 	r.advance(30 * time.Minute)
-	out, err := r.a.Refresh(context.Background())
+	out, err := r.a.Refresh(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

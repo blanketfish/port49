@@ -178,6 +178,10 @@ type reloader struct {
 	// the runner for a full context pass (plan 7e, Ruling 8 corrected). It
 	// must not wait. Nil tells no one.
 	onSwap func(pol *policy.Policy)
+	// mfaUnavailable is the broker's ruling 18 statement for a policy put in
+	// force (broker.Broker.MFAUnavailable), said after each swap when it is
+	// not empty. Nil with no broker in the process.
+	mfaUnavailable func(pol *policy.Policy, now time.Time) string
 	// fullPass is how the runner's duties hand run a full context pass a
 	// replica owes (runner.owed), which whole runs (full). Both are
 	// port49-broker's; elsewhere fullPass is nil, and a receive never fires.
@@ -636,6 +640,8 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		}
 		if err = bundle.CheckAdmissionOver(old, base, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
 			err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
+		} else if err = mfaRefusal(base, pol); err != nil {
+			err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 		}
 	}
 	if err != nil {
@@ -978,6 +984,23 @@ func (r *reloader) rereadVerifyKeys() {
 	}
 }
 
+// mfaRefusal refuses a policy edit that introduces a device whose per_login_mfa
+// levels accept no common method (decision 45 ruling 11): an entry base, the
+// policy in force over the same inventory, does not already have. One already
+// in force freezes no edit, so a grant revocation loads at 3am while a device
+// is quarantined over it; an inventory reload or a start quarantines instead,
+// so an inventory sync never freezes the fleet's inventory. A nil base counts
+// every entry.
+func mfaRefusal(base, pol *policy.Policy) error {
+	fresh := policy.NewMFADisjoint(base, pol)
+	if len(fresh) == 0 {
+		return nil
+	}
+	q, e := fresh[0], fresh[0].Entries[0]
+	return fmt.Errorf("per_login_mfa: %s would be quarantined: %s; %d device(s) in all (spec §5.1.5)", q.Device, e.Cause,
+		len(fresh))
+}
+
 // load puts raw, the policy file's content read as version v, in force and
 // refreshes, if it loads and passes the admission bound. A file that does
 // not, or could not be read (err), changes nothing.
@@ -999,6 +1022,10 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 			// device is refused whatever the bound.
 			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
 				forAdmission = true
+				err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
+			} else if err = mfaRefusal(old, pol); err != nil {
+				// Not forAdmission: no inventory settles levels that accept no
+				// common method, so it is its own fault, said alone.
 				err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 			}
 		}
@@ -1163,6 +1190,13 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 	}
 	sayPolicy(r.procName(), pol, now)
 	r.refresh(ctx)
+	// After the pass, not before: the walk over every subject and device must
+	// not delay the supersede that a tightened requirement depends on.
+	if r.mfaUnavailable != nil {
+		if line := r.mfaUnavailable(pol, now); line != "" {
+			r.sayf("broker: %s\n", line)
+		}
+	}
 }
 
 // securityEvents writes one inventory_change record for each security change

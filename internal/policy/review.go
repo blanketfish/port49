@@ -16,6 +16,10 @@ type ReviewRow struct {
 	Expired      bool
 	// Devices is how many devices in the inventory the scope selects now.
 	Devices int
+	// PerLoginMFA are the per-login levels this row carries: defaults, each
+	// of its roles and its scope (spec §5.1.5). The effective requirement is
+	// per device and per subject, and explain is where it is read.
+	PerLoginMFA []MFALevel
 }
 
 // Review lists every grant row naming subject, in file order, with its
@@ -28,6 +32,17 @@ func (p *Policy) Review(subject string, now time.Time) ([]ReviewRow, error) {
 	for _, g := range p.Grants(subject) {
 		row := ReviewRow{Scope: g.Scope, Roles: slices.Clone(g.Roles), MaxPrivilege: g.MaxPrivilege, Expires: g.Expires,
 			Expired: !g.Expires.IsZero() && !now.Before(g.Expires)}
+		add := func(name string, m *PerLoginMFA) {
+			if m != nil {
+				row.PerLoginMFA = append(row.PerLoginMFA, MFALevel{Level: name, Accept: m.Accept, ReuseFor: m.ReuseFor,
+					AppliesToMachines: m.AppliesToMachines})
+			}
+		}
+		add("defaults", p.defaults.PerLoginMFA)
+		for _, r := range g.Roles {
+			add("role "+r, p.roles[r].PerLoginMFA)
+		}
+		add("scope "+g.Scope, p.scopes[g.Scope].PerLoginMFA)
 		for _, d := range p.env.Devices {
 			if ok, _ := p.scopes[g.Scope].selects(d); ok {
 				row.Devices++

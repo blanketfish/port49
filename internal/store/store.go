@@ -95,6 +95,15 @@ type Credential struct {
 	Sid         string
 	ACR         string
 	AMR         []string
+	// MFAMethod and MFAAt are the per-login proof the mint was made under
+	// (spec §5.1.5): its method and when the person proved. Empty when no
+	// requirement applied. MFAAgentSHA256 is the hex SHA-256 of the agent
+	// session of the binding that proved, empty for a bearer proof or a
+	// context stored before it was recorded: only that agent's refresh is
+	// covered by the recorded proof (decision 45 ruling 15).
+	MFAMethod      string
+	MFAAt          time.Time
+	MFAAgentSHA256 string
 }
 
 type Token struct {
@@ -495,6 +504,14 @@ type ContextRefresh struct {
 	// write swapped from one a refresh rotated (Task 7b review I-2). Empty
 	// leaves it alone.
 	Sid string
+	// MFAMethod and MFAAt, when MFAMethod is non-empty, replace the context's
+	// Credential.MFAMethod and MFAAt: the per-login proof an extension under
+	// a requirement was covered by (spec §5.1.5, decision 45 ruling 16). Empty
+	// leaves the recorded proof alone. MFAAgentSHA256 is the proving
+	// binding's agent hash, replaced with them ("" for a bearer proof).
+	MFAMethod      string
+	MFAAt          time.Time
+	MFAAgentSHA256 string
 	// SessionAge, when set, is the ceiling the policy in force gives this
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen
@@ -1044,6 +1061,12 @@ type Store interface {
 	PutLogout(ctx context.Context, l Logout, ttl time.Duration) error
 	// GetLogout is the live logout record under key, or ErrNotFound.
 	GetLogout(ctx context.Context, key string) (Logout, error)
+	// PutMFAProof keeps p for ttl from now, the later At kept as PutLogout
+	// keeps the later logout, and the later expiry. An empty key is
+	// refused.
+	PutMFAProof(ctx context.Context, p MFAProof, ttl time.Duration) error
+	// GetMFAProof is the live proof under key, or ErrNotFound.
+	GetMFAProof(ctx context.Context, key string) (MFAProof, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
@@ -1242,6 +1265,17 @@ type Logout struct {
 	Key    string
 	At     time.Time
 	Origin string
+}
+
+// MFAProof is a per-login proof kept for reuse (spec §5.1.5; decision 45
+// ruling 15): Key is the hex SHA-256 of the principal, the certificate
+// fingerprint and the agent session's SHA-256, then "/" and the method; At
+// is when the person proved. It holds no identity in the clear and no
+// secret.
+type MFAProof struct {
+	Key    string
+	Method string
+	At     time.Time
 }
 
 // ErrNoKey is a record written with an empty key.

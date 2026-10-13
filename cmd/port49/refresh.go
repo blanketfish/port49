@@ -25,7 +25,22 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	out, err := agent.NewClient(*socket).Refresh(context.Background())
+	ctx, c := context.Background(), agent.NewClient(*socket)
+	out, err := c.Refresh(ctx, "")
+	if err == nil && out.PerLoginMFA != nil {
+		// A context was left for want of a proof: say what the first refresh
+		// did, prove the one challenge, and refresh once more naming it (the
+		// broker takes the proof and paces nothing between the two). A second
+		// requirement is printed, never proved in a loop.
+		printRefresh(stdout, out)
+		if err = prove(ctx, *socket, proveFlags(*socket), *out.PerLoginMFA, stderr); err == nil {
+			if out, err = c.Refresh(ctx, out.PerLoginMFA.Challenge); err == nil && out.PerLoginMFA != nil {
+				printRefresh(stdout, out)
+				fmt.Fprintf(stderr, "port49 refresh: %s\n", describeMFA(*out.PerLoginMFA))
+				return 1
+			}
+		}
+	}
 	switch {
 	case errors.Is(err, agent.ErrNoAgent):
 		fmt.Fprintf(stderr, "port49 refresh: no agent at %s; run 'port49 login'\n", *socket)
@@ -65,6 +80,10 @@ func printRefresh(w io.Writer, r api.RefreshResponse) {
 			what = "revoked, not extended (see 'port49 revoke --list' and the refresh record)"
 		case "past_grace":
 			what = "past the grace window, not resumed: log in again there"
+		case "per_login_mfa_required":
+			what = "needs a second factor, not extended: 'port49 refresh' asks for it"
+		case "per_login_mfa_unavailable":
+			what = "needs a second factor this broker cannot verify now, not extended: tell its operator"
 		default:
 			what = "not extended this time (the policy could not be applied to it): run 'port49 refresh' again"
 		}

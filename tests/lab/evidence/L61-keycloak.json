@@ -1,0 +1,9 @@
+{"step":"a. password and OTP, no AMR mapper","value":"amr absent; acr \"1\""}
+{"step":"config. reference value set on the execution","value":"auth-username-password-form -\u003e pwd: 201 "}
+{"step":"config. reference value set on the execution","value":"auth-otp-form -\u003e otp: 201 "}
+{"step":"config. reference value set on the execution","value":"sub-flow -\u003e mfa: 201 "}
+{"step":"b. password and OTP, the AMR mapper, references pwd, otp and mfa","value":"amr [pwd otp]; acr \"1\""}
+{"step":"c. control: password only (alice, the default flow), the AMR mapper","value":"amr []; acr \"1\""}
+{"step":"d. (b) with acr_values=gold asked","value":"amr [pwd otp]; acr \"1\""}
+{"step":"e. (b) with the OTP execution's reference value set to mfa","value":"amr [pwd mfa]; acr \"1\""}
+{"step":"Gate M1. (b) carries one of [mfa] and (c) does not","value":"false (b carries: false; c carries: false)"}

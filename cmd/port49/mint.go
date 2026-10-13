@@ -16,7 +16,12 @@ import (
 // shared by `port49 devices trust` and `port49 ssh`.
 func mintFailed(cmd, socket, device string, item api.MintItem, err error, stderr io.Writer) bool {
 	var ie *agent.ItemError
+	var need *agent.MFARequiredError
 	switch {
+	case errors.As(err, &need):
+		// Still required after a proof, or the requirement of a re-mint: said,
+		// never proved again in a loop.
+		fmt.Fprintf(stderr, "%s: %s\n", cmd, describeMFA(need.Requirement))
 	case errors.As(err, &ie):
 		// The broker could not decide this device. Whatever else the item
 		// carries is not printed.

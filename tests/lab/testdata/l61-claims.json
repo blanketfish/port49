@@ -1,0 +1,6 @@
+{
+  "a_otp_no_mapper": {"iss": "https://keycloak.example.invalid/realms/fixture", "aud": "fixture-client-not-real", "acr": "1"},
+  "b_otp_mapper": {"iss": "https://keycloak.example.invalid/realms/fixture", "aud": "fixture-client-not-real", "acr": "1", "amr": ["pwd", "otp"]},
+  "c_password_only": {"iss": "https://keycloak.example.invalid/realms/fixture", "aud": "fixture-client-not-real", "acr": "1", "amr": []},
+  "e_otp_reference_mfa": {"iss": "https://keycloak.example.invalid/realms/fixture", "aud": "fixture-client-not-real", "acr": "1", "amr": ["pwd", "mfa"]}
+}

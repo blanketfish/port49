@@ -16,6 +16,8 @@ import (
 	"unicode"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/workload"
 )
@@ -62,13 +64,24 @@ func workloadCmd(args []string, stdout, stderr io.Writer) int {
 type workloadFlags struct {
 	broker, brokerCA, cert, key string
 	deadline                    time.Duration
+	brokerCRL                   string
+	// touchKey is a key reference whose touch proves a per-login requirement
+	// (decision 45): on the workload key's own token, its PIN from the
+	// reference's pin-source alone.
+	touchKey string
 }
 
 func (w *workloadFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&w.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&w.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.StringVar(&w.cert, "cert", "", "the workload's certificate (PEM), read at every run")
-	fs.StringVar(&w.key, "key", "", "its private key (PEM), readable by its owner alone")
+	fs.StringVar(&w.key, "key", "", "its private key (PEM, readable by its owner alone), or a key reference "+
+		"(pkcs11:…;pin-source=file:///path, tpm:file=…): a workload has no terminal, so a token's PIN is read from the "+
+		"reference's pin-source")
+	fs.StringVar(&w.touchKey, "touch-key", "", "a key reference on the same token as --key, touched to prove a device's "+
+		"per-login second factor (pkcs11:…;pin-source=file:///path); without it such a device is reported, not minted")
+	fs.StringVar(&w.brokerCRL, "broker-crl", "", "the broker certificate's CRL check: check (default) refuses a "+
+		"revoked one; require also one it cannot check; off")
 	fs.DurationVar(&w.deadline, "deadline", workload.DefaultDeadline, "how long to retry a broker that cannot answer now")
 }
 
@@ -84,10 +97,30 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("%s holds no PEM certificate", w.brokerCA)
 	}
-	return workload.New(workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
-		Deadline: w.deadline, Warn: func(format string, args ...any) {
+	verify, err := brokerVerifier(w.brokerCRL, func(m string) { fmt.Fprintf(stderr, "%s: warning: %s\n", cmd, m) })
+	if err != nil {
+		return nil, err
+	}
+	cfg := workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
+		VerifyBroker: verify, Deadline: w.deadline, Warn: func(format string, args ...any) {
 			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
-		}})
+		}, Say: func(format string, args ...any) {
+			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
+		}}
+	if w.touchKey != "" {
+		// No PIN is given: a token's comes from the reference's pin-source.
+		tk, err := clientkey.Open(w.touchKey, nil)
+		if err != nil {
+			return nil, fmt.Errorf("--touch-key: %w", err)
+		}
+		if tk.State() == hwkey.Locked {
+			tk.Close()
+			return nil, errors.New("--touch-key needs a PIN and a workload has no terminal to ask for it: add " +
+				"pin-source=file:///path to the reference")
+		}
+		cfg.TouchKey = tk
+	}
+	return workload.New(cfg)
 }
 
 // mintedCount is the items that carry a token: a denied device is an answer,
@@ -143,28 +176,9 @@ func workloadToken(args []string, stdout, stderr io.Writer) int {
 	}
 	resp, err := c.Mint(context.Background(), workload.MintOptions{Devices: devices, Scope: *scope, Enable: *enable,
 		TTL: *ttl, Purpose: *purpose})
-	code := 0
-	var te *workload.TemporaryError
+	code := mintOutcome(stderr, cmd, *scope, devices, resp, err)
 	switch {
-	case errors.As(err, &te) && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted; run again\n", cmd,
-			safe(err.Error()), safe(*scope), mintedCount(resp.Results))
-		code = exitTemporary
-	case errors.As(err, &te):
-		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted; run again\n", cmd, safe(err.Error()),
-			len(te.Unminted), len(devices))
-		code = exitTemporary
-	case err != nil && *scope != "":
-		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted\n", cmd, safe(err.Error()),
-			safe(*scope), mintedCount(resp.Results))
-		code = 1
-	case err != nil:
-		// A final answer, perhaps after earlier pages minted: those are
-		// still written (pre-flight I-1).
-		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted\n", cmd, safe(err.Error()),
-			len(devices)-len(resp.Results), len(devices))
-		code = 1
-	case *scope != "" && len(resp.Results) == 0:
+	case err == nil && *scope != "" && len(resp.Results) == 0:
 		// One message for an undeclared scope and an ungranted one: the
 		// broker never tells them apart (decision 42 ruling 2).
 		fmt.Fprintf(stderr, "%s: scope %s: no device it selects is one you hold a grant on, or no scope has that name\n",

@@ -186,6 +186,18 @@ func (p *Policy) resolveAll(subs []*Subject, username string, d admission.Device
 	merged.Enable, merged.TokenTTL = strongestEnable(granting), leastTTL(granting)
 	res, err := p.resolved(merged, d, c)
 	if err != nil {
+		// Two subjects of one principal compose only here, so levels they
+		// bring together that accept no common method are found only here: the
+		// item is composition_refused, recorded, never a broker fault
+		// (decision 45 ruling 11; replay reads it the same way, unchecked).
+		if len(granting) > 1 && isMFAError(err) {
+			names := make([]string, len(granting))
+			for i, s := range granting {
+				names[i] = s.Name
+			}
+			return Resolution{}, fmt.Errorf("%w: subjects %s on %s: %v", ErrCompositionRefused,
+				strings.Join(names, ", "), d.Name, err)
+		}
 		return res, err
 	}
 	if len(granting) > 1 {

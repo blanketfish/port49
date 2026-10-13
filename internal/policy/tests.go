@@ -194,15 +194,19 @@ type TestResult struct {
 	// Reply is the session reply, placeholders empty (sessionReply).
 	Reply []string
 	// API is the subject's broker API rights, sorted.
-	API     []string
-	Pass    bool
-	Err     error
-	Caveats []string
+	API []string
+	// PerLoginMFA is the requirement the subject resolved to on the device,
+	// for a minted session.
+	PerLoginMFA MFARequirement
+	Pass        bool
+	Err         error
+	Caveats     []string
 }
 
 // onlyAPI reports whether a session test asserts API rights and nothing else.
 func (t Test) onlyAPI() bool {
-	return t.AssertsAPI && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" && t.Enable == "" && !t.AssertsReply
+	return t.AssertsAPI && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" && t.Enable == "" && !t.AssertsReply &&
+		t.MFA == nil
 }
 
 // subjectFor names the subject a test's subject or principal resolves to,
@@ -260,7 +264,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 				break
 			}
 			r.Level, r.Ceiling, r.Enable, r.PrivLvl = res.Level, res.Ceiling, res.Enable, NoCeiling
-			r.Reply = sessionReply(res)
+			r.Reply, r.PerLoginMFA = sessionReply(res), res.PerLoginMFA
 			if r.Ceiling == "" {
 				r.Ceiling = NoCeiling
 			}
@@ -284,6 +288,9 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
 		if minted {
+			if res.PerLoginMFA.Machine && res.PerLoginMFA.Required() {
+				r.Caveats = append(r.Caveats, "per_login_mfa "+machineMeets)
+			}
 			for _, a := range res.LeftOff {
 				r.Caveats = append(r.Caveats, fmt.Sprintf("%s (%s) is not sent to %s: under `all`, idletime and "+
 					"timeout are left off a projected platform, whose idle limit is the device's login class's "+
@@ -295,7 +302,8 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&
 			(t.Enable == "" || minted && t.Enable == r.Enable) &&
 			(!t.AssertsReply || minted && slices.Equal(t.Reply, r.Reply))
-		r.Pass = r.Pass && (!t.AssertsAPI || slices.Equal(t.API, r.API))
+		r.Pass = r.Pass && (!t.AssertsAPI || slices.Equal(t.API, r.API)) &&
+			(t.MFA == nil || minted && t.MFA.Matches(r.PerLoginMFA))
 		if t.Session() {
 			// A test asserting API rights alone needs no mint.
 			r.Pass = r.Pass && (minted || t.onlyAPI())

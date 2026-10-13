@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/mfatouch"
 )
 
 // ErrNoAgent is a socket nothing answers on. The answer is `port49 login`.
@@ -165,6 +167,12 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 			return item, &ItemError{Device: item.Device, Code: item.Error, Detail: item.Detail}
 		}
 		return item, nil
+	case http.StatusPreconditionRequired:
+		var need api.PerLoginMFA
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&need); err != nil || need.Challenge == "" {
+			return api.MintItem{}, errors.New("agent: the agent's requirement is malformed")
+		}
+		return api.MintItem{Device: r.Device}, &MFARequiredError{Requirement: need}
 	case http.StatusGone:
 		// Detail is the agent's ErrSessionOver with why the session ended
 		// after it, or, for a revocation, the broker's detail alone; the
@@ -183,16 +191,31 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	default:
-		var e api.Error
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		var e refusalBody
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		if refused := e.refused(); refused != nil {
+			return api.MintItem{}, refused
+		}
+		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
+			return api.MintItem{}, ke
+		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	}
 }
 
 // Refresh asks the agent to refresh the session it holds and answers what
-// the broker extended.
-func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/refresh", http.NoBody)
+// the broker extended. challenge, when not empty, names the proof that covers
+// the contexts a per-login requirement left.
+func (c *Client) Refresh(ctx context.Context, challenge string) (api.RefreshResponse, error) {
+	var rd io.Reader = http.NoBody
+	if challenge != "" {
+		body, err := json.Marshal(RefreshRequest{PerLoginMFAChallenge: challenge})
+		if err != nil {
+			return api.RefreshResponse{}, err
+		}
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/refresh", rd)
 	if err != nil {
 		return api.RefreshResponse{}, err
 	}
@@ -204,7 +227,7 @@ func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 		return api.RefreshResponse{}, fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
 	}
 	defer resp.Body.Close()
-	var e api.Error
+	var e refusalBody
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var out api.RefreshResponse
@@ -229,7 +252,13 @@ func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 	default:
 		// refresh_failed's detail is the agent's own error, already saying
 		// what the broker answered.
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		if refused := e.refused(); refused != nil {
+			return api.RefreshResponse{}, refused
+		}
+		if ke := keyErrorFromCode(e.Error, e.Detail); ke != nil {
+			return api.RefreshResponse{}, ke
+		}
 		if e.Error == "refresh_failed" {
 			return api.RefreshResponse{}, errors.New(e.Detail)
 		}
@@ -276,9 +305,13 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		}
 		return nil
 	}
-	var e api.Error
+	var e refusalBody
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
 	switch {
+	case e.refused() != nil:
+		return e.refused()
+	case e.Error == codeNoAttestation:
+		return fmt.Errorf("agent: %w", mfatouch.ErrNoAttestation)
 	case resp.StatusCode == http.StatusGone && e.Error == "credential_revoked":
 		return &RevokedError{Detail: e.Detail}
 	case resp.StatusCode == http.StatusGone:
@@ -287,12 +320,25 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		return ErrAgentTooOld
 	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
 		return errors.New(e.Detail)
+	case resp.StatusCode == http.StatusConflict && e.Error == "connection_changed":
+		return ErrConnectionChanged
+	case keyErrorFromCode(e.Error, e.Detail) != nil:
+		return keyErrorFromCode(e.Error, e.Detail)
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "revocation_running":
 		return &RevocationRunningError{Detail: e.Detail}
 	case e.Error != "":
 		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}
 	return fmt.Errorf("agent: the agent at %s answered %s", c.socket, resp.Status)
+}
+
+// ProveTouch asks the agent to prove challenge with its touch key: the key
+// blinks and the person touches it. A touch not made, a locked key or a key
+// that is gone is a *KeyError; a connection that changed meanwhile is
+// ErrConnectionChanged; the broker's refusal is an *APIError.
+func (c *Client) ProveTouch(ctx context.Context, challenge string) error {
+	var out struct{}
+	return c.roundTrip(ctx, http.MethodPost, "/mfa/touch", TouchRequest{Challenge: challenge}, &out)
 }
 
 // Identity asks the agent what the broker resolves its principal to.
@@ -341,6 +387,58 @@ type badAnswerError struct{ err error }
 
 func (e *badAnswerError) Error() string { return e.err.Error() }
 func (e *badAnswerError) Unwrap() error { return e.err }
+
+// Unlock gives the agent's key its PIN: POST /unlock {"pin": "…"}. The body
+// is built in a []byte, zeroed after the write, and pin is zeroed too. A PIN
+// the token refused is a *hwkey.PINError with the token's tries-left flags.
+func (c *Client) Unlock(ctx context.Context, pin []byte) error {
+	defer clear(pin)
+	body := make([]byte, 0, len(pin)+16)
+	defer func() { clear(body) }()
+	body = append(body, `{"pin":"`...)
+	for _, b := range pin {
+		switch {
+		case b == '"' || b == '\\':
+			body = append(body, '\\', b)
+		case b < 0x20:
+			return errors.New("agent: a PIN holds no control characters")
+		default:
+			body = append(body, b)
+		}
+	}
+	body = append(body, `"}`...)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/unlock", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := c.checkDir(); err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	var e UnlockRefusal
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&e)
+	switch {
+	case resp.StatusCode == http.StatusNotFound && e.Error == "":
+		return ErrAgentTooOld
+	case resp.StatusCode == http.StatusUnauthorized && e.Error == "pin_blocked":
+		return &hwkey.PINError{Blocked: true}
+	case resp.StatusCode == http.StatusUnauthorized && e.Error == "pin_refused":
+		return &hwkey.PINError{Low: e.Low, Final: e.Final}
+	case resp.StatusCode == http.StatusConflict && e.Error == "key_absent":
+		return hwkey.ErrKeyAbsent
+	case e.Error != "":
+		return fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
+	}
+	return fmt.Errorf("agent: the agent at %s answered %s", c.socket, resp.Status)
+}
 
 // Status asks the agent whose session it holds.
 func (c *Client) Status(ctx context.Context) (Status, error) {

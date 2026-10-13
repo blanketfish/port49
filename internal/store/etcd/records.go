@@ -25,6 +25,10 @@ type credRec struct {
 	Sid         string   `json:"sid,omitempty"`
 	ACR         string   `json:"acr,omitempty"`
 	AMR         []string `json:"amr,omitempty"`
+	MFAMethod   string   `json:"mfa_method,omitempty"`
+	// omitzero, not omitempty: omitempty never omits a zero time.Time.
+	MFAAt          time.Time `json:"mfa_at,omitzero"`
+	MFAAgentSHA256 string    `json:"mfa_agent_sha256,omitempty"`
 }
 
 type tokenRec struct {

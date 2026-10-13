@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -30,9 +29,12 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
+	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/oidcclient"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
@@ -60,7 +62,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
-	certPath, keyPath, err := userconfig.IssuedPaths(sf.broker)
+	certPath, _, err := userconfig.IssuedPaths(sf.broker)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
@@ -70,7 +72,23 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	if err := markIssuedDir(filepath.Dir(certPath)); err != nil {
 		fmt.Fprintf(stderr, "port49 login: warning: %v; exclude %s from your backups\n", err, filepath.Dir(certPath))
 	}
-	held, s, heldErr := heldCertificate(certPath, keyPath)
+	// A PIN asked for the agent is zeroed whichever way the login ends.
+	defer func() { clear(sf.pin) }()
+	pair, heldErr := pickHeldPair(sf)
+	if heldErr == nil {
+		if code, done := loginToIssuedHeldKey(ctx, sf, pair, stdout, stderr); done {
+			return code
+		}
+	}
+	var held tls.Certificate
+	var s issuer.SignIn
+	if heldErr == nil {
+		held, s, heldErr = heldCertificate(pair.cert, pair.key)
+	}
+	// A held certificate whose key is out (a token unplugged) is still the
+	// certificate of the session an agent may hold.
+	var keyErr *heldKeyError
+	keyOut := errors.As(heldErr, &keyErr)
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
 		// As on the certificate path: only the session this certificate
 		// holds is refreshed; another's is someone else's identity.
@@ -78,7 +96,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		switch {
 		case strings.TrimRight(sf.broker, "/") != st.Broker:
 			other = fmt.Sprintf("an agent logged in to %s", st.Broker)
-		case heldErr != nil || agent.CertFingerprint(held) != st.CertFingerprint:
+		case heldErr != nil && !keyOut || agent.CertFingerprint(held) != st.CertFingerprint:
 			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
 		}
 		if other != "" {
@@ -93,7 +111,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "port49: already logged in to %s as %s; refreshing\n", st.Broker, s.Principal)
-		out, err := agent.NewClient(sf.socket).Refresh(ctx)
+		out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
 			return 1
@@ -108,7 +126,17 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		return 0
 	}
 	now := time.Now()
-	if heldErr != nil && !errors.Is(heldErr, fs.ErrNotExist) {
+	switch {
+	case keyOut && keyErr.absent():
+		fmt.Fprintf(stderr, "port49 login: your key (%s) is not present: insert it, or `port49 login --sign-in` signs "+
+			"in for a new one\n", keyErr.store())
+		if !sf.signIn {
+			return 1
+		}
+	case errors.Is(heldErr, fs.ErrNotExist) && sf.issuedKeyStore == storeTPM:
+		// A file key on this home is not used: the operator named the TPM.
+		fmt.Fprintln(stderr, "port49 login: no TPM key for this machine yet")
+	case heldErr != nil && !errors.Is(heldErr, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "port49 login: your held certificate is not used: %v\n", heldErr)
 	}
 	usable := heldErr == nil && now.Before(held.Leaf.NotAfter)
@@ -116,11 +144,11 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "port49: using your certificate for %s (signed in at %s at %s), valid until %s; "+
 			"`port49 login --sign-in` signs in again\n", s.Principal, s.Issuer, rfc3339(s.AuthTime),
 			rfc3339(held.Leaf.NotAfter))
-		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
+		return startIssued(sf, pair, true, stdout, stderr)
 	}
-	code, err := issueCertificate(ctx, sf, pool, certPath, keyPath, stdout, stderr)
+	issued, code, err := issueCertificate(ctx, sf, pool, stdout, stderr)
 	if err == nil {
-		return startIssued(sf, certPath, keyPath, false, stdout, stderr)
+		return startIssued(sf, issued, false, stdout, stderr)
 	}
 	// A held certificate outlives any failure of the sign-in (ruling 17:
 	// only a sign-in fails), except a revocation or logout: the broker
@@ -128,8 +156,12 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	var refused *refusedError
 	var unreachable *oidcclient.UnreachableError
 	var silent *brokerDownError
+	var said saidError
 	down := errors.As(err, &unreachable)
 	switch {
+	case errors.As(err, &said):
+		// The PIN prompt has said why; a held certificate is for the same key.
+		return code
 	case errors.As(err, &silent):
 		// The held certificate is judged by this same broker, so there is
 		// nothing to start it against; a sign-in would cost a password and
@@ -141,6 +173,11 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "port49 login: the broker at %s did not answer; try again when it answers\n", sf.broker)
 		}
 		return 1
+	case refusedByCRL(err) != nil:
+		// The held certificate would meet the same broker certificate in the
+		// agent; going on would only fail one step later.
+		fmt.Fprintln(stderr, "port49 login:", err)
+		return 1
 	case usable && !sf.signIn && !errors.As(err, &refused):
 		why := ""
 		if down {
@@ -148,7 +185,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "port49 login: %v; using your certificate for %s until %s%s\n", err, s.Principal,
 			rfc3339(held.Leaf.NotAfter), why)
-		return startIssued(sf, certPath, keyPath, true, stdout, stderr)
+		return startIssued(sf, pair, true, stdout, stderr)
 	case down:
 		fmt.Fprintf(stderr, "port49 login: %v; port49 cannot sign you in until it answers (anyone already logged "+
 			"in keeps working: a certificate port49 issued needs no identity provider)\n", err)
@@ -160,6 +197,36 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 	}
 	return code
+}
+
+// loginToIssuedHeldKey is loginToHeldKey for the issued pair (final review
+// client I2): when the running agent holds pair's key, its key state is read
+// first and the key is not opened here (spec decision 45 ruling 8), so a key
+// that came back Locked is unlocked through the agent instead of the refresh
+// answering "run `port49 login`" at every login. A file key has no state and
+// is left to the ordinary path. done says the login is settled, with code.
+func loginToIssuedHeldKey(ctx context.Context, sf *sessionFlags, pair issuedPair, stdout, stderr io.Writer) (code int,
+	done bool) {
+	if !hwkey.IsRef(pair.key) {
+		return 0, false
+	}
+	c := agent.NewClient(sf.socket)
+	st, err := c.Status(ctx)
+	if err != nil || st.KeyState == "" || strings.TrimRight(sf.broker, "/") != st.Broker || st.KeyRef == "" ||
+		st.KeyRef != clientkey.CanonicalRef(pair.key) {
+		return 0, false
+	}
+	if sf.signIn {
+		fmt.Fprintf(stderr, "port49 login: an agent already holds your session at %s on this key; `port49 refresh` "+
+			"extends it; to sign in again, stop that agent first\n", st.Broker)
+		return 1, true
+	}
+	code = loginThroughAgent(ctx, sf, c, st, refLabel(pair.key), stdout, stderr)
+	if leaf, err := readLeaf(pair.cert); code == 0 && err == nil && api.LateRenewal(leaf, time.Now()) {
+		fmt.Fprintf(stdout, "port49: your certificate ends at %s, and the agent with it; to renew before then, "+
+			"stop the agent and run `port49 login`\n", rfc3339(leaf.NotAfter))
+	}
+	return code, true
 }
 
 // refusedError is the broker answering the certificate request 401
@@ -182,10 +249,15 @@ func (e *brokerDownError) Unwrap() error { return e.err }
 // startIssued starts the agent on the issued certificate and its key, as
 // --cert and --key would (ruling 7). A held one the agent could not connect
 // with, still there, is said: the broker's clock may be past its end.
-func startIssued(sf *sessionFlags, certPath, keyPath string, held bool, stdout, stderr io.Writer) int {
-	sf.cert, sf.key = certPath, keyPath
+func startIssued(sf *sessionFlags, pair issuedPair, held bool, stdout, stderr io.Writer) int {
+	sf.cert, sf.key = pair.cert, pair.key
+	// A token's key wants its PIN, asked once here and handed to the agent on
+	// a descriptor, as for a --key reference (unlockForAgent).
+	if !unlockIssuedKey(sf, pair.key, stderr) {
+		return 1
+	}
 	code, down := startAgentDown(sf, true, stdout, stderr)
-	if _, err := os.Stat(certPath); code != 0 && held && !down && err == nil {
+	if _, err := os.Stat(pair.cert); code != 0 && held && !down && err == nil {
 		fmt.Fprintln(stderr, "port49 login: if the broker refused your held certificate, `port49 login --sign-in` "+
 			"signs you in again")
 	}
@@ -193,19 +265,47 @@ func startIssued(sf *sessionFlags, certPath, keyPath string, held bool, stdout, 
 }
 
 // heldCertificate is the certificate a broker issued this user and its key,
-// from certPath and keyPath, with the sign-in it carries. A file not there
-// is fs.ErrNotExist.
-func heldCertificate(certPath, keyPath string) (tls.Certificate, issuer.SignIn, error) {
-	for _, p := range []string{certPath, keyPath} {
+// from certPath and keyRef (a path, or a tpm: or pkcs11: reference), with the
+// sign-in it carries. A file not there is fs.ErrNotExist. A hardware key is
+// opened, to check it is the certificate's, and let go again: no token is held
+// while the agent starts. One that cannot be opened (the token is out) comes
+// back with the certificate, which is still the held session's, and a
+// *heldKeyError.
+func heldCertificate(certPath, keyRef string) (tls.Certificate, issuer.SignIn, error) {
+	paths := []string{certPath}
+	if !hwkey.IsRef(keyRef) {
+		paths = append(paths, keyRef)
+	}
+	for _, p := range paths {
 		if _, err := os.Lstat(p); err != nil {
 			return tls.Certificate{}, issuer.SignIn{}, err
 		}
 	}
-	// Refused if the key is a symlink or readable by anyone but its owner
-	// (keyfile; pre-flight F14).
-	c, err := keyfile.LoadX509KeyPair(certPath, keyPath)
+	// A key file is refused if it is a symlink or readable by anyone but its
+	// owner (keyfile; pre-flight F14).
+	c, err := clientkey.LoadPair(certPath, keyRef, nil)
+	if err != nil && hwkey.IsRef(keyRef) {
+		// The key not opening is told from the certificate not being the key's:
+		// only the first leaves the certificate the held session's.
+		if k, oerr := clientkey.Open(keyRef, nil); oerr != nil {
+			leaf, rerr := readLeaf(certPath)
+			if rerr != nil {
+				return tls.Certificate{}, issuer.SignIn{}, rerr
+			}
+			s, serr := issuer.ReadSignIn(leaf)
+			if serr != nil {
+				return tls.Certificate{}, issuer.SignIn{}, fmt.Errorf("%s is not a certificate port49 issued: %v", certPath, serr)
+			}
+			return tls.Certificate{Certificate: [][]byte{leaf.Raw}, Leaf: leaf}, s, &heldKeyError{ref: keyRef, err: oerr}
+		} else {
+			k.Close()
+		}
+	}
 	if err != nil {
 		return tls.Certificate{}, issuer.SignIn{}, err
+	}
+	if k, ok := c.PrivateKey.(hwkey.Key); ok {
+		defer k.Close()
 	}
 	if c.Leaf, err = x509.ParseCertificate(c.Certificate[0]); err != nil {
 		return tls.Certificate{}, issuer.SignIn{}, err
@@ -222,49 +322,94 @@ func heldCertificate(certPath, keyPath string) (tls.Certificate, issuer.SignIn, 
 var writeIssuedPair = userconfig.WritePrivateAll
 
 // issueCertificate signs in at the provider the broker lists and asks the
-// broker for a certificate for a key generated here (decision 43 rulings 2,
-// 3, 7 and 8), and keeps the key and then the certificate. It prints nothing
-// on failure: the error, with the exit code, is the caller's to say, since a
-// held certificate may carry on past it.
-func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool, certPath, keyPath string,
-	stdout, stderr io.Writer) (code int, err error) {
-	conf, err := fetchBrokerConfig(ctx, sf.broker, pool)
+// broker for a certificate for a key made in the store chooseIssuedStore picks
+// (decision 43 rulings 2, 3, 7 and 8; decision 45 ruling 7), and keeps the key
+// and then the certificate. It returns the pair it kept. It prints nothing on
+// failure but the store's one line: the error, with the exit code, is the
+// caller's to say, since a held certificate may carry on past it.
+func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool,
+	stdout, stderr io.Writer) (kept issuedPair, code int, err error) {
+	verify, err := sf.verifyBroker(stderr)
 	if err != nil {
-		return 1, err
+		return issuedPair{}, 2, err
+	}
+	conf, err := fetchBrokerConfig(ctx, sf.broker, pool, verify)
+	if err != nil {
+		return issuedPair{}, 1, err
 	}
 	if conf.Issuance == nil {
-		return 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
+		return issuedPair{}, 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
 			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)", sf.broker)
 	}
 	if conf.Issuance.Unavailable() {
 		// Before the sign-in: a password and MFA for a certain 503 is the
 		// 3am cost the config's word spares (ruling 18).
-		return 1, errors.New("the broker cannot issue certificates now (its issuing CA is unavailable); " +
+		return issuedPair{}, 1, errors.New("the broker cannot issue certificates now (its issuing CA is unavailable); " +
 			"tell its operator")
 	}
 	prov, err := pickProvider(conf, sf.issuer)
 	if err != nil {
-		return 1, err
+		return issuedPair{}, 1, err
 	}
 	roots, err := sf.oidcRoots()
 	if err != nil {
-		return 2, err
+		return issuedPair{}, 2, err
 	}
 	p := oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
-	failed := func(err error) (int, error) { return 1, err }
+	failed := func(err error) (issuedPair, int, error) { return issuedPair{}, 1, err }
+	// Before the provider is asked anything: a store that cannot be used
+	// refuses here (decision 45 ruling 7).
+	store, err := chooseIssuedStore(sf, stderr)
+	if err != nil {
+		return failed(err)
+	}
 	e, err := oidcclient.Discover(ctx, p)
 	if err != nil {
 		return failed(err)
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// The key is opened or made before the browser: an issued_key naming no
+	// key, or a TPM that will not make one, costs no password.
+	target, keyFile, err := issuedTarget(store, sf)
 	if err != nil {
 		return failed(err)
+	}
+	key, keyBytes, err := newIssuedKey(store, sf, keyFile)
+	var refused *tpmRefused
+	switch {
+	case errors.As(err, &refused) && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto:
+		// `auto` goes where a key can be made: a TPM that is gone or will
+		// not make one (an owner password on its hierarchy) must not stop
+		// every login. Any other failure is an error. This is the one line.
+		if target, keyFile, err = issuedTarget(storeFile, sf); err != nil {
+			return failed(err)
+		}
+		store = storeFile
+		fmt.Fprintf(stderr, "port49 login: %sthe TPM could not make a key (%v); the key is a file (%s)\n",
+			ignoredClause(sf), unprefixed(refused.err), keyFile)
+		key, keyBytes, err = newIssuedKey(store, sf, keyFile)
+	case errors.As(err, &refused):
+		return failed(fmt.Errorf("issued_key_store is tpm, and the TPM could not make a key (%v): %s",
+			unprefixed(refused.err), tpmRefusalAdvice(refused.err)))
+	case err == nil && store == storeTPM && cmp.Or(sf.issuedKeyStore, storeAuto) == storeAuto:
+		// Said once the key is made, so it is never contradicted by a second line.
+		fmt.Fprintf(stderr, "port49 login: %sthe key is made in this machine's TPM\n", ignoredClause(sf))
+	}
+	if err != nil {
+		return failed(err)
+	}
+	// The agent opens its own session on a token; this process lets go of its
+	// own before the agent starts, whichever way the sign-in ends.
+	if k, ok := key.(hwkey.Key); ok {
+		defer k.Close()
+		if store == storePKCS && !unlockForAgent(sf, k, stderr) {
+			return issuedPair{}, 1, saidError{}
+		}
 	}
 	nonce, err := api.IssuanceNonce(key.Public())
 	if err != nil {
 		return failed(err)
 	}
-	tokens, err := signIn(ctx, p, e, nonce, sf.redirectPort, sf.noBrowser, stderr)
+	tokens, err := signIn(ctx, p, e, nonce, "", sf.redirectPort, sf.noBrowser, stderr)
 	if err != nil {
 		return failed(err)
 	}
@@ -273,7 +418,7 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err != nil {
 		return failed(err)
 	}
-	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr)
+	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr, verify)
 	if err != nil {
 		return failed(err)
 	}
@@ -282,7 +427,8 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if blk != nil {
 		leaf, err = x509.ParseCertificate(blk.Bytes)
 	}
-	if blk == nil || err != nil || !key.PublicKey.Equal(leaf.PublicKey) {
+	same, _ := key.Public().(interface{ Equal(crypto.PublicKey) bool })
+	if blk == nil || err != nil || same == nil || !same.Equal(leaf.PublicKey) {
 		return failed(errors.New("the broker's answer is not a certificate for the key this login sent"))
 	}
 	// Said from the certificate just checked, not from the broker's JSON.
@@ -292,31 +438,36 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err != nil {
 		return failed(fmt.Errorf("the broker's certificate carries no sign-in: %v", err))
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return failed(err)
-	}
 	// Both are staged before either is renamed, the key first and the
 	// certificate last: a failure to write leaves the held pair as it was,
 	// and the one that reads the pair never sees a new key beside an old
-	// certificate except across the last rename.
-	if err := writeIssuedPair(
-		userconfig.PrivateFile{Path: keyPath, Data: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
-			What: "port49-issued key"},
-		userconfig.PrivateFile{Path: certPath, Data: []byte(resp.Certificate), What: "port49-issued certificate"},
-	); err != nil {
+	// certificate except across the last rename. A token's key is no file:
+	// port49 writes the certificate alone and nothing to the token.
+	files := []userconfig.PrivateFile{{Path: target.cert, Data: []byte(resp.Certificate),
+		What: "port49-issued certificate"}}
+	if keyBytes != nil {
+		raw, err := keyBytes()
+		if err != nil {
+			return failed(err)
+		}
+		files = append([]userconfig.PrivateFile{{Path: keyFile, Data: raw, What: "port49-issued key"}}, files...)
+	}
+	if err := writeIssuedPair(files...); err != nil {
 		return failed(err)
 	}
+	// The unnamed .key is never removed here, whatever the store: on a home
+	// shared with a file host it is that host's (decision 45 ruling 7), and
+	// pickHeldPair looks for this machine's own pair before it.
 	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
 		si.Principal, sf.broker, rfc3339(leaf.NotAfter))
-	return 0, nil
+	return target, 0, nil
 }
 
 // requestCertificate is POST /v1/certificate, the sign-in's ID token the
 // bearer, over TLS 1.3 to the broker's CA alone and never through a proxy.
 // The token is in a header, never a URL, and is not kept.
 func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool, idToken string,
-	csr []byte) (api.IssueResponse, error) {
+	csr []byte, verify func(tls.ConnectionState) error) (api.IssueResponse, error) {
 	body, err := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(csr)})
 	if err != nil {
 		return api.IssueResponse{}, err
@@ -330,15 +481,24 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	}
 	req.Header.Set("Authorization", "Bearer "+idToken)
 	req.Header.Set("Content-Type", "application/json")
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	// No redirect is followed: the ID token and the CSR go to the broker
+	// named and nowhere else (final review client I4).
+	c := &http.Client{CheckRedirect: mfatouch.NoRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: pool, VerifyConnection: verify}}}
 	resp, err := c.Do(req)
 	if err != nil {
+		if refused := refusedByCRL(err); refused != nil {
+			return api.IssueResponse{}, refused
+		}
 		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s: %w", broker, err)}
+	}
+	if err := agent.Redirected(resp); err != nil {
+		return api.IssueResponse{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
@@ -376,9 +536,9 @@ var (
 // ends, and when a signal ends the process while the paste prompt has echo
 // off (guardedPaste): Ctrl-C there must not leave the operator's shell
 // typing blind.
-func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce string, port int,
+func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce, acr string, port int,
 	noBrowser bool, stderr io.Writer) (oidcclient.Tokens, error) {
-	o := oidcclient.LoginOptions{Nonce: nonce, Port: port, Out: stderr, Now: time.Now}
+	o := oidcclient.LoginOptions{Nonce: nonce, ACRValues: acr, Port: port, Out: stderr, Now: time.Now}
 	if !noBrowser {
 		o.Browser = openBrowser
 	}
@@ -492,27 +652,51 @@ func pickProvider(c api.Config, issuer string) (api.OIDCProvider, error) {
 	return c.OIDC[0], nil
 }
 
+// refusedByCRL is err's broker CRL refusal (a revoked broker certificate, or
+// one that could not be checked under broker_crl: require), or nil. It is the
+// broker's certificate being refused, not the broker being down: a login must
+// not treat it as an outage.
+func refusedByCRL(err error) error {
+	var revoked *brokercrl.RevokedError
+	var unchecked *brokercrl.UncheckedError
+	switch {
+	case errors.As(err, &revoked):
+		return revoked
+	case errors.As(err, &unchecked):
+		return unchecked
+	}
+	return nil
+}
+
 // fetchBrokerConfig is the broker's GET /v1/config, which needs no
 // credential (design §17), over TLS 1.3 to the broker's CA alone and never
 // through a proxy: the broker is the operator's own.
-func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool) (api.Config, error) {
+func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
+	verify func(tls.ConnectionState) error) (api.Config, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}
+	c := &http.Client{CheckRedirect: mfatouch.NoRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: pool, VerifyConnection: verify}}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(broker, "/")+"/v1/config", nil)
 	if err != nil {
 		return api.Config{}, err
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		var verify *tls.CertificateVerificationError
-		if errors.As(err, &verify) {
+		if refused := refusedByCRL(err); refused != nil {
+			return api.Config{}, refused
+		}
+		var cv *tls.CertificateVerificationError
+		if errors.As(err, &cv) {
 			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
-				"CA (--broker-ca) is the CA that issued it%s", broker, verify.Err, agent.RotatedCA(verify.Err, bundleKept(broker)))
+				"CA (--broker-ca) is the CA that issued it%s", broker, cv.Err, agent.RotatedCA(cv.Err, bundleKept(broker)))
 		}
 		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
+	if err := agent.Redirected(resp); err != nil {
+		return api.Config{}, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return api.Config{}, fmt.Errorf("%s/v1/config answered %s", broker, resp.Status)
 	}

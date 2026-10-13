@@ -51,6 +51,17 @@ type Result struct {
 type CRLSource struct {
 	Name, File, URL string
 	Issuer          *x509.Certificate // the CA that signs the list (issuer_file)
+	// IssuerWord is how a refusal calls the issuer: "issuer_file's" when
+	// empty, as the broker's operator knows it. A client has no issuer_file
+	// and says "the issuing CA's".
+	IssuerWord string
+}
+
+func (s CRLSource) issuerWord() string {
+	if s.IssuerWord == "" {
+		return "issuer_file's"
+	}
+	return s.IssuerWord
 }
 
 type OCSPConfig struct {

@@ -26,23 +26,30 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/brokercrl"
+	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 const usage = `usage:
-  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--cert FILE --key FILE |
+  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--touch-key REF] [--cert FILE --key FILE |
                --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in]]
                (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
                each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity
                provider and holds the certificate the broker issues, signing in again when it has under a
                quarter of its life left, or with --sign-in)
+  port49 login [--config FILE] [--broker URL] --delete-key
+               (issued_key_store: secure_enclave: deletes this Mac's Secure Enclave keys for the broker and
+               the certificate held for them, after asking; the next login makes one key)
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
@@ -202,6 +209,74 @@ type sessionFlags struct {
 	redirectPort            int
 	// oidcCAPEM is oidc_ca's bytes, read by userconfig.Load through its walk.
 	oidcCAPEM []byte
+	// brokerCRL is broker_crl: check (the default), require or off (plan 9c,
+	// ruling 9). verify is the one check every connection this process makes
+	// to the broker shares, made on first use.
+	brokerCRL string
+	verify    func(tls.ConnectionState) error
+	verified  bool
+	// touchKey is touch_key, a key reference on the session key's token
+	// (plan 9c, ruling 12). pinFD is an inherited descriptor the PIN comes on
+	// (the agent child's; hidden: the login sets it). 0 is unset.
+	touchKey string
+	pinFD    int
+	// issuedKeyStore and issuedKey are issued_key_store and issued_key, from
+	// the config file alone.
+	issuedKeyStore, issuedKey string
+	// pin is the key's PIN while it is held: read from pinFD in the agent,
+	// asked in the login. Never logged; zeroed by whoever sets it.
+	pin []byte
+}
+
+// brokerVerifier is the VerifyConnection that checks the broker's
+// certificate against its CRLs under mode, nil for off. The lists are kept in
+// ~/.port49/crl; a directory that cannot be made is said once and the lists
+// are fetched each run instead. warn says, once, a list that could not be
+// had under check.
+func brokerVerifier(mode string, warn func(string)) (func(tls.ConnectionState) error, error) {
+	m, err := brokercrl.ParseMode(mode)
+	if err != nil || m == brokercrl.ModeOff {
+		return nil, err
+	}
+	var once sync.Once
+	var chk *brokercrl.Checker
+	// keepNote is why the CRLs are not kept, said only with a check that had
+	// no answer (a kept list is what would have answered), not on every run.
+	var keepNote string
+	return func(cs tls.ConnectionState) error {
+		once.Do(func() {
+			dir, err := userconfig.PrivateDir(filepath.Join(userconfig.Dir(), "crl"), "kept CRL directory")
+			if err != nil {
+				keepNote = fmt.Sprintf("the CRLs cannot be kept (%v); they are fetched again at each run", err)
+				dir = ""
+			}
+			chk = brokercrl.New(dir, m, time.Now, func(msg string) {
+				if keepNote != "" {
+					msg += "; " + keepNote
+				}
+				warn(msg)
+			})
+		})
+		err := chk.VerifyConnection(cs)
+		var unchecked *brokercrl.UncheckedError
+		if keepNote != "" && errors.As(err, &unchecked) {
+			return fmt.Errorf("%w; %s", err, keepNote)
+		}
+		return err
+	}, nil
+}
+
+// verifyBroker is the check this session's connections to the broker make,
+// said to log.
+func (s *sessionFlags) verifyBroker(log io.Writer) (func(tls.ConnectionState) error, error) {
+	if !s.verified {
+		v, err := brokerVerifier(s.brokerCRL, func(m string) { fmt.Fprintln(log, "port49: warning:", m) })
+		if err != nil {
+			return nil, err
+		}
+		s.verify, s.verified = v, true
+	}
+	return s.verify, nil
 }
 
 // hardenAgent is harden, a var so TestMain makes it a no-op: the tests that
@@ -227,6 +302,11 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
+	fs.StringVar(&s.brokerCRL, "broker-crl", "", "the broker certificate's CRL check: check (default) refuses a "+
+		"revoked one; require also one it cannot check; off")
+	fs.StringVar(&s.touchKey, "touch-key", "", "a key reference on the same token as --key, whose touch the agent may use "+
+		"(touch_key in the config file)")
+	fs.IntVar(&s.pinFD, "pin-fd", 0, "internal: the descriptor the login passes the key's PIN on")
 	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
 		"key by key; each flag overrides its key")
@@ -268,6 +348,9 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 		s.oidc = f.Method == "oidc"
 	}
 	s.issuer = cmp.Or(s.issuer, f.OIDCIssuer)
+	s.brokerCRL = cmp.Or(s.brokerCRL, f.BrokerCRL)
+	s.touchKey = cmp.Or(s.touchKey, f.TouchKey)
+	s.issuedKeyStore, s.issuedKey = f.IssuedKeyStore, f.IssuedKey
 	if !set["redirect-port"] {
 		s.redirectPort = f.OIDCRedirectPort
 	}
@@ -276,13 +359,26 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 
 // complete is whether the command line names all this command needs, so
 // the config file is not read: the agent child is handed all of it, and a
-// certificate login with all four flags reads no file, as before.
+// certificate login with all four flags reads no file, as before. broker_crl
+// is the exception: without --broker-crl the file is read for it, so a
+// require in the file is not skipped by a command line that names the rest.
+// A pkcs11 key may leave --cert out (the certificate is on the token, or the
+// file's cert:), and a touch_key may be only in the system file, so that is
+// complete only for the agent child, which the login has handed all of it
+// (it is the one given --broker-ca-fd).
 func (s *sessionFlags) complete() bool {
-	return !s.oidc && s.broker != "" && s.cert != "" && s.key != "" && s.brokerCA != ""
+	return !s.oidc && s.broker != "" &&
+		(s.cert != "" || (strings.HasPrefix(s.key, "pkcs11:") && s.brokerCAFD != 0)) && s.key != "" &&
+		s.brokerCA != "" && s.brokerCRL != ""
 }
 
 func (s *sessionFlags) args() []string {
-	return []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA, "--socket", s.socket}
+	a := []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA,
+		"--broker-crl", cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck)), "--socket", s.socket}
+	if s.touchKey != "" {
+		a = append(a, "--touch-key", s.touchKey)
+	}
+	return a
 }
 
 // brokerPool is the broker CA's pool, from the bytes the config file's walk
@@ -340,7 +436,8 @@ func (s *sessionFlags) brokerPool() (*x509.CertPool, error) {
 }
 
 func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
-	if s.broker == "" || s.cert == "" || s.key == "" {
+	// A key on a PKCS#11 token may hold its certificate: --cert is then optional.
+	if s.broker == "" || (s.cert == "" && !strings.HasPrefix(s.key, "pkcs11:")) || s.key == "" {
 		return agent.Config{}, fmt.Errorf("--broker, --cert, --key and --broker-ca are all required, as flags "+
 			"or in %s", s.configFile)
 	}
@@ -350,7 +447,9 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	}
 	// Refused if the key is a symlink or readable by anyone but its owner
 	// (keyfile; pre-flight F14).
-	cert, err := keyfile.LoadX509KeyPair(s.cert, s.key)
+	// A key reference is opened (clientkey.LoadPair); LoadPair zeroes the PIN
+	// it is given, so it gets a copy.
+	cert, err := clientkey.LoadPair(s.cert, s.key, slices.Clone(s.pin))
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
@@ -358,8 +457,49 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if err != nil {
 		return agent.Config{}, err
 	}
-	return agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
-		BundleKept: bundleKept(s.broker)}, nil
+	verify, err := s.verifyBroker(log)
+	if err != nil {
+		return agent.Config{}, err
+	}
+	cfg := agent.Config{BrokerURL: s.broker, Cert: cert, BrokerCA: pool, Now: time.Now, Log: log,
+		BundleKept: bundleKept(s.broker), VerifyBroker: verify, BrokerCAPEM: s.brokerCAPEM,
+		BrokerCRL: cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck))}
+	if hwkey.IsRef(s.key) {
+		cfg.KeyRef = clientkey.CanonicalRef(s.key)
+	}
+	return cfg, nil
+}
+
+// openTouchKey is the agent's touch_key: opened with no PIN, and given the
+// PIN only once it is known to sit on the session key's own token, so a
+// reference to another token never spends that token's PIN tries (ruling 12;
+// pre-flight I6). Whatever goes wrong is the key's reason (TouchKeyUnusable)
+// and never a start failure.
+func (s *sessionFlags) openTouchKey(cfg *agent.Config, log io.Writer) {
+	if s.touchKey == "" {
+		return
+	}
+	tk, err := clientkey.Open(s.touchKey, nil)
+	if err != nil {
+		cfg.TouchKeyUnusable = "touch_key did not open: " + unprefixed(err)
+		fmt.Fprintln(log, "port49 agent: touch_key unusable:", cfg.TouchKeyUnusable)
+		return
+	}
+	if ok, why := agent.SameToken(cfg.Cert.PrivateKey, tk); ok && tk.State() == hwkey.Locked {
+		if len(s.pin) > 0 {
+			if err := tk.Unlock(slices.Clone(s.pin)); err != nil {
+				fmt.Fprintln(log, "port49 agent: the touch key stayed locked:", unprefixed(err))
+			}
+		} else if r, ok := tk.(interface{ ReadLogin() }); ok {
+			// The session key was unlocked from pin-source, so there is no PIN
+			// here, and none is sent: the token's login is the application's,
+			// and the touch key's session shows it (re-review M14).
+			r.ReadLogin()
+		}
+	} else if !ok {
+		fmt.Fprintln(log, "port49 agent: touch_key unusable:", why)
+	}
+	cfg.TouchKey = tk // agent.New keeps it only on the session key's token
 }
 
 // login logs in with the certificate --cert and --key name, or with --oidc
@@ -371,11 +511,20 @@ func login(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var sf sessionFlags
 	sf.register(fs)
+	deleteKey := fs.Bool("delete-key", false, "with issued_key_store: secure_enclave: delete this Mac's Secure Enclave "+
+		"keys for the broker, and the certificate held for them, after asking; logs in to nothing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if *deleteKey {
+		if err := sf.fill(fs); err != nil {
+			fmt.Fprintln(stderr, "port49 login:", err)
+			return 2
+		}
+		return deleteSecureEnclaveKey(&sf, stdout, stderr)
+	}
 	if sf.oidc && (set["cert"] || set["key"]) {
 		fmt.Fprintln(stderr, "port49 login: --cert and --key are a certificate login's; --oidc signs in at your "+
 			"identity provider instead")
@@ -385,6 +534,10 @@ func login(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
+	// A login with a terminal asks the PIN of a key whose pin-source PIN was
+	// held back for low tries; one without refuses (re-review N1).
+	clientkey.AskWhenTriesLow = loginStdinIsTerminal
+	defer func() { clientkey.AskWhenTriesLow = func() bool { return false } }()
 	if sf.oidc {
 		return loginIssued(&sf, stdout, stderr)
 	}
@@ -394,12 +547,28 @@ func login(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	ctx := context.Background()
+	// A hardware key is not opened while the agent that holds this login's key
+	// is running: that agent is asked first, so a token pulled out and put
+	// back costs a PIN and no second look at the token (pre-flight I15).
+	if hwkey.IsRef(sf.key) {
+		if code, done := loginToHeldKey(ctx, &sf, stdout, stderr); done {
+			return code
+		}
+	}
 	cfg, err := sf.config(stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
-	ctx := context.Background()
+	// The agent opens its own session on the token. This process lets go of
+	// its own before the agent starts, so none holds the token while the
+	// agent logs in (ruling 8); Close is idempotent for the early returns.
+	var held hwkey.Key
+	if k, ok := cfg.Cert.PrivateKey.(hwkey.Key); ok {
+		held = k
+		defer k.Close()
+	}
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
 		// Only the session these flags name is refreshed. Another broker's,
 		// or another certificate's, is someone else's identity: refreshing
@@ -417,16 +586,28 @@ func login(args []string, stdout, stderr io.Writer) int {
 				"stop that agent first, or use --socket\n", other, sf.socket)
 			return 1
 		}
-		fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
-		out, err := agent.NewClient(sf.socket).Refresh(ctx)
-		if err != nil {
-			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
-			return 1
-		}
-		printRefresh(stdout, out)
-		return 0
+		return refreshRunning(ctx, &sf, st, stdout, stderr)
+	}
+	if held != nil && !unlockForAgent(&sf, held, stderr) {
+		return 1
+	}
+	defer clear(sf.pin)
+	if held != nil {
+		held.Close()
 	}
 	return startAgent(&sf, false, stdout, stderr)
+}
+
+// refreshRunning refreshes the session of the agent that is already logged in.
+func refreshRunning(ctx context.Context, sf *sessionFlags, st agent.Status, stdout, stderr io.Writer) int {
+	fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
+	out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
+		return 1
+	}
+	printRefresh(stdout, out)
+	return 0
 }
 
 // startAgent starts the agent in its own session, detached, and waits until
@@ -475,9 +656,32 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 	}
 	defer caR.Close()
 	defer caW.Close()
-	cmd := exec.Command(self, append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")...)
+	argv := append(append([]string{"agent"}, sf.args()...), "--broker-ca-fd", "3")
+	extra := []*os.File{caR}
+	// The PIN the login asked goes on a pipe as descriptor 4, never argv or
+	// the environment, and is zeroed once written.
+	var pinR *os.File
+	if len(sf.pin) > 0 {
+		var pinW *os.File
+		if pinR, pinW, err = os.Pipe(); err != nil {
+			fmt.Fprintln(stderr, "port49 login:", err)
+			return 1, false
+		}
+		defer pinR.Close()
+		_, werr := pinW.Write(sf.pin)
+		pinW.Close()
+		clear(sf.pin)
+		sf.pin = nil
+		if werr != nil {
+			fmt.Fprintln(stderr, "port49 login: passing the PIN to the agent:", werr)
+			return 1, false
+		}
+		extra = append(extra, pinR)
+		argv = append(argv, "--pin-fd", "4")
+	}
+	cmd := exec.Command(self, argv...)
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.ExtraFiles = []*os.File{caR}
+	cmd.ExtraFiles = extra
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(stderr, "port49 login: starting the agent:", err)
@@ -501,8 +705,7 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 				// Refused at the bind, before the refresh could be: the same
 				// as a refused refresh (R6), so the pair is not kept to fail
 				// on every later login.
-				_ = os.Remove(sf.key)
-				_ = os.Remove(sf.cert)
+				removeIssued(sf.cert, sf.key)
 				fmt.Fprint(stderr, refusedCertificate(revokedWords(string(tail))))
 				return 1, false
 			}
@@ -527,12 +730,11 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 			// The session is up whatever the refresh does: a failure is
 			// said, and the login still succeeds, unless the broker refused
 			// a certificate it issued.
-			out, err := agent.NewClient(sf.socket).Refresh(ctx)
+			out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
 			var revoked *agent.RevokedError
 			switch {
 			case issued && errors.As(err, &revoked):
-				_ = os.Remove(sf.key)
-				_ = os.Remove(sf.cert)
+				removeIssued(sf.cert, sf.key)
 				fmt.Fprint(stderr, refusedCertificate(revoked.Detail))
 				return 1, false
 			case err != nil:
@@ -571,11 +773,21 @@ func agentMain(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
+	// The PIN, if the login passed one, is read from its descriptor and held
+	// only until the keys are open.
+	if err := sf.readPINFD(); err != nil {
+		fmt.Fprintln(stderr, "port49 agent:", err)
+		return 2
+	}
+	defer func() { clear(sf.pin) }()
 	cfg, err := sf.config(stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
+	sf.openTouchKey(&cfg, stderr)
+	clear(sf.pin)
+	sf.pin = nil
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a := agent.New(cfg)
@@ -707,8 +919,8 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	device := fs.Arg(0)
-	item, err := agent.NewClient(*socket).Token(context.Background(),
-		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)})
+	item, err := mintProved(context.Background(), proveFlags(*socket),
+		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
 		return 1
 	}

@@ -29,6 +29,23 @@ func AuthorizationURL(p Provider, e Endpoints, redirect, state, nonce, challenge
 	return u.String(), nil
 }
 
+// WithACRValues is authURL with acr_values=acr (OIDC Core §3.1.2.1), the
+// authentication context an idp_mfa sign-in asks the provider for (plan 9c;
+// decision 45). An empty acr leaves the URL as it is: the broker names none.
+func WithACRValues(authURL, acr string) (string, error) {
+	if acr == "" {
+		return authURL, nil
+	}
+	u, err := url.Parse(authURL)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("acr_values", acr)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 // scopeOf is the scope a sign-in sends: the verifier's scopes, openid first
 // when they leave it out (OIDC Core §3.1.2.1).
 func scopeOf(p Provider) string {

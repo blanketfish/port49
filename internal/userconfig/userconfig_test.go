@@ -1,6 +1,8 @@
 package userconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -621,6 +623,83 @@ func TestIssuedPaths(t *testing.T) {
 	}
 }
 
+// A token-held key's certificate is named for the key, the first 8 hex digits
+// of SHA-256 of its reference, beside the file pair's, so a token host and a
+// file host sharing a home never name the same certificate (decision 45
+// ruling 7); a broker URL IssuedPathsIn refuses is refused.
+func TestIssuedTokenPaths(t *testing.T) {
+	const ref = "pkcs11:token=lab;id=%10"
+	sum := sha256.Sum256([]byte(ref))
+	k := hex.EncodeToString(sum[:])[:8]
+	c, err := IssuedTokenPathsIn("/d", "https://Broker.Example:8443", ref)
+	if err != nil || c != "/d/issued/broker.example_8443."+k+".pem" {
+		t.Fatalf("%s %v", c, err)
+	}
+	if file, _, _ := IssuedPathsIn("/d", "https://Broker.Example:8443"); c == file {
+		t.Fatalf("the token's certificate is the file pair's, %s", c)
+	}
+	if other, _ := IssuedTokenPathsIn("/d", "https://Broker.Example:8443", "pkcs11:token=lab;id=%11"); other == c {
+		t.Fatalf("two keys share %s", c)
+	}
+	if _, err := IssuedTokenPathsIn("/d", "http://broker.example", ref); err == nil {
+		t.Error("a refused broker made a path")
+	}
+}
+
+// A TPM-held pair is named for the machine as well, beside the file pair, so
+// hosts that share a home directory keep a pair each (decision 45 ruling 7;
+// pre-flight I12); a broker URL IssuedPathsIn refuses is refused, and a
+// machine with no id makes no path.
+func TestIssuedTPMPaths(t *testing.T) {
+	prev := MachineID
+	t.Cleanup(func() { MachineID = prev })
+	MachineID = func() (string, error) { return "0123abcd", nil }
+	for broker, want := range map[string]string{
+		"https://Broker.Example:8443":  "broker.example_8443",
+		"https://broker.example":       "broker.example_443",
+		"https://[2001:db8::1]:8443/x": "2001-db8--1_8443",
+	} {
+		c, k, err := IssuedTPMPathsIn("/d", broker)
+		if err != nil || c != "/d/issued/"+want+".0123abcd.pem" || k != "/d/issued/"+want+".0123abcd.tpmkey" {
+			t.Errorf("%s: %s %s %v", broker, c, k, err)
+		}
+	}
+	for _, bad := range []string{"http://broker.example", "https://", "https://u:p@broker.example", "broker.example:8443"} {
+		if _, _, err := IssuedTPMPathsIn("/d", bad); err == nil {
+			t.Errorf("%q made a path", bad)
+		}
+	}
+	MachineID = func() (string, error) { return "", errors.New("no machine id") }
+	if _, _, err := IssuedTPMPathsIn("/d", "https://broker.example"); err == nil {
+		t.Error("a machine with no id made a path")
+	}
+}
+
+// The machine's name is the first 8 hex digits of SHA-256 of
+// /etc/machine-id as the file is (so `sha256sum /etc/machine-id` says it); a
+// missing or empty file is an error.
+func TestMachineID(t *testing.T) {
+	prev := machineIDFile
+	t.Cleanup(func() { machineIDFile = prev })
+	machineIDFile = filepath.Join(t.TempDir(), "machine-id")
+	if _, err := MachineID(); err == nil {
+		t.Fatal("no machine-id file gave an id")
+	}
+	if err := os.WriteFile(machineIDFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MachineID(); err == nil {
+		t.Fatal("an empty machine-id file gave an id")
+	}
+	if err := os.WriteFile(machineIDFile, []byte("abc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// sha256("abc\n") = edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb
+	if id, err := MachineID(); err != nil || id != "edeaaff3" {
+		t.Fatalf("MachineID = %q, %v", id, err)
+	}
+}
+
 // asSystem stands path in for /etc/port49/config.yaml for the rest of the
 // test, owned by owner in root's place.
 func asSystem(t *testing.T, path string, owner uint32) {
@@ -675,6 +754,41 @@ func TestLoadAllLayersYoursOverTheSystemFile(t *testing.T) {
 	}
 	if _, _, err := LoadAll(mine, false); err == nil || !strings.Contains(err.Error(), "broker_ca in "+sys) {
 		t.Fatalf("a CA others can write: %v", err)
+	}
+}
+
+// A key reference is not a path (plan 9c): it is carried byte for byte, not
+// joined to the file's directory, and the words issued_key_store and
+// broker_crl take are checked.
+func TestKeyReferencesAreNotPaths(t *testing.T) {
+	key := "pkcs11:id=%01?module-path=/usr/lib/libykcs11.so"
+	touch := "pkcs11:id=%02?module-path=/usr/lib/libykcs11.so"
+	p := private(t, "config.yaml", "key: \""+key+"\"\ntouch_key: \""+touch+"\"\n"+
+		"issued_key_store: tpm\nissued_key: \"tpm:file=/var/lib/p/issued.tss\"\nbroker_crl: require\n")
+	f, ok, err := Load(p)
+	if err != nil || !ok {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	if f.Key != key || f.TouchKey != touch || f.IssuedKeyStore != "tpm" ||
+		f.IssuedKey != "tpm:file=/var/lib/p/issued.tss" || f.BrokerCRL != "require" {
+		t.Fatalf("%+v", f)
+	}
+	for body, want := range map[string]string{
+		"issued_key_store: floppy\n": "auto, file, tpm, secure_enclave or pkcs11",
+		"broker_crl: maybe\n":        "check, require or off",
+		"touch_key: /k.pem\n":        "touch_key",
+		"issued_key: /k.pem\n":       "issued_key",
+	} {
+		if _, _, err := Load(private(t, "config.yaml", body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", body, err, want)
+		}
+	}
+	sys := private(t, "config.yaml", "touch_key: \"pkcs11:id=%09\"\nissued_key_store: file\n")
+	asSystem(t, sys, uint32(os.Getuid()))
+	t.Setenv("XDG_CONFIG_HOME", privateDir(t))
+	f, ok, err = LoadAll(p, false)
+	if err != nil || !ok || f.TouchKey != touch || f.IssuedKeyStore != "tpm" {
+		t.Fatalf("the personal file's touch_key must win: %+v %v %v", f, ok, err)
 	}
 }
 
@@ -780,5 +894,96 @@ func TestTheFixForARootFileUnderYourHomeIsYours(t *testing.T) {
 	}
 	if got := fixFor("/home/alicia/x", "0644"); strings.Contains(got, "yours") {
 		t.Fatalf("a sibling of the home directory: %q", got)
+	}
+}
+
+// The usual install is a link chain (libykcs11.so -> libykcs11.so.2 -> the
+// file): the directory each link's target is in is judged too, or a module
+// whose real file sits where someone else can write would pass (review I2).
+func TestCheckOwnedWalksTheDirectoryOfALinkTarget(t *testing.T) {
+	open := filepath.Join(privateDir(t), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(open, "libmod.so.2")
+	if err := os.WriteFile(real, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(privateDir(t), "libmod.so")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(link); err != nil {
+		t.Fatalf("a link into a 0700 directory: %v", err)
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := CheckOwned(link); err == nil || !strings.Contains(err.Error(), open) {
+		t.Fatalf("a link into a group-writable directory: %v", err)
+	}
+}
+
+// A PKCS#11 module is code the agent runs: the file, the links to it and
+// every directory above it are judged (plan 9c, ruling 3; pre-flight I1).
+func TestCheckOwnedJudgesTheModuleAndItsDirectories(t *testing.T) {
+	dir := privateDir(t)
+	mod := filepath.Join(dir, "libmod.so")
+	if err := os.WriteFile(mod, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err != nil {
+		t.Fatalf("a 0755 module in a 0700 directory: %v", err)
+	}
+
+	if err := os.Chmod(mod, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), mod) ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a group-writable module: %v", err)
+	}
+	if err := os.Chmod(mod, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	open := filepath.Join(privateDir(t), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inOpen := filepath.Join(open, "libmod.so")
+	if err := os.WriteFile(inOpen, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := CheckOwned(inOpen); err == nil || !strings.Contains(err.Error(), open) {
+		t.Fatalf("a module in a group-writable directory: %v", err)
+	}
+
+	// The libykcs11.so chain: a link of the user's to a regular file of the
+	// user's passes.
+	link := filepath.Join(dir, "libmod.so.2")
+	if err := os.Symlink("libmod.so", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(link); err != nil {
+		t.Fatalf("a link to a regular file: %v", err)
+	}
+
+	// A link to a directory is no module.
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dlink := filepath.Join(dir, "libdir.so")
+	if err := os.Symlink("sub", dlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(dlink); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("a link to a directory: %v", err)
 	}
 }

@@ -3,8 +3,10 @@ module github.com/rhwendt/port49
 go 1.26
 
 require (
+	github.com/ebitengine/purego v0.11.1
 	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-ldap/ldap/v3 v3.4.14
+	github.com/google/go-tpm v0.9.8
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	go.etcd.io/etcd/api/v3 v3.6.15
 	go.etcd.io/etcd/client/pkg/v3 v3.6.15

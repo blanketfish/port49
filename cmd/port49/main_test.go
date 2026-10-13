@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -30,9 +32,11 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/rhwendt/port49/internal/pivattest"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -254,6 +258,10 @@ func TestUsage(t *testing.T) {
 	if code := run(nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "port49 token") {
 		t.Fatalf("code %d %q", code, errb.String())
 	}
+	// touch_key is a fleet setting, so the login line names its flag.
+	if !strings.Contains(errb.String(), "[--touch-key REF]") {
+		t.Errorf("the usage does not name --touch-key: %q", errb.String())
+	}
 }
 
 // login prints the agent package's refusals under its own prefix, once.
@@ -300,6 +308,16 @@ func TestMain(m *testing.M) {
 	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
 		subreaperHook()
 	}
+	// No test, and no child a test starts (the askpass and port49 branches
+	// below), opens this machine's TPM: `auto` would find /dev/tpmrm0 and a
+	// login would make a key in it. The hwkey tests dial a swtpm: hwtest's
+	// init points a child at the one PORT49_TEST_SWTPM (hwtest.EnvSWTPM)
+	// names, and that is left in place.
+	if os.Getenv("PORT49_TEST_SWTPM") == "" {
+		tpm.Dial = func() (transport.TPMCloser, error) {
+			return nil, errors.New("the tests do not open this machine's TPM")
+		}
+	}
 	// The test binary is port49 ssh's askpass in the ssh tests, as port49
 	// is in production.
 	if sock, ok := askpassCall(os.Args[1:]); ok {
@@ -325,10 +343,14 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(userconfig.EnvConfig)
 	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
 	os.Setenv(testSystemConfig, userconfig.SystemPath)
-	code := m.Run()
+	code := runTests(m)
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// runTests runs the package's tests: m.Run, or, under the hwkey tags
+// (main_hwkey_test.go), SoftHSM's setup around it.
+var runTests = func(m *testing.M) int { return m.Run() }
 
 // labBroker is a real broker behind its own Listener, as port49d serves it,
 // on the lab PKI WriteLab wrote to dir, with one live context for alice on
@@ -343,6 +365,25 @@ type labBroker struct {
 	skew time.Duration
 	stop func() // closes the broker's server: the broker is down
 	bl   *broker.Listener
+	// onAccept, when set, runs for each connection the broker accepts, before
+	// it is served.
+	onAccept atomic.Pointer[func()]
+}
+
+// acceptHook is the lab broker's listener: it tells l each connection.
+type acceptHook struct {
+	net.Listener
+	l *labBroker
+}
+
+func (a acceptHook) Accept() (net.Conn, error) {
+	c, err := a.Listener.Accept()
+	if err == nil {
+		if f := a.l.onAccept.Load(); f != nil {
+			(*f)()
+		}
+	}
+	return c, err
 }
 
 func (l *labBroker) now() time.Time {
@@ -368,7 +409,38 @@ func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker {
 }
 
 func newLabBrokerWith(t *testing.T, maxAge time.Duration, iss *oidctest.Issuer, issue bool) *labBroker {
+	return newLabBrokerOpts(t, labOpts{maxAge: maxAge, iss: iss, issue: issue})
+}
+
+// labOpts are the lab broker's variations. mfa puts a per_login_mfa
+// requirement on every device (accept hardware_key_touch and idp_mfa, reuse
+// 15m); piv, when set, gives the broker its root as the attestation anchors;
+// acr is the acr_values an idp_mfa sign-in sends; logs receives the decision
+// log; spy sees every request the broker serves.
+type labOpts struct {
+	maxAge time.Duration
+	iss    *oidctest.Issuer
+	issue  bool
+	mfa    bool
+	// keepX509 keeps a broker that trusts certificates beside the OIDC
+	// verifier iss gives it (the idp_mfa proof's bearer).
+	keepX509 bool
+	piv      *testpki.PIV
+	acr      string
+	logs     io.Writer
+	spy      func(*http.Request)
+}
+
+func newLabBrokerOpts(t *testing.T, o labOpts) *labBroker {
 	t.Helper()
+	// A home of the lab's own, which the agent a login starts inherits: the
+	// issued pairs, kept CA bundles and CRLs are named by host and port
+	// alone, and a port an earlier lab used would hand this one that lab's
+	// pair, signed by another CA (final review client I3).
+	home := privateDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	maxAge, iss, issue := o.maxAge, o.iss, o.issue
 	l := &labBroker{dir: t.TempDir()}
 	if err := testpki.WriteLab(l.dir, "alice@example.com", time.Now()); err != nil {
 		t.Fatal(err)
@@ -388,9 +460,13 @@ func newLabBrokerWith(t *testing.T, maxAge time.Duration, iss *oidctest.Issuer, 
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(caPEM)
 
+	requirement := ""
+	if o.mfa {
+		requirement = ", per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}"
+	}
 	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(policyFile, []byte(`
-scopes: [{name: all_devices, match: {}}]
+scopes: [{name: all_devices, match: {}`+requirement+`}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
@@ -403,16 +479,31 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		t.Fatal(err)
 	}
 	l.st = memory.New(l.now)
-	log := decision.NewJSONLines(io.Discard)
+	var logOut io.Writer = io.Discard
+	if o.logs != nil {
+		logOut = o.logs
+	}
+	log := decision.NewJSONLines(logOut)
 	l.b = &broker.Broker{Policy: policy.NewLive(pol),
 		Minter: token.NewMinter(l.st, log, rand.Reader, token.TagKey([]byte("k")), l.now, 8),
 		Store:  l.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: l.now,
 		MaxSessionAge: maxAge, BatchMax: 4, Sessions: session.New(l.st, l.now, time.Hour, time.Hour),
 		ContextIdleTTL: time.Hour, CeilingWarning: 30 * time.Minute, GraceWindow: 5 * time.Minute}
+	if o.piv != nil || o.acr != "" {
+		v := &broker.MFAVerifiers{ACRValues: o.acr}
+		if o.piv != nil {
+			anchors, err := pivattest.ParseAnchors(o.piv.Anchors())
+			if err != nil {
+				t.Fatal(err)
+			}
+			v.Anchors = &anchors
+		}
+		l.b.PerLoginMFA = v
+	}
 	if iss != nil {
 		ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
 			MaxAge: 24 * time.Hour, Now: l.now, M: l.b.Metrics})
-		l.b.NoX509 = true
+		l.b.NoX509 = !o.keepX509
 		l.b.Identity = &oidc.Set{Timing: oidc.DefaultTiming, Now: l.now, M: l.b.Metrics,
 			Verifiers: []*oidc.Verifier{{VerifierConfig: oidc.VerifierConfig{Domain: oidc.Humans, Issuer: iss.URL,
 				ClientID: "port49-cli", PrincipalClaim: oidc.ClaimPreferredUsername,
@@ -452,7 +543,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		t.Fatal(err)
 	}
 	certKey, anchor := store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)), pool
-	if iss != nil {
+	if iss != nil && !o.keepX509 {
 		// A context before an OIDC login names no certificate; an OIDC-only
 		// broker takes no anchor.
 		certKey, anchor = "", nil
@@ -466,11 +557,18 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
+	if o.spy != nil {
+		inner := srv.Handler
+		srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			o.spy(r)
+			inner.ServeHTTP(w, r)
+		})
+	}
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
+	bl := broker.NewListener(broker.Limit(acceptHook{raw, l}, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
 	l.bl = bl

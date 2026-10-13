@@ -38,28 +38,84 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/mfatouch"
+	"github.com/rhwendt/port49/internal/printsafe"
 )
+
+// ErrConnectionChanged is a touch made while the held connection was replaced:
+// the signature covers the old connection's exporter value, so it is not
+// posted, and the challenge is unspent.
+var ErrConnectionChanged = errors.New("agent: the connection changed during the touch; run it again")
+
+// MFARequiredError is a mint the broker denied per_login_mfa_required: the
+// person proves the requirement (ProveTouch, or an IdP sign-in) and the mint
+// is made again naming Requirement.Challenge. It is not a failure of the agent
+// or the broker.
+type MFARequiredError struct{ Requirement api.PerLoginMFA }
+
+func (e *MFARequiredError) Error() string {
+	what := "a second factor"
+	if e.Requirement.Device != "" {
+		what += " for " + e.Requirement.Device
+	}
+	return fmt.Sprintf("agent: %s is required at each login (accepted: %s)", what, strings.Join(e.Requirement.Accept, ", "))
+}
 
 // Config is what opens a session.
 type Config struct {
 	BrokerURL string
-	// Cert is the operator's certificate and key. Load it with
-	// keyfile.LoadX509KeyPair, which refuses a key file others could read.
+	// Cert is the operator's certificate chain and its key: a file key, or a
+	// hwkey.Key as PrivateKey for a hardware key. Load it with
+	// clientkey.LoadPair, which opens the key from its --key value (a path,
+	// refused if others could read it, or a key reference) and takes the
+	// certificate from --cert or from the token.
 	Cert     tls.Certificate
 	BrokerCA *x509.CertPool
-	Now      func() time.Time
+	// BrokerCAPEM and BrokerCRL are BrokerCA's bytes and the broker_crl mode
+	// the session was started with. Neither is secret; Status hands them to a
+	// command that must reach this same broker without the agent (the
+	// sign-in's proof), so it trusts the CA and checks the CRL the session
+	// does, whether the login was made with flags or a config file.
+	BrokerCAPEM []byte
+	BrokerCRL   string
+	Now         func() time.Time
 	// Log receives the agent's own lines — reconnects, the session's end.
 	// Never a token.
 	Log io.Writer
 	// BundleKept is whether port49 has kept a CA bundle for this broker, so
 	// the rotation hint may promise to keep the CA current (RotatedCA).
 	BundleKept bool
+	// VerifyBroker, when set, is the dialer's tls.Config.VerifyConnection: it
+	// runs after the broker's chain verified and before a request is written
+	// (brokercrl.Checker.VerifyConnection). Its error ends the connection.
+	VerifyBroker func(tls.ConnectionState) error
+	// TouchKey is the touch_key slot, nil when none is configured or it did
+	// not open. It is the agent's only when it sits on the session key's own
+	// token (SameToken); Status says whether it is.
+	TouchKey hwkey.Key
+	// TouchKeyUnusable is why TouchKey is nil though touch_key is configured
+	// (it did not open), for Status.
+	TouchKeyUnusable string
+	// KeyRef is the session key's reference in canonical form, never a PIN;
+	// "" for a file key. `port49 login` compares it before it opens a token.
+	KeyRef string
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
 // clock or the broker's, or holding a certificate the broker no longer
 // trusts. The answer is `port49 login`.
 var ErrSessionOver = errors.New("agent: the session is over; run `port49 login`")
+
+// BrokerRefusedError is a connection Config.VerifyBroker refused, after the
+// broker's chain verified and before a request was written: a revoked broker
+// certificate, or one whose revocation could not be checked under broker_crl:
+// require. It is not a broker that is down, and not a session that is over:
+// the next connection checks again.
+type BrokerRefusedError struct{ Err error }
+
+func (e *BrokerRefusedError) Error() string { return "agent: " + e.Err.Error() }
+func (e *BrokerRefusedError) Unwrap() error { return e.Err }
 
 // RevokedError is a session an operator's revocation ended (spec §5.1.4).
 // It is ErrSessionOver to errors.Is, but its text does not say to log in:
@@ -124,7 +180,9 @@ type Agent struct {
 	broker       string
 	cert         tls.Certificate
 	client       *http.Client
-	revokeClient *http.Client // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
+	revokeClient *http.Client                                                      // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
+	mfaClient    *http.Client                                                      // client's transport and Timeout, refusing redirects: a proof is posted where it was meant
+	dialTLS      func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dialer
 	now          func() time.Time
 	log          io.Writer
 	handshakes   atomic.Int64
@@ -135,6 +193,24 @@ type Agent struct {
 	fingerprint string
 	// bundleKept is Config.BundleKept.
 	bundleKept bool
+	// session is the agent's session: 32 random bytes drawn at New, base64url,
+	// sent as api.AgentSessionHeader on every broker request (decision 45
+	// ruling 15). It is a credential of sorts: never logged, never in Status.
+	session string
+	// key is the session key when it is a hardware key, nil for a file key.
+	key hwkey.Key
+	// keySeenAbsent is set when the key was seen absent and not yet seen
+	// present again (probeKey, absentOrLocked).
+	keySeenAbsent atomic.Bool
+	// touch is the touch key when it is usable (same token as key), else
+	// nil; touchUnusable says why not when touch_key is configured.
+	touch         hwkey.Key
+	touchUnusable string
+	// brokerCAPEM and brokerCRL are the session's broker CA and CRL mode, for
+	// Status: what a sign-in proof to this broker must be checked with.
+	brokerCAPEM string
+	brokerCRL   string
+	keyRef      string
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -179,19 +255,64 @@ func New(c Config) *Agent {
 	if a.log == nil {
 		a.log = io.Discard
 	}
+	var session [32]byte
+	_, _ = rand.Read(session[:]) // crypto/rand.Read does not return an error (Go 1.24)
+	a.session = base64.RawURLEncoding.EncodeToString(session[:])
 	a.cert = c.Cert
 	a.fingerprint = CertFingerprint(c.Cert)
+	a.keyRef = c.KeyRef
+	a.key, _ = c.Cert.PrivateKey.(hwkey.Key)
+	a.touchUnusable = c.TouchKeyUnusable
+	a.brokerCAPEM, a.brokerCRL = string(c.BrokerCAPEM), c.BrokerCRL
+	if c.TouchKey != nil {
+		if ok, why := SameToken(c.Cert.PrivateKey, c.TouchKey); ok {
+			a.touch = c.TouchKey
+		} else {
+			a.touchUnusable = why
+			// A touch key that is not the session's token's is not used and
+			// holds nothing open.
+			_ = c.TouchKey.Close()
+		}
+	}
 	cert := c.Cert
-	dialer := &tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
+	var verify func(tls.ConnectionState) error
+	if c.VerifyBroker != nil {
+		verify = func(cs tls.ConnectionState) error {
+			if err := c.VerifyBroker(cs); err != nil {
+				return &BrokerRefusedError{Err: err}
+			}
+			return nil
+		}
+	}
+	base := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
+		VerifyConnection: verify,
 		// Always presented. Go's default presents a certificate only when the
 		// broker's CA hint names its issuer, and otherwise sends none — so a
 		// certificate from the wrong CA would log in with no identity at all
 		// and fail at the first mint instead of here (plan 3, Decided 3).
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}
 	tr := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := dialer.DialContext(ctx, network, addr)
+			// A hardware key's Sign errors are recorded, so the dialer can tell a
+			// key that failed from a broker that did not answer (crypto/tls
+			// flattens them). The recorder belongs to this dial alone: no other
+			// dial's Sign can be blamed on it, whatever else runs.
+			cfg := base
+			var rec *signRecorder
+			if s, ok := cert.PrivateKey.(crypto.Signer); ok && a.key != nil {
+				rec = &signRecorder{Signer: s}
+				mine := cert
+				mine.PrivateKey = rec
+				cfg = base.Clone()
+				cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &mine, nil }
+			}
+			conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
 			if err != nil {
+				if rec != nil {
+					if ke := rec.keyError(); ke != nil {
+						return nil, ke
+					}
+				}
 				return nil, err
 			}
 			if tc, ok := conn.(*tls.Conn); ok {
@@ -207,8 +328,14 @@ func New(c Config) *Agent {
 		MaxConnsPerHost:     1,
 		MaxIdleConnsPerHost: 1,
 	}
-	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
-	a.revokeClient = &http.Client{Transport: tr}
+	a.dialTLS = tr.DialTLSContext
+	// No client follows a redirect: each request carries the agent session
+	// header, and a mint or a refresh its body, on a certificate the dialer
+	// presents to any broker-CA host (final review client I4). The 3xx is
+	// the answer, and it is not a 200.
+	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
+	a.revokeClient = &http.Client{Transport: tr, CheckRedirect: mfatouch.NoRedirect}
+	a.mfaClient = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
 	return a
 }
 
@@ -246,12 +373,20 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	defer a.giveWire(false)
 	resp, err := a.do(req)
 	if err != nil {
+		var ke *KeyError
+		if errors.As(err, &ke) {
+			return api.Config{}, ke
+		}
 		if refused := a.refusal(err); refused != nil {
 			return api.Config{}, refused
 		}
 		var hup *hangUpError
 		if errors.As(err, &hup) {
 			return api.Config{}, hup
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.Config{}, no
 		}
 		return api.Config{}, fmt.Errorf("agent: connecting to the broker at %s: %w", a.broker, err)
 	}
@@ -366,8 +501,10 @@ func (a *Agent) end(why error) {
 // trust_domain_unresolved ends the session, and so does a reconnect whose
 // handshake the broker refuses. A 401 credential_revoked ends it too. An
 // item the broker could not decide is returned with an *ItemError, never
-// alone.
-func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
+// alone. A device under a per-login requirement the person has not proved is
+// returned with an *MFARequiredError carrying the challenge; challenge, when
+// not empty, names the proof (ProveTouch) that covers this mint, once.
+func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration, challenge string) (api.MintItem, error) {
 	select {
 	case <-a.done:
 		return api.MintItem{}, ErrSessionOver
@@ -376,7 +513,8 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
 		return api.MintItem{}, ErrSessionOver
 	}
-	body, err := json.Marshal(api.MintRequest{Devices: []string{device}, Enable: enable, TTLSeconds: int(ttl / time.Second)})
+	body, err := json.Marshal(api.MintRequest{Devices: []string{device}, Enable: enable, TTLSeconds: int(ttl / time.Second),
+		PerLoginMFAChallenge: challenge})
 	if err != nil {
 		return api.MintItem{}, err
 	}
@@ -426,6 +564,9 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		if busy := unavailable(resp, e); busy != nil {
 			return api.MintItem{}, busy
 		}
+		if err := redirected(resp); err != nil {
+			return api.MintItem{}, err
+		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
 	var mr api.MintResponse
@@ -441,6 +582,12 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		return item, &ItemError{Device: item.Device, Code: item.Error, Detail: item.Detail}
 	case item.Verdict == "":
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s with neither a verdict nor an error", device)
+	case item.Reason == "per_login_mfa_required" && item.PerLoginMFA != nil && item.PerLoginMFA.Challenge != "":
+		req := *item.PerLoginMFA
+		if req.Device == "" {
+			req.Device = item.Device
+		}
+		return item, &MFARequiredError{Requirement: req}
 	}
 	return item, nil
 }
@@ -463,6 +610,12 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 		a.client.CloseIdleConnections()
 		if over := a.refusedReconnect(err); over != nil {
 			return nil, over
+		}
+		// The check refused the broker's certificate: said as that, not
+		// retried, and the session stays up (a CRL blip must not end it).
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return nil, no
 		}
 		if attempt == 2 {
 			// A hang-up right after the handshake with a certificate still
@@ -635,6 +788,10 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 		if over := a.refusedReconnect(err); over != nil {
 			return over
 		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return no
+		}
 		if unanswered != nil && sent.Load() {
 			return unanswered(err)
 		}
@@ -671,6 +828,9 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 			"the broker at %s does not serve %s: it runs a port49d older than this port49", a.broker, path)}
 	}
 	if e.Error == "" {
+		if err := redirected(resp); err != nil {
+			return err
+		}
 		// Not the broker's API answering: a proxy, or a body cut short.
 		return fmt.Errorf("agent: %s%s answered %s with no API error", a.broker, path, resp.Status)
 	}
@@ -743,8 +903,14 @@ func (e *UnansweredRevokeError) Error() string {
 func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 
 // refusedReconnect ends the session on a transport error that means no
-// reconnect will be accepted, and returns why; nil for any other error.
+// reconnect will be accepted, and returns why; nil for any other error. A
+// *KeyError (the dialer's record of the key's own failure) is returned as it
+// is, without ending the session, and the callers' retry is skipped.
 func (a *Agent) refusedReconnect(err error) error {
+	var ke *KeyError
+	if errors.As(err, &ke) {
+		return a.absentOrLocked(ke, false)
+	}
 	if refused := a.refusal(err); refused != nil {
 		// A reconnect whose handshake failed: the certificate expired
 		// or the trust changed under the session, and no retry will
@@ -844,7 +1010,14 @@ func retryIn(d time.Duration) string {
 // credential_revoked ends the session, as a mint's does. Anything else the
 // broker refuses (refresh_too_soon, a 503) is returned and ends nothing, and
 // the deadline moves only on a refresh the broker answered 200.
-func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
+//
+// A context under a per-login requirement is left unextended
+// (per_login_mfa_required) and the answer carries the one challenge to prove.
+// challenge, when not empty, names a proof (ProveTouch) that covers them: it is
+// named on the challenge request, which takes it and exempts that request from
+// the connection's pacing, and again on the answer. The key's state is checked
+// first, before any challenge is asked for or named.
+func (a *Agent) Refresh(ctx context.Context, challenge string) (api.RefreshResponse, error) {
 	a.refreshMu.Lock()
 	defer a.refreshMu.Unlock()
 	select {
@@ -859,8 +1032,21 @@ func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 	if !ok {
 		return api.RefreshResponse{}, errors.New("agent: the session's key cannot sign a refresh")
 	}
+	// A key known to be out or locked is said before a challenge is asked
+	// for. State probes while the key is Absent (decision 45 ruling 8), so a
+	// key that came back is seen here with no signature. A key that has just
+	// been pulled still reads Present until a call fails: that refresh asks
+	// for a challenge and is told at the signature (refreshOnce).
+	if a.key != nil {
+		switch a.probeKey() {
+		case hwkey.Absent:
+			return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent}, false)
+		case hwkey.Locked:
+			return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrLocked}, false)
+		}
+	}
 	for attempt := 1; ; attempt++ {
-		out, retry, err := a.refreshOnce(ctx, signer)
+		out, retry, err := a.refreshOnce(ctx, signer, challenge)
 		if err == nil || !retry || attempt == 2 {
 			return out, err
 		}
@@ -869,17 +1055,28 @@ func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 
 // refreshOnce is one challenge and its answer. retry says the broker found
 // no live challenge for the answer: a new challenge may succeed.
-func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.RefreshResponse, bool, error) {
+func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer, challenge string) (api.RefreshResponse, bool, error) {
 	if err := a.takeWire(ctx, false, "refreshed", "port49 refresh"); err != nil {
 		return api.RefreshResponse{}, false, err
 	}
 	defer a.giveWire(false)
 	var conn *watchedConn
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { conn, _ = i.Conn.(*watchedConn) }}
+	var chBody io.Reader = http.NoBody
+	if challenge != "" {
+		named, err := json.Marshal(api.RefreshChallengeRequest{PerLoginMFAChallenge: challenge})
+		if err != nil {
+			return api.RefreshResponse{}, false, err
+		}
+		chBody = bytes.NewReader(named)
+	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost,
-		a.broker+"/v1/refresh/challenge", http.NoBody)
+		a.broker+"/v1/refresh/challenge", chBody)
 	if err != nil {
 		return api.RefreshResponse{}, false, err
+	}
+	if challenge != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := a.do(req)
 	if err != nil {
@@ -887,6 +1084,10 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 		// does; no new challenge would be answered either.
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.RefreshResponse{}, false, no
 		}
 		// Anything else is tried once more on a new connection, as a mint
 		// is: a held connection the broker closed as the challenge went out
@@ -925,9 +1126,13 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	}
 	sig, err := api.SignRefresh(signer, api.RefreshMessage(nonce, ekm))
 	if err != nil {
+		if keyFault(err) != nil {
+			return api.RefreshResponse{}, false, a.absentOrLocked(&KeyError{Err: err}, true)
+		}
 		return api.RefreshResponse{}, false, fmt.Errorf("agent: signing the refresh: %w", err)
 	}
-	body, err := json.Marshal(api.RefreshRequest{Nonce: ch.Nonce, Signature: base64.RawURLEncoding.EncodeToString(sig)})
+	body, err := json.Marshal(api.RefreshRequest{Nonce: ch.Nonce, Signature: base64.RawURLEncoding.EncodeToString(sig),
+		PerLoginMFAChallenge: challenge})
 	if err != nil {
 		return api.RefreshResponse{}, false, err
 	}
@@ -940,6 +1145,10 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	if err != nil {
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return api.RefreshResponse{}, false, no
 		}
 		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}
@@ -966,6 +1175,27 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	return out, false, nil
 }
 
+// Redirected is a 3xx answer as an error, nil for any other: no client of the
+// broker follows one (final review client I4), and the error names where it
+// pointed, so a proxy rule in the way is seen. The location is the answer's
+// own text, so it is made printable.
+func Redirected(resp *http.Response) error {
+	if resp.StatusCode < 300 || resp.StatusCode > 399 {
+		return nil
+	}
+	return fmt.Errorf("the broker answered %s to %s, pointing at %s; port49 never follows a redirect to "+
+		"the broker: set broker to the address that answers, or fix the rule that redirects",
+		resp.Status, resp.Request.URL.Path, printsafe.Line(resp.Header.Get("Location"), 200))
+}
+
+// redirected is Redirected in the agent's words.
+func redirected(resp *http.Response) error {
+	if err := Redirected(resp); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	return nil
+}
+
 // refreshRefused is the error a refused challenge or refresh means. The
 // code decides, never the detail text: credential_revoked ends the session,
 // refresh_challenge_missing is worth one new challenge, and the rest end
@@ -980,12 +1210,215 @@ func (a *Agent) refreshRefused(resp *http.Response, what string) (api.RefreshRes
 	if busy := unavailable(resp, e); busy != nil {
 		return api.RefreshResponse{}, false, busy
 	}
+	if err := redirected(resp); err != nil {
+		return api.RefreshResponse{}, false, err
+	}
 	hint := ""
 	if resp.StatusCode == http.StatusTooManyRequests {
 		hint = retryHint(resp.Header)
 	}
 	return api.RefreshResponse{}, e.Error == "refresh_challenge_missing",
 		fmt.Errorf("agent: the broker refused %s: %s (%s)%s", what, e.Detail, e.Error, hint)
+}
+
+// ProveTouch proves a per-login requirement with the touch key (decision 45
+// rulings 12–14): it signs api.MFAMessage(challenge, exporter value) and posts
+// the signature with the attestation chain to POST /v1/mfa, on the held
+// connection the exporter value came from.
+//
+// The wire is held to read the exporter value and again to post, never across
+// the touch: the key may wait its full 15 seconds, and a revocation the
+// operator sends meanwhile goes at once. If the connection was replaced during
+// the touch, the signature covers one that is gone: nothing is posted and the
+// challenge is unspent (ErrConnectionChanged). A touch not made, a locked key
+// and a key that is gone are the key's own errors, once, never retried. A
+// broker the CRL check refuses is that check's own error, unwrapped.
+func (a *Agent) ProveTouch(ctx context.Context, challenge string) error {
+	select {
+	case <-a.done:
+		return ErrSessionOver
+	default:
+	}
+	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
+		return ErrSessionOver
+	}
+	switch {
+	case a.touch != nil:
+	case a.touchUnusable != "":
+		return fmt.Errorf("agent: touch_key is configured and cannot be used: %s", a.touchUnusable)
+	default:
+		return errors.New("agent: no touch_key is configured; add touch_key to your config and run `port49 login` again")
+	}
+	ch, err := mfatouch.Challenge(challenge)
+	if err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	switch a.touch.State() {
+	case hwkey.Absent:
+		return a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent}, true)
+	case hwkey.Locked:
+		return a.absentOrLocked(&KeyError{Err: hwkey.ErrLocked}, true)
+	}
+	// The attestations are read before the touch: a token that shows none is
+	// said before the key blinks for nothing.
+	chain, err := a.touchChain()
+	if err != nil {
+		return err
+	}
+	ekm, err := a.heldExporter(ctx)
+	if err != nil {
+		return err
+	}
+	sig, err := mfatouch.Sign(a.touch, ch, ekm)
+	if err != nil {
+		if keyFault(err) != nil {
+			return a.absentOrLocked(&KeyError{Err: err}, true)
+		}
+		return fmt.Errorf("agent: signing the touch proof: %w", err)
+	}
+	body, err := mfatouch.Request(challenge, sig, chain)
+	if err != nil {
+		return err
+	}
+	if err := a.takeWire(ctx, false, "proved", "port49 token"); err != nil {
+		return err
+	}
+	defer a.giveWire(false)
+	resp, err := mfatouch.Post(ctx, func(req *http.Request) (*http.Response, error) { return a.doOn(a.mfaClient, req) },
+		a.broker+"/v1/mfa", body, ekm, func(c net.Conn) (tls.ConnectionState, bool) {
+			wc, ok := c.(*watchedConn)
+			if !ok {
+				return tls.ConnectionState{}, false
+			}
+			return wc.tlsState()
+		})
+	if err != nil {
+		if errors.Is(err, mfatouch.ErrConnectionChanged) {
+			return ErrConnectionChanged
+		}
+		a.client.CloseIdleConnections()
+		if over := a.refusedReconnect(err); over != nil {
+			return over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return no
+		}
+		var hup *hangUpError
+		if errors.As(err, &hup) {
+			return hup
+		}
+		return fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+	}
+	defer drain(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	return a.mfaRefused(resp)
+}
+
+// heldExporter is the held connection's exporter value for a touch proof,
+// read from a GET /v1/config on it (the connection is dialed first if there is
+// none). The wire is given back before it returns.
+func (a *Agent) heldExporter(ctx context.Context) ([]byte, error) {
+	for attempt := 1; ; attempt++ {
+		if err := a.takeWire(ctx, false, "proved", "port49 token"); err != nil {
+			return nil, err
+		}
+		ekm, err := a.probeExporter(ctx)
+		a.giveWire(false)
+		if err == nil {
+			return ekm, nil
+		}
+		var again *unreachableError
+		if !errors.As(err, &again) {
+			return nil, err
+		}
+		if attempt == 2 {
+			return nil, again.err
+		}
+	}
+}
+
+// unreachableError marks a probe failure worth one more try on a new connection.
+type unreachableError struct{ err error }
+
+func (e *unreachableError) Error() string { return e.err.Error() }
+func (e *unreachableError) Unwrap() error { return e.err }
+
+func (a *Agent) probeExporter(ctx context.Context) ([]byte, error) {
+	var conn *watchedConn
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { conn, _ = i.Conn.(*watchedConn) }}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodGet, a.broker+"/v1/config", http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.do(req)
+	if err != nil {
+		a.client.CloseIdleConnections()
+		if over := a.refusedReconnect(err); over != nil {
+			return nil, over
+		}
+		var no *BrokerRefusedError
+		if errors.As(err, &no) {
+			return nil, no
+		}
+		var ke *KeyError
+		if errors.As(err, &ke) {
+			return nil, a.absentOrLocked(err, false)
+		}
+		var hup *hangUpError
+		if errors.As(err, &hup) {
+			return nil, &unreachableError{hup}
+		}
+		return nil, &unreachableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
+	}
+	defer drain(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		var e api.Error
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		if over := sessionOver(resp.StatusCode, e); over != nil {
+			a.end(over)
+			return nil, over
+		}
+		if busy := unavailable(resp, e); busy != nil {
+			return nil, busy
+		}
+		if err := redirected(resp); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
+	}
+	if conn == nil {
+		return nil, errors.New("agent: the connection to the broker is not a TLS connection")
+	}
+	cs, ok := conn.tlsState()
+	if !ok {
+		return nil, errors.New("agent: the connection to the broker is not a TLS connection")
+	}
+	ekm, err := mfatouch.Exporter(cs)
+	if err != nil {
+		return nil, fmt.Errorf("agent: %w", err)
+	}
+	return ekm, nil
+}
+
+// mfaRefused is the error a refused proof means: the broker's code and detail
+// as an *APIError, or the session's end. Nothing the proof held is in it.
+func (a *Agent) mfaRefused(resp *http.Response) error {
+	var e api.Error
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+	if over := sessionOver(resp.StatusCode, e); over != nil {
+		a.end(over)
+		return over
+	}
+	if busy := unavailable(resp, e); busy != nil {
+		return busy
+	}
+	if e.Error == "" {
+		return fmt.Errorf("agent: %s/v1/mfa answered %s with no API error", a.broker, resp.Status)
+	}
+	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 }
 
 // ItemError is a device the broker could not decide: a fault on its side or
@@ -1078,6 +1511,7 @@ func (a *Agent) do(req *http.Request) (*http.Response, error) { return a.doOn(a.
 
 // doOn is do on client c, which shares a.client's transport.
 func (a *Agent) doOn(c *http.Client, req *http.Request) (*http.Response, error) {
+	req.Header.Set(api.AgentSessionHeader, a.session)
 	var conn *watchedConn
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
 		conn, _ = i.Conn.(*watchedConn)
@@ -1185,6 +1619,20 @@ type TokenRequest struct {
 	Device     string `json:"device"`
 	Enable     bool   `json:"enable"`
 	TTLSeconds int    `json:"ttl_seconds"`
+	// PerLoginMFAChallenge names the proof (POST /mfa/touch, or an IdP
+	// sign-in) that covers this mint, once.
+	PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
+}
+
+// TouchRequest is POST /mfa/touch.
+type TouchRequest struct {
+	Challenge string `json:"challenge"`
+}
+
+// RefreshRequest is POST /refresh's optional body: the proof, if any, that
+// covers the contexts a refresh leaves for want of one.
+type RefreshRequest struct {
+	PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
 }
 
 // Status is GET /status on the agent's socket. CertFingerprint is the
@@ -1201,6 +1649,51 @@ type Status struct {
 	// one: what `port49 ssh` reads when its in-session warning is due, so a
 	// `port49 refresh` in another terminal moves it (decision 42 ruling 11).
 	Sessions []api.RefreshedSession `json:"sessions,omitempty"`
+	// KeyState is whether the session key can sign now: present, absent or
+	// locked; "present" for a file key.
+	KeyState string `json:"key_state"`
+	// TouchKey is true only when the touch key opened and sits on the same
+	// token (module and token serial) as a pkcs11 session key (ruling 12);
+	// TouchKeyUnusable says why not when touch_key is configured.
+	TouchKey         bool   `json:"touch_key"`
+	TouchKeyUnusable string `json:"touch_key_unusable,omitempty"`
+	// TouchKeyState is the touch key's state now (present, absent or locked;
+	// no_attestation for a present key whose token shows none), "" when the
+	// agent has no usable touch key: what `port49 token` checks before it says
+	// "touch your key".
+	TouchKeyState string `json:"touch_key_state,omitempty"`
+	// BrokerCAPEM and BrokerCRL are the session's broker CA (public) and
+	// broker_crl mode.
+	BrokerCAPEM string `json:"broker_ca_pem,omitempty"`
+	BrokerCRL   string `json:"broker_crl,omitempty"`
+	// KeyRef is the session key's reference in canonical form (never a PIN),
+	// "" for a file key: what login compares before it opens a token.
+	KeyRef string `json:"key_ref,omitempty"`
+}
+
+// TokenKey is a key on a PKCS#11 token: the module it was opened through and
+// the token's serial name the token (pkcs11.Signer's methods).
+type TokenKey interface {
+	ModulePath() string
+	TokenSerial() string
+}
+
+// SameToken reports whether touch sits on the same token as session, the
+// session key, by module and token serial (decision 45 ruling 12). When it
+// does not, why says so. The PIN is only ever sent to a key for which this is
+// true: another token's PIN tries are not the agent's to spend.
+func SameToken(session any, touch hwkey.Key) (ok bool, why string) {
+	s, sok := session.(TokenKey)
+	t, tok := touch.(TokenKey)
+	switch {
+	case !sok:
+		return false, "touch_key needs a pkcs11 session key: this session's key is not on a PKCS#11 token"
+	case !tok:
+		return false, "touch_key is not a PKCS#11 key"
+	case s.ModulePath() != t.ModulePath() || s.TokenSerial() != t.TokenSerial():
+		return false, "touch_key is on another token than the session key; it must be on the same token"
+	}
+	return true, ""
 }
 
 // Handler is the agent's socket: POST /token mints one device and answers the
@@ -1218,10 +1711,15 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "name one device"})
 			return
 		}
-		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second)
+		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second,
+			req.PerLoginMFAChallenge)
 		var ie *ItemError
+		var need *MFARequiredError
 		var revoked *RevokedError
 		switch {
+		case errors.As(err, &need):
+			// 428: the requirement itself is the body, for the client to rebuild.
+			writeJSON(w, http.StatusPreconditionRequired, need.Requirement)
 		case errors.As(err, &ie):
 			// The item as the broker sent it: its error is the client's to
 			// report, and Client.Token turns it back into an ItemError.
@@ -1236,6 +1734,12 @@ func (a *Agent) Handler() http.Handler {
 			// Not the broker failing: the operator's own revocation is still
 			// running, and nothing was minted.
 			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
+		case KeyCode(err) != "":
+			// The key's own failure, not the broker's: its own code.
+			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+		case writeRefusal(w, err):
+			// The CRL check refused the broker: broker_refused, for the client
+			// to rebuild; never retried and never "unreachable".
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 		default:
@@ -1243,7 +1747,12 @@ func (a *Agent) Handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("POST /refresh", func(w http.ResponseWriter, r *http.Request) {
-		out, err := a.Refresh(r.Context())
+		req, err := decodeRefresh(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not a refresh request: " + err.Error()})
+			return
+		}
+		out, err := a.Refresh(r.Context(), req.PerLoginMFAChallenge)
 		var revoked *RevokedError
 		switch {
 		case errors.As(err, &revoked):
@@ -1252,6 +1761,9 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 		case errors.As(err, new(*RevocationRunningError)):
 			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
+		case KeyCode(err) != "":
+			writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+		case writeRefusal(w, err):
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "refresh_failed", Detail: err.Error()})
 		default:
@@ -1263,9 +1775,25 @@ func (a *Agent) Handler() http.Handler {
 		warn, sessions := a.ceilingWarning, a.refreshed
 		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
+			TouchKeyState: a.touchKeyState(), BrokerCAPEM: a.brokerCAPEM, BrokerCRL: a.brokerCRL,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
-			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions})
+			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions,
+			KeyState: a.keyState(), TouchKey: a.touch != nil, TouchKeyUnusable: a.touchUnusable, KeyRef: a.keyRef})
 	})
+	mux.HandleFunc("POST /mfa/touch", func(w http.ResponseWriter, r *http.Request) {
+		var req TouchRequest
+		if err := decodeOne(r.Body, &req); err != nil || req.Challenge == "" {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "name the challenge to prove"})
+			return
+		}
+		err := a.ProveTouch(r.Context(), req.Challenge)
+		if errors.Is(err, ErrConnectionChanged) {
+			writeJSON(w, http.StatusConflict, api.Error{Error: "connection_changed", Detail: err.Error()})
+			return
+		}
+		answer(w, struct{}{}, err)
+	})
+	mux.HandleFunc("POST /unlock", a.unlock)
 	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
 		out, err := a.Identity(r.Context())
 		answer(w, out, err)
@@ -1289,6 +1817,154 @@ func (a *Agent) Handler() http.Handler {
 		answer(w, out, err)
 	})
 	return mux
+}
+
+// touchChain is the attestation chain a touch proof carries, read from the
+// token: no touch is needed. A token that shows none is
+// mfatouch.ErrNoAttestation, said before the key blinks for nothing.
+func (a *Agent) touchChain() ([]string, error) {
+	certs, ok := a.touch.(mfatouch.Certificates)
+	session, sok := a.cert.PrivateKey.(crypto.Signer)
+	if !ok || !sok {
+		return nil, fmt.Errorf("agent: %w", mfatouch.ErrNoAttestation)
+	}
+	list, err := certs.Certificates()
+	if err != nil {
+		return nil, fmt.Errorf("agent: reading the token's attestation certificates: %w", err)
+	}
+	chain, err := mfatouch.Chain(list, a.touch.Public(), session.Public())
+	if err != nil {
+		return nil, fmt.Errorf("agent: %w", err)
+	}
+	return chain, nil
+}
+
+// touchKeyState is the touch key's State now, or codeNoAttestation for a
+// present key whose token shows no attestations; "" with no usable touch key.
+func (a *Agent) touchKeyState() string {
+	if a.touch == nil {
+		return ""
+	}
+	state := a.touch.State()
+	if state == hwkey.Present {
+		if _, err := a.touchChain(); errors.Is(err, mfatouch.ErrNoAttestation) {
+			return codeNoAttestation
+		}
+	}
+	return state.String()
+}
+
+// keyState is the session key's State, "present" for a file key.
+func (a *Agent) keyState() string {
+	if a.key == nil {
+		return hwkey.Present.String()
+	}
+	return a.probeKey().String()
+}
+
+// Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most
+// maxUnlockBody.
+const (
+	maxPIN        = 64
+	maxUnlockBody = 256
+)
+
+// UnlockRefusal is POST /unlock's 401 pin_refused body: the token's own
+// tries-left flags, which the client rebuilds as a *hwkey.PINError.
+type UnlockRefusal struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail"`
+	Low    bool   `json:"low,omitempty"`
+	Final  bool   `json:"final,omitempty"`
+	// Blocked is the token's CKF_USER_PIN_LOCKED, sent as the code
+	// pin_blocked rather than pin_refused: a blocked PIN takes no more tries
+	// and is never reported as a refusal that invites another.
+	Blocked bool `json:"blocked,omitempty"`
+}
+
+// unlock is POST /unlock {"pin": "…"}: the PIN goes to the session key and,
+// when it is on the same token, the touch key. The body and the PIN are read
+// as bytes and zeroed: a Go string cannot be, and the PIN is in nothing the
+// agent logs or returns.
+func (a *Agent) unlock(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxUnlockBody+1))
+	defer clear(body)
+	pin, ok := unlockPIN(body, err)
+	defer clear(pin)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "send {\"pin\": \"…\"}, a PIN of 1 to 64 bytes"})
+		return
+	}
+	if a.key == nil {
+		writeJSON(w, http.StatusOK, struct{}{}) // a file key has nothing to unlock
+		return
+	}
+	// Each Unlock zeroes the PIN it is given, so each gets its own copy.
+	err = a.key.Unlock(slices.Clone(pin))
+	if err == nil && a.touch != nil {
+		if terr := a.touch.Unlock(slices.Clone(pin)); terr != nil {
+			fmt.Fprintf(a.log, "port49 agent: the touch key stayed locked: %v\n", terr)
+		}
+	}
+	pe := hwkey.MarkBlocked(a.key, err)
+	switch {
+	case err == nil:
+		fmt.Fprintf(a.log, "port49 agent: the key was unlocked\n")
+		writeJSON(w, http.StatusOK, struct{}{})
+	case pe != nil && pe.Blocked:
+		fmt.Fprintf(a.log, "port49 agent: the key's PIN is blocked\n")
+		writeJSON(w, http.StatusUnauthorized, UnlockRefusal{Error: "pin_blocked", Detail: hwkey.PINBlockedWords, Blocked: true})
+	case pe != nil:
+		detail := "the token refused the PIN"
+		switch {
+		case pe.Final:
+			detail += "; one try is left before the key locks"
+		case pe.Low:
+			detail += "; fewer tries are left"
+		}
+		writeJSON(w, http.StatusUnauthorized, UnlockRefusal{Error: "pin_refused", Detail: detail, Low: pe.Low, Final: pe.Final})
+	case errors.Is(err, hwkey.ErrKeyAbsent):
+		writeJSON(w, http.StatusConflict, api.Error{Error: "key_absent", Detail: "the key is not present: insert it"})
+	default:
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: "unlock_failed", Detail: err.Error()})
+	}
+}
+
+// unlockPIN reads the pin field of {"pin": "…"} out of body as bytes: the
+// JSON string is cut from a json.RawMessage and unescaped by hand, since
+// decoding into a Go string would leave a copy that cannot be zeroed. Only
+// the escapes \" and \\ are understood, which are the two Client.Unlock
+// writes. The caller zeroes the returned PIN.
+func unlockPIN(body []byte, readErr error) (pin []byte, ok bool) {
+	if readErr != nil || len(body) > maxUnlockBody {
+		return nil, false
+	}
+	var f struct {
+		PIN json.RawMessage `json:"pin"`
+	}
+	err := json.Unmarshal(body, &f)
+	raw := f.PIN
+	defer clear(raw)
+	if err != nil || len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, false
+	}
+	for i := 1; i < len(raw)-1; i++ {
+		c := raw[i]
+		if c == '\\' {
+			i++
+			if i >= len(raw)-1 || (raw[i] != '"' && raw[i] != '\\') {
+				clear(pin)
+				return nil, false
+			}
+			c = raw[i]
+		}
+		if len(pin) == maxPIN {
+			clear(pin)
+			return nil, false
+		}
+		pin = append(pin, c)
+	}
+	return pin, len(pin) > 0
 }
 
 // decodeOne reads one JSON object, with no unknown fields and nothing after
@@ -1336,6 +2012,12 @@ func answer(w http.ResponseWriter, out any, err error) {
 			w.Header().Set("Retry-After", strconv.Itoa(int(refused.RetryAfter/time.Second)))
 		}
 		writeJSON(w, status, api.Error{Error: refused.Code, Detail: refused.Detail})
+	case KeyCode(err) != "":
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
+	case writeRefusal(w, err):
+	case errors.Is(err, mfatouch.ErrNoAttestation):
+		// The touch was never made: the client may fall back to idp_mfa.
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeNoAttestation, Detail: err.Error()})
 	default:
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 	}

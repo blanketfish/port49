@@ -52,6 +52,7 @@ const (
 	famOnce        = "on/" // on/<key>: a once-only record (plan 7h), the broker's alone
 	famOIDCOwner   = "oo/" // oo/<OIDCKey>: the principal minting under an OIDC sid or sub
 	famLogout      = "lo/" // lo/<OIDCKey>: a back-channel logout's record
+	famMFAProof    = "mp/" // mp/<key>: a kept per-login proof (plan 9c), the broker's alone
 	famMeta        = "meta/"
 )
 
@@ -101,6 +102,7 @@ func (k keys) membershipKey(mapKey string) string { return k.root + famMembershi
 func (k keys) once(key string) string      { return k.root + famOnce + esc(key) }
 func (k keys) oidcOwner(key string) string { return k.root + famOIDCOwner + esc(key) }
 func (k keys) logout(key string) string    { return k.root + famLogout + esc(key) }
+func (k keys) mfaProof(key string) string  { return k.root + famMFAProof + esc(key) }
 
 // lastTwo unescapes the last two parts of key: the (NAS, Username) every
 // lookup entry and token-index entry ends in.

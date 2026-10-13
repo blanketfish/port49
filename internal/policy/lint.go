@@ -73,6 +73,13 @@ const (
 	// mapping refuses the reload (decision 41 ruling 4). A warning, not a
 	// failure.
 	FindingWorkloadNoUsername = "workload_no_username"
+	// FindingPerLoginMFAExclude is a per_login_mfa scope chosen by attribute
+	// with on_missing: exclude, whose requirement a sync that drops the
+	// attribute lifts (spec §5.1.5). FindingPerLoginMFAMachines is a level
+	// with applies_to_machines: true, which a workload meets only with a
+	// pkcs11 key and a touch key on one token. Warnings, never failures.
+	FindingPerLoginMFAExclude  = "per_login_mfa_on_missing_exclude"
+	FindingPerLoginMFAMachines = "per_login_mfa_machines"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -93,6 +100,32 @@ func (p *Policy) Lint(now time.Time) []Finding {
 						"fleet-wide permit rarely is", name, r, strings.TrimSuffix(domain, "s"))
 				}
 			}
+		}
+	}
+	for name, s := range p.scopes {
+		// A scope that chooses devices by an attribute loses its requirement
+		// wherever the attribute goes missing, which a sync can do; with
+		// on_missing: include the device is held to it instead (spec §5.1.5).
+		if s.PerLoginMFA != nil && s.OnMissing == "exclude" && len(s.Match) > 0 && !pinnedByName(s.Match) {
+			add(FindingPerLoginMFAExclude, "scope %q carries per_login_mfa with on_missing: exclude: a sync that drops "+
+				"%s lifts this requirement from the device; security_log records it (spec §5.1.5)", name,
+				strings.Join(sortedKeys(s.Match), " or "))
+		}
+	}
+	if m := p.defaults.PerLoginMFA; m != nil && m.AppliesToMachines {
+		add(FindingPerLoginMFAMachines, "defaults: per_login_mfa applies_to_machines: true: a workload proves "+
+			"only with a pkcs11 key and a touch key on one token (spec §5.1.5; decision 45 ruling 21)")
+	}
+	for _, name := range sortedKeys(p.roles) {
+		if m := p.roles[name].PerLoginMFA; m != nil && m.AppliesToMachines {
+			add(FindingPerLoginMFAMachines, "role %q: per_login_mfa applies_to_machines: true: a workload proves "+
+				"only with a pkcs11 key and a touch key on one token (spec §5.1.5; decision 45 ruling 21)", name)
+		}
+	}
+	for _, name := range sortedKeys(p.scopes) {
+		if m := p.scopes[name].PerLoginMFA; m != nil && m.AppliesToMachines {
+			add(FindingPerLoginMFAMachines, "scope %q: per_login_mfa applies_to_machines: true: a workload proves "+
+				"only with a pkcs11 key and a touch key on one token (spec §5.1.5; decision 45 ruling 21)", name)
 		}
 	}
 	for name, sub := range p.subs {

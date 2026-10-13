@@ -176,8 +176,8 @@ func devicesTrust(args []string, stdout, stderr io.Writer) int {
 	}
 	addr := *address
 	if addr == "" {
-		item, err := agent.NewClient(*socket).Token(context.Background(),
-			agent.TokenRequest{Device: device, TTLSeconds: int(trustTTL / time.Second)})
+		item, err := mintProved(context.Background(), proveFlags(*socket),
+			agent.TokenRequest{Device: device, TTLSeconds: int(trustTTL / time.Second)}, stderr)
 		if mintFailed(cmd, *socket, device, item, err, stderr) {
 			return 1
 		}

@@ -236,7 +236,7 @@ func TestTheConfigFetchSaysTheRotationFix(t *testing.T) {
 	l := newLabBroker(t, time.Hour)
 	pool := x509.NewCertPool()
 	pool.AddCert(testCA(t).Cert)
-	_, err := fetchBrokerConfig(context.Background(), l.url, pool)
+	_, err := fetchBrokerConfig(context.Background(), l.url, pool, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not verify") ||
 		!strings.Contains(err.Error(), "; "+agent.RotatedCAHint) {
 		t.Fatalf("%v", err)
@@ -254,7 +254,7 @@ func TestTheConfigFetchSaysTheRotationFix(t *testing.T) {
 	if werr := userconfig.WritePrivate(path, testCA(t).PEM(), "broker CA bundle"); werr != nil {
 		t.Fatal(werr)
 	}
-	_, err = fetchBrokerConfig(context.Background(), l.url, pool)
+	_, err = fetchBrokerConfig(context.Background(), l.url, pool, nil)
 	if err == nil || !strings.Contains(err.Error(), "; "+agent.RotatedCAHintKept) ||
 		strings.Contains(err.Error(), "/etc/port49/broker-ca.pem") {
 		t.Fatalf("with a bundle kept: %v", err)

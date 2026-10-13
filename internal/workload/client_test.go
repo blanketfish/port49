@@ -32,6 +32,16 @@ type fakeBroker struct {
 	keys     []string
 	bodies   []api.MintRequest
 	presents []string // the client certificate's fingerprint, per request
+	// mfa is every POST /v1/mfa, with the exporter value of the connection
+	// it came on; mfaStatus answers it (200 when 0).
+	mfa       []mfaPost
+	mfaStatus int
+}
+
+// mfaPost is one proof the fake broker was sent.
+type mfaPost struct {
+	req api.MFAProofRequest
+	ekm []byte
 }
 
 func (f *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +56,17 @@ func (f *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.Config{BatchMax: f.batchMax})
 	case "/v1/identity":
 		_ = json.NewEncoder(w).Encode(api.Identity{Principal: "spiffe://corp.example.com/host/oxidized-01", Method: "cert"})
+	case "/v1/mfa":
+		var p mfaPost
+		_ = json.NewDecoder(r.Body).Decode(&p.req)
+		p.ekm, _ = r.TLS.ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)
+		f.mfa = append(f.mfa, p)
+		if f.mfaStatus != 0 {
+			w.WriteHeader(f.mfaStatus)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "per_login_mfa_refused", Detail: "the proof is refused"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MFAProofResponse{Method: p.req.Method, ProvedAt: "2026-10-13T00:00:00Z"})
 	case "/v1/tokens":
 		var req api.MintRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -211,6 +232,29 @@ func TestAFinalRefusalIsNotRetried(t *testing.T) {
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Code != "credential_revoked" || len(f.keys) != 1 || len(h.slept) != 0 {
 		t.Fatalf("%v keys %v", err, f.keys)
+	}
+}
+
+// A broker certificate VerifyBroker refuses is a final answer, not a broker
+// that cannot answer: no retry, no wait to the deadline, and nothing reached
+// the broker (plan 9c, ruling 9).
+func TestAVerifyBrokerRefusalIsFinalAndSendsNothing(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	why := errors.New("the broker's certificate CN=broker (serial 1) is revoked by a CRL; nothing was sent to it")
+	calls := 0
+	h.cfg.VerifyBroker = func(tls.ConnectionState) error { calls++; return why }
+	_, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)})
+	var refused *BrokerRefusedError
+	if !errors.As(err, &refused) || !errors.Is(err, why) || errors.Is(err, ErrTemporary) {
+		t.Fatalf("Mint = %v, want a final *BrokerRefusedError", err)
+	}
+	f.mu.Lock()
+	sent := len(f.keys)
+	f.mu.Unlock()
+	if calls != 1 || sent != 0 || len(h.slept) != 0 {
+		t.Fatalf("VerifyBroker ran %d times, the broker saw %d requests, the client slept %v; want 1, 0, none",
+			calls, sent, h.slept)
 	}
 }
 

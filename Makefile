@@ -1,10 +1,62 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-oidc-agent lab-workload lab-oxidized lab-ssh build evidence image compose-smoke
+.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static check-darwin evidence image compose-smoke
+
+# The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
+# environment says, so these are the four static binaries the image carries.
+STATIC_CMDS = port49d port49 port49-inventory port49-broker
 
 build:
-	go build -o bin/port49d ./cmd/port49d
-	go build -o bin/port49 ./cmd/port49
-	go build -o bin/port49-inventory ./cmd/port49-inventory
-	go build -o bin/port49-broker ./cmd/port49-broker
+	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build -o bin/$$c ./cmd/$$c; done
+
+# The client build: the PKCS#11 backend through purego, which links the
+# system's dynamic loader. Written beside, never over, bin/port49.
+build-client:
+	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+
+# The Secure Enclave backend and the L63 spike, built and vetted for macOS
+# without a Mac (decision 45 ruling 6): the client build of port49 and the
+# spike for arm64 and amd64, CGO_ENABLED=0, then go vet over every package
+# for darwin in both builds. Nothing here runs them; a Mac user does.
+DARWIN_ARCHES = arm64 amd64
+
+check-darwin:
+	@set -e; for a in $(DARWIN_ARCHES); do \
+	  echo "darwin/$$a"; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go build -tags hwkey_dlopen -o /dev/null ./cmd/port49; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go build -o /dev/null ./tests/spike/secureenclave; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go vet ./...; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go vet -tags hwkey_dlopen ./...; \
+	done
+
+# The static build (the image's, decision 45 ruling 22) must stay static: a
+# purego import outside a hwkey_dlopen file would make it need a loader that
+# distroless/static does not have.
+#
+# Every binary `build` makes is checked, not only cmd/port49: a leak through a
+# shared package reaches whichever ones import it. It fails closed: a missing
+# readelf is an error, and readelf's own status is read (a pipe would give
+# grep's, which reads a missing readelf as "static").
+check-static:
+	@set -e; \
+	command -v readelf >/dev/null || { echo "check-static needs readelf (binutils); without it nothing is checked"; exit 1; }; \
+	mkdir -p bin/static; \
+	for c in $(STATIC_CMDS); do \
+	  CGO_ENABLED=0 go build -o bin/static/$$c ./cmd/$$c; \
+	  out=$$(readelf -l bin/static/$$c); \
+	  if printf '%s\n' "$$out" | grep -q 'program interpreter'; then \
+	    echo "bin/static/$$c is dynamically linked; the image cannot run it"; exit 1; fi; \
+	done
+
+# The packages the hwkey tag adds tests to.
+HW_PACKAGES = ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/... ./internal/workload/... ./cmd/port49/...
+
+# Hardware-key tests against SoftHSM2, swtpm and libykcs11 (plan 9c; decision
+# 42 ruling 13), built with CGO_ENABLED=0 and the client build's tag so
+# purego runs as the client binary does. Needs softhsm2, swtpm, ykcs11 and a
+# running pcscd; PORT49_TEST_HW_REQUIRED makes a missing one a failure, not a
+# skip. No -run: the hwkey tag already selects the hardware tests, and a
+# pattern would silently leave a new one out.
+test-hw: check-static
+	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen $(HW_PACKAGES) -count=1 -timeout 20m
 
 # internal/port49d runs about 9.5 minutes under the full parallel suite, close
 # to go test's 10-minute default, so the limit is set here rather than left to
@@ -36,6 +88,8 @@ vet:
 	gofmt -l . | (! grep .)
 	go vet ./...
 	go vet -tags compose ./tests/compose/...
+	go vet -tags hwkey_dlopen ./...
+	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES)
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
 # unauthenticated connection; CI-sized. keyring is here because Resolve runs
@@ -86,6 +140,11 @@ lab-oidc:
 # L45 and L46; this runs L55 alone.
 lab-oidc-l55:
 	go test -tags lab ./tests/lab/ -run 'TestL55' -count=1 -v -timeout 30m
+
+# L61 (plan 9c): Keycloak's amr and acr for idp_mfa, a password-and-OTP realm
+# flow against the same compose Keycloak. Needs Docker with Compose v2.24.4+.
+lab-mfa-idp:
+	go test -tags lab ./tests/lab/ -run 'TestL61' -count=1 -v -timeout 30m
 
 # L56 (plan 9b): port49-issued certificates end to end, bin/port49 against
 # the compose stack's Keycloak, broker and vEOS. Needs the compose stack,

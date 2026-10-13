@@ -69,10 +69,23 @@ type RefreshChallenge struct {
 type RefreshRequest struct {
 	Nonce     string `json:"nonce"`
 	Signature string `json:"signature"`
+	// PerLoginMFAChallenge names the challenge whose proof (POST /v1/mfa)
+	// covers the contexts this refresh finds under a per_login_mfa
+	// requirement, once, when the challenge request did not already take it.
+	PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
+}
+
+// RefreshChallengeRequest is POST /v1/refresh/challenge's optional body. A
+// challenge proved by this caller exempts this one request from the
+// connection's refresh pacing (decision 45 ruling 16): the request takes the
+// proved record for the refresh that follows, so it exempts once.
+type RefreshChallengeRequest struct {
+	PerLoginMFAChallenge string `json:"per_login_mfa_challenge,omitempty"`
 }
 
 // RefreshedSession is one live context a refresh visited: its outcome
-// (extended, revoked, past_grace, not_judged), its ceiling when extended,
+// (extended, revoked, past_grace, not_judged, per_login_mfa_required,
+// per_login_mfa_unavailable), its ceiling when extended,
 // and whether the device's own session is out of the extension's reach.
 type RefreshedSession struct {
 	Device         string `json:"device"`
@@ -87,4 +100,8 @@ type RefreshResponse struct {
 	AuthTime      string             `json:"auth_time"`
 	SessionEndsAt string             `json:"session_ends_at"`
 	Sessions      []RefreshedSession `json:"sessions"`
+	// PerLoginMFA is the one challenge to prove when any context was left
+	// unextended for want of a proof (outcome per_login_mfa_required): its
+	// Device is empty, its requirement the strictest of those contexts'.
+	PerLoginMFA *PerLoginMFA `json:"per_login_mfa,omitempty"`
 }

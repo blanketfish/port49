@@ -57,7 +57,7 @@ var pools = map[string]Pool{
 	"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
 	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
-	"GetLogout": Token,
+	"GetLogout": Token, "PutMFAProof": Token, "GetMFAProof": Token,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -702,6 +702,15 @@ func (g *guarded) PutLogout(ctx context.Context, l store.Logout, ttl time.Durati
 
 func (g *guarded) GetLogout(ctx context.Context, key string) (l store.Logout, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { l, e = g.inner.GetLogout(ctx, key); return })
+	return
+}
+
+func (g *guarded) PutMFAProof(ctx context.Context, p store.MFAProof, ttl time.Duration) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutMFAProof(ctx, p, ttl) })
+}
+
+func (g *guarded) GetMFAProof(ctx context.Context, key string) (p store.MFAProof, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { p, e = g.inner.GetMFAProof(ctx, key); return })
 	return
 }
 
