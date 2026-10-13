@@ -491,16 +491,6 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			b.Minter.Release(ctx, principal, res)
 		}()
 	}
-	// The challenge a retried mint names is taken only now that the request
-	// holds its reservation, and under this caller's own binding: a request
-	// refused above spends no proof, and another caller's challenge is not
-	// found (decision 45 ruling 14; re-review R1).
-	mf := &mfaRequest{agentSHA256: agentKey(r)}
-	if req.PerLoginMFAChallenge != "" {
-		tctx, tcancel := context.WithTimeout(r.Context(), holdTimeout)
-		mf.proved, mf.takeErr = b.takeProved(tctx, c, mf.agentSHA256, req.PerLoginMFAChallenge)
-		tcancel()
-	}
 	// Held from the first resolution to the last token write, so a reload's
 	// swap waits for this request's mints and the refresh after it sees every
 	// token the old policy minted (policy.Live). Released before the response
@@ -545,6 +535,16 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// new Hold, so a nested one would wait on the swap that waits on this.
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	defer cancel()
+	// The challenge a retried mint names is taken only now that the request
+	// holds its reservation and has passed the collision and the mint gate,
+	// and under this caller's own binding: a request refused above, the
+	// gate's 503 among them, spends no proof, and another caller's challenge
+	// is not found (decision 45 ruling 14; re-review R1; final review broker
+	// I2).
+	mf := &mfaRequest{agentSHA256: agentKey(r)}
+	if req.PerLoginMFAChallenge != "" {
+		mf.proved, mf.takeErr = b.takeProved(ctx, c, mf.agentSHA256, req.PerLoginMFAChallenge)
+	}
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, resp.Subjects = subjectNames(pol, m)
 	for _, name := range req.Devices {

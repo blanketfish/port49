@@ -9138,8 +9138,9 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   `per_login_mfa_challenge`, and the proof made for that challenge covers that request's items
   whose `accept` holds its method, whatever `reuse_for` says, once. So `reuse_for: 0m` is a proof
   at every login. One endpoint serves the mint, the refresh and both methods. At the mint, the
-  proved record is taken (`TakeOnce`) only after the request's idempotency key is reserved, so a
-  store error or an in-progress answer before that leaves the proof for the retry. A store error
+  proved record is taken (`TakeOnce`) only after the request's idempotency key is reserved and
+  the request has passed the username collision and the mint gate, so a store error, an
+  in-progress answer or the gate's 503 before that leaves the proof for the retry. A store error
   while judging a requirement (`mfaCovers`, `issueChallenge`) is `deny store_unavailable` for that
   item, never "not covered": a challenge that was never stored would make the proof fail as
   `per_login_mfa_refused` and fire the alert during a store outage. A replay of a completed

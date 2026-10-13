@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/pivattest"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
@@ -766,6 +767,31 @@ func TestReuseForZeroCoversOnlyItsOwnRequest(t *testing.T) {
 	}
 	if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Reason != "per_login_mfa_required" {
 		t.Fatalf("the challenge named twice = %+v", it)
+	}
+}
+
+// A mint the gate refuses with a 503 (a restart, a takeover) spends no proof:
+// the retry once the gate opens is covered by the same touch, even under
+// reuse_for 0m, where nothing else could cover it (ruling 14; final review
+// broker I2).
+func TestAMintTheGateRefusesSpendsNoProof(t *testing.T) {
+	f := newMFAFixture(t, withReuseFor(0))
+	ch := f.ask(t, f.alice, "core-sw01")
+	if code := f.proveTouch(t, f.alice, ch); code != 200 {
+		t.Fatalf("POST /v1/mfa = %d", code)
+	}
+	f.b.MintGate = func(*policy.Policy) error { return errors.New("not yet judged") }
+	body, err := json.Marshal(api.MintRequest{Devices: []string{"core-sw01"}, Purpose: "test", PerLoginMFAChallenge: ch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, raw := f.alice.conn.post(t, "/v1/tokens", map[string]string{api.AgentSessionHeader: f.alice.agent},
+		string(body)); code != http.StatusServiceUnavailable {
+		t.Fatalf("the gated mint = %d %s, want 503", code, raw)
+	}
+	f.b.MintGate = nil
+	if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Verdict != "permit" {
+		t.Fatalf("the retry after the gate opens = %+v: the gate's 503 spent the proof", it)
 	}
 }
 
