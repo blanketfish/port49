@@ -923,6 +923,9 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	item, err := mintProved(context.Background(), proveFlags(*socket),
 		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
+		if *asJSON {
+			_ = json.NewEncoder(stdout).Encode(tokenFailureOf(device, item, err))
+		}
 		return 1
 	}
 	// The device's own ceiling, said where the operator is looking, for a

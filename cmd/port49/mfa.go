@@ -90,11 +90,21 @@ func mintProved(ctx context.Context, sf *sessionFlags, req agent.TokenRequest, s
 		return item, err
 	}
 	if err := prove(ctx, sf.socket, sf, need.Requirement, stderr); err != nil {
-		return api.MintItem{}, err
+		return api.MintItem{}, &mfaUnprovedError{Requirement: need.Requirement, Err: err}
 	}
 	req.PerLoginMFAChallenge = need.Requirement.Challenge
 	return c.Token(ctx, req)
 }
+
+// mfaUnprovedError is a requirement prove could not meet: Error is the
+// proof's own words, as mintFailed always said them.
+type mfaUnprovedError struct {
+	Requirement api.PerLoginMFA
+	Err         error
+}
+
+func (e *mfaUnprovedError) Error() string { return e.Err.Error() }
+func (e *mfaUnprovedError) Unwrap() error { return e.Err }
 
 // prove answers a requirement with the first factor it can: the agent's touch
 // key when the agent holds a usable one and the broker verifies the touch, or
