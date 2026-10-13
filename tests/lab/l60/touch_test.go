@@ -4,7 +4,7 @@
 // kept as the capture of that run. Like probe_test.go it is package pkcs11 and
 // ran through `go test -tags hwkey_dlopen -overlay` with this file mapped into
 // internal/hwkey/pkcs11 and the build tag removed; the l60probe tag keeps it
-// out of every other build. Ryan ran it from his own terminal: the PIN is read
+// out of every other build. Ryan ran it from their own terminal: the PIN is read
 // from /dev/tty with echo off, sent once and zeroed, and no signature byte is
 // printed.
 
