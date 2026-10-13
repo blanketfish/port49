@@ -68,10 +68,10 @@ func TestAUnpluggedTPMKeyNeverEndsTheSession(t *testing.T) {
 	}
 
 	sim.Stop() // the unplug
-	if _, err := a.Mint(ctx, "leaf1", false, 0); err != nil {
+	if _, err := a.Mint(ctx, "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("mint on the held connection with the TPM gone: %v", err)
 	}
-	_, err = a.Refresh(ctx)
+	_, err = a.Refresh(ctx, "")
 	var absent *KeyAbsentError
 	if !errors.As(err, &absent) || absent.State != hwkey.Absent || !strings.Contains(err.Error(), "insert your key") {
 		t.Fatalf("refresh with the TPM gone = %v", err)
@@ -79,7 +79,7 @@ func TestAUnpluggedTPMKeyNeverEndsTheSession(t *testing.T) {
 	srv.CloseClientConnections()
 	a.client.CloseIdleConnections()
 	absent = nil
-	if _, err = a.Mint(ctx, "leaf1", false, 0); !errors.As(err, &absent) {
+	if _, err = a.Mint(ctx, "leaf1", false, 0, ""); !errors.As(err, &absent) {
 		t.Fatalf("mint needing a reconnect with the TPM gone = %v, want *KeyAbsentError", err)
 	}
 	select {
@@ -89,7 +89,7 @@ func TestAUnpluggedTPMKeyNeverEndsTheSession(t *testing.T) {
 	}
 
 	sim.Restart() // the re-insertion: no mint, no reconnect, no signature since
-	if _, err := a.Refresh(ctx); err != nil {
+	if _, err := a.Refresh(ctx, ""); err != nil {
 		t.Fatalf("refresh after the TPM came back: %v", err)
 	}
 }

@@ -28,14 +28,14 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	r.key.setPresent(false)
 
 	// The held connection mints: the key was used at the handshake.
-	if _, err := r.a.Mint(ctx, "leaf1", false, 0); err != nil {
+	if _, err := r.a.Mint(ctx, "leaf1", false, 0, ""); err != nil {
 		t.Fatalf("mint on the held connection with the key out: %v", err)
 	}
 	// A refresh needs the key. The cached state is still Present, so the
 	// first one asks for a challenge on the held connection and fails at the
 	// signature; it says so, and the held connection is still up.
 	signs := r.key.nSigns()
-	_, err := r.a.Refresh(ctx)
+	_, err := r.a.Refresh(ctx, "")
 	var absent *KeyAbsentError
 	if !errors.As(err, &absent) || absent.State != hwkey.Absent || !strings.Contains(err.Error(), "insert your key") ||
 		!strings.Contains(err.Error(), "your session goes on until") ||
@@ -50,7 +50,7 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	}
 	// The state is Absent now: the next refresh says so before anything is sent.
 	signs = r.key.nSigns()
-	if _, err = r.a.Refresh(ctx); !errors.As(err, &absent) || absent.State != hwkey.Absent || r.key.nSigns() != signs {
+	if _, err = r.a.Refresh(ctx, ""); !errors.As(err, &absent) || absent.State != hwkey.Absent || r.key.nSigns() != signs {
 		t.Fatalf("second refresh with the key out = %v after %d signs, want *KeyAbsentError and none", err, r.key.nSigns()-signs)
 	}
 	// A reconnect needs the key at the handshake: the broker drops the
@@ -58,7 +58,7 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	// inside crypto/tls as text alone.
 	dropHeldConnection(r)
 	absent = nil
-	if _, err = r.a.Mint(ctx, "leaf1", false, 0); !errors.As(err, &absent) || absent.State != hwkey.Absent {
+	if _, err = r.a.Mint(ctx, "leaf1", false, 0, ""); !errors.As(err, &absent) || absent.State != hwkey.Absent {
 		t.Fatalf("mint needing a reconnect with the key out = %v, want *KeyAbsentError", err)
 	}
 	// The held connection is gone on this path: no promise of minting on it.
@@ -74,7 +74,7 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	// Re-inserted: Refresh asks State, which re-probes from Absent; nothing
 	// signed in between.
 	r.key.setPresent(true)
-	if _, err := r.a.Refresh(ctx); err != nil {
+	if _, err := r.a.Refresh(ctx, ""); err != nil {
 		t.Fatalf("refresh after the key came back: %v", err)
 	}
 }
@@ -83,12 +83,12 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 func TestALockedKeyAtARefreshSaysToLogIn(t *testing.T) {
 	r := newRigWith(t, rigOpts{hw: true}) // comes back Locked by default
 	r.key.setPresent(false)
-	if _, err := r.a.Refresh(context.Background()); err == nil {
+	if _, err := r.a.Refresh(context.Background(), ""); err == nil {
 		t.Fatal("refresh with the key out succeeded")
 	}
 	r.key.setPresent(true)
 	signs := r.key.nSigns()
-	_, err := r.a.Refresh(context.Background())
+	_, err := r.a.Refresh(context.Background(), "")
 	var locked *KeyAbsentError
 	if !errors.As(err, &locked) || locked.State != hwkey.Locked || !strings.Contains(err.Error(), "your key is back and needs its PIN: run `port49 login`") ||
 		!strings.Contains(err.Error(), "your session goes on until") || KeyCode(err) != "key_locked" {
@@ -110,7 +110,7 @@ func TestALockedKeyThatNeverLeftIsNotBack(t *testing.T) {
 	r.key.mu.Lock()
 	r.key.state = hwkey.Locked
 	r.key.mu.Unlock()
-	_, err := r.a.Refresh(context.Background())
+	_, err := r.a.Refresh(context.Background(), "")
 	var locked *KeyAbsentError
 	if !errors.As(err, &locked) || locked.State != hwkey.Locked ||
 		!strings.Contains(err.Error(), "your key needs its PIN: run `port49 login`; your session goes on until") ||
@@ -124,7 +124,7 @@ func TestALockedKeyThatNeverLeftIsNotBack(t *testing.T) {
 func TestATouchTimeoutIsNotAnAbsentKey(t *testing.T) {
 	r := newRigWith(t, rigOpts{hw: true})
 	r.key.signErr = hwkey.ErrTouchTimeout
-	_, err := r.a.Refresh(context.Background())
+	_, err := r.a.Refresh(context.Background(), "")
 	var absent *KeyAbsentError
 	if errors.As(err, &absent) || KeyCode(err) != "touch_timeout" || strings.Contains(err.Error(), "insert your key") {
 		t.Fatalf("refresh with a touch timeout = %v", err)
@@ -146,7 +146,7 @@ func TestAReinsertedKeyIsSeenWithoutASignature(t *testing.T) {
 		return st.KeyState
 	}
 	r.key.setPresent(false)
-	if _, err := r.a.Refresh(ctx); err == nil {
+	if _, err := r.a.Refresh(ctx, ""); err == nil {
 		t.Fatal("refresh with the key out succeeded")
 	}
 	if got := status(); got != "absent" {
@@ -179,7 +179,7 @@ func TestARefusedCertificateStillEndsTheSession(t *testing.T) {
 	r := newRigWith(t, rigOpts{hw: true})
 	r.refuse.Store(true)
 	dropHeldConnection(r)
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err == nil {
 		t.Fatal("mint after a refused reconnect succeeded")
 	}
 	select {

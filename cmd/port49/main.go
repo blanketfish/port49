@@ -577,7 +577,7 @@ func login(args []string, stdout, stderr io.Writer) int {
 // refreshRunning refreshes the session of the agent that is already logged in.
 func refreshRunning(ctx context.Context, sf *sessionFlags, st agent.Status, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
-	out, err := agent.NewClient(sf.socket).Refresh(ctx)
+	out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
 		return 1
@@ -706,7 +706,7 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 			// The session is up whatever the refresh does: a failure is
 			// said, and the login still succeeds, unless the broker refused
 			// a certificate it issued.
-			out, err := agent.NewClient(sf.socket).Refresh(ctx)
+			out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
 			var revoked *agent.RevokedError
 			switch {
 			case issued && errors.As(err, &revoked):
@@ -895,8 +895,8 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	device := fs.Arg(0)
-	item, err := agent.NewClient(*socket).Token(context.Background(),
-		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)})
+	item, err := mintProved(context.Background(), proveFlags(*socket),
+		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
 		return 1
 	}

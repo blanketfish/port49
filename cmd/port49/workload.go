@@ -16,6 +16,8 @@ import (
 	"unicode"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/workload"
 )
@@ -63,13 +65,21 @@ type workloadFlags struct {
 	broker, brokerCA, cert, key string
 	deadline                    time.Duration
 	brokerCRL                   string
+	// touchKey is a key reference whose touch proves a per-login requirement
+	// (decision 45): on the workload key's own token, its PIN from the
+	// reference's pin-source alone.
+	touchKey string
 }
 
 func (w *workloadFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&w.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&w.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.StringVar(&w.cert, "cert", "", "the workload's certificate (PEM), read at every run")
-	fs.StringVar(&w.key, "key", "", "its private key (PEM), readable by its owner alone")
+	fs.StringVar(&w.key, "key", "", "its private key (PEM, readable by its owner alone), or a key reference "+
+		"(pkcs11:…;pin-source=file:///path, tpm:file=…): a workload has no terminal, so a token's PIN is read from the "+
+		"reference's pin-source")
+	fs.StringVar(&w.touchKey, "touch-key", "", "a key reference on the same token as --key, touched to prove a device's "+
+		"per-login second factor (pkcs11:…;pin-source=file:///path); without it such a device is reported, not minted")
 	fs.StringVar(&w.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
 		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
 	fs.DurationVar(&w.deadline, "deadline", workload.DefaultDeadline, "how long to retry a broker that cannot answer now")
@@ -91,10 +101,26 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 	if err != nil {
 		return nil, err
 	}
-	return workload.New(workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
+	cfg := workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
 		VerifyBroker: verify, Deadline: w.deadline, Warn: func(format string, args ...any) {
 			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
-		}})
+		}, Say: func(format string, args ...any) {
+			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
+		}}
+	if w.touchKey != "" {
+		// No PIN is given: a token's comes from the reference's pin-source.
+		tk, err := clientkey.Open(w.touchKey, nil)
+		if err != nil {
+			return nil, fmt.Errorf("--touch-key: %w", err)
+		}
+		if tk.State() == hwkey.Locked {
+			tk.Close()
+			return nil, errors.New("--touch-key needs a PIN and a workload has no terminal to ask for it: add " +
+				"pin-source=file:///path to the reference")
+		}
+		cfg.TouchKey = tk
+	}
+	return workload.New(cfg)
 }
 
 // mintedCount is the items that carry a token: a denied device is an answer,

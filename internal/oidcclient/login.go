@@ -33,6 +33,9 @@ type LoginOptions struct {
 	// Nonce is the request's nonce: the key binding a login sends
 	// (api.IssuanceNonce; decision 43 ruling 3), or "" for one drawn here.
 	Nonce string
+	// ACRValues, when not empty, is sent as acr_values: what the broker's
+	// /v1/config names for an idp_mfa proof.
+	ACRValues string
 	// Port is the loopback listener's; 0 is an ephemeral one (RFC 8252 §7.3).
 	Port int
 	// Browser opens the authorization URL; nil, or an error, means no
@@ -72,6 +75,9 @@ func Login(ctx context.Context, p Provider, e Endpoints, o LoginOptions) (Tokens
 	}
 	redirect := fmt.Sprintf("http://127.0.0.1:%d/callback", ln.Addr().(*net.TCPAddr).Port)
 	authURL, err := AuthorizationURL(p, e, redirect, state, nonce, challengeOf(verifier))
+	if err == nil {
+		authURL, err = WithACRValues(authURL, o.ACRValues)
+	}
 	if err != nil {
 		ln.Close()
 		return Tokens{}, err

@@ -100,7 +100,7 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "port49: already logged in to %s as %s; refreshing\n", st.Broker, s.Principal)
-		out, err := agent.NewClient(sf.socket).Refresh(ctx)
+		out, err := agent.NewClient(sf.socket).Refresh(ctx, "")
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
 			return 1
@@ -368,7 +368,7 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err != nil {
 		return failed(err)
 	}
-	tokens, err := signIn(ctx, p, e, nonce, sf.redirectPort, sf.noBrowser, stderr)
+	tokens, err := signIn(ctx, p, e, nonce, "", sf.redirectPort, sf.noBrowser, stderr)
 	if err != nil {
 		return failed(err)
 	}
@@ -490,9 +490,9 @@ var (
 // ends, and when a signal ends the process while the paste prompt has echo
 // off (guardedPaste): Ctrl-C there must not leave the operator's shell
 // typing blind.
-func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce string, port int,
+func signIn(ctx context.Context, p oidcclient.Provider, e oidcclient.Endpoints, nonce, acr string, port int,
 	noBrowser bool, stderr io.Writer) (oidcclient.Tokens, error) {
-	o := oidcclient.LoginOptions{Nonce: nonce, Port: port, Out: stderr, Now: time.Now}
+	o := oidcclient.LoginOptions{Nonce: nonce, ACRValues: acr, Port: port, Out: stderr, Now: time.Now}
 	if !noBrowser {
 		o.Browser = openBrowser
 	}

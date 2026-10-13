@@ -47,15 +47,15 @@ func TestAKeyFailureAtTheHandshakeIsTheKeysOwnErrorAndIsNotRetried(t *testing.T)
 				socket bool
 				do     func() error
 			}{
-				{"mint", false, func() error { _, err := r.a.Mint(context.Background(), "leaf1", false, 0); return err }},
+				{"mint", false, func() error { _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); return err }},
 				{"mint through the socket", true, func() error {
 					_, err := c.Token(context.Background(), TokenRequest{Device: "leaf1"})
 					return err
 				}},
 				{"identity", false, func() error { _, err := r.a.Identity(context.Background()); return err }},
 				{"identity through the socket", true, func() error { _, err := c.Identity(context.Background()); return err }},
-				{"refresh", false, func() error { _, err := r.a.Refresh(context.Background()); return err }},
-				{"refresh through the socket", true, func() error { _, err := c.Refresh(context.Background()); return err }},
+				{"refresh", false, func() error { _, err := r.a.Refresh(context.Background(), ""); return err }},
+				{"refresh through the socket", true, func() error { _, err := c.Refresh(context.Background(), ""); return err }},
 			} {
 				r.srv.CloseClientConnections()
 				r.a.client.CloseIdleConnections()
@@ -94,7 +94,7 @@ func TestAKeyFailureAtTheHandshakeIsTheKeysOwnErrorAndIsNotRetried(t *testing.T)
 			r.key.mu.Unlock()
 			r.srv.CloseClientConnections()
 			r.a.client.CloseIdleConnections()
-			if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+			if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); err != nil {
 				t.Fatalf("after the key answered: %v", err)
 			}
 		})
@@ -152,7 +152,7 @@ func TestAnOldKeyFailureIsNotBlamedForALaterOutage(t *testing.T) {
 	r.key.signErr = hwkey.ErrTouchTimeout
 	r.srv.CloseClientConnections()
 	r.a.client.CloseIdleConnections()
-	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); KeyCode(err) != "touch_timeout" {
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0, ""); KeyCode(err) != "touch_timeout" {
 		t.Fatalf("setup: %v", err)
 	}
 	r.key.mu.Lock()
@@ -161,7 +161,7 @@ func TestAnOldKeyFailureIsNotBlamedForALaterOutage(t *testing.T) {
 	r.fault.Store(true) // the broker drops the handshake before the key signs
 	r.srv.CloseClientConnections()
 	r.a.client.CloseIdleConnections()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0, "")
 	if err == nil || KeyCode(err) != "" || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("Mint during an outage = %v, want the broker unreachable and no key error", err)
 	}

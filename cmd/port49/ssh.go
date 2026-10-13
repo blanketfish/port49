@@ -665,10 +665,14 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			"the device they ask for. Run `port49 token %s` and your own ssh instead\n", cmd, path, v[0], v[1], device)
 		return 1
 	}
+	req := agent.TokenRequest{Device: device, TTLSeconds: int(*ttl / time.Second)}
+	// The first mint proves a requirement, if there is one (a touch or a
+	// sign-in, at this terminal); a re-mint while ssh runs is the agent's
+	// alone: it holds the terminal, and the proof is reused for reuse_for.
 	mint := func(ctx context.Context) (api.MintItem, error) {
-		return agent.NewClient(*socket).Token(ctx, agent.TokenRequest{Device: device, TTLSeconds: int(*ttl / time.Second)})
+		return agent.NewClient(*socket).Token(ctx, req)
 	}
-	item, err := mint(context.Background())
+	item, err := mintProved(context.Background(), proveFlags(*socket), req, stderr)
 	mintedAt := time.Now()
 	if mintFailed(cmd, *socket, device, item, err, stderr) {
 		return 1

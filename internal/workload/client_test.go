@@ -32,6 +32,16 @@ type fakeBroker struct {
 	keys     []string
 	bodies   []api.MintRequest
 	presents []string // the client certificate's fingerprint, per request
+	// mfa is every POST /v1/mfa, with the exporter value of the connection
+	// it came on; mfaStatus answers it (200 when 0).
+	mfa       []mfaPost
+	mfaStatus int
+}
+
+// mfaPost is one proof the fake broker was sent.
+type mfaPost struct {
+	req api.MFAProofRequest
+	ekm []byte
 }
 
 func (f *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +56,17 @@ func (f *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.Config{BatchMax: f.batchMax})
 	case "/v1/identity":
 		_ = json.NewEncoder(w).Encode(api.Identity{Principal: "spiffe://corp.example.com/host/oxidized-01", Method: "cert"})
+	case "/v1/mfa":
+		var p mfaPost
+		_ = json.NewDecoder(r.Body).Decode(&p.req)
+		p.ekm, _ = r.TLS.ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)
+		f.mfa = append(f.mfa, p)
+		if f.mfaStatus != 0 {
+			w.WriteHeader(f.mfaStatus)
+			_ = json.NewEncoder(w).Encode(api.Error{Error: "per_login_mfa_refused", Detail: "the proof is refused"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MFAProofResponse{Method: p.req.Method, ProvedAt: "2026-10-13T00:00:00Z"})
 	case "/v1/tokens":
 		var req api.MintRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)

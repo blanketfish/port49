@@ -13,10 +13,10 @@ import (
 func TestEveryBrokerRequestCarriesTheAgentSession(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	if _, err := r.a.Mint(ctx, "leaf1", false, time.Minute); err != nil {
+	if _, err := r.a.Mint(ctx, "leaf1", false, time.Minute, ""); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = r.a.Refresh(ctx) // the fake broker's answer does not matter: both requests are sent
+	_, _ = r.a.Refresh(ctx, "") // the fake broker's answer does not matter: both requests are sent
 	r.fb.mu.Lock()
 	seen := map[string][]string{}
 	for p, v := range r.fb.sessions {
