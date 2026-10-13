@@ -175,7 +175,8 @@ no cell measured.
 **9c written 2026-10-12** (`2026-10-12-09c-hardware-keys-and-per-login-mfa.md`, seventeen tasks: one
 spec, one macOS spike, eleven code, two lab, one gated code, one docs). The key moves into
 hardware behind the agent's one `crypto.Signer`: PKCS#11 through purego, TPM 2.0 through go-tpm,
-the Secure Enclave only if its spike passes (gate SE1; no macOS host here, so it goes back to Ryan).
+the Secure Enclave built without a Mac, experimental and opt-in (Ryan's ruling, 2026-10-12; gate SE1
+is a check a Mac user runs).
 `port49 login --oidc` generates its key in the TPM by default (`issued_key_store: auto`). The key
 unplugged never ends a session. `per_login_mfa` takes four levels (`defaults:`, a role, a scope by
 attribute, a scope by `name`), the strictest winning as an intersection; a proof is a touch on an
@@ -188,8 +189,9 @@ YubiKey on the SER8, Ryan present, placed late), L61 (Keycloak's `amr`), L62 (th
 (the Secure Enclave).
 **9c executed 2026-10-12 to 2026-10-13** on `feature/hardware-keys-and-per-login-mfa` (base
 `e8d3e1a`), each code task reviewed (Plan 9c — As built, below). L61 closed; L60 half measured on a
-YubiKey 5C Nano FIPS, so it stays open; L62 and L63 open; the Secure Enclave (Tasks 2 and 14) is not
-built yet.
+YubiKey 5C Nano FIPS, so it stays open; L62 open. The Secure Enclave (Tasks 2 and 14) is built,
+experimental and opt-in, cross-compiled and vetted for darwin in CI, and run on no Mac: L63 stays
+open, marked needs testing on macOS.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5223,8 +5225,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     signature (`api.SignRefresh`) take it unchanged:
     - PKCS#11 through purego, for YubiKey PIV and smartcards;
     - TPM 2.0 through go-tpm;
-    - the macOS Secure Enclave through purego, if 9c's own first task, a spike on a macOS host,
-      allows (decision 42 ruling 13; a drop goes back to Ryan).
+    - the macOS Secure Enclave through purego, experimental and opt-in by name (decision 42 ruling
+      13 as Ryan ruled it on 2026-10-12: built without a Mac and marked needs testing).
   - **Policy:** touch and PIN policy are the operator's (design §7: `cached` or PIN-only is the
     default). The PEM file stays as the fallback.
   - **Issued keys too:** `port49 login --oidc` (9b) generates its key in the TPM, the Secure
@@ -5763,14 +5765,18 @@ Executed from `2026-10-12-09c-hardware-keys-and-per-login-mfa.md` on
 `main`), each code task reviewed, most through one to four fix rounds. The ledger is
 `.superpowers/sdd/2026-10-12-09c-hardware-keys-and-per-login-mfa/progress.md`. The rulings are
 decision 45 of the spec (§13), twenty-six of them. Lab hardware: a YubiKey 5C Nano FIPS (firmware
-5.4.3, libykcs11 from Debian's `ykcs11`), SoftHSM2, swtpm, Keycloak 26.4.7. **This entry is written
-before the Secure Enclave tasks and before the rest of L60 and L62 run (below): they are not built or
-measured, and nothing here says otherwise.**
+5.4.3, libykcs11 from Debian's `ykcs11`), SoftHSM2, swtpm, Keycloak 26.4.7. **The rest of L60 and L62
+have not run, and the Secure Enclave has never run on a Mac (below): nothing here says otherwise.**
 
 - **Gates read:**
-  - **SE1** (an unsigned `port49` creates and finds a Secure Enclave key): **not read.** Task 2 needs
-    a Mac. Ryan ruled on 2026-10-12 to build the backend without one (Task 14) as experimental and
-    opt-in, marked "needs testing" for community Mac users; neither task has run. L63 stays open.
+  - **SE1** (an unsigned `port49`, built with `CGO_ENABLED=0`, creates a Secure Enclave key, finds it
+    from a second process and from a rebuilt binary, and signs): **not read, because no Mac is
+    here.** Ryan ruled on 2026-10-12 to build the backend anyway (Task 14), experimental and opt-in,
+    marked needs testing on macOS for community Mac users, so SE1 is a check a Mac user runs
+    (Task 2, `tests/spike/secureenclave`), not a gate on building. It passes when four cells pass:
+    `create-permanent`, `find`, `sign` and `find-rebuilt` (the key found and signed with by a copy
+    of the spike built again, as a port49 upgrade is). A fifth, `control` (a software key through
+    the same calls), must pass or the run is invalid. L63 stays open.
   - **M1** (Keycloak puts `mfa` in `amr`): **failed as worded.** Keycloak emits `otp`, and only
     `mfa` if the OTP execution's reference is set to it. The default stays `[mfa]`; the operator
     notes carry the Keycloak setup.
@@ -5804,7 +5810,7 @@ measured, and nothing here says otherwise.**
     records the proving agent (`mfa_agent_sha256`), so a bearer's proof covers no other agent's
     refresh (ruling 15).
   - **Task 5, hardware keys in login and the agent** (e926ea5, then 896cafd, f3bc093, c490a0b, 850c9ab,
-    e57bd87, 402d933, 0e58eeb, 98eb724, 099bb0a, 0e9d873, 221267b, ee0936d): the PIN asked
+    e57bd87, 402d933, 6a6764b, 0e58eeb, 98eb724, 099bb0a, 0e9d873, 221267b, ee0936d): the PIN asked
     once with echo off, on descriptor 4; a blocked PIN told as blocked with the PUK as the way out;
     a key's own failure at the handshake is a typed error with its own socket code, found by a
     recorder around the key and never retried. **Touch timeout** (b25ded5, 609ac8d): ruling 14.
@@ -5815,10 +5821,33 @@ measured, and nothing here says otherwise.**
   - **Task 13, the proof from the CLI** (2a35677, a59af4d, 61e0bb9): `port49 token`, `ssh`, `refresh`
     and `workload token` give a proof when asked; the sign-in proof goes to the agent's broker;
     `idp_mfa` is the fallback when the touch cannot be made.
+  - **Task 2 and Task 14, the Secure Enclave, experimental** (ee329dc, the spec and plan amended to
+    Ryan's ruling; af0e4f4, 4a4bb89, then 9a17c8f, 791fa83, 224e9f6 after review). Nothing has run on
+    a Mac. `internal/hwkey/secureenclave` is the backend through purego, in a darwin-only
+    `secapi` package that the static build never links; it is opt-in by name (`key:
+    "secure-enclave:label=NAME"` or `issued_key_store: secure_enclave`), `auto` never picks it, it
+    prints a one-line experimental warning once per process, and any Security.framework error is a
+    refusal naming the OSStatus, never a fallback. The issued key is labeled
+    `port49.<host>_<port>.<machine>`, made once under a lock and kept across sign-ins. Two keys under
+    one label refuse every sign-in, and `port49 login --delete-key` removes them: it asks on a
+    terminal, and deletes without asking when there is no terminal. `make check-darwin` (and a
+    `darwin` job in the `hwkeys` workflow) cross-compiles `cmd/port49` with `-tags hwkey_dlopen` and
+    the spike for arm64 and amd64 with `CGO_ENABLED=0`, and vets darwin with and without the tag.
   - **Task 15, the lab, L61 half** (e5e3eff, 9e98d1d, 8836395). L62's half has not run.
-  - **Task 17, this entry.**
+  - **Task 17, this entry** (5b8c6a8, revised after Tasks 2 and 14).
 - **Left, and why:**
-  - **Task 2 and Task 14, the Secure Enclave:** wait on a Mac (above).
+  - **Task 2's check on a Mac (SE1, L63):** from a port49 checkout with Go installed, `go run
+    ./tests/spike/secureenclave`, then `go run ./tests/spike/secureenclave locked` (it asks the user
+    to lock the screen and waits 45s). Each prints `cell <name>: pass` or `cell <name>: fail OSStatus
+    <n> <description>`; the first ends `SE1: pass` or `SE1: fail`. Neither prints key bytes or a
+    signature, and each deletes the keys it made. The one who runs it reports both outputs with the
+    macOS version and Mac model. `find-rebuilt` runs `go build` itself, so it needs `go` on `PATH`
+    and the checkout. The locked cells are not part of SE1: they say whether the agent's refresh and
+    a new process sign with the screen locked (a locked-screen refresh is unmeasured, provisional on
+    L63). Also observed, outside SE1: whether a held key reference still signs after its keychain
+    item is deleted. If the Enclave refuses an unsigned binary (`-34018`, `errSecMissingEntitlement`, is the
+    answer L63 asks about), port49 names that OSStatus and fails closed. **L63 stays open, marked needs testing on
+    macOS;** a help-wanted issue asks community Mac users to run it at go-public.
   - **Task 16, the rest of L60:** needs Ryan at the key. Measured so far on the YubiKey 5C Nano FIPS,
     firmware 5.4.3 (2026-10-13, read-only, no login; probe kept in the ledger directory):
     libykcs11 lists the f9 attestation certificate and each slot's attestation with no login, the
@@ -5851,7 +5880,10 @@ measured, and nothing here says otherwise.**
   - **On L62:** ruling 5 on a real TPM (the SRK, a restart, a reboot, another machine refusing the
     key file, a user outside `tss` told the group); ruling 7's shared-home naming, the token host and
     file host each keeping their own certificate.
-  - **On L63:** ruling 6, the whole Secure Enclave.
+  - **On L63:** ruling 6, the whole Secure Enclave: that an unsigned binary can create and find a
+    key, that a rebuilt binary still finds it, the call shapes (checked against the headers from
+    memory, not an SDK), the data protection keychain, the refresh with the screen locked, and what a
+    held key reference does after its item is deleted.
 - **Carried:**
   - **The 7h bearer path's session refresh passes no agent session.** A person refreshing through it
     proves at every refresh under a requirement (ruling 15). It retires at the pre-beta review.
@@ -5859,12 +5891,33 @@ measured, and nothing here says otherwise.**
     "second factor required"; `port49 token` (or `ssh` again) proves.
   - **The agent's `GET /status`, or a `port49 token` in another terminal, waits up to about 15s** while a touch is
     pending (the token lock). Parked for the final review.
-  - **Parked minors for the final review:** the `TestMain` TPM stub placed above the CLI branch
-    (`cmd/port49/main_test.go`); `auto` loads the TPM pair twice; a staging file left by a killed
-    login; the attestation lost after the prompt is untested; exit 75's message omits `--scope`;
-    older agents fall back to the config's broker CA.
+  - **Parked minors for the final review** (the ledger's "Parked for final review" lines):
+    - Tasks 3 and 4: `closeOwned` holds the session lock across `C_CloseSession`, and its guard has no
+      red test of its own; the swtpm reaper's half-written record race, a root run killing another
+      user's swtpm, and the reaper test racing swtpm's start.
+    - Tasks 7 and 13: the `TestMain` TPM stub placed above the CLI branch
+      (`cmd/port49/main_test.go`); `auto` loads the TPM pair twice; a staging file left by a killed
+      login; a redundant `s == heldValid ||`; the attestation lost after the prompt is untested; exit
+      75's message omits `--scope`; older agents fall back to the config's broker CA.
+    - Task 9: `strconv.QuoteToASCII` for NFC and NFD display of a scope selector.
+    - Task 8: the `--broker-crl` help line is over 160 columns; the plan's Task 8 test list omits six
+      real tests.
+    - Task 12: the sealed `Credential` has no json tags (changing that breaks sealed records and needs
+      a migration ruling).
+    - Task 5: the broker client follows redirects on a POST with a body (out of scope there); the
+      concurrent-dials test could be a channel version.
+    - Tasks 2 and 14: the "after asking on a terminal" wording; a lock failure mislabelled "Secure
+      Enclave refused"; `--delete-key` refuses other flags with exit 2.
+    - One flake seen once, not reproduced in three solo runs and two full runs:
+      `TestATPMKeyFromAnotherTPMIsReplacedBySigningIn` failed with "unknown certificate authority" (a
+      different broker port); it touches neither the Secure Enclave nor this change.
+  - **Carried to the lab session with Ryan:** the rest of L60 (cells b, d, e, e2, f, g and the others
+    above) and L62, which the ledger defers: it needs a new lab user in `tss` (sudo, a host change), a
+    reboot of the SER8, and a second host for the shared home.
   - **Plan 12:** ship `attestation_roots_file` (the broker) and the `touch_key`, `key`,
-    `issued_key_store` and `broker_crl` lines in each shape's `/etc/port49/config.yaml`; add the lab
+    `issued_key_store` and `broker_crl` lines in each shape's `/etc/port49/config.yaml`; build the
+    macOS client with `-tags hwkey_dlopen` (the only build with the Secure Enclave) and keep `make
+    check-darwin` in CI; whether that build must be signed is L63's question; add the lab
     user to `tss` in the client packages that use the TPM; build **two `port49` artifacts** (decision
     45 ruling 22) and name them so an operator can tell which is which: the static one
     (`make build`, `CGO_ENABLED=0`, no PKCS#11, no Secure Enclave) in the image and the server
@@ -6030,19 +6083,25 @@ measured, and nothing here says otherwise.**
   stops being static (`make check-static`). Where a non-console user uses a token through `pcscd`,
   the host needs a polkit rule scoped to that user (the lab box's is
   `/etc/polkit-1/rules.d/99-port49-pcscd.rules`).
-- **Secure Enclave (macOS, experimental).** Built without a Mac to run it on, so untested (L63
-  open). Opt-in only: `key: "secure-enclave:label=NAME"` or `issued_key_store: secure_enclave` in
-  the client build; `auto` never picks it. Each process that opens or makes a key prints, once,
-  "the Secure Enclave backend is experimental and untested (L63); report results at the port49
-  issue tracker". Any
+- **Secure Enclave (macOS, experimental; needs testing on macOS).** Built without a Mac to run it
+  on, so it has never run on one (L63 open). It is cross-compiled and vetted for darwin in CI (`make
+  check-darwin`), which proves it builds and nothing about how it behaves. Opt-in only: `key:
+  "secure-enclave:label=NAME"` or `issued_key_store: secure_enclave` in the macOS client build; `auto`
+  never picks it. Each process that opens or makes a key prints, once, "the Secure Enclave backend is
+  experimental and untested (L63); report results at the port49 issue tracker". Any
   Security.framework error, `errSecMissingEntitlement` (-34018) among them, is a refusal naming the
   OSStatus, never a fallback to a file or another store. The issued key is labeled
   `port49.<host>_<port>.<machine>` and made once, under a lock in `~/.port49/issued/`, then kept
-  across sign-ins; a sign-in never removes it. Two keys under that label refuse every sign-in, and
-  `port49 login --delete-key` deletes them (and the certificate held for them) after asking; the
-  next login makes one. To help: `go run ./tests/spike/secureenclave` and
-  `go run ./tests/spike/secureenclave locked` on a Mac, from a port49 checkout, and report both
-  outputs.
+  across sign-ins; a sign-in never removes it. Two keys under that label refuse every sign-in, naming
+  the count; `port49 login --delete-key` deletes them (and the certificate held for them), asking
+  `[y/N]` on a terminal and deleting without asking when there is none; the next login makes one. It
+  works only with `issued_key_store: secure_enclave`. Whether the agent's refresh signs with the
+  screen locked is unmeasured. To help, from a port49 checkout on a Mac with Go installed:
+  `go run ./tests/spike/secureenclave`, then `go run ./tests/spike/secureenclave locked` (it asks
+  you to lock the screen). Each prints `cell <name>: pass` or `fail` with the OSStatus; the first
+  ends `SE1: pass` or `SE1: fail`. Neither prints a key or a signature, and each deletes the keys it
+  made. Report both outputs with the macOS version and the Mac model; a help-wanted issue asks for
+  this at go-public.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
