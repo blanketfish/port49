@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rhwendt/port49/internal/hwkey"
 )
@@ -39,6 +40,24 @@ type Signer struct {
 	label         string
 	state         hwkey.State
 	closed        bool
+	now           func() time.Time // the clock; nil is time.Now (tests inject one)
+}
+
+// touchTimeoutMin is how long a C_Sign that answers CKR_USER_NOT_LOGGED_IN
+// must have taken to be read as a touch timeout. libykcs11 reports an untouched
+// sign that way after about 14.4s although the token stays logged in (L60,
+// 2026-10-13); a genuine not-logged-in answers at once.
+const touchTimeoutMin = 5 * time.Second
+
+// signFault, set only by the test harness (FakeSign), stands in for the
+// module's C_SignInit and C_Sign: it returns the CK_RV to report.
+var signFault func(s *Signer) (rv uint)
+
+func (s *Signer) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 var _ hwkey.Key = (*Signer)(nil)
@@ -628,8 +647,19 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	sig, err := s.m.sign(s.session, mech, param, s.handle, digest)
+	start := s.clock()
+	var sig []byte
+	if signFault != nil {
+		err = &rvError{"C_Sign", signFault(s)}
+	} else {
+		sig, err = s.m.sign(s.session, mech, param, s.handle, digest)
+	}
 	if err != nil {
+		var re *rvError
+		if errors.As(err, &re) && re.fn == "C_Sign" && re.rv == ckrUserNotLoggedIn && s.clock().Sub(start) >= touchTimeoutMin {
+			// A touch timeout: the token is still logged in, so the state stays.
+			return nil, hwkey.ErrTouchTimeout
+		}
 		return nil, s.classify("C_Sign", err)
 	}
 	if s.keyType == ckkEC {

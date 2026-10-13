@@ -44,6 +44,11 @@ type Key interface {
 var (
 	ErrKeyAbsent = errors.New("hwkey: the key is not present")
 	ErrLocked    = errors.New("hwkey: the key needs its PIN")
+
+	// ErrTouchTimeout is a touch-policy key that was not touched in time. The
+	// key stays unlocked: the PIN is not the problem and the next Sign may try
+	// again.
+	ErrTouchTimeout = errors.New("no touch within 15s; touch the key when it blinks and try again")
 )
 
 // PINError is a PIN the token refused. Low and Final are the token's own
