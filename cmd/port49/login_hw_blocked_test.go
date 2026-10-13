@@ -54,13 +54,20 @@ func TestABlockedPINIsSaidAsBlockedOnBothPaths(t *testing.T) {
 		for _, tc := range []struct {
 			name         string
 			answerLocked bool
+			noFlag       bool // the token sets no CKF_USER_PIN_LOCKED; only C_Login says so
 			pin          string
 		}{
-			{"the wrong PIN that was the last try", false, "000000"},
-			{"CKR_PIN_LOCKED for the wrong PIN", true, "000000"},
-			{"CKR_PIN_LOCKED for the right PIN", true, hwtest.SoftHSMUserPIN},
+			{"the wrong PIN that was the last try", false, false, "000000"},
+			{"CKR_PIN_LOCKED for the wrong PIN", true, false, "000000"},
+			{"CKR_PIN_LOCKED for the right PIN", true, false, hwtest.SoftHSMUserPIN},
+			{"CKR_PIN_LOCKED with no token flag, wrong PIN", true, true, "000000"},
+			{"CKR_PIN_LOCKED with no token flag, right PIN", true, true, hwtest.SoftHSMUserPIN},
 		} {
 			restore := pkcs11.BlockPIN(tc.answerLocked)
+			if tc.noFlag {
+				restore()
+				restore = pkcs11.BlockPINWithoutFlag()
+			}
 			code, msg := run(tc.pin)
 			restore()
 			if code != 1 || !strings.Contains(msg, hwkey.PINBlockedWords) || strings.Contains(msg, "refused the PIN") {

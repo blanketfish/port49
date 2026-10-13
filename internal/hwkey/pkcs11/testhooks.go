@@ -80,6 +80,14 @@ func BlockPIN(answerLocked bool) (restore func()) {
 	return func() { pinBlockedFake.Store(false); loginLockedFake.Store(false) }
 }
 
+// BlockPINWithoutFlag makes C_Login answer CKR_PIN_LOCKED while the token info
+// shows no CKF_USER_PIN_LOCKED: a module that reports the lock by its return
+// code alone. The returned func removes it.
+func BlockPINWithoutFlag() (restore func()) {
+	loginLockedFake.Store(true)
+	return func() { loginLockedFake.Store(false) }
+}
+
 var pinBlockedFake, loginLockedFake atomic.Bool
 
 func fakeTokenFlags() uint {

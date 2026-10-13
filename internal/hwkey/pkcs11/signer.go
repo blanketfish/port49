@@ -564,6 +564,8 @@ func (s *Signer) unlock(pin []byte) error {
 			e.Low, e.Final = ti.flags&ckfPINCountLow != 0, ti.flags&ckfPINFinalTry != 0
 		}
 		if rv == ckrPINLocked {
+			// The module's own answer is definitive; the token flag is best effort.
+			e.Blocked = true
 			return fmt.Errorf("pkcs11: the token's PIN is locked; it needs the token's own unblock procedure: %w", e)
 		}
 		return e
