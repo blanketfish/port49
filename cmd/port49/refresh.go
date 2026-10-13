@@ -81,7 +81,7 @@ func printRefresh(w io.Writer, r api.RefreshResponse) {
 		case "past_grace":
 			what = "past the grace window, not resumed: log in again there"
 		case "per_login_mfa_required":
-			what = "needs a second factor, not extended yet (the refresh asks for it)"
+			what = "needs a second factor, not extended: 'port49 refresh' asks for it"
 		case "per_login_mfa_unavailable":
 			what = "needs a second factor this broker cannot verify now, not extended: tell its operator"
 		default:
