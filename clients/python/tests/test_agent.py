@@ -4,6 +4,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -13,7 +14,7 @@ import fakeport49 as fake  # noqa: E402
 from port49 import (Agent, BrokerRefused, Denied, KeyUnavailable, MFARequired, NoAgent,  # noqa: E402
                     NotInstalled, Port49Error, Refusal, SessionOver, Temporary)
 from port49 import DeviceFault  # noqa: E402
-from port49 import client  # noqa: E402
+from port49 import _run, client  # noqa: E402
 
 REPO = os.path.join(HERE, "..", "..", "..")
 
@@ -230,11 +231,14 @@ class AgentTest(unittest.TestCase):
             tok = Agent(port49=fake.make(self.dir, [noisy]), stderr=sink, timeout=20).token("leaf1")
         self.assertEqual(tok.login, "LOGINTOKEN")
 
-    def test_an_answer_larger_than_a_megabyte_is_no_answer(self):
+    def test_an_answer_over_the_cap_is_an_error_of_its_own(self):
         big = {"stdout": PERMIT.rstrip("\n")[:-1] + ', "pad": "' + "x" * (1 << 21) + '"}\n'}
-        with self.assertRaises(Port49Error) as cm:
-            self.agent(big).token("leaf1")
-        self.assertEqual(cm.exception.code, "exit_0")
+        with mock.patch.object(_run, "MAX_STDOUT", 1 << 20):
+            with self.assertRaises(Port49Error) as cm:
+                self.agent(big).token("leaf1")
+        self.assertEqual(cm.exception.code, "answer_too_large")
+        self.assertIn(str(1 << 20), str(cm.exception))
+        self.assertNotIn("LOGINTOKEN", str(cm.exception))
 
     def test_a_character_across_two_reads_is_whole(self):
         word = "€" * 5000  # 3 bytes each: a 4096-byte read splits one

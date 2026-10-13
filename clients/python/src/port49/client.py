@@ -77,7 +77,7 @@ class MintResults:
 def answer(ran):
     """The one JSON object the CLI printed, or None. Never quoted in an error: it may hold a token."""
     try:
-        obj = json.loads(ran.stdout.decode("utf-8"))
+        obj = json.loads(ran.stdout)
     except (ValueError, UnicodeDecodeError):
         return None
     return obj if isinstance(obj, dict) else None
@@ -202,17 +202,16 @@ def _sweep_of(obj):
 class Workload:
     """A machine's tokens: `port49 workload token`, which reads the certificate and key at every run
     (design §17). The CLI pages, retries within its deadline under one Idempotency-Key per page, checks
-    the broker's CRL and proves a touch with touch_key (decision 46 ruling 11).
+    the broker's CRL and proves a touch with touch_key. It runs the CLI once and never again: a page
+    in flight when the deadline ran out may already be minted, and a new run has a new Idempotency-Key
+    (decision 46 ruling 11).
 
     A run that stopped before it finished (the CLI's `stopped` key) never returns: it raises the class of
-    its code with what was minted on .results. Only a Temporary is run again, up to `attempts` runs with a
-    backoff, and only where that mints nothing twice: a run that sent nothing, a named sweep (which
-    re-mints just the devices that were left), or a scope sweep that had minted nothing."""
+    its code with what was minted on .results and the devices it left in .results.refused."""
 
     def __init__(self, broker, broker_ca, cert, key, touch_key=None, broker_crl=None, port49="port49",
-                 deadline=None, timeout=None, stderr=None, attempts=3):
-        self.port49, self.timeout, self.stderr, self.attempts = port49, timeout, stderr, attempts
-        self._sleep = time.sleep
+                 deadline=None, timeout=None, stderr=None):
+        self.port49, self.timeout, self.stderr = port49, timeout, stderr
         self.flags = ["--broker", broker, "--broker-ca", broker_ca, "--cert", cert, "--key", key]
         if touch_key:
             self.flags += ["--touch-key", touch_key]
@@ -234,33 +233,25 @@ class Workload:
             raise ValueError("name devices or a scope, not both")
         if devices is not None:
             devices = list(dict.fromkeys(devices))
-            if not devices or any(not d or any(c in d for c in "\r\n") for d in devices):
-                raise ValueError("devices must be a list of names, none empty or holding a line break")
+            # The CLI trims a name and skips one starting with "#": it would come back renamed or not at all.
+            if not devices or any(not d or d != d.strip() or d.startswith("#") or any(c in d for c in "\r\n")
+                                  for d in devices):
+                raise ValueError("devices must be a non-empty list of names, none empty, padded with whitespace, "
+                                 "starting with # or holding a line break")
         flags = ["--enable"] if enable else []
         flags += ["--ttl", f"{int(ttl)}s"] if ttl else []
         flags += ["--purpose", purpose] if purpose else []
-        acc, left = MintResults({}, {}), {}
-        for attempt in range(self.attempts):
-            err, sent = self._once(flags, devices, scope, acc, left)
-            if err is None:
-                return acc
-            # Retried: a Temporary that sent nothing; a named sweep, for just what it left; a scope
-            # sweep that has minted nothing. Anything else would mint twice, or cannot be mended.
-            again = isinstance(err, Temporary) and attempt + 1 < self.attempts and (
-                not sent or (devices is not None and left) or (devices is None and not acc.tokens))
-            if not again:
-                acc.refused.update(left)
-                err.results = acc
-                raise err
-            if devices is not None and sent:
-                devices = list(left)
-            self._sleep(2 ** attempt)
-        raise Port49Error("agent_error", "no attempts were made")
+        res = MintResults({}, {})
+        err = self._once(flags, devices, scope, res)
+        if err is not None:
+            err.results = res
+            raise err
+        return res
 
-    def _once(self, flags, devices, scope, acc, left):
-        """One run, merged into acc: (the error or None, whether the broker had been sent anything).
-        `left` becomes the devices this run says it left. The answer, which may hold tokens, stays in
-        this frame, so no traceback of the caller's can carry it in its locals."""
+    def _once(self, flags, devices, scope, res):
+        """The one run, its answer merged into res: the error to raise, or None. The answer, which
+        may hold tokens, stays in this frame, so no traceback of the caller's can carry it in its
+        locals."""
         argv = [self.port49, "workload", "token", *self.flags, "--format", "json", *flags]
         with tempfile.TemporaryDirectory(prefix="port49-") as tmp:
             if scope is not None:
@@ -270,27 +261,22 @@ class Workload:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write("".join(d + "\n" for d in devices))
                 argv += ["--devices-file", path]
-            ran = _run.run(argv, stdin=subprocess.DEVNULL, timeout=self.timeout, stderr=self.stderr)
+            ran = _run.run(argv, stdin=subprocess.DEVNULL, timeout=self.timeout, stderr=self.stderr,
+                           oversize_hint="; write the tokens with --out instead, or split the sweep into smaller ones")
         obj = answer(ran)
         if obj is None:
-            return _by_exit(ran, "port49 workload token"), False
+            return _by_exit(ran, "port49 workload token")
         try:
-            res, stop = _sweep_of(obj)
+            got, stop = _sweep_of(obj)
         except (KeyError, TypeError, AttributeError):
-            return Port49Error(f"exit_{ran.code}", "port49 workload token printed an answer that is not its own"), True
-        left.clear()
+            return Port49Error(f"exit_{ran.code}", "port49 workload token printed an answer that is not its own")
+        res.tokens, res.refused = got.tokens, got.refused
         if stop is not None:
             # What the stop left is in refused under its code, with no verdict of the broker's.
-            left.update({d: r for d, r in res.refused.items() if r.error == stop and not r.verdict})
-        acc.tokens.update(res.tokens)
-        acc.refused.update({d: r for d, r in res.refused.items() if d not in left})
-        for d in res.tokens:
-            acc.refused.pop(d, None)
-        if stop is not None:
-            detail = next((r.detail for r in left.values() if r.detail), "") or f"the run stopped: {stop}"
-            cls = CLASSES.get(stop, Port49Error)
-            return cls(stop, detail, None), True
+            left = [r for r in res.refused.values() if r.error == stop and not r.verdict]
+            detail = next((r.detail for r in left if r.detail), "") or f"the run stopped: {stop}"
+            return CLASSES.get(stop, Port49Error)(stop, detail, None)
         if ran.code == 75:
             return Temporary("exit_75", "the broker did not answer every device by the deadline; what was minted "
-                             "is in .results; run again for the rest", None), True
-        return None, True
+                             "is in .results", None)
+        return None

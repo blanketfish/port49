@@ -92,7 +92,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def openssl(*args):
-    done = subprocess.run(["openssl", *args], capture_output=True, text=True)
+    done = subprocess.run(["openssl", *args], capture_output=True, text=True, timeout=60)
     if done.returncode != 0:
         raise AssertionError("openssl " + " ".join(args) + " failed:\n" + done.stderr)
 
@@ -115,8 +115,9 @@ class RealWorkload(unittest.TestCase):
         if go is None or shutil.which("openssl") is None:
             raise unittest.SkipTest("no go toolchain or openssl to build the binary and its throwaway CA")
         cls.dir = tempfile.mkdtemp()
+        cls.addClassCleanup(shutil.rmtree, cls.dir, True)  # holds the CA key, even if setup fails below
         cls.binary = os.path.join(cls.dir, "port49")
-        built = subprocess.run([go, "build", "-o", cls.binary, "./cmd/port49"], cwd=REPO,
+        built = subprocess.run([go, "build", "-o", cls.binary, "./cmd/port49"], cwd=REPO, timeout=600,
                                env={**os.environ, "CGO_ENABLED": "0"}, capture_output=True, text=True)
         if built.returncode != 0:
             raise AssertionError("go build ./cmd/port49 failed:\n" + built.stderr)
@@ -138,15 +139,12 @@ class RealWorkload(unittest.TestCase):
     def tearDownClass(cls):
         cls.broker.shutdown()
         cls.broker.server_close()
-        shutil.rmtree(cls.dir, ignore_errors=True)
 
-    def workload(self, mint=mixed, batch_max=100, attempts=1):
+    def workload(self, mint=mixed, batch_max=100):
         self.broker.mint, self.broker.batch_max, self.broker.requests = staticmethod(mint), batch_max, []
-        w = Workload(f"https://127.0.0.1:{self.broker.server_address[1]}", os.path.join(self.dir, "ca.pem"),
-                     os.path.join(self.dir, "w.pem"), os.path.join(self.dir, "w.key"), port49=self.binary,
-                     deadline=1, stderr=io.StringIO(), attempts=attempts)
-        w._sleep = lambda s: None
-        return w
+        return Workload(f"https://127.0.0.1:{self.broker.server_address[1]}", os.path.join(self.dir, "ca.pem"),
+                        os.path.join(self.dir, "w.pem"), os.path.join(self.dir, "w.key"), port49=self.binary,
+                        deadline=1, timeout=30, stderr=io.StringIO())
 
     def test_identity(self):
         self.assertEqual(self.workload().identity()["principal"], PRINCIPAL)
@@ -203,21 +201,14 @@ class RealWorkload(unittest.TestCase):
         self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
         self.assertEqual(len(self.broker.requests), 2)  # minted a page: not run again
 
-    def test_a_retry_mints_only_what_was_left(self):
-        failed = []
-
-        def flaky(req):
-            if req["devices"][0] == "leaf2" and not failed:
-                failed.append(1)
-                return 503, {"error": "broker_unavailable"}
-            return mixed(req)
-        res = self.workload(flaky, batch_max=1, attempts=2).tokens(["leaf1", "leaf2", "leaf3"])
-        self.assertEqual(sorted(res.tokens), ["leaf1", "leaf2", "leaf3"])
-        self.assertEqual(res.refused, {})
+    def test_a_stopped_run_is_not_rerun(self):
+        # The CLI retried leaf2's page under one key until its deadline; the library does not start a
+        # second run, which would carry a new key and mint leaf1 again.
+        with self.assertRaises(Temporary):
+            self.workload(stop_at("leaf2", 503), batch_max=1).tokens(["leaf1", "leaf2", "leaf3"])
         asked = [r["devices"] for r in self.broker.requests]
-        self.assertEqual(asked.count(["leaf1"]), 1)  # never minted twice
-        self.assertIn(["leaf2"], asked)
-        self.assertEqual(asked.count(["leaf3"]), 1)
+        self.assertEqual(asked.count(["leaf1"]), 1)
+        self.assertNotIn(["leaf3"], asked)
 
 
 if __name__ == "__main__":

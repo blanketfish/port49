@@ -60,12 +60,17 @@ Pass `touch_key=` (a `pkcs11:` reference with a `pin-source`), `broker_crl=` and
   minted so far are on `.results`, and every device the run left is in `.results.refused` under
   the stopping code. No answer at all is `Temporary` for exit 75 and `Final` for exit 77 (the
   certificate expired: nothing can mint until someone acts).
-- A `Temporary` is run again, at most `attempts` runs (default 3) with a 1 s, 2 s, 4 s ... wait
-  between, and only where that mints nothing twice: a run that sent nothing, a sweep by name
-  (the rerun asks for just the devices that were left), or a scope sweep that had minted nothing.
-  A scope sweep that had minted a page before it stopped is not run again, since it cannot name
-  what it left: catch the error and run it again for the rest. `Final`, `BrokerRefused` and
-  `Port49Error` are never retried.
+- **The library never reruns a workload run**, not even on `Temporary`. The CLI already retries
+  each page within its `--deadline` under one Idempotency-Key; when that runs out, the page in
+  flight may already be minted at the broker with its answer lost, and a new run has a new key,
+  so it would mint that page's devices again. Deciding to run again is yours: `.results.refused`
+  names the devices a stopped run left. A rerun of a scope sweep, which cannot name what it left,
+  mints every page again, the ones already minted included.
+- The answer holds a token for every device and is read whole, up to 64 MiB (some 200,000
+  devices). Larger raises `Port49Error` with code `answer_too_large` (the run may have minted):
+  split the sweep, or have the CLI write the tokens with `--out`.
+- A device name may not be empty, padded with whitespace, start with `#` or hold a line break
+  (`ValueError`): the CLI would trim or skip it.
 
 ## Errors
 

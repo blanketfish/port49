@@ -14,7 +14,9 @@ import threading
 from .errors import NotInstalled, Port49Error
 
 TAIL = 2048
-MAX_STDOUT = 1 << 20  # the CLI's answer is one small object; more is a wrong binary
+# A fleet's answer grows with the fleet (a 6000-device sweep is 1.3 MB): 64 MiB holds some 200,000
+# devices. An answer over it is an error of its own, never read as "no answer".
+MAX_STDOUT = 64 << 20
 REAP = 1.0  # how long to wait for the readers once the child is killed
 
 
@@ -33,14 +35,14 @@ def printable(text, limit=512):
     return "".join(c if c == "\n" or (c.isprintable()) else "?" for c in text)[:limit]
 
 
-def run(argv, *, stdin=None, timeout=None, stderr=None):
+def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
     out = stderr if stderr is not None else sys.stderr
     try:
         p = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError:
         raise NotInstalled("not_installed", f"{argv[0]} is not on PATH: install port49, or pass port49=<path>") from None
     tail = bytearray()
-    chunks = []
+    out_buf = bytearray()  # one copy: the answer is parsed from it as it is
     size = [0]
     decoder = codecs.getincrementaldecoder("utf-8")("replace")  # a character may span two reads
 
@@ -66,7 +68,9 @@ def run(argv, *, stdin=None, timeout=None, stderr=None):
                 return
             size[0] += len(chunk)
             if size[0] <= MAX_STDOUT:
-                chunks.append(chunk)
+                out_buf.extend(chunk)
+            elif out_buf:
+                out_buf.clear()  # over the cap: keep draining, hold nothing
 
     threads = [threading.Thread(target=pump, daemon=True), threading.Thread(target=drain, daemon=True)]
     for t in threads:
@@ -90,5 +94,7 @@ def run(argv, *, stdin=None, timeout=None, stderr=None):
         reap()
         raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
     reap()
-    stdout = b"" if size[0] > MAX_STDOUT else b"".join(chunks)  # too big is no answer
-    return Ran(code, stdout, printable(tail.decode("utf-8", "replace"), TAIL))
+    if size[0] > MAX_STDOUT:
+        raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
+                          f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
+    return Ran(code, out_buf, printable(tail.decode("utf-8", "replace"), TAIL))

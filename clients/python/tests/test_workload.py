@@ -3,14 +3,17 @@ import io
 import json
 import os
 import pickle
+import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 import fakeport49 as fake  # noqa: E402
+from port49 import _run  # noqa: E402
 from port49 import BrokerRefused, Final, MFARequired, Port49Error, Temporary, Workload  # noqa: E402
 
 TESTDATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata")
@@ -46,14 +49,12 @@ def stopped(code, left, minted=(), denied=()):
 class WorkloadTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)  # the fake's answers hold fake tokens
         self.err = io.StringIO()
-        self.slept = []
 
     def workload(self, *answers, **kw):
-        w = Workload("https://broker:8443", "/ca.pem", "/w.pem", "/w.key", port49=fake.make(self.dir, list(answers)),
-                     stderr=self.err, **kw)
-        w._sleep = self.slept.append
-        return w
+        return Workload("https://broker:8443", "/ca.pem", "/w.pem", "/w.key", port49=fake.make(self.dir, list(answers)),
+                        stderr=self.err, timeout=30, **kw)
 
     def test_devices_go_in_a_file_and_results_come_back_per_item(self):
         res = self.workload({"stdout": json.dumps(MINTED), "code": 1}).tokens(["leaf1", "leaf2", "core1"], purpose="backup")
@@ -75,7 +76,8 @@ class WorkloadTest(unittest.TestCase):
 
     def test_devices_or_a_scope_not_both_not_neither_not_none(self):
         w = self.workload({"stdout": json.dumps(MINTED)})
-        for kw in [{}, {"devices": ["a"], "scope": "s"}, {"devices": []}, {"devices": ["a\nb"]}]:
+        for kw in [{}, {"devices": ["a"], "scope": "s"}, {"devices": []}, {"devices": ["a\nb"]},
+                   {"devices": [" leaf1"]}, {"devices": ["leaf1 "]}, {"devices": ["#core1"]}, {"devices": [""]}]:
             with self.assertRaises(ValueError, msg=str(kw)):
                 w.tokens(**kw)
         self.assertEqual(fake.argvs(self.dir), [])
@@ -142,7 +144,7 @@ class WorkloadTest(unittest.TestCase):
                                      ("broker_refused", 77, BrokerRefused)]:
             with self.assertRaises(cls, msg=code) as cm:
                 self.workload({"stdout": stopped(code, ["leaf2"], minted=["leaf1"], denied=["fw1"]),
-                               "code": exit_code}, attempts=1).tokens(["fw1", "leaf1", "leaf2"])
+                               "code": exit_code}).tokens(["fw1", "leaf1", "leaf2"])
             e = cm.exception
             self.assertEqual(e.code, code)
             self.assertEqual(list(e.results.tokens), ["leaf1"], code)
@@ -153,18 +155,18 @@ class WorkloadTest(unittest.TestCase):
     def test_a_stopped_run_with_the_agent_code_is_a_port49_error(self):
         with self.assertRaises(Port49Error) as cm:
             self.workload({"stdout": stopped("agent_error", ["leaf2"], minted=["leaf1"]), "code": 1},
-                          attempts=3).tokens(["leaf1", "leaf2"])
+                          ).tokens(["leaf1", "leaf2"])
         self.assertEqual(cm.exception.code, "agent_error")
         self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
         self.assertEqual(len(fake.argvs(self.dir)), 1)  # not Temporary: not run again
 
     def test_a_stopped_run_is_an_error_whatever_the_exit_code(self):
         with self.assertRaises(Temporary):
-            self.workload({"stdout": stopped("broker_unavailable", ["leaf1"]), "code": 0}, attempts=1).tokens(["leaf1"])
+            self.workload({"stdout": stopped("broker_unavailable", ["leaf1"]), "code": 0}).tokens(["leaf1"])
 
     def test_a_stopped_run_with_an_unknown_code_is_a_port49_error(self):
         with self.assertRaises(Port49Error) as cm:
-            self.workload({"stdout": stopped("something_new", ["leaf1"]), "code": 1}, attempts=1).tokens(["leaf1"])
+            self.workload({"stdout": stopped("something_new", ["leaf1"]), "code": 1}).tokens(["leaf1"])
         self.assertNotIsInstance(cm.exception, (Temporary, Final))
         self.assertEqual(cm.exception.code, "something_new")
 
@@ -172,85 +174,70 @@ class WorkloadTest(unittest.TestCase):
         out = json.dumps({"principal": "p", "results": [permit("leaf1", "TOK-leaf1")], "refused": [],
                           "stopped": "broker_refused"})
         with self.assertRaises(BrokerRefused) as cm:
-            self.workload({"stdout": out, "code": 1}, attempts=1).tokens(scope="dc")
+            self.workload({"stdout": out, "code": 1}).tokens(scope="dc")
         self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
 
     def test_a_stopped_runs_error_pickles_and_copies_without_its_tokens(self):
         with self.assertRaises(Temporary) as cm:
             self.workload({"stdout": stopped("broker_unavailable", ["leaf2"], minted=["leaf1"]), "code": 75},
-                          attempts=1).tokens(["leaf1", "leaf2"])
+                          ).tokens(["leaf1", "leaf2"])
         for e in (pickle.loads(pickle.dumps(cm.exception)), copy.deepcopy(cm.exception), copy.copy(cm.exception)):
             self.assertEqual(e.results.tokens, {"leaf1": None})
             self.assertEqual(e.code, "broker_unavailable")
         self.assertEqual(cm.exception.results.tokens["leaf1"].login, "TOK-leaf1")  # the original keeps its own
 
-    # Retries: only Temporary, only what can be run again without minting twice.
+    # Never rerun (decision 46 ruling 11): a page in flight may already be minted, and a new run has a
+    # new Idempotency-Key. The answers repeat if asked again, so one run is what the argv log shows.
 
-    def test_a_retry_of_a_stopped_named_sweep_mints_only_the_unminted(self):
-        w = self.workload({"stdout": stopped("broker_unavailable", ["leaf2", "leaf3"], minted=["leaf1"], denied=["fw1"]),
-                           "code": 75},
-                          {"stdout": json.dumps({"principal": "p", "results": [permit("leaf2", "TOK-leaf2"),
-                                                                              permit("leaf3", "TOK-leaf3")],
-                                                 "refused": []}), "code": 0})
-        res = w.tokens(["fw1", "leaf1", "leaf2", "leaf3"])
-        self.assertEqual(fake.device_files(self.dir), [["fw1", "leaf1", "leaf2", "leaf3"], ["leaf2", "leaf3"]])
-        self.assertEqual(sorted(res.tokens), ["leaf1", "leaf2", "leaf3"])
-        self.assertEqual(list(res.refused), ["fw1"])  # the first run's deny stands; no stale "left" entries
-        self.assertEqual(self.slept, [1])
+    def test_a_workload_run_is_never_rerun(self):
+        for ans in [{"stderr": "cannot reach the broker\n", "code": 75},
+                    {"stderr": "certificate expired\n", "code": 77},
+                    {"stderr": "x\n", "code": 1},
+                    {"stdout": stopped("broker_unavailable", ["leaf2"], minted=["leaf1"]), "code": 75},
+                    {"stdout": stopped("connection_changed", ["leaf2"], minted=["leaf1"]), "code": 75},
+                    {"stdout": stopped("broker_refused", ["leaf2"], minted=["leaf1"]), "code": 77},
+                    {"stdout": stopped("agent_error", ["leaf2"], minted=["leaf1"]), "code": 1},
+                    {"stdout": json.dumps(MINTED), "code": 75}]:
+            for kw in [{"devices": ["leaf1", "leaf2"]}, {"scope": "dc"}]:
+                with self.assertRaises(Port49Error, msg=str(ans)):
+                    self.workload(ans).tokens(**kw)
+                self.assertEqual(len(fake.argvs(self.dir)), 1, ans)
 
-    def test_a_retry_that_stops_again_raises_with_everything_so_far(self):
-        w = self.workload({"stdout": stopped("connection_changed", ["leaf2", "leaf3"], minted=["leaf1"]), "code": 75},
-                          {"stdout": stopped("connection_changed", ["leaf3"], minted=["leaf2"]), "code": 75},
-                          attempts=2)
+    def test_the_constructor_has_no_attempts(self):
+        with self.assertRaises(TypeError):
+            Workload("https://broker:8443", "/ca.pem", "/w.pem", "/w.key", attempts=3)
+
+    def test_a_no_answer_exit_75_keeps_the_empty_results(self):
         with self.assertRaises(Temporary) as cm:
-            w.tokens(["leaf1", "leaf2", "leaf3"])
-        self.assertEqual(fake.device_files(self.dir), [["leaf1", "leaf2", "leaf3"], ["leaf2", "leaf3"]])
-        self.assertEqual(sorted(cm.exception.results.tokens), ["leaf1", "leaf2"])
-        self.assertEqual(list(cm.exception.results.refused), ["leaf3"])
+            self.workload({"stderr": "port49 workload token: cannot write the tokens to stdout; run again\n",
+                           "code": 75}).tokens(["leaf1"])
+        self.assertEqual((cm.exception.results.tokens, cm.exception.results.refused), ({}, {}))
 
-    def test_attempts_are_bounded_and_back_off(self):
-        w = self.workload({"stdout": stopped("broker_unavailable", ["leaf1"]), "code": 75}, attempts=4)
-        with self.assertRaises(Temporary):
-            w.tokens(["leaf1"])
-        self.assertEqual(len(fake.argvs(self.dir)), 4)
-        self.assertEqual(self.slept, [1, 2, 4])
+    # An answer over the cap is an error of its own, never "no answer" (review I3).
 
-    def test_a_run_that_sent_nothing_is_retried(self):
-        w = self.workload({"stderr": "port49 workload token: cannot reach the broker\n", "code": 75},
-                          {"stdout": json.dumps(MINTED), "code": 1})
-        self.assertEqual(sorted(w.tokens(["leaf1", "leaf2", "core1"]).tokens), ["leaf1"])
-        self.assertEqual(len(fake.argvs(self.dir)), 2)
+    def test_the_cap_holds_a_fleet(self):
+        self.assertEqual(_run.MAX_STDOUT, 64 << 20)
 
-    def test_a_scope_sweep_that_sent_nothing_is_retried_whole(self):
-        w = self.workload({"stderr": "no answer\n", "code": 75}, {"stdout": json.dumps(MINTED), "code": 1})
-        w.tokens(scope="core")
-        self.assertEqual(len(fake.argvs(self.dir)), 2)
+    def test_an_answer_over_the_cap_names_the_cap_and_the_way_out(self):
+        big = json.dumps({"principal": "p", "results": [permit(f"leaf{i}", "TOK-%d" % i) for i in range(200)],
+                          "refused": []})
+        with mock.patch.object(_run, "MAX_STDOUT", len(big) - 1):
+            with self.assertRaises(Port49Error) as cm:
+                self.workload({"stdout": big, "code": 0}).tokens(scope="dc")
+        e = cm.exception
+        self.assertEqual(e.code, "answer_too_large")
+        self.assertNotIn("exit_0", str(e))
+        for word in (str(len(big) - 1), "--out", "split"):
+            self.assertIn(word, str(e))
+        self.assertNotIn("TOK-", str(e) + repr(e) + repr(e.args))
+        with mock.patch.object(_run, "MAX_STDOUT", len(big)):  # exactly the cap is read
+            self.assertEqual(len(self.workload({"stdout": big, "code": 0}).tokens(scope="dc").tokens), 200)
 
-    def test_a_scope_sweep_that_minted_before_it_stopped_is_not_rerun(self):
-        # It cannot name what it left, and a rerun would mint the first page again.
-        out = json.dumps({"principal": "p", "results": [permit("leaf1", "TOK-leaf1")], "refused": [],
-                          "stopped": "broker_unavailable"})
-        with self.assertRaises(Temporary) as cm:
-            self.workload({"stdout": out, "code": 75}).tokens(scope="dc")
-        self.assertEqual(len(fake.argvs(self.dir)), 1)
-        self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
-
-    def test_nothing_final_is_retried(self):
-        for ans in [{"stderr": "x\n", "code": 77}, {"stderr": "x\n", "code": 2}, {"stderr": "x\n", "code": 1},
-                    {"stdout": stopped("broker_refused", ["leaf1"]), "code": 77}]:
-            self.dir = tempfile.mkdtemp()
-            with self.assertRaises(Port49Error):
-                self.workload(ans).tokens(["leaf1"])
-            self.assertEqual(len(fake.argvs(self.dir)), 1, ans)
-        self.assertEqual(self.slept, [])
-
-    def test_no_token_in_a_retried_runs_errors(self):
-        w = self.workload({"stdout": stopped("broker_unavailable", ["leaf2"], minted=["leaf1"]), "code": 75},
-                          {"stdout": "TOK-leaf2 not json", "code": 0})
-        with self.assertRaises(Port49Error) as cm:
-            w.tokens(["leaf1", "leaf2"])
-        text = str(cm.exception) + repr(cm.exception) + repr(cm.exception.args)
-        self.assertNotIn("TOK-", text)
+    def test_a_finished_fleet_sized_answer_is_read(self):
+        res = json.dumps({"principal": "p", "results": [permit(f"leaf{i}", "TOK-%d" % i) for i in range(8000)],
+                          "refused": []})
+        self.assertGreater(len(res), 1 << 20)  # over the old 1 MiB cap
+        self.assertEqual(len(self.workload({"stdout": res, "code": 0}).tokens(scope="dc").tokens), 8000)
 
 
 if __name__ == "__main__":
