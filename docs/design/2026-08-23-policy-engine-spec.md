@@ -6302,7 +6302,8 @@ token through the agent and logs in with the operator's OpenSSH (8.5 or later).
   The window this leaves is the first contact, per device and per operator; a shop that wants
   that verified too uses a managed `GlobalKnownHostsFile` or `@cert-authority`, which apply
   unchanged.
-- **The token** goes only to the device's own password prompt, once, through ssh's askpass.
+- **The token** goes only to the device's own password prompt, once, through ssh's askpass, never
+  a ProxyJump hop's (§13 decision 46 ruling 2).
 - **Exit and warnings.** It exits with ssh's status, and warns on the terminal within
   `session.ceiling_warning` of the device's ceiling (decision 42 rulings 10 and 11).
 
@@ -6316,7 +6317,8 @@ item (`error`, `detail`); anything else is `{"device", "error", "detail"}`, `err
 CLI's codes `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
 `revocation_running`, `per_login_mfa_required` (with `per_login_mfa`, never its challenge),
 `touch_timeout`, `key_locked`, `key_absent`, `broker_refused`, `connection_changed`, `no_token`,
-`agent_error`. These are the CLI's codes, not §5.7 reason codes.
+`agent_error`. Two share a §5.7 name, `credential_revoked` and `per_login_mfa_required`, and mean
+what the broker's reason means; the rest are the CLI's alone.
 
 **`port49 workload token --format json`** prints the broker's answer with only the minted items
 in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, `error`, `detail`,
@@ -8372,8 +8374,8 @@ built, and ruling 10's host-key options are replaced.
   - **No pin.** A device with no pinned key is refused before anything is minted.
   - Tasks 5 and 6.
 - **8. Names.** `port49 ssh` and `port49 devices trust` (the command is removed by decision 46; the
-  rule stands for `port49 ssh` and the Python client, decision 46 ruling 3) take device names of letters, digits, `.`,
-  `_` and `-`, starting with a letter or a digit, 253 at most.
+  rule stands for `port49 ssh` and the Python client, decision 46 ruling 3) take device names of
+  letters, digits, `.`, `_` and `-`, starting with a letter or a digit, 253 at most.
   - `known_hosts` reads `*`, `?`, `!`, `,` and `[` as patterns, and a leading `@` or `|` as a
     marker or a hash, so a name holding one could pin a key for other devices.
   - A name outside the set is refused with the reason; `port49 token` still serves it.
@@ -8429,8 +8431,11 @@ built, and ruling 10's host-key options are replaced.
     written (no note records it; Task 6's askpass tests pin the forms). L54 measured the second
     form, `(user@device) Password:`, which keyboard-interactive uses, on all five platforms, where
     the askpass answered it once; no platform took `password`, so the first form is not measured.
+    Under decision 46, a prompt naming the alias `ssh -G` reported also counts, and only an asker
+    whose parent is the ssh `port49 ssh` started is answered (decision 46 ruling 2).
   - **Other prompts.** Any other prompt, a jump host's, is asked of the terminal as ssh would ask
-    it: a password with echo off, and a yes/no question with echo on.
+    it: a password with echo off, and a yes/no question with echo on. So is a device-shaped
+    prompt from any other asker, a ProxyJump hop's included (decision 46 ruling 2).
   - **A second ask.** A second ask for the device's password, which ssh makes when the device
     refuses the token and offers another method, ends the connection before ssh answers it. No
     second or empty password reaches the device's failed-login counters.
@@ -9305,7 +9310,14 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   `yes`) stands; any other value is passed as `StrictHostKeyChecking=accept-new`; `no` is never
   passed. An operator's `HostKeyAlias` stands; otherwise `HostKeyAlias` is the device's inventory
   name, lowercased. ssh's prompt names the alias, so the askpass answers the device's prompt
-  naming the inventory name or the alias `ssh -G` reported. Under accept-new, a
+  naming the inventory name or the alias `ssh -G` reported, and only to an asker whose parent
+  process is the ssh `port49 ssh` started: a ProxyJump hop runs with the same `-F`, `-l` and
+  `SSH_ASKPASS`, and a `Match` block can give it the same alias (measured on 10.2p1), so its prompt
+  can match. The asker's pid is read from the socket (`SO_PEERCRED`, `LOCAL_PEERPID`), never from
+  what it says, and its parent from the OS; any other asker's device-shaped prompt is asked of the
+  terminal, and a pid or parent that cannot be read, or an OS without the check, fails closed. Gate
+  G1c measures the parent on 8.5p1 (`tests/ssh-compat/2026-10-13-openssh-accept-new.md`). Under
+  accept-new, a
   `UserKnownHostsFile` naming only `/dev/null` or `none` is refused, naming the setting: it files
   nothing, so every connection would be a first contact (fail closed, never a silent
   accept-all); under the operator's `yes` it stands. Nothing else about host keys is passed.
@@ -9380,7 +9392,8 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   first contact, and design §17's attack is open under `host_key_auto_add`. The README says so,
   sets `HostKeyAlias={{ inventory_hostname }}` where the connection runs OpenSSH, and never
   recommends `host_key_auto_add` with `ssh_type: paramiko`, which rewrites `~/.ssh/known_hosts`
-  without its `@revoked` and `@cert-authority` lines (*provisional on L66*).
+  without its `@revoked` and `@cert-authority` lines (*provisional on L66*). No `network_cli`
+  `ssh_type` is shown to file a key under the name until L66 (e) closes.
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
@@ -10022,8 +10035,11 @@ Beyond those already listed in the design document's §14:
 
 - **Never `no`**: whatever the operator's ssh_config says, `port49 ssh` passes
   `StrictHostKeyChecking=accept-new`, or the operator's own `yes`, never `no`; under accept-new a
-  `UserKnownHostsFile` of only `/dev/null` or `none` is refused before ssh starts, and so is it by
-  the Python client.
+  `UserKnownHostsFile` of only `/dev/null` or `none` is refused before ssh starts, and the Python
+  client refuses it too.
+- **A ProxyJump hop never gets the token**: a hop's prompt under the device's alias is not
+  answered, since the asker's parent is not the ssh `port49 ssh` started; an unreadable pid or
+  parent fails closed (ruling 2).
 - **The token unsent on a changed key**: a host presenting another key than the one filed under
   the device's name, of the same type or another, never sees the token, from `port49 ssh` or the
   Python client; nor does a key an `@revoked` line or `RevokedHostKeys` names, filed or presented
