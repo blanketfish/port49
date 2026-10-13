@@ -25,6 +25,10 @@ func mintOutcome(stderr io.Writer, cmd, scope string, devices []string, resp api
 		fmt.Fprintf(stderr, "%s: %s: %d of %d devices were not minted; run again\n", cmd, safe(err.Error()),
 			len(te.Unminted), len(devices))
 		return exitTemporary
+	case errors.Is(err, mfatouch.ErrConnectionChanged) && scope != "":
+		fmt.Fprintf(stderr, "%s: %s: the sweep of scope %s stopped after %d tokens minted\n", cmd, safe(err.Error()),
+			safe(scope), mintedCount(resp.Results))
+		return exitTemporary
 	case errors.Is(err, mfatouch.ErrConnectionChanged):
 		// The touch was made for a connection that is gone and nothing was
 		// posted; the error's own text says to run it again.

@@ -302,8 +302,8 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")
 	fs.StringVar(&s.brokerCA, "broker-ca", "", "the CA that issued the broker's certificate (PEM)")
 	fs.IntVar(&s.brokerCAFD, "broker-ca-fd", 0, "internal: the descriptor the login passes the CA's bytes on")
-	fs.StringVar(&s.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
-		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
+	fs.StringVar(&s.brokerCRL, "broker-crl", "", "the broker certificate's CRL check: check (default) refuses a "+
+		"revoked one; require also one it cannot check; off")
 	fs.StringVar(&s.touchKey, "touch-key", "", "a key reference on the same token as --key, whose touch the agent may use "+
 		"(touch_key in the config file)")
 	fs.IntVar(&s.pinFD, "pin-fd", 0, "internal: the descriptor the login passes the key's PIN on")

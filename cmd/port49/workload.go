@@ -80,8 +80,8 @@ func (w *workloadFlags) register(fs *flag.FlagSet) {
 		"reference's pin-source")
 	fs.StringVar(&w.touchKey, "touch-key", "", "a key reference on the same token as --key, touched to prove a device's "+
 		"per-login second factor (pkcs11:…;pin-source=file:///path); without it such a device is reported, not minted")
-	fs.StringVar(&w.brokerCRL, "broker-crl", "", "check the broker's certificate against the CRLs it names: check "+
-		"(the default) refuses a revoked one, require refuses one that cannot be checked too, or that names no http(s) CRL distribution point, off checks nothing")
+	fs.StringVar(&w.brokerCRL, "broker-crl", "", "the broker certificate's CRL check: check (default) refuses a "+
+		"revoked one; require also one it cannot check; off")
 	fs.DurationVar(&w.deadline, "deadline", workload.DefaultDeadline, "how long to retry a broker that cannot answer now")
 }
 

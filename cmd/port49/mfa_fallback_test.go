@@ -183,4 +183,10 @@ func TestAWorkloadsChangedConnectionIsTempFail(t *testing.T) {
 	if code := mintOutcome(&errb, "port49 workload token", "", []string{"leaf1"}, resp, errors.New("refused")); code != 1 {
 		t.Fatalf("a final refusal: exit %d, want 1", code)
 	}
+	// A --scope sweep's says which sweep stopped (final review client M3).
+	errb.Reset()
+	if code := mintOutcome(&errb, "port49 workload token", "core", nil, resp, err); code != exitTemporary ||
+		!strings.Contains(errb.String(), "the sweep of scope core stopped after 1 tokens minted") {
+		t.Fatalf("a sweep's changed connection: exit %d: %q", code, errb.String())
+	}
 }
