@@ -5957,6 +5957,14 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   read and add `pin-source=file:///path` to the URI; `pin-value` is refused. The PIN travels on a
   file descriptor and is zeroed after login, but copies inside `net/http` and `x/term` buffers cannot
   be zeroed.
+- **A `pin-source` PIN is never tried while tries are low.** When the token reports a failed PIN try
+  since the last success (`CKF_USER_PIN_COUNT_LOW`) or one try left (`CKF_USER_PIN_FINAL_TRY`), a
+  PIN read from `pin-source` is not sent: the agent's start and `port49 workload` refuse, saying
+  tries are low. A wrong file on a timer would otherwise block the token in three runs, every key on
+  it with it. Fix the file, then a person runs `port49 login` and types the PIN once at a terminal,
+  which a success resets; `ykman piv info` shows the tries left. A typed PIN is tried as before.
+  Whether libykcs11 sets these flags is unmeasured (provisional on L60); a module that does not
+  leaves the guard silent and each run spends one try.
 - **A blocked PIN.** `CKR_PIN_LOCKED`, or the token's own flag, means the PIN is blocked; `port49
   login` says so and keeps no retry. Unblock it with the PUK: `ykman piv access unblock-pin`.
 - **Touch and PIN policy are yours.** For the session key, PIN once and touch never or cached is the

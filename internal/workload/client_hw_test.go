@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -79,5 +80,16 @@ func TestAWorkloadKeyMayBeAReference(t *testing.T) {
 	_, err = LoadCertificate(certFile, base, now, nil)
 	if err == nil || !strings.Contains(err.Error(), "pin-source") || strings.Contains(err.Error(), hwtest.SoftHSMUserPIN) {
 		t.Fatalf("a reference needing a PIN with no pin-source: %v", err)
+	}
+
+	// The token says a try failed since the last success: the pin-source
+	// PIN, which a timer would re-read on every run, is not tried (final
+	// review client I5).
+	restore := pkcs11.PINTriesLow(false)
+	defer restore()
+	before := hwtest.SoftHSMLoginAttempts(t)
+	_, err = LoadCertificate(certFile, base+"&pin-source=file://"+pinFile, now, nil)
+	if !errors.Is(err, pkcs11.ErrPINTriesLow) || hwtest.SoftHSMLoginAttempts(t) != before {
+		t.Fatalf("a pin-source PIN while tries are low: %v (%d logins)", err, hwtest.SoftHSMLoginAttempts(t)-before)
 	}
 }

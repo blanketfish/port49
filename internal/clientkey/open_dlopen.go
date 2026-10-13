@@ -41,13 +41,17 @@ func openToken(ref string, pin []byte) (hwkey.Key, error) {
 		clear(pin)
 		return nil, fmt.Errorf("clientkey: %w", err)
 	}
-	// A PIN given wins over the file the URI names.
+	// A PIN given wins over the file the URI names. One from the file is
+	// tried only while the token reports no failed try since the last
+	// success: the tries left are a person's (final review client I5).
+	open := pkcs11.Open
 	if len(pin) == 0 && u.PINSource != "" {
 		if pin, err = readPINSource(u.PINSource); err != nil {
 			return nil, err
 		}
+		open = pkcs11.OpenUnattended
 	}
-	s, err := pkcs11.Open(u, pin)
+	s, err := open(u, pin)
 	if err != nil {
 		return nil, err
 	}

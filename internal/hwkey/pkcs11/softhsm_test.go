@@ -207,6 +207,43 @@ func TestAWrongPINIsTriedOnce(t *testing.T) {
 	}
 }
 
+// A PIN no person typed (pin-source) never reaches C_Login while the token
+// says a try failed since the last success, or one try is left: a timer
+// re-reading a wrong file would block the token in three runs. A typed PIN is
+// tried as before, and with the flags clear so is the unattended one (final
+// review client I5).
+func TestAnUnattendedPINIsNotTriedWhileTriesAreLow(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	for _, final := range []bool{false, true} {
+		restore := pkcs11.PINTriesLow(final)
+		before := hwtest.SoftHSMLoginAttempts(t)
+		s, err := pkcs11.OpenUnattended(uriFor(t, module, label), pin())
+		if err == nil {
+			s.Close()
+		}
+		if !errors.Is(err, pkcs11.ErrPINTriesLow) || !strings.Contains(err.Error(), "port49 login") ||
+			!strings.Contains(err.Error(), "ykman piv info") {
+			restore()
+			t.Fatalf("final %v: OpenUnattended = %v, want ErrPINTriesLow", final, err)
+		}
+		if got := hwtest.SoftHSMLoginAttempts(t) - before; got != 0 {
+			restore()
+			t.Fatalf("final %v: the unattended PIN reached C_Login %d time(s)", final, got)
+		}
+		s, err = pkcs11.Open(uriFor(t, module, label), pin())
+		restore()
+		if err != nil || s.State() != hwkey.Present {
+			t.Fatalf("final %v: a typed PIN while tries are low: %v", final, err)
+		}
+		s.Close()
+	}
+	s, err := pkcs11.OpenUnattended(uriFor(t, module, label), pin())
+	if err != nil || s.State() != hwkey.Present {
+		t.Fatalf("an unattended PIN with the flags clear: %v", err)
+	}
+	s.Close()
+}
+
 func TestTwoTokensHoldingTheIDAreRefused(t *testing.T) {
 	module, label1 := hwtest.SoftHSM(t)
 	_, label2 := hwtest.SoftHSM(t)

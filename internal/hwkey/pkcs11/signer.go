@@ -183,11 +183,27 @@ func blankToken(err error) bool {
 	return errors.As(err, &re) && (re.rv == ckrTokenNotRecognized || re.rv == ckrTokenNotPresent)
 }
 
+// ErrPINTriesLow is a PIN from pin-source, the unattended kind, that was not
+// tried: the token reports a PIN try failed since the last success
+// (CKF_USER_PIN_COUNT_LOW) or one try left (CKF_USER_PIN_FINAL_TRY), and a
+// caller re-reading the same wrong file on every run would spend the tries a
+// person needs (final review client I5).
+var ErrPINTriesLow = errors.New("pkcs11: the token reports PIN tries low, so the pin-source PIN was not tried: " +
+	"check the pin-source file, then a person must run `port49 login` and type the PIN once at a terminal " +
+	"(`ykman piv info` shows the tries left on a YubiKey)")
+
+// OpenUnattended is Open with a PIN no person typed (pin-source): it is not
+// sent while the token reports tries low, and Open answers ErrPINTriesLow
+// instead. A token whose info cannot be read then is tried as Open tries it.
+func OpenUnattended(u URI, pin []byte) (*Signer, error) { return open(u, pin, true) }
+
 // Open finds the key u names and opens a session on its token. Two tokens
 // that both hold it are an error naming both. A token that needs login and a
 // nil pin gives a Signer in the Locked state; a pin is sent once (C_Login)
 // and zeroed.
-func Open(u URI, pin []byte) (*Signer, error) {
+func Open(u URI, pin []byte) (*Signer, error) { return open(u, pin, false) }
+
+func open(u URI, pin []byte, unattended bool) (*Signer, error) {
 	defer clear(pin)
 	openCalls.Add(1)
 	if u.Type != "" && u.Type != "private" {
@@ -268,6 +284,12 @@ func Open(u URI, pin []byte) (*Signer, error) {
 	}
 	s.readTouchPolicyLocked()
 	if len(pin) > 0 && s.state == hwkey.Locked {
+		if unattended {
+			if ti, err := m.tokenInfo(s.slot); err == nil && ti.flags&(ckfPINCountLow|ckfPINFinalTry) != 0 {
+				s.dropSession()
+				return nil, ErrPINTriesLow
+			}
+		}
 		if err := s.unlock(pin); err != nil {
 			s.dropSession()
 			return nil, err

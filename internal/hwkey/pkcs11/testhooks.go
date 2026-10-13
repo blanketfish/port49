@@ -88,13 +88,29 @@ func BlockPINWithoutFlag() (restore func()) {
 	return func() { loginLockedFake.Store(false) }
 }
 
+// PINTriesLow makes every token read as one that refused a PIN since the last
+// success: its token info carries CKF_USER_PIN_COUNT_LOW, and with final
+// CKF_USER_PIN_FINAL_TRY as well. SoftHSM2 sets neither. The returned func
+// removes it.
+func PINTriesLow(final bool) (restore func()) {
+	flags := uint(ckfPINCountLow)
+	if final {
+		flags |= ckfPINFinalTry
+	}
+	pinLowFake.Store(uint64(flags))
+	return func() { pinLowFake.Store(0) }
+}
+
 var pinBlockedFake, loginLockedFake atomic.Bool
 
+var pinLowFake atomic.Uint64
+
 func fakeTokenFlags() uint {
+	flags := uint(pinLowFake.Load())
 	if pinBlockedFake.Load() {
-		return ckfUserPINLocked
+		flags |= ckfUserPINLocked
 	}
-	return 0
+	return flags
 }
 
 func fakeLoginRV() (uint, bool) {
