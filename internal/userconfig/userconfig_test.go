@@ -716,13 +716,13 @@ func TestTheDirectories(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv(EnvConfig, "")
 	if Dir() != "/home/alice/.port49" || Path() != "/home/alice/.port49/config.yaml" ||
-		LegacyDir() != "/home/alice/.config/port49" {
-		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+		legacyDir() != "/home/alice/.config/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), legacyDir())
 	}
 	t.Setenv(EnvConfig, "/srv/p49.yaml")
 	t.Setenv("XDG_CONFIG_HOME", "/x")
-	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || LegacyDir() != "/x/port49" {
-		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || legacyDir() != "/x/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), legacyDir())
 	}
 }
 

@@ -91,10 +91,6 @@ const usage = `usage:
   port49 devices check-config --policy FILE --inventory FILE [--config PORT49D_YAML]
                               (--device NAME CONFIGFILE | --batch CONFIGFILE...)
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
-  port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
-                       [--socket PATH] DEVICE
-                (pins the SSH host key DEVICE presents, against the key you verified on its console: NX-OS
-                 prints its SHA256 fingerprint, the others print the key, so give ssh-keygen -lf's)
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
@@ -169,7 +165,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return platformCmd(args[1:], stdout, stderr)
 	case "devices":
 		if len(args) > 1 && args[1] == "trust" {
-			return devicesTrust(args[2:], stdout, stderr)
+			// Decision 46 ruling 4: host keys are OpenSSH's. Until the
+			// pre-beta review, the old command says where it went.
+			fmt.Fprintln(stderr, "port49 devices trust was removed in plan 9d: port49 ssh uses your OpenSSH "+
+				"known_hosts, which accepts a device's key at first contact and refuses a changed one. To check a "+
+				"key at first contact, compare the fingerprint ssh prints with the device's console")
+			return 2
 		}
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)

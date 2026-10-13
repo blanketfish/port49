@@ -3,11 +3,10 @@
 // system-wide /etc/port49/config.yaml the install ships, which gives `port49
 // login` its broker, broker CA, certificate and key, or its identity provider
 // (decision 43 ruling 19); the certificate the broker issued it
-// (IssuedPaths); and the private-file reading and writing it shares with the
-// pinned host keys (internal/hostkeys). Whoever can write these files chooses
-// which broker the operator trusts and which device keys `port49 ssh`
-// accepts, so a file, or a directory holding one, that anyone else can write
-// is refused, never read. It is keyfile's rule for a private key, for writing
+// (IssuedPaths); and the private-file reading and writing it keeps for them.
+// Whoever can write these files chooses which broker the operator trusts, so
+// a file, or a directory holding one, that anyone else can write is refused,
+// never read. It is keyfile's rule for a private key, for writing
 // rather than reading, and unlike internal/fence it holds on macOS too.
 package userconfig
 
@@ -68,11 +67,11 @@ var SystemPath = "/etc/port49/config.yaml"
 // can give a file.
 var SystemOwner uint32
 
-// LegacyDir is plan 9a's directory, $XDG_CONFIG_HOME/port49, else
-// ~/.config/port49. The pinned host keys stay there until plan 9d takes
-// them out of the user's flow; a config.yaml there is refused, naming the
-// move (LoadAll).
-func LegacyDir() string {
+// legacyDir is plan 9a's directory, $XDG_CONFIG_HOME/port49, else
+// ~/.config/port49. Nothing in it is read: a config.yaml there is refused by
+// Lstat, naming the move (LoadAll), and the pins file is only named
+// (LegacyPinsPath; decision 46 ruling 5).
+func legacyDir() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "port49")
 	}
@@ -84,7 +83,7 @@ func LegacyDir() string {
 
 // LegacyPinsPath is plan 9a's pins file. Nothing reads it since plan 9d
 // (decision 46 ruling 5); port49 ssh names it while it exists.
-func LegacyPinsPath() string { return filepath.Join(LegacyDir(), "known_hosts") }
+func LegacyPinsPath() string { return filepath.Join(legacyDir(), "known_hosts") }
 
 // IssuedPathsIn is where, under dir, `port49 login` keeps the certificate a
 // broker issued it and its key (spec §13 decision 43 ruling 7):
@@ -326,7 +325,7 @@ func overlay(base, over File) File {
 // holds none, and names the move: unread, it would leave the operator logged
 // in to whatever the system file names, or to nothing, with no word why.
 func noLegacy(path string) error {
-	old := filepath.Join(LegacyDir(), "config.yaml")
+	old := filepath.Join(legacyDir(), "config.yaml")
 	if _, err := os.Lstat(old); err != nil {
 		return nil
 	}

@@ -321,3 +321,22 @@ func TestThe9aPinsFileIsNamedNotRead(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errb)
 	}
 }
+
+// Plan 9b pre-flight 2, m5: Ubuntu's 0775 ~/.config refused port49 ssh with no
+// fix to run. Nothing port49 ssh reads is under it now.
+func TestAGroupWritableConfigStopsNothing(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "port49"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(home, ".config"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
+	if code, _, errb := r.run(t, "leaf1", "--", "show", "version"); code != 0 {
+		t.Fatalf("code %d stderr %q", code, errb)
+	}
+}

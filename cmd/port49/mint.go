@@ -13,7 +13,7 @@ import (
 
 // mintFailed says, under cmd's prefix, why a mint through the agent gave no
 // usable token, and reports whether it did. These are `port49 token`'s words,
-// shared by `port49 devices trust` and `port49 ssh`.
+// shared by `port49 ssh`.
 func mintFailed(cmd, socket, device string, item api.MintItem, err error, stderr io.Writer) bool {
 	var ie *agent.ItemError
 	var need *agent.MFARequiredError
