@@ -179,23 +179,32 @@ func loginToHeldKey(ctx context.Context, sf *sessionFlags, stdout, stderr io.Wri
 	if !holds {
 		return 0, false
 	}
+	return loginThroughAgent(ctx, sf, c, st, refLabel(sf.key), stdout, stderr), true
+}
+
+// loginThroughAgent is a login to the agent c, which holds this login's key
+// in st.KeyState; the key is not opened here (ruling 8). A key that is out
+// says to insert it; a Locked one is asked its PIN, under label, and unlocked
+// through the agent; then the session is refreshed.
+func loginThroughAgent(ctx context.Context, sf *sessionFlags, c *agent.Client, st agent.Status, label string,
+	stdout, stderr io.Writer) int {
 	switch st.KeyState {
 	case hwkey.Absent.String():
 		fmt.Fprintf(stderr, "port49 login: insert your key and run `port49 login` again; your session goes on until %s\n",
 			st.SessionEndsAt)
-		return 1, true
+		return 1
 	case hwkey.Locked.String():
-		pin, err := askPIN(refLabel(sf.key))
+		pin, err := askPIN(label)
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 login:", err)
-			return 1, true
+			return 1
 		}
 		if err := c.Unlock(ctx, pin); err != nil {
 			pinFailure(err, stderr)
-			return 1, true
+			return 1
 		}
 	}
-	return refreshRunning(ctx, sf, st, stdout, stderr), true
+	return refreshRunning(ctx, sf, st, stdout, stderr)
 }
 
 // refLabel names the token a reference picks by its token= attribute, for a

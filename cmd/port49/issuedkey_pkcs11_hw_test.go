@@ -211,6 +211,44 @@ func TestATokenHostAndAFileHostSharingAHomeSignInOnce(t *testing.T) {
 	login(tokenCfg, 2, "pkcs11")
 }
 
+// A login while the agent holds the issued token key reads the agent's key
+// state first and never opens the token (spec decision 45 ruling 8): a key
+// that came back Locked is asked its PIN, unlocked through the agent and
+// refreshed, where it looped on the agent's "run `port49 login`" before; one
+// that is out says to insert it. No sign-in either way (final review client
+// I2).
+func TestALoginToAnAgentHoldingTheIssuedTokenKeyUnlocksThroughIt(t *testing.T) {
+	ref := "pkcs11:token=held;id=%10?module-path=/nonexistent/module.so"
+	o := newOIDCLab(t, true)
+	sock := privateSocket(t)
+	h := serveHeldAgent(t, o.labBroker, sock, ref, "a-fingerprint", "locked")
+	cfg := issuedKeyConfig(t, ref)
+	prompts, _ := pinPty(t, hwtest.SoftHSMUserPIN)
+	opens, logins := pkcs11.OpenCalls(), pkcs11.LoginCalls()
+	code, out, errb := o.loginOn(t, sock, "--config", cfg)
+	h.mu.Lock()
+	pins, refreshes := h.pins, h.refresh
+	h.mu.Unlock()
+	if code != 0 || prompts.Load() != 1 || pins != 1 || refreshes != 1 || n(o) != 0 {
+		t.Fatalf("locked: code %d prompts %d unlocks %d refreshes %d sign-ins %d stdout %q stderr %q",
+			code, prompts.Load(), pins, refreshes, n(o), out, errb)
+	}
+	if pkcs11.OpenCalls() != opens || pkcs11.LoginCalls() != logins {
+		t.Fatal("the login opened the token though the agent held the key")
+	}
+
+	h.mu.Lock()
+	h.state = "absent"
+	h.mu.Unlock()
+	code, out, errb = o.loginOn(t, sock, "--config", cfg)
+	if code != 1 || !strings.Contains(errb, "insert your key and run `port49 login` again") || n(o) != 0 {
+		t.Fatalf("absent: code %d stdout %q stderr %q (%d sign-ins)", code, out, errb, n(o))
+	}
+	if pkcs11.OpenCalls() != opens || pkcs11.LoginCalls() != logins {
+		t.Fatal("the login opened the token though the agent held the key")
+	}
+}
+
 // A wrong PIN is found before the browser, costs one try, is not retried, and
 // leaves no certificate.
 func TestAWrongPINForTheIssuedKeyEndsTheLoginBeforeTheSignIn(t *testing.T) {

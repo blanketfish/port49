@@ -74,7 +74,17 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	}
 	// A PIN asked for the agent is zeroed whichever way the login ends.
 	defer func() { clear(sf.pin) }()
-	pair, held, s, heldErr := findHeld(sf)
+	pair, heldErr := pickHeldPair(sf)
+	if heldErr == nil {
+		if code, done := loginToIssuedHeldKey(ctx, sf, pair, stdout, stderr); done {
+			return code
+		}
+	}
+	var held tls.Certificate
+	var s issuer.SignIn
+	if heldErr == nil {
+		held, s, heldErr = heldCertificate(pair.cert, pair.key)
+	}
 	// A held certificate whose key is out (a token unplugged) is still the
 	// certificate of the session an agent may hold.
 	var keyErr *heldKeyError
@@ -187,6 +197,36 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 	}
 	return code
+}
+
+// loginToIssuedHeldKey is loginToHeldKey for the issued pair (final review
+// client I2): when the running agent holds pair's key, its key state is read
+// first and the key is not opened here (spec decision 45 ruling 8), so a key
+// that came back Locked is unlocked through the agent instead of the refresh
+// answering "run `port49 login`" at every login. A file key has no state and
+// is left to the ordinary path. done says the login is settled, with code.
+func loginToIssuedHeldKey(ctx context.Context, sf *sessionFlags, pair issuedPair, stdout, stderr io.Writer) (code int,
+	done bool) {
+	if !hwkey.IsRef(pair.key) {
+		return 0, false
+	}
+	c := agent.NewClient(sf.socket)
+	st, err := c.Status(ctx)
+	if err != nil || st.KeyState == "" || strings.TrimRight(sf.broker, "/") != st.Broker || st.KeyRef == "" ||
+		st.KeyRef != clientkey.CanonicalRef(pair.key) {
+		return 0, false
+	}
+	if sf.signIn {
+		fmt.Fprintf(stderr, "port49 login: an agent already holds your session at %s on this key; `port49 refresh` "+
+			"extends it; to sign in again, stop that agent first\n", st.Broker)
+		return 1, true
+	}
+	code = loginThroughAgent(ctx, sf, c, st, refLabel(pair.key), stdout, stderr)
+	if leaf, err := readLeaf(pair.cert); code == 0 && err == nil && api.LateRenewal(leaf, time.Now()) {
+		fmt.Fprintf(stdout, "port49: your certificate ends at %s, and the agent with it; to renew before then, "+
+			"stop the agent and run `port49 login`\n", rfc3339(leaf.NotAfter))
+	}
+	return code, true
 }
 
 // refusedError is the broker answering the certificate request 401
