@@ -329,9 +329,12 @@ func stopOf(err error, devices []string, answered []api.MintItem) *stoppedRun {
 	}
 	var te *workload.TemporaryError
 	var ae *workload.APIError
+	var refused *workload.BrokerRefusedError
 	switch {
 	case errors.As(err, &te):
 		s.code, s.detail = failBrokerUnavailable, fmt.Sprintf("the broker did not answer within %s", te.Deadline)
+	case errors.As(err, &refused):
+		s.code, s.detail = failBrokerRefused, "the broker's certificate was refused under broker_crl; see stderr"
 	case errors.Is(err, mfatouch.ErrConnectionChanged):
 		s.code, s.detail = failConnectionChanged, "the connection changed during the touch; run again"
 	case errors.As(err, &ae) && ae.Status < 500:

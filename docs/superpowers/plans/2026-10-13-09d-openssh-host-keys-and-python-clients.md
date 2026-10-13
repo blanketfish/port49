@@ -241,8 +241,8 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   file is still written only when a permit is in it (decision 40 ruling 10, pre-flight I-1).
   `results` and `refused` are `[]`, never `null`. A run that stops before it finishes (75, 77 and
   1 mid-run) never looks like a finished one: each device left unminted is in `refused` with the
-  CLI code that stopped it (`broker_unavailable` for 75, `broker_refused` for a 4xx, `agent_error`
-  otherwise), and the object has a top-level `"stopped"` holding that code, absent on a finished
+  CLI code that stopped it (`broker_unavailable` or `connection_changed` for 75, `broker_refused`
+  for a 4xx or a broker certificate refused under `broker_crl`, `agent_error` otherwise), and the object has a top-level `"stopped"` holding that code, absent on a finished
   run. A `--scope` sweep that stops cannot name what it left, so `stopped` tells it from a
   finished one. Task 8 relies on `stopped`.
 - **R11. The library's errors and retries.** One exception class per kind of code (`NoAgent`,
@@ -477,7 +477,8 @@ in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, 
 `per_login_mfa` without its challenge). Without `--out` the object is printed whenever the broker
 answered, on exit 75 and 77 too (§13 decision 46 ruling 10). A run that stopped early also lists
 each device it left in `refused` and has a top-level `stopped` holding the CLI code that stopped
-it (`broker_unavailable`, `broker_refused`, `agent_error`); `stopped` is absent on a finished run.
+it (`broker_unavailable` and `connection_changed`, both exit 75; `broker_refused`, a 4xx or a broker
+certificate refused under `broker_crl`; `agent_error`); `stopped` is absent on a finished run.
 ```
 
 - [ ] **Step 4: Decision 42's amendments.** In its heading paragraph, after "9d host keys from
