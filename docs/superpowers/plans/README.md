@@ -186,6 +186,10 @@ broker certificate against its CRL (`broker_crl: check`). SoftHSM2 and swtpm run
 test-hw` and a new `hwkeys` workflow. Decision 45 holds its twenty-two rulings; it opens L60 (a
 YubiKey on the SER8, Ryan present, placed late), L61 (Keycloak's `amr`), L62 (the SER8's TPM) and L63
 (the Secure Enclave).
+**9c executed 2026-10-12 to 2026-10-13** on `feature/hardware-keys-and-per-login-mfa` (base
+`e8d3e1a`), each code task reviewed (Plan 9c — As built, below). L61 closed; L60 half measured on a
+YubiKey 5C Nano FIPS, so it stays open; L62 and L63 open; the Secure Enclave (Tasks 2 and 14) is not
+built yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5270,6 +5274,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     passes a link that names none; `require` refuses it; defence in depth: the CA is the operator's).
   - **CI and lab:** SoftHSM2 and swtpm in CI; a new row for a real YubiKey on the SER8 (touch, PIN,
     unplug), if one is to hand.
+  - **Built:** see Plan 9c — As built, below, for what was built, what is left (L60, L62, L63, the
+    Secure Enclave) and the operator notes.
 - **9d — OpenSSH's own host-key handling, and the Python and Ansible clients** (design §17).
   - **Host keys are OpenSSH's job** (Ryan, 2026-10-10; replaces decision 42's pin-first rule). port49
     does not reimplement host-key trust. `port49 ssh` forces `StrictHostKeyChecking=accept-new`
@@ -5749,6 +5755,283 @@ each task reviewed, most through one to three fix rounds. The ledger is
     findings until a lab cell measures the `junoscript` deny closing each.
   - **No new reason code, metric or config key in `port49d.yaml`.** The decision log records the
     reply as before; the `junoscript` deny appears in it.
+
+### Plan 9c — As built
+
+Executed from `2026-10-12-09c-hardware-keys-and-per-login-mfa.md` on
+`feature/hardware-keys-and-per-login-mfa` (base `e8d3e1a`, the plan's last pre-flight commit on
+`main`), each code task reviewed, most through one to four fix rounds. The ledger is
+`.superpowers/sdd/2026-10-12-09c-hardware-keys-and-per-login-mfa/progress.md`. The rulings are
+decision 45 of the spec (§13), twenty-six of them. Lab hardware: a YubiKey 5C Nano FIPS (firmware
+5.4.3, libykcs11 from Debian's `ykcs11`), SoftHSM2, swtpm, Keycloak 26.4.7. **This entry is written
+before the Secure Enclave tasks and before the rest of L60 and L62 run (below): they are not built or
+measured, and nothing here says otherwise.**
+
+- **Gates read:**
+  - **SE1** (an unsigned `port49` creates and finds a Secure Enclave key): **not read.** Task 2 needs
+    a Mac. Ryan ruled on 2026-10-12 to build the backend without one (Task 14) as experimental and
+    opt-in, marked "needs testing" for community Mac users; neither task has run. L63 stays open.
+  - **M1** (Keycloak puts `mfa` in `amr`): **failed as worded.** Keycloak emits `otp`, and only
+    `mfa` if the OTP execution's reference is set to it. The default stays `[mfa]`; the operator
+    notes carry the Keycloak setup.
+- **Built** (`git log e8d3e1a..HEAD`; commits are grouped by task, the fixes after review among them):
+  - **Task 1, spec** (b9b8f5b, 305065b, 54676c2): decision 45, §5.1.5, §5.7, §13, §15 L60–L63. Later
+    amended by 6eeeb6c, fd8a2bc, 23a2d47 (rulings 25 and 26), 8420de6 and 34e5f10 (ruling 9),
+    609ac8d (ruling 14), fa73ed7 (ruling 7), 212dd48 (the key-failure codes), 8836395 (ruling 13).
+  - **Task 3, PKCS#11 through purego** (082ce56, 9a894ca, 1323bda, d3ade79, bf842c7, e1e8857): one
+    `hwkey.Key`; the module is checked as code the agent runs; `C_Initialize` with
+    `CKF_OS_LOCKING_OK`; `make check-static` builds `bin/static/<cmd>` and fails closed.
+  - **Task 4, TPM 2.0 through go-tpm** (5a283f3, 656627e, 75b26d4): ECC P-256 under the ECC SRK, a TSS2
+    key file, 0600; a key survives dictionary-attack lockout, a password or a loose file is refused,
+    each error names its cause.
+  - **Task 8, the broker certificate's CRL** (04b77af, 2f6044f, 40f4094, 34e5f10, 8420de6, afcdd95,
+    4f32efc, 113b1aa, 4aef096): `broker_crl: check | require | off`, link by link, in login, the
+    agent and `port49 workload`. Ryan ruled on 2026-10-12 that `require` refuses a link with no
+    http(s) distribution point (the trust anchor aside).
+  - **Task 9, `per_login_mfa` in the policy** (89a9d7f, 2a31e1f, 6eeeb6c, 18e71dd, fd8a2bc, 40bac09,
+    23a2d47): four levels, the strictest wins; an empty intersection is an error or a quarantine
+    by where it is found (ruling 11); `policy diff` fails on a weakening unless a session test asserts
+    the new requirement (ruling 24, the controller's ruling at Task 1 review, a change from the plan's
+    warning).
+  - **Task 10, YubiKey attestation** (9b05f1e, ada5ff4, c65892d, 4fc99c4, ec1a46c, dc78cd3, aa50b68,
+    80d62f2): `internal/pivattest` verifies slot f9 to the operator's roots and each slot's
+    attestation to f9; a roots file with a byte order mark or comments loads.
+  - **Task 11, the broker verifies a proof** (6be2c3a, efbfadb, 9f3f298, bb7a318, 39d78b7):
+    `POST /v1/mfa`, one challenge per request, the proof keyed by its binding; replay is decided
+    once (`ReplayOnly`), so a spent proof never turns a minted token into a required one.
+  - **Task 12, refresh under a requirement** (3665b93, a77146b, 0450452, 4c41868, 1562789, 4aef096): a
+    refresh extends a context only when a proof covers it; a reload revokes nothing. The context
+    records the proving agent (`mfa_agent_sha256`), so a bearer's proof covers no other agent's
+    refresh (ruling 15).
+  - **Task 5, hardware keys in login and the agent** (e926ea5, then 896cafd, f3bc093, c490a0b, 850c9ab,
+    e57bd87, 402d933, 0e58eeb, 98eb724, 099bb0a, 0e9d873, 221267b, ee0936d): the PIN asked
+    once with echo off, on descriptor 4; a blocked PIN told as blocked with the PUK as the way out;
+    a key's own failure at the handshake is a typed error with its own socket code, found by a
+    recorder around the key and never retried. **Touch timeout** (b25ded5, 609ac8d): ruling 14.
+  - **Task 6, the key unplugged** (ebc3907, d0471ee): "insert your key", no session ended.
+  - **Task 7, `port49 login --oidc` in hardware** (b830877, 05636d4, 31f96db, f394afd, fa73ed7, 8b99a3e,
+    78dd101, 819705b): `issued_key_store`; the shared-home naming; a named store looks only for its
+    own pair.
+  - **Task 13, the proof from the CLI** (2a35677, a59af4d, 61e0bb9): `port49 token`, `ssh`, `refresh`
+    and `workload token` give a proof when asked; the sign-in proof goes to the agent's broker;
+    `idp_mfa` is the fallback when the touch cannot be made.
+  - **Task 15, the lab, L61 half** (e5e3eff, 9e98d1d, 8836395). L62's half has not run.
+  - **Task 17, this entry.**
+- **Left, and why:**
+  - **Task 2 and Task 14, the Secure Enclave:** wait on a Mac (above).
+  - **Task 16, the rest of L60:** needs Ryan at the key. Measured so far on the YubiKey 5C Nano FIPS,
+    firmware 5.4.3 (2026-10-13, read-only, no login; probe kept in the ledger directory):
+    libykcs11 lists the f9 attestation certificate and each slot's attestation with no login, the
+    f9 certificate is issued directly by Yubico's PIV root (no intermediate on this firmware), every
+    attestation verifies in `pivattest`, the slot issuer is byte for byte the f9 subject, one device
+    serial runs through every slot attestation, touch policy reads 9a=1 9c=2 9e=1, and
+    `C_Initialize` with `CKF_OS_LOCKING_OK` runs clean five times with the token present (threads
+    6/6/6). An untouched 9c sign returns `CKR_USER_NOT_LOGGED_IN` after about 14.4s although the
+    token stays logged in (a touched sign on the same session then succeeds with no PIN). Ryan
+    approved the ruling that follows: a not-logged-in that took 5s or more is a touch timeout, not a
+    lock. **L60 stays open.** Cells not run: b, d, e, e2, f, g; the physical pull (does the return
+    code map to `ErrKeyAbsent`?); the object order after a certificate is imported beside the
+    attestation; the cost of `GET /status` reading attestations on the real key; the optional
+    three-wrong-PIN lockout.
+  - **L62, the SER8's TPM:** deferred to a session with Ryan. It needs a lab user in `tss`, a reboot
+    of the SER8 and a second host for the shared home, including the mixed-store (token and file)
+    cell. **L62 stays open.**
+- **Rows:** **L61 closed** (`L61-keycloak.md`, Keycloak 26.4.7, 2026-10-12: `amr` is `[pwd otp]`, or
+  `[pwd mfa]` with the OTP reference set to `mfa`; `acr` is `"1"` in every cell). **L60, L62, L63
+  open.**
+- **Every claim provisional on an open row:**
+  - **On L60:** ruling 3's module checks and `C_Initialize` with a live token (cell (a) measured
+    clean; the rest of the row is not); ruling 4's PIN asked once and a wrong PIN sent once with the
+    tries left; ruling 8's unplug (`GET /status` says `locked` after re-insertion, a second process
+    does not drop the agent's PIV login, the return code maps to `ErrKeyAbsent`); ruling 12's
+    attestation chain per firmware (one firmware measured), the policy bytes a YubiKey Bio reports,
+    and a touch proving end to end; ruling 14's touch timeout (14.4s measured, the 5s rule approved,
+    "15s" is the words' round figure); `issued_key_store: pkcs11` issuing with nothing written to
+    the token.
+  - **On L62:** ruling 5 on a real TPM (the SRK, a restart, a reboot, another machine refusing the
+    key file, a user outside `tss` told the group); ruling 7's shared-home naming, the token host and
+    file host each keeping their own certificate.
+  - **On L63:** ruling 6, the whole Secure Enclave.
+- **Carried:**
+  - **The 7h bearer path's session refresh passes no agent session.** A person refreshing through it
+    proves at every refresh under a requirement (ruling 15). It retires at the pre-beta review.
+  - **ssh's askpass re-mint does not prove.** A stale token with no reuse cover ends `ssh` with
+    "second factor required"; `port49 token` (or `ssh` again) proves.
+  - **The agent's `GET /status`, or a `port49 token` in another terminal, waits up to about 15s** while a touch is
+    pending (the token lock). Parked for the final review.
+  - **Parked minors for the final review:** the `TestMain` TPM stub placed above the CLI branch
+    (`cmd/port49/main_test.go`); `auto` loads the TPM pair twice; a staging file left by a killed
+    login; the attestation lost after the prompt is untested; exit 75's message omits `--scope`;
+    older agents fall back to the config's broker CA.
+  - **Plan 12:** ship `attestation_roots_file` (the broker) and the `touch_key`, `key`,
+    `issued_key_store` and `broker_crl` lines in each shape's `/etc/port49/config.yaml`; add the lab
+    user to `tss` in the client packages that use the TPM; build **two `port49` artifacts** (decision
+    45 ruling 22) and name them so an operator can tell which is which: the static one
+    (`make build`, `CGO_ENABLED=0`, no PKCS#11, no Secure Enclave) in the image and the server
+    packages, and the client release (`make build-client`, `-tags hwkey_dlopen`, dynamically linked)
+    in the desktop and jump-host packages people run `port49 login` from; keep `make check-static`
+    in the release pipeline. The `hwkeys` workflow is the first CI to run Go tests; plan 12 decides
+    whether `make test` joins it. The polkit rule for pcscd (below) is a host install, not the
+    package's.
+  - **Plan 13:** the operator notes below.
+  - **At go-public:** a help-wanted issue for the Secure Enclave, "needs testing" for community Mac
+    users (Ryan, 2026-10-12).
+- **Verification:** `make test && make vet` and `make test-hw`: see the pull request body.
+
+### Operator notes (for the pull request body)
+
+- **Which `port49` has hardware keys.** There are two builds. The client build (`make
+  build-client`, written as `bin/port49-client`; plan 12's desktop and jump-host release) has
+  PKCS#11 (YubiKeys, smartcards) and the TPM; it needs the system's dynamic loader, which every
+  desktop Linux and macOS has. The static build (`make build`, written as `bin/port49` with
+  `CGO_ENABLED=0`, and the container image) has the TPM and file keys only. Given a `pkcs11:` key it
+  says "this port49 was built without PKCS#11 support (the static build, as in the container image);
+  use the client release", and nothing else changes. Its `issued_key_store: auto` passes over a
+  configured `issued_key` and says so, rather than refusing. Run `port49 login` from the client build.
+  There is no Secure Enclave in either yet.
+- **Your key can live in hardware.** In `/etc/port49/config.yaml` (once, for the fleet) or your own
+  `~/.port49/config.yaml`, set `key:` to a reference instead of a path:
+  - a YubiKey or smartcard: `key: "pkcs11:id=%01?module-path=/usr/lib/x86_64-linux-gnu/libykcs11.so"`
+    (slot 9a is `id=%01`). Leave `cert:` out and port49 reads the certificate from the token. The
+    module, any symbolic link to it, and every directory above it must be owned by root or you and
+    writable by no one else.
+  - a TPM key file: `key: "tpm:file=/home/alice/.port49/my.tpmkey"`, or a persistent handle
+    `tpm:handle=0x81000001`. You must be in the `tss` group.
+
+  `port49 login` asks the token's PIN once, on the terminal; it is never on the command line, in the
+  environment or in a log. A wrong PIN is sent once: port49 never retries it, and tells you when the
+  token says few tries are left. For a host with no terminal, put the PIN in a file only you can
+  read and add `pin-source=file:///path` to the URI; `pin-value` is refused. The PIN travels on a
+  file descriptor and is zeroed after login, but copies inside `net/http` and `x/term` buffers cannot
+  be zeroed.
+- **A blocked PIN.** `CKR_PIN_LOCKED`, or the token's own flag, means the PIN is blocked; `port49
+  login` says so and keeps no retry. Unblock it with the PUK: `ykman piv access unblock-pin`.
+- **Touch and PIN policy are yours.** For the session key, PIN once and touch never or cached is the
+  sane default: the key is used once per session, at the handshake and at each refresh, never per
+  device.
+- **A touch that does not come.** With about 15s and no touch, `port49` says "no touch within 15s;
+  touch the key when it blinks and try again". The key stays unlocked, and nothing is retried:
+  run the command again and touch when it blinks. (Measured on one firmware, 5.4.3: an untouched sign
+  returned after 14.4s; provisional on L60.)
+- **`port49 login --oidc` keeps its key in hardware by default.** `issued_key_store: auto` is a token
+  when `touch_key` and `issued_key` are both set and PKCS#11 is available, then the TPM on Linux if a
+  key can be created there (it says so), else the 0600 file as before. `tpm`, `pkcs11` (with
+  `issued_key: "pkcs11:…;id=%04"`) or `file` name one store and never fall back; a named store that
+  cannot be used stops before your browser opens and says why:
+  - the TPM has an owner password: clear it, or use `auto` or `file`;
+  - the TPM is in lockout: `tpm2_dictionarylockout -c`;
+  - the device is missing or not yours: check `/dev/tpmrm0` and the `tss` group.
+
+  For `pkcs11`, make the key once yourself (`ykman piv keys generate 9e …`): port49 signs with it and
+  never writes to your token, so it never needs your management key. When tokens are present and none
+  matches `issued_key`, the error lists them by label, serial and manufacturer.
+- **Shared home directories.** Each machine keeps its own key and certificate, so jump hosts that share
+  your home never overwrite each other. A TPM pair is `<host>_<port>.<machine>.tpmkey` and
+  `.<machine>.pem`, where `<machine>` is eight hex digits of SHA-256 of `/etc/machine-id`; it is
+  useless on any other machine. A token key's certificate is `<host>_<port>.<8hex>.pem`, where the hex
+  is SHA-256 of the canonical `pkcs11:` reference without its query. A file key is
+  `<host>_<port>.key` and `.pem`. (Provisional on L62.)
+- **Rolling out touch keys.** A host keeps the file or TPM pair it holds until that pair renews.
+  `port49 login --sign-in` switches it to the token at once.
+- **The key unplugged at 3am.** Your open device sessions and the agent's held connection keep working:
+  `port49 token` still mints, and says "(tokens are still minted on the held connection while it
+  stays up)" where one exists. `port49 refresh` and anything that needs a new connection say "insert
+  your key; your session goes on until <time>"; nothing ends. Put the key back and run `port49
+  login`: it says "your key is back and needs its PIN: run `port49 login`" (or "your key needs its
+  PIN" if it never left), asks the PIN and carries on. Over the agent's socket these are
+  `touch_timeout`, `key_locked`, `key_absent` and `broker_refused`, each answered 502, and
+  `/unlock`'s `key_absent` answers 409. (The unplug is provisional on L60.)
+- **The broker's certificate is checked against its CRL**, link by link, for every link that names a
+  distribution point. `broker_crl: check` (default): a revoked broker certificate is refused before
+  anything is sent to it; a CRL server that does not answer is said once and the login goes on (tried
+  again after a minute, not at every connection); a link with no distribution point is not checked.
+  `require` refuses that too, and refuses any certificate in the chain (the trust anchor aside) that
+  names no `http` or `https` distribution point: add an HTTP CDP to the CA, or use `check`. `off`
+  checks nothing. **`require` therefore refuses a stock step-ca broker certificate, which carries no
+  HTTP CDP, and the intermediates of many private PKIs, until the CA adds one.** To see whether yours
+  has one: `openssl x509 -noout -ext crlDistributionPoints -in broker.pem` (and the same for each
+  intermediate); no output means none. Lists are kept in `~/.port49/crl/`.
+  - **Rotating the broker's certificate.** Issue the new one and load it before publishing the
+    revocation; revoke the leaf, not the CA.
+  - **Rotating the broker's CA.** Issue the new CA, publish its CRL, rotate the brokers onto it, then
+    revoke the old one. Revoking the CA with no replacement stops all authentication under `require`:
+    held sessions continue, new logins do not.
+- **`per_login_mfa`: a second factor at each login to the devices you mark.** Under `defaults:`, a
+  role, or a scope (`match: {tier: core}` for a class, `match: {name: core-sw01}` for one device):
+
+  ```yaml
+  per_login_mfa:
+    accept: [hardware_key_touch, idp_mfa]   # one or both
+    reuse_for: 15m                          # 0m: a proof at every login; at most 8h
+  ```
+
+  The strictest level wins: the methods every level accepts, the shortest `reuse_for`. Two levels that
+  share no method are a policy error naming both: `port49 policy test` fails, `policy diff` fails
+  when your edit introduces it, and a reload of an edited policy that introduces it is refused (the
+  old one keeps serving). If an inventory change makes them meet (a sync adds `tier: core`), that
+  device alone is quarantined with the cause, and the rest of the inventory change applies; watch
+  `port49_devices_quarantined`. While it stays quarantined, policy edits that do not add a new
+  conflict still load: fixing a grant at 3am never waits on it. A scope that matches by an attribute
+  needs `on_missing` and `security_log: true` (one matching `name` alone needs neither); `on_missing:
+  exclude` there is a lint warning. Machines are exempt unless a level says `applies_to_machines:
+  true`, and then prove by a touch from a key and touch slot on one token (`port49 workload token
+  --key pkcs11:… --touch-key pkcs11:…`); a connection that changes during the touch exits 75: run it
+  again. `port49 explain` prints the effective requirement and where each part came from; `policy
+  diff` fails on a weakening (a method added to `accept`, a longer `reuse_for`, a level removed,
+  `applies_to_machines` turned off, a requirement removed) unless a session test asserts the new
+  `per_login_mfa:`, as it does for a privilege raise; a tightening only prints.
+- **Upgrade first.** Upgrade every broker and daemon before adding `per_login_mfa` to a policy: a
+  replica that does not know the key refuses the policy and keeps serving the old one, with no
+  requirement; `port49_policy_file_refused` is 1 there and `port49_policy_bundle_matches_runner` 0
+  until it is upgraded.
+- **The two methods.**
+  - `hardware_key_touch`: a touch on your token's always-touch slot. Set `touch_key:
+    "pkcs11:id=%02?module-path=…"` (slot 9c, made with `ykman piv keys generate --touch-policy always
+    9c`), and on the broker `broker.identity.per_login_mfa.hardware_key_touch.
+    attestation_roots_file:` Yubico's PIV attestation roots, every one Yubico publishes (newer
+    firmware may chain through an intermediate under a newer root: list the root and the
+    intermediate; L60 records which, and measured none on firmware 5.4.3). The broker checks that the
+    touch slot is on the same token as your session key; a TPM, a file key or an imported key cannot
+    give it. **So a device that accepts only `hardware_key_touch` locks out anyone whose session key
+    is not on their token**, including `--oidc` users whose key went to the TPM under `auto`: give
+    them `issued_key` on the token, or accept `idp_mfa` too. port49 says this at the prompt ("your
+    session key is in the TPM; a touch proves only from the token that holds it") instead of trying
+    a touch that must fail. (Provisional on L60.)
+  - `idp_mfa`: a fresh sign-in at your identity provider whose `amr` shows a second factor (`mfa` by
+    default; `broker.identity.per_login_mfa.idp_mfa.amr` widens it). A browser round trip each time,
+    and it needs a terminal. It is also the fallback when the touch key is out or the token shows no
+    attestations, where the device accepts it.
+  - **Keycloak (measured, L61, 26.4.7).** Its ID token has no `amr` until you add an AMR mapper to
+    the client. Then set the OTP execution's reference to `otp` and list `otp` in `idp_mfa.amr`, or
+    set that reference to `mfa` and keep the default. **Never list `pwd`:** every login carries it,
+    so it proves nothing. **`acr` is no signal on Keycloak:** it is `"1"` in every case, and
+    `acr_values` does not change it.
+
+  Accept both where you can: with the IdP down, the touch still works, and with no token to hand, the
+  sign-in does.
+- **What you see.** `port49 token core-sw01` prints `core-sw01 asks for a second factor at each login:
+  scope core accepts hardware_key_touch (reuse 15m, from scope core)` then `touch your key now`. One
+  proof covers your further logins under that requirement for `reuse_for`, in this agent only: another
+  agent, or another machine, proves again. **A known wait:** the agent's status, or a `port49 token`
+  in another terminal, waits up to about 15s while a touch is pending. **A known gap:** `ssh`'s askpass re-mint
+  does not prove; a stale token with no reuse cover ends `ssh` with "second factor required": run
+  `port49 token` (or `ssh` again) to prove.
+- **Live sessions are never cut by a policy edit.** Adding a requirement revokes nothing. Your next
+  `port49 refresh` asks one proof before it extends those sessions; without it they keep their
+  current end. On Junos (which never asks port49 about a command) the device's own session runs until
+  it is closed, and `port49 refresh` says so.
+- **New in the decision log:** event `per_login_mfa` (`per_login_mfa_proved`, `per_login_mfa_refused`);
+  `per_login_mfa_required` and `per_login_mfa_unavailable` on `mint` and `refresh`; a mint record says
+  which method covered it and whether it was reused. Alert on `per_login_mfa_refused` (someone trying
+  another token or another person's sign-in) and on `per_login_mfa_unavailable` (a broker that cannot
+  verify a method a policy demands). Metric: `port49_per_login_mfa_total{method,outcome}`.
+- **Hardware tests and hosts.** `make test-hw` needs `softhsm2`, `swtpm`, `swtpm-tools`, `ykcs11` and a
+  running `pcscd`; the `hwkeys` workflow runs it on every pull request and fails if the static build
+  stops being static (`make check-static`). Where a non-console user uses a token through `pcscd`,
+  the host needs a polkit rule scoped to that user (the lab box's is
+  `/etc/polkit-1/rules.d/99-port49-pcscd.rules`).
+- **Secure Enclave.** Not built yet. When it is: experimental, opt-in by a `secure-enclave:` key,
+  cross-compiled in CI, fails closed, and "needs testing" for community Mac users (L63 open).
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
