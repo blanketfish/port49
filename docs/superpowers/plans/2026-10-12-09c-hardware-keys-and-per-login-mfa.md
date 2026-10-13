@@ -176,7 +176,9 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   object on the token**: on a YubiKey both need the PIV management key (`CKU_SO`), and asking every
   user for it at each sign-in is fleet toil and a secret port49 should never hold. `issued_key`
   names a key the user made once (`ykman piv keys generate`); port49 signs the CSR with it and
-  keeps the issued certificate as `~/.port49/issued/<host>_<port>.pem` (pre-flight I11). A TPM
+  keeps the issued certificate as `~/.port49/issued/<host>_<port>.<k>.pem`, `<k>` the first 8 hex
+  digits of SHA-256 of the canonical `issued_key` reference, so a token host and a file host
+  sharing a home never overwrite each other's certificate (pre-flight I11; Task 7 re-review). A TPM
   pair is `~/.port49/issued/<host>_<port>.<machine>.tpmkey` and `.<machine>.pem`, where
   `<machine>` is the first 8 hex digits of SHA-256 of `/etc/machine-id`: on a bastion pool whose
   home directories are shared, each host keeps its own pair, another host's reads as no held pair
@@ -752,7 +754,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 ```markdown
 | **L60** | A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5). Whether: `C_Initialize` with `CKF_OS_LOCKING_OK` and no callbacks, and `C_Finalize`, run clean with the token present, `libykcs11`'s threads included; a slot 9a key (PIN policy once, touch never, a lab CA's certificate) signs a TLS 1.3 handshake and a refresh with `port49 login` asking the PIN once; the attestation certificates (slot f9 and each slot's) are reachable as certificate objects, chain to Yubico's PIV roots (the chain's depth for this firmware recorded: whether an intermediate sits under the root), and carry the touch policy (1.3.6.1.4.1.41482.3.8) and serial (…3.7) port49 reads; a slot 9c key with touch policy always proves `hardware_key_touch` with a touch, and with no touch within the token's timeout is refused in port49's words, and the timeout is recorded (decision 45 ruling 14 says about 15s); the token unplugged mid-session: `port49 token` mints on the held connection, `port49 refresh` says to insert the key, the session survives, and after re-insertion, with nothing minted between, the agent's `GET /status` says `locked`, `port49 login` asks the PIN and the refresh works; a `port49 login` or `port49 token` in another terminal does not de-authenticate the agent's PIV login; a wrong PIN is sent once and the message says the tries left; a key the user generated with `ykman` and named by `issued_key` (`issued_key_store: pkcs11`) is issued a certificate with port49 writing nothing to the token. Each cell against a control. | §13 decision 45 rulings 3, 4, 8 and 12; the operator notes (plan 13) | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open — added by plan 9c 2026-10-12; needs Ryan present |
 | **L61** | Keycloak's `amr` and `acr` in an ID token for `idp_mfa`. With a realm flow of password and OTP, a `prompt=login` sign-in with both: whether the ID token carries `amr`, and which values, with Keycloak's AMR protocol mapper and with none; the control, a password-only sign-in, and its `amr`; whether `acr_values` changes either. | §13 decision 45 ruling 13 (the default `amr: [mfa]`); the operator notes' provider setup | Keycloak (26.x) | open — added by plan 9c 2026-10-12 |
-| **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
+| **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; on the same shared home a token host (`pkcs11`, certificate `<host>_<port>.<k>.pem`) and a file host each sign in once, log in again with no further sign-in, and overwrite neither certificate; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
 | **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs a macOS host |
 ```
 
@@ -1923,7 +1925,7 @@ var MachineID = func() (string, error)
   refreshes. `issuedkey_pkcs11_hw_test.go`: on SoftHSM2, the harness makes a key `%10` (the user's
   one-time `ykman piv keys generate`), and with `issued_key_store: pkcs11` and `issued_key:
   "pkcs11:token=<label>;id=%10?module-path=…"` the login signs the CSR with it, writes the
-  certificate to `<host>_<port>.pem` and nothing to the token (the token's object list is the same
+  certificate to `<host>_<port>.<k>.pem` and nothing to the token (the token's object list is the same
   before and after, and `pkcs11.GenerateKeyPairCalls()` and `pkcs11.CreateObjectCalls()` read the
   same after the harness made `%10` and after the login); an `issued_key` naming no key refuses before the browser, saying to make one with
   the token's own tool (pre-flight I11).
@@ -3665,7 +3667,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   directory both hosts mount) used from the SER8 and from a second host with its own TPM or
   swtpm: each `port49 login --oidc` keeps its own `.<machine>.{tpmkey,pem}`, the second host's
   first login signs in (no error), and a later login on each uses its own pair, neither
-  overwritten; the control: a user outside `tss` (refused naming the group). Record the TPM's vendor and
+  overwritten; the mixed-store cell: a token host (`pkcs11`, `<host>_<port>.<k>.pem`) and a file
+  host on the same home each sign in once and log in again with no further sign-in, neither
+  certificate overwritten; the control: a user outside `tss` (refused naming the group). Record the TPM's vendor and
   firmware (`/sys/class/tpm/tpm0/tpm_version_major`, `device/description`). Run under the lab
   watchdog (lab rule: a background stall watchdog, re-armed on wake).
 - [ ] **Step 5: Close L62** if every cell read as claimed; otherwise fix the doc to the reading.
