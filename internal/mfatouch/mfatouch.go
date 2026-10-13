@@ -42,33 +42,38 @@ var ErrNoAttestation = errors.New("your token does not show its attestation cert
 // Chain is the proof's attestation chain, base64url DER, in the order the
 // broker reads: the slot attestation whose key is the touch key's, the device
 // (f9) certificate that signed it, and the slot attestation whose key is the
-// session key's. Any missing is ErrNoAttestation. The certificates are the
-// token's own statement; the broker verifies them against the operator's
-// roots, and nothing here trusts them.
+// session key's. Any missing is ErrNoAttestation. A slot attestation is a
+// certificate with the slot's key that a device certificate on the token
+// signed, never just the first with that key: a slot can hold its own
+// certificate beside its attestation, with the same key (final review I1).
+// The certificates are the token's own statement; the broker verifies them
+// against the operator's roots, and nothing here trusts them.
 func Chain(certs []*x509.Certificate, touch, session crypto.PublicKey) ([]string, error) {
-	var touchAtt, sessionAtt, device *x509.Certificate
+	for _, device := range certs {
+		touchAtt := issuedBy(certs, device, touch)
+		sessionAtt := issuedBy(certs, device, session)
+		if touchAtt == nil || sessionAtt == nil {
+			continue
+		}
+		enc := base64.RawURLEncoding
+		return []string{enc.EncodeToString(touchAtt.Raw), enc.EncodeToString(device.Raw), enc.EncodeToString(sessionAtt.Raw)}, nil
+	}
+	return nil, ErrNoAttestation
+}
+
+// issuedBy is the certificate in certs, other than device, whose key is key and
+// whose signature device made. The signature is checked directly, as
+// pivattest.Verify does: some f9 certificates carry no basic constraints.
+func issuedBy(certs []*x509.Certificate, device *x509.Certificate, key crypto.PublicKey) *x509.Certificate {
 	for _, c := range certs {
-		switch {
-		case touchAtt == nil && sameKey(c.PublicKey, touch):
-			touchAtt = c
-		case sessionAtt == nil && sameKey(c.PublicKey, session):
-			sessionAtt = c
+		if c == device || !sameKey(c.PublicKey, key) || !bytes.Equal(c.RawIssuer, device.RawSubject) {
+			continue
+		}
+		if device.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) == nil {
+			return c
 		}
 	}
-	if touchAtt == nil || sessionAtt == nil {
-		return nil, ErrNoAttestation
-	}
-	for _, c := range certs {
-		if bytes.Equal(c.RawSubject, touchAtt.RawIssuer) && bytes.Equal(c.RawSubject, sessionAtt.RawIssuer) {
-			device = c
-			break
-		}
-	}
-	if device == nil {
-		return nil, ErrNoAttestation
-	}
-	enc := base64.RawURLEncoding
-	return []string{enc.EncodeToString(touchAtt.Raw), enc.EncodeToString(device.Raw), enc.EncodeToString(sessionAtt.Raw)}, nil
+	return nil
 }
 
 func sameKey(a, b crypto.PublicKey) bool {
