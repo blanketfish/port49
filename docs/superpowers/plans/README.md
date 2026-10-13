@@ -5888,7 +5888,7 @@ measured, and nothing here says otherwise.**
   says "this port49 was built without PKCS#11 support (the static build, as in the container image);
   use the client release", and nothing else changes. Its `issued_key_store: auto` passes over a
   configured `issued_key` and says so, rather than refusing. Run `port49 login` from the client build.
-  There is no Secure Enclave in either yet.
+  The macOS client build carries the Secure Enclave, experimental (below); the static build does not.
 - **Your key can live in hardware.** In `/etc/port49/config.yaml` (once, for the fleet) or your own
   `~/.port49/config.yaml`, set `key:` to a reference instead of a path:
   - a YubiKey or smartcard: `key: "pkcs11:id=%01?module-path=/usr/lib/x86_64-linux-gnu/libykcs11.so"`
@@ -6030,8 +6030,15 @@ measured, and nothing here says otherwise.**
   stops being static (`make check-static`). Where a non-console user uses a token through `pcscd`,
   the host needs a polkit rule scoped to that user (the lab box's is
   `/etc/polkit-1/rules.d/99-port49-pcscd.rules`).
-- **Secure Enclave.** Not built yet. When it is: experimental, opt-in by a `secure-enclave:` key,
-  cross-compiled in CI, fails closed, and "needs testing" for community Mac users (L63 open).
+- **Secure Enclave (macOS, experimental).** Built without a Mac to run it on, so untested (L63
+  open). Opt-in only: `key: "secure-enclave:label=NAME"` or `issued_key_store: secure_enclave` in
+  the client build; `auto` never picks it. Every open and every key made prints "the Secure Enclave
+  backend is experimental and untested (L63); report results at the port49 issue tracker". Any
+  Security.framework error, `errSecMissingEntitlement` (-34018) among them, is a refusal naming the
+  OSStatus, never a fallback to a file or another store. The issued key is labeled
+  `port49.<host>_<port>.<machine>` and made once, then kept across sign-ins; port49 never removes
+  it (Keychain Access does). To help: `go run ./tests/spike/secureenclave` on a Mac and report its
+  output.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,

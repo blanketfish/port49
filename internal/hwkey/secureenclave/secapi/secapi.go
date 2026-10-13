@@ -148,11 +148,12 @@ var (
 	// are what CFDictionaryCreateMutable takes, so these are not dereferenced)
 	kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks uintptr
 
-	// Security/SecItem.h
+	// Security/SecItem.h (kSecUseDataProtectionKeychain since macOS 10.15)
 	kSecClass, kSecClassKey, kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyType,
 	kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeySizeInBits, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave,
 	kSecAttrIsPermanent, kSecAttrLabel, kSecPrivateKeyAttrs, kSecAttrAccessControl, kSecReturnRef,
-	kSecMatchLimit, kSecMatchLimitAll, kSecAttrAccessibleWhenUnlockedThisDeviceOnly uintptr
+	kSecMatchLimit, kSecMatchLimitAll, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+	kSecUseDataProtectionKeychain uintptr
 	// Security/SecKey.h: const SecKeyAlgorithm kSecKeyAlgorithmECDSASignatureDigestX962SHA256 (and 384, 512)
 	kSecKeyAlgorithmECDSASignatureDigestX962SHA256, kSecKeyAlgorithmECDSASignatureDigestX962SHA384,
 	kSecKeyAlgorithmECDSASignatureDigestX962SHA512 uintptr
@@ -247,6 +248,7 @@ func load() error {
 		{sec, &kSecMatchLimit, "kSecMatchLimit", true},
 		{sec, &kSecMatchLimitAll, "kSecMatchLimitAll", true},
 		{sec, &kSecAttrAccessibleWhenUnlockedThisDeviceOnly, "kSecAttrAccessibleWhenUnlockedThisDeviceOnly", true},
+		{sec, &kSecUseDataProtectionKeychain, "kSecUseDataProtectionKeychain", true},
 		{sec, &kSecKeyAlgorithmECDSASignatureDigestX962SHA256, "kSecKeyAlgorithmECDSASignatureDigestX962SHA256", true},
 		{sec, &kSecKeyAlgorithmECDSASignatureDigestX962SHA384, "kSecKeyAlgorithmECDSASignatureDigestX962SHA384", true},
 		{sec, &kSecKeyAlgorithmECDSASignatureDigestX962SHA512, "kSecKeyAlgorithmECDSASignatureDigestX962SHA512", true},
@@ -360,7 +362,11 @@ func keyQuery(label string, enclave bool) *dict {
 	q.set(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom)
 	q.setOwned(kSecAttrLabel, cfString(label))
 	if enclave {
+		// A Secure Enclave key is kept in the data protection keychain, not
+		// the file-based one (Apple TN3137); without this key, macOS searches
+		// the file-based keychain.
 		q.set(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave)
+		q.set(kSecUseDataProtectionKeychain, kCFBooleanTrue)
 	}
 	return q
 }
@@ -383,6 +389,7 @@ func CreateKey(label string, enclave, permanent bool) (Key, error) {
 	params.setOwned(kSecAttrKeySizeInBits, cfNumberCreate(0, kCFNumberSInt32Type, &size))
 	if enclave {
 		params.set(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave)
+		params.set(kSecUseDataProtectionKeychain, kCFBooleanTrue)
 		var cfErr uintptr
 		ac := secAccessControlCreateWithFlags(0, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
 			kSecAccessControlPrivateKeyUsage, &cfErr)

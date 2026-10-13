@@ -23,6 +23,7 @@ import (
 	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
+	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -40,7 +41,8 @@ const (
 )
 
 // issuedPair is one certificate port49 issued and the key it is for: key is a
-// file path (store "file") or a key reference (store "tpm" or "pkcs11").
+// file path (store "file") or a key reference (store "tpm", "pkcs11" or
+// "secure_enclave").
 type issuedPair struct{ store, cert, key string }
 
 // tpmRef is the reference to the TSS2 key file at path.
@@ -73,8 +75,11 @@ func (e *heldKeyError) absent() bool {
 
 // store names the key's store in the words the login uses.
 func (e *heldKeyError) store() string {
-	if strings.HasPrefix(e.ref, "pkcs11:") {
+	switch {
+	case strings.HasPrefix(e.ref, "pkcs11:"):
 		return storePKCS
+	case strings.HasPrefix(e.ref, secureenclave.RefPrefix):
+		return storeEncl
 	}
 	return storeTPM
 }
@@ -98,6 +103,27 @@ func tpmUsable() error {
 // generateTPM is tpm.Generate, a var so a test makes the TPM fail as it
 // chooses.
 var generateTPM = tpm.Generate
+
+// The Secure Enclave as the login uses it (decision 45 ruling 6), vars so a
+// test on Linux plays a Mac.
+var (
+	seAvailable = secureenclave.Available
+	seHostID    = secureenclave.HostID
+	openSE      = func(label string) (hwkey.Key, error) {
+		s, err := secureenclave.Open(label)
+		if err != nil {
+			return nil, err // never a typed nil in the interface
+		}
+		return s, nil
+	}
+	generateSE = func(label string) (hwkey.Key, error) {
+		s, err := secureenclave.Generate(label)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
+	}
+)
 
 // tpmRefused is a TPM that is absent or will not make a key, the one failure
 // `auto` goes on from to a file (decision 45 ruling 7); any other is an error.
@@ -167,8 +193,11 @@ func chooseIssuedStore(sf *sessionFlags, stderr io.Writer) (store string, err er
 		}
 		return storePKCS, nil
 	case storeEncl:
-		return "", errors.New("issued_key_store is secure_enclave, and the Secure Enclave is macOS's: this port49 " +
-			"cannot keep a key there; use auto, tpm, file or pkcs11")
+		// Experimental and opt-in (ruling 6): reached only by this name.
+		if err := seAvailable(); err != nil {
+			return "", fmt.Errorf("issued_key_store is secure_enclave, and %s", strings.TrimPrefix(err.Error(), "secureenclave: "))
+		}
+		return storeEncl, nil
 	}
 	if pkcs11Wanted(sf) && clientkey.HasPKCS11 {
 		fmt.Fprintf(stderr, "port49 login: the key is the one issued_key names, on your token\n")
@@ -221,14 +250,46 @@ func issuedTarget(store string, sf *sessionFlags) (pair issuedPair, keyFile stri
 			return issuedPair{}, "", err
 		}
 		return issuedPair{storePKCS, tc, sf.issuedKey}, "", nil
+	case storeEncl:
+		label, err := seLabel(sf)
+		if err != nil {
+			return issuedPair{}, "", err
+		}
+		ref := secureenclave.Ref(label)
+		tc, err := userconfig.IssuedTokenPaths(sf.broker, ref)
+		if err != nil {
+			return issuedPair{}, "", err
+		}
+		return issuedPair{storeEncl, tc, ref}, "", nil
 	}
 	return issuedPair{storeFile, fc, fk}, fk, nil
+}
+
+// seLabel is the label of this Mac's Secure Enclave key for sf's broker
+// (decision 45 ruling 7): port49.<host>_<port>.<machine>, <machine> the
+// first 8 hex digits of SHA-256 of the host UUID, so Macs sharing a home
+// directory keep a key and a certificate each.
+func seLabel(sf *sessionFlags) (string, error) {
+	fc, _, err := userconfig.IssuedPaths(sf.broker)
+	if err != nil {
+		return "", err
+	}
+	host, err := seHostID()
+	if err != nil {
+		return "", err
+	}
+	label := "port49." + strings.TrimSuffix(filepath.Base(fc), ".pem") + "." + host
+	if err := secureenclave.CheckLabel(label); err != nil {
+		return "", fmt.Errorf("the broker's host is too long for a Secure Enclave label: %w", err)
+	}
+	return label, nil
 }
 
 // newIssuedKey is the sign-in's key in store: for "file" an ECDSA P-256 key
 // generated in memory, written with the certificate as today; for "tpm" a key
 // generated in tpmPath; for "pkcs11" the key sf.issuedKey names, which the
-// user made once on the token and port49 only opens and signs with. The func
+// user made once on the token and port49 only opens and signs with; for
+// "secure_enclave" this Mac's key for the broker, made the first time. The func
 // is the key file's bytes to keep with the certificate, nil for a token's
 // key. A TPM key is generated to a name of its own beside tpmPath, read, and
 // removed, so a login that fails after it leaves no key file and the one
@@ -279,6 +340,23 @@ func newIssuedKey(store string, sf *sessionFlags, tpmPath string) (crypto.Signer
 			return nil, nil, fmt.Errorf("issued_key %s: %s; port49 never makes a key on a token: make one with the "+
 				"token's own tool (for a YubiKey, `ykman piv keys generate`) and name it with issued_key",
 				pkcs11Name(sf.issuedKey), unprefixed(err))
+		}
+		return k, nil, nil
+	case storeEncl:
+		// The key labeled for this broker and Mac, made once when no key has
+		// the label and kept across sign-ins, as a token's is: port49 never
+		// removes one, so no failed sign-in costs the held pair its key. Any
+		// other failure is a refusal, never another store (ruling 6).
+		label, err := seLabel(sf)
+		if err != nil {
+			return nil, nil, fmt.Errorf("issued_key_store is secure_enclave, and %v", err)
+		}
+		k, err := openSE(label)
+		if errors.Is(err, secureenclave.ErrNotFound) {
+			k, err = generateSE(label)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("issued_key_store is secure_enclave, and the Secure Enclave refused: %w", err)
 		}
 		return k, nil, nil
 	}
@@ -337,7 +415,8 @@ func tokenTarget(sf *sessionFlags) (string, error) {
 }
 
 // pickHeldPair is the pair this login looks for. When issued_key_store names a
-// store, only that store's pair (decision 45 ruling 7, amended): a named tpm
+// store, only that store's pair (decision 45 ruling 7, amended; the Secure
+// Enclave's is never looked for under auto, which never picks it): a named tpm
 // host with no TPM pair of its own is not run on the file .key, which is the
 // operator's choice of hardware bypassed, and a pair that is not there reads
 // as no held pair (a sign-in). Under `auto`, the pair of the store `auto`
@@ -383,7 +462,14 @@ func pickHeldPair(sf *sessionFlags) (issuedPair, error) {
 			return issuedPair{store: storePKCS}, nil
 		}
 		return tokenPair()
-	case storeFile, storeEncl:
+	case storeEncl:
+		// Off macOS there is no label to look for: no held pair, and the
+		// sign-in refuses, naming macOS.
+		if p, _, err := issuedTarget(storeEncl, sf); err == nil {
+			return p, nil
+		}
+		return issuedPair{store: storeEncl}, nil
+	case storeFile:
 		return issuedPair{storeFile, fc, fk}, nil
 	}
 	// The pair of the store `auto` would choose now comes first, or a host

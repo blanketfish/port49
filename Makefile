@@ -1,4 +1,4 @@
-.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static evidence image compose-smoke
+.PHONY: test test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -11,6 +11,21 @@ build:
 # system's dynamic loader. Written beside, never over, bin/port49.
 build-client:
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+
+# The Secure Enclave backend and the L63 spike, built and vetted for macOS
+# without a Mac (decision 45 ruling 6): the client build of port49 and the
+# spike for arm64 and amd64, CGO_ENABLED=0, then go vet over every package
+# for darwin in both builds. Nothing here runs them; a Mac user does.
+DARWIN_ARCHES = arm64 amd64
+
+check-darwin:
+	@set -e; for a in $(DARWIN_ARCHES); do \
+	  echo "darwin/$$a"; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go build -tags hwkey_dlopen -o /dev/null ./cmd/port49; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go build -o /dev/null ./tests/spike/secureenclave; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go vet ./...; \
+	  CGO_ENABLED=0 GOOS=darwin GOARCH=$$a go vet -tags hwkey_dlopen ./...; \
+	done
 
 # The static build (the image's, decision 45 ruling 22) must stay static: a
 # purego import outside a hwkey_dlopen file would make it need a loader that

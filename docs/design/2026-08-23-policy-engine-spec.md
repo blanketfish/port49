@@ -8980,7 +8980,12 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   first 8 hex digits of SHA-256 of `/etc/machine-id`: on a bastion pool whose home directories are
   shared, each host keeps its own pair, another host's reads as no held pair (a sign-in), never as
   an error, and is never overwritten. A held pair is found by either key file. *Amended
-  2026-10-13:* when `issued_key_store` is named (`file`, `tpm`, `pkcs11`), only that store's pair is
+  2026-10-13:* a Secure Enclave pair is the key labeled `port49.<host>_<port>.<machine>`, where
+  `<machine>` is the first 8 hex digits of SHA-256 of the Mac's host UUID (`gethostuuid`; macOS has
+  no `/etc/machine-id`), and its certificate `~/.port49/issued/<host>_<port>.<k>.pem`, `<k>` from
+  its `secure-enclave:label=` reference as for a token's; the key is made once, when no key has the
+  label, and kept across sign-ins as a token's is, never removed by port49. *Amended
+  2026-10-13:* when `issued_key_store` is named (`file`, `tpm`, `pkcs11`, `secure_enclave`), only that store's pair is
   looked for: a named `tpm` host with no TPM pair signs in once, saying "no TPM key for this machine
   yet", and never runs on the file `.key`; `auto` accepts the file `.key`.
 - **8. The key unplugged.** A signing error the backend reads as the key gone (PKCS#11

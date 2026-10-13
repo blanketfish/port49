@@ -1,5 +1,6 @@
 // Package clientkey opens the client key a reference names: a path to a key
-// file, tpm:file= or tpm:handle= for a TPM, pkcs11: for a token. It is a
+// file, tpm:file= or tpm:handle= for a TPM, pkcs11: for a token,
+// secure-enclave:label= for a Mac's Secure Enclave (experimental). It is a
 // package of its own, not hwkey: the backends import hwkey for State and the
 // errors, so an opener in hwkey importing them would be an import cycle (plan
 // 9c, re-review R3).

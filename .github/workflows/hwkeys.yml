@@ -37,3 +37,14 @@ jobs:
       # state directory, say), before twenty minutes of tests say it slowly.
       - run: swtpm --version && d=$(mktemp -d) && timeout 5 swtpm socket --tpm2 --tpmstate dir=$d --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init --daemon && pkill swtpm
       - run: make test-hw
+  # The Secure Enclave backend and its L63 spike, cross-compiled and vetted
+  # for macOS (arm64 and amd64, CGO_ENABLED=0, the client build's tag): no
+  # Mac runs them here (decision 45 ruling 6).
+  darwin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: make check-darwin

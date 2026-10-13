@@ -4,13 +4,13 @@ package clientkey
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
+	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
@@ -22,10 +22,19 @@ const HasPKCS11 = true
 const maxPINSource = 64
 
 func openToken(ref string, pin []byte) (hwkey.Key, error) {
-	if strings.HasPrefix(ref, "secure-enclave:") {
+	if strings.HasPrefix(ref, secureenclave.RefPrefix) {
+		// A Secure Enclave key takes no PIN. Experimental and opt-in (ruling
+		// 6): reached only by this reference, and any failure is a refusal.
 		clear(pin)
-		return nil, errors.New("clientkey: secure-enclave: keys arrive with plan 9c's Task 14, behind its gate; " +
-			"this build cannot open one yet")
+		label, err := secureenclave.ParseRef(ref)
+		if err != nil {
+			return nil, fmt.Errorf("clientkey: %w", err)
+		}
+		s, err := secureenclave.Open(label)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
 	}
 	u, err := pkcs11.ParseURI(ref)
 	if err != nil {
