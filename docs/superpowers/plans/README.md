@@ -5964,8 +5964,11 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   since the last success (`CKF_USER_PIN_COUNT_LOW`) or one try left (`CKF_USER_PIN_FINAL_TRY`), a
   PIN read from `pin-source` is not sent: the agent's start and `port49 workload` refuse, saying
   tries are low. A wrong file on a timer would otherwise block the token in three runs, every key on
-  it with it. Fix the file, then a person runs `port49 login` and types the PIN once at a terminal,
-  which a success resets; `ykman piv info` shows the tries left. A typed PIN is tried as before.
+  it with it. Fix the file, then a person runs `port49 login` at a terminal: with a terminal it
+  asks the PIN there instead of reading the file (one try, zeroed, sent once), and a typed success
+  resets the flag; without one it refuses as before. `ykman piv info` shows the tries left. A typed
+  PIN is tried as before. A token whose tries state cannot be read is not tried either: the run is
+  refused, no try is spent, and it says to run again.
   Whether libykcs11 sets these flags is unmeasured (provisional on L60); a module that does not
   leaves the guard silent and each run spends one try.
 - **A blocked PIN.** `CKR_PIN_LOCKED`, or the token's own flag, means the PIN is blocked; `port49

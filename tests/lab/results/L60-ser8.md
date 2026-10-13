@@ -94,6 +94,7 @@ timeout (spec decision 45 ruling 14).
   place.
 - (f) one wrong PIN: the message, one try fewer, no second attempt; whether libykcs11 sets
   `CKF_USER_PIN_COUNT_LOW` and `CKF_USER_PIN_FINAL_TRY` after it, which the `pin-source` guard
-  reads.
+  reads; and a typed success clears `CKF_USER_PIN_COUNT_LOW` (`port49 login` at a terminal asks the
+  PIN instead of reading `pin-source` while it is set, final re-review N1).
 - (g) `issued_key_store: pkcs11` on 9e: the certificate issued, nothing written to the token.
 - The cost of `GET /status` reading the attestations on each call.
