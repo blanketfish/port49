@@ -20,7 +20,10 @@ example's strict pins.
   evaluation of ssh_config. A first connection is accepted and saved by OpenSSH ("Permanently
   added 'core-sw01'"); a changed key stops at OpenSSH's own warning, before the token is sent, and
   port49 says `ssh-keygen -R core-sw01`. No pin is checked first; nothing is refused for want of
-  one.
+  one. An ssh_config that keeps no host keys (`UserKnownHostsFile /dev/null` or `none`) is refused
+  under accept-new, naming the setting, since every connection would be a first contact. The
+  askpass answers the device's prompt under the inventory name or under the alias `ssh -G`
+  reports, since ssh's prompt names the alias.
 - **Removed:** `port49 devices trust` (it now answers one line naming the change, exit 2),
   `internal/hostkeys`, `port49 ssh --known-hosts` (refused, naming `UserKnownHostsFile`). The 9a
   pins file is never read; while it exists, `port49 ssh` names it and says how to carry its keys
@@ -39,11 +42,18 @@ example's strict pins.
   --json`). It drives the CLI, so the per-login proof, the PIN, hardware keys, the broker CRL check,
   idempotency and paging stay in one implementation. Typed exceptions per code; retries only what
   the CLI says sent nothing. `port49.hostkeys` and `port49.netmiko.connect(device)`: accept-new
-  under the inventory name in the operator's own known_hosts, read through `ssh -G` and
-  `ssh-keygen -F`, shared with `port49 ssh`.
+  under the inventory name in the operator's own known_hosts, read through `ssh -G`,
+  `ssh-keygen -F` and `ssh-keygen -Q`, shared with `port49 ssh`. A key an `@revoked` line or the
+  operator's `RevokedHostKeys` names is refused, filed or presented at first contact (checked
+  before authentication); a `KnownHostsCommand`, which Paramiko cannot run, is refused, naming
+  it; a device name known_hosts would read as a pattern is refused before the mint.
 - **The Ansible lookup** (`clients/ansible`, collection `port49.client`, lookup
   `port49.client.token`) over the library. Host keys stay Ansible's own (`host_key_checking`,
-  `host_key_auto_add`), as L66 measures them.
+  `host_key_auto_add`), as L66 measures them. `network_cli` keys them by the address in
+  Ansible's inventory, not the name, and the docs say what that leaves open; the README sets
+  `HostKeyAlias={{ inventory_hostname }}` where the connection runs OpenSSH, and never
+  recommends `host_key_auto_add` under `ssh_type: paramiko`, which rewrites `~/.ssh/known_hosts`
+  without its `@revoked` and `@cert-authority` lines.
 - **Lab:** L53 and L54 stay closed (their claims columns amended); new L64 (`port49 ssh` under
   accept-new per platform, the key surviving a reload included), L65 (the Python client and
   Netmiko per platform), L66 (the Ansible lookup: mints per task, host keys per `ssh_type`).
@@ -55,10 +65,14 @@ example's strict pins.
   wraps a proof that failed, so its code survives.
 - `cmd/port49/workload.go`: `workloadJSON`, `refusedItem`.
 - `internal/userconfig`: `legacyDir` (unexported), `LegacyPinsPath`.
-- `tests/lab/hostkeyscan_test.go`: the L53 scan, moved from `internal/hostkeys` into the lab.
+- `tests/lab/hostkeyscan_test.go`: the L53 scan, moved from `internal/hostkeys` into the lab;
+  `tests/lab/hostkeyscan_unit_test.go`: its unit test, under `make lab-unit`.
 - `clients/python/src/port49/`: `_run.py` (the CLI runner), `errors.py`, `client.py`,
-  `hostkeys.py`, `netmiko.py`. Tests are stdlib `unittest` against a fake `port49` executable and
+  `hostkeys.py` (`lookup`, `valid_name`, `is_revoked`, `remember`, `hashed`), `netmiko.py`
+  (`connect`, `FirstContact`). Tests are stdlib `unittest` against a fake `port49` executable and
   fake `netmiko`; the host-key tests run the real `ssh` and `ssh-keygen`.
+  `clients/python/tests/testdata/`: `port49 workload token --format json`'s own bytes, which the
+  Go tests compare against and the Python tests are fed.
 - `clients/ansible/ansible_collections/port49/client/`: `galaxy.yml`, `meta/runtime.yml`,
   `plugins/lookup/token.py`, `tests/unit/test_token.py` (stub `ansible` modules).
 - `Makefile`: `test-python`, run by `make test`; `lab-ssh` and `lab-ansible`.
@@ -74,7 +88,8 @@ every version).
 **Spec:**
 - `docs/design/2026-08-23-policy-engine-spec.md`: §12 (`port49 ssh`, `devices trust` removed,
   `port49 token --json`, `port49 workload token --format json`), §13 (new decision 46; decision 42
-  rulings 7, 9, 10 and 14 and decision 43 ruling 24 amended), §15 (L53 and L54 claims; new L64–L66).
+  rulings 7, 8, 9, 10, 12 and 14 and decision 43 ruling 24 amended), §14 (two host-key
+  assertions), §15 (L53 and L54 claims; new L64–L66).
 - `docs/design/2026-08-21-port49-design.md` §17 (the address paragraph, "As built (plan 9a)", the
   client libraries table, the integration examples).
 - The roadmap `docs/superpowers/plans/README.md`, "Plan 9", the 9d entry; "Plan 9a — As built"
@@ -118,25 +133,41 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   "never accept a first-seen key silently for a device inventory already knows" and its "Inventory
   MAY carry a host-key fingerprint" are replaced by R2's rule.
 - **R2. `port49 ssh`'s host-key options.** After the mint, `port49 ssh` runs `ssh -G` with the
-  same `-F`, `HostName`, `-l` and `-p` it will run ssh with, and reads two settings from it:
+  same `-F`, `HostName`, `-l` and `-p` it will run ssh with, and reads three settings from it:
   - `stricthostkeychecking`: `true` (the operator's `yes`) stands as `StrictHostKeyChecking=yes`;
     every other value (`ask`, OpenSSH's default; `false`; `accept-new`) is passed as
     `StrictHostKeyChecking=accept-new`. Never `no`.
   - `hostkeyalias`: when the operator's ssh_config sets one, it stands and port49 passes none;
     otherwise port49 passes `HostKeyAlias=<device>` lowercased (OpenSSH lowercases an alias).
+    ssh's password prompt names the alias, so the askpass answers the device's prompt naming the
+    inventory name or the alias `ssh -G` reported (pre-flight I1).
+  - `userknownhostsfile`: under accept-new, when every file it names is `/dev/null` or `none`,
+    the run is refused before ssh starts, naming `UserKnownHostsFile`: such a config files
+    nothing, so every connection is a first contact and accept-new would be accept-all, silently
+    (pre-flight I7; fail closed). Under the operator's own `yes` it stands: nothing unknown is
+    accepted there, and a managed `GlobalKnownHostsFile` with no user file is a verified setup.
   Nothing else about host keys is passed: the operator's `UserKnownHostsFile`,
   `GlobalKnownHostsFile` (with any `@cert-authority` or `@revoked` lines), `KnownHostsCommand`,
-  `VerifyHostKeyDNS`, `UpdateHostKeys`, `CheckHostIP` and `HashKnownHosts` apply as they would to
-  any ssh. `ssh -G` failing is a refusal before ssh runs ("nothing was sent"). Why the alias: a key
-  filed under the inventory name meets an address added to the device in the source of truth, so
-  design §17's attack (an address that leads to the attacker's host, which takes the token and
-  replays it) fails at the key exchange for every device this operator has reached before, at no
-  cost to anyone. Why `ssh -G`: it is OpenSSH's own reading of the operator's ssh_config, Match
-  blocks included; port49 parses two lines of it and decides nothing OpenSSH does not.
+  `RevokedHostKeys`, `VerifyHostKeyDNS`, `UpdateHostKeys`, `CheckHostIP` and `HashKnownHosts`
+  apply as they would to any ssh. `ssh -G` failing is a refusal before ssh runs ("nothing was
+  sent"). These refusals come after the mint, since `ssh -G` reads the address it gives (`Match
+  host`); the token minted is unused and expires, and the docs say so (pre-flight M14). The name
+  check (R3) comes before it. Why the alias: a key filed under the inventory name meets an
+  address added to the device in the source of truth, so design §17's attack (an address that
+  leads to the attacker's host, which takes the token and replays it) fails at the key exchange
+  for every device this operator has reached before through `port49 ssh` or the Python client,
+  at no cost to anyone. Ansible's `network_cli` keys by address, so it does not hold there (R15).
+  Why `ssh -G`: it is OpenSSH's own reading of the operator's ssh_config, Match blocks included;
+  port49 parses three lines of it and decides nothing OpenSSH does not. An operator's `Host`
+  pattern matches the destination as written, case and all, and `port49 ssh`'s destination is
+  the inventory name unlowered: a `Host leaf1` block does not match a device named `Leaf1`
+  (measured on 10.2p1, pre-flight M1; the docs say so).
 - **R3. Names.** Decision 42 ruling 8 stands: a device name `port49 ssh` takes is letters, digits,
   `.`, `_` and `-`, starting with a letter or digit, 253 at most, since it is written into the
   operator's known_hosts as a host field. It moves from `hostkeys.ValidName` to `sshName` in
-  `cmd/port49/ssh.go`.
+  `cmd/port49/ssh.go`, with its test (`TestSSHName`). The Python client keeps the same rule
+  (`port49.hostkeys.valid_name`) before any mint and before any known_hosts write (pre-flight I6):
+  it writes the name into the operator's known_hosts too.
 - **R4. `port49 devices trust` is removed, not kept as an admin tool.** The reasons weighed for
   keeping it: (a) verified first contact, which OpenSSH already gives a shop that wants it (a
   managed `GlobalKnownHostsFile`, `@cert-authority`, or `ssh-keyscan` plus `ssh-keygen -lf` and
@@ -155,14 +186,20 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   ruling 6's ownership walk, and a group-writable `~/.config` (Ubuntu's 0775) stops nothing.
 - **R6. The OpenSSH floor** stays 8.5 unless Task 2's gate G1 finds an 8.5p1 that, under
   `accept-new`, accepts a key of another type for an alias that already holds one; then the floor
-  rises to the earliest version Task 2 measured refusing it. Measured while this plan was written:
-  OpenSSH 10.2p1 refuses it as a changed key ("Host key for leaf1 has changed and you have
-  requested strict checking"), so an impostor that offers only another key type does not pass.
+  rises to the earliest version Task 2 measured refusing it. G1 is measured in the attack's
+  shape: a server that offers only Ed25519, against an ECDSA key filed under the alias, and a
+  client with OpenSSH's default algorithms (pre-flight I8; the client-side form, the client
+  forced to `HostKeyAlgorithms=ssh-ed25519`, is kept as G1b). Measured while this plan was
+  written and again at pre-flight, on OpenSSH 10.2p1, both forms refuse it as a changed key
+  ("Host key for leaf1 has changed and you have requested strict checking"), so an impostor that
+  offers only another key type does not pass.
 - **R7. The changed-key message.** A 255 before the token was sent, with ssh's "Host key
   verification failed", says the key filed under the name is not the one the address presents —
   either the device's key changed or the address inventory gives is not the device — and to verify
   the key on the console (L53's commands) and run `ssh-keygen -R <name>`. `<name>` is the alias
-  port49 passed, or the operator's own as `ssh -G` printed it.
+  port49 passed, or the operator's own as `ssh -G` printed it. Under the operator's own
+  `StrictHostKeyChecking yes` the same 255 may mean no key is filed at all, so the message says
+  that too: add the device's key under `<name>` after checking it on the console (pre-flight M4).
 - **R8. The Python library drives the port49 CLI**, never the agent's socket or the broker's API
   directly. Why: the CLI already carries the per-login proof (a touch, an `idp_mfa` sign-in at the
   terminal), the PIN, hardware keys, the broker CRL check, the `Idempotency-Key`, paging and the
@@ -199,28 +236,57 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   caller's as it comes, byte by byte, so "touch your key now" and a sign-in prompt reach the person,
   and keeps its last 2 KiB for an error's text.
 - **R13. Python host keys: accept-new under the inventory name, in OpenSSH's files, read with
-  OpenSSH's tools.** `port49.hostkeys.lookup` runs `ssh -G` (the same `-F` the caller names,
-  `HostName`, `-p`) and reads `hostkeyalias`, `stricthostkeychecking`, `userknownhostsfile`,
-  `globalknownhostsfile` and `hashknownhosts`; the name is the operator's alias, else the device
-  lowercased, as R2. It runs `ssh-keygen -F <name> -f <file>` on each existing file and keeps the
-  plain keys and the marker lines (`@cert-authority`, `@revoked`). Then:
-  - plain keys found: Netmiko connects with them alone, written under the address (or
-    `[address]:port`) to a private temporary file, and `ssh_strict=True`, so a changed key and a key
-    of another type are refused before authentication (as OpenSSH 10.2p1 refuses the second);
-  - none found, no marker line, and the operator's StrictHostKeyChecking not `yes`: Netmiko
-    connects with Paramiko's `AutoAddPolicy` (`ssh_strict=False`), and the key the device presented
-    is appended under the name to the first `userknownhostsfile`, hashed when `hashknownhosts` is
-    `yes`, in one `O_APPEND` write, and said on stderr as OpenSSH says it;
-  - none found and a marker line matches, or `yes`: refused before connecting, naming why. Paramiko
-    cannot check a host certificate or a revocation list, so a shop's `@cert-authority` is never
-    weakened to a first-contact accept by this client.
-  `port49 ssh` and the Python client share the entry: whichever reaches a device first files its
-  key, and the other verifies against it.
+  OpenSSH's tools.** `port49.netmiko.connect` checks the device name first, before any mint,
+  against R3's set (`port49.hostkeys.valid_name`), naming the rule as `port49 ssh` does. After the
+  mint, `port49.hostkeys.lookup` runs `ssh -G` as `port49 ssh` does (the caller's `-F`, `HostName`
+  double-quoted with each `%` doubled, `-l` the minted username, `-p`; pre-flight M6) and reads
+  `hostkeyalias`, `stricthostkeychecking`, `userknownhostsfile`, `globalknownhostsfile`,
+  `hashknownhosts`, `revokedhostkeys` and `knownhostscommand`; the name is the operator's alias,
+  else the device lowercased, as R2. Before anything connects it refuses (`HostKeyError`):
+  - a name outside R3's set (`device_name`), as `connect` did; `lookup` checks it again, since it
+    is public;
+  - a `KnownHostsCommand` other than `none` (`host_key_uncheckable`, naming the setting and `port49
+    ssh`): the client cannot run it as ssh does, and reading "nothing known" past it would accept
+    a key OpenSSH refuses (pre-flight C1; fail closed);
+  - under accept-new, a `UserKnownHostsFile` of only `/dev/null` or `none` (`host_keys_not_kept`,
+    R2's rule; pre-flight I7).
+  It runs `ssh-keygen -F <name> -f <file>` on each existing file and sorts the lines it prints:
+  plain keys, `@cert-authority` lines, and the keys `@revoked` lines name. A plain key that an
+  `@revoked` line names (same type and base64), or that `ssh-keygen -Q -f <RevokedHostKeys>`
+  reports revoked (exit 1), is dropped, always, not only when no other key is filed: that is how
+  a managed `GlobalKnownHostsFile` revokes a compromised device key that users' own files still
+  hold from accept-new (pre-flight C1). If that leaves none where some were filed, it refuses
+  (`host_key_revoked`). A `RevokedHostKeys` that `ssh-keygen -Q` cannot read (measured on 10.2p1:
+  exit 255 for a file that is not a KRL) is refused (`host_key_uncheckable`), never passed. Then:
+  - keys left: Netmiko connects with them alone, written under the address (or
+    `[address]:port`) to a private temporary file, and `ssh_strict=True`. Paramiko, holding a key
+    for the address, raises `BadHostKeyException` for a changed key and for a key of another type
+    alike (Paramiko 4.0.0 `client.py:461-466`), before authentication;
+  - none, no `@cert-authority` line, and the operator's StrictHostKeyChecking not `yes`: a first
+    contact. Netmiko is built with `auto_connect=False`, its `key_policy` is set to port49's
+    `FirstContact`, and the connection is opened (`_open`, what `auto_connect=True` runs).
+    Paramiko calls `FirstContact.missing_host_key` with the presented key after the key exchange
+    and before authentication (`client.py:455-460`; Netmiko applies `key_policy` in
+    `_build_ssh_client`). A key an `@revoked` line or `RevokedHostKeys` revokes is refused there
+    (`host_key_revoked`); any other is appended under the name to the first kept
+    `userknownhostsfile`, hashed when `hashknownhosts` is `yes`, in one `O_APPEND` write, and said
+    on stderr as OpenSSH says it, before the token is presented (pre-flight C1);
+  - none and an `@cert-authority` line matches, or `yes`: refused before connecting, naming why.
+    Paramiko cannot check a host certificate, so a shop's `@cert-authority` is never weakened to a
+    first-contact accept by this client (Q6). An `@revoked` line alone is no longer such a
+    refusal: its keys are checked against the presented one, as above.
+  A refusal after the mint leaves its token unused, to expire; the README says so (pre-flight
+  M14). `connect` refuses `ssh_config_file`, `sock` and `auto_connect` among the caller's Netmiko
+  arguments, since the first two could steer Paramiko to another host than the address checked
+  (pre-flight M16). `port49 ssh` and the Python client share the entry: whichever reaches a
+  device first files its key, and the other verifies against it. The Paramiko claims are
+  provisional on L65 until it closes (pre-flight M9).
 - **R14. Packaging, floor and tests.** `clients/python`: a `pyproject.toml` (setuptools, `name =
   "port49"`, `requires-python = ">=3.10"`, no runtime dependency, extra `netmiko = ["netmiko>=4.7"]`),
   sources in `src/port49/`. Python 3.10 is the floor: Ubuntu 22.04's, and ansible-core 2.16's
   controller floor. Tests are stdlib `unittest` (no pytest to install), run by `make test-python`,
-  which `make test` runs; a missing `python3` fails `make test`. A test parses every source with
+  which `make test` runs; a missing `python3`, or one below 3.10, fails `make test` with one line
+  naming the floor, before any test is discovered (Q9; pre-flight M12). A test parses every source with
   `ast.parse(..., feature_version=(3, 10))`. Not published to PyPI until go-public (plan 12).
 - **R15. The Ansible lookup.** Collection `port49.client` (`clients/ansible/ansible_collections/
   port49/client/`, `requires_ansible: ">=2.16"`), lookup `port49.client.token`. Terms are port49
@@ -230,8 +296,25 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   words, never a token. The README's pattern mints once per host per play: a `set_fact` with
   `no_log: true` in `pre_tasks`, since a lookup in `ansible_password` is templated at each task
   (L66 measures how many mints that costs). Host keys are Ansible's own; the README carries L66's
-  settings per `ssh_type`. Ansible keys host keys by `ansible_host`, which comes from Ansible's
-  inventory, not port49's.
+  settings per `ssh_type`, provisional on L66 until it closes (pre-flight M9). Ansible's
+  `network_cli` keys host keys by `ansible_host`, the address from Ansible's inventory, not by
+  the name (ansible.netcommon 8.7.0 `network_cli.py:688-697, 827-848`). When that inventory comes
+  from the same source of truth (a NetBox dynamic inventory, the usual case), an address added
+  to a device is a first contact for Ansible, and under `host_key_auto_add` design §17's attack is
+  open there: the impostor's key is accepted and the token presented (pre-flight I4). The docs
+  say so plainly, in decision 46 ruling 15, design §17 and the README. The README configures
+  `HostKeyAlias={{ inventory_hostname }}` wherever the connection runs OpenSSH
+  (`ansible.builtin.ssh`: `ansible_ssh_extra_args: "-o HostKeyAlias={{ inventory_hostname }}"`),
+  which keys it by name as `port49 ssh` does; `network_cli`'s address keying (`paramiko`, and
+  `libssh` unless L66 (e) finds it honours an alias) is documented as the gap it is. The README
+  never recommends `host_key_auto_add` with `ssh_type: paramiko`: network_cli's paramiko
+  `close()` writes a new `~/.ssh/known_hosts` from Paramiko's parsed entries and renames it over
+  the old (`network_cli.py:827-848, 866-900`), and Paramiko's parser drops `@revoked` and
+  `@cert-authority` lines and comments (`hostkeys.py:339-366`), which would silently weaken every
+  later `port49 ssh` and Python login (pre-flight I5). It recommends the path that leaves the
+  file intact (`libssh`, which appends, as L66 (c) measures). For devices that ask for
+  `hardware_key_touch`, the README says to run `port49 token <one such device>` before the play,
+  so `reuse_for` covers the forks rather than each fork asking for a touch (pre-flight M15).
 - **R16. The Netmiko example** moves into the library as `port49.netmiko.connect(device)`;
   `examples/netmiko/` keeps a README and a twelve-line script that uses it.
 - **R17. The lab.** L53 stays closed: its console commands are what the docs give for checking a
@@ -288,6 +371,15 @@ Under the standing grant (security first, keep moving), each on reasoning unless
    must never carry the token or the CLI's stdout. Tests: Task 7
    (`test_no_token_in_repr_errors_or_a_bad_answer`), Task 10
    (`test_errors_never_carry_the_token`).
+6. **A revoked key.** A device key that an `@revoked` line or the operator's `RevokedHostKeys`
+   names must never get the token from the Python client: filed beside the user's accept-new
+   entry, or presented at first contact (refused before authentication). A `KnownHostsCommand`
+   the client cannot run is refused, not read as "nothing known". Tests: Task 9
+   (`test_a_revoked_filed_key_is_refused_before_connecting`, `test_a_krl_revokes_a_filed_key`,
+   `test_known_hosts_command_is_refused`, `test_a_revoked_key_at_first_contact_is_refused_before_auth`).
+7. **An ssh_config that keeps no host keys.** `UserKnownHostsFile /dev/null` under accept-new is
+   accept-all; both clients refuse it, naming the setting. Tests: Task 3
+   (`TestAKnownHostsFileOfDevNullIsRefused`), Task 9 (`test_a_known_hosts_file_of_dev_null_is_refused`).
 
 ---
 
@@ -297,10 +389,12 @@ Under the standing grant (security first, keep moving), each on reasoning unless
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md`: §12's `port49 devices trust` paragraph
   (~6289–6298) and `port49 ssh` paragraph (~6300–6306); after `**`port49 workload token … --scope
   NAME`**` (~6308) two new paragraphs; decision 42's heading note (~8258–8262) and rulings 7
-  (~8348), 9 (~8363), 10's command-line bullet (~8392), 12 (~8437), 14 (~8456); decision 43 ruling
-  24's "Where" bullet (~8732–8735); §13 a new decision 46 after decision 45's ruling 26, before the
-  `---` above `## 14.` (~9273); §15's L53 and L54 rows' second column (~9993–9994), three rows
-  after L63's (~10003), and a bullet after the `**L60**–**L63**` bullet (~11941–11948).
+  (~8348), 8 (~8357), 9 (~8363), 10's command-line bullet (~8392), 12 (~8437), 14 (~8456); decision
+  43 ruling 24's "Where" bullet (~8732–8735); §13 a new decision 46 after decision 45's ruling 26,
+  before the `---` above `## 14.` (~9273); §14 a "**Host keys**" block after the "**Hardware keys
+  and per-login MFA**" block's last bullet (~9903–9904), before its `---`; §15's L53 and L54 rows'
+  second column (~9993–9994), three rows after L63's (~10003), and a bullet after the
+  `**L60**–**L63**` bullet (~11941–11948).
 - Modify: `docs/design/2026-08-21-port49-design.md` §17: the paragraph from "**The address is a
   fact from the source of truth**" through "As built (plan 9a; … rulings 7–10)" and its three
   bullets (~2072–2093); the client libraries table (~2221–2226) and the paragraph after it; the
@@ -327,10 +421,12 @@ token through the agent and logs in with the operator's OpenSSH (8.5 or later).
   `no`) and the device's inventory name as `HostKeyAlias` (unless the operator's ssh_config sets
   one). A first connection is accepted and saved by ssh; a changed key, or a key of another type
   under a name that holds one, stops ssh before the token is sent, and `port49 ssh` names
-  `ssh-keygen -R`. Why it matters: the token is the device's password for its lifetime, and a host
-  that takes it can replay it to the real device. The window this leaves is the first contact,
-  per device and per operator; a shop that wants that verified too uses a managed
-  `GlobalKnownHostsFile` or `@cert-authority`, which apply unchanged.
+  `ssh-keygen -R`. An ssh_config that keeps no host keys (`UserKnownHostsFile /dev/null` or
+  `none`) is refused under accept-new, naming the setting. Why it matters: the token is the
+  device's password for its lifetime, and a host that takes it can replay it to the real device.
+  The window this leaves is the first contact, per device and per operator; a shop that wants
+  that verified too uses a managed `GlobalKnownHostsFile` or `@cert-authority`, which apply
+  unchanged.
 - **The token** goes only to the device's own password prompt, once, through ssh's askpass.
 - **Exit and warnings.** It exits with ssh's status, and warns on the terminal within
   `session.ceiling_warning` of the device's ceiling (decision 42 rulings 10 and 11).
@@ -359,7 +455,9 @@ answered, on exit 75 and 77 too (§13 decision 46 ruling 10).
   inventory and the Python and Ansible clients." add: "Plan 9d (decision 46) made host keys
   OpenSSH's: rulings 7 and 9 are withdrawn, ruling 14's inventory fingerprint is not built, and
   ruling 10's host-key options are replaced." Prefix rulings 7 and 9 with "**Withdrawn by decision
-  46 ruling 1.**"; in ruling 10, replace the first bullet under "**The command line.**" ("the pinned
+  46 ruling 1.**"; in ruling 8, after "`port49 ssh` and `port49 devices trust`" add "(the command
+  is removed by decision 46; the rule stands for `port49 ssh` and the Python client, decision 46
+  ruling 3)"; in ruling 10, replace the first bullet under "**The command line.**" ("the pinned
   file, `HostKeyAlias`, …") with "host keys as decision 46 ruling 2 sets them (plan 9d), replacing
   9a's pinned file;"; in ruling 12, add "L64 re-measures `port49 ssh`'s host keys under decision 46
   (§15)."; prefix ruling 14 with "**Replaced by decision 46** (no inventory host keys; the clients
@@ -387,11 +485,20 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   `HostName`, `-l` and `-p` it will run ssh with. `stricthostkeychecking true` (the operator's
   `yes`) stands; any other value is passed as `StrictHostKeyChecking=accept-new`; `no` is never
   passed. An operator's `HostKeyAlias` stands; otherwise `HostKeyAlias` is the device's inventory
-  name, lowercased. Nothing else about host keys is passed. `ssh -G` failing refuses the run before
-  ssh starts. The alias files a key under the name, so an address added to a device in the source
-  of truth meets the key already known under its name, and design §17's replay attack fails at the
-  key exchange for every device the operator has reached.
-- **3. Names.** Decision 42 ruling 8 stands: the name is written into the operator's known_hosts.
+  name, lowercased. ssh's prompt names the alias, so the askpass answers the device's prompt
+  naming the inventory name or the alias `ssh -G` reported. Under accept-new, a
+  `UserKnownHostsFile` naming only `/dev/null` or `none` is refused, naming the setting: it files
+  nothing, so every connection would be a first contact (fail closed, never a silent
+  accept-all); under the operator's `yes` it stands. Nothing else about host keys is passed.
+  `ssh -G` failing refuses the run before ssh starts. These refusals follow the mint, since `ssh
+  -G` reads its address; that token is unused and expires. The alias files a key under the name,
+  so an address added to a device in the source of truth meets the key already known under its
+  name, and design §17's replay attack fails at the key exchange for every device the operator
+  has reached through `port49 ssh` or the Python client (ruling 13). It does not hold for
+  Ansible's `network_cli`, which keys host keys by address (ruling 15).
+- **3. Names.** Decision 42 ruling 8 stands, for `port49 ssh` and for the Python client, which
+  checks it before any mint and any known_hosts write: the name is written into the operator's
+  known_hosts.
 - **4. `port49 devices trust` is removed.** Kept as an admin tool only if a reason survived; none
   did: verified first contact is OpenSSH's (above, or `ssh-keyscan` and `ssh-keygen -lf` against
   L53's console commands), pre-seeding keys per device is the toil ruling 1 rules out, and its
@@ -404,12 +511,15 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   group-writable `~/.config` stops nothing (plan 9b pre-flight 2, m5).
 - **6. The OpenSSH floor** stays 8.5 unless an 8.5p1 under `accept-new` accepts a key of another
   type for an alias that holds one; then it rises to the earliest version measured refusing it
-  (data: `tests/ssh-compat/2026-10-13-openssh-accept-new.md`; OpenSSH 10.2p1 refuses it as a
-  changed key).
+  (data: `tests/ssh-compat/2026-10-13-openssh-accept-new.md`, a server offering only Ed25519
+  against an ECDSA key filed under the alias, the client on its default algorithms; OpenSSH
+  10.2p1 refuses it as a changed key).
 - **7. A changed key** ends ssh with exit 255 before the token is sent; `port49 ssh` says the key
   filed under the name is not the one the address presents, either because the device's key
   changed or because the address is not the device, and to verify the key on the console (§15 L53)
-  and run `ssh-keygen -R <name>`.
+  and run `ssh-keygen -R <name>`. Under the operator's `StrictHostKeyChecking yes` it says too
+  that no key may be filed under the name, and to add the device's key after checking it on the
+  console.
 - **8. The Python library drives the port49 CLI**, never the agent's socket or the broker's API:
   the CLI carries the per-login proof, the PIN, hardware keys, the broker CRL check, the
   `Idempotency-Key`, paging and the deadline retry, and a second client would be a second
@@ -428,17 +538,30 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
 - **12. The person's terminal.** The library passes stdin through for a person and none for a
   workload, and forwards the CLI's stderr as it comes, so a touch or sign-in prompt is seen.
 - **13. Python host keys** are accept-new under the name `port49 ssh` uses, in the operator's own
-  files, read through `ssh -G` and `ssh-keygen -F`. A key known under the name is the only key
-  accepted (a changed key, or another type, is refused before authentication); none known, a first
-  contact is accepted and appended under the name, hashed when `HashKnownHosts` is `yes`; a
-  `@cert-authority` or `@revoked` line matching the name with no plain key, or the operator's
-  `StrictHostKeyChecking yes` with none, is refused before connecting, since Paramiko checks
-  neither certificates nor revocations.
+  files, read through `ssh -G`, `ssh-keygen -F` and `ssh-keygen -Q`. The device name is checked
+  against decision 42 ruling 8 before the mint. Refused before connecting: a `KnownHostsCommand`,
+  which the client cannot run as ssh does (fail closed, naming it); under accept-new, a
+  `UserKnownHostsFile` that keeps nothing (ruling 2); a device whose every filed key an
+  `@revoked` line or the operator's `RevokedHostKeys` revokes, or whose `RevokedHostKeys`
+  `ssh-keygen -Q` cannot read. A revoked key is dropped always, beside any other filed key. A key
+  known under the name is the only key accepted (a changed key, or another type, is refused
+  before authentication, *provisional on L65*); none known, a first contact's key is checked
+  against the revocations and appended under the name, hashed when `HashKnownHosts` is `yes`,
+  after the key exchange and before authentication (*provisional on L65*); an `@cert-authority`
+  line matching the name with no plain key, or the operator's `StrictHostKeyChecking yes` with
+  none, is refused before connecting, since Paramiko cannot check a host certificate. A refusal
+  after the mint leaves its token unused.
 - **14. Packaging.** `clients/python` (import `port49`, Python 3.10+, no runtime dependency; the
-  `netmiko` extra), stdlib `unittest`, run by `make test`. Not published before go-public.
+  `netmiko` extra), stdlib `unittest`, run by `make test`, which refuses a Python below 3.10 by
+  name. Not published before go-public.
 - **15. The Ansible lookup** `port49.client.token`, in collection `port49.client` (ansible-core
   2.16+), over the library; person mode by default, workload mode with `broker`, `broker_ca`,
-  `cert` and `key`. Host keys are Ansible's own (§15 L66).
+  `cert` and `key`. Host keys are Ansible's own (§15 L66), and `network_cli` keys them by
+  `ansible_host`, the address in Ansible's inventory: there an address added to a device is a
+  first contact, and design §17's attack is open under `host_key_auto_add`. The README says so,
+  sets `HostKeyAlias={{ inventory_hostname }}` where the connection runs OpenSSH, and never
+  recommends `host_key_auto_add` with `ssh_type: paramiko`, which rewrites `~/.ssh/known_hosts`
+  without its `@revoked` and `@cert-authority` lines (*provisional on L66*).
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
@@ -453,9 +576,9 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   9a's command line, which decision 46 replaced: L64 (c) and (d)". Add after L63's row:
 
 ```markdown
-| **L64** | `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and what ssh files under the inventory name (the key type); (b) after a reload with the configuration saved, the device seen down and back: whether `port49 ssh` logs in again with no host-key warning, the filed key still the device's; (c) the entry under the name replaced by another key of the same type: ssh refuses before any TACACS+ exchange, the token never presented, exit 255, `port49 ssh` naming `ssh-keygen -R`; (d) the entry replaced by a key of another type only: the same. Also recorded per platform: the method ssh used and the askpass asks (L54's cells, re-run under the new command line). | §13 decision 46 rulings 2, 6 and 7 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
-| **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
-| **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
+| **L64** | `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the inventory name, before and after the login (its key types: `UpdateHostKeys`, on by default, may file more after authentication); (b) after a reload with the configuration saved, the device seen down and back: whether `port49 ssh` logs in again with no host-key warning, the filed key still the device's; (c) the entry under the name replaced by another key of the same type: ssh refuses before any TACACS+ exchange, the token never presented, exit 255, `port49 ssh` naming `ssh-keygen -R`; (d) the entry replaced by a key of another type only: the same. Also recorded per platform: the method ssh used and the askpass asks (L54's cells, re-run under the new command line). | §13 decision 46 rulings 2, 6 and 7 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
+| **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s; (f) the device's own key named by an `@revoked` line beside the filed entry, and then, from an empty known_hosts, at first contact: refused before authentication, no TACACS+ exchange, the token never presented, nothing filed. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
+| **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; and, per `ssh_type`, the known_hosts file's comments, `@revoked` and `@cert-authority` lines before and after the run (whether the file is appended to or rewritten without them); (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token; (e) an address changed in Ansible's inventory for a device reached before, leading to another host: for `libssh` and `paramiko` (and `libssh` with a `HostKeyAlias` in `ansible_libssh_config_file`), and for `ansible.builtin.ssh` with `-o HostKeyAlias={{ inventory_hostname }}`, whether the other host's key is auto-added and whether the token is presented to it. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | open |
 ```
 
   After the `**L60**–**L63**` bullet add:
@@ -465,13 +588,30 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   - **L64**: L53 measured the RSA key an `x/crypto/ssh` scan negotiates; OpenSSH's defaults may
     accept an Ed25519 or ECDSA key on EOS and Junos, whose survival across a reload nobody
     measured, and a key that changes at every reload would stop every operator's `port49 ssh`.
-  - **L65**: Paramiko negotiates host keys by its own preferences; that it is refused before
-    authentication under the name is decision 46 ruling 13's claim.
-  - **L66**: how often Ansible templates a lookup in a connection variable, and what
-    `host_key_auto_add` does per `ssh_type`, are Ansible's behaviour, not documentation's.
+  - **L65**: Paramiko negotiates host keys by its own preferences; that a changed, other-type or
+    revoked key is refused before authentication is decision 46 ruling 13's claim.
+  - **L66**: how often Ansible templates a lookup in a connection variable, what
+    `host_key_auto_add` does to the known_hosts file per `ssh_type`, and what an address moved in
+    Ansible's inventory meets, are Ansible's behaviour, not documentation's.
 ```
 
-- [ ] **Step 7: Design §17.** Replace the paragraph beginning "**The address is a fact from the
+- [ ] **Step 7: §14.** After the "**Hardware keys and per-login MFA**" block's last bullet ("**The
+  broker CRL**: …"), before the `---`, add (pre-flight M18):
+
+```markdown
+**Host keys (decision 46)**
+
+- **Never `no`**: whatever the operator's ssh_config says, `port49 ssh` passes
+  `StrictHostKeyChecking=accept-new`, or the operator's own `yes`, never `no`; under accept-new a
+  `UserKnownHostsFile` of only `/dev/null` or `none` is refused before ssh starts, and so is it by
+  the Python client.
+- **The token unsent on a changed key**: a host presenting another key than the one filed under
+  the device's name, of the same type or another, never sees the token, from `port49 ssh` or the
+  Python client; nor does a key an `@revoked` line or `RevokedHostKeys` names, filed or presented
+  at first contact, from the Python client.
+```
+
+- [ ] **Step 8: Design §17.** Replace the paragraph beginning "**The address is a fact from the
   source of truth**" with:
 
 ```markdown
@@ -485,7 +625,10 @@ OpenSSH's job (policy engine spec §13 decision 46): `port49 ssh` runs the opera
 against the operator's own known_hosts, accepting a key at first contact and refusing a changed
 one (`StrictHostKeyChecking=accept-new`), with the key filed under the device's inventory name
 (`HostKeyAlias`), so an address added to a device meets the key already known under its name.
-The window left is the first contact, per device and per operator, the one every SSH user
+That holds for `port49 ssh` and the Python client, which file keys under the name. Ansible's
+`network_cli` keys host keys by the address in Ansible's inventory, so there an address added
+to a device is a first contact, and under `host_key_auto_add` this attack is open (policy engine
+spec §13 decision 46 ruling 15, §15 L66). The window left is the first contact, per device and per operator, the one every SSH user
 accepts; a shop that wants it closed uses a managed `GlobalKnownHostsFile` or `@cert-authority`,
 which apply unchanged. port49 stores no host key anywhere. An address added to an existing
 device is a security event in the sync diff (policy engine spec, §10).
@@ -517,13 +660,15 @@ per platform.
 ```python
 # Netmiko / Python (clients/python, plan 9d). The mint returns the username to present
 # beside the token (policy engine spec, §2); the device's key is OpenSSH's known_hosts
-# entry under its inventory name, accepted at first contact and refused if changed.
+# entry under its inventory name, accepted at first contact and refused if changed or
+# revoked, before authentication (provisional on L65).
 from port49.netmiko import connect
 conn = connect("core-sw01")
 ```
 
 ```yaml
-# Ansible (clients/ansible, plan 9d): one mint per host per play.
+# Ansible (clients/ansible, plan 9d): one mint per host per play. Host keys are
+# Ansible's own, keyed by ansible_host under network_cli (§13 decision 46 ruling 15).
 pre_tasks:
   - ansible.builtin.set_fact:
       port49: "{{ lookup('port49.client.token', inventory_hostname, field='all') }}"
@@ -534,17 +679,17 @@ pre_tasks:
     no_log: true
 ```
 
-- [ ] **Step 8: Check** that nothing else in either document still asserts a pin, a pins file or
+- [ ] **Step 9: Check** that nothing else in either document still asserts a pin, a pins file or
   `devices trust` as current:
 
 ```bash
 grep -n "devices trust\|pinned host\|pins file\|known_hosts" docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
 ```
 
-  Expected: only decision 42's withdrawn rulings, decision 46, §12's removal line, §15's L53/L54
-  history and the new rows.
+  Expected: only decision 42's withdrawn rulings and ruling 8's note, decision 46, §12's removal
+  line, §14's host-key block, §15's L53/L54 history and the new rows.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
@@ -565,58 +710,157 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ruling 10 "Why 8.5" and decision 46 ruling 6
 
 **Interfaces:** Produces the floor `minSSH` Task 3 relies on, and the `ssh -G` value forms
-`sshPolicy` parses.
+`sshPolicy` (Task 3) and `port49.hostkeys.lookup` (Task 9) parse.
 
-Plan 9a's note (`tests/ssh-compat/2026-10-09-openssh-askpass.md`) built 8.5p1 upstream in
-`ubuntu:20.04` (`build-and-measure.sh 8.5p1`) and used `ubuntu:22.04` for 8.9p1; reuse its
-`setup.sh` and build script. Each container runs its own `sshd` on 127.0.0.1 with an Ed25519 and
-an RSA host key, and the client under test against it. No device; this is a note about the
-operator's ssh client, not a lab register entry.
+The harness is standalone (pre-flight I8): plan 9a's `build-and-measure.sh` hard-codes its own
+tarball path and its own measurements, so nothing of `tests/ssh-compat/2026-10-09-openssh-askpass`
+is mounted or run. Plan 9a's note built 8.5p1 upstream in `ubuntu:20.04`; this does too, with its
+own build step. Each container runs two `sshd`s on 127.0.0.1: port 22 with every host key `ssh-keygen
+-A` makes, and port 2222 with the Ed25519 key alone (the impostor of gate G1), and the client under
+test against them. The cells are measured in the attack's shape: a server that offers only
+Ed25519, a client on OpenSSH's default algorithms. No device; this is a note about the operator's
+ssh client, not a lab register entry.
 
-- [ ] **Step 1: Write `keys.sh`**, which, inside a container after `setup.sh`, makes the cells. For
-  each cell it writes a known_hosts `kh` and runs, with no terminal and `BatchMode=yes`:
+- [ ] **Step 1: Write `run.sh`**, which sets a container up and runs `keys.sh`:
 
 ```sh
-ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-    -o HostKeyAlias=leaf1 -o UserKnownHostsFile=/work-out/kh -o GlobalKnownHostsFile=/dev/null \
-    -o HostKeyAlgorithms=$ALGS -o PreferredAuthentications=password tuser@127.0.0.1 true
+#!/bin/sh
+# Plan 9d, gate G1 and the ssh -G forms, inside one container. $1 is
+# "distro" (the image's own OpenSSH client) or an upstream version to build
+# (8.5p1), whose tarball's SHA-256 is pinned below. Nothing of plan 9a's
+# harness is used.
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null
+apt-get install -y -qq openssh-server openssh-client curl ca-certificates >/dev/null 2>&1
+if [ "$1" != distro ]; then
+  v=$1
+  case $v in
+    # Written when the tarball is first fetched, after `gpg --verify` of its
+    # .asc against the OpenSSH release key; the note records it.
+    8.5p1) sum=SHA256_OF_openssh-8.5p1.tar.gz ;;
+    *) echo "run.sh: no pinned checksum for $v" >&2; exit 1 ;;
+  esac
+  apt-get install -y -qq build-essential zlib1g-dev libssl-dev >/dev/null 2>&1
+  cd /tmp
+  curl -fsSLO "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-$v.tar.gz"
+  echo "$sum  openssh-$v.tar.gz" | sha256sum -c -
+  tar xzf "openssh-$v.tar.gz" && cd "openssh-$v"
+  ./configure -q >/dev/null 2>&1 && make -s -j8 ssh >/dev/null 2>&1
+  mkdir -p /opt/b && cp ssh /opt/b/ssh
+  export PATH=/opt/b:$PATH
+fi
+echo "client: $(ssh -V 2>&1)"
+mkdir -p /run/sshd && ssh-keygen -A >/dev/null
+useradd -m -s /bin/sh tuser
+mkdir -p /root/.ssh /home/tuser/.ssh
+ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/ctl
+cp /root/.ssh/ctl.pub /home/tuser/.ssh/authorized_keys
+chown -R tuser /home/tuser/.ssh && chmod 700 /home/tuser/.ssh
+/usr/sbin/sshd
+printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /etc/ssh/ssh_host_ed25519_key\nPasswordAuthentication no\n' \
+  > /etc/ssh/sshd_g1
+/usr/sbin/sshd -f /etc/ssh/sshd_g1
+# The impostor's positive control: port 2222 offers Ed25519 and nothing else.
+ssh-keyscan -p 2222 127.0.0.1 2>/dev/null | awk '{print $2}' | sort -u > /tmp/g1types
+[ "$(cat /tmp/g1types)" = ssh-ed25519 ] || { echo "INVALID: port 2222 offers $(cat /tmp/g1types)"; exit 1; }
+[ "$2" = serve ] && exec sleep infinity
+sh /work/keys.sh
 ```
 
-  Cells:
-  - **g1-other-type:** `kh` holds `leaf1 <the server's RSA key>`; `ALGS=ssh-ed25519` (the server
-    presents only Ed25519). Record ssh's exit status, its last three stderr lines, and `kh` after.
-    **Gate G1:** passes when ssh refuses (exit 255, "has changed" or "verification failed") and
-    `kh` is unchanged.
-  - **g1-control:** `kh` empty, `ALGS=ssh-ed25519`: ssh accepts and files `leaf1` (the control;
-    without it G1 is INVALID).
+  `run.sh <version> serve` starts the servers and waits, for the host's own client (Step 3).
+- [ ] **Step 2: Write `keys.sh`**, the cells. Each writes a known_hosts `kh`, connects with no
+  terminal, `BatchMode=yes`, as `tuser` by the control key, and prints ssh's exit status, its last
+  three stderr lines, and `kh` after:
+
+```sh
+#!/bin/sh
+# Plan 9d Task 2's cells. KEYS is where the server's public keys are (the
+# container's /etc/ssh; a copy for the host's client), CTL the client key,
+# P22 and P2222 the two servers' ports.
+KEYS=${KEYS:-/etc/ssh} CTL=${CTL:-/root/.ssh/ctl} P22=${P22:-22} P2222=${P2222:-2222}
+k() { cut -d' ' -f1,2 "$KEYS/ssh_host_$1_key.pub"; }
+cell() { # name port kh-contents [ssh options...]
+  name=$1 port=$2 lines=$3; shift 3
+  printf '%s' "$lines" > /tmp/kh
+  ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=leaf1 \
+      -o UserKnownHostsFile=/tmp/kh -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$CTL" \
+      -o PreferredAuthentications=publickey -p "$port" "$@" tuser@127.0.0.1 true 2>/tmp/err
+  echo "== $name: exit $?"
+  tail -n 3 /tmp/err | sed 's/^/  stderr: /'
+  sed 's/^/  kh: /' /tmp/kh
+}
+ssh-keygen -q -t ed25519 -N '' -f /tmp/other
+cell g1 "$P2222" "leaf1 $(k ecdsa)
+"
+cell g1-control "$P2222" ""
+cell g1b "$P22" "leaf1 $(k ecdsa)
+" -o HostKeyAlgorithms=ssh-ed25519
+cell changed-same-type "$P22" "leaf1 $(cut -d' ' -f1,2 /tmp/other.pub)
+"
+cell hashed "$P22" "" -o HashKnownHosts=yes
+echo "  hashed found: $(ssh-keygen -F leaf1 -f /tmp/kh | grep -vc '^#')"
+ssh-keygen -q -k -f /tmp/krl /tmp/other.pub
+for cfg in "" "StrictHostKeyChecking yes" "StrictHostKeyChecking no" "StrictHostKeyChecking ask" \
+    "StrictHostKeyChecking accept-new" "StrictHostKeyChecking off" "Host leaf1
+  HostKeyAlias Corp-Leaf1" "UserKnownHostsFile /dev/null" "UserKnownHostsFile none" \
+    "RevokedHostKeys /tmp/krl" "KnownHostsCommand /bin/true %H" "Match user alice
+  HostKeyAlias alice-leaf1"; do
+  printf '%s\n' "$cfg" > /tmp/cfg
+  for dest in leaf1 Leaf1; do
+    echo "== g-forms [$(echo "$cfg" | tr '\n' ';')] $dest:"
+    ssh -G -F /tmp/cfg -o 'HostName="fe80::1%%eth0"' -l alice -- "$dest" |
+      grep -E '^(stricthostkeychecking|hostkeyalias|userknownhostsfile|revokedhostkeys|knownhostscommand) ' |
+      sed 's/^/  /'
+  done
+done
+```
+
+  The cells:
+  - **g1:** `kh` holds `leaf1 <the server's ECDSA key>`; the server on 2222 presents only
+    Ed25519, and the client has its default algorithms. **Gate G1:** passes when ssh refuses (exit
+    255, "has changed" or "verification failed") and `kh` is unchanged.
+  - **g1-control:** `kh` empty, against 2222: ssh accepts and files `leaf1` (exit 0). Without it
+    G1 is INVALID.
+  - **g1b:** the client-side form kept from the first draft: `kh` holds the ECDSA key, against
+    every host key, the client forced to `HostKeyAlgorithms=ssh-ed25519`; refused.
   - **changed-same-type:** `kh` holds `leaf1 <another Ed25519 key>`; refused.
   - **hashed:** `kh` empty and `-o HashKnownHosts=yes`: the line written starts `|1|` and
     `ssh-keygen -F leaf1 -f kh` finds it.
-  - **g-forms:** `ssh -G -F cfg leaf1` for `cfg` holding, in turn, nothing, `StrictHostKeyChecking
-    yes`, `no`, `ask`, `accept-new`, `off`, and `HostKeyAlias Corp-Leaf1`; record the
-    `stricthostkeychecking` and `hostkeyalias` lines verbatim (expected from 10.2p1, measured while
-    writing this plan: `true` for yes, `false` for no, `ask`, `accept-new`; `hostkeyalias` absent
-    when unset and lowercased when set).
-- [ ] **Step 2: Run** it on OpenSSH 8.5p1 (upstream build), 8.9p1 (`ubuntu:22.04`), 9.6p1
+  - **g-forms:** `ssh -G` with the zone-holding `HostName` `port49 ssh` would pass (the `%`
+    doubled) and `-l alice`, against destinations `leaf1` and `Leaf1`, for `cfg` holding in turn
+    each line above; the five settings' lines verbatim. Expected from 10.2p1 (measured while
+    writing this plan and at pre-flight): `true` for yes, `false` for no, `ask`, `accept-new`;
+    `hostkeyalias` absent when unset and lowercased when set; a `Host leaf1` block not matching
+    destination `Leaf1` (pre-flight M1); `userknownhostsfile /dev/null` and `none` as written;
+    `revokedhostkeys` and `knownhostscommand` absent when unset, and printed as written when set;
+    the `Match user alice` block matching under `-l alice`.
+- [ ] **Step 3: Run** it on OpenSSH 8.5p1 (upstream build), 8.9p1 (`ubuntu:22.04`), 9.6p1
   (`ubuntu:24.04`) and the host's 10.2p1:
 
 ```bash
-sg docker -c "docker run --rm -v $PWD/tests/ssh-compat/2026-10-13-openssh-accept-new:/work:ro -v $PWD/tests/ssh-compat/2026-10-09-openssh-askpass:/askpass:ro ubuntu:22.04 sh /work/run.sh"
+d=$PWD/tests/ssh-compat/2026-10-13-openssh-accept-new
+sg docker -c "docker run --rm -v $d:/work:ro ubuntu:20.04 sh /work/run.sh 8.5p1"
+sg docker -c "docker run --rm -v $d:/work:ro ubuntu:22.04 sh /work/run.sh distro"
+sg docker -c "docker run --rm -v $d:/work:ro ubuntu:24.04 sh /work/run.sh distro"
 ```
 
-  (`run.sh` runs `/askpass/setup.sh`, makes the server's keys, starts `sshd`, then `keys.sh`;
-  the 8.5p1 run goes through `/askpass/build-and-measure.sh 8.5p1` with `keys.sh` as its
-  measurement.) The host's 10.2p1 runs `keys.sh` against a container's sshd on a published
-  127.0.0.1 port.
-- [ ] **Step 3: Write the note** in the 2026-10-09 note's form: date, what it is for (decision 46
-  rulings 2 and 6), where, the clients table, one table per cell (client × exit, stderr, `kh`),
-  and the gate.
-- [ ] **Step 4: Read G1.** If it passes on 8.5p1, the floor stays; say so in the note. If 8.5p1
+  The host's 10.2p1: `docker run -d --name p49-g1 -p 127.0.0.1::22 -p 127.0.0.1::2222 -v
+  $d:/work:ro ubuntu:24.04 sh /work/run.sh distro serve`, then `docker cp` its `/etc/ssh/*.pub`
+  and `/root/.ssh/ctl` into a 0700 scratch directory, and run `KEYS=<dir> CTL=<dir>/ctl P22=<port>
+  P2222=<port> sh keys.sh` on the host with the published ports; `docker rm -f p49-g1` after.
+- [ ] **Step 4: Write the note** in the 2026-10-09 note's form: date, what it is for (decision 46
+  rulings 2 and 6), where, the clients table, the 8.5p1 tarball's SHA-256 and how it was checked,
+  the impostor's control (port 2222's key types), one table per cell (client × exit, stderr,
+  `kh`), the g-forms table, and the gate (G1, and G1b beside it).
+- [ ] **Step 5: Read G1.** If it passes on 8.5p1, the floor stays; say so in the note. If 8.5p1
   accepts the other type, set `minSSH` in `cmd/port49/ssh.go` to the earliest measured version that
   refuses, update its comment and the message in `sshCmd` ("port49 ssh needs 8.5 or later") and
   decision 42 ruling 10's "Why 8.5" and decision 46 ruling 6 to cite the note, and run `go test
-  ./cmd/port49/ -run 'TestAnOldOpenSSHIsRefusedBeforeAMint' -count=1`. Expected: PASS.
-- [ ] **Step 5: Commit**
+  ./cmd/port49/ -run 'TestAnOldOpenSSHIsRefusedBeforeAMint' -count=1`. Expected: PASS. If a g-forms
+  line differs from what `sshPolicy` (Task 3) or `port49.hostkeys.lookup` (Task 9) parse, those
+  tasks follow the note, not this plan's expectation.
+- [ ] **Step 6: Commit**
 
 ```bash
 git add tests/ssh-compat/2026-10-13-openssh-accept-new.md tests/ssh-compat/2026-10-13-openssh-accept-new
@@ -625,21 +869,24 @@ git commit -m "test: OpenSSH accept-new with a known alias, and ssh -G's forms, 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
-  (Add `cmd/port49/ssh.go` and the spec if Step 4 changed them, and say so in the message.)
+  (Add `cmd/port49/ssh.go` and the spec if Step 5 changed them, and say so in the message.)
 
 ---
 
 ## Task 3: `port49 ssh` on the operator's OpenSSH known_hosts
 
 **Files:**
-- Modify: `cmd/port49/ssh.go` (`sshOptions`, `sshArgs`, `sshCmd`; new `sshTrust`, `sshPolicy`,
-  `sshName`, `legacyPinsHint`; `shellWord` moved here from `cmd/port49/trust.go`)
+- Modify: `cmd/port49/ssh.go` (`sshOptions`, `sshArgs`, `sshCmd`, `askpassServer` (new field
+  `keyName`) and its `answer`, `minSSH`'s comment; new `sshTrust`, `sshPolicy`, `sshName`,
+  `legacyPinsHint`; `shellWord` moved here from `cmd/port49/trust.go`)
 - Modify: `cmd/port49/trust.go` (delete `shellWord`, now in `ssh.go`; the rest goes in Task 4)
 - Modify: `internal/userconfig/userconfig.go` (add `LegacyPinsPath`)
 - Modify: `cmd/port49/main.go` (usage: the `port49 ssh` lines)
-- Test: `cmd/port49/ssh_test.go` (the rig; `TestSSHArgs`; the host-key tests),
-  `cmd/port49/ssh_fix_test.go` (`TestPortSSHLogsInToADeviceNamedWithCapitals`,
-  `TestTheHostKeyHintIsConditionalOnSSHsMessage`), new `cmd/port49/ssh_hostkeys_test.go`
+- Test: `cmd/port49/ssh_test.go` (the rig; `fakeSSHHead`; `TestSSHArgs`; the host-key tests;
+  `TestTheTokenIsNeverInArgvOrTheEnvironment`'s fake), `cmd/port49/ssh_fix_test.go`
+  (`TestPortSSHLogsInToADeviceNamedWithCapitals`, `TestTheHostKeyHintIsConditionalOnSSHsMessage`,
+  `TestSSHsStderrIsTheCallersOwn`), `cmd/port49/ssh_pty_linux_test.go`
+  (`TestSSHRestoresTheTerminalWhenItEnds`'s fake), new `cmd/port49/ssh_hostkeys_test.go`
 
 **Interfaces:**
 - Consumes: Task 2's `minSSH`.
@@ -654,12 +901,16 @@ type sshTrust struct {
 }
 
 // sshPolicy runs `ssh -G` as ssh will run for o and reads the operator's
-// StrictHostKeyChecking and HostKeyAlias from it.
+// StrictHostKeyChecking, HostKeyAlias and UserKnownHostsFile from it; an
+// error for a config that keeps no host keys under accept-new.
 func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error)
 
 // sshName reports whether device can be an ssh destination and a known_hosts
 // host field as written (decision 42 ruling 8; decision 46 ruling 3).
 func sshName(device string) bool
+
+// askpassServer gains, beside device:
+//	keyName string // the alias ssh names in its prompt: sshTrust.keyName
 
 // userconfig
 // LegacyPinsPath is plan 9a's pins file, which nothing reads since plan 9d
@@ -742,15 +993,55 @@ func (r *sshRig) filed(t *testing.T, name string) []string {
   write the rig's known_hosts line under `Leaf1` (the case a fold must match) instead of
   `hostkeys.Pin(r.known, "Leaf1", …)`.
 
+  The fake ssh scripts (pre-flight I2). `sshPolicy` runs the `--ssh` binary with `-G` before the
+  real run, and four fakes answer only `-V`, so each would take `-G` as the real run: record argv
+  and `exec "$SSH_ASKPASS"` with it unset, exit 255, background a `sleep 3 >&2` that holds the
+  `-G` pipe, or run `stty -echo` and print nothing (which `sshPolicy` reads as no known_hosts kept,
+  and refuses). Add to `cmd/port49/ssh_test.go`, beside `sshTestBin`:
+
+```go
+// fakeSSHHead is a fake ssh's first lines: OpenSSH 10.2p1 to -V, and to -G
+// what a real `ssh -G` prints for the one setting sshPolicy needs to go on,
+// a known_hosts kept. The lines after it are the fake's real run.
+const fakeSSHHead = "#!/bin/sh\n" +
+	"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
+	"if [ \"$1\" = -G ]; then echo 'userknownhostsfile ~/.ssh/known_hosts'; exit 0; fi\n"
+```
+
+  and start each of the four fakes with it in place of its own first two lines:
+  `TestTheTokenIsNeverInArgvOrTheEnvironment` (`cmd/port49/ssh_test.go`),
+  `TestTheHostKeyHintIsConditionalOnSSHsMessage` and `TestSSHsStderrIsTheCallersOwn`
+  (`cmd/port49/ssh_fix_test.go`), and `TestSSHRestoresTheTerminalWhenItEnds`
+  (`cmd/port49/ssh_pty_linux_test.go`). For example:
+
+```go
+	script := fakeSSHHead + "echo 'remote username contains invalid characters' >&2\nexit 255\n"
+```
+
+  `ssh_fix2_test.go`'s wrapper forwards every run but `-V` to the real ssh, `-G` included, and
+  stays. Rewrite `TestTheHostKeyHintIsConditionalOnSSHsMessage`'s expectation to Step 4's 255
+  message:
+
+```go
+	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
+		!strings.Contains(errb, "If it says Host key verification failed") ||
+		!strings.Contains(errb, "run 'ssh-keygen -R leaf1'") || strings.Contains(errb, "devices trust") {
+		t.Fatalf("code %d stderr %q", code, errb)
+	}
+```
+
 - [ ] **Step 2: Write the failing tests** in `cmd/port49/ssh_hostkeys_test.go`:
 
 ```go
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -813,50 +1104,120 @@ func TestAnAddressMovedToAnotherHostNeverSeesTheToken(t *testing.T) {
 
 // Review Focus 3: the operator's yes stands; everything else is accept-new;
 // no is never passed. Their HostKeyAlias stands, and is the name keys are
-// filed under.
+// filed under; a Host block matches the destination as written, case and all
+// (pre-flight M1). Review Focus 7: a known_hosts of /dev/null or none under
+// accept-new is refused; under their yes it stands.
 func TestSSHPolicyReadsTheOperatorsConfig(t *testing.T) {
 	bin := sshTestBin(t)
-	for _, tc := range []struct{ cfg, strict, alias, keyName string }{
-		{"", "accept-new", "leaf1", "leaf1"},
-		{"StrictHostKeyChecking yes", "yes", "leaf1", "leaf1"},
-		{"StrictHostKeyChecking no", "accept-new", "leaf1", "leaf1"},
-		{"StrictHostKeyChecking ask", "accept-new", "leaf1", "leaf1"},
-		{"StrictHostKeyChecking accept-new", "accept-new", "leaf1", "leaf1"},
-		{"Host leaf1\n  HostKeyAlias Corp-Leaf1", "accept-new", "", "corp-leaf1"},
+	for _, tc := range []struct{ cfg, device, strict, alias, keyName, err string }{
+		{"", "leaf1", "accept-new", "leaf1", "leaf1", ""},
+		{"StrictHostKeyChecking yes", "leaf1", "yes", "leaf1", "leaf1", ""},
+		{"StrictHostKeyChecking no", "leaf1", "accept-new", "leaf1", "leaf1", ""},
+		{"StrictHostKeyChecking ask", "leaf1", "accept-new", "leaf1", "leaf1", ""},
+		{"StrictHostKeyChecking accept-new", "leaf1", "accept-new", "leaf1", "leaf1", ""},
+		{"Host leaf1\n  HostKeyAlias Corp-Leaf1", "leaf1", "accept-new", "", "corp-leaf1", ""},
+		{"Host leaf1\n  HostKeyAlias Corp-Leaf1", "Leaf1", "accept-new", "leaf1", "leaf1", ""},
+		{"Match user alice\n  HostKeyAlias alice-leaf1", "leaf1", "accept-new", "", "alice-leaf1", ""},
+		{"UserKnownHostsFile /dev/null", "leaf1", "", "", "", "UserKnownHostsFile"},
+		{"UserKnownHostsFile none", "leaf1", "", "", "", "UserKnownHostsFile"},
+		{"UserKnownHostsFile /dev/null\nStrictHostKeyChecking yes", "leaf1", "yes", "leaf1", "leaf1", ""},
 	} {
 		cfg := filepath.Join(privateDir(t), "ssh_config")
 		if err := os.WriteFile(cfg, []byte(tc.cfg+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got, err := sshPolicy(context.Background(), bin, sshOptions{config: cfg, device: "Leaf1",
+		got, err := sshPolicy(context.Background(), bin, sshOptions{config: cfg, device: tc.device,
 			address: "192.0.2.7", username: "alice"})
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%q: got %+v, %v; want a refusal naming %s", tc.cfg, got, err, tc.err)
+			}
+			continue
+		}
 		if err != nil || got.strict != tc.strict || got.alias != tc.alias || got.keyName != tc.keyName {
-			t.Errorf("%q: got %+v, %v; want strict %s alias %q keyName %s", tc.cfg, got, err, tc.strict, tc.alias, tc.keyName)
+			t.Errorf("%q %s: got %+v, %v; want strict %s alias %q keyName %s", tc.cfg, tc.device, got, err,
+				tc.strict, tc.alias, tc.keyName)
 		}
 	}
 }
 
+// Review Focus 7: an ssh_config that keeps no host keys would make every
+// connection a first contact. It is refused before ssh starts, naming the
+// setting; the device sees no connection.
+func TestAKnownHostsFileOfDevNullIsRefused(t *testing.T) {
+	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, nil)
+	if err := os.WriteFile(r.config, []byte("UserKnownHostsFile /dev/null\nGlobalKnownHostsFile /dev/null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errb := r.run(t, "leaf1")
+	if code != 1 || dev.connections() != 0 || !strings.Contains(errb, "UserKnownHostsFile /dev/null") ||
+		!strings.Contains(errb, "nothing was sent to leaf1") {
+		t.Fatalf("code %d conns %d stderr %q", code, dev.connections(), errb)
+	}
+	tokenNowhere(t, out, errb)
+}
+
 // The operator's StrictHostKeyChecking yes refuses a first contact: nothing
-// sent, nothing filed.
+// sent, nothing filed, and the message says a key may be missing, not only
+// changed (pre-flight M4).
 func TestTheOperatorsStrictYesStands(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, nil, "StrictHostKeyChecking yes")
 	code, _, errb := r.run(t, "leaf1")
-	if code != 255 || len(dev.attempts()) != 0 || len(r.filed(t, "leaf1")) != 0 {
+	if code != 255 || len(dev.attempts()) != 0 || len(r.filed(t, "leaf1")) != 0 ||
+		!strings.Contains(errb, "ssh_config says StrictHostKeyChecking yes") {
 		t.Fatalf("code %d stderr %q attempts %q", code, errb, dev.attempts())
 	}
 }
 
-// The operator's own HostKeyAlias is the name ssh looks the key up under.
+// The operator's own HostKeyAlias is the name ssh looks the key up under, and
+// the name ssh's prompt carries: the askpass answers it, once (pre-flight I1).
 func TestTheOperatorsHostKeyAliasStands(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, nil, "Host leaf1\n  HostKeyAlias corp-leaf1")
 	if err := os.WriteFile(r.known, []byte("corp-leaf1 "+string(ssh.MarshalAuthorizedKey(dev.key))), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errb := r.run(t, "leaf1")
-	if code != 0 || len(r.filed(t, "leaf1")) != 0 || strings.Contains(errb, "Permanently added") {
-		t.Fatalf("code %d stderr %q", code, errb)
+	code, out, errb := r.run(t, "leaf1")
+	if code != 0 || strings.Join(dev.attempts(), ",") != "LOGINTOKEN" || len(r.filed(t, "leaf1")) != 0 ||
+		strings.Contains(errb, "Permanently added") {
+		t.Fatalf("code %d stderr %q attempts %q", code, errb, dev.attempts())
+	}
+	tokenNowhere(t, out, errb)
+}
+
+// The askpass takes the device's prompt under the inventory name or the
+// alias, and no other (pre-flight I1).
+func TestTheAskpassAnswersThePromptNamingTheAlias(t *testing.T) {
+	for prompt, ours := range map[string]bool{
+		"(alice@leaf1) Password: ": true, "(alice@corp-leaf1) Password: ": true,
+		"alice@corp-leaf1's password: ": true, "(alice@jump1) Password: ": false,
+	} {
+		s := &askpassServer{token: "LOGINTOKEN", username: "alice", device: "leaf1", keyName: "corp-leaf1"}
+		a, b := net.Pipe()
+		go s.answer(a)
+		_, _ = io.WriteString(b, strconv.Quote(prompt)+"\n")
+		reply, _ := bufio.NewReader(b).ReadString('\n')
+		b.Close()
+		if got := strings.HasPrefix(reply, "T "); got != ours {
+			t.Errorf("%q: answered %q", prompt, reply)
+		}
+	}
+}
+
+// Decision 42 ruling 8, moved with sshName from hostkeys.ValidName
+// (pre-flight M2).
+func TestSSHName(t *testing.T) {
+	for name, ok := range map[string]bool{
+		"leaf1": true, "core-sw01.dc1": true, "srx_fw_04": true, strings.Repeat("a", 253): true,
+		"": false, "*": false, "leaf*": false, "a,b": false, "!x": false, "@cert-authority": false,
+		"|1|abc": false, "[leaf1]:22": false, "-leaf": false, ".leaf": false, "leaf 1": false,
+		"leaf?": false, "leaf1\n": false, strings.Repeat("a", 254): false,
+	} {
+		if sshName(name) != ok {
+			t.Errorf("sshName(%q) = %v", name, !ok)
+		}
 	}
 }
 
@@ -923,13 +1284,18 @@ func TestSSHArgs(t *testing.T) {
 
 - [ ] **Step 3: Run them to see them fail**
 
-Run: `go test ./cmd/port49/ -run 'TestFirstContact|TestAKeyOfAnotherType|TestAnAddressMoved|TestSSHPolicy|TestTheOperators|TestTheKnownHostsFlag|TestThe9aPins|TestSSHArgs|TestAHostWithAnotherKey' -count=1`
-Expected: FAIL to compile (`sshPolicy`, `sshTrust`, `sshOptions.trust` undefined).
+Run: `go test ./cmd/port49/ -run 'TestFirstContact|TestAKeyOfAnotherType|TestAnAddressMoved|TestSSHPolicy|TestAKnownHostsFile|TestTheOperators|TestTheAskpass|TestSSHName|TestTheKnownHostsFlag|TestThe9aPins|TestSSHArgs|TestAHostWithAnotherKey|TestTheHostKeyHint' -count=1`
+Expected: FAIL to compile (`sshPolicy`, `sshTrust`, `sshOptions.trust`, `sshName`,
+`askpassServer.keyName` undefined).
 
 - [ ] **Step 4: Implement.** In `cmd/port49/ssh.go`:
   - Replace `hostkeys.ValidName` with `sshName` (same regexp, moved here with its comment, ruling 8
     and decision 46 ruling 3 cited), and drop the `hostkeys` import.
   - Move `shellWord` from `trust.go` into `ssh.go` unchanged.
+  - `minSSH`'s comment loses "8.5 is also the first with KnownHostsCommand, which port49 ssh turns
+    off" (pre-flight M3) and gains: "Host keys are the operator's OpenSSH's own (decision 46 ruling
+    2); plan 9d's gate G1 measured accept-new against a key of another type under a known alias
+    (tests/ssh-compat/2026-10-13-openssh-accept-new.md)."
   - `sshOptions` loses `knownHosts` and gains `trust sshTrust`.
   - `sshArgs`:
 
@@ -982,6 +1348,8 @@ func sshArgs(o sshOptions) []string {
 // ruling 2). The operator's StrictHostKeyChecking yes stands, and every other
 // value is accept-new, never no; the operator's HostKeyAlias stands, and
 // otherwise the alias is the device's name, lowercased as ssh files it.
+// Under accept-new, a UserKnownHostsFile that keeps nothing (/dev/null, none)
+// is refused: every connection would be a first contact, accepted silently.
 // Nothing about trust is decided here that OpenSSH does not decide itself.
 func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) {
 	args := []string{"-G"}
@@ -995,11 +1363,21 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 	args = append(args, "--", o.device)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).Output()
+	c := exec.CommandContext(ctx, bin, args...)
+	// A descendant holding ssh -G's stderr cannot keep port49 ssh waiting
+	// past ssh itself (pre-flight I2).
+	c.WaitDelay = time.Second
+	out, err := c.Output()
 	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			err = fmt.Errorf("%v: %s", err, printsafe.Line(strings.TrimSpace(string(ee.Stderr)), 300))
+		}
 		return sshTrust{}, fmt.Errorf("%s -G (reading your ssh_config for %s): %v", bin, o.device, err)
 	}
 	t := sshTrust{alias: strings.ToLower(o.device), keyName: strings.ToLower(o.device), strict: "accept-new"}
+	var userFiles string
+	kept := false
 	for _, line := range strings.Split(string(out), "\n") {
 		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
 		switch k {
@@ -1009,11 +1387,24 @@ func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) 
 			if v == "true" || v == "yes" {
 				t.strict = "yes"
 			}
+		case "userknownhostsfile":
+			userFiles = v
+			for _, f := range strings.Fields(v) {
+				kept = kept || f != "/dev/null" && f != "none"
+			}
 		}
+	}
+	if !kept && t.strict != "yes" {
+		return sshTrust{}, fmt.Errorf("your ssh_config keeps no host keys for %s (UserKnownHostsFile %s): every "+
+			"connection would be a first contact, and a host at the device's address would get the token; remove "+
+			"that line for port49 devices, or set StrictHostKeyChecking yes with a managed GlobalKnownHostsFile",
+			o.device, printsafe.Line(cmp.Or(userFiles, "none"), 200))
 	}
 	return t, nil
 }
 ```
+
+  (`ssh.go` imports `cmp` for `cmp.Or`; `errors` it imports already.)
 
   - `legacyPinsHint`:
 
@@ -1058,9 +1449,39 @@ func legacyPinsHint(stderr io.Writer) {
 	}
 ```
 
-    and run ssh with `sshArgs(opts)`. The `code == 255` (not served) message becomes:
+    and run ssh with `sshArgs(opts)`. The askpass server is built with the name ssh's prompt
+    carries (pre-flight I1):
 
 ```go
+	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device,
+		keyName: opts.trust.keyName, expiresAt: expiresAt, remint: …as today…}
+```
+
+    with, in `askpassServer`, beside `device`:
+
+```go
+	keyName          string // the HostKeyAlias ssh names in its prompt (decision 46 ruling 2)
+```
+
+    and in `answer`, the first case:
+
+```go
+	case !ownPrompt(prompt, s.username, s.device) && !ownPrompt(prompt, s.username, s.keyName):
+		_, _ = io.WriteString(c, "N\n")
+```
+
+    `ownPrompt`'s comment gains: "Under an operator's own HostKeyAlias the prompt names that alias
+    (decision 46 ruling 2), so the askpass asks both names." The `code == 255` (not served)
+    message becomes two cases, the operator's `yes` first (pre-flight M4):
+
+```go
+	case code == 255 && opts.trust.strict == "yes":
+		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
+			"its message is above). Your ssh_config says StrictHostKeyChecking yes: if ssh says no host key is known, "+
+			"no key is filed under %s, so add the device's key to your known_hosts after checking it on its console; "+
+			"if it says the key changed, the key filed under %s is not the one %s presents, so verify it on the "+
+			"console and run 'ssh-keygen -R %s'\n",
+			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, shellWord(opts.trust.keyName))
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
 			"its message is above). If it says Host key verification failed, the key your known_hosts files under "+
@@ -1068,6 +1489,9 @@ func legacyPinsHint(stderr io.Writer) {
 			"is not the device. Verify the key on its console, then run 'ssh-keygen -R %s' and connect again\n",
 			cmd, device, opts.trust.keyName, item.Address, device, shellWord(opts.trust.keyName))
 ```
+
+    `TestTheOperatorsStrictYesStands` reads the first; both open with "ssh stopped before … so it
+    was never sent", which the other 255 tests read.
 
   - Usage in `main.go`: the `port49 ssh` lines lose `[--known-hosts FILE]` and "DEVICE's key must be
     pinned first with port49 devices trust" becomes "host keys are your OpenSSH known_hosts',
@@ -1082,14 +1506,14 @@ func LegacyPinsPath() string { return filepath.Join(LegacyDir(), "known_hosts") 
 
 - [ ] **Step 5: Run the tests to see them pass**
 
-Run: `go test ./cmd/port49/ -run 'SSH|Askpass|Ceiling|Token' -count=1`
+Run: `go test ./cmd/port49/ -run 'SSH|Askpass|Ceiling|Token|FirstContact|KeyOfAnotherType|AddressMoved|KnownHosts|Operators|9aPins|HostKeyHint' -count=1`
 Expected: PASS (each host-key test runs the real OpenSSH; on a host with none they skip, as
 `sshTestBin` says).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/port49/ssh.go cmd/port49/trust.go cmd/port49/main.go cmd/port49/ssh_test.go cmd/port49/ssh_fix_test.go cmd/port49/ssh_hostkeys_test.go internal/userconfig/userconfig.go
+git add cmd/port49/ssh.go cmd/port49/trust.go cmd/port49/main.go cmd/port49/ssh_test.go cmd/port49/ssh_fix_test.go cmd/port49/ssh_pty_linux_test.go cmd/port49/ssh_hostkeys_test.go internal/userconfig/userconfig.go
 git commit -m "feat: port49 ssh uses the operator's known_hosts under accept-new, filed under the inventory name
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -1103,9 +1527,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Delete: `internal/hostkeys/hostkeys.go`, `internal/hostkeys/hostkeys_test.go`,
   `cmd/port49/trust.go`, `cmd/port49/trust_test.go`, `cmd/port49/trust_hint_test.go`
 - Modify: `cmd/port49/main.go` (the `devices trust` case; usage), `internal/userconfig/userconfig.go`
-  (`LegacyDir` → `legacyDir`)
+  (`LegacyDir` → `legacyDir`; the package comment), `internal/userconfig/userconfig_test.go` (its
+  two `LegacyDir()` calls, ~719–725), `cmd/port49/mint.go` (`mintFailed`'s comment)
 - Create: `tests/lab/hostkeyscan_test.go` (`//go:build lab`: `labScan`, `labFingerprint`, moved from
-  `hostkeys.Scan` and `hostkeys.Fingerprint`)
+  `hostkeys.Scan` and `hostkeys.Fingerprint`), `tests/lab/hostkeyscan_unit_test.go`
+  (`TestLabScanReadsTheKeyAndSendsNoCredential`, moved from `hostkeys_test.go`; pre-flight M2)
 - Modify: `tests/lab/l53_l54_test.go` (the L54 half removed; `TestL53L54PortSSH` renamed
   `TestL53HostKeyScan`), `Makefile` (`lab-ssh`'s `-run`)
 - Test: `cmd/port49/devices_test.go` (`TestDevicesTrustIsGone`), `cmd/port49/ssh_hostkeys_test.go`
@@ -1177,7 +1603,14 @@ Expected: `TestDevicesTrustIsGone` FAIL (the old command runs and refuses its fl
   `LegacyDir` to `legacyDir` and its two uses (`noLegacy`, `LegacyPinsPath`); its comment becomes:
   "legacyDir is plan 9a's directory, `$XDG_CONFIG_HOME/port49`, else `~/.config/port49`. Nothing in
   it is read: a config.yaml there is refused by `Lstat`, naming the move (`LoadAll`), and the pins
-  file is only named (`LegacyPinsPath`; decision 46 ruling 5)."
+  file is only named (`LegacyPinsPath`; decision 46 ruling 5)." In `userconfig_test.go`, the two
+  `LegacyDir()` calls (~719–725) become `legacyDir()` (the test is in package `userconfig`). The
+  package comment's sentence "and the private-file reading and writing it shares with the pinned
+  host keys (internal/hostkeys). Whoever can write these files chooses which broker the operator
+  trusts and which device keys `port49 ssh` accepts, so …" becomes "and the private-file reading
+  and writing it keeps for them. Whoever can write these files chooses which broker the operator
+  trusts, so …" (pre-flight M3). In `cmd/port49/mint.go`, `mintFailed`'s comment "shared by `port49
+  devices trust` and `port49 ssh`" becomes "shared by `port49 ssh`".
 - [ ] **Step 4: The lab keeps its scan.** Create `tests/lab/hostkeyscan_test.go` with
   `//go:build lab`, `package lab`, holding `labScan` (the body of `hostkeys.Scan` with its
   `scanTimeout` and `errScanned`, renamed `labScanTimeout` and `errLabScanned`, its comment
@@ -1188,15 +1621,86 @@ Expected: `TestDevicesTrustIsGone` FAIL (the old command runs and refuses its fl
   the wrong-pin note (`say(&l54, "Against a wrong pin: …")`), the `l54` note variable and its
   writer, the `xdg` pins directory setup, and every claim assertion naming L54; rename
   `TestL53L54PortSSH` to `TestL53HostKeyScan` and its skip message. `Makefile`'s `lab-ssh` runs
-  `-run 'TestL53HostKeyScan'` until Task 11 adds L64's test.
+  `-run 'TestL53HostKeyScan'` until Task 11 adds L64's test. The scan keeps its unit test
+  (pre-flight M2): create `tests/lab/hostkeyscan_unit_test.go` (`//go:build lab`, `package lab`),
+  which `make lab-unit` runs by name:
+
+```go
+//go:build lab
+
+package lab
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"net"
+	"sync/atomic"
+	"testing"
+
+	"golang.org/x/crypto/ssh"
+)
+
+// labScan reads the key the server presents and offers no credential: no
+// authentication callback of the server's ever runs (moved from
+// internal/hostkeys by plan 9d).
+func TestLabScanReadsTheKeyAndSendsNoCredential(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auths atomic.Int32
+	cfg := &ssh.ServerConfig{
+		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			auths.Add(1)
+			return nil, errors.New("no")
+		},
+		KeyboardInteractiveCallback: func(ssh.ConnMetadata, ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+			auths.Add(1)
+			return nil, errors.New("no")
+		},
+		AuthLogCallback: func(ssh.ConnMetadata, string, error) { auths.Add(1) },
+	}
+	cfg.AddHostKey(signer)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _, _, _ = ssh.NewServerConn(c, cfg)
+		c.Close()
+	}()
+	got, err := labScan(context.Background(), ln.Addr().String())
+	<-done
+	if err != nil || string(got.Marshal()) != string(signer.PublicKey().Marshal()) || auths.Load() != 0 {
+		t.Fatalf("key %v err %v, %d auth attempts", got, err, auths.Load())
+	}
+}
+```
 - [ ] **Step 5: Check** that nothing kept reads under `~/.config`:
 
 ```bash
 grep -rn "LegacyDir\|legacyDir\|XDG_CONFIG_HOME\|\.config\"" --include='*.go' internal cmd
 ```
 
-  Expected: only `internal/userconfig/userconfig.go` (`legacyDir`, `noLegacy`, `LegacyPinsPath`)
-  and tests that set `XDG_CONFIG_HOME`.
+  Expected: only `internal/userconfig/userconfig.go` (`legacyDir`, `noLegacy`, `LegacyPinsPath`),
+  `internal/userconfig/userconfig_test.go` (its `legacyDir()` checks) and tests that set
+  `XDG_CONFIG_HOME`. Then check the words: `grep -rn "devices trust\|internal/hostkeys\|which port49
+  ssh turns off" --include='*.go' internal cmd` prints only `main.go`'s removal line and its
+  comment, `ssh.go`'s `legacyPinsHint`, and test lines asserting the words are absent (pre-flight
+  M3).
 
 - [ ] **Step 6: Run everything**
 
@@ -1206,7 +1710,7 @@ Expected: PASS; `make lab-unit` (inside `make test`) builds `tests/lab` with the
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A internal/hostkeys cmd/port49 internal/userconfig tests/lab/hostkeyscan_test.go tests/lab/l53_l54_test.go Makefile
+git add -A internal/hostkeys cmd/port49 internal/userconfig tests/lab/hostkeyscan_test.go tests/lab/hostkeyscan_unit_test.go tests/lab/l53_l54_test.go Makefile
 git commit -m "feat: remove port49 devices trust and internal/hostkeys; nothing reads under ~/.config
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -1309,6 +1813,15 @@ func TestTokenFailureCodes(t *testing.T) {
 			Err: &agent.KeyError{Err: hwkey.ErrTouchTimeout}}, tokenFailure{Device: "core1", Error: "touch_timeout"}},
 		{"changed", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: agent.ErrConnectionChanged},
 			tokenFailure{Device: "core1", Error: "connection_changed"}},
+		// A proof that met the session's own failure says that failure (pre-flight M8).
+		{"proof: revoked", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: &agent.RevokedError{Detail: "d"}},
+			tokenFailure{Device: "core1", Error: "credential_revoked"}},
+		{"proof: over", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: agent.ErrSessionOver},
+			tokenFailure{Device: "core1", Error: "session_over"}},
+		{"proof: no agent", api.MintItem{}, &mfaUnprovedError{Requirement: need,
+			Err: fmt.Errorf("%w at /s: refused", agent.ErrNoAgent)}, tokenFailure{Device: "core1", Error: "no_agent"}},
+		{"proof: too old", api.MintItem{}, &mfaUnprovedError{Requirement: need, Err: agent.ErrAgentTooOld},
+			tokenFailure{Device: "core1", Error: "agent_too_old"}},
 		{"refused", api.MintItem{}, &agent.BrokerRefusedError{Err: errors.New("revoked")},
 			tokenFailure{Device: "core1", Error: "broker_refused"}},
 		{"no token", api.MintItem{Device: "core1", Verdict: "permit"}, nil, tokenFailure{Device: "core1", Error: "no_token"}},
@@ -1420,10 +1933,6 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 		f.Error = failConnectionChanged
 	case errors.As(err, &refused):
 		f.Error = failBrokerRefused
-	case errors.As(err, &unproved):
-		f.Error, f.PerLoginMFA = failMFARequired, requirementOf(unproved.Requirement)
-	case errors.As(err, &need):
-		f.Error, f.PerLoginMFA = failMFARequired, requirementOf(need.Requirement)
 	case errors.As(err, &revoked):
 		f.Error = failRevoked
 	case errors.As(err, &running):
@@ -1434,6 +1943,10 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 		f.Error = failNoAgent
 	case errors.Is(err, agent.ErrSessionOver):
 		f.Error = failSessionOver
+	case errors.As(err, &unproved):
+		f.Error, f.PerLoginMFA = failMFARequired, requirementOf(unproved.Requirement)
+	case errors.As(err, &need):
+		f.Error, f.PerLoginMFA = failMFARequired, requirementOf(need.Requirement)
 	default:
 		f.Error = failAgent
 	}
@@ -1442,7 +1955,10 @@ func tokenFailureOf(device string, item api.MintItem, err error) tokenFailure {
 ```
 
   (`KeyCode` is checked before the requirement, so a touch that timed out inside a proof says
-  `touch_timeout`; `ErrConnectionChanged` before it too.) In `tokenCmd`:
+  `touch_timeout`; `ErrConnectionChanged` before it too. So are the session's own failures, which
+  `prove` meets in `c.Status` and `mfaUnprovedError` wraps: a revoked or ended session, no agent,
+  or an agent too old says so, not `per_login_mfa_required`, so the library never tells a person
+  whose session was revoked to run `port49 token` at a terminal (pre-flight M8).) In `tokenCmd`:
 
 ```go
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
@@ -1473,11 +1989,14 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `cmd/port49/workload.go` (`render`, `workloadToken`; new `workloadJSON`, `refusedItem`)
+- Create: `clients/python/tests/testdata/workload_every_device_denied.json`,
+  `clients/python/tests/testdata/workload_empty_sweep.json` (the CLI's own bytes; Task 8 feeds
+  them to the library)
 - Test: `cmd/port49/workload_test.go`
 
 **Interfaces:**
 - Consumes: `api.MintResponse`, `api.MintItem`, Task 5's `mfaRequirement` and `requirementOf`.
-- Produces (Task 8 parses exactly these):
+- Produces (Task 8 parses exactly these; `results` and `refused` are `[]`, never `null`):
 
 ```go
 // refusedItem is one item --format json did not mint: its words, never a token.
@@ -1540,7 +2059,21 @@ func TestWorkloadJSONListsTheRefused(t *testing.T) {
 	}
 }
 
-// Every device denied: exit 77 as before, and stdout says which and why.
+// goldenJSON fails t unless stdout is the golden file the Python library's
+// tests are fed (pre-flight I3): the two sides read the same bytes.
+func goldenJSON(t *testing.T, name string, stdout []byte) {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("..", "..", "clients", "python", "tests", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.TrimSpace(stdout); !bytes.Equal(got, bytes.TrimSpace(want)) {
+		t.Fatalf("stdout\n%s\nis not %s\n%s", got, name, want)
+	}
+}
+
+// Every device denied: exit 77 as before, and stdout says which and why,
+// with "results": [] (never null).
 func TestWorkloadJSONOnEveryDeviceDenied(t *testing.T) {
 	flags := workloadBroker(t, mixedMFA)
 	var out, errb bytes.Buffer
@@ -1549,6 +2082,23 @@ func TestWorkloadJSONOnEveryDeviceDenied(t *testing.T) {
 	if code != 77 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 0 || len(got.Refused) != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
+	goldenJSON(t, "workload_every_device_denied.json", out.Bytes())
+}
+
+// A scope selecting nothing: exit 77 as before, and stdout says nothing was
+// selected, told apart from a failure.
+func TestWorkloadJSONOnAnEmptySweep(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Subject: "svc_oxidized"})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "--scope", "none"),
+		&out, &errb)
+	if code != 77 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	goldenJSON(t, "workload_empty_sweep.json", out.Bytes())
 }
 
 // With --out, nothing is written when nothing was minted (decision 40 ruling
@@ -1597,6 +2147,12 @@ func render(format string, resp api.MintResponse, permitted []api.MintItem, enab
 	if format == "json" {
 		refused := refusedOf(resp.Results)
 		resp.Results = permitted
+		if resp.Results == nil {
+			// "results": [], never null: MintResponse.Results has no
+			// omitempty, and a reader iterating it must not meet a null
+			// (pre-flight I3).
+			resp.Results = []api.MintItem{}
+		}
 		return json.Marshal(workloadJSON{MintResponse: resp, Refused: refused})
 	}
 	…TSV unchanged…
@@ -1622,9 +2178,32 @@ func render(format string, resp api.MintResponse, permitted []api.MintItem, enab
 	}
 ```
 
-  and for the empty sweep (`*scope != "" && len(resp.Results) == 0`), under `--format json` with no
-  `--out`, print `{"principal": …, "results": [], "refused": []}` (render with no items) before
-  returning 77, so the library can tell "nothing selected" from a failure.
+  and for the empty sweep, after its stderr line:
+
+```go
+	case err == nil && *scope != "" && len(resp.Results) == 0:
+		fmt.Fprintf(stderr, "%s: scope %s: no device it selects is one you hold a grant on, or no scope has that name\n",
+			cmd, safe(*scope))
+		if *format == "json" && *out == "" {
+			// "Nothing selected", told apart from a failure (decision 46
+			// ruling 10): {"principal": …, "results": [], "refused": []}.
+			if body, err := render("json", resp, nil, *enable); err == nil {
+				_, _ = stdout.Write(body)
+			}
+		}
+		return exitFinal
+```
+
+  The golden files the Python tests read are written in this step (pre-flight I3; ruling: the
+  Python tests are fed the CLI's own bytes), each the exact stdout of the Go test that reads it,
+  without a trailing newline:
+  - `clients/python/tests/testdata/workload_every_device_denied.json`:
+    `{"principal":"spiffe://corp.example.com/host/oxidized-01","subject":"svc_oxidized","results":[],"refused":[{"device":"fw1","verdict":"deny","reason":"no_grants_matched"}]}`
+  - `clients/python/tests/testdata/workload_empty_sweep.json`:
+    `{"principal":"spiffe://corp.example.com/host/oxidized-01","subject":"svc_oxidized","results":[],"refused":[]}`
+
+  If a Go test's output differs from its golden file, the golden file is wrong only if the plan's
+  bytes are: fix whichever is wrong, and keep the two equal.
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `go test ./cmd/port49/ -run 'Workload' -count=1`
@@ -1634,7 +2213,7 @@ Expected: PASS, the Oxidized wrapper's tests (`examples/oxidized`) unchanged: `g
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/port49/workload.go cmd/port49/workload_test.go
+git add cmd/port49/workload.go cmd/port49/workload_test.go clients/python/tests/testdata
 git commit -m "feat: workload token --format json lists the refused, and answers on 75 and 77
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -1663,7 +2242,8 @@ class NotInstalled(Port49Error)        # code "not_installed"
 class NoAgent(Port49Error)             # "no_agent", "agent_too_old"
 class SessionOver(Port49Error)         # "session_over", "credential_revoked"
 class Denied(Port49Error)              # a deny; .reason (a §5.7 code), .verdict
-class MFARequired(Port49Error)         # "per_login_mfa_required"; .requirement: dict
+class MFARequired(Port49Error)         # "per_login_mfa_required", the CLI's code or a deny for it;
+                                       # .requirement: dict, .reason (the deny's, or None)
 class KeyUnavailable(Port49Error)      # "touch_timeout", "key_locked", "key_absent"
 class BrokerRefused(Port49Error)       # "broker_refused"
 class Temporary(Port49Error)           # "revocation_running", "connection_changed", workload exit 75; .results
@@ -1799,6 +2379,15 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(cm.exception.requirement["accept"], ["idp_mfa"])
         self.assertIn("port49 token core1", str(cm.exception))
 
+    def test_a_deny_for_a_second_factor_is_mfa_required(self):  # pre-flight M7: one condition, one class
+        a = self.agent({"stdout": fake.item(device="core1", verdict="deny", reason="per_login_mfa_required",
+                                            per_login_mfa={"accept": ["hardware_key_touch"], "reuse_for_seconds": 900}),
+                        "code": 1})
+        with self.assertRaises(MFARequired) as cm:
+            a.token("core1")
+        self.assertEqual((cm.exception.reason, cm.exception.requirement["accept"]),
+                         ("per_login_mfa_required", ["hardware_key_touch"]))
+
     def test_only_what_sent_nothing_is_retried(self):
         busy = {"stdout": fake.item(device="leaf1", error="revocation_running", detail="d"), "code": 1}
         tok = self.agent(busy, busy, {"stdout": PERMIT}).token("leaf1")
@@ -1894,6 +2483,8 @@ class Floor(unittest.TestCase):
 PYTHON ?= python3
 
 test-python:
+	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { \
+	  echo "make test needs python3 3.10 or later (decision 46 ruling 14)"; exit 1; }
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s clients/python/tests -v
 	@if [ -d clients/ansible/ansible_collections/port49/client/tests/unit ]; then \
 	  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python/src:clients/ansible $(PYTHON) -m unittest discover \
@@ -2043,10 +2634,11 @@ class Denied(Port49Error):
 
 
 class MFARequired(Port49Error):
-    """The device asks for a second factor that could not be given here."""
+    """The device asks for a second factor that could not be given here: the CLI's
+    per_login_mfa_required, or the broker's deny for it (reason kept)."""
 
-    def __init__(self, code, detail="", device=None, requirement=None):
-        self.requirement = requirement or {}
+    def __init__(self, code, detail="", device=None, requirement=None, reason=None):
+        self.requirement, self.reason = requirement or {}, reason
         super().__init__(code, detail, device)
 
     def __str__(self):
@@ -2160,9 +2752,14 @@ def answer(ran):
 def error_for(obj, device=None):
     device = obj.get("device") or device
     detail = _run.printable(obj.get("detail") or "")
-    verdict = obj.get("verdict")
+    verdict, reason = obj.get("verdict"), obj.get("reason")
     if verdict and verdict != "permit":
-        return Denied(obj.get("reason") or verdict, detail, device, reason=obj.get("reason"), verdict=verdict)
+        if reason == "per_login_mfa_required" or obj.get("per_login_mfa"):
+            # The condition the CLI's per_login_mfa_required code names: one class for both, a
+            # Workload's refused item and an Agent's failure alike (pre-flight M7).
+            return MFARequired("per_login_mfa_required", detail, device, requirement=obj.get("per_login_mfa"),
+                               reason=reason)
+        return Denied(reason or verdict, detail, device, reason=reason, verdict=verdict)
     code = obj.get("error") or "agent_error"
     cls = CLASSES.get(code, Port49Error)
     if cls is MFARequired:
@@ -2228,7 +2825,9 @@ class Agent:
   `src/port49/__init__.py` exports `Agent`, `Workload` (Task 8), `Token`, `Refusal`, `MintResults`
   and every exception class. `clients/python/README.md`: install (`pip install ./clients/python`,
   `[netmiko]` for Netmiko), the `Agent` example, the exception table (code → class → what to do),
-  what is retried and why, and "the token is never in argv, the environment, a log or a `repr`".
+  what is retried and why (a `connection_changed` retry asks for a second touch, since the touch
+  is bound to the connection that changed; pre-flight M8), and "the token is never in argv, the
+  environment, a log or a `repr`".
 - [ ] **Step 5: Run the tests to see them pass**
 
 Run: `make test-python`
@@ -2253,8 +2852,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Create: `clients/python/tests/test_workload.py`
 
 **Interfaces:**
-- Consumes: Task 6's `workloadJSON` and `refusedItem`; Task 7's `Token`, `Refusal`, `MintResults`,
-  `Temporary`, `Final`, `failed`, `answer`.
+- Consumes: Task 6's `workloadJSON` and `refusedItem`, and its golden files in
+  `clients/python/tests/testdata/`; Task 7's `Token`, `Refusal`, `MintResults`, `Temporary`,
+  `Final`, `MFARequired`, `failed`, `answer`.
 - Produces:
 
 ```python
@@ -2279,7 +2879,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 import fakeport49 as fake  # noqa: E402
-from port49 import Final, Port49Error, Temporary, Workload  # noqa: E402
+from port49 import Final, MFARequired, Port49Error, Temporary, Workload  # noqa: E402
+
+TESTDATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata")
+
+
+def golden(name):
+    """The CLI's own stdout, as Task 6's Go tests check it byte for byte (pre-flight I3)."""
+    with open(os.path.join(TESTDATA, name), encoding="utf-8") as f:
+        return f.read()
+
 
 MINTED = {"principal": "spiffe://corp/oxidized", "results": [
     {"device": "leaf1", "verdict": "permit", "address": "10.0.0.11", "platform": "arista_eos",
@@ -2303,6 +2912,7 @@ class WorkloadTest(unittest.TestCase):
         self.assertEqual(res.tokens["leaf1"].login, "LOGINTOKEN")
         self.assertEqual(res.refused["leaf2"].reason, "no_grants_matched")
         self.assertEqual(res.refused["core1"].per_login_mfa["accept"], ["hardware_key_touch"])
+        self.assertIsInstance(res.refused["core1"].exception(), MFARequired)  # as Agent raises it (M7)
         argv = fake.argvs(self.dir)[0]
         self.assertEqual(argv[:2], ["workload", "token"])
         self.assertIn("--devices-file", argv)
@@ -2315,11 +2925,16 @@ class WorkloadTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--scope") + 1], "core")
 
     def test_every_device_denied_is_results_not_an_exception(self):
-        res = self.workload({"stdout": json.dumps({"results": [], "refused": MINTED["refused"]}), "code": 77}).tokens(["leaf2"])
-        self.assertEqual((res.tokens, len(res.refused)), ({}, 2))
+        res = self.workload({"stdout": golden("workload_every_device_denied.json"), "code": 77}).tokens(["fw1"])
+        self.assertEqual((res.tokens, list(res.refused)), ({}, ["fw1"]))
+        self.assertEqual(res.refused["fw1"].reason, "no_grants_matched")
 
     def test_a_scope_selecting_nothing_is_empty(self):
-        res = self.workload({"stdout": json.dumps({"results": [], "refused": []}), "code": 77}).tokens(scope="none")
+        res = self.workload({"stdout": golden("workload_empty_sweep.json"), "code": 77}).tokens(scope="none")
+        self.assertEqual((res.tokens, res.refused), ({}, {}))
+
+    def test_a_null_list_is_an_empty_one(self):  # a CLI before Task 6's fix printed "results": null
+        res = self.workload({"stdout": '{"principal": "p", "results": null, "refused": null}', "code": 77}).tokens(["x"])
         self.assertEqual((res.tokens, res.refused), ({}, {}))
 
     def test_75_is_temporary_with_what_was_minted(self):
@@ -2409,11 +3024,12 @@ class Workload:
             if ran.code == 77:
                 raise Final(*_words(err))
             raise err
+        # `or []`: a null list is an empty one, never a TypeError (pre-flight I3).
         res = MintResults(
-            {it["device"]: Token.of(it) for it in obj.get("results", []) if it.get("login")},
+            {it["device"]: Token.of(it) for it in obj.get("results") or [] if it.get("login")},
             {r["device"]: Refusal(r["device"], r.get("verdict"), r.get("reason"), r.get("error"),
                                   _run.printable(r.get("detail") or ""), r.get("per_login_mfa"))
-             for r in obj.get("refused", [])})
+             for r in obj.get("refused") or []})
         if ran.code == 75:
             raise Temporary("exit_75", "the broker did not answer every device by the deadline; what was minted "
                             "is in .results; run again for the rest", None, results=res)
@@ -2454,7 +3070,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `clients/python/README.md` (host keys)
 
 **Interfaces:**
-- Consumes: Task 7's `Agent`, `Token`, `HostKeyError`; OpenSSH's `ssh -G` and `ssh-keygen -F`.
+- Consumes: Task 7's `Agent`, `Token`, `HostKeyError`, `_run.printable`; OpenSSH's `ssh -G`,
+  `ssh-keygen -F` and `ssh-keygen -Q`; Task 2's note for the `ssh -G` forms.
 - Produces:
 
 ```python
@@ -2462,20 +3079,33 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 @dataclass(frozen=True)
 class KnownHosts:
     name: str                 # the name keys are filed under: the operator's alias, else the device lowercased
-    keys: tuple               # ("ssh-ed25519 AAAA…", …): every plain key filed under name
-    markers: tuple            # "@cert-authority …" / "@revoked …" lines matching name
+    keys: tuple               # ("ssh-ed25519 AAAA…", …): the plain keys filed under name, none of them revoked
+    authorities: tuple        # "@cert-authority …" lines matching name
+    revoked: tuple            # ("ssh-ed25519 AAAA…", …): the keys "@revoked" lines matching name revoke
+    krl: str                  # the operator's RevokedHostKeys, or ""
     strict: bool              # the operator's StrictHostKeyChecking is yes
     hash_names: bool          # HashKnownHosts yes
-    write_to: str             # the first UserKnownHostsFile
-def lookup(device, address, *, port=22, ssh_config=None, ssh="ssh", ssh_keygen="ssh-keygen") -> KnownHosts
+    write_to: str             # the first UserKnownHostsFile that keeps keys ("" under strict with none)
+NAME_RULE: str                # decision 42 ruling 8 in port49 ssh's words
+def valid_name(device) -> bool
+def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh",
+           ssh_keygen="ssh-keygen") -> KnownHosts
+def is_revoked(kh: KnownHosts, keytype: str, key_b64: str, *, ssh_keygen="ssh-keygen") -> bool
 def remember(kh: KnownHosts, keytype: str, key_b64: str, stderr=None) -> None
 def hashed(name: str, salt: bytes | None = None) -> str
 
 # port49.netmiko
 DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_iosxe": "cisco_xe",
                 "juniper_junos": "juniper_junos"}
+class FirstContact:           # Paramiko's missing-host-key policy for a first contact
+    def __init__(self, kh, device, stderr=None)
+    def missing_host_key(self, client, hostname, key) -> None
 def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwargs)
 ```
+
+  `HostKeyError` codes: `device_name`, `address`, `ssh_config_unread`, `known_hosts_unread`,
+  `host_key_uncheckable`, `host_keys_not_kept`, `host_key_revoked`, `host_key_unknown`,
+  `host_key_changed`. They are the library's own, like the CLI's codes, not §5.7 reason codes.
 
 - [ ] **Step 1: Write the failing tests.** `clients/python/tests/test_hostkeys.py` (the real `ssh`
   and `ssh-keygen`; skipped when either is missing):
@@ -2494,7 +3124,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from port49 import hostkeys  # noqa: E402
+from port49 import HostKeyError, hostkeys  # noqa: E402
 
 ED = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
 
@@ -2506,15 +3136,23 @@ class HostKeysTest(unittest.TestCase):
         self.kh = os.path.join(self.dir, "known_hosts")
         open(self.kh, "w").close()
 
-    def config(self, *lines):
+    def config(self, *lines, user=None):
         path = os.path.join(self.dir, "ssh_config")
         with open(path, "w", encoding="ascii") as f:
-            f.write("\n".join([f"UserKnownHostsFile {self.kh}", "GlobalKnownHostsFile /dev/null", *lines]) + "\n")
+            f.write("\n".join([f"UserKnownHostsFile {user or self.kh}", "GlobalKnownHostsFile /dev/null", *lines]) + "\n")
         return path
+
+    def newkey(self, name):
+        """A fresh Ed25519 public key, "type base64", and its .pub file."""
+        path = os.path.join(self.dir, name)
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path], check=True)
+        with open(path + ".pub", encoding="ascii") as f:
+            return " ".join(f.read().split()[:2]), path + ".pub"
 
     def test_nothing_known(self):
         kh = hostkeys.lookup("Leaf1", "10.0.0.11", ssh_config=self.config())
-        self.assertEqual((kh.name, kh.keys, kh.markers, kh.strict, kh.write_to), ("leaf1", (), (), False, self.kh))
+        self.assertEqual((kh.name, kh.keys, kh.authorities, kh.revoked, kh.krl, kh.strict, kh.write_to),
+                         ("leaf1", (), (), (), "", False, self.kh))
 
     def test_a_key_filed_under_the_name_plain_or_hashed(self):
         with open(self.kh, "w", encoding="ascii") as f:
@@ -2529,11 +3167,83 @@ class HostKeysTest(unittest.TestCase):
                              ssh_config=self.config("StrictHostKeyChecking yes", "Host leaf1", "  HostKeyAlias corp-leaf1"))
         self.assertEqual((kh.name, kh.keys, kh.strict), ("corp-leaf1", (ED,), True))
 
-    def test_a_marker_line_is_kept_apart(self):
+    def test_marker_lines_are_kept_apart(self):
         with open(self.kh, "w", encoding="ascii") as f:
-            f.write(f"@cert-authority leaf* {ED}\n")
+            f.write(f"@cert-authority leaf* {ED}\n@revoked * {ED}\n")
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
-        self.assertEqual((kh.keys, len(kh.markers)), ((), 1))
+        self.assertEqual((kh.keys, len(kh.authorities), kh.revoked), ((), 1, (ED,)))
+
+    def test_a_revoked_filed_key_is_refused_before_connecting(self):  # Review Focus 6; pre-flight C1
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {ED}\n@revoked * {ED}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+
+    def test_a_revoked_key_beside_another_is_dropped(self):  # always, not only when nothing else is filed
+        other, _ = self.newkey("other")
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {ED}\nleaf1 {other}\n@revoked * {ED}\n")
+        self.assertEqual(hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config()).keys, (other,))
+
+    def test_a_krl_revokes_a_filed_key(self):  # Review Focus 6: RevokedHostKeys, read by ssh-keygen -Q
+        bad, pub = self.newkey("bad")
+        good, _ = self.newkey("good")
+        krl = os.path.join(self.dir, "krl")
+        subprocess.run(["ssh-keygen", "-q", "-k", "-f", krl, pub], check=True)
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {bad}\n")
+        cfg = self.config(f"RevokedHostKeys {krl}")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=cfg)
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {good}\n")
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=cfg)
+        self.assertEqual((kh.keys, kh.krl), ((good,), krl))
+        self.assertTrue(hostkeys.is_revoked(kh, *bad.split()))
+        self.assertFalse(hostkeys.is_revoked(kh, *good.split()))
+
+    def test_a_krl_ssh_keygen_cannot_read_is_refused(self):  # fail closed (10.2p1: exit 255, not a KRL)
+        plain = os.path.join(self.dir, "plain")
+        with open(plain, "w", encoding="ascii") as f:
+            f.write(ED + "\n")
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {ED}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config(f"RevokedHostKeys {plain}"))
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
+        self.assertIn("RevokedHostKeys", str(cm.exception))
+
+    def test_known_hosts_command_is_refused(self):  # Review Focus 6; pre-flight C1
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("KnownHostsCommand /bin/true %H"))
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
+        self.assertIn("KnownHostsCommand", str(cm.exception))
+        self.assertIn("port49 ssh", str(cm.exception))
+
+    def test_a_known_hosts_file_of_dev_null_is_refused(self):  # Review Focus 7; pre-flight I7
+        for user in ("/dev/null", "none"):
+            with self.assertRaises(HostKeyError, msg=user) as cm:
+                hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config(user=user))
+            self.assertEqual(cm.exception.code, "host_keys_not_kept")
+            self.assertIn("UserKnownHostsFile", str(cm.exception))
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("StrictHostKeyChecking yes", user="/dev/null"))
+        self.assertEqual((kh.strict, kh.write_to), (True, ""))  # the operator's yes: nothing accepted, so it stands
+
+    def test_names_known_hosts_would_misread_are_refused(self):  # pre-flight I6
+        for name in ("leaf*", "a,b", "a b", "x\ny", "leaf1\n", "@x", "|1|x", "[leaf1]:22", "-leaf", "a" * 254, ""):
+            self.assertFalse(hostkeys.valid_name(name), name)
+            with self.assertRaises(HostKeyError, msg=repr(name)) as cm:
+                hostkeys.lookup(name, "10.0.0.11", ssh_config=self.config())
+            self.assertEqual(cm.exception.code, "device_name")
+        self.assertTrue(hostkeys.valid_name("a" * 253))
+        self.assertTrue(hostkeys.valid_name("core-sw01.dc1"))
+
+    def test_ssh_g_runs_as_port49_ssh_runs_it(self):  # pre-flight M6: HostName's %, and -l for Match user
+        kh = hostkeys.lookup("leaf1", "fe80::1%eth0", username="alice",
+                             ssh_config=self.config("Match user alice", "  HostKeyAlias alice-leaf1"))
+        self.assertEqual(kh.name, "alice-leaf1")
 
     def test_remember_files_under_the_name_hashed_when_asked(self):
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("HashKnownHosts yes"))
@@ -2582,6 +3292,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 captured = {}
+EVENTS = []      # "filed" and "authenticated", in the order they happened
 NEXT_ERROR = []  # what the next connection raises, as Paramiko would
 PRESENTED = ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
 
@@ -2591,17 +3302,35 @@ class BadHostKeyException(Exception):
 
 
 class FakeConnection:
+    """Netmiko 4.7.0's shape: with auto_connect=False nothing connects until _open, and key_policy is
+    Paramiko's AutoAddPolicy or RejectPolicy as ssh_strict says, until the caller sets another."""
+
     def __init__(self, **kw):
         captured.clear()
+        EVENTS.clear()
         captured.update(kw)
-        with open(kw["alt_key_file"], encoding="ascii") as f:
+        self.kw = kw
+        self.key_policy = "RejectPolicy" if kw["ssh_strict"] else "AutoAddPolicy"
+        if not kw.get("auto_connect", True):
+            return
+        self._open()
+
+    def _open(self):
+        with open(self.kw["alt_key_file"], encoding="ascii") as f:
             captured["known_hosts"] = f.read()
-        captured["mode"] = stat.S_IMODE(os.stat(kw["alt_key_file"]).st_mode)
+        captured["mode"] = stat.S_IMODE(os.stat(self.kw["alt_key_file"]).st_mode)
+        captured["policy"] = self.key_policy
         if NEXT_ERROR:
             raise NEXT_ERROR.pop()
         key = types.SimpleNamespace(get_name=lambda: PRESENTED[0], get_base64=lambda: PRESENTED[1])
-        transport = types.SimpleNamespace(get_remote_server_key=lambda: key)
-        self.remote_conn_pre = types.SimpleNamespace(get_transport=lambda: transport)
+        if not captured["known_hosts"]:
+            # Paramiko: no key held for the address, so the policy is asked, after the key exchange
+            # and before authentication.
+            self.key_policy.missing_host_key(None, self.kw["host"], key)
+        EVENTS.append("authenticated")
+
+    def disconnect(self):
+        captured["disconnected"] = True
 
 
 sys.modules["netmiko"] = types.SimpleNamespace(ConnectHandler=lambda **kw: FakeConnection(**kw))
@@ -2622,21 +3351,29 @@ class FakeAgent:
         return self.token_
 
 
-def known(*keys, markers=(), strict=False):
-    return hostkeys.KnownHosts("leaf1", tuple(keys), tuple(markers), strict, False, "/dev/null")
+def known(*keys, authorities=(), revoked=(), strict=False):
+    return hostkeys.KnownHosts("leaf1", tuple(keys), tuple(authorities), tuple(revoked), "", strict, False,
+                               "/dev/null")
 
 
 class NetmikoTest(unittest.TestCase):
-    def connect(self, kh, **kw):
+    def connect(self, kh, device="leaf1", agent=None, **kw):
         remembered = []
+
+        def remember(k, t, b, stderr=None):
+            remembered.append((k.name, t, b))
+            EVENTS.append("filed")
+
         with mock.patch.object(hostkeys, "lookup", return_value=kh), \
-                mock.patch.object(hostkeys, "remember", side_effect=lambda k, t, b, stderr=None: remembered.append((k.name, t, b))):
-            conn = p49netmiko.connect("leaf1", agent=FakeAgent(), **kw)
+                mock.patch.object(hostkeys, "remember", side_effect=remember):
+            conn = p49netmiko.connect(device, agent=agent or FakeAgent(), **kw)
         return conn, remembered
 
     def test_a_known_key_is_the_only_key(self):
         _, remembered = self.connect(known("ssh-ed25519 AAAA1"))
         self.assertTrue(captured["ssh_strict"])
+        self.assertFalse(captured["auto_connect"])
+        self.assertEqual(captured["policy"], "RejectPolicy")
         self.assertEqual(captured["known_hosts"], "10.0.0.11 ssh-ed25519 AAAA1\n")
         self.assertEqual(captured["mode"], 0o600)
         self.assertFalse(os.path.exists(captured["alt_key_file"]))
@@ -2644,19 +3381,31 @@ class NetmikoTest(unittest.TestCase):
         self.assertEqual((captured["username"], captured["password"], captured["secret"]), ("alice", "LOGINTOKEN", "ENABLETOKEN"))
         self.assertEqual(remembered, [])
 
-    def test_a_first_contact_is_accepted_and_filed_under_the_name(self):
+    def test_a_first_contact_is_filed_under_the_name_before_authentication(self):  # pre-flight C1
         _, remembered = self.connect(known())
         self.assertFalse(captured["ssh_strict"])
+        self.assertIsInstance(captured["policy"], p49netmiko.FirstContact)
         self.assertEqual(captured["known_hosts"], "")
         self.assertEqual(remembered, [("leaf1", PRESENTED[0], PRESENTED[1])])
+        self.assertEqual(EVENTS, ["filed", "authenticated"])
+
+    def test_a_revoked_key_at_first_contact_is_refused_before_auth(self):  # Review Focus 6; pre-flight C1
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known(revoked=(" ".join(PRESENTED),)))
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+        self.assertEqual(EVENTS, [])  # neither filed nor authenticated
+        self.assertTrue(captured.get("disconnected"))
+        self.assertNotIn("LOGINTOKEN", str(cm.exception))
 
     def test_another_port_is_filed_in_brackets_for_paramiko(self):
         self.connect(known("ssh-ed25519 AAAA1"), port=2222)
         self.assertEqual(captured["known_hosts"], "[10.0.0.11]:2222 ssh-ed25519 AAAA1\n")
 
     def test_a_key_of_another_type_under_a_known_name_is_refused(self):  # Review Focus 1
-        # Under ssh_strict, holding only the filed RSA key, Paramiko refuses an Ed25519 one as unknown.
-        NEXT_ERROR.append(Exception("Server '10.0.0.11' not found in known_hosts"))
+        # Paramiko, holding the filed RSA key for the address, raises BadHostKeyException for an
+        # Ed25519 one: our_key is None, so it compares against the first key held (client.py:461-466).
+        NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match: got 'AAAAC3', "
+                                              "expected 'AAAAB3'"))
         with self.assertRaises(HostKeyError) as cm:
             self.connect(known("ssh-rsa AAAAB3"))
         self.assertTrue(captured["ssh_strict"])
@@ -2665,7 +3414,8 @@ class NetmikoTest(unittest.TestCase):
         self.assertNotIn("LOGINTOKEN", str(cm.exception))
 
     def test_an_address_moved_to_another_host_is_refused(self):  # Review Focus 2
-        NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match: got 'AAAA9'"))
+        NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match: got 'AAAA9', "
+                                              "expected 'AAAA1'"))
         with self.assertRaises(HostKeyError) as cm:
             self.connect(known("ssh-ed25519 AAAA1"))
         self.assertIn("is not the one 10.0.0.11 presents", str(cm.exception))
@@ -2674,7 +3424,7 @@ class NetmikoTest(unittest.TestCase):
     def test_a_certificate_authority_alone_is_refused_before_connecting(self):
         captured.clear()
         with self.assertRaises(HostKeyError) as cm:
-            self.connect(known(markers=("@cert-authority leaf* ssh-ed25519 AAAA",)))
+            self.connect(known(authorities=("@cert-authority leaf* ssh-ed25519 AAAA",)))
         self.assertEqual(captured, {})
         self.assertIn("cannot check", str(cm.exception))
 
@@ -2684,16 +3434,24 @@ class NetmikoTest(unittest.TestCase):
             self.connect(known(strict=True))
         self.assertEqual(captured, {})
 
-    def test_the_security_options_cannot_be_overridden(self):
-        with self.assertRaises(ValueError):
-            self.connect(known("ssh-ed25519 AAAA1"), ssh_strict=False)
+    def test_a_bad_name_is_refused_before_minting(self):  # pre-flight I6, M14
+        agent = FakeAgent()
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known(), device="leaf*", agent=agent)
+        self.assertEqual((cm.exception.code, agent.asked), ("device_name", []))
+
+    def test_the_security_options_cannot_be_overridden(self):  # pre-flight M16 adds sock and ssh_config_file
+        for kw in ("ssh_strict", "sock", "ssh_config_file", "auto_connect"):
+            with self.assertRaises(ValueError, msg=kw):
+                self.connect(known("ssh-ed25519 AAAA1"), **{kw: None})
 ```
 
-  Note on the impostor tests: Paramiko, holding only the filed key for the address under
-  `ssh_strict=True`, raises `BadHostKeyException` for a different key of the same type and
-  `SSHException("Server … not found in known_hosts")` for a key of another type; the fake raises
-  each in turn, and `is_host_key_failure` (Step 3) recognises both by type name and message.
-  L65 (c) and (d) measure both against devices.
+  Note on the impostor tests (pre-flight M5): Paramiko 4.0.0, holding any key for the address,
+  raises `BadHostKeyException` for a different key of the same type and for a key of another type
+  alike (`client.py:461-466`: `our_key is None` takes the first key held, then raises); a
+  missing-host-key policy is asked only when nothing is held. The fake raises it for both, and
+  `is_host_key_failure` (Step 3) recognises it by type name and message. L65 (c) and (d) measure
+  both against devices.
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -2708,35 +3466,64 @@ files and settings, read through OpenSSH's own tools, and accept-new under
 the device's inventory name, the name `port49 ssh` files keys under.
 
 `ssh -G` reads the operator's ssh_config as ssh would; `ssh-keygen -F` finds
-the lines filed under a name, hashed or not, patterns included. Nothing here
-parses ssh_config or matches known_hosts patterns itself."""
+the lines filed under a name, hashed or not, patterns included; `ssh-keygen -Q`
+reads a RevokedHostKeys file. Nothing here parses ssh_config, matches
+known_hosts patterns or reads a KRL itself. What this client cannot honour as
+ssh would (a KnownHostsCommand, a RevokedHostKeys ssh-keygen cannot read) is
+refused, never passed."""
 
 import base64
 import hashlib
 import hmac
 import os
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, replace
 
+from . import _run
 from .errors import HostKeyError
+
+# Decision 42 ruling 8, `port49 ssh`'s sshName: known_hosts reads '*', '?', '!', ',' and '[' as patterns, and a
+# leading '@' or '|' as a marker or a hash, so a name holding one could file a key for other devices.
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,252}")
+NAME_RULE = ("port49 takes devices named with letters, digits, '.', '_' and '-' only (decision 42 ruling 8), since "
+             "the name is written into your known_hosts; use `port49 token` and your own client for it")
+
+# A UserKnownHostsFile that keeps nothing.
+_KEEPS_NOTHING = ("/dev/null", "none")
 
 
 @dataclass(frozen=True)
 class KnownHosts:
     name: str
     keys: tuple
-    markers: tuple
+    authorities: tuple
+    revoked: tuple
+    krl: str
     strict: bool
     hash_names: bool
     write_to: str
 
 
-def _ssh_g(device, address, port, ssh_config, ssh):
-    argv = [ssh, "-G"] + (["-F", ssh_config] if ssh_config else []) + ["-o", f"HostName={address}"]
+def valid_name(device):
+    """Whether device can be written into known_hosts as a host field, as `port49 ssh`'s sshName says."""
+    return isinstance(device, str) and _NAME.fullmatch(device) is not None
+
+
+def _ssh_g(device, address, port, username, ssh_config, ssh):
+    # As `port49 ssh` runs it (sshPolicy): HostName double-quoted with each '%' doubled, since ssh expands
+    # %-tokens in it (an IPv6 zone's "%eth0"), and -l, so a `Match user` block reads as it does for the login.
+    argv = [ssh, "-G"] + (["-F", ssh_config] if ssh_config else [])
+    argv += ["-o", 'HostName="' + address.replace("%", "%%") + '"'] + (["-l", username] if username else [])
     argv += (["-p", str(port)] if port and port != 22 else []) + ["--", device]
     try:
-        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10, check=True).stdout
+        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+                             check=True).stdout
+    except subprocess.CalledProcessError as e:
+        said = _run.printable((e.stderr or "").strip(), 300) or f"exit {e.returncode}"
+        raise HostKeyError("ssh_config_unread", f"{ssh} -G could not read your ssh_config: {said}", device) from None
     except (OSError, subprocess.SubprocessError) as e:
         raise HostKeyError("ssh_config_unread", f"{ssh} -G could not read your ssh_config: {e}", device) from None
     conf = {}
@@ -2746,31 +3533,80 @@ def _ssh_g(device, address, port, ssh_config, ssh):
     return conf
 
 
-def lookup(device, address, *, port=22, ssh_config=None, ssh="ssh", ssh_keygen="ssh-keygen"):
-    conf = _ssh_g(device, address, port, ssh_config, ssh)
+def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh", ssh_keygen="ssh-keygen"):
+    """What OpenSSH's files hold for device, as ssh reads them, with every revoked key dropped. Refuses,
+    before anything connects, what this client cannot honour as ssh does (decision 46 ruling 13)."""
+    if not valid_name(device):
+        raise HostKeyError("device_name", f"{str(device)[:64]!r}: {NAME_RULE}")  # repr: no newline, no escape
+    if '"' in address or "\n" in address:
+        raise HostKeyError("address", "the broker gives an address ssh cannot be handed; tell the operator", device)
+    conf = _ssh_g(device, address, port, username, ssh_config, ssh)
+    command = conf.get("knownhostscommand", "")
+    if command and command != "none":
+        raise HostKeyError("host_key_uncheckable", "your ssh_config sets KnownHostsCommand, which this client cannot "
+                           "run as ssh does, and reading past it could accept a key ssh refuses: use port49 ssh for "
+                           "this device, or file its key in a known_hosts file", device)
     name = conf.get("hostkeyalias") or device.lower()
-    files = conf.get("userknownhostsfile", "").split() + conf.get("globalknownhostsfile", "").split()
-    keys, markers = [], []
+    strict = conf.get("stricthostkeychecking") in ("true", "yes")
+    user = conf.get("userknownhostsfile", "").split()
+    kept = [p for p in user if p not in _KEEPS_NOTHING]
+    if not kept and not strict:
+        raise HostKeyError("host_keys_not_kept", f"your ssh_config keeps no host keys (UserKnownHostsFile "
+                           f"{' '.join(user) or 'none'}): every connection would be a first contact, and a host at "
+                           f"the device's address would get the token; remove that line for port49 devices", device)
+    krl = conf.get("revokedhostkeys", "")
+    files = kept + [p for p in conf.get("globalknownhostsfile", "").split() if p not in _KEEPS_NOTHING]
+    keys, authorities, revoked = [], [], []
     for path in files:
         if not os.path.isfile(path):
             continue
         r = subprocess.run([ssh_keygen, "-F", name, "-f", path], stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, timeout=10)
         if r.returncode not in (0, 1):
-            raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: {r.stderr.strip()}", device)
+            raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: "
+                               f"{_run.printable(r.stderr.strip(), 300)}", device)
         for line in r.stdout.splitlines():
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("@"):
-                markers.append(line)
-                continue
             fields = line.split()
-            if len(fields) >= 3:
+            if not fields or fields[0].startswith("#"):
+                continue
+            if fields[0] == "@revoked":
+                if len(fields) >= 4:
+                    revoked.append(f"{fields[2]} {fields[3]}")
+            elif fields[0].startswith("@"):
+                authorities.append(line)
+            elif len(fields) >= 3:
                 keys.append(f"{fields[1]} {fields[2]}")
-    user = conf.get("userknownhostsfile", "").split()
-    return KnownHosts(name, tuple(dict.fromkeys(keys)), tuple(markers),
-                      conf.get("stricthostkeychecking") in ("true", "yes"), conf.get("hashknownhosts") == "yes",
-                      user[0] if user else os.path.expanduser("~/.ssh/known_hosts"))
+    kh = KnownHosts(name, (), tuple(authorities), tuple(dict.fromkeys(revoked)), "" if krl == "none" else krl,
+                    strict, conf.get("hashknownhosts") == "yes", kept[0] if kept else "")
+    filed = tuple(k for k in dict.fromkeys(keys) if not is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen))
+    if keys and not filed:
+        raise HostKeyError("host_key_revoked", f"every key filed under {name} is revoked (an @revoked line, or your "
+                           f"RevokedHostKeys): verify the device's key on its console before filing another", device)
+    return replace(kh, keys=filed)
+
+
+def is_revoked(kh, keytype, key_b64, *, ssh_keygen="ssh-keygen"):
+    """Whether an @revoked line matching kh.name, or the operator's RevokedHostKeys, revokes the key, as ssh
+    would refuse it. A RevokedHostKeys that ssh-keygen -Q cannot read is refused, never passed."""
+    if f"{keytype} {key_b64}" in kh.revoked:
+        return True
+    if not kh.krl:
+        return False
+    with tempfile.TemporaryDirectory(prefix="port49-") as tmp:
+        pub = os.path.join(tmp, "key.pub")
+        with open(pub, "w", encoding="ascii") as f:
+            f.write(f"{keytype} {key_b64}\n")
+        try:
+            r = subprocess.run([ssh_keygen, "-Q", "-f", kh.krl, pub], stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            r, why = None, str(e)
+    if r is not None and r.returncode in (0, 1):  # measured on 10.2p1: 0 not revoked, 1 revoked
+        return r.returncode == 1
+    if r is not None:
+        why = _run.printable(r.stderr.strip(), 300) or f"exit {r.returncode}"
+    raise HostKeyError("host_key_uncheckable", f"{ssh_keygen} -Q could not read your RevokedHostKeys {kh.krl} "
+                       f"({why}), so no key can be checked against it: use port49 ssh for this device")
 
 
 def hashed(name, salt=None):
@@ -2801,7 +3637,8 @@ def remember(kh, keytype, key_b64, stderr=None):
 
 The token comes from your agent through `port49 token --json`; the device's key
 is OpenSSH's known_hosts entry under its inventory name: the only key accepted
-once filed, and filed at first contact. The token is never printed."""
+once filed, and filed at first contact, before authentication, unless revoked.
+The token is never printed."""
 
 import os
 import shutil
@@ -2816,15 +3653,36 @@ DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_i
                 "juniper_junos": "juniper_junos"}
 
 # What connect sets and a caller may not: host keys, and no key offered (L51: every refused key counts
-# against the device's login-attempt limit).
+# against the device's login-attempt limit); and ssh_config_file and sock, either of which could steer
+# Paramiko to another host than the address the key was checked for (pre-flight M16).
 OWNED = {"ssh_strict", "system_host_keys", "alt_host_keys", "alt_key_file", "use_keys", "allow_agent", "host",
-         "username", "password", "secret", "device_type"}
+         "username", "password", "secret", "device_type", "auto_connect", "ssh_config_file", "sock"}
+
+
+class FirstContact:
+    """Paramiko's missing-host-key policy for a device with no key filed (decision 46 ruling 13). Paramiko
+    calls it with the key the device presented, after the key exchange and before any authentication
+    (Paramiko 4.0.0 client.py:455-460), so the token never goes to a key refused here. A key an @revoked
+    line or the operator's RevokedHostKeys revokes is refused; any other is filed under the inventory name,
+    as OpenSSH's accept-new files it, before the login goes on."""
+
+    def __init__(self, kh, device, stderr=None):
+        self.kh, self.device, self.stderr = kh, device, stderr
+
+    def missing_host_key(self, client, hostname, key):
+        keytype, key_b64 = key.get_name(), key.get_base64()
+        if hostkeys.is_revoked(self.kh, keytype, key_b64):
+            raise HostKeyError("host_key_revoked", f"{hostname} presents a {keytype} key that is revoked (an "
+                               f"@revoked line, or your RevokedHostKeys): it was not filed, and the token was not "
+                               f"sent", self.device)
+        hostkeys.remember(self.kh, keytype, key_b64, stderr=self.stderr)
 
 
 def is_host_key_failure(exc):
-    """Whether exc, or what it wraps, is Paramiko refusing the host key: BadHostKeyException (a changed
-    key), or an SSHException saying the server is not in known_hosts (a key of another type under
-    ssh_strict). Netmiko may wrap either, so the chain is walked."""
+    """Whether exc, or what it wraps, is Paramiko refusing the host key: BadHostKeyException, for a changed
+    key and for a key of another type alike while any key is held for the address (Paramiko 4.0.0
+    client.py:461-466), or an SSHException saying the server is not in known_hosts (RejectPolicy, should
+    nothing be held). Netmiko may wrap either, so the chain is walked."""
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
@@ -2842,16 +3700,21 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
     owned = OWNED & set(netmiko_kwargs)
     if owned:
         raise ValueError(f"port49.netmiko.connect sets {', '.join(sorted(owned))} itself")
+    if not hostkeys.valid_name(device):
+        # Before the mint: nothing is minted for a name known_hosts would misread (pre-flight I6, M14).
+        raise HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
     tok = (agent or Agent()).token(device, enable=enable)
     device_type = DEVICE_TYPES.get(tok.platform)
     if device_type is None:
         raise ValueError(f"{device}: platform {tok.platform!r} has no Netmiko device type here")
     port = int(netmiko_kwargs.get("port", 22))
-    kh = hostkeys.lookup(device, tok.address, port=port, ssh_config=ssh_config)
-    if not kh.keys and kh.markers:
-        raise HostKeyError("host_key_uncheckable", f"a {kh.markers[0].split()[0]} line in your known_hosts covers "
-                           f"{kh.name}, and Paramiko cannot check a host certificate or a revocation: file the "
-                           f"device's own key under {kh.name}, or use port49 ssh", device)
+    # After the mint, since ssh -G reads the address it gives (Match host): a refusal from here on leaves
+    # the token unused, to expire.
+    kh = hostkeys.lookup(device, tok.address, port=port, username=tok.username, ssh_config=ssh_config)
+    if not kh.keys and kh.authorities:
+        raise HostKeyError("host_key_uncheckable", f"a {kh.authorities[0].split()[0]} line in your known_hosts "
+                           f"covers {kh.name}, and Paramiko cannot check a host certificate: file the device's own "
+                           f"key under {kh.name}, or use port49 ssh", device)
     if not kh.keys and kh.strict:
         raise HostKeyError("host_key_unknown", f"no key is filed under {kh.name} and your ssh_config says "
                            f"StrictHostKeyChecking yes", device)
@@ -2862,12 +3725,24 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
         fd = os.open(known, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="ascii") as f:
             f.write("".join(f"{field} {k}\n" for k in kh.keys))
+        conn = ConnectHandler(device_type=device_type, host=tok.address, username=tok.username,
+                              password=tok.login, secret=tok.enable or "",
+                              ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
+                              alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
+                              **netmiko_kwargs)
+        if not kh.keys:
+            # A first contact: the presented key is checked and filed before authentication, not after
+            # the login (pre-flight C1).
+            conn.key_policy = FirstContact(kh, device, stderr=sys.stderr)
         try:
-            conn = ConnectHandler(device_type=device_type, host=tok.address, username=tok.username,
-                                  password=tok.login, secret=tok.enable or "",
-                                  ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
-                                  alt_key_file=known, use_keys=False, allow_agent=False, **netmiko_kwargs)
-        except Exception as e:
+            conn._open()  # what auto_connect=True runs: the connection, then the session's preparation
+        except BaseException as e:
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+            if isinstance(e, HostKeyError):
+                raise
             if is_host_key_failure(e):
                 raise HostKeyError("host_key_changed", f"the key filed under {kh.name} is not the one {tok.address} "
                                    f"presents: either the device's key changed, or the address is not the device. "
@@ -2875,14 +3750,13 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if not kh.keys:
-        key = conn.remote_conn_pre.get_transport().get_remote_server_key()
-        hostkeys.remember(kh, key.get_name(), key.get_base64(), stderr=sys.stderr)
     return conn
 ```
 
   (`from None` drops Paramiko's text, which names the address but never the token; the token is in
-  no exception here, since Paramiko never puts a password in one.) `examples/netmiko/show_version.py`:
+  no exception here, since Paramiko never puts a password in one. `_open` is Netmiko's own split of
+  its constructor, "decouple connection creation from __init__", in 4.7.0; `netmiko>=4.7` pins it,
+  and L65 runs it against devices.) `examples/netmiko/show_version.py`:
 
 ```python
 """port49 and Netmiko: `python3 show_version.py leaf1` (after `port49 login`)."""
@@ -2902,7 +3776,14 @@ finally:
   and what happens to host keys (accept-new under the inventory name in your known_hosts, shared
   with `port49 ssh`; a changed key refused before the token is sent; `@cert-authority` not
   checkable by Paramiko), with 9a's note on Paramiko presenting the token a second time by
-  `keyboard-interactive` kept.
+  `keyboard-interactive` kept. `clients/python/README.md`'s "Host keys" section says the same and
+  what is refused, and why: a device name known_hosts would read as a pattern (before the mint);
+  a `KnownHostsCommand` (use `port49 ssh`); a `UserKnownHostsFile /dev/null` under accept-new; a
+  key an `@revoked` line or `RevokedHostKeys` names, filed or presented at first contact; a
+  `RevokedHostKeys` `ssh-keygen -Q` cannot read (a plain key list: make it a KRL with `ssh-keygen
+  -k`). A refusal after the mint leaves that token unused; it expires (pre-flight M14). The
+  claims that Paramiko refuses before authentication are marked provisional on L65 until Task 11
+  closes it (pre-flight M9).
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -3067,6 +3948,8 @@ description:
   - Each call is a mint. Mint once per host per play in a C(set_fact) with C(no_log), not in
     C(ansible_password), which Ansible templates at every task.
   - Needs the port49 Python library on the controller (C(pip install port49)).
+  - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name;
+    see the collection README before setting C(host_key_auto_add), and never set it with C(ssh_type=paramiko).
 options:
   _terms: {description: Device names as port49's inventory knows them., required: true, type: list, elements: str}
   field:
@@ -3160,10 +4043,26 @@ class LookupModule(LookupBase):
   ">=2.16"`. The README: install (`ansible-galaxy collection install ./clients/ansible/…` and `pip
   install port49` on the controller), the `pre_tasks` pattern of design §17 with `no_log`, the
   workload options, why one mint per play (the lookup in `ansible_password` mints at each task,
-  as L66 (a) measures), `receipt_max_age` (a play longer than it mints again), and a "Host keys"
-  section left for Task 12 to fill from L66 (written now as: host keys are Ansible's own
-  `host_key_checking` and `host_key_auto_add`, keyed by `ansible_host`; the per-`ssh_type` settings
-  follow L66).
+  as L66 (a) measures), `receipt_max_age` (a play longer than it mints again), devices that ask
+  for `hardware_key_touch` (run `port49 token <one such device>` before the play, so `reuse_for`
+  covers the forks; pre-flight M15), and a "Host keys" section that Task 12 completes from L66.
+  Written now, every setting in it marked provisional on L66 (pre-flight M9):
+  - host keys are Ansible's own `host_key_checking` and `host_key_auto_add`, and `network_cli`
+    keys them by `ansible_host`, the address in Ansible's inventory, not by the port49 name. So
+    an address added to a device in the source of truth (a dynamic inventory from it, the usual
+    case) is a first contact for Ansible, and under `host_key_auto_add` a host at that address
+    is accepted and given the token: design §17's attack is open on this path, as it is not for
+    `port49 ssh` (pre-flight I4). Said plainly, with what flags it: the sync diff's
+    address-change security event (spec §10);
+  - where the connection runs OpenSSH (`ansible.builtin.ssh`), set `ansible_ssh_extra_args: "-o
+    HostKeyAlias={{ inventory_hostname }}"`, which files keys under the name as `port49 ssh` does
+    and closes that gap there;
+  - never `host_key_auto_add` with `ssh_type: paramiko`: its close rewrites `~/.ssh/known_hosts`
+    from Paramiko's parse, which drops `@revoked` and `@cert-authority` lines and comments, and
+    so silently weakens every later `port49 ssh` and Python login (pre-flight I5). Use the path
+    that leaves the file intact (`libssh`, which appends);
+  - a re-keyed device has two entries: the name (`port49 ssh`, Python, `ansible.builtin.ssh` with
+    the alias) and the address (`network_cli`); `ssh-keygen -R` both (pre-flight M13).
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `make test-python`
@@ -3194,12 +4093,18 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 (`labScan`), L53's reload steps (`l53Reload`, `l53WaitDown`, `l53Rebooted`), the capture and
 TACACS+ packet counter (`l.capture`, `l29Packets`).
 
+The run is on the SER8 lab box: WSL2 cannot boot the vJunos-router and vSRX images (pre-flight
+M10). The lab is single-occupant; the watchdog runs throughout.
+
 - [ ] **Step 1: The harness.** Per platform, a private `HOME` (0700) with `~/.ssh/config` holding
   only `UserKnownHostsFile ~/.ssh/known_hosts` and `GlobalKnownHostsFile /dev/null`, and an empty
   `known_hosts`; one capture for the run; each cell counts TACACS+ packets in its own window, the
   good login's window the positive control (a zero is a zero of a counter that counts). Cells:
   - **L64 (a):** `port49 ssh -v <node> -- show version`: exit, methods ssh tried, askpass asks,
-    redeem records, the output present, and `ssh-keygen -F <node>` (the filed line's key type).
+    redeem records, the output present, and every line `ssh-keygen -F <node>` finds, read after
+    the login (ssh's `UpdateHostKeys`, on by default even under an alias, as `ssh -G` on 10.2p1
+    shows, may file further key types after authentication; EOS runs OpenSSH): each line's key
+    type, not only the first (pre-flight M17).
   - **L65 (e1):** `port49.netmiko.connect(<node>)` in the venv against that entry: connects, no
     line added (the file's line count before and after).
   - **L64 (b):** the reload with configuration saved (L53's steps; the device seen down, then
@@ -3213,24 +4118,40 @@ TACACS+ packet counter (`l.capture`, `l29Packets`).
     connects, one hashed line under the name, its key type. **(b):** `connect` again: connects, no
     line added. **(c)** and **(d):** as L64's, through `connect`: `HostKeyError`, 0 TACACS+
     packets, the token never presented. **(e2):** `port49 ssh` against the entry Python filed:
-    exit 0, no line added.
+    exit 0, no line added. **(f):** an `@revoked` line naming the device's own key added beside
+    the filed entry: `connect` raises `HostKeyError` (`host_key_revoked`) before connecting; then
+    `known_hosts` emptied but for that `@revoked` line: `connect` raises `HostKeyError`
+    (`host_key_revoked`) from `FirstContact`, 0 TACACS+ packets, the token never presented,
+    nothing filed.
   Never print a token; the venv script reads it from the library and prints only the outcome.
 - [ ] **Step 2: Unit-test the readers.** `l64_l65_unit_test.go` tests the classifiers that read
   ssh's stderr into "accepted / changed / other type" and count lines, against fixtures from
   Task 2's note (OpenSSH 10.2p1's wording), under `make lab-unit`.
-- [ ] **Step 3: Run** `PORT49_LAB_PLATFORMS=<each> make lab-ssh` with the lab watchdog armed (a
-  background stall watchdog, re-armed on wake). Copy raw pcaps to the main checkout before removing
-  any lab worktree.
-- [ ] **Step 4: Write the notes** (platform, image version, the venv's Netmiko and Paramiko
-  versions, OpenSSH's, each cell's observation, the capture pointer) and read them. Close L64 and
-  L65 per platform only where every cell read as claimed; a row with one platform measured and
-  others open stays open. If (b) finds a key that changes at a reload on some platform, the docs
-  say so per platform (the operator note: "on <platform> the key changes at every reload; port49
-  ssh stops at OpenSSH's warning; …") and decision 46 names it; nothing is weakened to hide it.
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit the harness** before any run, so the results commit holds results only
+  (pre-flight M10):
 
 ```bash
-git add tests/lab Makefile docs/design/2026-08-23-policy-engine-spec.md
+git add tests/lab/l64_l65_test.go tests/lab/l64_l65_unit_test.go Makefile
+git commit -m "test: the L64 and L65 harness: port49 ssh under accept-new, and the Python client, per platform
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: Run** `PORT49_LAB_PLATFORMS=<each> make lab-ssh` on the SER8 with the lab watchdog
+  armed (a background stall watchdog, re-armed on wake). Copy raw pcaps to the main checkout
+  before removing any lab worktree.
+- [ ] **Step 5: Write the notes** (the host, platform, image version, the venv's Netmiko and
+  Paramiko versions, OpenSSH's, each cell's observation, the capture pointer) and read them. Close
+  L64 and L65 per platform only where every cell read as claimed; a row with one platform measured
+  and others open stays open. **Gate (pre-flight M11):** if (b) finds a key that changes at a
+  reload on any platform, stop and ask Ryan before writing any note's conclusion or doc. On such a
+  platform every `port49 ssh` and every Python connection stops after each maintenance window
+  and needs an `ssh-keygen -R` per device: fleet toil, which a doc note does not answer. Nothing
+  is weakened to hide it while Ryan decides.
+- [ ] **Step 6: Commit the results**
+
+```bash
+git add tests/lab/results tests/lab/evidence docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L64 and L65
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -3244,8 +4165,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `tests/lab/l66_test.go` (`//go:build lab`, behind `PORT49_LAB_ANSIBLE=1`),
-  `tests/lab/l66_unit_test.go`, `tests/lab/l66/` (the playbooks and inventory the harness writes
-  from), `tests/lab/results/L66-<platform>.md`
+  `tests/lab/l66_unit_test.go`, `tests/lab/l66/` (the playbooks, inventory and the stand-in
+  sshd's container setup the harness writes from), `tests/lab/results/L66-<platform>.md`
 - Modify: `Makefile` (`lab-ansible`), `clients/ansible/ansible_collections/port49/client/README.md`
   (the "Host keys" section, from L66), the spec's §15 L66 Status
 
@@ -3253,37 +4174,68 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 junipernetworks.junos` and `pip install ansible-pylibssh ./clients/python`, the collection from
 `clients/ansible` (`ANSIBLE_COLLECTIONS_PATH`), `make build`, the agent (`l29Agent`).
 
+The run is on the SER8 lab box, as Task 11's (pre-flight M10).
+
 - [ ] **Step 1: The harness.** Per platform, a private `HOME`, `ANSIBLE_COLLECTIONS_PATH` naming
   `clients/ansible` first, and an inventory of the one node with `ansible_connection:
-  ansible.netcommon.network_cli` and the platform's `ansible_network_os`. Cells:
+  ansible.netcommon.network_cli` and the platform's `ansible_network_os`. One capture for the
+  run; each cell counts TACACS+ packets in its own window, and a good login's window in the same
+  capture is the positive control for every "0 TACACS+ packets" (a zero is a zero of a counter
+  that counts; pre-flight M10). Cells:
   - **(a)** a ten-task play (each task a `*_command` `show version`) with `ansible_password: "{{
     lookup('port49.client.token', inventory_hostname) }}"` and `ansible_user` from a second lookup
     with `field='username'`: count `mint` records (and `redeem`s) for the run.
   - **(b)** the same play minting once in a `pre_tasks` `set_fact` (`field='all'`, `no_log`):
     count mints, redeems, and TACACS+ authentication starts in the capture.
-  - **(c)** host keys, for `ansible_network_cli_ssh_type: libssh` and then `paramiko`, each from an
-    empty known_hosts with `ANSIBLE_HOST_KEY_CHECKING=True` and `ANSIBLE_HOST_KEY_AUTO_ADD=True`:
-    the play passes; which file gained which line under which name (address, port form). Then that
-    line's key replaced by a fresh key of its type: the play fails before authentication, 0 TACACS+
-    packets, the token never presented (records other than `mint` and `blob`: none).
+  - **(c)** host keys, for `ansible_network_cli_ssh_type: libssh` and then `paramiko`, each from a
+    known_hosts holding only a comment line, an `@revoked` line for an unrelated key and an
+    `@cert-authority` line for an unrelated pattern, with `ANSIBLE_HOST_KEY_CHECKING=True` and
+    `ANSIBLE_HOST_KEY_AUTO_ADD=True`: the play passes; which file gained which line under which
+    name (address, port form); and the file's comment and marker lines after the run, verbatim
+    beside the before (whether it was appended to, or rewritten without them; pre-flight I5).
+    Then that line's key replaced by a fresh key of its type: the play fails before
+    authentication, 0 TACACS+ packets, the token never presented (records other than `mint` and
+    `blob`: none).
   - **(d)** a denied device (inventory name with no grant): the task fails naming
     `no_grants_matched`; `ansible-playbook -vvv` output holds no token (grep for every minted
     token the harness learned from the decision log's `credential_sha256`, never the token itself:
     the harness hashes each `-vvv` word and compares).
+  - **(e)** an address moved (pre-flight I4): after a run that filed the device's key, the
+    inventory's `ansible_host` changed to a stand-in host (a throwaway sshd container on the lab
+    bridge, its own key, logging each password attempt but never its text). For `libssh`,
+    `paramiko`, `libssh` with `ansible_libssh_config_file` naming an ssh_config with `Host *` /
+    `HostKeyAlias <the node's name>`, and `ansible.builtin.ssh` (the `raw` module, `ansible_ssh_extra_args:
+    "-o HostKeyAlias={{ inventory_hostname }}"`): whether the stand-in's key is auto-added, and
+    whether the stand-in logged a password attempt (the token presented).
   Record the versions: ansible-core, `ansible.netcommon`, each platform collection,
-  `ansible-pylibssh`, Paramiko.
-- [ ] **Step 2: Unit-test the readers** (the PLAY RECAP and the record counts) under `make lab-unit`.
-- [ ] **Step 3: Run** `PORT49_LAB_ANSIBLE=1 PORT49_LAB_PLATFORMS=<each> make lab-ansible` with the
-  watchdog armed (target: `go test -tags lab ./tests/lab/ -run 'TestL66' -count=1 -v -timeout 90m`).
-- [ ] **Step 4: Write the notes, then the README's "Host keys".** For each `ssh_type`, the settings
-  that give accept-new as measured (or, if one does not save a first contact or does not refuse a
-  changed key before authentication, say so and recommend the one that does). The pattern's
-  section states the measured counts: (a) N mints per host for ten tasks, (b) one. Close L66 per
-  platform where every cell read as claimed.
-- [ ] **Step 5: Commit**
+  `ansible-pylibssh`, Paramiko, OpenSSH.
+- [ ] **Step 2: Unit-test the readers** (the PLAY RECAP, the record counts, the known_hosts
+  before/after diff, the stand-in's log) under `make lab-unit`.
+- [ ] **Step 3: Commit the harness** before any run (pre-flight M10):
 
 ```bash
-git add tests/lab Makefile clients/ansible docs/design/2026-08-23-policy-engine-spec.md
+git add tests/lab/l66_test.go tests/lab/l66_unit_test.go tests/lab/l66 Makefile
+git commit -m "test: the L66 harness: the Ansible lookup's mints and host keys, per platform and ssh_type
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: Run** `PORT49_LAB_ANSIBLE=1 PORT49_LAB_PLATFORMS=<each> make lab-ansible` on the
+  SER8 with the watchdog armed (target: `go test -tags lab ./tests/lab/ -run 'TestL66' -count=1 -v
+  -timeout 90m`).
+- [ ] **Step 5: Write the notes, then the README's "Host keys".** For each `ssh_type`, the settings
+  that give accept-new as measured (or, if one does not save a first contact or does not refuse a
+  changed key before authentication, say so and recommend the one that does). Never
+  `host_key_auto_add` with an `ssh_type` that (c) found rewriting the file without its marker
+  lines or comments; recommend the one that leaves it intact (ruling I5). (e) says, per path,
+  whether an address moved in Ansible's inventory meets the key under the name; where it does
+  not, the README says so as the gap it is (ruling I4). Drop the "provisional on L66" marks only
+  for what was measured. The pattern's section states the measured counts: (a) N mints per host
+  for ten tasks, (b) one. Close L66 per platform where every cell read as claimed.
+- [ ] **Step 6: Commit the results**
+
+```bash
+git add tests/lab/results tests/lab/evidence clients/ansible docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entry L66
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -3308,7 +4260,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - **pre-beta review:** the `port49 devices trust` removal line goes; plan 9a's pins file hint
     goes;
   - **L60's session:** whether parallel Ansible forks under a `hardware_key_touch` requirement ask
-    one touch or several (the agent's token lock serializes them; unmeasured);
+    one touch or several (the agent's token lock serializes them; unmeasured); the README's
+    pre-play `port49 token <one such device>` stands until then;
+  - **Ansible's address keying:** if L66 (e) finds no `network_cli` path that keys host keys by
+    name, design §17's attack stays open for `network_cli` under `host_key_auto_add`, documented as
+    a gap; whether port49 can close it (for one, a lookup check that refuses a new address for a
+    device whose key is filed under its name) is a decision for Ryan, not this plan;
   - **plan 13:** these operator notes; plan 9a's `devices trust` notes withdrawn.
 - [ ] **Step 2: Verify** — `make test && make vet`; paste the summary lines into the PR body.
 - [ ] **Step 3: Commit**
@@ -3329,7 +4286,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   OpenSSH's warning before the token is sent. Nothing to run first; `port49 devices trust` is gone
   (it says so and exits 2). Keys are filed under the device's inventory name (`HostKeyAlias`), so
   an address changed in inventory for a device you have reached before is refused at the key
-  exchange.
+  exchange. An ssh_config with `UserKnownHostsFile /dev/null` (often beside `StrictHostKeyChecking
+  no` in a `Host *` block) is refused, naming the line: it would make every connection a first
+  contact. Your own `Host` blocks match the device name as written, case and all. A refusal that
+  comes after the mint (`ssh -G` failing, that `/dev/null`) leaves the token unused; it expires.
 - **Why it matters.** The token is the device's password for its lifetime. A host that takes it
   can replay it to the real device until it expires. The window port49 leaves is the first contact,
   per device and per operator, the same one every SSH user accepts.
@@ -3339,7 +4299,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   so run `ssh-keygen -lf` on it (L53; the type is the one ssh filed, L64).
 - **A changed key.** `port49 ssh` says the key filed under the name is not the one the address
   presents. Either the device was re-keyed (verify the new key on its console, then `ssh-keygen -R
-  core-sw01`), or the address is not the device: tell security.
+  core-sw01`), or the address is not the device: tell security. Ansible's `network_cli` files its
+  own entry under the address, so a re-keyed device you also reach from Ansible needs both:
+  `ssh-keygen -R core-sw01` and `ssh-keygen -R 10.0.0.11` (`-R '[10.0.0.11]:2222'` on another
+  port). For a planned fleet re-key (an image upgrade), over a file of inventory names and one of
+  their addresses: `while read -r d; do ssh-keygen -R "$d"; done < devices.txt` and the same over
+  `addresses.txt`. That reopens the first-contact window for every device in it, until each is
+  reached again; check a sample on the console.
 - **Verified first contact for a shop.** Ship a managed `GlobalKnownHostsFile` keyed by inventory
   name, or host certificates with `@cert-authority`; `port49 ssh` leaves both alone. Your own
   `StrictHostKeyChecking yes` and `HostKeyAlias` in ssh_config stand; `no` is never used.
@@ -3359,8 +4325,17 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `port49 token`; prompts appear on your terminal. Errors are typed (`Denied` with the reason,
   `MFARequired`, `KeyUnavailable`, `NoAgent`, …). Netmiko's host keys follow `port49 ssh`'s rule
   in the same known_hosts. Paramiko cannot check `@cert-authority`, so a device covered only by
-  one is refused there; use `port49 ssh`, or file its key.
+  one is refused there; use `port49 ssh`, or file its key. A key an `@revoked` line or your
+  `RevokedHostKeys` (a KRL) names is refused, filed or at first contact, before authentication;
+  a `KnownHostsCommand` is refused (use `port49 ssh`); a device name holding `*`, `,`, a space and
+  the like is refused before anything is minted.
 - **Ansible.** `ansible-galaxy collection install` the collection and `pip install port49` on the
   controller. Mint once per host per play (`pre_tasks`, `set_fact`, `no_log: true`); a lookup in
-  `ansible_password` mints at every task (L66). Host keys are Ansible's own:
-  `host_key_checking: true` and `host_key_auto_add: true` (per `ssh_type`, as L66 measured).
+  `ansible_password` mints at every task (L66). For devices that ask for a touch, run `port49
+  token <one such device>` before the play, so one proof covers the forks. Host keys are
+  Ansible's own, and `network_cli` keys them by `ansible_host`, the address, not the name: an
+  address changed in Ansible's inventory is a first contact there, and with `host_key_auto_add`
+  the host at it gets the token. Where the connection runs OpenSSH, set `-o HostKeyAlias={{
+  inventory_hostname }}`. Never use `host_key_auto_add` with `ssh_type: paramiko`: it rewrites
+  `~/.ssh/known_hosts` without its `@revoked` and `@cert-authority` lines. The settings per
+  `ssh_type` are as L66 measured.

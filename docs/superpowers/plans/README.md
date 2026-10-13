@@ -206,6 +206,17 @@ takes accept-new under the inventory name in the operator's known_hosts. The Ans
 `port49.client.token`. Decision 46 holds its seventeen rulings; L53 and L54 stay closed (claims
 amended), and it opens L64 (`port49 ssh` under accept-new, a reload included), L65 (Python and
 Netmiko) and L66 (the Ansible lookup).
+**9d pre-flight 2026-10-13**, READY WITH FIXES (1 Critical, 8 Important, 18 Minor), every finding
+applied to the plan: the Python client drops any key an `@revoked` line or `RevokedHostKeys` names
+and checks a first contact's key before authentication (Netmiko's `key_policy`), and refuses a
+`KnownHostsCommand` it cannot run; both clients refuse an ssh_config that keeps no host keys under
+accept-new; the askpass answers the prompt naming the operator's alias; the Python client checks
+decision 42 ruling 8's name rule before minting; `--format json` prints `"results": []`, never
+`null`, and the Python tests are fed the CLI's own bytes; gate G1 is measured in the attack's
+shape (a server offering only Ed25519 against a filed ECDSA key) by a standalone 8.5p1 harness;
+and the docs say what Ansible's address keying leaves open, never recommending
+`host_key_auto_add` under `ssh_type: paramiko`, which rewrites `~/.ssh/known_hosts` without its
+`@revoked` and `@cert-authority` lines.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5333,6 +5344,14 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     `port49.client.token`. Gate G1 (Task 2) measures whether OpenSSH 8.5p1's accept-new refuses a
     key of another type under a known alias, as 10.2p1 does. Lab: L53 and L54 stay closed (claims
     amended); L64, L65 and L66 are opened.
+  - **Pre-flight 2026-10-13** (1 Critical, 8 Important, 18 Minor; all applied). The thousand-switch
+    run above trusts nothing by hand on every path, but its safety holds only where keys are filed
+    under the name: `port49 ssh` and the Python client. Ansible's `network_cli` keys host keys by
+    `ansible_host`, so an address added to a device in the source of truth is a first contact
+    there, and design §17's attack is open under `host_key_auto_add`. Decision 46 rulings 2 and
+    15, design §17 and the collection README say so; the README sets `HostKeyAlias={{
+    inventory_hostname }}` where the connection runs OpenSSH, and L66 (e) measures each path.
+    Whether port49 closes the gap for `network_cli` is carried to Ryan.
 
 - **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
   with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
