@@ -29,6 +29,13 @@ func TestParseURI(t *testing.T) {
 			t.Errorf("ParseURI(%q) = %v, want an error naming %q", bad.uri, err, bad.says)
 		}
 	}
+	// A malformed escape in a pin-value is refused as pin-value, and no
+	// byte of the PIN is in the error (final review client M11).
+	_, err = ParseURI("pkcs11:id=%01?module-path=/x.so&pin-value=98%Z7")
+	if err == nil || !strings.Contains(err.Error(), "pin-value is refused") || strings.Contains(err.Error(), "Z7") ||
+		strings.Contains(err.Error(), "98") {
+		t.Errorf("a pin-value with a bad escape: %v", err)
+	}
 }
 
 // String is canonical and carries no PIN source's contents; parsing it again

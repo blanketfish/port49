@@ -308,6 +308,16 @@ func TestMain(m *testing.M) {
 	if subreaperHook != nil && os.Getenv("PORT49_TEST_SUBREAPER") == "1" {
 		subreaperHook()
 	}
+	// No test, and no child a test starts (the askpass and port49 branches
+	// below), opens this machine's TPM: `auto` would find /dev/tpmrm0 and a
+	// login would make a key in it. The hwkey tests dial a swtpm: hwtest's
+	// init points a child at the one PORT49_TEST_SWTPM (hwtest.EnvSWTPM)
+	// names, and that is left in place.
+	if os.Getenv("PORT49_TEST_SWTPM") == "" {
+		tpm.Dial = func() (transport.TPMCloser, error) {
+			return nil, errors.New("the tests do not open this machine's TPM")
+		}
+	}
 	// The test binary is port49 ssh's askpass in the ssh tests, as port49
 	// is in production.
 	if sock, ok := askpassCall(os.Args[1:]); ok {
@@ -333,11 +343,6 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(userconfig.EnvConfig)
 	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
 	os.Setenv(testSystemConfig, userconfig.SystemPath)
-	// No test opens this machine's TPM: `auto` would find /dev/tpmrm0 and a
-	// login would make a key in it. The hwkey tests dial a swtpm (hwtest).
-	tpm.Dial = func() (transport.TPMCloser, error) {
-		return nil, errors.New("the tests do not open this machine's TPM")
-	}
 	code := runTests(m)
 	os.RemoveAll(dir)
 	os.Exit(code)

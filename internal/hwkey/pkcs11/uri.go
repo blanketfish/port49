@@ -84,6 +84,11 @@ func ParseURI(s string) (URI, error) {
 	}
 	if hasQuery {
 		err = each(query, "&", func(name, raw string) error {
+			if name == "pin-value" {
+				// Refused before it is decoded: a bad escape's error would
+				// quote PIN bytes.
+				return errors.New("pin-value is refused: a PIN does not belong in a config file; use pin-source=file:///path or let `port49 login` ask it")
+			}
 			v, err := percentDecode(raw)
 			if err != nil {
 				return fmt.Errorf("the attribute %s: %w", name, err)
@@ -93,8 +98,6 @@ func ParseURI(s string) (URI, error) {
 				u.ModulePath = string(v)
 			case "pin-source":
 				u.PINSource = string(v)
-			case "pin-value":
-				return errors.New("pin-value is refused: a PIN does not belong in a config file; use pin-source=file:///path or let `port49 login` ask it")
 			default:
 				return fmt.Errorf("the attribute %s is not one port49 reads (module-path, pin-source)", name)
 			}

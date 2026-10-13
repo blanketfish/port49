@@ -142,6 +142,21 @@ func TestRefusalOfNamesTheCause(t *testing.T) {
 	}
 }
 
+// A PIN handed to a TPM key, which takes none, is zeroed as every key's
+// Unlock zeroes it: /unlock hands each key its own clone (final review client
+// M12).
+func TestUnlockZeroesThePIN(t *testing.T) {
+	pin := []byte("123456")
+	if err := (&Signer{}).Unlock(pin); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range pin {
+		if b != 0 {
+			t.Fatal("Unlock left the PIN in its buffer")
+		}
+	}
+}
+
 func TestGenerateWithNoTPMWritesNoFile(t *testing.T) {
 	dialing(t, errors.New("no tpm"))
 	path := filepath.Join(t.TempDir(), "new.tpmkey")

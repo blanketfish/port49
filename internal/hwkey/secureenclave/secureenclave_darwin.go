@@ -122,6 +122,9 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	if s.closed {
 		return nil, errors.New("secureenclave: the key is closed")
 	}
+	if opts == nil {
+		return nil, errors.New("secureenclave: Sign needs the digest's hash in opts")
+	}
 	sig, err := secapi.Sign(s.ref, digest, opts.HashFunc())
 	if secapi.NotFound(err) {
 		s.state = hwkey.Absent

@@ -523,8 +523,11 @@ func probe() bool {
 	return err == nil
 }
 
-// Unlock does nothing: the key has an empty auth.
-func (s *Signer) Unlock([]byte) error { return nil }
+// Unlock does nothing but zero pin: the key has an empty auth.
+func (s *Signer) Unlock(pin []byte) error {
+	clear(pin)
+	return nil
+}
 
 // Close ends the Signer. It holds no handle, so there is nothing to release.
 func (s *Signer) Close() error {

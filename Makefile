@@ -46,9 +46,8 @@ check-static:
 	    echo "bin/static/$$c is dynamically linked; the image cannot run it"; exit 1; fi; \
 	done
 
-# The packages the hwkey tag adds tests to. internal/clientkey arrives in
-# plan 9c's Task 5; until then a pattern for it would fail the run.
-HW_PACKAGES = ./internal/hwkey/... $(if $(wildcard internal/clientkey),./internal/clientkey/...) ./internal/agent/... ./internal/workload/... ./cmd/port49/...
+# The packages the hwkey tag adds tests to.
+HW_PACKAGES = ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/... ./internal/workload/... ./cmd/port49/...
 
 # Hardware-key tests against SoftHSM2, swtpm and libykcs11 (plan 9c; decision
 # 42 ruling 13), built with CGO_ENABLED=0 and the client build's tag so
