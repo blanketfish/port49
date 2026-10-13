@@ -485,6 +485,18 @@ func mfaWeakened(old, new MFARequirement) bool {
 	})
 }
 
+// MetBy is whether a login made under prior meets r: r requires nothing, or
+// prior required a proof from methods r accepts, reusable no longer than r
+// allows. It compares the effective requirements alone, so a level added that
+// leaves them unchanged is met; anything else added or tightened is not,
+// fail-closed (a token minted under prior is superseded, final review I1).
+func (r MFARequirement) MetBy(prior MFARequirement) bool {
+	if !r.Required() {
+		return true
+	}
+	return prior.Required() && subsetOf(prior.Accept, r.Accept) && prior.ReuseFor <= r.ReuseFor
+}
+
 // detail is the requirement with the levels that set it, `accept [..]
 // reuse_for 5m (defaults ∩ scope core)`, a level that applies to machines
 // marked, so a diff line never reads the same on both sides when only the

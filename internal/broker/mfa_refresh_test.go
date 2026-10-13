@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -190,6 +191,80 @@ func TestARequirementAddedRevokesNothing(t *testing.T) {
 	if !ctx.RevokedAt.IsZero() {
 		t.Fatal("a reload that added per_login_mfa revoked a live context")
 	}
+}
+
+// reload swaps in the fixture's policy under o and runs the refresh a reload
+// runs, with the policy it replaced as the prior.
+func (f *mfaFixture) reload(t *testing.T, o mfaOpts) {
+	t.Helper()
+	pol, err := policy.Parse([]byte(mfaPolicy(o)), policy.Env{Devices: f.inventory(), Now: f.b.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+	if _, err := f.b.Refresh(context.Background(), prior); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *mfaFixture) unspent(t *testing.T, device, username string) int {
+	t.Helper()
+	toks, err := f.st.Candidates(context.Background(), store.TokenKey{NAS: device, Username: username})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(toks)
+}
+
+// A requirement added or tightened by a reload gates the logins not yet made:
+// an unspent token minted under the weaker one is superseded, and a retry of
+// its mint under the same Idempotency-Key is judged afresh and asked for a
+// proof, not answered from the record (final review broker I1). One whose
+// requirement is unchanged or loosened is kept.
+func TestARequirementAddedOrTightenedSupersedesUnspentTokens(t *testing.T) {
+	t.Run("added", func(t *testing.T) {
+		f := newMFAFixture(t)
+		f.setRequirement(t, false)
+		if it := f.mintWithKey(t, f.alice, "core-sw01", "", "idem-1").Results[0]; it.Verdict != "permit" {
+			t.Fatalf("mint with no requirement = %+v", it)
+		}
+		f.reload(t, f.opts)
+		if n := f.unspent(t, "core-sw01", "alice"); n != 0 {
+			t.Fatalf("%d unspent tokens minted with no proof survive the reload that adds per_login_mfa", n)
+		}
+		it := f.mintWithKey(t, f.alice, "core-sw01", "", "idem-1").Results[0]
+		if it.Verdict != "deny" || it.Reason != "per_login_mfa_required" || it.PerLoginMFA == nil {
+			t.Fatalf("the retried mint after the reload = %+v, want asked for a proof", it)
+		}
+	})
+	t.Run("tightened", func(t *testing.T) {
+		f := newMFAFixture(t)
+		ch := f.ask(t, f.alice, "core-sw01")
+		f.proveTouch(t, f.alice, ch)
+		if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Verdict != "permit" {
+			t.Fatalf("mint under the requirement = %+v", it)
+		}
+		o := f.opts
+		o.reuseZero = true // reuse_for 15m → 0m
+		f.reload(t, o)
+		if n := f.unspent(t, "core-sw01", "alice"); n != 0 {
+			t.Fatalf("%d unspent tokens survive the reload that shortens reuse_for", n)
+		}
+	})
+	t.Run("removed", func(t *testing.T) {
+		f := newMFAFixture(t)
+		ch := f.ask(t, f.alice, "core-sw01")
+		f.proveTouch(t, f.alice, ch)
+		if it := f.mint(t, f.alice, "core-sw01", ch).Results[0]; it.Verdict != "permit" {
+			t.Fatalf("mint under the requirement = %+v", it)
+		}
+		o := f.opts
+		o.noRequirement = true
+		f.reload(t, o)
+		if n := f.unspent(t, "core-sw01", "alice"); n != 1 {
+			t.Fatalf("%d unspent tokens after the reload that removes per_login_mfa, want the 1 kept", n)
+		}
+	})
 }
 
 func TestRefreshUnderARequirementNeedsAProof(t *testing.T) {

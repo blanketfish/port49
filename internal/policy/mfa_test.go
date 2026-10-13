@@ -713,3 +713,31 @@ grants:
 		t.Fatalf("a new level pair on a quarantined device: %+v, want it new", got)
 	}
 }
+
+// MetBy: a login under prior meets r when r asks nothing, or prior asked a
+// proof from methods r accepts, reusable no longer than r allows.
+func TestMFARequirementMetBy(t *testing.T) {
+	req := func(reuse time.Duration, accept ...MFAMethod) MFARequirement {
+		return MFARequirement{Accept: accept, ReuseFor: reuse, Levels: []MFALevel{{Level: "scope core"}}}
+	}
+	none := MFARequirement{}
+	both := req(15*time.Minute, HardwareKeyTouch, IdPMFA)
+	for _, c := range []struct {
+		name     string
+		r, prior MFARequirement
+		want     bool
+	}{
+		{"none under none", none, none, true},
+		{"none under a requirement", none, both, true},
+		{"added", both, none, false},
+		{"unchanged", both, both, true},
+		{"accept narrowed", req(15*time.Minute, HardwareKeyTouch), both, false},
+		{"accept widened", both, req(15*time.Minute, HardwareKeyTouch), true},
+		{"reuse_for shortened", req(0, HardwareKeyTouch, IdPMFA), both, false},
+		{"reuse_for lengthened", req(time.Hour, HardwareKeyTouch, IdPMFA), both, true},
+	} {
+		if got := c.r.MetBy(c.prior); got != c.want {
+			t.Errorf("%s: MetBy = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
