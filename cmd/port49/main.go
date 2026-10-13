@@ -681,8 +681,7 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 				// Refused at the bind, before the refresh could be: the same
 				// as a refused refresh (R6), so the pair is not kept to fail
 				// on every later login.
-				_ = os.Remove(sf.key)
-				_ = os.Remove(sf.cert)
+				removeIssued(sf.cert, sf.key)
 				fmt.Fprint(stderr, refusedCertificate(revokedWords(string(tail))))
 				return 1, false
 			}
@@ -711,8 +710,7 @@ func startAgentDown(sf *sessionFlags, issued bool, stdout, stderr io.Writer) (in
 			var revoked *agent.RevokedError
 			switch {
 			case issued && errors.As(err, &revoked):
-				_ = os.Remove(sf.key)
-				_ = os.Remove(sf.cert)
+				removeIssued(sf.cert, sf.key)
 				fmt.Fprint(stderr, refusedCertificate(revoked.Detail))
 				return 1, false
 			case err != nil:

@@ -621,6 +621,60 @@ func TestIssuedPaths(t *testing.T) {
 	}
 }
 
+// A TPM-held pair is named for the machine as well, beside the file pair, so
+// hosts that share a home directory keep a pair each (decision 45 ruling 7;
+// pre-flight I12); a broker URL IssuedPathsIn refuses is refused, and a
+// machine with no id makes no path.
+func TestIssuedTPMPaths(t *testing.T) {
+	prev := MachineID
+	t.Cleanup(func() { MachineID = prev })
+	MachineID = func() (string, error) { return "0123abcd", nil }
+	for broker, want := range map[string]string{
+		"https://Broker.Example:8443":  "broker.example_8443",
+		"https://broker.example":       "broker.example_443",
+		"https://[2001:db8::1]:8443/x": "2001-db8--1_8443",
+	} {
+		c, k, err := IssuedTPMPathsIn("/d", broker)
+		if err != nil || c != "/d/issued/"+want+".0123abcd.pem" || k != "/d/issued/"+want+".0123abcd.tpmkey" {
+			t.Errorf("%s: %s %s %v", broker, c, k, err)
+		}
+	}
+	for _, bad := range []string{"http://broker.example", "https://", "https://u:p@broker.example", "broker.example:8443"} {
+		if _, _, err := IssuedTPMPathsIn("/d", bad); err == nil {
+			t.Errorf("%q made a path", bad)
+		}
+	}
+	MachineID = func() (string, error) { return "", errors.New("no machine id") }
+	if _, _, err := IssuedTPMPathsIn("/d", "https://broker.example"); err == nil {
+		t.Error("a machine with no id made a path")
+	}
+}
+
+// The machine's name is the first 8 hex digits of SHA-256 of
+// /etc/machine-id as the file is (so `sha256sum /etc/machine-id` says it); a
+// missing or empty file is an error.
+func TestMachineID(t *testing.T) {
+	prev := machineIDFile
+	t.Cleanup(func() { machineIDFile = prev })
+	machineIDFile = filepath.Join(t.TempDir(), "machine-id")
+	if _, err := MachineID(); err == nil {
+		t.Fatal("no machine-id file gave an id")
+	}
+	if err := os.WriteFile(machineIDFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MachineID(); err == nil {
+		t.Fatal("an empty machine-id file gave an id")
+	}
+	if err := os.WriteFile(machineIDFile, []byte("abc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// sha256("abc\n") = edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb
+	if id, err := MachineID(); err != nil || id != "edeaaff3" {
+		t.Fatalf("MachineID = %q, %v", id, err)
+	}
+}
+
 // asSystem stands path in for /etc/port49/config.yaml for the rest of the
 // test, owned by owner in root's place.
 func asSystem(t *testing.T, path string, owner uint32) {

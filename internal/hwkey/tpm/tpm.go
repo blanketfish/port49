@@ -68,6 +68,22 @@ func dial() (transport.TPMCloser, error) {
 	return nil, fmt.Errorf("%w: %v", hwkey.ErrKeyAbsent, err)
 }
 
+// Available says whether this user can open a TPM at all, and why not: the
+// tss group's advice for one the user may not open, "no TPM" for one that is
+// not there. It makes no key and runs no command, so a TPM that opens but
+// refuses the storage root key's auth is found by Generate, not here.
+func Available() error {
+	t, err := Dial()
+	switch {
+	case err == nil:
+		t.Close()
+		return nil
+	case errors.Is(err, fs.ErrPermission):
+		return errNoAccess
+	}
+	return fmt.Errorf("no TPM answers at %s: %v", devicePath, err)
+}
+
 // answered turns an error from a TPM command into the error a caller sees.
 // A response code is the TPM answering, so it stays as it is; anything else
 // is the transport failing, which is the TPM gone.

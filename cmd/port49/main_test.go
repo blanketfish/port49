@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -30,6 +32,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
@@ -329,6 +332,11 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(userconfig.EnvConfig)
 	userconfig.SystemPath = filepath.Join(dir, "etc", "port49", "config.yaml")
 	os.Setenv(testSystemConfig, userconfig.SystemPath)
+	// No test opens this machine's TPM: `auto` would find /dev/tpmrm0 and a
+	// login would make a key in it. The hwkey tests dial a swtpm (hwtest).
+	tpm.Dial = func() (transport.TPMCloser, error) {
+		return nil, errors.New("the tests do not open this machine's TPM")
+	}
 	code := runTests(m)
 	os.RemoveAll(dir)
 	os.Exit(code)

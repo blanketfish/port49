@@ -50,6 +50,34 @@ func TestATPMThatIsNotThereIsAbsent(t *testing.T) {
 	}
 }
 
+// Available says whether a key can be made here at all, and why not, without
+// making one: a TPM the user may not open names the tss group, one that is
+// not there says so, and neither is read as the other.
+func TestAvailableSaysWhyNoTPMIsUsable(t *testing.T) {
+	dialing(t, &fs.PathError{Op: "open", Path: "/dev/tpmrm0", Err: syscall.EACCES})
+	if err := Available(); err == nil || !strings.Contains(err.Error(), "add this user to the tss group") {
+		t.Fatalf("Available with EACCES = %v, want the tss group advice", err)
+	}
+	dialing(t, &fs.PathError{Op: "stat", Path: "/dev/tpmrm0", Err: syscall.ENOENT})
+	if err := Available(); err == nil || !strings.Contains(err.Error(), "no TPM") ||
+		strings.Contains(err.Error(), "tss group") {
+		t.Fatalf("Available with no TPM = %v", err)
+	}
+	prev := Dial
+	t.Cleanup(func() { Dial = prev })
+	closed := false
+	Dial = func() (transport.TPMCloser, error) { return &closer{closed: &closed}, nil }
+	if err := Available(); err != nil || !closed {
+		t.Fatalf("Available with a TPM that answers = %v (closed %v)", err, closed)
+	}
+}
+
+// closer is a TPM that is there and is asked nothing.
+type closer struct{ closed *bool }
+
+func (c *closer) Send([]byte) ([]byte, error) { return nil, errors.New("unused") }
+func (c *closer) Close() error                { *c.closed = true; return nil }
+
 func TestGenerateWithNoTPMWritesNoFile(t *testing.T) {
 	dialing(t, errors.New("no tpm"))
 	path := filepath.Join(t.TempDir(), "new.tpmkey")

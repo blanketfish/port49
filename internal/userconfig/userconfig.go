@@ -14,6 +14,8 @@ package userconfig
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -102,6 +104,47 @@ func IssuedPathsIn(dir, broker string) (cert, key string, err error) {
 	}
 	base := filepath.Join(dir, "issued", host+"_"+port)
 	return base + ".pem", base + ".key", nil
+}
+
+// IssuedTPMPathsIn is where, under dir, this machine keeps a TPM-held pair:
+// tpmKey <host>_<port>.<machine>.tpmkey and tpmCert <host>_<port>.<machine>.pem
+// beside IssuedPathsIn's pair, <machine> the first 8 hex digits of SHA-256 of
+// /etc/machine-id (decision 45 ruling 7), so hosts sharing a home directory
+// keep a pair each. The broker URL is judged as IssuedPathsIn judges it.
+func IssuedTPMPathsIn(dir, broker string) (tpmCert, tpmKey string, err error) {
+	cert, _, err := IssuedPathsIn(dir, broker)
+	if err != nil {
+		return "", "", err
+	}
+	machine, err := MachineID()
+	if err != nil {
+		return "", "", err
+	}
+	base := strings.TrimSuffix(cert, ".pem") + "." + machine
+	return base + ".pem", base + ".tpmkey", nil
+}
+
+// IssuedTPMPaths is IssuedTPMPathsIn ~/.port49 (Dir).
+func IssuedTPMPaths(broker string) (tpmCert, tpmKey string, err error) {
+	return IssuedTPMPathsIn(Dir(), broker)
+}
+
+// machineIDFile is what MachineID names this machine from.
+var machineIDFile = "/etc/machine-id"
+
+// MachineID is this machine's 8-hex-digit name: the first 8 digits of the
+// SHA-256 of /etc/machine-id as the file is, so `sha256sum /etc/machine-id`
+// says it. A var so cmd/port49's tests set it.
+var MachineID = func() (string, error) {
+	raw, err := os.ReadFile(machineIDFile)
+	if err != nil {
+		return "", fmt.Errorf("this machine has no readable %s to name its TPM key by: %w", machineIDFile, err)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", fmt.Errorf("%s is empty, so it cannot name this machine's TPM key", machineIDFile)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:8], nil
 }
 
 // CABundlePathIn is where, under dir, the agent keeps the CA bundle a broker

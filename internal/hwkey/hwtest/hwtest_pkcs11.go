@@ -5,12 +5,15 @@ package hwtest
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -181,6 +184,34 @@ func SoftHSMUnplug(t testing.TB, label string) {
 		t.Fatal(err)
 	}
 	rescan(t, lastModule)
+}
+
+// SoftHSMObjects is what the token label holds, as text: every object file of
+// its directory by name and SHA-256, in name order, and the generation counter
+// SoftHSM2 bumps on a write, so a test can see that something wrote an object
+// or changed one. Reading an object changes none. token.object is left out: it
+// holds the token's own state, which a PIN login rewrites (its try counters).
+func SoftHSMObjects(t testing.TB, label string) string {
+	t.Helper()
+	root := softHSMTokenDir(t, label)
+	var lines []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || strings.HasSuffix(path, ".lock") || filepath.Base(path) == "token.object" {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		lines = append(lines, fmt.Sprintf("%s %x", rel, sha256.Sum256(raw)))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("hwtest: listing the token's objects: %v", err)
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 // softHSMTokenDir is the token's directory under the harness's: SoftHSM2 names

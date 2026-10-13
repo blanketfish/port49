@@ -76,6 +76,7 @@ func SWTPM(t *testing.T) *TPM {
 	current = s
 	currentMu.Unlock()
 	tpm.Dial = s.dial
+	t.Setenv(EnvSWTPM, s.command+" "+s.control)
 	t.Cleanup(func() {
 		s.Stop()
 		currentMu.Lock()
@@ -103,6 +104,7 @@ func SWTPMFresh(t *testing.T) *TPM {
 	current = s
 	currentMu.Unlock()
 	tpm.Dial = s.dial
+	t.Setenv(EnvSWTPM, s.command+" "+s.control)
 	t.Cleanup(s.Stop)
 	return s
 }
@@ -161,7 +163,10 @@ func (s *TPM) launch() bool {
 		s.t.Fatalf("hwtest: starting swtpm: %v", err)
 	}
 	// A test binary killed or timed out skips t.Cleanup: the next harness start
-	// finds this record and reaps the swtpm (reapStale).
+	// finds this record and reaps the swtpm (reapStale). Recorded once the
+	// process shows swtpm's own command line: a harness that starts between
+	// the fork and the exec would take it for a stranger and drop the record.
+	waitSwtpm(cmd.Process.Pid, 2*time.Second)
 	pidFile := recordPid(cmd.Process.Pid)
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
@@ -237,11 +242,60 @@ func pidDir() string {
 
 var reapOnce sync.Once
 
+// getuid is os.Getuid, a var so a test can be another user.
+var getuid = os.Getuid
+
+// EnvSWTPM names the running swtpm's two addresses ("command control") to a
+// process the test starts, such as the agent a login starts, which is the test
+// binary again and so imports this package: init points tpm.Dial at them.
+// Nothing sets it outside SWTPM, so no process dials a swtpm by accident, and
+// none dials the machine's TPM in its place while it is set.
+const EnvSWTPM = "PORT49_TEST_SWTPM"
+
+func init() {
+	if v := os.Getenv(EnvSWTPM); v != "" {
+		tpm.Dial = func() (transport.TPMCloser, error) { return dialAddrs(v) }
+	}
+}
+
+// dialAddrs dials the swtpm that "command control" names, both channels.
+func dialAddrs(v string) (transport.TPMCloser, error) {
+	command, control, ok := strings.Cut(v, " ")
+	if !ok {
+		return nil, fmt.Errorf("hwtest: %s=%q is not \"command control\"", EnvSWTPM, v)
+	}
+	return tcp.Open(tcp.Config{CommandAddress: command, PlatformAddress: control})
+}
+
+// waitSwtpm is true once pid's command line is swtpm's, false after d. A
+// process just started shows its parent's until it execs, so a record made
+// then would name a process reapStale cannot tell from a stranger.
+func waitSwtpm(pid int, d time.Duration) bool {
+	for deadline := time.Now().Add(d); ; time.Sleep(10 * time.Millisecond) {
+		if isSwtpm(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+}
+
 // reapStale kills every swtpm recorded in dir whose test binary is gone, and
 // removes the record of any whose process is gone or is no longer a swtpm (the
 // pid was reused). A swtpm whose test binary is alive belongs to a package
 // running in parallel and is left alone.
+//
+// Nothing is reaped as root, or from a directory this user does not own: a
+// record there is not this user's, and a kill by pid on another's word is how
+// an unrelated process dies. A record that is empty or short is one being
+// written (recordPid renames it whole, but an older harness did not) and is
+// left for the next start.
 func reapStale(dir string) {
+	fi, err := os.Stat(dir)
+	if st, ok := fi.Sys().(*syscall.Stat_t); err != nil || !ok || getuid() == 0 || int(st.Uid) != getuid() {
+		return
+	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		file := filepath.Join(dir, e.Name())
@@ -250,7 +304,8 @@ func reapStale(dir string) {
 			continue
 		}
 		owner, _ := os.ReadFile(file)
-		if opid, err := strconv.Atoi(strings.TrimSpace(string(owner))); err == nil && alive(opid) {
+		opid, err := strconv.Atoi(strings.TrimSpace(string(owner)))
+		if err != nil || alive(opid) {
 			continue
 		}
 		if isSwtpm(pid) {
@@ -283,8 +338,20 @@ func recordPid(pid int) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ""
 	}
+	// Written to a name reapStale does not read and renamed whole, so a
+	// harness starting alongside never sees half a record.
+	tmp, err := os.CreateTemp(dir, ".record-*")
+	if err != nil {
+		return ""
+	}
+	_, werr := tmp.WriteString(strconv.Itoa(os.Getpid()))
+	if cerr := tmp.Close(); werr != nil || cerr != nil {
+		os.Remove(tmp.Name())
+		return ""
+	}
 	file := filepath.Join(dir, strconv.Itoa(pid))
-	if os.WriteFile(file, []byte(strconv.Itoa(os.Getpid())), 0o600) != nil {
+	if os.Rename(tmp.Name(), file) != nil {
+		os.Remove(tmp.Name())
 		return ""
 	}
 	return file
