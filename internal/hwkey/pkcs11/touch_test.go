@@ -111,6 +111,45 @@ func TestACertificateThatIsNotASlotAttestationSaysNothingOfTouch(t *testing.T) {
 	}
 }
 
+// libykcs11 gives a slot's attestation certificate the same CKA_ID as the
+// slot's own certificate (measured on a YubiKey 5C Nano FIPS, 2026-10-13). It
+// is never the client certificate, alone or beside the real one in either order.
+func TestASlotAttestationIsNeverTheSlotsCertificate(t *testing.T) {
+	att := attestation{"YubiKey PIV Attestation 9a", pivattest.TouchNever}
+	for _, order := range []string{"attestation alone", "attestation then certificate", "certificate then attestation"} {
+		module, label := hwtest.SoftHSM(t)
+		s, err := pkcs11.Open(uriFor(t, module, label), pin())
+		if err != nil {
+			t.Fatal(err)
+		}
+		real := newCA(t).issue(t, "alice", s.Public(), x509.ExtKeyUsageClientAuth)
+		storeReal := func() {
+			if err := pkcs11.StoreCertificate(uriFor(t, module, label), real, pin()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		switch order {
+		case "attestation alone":
+			storeAttestation(t, module, label, att)
+		case "attestation then certificate":
+			storeAttestation(t, module, label, att)
+			storeReal()
+		case "certificate then attestation":
+			storeReal()
+			storeAttestation(t, module, label, att)
+		}
+		got, err := s.Certificate()
+		if order == "attestation alone" {
+			if err == nil {
+				t.Errorf("%s: Certificate() = %q, want an error (the slot holds no certificate)", order, got.Subject.CommonName)
+			}
+		} else if err != nil || !got.Equal(real) {
+			t.Errorf("%s: Certificate() = %v, %v, want the real certificate", order, got, err)
+		}
+		s.Close()
+	}
+}
+
 // A slow not-logged-in from another call (C_SignInit) is not a missed touch:
 // only C_Sign waits for one.
 func TestASlowNotLoggedInFromCSignInitIsNotATouchTimeout(t *testing.T) {

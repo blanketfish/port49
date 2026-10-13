@@ -295,7 +295,8 @@ func (s *Signer) readPublic() error {
 			return s.setPublic(pub, kt)
 		}
 	}
-	if certs, err := s.certificatesLocked(s.id); err == nil && len(certs) > 0 {
+	if certs, err := s.certificatesLocked(s.id); err == nil && len(withoutAttestations(certs)) > 0 {
+		certs = withoutAttestations(certs)
 		switch pub := certs[0].PublicKey.(type) {
 		case *ecdsa.PublicKey:
 			return s.setPublic(pub, ckkEC)
@@ -733,7 +734,21 @@ func (s *Signer) certificatesLocked(id []byte) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
-// Certificate is the token's certificate object with the key's CKA_ID.
+// withoutAttestations drops the slot attestation certificates: libykcs11 gives
+// a slot's attestation the same CKA_ID as the slot's own certificate, and it is
+// Yubico's statement about the key, never the key's certificate.
+func withoutAttestations(certs []*x509.Certificate) []*x509.Certificate {
+	var out []*x509.Certificate
+	for _, c := range certs {
+		if !strings.HasPrefix(c.Subject.CommonName, pivattest.SlotCNPrefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Certificate is the token's certificate object with the key's CKA_ID, other
+// than a slot attestation.
 func (s *Signer) Certificate() (*x509.Certificate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -744,6 +759,7 @@ func (s *Signer) Certificate() (*x509.Certificate, error) {
 	if err != nil {
 		return nil, s.classify("C_FindObjects", err)
 	}
+	certs = withoutAttestations(certs)
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("pkcs11: token %q holds no certificate with the key's CKA_ID", s.label)
 	}

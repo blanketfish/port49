@@ -91,9 +91,10 @@ func keyErrorFromCode(code, detail string) error {
 
 // signRecorder wraps the key the TLS handshake signs with and remembers its
 // last Sign error. crypto/tls flattens a signer's error to text, so the
-// dialer reads the error here instead of matching words. The error is held
-// only until the next success or the next dial and is never logged by the
-// recorder; what the caller does with its message is the caller's.
+// dialer reads the error here instead of matching words. One recorder serves
+// one dial (the dialer makes it), so no dial sees another's error; it is never
+// logged by the recorder, and what the caller does with its message is the
+// caller's.
 type signRecorder struct {
 	crypto.Signer
 	mu   sync.Mutex
@@ -106,13 +107,6 @@ func (r *signRecorder) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpt
 	r.last = err // nil on success clears an earlier failure
 	r.mu.Unlock()
 	return sig, err
-}
-
-// reset forgets the last error: a new dial attributes nothing to an old Sign.
-func (r *signRecorder) reset() {
-	r.mu.Lock()
-	r.last = nil
-	r.mu.Unlock()
 }
 
 // keyError is the *KeyError for the last Sign error when it is one of the

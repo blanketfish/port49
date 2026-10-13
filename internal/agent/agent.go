@@ -152,7 +152,8 @@ type Agent struct {
 	broker       string
 	cert         tls.Certificate
 	client       *http.Client
-	revokeClient *http.Client // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
+	revokeClient *http.Client                                                      // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
+	dialTLS      func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dialer
 	now          func() time.Time
 	log          io.Writer
 	handshakes   atomic.Int64
@@ -237,13 +238,6 @@ func New(c Config) *Agent {
 		}
 	}
 	cert := c.Cert
-	// A hardware key's Sign errors are recorded, so the dialer can tell a key
-	// that failed from a broker that did not answer (crypto/tls flattens them).
-	var rec *signRecorder
-	if s, ok := cert.PrivateKey.(crypto.Signer); ok && a.key != nil {
-		rec = &signRecorder{Signer: s}
-		cert.PrivateKey = rec
-	}
 	var verify func(tls.ConnectionState) error
 	if c.VerifyBroker != nil {
 		verify = func(cs tls.ConnectionState) error {
@@ -253,19 +247,29 @@ func New(c Config) *Agent {
 			return nil
 		}
 	}
-	dialer := &tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
+	base := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
 		VerifyConnection: verify,
 		// Always presented. Go's default presents a certificate only when the
 		// broker's CA hint names its issuer, and otherwise sends none — so a
 		// certificate from the wrong CA would log in with no identity at all
 		// and fail at the first mint instead of here (plan 3, Decided 3).
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}
 	tr := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if rec != nil {
-				rec.reset()
+			// A hardware key's Sign errors are recorded, so the dialer can tell a
+			// key that failed from a broker that did not answer (crypto/tls
+			// flattens them). The recorder belongs to this dial alone: no other
+			// dial's Sign can be blamed on it, whatever else runs.
+			cfg := base
+			var rec *signRecorder
+			if s, ok := cert.PrivateKey.(crypto.Signer); ok && a.key != nil {
+				rec = &signRecorder{Signer: s}
+				mine := cert
+				mine.PrivateKey = rec
+				cfg = base.Clone()
+				cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &mine, nil }
 			}
-			conn, err := dialer.DialContext(ctx, network, addr)
+			conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, network, addr)
 			if err != nil {
 				if rec != nil {
 					if ke := rec.keyError(); ke != nil {
@@ -287,6 +291,7 @@ func New(c Config) *Agent {
 		MaxConnsPerHost:     1,
 		MaxIdleConnsPerHost: 1,
 	}
+	a.dialTLS = tr.DialTLSContext
 	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
 	a.revokeClient = &http.Client{Transport: tr}
 	return a

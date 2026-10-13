@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/hwkey"
@@ -159,6 +160,48 @@ func TestAnOldKeyFailureIsNotBlamedForALaterOutage(t *testing.T) {
 	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
 	if err == nil || KeyCode(err) != "" || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("Mint during an outage = %v, want the broker unreachable and no key error", err)
+	}
+}
+
+// Each dial has its own recorder. One dial's handshake is held at the broker
+// while another's key fails; the held one then fails for the broker's reasons
+// and must not be reported as the other dial's key error.
+func TestTwoConcurrentDialsNeverSeeEachOthersSignError(t *testing.T) {
+	r := newRigWith(t, rigOpts{hw: true})
+	r.key.signErr = hwkey.ErrLocked
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	go func() { // accepts and says nothing: the handshake waits for its deadline
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	var brokerErr, keyErr error
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		close(started)
+		_, brokerErr = r.a.dialTLS(ctx, "tcp", silent.Addr().String())
+	}()
+	<-started
+	time.Sleep(100 * time.Millisecond) // the silent dial is under way
+	_, keyErr = r.a.dialTLS(context.Background(), "tcp", r.srv.Listener.Addr().String())
+	<-done
+	if KeyCode(keyErr) != "key_locked" {
+		t.Errorf("the dial whose key failed = %v, want its own key_locked", keyErr)
+	}
+	if brokerErr == nil || KeyCode(brokerErr) != "" {
+		t.Errorf("the dial the broker never answered = %v, want a plain error, not the other dial's key error", brokerErr)
 	}
 }
 
