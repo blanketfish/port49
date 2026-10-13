@@ -193,6 +193,19 @@ func readSerial(c *x509.Certificate) (uint32, error) {
 	return uint32(n.Uint64()), nil
 }
 
+// SlotCNPrefix begins the subject common name of a YubiKey's slot attestation
+// certificate ("YubiKey PIV Attestation 9a"), which tells it from the slot's
+// own certificate, the f9 device certificate and anything else on the token.
+const SlotCNPrefix = "YubiKey PIV Attestation"
+
+// KeyPolicy is the PIN and touch policy a slot attestation certificate names
+// (the Yubico key policy extension, 1.3.6.1.4.1.41482.3.8). It verifies
+// nothing: it is for a message to the operator, never for a decision that
+// grants anything. Verify is the check that the certificate is Yubico's.
+func KeyPolicy(c *x509.Certificate) (pin, touch byte, err error) {
+	return readPolicy(c)
+}
+
 func readPolicy(c *x509.Certificate) (pin, touch byte, err error) {
 	raw, err := extension(c, oidPolicy, "key policy")
 	if err != nil {

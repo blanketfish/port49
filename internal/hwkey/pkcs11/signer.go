@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/rhwendt/port49/internal/pivattest"
 )
 
 // Signer is one private key object on one token; it implements hwkey.Key.
@@ -40,7 +41,12 @@ type Signer struct {
 	label         string
 	state         hwkey.State
 	closed        bool
-	now           func() time.Time // the clock; nil is time.Now (tests inject one)
+	// touchPolicy is the touch policy byte of the slot's attestation
+	// certificate (pivattest.TouchNever, TouchAlways, TouchCached), 0 when the
+	// token shows none (not a YubiKey, or no attestation object). It is read
+	// for the message only, unverified.
+	touchPolicy byte
+	now         func() time.Time // the clock; nil is time.Now (tests inject one)
 }
 
 // touchTimeoutMin is how long a C_Sign that answers CKR_USER_NOT_LOGGED_IN
@@ -50,8 +56,9 @@ type Signer struct {
 const touchTimeoutMin = 5 * time.Second
 
 // signFault, set only by the test harness (FakeSign), stands in for the
-// module's C_SignInit and C_Sign: it returns the CK_RV to report.
-var signFault func(s *Signer) (rv uint)
+// module's C_SignInit and C_Sign: it returns the function that failed and the
+// CK_RV to report.
+var signFault func(s *Signer) (fn string, rv uint)
 
 func (s *Signer) clock() time.Time {
 	if s.now != nil {
@@ -244,6 +251,7 @@ func Open(u URI, pin []byte) (*Signer, error) {
 		s.dropSession()
 		return nil, err
 	}
+	s.readTouchPolicyLocked()
 	if len(pin) > 0 && s.state == hwkey.Locked {
 		if err := s.unlock(pin); err != nil {
 			s.dropSession()
@@ -251,6 +259,31 @@ func Open(u URI, pin []byte) (*Signer, error) {
 		}
 	}
 	return s, nil
+}
+
+// readTouchPolicyLocked reads the key's touch policy from the slot attestation
+// certificate object that shares its CKA_ID: a certificate whose subject CN
+// begins "YubiKey PIV Attestation". libykcs11 shows it with no login. Nothing
+// is verified: the policy only decides whether a slow not-logged-in can be a
+// touch timeout, so a forged object could at most change a message.
+func (s *Signer) readTouchPolicyLocked() {
+	s.touchPolicy = 0
+	if len(s.id) == 0 {
+		return
+	}
+	certs, err := s.certificatesLocked(s.id)
+	if err != nil {
+		return
+	}
+	for _, c := range certs {
+		if !strings.HasPrefix(c.Subject.CommonName, pivattest.SlotCNPrefix) {
+			continue
+		}
+		if _, touch, err := pivattest.KeyPolicy(c); err == nil {
+			s.touchPolicy = touch
+		}
+		return
+	}
 }
 
 // readPublic fills pub, keyType and sigSize from the token's public key
@@ -501,6 +534,7 @@ func (s *Signer) reopenLocked() {
 	s.m.claim(s.session, s)
 	s.loginRequired = chosen.loginRequired
 	s.serial, s.label = trimField(chosen.ti.serial[:]), trimField(chosen.ti.label[:])
+	s.readTouchPolicyLocked()
 	if s.loginRequired {
 		s.state = hwkey.Locked
 		return
@@ -652,13 +686,18 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	start := s.clock()
 	var sig []byte
 	if signFault != nil {
-		err = &rvError{"C_Sign", signFault(s)}
+		fn, rv := signFault(s)
+		err = &rvError{fn, rv}
 	} else {
 		sig, err = s.m.sign(s.session, mech, param, s.handle, digest)
 	}
 	if err != nil {
 		var re *rvError
-		if errors.As(err, &re) && re.fn == "C_Sign" && re.rv == ckrUserNotLoggedIn && s.clock().Sub(start) >= touchTimeoutMin {
+		// A key whose attestation says touch never has no touch to miss: its
+		// not-logged-in is a lock, however long it took. Always, cached or no
+		// attestation at all (a non-Yubico token) leave the timing rule.
+		if errors.As(err, &re) && re.fn == "C_Sign" && re.rv == ckrUserNotLoggedIn &&
+			s.touchPolicy != pivattest.TouchNever && s.clock().Sub(start) >= touchTimeoutMin {
 			// A touch timeout: the token is still logged in, so the state stays.
 			return nil, hwkey.ErrTouchTimeout
 		}
