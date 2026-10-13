@@ -9123,6 +9123,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   (another exporter value) as `per_login_mfa_refused`, the alert §5.7 reserves for someone trying
   another token, and would spend the challenge. So `port49 revoke` never waits behind a touch, and
   a reconnect during one fires no alert.
+  *Measured on a YubiKey 5C Nano FIPS, firmware 5.4.3, libykcs11 (L60 probe, 2026-10-13):* an untouched sign fails after about 14.4s with CKR_USER_NOT_LOGGED_IN although the token stays logged in (a touched sign on the same session then succeeds with no PIN); port49 reads a not-logged-in that took 5s or more as a touch timeout and keeps the key unlocked.
 - **15. Reuse.** A proof is kept as `(SHA-256(principal ‖ 0 ‖ certificate fingerprint ‖ 0 ‖
   agent_sha256), method) → proved_at` (`PutMFAProof`, the later kept, 8h), where `agent_sha256` is
   the hex SHA-256 of the agent session. The challenge and proved records (`PutOnce`, which crypt
