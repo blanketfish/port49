@@ -2428,7 +2428,7 @@ refused request named; any other path is recorded `mint`.
 | `certificate_issued` | `issue`: the broker issued a short-lived client certificate for the key the sign-in's `nonce` names (§13 decision 43 ruling 8) |
 | `per_login_mfa_required` | `mint`: the device's per-login requirement (§5.1.5) applies and no proof covers it; the item carries a challenge, and nothing is minted for it. `refresh`: a context under a requirement no proof covers is not extended and keeps its ceiling |
 | `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
-| `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token decision 39 refuses, for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause |
+| `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause. An ID token decision 39 itself refuses (its signature, issuer, audience or expiry; an unmapped identity) is recorded under event `per_login_mfa` with decision 39's own reason (`trust_domain_unresolved`, `identity_unmapped`, …), not as this one, and is not counted in `port49_per_login_mfa_total`: an alert on forged tokens at `/v1/mfa` watches those reasons |
 | `per_login_mfa_unavailable` | `mint`, `refresh`: the device's requirement accepts no method this broker can verify now (no `hardware_key_touch.attestation_roots_file` loaded, no human OIDC verifier). That device alone; alertable: a configuration fault, not a person's |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
@@ -8917,8 +8917,8 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **2. Key references.** `key:` (`--key`) is a path, or a reference: `pkcs11:` in RFC 7512's form
   (path attributes `token`, `manufacturer`, `serial`, `model`, `object`, `type`, `id`, `slot-id`;
   query attributes `module-path` and `pin-source`), `tpm:file=PATH` (a TSS2 key file) or
-  `tpm:handle=0x81xxxxxx` (a persistent handle), `secure-enclave:label=NAME` (if ruling 6 builds
-  it). `pin-value` is refused: a PIN does not live in a config file. `pin-source=file:///path` is
+  `tpm:handle=0x81xxxxxx` (a persistent handle), `secure-enclave:label=NAME` (ruling 6:
+  experimental, opt-in by name). `pin-value` is refused: a PIN does not live in a config file. `pin-source=file:///path` is
   read through `keyfile.ReadSecret` (owner-only). A `pkcs11:` key with no `cert:` takes the
   certificate object with the key's `CKA_ID`, so a fleet's system file names `key:
   "pkcs11:id=%01?module-path=…"` once and no user writes anything. A reference that matches objects
@@ -9202,7 +9202,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   method, proved_at, reused}`. Reasons (§5.7 first): `per_login_mfa_required`,
   `per_login_mfa_proved`, `per_login_mfa_refused`, `per_login_mfa_unavailable`. Metric
   `port49_per_login_mfa_total{method,outcome}`; no principal, no device. A token's credential
-  carries `mfa_method` and `mfa_at` into the context.
+  carries `mfa_method`, `mfa_at` and `mfa_agent_sha256` into the context (§5.1.4; ruling 15).
 - **20. Decision 43 ruling 13 amended.** A broker with `issuance` takes a person's ID token at
   `POST /v1/certificate` and at `POST /v1/mfa` (as an `idp_mfa` proof, never as a caller's
   credential), and refuses it everywhere else, as before.

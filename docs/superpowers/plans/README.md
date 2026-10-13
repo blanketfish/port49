@@ -184,7 +184,7 @@ attested always-touch slot of the session key's own token or a fresh IdP sign-in
 `POST /v1/mfa` against the mint's challenge and reused for `reuse_for` within one agent session; a
 reload adding a requirement revokes nothing, and a refresh needs a proof. The agent checks the
 broker certificate against its CRL (`broker_crl: check`). SoftHSM2 and swtpm run under `make
-test-hw` and a new `hwkeys` workflow. Decision 45 holds its twenty-two rulings; it opens L60 (a
+test-hw` and a new `hwkeys` workflow. Decision 45 holds its twenty-six rulings; it opens L60 (a
 YubiKey on the SER8, Ryan present, placed late), L61 (Keycloak's `amr`), L62 (the SER8's TPM) and L63
 (the Secure Enclave).
 **9c executed 2026-10-12 to 2026-10-13** on `feature/hardware-keys-and-per-login-mfa` (base
@@ -5891,27 +5891,29 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   - **ssh's askpass re-mint does not prove.** A stale token with no reuse cover ends `ssh` with
     "second factor required"; `port49 token` (or `ssh` again) proves.
   - **The agent's `GET /status`, or a `port49 token` in another terminal, waits up to about 15s** while a touch is
-    pending (the token lock). Parked for the final review.
-  - **Parked minors for the final review** (the ledger's "Parked for final review" lines):
-    - Tasks 3 and 4: `closeOwned` holds the session lock across `C_CloseSession`, and its guard has no
-      red test of its own; the swtpm reaper's half-written record race, a root run killing another
-      user's swtpm, and the reaper test racing swtpm's start.
-    - Tasks 7 and 13: the `TestMain` TPM stub placed above the CLI branch
-      (`cmd/port49/main_test.go`); `auto` loads the TPM pair twice; a staging file left by a killed
-      login; a redundant `s == heldValid ||`; the attestation lost after the prompt is untested; exit
-      75's message omits `--scope`; older agents fall back to the config's broker CA.
-    - Task 9: `strconv.QuoteToASCII` for NFC and NFD display of a scope selector.
-    - Task 8: the `--broker-crl` help line is over 160 columns; the plan's Task 8 test list omits six
-      real tests.
-    - Task 12: the sealed `Credential` has no json tags (changing that breaks sealed records and needs
-      a migration ruling).
-    - Task 5: the broker client follows redirects on a POST with a body (out of scope there); the
-      concurrent-dials test could be a channel version.
+    pending (the token lock). It does not fail: the socket's timeout is longer. Still parked.
+  - **The final review's fix round** fixed: a token listing a slot's own certificate before its
+    attestation (`mfatouch.Chain` takes the one the f9 certificate signed); an OIDC login looping on
+    a Locked issued token key (it now unlocks through the agent, never opening the token); a reload
+    adding or tightening `per_login_mfa` left unspent no-proof tokens redeemable (now superseded);
+    the mint gate's 503 spending the proof; ruling 18's start-time line; redirects followed by every
+    broker client but the proof posts; a `pin-source` PIN tried while the token reports tries low;
+    the `TestATPMKeyFromAnotherTPMIsReplacedBySigningIn` flake (tests shared one `HOME`, so a reused
+    port handed one test another's issued pair; each lab broker now has its own); and, of the parked
+    minors, the `TestMain` TPM stub, exit 75's `--scope`, `QuoteToASCII`, the `--broker-crl` help
+    width and the redirects. The plan's Task 8 test list omits six real tests:
+    `TestAForgedListIsNotSaidToBeIssuerFiles`, `TestALeafWithNoFetchableDistributionPoint`,
+    `TestAnHTTPLeafIsStillCheckedUnderRequire`, `TestAStaleListIsRememberedForAMinute`,
+    `TestNoVerifiedChainIsRefusedUnderRequire` and `TestParseMode` (`internal/brokercrl`).
+  - **Still parked** (the final review's reports list each with its reason):
+    - Tasks 3 and 4: `closeOwned`'s owner guard has no red test of its own.
+    - Tasks 7 and 13: `auto` loads the TPM pair twice; a staging file left by a killed login; the
+      attestation lost after the prompt is untested; older agents fall back to the config's broker CA.
+    - Task 12: the sealed `Credential` has no json tags (a sealed-format change, left for its own
+      ruling).
+    - Task 5: the concurrent-dials test could be a channel version.
     - Tasks 2 and 14: the "after asking on a terminal" wording; a lock failure mislabelled "Secure
       Enclave refused"; `--delete-key` refuses other flags with exit 2.
-    - One flake seen once, not reproduced in three solo runs and two full runs:
-      `TestATPMKeyFromAnotherTPMIsReplacedBySigningIn` failed with "unknown certificate authority" (a
-      different broker port); it touches neither the Secure Enclave nor this change.
   - **Carried to the lab session with Ryan:** the rest of L60 (cells b, d, e, e2, f, g and the others
     above) and L62, which the ledger defers: it needs a new lab user in `tss` (sudo, a host change), a
     reboot of the SER8, and a second host for the shared home.
@@ -6082,7 +6084,14 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
 - **Live sessions are never cut by a policy edit.** Adding a requirement revokes nothing. Your next
   `port49 refresh` asks one proof before it extends those sessions; without it they keep their
   current end. On Junos (which never asks port49 about a command) the device's own session runs until
-  it is closed, and `port49 refresh` says so.
+  it is closed, and `port49 refresh` says so. A login not yet made is gated at once: the reload
+  deletes the unspent tokens minted under no requirement or a looser one, so a token minted at 09:58
+  is not redeemed at 10:10 without a proof; `port49 token` again asks one.
+- **A requirement no method here can meet is said at start.** When a device's `accept` holds no
+  method this broker verifies (a touch-only scope with no `attestation_roots_file`, an
+  `idp_mfa`-only one with no human OIDC verifier), the broker says one line at its start and at each
+  policy reload naming those devices; it starts anyway, and every login there is `deny
+  per_login_mfa_unavailable` until it is configured.
 - **New in the decision log:** event `per_login_mfa` (`per_login_mfa_proved`, `per_login_mfa_refused`);
   `per_login_mfa_required` and `per_login_mfa_unavailable` on `mint` and `refresh`; a mint record says
   which method covered it and whether it was reused. Alert on `per_login_mfa_refused` (someone trying
