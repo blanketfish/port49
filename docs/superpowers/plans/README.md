@@ -5849,8 +5849,9 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
     answer L63 asks about), port49 names that OSStatus and fails closed. **L63 stays open, marked needs testing on
     macOS;** a help-wanted issue asks community Mac users to run it at go-public.
   - **Task 16, the rest of L60:** needs Ryan at the key. Measured so far on the YubiKey 5C Nano FIPS,
-    firmware 5.4.3 (2026-10-13, read-only, no login; probe kept in the ledger directory):
-    libykcs11 lists the f9 attestation certificate and each slot's attestation with no login, the
+    firmware 5.4.3, libykcs11 2.7.2 (2026-10-13; the partial results note
+    `tests/lab/results/L60-ser8.md`, its probe at `tests/lab/l60/probe_test.go`; everything else
+    stays *provisional on L60*): libykcs11 lists the f9 attestation certificate and each slot's attestation with no login, the
     f9 certificate is issued directly by Yubico's PIV root (no intermediate on this firmware), every
     attestation verifies in `pivattest`, the slot issuer is byte for byte the f9 subject, one device
     serial runs through every slot attestation, touch policy reads 9a=1 9c=2 9e=1, and
@@ -6051,7 +6052,8 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
     9c`), and on the broker `broker.identity.per_login_mfa.hardware_key_touch.
     attestation_roots_file:` Yubico's PIV attestation roots, every one Yubico publishes (newer
     firmware may chain through an intermediate under a newer root: list the root and the
-    intermediate; L60 records which, and measured none on firmware 5.4.3). The broker checks that the
+    intermediate; L60 records which, and measured none on firmware 5.4.3:
+    `tests/lab/results/L60-ser8.md`, partial, the row open). The broker checks that the
     touch slot is on the same token as your session key; a TPM, a file key or an imported key cannot
     give it. **So a device that accepts only `hardware_key_touch` locks out anyone whose session key
     is not on their token**, including `--oidc` users whose key went to the TPM under `auto`: give
