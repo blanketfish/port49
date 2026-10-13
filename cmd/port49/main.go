@@ -359,8 +359,13 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 // certificate login with all four flags reads no file, as before. broker_crl
 // is the exception: without --broker-crl the file is read for it, so a
 // require in the file is not skipped by a command line that names the rest.
+// A pkcs11 key may leave --cert out (the certificate is on the token, or the
+// file's cert:), and a touch_key may be only in the system file, so that is
+// complete only for the agent child, which the login has handed all of it
+// (it is the one given --broker-ca-fd).
 func (s *sessionFlags) complete() bool {
-	return !s.oidc && s.broker != "" && (s.cert != "" || strings.HasPrefix(s.key, "pkcs11:")) && s.key != "" &&
+	return !s.oidc && s.broker != "" &&
+		(s.cert != "" || (strings.HasPrefix(s.key, "pkcs11:") && s.brokerCAFD != 0)) && s.key != "" &&
 		s.brokerCA != "" && s.brokerCRL != ""
 }
 
