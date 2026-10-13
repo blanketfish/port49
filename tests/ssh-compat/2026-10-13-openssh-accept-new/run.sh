@@ -44,6 +44,7 @@ printf 'Port 2222\nListenAddress %s\nHostKey /etc/ssh/ssh_host_ed25519_key\nPass
 /usr/sbin/sshd -f /etc/ssh/sshd_g1
 # The impostor's positive control: port 2222 offers Ed25519 and nothing else.
 ssh-keyscan -p 2222 127.0.0.1 2>/dev/null | awk '{print $2}' | sort -u > /tmp/g1types
+echo "port 22 offers: $(ssh-keyscan -p 22 127.0.0.1 2>/dev/null | awk '{print $2}' | sort -u | tr '\n' ' ')"
 [ "$(cat /tmp/g1types)" = ssh-ed25519 ] || { echo "INVALID: port 2222 offers $(cat /tmp/g1types)"; exit 1; }
 [ "$2" = serve ] && exec sleep infinity
 sh /work/keys.sh

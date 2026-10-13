@@ -37,11 +37,13 @@ Primary key fingerprint: 7168 B983 815A 5EEF 59A4  ADFD 2A3F 414E 7360 60BA
 ```
 
 (The "not certified" warning is only that the measuring machine's keyring has no trust path to the
-key; the fingerprint is the release key's.) Each run re-checks the pinned sum (`openssh-8.5p1.tar.gz: OK`).
+key.) The fingerprint was also checked against sources other than the ftp server the key and tarball
+came from: openssh.com/portable.html states `7168B983815A5EEF59A4ADFD2A3F414E736060BA`, and
+keys.openpgp.org serves a key with that fingerprint. Each run re-checks the pinned sum (`openssh-8.5p1.tar.gz: OK`).
 
 **The impostor's positive control.** Every run first asks `ssh-keyscan -p 2222` what port 2222
-offers and refuses to go on unless the answer is exactly `ssh-ed25519`. Port 22 offers ECDSA,
-Ed25519 and RSA. Cell `g1-control` shows the 2222 server is reachable and that `accept-new` files its
+offers and refuses to go on unless the answer is exactly `ssh-ed25519`. Port 22's own scan, logged
+as `port 22 offers:` on every in-container run, was `ecdsa-sha2-nistp256 ssh-ed25519 ssh-rsa`. Cell `g1-control` shows the 2222 server is reachable and that `accept-new` files its
 key when `kh` is empty (exit 0, `leaf1` filed). Without it G1 would be INVALID; with it, G1's refusal
 is the ECDSA line's doing and not a dead server's.
 
@@ -76,19 +78,47 @@ known hosts.` The `hashed` cell wrote `|1|<salt>|<hash> ssh-ed25519 <key>` on ev
 
 ### G1c: whose child is the askpass at a ProxyJump hop
 
-A `-J jumpuser@127.0.0.1:22` hop that asks for a password; `SSH_ASKPASS` is a script that appends its
-own `$PPID` to a file and exits 1, `SSH_ASKPASS_REQUIRE=force`. The top ssh is the shell's background
-job, so `$top` is its pid.
+`SSH_ASKPASS` is `askpass.sh`, with `SSH_ASKPASS_REQUIRE=force`: it logs its parent's pid, that
+parent's command line (`/proc/$PPID/cmdline`) and the prompt it was given, and exits 1. It never has
+a password. The top ssh runs as the shell's background job, so `$top` is its pid. A ProxyJump hop's
+ssh gets only the top ssh's `-F`, not its `-o` options, so the hop's trust is seeded through a `-F`
+cfg (`Host 127.0.0.1`: its own known_hosts holding the server's Ed25519 key, `StrictHostKeyChecking
+yes`), which is what lets the hop reach its password prompt. (The first run of this cell did not do
+that and measured the hop's host-key question only; the table below replaces it.) Three runs per client:
 
-| Client | top ssh pid | askpass parent pid(s) | G1c |
-|---|---|---|---|
-| 8.5p1 | 15695 | 15696 | PASS |
-| 8.9p1 | 3689 | 3690 | PASS |
-| 9.6p1 | 3843 | 3844 | PASS |
-| 10.2p1 | 3129737 | 3129738 | PASS |
+- **g1c-hostkey:** the hop's host key unknown (empty file, `StrictHostKeyChecking ask`): the hop asks
+  the host-key question. Recorded, not a gate; it is a hop prompt port49's askpass must also refuse.
+- **g1c (the gate):** the hop's key known, so the hop asks `jumpuser@127.0.0.1's password: ` (three
+  times; `NumberOfPasswordPrompts=1` applies to the top ssh). PASS needs a password prompt logged and
+  no logged parent equal to `$top`.
+- **g1c-control:** no `-J`; the top ssh itself asks the same password prompt (the device's own
+  prompt). PASS needs the parent to be `$top`. G1c is valid only if the control passes.
 
-The askpass ran on every version, and its parent was never the top ssh: the hop's ssh is a child
-of the top ssh (the ProxyCommand's), so the pid of the asker's parent tells a hop from the device.
+The asker in every row is `ssh -l jumpuser -p 22 -F <cfg> -W [127.0.0.1]:2222 127.0.0.1` (the hop's
+ssh, ProxyJump's `-W` form) except in the control, where it is the top ssh itself
+(`ssh -F <cfg> ... -p 22 jumpuser@127.0.0.1 true`). The host's run used the published port for 22 in place
+of 22 (`-p <P22>`, `[127.0.0.1]:<P22>` in the known_hosts line) and an explicit `UserKnownHostsFile`,
+so the operator's own `~/.ssh/known_hosts` was never consulted.
+
+| Client | Run | top ssh pid | asker pid (parent of the askpass) | Prompt | Result |
+|---|---|---|---|---|---|
+| 8.5p1 | g1c-hostkey | 15714 | 15715 | `The authenticity of host '127.0.0.1 (127.0.0.1)' can't be established. ...` | recorded |
+| 8.5p1 | **g1c** | 15728 | 15729 | `jumpuser@127.0.0.1's password: ` | **PASS** |
+| 8.5p1 | g1c-control | 15751 | 15751 | `jumpuser@127.0.0.1's password: ` | PASS |
+| 8.9p1 | g1c-hostkey | 3708 | 3709 | host-key question | recorded |
+| 8.9p1 | **g1c** | 3722 | 3723 | `jumpuser@127.0.0.1's password: ` | **PASS** |
+| 8.9p1 | g1c-control | 3745 | 3745 | `jumpuser@127.0.0.1's password: ` | PASS |
+| 9.6p1 | g1c-hostkey | 3862 | 3863 | host-key question | recorded |
+| 9.6p1 | **g1c** | 3876 | 3877 | `jumpuser@127.0.0.1's password: ` | **PASS** |
+| 9.6p1 | g1c-control | 3899 | 3899 | `jumpuser@127.0.0.1's password: ` | PASS |
+| 10.2p1 | g1c-hostkey | 3275305 | 3275306 | `The authenticity of host '[127.0.0.1]:<P22> ...` | recorded |
+| 10.2p1 | **g1c** | 3275320 | 3275321 | `jumpuser@127.0.0.1's password: ` | **PASS** |
+| 10.2p1 | g1c-control | 3275343 | 3275343 | `jumpuser@127.0.0.1's password: ` | PASS |
+
+On every version the hop's password prompt has the hop's ssh (top + 1, a child of the top ssh, its
+`-W` command line shown) as parent, never the top ssh; the device's own prompt has the top ssh as
+parent. The pid of the asker's parent therefore tells a hop's prompt from the device's, password and
+host-key question alike.
 
 ## `ssh -G`: the forms
 
@@ -124,12 +154,12 @@ stderr when stdin is not a terminal; it is not on stdout.)
 Both settings print as **space-separated absolute paths, `~` already expanded, never `%d`**, and each
 lists its `...2` companion:
 
-| Client | `globalknownhostsfile` | `userknownhostsfile` (run as root; the host's was run as `rwendt`) |
+| Client | `globalknownhostsfile` | `userknownhostsfile` (run as root; the host's was run as the operator, `<home>`) |
 |---|---|---|
 | 8.5p1 (upstream build) | `/usr/local/etc/ssh_known_hosts /usr/local/etc/ssh_known_hosts2` | `/root/.ssh/known_hosts /root/.ssh/known_hosts2` |
 | 8.9p1 | `/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2` | `/root/.ssh/known_hosts /root/.ssh/known_hosts2` |
 | 9.6p1 | `/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2` | `/root/.ssh/known_hosts /root/.ssh/known_hosts2` |
-| 10.2p1 | `/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2` | `/home/rwendt/.ssh/known_hosts /home/rwendt/.ssh/known_hosts2` |
+| 10.2p1 | `/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2` | `<home>/.ssh/known_hosts <home>/.ssh/known_hosts2` |
 
 (8.5p1's global path is its own build's `--sysconfdir`; a distro build prints `/etc/ssh/...`.)
 
@@ -138,11 +168,17 @@ Set explicitly, with `UserKnownHostsFile ~/kh1 %d/kh2 /etc/kh3` and `GlobalKnown
 | Client | `userknownhostsfile` | `globalknownhostsfile` |
 |---|---|---|
 | 8.5p1, 8.9p1, 9.6p1 | `/root/kh1 /root/kh2 /etc/kh3` (`~` and `%d` both expanded to the home directory) | `~/g1 %d/g2` **verbatim, not expanded** |
-| 10.2p1 | `/home/rwendt/kh1 /home/rwendt/kh2 /etc/kh3` | `~/g1 %d/g2` verbatim |
+| 10.2p1 | `<home>/kh1 <home>/kh2 /etc/kh3` | `~/g1 %d/g2` verbatim |
 
-So a parser of `ssh -G` may take `userknownhostsfile` as absolute paths (or `none`, or absent on
-8.5p1, or `/dev/null`) and must treat `globalknownhostsfile` as possibly unexpanded when the operator
-set it.
+A path holding a space (`UserKnownHostsFile "/a b/kh" /c/kh`) prints **unquoted**, `userknownhostsfile
+/a b/kh /c/kh`, on 8.5p1, 8.9p1 and 9.6p1 (the host's 10.2p1 was not run on this cfg): the value cannot
+be split unambiguously.
+
+So a parser of `ssh -G` may take `userknownhostsfile` as absolute paths (or `none`, or `/dev/null`) and
+must treat `globalknownhostsfile` as possibly unexpanded when the operator set it. **An absent
+`userknownhostsfile` line on 8.5p1 means `none`**: no user file (an unset setting prints the defaults
+above, so absence is only `UserKnownHostsFile none`). **Task 9 must refuse a value it cannot split
+unambiguously**, a path with a space in it.
 
 ## Gates
 
@@ -151,7 +187,8 @@ set it.
 | **G1** (a known ECDSA line, an Ed25519-only server, default algorithms: ssh refuses, `kh` unchanged) | **PASS** on 8.5p1, 8.9p1, 9.6p1 and 10.2p1 |
 | G1b (ECDSA line, `HostKeyAlgorithms=ssh-ed25519`) | PASS on all four |
 | changed-same-type | PASS (refused) on all four |
-| **G1c** (the hop's askpass is not a child of the top ssh) | **PASS** on all four, including the 8.5p1 floor |
+| **G1c** (the askpass of a ProxyJump hop's *password* prompt is not a child of the top ssh) | **PASS** on all four, including the 8.5p1 floor |
+| g1c-control (validity of G1c: the device's own password prompt has the top ssh as parent) | PASS on all four: G1c is valid |
 | g1-control (validity of G1) | exit 0, key filed, on all four: G1 is valid |
 
 **The floor stays.** 8.5p1 refuses what 8.9p1, 9.6p1 and 10.2p1 refuse, so `minSSH` in

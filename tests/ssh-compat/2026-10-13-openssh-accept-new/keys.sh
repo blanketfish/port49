@@ -27,14 +27,39 @@ cell hashed "$P22" "" -o HashKnownHosts=yes
 echo "  hashed found: $(ssh-keygen -F leaf1 -f "$T/kh" | grep -vc '^#')"
 # g1c (pre-flight N3): who is the askpass's parent when a ProxyJump hop asks? SSH_ASKPASS logs its own
 # parent pid, then fails. The top ssh is this shell's background job, so $top is its pid.
-printf '#!/bin/sh\necho "$PPID" >> "%s/askers"\nexit 1\n' "$T" > "$T/ap" && chmod +x "$T/ap" && : > "$T/askers"
-SSH_ASKPASS="$T/ap" SSH_ASKPASS_REQUIRE=force ssh -F /dev/null -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$T/kh-pj" -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$CTL" \
-    -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
-    -J "jumpuser@127.0.0.1:$P22" -p "$P2222" tuser@127.0.0.1 true 2>"$T/err-pj" &
-top=$!; wait "$top"
-echo "== g1c: top ssh $top; askpass parents: $(sort -u "$T/askers" | tr '\n' ' ')"
-if [ -s "$T/askers" ] && ! grep -qx "$top" "$T/askers"; then echo "  g1c: PASS"; else echo "  g1c: FAIL"; fi
+#
+# A hop ssh gets only -F from the top ssh, not its -o options, so the hop's trust is seeded through a
+# -F cfg: its known_hosts line (the plain name on port 22, [name]:port otherwise) and
+# StrictHostKeyChecking yes, so the hop reaches its password prompt and the askpass never meets a
+# host-key question. The three runs:
+#   g1c-hostkey  the hop's host key is unknown (empty file, ask): the hop's host-key question
+#   g1c          the hop's key is known: the hop's password prompt (the gate)
+#   g1c-control  no -J, the device's own password prompt: its parent must be the top ssh
+cp "$(dirname "$0")/askpass.sh" "$T/ap" && chmod +x "$T/ap"
+hn=127.0.0.1; [ "$P22" = 22 ] || hn="[127.0.0.1]:$P22"
+printf '%s %s\n' "$hn" "$(k ed25519)" > "$T/kh-hop"
+: > "$T/kh-empty"
+printf 'Host 127.0.0.1\n  UserKnownHostsFile %s\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n' "$T/kh-hop" > "$T/pjcfg"
+printf 'Host 127.0.0.1\n  UserKnownHostsFile %s\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking ask\n' "$T/kh-empty" > "$T/pjcfg-ask"
+pj() { # name cfg ssh-args...: run ssh in the background so $! is the top ssh, log every asker
+  name=$1 cfg=$2; shift 2
+  : > "$T/askers-$name"
+  ASKLOG="$T/askers-$name" SSH_ASKPASS="$T/ap" SSH_ASKPASS_REQUIRE=force ssh -F "$cfg" -o IdentitiesOnly=yes \
+      -i "$CTL" -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+      "$@" true 2>"$T/err-$name" &
+  top=$!; wait "$top"
+  echo "== $name: top ssh $top"
+  awk -F'\t' '{print "  asker " $1 ": " $2 "| prompt: " $3}' "$T/askers-$name"
+}
+pj g1c-hostkey "$T/pjcfg-ask" -J "jumpuser@127.0.0.1:$P22" -p "$P2222" tuser@127.0.0.1
+echo "  asker parents: $(cut -f1 "$T/askers-g1c-hostkey" | sort -u | tr '\n' ' ')(recorded, not a gate)"
+pj g1c "$T/pjcfg" -J "jumpuser@127.0.0.1:$P22" -p "$P2222" tuser@127.0.0.1
+gtop=$top
+if grep -q "password: " "$T/askers-g1c" && ! cut -f1 "$T/askers-g1c" | grep -qx "$gtop"; then g1c=PASS; else g1c=FAIL; fi
+pj g1c-control "$T/pjcfg" -p "$P22" jumpuser@127.0.0.1
+if grep -q "password: " "$T/askers-g1c-control" && cut -f1 "$T/askers-g1c-control" | grep -qx "$top"; then ctl=PASS; else ctl=FAIL; fi
+echo "  g1c-control: $ctl"
+if [ "$ctl" = PASS ]; then echo "  g1c: $g1c"; else echo "  g1c: INVALID (control $ctl; cell $g1c)"; fi
 ssh-keygen -q -k -f "$T/krl" "$T/other.pub"
 for cfg in "" "StrictHostKeyChecking yes" "StrictHostKeyChecking no" "StrictHostKeyChecking ask" \
     "StrictHostKeyChecking accept-new" "StrictHostKeyChecking off" "Host leaf1
@@ -42,7 +67,7 @@ for cfg in "" "StrictHostKeyChecking yes" "StrictHostKeyChecking no" "StrictHost
     "RevokedHostKeys $T/krl" "KnownHostsCommand /bin/true %H" "Match user alice
   HostKeyAlias alice-leaf1" "HashKnownHosts yes" \
     "UserKnownHostsFile ~/kh1 %d/kh2 /etc/kh3
-GlobalKnownHostsFile ~/g1 %d/g2"; do
+GlobalKnownHostsFile ~/g1 %d/g2" 'UserKnownHostsFile "/a b/kh" /c/kh'; do
   printf '%s\n' "$cfg" > "$T/cfg"
   for dest in leaf1 Leaf1; do
     echo "== g-forms [$(echo "$cfg" | tr '\n' ';')] $dest:"
