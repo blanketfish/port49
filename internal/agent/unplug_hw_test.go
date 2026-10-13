@@ -9,6 +9,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
+	"log"
 	"math/big"
 	"net/http/httptest"
 	"path/filepath"
@@ -55,6 +57,7 @@ func TestAUnpluggedTPMKeyNeverEndsTheSession(t *testing.T) {
 	srv := httptest.NewUnstartedServer(&fakeBroker{})
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
 		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // the failed reconnect's handshake error
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 

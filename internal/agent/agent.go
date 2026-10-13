@@ -170,6 +170,9 @@ type Agent struct {
 	session string
 	// key is the session key when it is a hardware key, nil for a file key.
 	key hwkey.Key
+	// keySeenAbsent is set when the key was seen absent and not yet seen
+	// present again (probeKey, absentOrLocked).
+	keySeenAbsent atomic.Bool
 	// touch is the touch key when it is usable (same token as key), else
 	// nil; touchUnusable says why not when touch_key is configured.
 	touch         hwkey.Key
@@ -852,7 +855,7 @@ func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 func (a *Agent) refusedReconnect(err error) error {
 	var ke *KeyError
 	if errors.As(err, &ke) {
-		return a.absentOrLocked(ke)
+		return a.absentOrLocked(ke, false)
 	}
 	if refused := a.refusal(err); refused != nil {
 		// A reconnect whose handshake failed: the certificate expired
@@ -968,11 +971,18 @@ func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 	if !ok {
 		return api.RefreshResponse{}, errors.New("agent: the session's key cannot sign a refresh")
 	}
-	// A key that is out is said before anything is sent. keyState probes
-	// while the key is Absent (decision 45 ruling 8), so this is never a
-	// cached Absent: a key that came back is seen here with no signature.
-	if a.key != nil && a.key.State() == hwkey.Absent {
-		return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent})
+	// A key known to be out or locked is said before a challenge is asked
+	// for. State probes while the key is Absent (decision 45 ruling 8), so a
+	// key that came back is seen here with no signature. A key that has just
+	// been pulled still reads Present until a call fails: that refresh asks
+	// for a challenge and is told at the signature (refreshOnce).
+	if a.key != nil {
+		switch a.probeKey() {
+		case hwkey.Absent:
+			return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent}, false)
+		case hwkey.Locked:
+			return api.RefreshResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrLocked}, false)
+		}
 	}
 	for attempt := 1; ; attempt++ {
 		out, retry, err := a.refreshOnce(ctx, signer)
@@ -1045,7 +1055,7 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	sig, err := api.SignRefresh(signer, api.RefreshMessage(nonce, ekm))
 	if err != nil {
 		if keyFault(err) != nil {
-			return api.RefreshResponse{}, false, a.absentOrLocked(&KeyError{Err: err})
+			return api.RefreshResponse{}, false, a.absentOrLocked(&KeyError{Err: err}, true)
 		}
 		return api.RefreshResponse{}, false, fmt.Errorf("agent: signing the refresh: %w", err)
 	}
@@ -1466,7 +1476,7 @@ func (a *Agent) keyState() string {
 	if a.key == nil {
 		return hwkey.Present.String()
 	}
-	return a.key.State().String()
+	return a.probeKey().String()
 }
 
 // Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most

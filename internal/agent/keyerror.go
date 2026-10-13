@@ -49,6 +49,11 @@ type KeyAbsentError struct {
 	State       hwkey.State // Absent or Locked
 	SessionEnds time.Time   // zero when the session has no end yet
 	KeyErr      *KeyError
+	// Back says the key was seen absent before it was seen locked: only then
+	// is it "back". Held says a held connection is still up, so tokens are
+	// still minted on it: a refresh's challenge came on one, a reconnect's
+	// handshake has none.
+	Back, Held bool
 }
 
 func (e *KeyAbsentError) Error() string {
@@ -57,7 +62,10 @@ func (e *KeyAbsentError) Error() string {
 		until = e.SessionEnds.UTC().Format(time.RFC3339)
 	}
 	if e.State == hwkey.Locked {
-		words := "agent: your key is back and needs its PIN: run `port49 login`"
+		words := "agent: your key needs its PIN: run `port49 login`"
+		if e.Back {
+			words = "agent: your key is back and needs its PIN: run `port49 login`"
+		}
 		if until != "" {
 			words += "; your session goes on until " + until
 		}
@@ -65,8 +73,10 @@ func (e *KeyAbsentError) Error() string {
 	}
 	words := "agent: insert your key"
 	if until != "" {
-		words += "; your session goes on until " + until +
-			" (tokens are still minted on the held connection while it stays up)"
+		words += "; your session goes on until " + until
+		if e.Held {
+			words += " (tokens are still minted on the held connection while it stays up)"
+		}
 	}
 	return words
 }
@@ -80,8 +90,8 @@ func (e *KeyAbsentError) Unwrap() error {
 
 // absentOrLocked is err as a KeyAbsentError when it is a KeyError for a key
 // that is gone or locked, and err itself for any other error (a touch timeout
-// included).
-func (a *Agent) absentOrLocked(err error) error {
+// included). held says a held connection is still up.
+func (a *Agent) absentOrLocked(err error, held bool) error {
 	var already *KeyAbsentError
 	var ke *KeyError
 	if errors.As(err, &already) || !errors.As(err, &ke) {
@@ -91,10 +101,27 @@ func (a *Agent) absentOrLocked(err error) error {
 	switch {
 	case errors.Is(ke.Err, hwkey.ErrLocked):
 		state = hwkey.Locked
-	case !errors.Is(ke.Err, hwkey.ErrKeyAbsent):
+	case errors.Is(ke.Err, hwkey.ErrKeyAbsent):
+		a.keySeenAbsent.Store(true)
+	default:
 		return err
 	}
-	return &KeyAbsentError{State: state, SessionEnds: a.SessionEndsAt(), KeyErr: ke}
+	return &KeyAbsentError{State: state, SessionEnds: a.SessionEndsAt(), KeyErr: ke,
+		Back: a.keySeenAbsent.Load(), Held: held}
+}
+
+// probeKey is the session key's State, remembering whether the key has been
+// seen absent since it was last seen present: a locked key is "back" only
+// after that.
+func (a *Agent) probeKey() hwkey.State {
+	st := a.key.State()
+	switch st {
+	case hwkey.Absent:
+		a.keySeenAbsent.Store(true)
+	case hwkey.Present:
+		a.keySeenAbsent.Store(false)
+	}
+	return st
 }
 
 // Socket codes for a KeyError, snake_case like the socket's others.

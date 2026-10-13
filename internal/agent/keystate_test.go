@@ -80,10 +80,9 @@ func (k *fakeKey) State() hwkey.State {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.probes++
-	switch {
-	case !k.present:
-		k.state = hwkey.Absent
-	case k.state == hwkey.Absent:
+	// As the backends do: a cached state moves only when a call fails (Sign
+	// or Unlock, to Absent), and a probe re-reads the device only from Absent.
+	if k.state == hwkey.Absent && k.present {
 		k.state = hwkey.Locked // back, and wants its PIN
 		if k.backFree {
 			k.state = hwkey.Present
@@ -118,6 +117,7 @@ func (k *fakeKey) Unlock(pin []byte) error {
 	k.pins = append(k.pins, string(pin))
 	defer clear(pin)
 	if !k.present {
+		k.state = hwkey.Absent
 		return hwkey.ErrKeyAbsent
 	}
 	if k.blocked {
@@ -187,6 +187,8 @@ func TestStatusSaysTheKeyState(t *testing.T) {
 		t.Fatalf("the agent's log holds the PIN: %q", log.String())
 	}
 	key.setPresent(false)
+	// The cached state moves when a call fails, not at a probe.
+	_, _ = key.Sign(rand.Reader, make([]byte, 32), crypto.SHA256)
 	if st, _ = c.Status(ctx); st.KeyState != "absent" {
 		t.Fatalf("the key was pulled: %+v", st)
 	}

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
@@ -29,19 +31,27 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	if _, err := r.a.Mint(ctx, "leaf1", false, 0); err != nil {
 		t.Fatalf("mint on the held connection with the key out: %v", err)
 	}
-	// A refresh needs the key: it says so, and signs nothing.
+	// A refresh needs the key. The cached state is still Present, so the
+	// first one asks for a challenge on the held connection and fails at the
+	// signature; it says so, and the held connection is still up.
 	signs := r.key.nSigns()
 	_, err := r.a.Refresh(ctx)
 	var absent *KeyAbsentError
 	if !errors.As(err, &absent) || absent.State != hwkey.Absent || !strings.Contains(err.Error(), "insert your key") ||
-		!strings.Contains(err.Error(), "your session goes on until") {
+		!strings.Contains(err.Error(), "your session goes on until") ||
+		!strings.Contains(err.Error(), "tokens are still minted on the held connection") {
 		t.Fatalf("refresh with the key out = %v", err)
 	}
 	if !errors.Is(err, hwkey.ErrKeyAbsent) || KeyCode(err) != "key_absent" {
 		t.Fatalf("refresh with the key out = %v, want the key_absent KeyError underneath", err)
 	}
-	if r.key.nSigns() != signs {
-		t.Fatal("a refresh signed with a key that is out")
+	if r.key.nSigns() != signs+1 {
+		t.Fatalf("the first refresh signed %d times, want the one that failed", r.key.nSigns()-signs)
+	}
+	// The state is Absent now: the next refresh says so before anything is sent.
+	signs = r.key.nSigns()
+	if _, err = r.a.Refresh(ctx); !errors.As(err, &absent) || absent.State != hwkey.Absent || r.key.nSigns() != signs {
+		t.Fatalf("second refresh with the key out = %v after %d signs, want *KeyAbsentError and none", err, r.key.nSigns()-signs)
 	}
 	// A reconnect needs the key at the handshake: the broker drops the
 	// connection, the next mint dials, and the handshake's signature fails
@@ -50,6 +60,11 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 	absent = nil
 	if _, err = r.a.Mint(ctx, "leaf1", false, 0); !errors.As(err, &absent) || absent.State != hwkey.Absent {
 		t.Fatalf("mint needing a reconnect with the key out = %v, want *KeyAbsentError", err)
+	}
+	// The held connection is gone on this path: no promise of minting on it.
+	if !strings.Contains(err.Error(), "insert your key; your session goes on until") ||
+		strings.Contains(err.Error(), "held connection") {
+		t.Fatalf("the reconnect said %q, want no word of a held connection", err)
 	}
 	select {
 	case <-r.a.Done():
@@ -68,18 +83,39 @@ func TestAKeyUnpluggedNeverEndsTheSession(t *testing.T) {
 func TestALockedKeyAtARefreshSaysToLogIn(t *testing.T) {
 	r := newRigWith(t, rigOpts{hw: true}) // comes back Locked by default
 	r.key.setPresent(false)
-	_ = r.key.State()
+	if _, err := r.a.Refresh(context.Background()); err == nil {
+		t.Fatal("refresh with the key out succeeded")
+	}
 	r.key.setPresent(true)
+	signs := r.key.nSigns()
 	_, err := r.a.Refresh(context.Background())
 	var locked *KeyAbsentError
-	if !errors.As(err, &locked) || locked.State != hwkey.Locked || !strings.Contains(err.Error(), "run `port49 login`") ||
+	if !errors.As(err, &locked) || locked.State != hwkey.Locked || !strings.Contains(err.Error(), "your key is back and needs its PIN: run `port49 login`") ||
 		!strings.Contains(err.Error(), "your session goes on until") || KeyCode(err) != "key_locked" {
 		t.Fatalf("refresh with the key back and locked = %v", err)
+	}
+	if r.key.nSigns() != signs {
+		t.Fatal("a locked key was asked for a challenge and a signature")
 	}
 	select {
 	case <-r.a.Done():
 		t.Fatal("the session ended on a locked key")
 	default:
+	}
+}
+
+// A key that never left but is not logged in is not "back".
+func TestALockedKeyThatNeverLeftIsNotBack(t *testing.T) {
+	r := newRigWith(t, rigOpts{hw: true})
+	r.key.mu.Lock()
+	r.key.state = hwkey.Locked
+	r.key.mu.Unlock()
+	_, err := r.a.Refresh(context.Background())
+	var locked *KeyAbsentError
+	if !errors.As(err, &locked) || locked.State != hwkey.Locked ||
+		!strings.Contains(err.Error(), "your key needs its PIN: run `port49 login`; your session goes on until") ||
+		strings.Contains(err.Error(), "back") {
+		t.Fatalf("refresh with a key that never left and is locked = %v", err)
 	}
 }
 
@@ -127,7 +163,7 @@ func TestAReinsertedKeyIsSeenWithoutASignature(t *testing.T) {
 	}
 	// Absent then Present on the next probe, no PIN needed: present at once.
 	r.key.setPresent(false)
-	_, _ = r.a.Refresh(ctx)
+	_, _ = r.key.Sign(rand.Reader, make([]byte, 32), crypto.SHA256) // the call that fails
 	r.key.mu.Lock()
 	r.key.backFree = true
 	r.key.mu.Unlock()
