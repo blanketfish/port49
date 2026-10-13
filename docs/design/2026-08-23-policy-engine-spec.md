@@ -8432,10 +8432,12 @@ built, and ruling 10's host-key options are replaced.
     form, `(user@device) Password:`, which keyboard-interactive uses, on all five platforms, where
     the askpass answered it once; no platform took `password`, so the first form is not measured.
     Under decision 46, a prompt naming the alias `ssh -G` reported also counts, and only an asker
-    whose parent is the ssh `port49 ssh` started is answered (decision 46 ruling 2).
+    whose parent is the ssh `port49 ssh` started is answered; one whose pid or parent cannot be
+    read fails closed (decision 46 ruling 2).
   - **Other prompts.** Any other prompt, a jump host's, is asked of the terminal as ssh would ask
     it: a password with echo off, and a yes/no question with echo on. So is a device-shaped
-    prompt from any other asker, a ProxyJump hop's included (decision 46 ruling 2).
+    prompt from any other asker, a ProxyJump hop's included; an asker whose pid or parent cannot
+    be read gets nothing, and ssh is ended (decision 46 ruling 2).
   - **A second ask.** A second ask for the device's password, which ssh makes when the device
     refuses the token and offers another method, ends the connection before ssh answers it. No
     second or empty password reaches the device's failed-login counters.
@@ -9315,7 +9317,8 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   `SSH_ASKPASS`, and a `Match` block can give it the same alias (measured on 10.2p1), so its prompt
   can match. The asker's pid is read from the socket (`SO_PEERCRED`, `LOCAL_PEERPID`), never from
   what it says, and its parent from the OS; any other asker's device-shaped prompt is asked of the
-  terminal, and a pid or parent that cannot be read, or an OS without the check, fails closed. Gate
+  terminal, and a pid or parent that cannot be read, or an OS without the check, fails closed:
+  nothing is sent, ssh is ended, and `port49 ssh` says it could not tell which process asked. Gate
   G1c measures the parent on 8.5p1 (`tests/ssh-compat/2026-10-13-openssh-accept-new.md`). Under
   accept-new, a
   `UserKnownHostsFile` naming only `/dev/null` or `none` is refused, naming the setting: it files
