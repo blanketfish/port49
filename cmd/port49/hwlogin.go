@@ -46,7 +46,6 @@ func askPIN(label string) ([]byte, error) {
 	}
 	defer tty.Close()
 	fd := int(tty.Fd())
-	fmt.Fprintf(tty, "PIN for %s: ", label)
 	if saved, err := term.GetState(fd); err == nil {
 		restore := func() { _ = term.Restore(fd, saved) }
 		defer restore()
@@ -69,7 +68,11 @@ func askPIN(label string) ([]byte, error) {
 			case <-done:
 			}
 		}()
+		// Echo goes off before the prompt is written, as readpassphrase does,
+		// so nothing typed once the prompt shows is echoed.
+		echoOff(fd)
 	}
+	fmt.Fprintf(tty, "PIN for %s: ", label)
 	pin, err := term.ReadPassword(fd)
 	fmt.Fprintln(tty)
 	switch {
