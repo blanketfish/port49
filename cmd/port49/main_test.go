@@ -351,6 +351,25 @@ type labBroker struct {
 	skew time.Duration
 	stop func() // closes the broker's server: the broker is down
 	bl   *broker.Listener
+	// onAccept, when set, runs for each connection the broker accepts, before
+	// it is served.
+	onAccept atomic.Pointer[func()]
+}
+
+// acceptHook is the lab broker's listener: it tells l each connection.
+type acceptHook struct {
+	net.Listener
+	l *labBroker
+}
+
+func (a acceptHook) Accept() (net.Conn, error) {
+	c, err := a.Listener.Accept()
+	if err == nil {
+		if f := a.l.onAccept.Load(); f != nil {
+			(*f)()
+		}
+	}
+	return c, err
 }
 
 func (l *labBroker) now() time.Time {
@@ -478,7 +497,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
+	bl := broker.NewListener(broker.Limit(acceptHook{raw, l}, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
 	l.bl = bl

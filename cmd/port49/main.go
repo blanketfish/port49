@@ -537,8 +537,13 @@ func login(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
+	// The agent opens its own session on the token. This process lets go of
+	// its own before the agent starts, so none holds the token while the
+	// agent logs in (ruling 8); Close is idempotent for the early returns.
+	var held hwkey.Key
 	if k, ok := cfg.Cert.PrivateKey.(hwkey.Key); ok {
-		defer k.Close() // the agent opens its own
+		held = k
+		defer k.Close()
 	}
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
 		// Only the session these flags name is refreshed. Another broker's,
@@ -559,10 +564,13 @@ func login(args []string, stdout, stderr io.Writer) int {
 		}
 		return refreshRunning(ctx, &sf, st, stdout, stderr)
 	}
-	if k, ok := cfg.Cert.PrivateKey.(hwkey.Key); ok && !unlockForAgent(&sf, k, stderr) {
+	if held != nil && !unlockForAgent(&sf, held, stderr) {
 		return 1
 	}
 	defer clear(sf.pin)
+	if held != nil {
+		held.Close()
+	}
 	return startAgent(&sf, false, stdout, stderr)
 }
 

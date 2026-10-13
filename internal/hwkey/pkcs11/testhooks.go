@@ -24,6 +24,24 @@ func GenerateKeyPairCalls() int64 { return generateKeyPairCalls.Load() }
 // CreateObjectCalls is how many C_CreateObject calls the process has made.
 func CreateObjectCalls() int64 { return createObjectCalls.Load() }
 
+// OpenSessions is how many sessions this process's Signers hold open on every
+// module it has loaded, so a test can see that a process let go of its token.
+func OpenSessions() int {
+	modulesMu.Lock()
+	defer modulesMu.Unlock()
+	n := 0
+	for _, m := range modules {
+		m.sessMu.Lock()
+		for _, o := range m.owners {
+			if o != nil {
+				n++
+			}
+		}
+		m.sessMu.Unlock()
+	}
+	return n
+}
+
 // SessionHandle is the session number s holds (0 when it holds none), so a
 // test can check that the module reused a lost Signer's number for another's
 // new session instead of assuming it.
