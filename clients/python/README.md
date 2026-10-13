@@ -32,6 +32,41 @@ res.refused     # {device: Refusal}: denies, and devices that want a second fact
 res.raise_for_refused()
 ```
 
+### A machine's tokens: `Workload`
+
+For a service with a workload certificate (Oxidized, a backup job), `Workload` drives
+`port49 workload token`, which reads the certificate and key at every run:
+
+```python
+from port49 import Workload
+
+w = Workload(broker="https://broker.example.com:8443", broker_ca="/etc/port49/ca.pem",
+             cert="/etc/port49/w.pem", key="/etc/port49/w.key")
+print(w.identity()["principal"])
+res = w.tokens(scope="backup")                       # every device the scope selects that you hold a grant on
+res = w.tokens(["leaf1", "leaf2"], purpose="nightly backup")
+res.tokens      # {device: Token}
+res.refused     # {device: Refusal}: denies, and devices that want a second factor
+```
+
+Pass `touch_key=` (a `pkcs11:` reference with a `pin-source`), `broker_crl=` and `deadline=`
+(seconds) to reach the CLI's flags of those names.
+
+- A scope that selects nothing returns empty `tokens` and `refused`. So does a run where every
+  device was denied (the CLI exits 77 for that): the denies are in `refused`, and nothing raises.
+- A run that **stopped** before it finished never returns: the CLI says so (`stopped`), and the
+  library raises the class of that code (`broker_unavailable` and `connection_changed` are
+  `Temporary`, `broker_refused` is `BrokerRefused`, `agent_error` is `Port49Error`). The tokens
+  minted so far are on `.results`, and every device the run left is in `.results.refused` under
+  the stopping code. No answer at all is `Temporary` for exit 75 and `Final` for exit 77 (the
+  certificate expired: nothing can mint until someone acts).
+- A `Temporary` is run again, at most `attempts` runs (default 3) with a 1 s, 2 s, 4 s ... wait
+  between, and only where that mints nothing twice: a run that sent nothing, a sweep by name
+  (the rerun asks for just the devices that were left), or a scope sweep that had minted nothing.
+  A scope sweep that had minted a page before it stopped is not run again, since it cannot name
+  what it left: catch the error and run it again for the rest. `Final`, `BrokerRefused` and
+  `Port49Error` are never retried.
+
 ## Errors
 
 Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.

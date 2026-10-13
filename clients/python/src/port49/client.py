@@ -1,12 +1,15 @@
 """Identity, mint, sweep and retry over the port49 CLI (design §17; decision 46)."""
 
 import json
+import os
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 
 from . import _run
-from .errors import (BrokerRefused, Denied, DeviceFault, KeyUnavailable, MFARequired, NoAgent, Port49Error, SessionOver,
-                     Temporary)
+from .errors import (BrokerRefused, Denied, DeviceFault, Final, KeyUnavailable, MFARequired, NoAgent, Port49Error,
+                     SessionOver, Temporary)
 
 # The CLI's codes (spec §12) to their classes; any other is a Port49Error (no_token and
 # agent_error are that on purpose: nothing a caller does differently).
@@ -174,3 +177,120 @@ class Agent:
                 e.results = res
                 raise
         return res
+
+
+def _by_exit(ran, what):
+    """The error for a workload run that printed no answer: by its exit code (75 temporary, 77 final)."""
+    err = failed(ran, None, what)
+    return (Temporary if ran.code == 75 else Final if ran.code == 77 else Port49Error)(err.code, err.detail, None)
+
+
+def _sweep_of(obj):
+    """(MintResults, stopped code or None) of a `workload token --format json` object. A null list is
+    an empty one. Raises KeyError, TypeError or AttributeError on a shape that is not the CLI's."""
+    res = MintResults(
+        {it["device"]: Token.of(it) for it in obj.get("results") or [] if it.get("login")},
+        {r["device"]: Refusal(r["device"], r.get("verdict"), r.get("reason"), r.get("error"),
+                              _run.printable(r.get("detail") or ""), r.get("per_login_mfa"))
+         for r in obj.get("refused") or []})
+    if "stopped" not in obj:
+        return res, None
+    stop = obj["stopped"]
+    return res, stop if isinstance(stop, str) and stop else "agent_error"
+
+
+class Workload:
+    """A machine's tokens: `port49 workload token`, which reads the certificate and key at every run
+    (design §17). The CLI pages, retries within its deadline under one Idempotency-Key per page, checks
+    the broker's CRL and proves a touch with touch_key (decision 46 ruling 11).
+
+    A run that stopped before it finished (the CLI's `stopped` key) never returns: it raises the class of
+    its code with what was minted on .results. Only a Temporary is run again, up to `attempts` runs with a
+    backoff, and only where that mints nothing twice: a run that sent nothing, a named sweep (which
+    re-mints just the devices that were left), or a scope sweep that had minted nothing."""
+
+    def __init__(self, broker, broker_ca, cert, key, touch_key=None, broker_crl=None, port49="port49",
+                 deadline=None, timeout=None, stderr=None, attempts=3):
+        self.port49, self.timeout, self.stderr, self.attempts = port49, timeout, stderr, attempts
+        self._sleep = time.sleep
+        self.flags = ["--broker", broker, "--broker-ca", broker_ca, "--cert", cert, "--key", key]
+        if touch_key:
+            self.flags += ["--touch-key", touch_key]
+        if broker_crl:
+            self.flags += ["--broker-crl", broker_crl]
+        if deadline:
+            self.flags += ["--deadline", f"{int(deadline)}s"]
+
+    def identity(self):
+        ran = _run.run([self.port49, "workload", "identity", *self.flags, "--json"], stdin=subprocess.DEVNULL,
+                       timeout=self.timeout, stderr=self.stderr)
+        obj = answer(ran)
+        if ran.code != 0 or obj is None:
+            raise _by_exit(ran, "port49 workload identity")
+        return obj
+
+    def tokens(self, devices=None, scope=None, enable=False, ttl=None, purpose=None):
+        if (devices is None) == (scope is None):
+            raise ValueError("name devices or a scope, not both")
+        if devices is not None:
+            devices = list(dict.fromkeys(devices))
+            if not devices or any(not d or any(c in d for c in "\r\n") for d in devices):
+                raise ValueError("devices must be a list of names, none empty or holding a line break")
+        flags = ["--enable"] if enable else []
+        flags += ["--ttl", f"{int(ttl)}s"] if ttl else []
+        flags += ["--purpose", purpose] if purpose else []
+        acc, left = MintResults({}, {}), {}
+        for attempt in range(self.attempts):
+            err, sent = self._once(flags, devices, scope, acc, left)
+            if err is None:
+                return acc
+            # Retried: a Temporary that sent nothing; a named sweep, for just what it left; a scope
+            # sweep that has minted nothing. Anything else would mint twice, or cannot be mended.
+            again = isinstance(err, Temporary) and attempt + 1 < self.attempts and (
+                not sent or (devices is not None and left) or (devices is None and not acc.tokens))
+            if not again:
+                acc.refused.update(left)
+                err.results = acc
+                raise err
+            if devices is not None and sent:
+                devices = list(left)
+            self._sleep(2 ** attempt)
+        raise Port49Error("agent_error", "no attempts were made")
+
+    def _once(self, flags, devices, scope, acc, left):
+        """One run, merged into acc: (the error or None, whether the broker had been sent anything).
+        `left` becomes the devices this run says it left. The answer, which may hold tokens, stays in
+        this frame, so no traceback of the caller's can carry it in its locals."""
+        argv = [self.port49, "workload", "token", *self.flags, "--format", "json", *flags]
+        with tempfile.TemporaryDirectory(prefix="port49-") as tmp:
+            if scope is not None:
+                argv += ["--scope", scope]
+            else:
+                path = os.path.join(tmp, "devices")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("".join(d + "\n" for d in devices))
+                argv += ["--devices-file", path]
+            ran = _run.run(argv, stdin=subprocess.DEVNULL, timeout=self.timeout, stderr=self.stderr)
+        obj = answer(ran)
+        if obj is None:
+            return _by_exit(ran, "port49 workload token"), False
+        try:
+            res, stop = _sweep_of(obj)
+        except (KeyError, TypeError, AttributeError):
+            return Port49Error(f"exit_{ran.code}", "port49 workload token printed an answer that is not its own"), True
+        left.clear()
+        if stop is not None:
+            # What the stop left is in refused under its code, with no verdict of the broker's.
+            left.update({d: r for d, r in res.refused.items() if r.error == stop and not r.verdict})
+        acc.tokens.update(res.tokens)
+        acc.refused.update({d: r for d, r in res.refused.items() if d not in left})
+        for d in res.tokens:
+            acc.refused.pop(d, None)
+        if stop is not None:
+            detail = next((r.detail for r in left.values() if r.detail), "") or f"the run stopped: {stop}"
+            cls = CLASSES.get(stop, Port49Error)
+            return cls(stop, detail, None), True
+        if ran.code == 75:
+            return Temporary("exit_75", "the broker did not answer every device by the deadline; what was minted "
+                             "is in .results; run again for the rest", None), True
+        return None, True

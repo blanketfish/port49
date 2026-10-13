@@ -11,6 +11,10 @@ import json, os, sys, time
 d =os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(d, "argv.jsonl"), "a", encoding="utf-8") as f:
     f.write(json.dumps(sys.argv[1:]) + "\\n")
+if "--devices-file" in sys.argv:  # the file is gone once the run returns: keep what it held
+    with open(sys.argv[sys.argv.index("--devices-file") + 1], encoding="utf-8") as src:
+        with open(os.path.join(d, "devices.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(src.read().split()) + "\\n")
 with open(os.path.join(d, "answers.json"), encoding="utf-8") as f:
     answers = json.load(f)
 n = sum(1 for _ in open(os.path.join(d, "argv.jsonl"), encoding="utf-8")) - 1
@@ -27,6 +31,7 @@ def make(directory, answers):
     with open(os.path.join(directory, "answers.json"), "w", encoding="utf-8") as f:
         json.dump(answers, f)
     open(os.path.join(directory, "argv.jsonl"), "w").close()  # a new fake starts at its first answer
+    open(os.path.join(directory, "devices.jsonl"), "w").close()
     path = os.path.join(directory, "port49")
     with open(path, "w", encoding="utf-8") as f:
         f.write(SCRIPT.format(python=sys.executable))
@@ -37,6 +42,12 @@ def make(directory, answers):
 def argvs(directory):
     """Every run's argv, in order."""
     with open(os.path.join(directory, "argv.jsonl"), encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
+
+
+def device_files(directory):
+    """What each run's --devices-file held, as a list of names, in order."""
+    with open(os.path.join(directory, "devices.jsonl"), encoding="utf-8") as f:
         return [json.loads(line) for line in f]
 
 
