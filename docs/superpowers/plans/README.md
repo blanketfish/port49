@@ -192,6 +192,20 @@ YubiKey on the SER8, Ryan present, placed late), L61 (Keycloak's `amr`), L62 (th
 YubiKey 5C Nano FIPS, so it stays open; L62 open. The Secure Enclave (Tasks 2 and 14) is built,
 experimental and opt-in, cross-compiled and vetted for darwin in CI, and run on no Mac: L63 stays
 open, marked needs testing on macOS.
+**9d written 2026-10-13** (`2026-10-13-09d-openssh-host-keys-and-python-clients.md`, thirteen tasks:
+one spec, one OpenSSH container measurement (gate G1, the floor), eight code, two lab, one docs) on
+Ryan's rulings of 2026-10-10. Host keys become OpenSSH's: `port49 ssh` passes
+`StrictHostKeyChecking=accept-new` (the operator's own `yes` stands, `no` never passes) and the
+inventory name as `HostKeyAlias` (the operator's own stands), read through `ssh -G`, and nothing
+else about host keys; `port49 devices trust`, `internal/hostkeys` and the pins file go (no admin
+reason survived), which ends 9b's group-writable `~/.config` refusal and makes 9a's I-1 moot. The
+Python library (`clients/python`, Python 3.10+) drives the CLI rather than the API, so the
+per-login proof, PINs, hardware keys and the broker CRL check stay in one implementation;
+`port49 token --json` and `workload token --format json` say why a mint failed, as JSON; Netmiko
+takes accept-new under the inventory name in the operator's known_hosts. The Ansible lookup is
+`port49.client.token`. Decision 46 holds its seventeen rulings; L53 and L54 stay closed (claims
+amended), and it opens L64 (`port49 ssh` under accept-new, a reload included), L65 (Python and
+Netmiko) and L66 (the Ansible lookup).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5306,6 +5320,19 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     host whose `~/.config` is group-writable (Ubuntu's default 0775), `port49 ssh` and `devices
     trust` are refused with no fix to run. The pins file goes away in 9d, which ends it; 9d's
     plan checks that nothing it keeps reads a file under `~/.config` through that walk.
+  - **Written 2026-10-13:** `2026-10-13-09d-openssh-host-keys-and-python-clients.md`, thirteen
+    tasks, branch `feature/openssh-host-keys-and-python-clients`, base `235beee`; decision 46
+    (seventeen rulings). `port49 ssh` reads the operator's `StrictHostKeyChecking` and
+    `HostKeyAlias` with `ssh -G` and passes accept-new (their `yes` stands) and the inventory name
+    as the alias (theirs stands), nothing else about host keys. `devices trust` is removed, not
+    kept as an admin tool: verified first contact is OpenSSH's (a managed `GlobalKnownHostsFile`,
+    `@cert-authority`), and pre-seeding keys is the per-device toil ruled out. `userconfig.LegacyDir`
+    is unexported, so nothing kept reads under `~/.config`. The Python library drives the CLI
+    (`port49 token --json` and `workload token --format json` gain JSON failures); Netmiko keeps
+    keys under the inventory name in the operator's known_hosts; the Ansible lookup is
+    `port49.client.token`. Gate G1 (Task 2) measures whether OpenSSH 8.5p1's accept-new refuses a
+    key of another type under a known alias, as 10.2p1 does. Lab: L53 and L54 stay closed (claims
+    amended); L64, L65 and L66 are opened.
 
 - **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
   with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
