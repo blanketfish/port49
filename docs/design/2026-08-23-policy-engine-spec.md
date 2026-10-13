@@ -8905,7 +8905,7 @@ data. Ruling 6's `rest`, XML API and `outbound-ssh` clauses, and its file-read n
 **45. The agent in full, third part: hardware-backed client keys, `per_login_mfa`, and the broker
 certificate's CRL check.** *Plan 9c, 2026-10-12, on plan 3's rulings of 2026-09-24, decision 42
 ruling 13, and Ryan's direction of 2026-10-10.* Rulings rest on reasoning unless they say data.
-Ruling 6 is gated on L63; rulings 3, 4, 8 and 12's PKCS#11 and attestation claims are
+Ruling 6's Secure Enclave is *provisional on L63* (built, experimental, opt-in); rulings 3, 4, 8 and 12's PKCS#11 and attestation claims are
 *provisional on L60* (as is ruling 14's touch timeout); ruling 13's `amr` on Keycloak is measured (L61, closed 2026-10-12); ruling 5 on real
 hardware and ruling 7's shared-home naming are *provisional on L62*. Ruling 22 rests on data:
 a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pre-flight C1).
@@ -8947,14 +8947,21 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   `PRIVATE KEY` PEM file (the "ASN.1 Specification for TPM 2.0 Key Files" form the OpenSSL tpm2
   provider and tpm2-tools write), 0600. The file is useless on another machine. Linux only; a
   user outside the `tss` group is told so in one line naming the group.
-- **6. The Secure Enclave** is built only if the spike shows an unsigned `port49` can create and
-  find again a Secure Enclave key (gate SE1). Otherwise macOS is served through PKCS#11 (a
-  YubiKey) and the choice goes back to Ryan (decision 42 ruling 13); L63 stays open.
+- **6. The Secure Enclave** is built now, experimental and opt-in, without a Mac to run it on
+  (Ryan, 2026-10-12, under decision 42 ruling 13). It is chosen only by name
+  (`issued_key_store: secure_enclave`, or a `secure-enclave:` key reference); `auto` never picks it
+  (ruling 7). Each use prints one line saying it is experimental and untested. It fails
+  closed: any Security.framework error, an `errSecMissingEntitlement` (-34018) among them, is a
+  refusal that names the OSStatus, never a fallback to another store. Its code is cross-compiled
+  for darwin in CI. Gate SE1 becomes a check a Mac user runs (`tests/spike/secureenclave`): it
+  prints pass or fail for each cell and no secret. L63 stays open, marked needs testing on macOS,
+  and a help-wanted issue asks community Mac users to run it at go-public. If L63 measures a
+  refusal, the backend stays refused on that macOS, and macOS is served through PKCS#11.
 - **7. Issued keys in hardware.** `issued_key_store` in `config.yaml`: `auto` (the default), `tpm`,
   `secure_enclave`, `pkcs11` (with `issued_key: "pkcs11:…;id=…"` naming the key) or `file`.
   `auto` is a token when `touch_key` and `issued_key` are both set (so the session key sits on the
   token a touch proves from, ruling 12), else the TPM on Linux where a key can be created there,
-  the Secure Enclave on macOS once ruling 6 builds it, else the file; the login says which in one
+  else the file (never the Secure Enclave, which is opt-in by name until L63 closes, ruling 6); the login says which in one
   line. `auto` passes over a store this build lacks and says so in that line: in the static build
   (ruling 22) a fleet's `touch_key` and `issued_key` do not make `auto` pick `pkcs11` and refuse;
   it says "this port49 was built without PKCS#11 support, so issued_key is not used; use the
@@ -9976,7 +9983,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L60** | A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5). Whether: `C_Initialize` with `CKF_OS_LOCKING_OK` and no callbacks, and `C_Finalize`, run clean with the token present, `libykcs11`'s threads included; a slot 9a key (PIN policy once, touch never, a lab CA's certificate) signs a TLS 1.3 handshake and a refresh with `port49 login` asking the PIN once; the attestation certificates (slot f9 and each slot's) are reachable as certificate objects, chain to Yubico's PIV roots (the chain's depth for this firmware recorded: whether an intermediate sits under the root), and carry the touch policy (1.3.6.1.4.1.41482.3.8) and serial (…3.7) port49 reads (the PIN/touch policy bytes a YubiKey Bio reports are recorded too: `internal/pivattest` accepts PIN 1–3 only, and yubikey-manager lists 0x04 and 0x05; and whether the slot certificate's issuer is byte for byte the f9 certificate's subject, which `internal/pivattest` requires; and whether every slot attestation from one YubiKey carries the same device serial, which the broker's per-login proof requires: it compares the serial of the touch slot's certificate with the session slot's, and refuses a proof whose two differ); a slot 9c key with touch policy always proves `hardware_key_touch` with a touch, and with no touch within the token's timeout is refused in port49's words, and the timeout is recorded (decision 45 ruling 14 says about 15s); the token unplugged mid-session: `port49 token` mints on the held connection, `port49 refresh` says to insert the key, the session survives, and after re-insertion, with nothing minted between, the agent's `GET /status` says `locked`, `port49 login` asks the PIN and the refresh works; a `port49 login` or `port49 token` in another terminal does not de-authenticate the agent's PIV login; a wrong PIN is sent once and the message says the tries left; a key the user generated with `ykman` and named by `issued_key` (`issued_key_store: pkcs11`) is issued a certificate with port49 writing nothing to the token. Each cell against a control. | §13 decision 45 rulings 3, 4, 8 and 12; the operator notes (plan 13) | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open — added by plan 9c 2026-10-12; needs Ryan present |
 | **L61** | Keycloak's `amr` and `acr` in an ID token for `idp_mfa`. With a realm flow of password and OTP, a `prompt=login` sign-in with both: whether the ID token carries `amr`, and which values, with Keycloak's AMR protocol mapper and with none; the control, a password-only sign-in, and its `amr`; whether `acr_values` changes either. | §13 decision 45 ruling 13 (the default `amr: [mfa]`); the operator notes' provider setup | Keycloak (26.x) | closed — measured 2026-10-12; tests/lab/results/L61-keycloak.md (Gate M1 as worded failed: Keycloak emits `otp`, not `mfa`, unless the OTP execution's reference is set to `mfa`; decision 45 ruling 13 records the setup, per plan 9c Task 15 Step 3) |
 | **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; on the same shared home a token host (`pkcs11`, certificate `<host>_<port>.<k>.pem`) and a file host each sign in once, log in again with no further sign-in, and overwrite neither certificate; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
-| **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs a macOS host |
+| **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs testing on macOS: the backend is built experimental and opt-in (Ryan, 2026-10-12), and `tests/spike/secureenclave` is the check a Mac user runs |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -11920,7 +11927,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
     firmware is recollection, not measurement.
   - **L61**: `idp_mfa`'s `amr` default is provider data.
   - **L62**: swtpm is not a TPM's firmware.
-  - **L63**: the entitlement question decides whether the Secure Enclave is built.
+  - **L63**: the entitlement question decides whether the Secure Enclave, built experimental and
+    opt-in, works from an unsigned binary.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

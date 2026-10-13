@@ -784,11 +784,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:** Produces gate SE1 for Task 14. Nothing else depends on it.
 
-- [ ] **Step 0: Find a macOS host.** None is known to this project: the development host is WSL2 and
-  the lab machine (SER8) is Linux. If there is none, write the open question "the Secure Enclave
-  spike needs a macOS host (decision 42 ruling 13); run `tests/spike/secureenclave` there, or drop
-  the Secure Enclave and serve macOS through a YubiKey" to the plan's report, leave L63 open, mark
-  Task 14 waiting, and go on to Task 3. Steps 1–4 are written so Ryan, or a later run, can run them.
+- [ ] **Step 0: Ryan ruled (2026-10-12).** No macOS host exists. The spike is written as a check a
+  community Mac user runs: one `go run ./tests/spike/secureenclave` with no arguments, which runs
+  every cell in order (`find` from a re-exec of itself as a second process) and prints
+  `cell <name>: pass` or `cell <name>: fail OSStatus <n> <description>`, then `SE1: pass` or
+  `SE1: fail`. It prints no key bytes and no signature, and deletes the key it made. Here it is
+  written, and cross-compiled with `GOOS=darwin GOARCH=arm64` and `amd64`, `CGO_ENABLED=0`; it is
+  not run. L63 stays open as needs testing on macOS. Task 14 runs under the ruling.
 
 - [ ] **Step 1: Write the spike.** One program, purego only, no cgo:
 
@@ -3613,11 +3615,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   error)`; `Signer` implements `hwkey.Key` (`Unlock` a no-op; `State` `Absent` on
   `errSecItemNotFound` after a create).
 
-- [ ] **Step 0: Read the gate.** If L63's note says SE1 passed, go on. If Ryan ruled the per-agent
-  ephemeral key, replace `Generate`'s `kSecAttrIsPermanent` with false, generate in the agent child,
-  and have the login sign in for the key the child reports on its socket before it connects (one
-  extra socket call, `GET /issued-key`); write that in the plan text first. If neither, skip this
-  task and record it in the roadmap as waiting on Ryan.
+- [ ] **Step 0: Ryan ruled (2026-10-12): build it, experimental and opt-in** (spec decision 45
+  ruling 6 as amended). It is chosen only by name (`issued_key_store: secure_enclave`, or a
+  `secure-enclave:<label>` reference); `auto` never picks it. Every open or generate prints one
+  line: "the Secure Enclave backend is experimental and untested (L63); report results at the
+  port49 issue tracker". Any OSStatus is a refusal naming it, never a fallback. CI cross-compiles
+  it (`GOOS=darwin`, `-tags hwkey_dlopen`, `CGO_ENABLED=0`, arm64 and amd64) in `hwkeys.yml`, and
+  `go vet` runs on it with the same GOOS. The darwin test is written for a Mac user to run and is
+  not run here. Everything that can run on Linux (the `secure-enclave:` reference parsing, the
+  dispatch, the store choice, the refusal off macOS and on the static build) is tested on Linux.
 - [ ] **Step 1: Write the failing test** (`//go:build darwin`, runs on a macOS CI runner or by
   hand): generate under a random label, sign a refresh message, verify, open again from a second
   `exec` of the test binary, delete.
