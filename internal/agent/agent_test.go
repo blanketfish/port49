@@ -91,6 +91,9 @@ type fakeBroker struct {
 	certStatus      bool
 	answers         map[string]refusal
 	revokeDelay     time.Duration
+	// redirect answers every path but /landed 307 to /landed, as a front
+	// proxy's rule might: a client that follows it is seen at /landed.
+	redirect bool
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
@@ -118,7 +121,13 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/v1/refresh") {
 		fb.order = append(fb.order, r.URL.Path)
 	}
+	redirect := fb.redirect
 	fb.mu.Unlock()
+	if redirect && r.URL.Path != "/landed" {
+		w.Header().Set("Location", "/landed")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return
+	}
 	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
 		w.Header().Set("Retry-After", "60") // as the broker's writeRefusal answers it
 		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",

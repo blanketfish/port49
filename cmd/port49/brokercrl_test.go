@@ -157,6 +157,41 @@ func TestARevokedBrokerIsNotABrokerThatIsDown(t *testing.T) {
 	}
 }
 
+// A 307 from anything answering under the broker CA (a front proxy's rule) is
+// not followed: the certificate request's ID token and body, and the config
+// fetch, go to the broker named and nowhere else (final review client I4).
+func TestTheBrokerClientsFollowNoRedirect(t *testing.T) {
+	ca := testCA(t)
+	now := time.Now()
+	leaf, err := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: testpki.Loopback(),
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var landed atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/landed" {
+			landed.Add(1)
+			return
+		}
+		w.Header().Set("Location", "/landed")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}}
+	srv.StartTLS()
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.Cert)
+	_, err = fetchBrokerConfig(context.Background(), srv.URL, pool, nil)
+	if err == nil || !strings.Contains(err.Error(), "never follows a redirect") || landed.Load() != 0 {
+		t.Fatalf("fetchBrokerConfig = %v, %d request(s) at /landed: want the 307 said and not followed", err, landed.Load())
+	}
+	_, err = requestCertificate(context.Background(), srv.URL, pool, "an-id-token", []byte("csr"), nil)
+	if err == nil || !strings.Contains(err.Error(), "never follows a redirect") || landed.Load() != 0 {
+		t.Fatalf("requestCertificate = %v, %d request(s) at /landed: want the 307 said and not followed", err, landed.Load())
+	}
+}
+
 // With ~/.port49/crl unmakeable, "the CRLs cannot be kept" is said only when
 // the check had no answer and needed a kept list: not on every run that
 // merely fetched a fine list. Under require it rides on the refusal.

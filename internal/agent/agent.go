@@ -40,6 +40,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/mfatouch"
+	"github.com/rhwendt/port49/internal/printsafe"
 )
 
 // ErrConnectionChanged is a touch made while the held connection was replaced:
@@ -328,8 +329,12 @@ func New(c Config) *Agent {
 		MaxIdleConnsPerHost: 1,
 	}
 	a.dialTLS = tr.DialTLSContext
-	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
-	a.revokeClient = &http.Client{Transport: tr}
+	// No client follows a redirect: each request carries the agent session
+	// header, and a mint or a refresh its body, on a certificate the dialer
+	// presents to any broker-CA host (final review client I4). The 3xx is
+	// the answer, and it is not a 200.
+	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
+	a.revokeClient = &http.Client{Transport: tr, CheckRedirect: mfatouch.NoRedirect}
 	a.mfaClient = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
 	return a
 }
@@ -558,6 +563,9 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		}
 		if busy := unavailable(resp, e); busy != nil {
 			return api.MintItem{}, busy
+		}
+		if err := redirected(resp); err != nil {
+			return api.MintItem{}, err
 		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
@@ -820,6 +828,9 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 			"the broker at %s does not serve %s: it runs a port49d older than this port49", a.broker, path)}
 	}
 	if e.Error == "" {
+		if err := redirected(resp); err != nil {
+			return err
+		}
 		// Not the broker's API answering: a proxy, or a body cut short.
 		return fmt.Errorf("agent: %s%s answered %s with no API error", a.broker, path, resp.Status)
 	}
@@ -1164,6 +1175,27 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer, challenge
 	return out, false, nil
 }
 
+// Redirected is a 3xx answer as an error, nil for any other: no client of the
+// broker follows one (final review client I4), and the error names where it
+// pointed, so a proxy rule in the way is seen. The location is the answer's
+// own text, so it is made printable.
+func Redirected(resp *http.Response) error {
+	if resp.StatusCode < 300 || resp.StatusCode > 399 {
+		return nil
+	}
+	return fmt.Errorf("the broker answered %s to %s, pointing at %s; port49 never follows a redirect to "+
+		"the broker: set broker to the address that answers, or fix the rule that redirects",
+		resp.Status, resp.Request.URL.Path, printsafe.Line(resp.Header.Get("Location"), 200))
+}
+
+// redirected is Redirected in the agent's words.
+func redirected(resp *http.Response) error {
+	if err := Redirected(resp); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	return nil
+}
+
 // refreshRefused is the error a refused challenge or refresh means. The
 // code decides, never the detail text: credential_revoked ends the session,
 // refresh_challenge_missing is worth one new challenge, and the rest end
@@ -1177,6 +1209,9 @@ func (a *Agent) refreshRefused(resp *http.Response, what string) (api.RefreshRes
 	}
 	if busy := unavailable(resp, e); busy != nil {
 		return api.RefreshResponse{}, false, busy
+	}
+	if err := redirected(resp); err != nil {
+		return api.RefreshResponse{}, false, err
 	}
 	hint := ""
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -1348,6 +1383,9 @@ func (a *Agent) probeExporter(ctx context.Context) ([]byte, error) {
 		}
 		if busy := unavailable(resp, e); busy != nil {
 			return nil, busy
+		}
+		if err := redirected(resp); err != nil {
+			return nil, err
 		}
 		return nil, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}

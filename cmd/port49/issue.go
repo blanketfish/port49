@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/oidcclient"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
@@ -440,8 +441,10 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	}
 	req.Header.Set("Authorization", "Bearer "+idToken)
 	req.Header.Set("Content-Type", "application/json")
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool,
-		VerifyConnection: verify}}}
+	// No redirect is followed: the ID token and the CSR go to the broker
+	// named and nowhere else (final review client I4).
+	c := &http.Client{CheckRedirect: mfatouch.NoRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: pool, VerifyConnection: verify}}}
 	resp, err := c.Do(req)
 	if err != nil {
 		if refused := refusedByCRL(err); refused != nil {
@@ -453,6 +456,9 @@ func requestCertificate(ctx context.Context, broker string, pool *x509.CertPool,
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return api.IssueResponse{}, &brokerDownError{fmt.Errorf("the broker at %s: %w", broker, err)}
+	}
+	if err := agent.Redirected(resp); err != nil {
+		return api.IssueResponse{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
@@ -629,8 +635,8 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
 	verify func(tls.ConnectionState) error) (api.Config, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool,
-		VerifyConnection: verify}}}
+	c := &http.Client{CheckRedirect: mfatouch.NoRedirect, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: pool, VerifyConnection: verify}}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(broker, "/")+"/v1/config", nil)
 	if err != nil {
 		return api.Config{}, err
@@ -648,6 +654,9 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
 		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
+	if err := agent.Redirected(resp); err != nil {
+		return api.Config{}, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return api.Config{}, fmt.Errorf("%s/v1/config answered %s", broker, resp.Status)
 	}
