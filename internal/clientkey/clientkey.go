@@ -28,6 +28,14 @@ import (
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
+// AskWhenTriesLow is whether a person is there to type a PIN. `port49 login`
+// sets it to its stdin being a terminal; every other caller leaves it false.
+// A pkcs11: key whose pin-source PIN is not tried because the token reports
+// few tries left (pkcs11.ErrPINTriesLow) is then opened without it, Locked, so
+// the caller asks the person: a typed success is what clears the token's
+// tries-low flag, and a file the person has fixed never can (re-review N1).
+var AskWhenTriesLow = func() bool { return false }
+
 // Open opens the key a reference names; pin may be nil (the key is then
 // Locked where the token needs one). Open zeroes pin.
 func Open(ref string, pin []byte) (hwkey.Key, error) {

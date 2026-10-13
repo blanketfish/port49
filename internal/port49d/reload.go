@@ -1189,12 +1189,14 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 			"(spec §10)\n", file, n)
 	}
 	sayPolicy(r.procName(), pol, now)
+	r.refresh(ctx)
+	// After the pass, not before: the walk over every subject and device must
+	// not delay the supersede that a tightened requirement depends on.
 	if r.mfaUnavailable != nil {
 		if line := r.mfaUnavailable(pol, now); line != "" {
 			r.sayf("broker: %s\n", line)
 		}
 	}
-	r.refresh(ctx)
 }
 
 // securityEvents writes one inventory_change record for each security change

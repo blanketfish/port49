@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -984,6 +986,31 @@ func TestAnUnverifiableRequirementIsSaidAtStartAndAtEachSwap(t *testing.T) {
 	}
 	if n := strings.Count(start.String(), "per_login_mfa_unavailable"); n != 1 || !strings.Contains(start.String(), ": leaf1;") {
 		t.Fatalf("the start said it %d times, or without the devices:\n%s", n, start.String())
+	}
+}
+
+// Ruling 18's line is said after the refresh pass, not before: the pass
+// supersedes tokens a tightened requirement no longer covers, and the line is
+// a walk over every subject and device that must not delay it (final
+// re-review N4).
+func TestTheUnverifiableLineIsSaidAfterTheRefreshPass(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	var mu sync.Mutex
+	var order []string
+	note := func(s string) { mu.Lock(); order = append(order, s); mu.Unlock() }
+	pass := rig.r.pass
+	rig.r.pass = func(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error) {
+		note("pass")
+		return pass(ctx, priors)
+	}
+	rig.r.mfaUnavailable = func(*policy.Policy, time.Time) string { note("line"); return "x" }
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	mu.Lock()
+	defer mu.Unlock()
+	pi, li := slices.Index(order, "pass"), slices.Index(order, "line")
+	if pi < 0 || li < 0 || li < pi {
+		t.Fatalf("the line was said before the refresh pass ran: %v", order)
 	}
 }
 

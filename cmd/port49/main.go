@@ -485,9 +485,16 @@ func (s *sessionFlags) openTouchKey(cfg *agent.Config, log io.Writer) {
 		fmt.Fprintln(log, "port49 agent: touch_key unusable:", cfg.TouchKeyUnusable)
 		return
 	}
-	if ok, why := agent.SameToken(cfg.Cert.PrivateKey, tk); ok && len(s.pin) > 0 && tk.State() == hwkey.Locked {
-		if err := tk.Unlock(slices.Clone(s.pin)); err != nil {
-			fmt.Fprintln(log, "port49 agent: the touch key stayed locked:", unprefixed(err))
+	if ok, why := agent.SameToken(cfg.Cert.PrivateKey, tk); ok && tk.State() == hwkey.Locked {
+		if len(s.pin) > 0 {
+			if err := tk.Unlock(slices.Clone(s.pin)); err != nil {
+				fmt.Fprintln(log, "port49 agent: the touch key stayed locked:", unprefixed(err))
+			}
+		} else if r, ok := tk.(interface{ ReadLogin() }); ok {
+			// The session key was unlocked from pin-source, so there is no PIN
+			// here, and none is sent: the token's login is the application's,
+			// and the touch key's session shows it (re-review M14).
+			r.ReadLogin()
 		}
 	} else if !ok {
 		fmt.Fprintln(log, "port49 agent: touch_key unusable:", why)
@@ -527,6 +534,10 @@ func login(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
+	// A login with a terminal asks the PIN of a key whose pin-source PIN was
+	// held back for low tries; one without refuses (re-review N1).
+	clientkey.AskWhenTriesLow = loginStdinIsTerminal
+	defer func() { clientkey.AskWhenTriesLow = func() bool { return false } }()
 	if sf.oidc {
 		return loginIssued(&sf, stdout, stderr)
 	}

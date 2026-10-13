@@ -15,6 +15,7 @@ func TestFunctionIndexes(t *testing.T) {
 		{"C_GetTokenInfo", fnGetTokenInfo, 6},
 		{"C_OpenSession", fnOpenSession, 12},
 		{"C_CloseSession", fnCloseSession, 13},
+		{"C_GetSessionInfo", fnGetSessionInfo, 15},
 		{"C_Login", fnLogin, 18},
 		{"C_Logout", fnLogout, 19},
 		{"C_GetAttributeValue", fnGetAttributeValue, 24},

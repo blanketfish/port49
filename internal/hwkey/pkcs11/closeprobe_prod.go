@@ -10,3 +10,7 @@ func closeProbe(*Module) {}
 // the hwkey test build the token's own flags and C_Login answer stand.
 func fakeTokenFlags() uint      { return 0 }
 func fakeLoginRV() (uint, bool) { return 0, false }
+
+// fakeTriesReadErr is the test harness's (PINTriesUnreadable); outside the
+// hwkey test build the tries-state read is the token's own.
+func fakeTriesReadErr() error { return nil }

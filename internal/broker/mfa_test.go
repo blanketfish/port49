@@ -1264,6 +1264,11 @@ func TestUnavailableRequirementsAreSaidOncePerPolicy(t *testing.T) {
 	if strings.Contains(line, "edge-sw01") {
 		t.Errorf("the statement %q names edge-sw01, which requires nothing", line)
 	}
+	// A touch-only requirement is not cured by an OIDC verifier (final
+	// re-review N4): only the touch remedy is named.
+	if strings.Contains(line, "OIDC verifier") {
+		t.Errorf("a touch-only requirement is told to configure idp_mfa: %q", line)
+	}
 	for name, opts := range map[string][]mfaOpt{
 		"touch only, roots loaded":       {withTouchOnlyCore()},
 		"touch or idp, idp verified":     {withoutAttestationRoots()},

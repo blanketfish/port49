@@ -188,13 +188,18 @@ func blankToken(err error) bool {
 // (CKF_USER_PIN_COUNT_LOW) or one try left (CKF_USER_PIN_FINAL_TRY), and a
 // caller re-reading the same wrong file on every run would spend the tries a
 // person needs (final review client I5).
-var ErrPINTriesLow = errors.New("pkcs11: the token reports PIN tries low, so the pin-source PIN was not tried: " +
-	"check the pin-source file, then a person must run `port49 login` and type the PIN once at a terminal " +
-	"(`ykman piv info` shows the tries left on a YubiKey)")
+var ErrPINTriesLow = errors.New("pkcs11: the token reports few PIN tries left; port49 will not spend one unattended. " +
+	"Run `port49 login` at a terminal and type the PIN (or check with `ykman piv info`)")
+
+// ErrPINTriesUnreadable is a pin-source PIN that was not tried because the
+// token's PIN-tries state could not be read: no try is spent blind.
+var ErrPINTriesUnreadable = errors.New("pkcs11: could not read the token's PIN-tries state, " +
+	"so the pin-source PIN was not tried; run again")
 
 // OpenUnattended is Open with a PIN no person typed (pin-source): it is not
 // sent while the token reports tries low, and Open answers ErrPINTriesLow
-// instead. A token whose info cannot be read then is tried as Open tries it.
+// instead. A token whose state cannot be read is not tried either
+// (ErrPINTriesUnreadable).
 func OpenUnattended(u URI, pin []byte) (*Signer, error) { return open(u, pin, true) }
 
 // Open finds the key u names and opens a session on its token. Two tokens
@@ -285,7 +290,18 @@ func open(u URI, pin []byte, unattended bool) (*Signer, error) {
 	s.readTouchPolicyLocked()
 	if len(pin) > 0 && s.state == hwkey.Locked {
 		if unattended {
-			if ti, err := m.tokenInfo(s.slot); err == nil && ti.flags&(ckfPINCountLow|ckfPINFinalTry) != 0 {
+			// An unreadable state fails closed: open read this slot's token
+			// info moments ago, so an error now is a token pulled or a module
+			// fault, and a try spent then is spent blind (re-review N2).
+			ti, err := m.tokenInfo(s.slot)
+			if err == nil {
+				err = fakeTriesReadErr()
+			}
+			if err != nil {
+				s.dropSession()
+				return nil, fmt.Errorf("%w: %v", ErrPINTriesUnreadable, err)
+			}
+			if ti.flags&(ckfPINCountLow|ckfPINFinalTry) != 0 {
 				s.dropSession()
 				return nil, ErrPINTriesLow
 			}
@@ -621,6 +637,26 @@ func (s *Signer) Unlock(pin []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.unlock(pin)
+}
+
+// ReadLogin re-reads the session's login state with no PIN: a Locked key
+// whose token another session of this application has since logged in to (the
+// login is the application's, not the session's) goes Present. Nothing is sent
+// to the token but C_GetSessionInfo, so no PIN try is spent (final re-review
+// M14). Any other state is left as it is.
+func (s *Signer) ReadLogin() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkSession()
+	if s.state != hwkey.Locked {
+		return
+	}
+	if in, err := s.m.userLoggedIn(s.session); err != nil || !in {
+		return
+	}
+	if s.findKeyLocked() {
+		s.state = hwkey.Present
+	}
 }
 
 func (s *Signer) unlock(pin []byte) error {

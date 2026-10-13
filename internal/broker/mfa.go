@@ -93,6 +93,7 @@ func (b *Broker) mfaVerified() []policy.MFAMethod {
 func (b *Broker) MFAUnavailable(pol *policy.Policy, now time.Time) string {
 	const named = 10
 	var devices, accepts []string
+	var touchRemedy, idpRemedy bool // which method an unmet accept could be cured by
 	for _, d := range pol.MFARequirements(now) {
 		unmet := false
 		for _, r := range d.Requirements {
@@ -100,6 +101,10 @@ func (b *Broker) MFAUnavailable(pol *policy.Policy, now time.Time) string {
 				continue
 			}
 			unmet = true
+			touchRemedy = touchRemedy || r.Accepts(policy.HardwareKeyTouch)
+			// A machine proves only hardware_key_touch: an OIDC verifier
+			// cures nothing for it.
+			idpRemedy = idpRemedy || (r.Accepts(policy.IdPMFA) && !r.Machine)
 			a := "[" + strings.Join(methodNames(r.Accept), ", ") + "]"
 			if r.Machine {
 				a += " for machines"
@@ -123,11 +128,17 @@ func (b *Broker) MFAUnavailable(pol *policy.Policy, now time.Time) string {
 	if v := b.mfaVerified(); len(v) > 0 {
 		verified = strings.Join(methodNames(v), ", ")
 	}
+	var remedies []string
+	if touchRemedy {
+		remedies = append(remedies, "broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file loads "+
+			"(hardware_key_touch, the only method a machine proves)")
+	}
+	if idpRemedy {
+		remedies = append(remedies, "a human OIDC verifier is configured (idp_mfa)")
+	}
 	return fmt.Sprintf("per_login_mfa: %d device(s) require accept %s, and this broker verifies %s: %s; "+
-		"every login the requirement applies to there is denied per_login_mfa_unavailable until "+
-		"broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file loads (hardware_key_touch, "+
-		"the only method a machine proves) or a human OIDC verifier is configured (idp_mfa)",
-		len(devices), strings.Join(accepts, ", "), verified, list)
+		"every login the requirement applies to there is denied per_login_mfa_unavailable until %s",
+		len(devices), strings.Join(accepts, ", "), verified, list, strings.Join(remedies, " or "))
 }
 
 // mfaConfig is GET /v1/config's per_login_mfa, nil when none is verified.

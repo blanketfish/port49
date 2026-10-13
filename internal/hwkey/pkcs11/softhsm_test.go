@@ -222,7 +222,8 @@ func TestAnUnattendedPINIsNotTriedWhileTriesAreLow(t *testing.T) {
 			s.Close()
 		}
 		if !errors.Is(err, pkcs11.ErrPINTriesLow) || !strings.Contains(err.Error(), "port49 login") ||
-			!strings.Contains(err.Error(), "ykman piv info") {
+			!strings.Contains(err.Error(), "ykman piv info") ||
+			!strings.Contains(err.Error(), "will not spend one unattended. Run `port49 login` at a terminal and type the PIN") {
 			restore()
 			t.Fatalf("final %v: OpenUnattended = %v, want ErrPINTriesLow", final, err)
 		}
@@ -240,6 +241,34 @@ func TestAnUnattendedPINIsNotTriedWhileTriesAreLow(t *testing.T) {
 	s, err := pkcs11.OpenUnattended(uriFor(t, module, label), pin())
 	if err != nil || s.State() != hwkey.Present {
 		t.Fatalf("an unattended PIN with the flags clear: %v", err)
+	}
+	s.Close()
+}
+
+// A token whose PIN-tries state cannot be read is no token whose tries are
+// known to be fine: the unattended PIN is not tried, no C_Login is made, and
+// the refusal says why. A typed PIN is not held up by it (final re-review N2).
+func TestAnUnreadableTriesStateFailsAnUnattendedPINClosed(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	restore := pkcs11.PINTriesUnreadable()
+	before := hwtest.SoftHSMLoginAttempts(t)
+	s, err := pkcs11.OpenUnattended(uriFor(t, module, label), pin())
+	if err == nil {
+		s.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "could not read the token's PIN-tries state") ||
+		!strings.Contains(err.Error(), "run again") {
+		restore()
+		t.Fatalf("OpenUnattended with an unreadable state = %v", err)
+	}
+	if got := hwtest.SoftHSMLoginAttempts(t) - before; got != 0 {
+		restore()
+		t.Fatalf("the unattended PIN reached C_Login %d time(s)", got)
+	}
+	s, err = pkcs11.Open(uriFor(t, module, label), pin())
+	restore()
+	if err != nil || s.State() != hwkey.Present {
+		t.Fatalf("a typed PIN with an unreadable state: %v", err)
 	}
 	s.Close()
 }

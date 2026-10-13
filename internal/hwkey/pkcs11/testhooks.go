@@ -101,6 +101,23 @@ func PINTriesLow(final bool) (restore func()) {
 	return func() { pinLowFake.Store(0) }
 }
 
+// PINTriesUnreadable makes the read of the token's PIN-tries state, the one an
+// unattended PIN waits on, fail, as a token pulled out between the slot scan
+// and the login would. The returned func removes it.
+func PINTriesUnreadable() (restore func()) {
+	triesUnreadableFake.Store(true)
+	return func() { triesUnreadableFake.Store(false) }
+}
+
+func fakeTriesReadErr() error {
+	if triesUnreadableFake.Load() {
+		return &rvError{"C_GetTokenInfo", ckrTokenNotPresent}
+	}
+	return nil
+}
+
+var triesUnreadableFake atomic.Bool
+
 var pinBlockedFake, loginLockedFake atomic.Bool
 
 var pinLowFake atomic.Uint64

@@ -40,7 +40,12 @@ func TestLibykcs11InitFinalizeUnderPurego(t *testing.T) {
 	if _, err := os.Stat(module); err != nil {
 		hwtest.Missing(t, "libykcs11 module "+module+" is not there")
 	}
-	const rounds = 5
+	// The Go runtime adds a thread once, early (9 to 10, then steady), so a
+	// strict "never grows" flaked. A leak in the module grows the count by one
+	// or more per round, which over ten rounds is at least 9 from the first
+	// round to the last: slack of two catches it and not the runtime (final
+	// re-review N5).
+	const rounds, slack = 10, 2
 	// The last round leaves a finalized Module in the cache.
 	t.Cleanup(pkcs11.ResetModules)
 	before := threads(t)
@@ -73,7 +78,7 @@ func TestLibykcs11InitFinalizeUnderPurego(t *testing.T) {
 		afterLast = n
 	}
 	t.Logf("threads before the first round %d, after it %d, after the last %d", before, afterFirst, afterLast)
-	if afterLast > afterFirst {
+	if afterLast-afterFirst > slack {
 		t.Fatalf("the thread count grew across rounds: %d after the first, %d after the last", afterFirst, afterLast)
 	}
 }

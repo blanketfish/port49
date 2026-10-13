@@ -4,6 +4,7 @@ package clientkey
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -45,13 +46,19 @@ func openToken(ref string, pin []byte) (hwkey.Key, error) {
 	// tried only while the token reports no failed try since the last
 	// success: the tries left are a person's (final review client I5).
 	open := pkcs11.Open
+	unattended := false
 	if len(pin) == 0 && u.PINSource != "" {
 		if pin, err = readPINSource(u.PINSource); err != nil {
 			return nil, err
 		}
-		open = pkcs11.OpenUnattended
+		open, unattended = pkcs11.OpenUnattended, true
 	}
 	s, err := open(u, pin)
+	if errors.Is(err, pkcs11.ErrPINTriesLow) && unattended && AskWhenTriesLow() {
+		// A person is here: the key comes back Locked and they are asked.
+		u.PINSource = ""
+		s, err = pkcs11.Open(u, nil)
+	}
 	if err != nil {
 		return nil, err
 	}

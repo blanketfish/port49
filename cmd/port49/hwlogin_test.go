@@ -55,7 +55,7 @@ func TestALockedKeyWithNoTerminalSaysWhatToDo(t *testing.T) {
 	pinTerminal = func() (*os.File, error) { return nil, errors.New("no tty") }
 	t.Cleanup(func() { pinTerminal = old })
 	_, err := askPIN("tok")
-	if err == nil || !strings.Contains(err.Error(), "there is no terminal to ask it on; set pin-source=file:///path in the key's URI") {
+	if err == nil || !strings.Contains(err.Error(), "there is no terminal to ask it on; run `port49 login` at a terminal, or give the key's URI a pin-source=file:///path if it has none") {
 		t.Fatalf("%v", err)
 	}
 	// A file that is no terminal is no terminal either: /dev/null answers no TCGETS.

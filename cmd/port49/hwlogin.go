@@ -28,10 +28,16 @@ const maxPIN = 64
 // test supplies a pty. The caller closes the file.
 var pinTerminal = func() (*os.File, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) }
 
-// errNoPINTerminal is a login with a Locked key, no terminal and no
-// pin-source to read the PIN from.
+// loginStdinIsTerminal is whether `port49 login` has a person to type a PIN;
+// a var so a test says it has.
+var loginStdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
+// errNoPINTerminal is a login with a Locked key and no terminal. The way out
+// is right whether or not the key has a pin-source: a key that has one is
+// Locked only for a person to unlock, so naming one to set would mislead
+// (re-review M17).
 var errNoPINTerminal = errors.New("this key needs its PIN and there is no terminal to ask it on; " +
-	"set pin-source=file:///path in the key's URI")
+	"run `port49 login` at a terminal, or give the key's URI a pin-source=file:///path if it has none")
 
 // askPIN asks for the PIN of the token named label on the controlling
 // terminal, echo off, and returns it as bytes for the caller to zero. A

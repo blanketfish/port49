@@ -235,6 +235,29 @@ func (m *Module) tokenInfo(slot uint) (*ckTokenInfo, error) {
 	return ti, nil
 }
 
+// ckSessionInfo is CK_SESSION_INFO.
+type ckSessionInfo struct {
+	slotID, state, flags, deviceError uint
+}
+
+// CKS_RO_USER_FUNCTIONS and CKS_RW_USER_FUNCTIONS: the user is logged in.
+const (
+	cksROUserFunctions = 1
+	cksRWUserFunctions = 3
+)
+
+// userLoggedIn is whether the token's login, which is shared by every session
+// an application has on it, shows on session (C_GetSessionInfo).
+func (m *Module) userLoggedIn(session uint) (bool, error) {
+	var p pins
+	defer p.Unpin()
+	si := new(ckSessionInfo)
+	if rv := m.call(fnGetSessionInfo, uintptr(session), p.ptr(si, unsafe.Pointer(si))); rv != ckrOK {
+		return false, &rvError{"C_GetSessionInfo", rv}
+	}
+	return si.state == cksROUserFunctions || si.state == cksRWUserFunctions, nil
+}
+
 func (m *Module) openSession(slot uint, rw bool) (uint, error) {
 	var p pins
 	defer p.Unpin()

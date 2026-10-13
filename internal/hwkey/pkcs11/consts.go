@@ -15,6 +15,7 @@ const (
 	fnGetTokenInfo      = 6
 	fnOpenSession       = 12
 	fnCloseSession      = 13
+	fnGetSessionInfo    = 15
 	fnLogin             = 18
 	fnLogout            = 19
 	fnCreateObject      = 20
