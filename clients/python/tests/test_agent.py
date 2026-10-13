@@ -183,6 +183,26 @@ class AgentTest(unittest.TestCase):
             self.agent({"stdout": PERMIT}, gone).tokens(["leaf1", "leaf2"])
         self.assertEqual(list(cm.exception.results.tokens), ["leaf1"])
 
+    def test_a_stopped_sweeps_exception_never_pickles_or_copies_its_tokens(self):
+        import copy
+        import pickle
+        gone = {"stdout": fake.item(device="leaf2", error="session_over", detail="ended"), "code": 1}
+        refuse = {"stdout": fake.item(device="leaf0", verdict="deny", reason="no_grants_matched"), "code": 1}
+        with self.assertRaises(SessionOver) as cm:
+            self.agent(refuse, {"stdout": PERMIT}, gone).tokens(["leaf0", "leaf1", "leaf2"])
+        e = cm.exception
+        self.assertEqual(e.results.tokens["leaf1"].login, "LOGINTOKEN")  # in process, usable
+        blob = pickle.dumps(e)
+        self.assertNotIn(b"LOGINTOKEN", blob)
+        self.assertNotIn(b"ENABLETOKEN", blob)
+        for back in (pickle.loads(blob), copy.deepcopy(e), copy.copy(e)):
+            self.assertIsInstance(back, SessionOver)
+            self.assertEqual((back.code, back.device, str(back)), (e.code, e.device, str(e)))
+            self.assertEqual(list(back.results.tokens), ["leaf1"])  # the device names stay
+            self.assertIsNone(back.results.tokens["leaf1"])  # the tokens do not
+            self.assertEqual(back.results.refused["leaf0"].reason, "no_grants_matched")
+        self.assertEqual(e.results.tokens["leaf1"].login, "LOGINTOKEN")  # copying left it alone
+
     def test_a_traceback_with_locals_holds_no_token(self):
         import traceback
         a = self.agent({"stdout": fake.item(verdict="permit", login="LOGINTOKEN", extra=1), "code": 1})

@@ -1,11 +1,34 @@
-"""The library's exceptions (decision 46 ruling 11). None carries a token or
-the CLI's stdout: only the CLI's code, its printable detail, and the device."""
+"""The library's exceptions (decision 46 ruling 11). None carries the CLI's
+stdout, and str(), repr() and args hold only the CLI's code, its printable
+detail, and the device.
+
+The one attribute that holds tokens is .results, set on the error of a run that
+stopped part way (Agent.tokens, Workload): the tokens minted so far, for the
+caller's use in this process. It never reaches str or repr, and pickle and copy
+leave the tokens out of it (__reduce__): a rebuilt exception keeps the device
+names and the codes, with None for each token."""
+
+
+def _rebuild(cls, args, state):
+    e = cls.__new__(cls)
+    Exception.__init__(e, *args)
+    e.__dict__.update(state)
+    return e
 
 
 class Port49Error(Exception):
     def __init__(self, code, detail="", device=None):
         self.code, self.detail, self.device = code, detail, device
         super().__init__(str(self))
+
+    def __reduce__(self):
+        state = dict(self.__dict__)
+        results = state.get("results")
+        if results is not None:
+            # An object with no without_tokens() is not known to be free of tokens: dropped whole.
+            scrub = getattr(results, "without_tokens", None)
+            state["results"] = scrub() if scrub else None
+        return _rebuild, (type(self), self.args, state)
 
     def __str__(self):
         where = f"{self.device}: " if self.device else ""

@@ -20,7 +20,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from port49 import (Agent, Denied, DeviceFault, KeyUnavailable, NoAgent, Port49Error,  # noqa: E402
+from port49 import (Agent, Denied, DeviceFault, KeyUnavailable, MFARequired, NoAgent, Port49Error,  # noqa: E402
                     SessionOver, Temporary)
 
 REPO = os.path.join(HERE, "..", "..", "..")
@@ -38,7 +38,12 @@ ANSWERS = {  # name: (HTTP status, JSON body) the stub agent gives POST /token
     "revocation_running": (503, {"error": "revocation_running", "detail": "busy"}),
     "broker_unavailable": (503, {"error": "broker_unavailable", "detail": "down"}),
     "touch_timeout": (409, {"error": "touch_timeout", "detail": "no touch"}),
+    # A device that asks for a touch from an agent with no touch key: the CLI's per_login_mfa_required,
+    # whatever the terminal (hardware_key_touch only: idp_mfa would depend on stdin being one).
+    "mfa": (428, {"device": "leaf1", "challenge": "CHALLENGE", "accept": ["hardware_key_touch"],
+                  "reuse_for_seconds": 900, "reuse_from": "scope core"}),
 }
+STATUS = {"mfa": (200, {})}  # GET /status; every other answer leaves it a 404
 
 
 class StubHandler(http.server.BaseHTTPRequestHandler):
@@ -52,7 +57,8 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)
-        status, obj = self.server.answer if self.path == "/token" else (404, {"error": "not_found"})
+        status, obj = {"/token": self.server.answer, "/status": self.server.status}.get(
+            self.path, (404, {"error": "not_found"}))
         data = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -66,6 +72,7 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
 class StubAgent(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     answer = ANSWERS["permit"]
+    status = (404, {"error": "not_found"})
 
 
 class RealCLI(unittest.TestCase):
@@ -96,6 +103,7 @@ class RealCLI(unittest.TestCase):
 
     def stubbed(self, name, attempts=1):
         self.stub.answer = ANSWERS[name]
+        self.stub.status = STATUS.get(name, (404, {"error": "not_found"}))
         return Agent(port49=self.binary, socket=self.stub_socket, stderr=io.StringIO(), attempts=attempts)
 
     def test_no_agent_is_no_agent(self):
@@ -132,6 +140,22 @@ class RealCLI(unittest.TestCase):
             with self.assertRaises(cls, msg=name) as cm:
                 self.stubbed(name).token("leaf1")
             self.assertEqual((cm.exception.code, cm.exception.device), (code, "leaf1"), name)
+
+    def test_the_real_mfa_required_carries_its_requirement(self):
+        with self.assertRaises(MFARequired) as cm:
+            self.stubbed("mfa").token("leaf1")
+        e = cm.exception
+        self.assertEqual((e.code, e.device), ("per_login_mfa_required", "leaf1"))
+        self.assertEqual(e.requirement["accept"], ["hardware_key_touch"])
+        self.assertEqual(e.requirement["reuse_for_seconds"], 900)
+        self.assertNotIn("challenge", e.requirement)
+        self.assertNotIn("CHALLENGE", str(e) + repr(e.__dict__))
+
+    def test_a_real_mfa_required_is_collected_by_a_sweep(self):
+        res = self.stubbed("mfa").tokens(["leaf1", "leaf2"])
+        self.assertEqual((list(res.tokens), sorted(res.refused)), ([], ["leaf1", "leaf2"]))
+        self.assertEqual(res.refused["leaf1"].per_login_mfa["accept"], ["hardware_key_touch"])
+        self.assertIsInstance(res.refused["leaf2"].exception(), MFARequired)
 
     def test_a_real_item_fault_does_not_stop_a_sweep(self):
         res = self.stubbed("item_fault").tokens(["leaf1", "leaf2"])

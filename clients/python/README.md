@@ -46,7 +46,7 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 | `touch_timeout`, `key_locked`, `key_absent` | `KeyUnavailable` | Touch the key, unlock it, or plug it in; not retried. |
 | `broker_refused` | `BrokerRefused` | The broker refused a proof, or its certificate was refused; not retried. |
 | `revocation_running`, `connection_changed`, `broker_unavailable` | `Temporary` | Retried; see below. |
-| `device_unconfigured`, `attribute_too_long`, `attribute_unsafe`, `broker_error`, `no_token` | `DeviceFault` | The broker could not decide this one device (or minted it no token); fix its inventory entry. Other devices are unaffected. |
+| `device_unconfigured`, `attribute_too_long`, `attribute_unsafe`, `broker_error`, `no_token` | `DeviceFault` | The broker could not decide this one device (or minted it no token). Fix its inventory entry (`device_unconfigured`, `attribute_*`), or read the broker's log (`broker_error`, `no_token`). Other devices are unaffected. |
 | `agent_error`, `exit_N`, `timeout` | `Port49Error` | Read `.detail`. |
 
 `tokens()` collects what belongs to one device (a deny, a second factor, a `DeviceFault`) into
@@ -54,6 +54,11 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 `isinstance(r.exception(), MFARequired)`, not `r.error`: the same second-factor condition comes
 from the CLI's code (`error`) or from a broker deny (`reason`). Anything else stops the sweep, and
 the exception's `.results` holds the tokens minted so far, so a rerun need not mint them again.
+
+`.results` holds live tokens: use it in the process that caught the error, and do not log or
+serialize it. `str`, `repr`, pickle and `copy` of the exception leave the tokens out (a rebuilt
+exception has the device names and `None` for each token), but `vars(e)` and `e.results` itself
+are the real thing.
 
 ## What is retried, and why
 

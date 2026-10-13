@@ -62,6 +62,10 @@ class MintResults:
     tokens: dict
     refused: dict
 
+    def without_tokens(self):
+        """A copy with each token None (the device names stay): what pickle and copy of an error keep."""
+        return MintResults({d: None for d in self.tokens}, dict(self.refused))
+
     def raise_for_refused(self):
         for r in self.refused.values():
             raise r.exception()
