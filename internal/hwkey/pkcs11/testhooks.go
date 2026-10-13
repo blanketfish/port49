@@ -30,6 +30,22 @@ func SessionHandle(s *Signer) uint {
 	return s.session
 }
 
+// SessMuHeldDuringClose has fn told, just before every C_CloseSession,
+// whether the module's session lock is held: closeOwned must delete the owner
+// entry under the lock and call C_CloseSession after releasing it. The
+// returned func removes the probe.
+func SessMuHeldDuringClose(fn func(held bool)) (restore func()) {
+	closeProbe = func(m *Module) {
+		if m.sessMu.TryLock() {
+			m.sessMu.Unlock()
+			fn(false)
+			return
+		}
+		fn(true)
+	}
+	return func() { closeProbe = nil }
+}
+
 // Finalize calls C_Finalize on m and returns its CK_RV.
 func Finalize(m *Module) uint { return m.call(fnFinalize, 0) }
 

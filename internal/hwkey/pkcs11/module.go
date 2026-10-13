@@ -276,18 +276,31 @@ func (m *Module) closeSession(h uint) { m.closeOwned(h, nil) }
 // ignored: a session on a token already gone is already closed. Handle 0 is
 // CK_INVALID_HANDLE, and a number someone else holds now is not the caller's
 // to close, so neither is sent.
+//
+// The owner entry goes under sessMu and C_CloseSession is called after it is
+// released: a module may block in C_CloseSession (a token pulled mid-call),
+// and sessMu is every Signer's gate. The number cannot be given to another
+// session before the close returns, since only the close frees it.
 func (m *Module) closeOwned(h uint, owner *Signer) {
-	m.sessMu.Lock()
-	defer m.sessMu.Unlock()
 	if h == 0 {
 		return
 	}
+	m.sessMu.Lock()
 	if o, ok := m.owners[h]; !ok || o != owner {
+		m.sessMu.Unlock()
 		return
 	}
 	delete(m.owners, h)
+	m.sessMu.Unlock()
+	if closeProbe != nil {
+		closeProbe(m)
+	}
 	m.call(fnCloseSession, uintptr(h))
 }
+
+// closeProbe, set only by the test harness (SessMuHeldDuringClose), runs
+// just before C_CloseSession.
+var closeProbe func(m *Module)
 
 // login is one C_Login; the caller owns pin and zeroes it.
 func (m *Module) login(session uint, user uint, pin []byte) uint {

@@ -371,6 +371,30 @@ func TestAStaleSessionHandleIsNotClosedAgain(t *testing.T) {
 	}
 }
 
+// C_CloseSession is called with the module's session lock released (Task 3's
+// re-review): a module that blocks in it must not hold every Signer's gate.
+func TestCloseSessionRunsWithTheSessionLockReleased(t *testing.T) {
+	p := newPlugged(t)
+	s, err := pkcs11.Open(p.u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls, held int
+	restore := pkcs11.SessMuHeldDuringClose(func(h bool) {
+		calls++
+		if h {
+			held++
+		}
+	})
+	defer restore()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || held != 0 {
+		t.Fatalf("C_CloseSession ran %d times, %d of them with the session lock held", calls, held)
+	}
+}
+
 // A Signer that learns of the loss late, after another has reopened under the
 // number it lost, must neither use nor close that session (re-review I1).
 func TestALateLearnerDoesNotTouchAnotherSignersSession(t *testing.T) {
