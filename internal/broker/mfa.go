@@ -84,6 +84,52 @@ func (b *Broker) mfaVerified() []policy.MFAMethod {
 	return out
 }
 
+// MFAUnavailable is decision 45 ruling 18's statement for pol at now: one
+// line naming the devices where a requirement accepts no method this broker
+// verifies, so every login it applies to there is denied
+// per_login_mfa_unavailable, or "" when every requirement has one. port49d
+// says it at its start and at each swap, once per policy; it never refuses
+// either.
+func (b *Broker) MFAUnavailable(pol *policy.Policy, now time.Time) string {
+	const named = 10
+	var devices, accepts []string
+	for _, d := range pol.MFARequirements(now) {
+		unmet := false
+		for _, r := range d.Requirements {
+			if len(b.mfaUsable(r)) > 0 {
+				continue
+			}
+			unmet = true
+			a := "[" + strings.Join(methodNames(r.Accept), ", ") + "]"
+			if r.Machine {
+				a += " for machines"
+			}
+			if !slices.Contains(accepts, a) {
+				accepts = append(accepts, a)
+			}
+		}
+		if unmet {
+			devices = append(devices, d.Device)
+		}
+	}
+	if len(devices) == 0 {
+		return ""
+	}
+	list := strings.Join(devices[:min(len(devices), named)], ", ")
+	if len(devices) > named {
+		list += fmt.Sprintf(" and %d more", len(devices)-named)
+	}
+	verified := "none"
+	if v := b.mfaVerified(); len(v) > 0 {
+		verified = strings.Join(methodNames(v), ", ")
+	}
+	return fmt.Sprintf("per_login_mfa: %d device(s) require accept %s, and this broker verifies %s: %s; "+
+		"every login the requirement applies to there is denied per_login_mfa_unavailable until "+
+		"broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file loads (hardware_key_touch, "+
+		"the only method a machine proves) or a human OIDC verifier is configured (idp_mfa)",
+		len(devices), strings.Join(accepts, ", "), verified, list)
+}
+
 // mfaConfig is GET /v1/config's per_login_mfa, nil when none is verified.
 func (b *Broker) mfaConfig() *api.MFAConfig {
 	methods := b.mfaVerified()

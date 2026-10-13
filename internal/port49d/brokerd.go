@@ -617,6 +617,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	rel.inventory, rel.cfgPath = inventoryAtStart, cfgPath
 	rel.startDocument(startDoc, startFrom)
 	rel.onSettled = rn.settled
+	rel.mfaUnavailable = brk.MFAUnavailable
 	rel.fullPass, rel.whole = make(chan fullPassOwed), rn.whole
 	rel.onSwap = func(pol *policy.Policy) {
 		select {

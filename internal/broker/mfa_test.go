@@ -1234,6 +1234,40 @@ func TestUnavailableMethodsAreSaidPerDevice(t *testing.T) {
 	}
 }
 
+// Ruling 18's statement: one line per policy naming the devices whose
+// requirement accepts no method this broker verifies, and nothing where every
+// requirement has one (final review broker I3).
+func TestUnavailableRequirementsAreSaidOncePerPolicy(t *testing.T) {
+	f := newMFAFixture(t, withoutAttestationRoots(), withTouchOnlyCore())
+	line := f.b.MFAUnavailable(f.b.Policy.Load(), f.b.Now())
+	for _, want := range []string{"core-sw01", "[hardware_key_touch]", "per_login_mfa_unavailable", "attestation_roots_file"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the statement %q does not name %q", line, want)
+		}
+	}
+	if strings.Contains(line, "edge-sw01") {
+		t.Errorf("the statement %q names edge-sw01, which requires nothing", line)
+	}
+	for name, opts := range map[string][]mfaOpt{
+		"touch only, roots loaded":       {withTouchOnlyCore()},
+		"touch or idp, idp verified":     {withoutAttestationRoots()},
+		"touch or idp, both verified":    nil,
+		"applies to machines, roots set": {withAppliesToMachines()},
+	} {
+		f := newMFAFixture(t, opts...)
+		if line := f.b.MFAUnavailable(f.b.Policy.Load(), f.b.Now()); line != "" {
+			t.Errorf("%s: %q, want nothing said", name, line)
+		}
+	}
+	// A machine is held only to hardware_key_touch: with no roots, a
+	// requirement that applies to machines is unmet for them alone.
+	f = newMFAFixture(t, withoutAttestationRoots(), withAppliesToMachines())
+	if line := f.b.MFAUnavailable(f.b.Policy.Load(), f.b.Now()); !strings.Contains(line, "core-sw01") ||
+		!strings.Contains(line, "machines") {
+		t.Errorf("a machine requirement with no roots: %q", line)
+	}
+}
+
 // A batch is asked only where a requirement applies, and the proof for its
 // challenge covers the retried batch.
 func TestABatchAsksOnlyWhereARequirementApplies(t *testing.T) {

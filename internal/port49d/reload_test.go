@@ -946,6 +946,47 @@ grants:
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
 `
 
+// A requirement whose accept holds no method this broker verifies (here none:
+// no attestation roots, no human OIDC verifier) is said, naming the devices,
+// at the broker's start and once at each swap that puts such a policy in
+// force; neither refuses (decision 45 ruling 18; final review broker I3).
+func TestAnUnverifiableRequirementIsSaidAtStartAndAtEachSwap(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.r.mfaUnavailable = rig.b.MFAUnavailable
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	if strings.Contains(rig.out.String(), "per_login_mfa_unavailable") {
+		t.Fatalf("said with no requirement in force:\n%s", rig.out.String())
+	}
+	touchOnly := strings.Replace(policyWithGroups, "{name: all_devices, match: {}}",
+		"{name: all_devices, match: {}, per_login_mfa: {accept: [hardware_key_touch]}}", 1)
+	swapTo(t, rig, touchOnly)
+	if !strings.Contains(string(rig.b.Policy.Load().Raw()), "per_login_mfa") {
+		t.Fatalf("the touch-only policy was not applied:\n%s", rig.out.String())
+	}
+	out := rig.out.String()
+	if n := strings.Count(out, "per_login_mfa_unavailable"); n != 1 || !strings.Contains(out, "leaf1, leaf2") ||
+		!strings.Contains(out, "[hardware_key_touch]") {
+		t.Fatalf("the swap said it %d times, or without the devices and accept:\n%s", n, out)
+	}
+	rig.pollTwice() // nothing changed: nothing swapped, nothing said again
+	if n := strings.Count(rig.out.String(), "per_login_mfa_unavailable"); n != 1 {
+		t.Fatalf("said %d times for one policy:\n%s", n, rig.out.String())
+	}
+
+	// A start reads the inventory config.Load read (rig.cfg.Inventory: leaf1).
+	var start syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &start
+	if _, _, err := buildBroker(rig.cfg, "inventory_file "+rig.cfg.InventoryFile, memory.New(time.Now), seedMinter(),
+		decision.NewJSONLines(io.Discard), rig.m); err != nil {
+		t.Fatalf("the start refused: %v", err)
+	}
+	if n := strings.Count(start.String(), "per_login_mfa_unavailable"); n != 1 || !strings.Contains(start.String(), ": leaf1;") {
+		t.Fatalf("the start said it %d times, or without the devices:\n%s", n, start.String())
+	}
+}
+
 // mfaInventory is two devices; leaf1's tier is the argument.
 func mfaInventory(leaf1Tier, leaf2Tier, third string) string {
 	return "devices:\n" +

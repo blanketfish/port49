@@ -390,6 +390,11 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 			fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
 		})
 	}
+	// Once the verifiers are known: a requirement none of them meets is said
+	// now, never refused (decision 45 ruling 18); each swap says it again.
+	if line := b.MFAUnavailable(pol, now); line != "" {
+		fmt.Fprintf(stderr, "%s: broker: %s\n", proc, line)
+	}
 	var anchor *x509.CertPool
 	if anchorCert != nil {
 		anchor = x509.NewCertPool()
@@ -1372,10 +1377,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// With no broker in the process a swap carries nothing into the live
 		// contexts: port49d reads the policy in force at each packet (plan 7e).
 		var pass func(context.Context, []broker.Prior) (broker.RefreshReport, error)
+		var mfaUnavailable func(*policy.Policy, time.Time) string
 		if brk != nil {
-			pass = brk.Refresh
+			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
+		r.mfaUnavailable = mfaUnavailable
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held

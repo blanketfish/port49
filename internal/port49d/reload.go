@@ -178,6 +178,10 @@ type reloader struct {
 	// the runner for a full context pass (plan 7e, Ruling 8 corrected). It
 	// must not wait. Nil tells no one.
 	onSwap func(pol *policy.Policy)
+	// mfaUnavailable is the broker's ruling 18 statement for a policy put in
+	// force (broker.Broker.MFAUnavailable), said after each swap when it is
+	// not empty. Nil with no broker in the process.
+	mfaUnavailable func(pol *policy.Policy, now time.Time) string
 	// fullPass is how the runner's duties hand run a full context pass a
 	// replica owes (runner.owed), which whole runs (full). Both are
 	// port49-broker's; elsewhere fullPass is nil, and a receive never fires.
@@ -1185,6 +1189,11 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 			"(spec §10)\n", file, n)
 	}
 	sayPolicy(r.procName(), pol, now)
+	if r.mfaUnavailable != nil {
+		if line := r.mfaUnavailable(pol, now); line != "" {
+			r.sayf("broker: %s\n", line)
+		}
+	}
 	r.refresh(ctx)
 }
 

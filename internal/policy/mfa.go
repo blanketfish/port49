@@ -384,6 +384,36 @@ func (p *Policy) mfaAt(subject string, d admission.Device, at time.Time) (MFAReq
 	return req, err == nil
 }
 
+// DeviceMFA is the distinct per-login requirements subjects are held to on
+// one device.
+type DeviceMFA struct {
+	Device       string
+	Requirements []MFARequirement
+}
+
+// MFARequirements is, device by device at at, every distinct requirement a
+// subject with a grant there is held to, a device where none is held left
+// out: what a broker judges its verifiers against at its start and at each
+// swap (decision 45 ruling 18).
+func (p *Policy) MFARequirements(at time.Time) []DeviceMFA {
+	subjects := sortedKeys(p.subs)
+	var out []DeviceMFA
+	for _, d := range p.Devices() {
+		var reqs []MFARequirement
+		for _, s := range subjects {
+			r, ok := p.mfaAt(s, d, at)
+			if !ok || !r.Required() || slices.ContainsFunc(reqs, func(o MFARequirement) bool { return reflect.DeepEqual(o, r) }) {
+				continue
+			}
+			reqs = append(reqs, r)
+		}
+		if len(reqs) > 0 {
+			out = append(out, DeviceMFA{Device: d.Name, Requirements: reqs})
+		}
+	}
+	return out
+}
+
 // MFADisjoint lists the quarantined devices with an entry whose cause is
 // ErrMFADisjoint (or the machine refusal), only those entries kept: what a
 // start or an inventory reload quarantines (ruling 11).
