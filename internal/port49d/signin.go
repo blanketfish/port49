@@ -272,29 +272,59 @@ type reopenable struct {
 
 func (r *reopenable) Lost() string { return r.lost() }
 
-func (l *lateEnrollments) get() (store.Enrollments, error) {
+func (l *lateEnrollments) get() (store.Enrollments, error) { return l.fetch(false) }
+
+// Refresh opens a lost or unopened store again at once (the broker's
+// reset --all calls it before it reads the mark).
+func (l *lateEnrollments) Refresh() { _, _ = l.fetch(true) }
+
+// getFresh is get for an op that replaces a lost store (a mark put, a mark
+// created, an import): a handle that is lost, or not yet open, is opened
+// again at once whatever the 30s say, so the operator who has just fixed the
+// file's mode and runs `reset-second-factor --all` does not have the good file
+// set aside (re-review I4-r).
+func (l *lateEnrollments) getFresh() (store.Enrollments, error) { return l.fetch(true) }
+
+// fetch is the handle. The open itself runs outside the lock (an etcd's probe
+// takes seconds), so concurrent callers meanwhile get the last answer; the
+// attempt is stamped first, so only one runs per interval unless forced.
+func (l *lateEnrollments) fetch(force bool) (store.Enrollments, error) {
+	l.mu.Lock()
+	cur := l.inner
+	if cur != nil {
+		if r, ok := cur.(*reopenable); !ok || r.Lost() == "" {
+			l.mu.Unlock()
+			return cur, nil
+		}
+	}
+	if !force && !l.tried.IsZero() && l.now().Sub(l.tried) < enrollmentRetryEvery {
+		failed := l.failed
+		l.mu.Unlock()
+		if cur != nil {
+			return cur, nil
+		}
+		return nil, failed
+	}
+	l.tried = l.now()
+	l.mu.Unlock()
+
+	in, err := l.open()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.inner != nil {
-		r, ok := l.inner.(*reopenable)
-		if !ok || r.Lost() == "" || l.now().Sub(l.tried) < enrollmentRetryEvery {
-			return l.inner, nil
-		}
-		// Lost: look at the file again, and keep the new handle only if it is
-		// well; a lost one answers the same as the old, so nothing is gained.
-		l.tried = l.now()
-		if in, err := l.open(); err == nil {
+	if cur != nil {
+		// Lost: keep the new handle only if it is well; a lost one answers the
+		// same as the old, so nothing is gained.
+		if err == nil {
 			if nr, ok := in.(*reopenable); !ok || nr.Lost() == "" {
 				l.inner = in
 			}
 		}
 		return l.inner, nil
 	}
-	if !l.tried.IsZero() && l.now().Sub(l.tried) < enrollmentRetryEvery {
-		return nil, l.failed
+	if l.inner != nil {
+		return l.inner, nil // another caller opened it meanwhile
 	}
-	l.tried = l.now()
-	in, err := l.open()
 	if err != nil {
 		if !errors.Is(err, store.ErrEnrollmentStoreLost) {
 			err = fmt.Errorf("%w: the enrollment store did not open: %v", store.ErrUnavailable, err)
@@ -347,7 +377,7 @@ func (l *lateEnrollments) GetEnrollmentMark(ctx context.Context) (store.Enrollme
 }
 
 func (l *lateEnrollments) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
-	in, err := l.get()
+	in, err := l.getFresh()
 	if err != nil {
 		return err
 	}
@@ -355,7 +385,7 @@ func (l *lateEnrollments) CreateEnrollmentMark(ctx context.Context, m store.Enro
 }
 
 func (l *lateEnrollments) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
-	in, err := l.get()
+	in, err := l.getFresh()
 	if err != nil {
 		return err
 	}
@@ -379,7 +409,7 @@ func (l *lateEnrollments) Export(ctx context.Context) ([]byte, error) {
 }
 
 func (l *lateEnrollments) Import(ctx context.Context, sealed []byte, replace bool) (int, time.Time, error) {
-	in, err := l.get()
+	in, err := l.getFresh()
 	if err != nil {
 		return 0, time.Time{}, err
 	}

@@ -392,9 +392,14 @@ func TestResetAllAfterALostKeyOnEtcdReplacesWhatWillNotOpen(t *testing.T) {
 	}
 	carolBefore := revOf(t, f.b.Enrollments, carol)
 
+	var said []string
+	f.b.Say = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
 	text, err := f.b.ResetSecondFactor(ctx, "", true, "admin_socket uid 0")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(said, "\n"), "did not open and were replaced: 2") {
+		t.Errorf("the log line lacks the count: %q", said)
 	}
 	for _, want := range []string{"the enrollment mark did not open and is replaced", "second factors that did not open and are replaced: 2",
 		"keep working", "etcd snapshot"} {

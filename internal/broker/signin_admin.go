@@ -206,6 +206,12 @@ func (b *Broker) ResetSecondFactor(ctx context.Context, principal string, all bo
 // second factor may enroll until reopen_for from now. It is also the way past
 // an enrollment store that is lost, which it replaces.
 func (b *Broker) resetAll(ctx context.Context, origin string) (string, error) {
+	// A store that looks lost may be a file whose mode the operator has just
+	// fixed: look at it afresh before deciding it is, or --all would replace
+	// (and set aside) a good file.
+	if r, ok := b.Enrollments.(interface{ Refresh() }); ok {
+		r.Refresh()
+	}
 	now := b.Now()
 	until := now.Add(b.PasswordSignIn.ReopenFor)
 	mark := store.EnrollmentMark{CreatedAt: now, ReopenAllUntil: until}
@@ -236,8 +242,8 @@ func (b *Broker) resetAll(ctx context.Context, origin string) (string, error) {
 	}
 	b.Log.Emit(decision.Record{TS: now, Event: decision.EventSecondFactorReset,
 		SecondFactorReset: &decision.SecondFactorReset{ReopenUntil: decision.FormatTime(until), All: true, Origin: origin}})
-	b.say("sign-in: %s reopened enrollment for every entry with no active second factor, until %s", origin,
-		decision.FormatTime(until))
+	b.say("sign-in: %s reopened enrollment for every entry with no active second factor, until %s; second factors "+
+		"that did not open and were replaced: %d", origin, decision.FormatTime(until), unopened)
 	text := fmt.Sprintf("every entry with no active second factor may enroll until %s", decision.FormatTime(until))
 	switch {
 	case replaced && b.EnrollmentFile == "":
