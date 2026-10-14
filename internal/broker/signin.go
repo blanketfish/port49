@@ -15,11 +15,10 @@ import (
 	"math"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
@@ -51,11 +50,11 @@ const (
 // The answers a directory sign-in gives, fixed text by reason: nothing the
 // directory, a store or the person typed is ever put in one.
 const (
-	refusedText = "the name, password or code was not accepted; check them and run `port49 login` again"
+	refusedText = "the broker did not accept that name, password and code; check each and run `port49 login` again"
 	lostText    = "the broker's store of second factors is lost, so no one can sign in with a password until an " +
 		"operator restores it; anyone already signed in keeps working until their certificate ends"
-	directoryDownText = "the broker cannot reach its directory now, so no one can sign in with a password; anyone " +
-		"already signed in keeps working until their certificate ends; try again shortly"
+	directoryDownText = "the directory did not answer, so no one can sign in with a password now; anyone " +
+		"already signed in keeps working until their certificate ends"
 	storeDownText = "the broker could not reach its store, so it signed no one in; try again shortly"
 	closedText    = "you have no second factor, and enrollment is closed for you: ask an operator to run " +
 		"`port49 directory reset-second-factor` for your account"
@@ -67,13 +66,13 @@ const (
 func stateWords(p *directory.PasswordRefusal) string {
 	switch p.Data {
 	case "532", "password_expired":
-		return "your password has expired: change it in your directory, then run `port49 login` again"
+		return "your directory password has expired: change it, then sign in"
 	case "773", "change_after_reset":
-		return "your password must be changed: change it in your directory, then run `port49 login` again"
+		return "your directory password must be changed before first use: change it, then sign in"
 	case "533":
-		return "your account is disabled: ask your directory administrator"
+		return "your directory account is disabled: ask your directory administrator"
 	case "775", "account_locked":
-		return "your account is locked: ask your directory administrator, or wait for it to unlock"
+		return "your directory account is locked: ask your directory administrator"
 	case "701":
 		return "your account has expired: ask your directory administrator"
 	case "530", "531":
@@ -91,6 +90,20 @@ type signInAttempt struct {
 	w   http.ResponseWriter
 	now time.Time
 	src string
+	// event is the event a refusal is recorded under: issue for a sign-in,
+	// enroll for a confirm (spec §5.7: an enroll deny carries the sign-in's
+	// reasons).
+	event string
+	// ctx is the request's store context, set once the first count is taken.
+	ctx context.Context
+	// counted is the keys this attempt took a count on, so a broker fault can
+	// give them back.
+	counted []string
+}
+
+// newSignInAttempt is a sign-in's state; a confirm's records are enroll's.
+func (b *Broker) newSignInAttempt(w http.ResponseWriter, r *http.Request, event string) *signInAttempt {
+	return &signInAttempt{b: b, w: w, now: b.Now(), src: sourcePrefix(r.RemoteAddr), event: event}
 }
 
 // rec emits a deny record of event for principal ("" when none is known).
@@ -100,10 +113,29 @@ func (s *signInAttempt) rec(event string, reason decision.Reason, principal stri
 		Principal: principal, Auth: &decision.Auth{Method: signInMethod}, SignIn: &si})
 }
 
+// giveBack takes back the counts this attempt took, keys (every one when
+// none are named). A broker fault judges nothing about the person, so it
+// costs them no attempt (decision 47 D5); an undo error is the broker's
+// line, never an answer.
+func (s *signInAttempt) giveBack(keys ...string) {
+	var left []string
+	for _, k := range s.counted {
+		if len(keys) > 0 && !slices.Contains(keys, k) {
+			left = append(left, k)
+			continue
+		}
+		if err := s.b.Store.UndoSignInAttempt(s.ctx, k); err != nil {
+			s.b.sayOnce("sign_in_undo", sayEvery, "sign-in: an attempt could not be taken back: %s",
+				printsafe.Line(err.Error(), 300))
+		}
+	}
+	s.counted = left
+}
+
 // refuseWith is the one refusal: 401 sign_in_refused for a wrong name,
 // password or code alike (ruling 7).
 func (s *signInAttempt) refuseWith(principal string, si decision.SignIn, text string) {
-	s.rec(decision.EventIssue, decision.SignInRefused, principal, si)
+	s.rec(s.event, decision.SignInRefused, principal, si)
 	s.b.Metrics.SignIns.WithLabelValues("refused").Inc()
 	writeError(s.w, http.StatusUnauthorized, string(decision.SignInRefused), text)
 }
@@ -119,8 +151,15 @@ func (s *signInAttempt) refuseAs(principal, failed string) {
 }
 
 // storeLost is C1's answer (D7): the enrollment store is lost, and no
-// password sign-in is taken.
-func (s *signInAttempt) storeLost() {
+// password sign-in is taken. why is what a store found lost in the middle of
+// a request said ("" when the lost state was already known): the state is set
+// then, so the next sign-in is refused before it is counted. Any count this
+// attempt took is given back.
+func (s *signInAttempt) storeLost(why string) {
+	if why != "" {
+		s.b.markEnrollmentStore(why)
+	}
+	s.giveBack()
 	s.rec(decision.EventIssue, decision.EnrollmentStoreLost, "", decision.SignIn{})
 	s.b.Metrics.SignIns.WithLabelValues("enrollment_store_lost").Inc()
 	s.w.Header().Set("Retry-After", "300")
@@ -133,7 +172,8 @@ func (s *signInAttempt) storeLost() {
 func (s *signInAttempt) storeUnavailable(principal, what string, err error, text string) {
 	s.b.sayOnce("sign_in_store_"+what, sayEvery, "sign-in: the %s store did not answer: %s", what,
 		printsafe.Line(fmt.Sprint(err), 300))
-	s.rec(decision.EventIssue, decision.StoreUnavailable, principal, decision.SignIn{})
+	s.giveBack() // a broker fault judges nothing about the person
+	s.rec(s.event, decision.StoreUnavailable, principal, decision.SignIn{})
 	s.b.Metrics.SignIns.WithLabelValues("store_unavailable").Inc()
 	if text == "" {
 		text = storeDownText
@@ -147,7 +187,8 @@ func (s *signInAttempt) storeUnavailable(principal, what string, err error, text
 func (s *signInAttempt) directoryUnavailable(principal string) {
 	s.b.sayOnce("sign_in_directory_unavailable", sayEvery, "sign-in: the directory did not answer; password "+
 		"sign-in is refused until it does")
-	s.rec(decision.EventIssue, decision.DirectoryUnavailable, principal, decision.SignIn{})
+	s.giveBack()
+	s.rec(s.event, decision.DirectoryUnavailable, principal, decision.SignIn{})
 	s.b.Metrics.SignIns.WithLabelValues("directory_unavailable").Inc()
 	s.w.Header().Set("Retry-After", "30")
 	writeError(s.w, http.StatusServiceUnavailable, string(decision.DirectoryUnavailable), directoryDownText)
@@ -156,7 +197,7 @@ func (s *signInAttempt) directoryUnavailable(principal string) {
 // throttled is 429 sign_in_throttled, the words fixed by who is over their
 // limit; neither names the principal (I3).
 func (s *signInAttempt) throttled(failed, principal, text string, end time.Time) {
-	s.rec(decision.EventIssue, decision.SignInThrottled, principal, decision.SignIn{Failed: failed})
+	s.rec(s.event, decision.SignInThrottled, principal, decision.SignIn{Failed: failed})
 	s.b.Metrics.SignIns.WithLabelValues("throttled").Inc()
 	wait := int(math.Ceil(end.Sub(s.now).Seconds()))
 	s.w.Header().Set("Retry-After", strconv.Itoa(max(wait, 1)))
@@ -196,6 +237,8 @@ func (s *signInAttempt) underLimit(ctx context.Context, cfg *oidc.PasswordSignIn
 		s.storeUnavailable(principal, "attempts", err, "")
 		return false
 	}
+	s.ctx = ctx
+	s.counted = append(s.counted, key)
 	if n > limit {
 		s.throttled(failed, principal, text, end)
 		return false
@@ -281,9 +324,24 @@ func (s *signInAttempt) refuseSkew(principal string, by time.Duration) {
 	if by > 0 {
 		dir = "ahead of"
 	}
+	unit := "minutes"
+	if mins == 1 {
+		unit = "minute"
+	}
 	s.refuseWith(principal, decision.SignIn{Failed: "second_factor_skew", SkewSeconds: int(by / time.Second)},
-		fmt.Sprintf("your authenticator's clock is about %d minutes off (%s the broker's): set it to the network "+
-			"time and run `port49 login` again", mins, dir))
+		fmt.Sprintf("your authenticator's clock is about %d %s off (%s the broker's): set it to the network "+
+			"time and run `port49 login` again", mins, unit, dir))
+}
+
+// notCertifiable is 401 sign_in_not_certifiable: the person's principal (or
+// an account a second factor's label cannot carry) is one the broker cannot
+// serve, however right their password. Recorded as 9b records the same
+// answer, so a sign_in_refused record always says which check failed.
+func (s *signInAttempt) notCertifiable(principal string) {
+	s.rec(s.event, decision.TrustDomainUnresolved, principal, decision.SignIn{})
+	s.b.Metrics.SignIns.WithLabelValues("refused").Inc()
+	writeError(s.w, http.StatusUnauthorized, "sign_in_not_certifiable", "your account's principal cannot be "+
+		"carried in a certificate; tell the operator")
 }
 
 // signOf is the sign-in a certificate for principal on entryID is issued over.
@@ -302,11 +360,9 @@ func (s *signInAttempt) issuable(principal, entryID string) bool {
 	case err == nil:
 		return true
 	case errors.Is(err, issuer.ErrNotCertifiable):
-		s.rec(decision.EventIssue, decision.SignInRefused, principal, decision.SignIn{})
-		s.b.Metrics.SignIns.WithLabelValues("refused").Inc()
-		writeError(s.w, http.StatusUnauthorized, "sign_in_not_certifiable", "your account's principal cannot be "+
-			"carried in a certificate; tell the operator")
+		s.notCertifiable(principal)
 	default:
+		s.giveBack() // the CA's fault, not the person's
 		s.b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
 		s.b.sayOnce("issuance_unavailable", sayEvery, "issuance: a sign-in of %s was not issued a certificate: %s",
 			printsafe.Line(principal, 300), printsafe.Line(err.Error(), 300))
@@ -349,12 +405,8 @@ func (s *signInAttempt) succeeded(ctx context.Context, cfg *oidc.PasswordSignIn,
 		s.b.sayOnce("sign_in_clear", sayEvery, "sign-in: a principal's failed-attempt count could not be cleared: %s",
 			printsafe.Line(err.Error(), 300))
 	}
-	if cfg.FailuresPerSource > 0 {
-		if err := s.b.Store.UndoSignInAttempt(ctx, "source:"+s.src); err != nil {
-			s.b.sayOnce("sign_in_undo", sayEvery, "sign-in: a source's attempt could not be taken back: %s",
-				printsafe.Line(err.Error(), 300))
-		}
-	}
+	s.giveBack("source:" + s.src)
+	s.counted = nil
 }
 
 // issue signs the person's certificate and answers it, counting it issued.
@@ -367,15 +419,16 @@ func (s *signInAttempt) issue(pub crypto.PublicKey, principal, entryID string) {
 }
 
 // normalName is the name typed as it is searched: surrounding space dropped.
-// A name with a control or format character (a bidi override), invalid UTF-8,
-// or none or too many bytes is no name.
+// Anything but 1 to 256 bytes of printable ASCII is no name (decision 47
+// ruling 3), so no look-alike or format character reaches the directory's
+// matching rules.
 func normalName(raw string) (string, bool) {
 	name := strings.TrimSpace(raw)
-	if name == "" || len(name) > maxSignInName || !utf8.ValidString(name) {
+	if name == "" || len(name) > maxSignInName {
 		return "", false
 	}
-	for _, r := range name {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 || name[i] > 0x7e {
 			return "", false
 		}
 	}
@@ -429,9 +482,9 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
 			"(broker.identity has no directory_password verifier)")
 		return
 	}
-	s := &signInAttempt{b: b, w: w, now: b.Now(), src: sourcePrefix(r.RemoteAddr)}
+	s := b.newSignInAttempt(w, r, decision.EventIssue)
 	if b.enrollmentLost() != "" {
-		s.storeLost()
+		s.storeLost("")
 		return
 	}
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
@@ -473,7 +526,7 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
 		s.enrollOrRefuse(ctx, cfg, e, f, err == nil, req.Password, pub)
 		return
 	case errors.Is(err, store.ErrEnrollmentStoreLost):
-		s.storeLost()
+		s.storeLost(lostWhy(err))
 		return
 	case err != nil:
 		s.storeUnavailable(e.Principal, "second factor", err, "the broker could not read your second factor; "+
@@ -507,7 +560,7 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
 		s.refuseAs(e.Principal, "second_factor")
 		return
 	case errors.Is(err, store.ErrEnrollmentStoreLost):
-		s.storeLost()
+		s.storeLost(lostWhy(err))
 		return
 	case err != nil:
 		s.storeUnavailable(e.Principal, "second factor", err, "") // 503 store_unavailable (I2)
@@ -538,7 +591,7 @@ func (s *signInAttempt) windowOpen(ctx context.Context, cfg *oidc.PasswordSignIn
 	m, err := s.b.Enrollments.GetEnrollmentMark(ctx)
 	switch {
 	case errors.Is(err, store.ErrEnrollmentStoreLost), errors.Is(err, store.ErrNotFound):
-		s.storeLost()
+		s.storeLost(lostWhy(err))
 		return false, true
 	case err != nil:
 		s.storeUnavailable(e.Principal, "enrollment", err, "")
@@ -574,10 +627,7 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 		// would read it as this account's.
 		b.sayOnce("sign_in_totp_label "+e.Principal, time.Hour, "sign-in: %s cannot be enrolled: a ':' is in the "+
 			"totp_label or the account, and an authenticator reads one as the label's end", printsafe.Line(e.Principal, 300))
-		s.rec(decision.EventIssue, decision.SignInRefused, e.Principal, decision.SignIn{Failed: "enrollment"})
-		b.Metrics.SignIns.WithLabelValues("refused").Inc()
-		writeError(s.w, http.StatusServiceUnavailable, "enrollment_unavailable", "the broker cannot enroll your "+
-			"account's second factor; tell the operator (the broker's log says why)")
+		s.notCertifiable(e.Principal)
 		return
 	}
 	secret, err := totp.NewSecret()
@@ -591,13 +641,20 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 	rev := uint64(0)
 	if exists {
 		rev = f.Rev
+		if f.State == store.SecondFactorReopened {
+			// The enrollment must not end the operator's window: the record stays
+			// reopened until its own end, holding the new secret, and the handle
+			// carries the enrollment's end. A lapse then leaves the reopen in
+			// place (decision 47 ruling 4: a later sign-in starts again).
+			rec.State, rec.Until = store.SecondFactorReopened, f.Until
+		}
 	}
 	switch err := b.Enrollments.SwapSecondFactor(ctx, rec, rev); {
 	case errors.Is(err, store.ErrConflict):
 		s.refuseAs(e.Principal, "enrollment")
 		return
 	case errors.Is(err, store.ErrEnrollmentStoreLost):
-		s.storeLost()
+		s.storeLost(lostWhy(err))
 		return
 	case err != nil:
 		s.storeUnavailable(e.Principal, "second factor", err, "")
@@ -609,10 +666,14 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 		return
 	}
 	handle := base64.RawURLEncoding.EncodeToString(raw)
-	if _, err := b.Store.PutOnce(ctx, handleKey(handle), []byte(e.Principal), until.Sub(s.now)); err != nil {
+	if _, err := b.Store.PutOnce(ctx, handleKey(handle), handleValue(e.Principal, until), until.Sub(s.now)); err != nil {
 		s.storeUnavailable(e.Principal, "handle", err, "")
 		return
 	}
+	// The right password inside a window is the enrolling person's success: its
+	// source attempt goes back (a rollout behind one address would otherwise
+	// throttle itself), the principal's stays until the confirm clears it (I1).
+	s.giveBack("source:" + s.src)
 	b.Metrics.SignIns.WithLabelValues("enrollment_started").Inc()
 	s.w.Header().Set("Cache-Control", "no-store") // the answer holds a secret (M8)
 	writeJSON(s.w, http.StatusAccepted, api.EnrollResponse{Enroll: api.Enrollment{Handle: handle,
@@ -629,9 +690,9 @@ func (b *Broker) signInConfirm(w http.ResponseWriter, r *http.Request) {
 			"(broker.identity has no directory_password verifier)")
 		return
 	}
-	s := &signInAttempt{b: b, w: w, now: b.Now(), src: sourcePrefix(r.RemoteAddr)}
+	s := b.newSignInAttempt(w, r, decision.EventEnroll)
 	if b.enrollmentLost() != "" {
-		s.storeLost()
+		s.storeLost("")
 		return
 	}
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
@@ -661,10 +722,15 @@ func (b *Broker) signInConfirm(w http.ResponseWriter, r *http.Request) {
 		s.storeUnavailable("", "handle", err, "")
 		return
 	}
-	principal := string(held)
+	principal, until, ok := handleHeld(held)
+	if !ok || !until.After(s.now) {
+		s.refuseWith("", decision.SignIn{Failed: "enrollment"}, endedText)
+		return
+	}
 	// putBack is the handle returned for what is left of its enrollment, after
-	// a refusal that is not the person's last word (M10).
-	var until time.Time
+	// a refusal that is not the person's last word: a throttle, a CA fault, a
+	// wrong code, a store that did not answer (M10, I3). The handle carries its
+	// own end, so it can be put back before the record is read.
 	putBack := func() {
 		if ttl := until.Sub(s.now); ttl > 0 {
 			if _, err := b.Store.PutOnce(ctx, key, held, ttl); err != nil {
@@ -675,17 +741,18 @@ func (b *Broker) signInConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := b.Enrollments.GetSecondFactor(ctx, principal)
 	switch {
-	case errors.Is(err, store.ErrNotFound), err == nil && (f.State != store.SecondFactorPending || !f.Until.After(s.now)):
+	case errors.Is(err, store.ErrNotFound), err == nil && !enrolling(f, s.now):
 		s.refuseWith(principal, decision.SignIn{Failed: "enrollment"}, endedText)
 		return
 	case errors.Is(err, store.ErrEnrollmentStoreLost):
-		s.storeLost()
+		putBack()
+		s.storeLost(lostWhy(err))
 		return
 	case err != nil:
+		putBack()
 		s.storeUnavailable(principal, "second factor", err, "")
 		return
 	}
-	until = f.Until
 	if !s.underPrincipalLimit(ctx, cfg, principal) {
 		putBack()
 		return
@@ -713,9 +780,11 @@ func (b *Broker) signInConfirm(w http.ResponseWriter, r *http.Request) {
 		s.refuseAs(principal, "enrollment")
 		return
 	case errors.Is(err, store.ErrEnrollmentStoreLost):
-		s.storeLost()
+		putBack()
+		s.storeLost(lostWhy(err))
 		return
 	case err != nil:
+		putBack()
 		s.storeUnavailable(principal, "second factor", err, "")
 		return
 	}
@@ -771,6 +840,15 @@ func (b *Broker) CheckEnrollmentStore(ctx context.Context) error {
 	default:
 		return err
 	}
+	b.markEnrollmentStore(why)
+	return nil
+}
+
+// markEnrollmentStore sets the enrollment store's state and gauge: why "" is
+// well, else lost, with one error line per state change. A request that finds
+// the store lost sets it too, so the next sign-in is refused before it is
+// counted rather than at the next scheduled pass.
+func (b *Broker) markEnrollmentStore(why string) {
 	b.enrollMu.Lock()
 	b.enrollLost = why
 	say := why != "" && why != b.enrollLostSaid
@@ -778,7 +856,7 @@ func (b *Broker) CheckEnrollmentStore(ctx context.Context) error {
 	b.enrollMu.Unlock()
 	if why == "" {
 		b.Metrics.DirectoryEnrollmentStoreOK.WithLabelValues().Set(1)
-		return nil
+		return
 	}
 	b.Metrics.DirectoryEnrollmentStoreOK.WithLabelValues().Set(0)
 	if say {
@@ -787,5 +865,42 @@ func (b *Broker) CheckEnrollmentStore(ctx context.Context) error {
 			"the store (`port49 directory import`, or the etcd snapshot) or run `port49 directory "+
 			"reset-second-factor --all`", why)
 	}
-	return nil
+}
+
+// lostWhy is why a store error read as lost, for the line and the state.
+func lostWhy(err error) string {
+	if errors.Is(err, store.ErrNotFound) {
+		return "it holds no creation mark"
+	}
+	return printsafe.Line(err.Error(), 300)
+}
+
+// handleValue is what an enrollment handle's once-only record holds: the
+// principal and the enrollment's end, identity and time, never a secret. The
+// end lets a refusal put the handle back before the record is read.
+func handleValue(principal string, until time.Time) []byte {
+	return []byte(principal + "\x00" + strconv.FormatInt(until.UnixNano(), 10))
+}
+
+// handleHeld is handleValue's principal and end; false for anything else.
+func handleHeld(v []byte) (string, time.Time, bool) {
+	principal, ns, ok := strings.Cut(string(v), "\x00")
+	n, err := strconv.ParseInt(ns, 10, 64)
+	if !ok || principal == "" || err != nil {
+		return "", time.Time{}, false
+	}
+	return principal, time.Unix(0, n), true
+}
+
+// enrolling is whether f is an enrollment a handle can confirm: a pending
+// record not past its end, or a reopened record holding the secret of an
+// enrollment begun inside its window (its end is the handle's).
+func enrolling(f store.SecondFactor, now time.Time) bool {
+	switch f.State {
+	case store.SecondFactorPending:
+		return f.Until.After(now)
+	case store.SecondFactorReopened:
+		return len(f.Secret) > 0
+	}
+	return false
 }

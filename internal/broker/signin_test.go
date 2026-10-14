@@ -40,6 +40,7 @@ type fakeDir struct {
 	mu       sync.Mutex
 	people   map[string]fakePerson
 	down     bool
+	bindDown bool // only the bind is unavailable
 	state    string
 	result   int // the LDAP result a state refusal carries; 49 when 0
 	searches int
@@ -74,7 +75,7 @@ func (d *fakeDir) CheckPassword(_ context.Context, _ directory.Server, dn, passw
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.down {
+	if d.down || d.bindDown {
 		return fmt.Errorf("%w: dc-01", directory.ErrUnavailable)
 	}
 	d.binds++
@@ -940,7 +941,9 @@ func TestTheNameIsNormalised(t *testing.T) {
 	if w.Code != 200 || dir.names[0] != "alice" {
 		t.Fatalf("%s, searched %q", shown(w), dir.names)
 	}
-	for _, name := range []string{"", "   ", "al\x00ice", "al\nice", "al‮ice", strings.Repeat("a", 300)} {
+	// Printable ASCII only (decision 47 ruling 3): no accented or fullwidth look-alike reaches a search.
+	for _, name := range []string{"", "   ", "al\x00ice", "al\nice", "al‮ice", strings.Repeat("a", 300),
+		"ålice", "ａlice", "al ice"} {
 		f, dir := newSignInFixture(t)
 		w := f.signIn(t, api.SignInRequest{Name: name, Password: "right", Code: "123456", CSR: csrOf(t, newECKey(t))})
 		rec := f.lastIssue(t)
@@ -979,7 +982,9 @@ func TestAPrincipalOutsideTheDomainsIsRefused(t *testing.T) {
 }
 
 // A ':' in the otpauth label or account would shift the URI's label: the
-// broker answers an enrollment it cannot make, 503, and starts none.
+// broker answers an enrollment it cannot make as it answers a principal no
+// certificate carries (401 sign_in_not_certifiable, 9b's reason), and starts
+// none.
 func TestAColonInTheTOTPLabelRefusesTheEnrollment(t *testing.T) {
 	for name, set := range map[string]func(f *fixture, d *fakeDir){
 		"label": func(f *fixture, _ *fakeDir) { f.b.PasswordSignIn.TOTPLabel = "port49: lab" },
@@ -993,8 +998,10 @@ func TestAColonInTheTOTPLabelRefusesTheEnrollment(t *testing.T) {
 		f.b.PasswordSignIn.OpenUntil = f.now.Add(time.Hour)
 		set(f, dir)
 		w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "right", CSR: csrOf(t, newECKey(t))})
-		if w.Code != 503 || strings.Contains(w.Body.String(), "otpauth") || f.outcome("enrollment_started") != 0 {
-			t.Fatalf("%s: %s", name, shown(w))
+		rec := f.lastIssue(t)
+		if w.Code != 401 || apiError(w) != "sign_in_not_certifiable" || strings.Contains(w.Body.String(), "otpauth") ||
+			f.outcome("enrollment_started") != 0 || rec["reason"] != "trust_domain_unresolved" {
+			t.Fatalf("%s: %s %v", name, shown(w), rec)
 		}
 		if ps, _ := f.b.Enrollments.SecondFactorPrincipals(context.Background()); len(ps) != 0 {
 			t.Fatalf("%s: a record for %v", name, ps)

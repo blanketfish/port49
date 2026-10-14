@@ -143,7 +143,11 @@ plan's text assumes each recommendation; a different ruling changes the tasks it
 - **D5. Lockout and rate limits.** Two fixed windows in the store: 5 failures per principal and 50
   per source per 15 minutes (`rate_limits.failures_per_principal`, `failures_per_source`,
   `window`). Each attempt is counted before it is judged, so parallel attempts cannot pass the
-  limit; a success clears the principal's count and takes its own attempt back from the source's.
+  limit; a success clears the principal's count and takes its own attempt back from the source's
+  (a 202 that starts an enrollment gives back its source attempt only: the confirm clears the
+  principal's). A broker fault (`503 directory_unavailable`, `store_unavailable`,
+  `issuance_unavailable`, or a lost enrollment store found mid-request) gives back every count the
+  attempt took, since nothing about the person was judged.
   The source is the TCP peer, an IPv4 /32 or an IPv6 /64. A store error is `503 store_unavailable`
   and nothing is checked (fail closed). Over the limit: `429 sign_in_throttled`, `Retry-After`,
   naming the time. `port49 directory unlock <principal>` clears a principal's count at 3am. 5 is
