@@ -993,6 +993,9 @@ func load(path string, role Role) (Config, error) {
 	if c.Store, err = checkStore(f.Store, role, f.Broker != nil, f.Policy != nil, f.AdminSocket != ""); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
+	if c.Broker != nil {
+		resolveEnrollmentStore(c.Broker, c.Store)
+	}
 	if role == RoleDaemon && c.Store.Backend == BackendEtcd && c.Lab != nil && len(c.Lab.SeedTokens) > 0 {
 		return Config{}, errors.New("config: lab.seed_tokens: lab seed tokens are minted by port49-broker on etcd; " +
 			"move lab.seed_tokens and lab.seed_token_file into port49-broker.yaml (plan 7e)")
@@ -1322,11 +1325,22 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		b.CertificateStatus = &cs
 	}
 	if b.DirectorySet != nil {
-		d, err := checkDirectory(*b.DirectorySet, os.Getenv)
+		d, err := checkDirectory(*b.DirectorySet, os.Getenv, b.ClientCAFile != "")
 		if err != nil {
 			return nil, err
 		}
 		b.Directory = d
+	}
+	// A directory_password verifier checks the password at the directory
+	// (plan 9e; decision 47), so it needs one; and its enrollment store is
+	// nothing without it (D12).
+	switch {
+	case id.PasswordSignIn != nil && b.Directory == nil:
+		return nil, errors.New("config: broker.identity.humans: directory_password checks a password at the " +
+			"directory, and broker.directory is not configured: configure it, or remove the verifier")
+	case id.PasswordSignIn == nil && b.DirectorySet != nil && b.DirectorySet.EnrollmentStore != nil:
+		return nil, errors.New("config: broker.directory.enrollment_store: no directory_password verifier is " +
+			"listed, so nothing is enrolled without one; remove it")
 	}
 	// A workload certificate's directory (plan 8b; spec §13 decision 41 ruling
 	// 1) reuses broker.directory's pool, bind and base_dn, so it needs one.
@@ -1704,6 +1718,8 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
 			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
 	}
+	others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
+		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
 	if b.Identity != nil {
 		for _, v := range b.Identity.OIDC {
 			others = append(others, struct{ key, path string }{"broker.identity's ca_file for " + v.Issuer, v.CAFile})
@@ -1825,6 +1841,8 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 			others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
 				filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
 		}
+		others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
+			filepath.Join(BrokerStateDir(&b), "enrollments.json")})
 		for _, o := range others {
 			if o.path == "" {
 				continue

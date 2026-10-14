@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -62,6 +63,24 @@ type prewarmYAML struct {
 	MaxPrincipals int `yaml:"max_principals"`
 }
 
+// enrollmentStoreYAML is broker.directory.enrollment_store (plan 9e, D12):
+// where a directory_password verifier keeps its enrollments. Absent, it is
+// the shape of store:.
+type enrollmentStoreYAML struct {
+	Backend string              `yaml:"backend"`
+	Etcd    *enrollmentEtcdYAML `yaml:"etcd"`
+}
+
+// enrollmentEtcdYAML is an enrollment store's own etcd, written as
+// store.etcd is.
+type enrollmentEtcdYAML struct {
+	Endpoints   []string      `yaml:"endpoints"`
+	CAFile      string        `yaml:"ca_file"`
+	Prefix      string        `yaml:"prefix"`
+	Identity    *EtcdIdentity `yaml:"identity"`
+	CallTimeout time.Duration `yaml:"call_timeout"`
+}
+
 // directoryYAML is broker.directory (design §10; plan 7g).
 type directoryYAML struct {
 	Servers            []serverYAML   `yaml:"servers"`
@@ -86,6 +105,8 @@ type directoryYAML struct {
 	Failback           *failbackYAML  `yaml:"failback"`
 	Grace              *time.Duration `yaml:"grace"`
 	Prewarm            *prewarmYAML   `yaml:"prewarm"`
+
+	EnrollmentStore *enrollmentStoreYAML `yaml:"enrollment_store"`
 }
 
 // Defaults provisional on the owner's answer to OR-1 (plan 7g): each is one
@@ -97,8 +118,10 @@ const (
 )
 
 // checkDirectory resolves broker.directory, refusing what Rulings 1, 6,
-// 8 and 9 refuse. getenv is os.Getenv outside tests.
-func checkDirectory(y directoryYAML, getenv func(string) string) (*directory.Config, error) {
+// 8 and 9 refuse. getenv is os.Getenv outside tests. x509Human is whether a
+// human x509 verifier is configured: certificate_mapping maps its
+// certificates, so it is required then and optional otherwise (plan 9e).
+func checkDirectory(y directoryYAML, getenv func(string) string, x509Human bool) (*directory.Config, error) {
 	const p = "broker.directory."
 	d := &directory.Config{CAFile: y.CAFile, BaseDN: y.BaseDN,
 		GroupsBaseDN:       or(y.GroupsBaseDN, y.BaseDN),
@@ -177,11 +200,18 @@ func checkDirectory(y directoryYAML, getenv func(string) string) (*directory.Con
 		return nil, fmt.Errorf("config: %ssite_env %s is also bind.password_env: the site is logged, a password "+
 			"never is; name different variables", p, b.PasswordEnv)
 	}
-	m, err := checkMapping(y.CertificateMapping)
-	if err != nil {
-		return nil, err
+	if cm := y.CertificateMapping; x509Human || cm.Kind != "" || cm.Attribute != "" || cm.AllowWeak || len(cm.Issuers) > 0 {
+		m, err := checkMapping(cm)
+		if err != nil {
+			return nil, err
+		}
+		d.Mapping = m
 	}
-	d.Mapping = m
+	if es := y.EnrollmentStore; es != nil {
+		if d.EnrollmentStore, err = checkEnrollmentStore(*es); err != nil {
+			return nil, err
+		}
+	}
 	switch directory.Nested(y.NestedGroups) {
 	case "in_chain", "recursive", "direct":
 		d.Nested = directory.Nested(y.NestedGroups)
@@ -331,6 +361,90 @@ func checkMapping(m mappingYAML) (directory.Mapping, error) {
 	return out, nil
 }
 
+// checkEnrollmentStore resolves an enrollment_store that is written (plan 9e,
+// D12): memory, or etcd with its own endpoints, CA, prefix and identity,
+// checked as store.etcd is. The memory file is filled by resolveEnrollmentStore,
+// once the state directory and store: are known.
+func checkEnrollmentStore(y enrollmentStoreYAML) (directory.EnrollmentStore, error) {
+	const p = "broker.directory.enrollment_store"
+	switch y.Backend {
+	case BackendMemory:
+		if y.Etcd != nil {
+			return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd is set but backend is memory: say "+
+				"backend: etcd, or remove etcd", p)
+		}
+		return directory.EnrollmentStore{Backend: BackendMemory}, nil
+	case BackendEtcd:
+	default:
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.backend %q: must be memory or etcd", p, y.Backend)
+	}
+	e := y.Etcd
+	if e == nil {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.backend is etcd and %s.etcd is missing", p, p)
+	}
+	if len(e.Endpoints) == 0 {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.endpoints is empty", p)
+	}
+	for i, ep := range e.Endpoints {
+		u, err := url.Parse(ep)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.endpoints[%d] must be "+
+				"https://host:port, with no user information, path, query or fragment: port49 authenticates to etcd "+
+				"by client certificate (decision 35)", p, i)
+		}
+	}
+	prefix := or(e.Prefix, "/port49/")
+	if !strings.HasPrefix(prefix, "/") {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.prefix %q: must start with /", p, prefix)
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	if err := readableFile(p+".etcd.ca_file", e.CAFile); err != nil {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %w", err)
+	}
+	if e.Identity == nil {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.identity is required: the broker's own "+
+			"certificate and key for this etcd (cert_file, key_file)", p)
+	}
+	for _, f := range [][2]string{{".cert_file", e.Identity.CertFile}, {".key_file", e.Identity.KeyFile}} {
+		if err := readableFile(p+".etcd.identity"+f[0], f[1]); err != nil {
+			return directory.EnrollmentStore{}, fmt.Errorf("config: %w", err)
+		}
+	}
+	if certCN(e.Identity.CertFile) == "root" {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.identity.cert_file: its CN is \"root\", "+
+			"etcd's administrator, which bypasses every role: give the broker a certificate of its own "+
+			"(decision 35)", p)
+	}
+	timeout := orD(e.CallTimeout, 500*time.Millisecond)
+	if timeout < 10*time.Millisecond || timeout > 5*time.Second {
+		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.call_timeout %v: must be 10ms to 5s", p, timeout)
+	}
+	return directory.EnrollmentStore{Backend: BackendEtcd, Etcd: &directory.EnrollmentEtcd{Endpoints: e.Endpoints,
+		CAFile: e.CAFile, Prefix: prefix, CertFile: e.Identity.CertFile, KeyFile: e.Identity.KeyFile,
+		CallTimeout: timeout}}, nil
+}
+
+// resolveEnrollmentStore fills what checkDirectory could not: with no
+// enrollment_store, the shape of store: (memory, or etcd with store.etcd and
+// the broker's identity), and on memory the sealed file in the broker's state
+// directory (plan 9e, D7 and D12). It does nothing without a directory_password
+// verifier.
+func resolveEnrollmentStore(b *BrokerConfig, s StoreConfig) {
+	if b.Directory == nil || b.Identity == nil || b.Identity.PasswordSignIn == nil {
+		return
+	}
+	es := &b.Directory.EnrollmentStore
+	if es.Backend == "" {
+		es.Backend = s.Backend
+	}
+	if es.Backend == BackendMemory {
+		es.File = filepath.Join(BrokerStateDir(b), "enrollments.json")
+	}
+}
+
 // refreshInterval resolves broker.refresh_interval (Ruling 12).
 func refreshInterval(d time.Duration) (time.Duration, error) {
 	d = orD(d, defaultRefreshInterval)
@@ -392,6 +506,9 @@ func checkSearchShape(d *directory.Config) error {
 	for _, a := range []struct{ key, v string }{{"principal_attribute", d.PrincipalAttribute},
 		{"username_attribute", d.UsernameAttribute}, {"group_name_attribute", d.GroupNameAttribute},
 		{"member_attribute", d.MemberAttribute}, {"certificate_mapping.attribute", d.Mapping.Attribute}} {
+		if a.v == "" && a.key == "certificate_mapping.attribute" {
+			continue // no mapping: no x509 verifier (plan 9e)
+		}
 		if !descriptor.MatchString(a.v) {
 			return fmt.Errorf("config: %s%s %q: not an attribute descriptor", p, a.key, a.v)
 		}

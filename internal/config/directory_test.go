@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func env(m map[string]string) func(string) string { return func(k string) string
 // The defaults of Rulings 6–10 and 20, and the site from the environment
 // (design §10: "derive its own site from the environment").
 func TestDirectoryDefaults(t *testing.T) {
-	d, err := checkDirectory(dirYAML(t), env(map[string]string{"PORT49_SITE": "us-west", "PORT49_LDAP_PASSWORD": "x"}))
+	d, err := checkDirectory(dirYAML(t), env(map[string]string{"PORT49_SITE": "us-west", "PORT49_LDAP_PASSWORD": "x"}), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestDirectoryRefusals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := dirYAML(t)
 			c.edit(&d)
-			_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}))
+			_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("%v, want %q", err, c.want)
 			}
@@ -120,14 +121,14 @@ func TestMappingKindsAndPins(t *testing.T) {
 		"san_upn": "userPrincipalName", "san_email": "mail", "subject_dn": "distinguishedName", "cn": "cn"} {
 		d := dirYAML(t)
 		d.CertificateMapping = mappingYAML{Kind: kind, AllowWeak: true, Issuers: []string{"CN=Corp Users CA,O=Example"}}
-		got, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}))
+		got, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true)
 		if err != nil || got.Mapping.Attribute != attr || got.Mapping.Kind.Strong() != (kind == "issuer_serial" || kind == "sid") {
 			t.Errorf("%s: %+v %v", kind, got, err)
 		}
 	}
 	d := dirYAML(t)
 	d.CertificateMapping = mappingYAML{Kind: "cn", AllowWeak: true, Issuers: []string{"not a dn"}}
-	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true); err == nil ||
 		!strings.Contains(err.Error(), `broker.directory.certificate_mapping.issuers[0] "not a dn"`) {
 		t.Fatalf("%v", err)
 	}
@@ -138,7 +139,7 @@ func TestMappingKindsAndPins(t *testing.T) {
 func TestAnIssuerPinNoCertificateCanMatchIsRefused(t *testing.T) {
 	d := dirYAML(t)
 	d.CertificateMapping = mappingYAML{Kind: "cn", AllowWeak: true, Issuers: []string{"SERIALNUMBER=1,DC=corp"}}
-	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true); err == nil ||
 		!strings.Contains(err.Error(), `broker.directory.certificate_mapping.issuers[0] "SERIALNUMBER=1,DC=corp"`) {
 		t.Fatalf("%v", err)
 	}
@@ -181,7 +182,7 @@ func TestServerURICredentialsAreRefusedAndNeverPrinted(t *testing.T) {
 	} {
 		d := dirYAML(t)
 		d.Servers[1].URI = uri
-		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}))
+		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true)
 		if err == nil || err.Error() != want {
 			t.Errorf("%q: %v", uri, err)
 		}
@@ -192,7 +193,7 @@ func TestServerURICredentialsAreRefusedAndNeverPrinted(t *testing.T) {
 	// The other uri errors still name the (userinfo-free) URI.
 	d := dirYAML(t)
 	d.Servers[0].URI = "ldap://dc-01:389"
-	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true); err == nil ||
 		!strings.Contains(err.Error(), "ldap://dc-01:389") {
 		t.Fatalf("%v", err)
 	}
@@ -209,7 +210,7 @@ func TestSiteEnvIsNotThePasswordEnv(t *testing.T) {
 		if siteEnv == "" {
 			d.Bind.PasswordEnv = "PORT49_SITE"
 		}
-		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "hunter2secret", "PORT49_SITE": "hunter2secret"}))
+		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "hunter2secret", "PORT49_SITE": "hunter2secret"}), true)
 		if err == nil || !strings.Contains(err.Error(), "is also bind.password_env") || strings.Contains(err.Error(), "hunter2secret") {
 			t.Errorf("site_env %q: %v", siteEnv, err)
 		}
@@ -231,13 +232,13 @@ func TestBindFilesAreCheckedAtLoad(t *testing.T) {
 	} {
 		d := dirYAML(t)
 		d.Bind = c.bind
-		if _, err := checkDirectory(d, env(nil)); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := checkDirectory(d, env(nil), true); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
 	d := dirYAML(t)
 	d.Bind = bindYAML{Mechanism: "external", TLSCertFile: ok, TLSKeyFile: ok}
-	if _, err := checkDirectory(d, env(nil)); err != nil {
+	if _, err := checkDirectory(d, env(nil), true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -272,8 +273,47 @@ func TestALoadedBrokerResolvesItsDirectory(t *testing.T) {
 func TestServersSharingAHostPortAreRefused(t *testing.T) {
 	d := dirYAML(t)
 	d.Servers[1].URI = d.Servers[0].URI + "/"
-	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"}), true); err == nil ||
 		!strings.Contains(err.Error(), "servers[1]") || !strings.Contains(err.Error(), "same host:port") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// The enrollments file is the broker's own state beside the revocations
+// file: the revocations file may not be it (plan 9e, M5).
+func TestTheRevocationsFileMayNotBeTheEnrollmentsFile(t *testing.T) {
+	cfg := strings.Replace(passwordBroker(t, passwordBase, true), "/var/lib/port49/revocations.json",
+		"/var/lib/port49/enrollments.json", 1)
+	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "enrollment_store's file") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// certificate_mapping maps a client certificate to its entry, so a broker
+// with no human x509 verifier needs none (plan 9e); with one, a missing
+// mapping is refused as before.
+func TestCertificateMappingIsOptionalWithoutAnX509Verifier(t *testing.T) {
+	getenv := env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})
+	d := dirYAML(t)
+	d.CertificateMapping = mappingYAML{}
+	got, err := checkDirectory(d, getenv, false)
+	if err != nil || !reflect.DeepEqual(got.Mapping, directory.Mapping{}) {
+		t.Fatalf("no x509 verifier, no mapping: %+v %v", got, err)
+	}
+	if _, err := checkDirectory(d, getenv, true); err == nil || !strings.Contains(err.Error(), "certificate_mapping.kind") {
+		t.Fatalf("an x509 verifier and no mapping: %v", err)
+	}
+	d.CertificateMapping = mappingYAML{Kind: "sid"}
+	if got, err = checkDirectory(d, getenv, false); err != nil || got.Mapping.Kind != directory.MapSID {
+		t.Fatalf("a mapping that is set is still read: %+v %v", got, err)
+	}
+	c, err := loadWith(t, passwordBroker(t, passwordBase, true))
+	if err != nil || !reflect.DeepEqual(c.Broker.Directory.Mapping, directory.Mapping{}) {
+		t.Fatalf("through Load: %v", err)
+	}
+	if _, err := loadWith(t, strings.Replace(withDirectoryBlock(t, brokerBlock),
+		"    certificate_mapping: {kind: issuer_serial}\n", "", 1)); err == nil ||
+		!strings.Contains(err.Error(), "certificate_mapping.kind") {
+		t.Fatalf("x509 through Load: %v", err)
 	}
 }

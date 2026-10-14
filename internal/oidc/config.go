@@ -125,6 +125,9 @@ type Config struct {
 	// PerLoginMFA is broker.identity.per_login_mfa (plan 9c; decision 45):
 	// nil when none is configured.
 	PerLoginMFA *PerLoginMFA
+	// PasswordSignIn is the directory_password human verifier (plan 9e;
+	// decision 47): nil when none is listed.
+	PasswordSignIn *PasswordSignIn
 }
 
 // PerLoginMFA is broker.identity.per_login_mfa resolved: the roots file a
@@ -135,6 +138,28 @@ type PerLoginMFA struct {
 	AMR                  []string
 	ACRValues            string
 }
+
+// PasswordSignIn is a type: directory_password human verifier resolved
+// (plan 9e; spec §13 decision 47 ruling 18).
+type PasswordSignIn struct {
+	PrincipalDomains     []string
+	Filter               string
+	OpenUntil            time.Time     // zero: no rollout window
+	NewEntriesFor        time.Duration // 0: off
+	ReopenFor            time.Duration
+	FailuresPerPrincipal int
+	FailuresPerSource    int // 0: off
+	Window               time.Duration
+	TOTPLabel            string // "" is "port49 (<broker host>)", filled at start
+}
+
+const (
+	DefaultNewEntriesFor        = 14 * 24 * time.Hour
+	DefaultReopenFor            = 24 * time.Hour
+	DefaultFailuresPerPrincipal = 5
+	DefaultFailuresPerSource    = 50
+	DefaultSignInWindow         = 15 * time.Minute
+)
 
 // Issuance is broker.identity.issuance resolved.
 type Issuance struct {

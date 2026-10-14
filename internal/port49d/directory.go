@@ -109,13 +109,16 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 		fmt.Fprintf(w, "%s: directory: bind simple as %s: the weakest of the three (design §10); its password is "+
 			"read from %s\n", proc, d.Bind.BindDN, d.Bind.PasswordEnv)
 	}
-	strength := "weak, pinned to " + strings.Join(d.Mapping.Issuers, "; ")
-	if d.Mapping.Kind.Strong() {
-		strength = "strong"
+	mapping := "no certificate mapping (no x509 verifier)"
+	if d.Mapping.Kind != "" {
+		strength := "weak, pinned to " + strings.Join(d.Mapping.Issuers, "; ")
+		if d.Mapping.Kind.Strong() {
+			strength = "strong"
+		}
+		mapping = fmt.Sprintf("certificates map by %s (%s) through %s", d.Mapping.Kind, strength, d.Mapping.Attribute)
 	}
-	fmt.Fprintf(w, "%s: directory: certificates map by %s (%s) through %s; principal from %s, username from %s; "+
-		"nested groups %s under %s\n", proc, d.Mapping.Kind, strength, d.Mapping.Attribute, d.PrincipalAttribute,
-		d.UsernameAttribute, d.Nested, d.GroupsBaseDN)
+	fmt.Fprintf(w, "%s: directory: %s; principal from %s, username from %s; nested groups %s under %s\n", proc,
+		mapping, d.PrincipalAttribute, d.UsernameAttribute, d.Nested, d.GroupsBaseDN)
 	fmt.Fprintf(w, "%s: directory: %s and %s must be writable only by directory administrators: two entries "+
 		"holding one value are both refused (identity_ambiguous, username_collision) until it is fixed\n", proc,
 		d.PrincipalAttribute, d.UsernameAttribute)
