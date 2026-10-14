@@ -3,6 +3,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -350,5 +351,55 @@ func TestAnUnknownKeyIsRefused(t *testing.T) {
 	case op := <-called:
 		t.Fatalf("a request with an unknown key reached the broker: %+v", op)
 	default:
+	}
+}
+
+// An import's body follows its request line on the connection, to the
+// client's half-close, whole across the decoder's read-ahead and the socket's
+// buffers; an export's comes back whole in the answer (plan 9e, I14).
+func TestAnImportBodyFollowsItsRequestLineAndAnExportComesBack(t *testing.T) {
+	body := make([]byte, 3<<20+17)
+	for i := range body {
+		body[i] = byte('a' + i%26)
+	}
+	got := make(chan []byte, 1)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		EnrollmentsImport: func(_ context.Context, sealed []byte, replace bool, _ uint32) (string, error) {
+			got <- sealed
+			return fmt.Sprintf("imported (replace %v)", replace), nil
+		},
+		EnrollmentsExport: func(context.Context, uint32) ([]byte, error) { return body, nil }})
+
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := json.NewEncoder(c).Encode(Request{Op: "enrollments_import", Replace: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.(*net.UnixConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil || r.Text != "imported (replace true)" {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	if sealed := <-got; !bytes.Equal(sealed, body) {
+		t.Fatalf("the body arrived as %d bytes, want %d, or changed", len(sealed), len(body))
+	}
+
+	e, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	json.NewEncoder(e).Encode(Request{Op: "enrollments_export"})
+	var x Response
+	if err := json.NewDecoder(e).Decode(&x); err != nil || !bytes.Equal(x.Sealed, body) {
+		t.Fatalf("the export came back as %d bytes: %v", len(x.Sealed), err)
 	}
 }

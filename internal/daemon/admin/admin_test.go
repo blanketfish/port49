@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,7 +17,8 @@ import (
 
 func TestAnswerRefusesAnUnknownOpAndAnUnheldDevice(t *testing.T) {
 	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
-	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations and directory_forget" {
+	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, second_factor_reset, "+
+		"sign_in_unlock, enrollments_init, enrollments_export and enrollments_import" {
 		t.Fatalf("%+v", r)
 	}
 	if r := s.answer(context.Background(), Request{Op: "keys_diagnose", Device: "x"}, 0); !strings.Contains(r.Error, "holds no unvalidated packet") {
@@ -174,6 +177,135 @@ func TestConnTimeoutCoversTheOpsWorstCase(t *testing.T) {
 	if got := s.connTimeout("directory_forget"); got != ListWait {
 		t.Fatalf("directory_forget: %v", got)
 	}
+}
+
+// The sign-in ops: a process with no broker says where they run; an empty
+// principal is refused for second_factor_reset without all and for
+// sign_in_unlock; a principal and all together are refused; an import body
+// over maxImport is refused and never reaches the broker; each op reaches the
+// broker with the caller's uid; the unknown-op line lists all nine ops.
+func TestTheSignInAdminOps(t *testing.T) {
+	ctx := context.Background()
+	ops := []Request{{Op: "second_factor_reset", All: true}, {Op: "sign_in_unlock", Principal: "user:a@b"},
+		{Op: "enrollments_init"}, {Op: "enrollments_export"}, {Op: "enrollments_import"}}
+	none := &Server{Held: &keyring.Held{}, Now: time.Now}
+	beside := &Server{Held: &keyring.Held{}, Now: time.Now, RevokeElsewhere: "port49-broker's admin socket"}
+	for _, req := range ops {
+		if r := none.answer(ctx, req, 0); !strings.Contains(r.Error, "runs no broker") || !strings.Contains(r.Error, "port49 directory ") {
+			t.Fatalf("%s with no broker: %+v", req.Op, r)
+		}
+		if r := beside.answer(ctx, req, 0); !strings.Contains(r.Error, "port49-broker's admin socket") ||
+			!strings.Contains(r.Error, "--socket <that path>") {
+			t.Fatalf("%s beside port49-broker: %+v", req.Op, r)
+		}
+	}
+
+	type call struct {
+		op, principal string
+		all, replace  bool
+		uid           uint32
+		body          string
+	}
+	var got []call
+	s := &Server{Held: &keyring.Held{}, Now: time.Now,
+		SecondFactorReset: func(_ context.Context, p string, all bool, uid uint32) (string, error) {
+			got = append(got, call{op: "reset", principal: p, all: all, uid: uid})
+			return "reset it", nil
+		},
+		SignInUnlock: func(_ context.Context, p string, uid uint32) (string, error) {
+			got = append(got, call{op: "unlock", principal: p, uid: uid})
+			return "unlocked it", nil
+		},
+		EnrollmentsInit: func(_ context.Context, uid uint32) (string, error) {
+			got = append(got, call{op: "init", uid: uid})
+			return "created it", nil
+		},
+		EnrollmentsExport: func(_ context.Context, uid uint32) ([]byte, error) {
+			got = append(got, call{op: "export", uid: uid})
+			return []byte("sealed export"), nil
+		},
+		EnrollmentsImport: func(_ context.Context, sealed []byte, replace bool, uid uint32) (string, error) {
+			got = append(got, call{op: "import", replace: replace, uid: uid, body: string(sealed)})
+			return "imported it", nil
+		}}
+	for _, req := range []Request{{Op: "second_factor_reset"}, {Op: "sign_in_unlock"},
+		{Op: "second_factor_reset", All: true, Principal: "user:a@b"}} {
+		if r := s.answer(ctx, req, 0); r.Error == "" || len(got) != 0 {
+			t.Fatalf("%+v was taken: %+v, %v", req, r, got)
+		}
+	}
+	if r := s.answer(ctx, Request{Op: "second_factor_reset", Principal: "user:a@b"}, 1000); r.Text != "reset it" {
+		t.Fatalf("%+v", r)
+	}
+	if r := s.answer(ctx, Request{Op: "second_factor_reset", All: true}, 1001); r.Text != "reset it" {
+		t.Fatalf("%+v", r)
+	}
+	if r := s.answer(ctx, Request{Op: "sign_in_unlock", Principal: "user:a@b"}, 1002); r.Text != "unlocked it" {
+		t.Fatalf("%+v", r)
+	}
+	if r := s.answer(ctx, Request{Op: "enrollments_init"}, 1003); r.Text != "created it" {
+		t.Fatalf("%+v", r)
+	}
+	if r := s.answer(ctx, Request{Op: "enrollments_export"}, 1004); string(r.Sealed) != "sealed export" || r.Error != "" {
+		t.Fatalf("%+v", r)
+	}
+	imp := Request{Op: "enrollments_import", Replace: true, body: strings.NewReader("\nthe export")}
+	if r := s.answer(ctx, imp, 1005); r.Text != "imported it" {
+		t.Fatalf("%+v", r)
+	}
+	want := []call{{op: "reset", principal: "user:a@b", uid: 1000}, {op: "reset", all: true, uid: 1001},
+		{op: "unlock", principal: "user:a@b", uid: 1002}, {op: "init", uid: 1003}, {op: "export", uid: 1004},
+		{op: "import", replace: true, uid: 1005, body: "the export"}}
+	if len(got) != len(want) {
+		t.Fatalf("%v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call %d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// An import body one byte over the bound is refused, and an empty one.
+	got = nil
+	big := Request{Op: "enrollments_import", body: io.LimitReader(zeros{}, maxImport+1)}
+	if r := s.answer(ctx, big, 0); !strings.Contains(r.Error, "over 64 MiB") || len(got) != 0 {
+		t.Fatalf("%+v, %v", r, got)
+	}
+	exact := Request{Op: "enrollments_import", body: io.LimitReader(ones{}, maxImport)}
+	if r := s.answer(ctx, exact, 0); r.Text != "imported it" || len(got) != 1 {
+		t.Fatalf("a body of exactly maxImport: %+v", r)
+	}
+	got = nil
+	if r := s.answer(ctx, Request{Op: "enrollments_import", body: strings.NewReader("\n")}, 0); r.Error == "" || len(got) != 0 {
+		t.Fatalf("%+v, %v", r, got)
+	}
+	// An export the socket cannot carry is not sent.
+	s.EnrollmentsExport = func(context.Context, uint32) ([]byte, error) { return make([]byte, maxImport+1), nil }
+	if r := s.answer(ctx, Request{Op: "enrollments_export"}, 0); r.Error == "" || len(r.Sealed) != 0 {
+		t.Fatalf("an export over the bound: %d bytes, %q", len(r.Sealed), r.Error)
+	}
+	// The broker's refusal is the answer, whole.
+	s.EnrollmentsInit = func(context.Context, uint32) (string, error) { return "", errors.New("it is already there") }
+	if r := s.answer(ctx, Request{Op: "enrollments_init"}, 0); r.Error != "it is already there" {
+		t.Fatalf("%+v", r)
+	}
+	if got := s.connTimeout("enrollments_import"); got != ListWait {
+		t.Fatalf("enrollments_import holds its connection %v", got)
+	}
+}
+
+// zeros and ones are endless readers of one byte.
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+type ones struct{}
+
+func (ones) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = '1'
+	}
+	return len(p), nil
 }
 
 // directory_forget reaches the broker with the caller's uid; with no

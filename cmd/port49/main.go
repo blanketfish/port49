@@ -104,6 +104,17 @@ const usage = `usage:
   port49 directory forget [--socket PATH] PRINCIPAL
                 (forget a principal's directory membership and the entry it is pinned to: for an
                 entry deleted and re-created, once you have confirmed it is the same person)
+  port49 directory reset-second-factor [--socket PATH] (PRINCIPAL | --all)
+                (a person who lost their authenticator may enroll again for the broker's reopen_for;
+                --all reopens it for every entry with no active second factor, and replaces a lost
+                enrollment store, keeping the unreadable file beside it)
+  port49 directory unlock [--socket PATH] PRINCIPAL
+                (clear a person's failed password sign-ins)
+  port49 directory init-enrollments [--socket PATH]
+                (create the enrollment store of a new install, once)
+  port49 directory export [--socket PATH] > FILE
+  port49 directory import [--socket PATH] [--replace] < FILE
+                (the enrollment store, sealed under the broker's key: keep it, restore from it)
 `
 
 func main() {
