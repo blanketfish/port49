@@ -183,18 +183,20 @@ lab-oxidized:
 	  fi; \
 	done
 
-# L53 (plan 9a; L54's half went with port49 devices trust in plan 9d): the
-# host-key scan against each platform, one at a time as `make lab` runs them.
-# Each device is reloaded once, so this is its own target.
+# L64 and L65 (plan 9d): `port49 ssh` under OpenSSH's accept-new and the Python
+# client against each platform, one at a time as `make lab` runs them. Each
+# device is reloaded once, so this is its own target. It installs
+# ./clients/python[netmiko] into /home/rwendt/lab-venv first. L53 (the host-key
+# scan) is closed and runs only as `PORT49_LAB_REMEASURE=L53 go test -tags lab
+# ./tests/lab/ -run TestL53HostKeyScan` with PORT49_LAB_SSH=1.
 # PORT49_LAB_REMEASURE passes through from the caller's environment only; set
-# it to re-measure closed entries (e.g., `PORT49_LAB_REMEASURE=L53 make
-# lab-ssh`). Needs containerlab, the
-# images and `make build`.
+# it to re-measure closed entries (e.g., `PORT49_LAB_REMEASURE=L64 make
+# lab-ssh`). Needs containerlab, the images and `make build`.
 lab-ssh:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
 	  echo "=== lab-ssh platform: $$p ==="; \
-	  if ! PORT49_LAB_SSH=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE} PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL53HostKeyScan' -count=1 -v -timeout 90m; then \
+	  if ! PORT49_LAB_SSH=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE} PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL64L65' -count=1 -v -timeout 180m; then \
 	    echo "=== lab-ssh platform $$p FAILED; the platforms after it were not run ==="; \
 	    exit 1; \
 	  fi; \
