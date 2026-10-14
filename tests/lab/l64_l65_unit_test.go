@@ -315,6 +315,143 @@ func TestL64GradesAPythonRefusal(t *testing.T) {
 	}
 }
 
+// C1: a refusal cell's zero means something only while the positive control holds.
+func TestL64OutcomeTruthTable(t *testing.T) {
+	for _, c := range []struct {
+		name                                       string
+		pass, timedOut, controlOK, refusal, unread bool
+		want                                       string
+	}{
+		{"a pass", true, false, true, false, false, "PASS"},
+		{"a refusal that passes with its control", true, false, true, true, false, "PASS"},
+		{"a refusal that passes with the control failed", true, false, false, true, false, "INVALID"},
+		{"a refusal that fails on packets, control failed", false, false, false, true, false, "FAIL"},
+		{"a refusal whose count could not be read", false, false, true, true, true, "INVALID"},
+		{"a refusal that passes yet the count was unread", true, false, true, true, true, "INVALID"},
+		{"a refusal that fails with its control", false, false, true, true, false, "FAIL"},
+		{"a non-refusal ignores the control", true, false, false, false, false, "PASS"},
+		{"a non-refusal that fails", false, false, true, false, false, "FAIL"},
+		{"a timeout", true, true, true, true, false, "TIMEOUT"},
+	} {
+		if got := l64Outcome(c.pass, c.timedOut, c.controlOK, c.refusal, c.unread); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestL64ControlNeedsPacketsAndARedeem(t *testing.T) {
+	for _, c := range []struct {
+		packets, redeems int
+		want             bool
+	}{{120, 1, true}, {0, 1, false}, {120, 0, false}, {-1, 1, false}, {-1, 0, false}} {
+		if got := l64ControlOK(c.packets, c.redeems); got != c.want {
+			t.Errorf("l64ControlOK(%d, %d) = %v", c.packets, c.redeems, got)
+		}
+	}
+}
+
+// I1: the absolute known_hosts path turns UpdateHostKeys off unless the config says so.
+func TestL64CheckConfigRequiresThePrivateFileAndUpdateHostKeys(t *testing.T) {
+	good := "userknownhostsfile /h/.ssh/known_hosts\nupdatehostkeys true\n"
+	if err := l64CheckConfig(good, "/h/.ssh/known_hosts"); err != nil {
+		t.Errorf("a good config refused: %v", err)
+	}
+	for name, g := range map[string]string{
+		"updatehostkeys off": "userknownhostsfile /h/.ssh/known_hosts\nupdatehostkeys false\n",
+		"no updatehostkeys":  "userknownhostsfile /h/.ssh/known_hosts\n",
+		"the real file":      "userknownhostsfile /home/u/.ssh/known_hosts\nupdatehostkeys true\n",
+		"two files":          "userknownhostsfile /h/.ssh/known_hosts /h/.ssh/known_hosts2\nupdatehostkeys true\n",
+	} {
+		if err := l64CheckConfig(g, "/h/.ssh/known_hosts"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// I3: lines are compared by type and key, never by the host field (a hashed salt differs each time).
+func TestL64DiffComparesTypeAndBlobNotHost(t *testing.T) {
+	a := l64Entry{Host: "leaf1", Type: "ssh-ed25519", Blob: "AAA"}
+	b := l64Entry{Host: "|1|s|h", Hashed: true, Type: "ssh-rsa", Blob: "BBB"}
+	c := l64Entry{Host: "leaf1", Type: "ssh-rsa", Blob: "CCC"}
+	added, removed := l64Diff([]l64Entry{a, b}, []l64Entry{{Host: "|1|x|y", Type: "ssh-ed25519", Blob: "AAA"}, b})
+	if len(added) != 0 || len(removed) != 0 {
+		t.Errorf("the same keys under other host fields differ: +%v -%v", added, removed)
+	}
+	added, removed = l64Diff([]l64Entry{a, b}, []l64Entry{a, c})
+	if len(added) != 1 || added[0].Blob != "CCC" || len(removed) != 1 || removed[0].Blob != "BBB" {
+		t.Errorf("a secondary key that changed: +%v -%v", added, removed)
+	}
+	added, removed = l64Diff([]l64Entry{a}, []l64Entry{a, b})
+	if len(added) != 1 || len(removed) != 0 {
+		t.Errorf("a type that appeared: +%v -%v", added, removed)
+	}
+}
+
+// I4: the revoked line names the key the client negotiated, by the type the driver reported.
+func TestL64PickEntryTakesTheLineOfTheNegotiatedType(t *testing.T) {
+	es := []l64Entry{{Type: "ssh-rsa", Blob: "R"}, {Type: "ssh-ed25519", Blob: "E"}}
+	if e, ok := l64PickEntry(es, "ssh-ed25519"); !ok || e.Blob != "E" {
+		t.Errorf("%+v %v", e, ok)
+	}
+	if _, ok := l64PickEntry(es, "ecdsa-sha2-nistp256"); ok {
+		t.Error("a type that is not filed was picked")
+	}
+	if _, ok := l64PickEntry(nil, "ssh-rsa"); ok {
+		t.Error("nothing filed picked something")
+	}
+}
+
+// I1: UpdateHostKeys may add key types after authentication; e2 grades the negotiated key's line.
+func TestL64GradeE2LetsExtraTypesBeAnObservation(t *testing.T) {
+	want := l64Entry{Type: "ssh-ed25519", Blob: "E"}
+	clean := l64ReadSSH("debug1: Next authentication method: keyboard-interactive\n")
+	same := []l64Entry{{Host: "|1|a|b", Type: "ssh-ed25519", Blob: "E"}}
+	if ok, why := l64GradeE2(clean, 0, want, same); !ok {
+		t.Errorf("unchanged line: %s", why)
+	}
+	extra := append(slices.Clone(same), l64Entry{Type: "ssh-rsa", Blob: "R"})
+	if ok, why := l64GradeE2(clean, 0, want, extra); !ok {
+		t.Errorf("an extra type is an observation, not a failure: %s", why)
+	}
+	for name, c := range map[string]struct {
+		r     l64Stderr
+		exit  int
+		after []l64Entry
+	}{
+		"exit 255":        {clean, 255, same},
+		"line gone":       {clean, 0, []l64Entry{{Type: "ssh-rsa", Blob: "R"}}},
+		"line changed":    {clean, 0, []l64Entry{{Type: "ssh-ed25519", Blob: "OTHER"}}},
+		"a key was filed": {l64ReadSSH(l64Accepted), 0, same},
+	} {
+		if ok, _ := l64GradeE2(c.r, c.exit, want, c.after); ok {
+			t.Errorf("%s: passed", name)
+		}
+	}
+}
+
+// I7: the lines a watchdog reads.
+func TestL64StartAndStageLines(t *testing.T) {
+	if got, want := l64Start("juniper_vsrx", "L64b", 45*time.Minute), "L64L65 juniper_vsrx L64b START budget 45m0s"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := l64Stage("juniper_vsrx", "L64b", "seen down"), "L64L65 juniper_vsrx L64b STAGE seen down"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestL64KeyLinesShowUpdateHostKeysAtWork(t *testing.T) {
+	got := l64KeyLines("debug1: client_input_hostkeys: searching /h/.ssh/known_hosts for leaf1\n" +
+		"debug1: Learned new hostkey: RSA SHA256:abc\ndebug1: update_known_hosts: updating\ndebug1: unrelated\n")
+	for _, want := range []string{"Learned new hostkey", "update_known_hosts", "client_input_hostkeys"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing from %q", want, got)
+		}
+	}
+	if strings.Contains(got, "unrelated") {
+		t.Errorf("kept %q", got)
+	}
+}
+
 func TestL64AnExcerptKeepsOnlyTheLinesThatSayWhatSSHDecided(t *testing.T) {
 	// A note's stderr excerpt keeps the lines that say what ssh decided, and drops the rest.
 	got := l64KeyLines("debug1: Reading configuration data /x\ndebug1: Authenticated to h ([1.1.1.1]:22) using \"password\".\n" +

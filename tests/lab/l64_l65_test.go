@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -46,7 +47,8 @@ var (
 	l64AuthedRe    = regexp.MustCompile(`Authenticated to \S+ \(\S+\) using "([^"]+)"`)
 	l64KeygenRRe   = regexp.MustCompile(`ssh-keygen\b[^\n]*-R\b`)
 	l64KeyLineRe   = regexp.MustCompile(`Authenticated to|Permanently added|Offending|Host key|REMOTE HOST|ssh-keygen|` +
-		`no matching host key|Next authentication method|port49 ssh:|fingerprint for`)
+		`no matching host key|Next authentication method|port49 ssh:|fingerprint for|` +
+		`Learned new hostkey|update_known_hosts|client_input_hostkeys`)
 )
 
 // l64Stderr is what ssh's stderr (run with -v) and port49 ssh's own lines say.
@@ -290,6 +292,100 @@ func l64UserKnownHosts(sshG string) []string {
 	return nil
 }
 
+// l64Outcome is a cell's verdict. A refusal cell's zero (no packet, no redeem) means something only while the
+// positive control holds, so a refusal that passes with the control failed, or with a count that could not be
+// read, is INVALID and never PASS; one that fails stays a FAIL, since what it saw is real whatever the control.
+func l64Outcome(pass, timedOut, controlOK, refusal, unread bool) string {
+	switch {
+	case timedOut:
+		return "TIMEOUT"
+	case refusal && unread:
+		return "INVALID"
+	case pass && refusal && !controlOK:
+		return "INVALID"
+	case !pass:
+		return "FAIL"
+	}
+	return "PASS"
+}
+
+// l64ControlOK is whether a good login's window proves the counter counts: TACACS+ packets and a redeem. An
+// unreadable count (-1) proves nothing.
+func l64ControlOK(packets, redeems int) bool { return packets > 0 && redeems > 0 }
+
+// l64CheckConfig refuses a private ssh_config that would not behave as the operator's default client: ssh must
+// read the private known_hosts file and no other, with UpdateHostKeys on (an absolute UserKnownHostsFile turns
+// it off unless the config says so).
+func l64CheckConfig(sshG, kh string) error {
+	if got := l64UserKnownHosts(sshG); !slices.Equal(got, []string{kh}) {
+		return fmt.Errorf("ssh -G reads %v, not only %s: the run would touch the operator's own known_hosts", got, kh)
+	}
+	for _, ln := range strings.Split(sshG, "\n") {
+		if v, ok := strings.CutPrefix(ln, "updatehostkeys "); ok && strings.TrimSpace(v) == "true" {
+			return nil
+		}
+	}
+	return errors.New("ssh -G does not say updatehostkeys true: the run would measure a client that files only the negotiated key")
+}
+
+// l64Diff compares two readings of the filed lines by key type and blob (the host field of a hashed line is
+// salted afresh): the lines after has that before did not, and the lines before had that after lacks.
+func l64Diff(before, after []l64Entry) (added, removed []l64Entry) {
+	has := func(es []l64Entry, e l64Entry) bool {
+		return slices.ContainsFunc(es, func(o l64Entry) bool { return o.Type == e.Type && o.Blob == e.Blob })
+	}
+	for _, e := range after {
+		if !has(before, e) {
+			added = append(added, e)
+		}
+	}
+	for _, e := range before {
+		if !has(after, e) {
+			removed = append(removed, e)
+		}
+	}
+	return added, removed
+}
+
+// l64PickEntry is the filed line of key type typ.
+func l64PickEntry(es []l64Entry, typ string) (l64Entry, bool) {
+	for _, e := range es {
+		if e.Type == typ && e.Marker == "" {
+			return e, true
+		}
+	}
+	return l64Entry{}, false
+}
+
+// l64GradeE2 reads L65 (e2): `port49 ssh` against the entry Python filed exits 0, files nothing new (class
+// clean, no "Permanently added"), and leaves the negotiated key's line as it was. Types UpdateHostKeys adds
+// after authentication are an observation, not a failure.
+func l64GradeE2(r l64Stderr, exit int, want l64Entry, after []l64Entry) (bool, string) {
+	var bad []string
+	if exit != 0 {
+		bad = append(bad, fmt.Sprintf("exit %d, not 0", exit))
+	}
+	if r.Class != "clean" || len(r.Added) != 0 {
+		bad = append(bad, fmt.Sprintf("ssh: %s, added %v", r.Class, r.Added))
+	}
+	if _, removed := l64Diff([]l64Entry{want}, after); len(removed) != 0 {
+		bad = append(bad, "the negotiated key's line is not as Python filed it")
+	}
+	if len(bad) > 0 {
+		return false, strings.Join(bad, "; ")
+	}
+	return true, ""
+}
+
+// l64Start and l64Stage are the lines a cell writes to stdout when it starts and at each stage of a long one.
+func l64Start(platform, cell string, budget time.Duration) string {
+	return fmt.Sprintf("L64L65 %s %s START budget %s", platform, cell, budget)
+}
+
+func l64Stage(platform, cell, stage string) string {
+	return fmt.Sprintf("L64L65 %s %s STAGE %s", platform, cell, stage)
+}
+
 // l64Progress is the line a cell writes to stdout when it ends.
 func l64Progress(platform, cell, outcome string, d time.Duration) string {
 	return fmt.Sprintf("L64L65 %s %s %s %s", platform, cell, outcome, d.Round(100*time.Millisecond))
@@ -401,6 +497,10 @@ var l64Versions string
 func l64Run(ctx context.Context, env []string, dir, name string, args ...string) (stdout, stderr string, exit int, err error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env, cmd.Dir = env, dir
+	// Its own process group, ended whole at the deadline: the ssh under `port49 ssh` and the CLI under the
+	// driver must not outlive the cell and reach the device in a later cell's window.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	cmd.WaitDelay = 10 * time.Second // a descendant that holds the pipes cannot keep this from returning
@@ -436,10 +536,18 @@ type l64Env struct {
 	controlOK        bool // the good login's window held TACACS+ packets: the counter counts
 	reloadKeyChanged bool
 	filedType        string
-	filedBlob        string
-	pyFile           string // the known_hosts content Python's first contact filed
+	filedEntries     []l64Entry // every line L64a left, read after its login
+	pyFile           string     // the known_hosts content Python's first contact filed
+	pyEntry          l64Entry   // the line of the type Python negotiated in L65a
 	idleNote         string
 	keyN             int
+
+	// Per cell: unread is set when a TACACS+ count could not be read, invalid when the cell could not measure
+	// its claim at all; both are reset when the cell starts.
+	unread  bool
+	invalid string
+	// reloadFailed is why the device was not back after L64b, which ends the platform's run.
+	reloadFailed string
 }
 
 func (e *l64Env) env() []string {
@@ -457,12 +565,24 @@ func (e *l64Env) env() []string {
 
 // writeConfig writes the private ssh_config. Its known_hosts path is absolute: ssh expands "~" from the
 // passwd entry, not from $HOME, so "~/.ssh/known_hosts" would be the operator's real file.
+//
+// An absolute path also turns UpdateHostKeys off (it is on by default only for the default path), so the
+// config says "UpdateHostKeys yes": the operator's default, made explicit. ssh -G is read after every write.
 func (e *l64Env) writeConfig(hash bool) error {
-	cfg := "UserKnownHostsFile " + e.khPath + "\nGlobalKnownHostsFile /dev/null\n"
+	cfg := "UserKnownHostsFile " + e.khPath + "\nGlobalKnownHostsFile /dev/null\nUpdateHostKeys yes\n"
 	if hash {
 		cfg += "HashKnownHosts yes\n"
 	}
-	return os.WriteFile(e.cfgPath, []byte(cfg), 0o600)
+	if err := os.WriteFile(e.cfgPath, []byte(cfg), 0o600); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	sshG, _, _, err := l64Run(ctx, e.env(), e.home, "ssh", "-G", "-F", e.cfgPath, "--", e.node)
+	if err != nil {
+		return err
+	}
+	return l64CheckConfig(sshG, e.khPath)
 }
 
 func (e *l64Env) writeKnownHosts(content string) error {
@@ -503,10 +623,29 @@ func (e *l64Env) freshKey(ctx context.Context, typ string) (string, error) {
 	return f[1], nil
 }
 
+// flush is flushCapture without a *testing.T: a cell may outlive its test goroutine's patience and must not
+// log through t.
+func (e *l64Env) flush() {
+	before := pcapSize(e.l.capAbs)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		capProbe()
+		for i := 0; i < 10 && time.Now().Before(deadline); i++ {
+			if pcapSize(e.l.capAbs) > before {
+				time.Sleep(200 * time.Millisecond)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// tacacsIn counts the TACACS+ packets in a window of the capture; -1, and e.unread, when it cannot be read.
 func (e *l64Env) tacacsIn(from, to time.Time) int {
-	e.l.flushCapture(e.t)
+	e.flush()
 	pkts, err := l29Packets(e.l.capAbs, e.l.p.addr)
 	if err != nil {
+		e.unread = true
 		return -1
 	}
 	return l64PacketsIn(pkts, from, to)
@@ -615,6 +754,8 @@ func (r l64PyRun) counts() string {
 // returned a minute after its budget ends the platform's run: its goroutine could still be using the device.
 func (e *l64Env) cell(id string, budget time.Duration, fn func(ctx context.Context) (bool, string)) bool {
 	start := time.Now()
+	fmt.Fprintln(os.Stdout, l64Start(e.l.p.name, id, budget))
+	e.unread, e.invalid = false, ""
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	type done struct {
@@ -635,22 +776,19 @@ func (e *l64Env) cell(id string, budget time.Duration, fn func(ctx context.Conte
 	outcome := "PASS"
 	select {
 	case d = <-ch:
-		switch {
-		case ctx.Err() != nil:
-			outcome = "TIMEOUT"
-		case !d.pass && !e.controlOK && l64Refusal(id):
-			outcome = "INVALID"
-		case !d.pass:
-			outcome = "FAIL"
+		outcome = l64Outcome(d.pass, ctx.Err() != nil, e.controlOK, l64Refusal(id), e.unread)
+		if e.invalid != "" && outcome != "TIMEOUT" {
+			outcome, d.obs = "INVALID", "**INVALID: "+e.invalid+".** "+d.obs
 		}
 	case <-time.After(budget + l64Grace):
 		e.t.Logf("%s", l64Progress(e.l.p.name, id, "STUCK", time.Since(start)))
 		fmt.Fprintln(os.Stdout, l64Progress(e.l.p.name, id, "STUCK", time.Since(start)))
 		e.t.Fatalf("cell %s did not return %s after its %s budget; the platform's run ends here", id, l64Grace, budget)
 	}
-	if outcome == "INVALID" {
-		d.obs = "**INVALID: the positive control failed** (the good login's window held no TACACS+ packet, so a zero here " +
-			"is a zero of a counter that does not count). " + d.obs
+	if outcome == "INVALID" && e.invalid == "" {
+		d.obs = "**INVALID: the positive control failed or a count could not be read** (the nearest good login's window held " +
+			"no TACACS+ packet and redeem, or the capture could not be read, so a zero here is a zero of a counter that " +
+			"does not count). " + d.obs
 	}
 	if outcome == "TIMEOUT" {
 		d.obs = "**The cell's budget ran out.** " + d.obs
@@ -660,6 +798,21 @@ func (e *l64Env) cell(id string, budget time.Duration, fn func(ctx context.Conte
 	fmt.Fprintln(os.Stdout, l64Progress(e.l.p.name, id, outcome, elapsed))
 	e.t.Logf("%s: %s", id, d.obs)
 	return outcome == "PASS"
+}
+
+// l64AfterReload are the cells that follow L64b, skipped when the device is not back.
+var l64AfterReload = []string{"L64c", "L64d", "L65a", "L65b", "L65c", "L65d", "L65e2", "L65f1", "L65f2"}
+
+// l64Types lists the key types of es for a note.
+func l64Types(es []l64Entry) string {
+	if len(es) == 0 {
+		return "none"
+	}
+	var ts []string
+	for _, e := range es {
+		ts = append(ts, e.Type)
+	}
+	return strings.Join(ts, ", ")
 }
 
 // l64Refusal is whether the cell id claims a refusal, whose zero needs the positive control.
@@ -684,7 +837,14 @@ func (e *l64Env) newAgent() (string, func(), error) {
 		os.RemoveAll(dir)
 		return "", nil, fmt.Errorf("port49 login: exit %d %v\n%s", exit, err, errOut)
 	}
-	return sock, func() { stopSliceAgent(e.t, out+errOut); os.RemoveAll(dir) }, nil
+	return sock, func() {
+		if m := agentPID.FindStringSubmatch(out + errOut); m != nil {
+			if pid, err := strconv.Atoi(m[1]); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGTERM)
+			}
+		}
+		os.RemoveAll(dir)
+	}, nil
 }
 
 // admin runs fn on the break-glass CLI. The device takes the local password only while port49d is down, so
@@ -702,6 +862,7 @@ func (e *l64Env) admin(fn func(c *cliConn) error) error {
 		c.Close()
 	}
 	e.stopAgent()
+	e.stopAgent = func() {} // the agent is stopped; a failure below must not stop it twice
 	if err := l.startDaemonWith(e.daemonCfg, true); err != nil {
 		return fmt.Errorf("port49d would not start again: %w", err)
 	}
@@ -719,7 +880,7 @@ func (e *l64Env) admin(fn func(c *cliConn) error) error {
 // reload saves the configuration and reloads the device, as L53 does, and returns whether the uptime shows it
 // rebooted, what was compared, and the transcript of the reload's steps. The device must be seen down before
 // it is waited for.
-func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
+func (e *l64Env) reload(stage func(string)) (rebooted bool, why, transcript string, err error) {
 	l := e.l
 	addr := l.p.addr + ":22"
 	var log strings.Builder
@@ -732,6 +893,7 @@ func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
 	}); err != nil {
 		return false, "", "", fmt.Errorf("the uptime before the reload: %w", err)
 	}
+	stage("uptime before the reload read")
 	steps := slices.Clone(l53Reload[l.p.name])
 	for i := range steps {
 		if steps[i][0], err = l53BootLine(steps[i][0], before); err != nil {
@@ -745,6 +907,7 @@ func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
 			last := i == len(steps)-1
 			if last {
 				reloadAt = time.Now()
+				stage("reload command sent")
 				go func() {
 					err := l53WaitDown(addr, 10*time.Minute)
 					downAt = time.Now()
@@ -769,11 +932,13 @@ func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
 				return err
 			}
 			if step[1] != "" {
+				answered := len(c.transcript())
 				if err := c.send(step[2]); err != nil {
 					return err
 				}
 				if last {
 					time.Sleep(5 * time.Second)
+					fmt.Fprintf(&log, "after the answer %q, the device said:\n%s\n", step[2], trimForNote(c.transcript()[answered:]))
 				}
 			}
 		}
@@ -782,11 +947,19 @@ func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
 		return false, "", log.String(), err
 	}
 	if err = <-downErr; err != nil {
+		// As L53 does: ask the device once more, so the note says whether it ever went down.
+		_ = e.admin(func(c *cliConn) error {
+			up, _ := l53Show(l, c, l53Uptime[l.p.name])
+			fmt.Fprintf(&log, "the device, asked after the failed wait, `%s`: %s\n", l53Uptime[l.p.name], trimForNote(up))
+			return nil
+		})
 		return false, "", log.String(), fmt.Errorf("after the reload command: %w", err)
 	}
+	stage("seen down (no SSH banner on two connections in a row)")
 	if err = l.waitDeviceReady(l.p.boot); err != nil {
 		return false, "", log.String(), fmt.Errorf("after the reload: %w", err)
 	}
+	stage("seen up: SSH authentication served again")
 	fmt.Fprintf(&log, "The reload command was sent at %s; the device was seen down (no SSH banner on two connections in a row) "+
 		"at %s, and was serving SSH authentication again no later than %s after that.\n", reloadAt.UTC().Format("15:04:05"),
 		downAt.UTC().Format("15:04:05"), time.Since(downAt).Round(time.Second))
@@ -799,10 +972,39 @@ func (e *l64Env) reload() (rebooted bool, why, transcript string, err error) {
 	}); err != nil {
 		return false, "", log.String(), fmt.Errorf("the uptime after the reload: %w", err)
 	}
+	stage("uptime after the reload read; the daemon and agent are back")
 	fmt.Fprintf(&log, "Before the reload, `%s` says: %q. After: %q.\n", l53Uptime[l.p.name],
 		l53UptimeLine.FindAllString(before, -1), l53UptimeLine.FindAllString(after, -1))
 	rebooted, why = l53Rebooted(before, after, afterAt.Sub(beforeAt))
 	return rebooted, why, log.String(), nil
+}
+
+// l64CopyClient copies the Python package at src to dst, leaving out its tests and any build litter.
+func l64CopyClient(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if d.IsDir() {
+			switch d.Name() {
+			case "tests", "__pycache__", "build", ".pytest_cache":
+				return filepath.SkipDir
+			}
+			if strings.HasSuffix(d.Name(), ".egg-info") {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+	})
 }
 
 // installClient puts ./clients/python[netmiko] in the lab venv, once per run, and records the versions of
@@ -813,8 +1015,20 @@ func installClient(t *testing.T) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		env := append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
-		out, se, exit, err := l64Run(ctx, env, root, venvPython, "-m", "pip", "install", "--disable-pip-version-check",
-			"./clients/python[netmiko]")
+		// From a temp copy, so the build leaves nothing in the tree; --force-reinstall so the venv runs this
+		// tree's code. The venv is shared by every worktree: the version line names the commit installed.
+		tmp, err := os.MkdirTemp("", "p49l64client")
+		if err != nil {
+			l64Versions = fmt.Sprintf("INSTALL FAILED: %v", err)
+			return
+		}
+		defer os.RemoveAll(tmp)
+		if err := l64CopyClient(filepath.Join(root, "clients", "python"), tmp); err != nil {
+			l64Versions = fmt.Sprintf("INSTALL FAILED: copying clients/python: %v", err)
+			return
+		}
+		out, se, exit, err := l64Run(ctx, env, tmp, venvPython, "-m", "pip", "install", "--disable-pip-version-check",
+			"--force-reinstall", tmp+"[netmiko]")
 		if err != nil || exit != 0 {
 			l64Versions = fmt.Sprintf("INSTALL FAILED: exit %d %v\n%s%s", exit, err, trimForNote(out), trimForNote(se))
 			return
@@ -827,7 +1041,9 @@ func installClient(t *testing.T) string {
 			return
 		}
 		_, sv, _, _ := l64Run(ctx, env, root, "ssh", "-V")
-		l64Versions = strings.TrimSpace(out) + "; " + strings.TrimSpace(sv)
+		sha, _, _, _ := l64Run(ctx, env, root, "git", "-C", root, "rev-parse", "HEAD")
+		l64Versions = strings.TrimSpace(out) + "; " + strings.TrimSpace(sv) + "; installed from clients/python at commit " +
+			strings.TrimSpace(sha) + " into the shared lab venv"
 	})
 	if strings.Contains(l64Versions, "FAILED") {
 		t.Fatalf("the lab venv: %s", l64Versions)
@@ -902,19 +1118,13 @@ func TestL64L65(t *testing.T) {
 		if err := os.WriteFile(e.driverPath, []byte(l64DriverScript), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		// writeConfig reads ssh -G after writing: ssh must read the private file and no other, with
+		// UpdateHostKeys on.
 		if err := e.writeConfig(false); err != nil {
-			t.Fatal(err)
+			t.Fatalf("the private ssh_config: %v", err)
 		}
 		if err := e.writeKnownHosts(""); err != nil {
 			t.Fatal(err)
-		}
-		// ssh must read the private file and no other.
-		gctx, gcancel := context.WithTimeout(context.Background(), time.Minute)
-		sshG, _, _, gerr := l64Run(gctx, e.env(), home, "ssh", "-G", "-F", e.cfgPath, "--", e.node)
-		gcancel()
-		if gerr != nil || !slices.Equal(l64UserKnownHosts(sshG), []string{e.khPath}) {
-			t.Fatalf("ssh -G reads %v, not only %s: the run would touch the operator's own known_hosts (%v)",
-				l64UserKnownHosts(sshG), e.khPath, gerr)
 		}
 		if e.sock, e.stopAgent, err = e.newAgent(); err != nil {
 			t.Fatal(err)
@@ -947,13 +1157,14 @@ func runL64L65(e *l64Env, versions string) {
 		r := e.portSSH(ctx)
 		es, ferr := e.keygenFind(ctx)
 		var lines []string
+		e.filedEntries = es
 		for _, en := range es {
 			lines = append(lines, en.Type)
 			if e.filedType == "" {
-				e.filedType, e.filedBlob = en.Type, en.Blob
+				e.filedType = en.Type
 			}
 		}
-		e.controlOK = r.packets > 0 && r.redeems > 0
+		e.controlOK = l64ControlOK(r.packets, r.redeems)
 		obs := fmt.Sprintf("`port49 ssh -v %s -- show version` with an empty known_hosts: exit %d; %d lines of output; ssh tried "+
 			"%v, authenticated by `%s`; %d askpass asks (the keyboard-interactive and password methods tried); %d redeem records; "+
 			"%d TACACS+ packets in the window (the positive control: it must be above 0); records: %s. ssh: %s. After the login "+
@@ -977,9 +1188,16 @@ func runL64L65(e *l64Env, versions string) {
 
 	// L64 (b): the reload, then port49 ssh again; M11: a key that changes here is marked, and the run goes on.
 	e.cell("L64b", l64ReloadBudget, func(ctx context.Context) (bool, string) {
+		// Every line filed, read before the reload: nothing filed is nothing to survive it.
+		before, ferr := e.keygenFind(ctx)
+		if len(before) == 0 {
+			e.invalid = "L64a filed no key, so there is nothing for the reload to change; the reload was not run"
+			return false, fmt.Sprintf("`ssh-keygen -F %s` finds no line (read error: %v).", node, ferr)
+		}
 		keyBefore, serr := labScan(ctx, addr)
-		rebooted, why, steps, err := e.reload()
+		rebooted, why, steps, err := e.reload(func(s string) { fmt.Fprintln(os.Stdout, l64Stage(l.p.name, "L64b", s)) })
 		if err != nil {
+			e.reloadFailed = err.Error()
 			return false, fmt.Sprintf("the reload failed: %v\n\n```\n%s\n```", err, trimForNote(steps))
 		}
 		var scanNote string
@@ -994,19 +1212,40 @@ func runL64L65(e *l64Env, versions string) {
 			scanNote = fmt.Sprintf("The scan's key is the same after the reload (%s).", labFingerprint(keyAfter))
 		}
 		r := e.portSSH(ctx)
+		// This login is the nearest good one for the refusal cells that follow.
+		e.controlOK = l64ControlOK(r.packets, r.redeems)
 		if r.read.Banner || r.read.Class == "changed" || r.read.Class == "other_type" {
+			keyChanged = true
+		}
+		// Every filed line again, secondary types included: any difference is a key that changed at the reload.
+		after, _ := e.keygenFind(ctx)
+		added, removed := l64Diff(before, after)
+		if len(added)+len(removed) > 0 {
 			keyChanged = true
 		}
 		if keyChanged {
 			e.reloadKeyChanged = true
 			fmt.Fprintf(os.Stdout, "RELOAD_KEY_CHANGED %s\n", l.p.name)
 		}
-		obs := fmt.Sprintf("The device rebooted: %v (%s). %s\n\n```\n%s\n```\n\n%s\n\nAfter it, `port49 ssh -v %s -- show version`: "+
-			"exit %d; %d lines of output; %s; ssh: %s; the warning banner is present: %v.", rebooted, why, scanNote, trimForNote(steps),
-			e.idleNote, node, r.exit, l64Lines(r.stdout), r.counts(), r.read.Class, r.read.Banner)
+		obs := fmt.Sprintf("The device rebooted: %v (%s). %s\n\nThe filed lines (type and key, compared with the host field left out) "+
+			"before the reload: %d; after: %d; added by the login: %s; gone after it: %s.\n\n```\n%s\n```\n\n%s\n\nAfter it, "+
+			"`port49 ssh -v %s -- show version`: exit %d; %d lines of output; %s; ssh: %s; the warning banner is present: %v.",
+			rebooted, why, scanNote, len(before), len(after), l64Types(added), l64Types(removed), trimForNote(steps), e.idleNote, node,
+			r.exit, l64Lines(r.stdout), r.counts(), r.read.Class, r.read.Banner)
 		obs += "\n\n```\n" + trimForNote(l64KeyLines(r.stderr)) + "\n```"
-		return rebooted && !keyChanged && r.exit == 0 && !r.read.Banner && r.err == nil, obs
+		return rebooted && !keyChanged && r.exit == 0 && !r.read.Banner && r.read.Class == "clean" && len(r.read.Added) == 0 &&
+			r.err == nil, obs
 	})
+	if e.reloadFailed != "" {
+		// The device is not back: the cells after it would grind against it and read as client results.
+		for _, id := range l64AfterReload {
+			e.results = append(e.results, l64Result{id, "SKIPPED", "reload_failed: the device was not back after L64b (" +
+				e.reloadFailed + ")", 0})
+			fmt.Fprintln(os.Stdout, l64Progress(l.p.name, id, "SKIPPED", 0))
+		}
+		l64WriteNotes(e, versions)
+		return
+	}
 
 	// L64 (c) and (d): the entry replaced under the name.
 	e.replaced("L64c", false, func(ctx context.Context, typ string) (bool, string) {
@@ -1043,7 +1282,10 @@ func runL64L65(e *l64Env, versions string) {
 			types = append(types, en.Type)
 			hashed = hashed && en.Hashed
 		}
-		return r.d.Outcome == "connected" && l64KnownHostsLines(content) == 1 && hashed, fmt.Sprintf("`connect(%s)` from an empty "+
+		// The line of the type Paramiko accepted: what L65e2 verifies and L65f revokes.
+		var found bool
+		e.pyEntry, found = l64PickEntry(es, r.d.KeyType)
+		return r.d.Outcome == "connected" && l64KnownHostsLines(content) == 1 && hashed && found, fmt.Sprintf("`connect(%s)` from an empty "+
 			"known_hosts, with `HashKnownHosts yes`: %s; the file holds %d line(s); `ssh-keygen -F %s` finds %d, of key types %v, "+
 			"hashed: %v (read error: %v); the key Paramiko accepted: `%s`; %s. Driver stderr: %s", node, r.said(),
 			l64KnownHostsLines(content), node, len(es), types, hashed, ferr, r.d.KeyType, r.counts(), trimForNote(l64Tail(r.stderr)))
@@ -1052,6 +1294,8 @@ func runL64L65(e *l64Env, versions string) {
 		before := l64KnownHostsLines(e.readKnownHosts())
 		r := e.python(ctx)
 		after := l64KnownHostsLines(e.readKnownHosts())
+		// This connection is the nearest good login for L65c and L65d.
+		e.controlOK = l64ControlOK(r.packets, r.redeems)
 		return r.d.Outcome == "connected" && before == after && before > 0, fmt.Sprintf("A second `connect(%s)`: %s; the file held "+
 			"%d line(s) before and %d after; %s.", node, r.said(), before, after, r.counts())
 	})
@@ -1077,12 +1321,22 @@ func runL64L65(e *l64Env, versions string) {
 		if err := e.writeKnownHosts(e.pyFile); err != nil {
 			return false, err.Error()
 		}
+		if e.pyEntry.Blob == "" {
+			return false, "L65a recorded no line for the key Python negotiated, so there is no line to verify"
+		}
 		before := l64KnownHostsLines(e.pyFile)
 		r := e.portSSH(ctx)
 		after := l64KnownHostsLines(e.readKnownHosts())
-		return r.exit == 0 && before == after && r.err == nil, fmt.Sprintf("`port49 ssh -v %s -- show version` against the entry Python filed: "+
-			"exit %d; ssh: %s; the file held %d line(s) before and %d after; %s.\n\n```\n%s\n```", node, r.exit, r.read.Class, before, after,
-			r.counts(), trimForNote(l64KeyLines(r.stderr)))
+		// This login is the nearest good one for L65f1 and L65f2.
+		e.controlOK = l64ControlOK(r.packets, r.redeems)
+		es, ferr := e.keygenFind(ctx)
+		ok, why := l64GradeE2(r.read, r.exit, e.pyEntry, es)
+		added, _ := l64Diff([]l64Entry{e.pyEntry}, es)
+		return ok && r.err == nil, fmt.Sprintf("`port49 ssh -v %s -- show version` against the entry Python filed (`%s`): "+
+			"exit %d; ssh: %s; the file held %d line(s) before and %d after, of key types %s (UpdateHostKeys is on; types it adds "+
+			"after authentication are an observation, the negotiated key's line must be unchanged; read error: %v); %s. %s\n\n```\n%s\n```",
+			node, e.pyEntry.Type, r.exit, r.read.Class, before, after, l64Types(es), ferr, r.counts(), why,
+			trimForNote(l64KeyLines(r.stderr))) + l64Added(added)
 	})
 
 	// L65 (f): the device's own key named by an @revoked line, beside the filed entry and then alone.
@@ -1094,10 +1348,11 @@ func runL64L65(e *l64Env, versions string) {
 		if err := e.writeKnownHosts(e.pyFile + line); err != nil {
 			return false, err.Error()
 		}
+		quiet := e.waitQuiet(ctx)
 		r := e.python(ctx)
 		ok, why := l64GradePyRefusal(r.d, "host_key_revoked", r.packets, r.other)
-		return ok, fmt.Sprintf("`connect(%s)` with an `@revoked` line naming the filed key beside the filed entry: %s; %s. %s", node,
-			r.said(), r.counts(), why)
+		return ok, fmt.Sprintf("`connect(%s)` with an `@revoked` line naming the key Python filed (`%s`) beside the filed entry: %s; %s. %s %s.",
+			node, e.pyEntry.Type, r.said(), r.counts(), why, quiet)
 	})
 	e.cell("L65f2", l64CellBudget, func(ctx context.Context) (bool, string) {
 		line, err := e.revokedLine()
@@ -1107,6 +1362,7 @@ func runL64L65(e *l64Env, versions string) {
 		if err := e.writeKnownHosts(line); err != nil {
 			return false, err.Error()
 		}
+		quiet := e.waitQuiet(ctx)
 		r := e.python(ctx)
 		after := e.readKnownHosts()
 		ok, why := l64GradePyRefusal(r.d, "host_key_revoked", r.packets, r.other)
@@ -1115,7 +1371,7 @@ func runL64L65(e *l64Env, versions string) {
 			ok, why = false, strings.TrimSpace(why+" The file changed: something was filed.")
 		}
 		return ok, fmt.Sprintf("`connect(%s)` from a known_hosts holding only that `@revoked` line, at first contact: %s; %s; the file "+
-			"held %d key line(s) after, and is unchanged: %v. %s", node, r.said(), r.counts(), l64KnownHostsLines(after), !filed, why)
+			"held %d key line(s) after, and is unchanged: %v. %s %s.", node, r.said(), r.counts(), l64KnownHostsLines(after), !filed, why, quiet)
 	})
 
 	l64WriteNotes(e, versions)
@@ -1145,15 +1401,24 @@ func (e *l64Env) replaced(id string, other bool, fn func(ctx context.Context, ty
 	})
 }
 
-// revokedLine is an @revoked line for the key L64a filed, which is the device's own.
+// revokedLine is an @revoked line for the key Python filed in L65a, of the type the driver said Paramiko
+// accepted: the device's own key at this moment, whatever L64a filed before the reload.
 func (e *l64Env) revokedLine() (string, error) {
-	if e.filedType == "" || e.filedBlob == "" {
-		return "", errors.New("no filed key is known, so no @revoked line can name the device's own")
+	if e.pyEntry.Type == "" || e.pyEntry.Blob == "" {
+		return "", errors.New("L65a recorded no line for the key Python negotiated, so no @revoked line can name the device's own")
 	}
-	if _, err := base64.StdEncoding.DecodeString(e.filedBlob); err != nil {
+	if _, err := base64.StdEncoding.DecodeString(e.pyEntry.Blob); err != nil {
 		return "", fmt.Errorf("the filed key is not base64: %w", err)
 	}
-	return fmt.Sprintf("@revoked %s %s %s\n", e.node, e.filedType, e.filedBlob), nil
+	return fmt.Sprintf("@revoked %s %s %s\n", e.node, e.pyEntry.Type, e.pyEntry.Blob), nil
+}
+
+// l64Added is the sentence a note carries for key lines UpdateHostKeys added.
+func l64Added(added []l64Entry) string {
+	if len(added) == 0 {
+		return ""
+	}
+	return "\n\nObserved: ssh filed further key types after authentication (UpdateHostKeys): " + l64Types(added) + "."
 }
 
 func l64Summary(recs []map[string]any) string {
@@ -1186,7 +1451,7 @@ func l64WriteNotes(e *l64Env, versions string) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "Client versions in this run: %s.\n\n", versions)
 		fmt.Fprintf(&b, "%s\n\n", e.idleNote)
-		if e.reloadKeyChanged && entry == "L64" {
+		if e.reloadKeyChanged {
 			fmt.Fprintf(&b, "**RELOAD_KEY_CHANGED %s**: the key the device presents changed across the reload (cell L64b). Per the plan's "+
 				"gate (pre-flight M11) no conclusion is written and nothing was weakened; this is for Ryan.\n\n", l.p.name)
 		}
