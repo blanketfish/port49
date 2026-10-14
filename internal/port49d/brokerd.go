@@ -364,6 +364,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	wirePasswordSignIn(ctx, cfg, brk, keys, m, bs.raw, stderr)
 	if startDoc != nil {
 		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
@@ -567,9 +568,14 @@ func runBroker(parent context.Context, cfgPath string) error {
 	asrv := &admin.Server{Revoke: adminRevoke(brk, marksCopy), Revocations: adminRevocations(bs.st),
 		Forget: adminForget(brk), Now: time.Now,
 		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
+	serveSignInOps(asrv, brk)
 	wg.Add(1)
 	go func() { defer wg.Done(); asrv.Serve(ctx, aln) }()
-	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (port49 revoke, port49 directory forget)\n", cfg.AdminSocket)
+	ops := "port49 revoke, port49 directory forget"
+	if brk.PasswordSignIn != nil {
+		ops += ", reset-second-factor, unlock, init-enrollments, export, import"
+	}
+	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
 
 	if cfg.Lab != nil && len(cfg.Lab.SeedTokens) > 0 {
 		logins, enables, err := mintSeeds(ctx, cfg, minter)

@@ -992,6 +992,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		<-spoolDone
 		return err
 	}
+	wirePasswordSignIn(ctx, cfg, brk, keys, m, nil, stderr)
 	// The policy in force: the broker's, or with no broker the one policy:
 	// names, which port49d admits from and asks about quarantine (plan 7e),
 	// loaded as the broker loads it, and said the same. Nil with neither:
@@ -1274,12 +1275,17 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			brk.RevokeTimeout = admin.OpTimeout
 			brk.AdminSocket = cfg.AdminSocket
 			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
+			serveSignInOps(srv, brk)
 		} else if sts.persistent {
 			// Beside port49-broker on etcd (plan 7e, Ruling 13).
 			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"
 		}
 		go srv.Serve(ctx, aln)
-		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose, port49 revoke)\n", cfg.AdminSocket)
+		ops := "port49 keys diagnose, port49 revoke"
+		if brk != nil && brk.PasswordSignIn != nil {
+			ops += ", port49 directory reset-second-factor, unlock, init-enrollments, export, import"
+		}
+		fmt.Fprintf(stderr, "port49d: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
 	}
 	if brk != nil && cfg.AdminSocket == "" {
 		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
