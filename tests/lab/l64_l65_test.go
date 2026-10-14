@@ -1218,9 +1218,12 @@ func runL64L65(e *l64Env, versions string) {
 			keyChanged = true
 		}
 		// Every filed line again, secondary types included: any difference is a key that changed at the reload.
-		after, _ := e.keygenFind(ctx)
-		added, removed := l64Diff(before, after)
-		if len(added)+len(removed) > 0 {
+		after, aerr := e.keygenFind(ctx)
+		var added, removed []l64Entry
+		if aerr != nil {
+			// An unread file is not a changed key: the cell cannot say, so it is INVALID.
+			e.invalid = fmt.Sprintf("`ssh-keygen -F %s` after the reload failed: %v", node, aerr)
+		} else if added, removed = l64Diff(before, after); len(added)+len(removed) > 0 {
 			keyChanged = true
 		}
 		if keyChanged {
