@@ -11,6 +11,9 @@ pip install ./clients/python                                   # on the controll
 ansible-galaxy collection install ./clients/ansible/ansible_collections/port49/client
 ```
 
+Install the library from the tree, not by name from PyPI: the name is not the project's. Where
+ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
+
 `port49` must be on the controller's `PATH` (or pass `port49=/opt/port49/bin/port49`), and
 `port49 login` must have started an agent. Needs ansible-core 2.16 or later.
 
@@ -38,8 +41,15 @@ ansible-galaxy collection install ./clients/ansible/ansible_collections/port49/c
 lived; each call of the lookup is a mint.
 
 - **Never put the lookup itself in `ansible_password`.** Ansible templates a connection variable at
-  every task, so the lookup would mint at each one (lab entry L66 (a) measures this). Mint in a
-  `set_fact` and point `ansible_password` at the fact.
+  every task, so the lookup would mint at each one (lab entry L66 (a) is to measure how many
+  logins a play makes). Mint in a `set_fact` and point `ansible_password` at the fact.
+- **Never `cacheable: true` on the mint.** It writes the token to the fact-cache backend (a
+  jsonfile, or Redis in a real deployment).
+- **A reconnect needs a new mint.** The token is single-use for a login. `network_cli` closes an
+  idle persistent connection (`persistent_connect_timeout`, 30 s by default), and
+  `meta: reset_connection` or a reboot closes it too; the next task would log in again with the
+  spent token and fail with an authentication error that points nowhere near port49. Mint again
+  (a second `set_fact`) before a long gap. Unmeasured; L66 (b) is to measure a play with an idle gap.
 - **`no_log: true` on the mint.** The fact holds the token. With `no_log`, `-v`, `-vvv` and
   `-vvvvv` print `censored` for the task and nothing else (the collection's real-ansible test
   runs all four and searches the output for the token).
@@ -73,6 +83,13 @@ A failed lookup raises an Ansible error that names the device and port49's code,
 `port49: leaf2: deny no_grants_matched: no grant`. It never carries a token or the CLI's output.
 A deny, a second factor the lookup cannot give (run `port49 token DEVICE` at a terminal first) or a
 device the broker cannot decide fails **that host only**; the play goes on for the others. The
+message always ends in port49's code, in brackets when the detail does not already hold it
+(`port49: leaf2: the device has no platform [device_unconfigured]`). The lookup also raises the
+message as an Ansible warning, because ansible-core 2.16 to 2.18 censor the message of a failed
+`no_log` task and show only `censored`; on those versions the code appears in the
+`[WARNING]` line beside it (measured on 2.16, 2.17 and 2.18; 2.19 and later print the error
+itself, measured to 2.21). A workload option given without the other three, or given empty (an
+unset variable), is an error: the lookup never falls back to your agent. The
 lookup retries nothing beyond what the library does for an agent (a revocation sweep or a broker
 outage, three tries); a deny, a locked key and a lost session are never retried. The library's
 README lists the codes and what to do for each.
@@ -83,10 +100,8 @@ The token travels from the CLI's stdout to the lookup's return value and nowhere
 not the environment, not a log, not an exception. The lookup prints nothing. What Ansible does with
 the value is its own: it is in the task result of the `set_fact` (censored by `no_log`) and in any
 later task that templates it. A `debug` of the fact, or a task without `no_log` that receives
-`ansible_password`, prints or logs it at its own verbosity; keep `no_log` on those. Ansible
-2.21 prints a failed `no_log` task's error beside the censored result, so the code above reaches
-the operator; an older ansible-core may censor the message too, in which case rerun the mint with
-`port49 token DEVICE --json` at a terminal to read the code.
+`ansible_password`, prints or logs it at its own verbosity; keep `no_log` on those. Ansible has no
+way to mark one value secret, so `no_log` on every task that templates the token is the control.
 
 ## Host keys
 
@@ -105,11 +120,18 @@ port49 stores no host key. Ansible keeps them its own way, and the two ways diff
 - **Where the connection runs OpenSSH** (`ansible.builtin.ssh`), set
 
   ```yaml
-  ansible_ssh_extra_args: "-o HostKeyAlias={{ inventory_hostname }}"
+  ansible_ssh_extra_args: "-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new"
   ```
 
-  which files keys under the port49 name, as `port49 ssh` and the Python client do, and closes the
-  gap there.
+  which files keys under the port49 name, as `port49 ssh` and the Python client do (the name is
+  lowercased, as they lowercase it), and is expected to close the gap there. Without
+  `accept-new`, a first contact is `Host key verification failed.` (measured against a local
+  sshd: with the alias and accept-new, keys filed under the name and a changed key refused).
+  **Do not set `host_key_checking = False`**: Ansible then passes `StrictHostKeyChecking=no`
+  ahead of your extra args, which overrides `accept-new`. OpenSSH still withholds a password from
+  a host whose key changed, but a first contact is accepted unchecked. One caveat, unmeasured
+  (L66 (e)): `ansible.builtin.ssh` keys its ControlPath on address, port and user, so a second
+  inventory name at an address with an open master reuses the master and its alias is never checked.
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: paramiko`.** Its close
   rewrites `~/.ssh/known_hosts` from Paramiko's parse, which drops `@revoked` and
   `@cert-authority` lines and comments, and so silently weakens every later `port49 ssh` and Python

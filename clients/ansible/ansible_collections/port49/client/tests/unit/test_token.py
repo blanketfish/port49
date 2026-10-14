@@ -21,7 +21,17 @@ class LookupBase:
         return self._opts.get(name)
 
 
+WARNINGS = []
+
+
+class Display:
+    def warning(self, msg, *a, **kw):
+        WARNINGS.append(msg)
+
+
 for name, mod in {"ansible": types.ModuleType("ansible"), "ansible.errors": types.SimpleNamespace(AnsibleError=AnsibleError),
+                  "ansible.utils": types.ModuleType("ansible.utils"),
+                  "ansible.utils.display": types.SimpleNamespace(Display=Display),
                   "ansible.plugins": types.ModuleType("ansible.plugins"),
                   "ansible.plugins.lookup": types.SimpleNamespace(LookupBase=LookupBase)}.items():
     sys.modules[name] = mod
@@ -59,6 +69,8 @@ class Plugin(unittest.TestCase):
                 calls.agent.append(("token", device, enable, ttl))
                 if device == "denied":
                     raise port49.Denied("no_grants_matched", "no grant", device, reason="no_grants_matched")
+                if device == "fault":
+                    raise port49.DeviceFault("device_unconfigured", "the device has no platform", device)
                 return TOK
 
         class FakeWorkload:
@@ -77,6 +89,7 @@ class Plugin(unittest.TestCase):
     def tearDown(self):
         for o, n, v in self.saved:
             setattr(o, n, v)
+        del WARNINGS[:]
 
     def lookup(self, terms, **kw):
         return plugin.LookupModule().run(terms, variables={}, **kw)
@@ -125,6 +138,33 @@ class Plugin(unittest.TestCase):
             self.lookup(["leaf2"], broker="https://b", broker_ca="/ca", cert="/c", key="/k")
         self.assertIn("leaf2", str(cm.exception))
         self.assertIn("no_grants_matched", str(cm.exception))
+
+
+    def test_every_error_names_its_code(self):  # I2
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["fault"])
+        self.assertIn("device_unconfigured", str(cm.exception))
+        self.assertIn("the device has no platform", str(cm.exception))
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["denied"])
+        self.assertNotIn("[no_grants_matched]", str(cm.exception))  # already named: not repeated
+
+    def test_the_error_is_also_a_warning(self):  # I1: ansible-core 2.16-2.18 censor a no_log failure
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["fault"])
+        self.assertEqual(WARNINGS, [str(cm.exception)])
+        self.assertNotIn("LOGINTOKEN", WARNINGS[0])
+
+    def test_workload_options_alone_are_refused(self):  # m3
+        for kw in ({"touch_key": "pkcs11:x"}, {"deadline": 5}, {"broker": "https://b", "broker_ca": "", "cert": "", "key": ""}):
+            with self.assertRaises(AnsibleError, msg=str(kw)):
+                self.lookup(["leaf1"], **kw)
+        self.assertEqual(self.calls.agent, [])  # never fell back to the agent
+
+    def test_a_device_the_answer_left_out_is_named(self):  # m4
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["leaf3"], broker="https://b", broker_ca="/ca", cert="/c", key="/k")
+        self.assertIn("leaf3", str(cm.exception))
 
 
 if __name__ == "__main__":

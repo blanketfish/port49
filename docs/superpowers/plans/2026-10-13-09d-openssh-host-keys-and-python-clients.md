@@ -4171,7 +4171,7 @@ description:
     (C(port49 token --json) with your agent, or C(port49 workload token) with a workload certificate).
   - Each call is a mint. Mint once per host per play in a C(set_fact) with C(no_log), not in
     C(ansible_password), which Ansible templates at every task.
-  - Needs the port49 Python library on the controller (C(pip install port49)).
+  - Needs the port49 Python library on the controller (C(pip install ./clients/python) from the port49 repository).
   - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name;
     see the collection README before setting C(host_key_auto_add), and never set it with C(ssh_type=paramiko).
 options:
@@ -4239,7 +4239,7 @@ class LookupModule(LookupBase):
             import port49
         except ImportError:
             raise AnsibleError("the port49 lookup needs the port49 Python library on the controller: "
-                               "pip install port49 (clients/python in the port49 repository)") from None
+                               "pip install ./clients/python from the port49 repository") from None
         opt = self.get_option
         field, enable, ttl = opt("field") or "login", bool(opt("enable")), opt("ttl")
         if field == "enable" and not enable:
@@ -4553,7 +4553,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `RevokedHostKeys` (a KRL) names is refused, filed or at first contact, before authentication;
   a `KnownHostsCommand` is refused (use `port49 ssh`); a device name holding `*`, `,`, a space and
   the like is refused before anything is minted.
-- **Ansible.** `ansible-galaxy collection install` the collection and `pip install port49` on the
+- **Ansible.** `ansible-galaxy collection install` the collection and `pip install ./clients/python` on the
   controller. Mint once per host per play (`pre_tasks`, `set_fact`, `no_log: true`); a lookup in
   `ansible_password` mints at every task (L66). For devices that ask for a touch, run `port49
   token <one such device>` before the play, so one proof covers the forks. Host keys are

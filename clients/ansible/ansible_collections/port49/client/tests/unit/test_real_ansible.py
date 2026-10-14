@@ -95,6 +95,13 @@ class RealAnsible(unittest.TestCase):
         code, out = self.play(True)
         self.assertIn(f"login is {len(LOGIN)} long, user alice", out)
 
+    def test_a_no_log_failure_still_shows_the_code(self):
+        # ansible-core 2.16 to 2.18 censor a failed no_log task's message: the lookup's warning carries the code.
+        code, out = self.play(True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("no_grants_matched", out)
+        self.assertNotIn(LOGIN, out)
+
     def test_a_deny_fails_that_host_only_and_names_the_code(self):
         code, out = self.play(False)
         self.assertNotEqual(code, 0)
