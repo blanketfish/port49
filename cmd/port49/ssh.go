@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -21,11 +23,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hostkeys"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -52,8 +54,10 @@ func askpassCall(args []string) (string, bool) {
 // ignore SSH_ASKPASS_REQUIRE=force and take the terminal's prompt; 8.4, and
 // the no-terminal route on the others, pass a keyboard-interactive prompt as
 // the server's bare text, naming no host, so the askpass could not tell the
-// device's prompt from a jump host's. 8.5 names it. 8.5 is also the first
-// with KnownHostsCommand, which port49 ssh turns off.
+// device's prompt from a jump host's. 8.5 names it. Host keys are the
+// operator's OpenSSH's own (decision 46 ruling 2); plan 9d's gate G1 measured
+// accept-new against a key of another type under a known alias
+// (tests/ssh-compat/2026-10-13-openssh-accept-new.md).
 var minSSH = [2]int{8, 5}
 
 // maxPrompt bounds a prompt the askpass relays: ssh's own text and a
@@ -89,17 +93,89 @@ func atLeast(v, floor [2]int) bool { return v[0] > floor[0] || v[0] == floor[0] 
 
 // sshOptions is one ssh run's command line.
 type sshOptions struct {
-	config, knownHosts, device, address, username string
-	port                                          int
-	verbose                                       bool
-	command                                       []string
+	config, device, address, username string
+	trust                             sshTrust
+	port                              int
+	verbose                           bool
+	command                           []string
+	env                               []string // the environment ssh and ssh -G run in; nil is the caller's own
+}
+
+// sshTrust is what port49 ssh passes about host keys (decision 46 ruling 2).
+type sshTrust struct {
+	alias   string // HostKeyAlias to pass; "" when the operator's own stands
+	keyName string // the name the device's keys are filed under: alias, or the operator's own
+	strict  string // StrictHostKeyChecking: "yes" or "accept-new", never "no"
+	known   string // the first UserKnownHostsFile ssh -G printed: where ssh files and looks up keys
+}
+
+// passwdHome is the home directory in the passwd entry, which is what ssh's
+// `~` is; "" when it cannot be read. $HOME is the caller's to set and is not it.
+func passwdHome() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.HomeDir
+}
+
+// keygenCommand is the ssh-keygen command that removes the keys filed under
+// t.keyName: with -f when the first known_hosts file is not ~/.ssh/known_hosts,
+// since ssh-keygen edits that one alone. "" when that file keeps no key (under
+// the operator's yes it may be /dev/null, none or a split value): the advice
+// then points at the file ssh names (keygenAdvice).
+func keygenCommand(t sshTrust) string {
+	cmd := "ssh-keygen"
+	home := passwdHome()
+	switch {
+	case t.known == "" || home != "" && t.known == filepath.Join(home, ".ssh", "known_hosts"):
+	case knownHostsCannotKeep(t.known) == "":
+		cmd += " -f " + shellWord(t.known)
+	default:
+		return ""
+	}
+	return cmd + " -R " + shellWord(t.keyName)
+}
+
+// keygenAdvice is what to do about an old key under t.keyName, as the end of
+// a sentence that follows "then".
+func keygenAdvice(t sshTrust) string {
+	if c := keygenCommand(t); c != "" {
+		return "run " + c
+	}
+	return "remove the key filed under " + shellWord(t.keyName) + " from the file ssh names above"
+}
+
+var validSSHName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$`)
+
+// sshName reports whether device can be an ssh destination and a known_hosts
+// host field as written (decision 42 ruling 8; decision 46 ruling 3): letters,
+// digits, '.', '_' and '-', starting with a letter or a digit, 253 at most.
+// known_hosts reads '*', '?', '!', ',' and '[' as patterns, and a leading '@'
+// or '|' as a marker or a hash, so a name holding one could be filed for
+// other devices.
+func sshName(device string) bool { return validSSHName.MatchString(device) }
+
+// shellWord quotes s for a shell when it holds anything but characters a
+// shell leaves alone, so a hint can be pasted.
+func shellWord(s string) string {
+	plain := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./:@%+=,-…", r)) {
+			plain = false
+		}
+	}
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // sshValue is v as an -o value ssh reads back as v: each '%' doubled, since
-// ssh expands %-tokens in HostName and UserKnownHostsFile (an IPv6 zone's
-// "%eth0" would be refused), and the whole double-quoted, since ssh splits a
-// value on whitespace. A value holding '"' cannot be written so; sshCmd
-// refuses one first.
+// ssh expands %-tokens in HostName (an IPv6 zone's "%eth0" would be
+// refused), and the whole double-quoted, since ssh splits a value on
+// whitespace. A value holding '"' cannot be written so; sshCmd refuses one
+// first.
 func sshValue(v string) string { return `"` + strings.ReplaceAll(v, "%", "%%") + `"` }
 
 // sshArgs is ssh's command line (decision 42 ruling 10). Every -o here comes
@@ -111,16 +187,12 @@ func sshArgs(o sshOptions) []string {
 	if o.config != "" {
 		a = append(a, "-F", o.config)
 	}
-	for _, opt := range []string{
-		"HostName=" + sshValue(o.address),
-		"HostKeyAlias=" + o.device,
-		"UserKnownHostsFile=" + sshValue(o.knownHosts),
-		"GlobalKnownHostsFile=/dev/null",
-		"StrictHostKeyChecking=yes",
-		"UpdateHostKeys=no",
-		"CheckHostIP=no",
-		"VerifyHostKeyDNS=no",
-		"KnownHostsCommand=none",
+	opts := []string{"HostName=" + sshValue(o.address)}
+	if o.trust.alias != "" {
+		opts = append(opts, "HostKeyAlias="+o.trust.alias)
+	}
+	opts = append(opts,
+		"StrictHostKeyChecking="+o.trust.strict,
 		// L51: every key offered and refused counts against the device's
 		// authentication-attempt limit, and an IOS-XE login block-for
 		// locks the source address out.
@@ -133,7 +205,8 @@ func sshArgs(o sshOptions) []string {
 		"ControlMaster=no",
 		"ControlPath=none",
 		"ForwardAgent=no",
-	} {
+	)
+	for _, opt := range opts {
 		a = append(a, "-o", opt)
 	}
 	if o.verbose {
@@ -147,13 +220,167 @@ func sshArgs(o sshOptions) []string {
 	return append(a, o.command...)
 }
 
+// sshPolicy asks the operator's OpenSSH what its ssh_config makes of this
+// connection (`ssh -G`: OpenSSH's own reading of it, Match blocks
+// included), and returns what port49 ssh passes about host keys (decision 46
+// ruling 2). The operator's StrictHostKeyChecking yes stands, and every other
+// value is accept-new, never no; the operator's HostKeyAlias stands, and
+// otherwise the alias is the device's name, lowercased as ssh files it.
+// Under accept-new, a first UserKnownHostsFile that cannot keep a key
+// (knownHostsCannotKeep says why) is refused: every connection would be a
+// first contact, accepted silently.
+// Nothing about trust is decided here that OpenSSH does not decide itself.
+func sshPolicy(ctx context.Context, bin string, o sshOptions) (sshTrust, error) {
+	args := []string{"-G"}
+	if o.config != "" {
+		args = append(args, "-F", o.config)
+	}
+	args = append(args, "-o", "HostName="+sshValue(o.address), "-l", o.username)
+	if o.port != 0 {
+		args = append(args, "-p", strconv.Itoa(o.port))
+	}
+	// With the command the real run gets: OpenSSH evaluates `Match
+	// sessiontype` and `Match command` against it, and the file the real run
+	// uses can differ from the one -G reads without it (re-review I1).
+	args = append(append(args, "--", o.device), o.command...)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	c.Env = o.env
+	// A descendant holding ssh -G's stderr cannot keep port49 ssh waiting
+	// past ssh itself (pre-flight I2).
+	c.WaitDelay = time.Second
+	out, err := c.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			err = fmt.Errorf("%v: %s", err, printsafe.Line(strings.TrimSpace(string(ee.Stderr)), 300))
+		}
+		return sshTrust{}, fmt.Errorf("%s -G (reading your ssh_config for %s): %v", bin, o.device, err)
+	}
+	t := sshTrust{alias: strings.ToLower(o.device), keyName: strings.ToLower(o.device), strict: "accept-new"}
+	var userFiles string
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch k {
+		case "hostkeyalias":
+			t.alias, t.keyName = "", printsafe.Line(v, 253)
+		case "stricthostkeychecking":
+			if v == "true" || v == "yes" {
+				t.strict = "yes"
+			}
+		case "userknownhostsfile":
+			userFiles = v
+		}
+	}
+	t.known, _, _ = strings.Cut(strings.TrimSpace(userFiles), " ")
+	if t.strict != "yes" {
+		if why := knownHostsCannotKeep(userFiles); why != "" {
+			return sshTrust{}, fmt.Errorf("your ssh_config keeps no host keys for %s (UserKnownHostsFile %s%s): every "+
+				"connection would be a first contact, and a host at the device's address would get the token; point "+
+				"the first UserKnownHostsFile for port49 devices at a file you can write, or set StrictHostKeyChecking "+
+				"yes with a managed GlobalKnownHostsFile",
+				o.device, printsafe.Line(cmp.Or(userFiles, "none"), 200), why)
+		}
+	}
+	return t, nil
+}
+
+// knownHostsCannotKeep is why the first of userFiles (ssh -G's
+// userknownhostsfile, already expanded) cannot keep the key accept-new files
+// on a first contact, or "". Accept-new writes to the first file only, and
+// connects anyway when it cannot write, so what matters is the file that
+// first name resolves to, not how the setting is spelled: it must be a regular
+// file the user can write, or one that does not exist yet in a directory the
+// user can write (ssh creates the file, and ~/.ssh in the passwd home, but no
+// other directory). Anything but a regular file (/dev/null however written or
+// linked, a FIFO, a directory), a missing directory, a dangling link and an
+// unwritable file keep nothing (decision 46 ruling 2; task 3 review C1). A
+// value with a field that is not an absolute path is refused as ambiguous
+// (re-review I2).
+//
+// Residuals, not detected: a directory whose name ends in a space, followed by
+// '/', reads as two absolute paths, and ssh -G prints the default
+// "~/.ssh/known_hosts ~/.ssh/known_hosts2" in the same shape, so no rule can
+// refuse it without refusing the default (re-review 2, R1); and a `Match exec`
+// whose answer changes between ssh -G and the run (the network, the time).
+func knownHostsCannotKeep(userFiles string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(userFiles), " ")
+	if first == "" || first == "none" {
+		return ": it names no file"
+	}
+	// -G prints a path with a space unquoted, so a value is told from a
+	// path that holds a space only if every field is an absolute path (-G
+	// expands ~ and %d): anything else is refused (re-review I2).
+	for _, f := range strings.Fields(userFiles) {
+		if !strings.HasPrefix(f, "/") {
+			return ": a path with a space, or a relative path, cannot be told from a list; use absolute paths without spaces"
+		}
+	}
+	home := passwdHome()
+	at := func(resolved string) string {
+		if resolved == first {
+			return ""
+		}
+		return ", which is " + printsafe.Line(resolved, 200)
+	}
+	resolved, err := filepath.EvalSymlinks(first)
+	if err == nil {
+		fi, err := os.Stat(resolved)
+		switch {
+		case err != nil:
+			return at(resolved) + ": " + unprefixed(err)
+		case !fi.Mode().IsRegular():
+			return at(resolved) + ": that is not a regular file"
+		case unix.Access(resolved, unix.W_OK) != nil:
+			return at(resolved) + ": you cannot write it"
+		}
+		return ""
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return ": " + unprefixed(err)
+	}
+	if _, err := os.Lstat(first); err == nil {
+		return ": it is a link to nothing"
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(first))
+	if err != nil {
+		// ssh makes ~/.ssh when it files the first key, if it can write the home directory.
+		if home != "" && filepath.Dir(first) == filepath.Join(home, ".ssh") && unix.Access(home, unix.W_OK) == nil {
+			return ""
+		}
+		return ": its directory does not exist"
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() || unix.Access(dir, unix.W_OK|unix.X_OK) != nil {
+		return at(filepath.Join(dir, filepath.Base(first))) + ": you cannot create it in " + printsafe.Line(dir, 200)
+	}
+	return ""
+}
+
+// legacyPinsHint says, while plan 9a's pins file exists, that port49 no
+// longer reads it, and how to keep the keys in it (decision 46 ruling 5). It
+// is found by Lstat alone and never opened, so a pins file or a ~/.config
+// others can write stops nothing.
+func legacyPinsHint(stderr io.Writer) {
+	p := userconfig.LegacyPinsPath()
+	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+		return
+	}
+	fmt.Fprintf(stderr, "port49 ssh: %s holds keys `port49 devices trust` pinned (plan 9a); port49 no longer reads it, "+
+		"and uses your OpenSSH known_hosts. Its lines are filed under the device names port49 ssh uses, so to keep "+
+		"keys you verified: check they are yours, then `cat %s >> ~/.ssh/known_hosts`, and remove it\n",
+		p, shellWord(p))
+}
+
 // ownPrompt reports whether prompt is ssh asking for the device's own
 // password: "<user>@<device>'s password: " for the password method,
 // "(<user>@<device>) <the device's text>" for keyboard-interactive, where
 // <device> is the HostKeyAlias (OpenSSH 8.5p1, 8.9p1 and 10.2p1, measured
 // for plan 9a; §15 L54 per platform). A jump host's prompt names the jump
 // host. ssh lowercases the alias in a prompt and keeps the username's case, so
-// the device is compared folded and the username exact.
+// the device is compared folded and the username exact. Under an operator's
+// own HostKeyAlias the prompt names that alias (decision 46 ruling 2), so the
+// askpass asks both names.
 func ownPrompt(prompt, username, device string) bool {
 	who := username + "@" + strings.ToLower(device)
 	return prompt == who+"'s password: " || strings.HasPrefix(prompt, "("+who+") ")
@@ -165,20 +392,38 @@ func ownPrompt(prompt, username, device string) bool {
 // nothing, after kill has ended ssh, so the token is presented once and no
 // second or empty password follows it. A device prompt that comes when the
 // token is within askpassMargin of expiresAt, or past it, is answered with a
-// fresh mint's token from remint, or not at all (pre-flight I-3).
+// fresh mint's token from remint, or not at all (pre-flight I-3). The token
+// goes only to an asker whose parent is the ssh port49 started: a ProxyJump
+// hop's askpass has the hop's ssh for a parent (pre-flight N3). The check is
+// not a boundary against code of the operator's own: any direct child of the
+// ssh port49 started (a ProxyCommand program, LocalCommand, KnownHostsCommand,
+// a Match exec) inherits SSH_ASKPASS and the socket and passes it, and the
+// same uid can already ask the agent for a token (task 3 review M3).
 type askpassServer struct {
 	ln               net.Listener
 	token            string
 	username, device string
-	expiresAt        time.Time // the token's expires_at; zero when the broker gave none
+	keyName          string                      // the HostKeyAlias ssh names in its prompt (decision 46 ruling 2)
+	askerParent      func(net.Conn) (int, error) // see askerParent; nil only where a test builds the server by hand
+	expiresAt        time.Time                   // the token's expires_at; zero when the broker gave none
 	remint           func() (api.MintItem, error)
 
-	mu       sync.Mutex
-	served   bool
-	repeated bool
-	expired  string    // why a device prompt that came too late got no token
-	askedAt  time.Time // when that prompt came
-	kill     func()
+	mu         sync.Mutex
+	served     bool
+	repeated   bool
+	expired    string    // why a device prompt that came too late got no token
+	askedAt    time.Time // when that prompt came
+	sshPid     int       // the ssh port49 started; set under mu by setSSHPid
+	unverified string    // why an asker's parent could not be read
+	kill       func()
+}
+
+// setSSHPid sets the pid of the ssh port49 started, the one parent whose
+// askpass is answered the token.
+func (s *askpassServer) setSSHPid(pid int) {
+	s.mu.Lock()
+	s.sshPid = pid
+	s.mu.Unlock()
 }
 
 // setKill sets what ends ssh before a refusal is answered: OpenSSH's
@@ -196,6 +441,14 @@ func (s *askpassServer) state() (served, repeated bool, expired string, askedAt 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.served, s.repeated, s.expired, s.askedAt
+}
+
+// unverifiedAsker is why a device prompt's asker could not be told from a
+// hop's, or "".
+func (s *askpassServer) unverifiedAsker() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unverified
 }
 
 // refuse ends ssh, then answers "X".
@@ -282,8 +535,23 @@ func (s *askpassServer) answer(c net.Conn) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	own := ownPrompt(prompt, s.username, s.device) || ownPrompt(prompt, s.username, s.keyName)
+	if own && s.askerParent != nil {
+		ppid, err := s.askerParent(c)
+		switch {
+		case err != nil:
+			// Fail closed: the prompt may be the device's, and nothing says which ssh asked.
+			s.unverified = err.Error()
+			s.refuse(c)
+			return
+		case ppid != s.sshPid:
+			// A ProxyJump hop's askpass: its parent is the hop's ssh, never the one started here.
+			_, _ = io.WriteString(c, "N\n")
+			return
+		}
+	}
 	switch {
-	case !ownPrompt(prompt, s.username, s.device):
+	case !own:
 		_, _ = io.WriteString(c, "N\n")
 	case s.served:
 		s.repeated = true
@@ -615,7 +883,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	port := fs.Int("port", 0, "the device's SSH port (default: ssh's, 22 unless your ssh_config says otherwise)")
 	bin := fs.String("ssh", "ssh", "the OpenSSH client to run, 8.5 or later")
 	sshConfig := fs.String("ssh-config", "", "an ssh_config to read in place of ~/.ssh/config (ssh -F)")
-	knownHosts := fs.String("known-hosts", hostkeys.Path(), "the pinned host keys file")
+	knownHosts := fs.String("known-hosts", "", "removed in plan 9d: port49 ssh uses your OpenSSH known_hosts")
 	verbose := fs.Bool("v", false, "ssh -v: say each step of the connection and its authentication")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -628,27 +896,17 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	if len(command) > 0 && command[0] == "--" {
 		command = command[1:]
 	}
-	if !hostkeys.ValidName(device) {
+	if !sshName(device) {
 		fmt.Fprintf(stderr, "%s: %q: port49 ssh takes devices named with letters, digits, '.', '_' and '-' only "+
 			"(decision 42 ruling 8); use `port49 token` and your own ssh for it\n", cmd, device)
 		return 2
 	}
-	if strings.ContainsAny(*knownHosts, "\"\n") {
-		fmt.Fprintf(stderr, "%s: --known-hosts %q holds a '\"' or a newline, which ssh cannot be handed; "+
-			"name the file by another path\n", cmd, *knownHosts)
+	if *knownHosts != "" {
+		fmt.Fprintf(stderr, "%s: --known-hosts named port49's own pins file, which plan 9d removed: port49 ssh uses "+
+			"your OpenSSH known_hosts. Name another with UserKnownHostsFile in an ssh_config (--ssh-config FILE)\n", cmd)
 		return 2
 	}
-	pinned, err := hostkeys.Lookup(*knownHosts, device)
-	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
-		return 1
-	}
-	if len(pinned) == 0 {
-		fmt.Fprintf(stderr, "%s: no host key is pinned for %s: verify its key on its console and run '%s' "+
-			"first; a key never seen is never accepted (design §17)\n", cmd, device,
-			trustCommand(trustHint{knownHosts: *knownHosts, socket: *socket, port: *port}, device))
-		return 1
-	}
+	legacyPinsHint(stderr)
 	path, err := exec.LookPath(*bin)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
@@ -682,8 +940,9 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			cmd, device)
 		return 1
 	}
+	// Asked before the signal trap, so a ^C while the agent is slow to answer
+	// ends the run before anything is sent (Task 3 re-review 3, N1).
 	warn := ceilingWarning(*socket)
-	warnNearCeiling(stderr, device, item, warn)
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
@@ -702,18 +961,28 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	defer os.Remove(sockPath)
 	defer ln.Close()
+	// ssh -G gets the environment the run gets, so a Match exec that tests it
+	// is decided alike (re-review 2, R2). The token is in neither.
+	env := append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+askpassPath(self), "SSH_ASKPASS_REQUIRE=force",
+		askpassEnv+"="+sockPath)
+	opts := sshOptions{config: *sshConfig, device: device, address: item.Address, username: item.Username,
+		port: *port, verbose: *verbose, command: command, env: env}
+	if opts.trust, err = sshPolicy(context.Background(), path, opts); err != nil {
+		fmt.Fprintf(stderr, "%s: %v; nothing was sent to %s\n", cmd, err, device)
+		return 1
+	}
+	warnNearCeiling(stderr, device, item, warn)
 	expiresAt, _ := time.Parse(time.RFC3339, item.ExpiresAt)
-	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device, expiresAt: expiresAt,
+	srv := &askpassServer{ln: ln, token: item.Login, username: item.Username, device: device,
+		keyName: opts.trust.keyName, askerParent: askerParent, expiresAt: expiresAt,
 		remint: func() (api.MintItem, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			return mint(ctx)
 		}}
 
-	c := exec.Command(path, sshArgs(sshOptions{config: *sshConfig, knownHosts: *knownHosts, device: device,
-		address: item.Address, username: item.Username, port: *port, verbose: *verbose, command: command})...)
-	c.Env = append(withoutAskpass(os.Environ()), "SSH_ASKPASS="+askpassPath(self), "SSH_ASKPASS_REQUIRE=force",
-		askpassEnv+"="+sockPath)
+	c := exec.Command(path, sshArgs(opts)...)
+	c.Env = env
 	// ssh's stderr is the caller's own: ssh acts on whether it is a terminal,
 	// and no descendant holding it can keep this from returning.
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
@@ -732,6 +1001,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	// the listener's backlog, so no refusal is ever answered with ssh left
 	// running to send an empty password.
 	srv.setKill(func() { _ = c.Process.Kill() })
+	srv.setSSHPid(c.Process.Pid)
 	go srv.serve()
 	done := make(chan struct{})
 	defer close(done)
@@ -752,7 +1022,13 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	stopWarn()
 	code := exitCode(err)
 	served, repeated, expired, askedAt := srv.state()
-	switch {
+	switch unverified := srv.unverifiedAsker(); {
+	case unverified != "":
+		// Fail closed: the device's prompt came from a process whose parent could not
+		// be read, so it might have been a ProxyJump hop's (pre-flight N3).
+		fmt.Fprintf(stderr, "%s: could not tell which process asked for the token (%s), so it was not sent and "+
+			"ssh was ended\n", cmd, printsafe.Line(unverified, 200))
+		return 255
 	case expired != "":
 		// A timing fault, never policy's: the device asked after the
 		// token's expiry, as behind a slow jump host (pre-flight I-3).
@@ -770,11 +1046,19 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s was sent the token and the connection failed (ssh exit 255, its message is "+
 			"above); if it says Permission denied, `port49 explain --device %s` says whether your policy permits "+
 			"you, and port49d's decision log says why the device refused\n", cmd, device, device)
+	case code == 255 && opts.trust.strict == "yes":
+		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
+			"its message is above). Your ssh_config says StrictHostKeyChecking yes: if ssh says no host key is known, "+
+			"no key is filed under %s, so add the device's key to your known_hosts after checking it on its console; "+
+			"if it says the key changed, the key filed under %s is not the one %s presents, so verify it on the "+
+			"console and %s, then add the key you verified\n",
+			cmd, device, opts.trust.keyName, opts.trust.keyName, item.Address, keygenAdvice(opts.trust))
 	case code == 255:
 		fmt.Fprintf(stderr, "%s: ssh stopped before %s asked for the token, so it was never sent (ssh exit 255, "+
-			"its message is above); if ssh's message above says Host key verification failed, the address inventory "+
-			"gives for %s may not be the device: verify the key on its console, then run '%s'\n", cmd, device, device,
-			trustCommand(trustHint{knownHosts: *knownHosts, socket: *socket, port: *port, replace: true}, device))
+			"its message is above). If it says Host key verification failed, the key your known_hosts files under "+
+			"%s is not the one %s presents: either the device's key changed, or the address inventory gives for %s "+
+			"is not the device. Verify the key on its console, then %s and connect again\n",
+			cmd, device, opts.trust.keyName, item.Address, device, keygenAdvice(opts.trust))
 	}
 	return code
 }

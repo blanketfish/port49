@@ -651,13 +651,14 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   stack's log. A note is written only if neither it nor the evidence holds a token, a key or a
   compact JWS; `router.db` is removed when each stack goes down.
 
-## port49 ssh (L53, L54)
+## SSH host-key scan (L53)
 
-`make build && make lab-ssh` measures the SSH host key each platform presents to `port49 devices
-trust` (L53) and `port49 ssh` against it (L54). Each device is reloaded once, so it is gated by
-`PORT49_LAB_SSH=1`. `PORT49_LAB_REMEASURE` passes through from the caller's environment, so a
-plain `make lab-ssh` refuses to overwrite closed entries; `PORT49_LAB_REMEASURE=L53,L54 make lab-ssh`
-re-measures them. The notes go to `tests/lab/results/L53-*.md` and `L54-*.md`. The run's capture is
+`make build && make lab-ssh` measures the SSH host key each platform presents to a scan (L53; the
+scan is `labScan` in `hostkeyscan_test.go`, moved from `internal/hostkeys` by plan 9d, which
+removed `port49 devices trust` and with it L54's half). Each device is reloaded once, so it is
+gated by `PORT49_LAB_SSH=1`. `PORT49_LAB_REMEASURE` passes through from the caller's environment,
+so a plain `make lab-ssh` refuses to overwrite closed entries; `PORT49_LAB_REMEASURE=L53 make
+lab-ssh` re-measures it. The note goes to `tests/lab/results/L53-*.md`. The run's capture is
 `tests/lab/captures/L53L54-<platform>.pcap` and goes through `make evidence` like every other. On
 IOS-XE and NX-OS the run sets a login-attempt limit for about three minutes (a 70 s wait, three
 scans, the control's logins, which may each wait up to 30 s, and a 75 s wait) and removes it; a run

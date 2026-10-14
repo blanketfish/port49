@@ -120,9 +120,15 @@ func TestAnItemErrorNamesTheDeviceAndPrintsNoToken(t *testing.T) {
 	for _, args := range [][]string{{"token", "--socket", p, "leaf1"}, {"token", "--json", "--socket", p, "leaf1"}} {
 		var out, errb bytes.Buffer
 		code := run(args, &out, &errb)
-		if code != 1 || out.Len() != 0 || strings.Contains(errb.String(), "LOGINTOKEN") ||
+		if code != 1 || strings.Contains(errb.String(), "LOGINTOKEN") || strings.Contains(out.String(), "LOGINTOKEN") ||
 			!strings.Contains(errb.String(), "leaf1") || !strings.Contains(errb.String(), "device_unconfigured") {
 			t.Fatalf("%v: code %d stdout %s stderr %q", args, code, tokenOut(out.String()), errb.String())
+		}
+		// Plain prints nothing; --json prints the failure object, never the item.
+		var f tokenFailure
+		if len(args) == 5 && (json.Unmarshal(out.Bytes(), &f) != nil || f.Error != "device_unconfigured") ||
+			len(args) == 4 && out.Len() != 0 {
+			t.Fatalf("%v: stdout %s", args, tokenOut(out.String()))
 		}
 	}
 }
@@ -169,8 +175,13 @@ func TestAPermitWithNoTokenIsAFailure(t *testing.T) {
 	for _, args := range [][]string{{"token", "--socket", p, "leaf1"}, {"token", "--json", "--socket", p, "leaf1"}} {
 		var out, errb bytes.Buffer
 		code := run(args, &out, &errb)
-		if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "leaf1: the broker answered permit with no token") {
+		if code != 1 || !strings.Contains(errb.String(), "leaf1: the broker answered permit with no token") {
 			t.Fatalf("%v: code %d stdout %s stderr %q", args, code, tokenOut(out.String()), errb.String())
+		}
+		var f tokenFailure
+		if len(args) == 5 && (json.Unmarshal(out.Bytes(), &f) != nil || f.Error != "no_token") ||
+			len(args) == 4 && out.Len() != 0 {
+			t.Fatalf("%v: stdout %s", args, tokenOut(out.String()))
 		}
 	}
 }

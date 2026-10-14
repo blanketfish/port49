@@ -117,6 +117,22 @@ type BrokerRefusedError struct{ Err error }
 func (e *BrokerRefusedError) Error() string { return "agent: " + e.Err.Error() }
 func (e *BrokerRefusedError) Unwrap() error { return e.Err }
 
+// BrokerUnavailableError is a broker the agent could not reach, or one that
+// answered 503: an outage the caller may try again, unlike a broker that
+// answered and refused. Its text is the cause's own.
+type BrokerUnavailableError struct{ Err error }
+
+func (e *BrokerUnavailableError) Error() string { return e.Err.Error() }
+func (e *BrokerUnavailableError) Unwrap() error { return e.Err }
+
+// BrokerFaultError is a broker failure the agent could say no more of than
+// "broker_error" (its 502 on the socket): a fault, not an outage and not a
+// refusal. Its text is the agent's own.
+type BrokerFaultError struct{ Err error }
+
+func (e *BrokerFaultError) Error() string { return e.Err.Error() }
+func (e *BrokerFaultError) Unwrap() error { return e.Err }
+
 // RevokedError is a session an operator's revocation ended (spec §5.1.4).
 // It is ErrSessionOver to errors.Is, but its text does not say to log in:
 // a login is refused the same way until the revocation is lifted. Detail is
@@ -626,7 +642,7 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 			if errors.As(err, &hup) {
 				return nil, hup
 			}
-			return nil, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+			return nil, &BrokerUnavailableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
 		}
 	}
 }
@@ -969,12 +985,13 @@ func unavailable(resp *http.Response, e api.Error) error {
 			return fmt.Errorf("agent: %s", e.Detail) // final until the operator acts: no "retry in"
 		}
 		if e.Detail != "" {
-			return fmt.Errorf("agent: %s%s", e.Detail, retryHint(resp.Header))
+			return &BrokerUnavailableError{fmt.Errorf("agent: %s%s", e.Detail, retryHint(resp.Header))}
 		}
-		return fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now; try again%s",
-			retryHint(resp.Header))
+		return &BrokerUnavailableError{fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now; try again%s",
+			retryHint(resp.Header))}
 	}
-	return fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail, retryHint(resp.Header))
+	return &BrokerUnavailableError{fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail,
+		retryHint(resp.Header))}
 }
 
 // retryHint is "; retry in Ns" for a Retry-After in whole seconds, or "".
@@ -1308,7 +1325,7 @@ func (a *Agent) ProveTouch(ctx context.Context, challenge string) error {
 		if errors.As(err, &hup) {
 			return hup
 		}
-		return fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		return &BrokerUnavailableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode == http.StatusOK {
@@ -1371,7 +1388,7 @@ func (a *Agent) probeExporter(ctx context.Context) ([]byte, error) {
 		if errors.As(err, &hup) {
 			return nil, &unreachableError{hup}
 		}
-		return nil, &unreachableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}
+		return nil, &unreachableError{&BrokerUnavailableError{fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)}}
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -1740,6 +1757,10 @@ func (a *Agent) Handler() http.Handler {
 		case writeRefusal(w, err):
 			// The CRL check refused the broker: broker_refused, for the client
 			// to rebuild; never retried and never "unreachable".
+		case errors.As(err, new(*BrokerUnavailableError)):
+			// An outage, not a fault: the client rebuilds it as one, so a
+			// caller may try again.
+			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeBrokerUnavailable, Detail: err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 		default:
@@ -2015,6 +2036,10 @@ func answer(w http.ResponseWriter, out any, err error) {
 	case KeyCode(err) != "":
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 	case writeRefusal(w, err):
+	case errors.As(err, new(*BrokerUnavailableError)):
+		// An outage, after the key's own code and a refusal (as POST /token
+		// orders them): the client rebuilds it as one.
+		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeBrokerUnavailable, Detail: err.Error()})
 	case errors.Is(err, mfatouch.ErrNoAttestation):
 		// The touch was never made: the client may fall back to idp_mfa.
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeNoAttestation, Detail: err.Error()})

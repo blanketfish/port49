@@ -5,8 +5,6 @@ package lab
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -17,7 +15,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -29,7 +26,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/hostkeys"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -425,7 +421,7 @@ func (t *l53Tap) bytes() []byte {
 }
 
 // l53HostKeyAlgorithm is the host-key algorithm the device at addr signs
-// with when offered what hostkeys.Scan offers (the same lists; if Scan's
+// with when offered what labScan offers (the same lists; if labScan's
 // change, change these), read off the wire. The key type is not it: an RSA
 // key is signed with rsa-sha2-512, rsa-sha2-256 or ssh-rsa, and which the
 // scan gets is what the row's first clause asks (task 8 review M9).
@@ -612,7 +608,7 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 	// and not yet tripped.
 	time.Sleep(70 * time.Second)
 	for i := range 3 {
-		if _, err := hostkeys.Scan(context.Background(), addr); err != nil {
+		if _, err := labScan(context.Background(), addr); err != nil {
 			t.Errorf("scan %d with the limit set: %v", i+1, err)
 		}
 	}
@@ -637,20 +633,17 @@ func l53Limit(t *testing.T, l *lab, admin func(func(*cliConn) error), token func
 		outcome(afterScans), outcome(afterControl)), afterControl != nil
 }
 
-// TestL53L54PortSSH measures L53 and L54 on each selected platform: the
-// scan and what it leaves, the console's view of the key, the login-attempt
-// limit where the row names one, port49 ssh with the key pinned through
-// port49 devices trust, port49 ssh against a wrong pin, and the key after a
-// reload, in that order (the reload last, since it takes the device away
-// for its boot budget). Once both notes are written, it asserts each claim
-// decision 42 relies on (pre-flight I-8), so "the lab test passed" means
-// they held.
-func TestL53L54PortSSH(t *testing.T) {
+// TestL53HostKeyScan measures L53 on each selected platform: the scan and
+// what it leaves, the console's view of the key, the login-attempt limit
+// where the row names one, and the key after a reload, in that order (the
+// reload last, since it takes the device away for its boot budget). L54's
+// half, port49 ssh against a pinned key, went with port49 devices trust in
+// plan 9d.
+func TestL53HostKeyScan(t *testing.T) {
 	if os.Getenv("PORT49_LAB_SSH") != "1" {
-		t.Skip("L53 and L54 reload each device: run them with `make lab-ssh` (PORT49_LAB_SSH=1)")
+		t.Skip("L53 reloads each device: run it with `make lab-ssh` (PORT49_LAB_SSH=1)")
 	}
 	eachPlatform(t, func(t *testing.T, l *lab) {
-		port49 := filepath.Join(root, "bin", "port49")
 		// The broker's PKI and a port49d with the broker block, as the slice
 		// test starts them; the standing daemon is put back afterwards.
 		if err := testpki.WriteLab(filepath.Join(root, slicePKIDir), sliceEmail, time.Now()); err != nil {
@@ -717,21 +710,8 @@ func TestL53L54PortSSH(t *testing.T) {
 				t.Fatalf("break-glass session: %v", fnErr)
 			}
 		}
-		xdg := t.TempDir()
-		// Only this user may write above the pins file, whatever the
-		// lab host's umask (decision 42 ruling 6).
-		if err := os.Chmod(xdg, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		env := append(os.Environ(), "XDG_CONFIG_HOME="+xdg)
-		// An empty ssh_config: the lab host's own ~/.ssh/config does not
-		// shape what is measured.
-		sshConfig := filepath.Join(xdg, "ssh_config")
-		if err := os.WriteFile(sshConfig, nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
 		addr := l.p.addr + ":22"
-		var l53, l54 []string
+		var l53 []string
 		say := func(note *[]string, format string, args ...any) { *note = append(*note, fmt.Sprintf(format, args...)) }
 
 		// One capture for the run, so each note points at device traffic;
@@ -792,14 +772,14 @@ func TestL53L54PortSSH(t *testing.T) {
 			"from the device in the capture.", baseRecs, basePkts)
 		off := l.mark()
 		scanFrom := time.Now()
-		key, err := hostkeys.Scan(context.Background(), addr)
+		key, err := labScan(context.Background(), addr)
 		if err != nil {
 			t.Fatalf("scan %s: %v", addr, err)
 		}
 		scan := l53Window{scanFrom, time.Now()}
 		say(&l53, "The scan (%s-%s UTC) read a `%s` key, %s. The host-key algorithm the device signed with when offered "+
 			"what the scan offers: `%s`.", scan.from.UTC().Format("15:04:05"), scan.to.UTC().Format("15:04:05"), key.Type(),
-			hostkeys.Fingerprint(key), alg)
+			labFingerprint(key), alg)
 		time.Sleep(10 * time.Second)
 		say(&l53, "Within 10s of the scan: %d decision records, and %d TACACS+ packets to or from the device in the "+
 			"capture.", len(l.recordsSince(off)), tacacsIn(scanFrom, time.Now()))
@@ -837,13 +817,10 @@ func TestL53L54PortSSH(t *testing.T) {
 			}
 			return nil
 		})
-		consoleFP := ""
 		for i, cmd := range l53Console[l.p.name] {
 			form := l53Shown(outs[i], key)
 			if form == "" {
 				form = "not this key"
-			} else if consoleFP == "" {
-				consoleFP = hostkeys.Fingerprint(key)
 			}
 			say(&l53, "`%s`: %s.\n\n```\n%s\n```", cmd, form, trimForNote(outs[i]))
 		}
@@ -874,74 +851,6 @@ func TestL53L54PortSSH(t *testing.T) {
 					"here", l.p.name)
 			}
 		}
-
-		// L54: port49 devices trust, then port49 ssh with a command.
-		fp := consoleFP
-		if fp == "" {
-			fp = hostkeys.Fingerprint(key) // no console form matched: the scan's own, and the note says so
-			say(&l53, "No console command showed this key; the trust step below used the scan's fingerprint.")
-		}
-		trust := exec.Command(port49, "devices", "trust", "--socket", sock, "--fingerprint", fp, l.p.node)
-		trust.Env = env
-		if out, err := trust.CombinedOutput(); err != nil {
-			t.Fatalf("port49 devices trust: %v\n%s", err, out)
-		}
-		off = l.mark()
-		goodFrom := time.Now()
-		run := exec.Command(port49, "ssh", "-v", "--socket", sock, "--ssh-config", sshConfig, l.p.node, "--",
-			"show version")
-		run.Env = env
-		var stdout, stderr strings.Builder
-		run.Stdout, run.Stderr = &stdout, &stderr
-		err = run.Run()
-		code := 0
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-		methods := regexp.MustCompile(`Next authentication method: (\S+)`).FindAllStringSubmatch(stderr.String(), -1)
-		var tried []string
-		for _, m := range methods {
-			tried = append(tried, m[1])
-		}
-		asked := strings.Count(stderr.String(), "read_passphrase: requested to askpass")
-		version := strings.Contains(strings.ToLower(stdout.String()), "version")
-		say(&l54, "`port49 ssh %s -- show version` exited %d; methods ssh tried: %v; askpass asked %d times; "+
-			"`show version` output %s.", l.p.node, code, tried, asked,
-			map[bool]string{true: "present", false: "absent"}[version])
-		redeems := 0
-		for _, r := range l.recordsSince(off) {
-			if str(r, "event") == "redeem" {
-				redeems++
-			}
-		}
-		say(&l54, "Redeem records for the login: %d.", redeems)
-
-		// L54: a wrong pin, never presented. The session above has ended
-		// and its accounting landed before the window opens.
-		wrong, _, _ := ed25519.GenerateKey(rand.Reader)
-		wk, _ := ssh.NewPublicKey(wrong)
-		if err := hostkeys.Pin(filepath.Join(xdg, "port49", "known_hosts"), l.p.node, wk, true); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(10 * time.Second)
-		goodTACACS := tacacsIn(goodFrom, time.Now())
-		say(&l54, "The good login's own window, from its start to 10s after it ended: %d TACACS+ packets to or from the "+
-			"device in the capture. The counter counts: the wrong-pin zero below is a zero of the same count.", goodTACACS)
-		off = l.mark()
-		wrongFrom := time.Now()
-		bad := exec.Command(port49, "ssh", "--socket", sock, "--ssh-config", sshConfig, l.p.node, "--", "show version")
-		bad.Env = env
-		badOut, _ := bad.CombinedOutput()
-		time.Sleep(10 * time.Second)
-		wrongTACACS := tacacsIn(wrongFrom, time.Now())
-		var wrongOther []string
-		for _, r := range l.recordsSince(off) {
-			if e := str(r, "event"); e != "mint" && e != "blob" {
-				wrongOther = append(wrongOther, e)
-			}
-		}
-		say(&l54, "Against a wrong pin: %d TACACS+ packets to or from the device in the capture; records other than "+
-			"mint and blob: %v. port49 ssh said:\n\n```\n%s\n```", wrongTACACS, wrongOther, trimForNote(string(badOut)))
 
 		// L53: the key after a reload, with the configuration saved. The
 		// device must be seen to go down before it is waited for.
@@ -1034,36 +943,19 @@ func TestL53L54PortSSH(t *testing.T) {
 		if !rebooted {
 			t.Errorf("the uptime does not show a reboot: %s", rebootedWhy)
 		}
-		after, err := hostkeys.Scan(context.Background(), addr)
+		after, err := labScan(context.Background(), addr)
 		switch {
 		case err != nil:
 			say(&l53, "**The scan after the reload failed**: %v", err)
-		case hostkeys.Fingerprint(after) == hostkeys.Fingerprint(key):
+		case labFingerprint(after) == labFingerprint(key):
 			say(&l53, "After a reload with the configuration saved, the device seen down and back, the key is the "+
-				"same (%s).", hostkeys.Fingerprint(after))
+				"same (%s).", labFingerprint(after))
 		default:
-			say(&l53, "**After a reload the key changed**: %s, then %s.", hostkeys.Fingerprint(key), hostkeys.Fingerprint(after))
+			say(&l53, "**After a reload the key changed**: %s, then %s.", labFingerprint(key), labFingerprint(after))
 		}
 
-		l.result(t, "L53", "The SSH host key the device presents to port49 devices trust's scan, the console's view of "+
+		l.result(t, "L53", "The SSH host key the device presents to a scan, the console's view of "+
 			"it, whether it survives a reload, and what the scan leaves (policy engine spec §15, L53).", strings.Join(l53, "\n\n"))
-		l.result(t, "L54", "port49 ssh against the device: the method, the askpass, the command, and a wrong pin "+
-			"(policy engine spec §15, L54).", strings.Join(l54, "\n\n"))
-
-		// The claims decision 42 rests on, asserted once the notes are written.
-		if code != 0 || !version {
-			t.Errorf("port49 ssh -- show version: exit %d, show version %v; want 0 and present", code, version)
-		}
-		if asked != 1 {
-			t.Errorf("the askpass was asked %d times; want once", asked)
-		}
-		if goodTACACS == 0 {
-			t.Errorf("the good port49 ssh login's window holds no TACACS+ packet, so the wrong-pin zero proves nothing")
-		}
-		if wrongTACACS != 0 || len(wrongOther) != 0 {
-			t.Errorf("a wrong pin reached the device's authentication: %d TACACS+ packets, records %v", wrongTACACS,
-				wrongOther)
-		}
 	})
 }
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net"
@@ -21,7 +23,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hostkeys"
 )
 
 // sshTestBin is the system's OpenSSH, 8.5 or later, or the test is skipped:
@@ -40,14 +41,15 @@ func sshTestBin(t *testing.T) string {
 }
 
 // sshRig is one port49 ssh run's world: an agent that answers each mint
-// from items and its status from status, counting mints; the device's key
-// pinned (unless pin is nil); an empty ssh_config; and the flags that reach
-// them.
+// from items and its status from status, counting mints; an ssh_config
+// naming the operator's known_hosts (holding the device's key under leaf1
+// unless known is nil) and no global one; and the flags that reach them.
 type sshRig struct {
-	mints *atomic.Int32
-	flags []string
-	sock  string
-	known string // the pinned host keys file
+	mints  *atomic.Int32
+	flags  []string
+	sock   string
+	known  string // the operator's known_hosts, as the rig's ssh_config names it
+	config string // the rig's ssh_config
 
 	mu     sync.Mutex
 	items  []api.MintItem // the nth mint answers items[n], the last one after that
@@ -65,7 +67,7 @@ func (r *sshRig) set(status agent.Status, items ...api.MintItem) {
 	}
 }
 
-func newSSHRig(t *testing.T, dev *deviceSSH, item api.MintItem, warn int, pin ssh.PublicKey) *sshRig {
+func newSSHRig(t *testing.T, dev *deviceSSH, item api.MintItem, warn int, known ssh.PublicKey, extra ...string) *sshRig {
 	t.Helper()
 	r := &sshRig{mints: new(atomic.Int32), items: []api.MintItem{item},
 		status: agent.Status{CeilingWarningSeconds: warn}}
@@ -82,20 +84,58 @@ func newSSHRig(t *testing.T, dev *deviceSSH, item api.MintItem, warn int, pin ss
 		}
 	}))
 	dir := privateDir(t)
-	known := filepath.Join(dir, "known_hosts")
-	r.known = known
-	if pin != nil {
-		if err := hostkeys.Pin(known, "leaf1", pin, false); err != nil {
-			t.Fatal(err)
-		}
+	r.known = filepath.Join(dir, "known_hosts")
+	var lines []byte
+	if known != nil {
+		lines = []byte("leaf1 " + string(ssh.MarshalAuthorizedKey(known)))
 	}
-	cfg := filepath.Join(dir, "ssh_config")
-	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+	if err := os.WriteFile(r.known, lines, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r.flags = []string{"--socket", r.sock, "--ssh", sshTestBin(t), "--ssh-config", cfg, "--known-hosts", known,
+	r.config = filepath.Join(dir, "ssh_config")
+	cfg := "UserKnownHostsFile " + r.known + "\nGlobalKnownHostsFile /dev/null\n" + strings.Join(extra, "\n") + "\n"
+	if err := os.WriteFile(r.config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.flags = []string{"--socket", r.sock, "--ssh", sshTestBin(t), "--ssh-config", r.config,
 		"--port", strconv.Itoa(dev.port)}
 	return r
+}
+
+// filed is every line ssh-keygen finds under name in the rig's known_hosts.
+func (r *sshRig) filed(t *testing.T, name string) []string {
+	t.Helper()
+	out, _ := exec.Command("ssh-keygen", "-F", name, "-f", r.known).Output()
+	var keys []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if l != "" && !strings.HasPrefix(l, "#") {
+			keys = append(keys, l)
+		}
+	}
+	return keys
+}
+
+// fakeSSHHead is a fake ssh's first lines: OpenSSH 10.2p1 to -V, and to -G
+// what a real `ssh -G` prints for the one setting sshPolicy needs to go on,
+// a known_hosts kept (known, the rig's own). The lines after it are the
+// fake's real run.
+func fakeSSHHead(known string) string {
+	return "#!/bin/sh\n" +
+		"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
+		"if [ \"$1\" = -G ]; then echo 'userknownhostsfile " + known + "'; exit 0; fi\n"
+}
+
+func testHostKey(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 func (r *sshRig) run(t *testing.T, args ...string) (int, string, string) {
@@ -143,11 +183,13 @@ func TestTheTokenIsNeverInArgvOrTheEnvironment(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	dir := t.TempDir()
 	at := func(name string) string { return filepath.Join(dir, name) }
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = -V ]; then echo 'OpenSSH_10.2p1, OpenSSL 3.5.5' >&2; exit 0; fi\n" +
+	// The askpass is forked, not exec'd: its parent is then the "ssh" port49
+	// started, as a real ssh's askpass's is (pre-flight N3).
+	script := fakeSSHHead(r.known) +
 		"printf '%s\\n' \"$@\" > '" + at("argv") + "'\n" +
 		"env > '" + at("env") + "'\n" +
-		"exec \"$SSH_ASKPASS\" \"alice@leaf1's password: \" > '" + at("answer") + "'\n"
+		"\"$SSH_ASKPASS\" \"alice@leaf1's password: \" > '" + at("answer") + "'\n" +
+		"exit $?\n"
 	if err := os.WriteFile(at("ssh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -174,31 +216,18 @@ func TestTheTokenIsNeverInArgvOrTheEnvironment(t *testing.T) {
 	}
 }
 
-// A host presenting another key than the pin never sees the token: ssh stops
-// at the key exchange, the askpass is never asked, and port49 ssh says how
-// to re-pin (decision 42 ruling 7; Review Focus 1).
+// A host presenting another key than the one filed never sees the token: ssh
+// stops at the key exchange, the askpass is never asked, and port49 ssh says
+// how to clear the old key (decision 42 ruling 7; Review Focus 1).
 func TestAHostWithAnotherKeyNeverSeesTheToken(t *testing.T) {
 	dev := startDeviceSSH(t, []string{"keyboard-interactive", "password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, testHostKey(t))
 	code, out, errb := r.run(t, "leaf1", "--", "show", "version")
 	if code != 255 || len(dev.attempts()) != 0 || !strings.Contains(errb, "Host key verification failed") ||
-		!strings.Contains(errb, "so it was never sent") ||
-		!strings.Contains(errb, "run 'port49 devices trust --known-hosts "+r.known+" --socket "+r.sock+
-			" --port "+strconv.Itoa(dev.port)+" --replace leaf1'") {
+		!strings.Contains(errb, "so it was never sent") || !strings.Contains(errb, "run ssh-keygen -f "+r.known+" -R leaf1 and") {
 		t.Fatalf("code %d stdout %q stderr %q attempts %q", code, out, errb, dev.attempts())
 	}
 	tokenNowhere(t, out, errb)
-}
-
-// With no pin, nothing is minted and ssh never starts (Review Focus 2).
-func TestNoPinnedKeyMintsNothing(t *testing.T) {
-	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
-	r := newSSHRig(t, dev, sshPermit, 0, nil)
-	code, _, errb := r.run(t, "leaf1")
-	if code != 1 || r.mints.Load() != 0 || dev.connections() != 0 ||
-		!strings.Contains(errb, "no host key is pinned for leaf1") {
-		t.Fatalf("code %d mints %d conns %d stderr %q", code, r.mints.Load(), dev.connections(), errb)
-	}
 }
 
 // No agent, an ended session, an unreachable broker: no ssh starts, and the
@@ -512,21 +541,26 @@ func TestAnAskpassNotificationIsShownAndNeverRead(t *testing.T) {
 // the destination follows --. The file's path and the address are quoted,
 // with % doubled, since ssh expands % tokens and splits on whitespace there.
 func TestSSHArgs(t *testing.T) {
-	got := sshArgs(sshOptions{config: "/c", knownHosts: "/k", device: "leaf1", address: "10.0.0.1", username: "alice",
-		port: 2222, verbose: true, command: []string{"show", "version"}})
-	want := `-F /c -o HostName="10.0.0.1" -o HostKeyAlias=leaf1 -o UserKnownHostsFile="/k" ` +
-		"-o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o CheckHostIP=no " +
-		"-o VerifyHostKeyDNS=no -o KnownHostsCommand=none -o PubkeyAuthentication=no " +
-		"-o PreferredAuthentications=keyboard-interactive,password -o KbdInteractiveAuthentication=yes " +
-		"-o PasswordAuthentication=yes -o NumberOfPasswordPrompts=1 -o BatchMode=no -o ControlMaster=no " +
-		"-o ControlPath=none -o ForwardAgent=no -v -l alice -p 2222 -- leaf1 show version"
+	got := sshArgs(sshOptions{config: "/c", device: "leaf1", address: "10.0.0.1", username: "alice",
+		trust: sshTrust{alias: "leaf1", keyName: "leaf1", strict: "accept-new"}, port: 2222, verbose: true,
+		command: []string{"show", "version"}})
+	want := `-F /c -o HostName="10.0.0.1" -o HostKeyAlias=leaf1 -o StrictHostKeyChecking=accept-new ` +
+		"-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password " +
+		"-o KbdInteractiveAuthentication=yes -o PasswordAuthentication=yes -o NumberOfPasswordPrompts=1 " +
+		"-o BatchMode=no -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -v -l alice -p 2222 -- " +
+		"leaf1 show version"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, " "), want)
 	}
-	odd := sshArgs(sshOptions{knownHosts: "/home/a b/%d/known_hosts", device: "leaf1", address: "fe80::1%eth0",
-		username: "alice"})
-	if s := strings.Join(odd, " "); !strings.Contains(s, `-o HostName="fe80::1%%eth0"`) ||
-		!strings.Contains(s, `-o UserKnownHostsFile="/home/a b/%%d/known_hosts"`) {
-		t.Fatalf("got %s", s)
+	theirs := strings.Join(sshArgs(sshOptions{device: "leaf1", address: "fe80::1%eth0", username: "alice",
+		trust: sshTrust{keyName: "corp-leaf1", strict: "yes"}}), " ")
+	for _, gone := range []string{"HostKeyAlias", "UserKnownHostsFile", "GlobalKnownHostsFile", "UpdateHostKeys",
+		"CheckHostIP", "VerifyHostKeyDNS", "KnownHostsCommand", "StrictHostKeyChecking=no"} {
+		if strings.Contains(theirs, gone) {
+			t.Errorf("%s passed: %s", gone, theirs)
+		}
+	}
+	if !strings.Contains(theirs, `-o HostName="fe80::1%%eth0"`) || !strings.Contains(theirs, "StrictHostKeyChecking=yes") {
+		t.Fatalf("got %s", theirs)
 	}
 }

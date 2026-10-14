@@ -27,4 +27,4 @@ shared secrets that in practice are never rotated. port49 targets three gaps:
 
 ## License
 
-Apache-2.0 (design document §18). The `LICENSE` file is added with the first code commit.
+Apache-2.0 (design document §18); see [`LICENSE`](LICENSE).

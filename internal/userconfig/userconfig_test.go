@@ -143,7 +143,7 @@ func TestASymlinkedDirectoryIntoAWritableOneIsRefused(t *testing.T) {
 	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by others") {
 		t.Fatalf("a link into a world-writable directory: %v", err)
 	}
-	if err := WritePrivate(p, []byte("x\n"), "pinned host keys file"); err == nil ||
+	if err := WritePrivate(p, []byte("x\n"), "private test file"); err == nil ||
 		!strings.Contains(err.Error(), shared+" is writable by others") {
 		t.Fatalf("a write through it: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestWritePrivateCreatesNothingWhenTheChainIsRefused(t *testing.T) {
 	mustDo(t, os.Mkdir(real, 0o700),
 		os.Symlink(real, filepath.Join(shared, "hop")),
 		os.Symlink(filepath.Join(shared, "hop"), filepath.Join(home, ".cfg2")))
-	err := WritePrivate(filepath.Join(home, ".cfg2", "sub", "pins.yaml"), []byte("x\n"), "pinned host keys file")
+	err := WritePrivate(filepath.Join(home, ".cfg2", "sub", "pins.yaml"), []byte("x\n"), "private test file")
 	if err == nil {
 		t.Fatal("wrote through a chain that ReadPrivate refuses")
 	}
@@ -454,7 +454,7 @@ func TestAnUnknownKeyOrASecondDocumentIsRefused(t *testing.T) {
 // reads it back.
 func TestWritePrivateThenReadPrivate(t *testing.T) {
 	p := filepath.Join(privateDir(t), "port49", "known_hosts")
-	if err := WritePrivate(p, []byte("x\n"), "pinned host keys file"); err != nil {
+	if err := WritePrivate(p, []byte("x\n"), "private test file"); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(p)
@@ -462,14 +462,14 @@ func TestWritePrivateThenReadPrivate(t *testing.T) {
 	if err != nil || derr != nil || fi.Mode().Perm() != 0o600 || di.Mode().Perm() != 0o700 {
 		t.Fatalf("file %v dir %v (%v %v)", fi.Mode(), di.Mode(), err, derr)
 	}
-	raw, err := ReadPrivate(p, 64, "pinned host keys file")
+	raw, err := ReadPrivate(p, 64, "private test file")
 	if err != nil || string(raw) != "x\n" {
 		t.Fatalf("%q %v", raw, err)
 	}
 	if _, err := ReadPrivate(filepath.Join(filepath.Dir(p), "none"), 64, "x"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a missing file: %v", err)
 	}
-	if _, err := ReadPrivate(p, 1, "pinned host keys file"); err == nil {
+	if _, err := ReadPrivate(p, 1, "private test file"); err == nil {
 		t.Fatal("a file over max was read")
 	}
 }
@@ -513,7 +513,7 @@ func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(top, 0o700) })
 	p := filepath.Join(top, "a", "b", "known_hosts")
-	if err := WritePrivate(p, []byte("x\n"), "pinned host keys file"); err == nil ||
+	if err := WritePrivate(p, []byte("x\n"), "private test file"); err == nil ||
 		!strings.Contains(err.Error(), top+" is writable by others") {
 		t.Fatalf("a world-writable parent: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(top, "a"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WritePrivate(filepath.Join(top, "a", "known_hosts"), []byte("x\n"), "pinned host keys file"); err == nil {
+	if err := WritePrivate(filepath.Join(top, "a", "known_hosts"), []byte("x\n"), "private test file"); err == nil {
 		t.Fatal("wrote under a world-writable directory")
 	}
 	if ents, _ := os.ReadDir(filepath.Join(top, "a")); len(ents) != 0 {
@@ -536,7 +536,7 @@ func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
 // one is an error and creates nothing.
 func TestPrivateDirCreatesAndJudges(t *testing.T) {
 	top := privateDir(t)
-	got, err := PrivateDir(filepath.Join(top, "a", "b"), "pinned host keys file")
+	got, err := PrivateDir(filepath.Join(top, "a", "b"), "private test file")
 	if err != nil || got != filepath.Join(top, "a", "b") {
 		t.Fatalf("%q %v", got, err)
 	}
@@ -547,7 +547,7 @@ func TestPrivateDirCreatesAndJudges(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(top, 0o700) })
-	if _, err := PrivateDir(filepath.Join(top, "c"), "pinned host keys file"); err == nil ||
+	if _, err := PrivateDir(filepath.Join(top, "c"), "private test file"); err == nil ||
 		!strings.Contains(err.Error(), "writable by others") {
 		t.Fatalf("a world-writable parent: %v", err)
 	}
@@ -716,13 +716,13 @@ func TestTheDirectories(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv(EnvConfig, "")
 	if Dir() != "/home/alice/.port49" || Path() != "/home/alice/.port49/config.yaml" ||
-		LegacyDir() != "/home/alice/.config/port49" {
-		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+		legacyDir() != "/home/alice/.config/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), legacyDir())
 	}
 	t.Setenv(EnvConfig, "/srv/p49.yaml")
 	t.Setenv("XDG_CONFIG_HOME", "/x")
-	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || LegacyDir() != "/x/port49" {
-		t.Fatalf("%s %s %s", Dir(), Path(), LegacyDir())
+	if Path() != "/srv/p49.yaml" || Dir() != "/home/alice/.port49" || legacyDir() != "/x/port49" {
+		t.Fatalf("%s %s %s", Dir(), Path(), legacyDir())
 	}
 }
 

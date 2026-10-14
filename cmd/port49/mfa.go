@@ -17,6 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/oidcclient"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -90,11 +91,21 @@ func mintProved(ctx context.Context, sf *sessionFlags, req agent.TokenRequest, s
 		return item, err
 	}
 	if err := prove(ctx, sf.socket, sf, need.Requirement, stderr); err != nil {
-		return api.MintItem{}, err
+		return api.MintItem{}, &mfaUnprovedError{Requirement: need.Requirement, Err: err}
 	}
 	req.PerLoginMFAChallenge = need.Requirement.Challenge
 	return c.Token(ctx, req)
 }
+
+// mfaUnprovedError is a requirement prove could not meet: Error is the
+// proof's own words, as mintFailed always said them.
+type mfaUnprovedError struct {
+	Requirement api.PerLoginMFA
+	Err         error
+}
+
+func (e *mfaUnprovedError) Error() string { return e.Err.Error() }
+func (e *mfaUnprovedError) Unwrap() error { return e.Err }
 
 // prove answers a requirement with the first factor it can: the agent's touch
 // key when the agent holds a usable one and the broker verifies the touch, or
@@ -147,6 +158,23 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 	return fmt.Errorf("this broker verifies none of the methods this device accepts (%s)", methodList(req.Accept))
 }
 
+// configFault is a /v1/config error as the proof reports it: an outage, a
+// broker answer and a CRL refusal keep their own types, and anything else (a
+// redirect, a body that is not a config, a certificate the CA does not verify)
+// is a broker fault, agent_error, as the touch path says (Task 5 re-review 2,
+// N1), never a requirement to prove again.
+func configFault(err error) error {
+	var down *brokerDownError
+	var status *brokerStatusError
+	var revoked *brokercrl.RevokedError
+	var unchecked *brokercrl.UncheckedError
+	if err == nil || errors.As(err, &down) || errors.As(err, &status) ||
+		errors.As(err, &revoked) || errors.As(err, &unchecked) {
+		return err
+	}
+	return &agent.BrokerFaultError{Err: err}
+}
+
 // proveBySignIn is the idp_mfa proof: a sign-in at the provider the broker
 // lists, prompt=login, the broker's acr_values, and nonce = api.MFANonce of
 // the challenge; its ID token goes to POST /v1/mfa as the bearer, once, with
@@ -167,7 +195,7 @@ func proveBySignIn(ctx context.Context, sf *sessionFlags, st agent.Status, req a
 	}
 	conf, err := fetchBrokerConfig(ctx, sf.broker, pool, verify)
 	if err != nil {
-		return err
+		return configFault(err)
 	}
 	prov, err := pickProvider(conf, sf.issuer)
 	if err != nil {
@@ -224,7 +252,7 @@ func postIdPProof(ctx context.Context, broker string, pool *x509.CertPool, verif
 		if refused := refusedByCRL(err); refused != nil {
 			return refused
 		}
-		return fmt.Errorf("the broker at %s is unreachable: %w", broker, err)
+		return &agent.BrokerUnavailableError{Err: fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -234,8 +262,10 @@ func postIdPProof(ctx context.Context, broker string, pool *x509.CertPool, verif
 	var e api.Error
 	_ = json.Unmarshal(raw, &e)
 	if e.Error == "" {
-		return fmt.Errorf("the broker did not take your sign-in as the second factor: it answered %s", resp.Status)
+		return &brokerStatusError{Status: resp.StatusCode,
+			msg: fmt.Sprintf("the broker did not take your sign-in as the second factor: it answered %s", resp.Status)}
 	}
-	return fmt.Errorf("the broker did not take your sign-in as the second factor: %s (%s)",
-		printsafe.Line(e.Detail, 400), printsafe.Line(e.Error, 64))
+	return &brokerStatusError{Status: resp.StatusCode, msg: fmt.Sprintf(
+		"the broker did not take your sign-in as the second factor: %s (%s)",
+		printsafe.Line(e.Detail, 400), printsafe.Line(e.Error, 64))}
 }

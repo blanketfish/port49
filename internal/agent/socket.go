@@ -189,6 +189,9 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		if e.Error == "revocation_running" {
 			return api.MintItem{}, &RevocationRunningError{Detail: e.Detail}
 		}
+		if e.Error == codeBrokerUnavailable {
+			return api.MintItem{}, &BrokerUnavailableError{errors.New(e.Detail)}
+		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	default:
 		var e refusalBody
@@ -319,13 +322,15 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 	case resp.StatusCode == http.StatusNotFound && e.Error == "":
 		return ErrAgentTooOld
 	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
-		return errors.New(e.Detail)
+		return &BrokerFaultError{errors.New(e.Detail)}
 	case resp.StatusCode == http.StatusConflict && e.Error == "connection_changed":
 		return ErrConnectionChanged
 	case keyErrorFromCode(e.Error, e.Detail) != nil:
 		return keyErrorFromCode(e.Error, e.Detail)
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "revocation_running":
 		return &RevocationRunningError{Detail: e.Detail}
+	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == codeBrokerUnavailable:
+		return &BrokerUnavailableError{errors.New(e.Detail)}
 	case e.Error != "":
 		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}

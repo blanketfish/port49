@@ -1,0 +1,14 @@
+namespace: port49
+name: client
+version: 0.1.0
+readme: README.md
+authors:
+  - port49 contributors
+description: Device tokens from port49 for Ansible, through the port49 CLI and its Python library.
+license:
+  - Apache-2.0
+repository: https://github.com/rhwendt/port49
+tags:
+  - networking
+  - security
+  - tacacs

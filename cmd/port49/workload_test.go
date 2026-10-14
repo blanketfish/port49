@@ -629,3 +629,227 @@ func TestAScopeAndDevicesTogetherIsUsage(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
+
+// mixedMFA is mixed, with core1 denied under a per-login requirement whose
+// challenge must never be printed.
+func mixedMFA(w http.ResponseWriter, req api.MintRequest) {
+	resp := api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01", Subject: "svc_oxidized"}
+	for _, d := range req.Devices {
+		switch d {
+		case "fw1":
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "no_grants_matched"})
+		case "core1":
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "deny", Reason: "per_login_mfa_required",
+				PerLoginMFA: &api.PerLoginMFA{Device: d, Challenge: "CHALLENGE", Accept: []string{"hardware_key_touch"},
+					ReuseForSeconds: 900}})
+		default:
+			resp.Results = append(resp.Results, api.MintItem{Device: d, Verdict: "permit", Address: "10.0.0.1",
+				Platform: "arista_eos", Username: "svc-oxidized", Login: "TOKEN-" + d, ExpiresAt: "2026-10-08T03:00:00Z"})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// --format json lists the refused beside the minted, with no token and no
+// challenge, and exits 1 as before.
+func TestWorkloadJSONListsTheRefused(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "leaf1", "fw1", "core1"),
+		&out, &errb)
+	var got workloadJSON
+	if code != 1 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 1 || len(got.Refused) != 2 ||
+		got.Refused[0].Reason != "no_grants_matched" || got.Refused[1].PerLoginMFA == nil ||
+		got.Refused[1].PerLoginMFA.ReuseForSeconds != 900 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), "CHALLENGE") || strings.Count(out.String(), "TOKEN-") != 1 {
+		t.Fatalf("stdout %q", out.String())
+	}
+}
+
+// goldenJSON fails t unless stdout is the golden file the Python library's
+// tests are fed (pre-flight I3): the two sides read the same bytes.
+func goldenJSON(t *testing.T, name string, stdout []byte) {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("..", "..", "clients", "python", "tests", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.TrimSpace(stdout); !bytes.Equal(got, bytes.TrimSpace(want)) {
+		t.Fatalf("stdout\n%s\nis not %s\n%s", got, name, want)
+	}
+}
+
+// Every device denied: exit 77 as before, and stdout says which and why,
+// with "results": [] (never null).
+func TestWorkloadJSONOnEveryDeviceDenied(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "fw1"), &out, &errb)
+	var got workloadJSON
+	if code != 77 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 0 || len(got.Refused) != 1 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	goldenJSON(t, "workload_every_device_denied.json", out.Bytes())
+}
+
+// A scope selecting nothing: exit 77 as before, and stdout says nothing was
+// selected, told apart from a failure.
+func TestWorkloadJSONOnAnEmptySweep(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Subject: "svc_oxidized"})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "--scope", "none"),
+		&out, &errb)
+	if code != 77 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	goldenJSON(t, "workload_empty_sweep.json", out.Bytes())
+}
+
+// With --out, nothing is written when nothing was minted (decision 40 ruling
+// 10), and stdout stays empty.
+func TestWorkloadJSONOutStillWritesOnlyAPermit(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	if err := os.WriteFile(path, []byte("LAST"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json", "--out", path}, flags...), "fw1"),
+		&out, &errb)
+	if b, _ := os.ReadFile(path); code != 77 || string(b) != "LAST" || out.Len() != 0 {
+		t.Fatalf("code %d file %q stdout %q", code, b, out.String())
+	}
+}
+
+// stopAt answers like mixedMFA, except that the page whose first device is
+// bad gets status (a body of the broker's own words, never read back).
+func stopAt(bad string, status int) func(w http.ResponseWriter, req api.MintRequest) {
+	return func(w http.ResponseWriter, req api.MintRequest) {
+		if len(req.Devices) > 0 && req.Devices[0] == bad {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":"bad_request","detail":"BODY-WORDS"}`))
+			return
+		}
+		mixedMFA(w, req)
+	}
+}
+
+// refusedBy is got's refused entries as device -> error code.
+func refusedBy(got workloadJSON) map[string]string {
+	m := map[string]string{}
+	for _, r := range got.Refused {
+		m[r.Device] = r.Error
+	}
+	return m
+}
+
+// A run that stops early never looks like a finished one (review I1): a
+// final error after a deny names the devices it left, and says it stopped.
+func TestWorkloadJSONNamesWhatAFinalErrorLeftAfterADeny(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, stopAt("leaf2", http.StatusBadRequest))
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "fw1", "leaf2", "leaf3"),
+		&out, &errb)
+	var got workloadJSON
+	if code != 77 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 0 || got.Stopped != "broker_refused" ||
+		len(got.Refused) != 3 || refusedBy(got)["leaf2"] != "broker_refused" || refusedBy(got)["leaf3"] != "broker_refused" ||
+		got.Refused[0].Reason != "no_grants_matched" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), "BODY-WORDS") {
+		t.Fatalf("an unvalidated body reached stdout: %q", out.String())
+	}
+}
+
+// A final error after a permit: the token is there, the rest is named.
+func TestWorkloadJSONNamesWhatAFinalErrorLeftAfterAPermit(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, stopAt("leaf2", http.StatusBadRequest))
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "leaf1", "leaf2"), &out, &errb)
+	var got workloadJSON
+	if code != 1 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 1 || got.Stopped != "broker_refused" ||
+		len(got.Refused) != 1 || refusedBy(got)["leaf2"] != "broker_refused" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A 500 is agent_error, as the token command files it.
+func TestWorkloadJSONFilesAServerFaultAsAgentError(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, stopAt("leaf2", http.StatusInternalServerError))
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "leaf1", "leaf2"), &out, &errb)
+	var got workloadJSON
+	if code != 1 || json.Unmarshal(out.Bytes(), &got) != nil || got.Stopped != "agent_error" ||
+		refusedBy(got)["leaf2"] != "agent_error" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// Exit 75 after a deny and a permit names the devices the deadline left (M1).
+func TestWorkloadJSONOnExit75NamesTheUnminted(t *testing.T) {
+	flags := workloadBrokerPaged(t, 1, stopAt("leaf2", http.StatusServiceUnavailable))
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "--deadline", "100ms",
+		"fw1", "leaf1", "leaf2", "leaf3"), &out, &errb)
+	var got workloadJSON
+	if code != 75 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 1 || got.Stopped != "broker_unavailable" ||
+		len(got.Refused) != 3 || got.Refused[0].Reason != "no_grants_matched" ||
+		refusedBy(got)["leaf2"] != "broker_unavailable" || refusedBy(got)["leaf3"] != "broker_unavailable" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A scope sweep that stops cannot name what it left, so it says it stopped.
+func TestWorkloadJSONOnAScopeSweepThatStops(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		if req.After != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "spiffe://corp.example.com/host/oxidized-01",
+			Subject: "svc_oxidized", Next: "leaf1", Results: []api.MintItem{{Device: "leaf1", Verdict: "permit",
+				Address: "10.0.0.1", Platform: "arista_eos", Username: "svc-oxidized", Login: "TOKEN-leaf1",
+				ExpiresAt: "2026-10-08T03:00:00Z"}}})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "--scope", "dc"), &out, &errb)
+	var got workloadJSON
+	if code != 1 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Results) != 1 || got.Stopped != "broker_refused" ||
+		len(got.Refused) != 0 || !strings.Contains(out.String(), `"refused":[]`) {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A finished run has no stopped key, however many were refused.
+func TestWorkloadJSONOfAFinishedRunHasNoStopped(t *testing.T) {
+	flags := workloadBroker(t, mixedMFA)
+	var out, errb bytes.Buffer
+	run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "leaf1", "fw1"), &out, &errb)
+	if strings.Contains(out.String(), "stopped") {
+		t.Fatalf("stdout %q", out.String())
+	}
+}
+
+// An item with an error and a detail, and a permit with no token, both land
+// in refused, the detail made printable (M2).
+func TestWorkloadJSONRefusesAnErroredItemAndATokenlessPermit(t *testing.T) {
+	flags := workloadBroker(t, func(w http.ResponseWriter, req api.MintRequest) {
+		_ = json.NewEncoder(w).Encode(api.MintResponse{Principal: "p", Subject: "s", Results: []api.MintItem{
+			{Device: "brk", Error: "broker_error", Detail: "bad\x1bthing"},
+			{Device: "nolog", Verdict: "permit", Address: "10.0.0.1"},
+		}})
+	})
+	var out, errb bytes.Buffer
+	code := run(append(append([]string{"workload", "token", "--format", "json"}, flags...), "brk", "nolog"), &out, &errb)
+	var got workloadJSON
+	if code != 77 || json.Unmarshal(out.Bytes(), &got) != nil || len(got.Refused) != 2 ||
+		got.Refused[0].Error != "broker_error" || strings.ContainsRune(got.Refused[0].Detail, 0x1b) ||
+		got.Refused[1].Device != "nolog" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}

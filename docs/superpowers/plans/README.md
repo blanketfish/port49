@@ -217,6 +217,12 @@ shape (a server offering only Ed25519 against a filed ECDSA key) by a standalone
 and the docs say what Ansible's address keying leaves open, never recommending
 `host_key_auto_add` under `ssh_type: paramiko`, which rewrites `~/.ssh/known_hosts` without its
 `@revoked` and `@cert-authority` lines.
+**9d executed 2026-10-13 to 2026-10-14** on `feature/openssh-host-keys-and-python-clients` (base
+`b898e1c4`), each code task reviewed (Plan 9d — As built, below). G1 passed on OpenSSH 8.5p1 to
+10.2p1, so the 8.5 floor stands. L64, L65 and L66 are closed on all five platforms. Ansible's
+`network_cli` address keying stays an open gap, **awaiting Ryan's decision** (no plan yet). L66
+showed the pre-flight's paramiko guess above wrong (spec ruling 15 corrected): libssh is the
+`ssh_type` that accepted a changed key under `host_key_auto_add`.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5352,6 +5358,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     15, design §17 and the collection README say so; the README sets `HostKeyAlias={{
     inventory_hostname }}` where the connection runs OpenSSH, and L66 (e) measures each path.
     Whether port49 closes the gap for `network_cli` is carried to Ryan.
+  - **Built:** see Plan 9d — As built, below, for what was built, the rows closed, what is carried
+    to later plans, and the operator notes.
 
 - **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
   with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
@@ -5434,7 +5442,9 @@ Important, 17 Minor) was applied before Task 1. The rulings are decision 42 of t
     command's exit 1 does (the `port49 ssh:` line tells them apart), and login exits 2 where ssh
     and trust exit 1 for the same refused `~/.config`.
 - **Operator-facing notes** (the plan's "Operator notes," as the lab measured them; plan 13 owns
-  the guide):
+  the guide). **The `devices trust` and pins-file notes below are superseded by plan 9d (Plan 9d
+  — As built, below): host keys are OpenSSH's, `devices trust` is gone, and the pins file is no
+  longer read. Plan 13 withdraws them.**
   - `port49 login` needs no flags once `~/.config/port49/config.yaml` exists. Keep it, the CA file
     and every directory above them writable by you alone; on Ubuntu run `chmod go-w ~/.config`
     once. `--config FILE` reads another file, which must exist.
@@ -6017,6 +6027,14 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   refused, no try is spent, and it says to run again.
   Whether libykcs11 sets these flags is unmeasured (provisional on L60); a module that does not
   leaves the guard silent and each run spends one try.
+- **A wrong PIN typed in another process logs the running agent off the key** (L60 finding F1,
+  `tests/lab/results/L60-ser8.md`, GitHub issue #6). Measured: one wrong PIN typed at a second
+  `port49 login` left the running agent's next refresh saying "your key needs its PIN: run port49
+  login", with its status `locked`. Unmeasured: other processes using the token, whether the agent
+  still mints on its held connection after the wrong PIN, and what puts the PIN back (a login to
+  the agent's socket failed while the PIN was blocked; a new login after the unblock worked). Until
+  measured, give each token one user at a time, and do not let a script try a PIN on a token an
+  agent holds.
 - **A blocked PIN.** `CKR_PIN_LOCKED`, or the token's own flag, means the PIN is blocked; `port49
   login` says so and keeps no retry. Unblock it with the PUK: `ykman piv access unblock-pin`.
 - **Touch and PIN policy are yours.** For the session key, PIN once and touch never or cached is the
@@ -6170,6 +6188,175 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   ends `SE1: pass` or `SE1: fail`. Neither prints a key or a signature, and each deletes the keys it
   made. Report both outputs with the macOS version and the Mac model; a help-wanted issue asks for
   this at go-public.
+
+### Plan 9d — As built
+
+Executed from `2026-10-13-09d-openssh-host-keys-and-python-clients.md` on
+`feature/openssh-host-keys-and-python-clients` (base `b898e1c4`, the plan's last pre-flight commit),
+each code task reviewed, most through one to five fix rounds. The ledger is
+`.superpowers/sdd/2026-10-13-09d-openssh-host-keys-and-python-clients/progress.md`. The rulings are
+decision 46 of the spec (§13), seventeen of them. Pre-flight: 1 Critical, 8 Important, 18 Minor,
+all applied before Task 1.
+
+- **Built** (`git log b898e1c4..HEAD`; `make test` and `make vet` pass):
+  - **Spec** (2c4d9215 and its fixes): decision 46 and L64–L66.
+  - **Gate G1, the floor** (6af683f2, e63bab1e, 29d713e3; `tests/ssh-compat/2026-10-13-openssh-accept-new.md`):
+    accept-new under a known `HostKeyAlias` refuses a key of another type, in the attack's shape (a
+    server offering only Ed25519 against a filed ECDSA key), and the askpass answers only the ssh
+    port49 started (G1c, the hop's password prompt, with a control). It holds on OpenSSH 8.5p1,
+    8.9p1, 9.6p1 and 10.2p1, so **the OpenSSH floor stays 8.5**. 10.2p1 was not run for one
+    quoted-path form (Task 9 refuses that value).
+  - **`port49 ssh`** (3c097919, 18f2f305, 82c2c810, 62ce3a0e, 543e6c69): reads the operator's
+    `StrictHostKeyChecking`, `HostKeyAlias` and known_hosts with `ssh -G` (evaluated with the real
+    command and environment, so `Match` blocks see them), passes accept-new (their `yes` stands,
+    `no` never passes) and the inventory name as the alias (theirs stands). It refuses an effective
+    `UserKnownHostsFile` that does not resolve to a writable regular file (or a missing one in a
+    writable directory), `/dev/null` included, naming the setting and the resolved path.
+  - **`port49 devices trust`, `internal/hostkeys` and the pins file removed** (459efda6): the command
+    says so and exits 2; `userconfig.LegacyDir` is unexported, so nothing kept reads under
+    `~/.config` and 9b's group-writable refusal is gone.
+  - **`token --json`, `workload token --format json`** (6d23df56, c2730421 and their fixes): a
+    failure is one JSON object with the code or the §5.7 reason; a sweep lists what it did not mint
+    in `refused`, prints `"results": []` never `null`, and names a run that stopped early in
+    `stopped`. New client code `broker_unavailable` (an unreachable or 503 broker, which sent
+    nothing), carried across the agent socket as a typed error.
+  - **The Python library** (3203c098, a63a074f and their fixes; `clients/python`, 3.10+): `Agent`,
+    `Workload`, typed errors, retry only of `revocation_running`, `connection_changed` and
+    `broker_unavailable`. `Workload` never reruns a run (decision 46 ruling 11).
+  - **Netmiko and Python host keys** (ab07f245 and its fixes): `port49.netmiko.connect` files keys
+    under the inventory name in the operator's known_hosts, refuses `@revoked` keys, a
+    `KnownHostsCommand`, a proxy and a port mismatch (below), and a key that is not the filed one.
+  - **The Ansible lookup** `port49.client.token` (864a013e and its fixes; collection `port49.client`,
+    ansible-core 2.16+): tested on 2.16, 2.17, 2.18 and 2.21 with the token absent from the
+    output at every verbosity tested.
+  - **Lab** (47a5ea28 to 6c967491): L64 and L65 closed on five platforms (80a4665d); L66 closed on
+    five platforms (6c967491). Under rule 4 the lab corrected the collection README, spec ruling 15
+    and design §17: the first guess, that Paramiko with `host_key_auto_add` rewrites known_hosts
+    without its `@revoked` and `@cert-authority` lines, was wrong in the way described there.
+- **Rows:** L53 and L54 stay closed (claims amended). L64, L65, L66 closed 2026-10-14
+  (`tests/lab/results/L64-*.md`, `L65-*.md`, `L66-*.md`).
+- **Residuals, measured (spec §15 L64–L66; the collection README says how to configure around
+  each; this is the list):**
+  - **Ansible `network_cli` keys host keys by address** (`ansible_host`), not by name. Under
+    `host_key_auto_add`, both libssh and paramiko presented the token to another host at a moved
+    address (L66 (e)). No `network_cli` `ssh_type` honoured a `HostKeyAlias`. **Awaiting Ryan's
+    decision: whether and how port49 closes this (no plan yet).** Design §17's attack stays open for
+    `network_cli` under `host_key_auto_add`, documented as a gap.
+  - **libssh with `host_key_auto_add` accepts a changed key** and presents the token (L66 (c)).
+  - **paramiko refuses a known_hosts that holds any `@revoked` or `@cert-authority` line**
+    (`InvalidHostKey`), and on a first contact rewrites the file without its comments (L66 (c)). A
+    shop on `@cert-authority` breaks Ansible's paramiko path.
+  - **`persistent_log_messages` writes the token to its log** (L66 (d)), which breaks the rule that
+    no token is ever logged.
+  - **The `ansible.builtin.ssh` master is shared between two names at one address** (L66 (e2)): the
+    second name reuses the first's ControlPath master (the measured reading is in the notes).
+  - **A lookup in `ansible_password` mints more than once per task** (L66 (a)): 10 mints for the
+    first 2 tasks, and at the default cap of 8 the play failed at its second task with
+    `candidate_cap_reached`. The README mints once.
+- **Carried:**
+  - **Plan 12:** publish the Python library (PyPI `port49`) and the Ansible collection (Galaxy
+    `port49.client`) at go-public, **after reserving both names**; each shape's client package
+    installs them beside the client build; the Oxidized example's `secure: true` asks for every device's key in
+    `~/.ssh/known_hosts` before its first backup (per-device toil): measure Oxidized's own host-key
+    options against accept-new and change the example, or say why not.
+  - **Pre-beta review:** the `port49 devices trust` removal line in `cmd/port49/main.go` goes; plan
+    9a's pins-file hint in `port49 ssh` goes.
+  - **L60's session:** whether parallel Ansible forks under a `hardware_key_touch` requirement ask
+    one touch or several (the agent's token lock serializes them; unmeasured). The README's
+    pre-play `port49 token <one such device>` stands until then.
+  - **Ansible's address keying:** see Residuals. If a later plan takes it, a lookup check that
+    refuses a new address for a device whose key is filed under its name is one option; it is
+    Ryan's decision, not this plan's. The `@cert-authority`-only gap in Paramiko (below) is decided
+    with it.
+  - **Plan 13:** these operator notes; plan 9a's `devices trust` notes withdrawn.
+- **Left for later:**
+  - **Netmiko through ProxyJump** (`sock=` via `ssh -W`): the Python client fails closed on a
+    `ProxyJump`, `ProxyCommand` or a `Port` that is not the one it dials, and points to `port49
+    ssh`. Following a bastion safely is a follow-up issue Ryan decides at the 9d PR.
+  - **A `@cert-authority`-only device in Paramiko:** Paramiko cannot check it, so the Python client
+    refuses; use `port49 ssh` or file the key. Owner: the network_cli address-keying decision that
+    awaits Ryan (Carried, above).
+  - **Parked review minors**, none a false pass: Task 9's `ssh-dss` in the algorithm map (M-A),
+    `host_key_uncheckable` for nothing filed (M-B) and a real publickey login in the end-to-end test;
+    Task 12's M1 to M3 (an INVALID first contact marking dependants NOT RUN, CI paramiko against the
+    lab's libssh, an unpinned `ansible.utils`). The final whole-branch review takes them.
+- **Operator-facing notes** (the plan's "Operator notes," as built; plan 13 builds the guide):
+  - **Host keys are OpenSSH's now.** `port49 ssh` uses your own known_hosts: the first connection to
+    a device is accepted and saved ("Permanently added 'core-sw01'"), and a changed key stops at
+    OpenSSH's warning before the token is sent. Nothing to run first; `port49 devices trust` is gone
+    (it says so and exits 2). Keys are filed under the device's inventory name (`HostKeyAlias`), so
+    an address changed in inventory for a device you have reached before is refused at the key
+    exchange. An ssh_config with `UserKnownHostsFile /dev/null` (often beside `StrictHostKeyChecking
+    no` in a `Host *` block) is refused, naming the line: it would make every connection a first
+    contact. Your own `Host` blocks match the device name as written, case and all. A refusal that
+    comes after the mint (`ssh -G` failing, that `/dev/null`) leaves the token unused; it expires.
+  - **Why it matters.** The token is the device's password for its lifetime. A host that takes it
+    can replay it to the real device until it expires. The window port49 leaves is the first
+    contact, per device and per operator, the same one every SSH user accepts.
+  - **Checking a first contact.** Compare the fingerprint ssh prints with the device's console:
+    NX-OS `show ssh key` prints a SHA256 fingerprint; EOS `show management ssh hostkey <type>
+    public`, Junos `file show /etc/ssh/ssh_host_<type>_key.pub`, IOS-XE `show ip ssh` print the key,
+    so run `ssh-keygen -lf` on it (L53; the type is the one ssh filed, L64).
+  - **A changed key.** `port49 ssh` says the key filed under the name is not the one the address
+    presents. Either the device was re-keyed (verify the new key on its console, then `ssh-keygen -R
+    core-sw01`), or the address is not the device: tell security. Ansible's `network_cli` files its
+    own entry under the address, so a re-keyed device you also reach from Ansible needs both:
+    `ssh-keygen -R core-sw01` and `ssh-keygen -R 10.0.0.11` (`-R '[10.0.0.11]:2222'` on another
+    port). For a planned fleet re-key (an image upgrade), over a file of inventory names and one of
+    their addresses: `while read -r d; do ssh-keygen -R "$d"; done < devices.txt` and the same over
+    `addresses.txt`. That reopens the first-contact window for every device in it, until each is
+    reached again; check a sample on the console.
+  - **Verified first contact for a shop.** Ship a managed `GlobalKnownHostsFile` keyed by inventory
+    name, or host certificates with `@cert-authority`; `port49 ssh` leaves both alone. Your own
+    `StrictHostKeyChecking yes` and `HostKeyAlias` in ssh_config stand; `no` is never used.
+  - **Plan 9a's pins file** (`~/.config/port49/known_hosts`) is no longer read. `port49 ssh` names
+    it while it exists; its lines are already OpenSSH's format under the same names, so keep keys
+    you verified with `cat ~/.config/port49/known_hosts >> ~/.ssh/known_hosts`, then remove it. A
+    group-writable `~/.config` (Ubuntu's default) no longer stops `port49 ssh`. `--known-hosts` is
+    refused: use `UserKnownHostsFile` in an ssh_config (`--ssh-config`).
+  - **`--ssh` with a shell wrapper.** `port49 ssh --ssh PATH` takes a program that execs the real
+    `ssh`. A wrapper that is not an exec (a shell script that runs `ssh` as a child) is not the
+    process port49's askpass trusts, so the device's password prompt falls to the terminal and the
+    token is never typed for you. That fails closed; make the wrapper `exec ssh "$@"`.
+  - **`port49 token --json`** prints one JSON object on a failure too (a deny's §5.7 `reason`, or a
+    code: `no_agent`, `per_login_mfa_required`, `touch_timeout`, `key_locked`, `key_absent`,
+    `broker_refused`, `broker_unavailable`, ...); the exit status is unchanged. **`port49 workload
+    token --format json`** lists what was not minted in `refused`, and prints on exit 75 and 77 too.
+  - **Python.** `pip install './clients/python[netmiko]'` (Python 3.10+). `port49.Agent().token(
+    "core-sw01")` for a person, `port49.Workload(broker=…, broker_ca=…, cert=…, key=…).tokens(
+    scope="backup")` for a machine, `port49.netmiko.connect("core-sw01")` for Netmiko. It runs the
+    `port49` CLI, so touches, PINs, hardware keys and the broker CRL check work as they do for
+    `port49 token`; prompts appear on your terminal. Errors are typed (`Denied` with the reason,
+    `MFARequired`, `KeyUnavailable`, `NoAgent`, ...; `broker_unavailable` is `Temporary` and
+    retried). Netmiko's host keys follow `port49 ssh`'s rule in the same known_hosts. Paramiko
+    cannot check `@cert-authority`, so a device covered only by one is refused there; use `port49
+    ssh`, or file its key. A key an `@revoked` line or your `RevokedHostKeys` (a KRL) names is
+    refused, filed or at first contact, before authentication; a `KnownHostsCommand` is refused
+    (use `port49 ssh`); a device name holding `*`, `,`, a space and the like is refused before
+    anything is minted.
+  - **Python and bastions.** The Python client does not follow a `ProxyJump` or `ProxyCommand`, and
+    refuses a `Port` that is not the one it dials, and a `BindAddress` or `BindInterface` (a VRF
+    per site will hit this), which Paramiko cannot honour: Paramiko would dial the address itself, and a
+    key checked or filed could be another host's. It refuses, naming the setting, and the fix is
+    `port49 ssh`, which honours both. This fails closed.
+  - **Ansible.** `ansible-galaxy collection install` the collection and `pip install
+    ./clients/python` on the controller. Mint once per host per play (`pre_tasks` first,
+    `gather_facts: false`, `set_fact`, `no_log: true`); a lookup in `ansible_password` mints more
+    than once per task (10 mints for the first 2 tasks; at the default cap of 8 the play failed at
+    its second task with `candidate_cap_reached`, L66 (a)). Never enable `persistent_log_messages`:
+    it writes the token to its log (L66 (d)). For devices that ask for a touch, run `port49 token <one such device>` before
+    the play, so one proof covers the forks. Host keys are Ansible's own, and `network_cli` keys
+    them by `ansible_host`, the address, not the name: an address changed in Ansible's inventory is
+    a first contact there, and with `host_key_auto_add` the host at it gets the token (both
+    `ssh_type`s, L66 (e)). `ssh_type: libssh` with `host_key_auto_add` also accepts a changed key:
+    never set `host_key_auto_add` with `ssh_type: libssh` (L66 (c)). `ssh_type: paramiko` refuses a
+    known_hosts holding `@revoked` or `@cert-authority` lines and drops its comments on a first
+    contact (L66 (c)). Where the connection runs OpenSSH, set `-o HostKeyAlias={{
+    inventory_hostname }}`. The `ansible.builtin.ssh` master is shared between two names at one
+    address: use one inventory name per address (L66 (e2)). The settings per
+    `ssh_type` are as L66 measured; the collection README has them.
+  - **A wrong PIN typed elsewhere** logs a running agent off a hardware key (L60 F1, issue #6):
+    see Plan 9c's operator notes above.
 
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,

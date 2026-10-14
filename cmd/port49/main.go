@@ -53,10 +53,10 @@ const usage = `usage:
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
   port49 identity [--json] [--socket PATH]
-  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [--known-hosts FILE] [-v]
+  port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [-v]
              [--socket PATH] DEVICE [-- COMMAND...]
-             (mints through your agent and runs your OpenSSH, 8.5 or later; DEVICE's key must be pinned
-             first with port49 devices trust; exits with ssh's status)
+             (mints through your agent and runs your OpenSSH, 8.5 or later; host keys are your OpenSSH
+             known_hosts', accepted at first contact and refused if changed; exits with ssh's status)
   port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
                         [--deadline DURATION] [--scope NAME | DEVICE...]
@@ -91,10 +91,6 @@ const usage = `usage:
   port49 devices check-config --policy FILE --inventory FILE [--config PORT49D_YAML]
                               (--device NAME CONFIGFILE | --batch CONFIGFILE...)
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
-  port49 devices trust [--fingerprint SHA256:...] [--address ADDR] [--port N] [--replace] [--known-hosts FILE]
-                       [--socket PATH] DEVICE
-                (pins the SSH host key DEVICE presents, against the key you verified on its console: NX-OS
-                 prints its SHA256 fingerprint, the others print the key, so give ssh-keygen -lf's)
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
@@ -169,7 +165,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return platformCmd(args[1:], stdout, stderr)
 	case "devices":
 		if len(args) > 1 && args[1] == "trust" {
-			return devicesTrust(args[2:], stdout, stderr)
+			// Decision 46 ruling 4: host keys are OpenSSH's. Until the
+			// pre-beta review, the old command says where it went.
+			fmt.Fprintln(stderr, "port49 devices trust was removed in plan 9d: port49 ssh uses your OpenSSH "+
+				"known_hosts, which accepts a device's key at first contact and refuses a changed one. To check a "+
+				"key at first contact, compare the fingerprint ssh prints with the device's console")
+			return 2
 		}
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)
@@ -922,6 +923,9 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	item, err := mintProved(context.Background(), proveFlags(*socket),
 		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
+		if *asJSON {
+			_ = json.NewEncoder(stdout).Encode(tokenFailureOf(device, item, err))
+		}
 		return 1
 	}
 	// The device's own ceiling, said where the operator is looking, for a

@@ -20,7 +20,7 @@ const configBroker = "https://broker.example:8443"
 
 // privateDir is a fresh directory only this user can write, whatever the
 // umask: under umask 002, the default on Ubuntu, a t.TempDir is
-// group-writable, and port49 reads no config or pins file below one
+// group-writable, and port49 reads no config file below one
 // (decision 42 ruling 6).
 func privateDir(t *testing.T) string {
 	t.Helper()

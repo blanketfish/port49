@@ -227,8 +227,11 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   one of the client codes: `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
   `revocation_running`, `per_login_mfa_required` (with `per_login_mfa: {accept,
   reuse_for_seconds, reuse_from, levels}`, never the challenge), `touch_timeout`, `key_locked`,
-  `key_absent`, `broker_refused`, `connection_changed`, `no_token` (a permit with no token), and
-  `agent_error` (any other). These are the CLI's codes, like design §17's API error codes, not
+  `key_absent`, `broker_refused` (the broker refused a proof with a 4xx, or the CRL check refused
+  the broker's certificate: not to be tried again as it is), `broker_unavailable` (the broker
+  unreachable or answering 503, on /token or in a touch or sign-in proof: temporary; a proof's 500
+  is `agent_error`), `connection_changed`, `no_token` (a permit with no token), and `agent_error` (any
+  other; an item's own `error`, e.g. the broker's `broker_error`, is passed through as sent). These are the CLI's codes, like design §17's API error codes, not
   §5.7 reason codes; the deny's `reason` is §5.7's, as the broker sent it. `detail` is made
   printable (`printsafe.Line`, 512).
 - **R10. `port49 workload token --format json`** gains `refused`: one entry per item not minted
@@ -236,6 +239,12 @@ Under the standing grant (security first, keep moving), each on reasoning unless
   never a token. With no `--out`, the object is printed whenever the broker answered, so on 77
   ("every device denied") and 75 (some pages minted) stdout says which and why. With `--out` the
   file is still written only when a permit is in it (decision 40 ruling 10, pre-flight I-1).
+  `results` and `refused` are `[]`, never `null`. A run that stops before it finishes (75, 77 and
+  1 mid-run) never looks like a finished one: each device left unminted is in `refused` with the
+  CLI code that stopped it (`broker_unavailable` or `connection_changed` for 75, `broker_refused`
+  for a 4xx or a broker certificate refused under `broker_crl`, `agent_error` otherwise), and the object has a top-level `"stopped"` holding that code, absent on a finished
+  run. A `--scope` sweep that stops cannot name what it left, so `stopped` tells it from a
+  finished one. Task 8 relies on `stopped`.
 - **R11. The library's errors and retries.** One exception class per kind of code (`NoAgent`,
   `SessionOver`, `Denied` with the §5.7 `reason`, `MFARequired` with the requirement,
   `KeyUnavailable`, `BrokerRefused`, `Temporary`, `Final`, `NotInstalled`, `HostKeyError`), all
@@ -460,13 +469,16 @@ broker's item (`verdict`, `reason`, `detail`; no token); an item the broker coul
 item (`error`, `detail`); anything else is `{"device", "error", "detail"}`, `error` one of the
 CLI's codes `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
 `revocation_running`, `per_login_mfa_required` (with `per_login_mfa`, never its challenge),
-`touch_timeout`, `key_locked`, `key_absent`, `broker_refused`, `connection_changed`, `no_token`,
-`agent_error`. These are the CLI's codes, not §5.7 reason codes.
+`touch_timeout`, `key_locked`, `key_absent`, `broker_refused`, `broker_unavailable`,
+`connection_changed`, `no_token`, `agent_error`. These are the CLI's codes, not §5.7 reason codes.
 
 **`port49 workload token --format json`** prints the broker's answer with only the minted items
 in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, `error`, `detail`,
 `per_login_mfa` without its challenge). Without `--out` the object is printed whenever the broker
-answered, on exit 75 and 77 too (§13 decision 46 ruling 10).
+answered, on exit 75 and 77 too (§13 decision 46 ruling 10). A run that stopped early also lists
+each device it left in `refused` and has a top-level `stopped` holding the CLI code that stopped
+it (`broker_unavailable` and `connection_changed`, both exit 75; `broker_refused`, a 4xx or a broker
+certificate refused under `broker_crl`; `agent_error`); `stopped` is absent on a finished run.
 ```
 
 - [ ] **Step 4: Decision 42's amendments.** In its heading paragraph, after "9d host keys from
@@ -4159,7 +4171,7 @@ description:
     (C(port49 token --json) with your agent, or C(port49 workload token) with a workload certificate).
   - Each call is a mint. Mint once per host per play in a C(set_fact) with C(no_log), not in
     C(ansible_password), which Ansible templates at every task.
-  - Needs the port49 Python library on the controller (C(pip install port49)).
+  - Needs the port49 Python library on the controller (C(pip install ./clients/python) from the port49 repository).
   - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name;
     see the collection README before setting C(host_key_auto_add), and never set it with C(ssh_type=paramiko).
 options:
@@ -4227,7 +4239,7 @@ class LookupModule(LookupBase):
             import port49
         except ImportError:
             raise AnsibleError("the port49 lookup needs the port49 Python library on the controller: "
-                               "pip install port49 (clients/python in the port49 repository)") from None
+                               "pip install ./clients/python from the port49 repository") from None
         opt = self.get_option
         field, enable, ttl = opt("field") or "login", bool(opt("enable")), opt("ttl")
         if field == "enable" and not enable:
@@ -4541,7 +4553,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   `RevokedHostKeys` (a KRL) names is refused, filed or at first contact, before authentication;
   a `KnownHostsCommand` is refused (use `port49 ssh`); a device name holding `*`, `,`, a space and
   the like is refused before anything is minted.
-- **Ansible.** `ansible-galaxy collection install` the collection and `pip install port49` on the
+- **Ansible.** `ansible-galaxy collection install` the collection and `pip install ./clients/python` on the
   controller. Mint once per host per play (`pre_tasks`, `set_fact`, `no_log: true`); a lookup in
   `ansible_password` mints at every task (L66). For devices that ask for a touch, run `port49
   token <one such device>` before the play, so one proof covers the forks. Host keys are

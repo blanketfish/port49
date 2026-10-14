@@ -1,0 +1,1 @@
+{"principal":"spiffe://corp.example.com/host/oxidized-01","subject":"svc_oxidized","results":[],"refused":[{"device":"fw1","verdict":"deny","reason":"no_grants_matched"}]}

@@ -6286,27 +6286,58 @@ issues (§13 decision 43).
 - **No sign-in** while a held certificate has more than a quarter of its life left, or while the
   provider does not answer and it is still valid; `--sign-in` forces one.
 
-**`port49 devices trust [--fingerprint SHA256:…] [--address ADDR] [--port N] [--replace] DEVICE`**
-pins the SSH host key the device presents, in `$XDG_CONFIG_HOME/port49/known_hosts` under its
-inventory name.
-- **The address.** One mint through the agent gives it; `--address` is the alternative.
-- **When it pins.** Only against a `--fingerprint` the operator verified out of band, or a `yes`
-  typed at a terminal. On the device's console (L53), NX-OS prints a SHA256 fingerprint beside the
-  key; EOS, IOS-XE, vJunos-router and vSRX print the key itself (OpenSSH base64, and on IOS-XE hex
-  DER too), so there the operator compares the key, or gives `--fingerprint` what `ssh-keygen -lf`
-  prints for it.
-- **An existing pin.** It is replaced only with `--replace` (decision 42 rulings 7–9).
+**`port49 devices trust`** was removed by plan 9d (§13 decision 46 ruling 4): port49 keeps no host
+key. It answers one line naming the change and exits 2.
 
 **`port49 ssh [--port N] [--ssh PATH] [--ssh-config FILE] [-v] DEVICE [-- COMMAND…]`** mints a
 token through the agent and logs in with the operator's OpenSSH (8.5 or later).
-- **Host keys.** It refuses a device with no pinned key before minting, and hands ssh the pin as
-  the only key it accepts.
-- **The token** goes only to the device's own password prompt, once, through ssh's askpass.
+- **Host keys are OpenSSH's** (§13 decision 46). The operator's own known_hosts files apply, with
+  `StrictHostKeyChecking=accept-new` (or `yes`, where the operator's ssh_config says so; never
+  `no`) and the device's inventory name as `HostKeyAlias` (unless the operator's ssh_config sets
+  one). A first connection is accepted and saved by ssh; a changed key, or a key of another type
+  under a name that holds one, stops ssh before the token is sent, and `port49 ssh` names
+  `ssh-keygen -R` (with `-f` when the first file is not `~/.ssh/known_hosts`). A first
+  `UserKnownHostsFile` that cannot keep a key (`none`; a path that resolves to anything but a
+  regular file, such as `/dev/null` or a FIFO; a missing directory, a dangling link or a file the
+  user cannot write; or a value holding a space or a relative path, which `ssh -G` prints
+  ambiguously) is refused under accept-new, naming the setting and where it resolves. Why it matters: the token is the
+  device's password for its lifetime, and a host that takes it can replay it to the real device.
+  The window this leaves is the first contact, per device and per operator; a shop that wants
+  that verified too uses a managed `GlobalKnownHostsFile` or `@cert-authority`, which apply
+  unchanged.
+- **The token** goes only to the device's own password prompt, once, through ssh's askpass, never
+  a ProxyJump hop's (§13 decision 46 ruling 2).
 - **Exit and warnings.** It exits with ssh's status, and warns on the terminal within
   `session.ceiling_warning` of the device's ceiling (decision 42 rulings 10 and 11).
 
 **`port49 workload token … --scope NAME`** mints, page by page, every device the scope selects on
 which the workload holds a grant, in place of a device list (decision 42 rulings 1–5).
+
+**`port49 token --json DEVICE`** prints the broker's item as JSON on stdout. On a failure it
+prints one JSON object too, keeping its exit status (§13 decision 46 ruling 9): a deny is the
+broker's item (`verdict`, `reason`, `detail`; no token); an item the broker could not decide is its
+item (`error`, `detail`); anything else is `{"device", "error", "detail"}`, `error` one of the
+CLI's codes `no_agent`, `agent_too_old`, `session_over`, `credential_revoked`,
+`revocation_running`, `per_login_mfa_required` (with `per_login_mfa`, never its challenge),
+`touch_timeout`, `key_locked`, `key_absent`, `broker_refused` (the broker refused a proof with a
+4xx, or the CRL check refused the broker's certificate, in the agent or in a proof: not to be tried
+again as it is), `broker_unavailable` (the broker could not be reached or
+answered 503: an outage to try again), `connection_changed`, `no_token`, `agent_error`. Two share a
+§5.7 name, `credential_revoked` and `per_login_mfa_required`, and mean what the broker's reason
+means; the rest are the CLI's alone. `broker_error` in an item's `error` is the broker's own code
+for a device it could not decide (it answered, and failed on that one device); the agent's socket
+code of the same name, for a broker fault it cannot tell further, is `agent_error` here, and a
+broker outage is `broker_unavailable`. A proof (touch or sign-in) maps alike: down or 503 is
+`broker_unavailable`, a 4xx `broker_refused`, a 500 `agent_error`; no terminal, or a sign-in the
+person abandoned, stays `per_login_mfa_required`.
+
+**`port49 workload token --format json`** prints the broker's answer with only the minted items
+in `results`, and every other item in `refused` (`device`, `verdict`, `reason`, `error`, `detail`,
+`per_login_mfa` without its challenge). Without `--out` the object is printed whenever the broker
+answered, on exit 75 and 77 too (§13 decision 46 ruling 10). A run that stopped early also lists
+each device it left in `refused` and has a top-level `stopped` holding the CLI code that stopped
+it (`broker_unavailable` and `connection_changed`, both exit 75; `broker_refused`, a 4xx or a broker
+certificate refused under `broker_crl`; `agent_error`); `stopped` is absent on a finished run.
 
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
 prints what a change to the inventory does to the bundle: devices added, removed and changed,
@@ -8259,7 +8290,9 @@ are confirmed or overridden at its pre-flight; Ryan may override any.
 pinned host keys.** *Plan 9a, 2026-10-09.* Rulings rest on reasoning unless they say data. Plan
 9a's pre-flight questions Q1–Q5 were answered as the plan recommended; Ryan may override any.
 Plan 9 is split: 9b the OIDC public client, 9c hardware-backed keys and the broker certificate's
-CRL check, 9d host keys from inventory and the Python and Ansible clients.
+CRL check, 9d host keys from inventory and the Python and Ansible clients. Plan 9d (decision 46)
+made host keys OpenSSH's: rulings 7 and 9 are withdrawn, ruling 14's inventory fingerprint is not
+built, and ruling 10's host-key options are replaced.
 
 - **1. Mint by scope** (design §17: "a device name or a `scope`, resolved through inventory").
   - **The request.** `POST /v1/tokens` takes `scope` in place of `devices`, one or the other, and
@@ -8345,7 +8378,7 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     breaks nothing. A CA file the config file names is refused when group or others can write it.
   - **Not `port49 workload`.** A cron job states what it trusts on its own line.
   - Task 4.
-- **7. Pinned host keys** (design §17).
+- **7. Withdrawn by decision 46 ruling 1.** Pinned host keys (design §17).
   - **The file.** `$XDG_CONFIG_HOME/port49/known_hosts`, in OpenSSH's format, one line per key,
     whose host field is the device's inventory name. It is held to ruling 6's ownership rule.
   - **How `port49 ssh` uses it.** As ssh's only known-hosts source, with the device's name as
@@ -8354,13 +8387,14 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     authentication.
   - **No pin.** A device with no pinned key is refused before anything is minted.
   - Tasks 5 and 6.
-- **8. Names.** `port49 ssh` and `port49 devices trust` take device names of letters, digits, `.`,
-  `_` and `-`, starting with a letter or a digit, 253 at most.
+- **8. Names.** `port49 ssh` and `port49 devices trust` (the command is removed by decision 46; the
+  rule stands for `port49 ssh` and the Python client, decision 46 ruling 3) take device names of
+  letters, digits, `.`, `_` and `-`, starting with a letter or a digit, 253 at most.
   - `known_hosts` reads `*`, `?`, `!`, `,` and `[` as patterns, and a leading `@` or `|` as a
     marker or a hash, so a name holding one could pin a key for other devices.
   - A name outside the set is refused with the reason; `port49 token` still serves it.
   - Task 5.
-- **9. `port49 devices trust DEVICE`.**
+- **9. Withdrawn by decision 46 ruling 1.** `port49 devices trust DEVICE`.
   - **The address.** It comes from one mint through the agent, asking a 60s TTL; the token is
     never used and expires at its TTL. A device the caller holds no grant on is refused there, so
     trust is no oracle. `--address` skips the mint (pre-flight Q4).
@@ -8389,9 +8423,7 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     to a host that is not the device. 8.0p1 and 8.2p1 fail on `force` and, by the no-terminal
     route, on the prompt; 8.4p1 on the prompt alone. `port49 token` serves an older ssh.
   - **The command line.** `ssh_config` is honoured. The command line forces:
-    - the pinned file, `HostKeyAlias`, `StrictHostKeyChecking yes`, no host-key update, no DNS or
-      `KnownHostsCommand` source. The file's path and the address are quoted and `%`-escaped, since
-      ssh expands `%` tokens and splits on whitespace there;
+    - host keys as decision 46 ruling 2 sets them (plan 9d), replacing 9a's pinned file;
     - `PubkeyAuthentication no` (L51: every refused key counts against the device's attempt
       limit, and an IOS-XE `login block-for` locks the source address out);
     - `PreferredAuthentications keyboard-interactive,password`, one prompt each;
@@ -8413,8 +8445,13 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     written (no note records it; Task 6's askpass tests pin the forms). L54 measured the second
     form, `(user@device) Password:`, which keyboard-interactive uses, on all five platforms, where
     the askpass answered it once; no platform took `password`, so the first form is not measured.
+    Under decision 46, a prompt naming the alias `ssh -G` reported also counts, and only an asker
+    whose parent is the ssh `port49 ssh` started is answered; one whose pid or parent cannot be
+    read fails closed (decision 46 ruling 2).
   - **Other prompts.** Any other prompt, a jump host's, is asked of the terminal as ssh would ask
-    it: a password with echo off, and a yes/no question with echo on.
+    it: a password with echo off, and a yes/no question with echo on. So is a device-shaped
+    prompt from any other asker, a ProxyJump hop's included; an asker whose pid or parent cannot
+    be read gets nothing, and ssh is ended (decision 46 ruling 2).
   - **A second ask.** A second ask for the device's password, which ssh makes when the device
     refuses the token and offers another method, ends the connection before ssh answers it. No
     second or empty password reaches the device's failed-login counters.
@@ -8435,7 +8472,8 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     L34), so there this line is the warning.
   - Task 6.
 - **12. The lab.** L53 (host keys per platform) and L54 (`port49 ssh` per platform), both closed
-  2026-10-09 on all five platforms (§15). Task 8.
+  2026-10-09 on all five platforms (§15). Task 8. L64 re-measures `port49 ssh`'s host keys under
+  decision 46 (§15).
 - **13. Hardware-backed client keys, for plan 9c** (pre-flight Q2), all without cgo.
   - **PKCS#11 through `github.com/ebitengine/purego`.** It covers YubiKey PIV, smartcards and HSMs.
     The module is `dlopen`ed at run time with `CGO_ENABLED=0`, and CI tests it against SoftHSM2.
@@ -8453,8 +8491,9 @@ CRL check, 9d host keys from inventory and the Python and Ansible clients.
     entitlement an unsigned `port49` cannot have, macOS is served through PKCS#11, a YubiKey. The
     Secure Enclave is dropped only then, and only by Ryan, as is any other route the spike or 9c's
     measurement rules out.
-- **14. Inventory-carried host keys and the Python and Ansible clients, for plan 9d** (pre-flight
-  Q5).
+- **14. Replaced by decision 46** (no inventory host keys; the clients drive the CLI and use
+  OpenSSH's own known_hosts). Inventory-carried host keys and the Python and Ansible clients, for
+  plan 9d (pre-flight Q5).
   - **What moves to 9d:** both. Inventory's host-key fingerprint (design §17's MAY) goes through the
     bundle into the mint item, and `port49 ssh` checks it beside its pins.
   - **Why after L53:** its format follows what L53 shows devices present.
@@ -8730,8 +8769,8 @@ certificate while the certificate is valid.
     not in the design, and what can be automated away from the user is. The cases weighed: 1,000
     devices, 50 operators, a new hire, a laptop rebuilt, and each CA rotated.
   - **Where.** `~/.port49/`, as `~/.ssh/` is, made 0700 when it is missing. It holds `config.yaml`
-    and `issued/`, and no host-key pins: those stay in plan 9a's
-    `$XDG_CONFIG_HOME/port49/known_hosts` until plan 9d takes them out of the user's flow.
+    and `issued/`, and no host key: since plan 9d port49 keeps none
+    (decision 46), and plan 9a's pins file is never read.
     `$PORT49_CONFIG`, and over it `--config FILE`, name another personal file, which must exist.
   - **The system file.** `/etc/port49/config.yaml`, shipped by the install (a package, config
     management or MDM), takes the same keys, under the personal file key by key. A key the personal
@@ -9269,6 +9308,142 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   changes which levels apply leaves the correct assertion identical; and neither rule stops a
   two-change split (delete the test, then swap and re-add it), so review relies on the printed
   `per_login_mfa` diff lines.
+
+**46. The agent in full, fourth part: host keys are OpenSSH's, and the Python and Ansible
+clients.** *Plan 9d, 2026-10-13, on Ryan's rulings of 2026-10-10 (host keys are OpenSSH's job; no
+inventory host keys).* Rulings rest on reasoning unless they say data. Amends decision 42 rulings
+7, 9, 10, 12 and 14, and decision 43 ruling 24.
+
+- **1. port49 stores no host key.** Decision 42 rulings 7 and 9 are withdrawn, and ruling 14's
+  inventory fingerprint is not built: keeping every device's key in the source of truth, and
+  updating it at every re-key, is not feasible at production scale (Ryan). The first-contact
+  window is the one every SSH user accepts. A shop that wants verified first contact uses
+  OpenSSH's own tools, a managed `GlobalKnownHostsFile` or `@cert-authority`, which port49 leaves
+  untouched. Why host keys matter at all: the device password is a one-time token, and an impostor
+  that takes it can replay it to the real device within its lifetime.
+- **2. `port49 ssh`'s host-key options.** After the mint it runs `ssh -G` with the `-F`,
+  `HostName`, `-l`, `-p` and remote command it will run ssh with (`Match sessiontype` and `Match
+  command` blocks are evaluated against the command; measured on 10.2p1, task 3 re-review I1). `stricthostkeychecking true` (the operator's
+  `yes`) stands; any other value is passed as `StrictHostKeyChecking=accept-new`; `no` is never
+  passed. An operator's `HostKeyAlias` stands; otherwise `HostKeyAlias` is the device's inventory
+  name, lowercased. ssh's prompt names the alias, so the askpass answers the device's prompt
+  naming the inventory name or the alias `ssh -G` reported, and only to an asker whose parent
+  process is the ssh `port49 ssh` started: a ProxyJump hop runs with the same `-F`, `-l` and
+  `SSH_ASKPASS`, and a `Match` block can give it the same alias (measured on 10.2p1), so its prompt
+  can match. The asker's pid is read from the socket (`SO_PEERCRED`, `LOCAL_PEERPID`), never from
+  what it says, and its parent from the OS; any other asker's device-shaped prompt is asked of the
+  terminal, and a pid or parent that cannot be read, or an OS without the check, fails closed:
+  nothing is sent, ssh is ended, and `port49 ssh` says it could not tell which process asked. Gate
+  G1c measures the parent on 8.5p1 (`tests/ssh-compat/2026-10-13-openssh-accept-new.md`). Under
+  accept-new, a first
+  `UserKnownHostsFile` that cannot keep a key is refused, naming the setting and where it resolves:
+  accept-new files a first contact in the first file only and connects anyway when it cannot, so
+  every connection would be a first contact (fail closed, never a silent accept-all). Measured on
+  10.2p1 (task 3 review C1): a link to `/dev/null`, `/dev/null` before a real file, `/dev//null` and a
+  missing directory each let a second host take the token. The first file, resolved through links,
+  must be a regular file the user can write, or absent in a directory the user can write (ssh also
+  makes `~/.ssh` in the passwd home, not `$HOME`). `ssh -G` prints a path with a space unquoted, so a
+  value with any field that is not an absolute path is refused as ambiguous (task 3 re-review I2).
+  Under the operator's `yes` it stands, and a changed key's message says to add the verified key.
+  The `ssh-keygen` hint names `-f` with the first file when it is not `~/.ssh/known_hosts` and can
+  keep a key; under the operator's `yes` with `/dev/null`, `none` or a split value it names no file
+  and points at the one ssh names. `ssh -G` runs with the environment the run gets
+  (`SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `PORT49_ASKPASS`; never the token), so a `Match exec` on
+  them is decided alike (task 3 re-review 2, R2). Two residuals are not detected: a directory whose
+  name ends in a space, followed by `/`, still reads as two absolute paths (`ssh -G` prints the
+  default two-file value in that shape, so nothing can refuse it without refusing the default;
+  R1), and a `Match exec` whose answer changes between `ssh -G` and the run. Nothing else about host keys is passed.
+  `ssh -G` failing refuses the run before ssh starts. These refusals follow the mint, since `ssh
+  -G` reads its address; that token is unused and expires. The alias files a key under the name,
+  so an address added to a device in the source of truth meets the key already known under its
+  name, and design §17's replay attack fails at the key exchange for every device the operator
+  has reached through `port49 ssh` or the Python client (ruling 13). It does not hold for
+  Ansible's `network_cli`, which keys host keys by address (ruling 15).
+- **3. Names.** Decision 42 ruling 8 stands, for `port49 ssh` and for the Python client, which
+  checks it before any mint and any known_hosts write: the name is written into the operator's
+  known_hosts.
+- **4. `port49 devices trust` is removed.** Kept as an admin tool only if a reason survived; none
+  did: verified first contact is OpenSSH's (above, or `ssh-keyscan` and `ssh-keygen -lf` against
+  L53's console commands), pre-seeding keys per device is the toil ruling 1 rules out, and its
+  direct dial past a jump host (plan 9a final review I-1) goes with it. It answers one line naming
+  this and exits 2.
+- **5. Plan 9a's pins file** is never read. While it exists, `port49 ssh` names it once per run and
+  says how to keep the keys in it (its lines are already OpenSSH's format under the alias). It is
+  found by `Lstat` alone. `port49 ssh --known-hosts` is refused, naming `UserKnownHostsFile`.
+  Nothing port49 keeps reads a file under `~/.config` through decision 42 ruling 6's walk, so a
+  group-writable `~/.config` stops nothing (plan 9b pre-flight 2, m5).
+- **6. The OpenSSH floor** stays 8.5 unless an 8.5p1 under `accept-new` accepts a key of another
+  type for an alias that holds one; then it rises to the earliest version measured refusing it
+  (data: `tests/ssh-compat/2026-10-13-openssh-accept-new.md`, a server offering only Ed25519
+  against an ECDSA key filed under the alias, the client on its default algorithms; OpenSSH
+  10.2p1 refuses it as a changed key).
+- **7. A changed key** ends ssh with exit 255 before the token is sent; `port49 ssh` says the key
+  filed under the name is not the one the address presents, either because the device's key
+  changed or because the address is not the device, and to verify the key on the console (§15 L53)
+  and run `ssh-keygen -R <name>`. Under the operator's `StrictHostKeyChecking yes` it says too
+  that no key may be filed under the name, and to add the device's key after checking it on the
+  console.
+- **8. The Python library drives the port49 CLI**, never the agent's socket or the broker's API:
+  the CLI carries the per-login proof, the PIN, hardware keys, the broker CRL check, the
+  `Idempotency-Key`, paging and the deadline retry, and a second client would be a second
+  implementation of each. Design §17's "the CLI is the universal client".
+- **9. `port49 token --json` on a failure** prints one JSON object (§12), keeping its exit status.
+  Its `error` codes are the CLI's (§12), not reason codes; a deny's `reason` is §5.7's as the
+  broker sent it; `detail` is made printable; a requirement's challenge is never printed.
+- **10. `port49 workload token --format json`** adds `refused`, and without `--out` prints its
+  object whenever the broker answered. With `--out`, decision 40 ruling 10 stands. `results` and
+  `refused` are `[]`, never `null`. A run that stops before it finishes (exits 75, 77 and 1
+  mid-run) never looks like a finished one: every device left unminted is in `refused` with the
+  CLI code that stopped the run (`broker_unavailable` or `connection_changed` for 75,
+  `broker_refused` for a 4xx or a broker certificate refused under `broker_crl`, `agent_error`
+  otherwise; a detail of fixed words, never the broker's body), and the object has
+  a top-level `"stopped"` holding that code. `stopped` is absent on a run that finished. A
+  `--scope` sweep that stops cannot name what it left, so `stopped` is how it is told from a
+  finished one.
+- **11. The library's errors and retries.** An exception class per kind of code. `Agent.token`
+  retries `revocation_running` and `connection_changed` alone (the CLI sent nothing to mint with),
+  three attempts by default, waiting 1s then 2s; never a deny, a requirement, a key error or a touch
+  timeout (decision 45 ruling 14), and never a workload run, which the CLI's `--deadline` retries
+  under one `Idempotency-Key` per page. No exception, `repr` or message carries a token or the
+  CLI's stdout.
+- **12. The person's terminal.** The library passes stdin through for a person and none for a
+  workload, and forwards the CLI's stderr as it comes, so a touch or sign-in prompt is seen.
+- **13. Python host keys** are accept-new under the name `port49 ssh` uses, in the operator's own
+  files, read through `ssh -G`, `ssh-keygen -F` and `ssh-keygen -Q`. The device name is checked
+  against decision 42 ruling 8 before the mint. Refused before connecting: a `KnownHostsCommand`,
+  which the client cannot run as ssh does (fail closed, naming it); under accept-new, a
+  `UserKnownHostsFile` that keeps nothing (ruling 2); a device whose every filed key an
+  `@revoked` line or the operator's `RevokedHostKeys` revokes, or whose `RevokedHostKeys`
+  `ssh-keygen -Q` cannot read. A revoked key is dropped always, beside any other filed key. A key
+  known under the name is the only key accepted (a changed key, or another type, is refused
+  before authentication, measured 2026-10-14, `tests/lab/results/L65-<platform>.md`); none known, a first contact's key is checked
+  against the revocations and appended under the name, hashed when `HashKnownHosts` is `yes`,
+  after the key exchange and before authentication (measured 2026-10-14,
+  `tests/lab/results/L65-<platform>.md`); an `@cert-authority`
+  line matching the name with no plain key, or the operator's `StrictHostKeyChecking yes` with
+  none, is refused before connecting, since Paramiko cannot check a host certificate. A refusal
+  after the mint leaves its token unused.
+- **14. Packaging.** `clients/python` (import `port49`, Python 3.10+, no runtime dependency; the
+  `netmiko` extra), stdlib `unittest`, run by `make test`, which refuses a Python below 3.10 by
+  name. Not published before go-public.
+- **15. The Ansible lookup** `port49.client.token`, in collection `port49.client` (ansible-core
+  2.16+), over the library; person mode by default, workload mode with `broker`, `broker_ca`,
+  `cert` and `key`. Host keys are Ansible's own (§15 L66), and `network_cli` keys them by
+  `ansible_host`, the address in Ansible's inventory: there an address added to a device is a
+  first contact, and design §17's attack is open under `host_key_auto_add`. Under it, both
+  `ssh_type`s presented the token to another host at a moved address (L66 (e)). The README says
+  so, and sets `HostKeyAlias={{ inventory_hostname }}` where the connection runs OpenSSH: the one
+  measured path that refused the moved address. It never recommends `host_key_auto_add` with
+  `ssh_type: libssh`, which accepted a changed key and presented the token (L66 (c)). This ruling
+  first named Paramiko as the path to avoid, on the guess that it rewrites `~/.ssh/known_hosts`
+  without its `@revoked` and `@cert-authority` lines; the lab showed that guess wrong. Paramiko
+  refuses a file holding those lines outright, refuses a changed key before authentication, and
+  on a first contact rewrites the file without its comments. No `network_cli` `ssh_type` files a
+  key under the name: `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured (L66 (e)).
+  Measured 2026-10-14, `tests/lab/results/L66-<platform>.md`.
+- **16. The Netmiko example** is `port49.netmiko.connect`.
+- **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
+  rows (§15).
 
 ---
 
@@ -9903,6 +10078,20 @@ Beyond those already listed in the design document's §14:
 - **The broker CRL**: revoked refuses before any request; unavailable goes on under `check`, is
   refused under `require`.
 
+**Host keys (decision 46)**
+
+- **Never `no`**: whatever the operator's ssh_config says, `port49 ssh` passes
+  `StrictHostKeyChecking=accept-new`, or the operator's own `yes`, never `no`; under accept-new a
+  first `UserKnownHostsFile` that cannot keep a key is refused before ssh starts, and the Python
+  client refuses it too.
+- **A ProxyJump hop never gets the token**: a hop's prompt under the device's alias is not
+  answered, since the asker's parent is not the ssh `port49 ssh` started; an unreadable pid or
+  parent fails closed (ruling 2).
+- **The token unsent on a changed key**: a host presenting another key than the one filed under
+  the device's name, of the same type or another, never sees the token, from `port49 ssh` or the
+  Python client; nor does a key an `@revoked` line or `RevokedHostKeys` names, filed or presented
+  at first contact, from the Python client.
+
 ---
 
 ## 15. Lab register
@@ -9990,8 +10179,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L50** | Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16, 40 ruling 5 and 41 ruling 10): on Windows AD and on Samba AD, for a service account's entry in its own OU, and for each of `uid`, `description`, `wWWHomePage` and `url` holding a SPIFFE ID, whether the entry itself (`SELF`), a member of Account Operators, a delegated OU administrator ("create, delete and manage user accounts" on the OU) and an ordinary domain user can write it, under the default ACLs and under a candidate ACL plan 8b's docs might prescribe once this row closes (an inherited deny of write on that attribute on the OU for each writer that is not a domain administrator); and whether each write, accepted or refused, is in the directory's audit log as installed and with directory-change auditing turned on. Until it closes, no doc asserts who can write it (rule 1). Row text sharpened by plan 8b, 2026-10-09. | §13 decision 41 ruling 10 (the docs' ACL for the mapping's attribute) | Windows Server AD (L44's box), Samba AD | closed — measured 2026-10-09; tests/lab/results/L50-windows_ad.md, L50-samba_ad.md. Windows Server 2025 and Samba 4.17 alike: an ordinary user writes none of the four; `SELF` writes `wWWHomePage` and `url` whatever the OU's ACL; Account Operators write all four whatever it; a delegated OU administrator writes all four, and under the OU deny adds an allow for itself on the entry and writes (owning the entry alone does not). Neither directory logs a write as installed; with directory-change auditing on, both do. Decision 41 ruling 10 records what the docs say. |
 | **L51** | What an SSH client offering several public keys before the password does to a port49 login (raised by the owner from production NX-OS experience): on each platform, whether each refused key counts against the device's SSH authentication-attempt limit (NX-OS `ssh login-attempts`, Junos `retry-options`, IOS-XE `ip ssh authentication-retries`, EOS's), how many keys an OpenSSH client with a loaded agent can offer before the password prompt never comes, whether a refused key reaches port49 as any TACACS+ exchange, whether the refusals lock the user or the source out afterwards and for how long, and which client-side settings (`IdentitiesOnly yes`, `PubkeyAuthentication no`, `PreferredAuthentications keyboard-interactive,password`) and device-side settings avoid it. Until it closes, the docs give no advice on it. | The operator docs for typing a minted token at an SSH password prompt (plan 13), the agent's and `port49 workload`'s guidance, and Oxidized's SSH settings (`examples/oxidized`) | NX-OS (first), EOS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L51-cisco_nxos.md, L51-arista_eos.md, L51-cisco_iosxe.md, L51-juniper_vjunos.md, L51-juniper_vsrx.md. OpenSSH 10.2p1 client. Every refused key counts as one attempt and sends no TACACS+; the password prompt never comes at 3 keys on NX-OS 10.4(2)F (`ssh login-attempts`, default 3), 4 on IOS-XE 17.13.01a (`ip ssh authentication-retries`, default 3), 6 on EOS 4.31.2F, and 2 × `retry-options tries-before-disconnect` on vJunos-router and vSRX (6 at the default). An agent certificate is two identities. On defaults no lockout follows. A login ban changes that: IOS-XE `login block-for` counts each refused key and blocks the source address, every user and break-glass included, for its period; NX-OS `aaa authentication rejected ... ban` does not count refused keys but bans a username after wrong tokens, the correct token refused at the device with no TACACS+ and no device log line. `PubkeyAuthentication no`, `IdentityAgent none` (on-disk default keys are still offered) and `PreferredAuthentications keyboard-interactive,password` each reach the prompt first try on all five, scoped by `Host`/`Match host`; each disables certificate login for those hosts. A `CertificateFile` with no `IdentityFile` under `IdentitiesOnly yes` offers the certificate alone, one attempt; adding the key's `IdentityFile` makes it two. |
 | **L52** | Why a C8000V running IOS-XE 17.13.01a intermittently skips its TACACS+ method for SSH logins (found during L51, Addendum B of tests/lab/results/L51-cisco_iosxe.md): about four good logins, then 40–55 s in which `aaa authentication login default group port49 local` falls straight to `local` with no connection to port49d, `show tacacs` reporting the server alive with no timeouts, and repeating; unchanged without `single-connection`, without `ip tacacs source-interface`, without accounting, and with no keys offered. Whether it reproduces on another IOS-XE image or a hardware platform, and what the device's AAA state is during a failure window. Until it closes, the docs say only what the operator sees (a valid token refused, nothing in port49's log, `SSH2_USERAUTH` for `User ''`) and must not attribute it to port49 or to IOS-XE generally. | The operator docs' IOS-XE troubleshooting (plan 13) | IOS-XE (C8000V 17.13.01a first) | open — added 2026-10-09 |
-| **L53** | The SSH host key each platform presents to `port49 devices trust`'s scan (plan 9a), and what the scan does to the device. The key: the host-key algorithm negotiated with a client offering every algorithm `x/crypto/ssh` knows but DSA, which OpenSSH 10 cannot use; whether a console command shows the same key or a fingerprint of it, which command, and in what form (OpenSSH base64, SHA-256, hex DER, MD5), so an operator can verify it out of band; whether the key is the same after a reload with the configuration saved, the device shown to have gone down and come back. The scan, a key exchange abandoned before authentication: whether it reaches port49 as any TACACS+ exchange, writes a device log line, or counts against the device's login-attempt or ban limits (IOS-XE `login block-for`, NX-OS `aaa authentication rejected`: a limit of two failures set, three scans, then a login; valid only where a control of two refused logins does trip the limit). | §13 decision 42 rulings 9 and 12; the operator docs' "verify the key on the console" (plan 13) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L53-arista_eos.md, L53-cisco_nxos.md, L53-cisco_iosxe.md, L53-juniper_vjunos-router.md, L53-juniper_vsrx.md. The scan gets an RSA key (key type `ssh-rsa`, the key `port49 devices trust` pins) signed with `rsa-sha2-256` on all five, read off the wire against the scan's own offer. Every platform shows that key on a privileged console: EOS `show management ssh hostkey rsa public` and Junos (both) `file show /etc/ssh/ssh_host_rsa_key.pub` as an OpenSSH base64 blob; NX-OS `show ssh key` as the blob and a SHA256 fingerprint; IOS-XE `show ip ssh` as an OpenSSH (SECSH) blob and `show crypto key mypubkey rsa` as hex DER. Only NX-OS prints a SHA256 fingerprint and none prints MD5, so on the other four the operator compares the key, or runs `ssh-keygen -lf` on it. The ed25519 and ECDSA keys the EOS and Junos consoles also show are other keys, not the one scanned. The key is unchanged after a reload with the configuration saved: each device was seen down (no SSH banner) and back, and its uptime (EOS, IOS-XE, NX-OS) or boot time (Junos) shows it rebooted. A scan reaches port49 as no TACACS+ packet and no decision record on any platform, where the good `port49 ssh` login's window on the same count holds 120 to 270 packets. It does not count against IOS-XE `login block-for` or NX-OS `aaa authentication rejected` (each limit's control, two refused logins as the same user, did trip it, so the measurement holds); no other limit was measured. The device's log: each log was first shown to record a refused SSH login as a user that does not exist (the control), and lines are credited to the scan only by their own stamp inside the scan's window. By that: EOS writes `sshd: Connection closed by <scanner> port N [preauth]` to `/var/log/secure`; `show logging` does not record a refused login either, so it showed none; IOS-XE writes `%SSH-4-SSH2_UNEXPECTED_MSG`, `%SSH-5-SSH2_SESSION ... Failed` and `%SSH-5-SSH2_CLOSE` for a session with no user; vJunos-router and vSRX write the same `sshd ... Connection closed by <scanner> port N [preauth]` to `messages` (the lab config's `system syslog` stanza); NX-OS's logfile gains no line, and it does log the control. The IOS-XE `SSH2_USERAUTH: User ''` line is a refused login, not a scan (L52's signature). In the 2026-10-09 run set (harness commit `0a5e9d3`) all five passed their first run. The first vJunos-router run on the earlier harness commit `74ec202` did not serve SSH within 8 minutes of its reboot (the rerun passed; the cause was not investigated; not seen since). |
-| **L54** | `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's askpass answers it once and the login succeeds at the first try; that a command after `--` runs and its exit status is `port49 ssh`'s; that a pinned key the device does not hold is refused by ssh before any TACACS+ exchange, with the minted token never presented. | §13 decision 42 rulings 10 and 11 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L54-arista_eos.md, L54-cisco_nxos.md, L54-cisco_iosxe.md, L54-juniper_vjunos-router.md, L54-juniper_vsrx.md. On all five, `port49 ssh <device> -- show version` exits 0 with the output present; ssh tries `keyboard-interactive` once, the askpass is asked once and answers it, and port49d records one redeem. A pinned key the device does not hold is refused by ssh (`Host key verification failed`, exit 255) before any TACACS+ exchange: 0 TACACS+ packets (the good login's window on the same count holds 120 to 270) and no decision record but `mint` and `blob`, the token never presented. No platform ended a command that ran with exit 255, so the 255 message's policy wording needed no per-platform change. |
+| **L53** | The SSH host key each platform presents to `port49 devices trust`'s scan (plan 9a), and what the scan does to the device. The key: the host-key algorithm negotiated with a client offering every algorithm `x/crypto/ssh` knows but DSA, which OpenSSH 10 cannot use; whether a console command shows the same key or a fingerprint of it, which command, and in what form (OpenSSH base64, SHA-256, hex DER, MD5), so an operator can verify it out of band; whether the key is the same after a reload with the configuration saved, the device shown to have gone down and come back. The scan, a key exchange abandoned before authentication: whether it reaches port49 as any TACACS+ exchange, writes a device log line, or counts against the device's login-attempt or ban limits (IOS-XE `login block-for`, NX-OS `aaa authentication rejected`: a limit of two failures set, three scans, then a login; valid only where a control of two refused logins does trip the limit). | §13 decision 42 rulings 9 (withdrawn by decision 46) and 12; the operator docs' "check a first-contact key on the console" (decision 46 ruling 7; plan 13). The key it scanned is RSA; the type OpenSSH's defaults accept, and its survival across a reload, are L64's | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L53-arista_eos.md, L53-cisco_nxos.md, L53-cisco_iosxe.md, L53-juniper_vjunos-router.md, L53-juniper_vsrx.md. The scan gets an RSA key (key type `ssh-rsa`, the key `port49 devices trust` pins) signed with `rsa-sha2-256` on all five, read off the wire against the scan's own offer. Every platform shows that key on a privileged console: EOS `show management ssh hostkey rsa public` and Junos (both) `file show /etc/ssh/ssh_host_rsa_key.pub` as an OpenSSH base64 blob; NX-OS `show ssh key` as the blob and a SHA256 fingerprint; IOS-XE `show ip ssh` as an OpenSSH (SECSH) blob and `show crypto key mypubkey rsa` as hex DER. Only NX-OS prints a SHA256 fingerprint and none prints MD5, so on the other four the operator compares the key, or runs `ssh-keygen -lf` on it. The ed25519 and ECDSA keys the EOS and Junos consoles also show are other keys, not the one scanned. The key is unchanged after a reload with the configuration saved: each device was seen down (no SSH banner) and back, and its uptime (EOS, IOS-XE, NX-OS) or boot time (Junos) shows it rebooted. A scan reaches port49 as no TACACS+ packet and no decision record on any platform, where the good `port49 ssh` login's window on the same count holds 120 to 270 packets. It does not count against IOS-XE `login block-for` or NX-OS `aaa authentication rejected` (each limit's control, two refused logins as the same user, did trip it, so the measurement holds); no other limit was measured. The device's log: each log was first shown to record a refused SSH login as a user that does not exist (the control), and lines are credited to the scan only by their own stamp inside the scan's window. By that: EOS writes `sshd: Connection closed by <scanner> port N [preauth]` to `/var/log/secure`; `show logging` does not record a refused login either, so it showed none; IOS-XE writes `%SSH-4-SSH2_UNEXPECTED_MSG`, `%SSH-5-SSH2_SESSION ... Failed` and `%SSH-5-SSH2_CLOSE` for a session with no user; vJunos-router and vSRX write the same `sshd ... Connection closed by <scanner> port N [preauth]` to `messages` (the lab config's `system syslog` stanza); NX-OS's logfile gains no line, and it does log the control. The IOS-XE `SSH2_USERAUTH: User ''` line is a refused login, not a scan (L52's signature). In the 2026-10-09 run set (harness commit `0a5e9d3`) all five passed their first run. The first vJunos-router run on the earlier harness commit `74ec202` did not serve SSH within 8 minutes of its reboot (the rerun passed; the cause was not investigated; not seen since). |
+| **L54** | `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's askpass answers it once and the login succeeds at the first try; that a command after `--` runs and its exit status is `port49 ssh`'s; that a pinned key the device does not hold is refused by ssh before any TACACS+ exchange, with the minted token never presented. | §13 decision 42 rulings 10 and 11; its pinned-key clause measured plan 9a's command line, which decision 46 replaced: L64 (c) and (d) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-09; tests/lab/results/L54-arista_eos.md, L54-cisco_nxos.md, L54-cisco_iosxe.md, L54-juniper_vjunos-router.md, L54-juniper_vsrx.md. On all five, `port49 ssh <device> -- show version` exits 0 with the output present; ssh tries `keyboard-interactive` once, the askpass is asked once and answers it, and port49d records one redeem. A pinned key the device does not hold is refused by ssh (`Host key verification failed`, exit 255) before any TACACS+ exchange: 0 TACACS+ packets (the good login's window on the same count holds 120 to 270) and no decision record but `mint` and `blob`, the token never presented. No platform ended a command that ran with exit 255, so the 255 message's policy wording needed no per-platform change. |
 | **L55** | Keycloak as port49's public client meets it (plan 9b). **The redirect:** for port49-cli registered with `http://127.0.0.1:18749/callback`, `http://127.0.0.1/callback`, `http://127.0.0.1/*` and `http://127.0.0.1:*/callback` in turn, whether the admin API takes the registration and whether an authorization request naming `http://127.0.0.1:<port>/callback` is accepted (the login form shown) for the registered port and an ephemeral one (RFC 8252 §7.3), against a matcher seen to accept the realm's own redirect and refuse another host's. **PKCE:** with `S256`, on port49-cli as the realm file sets its `pkce.code.challenge.method` (recorded), whether a code exchanged with the right verifier, a wrong one and none is answered, and with which `error`; whether `code_challenge_method=plain` is accepted. **Discovery and the answer:** `code_challenge_methods_supported`, `authorization_response_iss_parameter_supported`, and whether the authorization response carries `iss` (RFC 9207). **The key binding:** whether a 43-character base64url `nonce` comes back in the ID token byte for byte, and whether a `prompt=login` sign-in's `auth_time` is within 10s of the sign-in. **`prompt=login` over a live SSO session:** in one browser, a sign-in with no `prompt`, then 15s later, the control, the same session with no `prompt` (whether the form is shown, and `auth_time` against the first), then a `prompt=login` sign-in (whether the form is shown, and whether `auth_time` moves on by 15s or more). | §13 decision 43 rulings 1, 3, 4 and 8; the operator notes' redirect registration (plan 13) | Keycloak (26.x) | closed — measured 2026-10-11; tests/lab/results/L55-keycloak.md. Measured on Keycloak 26.4.7 (a loopback authorization request with the realm's own redirect accepted and another host's refused, so the matcher is shown). The redirect: `http://127.0.0.1:18749/callback` admits port 18749 and refuses 41587; `http://127.0.0.1/callback` and `http://127.0.0.1/*` admit both; `http://127.0.0.1:*/callback` admits neither. PKCE: port49-cli's `pkce.code.challenge.method` is `S256`; the right verifier gets `200` with an `id_token` and `refresh_token`, a wrong one and none each `400 invalid_grant`, and `code_challenge_method=plain` is refused. Discovery lists `[plain S256]` and `authorization_response_iss_parameter_supported: true`, and the authorization response carries `iss`, the issuer. The key binding holds: a 43-character `nonce` came back byte for byte and `auth_time` was +0s from the sign-in. Over a live SSO session the control (no `prompt`, 15s later) showed no form and kept the first `auth_time`, while `prompt=login` showed the form and moved `auth_time` on by 15s. Not measured: a client set to require no PKCE method. |
 | **L56** | Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI. Whether: a broker started with `broker.identity.issuance` and no issuing CA says in `/v1/config` `issuance.available: false`, the CLI says before any sign-in that the broker cannot issue, its log names `init-issuer`, and after `port49-broker init-issuer` and a restart issues; `port49 login --oidc --no-browser` signs in through a scripted browser, asks the password, writes a 0600 key and its certificate, names the principal, starts the agent and refreshes once; `port49 token` mints and the device takes the token over SSH; `port49 refresh` extends the device session with no sign-in; `port49 login` after the agent stopped starts a new one with no sign-in and extends the device session; `port49 login --sign-in` at a terminal, the address pasted, issues a new certificate; an administrator's sign-out refuses the certificate's next mint in the broker's logout words and ends the agent, a `port49 login` over that certificate removes it, and a sign-in from the time the broker names works; with Keycloak stopped, `port49 token`, `port49 refresh` and a new agent over the held certificate work, and `port49 login --sign-in` says the provider did not answer and when the held certificate ends. No compact JWS, code or private key in the CLI's raw output or the agent's log (the PKCE verifier, which port49 draws and the lab never sees, is checked by the unit tests' `credentialsNowhere`). Each cell's assertion has a control that shows it can fail. | §13 decision 43 rulings 5, 8, 11, 12, 14, 16, 17 and 20; the operator notes (plan 13) | Keycloak (26.x); EOS | closed — measured 2026-10-11; tests/lab/results/L56-arista_eos.md. Measured with `bin/port49` on the compose stack, Keycloak 26.4.7 and vEOS 4.31.2F. With no issuing CA the CLI said "the broker cannot issue certificates now (its issuing CA is unavailable); tell its operator" before any sign-in (no password form was shown; the broker's 503 `issuance_unavailable` for an exchange is unit-tested), and the broker's start named the missing CA and `init-issuer`; after `init-issuer` and a restart `port49 login --oidc --no-browser` signed in (the password asked, a control with no `prompt=login` showed no form), wrote the 0600 key and certificate, named `user:alice@corp.example.com`, started the agent and refreshed once (`refreshed at`). `port49 token` was taken by the device over SSH (a token port49 never minted refused); `port49 refresh` extended the device session with no sign-in; `port49 login` after the agent stopped used the held certificate, and `port49 login --sign-in` with the address pasted issued a new one. An administrator's sign-out refused the certificate's next mint in the broker's logout words, ended the agent and removed the certificate at the next `port49 login`, and a sign-in from the named time worked. With Keycloak stopped, `port49 token` (taken by the device), `port49 refresh` and a new agent worked, and `port49 login --sign-in` said the provider did not answer and that `port49 login` without it uses the held certificate, valid until the time it names. No compact JWS, code or private key was in the CLI's raw output, the agent's log or the broker's logs. |
 | **L57** | What a Junos configuration capture carries for configuration groups that reach port49's template classes. Under `show configuration \| display set \| display inheritance`, and the other order (`\| display inheritance \| display set`), against plain `display set`: whether a group applied at the top by `apply-groups` is expanded under `system login class p49-remote` for a `<*>` and a `<p49-*>` path; whether `apply-groups-except` at the class keeps a group's statements off it; whether a group applied from inside another group's definition commits, and is expanded; whether the `apply-groups` and `set groups` lines still print in the inherited capture; whether a class's own leaf (`idle-timeout`) stands over a group's; whether a group's `permissions` is added beside a class's own (a leaf-list). Whether a group applied on the class itself (class-level `apply-groups`) keeps that line in the inherited capture. And whether a TACACS+ session landing in `remote` holds what a nested group added (the nested-group session cell: the inner group adds `permissions network` under `<p49-*>`, and a session under a class holding its own `view` reads `show cli authorization`, which must list `clear` and `view-configuration` from the top-level groups, and `ping 127.0.0.1 count 1 rapid` as the second reading). | `port49 devices check-config`'s group reading (§12; decision 44 rulings 7 and 9): which lines it trusts as expanded, and when it refuses a capture as not inherited | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-12; tests/lab/results/L57-juniper_vjunos-router.md, L57-juniper_vsrx.md. The two images agree. Both inherited set forms expand `p49g-tip` and `p49g-perm` under `p49-remote` and print no `apply-groups` or `set groups` line; plain `display set` prints both and expands nothing. The class-level `apply-groups` is stripped by both inherited forms, with `p49g-classlevel`'s `login-alarms` expanded under `p49-remote`; beside it the class's `apply-groups-except` line is stripped too (it survived in the 2026-10-11 capture, which had no class-level `apply-groups`). The nested-group session cell reads "not applied" on both images: the p49-l57own session listed `clear` and `view-configuration` (the controls) and not the inner group's `network`, and `ping 127.0.0.1 count 1 rapid` was refused with "unknown command" |
@@ -10001,6 +10190,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L61** | Keycloak's `amr` and `acr` in an ID token for `idp_mfa`. With a realm flow of password and OTP, a `prompt=login` sign-in with both: whether the ID token carries `amr`, and which values, with Keycloak's AMR protocol mapper and with none; the control, a password-only sign-in, and its `amr`; whether `acr_values` changes either. | §13 decision 45 ruling 13 (the default `amr: [mfa]`); the operator notes' provider setup | Keycloak (26.x) | closed — measured 2026-10-12; tests/lab/results/L61-keycloak.md (Gate M1 as worded failed: Keycloak emits `otp`, not `mfa`, unless the OTP execution's reference is set to `mfa`; decision 45 ruling 13 records the setup, per plan 9c Task 15 Step 3) |
 | **L62** | A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file; with a home directory another host shares (an NFS export, or the same directory mounted on the WSL host), each host's `port49 login --oidc` keeps its own `<host>_<port>.<machine>.tpmkey`, reads the other's as no held pair, and overwrites neither; on the same shared home a token host (`pkcs11`, certificate `<host>_<port>.<k>.pem`) and a file host each sign in once, log in again with no further sign-in, and overwrite neither certificate; the control, a user outside `tss`, is refused naming the group. | §13 decision 45 rulings 5 and 7 | SER8 (TPM vendor and firmware recorded) | open — added by plan 9c 2026-10-12 |
 | **L63** | The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds it by label and signs with it, whether a rebuilt binary (another `-ldflags -X` value, so another code signature, as an upgrade's) finds it and signs with it, and what a refusal returns (`errSecMissingEntitlement`, -34018, or another). Also observed, outside gate SE1: whether a key made `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` signs while the screen is locked, from a held reference (the agent's refresh) and from a new process (`tests/spike/secureenclave locked`); and, for a deleted keychain item, whether a held reference still signs (`held-after-delete`; if it does, the backend's `Absent` state is unreachable). The control: the same calls for a software key. | §13 decision 45 ruling 6 (gate SE1) | macOS (version and hardware recorded) | open — added by plan 9c 2026-10-12; needs testing on macOS: the backend is built experimental and opt-in (Ryan, 2026-10-12), and `tests/spike/secureenclave` is the check a Mac user runs |
+| **L64** | `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the inventory name, before and after the login (its key types: `UpdateHostKeys`, on by default, may file more after authentication); (b) after a reload with the configuration saved, the device seen down and back: whether `port49 ssh` logs in again with no host-key warning, the filed key still the device's; (c) the entry under the name replaced by another key of the same type: ssh refuses before any TACACS+ exchange, the token never presented, exit 255, `port49 ssh` naming `ssh-keygen -R`; (d) the entry replaced by a key of another type only: the same. Also recorded per platform: the method ssh used and the askpass asks (L54's cells, re-run under the new command line). | §13 decision 46 rulings 2, 6 and 7 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L64-arista_eos.md, L64-cisco_nxos.md, L64-cisco_iosxe.md, L64-juniper_vjunos-router.md, L64-juniper_vsrx.md (every cell on every platform; no host key changed at a reload. (d)'s refusal reads as "changed" on EOS, vJunos-router and vSRX, which file Ed25519 and also offer the RSA key put in its place, and as "another type" on NX-OS and IOS-XE, which file RSA and offer no Ed25519; both exit 255 before the token. UpdateHostKeys files further types on a later login with a key already filed (EOS one, vJunos-router three, vSRX one), never on the first contact; the askpass count is ssh's tried methods, the redeem records the ground truth) |
+| **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s; (f) the device's own key named by an `@revoked` line beside the filed entry, and then, from an empty known_hosts, at first contact: refused before authentication, no TACACS+ exchange, the token never presented, nothing filed. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L65-arista_eos.md, L65-cisco_nxos.md, L65-cisco_iosxe.md, L65-juniper_vjunos-router.md, L65-juniper_vsrx.md (every cell on every platform, netmiko 4.8.0 and paramiko 5.0.0 on Python 3.14.4) |
+| **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host, and again with an idle gap longer than `persistent_connect_timeout` (30 s by default) or a `meta: reset_connection` between tasks: whether the next task logs in again with the spent token and how that fails; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; and, per `ssh_type`, the known_hosts file's comments, `@revoked` and `@cert-authority` lines before and after the run (whether the file is appended to or rewritten without them); (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token, nor does the persistent connection's log (`ANSIBLE_PERSISTENT_LOG_MESSAGES`, `-vvvv`); (e) an address changed in Ansible's inventory for a device reached before, leading to another host: for `libssh` and `paramiko` (and `libssh` with a `HostKeyAlias` in `ansible_libssh_config_file`), and for `ansible.builtin.ssh` with `-o HostKeyAlias={{ inventory_hostname }}`, whether the other host's key is auto-added and whether the token is presented to it; and, for `ansible.builtin.ssh`, two inventory names at one address, whose shared ControlPath (keyed on address, port and user) may let the second name reuse the first's open master: whether its `HostKeyAlias` is ever checked. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L66-arista_eos.md, L66-cisco_nxos.md, L66-cisco_iosxe.md, L66-juniper_vjunos-router.md, L66-juniper_vsrx.md. Every platform gave the same reading, because what is measured is the client. (a) With the lookup in `ansible_password`: 10 mints for the first 2 tasks, then `candidate_cap_reached` at the default cap of 8. (b) Minting once: 1 mint and 1 authentication for ten tasks. After an idle gap or `reset_connection`, the next task logged in again with the spent token, answered PASS `receipt_replayed`. (c) `libssh` appended to the file and kept its comments and marker lines, **but with `host_key_auto_add` accepted a changed key and presented the token**. `paramiko` refused a changed key before authentication, refused a file holding `@revoked` or `@cert-authority` lines (`InvalidHostKey`), and rewrote the file without its comments. (d) The deny names its reason, and `-vvv` and `-vvvv` output hold no token, **but `persistent_log_messages` writes the token to its log**. (e) Under `host_key_auto_add`, `libssh` and `paramiko` presented the token to another host at a moved address. `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured. `ansible.builtin.ssh` with the alias refused the moved address. Two names at one address: the second reused the first's master, and its alias was never looked up. Ruling 15 and the collection README now follow these readings; the ruling's guess about Paramiko was wrong (CLAUDE.md rule 4) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -11946,6 +12138,15 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   - **L62**: swtpm is not a TPM's firmware.
   - **L63**: the entitlement question decides whether the Secure Enclave, built experimental and
     opt-in, works from an unsigned binary.
+- **L64**–**L66** — added by plan 9d. Why each is a row:
+  - **L64**: L53 measured the RSA key an `x/crypto/ssh` scan negotiates; OpenSSH's defaults may
+    accept an Ed25519 or ECDSA key on EOS and Junos, whose survival across a reload nobody
+    measured, and a key that changes at every reload would stop every operator's `port49 ssh`.
+  - **L65**: Paramiko negotiates host keys by its own preferences; that a changed, other-type or
+    revoked key is refused before authentication is decision 46 ruling 13's claim.
+  - **L66**: how often Ansible templates a lookup in a connection variable, what
+    `host_key_auto_add` does to the known_hosts file per `ssh_type`, and what an address moved in
+    Ansible's inventory meets, are Ansible's behaviour, not documentation's.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

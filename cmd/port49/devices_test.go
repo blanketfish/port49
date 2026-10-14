@@ -545,3 +545,14 @@ key_groups:
 		t.Errorf("fqdn: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// port49 devices trust is gone (decision 46 ruling 4): one line on stderr, exit 2, and
+// nothing on stdout.
+func TestDevicesTrustIsGone(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "trust", "--fingerprint", "SHA256:x", "leaf1"}, &out, &errb)
+	if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "removed in plan 9d") ||
+		!strings.Contains(errb.String(), "known_hosts") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}

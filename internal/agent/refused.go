@@ -14,6 +14,11 @@ import (
 // unreachable.
 const codeBrokerRefused = "broker_refused"
 
+// codeBrokerUnavailable is the socket code for a broker the agent could not
+// reach or that answered 503 (a BrokerUnavailableError): an outage a caller may
+// try again, not a broker that answered and refused (that stays broker_error).
+const codeBrokerUnavailable = "broker_unavailable"
+
 // codeNoAttestation is the socket code for a token that shows none of the
 // attestations a touch proof needs (mfatouch.ErrNoAttestation): sent before
 // the key blinked, so the command may prove another way.
