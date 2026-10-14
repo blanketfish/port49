@@ -79,6 +79,8 @@ func Code(secret []byte, at time.Time) (string, error) {
 // SkewReach, is *Skewed; none, ErrWrongCode; a step at or before lastStep,
 // ErrReplayed.
 func Check(secret []byte, code string, now time.Time, lastStep int64) (int64, error) {
+	// A fast path for garbage: correctness does not depend on these guards,
+	// since a malformed code can never equal a generated one.
 	if len(code) != Digits {
 		return 0, ErrWrongCode
 	}

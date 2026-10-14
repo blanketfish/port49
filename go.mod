@@ -3,7 +3,7 @@ module github.com/rhwendt/port49
 go 1.26
 
 require (
-	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
+	github.com/boombuler/barcode v1.1.0
 	github.com/ebitengine/purego v0.11.1
 	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-ldap/ldap/v3 v3.4.14

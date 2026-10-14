@@ -24,8 +24,17 @@ func TestQRTextIsSquareWithAQuietZone(t *testing.T) {
 			t.Fatal("ragged")
 		}
 	}
-	// The quiet zone: the first two lines are light (spaces) in full.
-	if strings.TrimSpace(lines[0]) != "" || strings.TrimSpace(lines[1]) != "" {
-		t.Fatal("no quiet zone")
+	// The quiet zone: the first and last two lines are light (spaces) in
+	// full, and every line starts and ends with four light modules.
+	for _, i := range []int{0, 1, len(lines) - 2, len(lines) - 1} {
+		if strings.TrimSpace(lines[i]) != "" {
+			t.Fatalf("line %d: no quiet zone", i)
+		}
+	}
+	for i, l := range lines {
+		r := []rune(l)
+		if strings.TrimSpace(string(r[:4])) != "" || strings.TrimSpace(string(r[w-4:])) != "" {
+			t.Fatalf("line %d: no quiet zone at the sides", i)
+		}
 	}
 }

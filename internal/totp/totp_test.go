@@ -41,6 +41,25 @@ func TestThreeStepsAwayIsSaidAsSkew(t *testing.T) {
 	}
 }
 
+// The window and the skew reach are held exactly at their edges, both sides:
+// the broker k periods after the code's time. Past Window is said as skew,
+// past SkewReach is simply wrong.
+func TestWindowEdges(t *testing.T) {
+	code := time.Unix(1111111111, 0)
+	for _, k := range []int64{2, -2, 3, -3, 10, -10} {
+		_, err := Check(rfcSecret, "050471", code.Add(time.Duration(k)*Period), 0)
+		var s *Skewed
+		if !errors.As(err, &s) || s.By != -time.Duration(k)*Period {
+			t.Errorf("k %d: not said as skew: %v", k, err)
+		}
+	}
+	for _, k := range []int64{11, -11} {
+		if _, err := Check(rfcSecret, "050471", code.Add(time.Duration(k)*Period), 0); !errors.Is(err, ErrWrongCode) {
+			t.Errorf("k %d: %v", k, err)
+		}
+	}
+}
+
 func TestAStepIsTakenOnce(t *testing.T) {
 	at := time.Unix(1111111111, 0)
 	step, err := Check(rfcSecret, "050471", at, 0)
