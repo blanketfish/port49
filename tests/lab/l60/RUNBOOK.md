@@ -42,5 +42,7 @@ Notes:
 - A wrong PIN means one you know is wrong. Never use the default PIN as the wrong one.
 - If a cell stops early, it says why. What it saw before stopping is already in
   `observations.log`. Every agent it started is stopped by pid.
-- Cell (g) (`TestL60G`) skips until plan 9e is built. The cert-import-order sub-cell of (c) is
-  not built.
+- Cell (g) (`TestL60G`) skips until plan 9e is built.
+- The (c) certificate-order sub-cell runs after step 2. It is read-only: one session, no
+  login, no PIN, nothing written, no terminal. The controller can run it unattended:
+  `PORT49_L60_C_ORDER=1 CGO_ENABLED=0 go test -tags hwkey,hwkey_dlopen ./tests/lab/l60/ -count=1 -v -run '^TestL60COrder$'`

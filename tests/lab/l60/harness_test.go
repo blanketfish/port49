@@ -669,6 +669,19 @@ func loadClientCA(dir string) (*testpki.CA, error) {
 	return &testpki.CA{Cert: cert, Key: ek}, nil
 }
 
+// parsePEMCert is the first certificate in a PEM file's bytes.
+func parsePEMCert(raw []byte) (*x509.Certificate, error) {
+	for {
+		var b *pem.Block
+		if b, raw = pem.Decode(raw); b == nil {
+			return nil, errors.New("no PEM certificate")
+		}
+		if b.Type == "CERTIFICATE" {
+			return x509.ParseCertificate(b.Bytes)
+		}
+	}
+}
+
 // writeClientCA makes the lab client CA in dir, valid a year.
 func writeClientCA(dir string, now time.Time) (*testpki.CA, error) {
 	ca, err := testpki.NewCA("port49 L60 lab client CA", now.Add(-time.Hour), now.Add(365*24*time.Hour))

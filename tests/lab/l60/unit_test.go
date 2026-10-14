@@ -11,11 +11,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -175,6 +177,67 @@ func TestUnitLabBrokerServesAFileKey(t *testing.T) {
 	}
 	if len(out.Sessions) != 1 || out.Sessions[0].Device != leafPlain || out.Sessions[0].Outcome != "extended" {
 		t.Fatalf("refresh: %+v", out.Sessions)
+	}
+}
+
+// The c_order cell's chain check on a test attestation hierarchy: the
+// session slot holds its lab certificate beside its attestation, and
+// mfatouch.Chain picks the attestation, the same chain in the listed order
+// and reversed; chainWords names each link.
+func TestUnitCOrderChainWords(t *testing.T) {
+	now := time.Now()
+	piv, err := testpki.NewPIV(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := writeClientCA(t.TempDir(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	touch, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	sessionAtt, err := piv.Slot(session.Public(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	touchAtt, err := piv.Slot(touch.Public(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labPEM, err := issueFor(ca, session.Public(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab, err := parsePEMCert(labPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := []*x509.Certificate{lab, sessionAtt, piv.Device, touchAtt}
+	rev := slices.Clone(list)
+	slices.Reverse(rev)
+	fwd, err := mfatouch.Chain(list, touch.Public(), session.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := mfatouch.Chain(rev, touch.Public(), session.Public())
+	if err != nil || !slices.Equal(fwd, back) {
+		t.Fatalf("reversed: %v, same %v", err, slices.Equal(fwd, back))
+	}
+	describe := func(c *x509.Certificate) string {
+		if c.Equal(lab) {
+			return "LAB"
+		}
+		if c.Equal(sessionAtt) {
+			return "SESSION_ATT"
+		}
+		return c.Subject.CommonName
+	}
+	got := chainWords(fwd, nil, describe)
+	if !strings.HasSuffix(got, "session SESSION_ATT") || strings.Contains(got, "LAB") {
+		t.Fatalf("%q", got)
+	}
+	if got := chainWords(nil, mfatouch.ErrNoAttestation, describe); !strings.HasPrefix(got, "error: ") {
+		t.Fatalf("%q", got)
 	}
 }
 
