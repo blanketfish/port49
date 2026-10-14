@@ -85,6 +85,12 @@ type Broker struct {
 	// 9e; decision 47): nil when there is none. A certificate issued over a
 	// directory sign-in is taken only while it names the principal's domain.
 	PasswordSignIn *oidc.PasswordSignIn
+	// SignInDirectory is what a directory sign-in asks the directory;
+	// *directory.Resolver is one. Nil with PasswordSignIn set answers 404.
+	SignInDirectory SignInDirectory
+	// Enrollments is the enrollment store's handle (decision 47 D12); Store
+	// keeps the attempt counts. Nil with PasswordSignIn set is a lost store.
+	Enrollments store.Enrollments
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
 	NoX509 bool
@@ -219,6 +225,13 @@ type Broker struct {
 	// said is, by key, when sayOnce last said it.
 	said map[string]time.Time
 
+	// enrollLost is why the enrollment store is lost, "" when it is not;
+	// enrollLostSaid is the why its error line last said. Guarded by
+	// enrollMu, which EnrollmentStoreLost takes on every sign-in.
+	enrollMu       sync.Mutex
+	enrollLost     string
+	enrollLostSaid string
+
 	// ready is what /readyz answers (SetReady).
 	ready atomic.Pointer[string]
 }
@@ -233,6 +246,8 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("POST /v1/certificate", b.issue)
+	mux.HandleFunc("POST /v1/sign-in", b.signIn)
+	mux.HandleFunc("POST /v1/sign-in/confirm", b.signInConfirm)
 	mux.HandleFunc("GET /v1/identity", b.identity)
 	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
 	mux.HandleFunc("POST /v1/explain", b.explain)
@@ -326,6 +341,10 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 			}
 			c.OIDC = append(c.OIDC, api.OIDCProvider{Issuer: v.Issuer, ClientID: v.ClientID, Scopes: scopes})
 		}
+	}
+	if b.PasswordSignIn != nil {
+		c.Methods = append(c.Methods, "directory_password")
+		c.SignIn = &api.SignInConfig{SecondFactor: "totp"}
 	}
 	if b.Issuer != nil {
 		available := b.Issuer.Unavailable == nil

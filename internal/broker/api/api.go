@@ -43,6 +43,9 @@ type Config struct {
 	// Issuance is set when the broker issues a person a certificate over an
 	// OIDC sign-in (plan 9b; spec §13 decision 43 ruling 18).
 	Issuance *Issuance `json:"issuance,omitempty"`
+	// SignIn is set when the broker signs a person in by directory password
+	// (plan 9e; decision 47).
+	SignIn *SignInConfig `json:"sign_in,omitempty"`
 	// BrokerCABundle is the CAs a client trusts for this broker's server
 	// certificate, PEM: the one in use and, through a rotation, the next
 	// (decision 43 ruling 25). Empty when broker.tls_ca_bundle_file is not
