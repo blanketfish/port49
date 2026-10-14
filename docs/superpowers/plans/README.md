@@ -223,6 +223,10 @@ and the docs say what Ansible's address keying leaves open, never recommending
 `network_cli` address keying stays an open gap, **awaiting Ryan's decision** (no plan yet). L66
 showed the pre-flight's paramiko guess above wrong (spec ruling 15 corrected): libssh is the
 `ssh_type` that accepted a changed key under `host_key_auto_add`.
+**9e written 2026-10-14** (`2026-10-14-09e-directory-password-sign-in.md`, fifteen tasks), on Ryan's
+rulings of that day: D1–D11 as recommended, D7 as a sealed file on the memory store that fails
+closed when lost (`enrollment_store_lost`, never a reopened window), D12 a separate enrollment
+store handle that can point at a global etcd. The global and regional split itself is plan 11a.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6388,6 +6392,23 @@ Projected ServiceAccount token validation against the cluster JWKS; identity
 
 Separate listener on 300, mutual TLS replacing the shared key, device records expressing
 both. Design §11.
+
+## Plan 11a — Global and regional stores (design §13; Ryan, 2026-10-14)
+
+Not yet written. Built in, not left to the operator: a deployment in several regions (Ryan's
+shape at work is three regions, three Kubernetes clusters) runs one **global** etcd, one member
+per region, and one **regional** etcd per cluster. Global holds what is written rarely and must
+agree everywhere: enrollments (9e's `directory.enrollment_store`), revocations, unlocks,
+second-factor resets, the TOTP used-step record, and policy. Each port49d watches it and serves
+reads from a local cache. Regional holds the hot path: tokens, login contexts, receipts, and
+attempt counts (a spray across three regions gets 3×5 guesses, accepted unless the lab says
+otherwise). A region cut off from global keeps verifying from its cache and refuses new
+enrollments and revocations (fail closed). Replaces design §13's single-store default with this
+split for multi-region. Lab: three simulated regions with netem latency and a cut region,
+measuring the cache, the fail-closed edges, and the cross-region replay of a TOTP code.
+Backups stay the operator's tools (cron, Velero, etcd snapshots); the notes show one of each,
+alongside 9e's `port49 directory export` and `import`. Lands before plan 12, whose failure matrix
+includes the cut region.
 
 ## Plan 12 — Deployment (§19 step 12)
 
