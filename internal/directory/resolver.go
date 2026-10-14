@@ -60,6 +60,9 @@ type Resolver struct {
 	// on its own budget (the grace read, a refusal); 10s when zero, as
 	// the broker's holdTimeout.
 	StoreTimeout time.Duration
+	// PersonDial dials the connection a person's bind is made on; nil is
+	// dialPerson (signin.go).
+	PersonDial func(ctx context.Context, s Server) (PersonConn, error)
 	// Calls counts the answers a ForTestsStaticResolver gave: nothing
 	// else sets it.
 	Calls atomic.Int64

@@ -147,42 +147,59 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 // query's timeout.
 func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 	return func(ctx context.Context, s Server) (Client, error) {
-		if u, err := url.Parse(s.URI); err != nil || (!s.StartTLS && u.Scheme != "ldaps") {
-			return nil, fmt.Errorf("directory %s: ldap:// needs start_tls; no connection is made in clear", s.Label())
-		}
-		tc, err := tlsConfig(cfg, s, cr)
+		conn, err := dialTLS(ctx, cfg, s, cr)
 		if err != nil {
 			return nil, err
 		}
-		d := &net.Dialer{}
-		if dl, ok := ctx.Deadline(); ok {
-			d.Deadline = dl
-		}
-		opts := []ldap.DialOpt{ldap.DialWithDialer(d)}
-		if !s.StartTLS {
-			opts = append(opts, ldap.DialWithTLSConfig(tc))
-		}
-		conn, err := ldap.DialURL(s.URI, opts...)
-		if err != nil {
-			return nil, err
-		}
-		conn.SetTimeout(cfg.QueryTimeout)
-		// The query's deadline ends the handshake and the bind, which have
-		// no context of their own, by closing the connection under them.
+		// The query's deadline ends the bind, which has no context of its
+		// own, by closing the connection under it.
 		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		defer stop()
-		if s.StartTLS {
-			if err := conn.StartTLS(tc); err != nil {
-				conn.Close()
-				return nil, err
-			}
-		}
 		if err := bind(ctx, conn, s, cr); err != nil {
 			conn.Close()
 			return nil, err
 		}
 		return ldapClient{c: conn}, nil
 	}, nil
+}
+
+// dialTLS dials s and secures it (LDAPS, or StartTLS), returning the
+// connection unbound. cr is never nil: tlsConfig reads it unguarded, and
+// it alone decides whether a client certificate is presented. Nothing is
+// ever sent in clear: an ldap:// server without start_tls is refused
+// before it is dialled.
+func dialTLS(ctx context.Context, cfg Config, s Server, cr *Credentials) (*ldap.Conn, error) {
+	if u, err := url.Parse(s.URI); err != nil || (!s.StartTLS && u.Scheme != "ldaps") {
+		return nil, fmt.Errorf("directory %s: ldap:// needs start_tls; no connection is made in clear", s.Label())
+	}
+	tc, err := tlsConfig(cfg, s, cr)
+	if err != nil {
+		return nil, err
+	}
+	d := &net.Dialer{}
+	if dl, ok := ctx.Deadline(); ok {
+		d.Deadline = dl
+	}
+	opts := []ldap.DialOpt{ldap.DialWithDialer(d)}
+	if !s.StartTLS {
+		opts = append(opts, ldap.DialWithTLSConfig(tc))
+	}
+	conn, err := ldap.DialURL(s.URI, opts...)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetTimeout(cfg.QueryTimeout)
+	// The deadline ends the handshake, which has no context of its own, by
+	// closing the connection under it.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if s.StartTLS {
+		if err := conn.StartTLS(tc); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
 }
 
 // ldapClient is a bound *ldap.Conn as a Client (pre-flight I-3): every
