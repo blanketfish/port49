@@ -31,6 +31,9 @@ __pycache__/
 /tests/lab/logs/
 # L66's private Ansible collections (ansible-galaxy installs them; nothing is committed)
 /tests/lab/l66/.collections/
+# `pip install ./clients/python` writes these into the tree
+/clients/python/build/
+/clients/python/src/*.egg-info/
 # containerlab's per-lab working directory, created beside the topology it runs
 /tests/lab/topologies/clab-*/
 # deploy/compose's trial PKI and env files (go run ./tests/compose/cmd/compose-pki)

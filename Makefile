@@ -206,8 +206,9 @@ lab-ssh:
 # the host keys of Ansible's connection plugins, one platform at a time. It
 # installs nothing: the venv needs ansible-pylibssh and ./clients/python, and
 # tests/lab/l66/.collections the platform collections (the harness names the
-# command when one is missing). Needs sshpass, docker, containerlab, the images
-# and `make build`.
+# command when one is missing). Needs libnss-wrapper (libssh takes its home
+# from the passwd entry; every play runs under nss_wrapper with the private one),
+# docker with alpine:3.22 pulled, containerlab, the images and `make build`.
 lab-ansible:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \

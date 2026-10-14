@@ -43,7 +43,6 @@ import (
 var (
 	l66RecapRe = regexp.MustCompile(`(?m)^(\S+)\s*:\s+ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)` +
 		`(?:\s+skipped=(\d+))?(?:\s+rescued=(\d+))?(?:\s+ignored=(\d+))?`)
-	l66HostTagRe = regexp.MustCompile(`^<([^>\s]+)> `)
 )
 
 // l66Recap is one host's line of the PLAY RECAP.
@@ -454,54 +453,8 @@ func l66LoadSegs(path, addr string) ([]l66Seg, error) {
 	return segs, nil
 }
 
-// l66HostSection is the lines of an `ansible-playbook -vvv` output that belong to host: from a line tagged
-// `<host> ` to the next line tagged for another host. Untagged lines belong to the host before them.
-func l66HostSection(text, host string) string {
-	var keep []string
-	cur := ""
-	for _, ln := range strings.Split(text, "\n") {
-		if m := l66HostTagRe.FindStringSubmatch(ln); m != nil {
-			cur = m[1]
-		}
-		if cur == host {
-			keep = append(keep, ln)
-		}
-	}
-	return strings.Join(keep, "\n")
-}
-
-// l66AliasRead is what one host's ssh -vvv output says about its HostKeyAlias.
-type l66AliasRead struct {
-	// Lines are the lines that name the alias in a known_hosts lookup or a filed key.
-	Lines []string
-	// Muxed: the connection reused an open master. NewConnection: it authenticated afresh. KeyChecked: ssh
-	// compared a server key it was sent.
-	Muxed, NewConnection, KeyChecked bool
-}
-
-var l66AliasLineRe = regexp.MustCompile(`hostkeys_foreach|load_hostkeys|record_hostkey|is known and matches|Permanently added|known hosts|Host '`)
-
-func l66ReadAlias(section, alias string) l66AliasRead {
-	var r l66AliasRead
-	// Ansible shows ssh's stderr inside a bytes repr, newlines escaped.
-	s := strings.ReplaceAll(section, `\n`, "\n")
-	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(alias) + `\b`)
-	for _, ln := range strings.Split(s, "\n") {
-		if word.MatchString(ln) && l66AliasLineRe.MatchString(ln) {
-			r.Lines = append(r.Lines, strings.TrimSpace(ln))
-		}
-	}
-	r.Muxed = strings.Contains(s, "auto-mux: Trying existing master") || strings.Contains(s, "mux_client_request_session: master session id")
-	r.NewConnection = strings.Contains(s, "Authenticated to ")
-	r.KeyChecked = strings.Contains(s, "Server host key:") || strings.Contains(s, "is known and matches")
-	return r
-}
-
 // l66Result is one cell's row.
-type l66Result struct {
-	id, outcome, observation string
-	elapsed                  time.Duration
-}
+type l66Result = l64Result
 
 // l66Outcome is a cell's verdict. kind is claim (ok is whether the claim held), refusal (a claim whose
 // zero needs the positive control) or record (it records what happens: ok is only whether the thing could
@@ -538,20 +491,21 @@ func l66WhyInvalid(kind string, ok, controlOK, unread bool) string {
 	return ""
 }
 
-// l66Writable is whether a run's note may be written: an INVALID cell measured nothing, so the run writes
-// none.
+// l66Writable is whether a run's note may be written: an INVALID cell measured nothing, and an INCOMPLETE
+// one (skipped for the test's deadline) leaves the run short, so either writes no note. A NOT RUN cell, blocked
+// by a client behaviour another cell measured, does not stop it.
 func l66Writable(rs []l66Result) (bool, string) {
 	if len(rs) == 0 {
 		return false, "no cell ran"
 	}
 	var bad []string
 	for _, r := range rs {
-		if r.outcome == "INVALID" {
-			bad = append(bad, r.id)
+		if r.outcome == "INVALID" || strings.HasPrefix(r.outcome, "INCOMPLETE") {
+			bad = append(bad, r.id+" "+strings.SplitN(r.outcome, " ", 2)[0])
 		}
 	}
 	if len(bad) > 0 {
-		return false, "INVALID cells: " + strings.Join(bad, ", ")
+		return false, "cells that stop the note: " + strings.Join(bad, ", ")
 	}
 	return true, ""
 }
@@ -822,9 +776,13 @@ func l66DiffFileSums(tree, installed map[string]string) []string {
 // ---------------------------------------------------------------------------
 
 const (
-	l66Budget      = 10 * time.Minute
-	l66Grace       = time.Minute
-	l66PlayBudget  = 4 * time.Minute
+	l66Budget     = 10 * time.Minute
+	l66Grace      = time.Minute
+	l66PlayBudget = 4 * time.Minute
+	// l66Reserve is what a cell leaves of the test's deadline for the teardown; l66MinCell is the least a
+	// cell is given.
+	l66Reserve     = 5 * time.Minute
+	l66MinCell     = 2 * time.Minute
 	l66StandinName = "l66-standin"
 	l66StandinAddr = "172.100.100.250"
 	l66DockerNet   = "port49-lab"
@@ -842,18 +800,22 @@ var (
 	l66Once     sync.Once
 	l66Versions string
 	l66CollDir  string
+	l66NSSLib   string
+	// l66NSSDirs are where libnss_wrapper.so is looked for.
+	l66NSSDirs = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib"}
 )
 
+// l66StandinImage is the stand-in's base image, which the preflight finds locally rather than pulling mid-run.
+const l66StandinImage = "alpine:3.22"
+
 func l66Start(platform, cell string, budget time.Duration) string {
-	return fmt.Sprintf("L66 %s %s START budget %s", platform, cell, budget)
+	return labStart("L66", platform, cell, budget)
 }
 
-func l66Stage(platform, cell, stage string) string {
-	return fmt.Sprintf("L66 %s %s STAGE %s", platform, cell, stage)
-}
+func l66Stage(platform, cell, stage string) string { return labStage("L66", platform, cell, stage) }
 
 func l66Progress(platform, cell, outcome string, d time.Duration) string {
-	return fmt.Sprintf("L66 %s %s %s %s", platform, cell, outcome, d.Round(100*time.Millisecond))
+	return labProgress("L66", platform, cell, outcome, d)
 }
 
 // l66PyProbe is what the lab venv's Python prints: the versions of what the cells use, and the SHA-256 of each
@@ -864,9 +826,9 @@ try:
 except ImportError as e:
     print("IMPORT_ERROR " + str(e.name))
     sys.exit(3)
-print("VERSIONS python %s ansible-core %s ansible-pylibssh %s paramiko %s port49 %s" % (
-    sys.version.split()[0], m.version("ansible-core"), m.version("ansible-pylibssh"), m.version("paramiko"),
-    m.version("port49")))
+print("VERSIONS python %s ansible-core %s ansible-pylibssh %s (libssh %s) paramiko %s port49 %s" % (
+    sys.version.split()[0], m.version("ansible-core"), m.version("ansible-pylibssh"), pylibsshext.__libssh_version__,
+    m.version("paramiko"), m.version("port49")))
 d = os.path.dirname(port49.__file__)
 for n in sorted(os.listdir(d)):
     if n.endswith(".py"):
@@ -874,26 +836,40 @@ for n in sorted(os.listdir(d)):
 `
 
 // l66Preflight checks everything a run needs and installs nothing: the venv's Python with the port49 library
-// of this tree and ansible-pylibssh, the collections in their private directory, sshpass, docker. It returns
-// the versions line for the note and the collections directory. A missing piece is a Fatal that names the
-// command that installs it.
+// of this tree and ansible-pylibssh, the collections in their private directory, libnss_wrapper, docker and the
+// stand-in's image. It returns the versions line for the note and the collections directory. A missing piece
+// is a Fatal that names the command that installs it. Every Ansible command runs with a private HOME, so none
+// of them touches the operator's ~/.ansible.
 func l66Preflight(t *testing.T) (versions, collDir string) {
 	t.Helper()
 	l66Once.Do(func() {
 		l66CollDir = filepath.Join(root, "tests", "lab", "l66", ".collections")
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		env := append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+		pre, err := os.MkdirTemp("", "p49l66pre")
+		if err != nil {
+			l66Versions = "PREFLIGHT FAILED: " + err.Error()
+			return
+		}
+		defer os.RemoveAll(pre)
+		env := append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "HOME="+pre)
 		fail := func(f string, a ...any) { l66Versions = "PREFLIGHT FAILED: " + fmt.Sprintf(f, a...) }
-		for _, tool := range []string{"sshpass", "docker", "go", "ssh", "ssh-keygen"} {
+		for _, tool := range []string{"docker", "go", "ssh", "ssh-keygen"} {
 			if _, err := exec.LookPath(tool); err != nil {
-				hint := ""
-				if tool == "sshpass" {
-					hint = " (ansible.builtin.ssh logs in with a password only through sshpass; `sudo apt install sshpass`)"
-				}
-				fail("%s is not on PATH%s", tool, hint)
+				fail("%s is not on PATH", tool)
 				return
 			}
+		}
+		lib, found := l66FindNSSWrapper(l66NSSDirs)
+		if !found {
+			fail("libnss_wrapper.so is not under %s: libssh reads the home from the passwd entry, and this gives it the private one. "+
+				"Install it with: sudo apt install libnss-wrapper", strings.Join(l66NSSDirs, ", "))
+			return
+		}
+		l66NSSLib = lib
+		if _, se, exit, err := l64Run(ctx, env, root, "docker", "image", "inspect", l66StandinImage); err != nil || exit != 0 {
+			fail("the stand-in's image %s is not local (%s): docker pull %s", l66StandinImage, trimForNote(se), l66StandinImage)
+			return
 		}
 		out, se, exit, err := l64Run(ctx, env, root, venvPython, "-I", "-B", "-c", l66PyProbe)
 		if err != nil || exit != 0 {
@@ -920,8 +896,8 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			fail("the lab venv's port49 library is not this tree's (%s): pip install --force-reinstall ./clients/python", strings.Join(diff, ", "))
 			return
 		}
-		cenv := append(os.Environ(), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "clients", "ansible")+":"+l66CollDir,
-			"ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false", "HOME="+os.TempDir())
+		cenv := append(slices.Clone(env), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "clients", "ansible")+":"+l66CollDir,
+			"ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false")
 		gout, gerr, gexit, err := l64Run(ctx, cenv, root, filepath.Join(l66Venv, "ansible-galaxy"), "collection", "list", "--format", "json")
 		if err != nil || gexit != 0 {
 			fail("ansible-galaxy collection list: exit %d %v %s", gexit, err, trimForNote(gerr))
@@ -943,10 +919,12 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			}
 		}
 		pv, _, _, _ := l64Run(ctx, env, root, filepath.Join(l66Venv, "ansible-playbook"), "--version")
-		sv, _, _, _ := l64Run(ctx, env, root, "ssh", "-V")
+		// OpenSSH prints its version on stderr.
+		_, sv, _, _ := l64Run(ctx, env, root, "ssh", "-V")
 		sha, _, _, _ := l64Run(ctx, env, root, "git", "-C", root, "rev-parse", "HEAD")
-		l66Versions = fmt.Sprintf("%s; %s; collections: %s; %s; tree commit %s", strings.TrimSpace(vline),
-			strings.TrimSpace(strings.SplitN(pv, "\n", 2)[0]), strings.Join(cols, ", "), strings.TrimSpace(sv), strings.TrimSpace(sha))
+		l66Versions = fmt.Sprintf("%s; %s; collections: %s; %s; nss_wrapper %s; ANSIBLE_SSH_PASSWORD_MECHANISM=ssh_askpass; "+
+			"tree commit %s", strings.TrimSpace(vline), strings.TrimSpace(strings.SplitN(pv, "\n", 2)[0]), strings.Join(cols, ", "),
+			strings.TrimSpace(sv), lib, strings.TrimSpace(sha))
 	})
 	if strings.HasPrefix(l66Versions, "PREFLIGHT FAILED") {
 		t.Fatalf("%s", l66Versions)
@@ -971,8 +949,17 @@ type l66Env struct {
 	// is searched and scrubbed by.
 	hashes map[string]bool
 
-	realHome bool // PORT49_LAB_L66_REAL_HOME=1: libssh runs without a config file redirecting its known_hosts
-	realKH   []l66Snap
+	// nssLib is libnss_wrapper.so: every ansible-playbook runs under it, with a passwd file whose entry for the
+	// current uid has the private home (libssh takes its home from the passwd entry). realKH are the operator's
+	// own files, checked around every play; fatal is set when one changed and ends the run.
+	nssLib string
+	realKH []l66Snap
+	fatal  string
+	// notRun is set by a cell that cannot run because of a client behaviour another cell measured.
+	notRun string
+	// deadline is the test's, for the cells' budgets.
+	deadline    time.Time
+	hasDeadline bool
 
 	standin     bool
 	standinKeys []string
@@ -1030,6 +1017,12 @@ func (e *l66Env) ansibleEnv(o l66Opts) []string {
 		"ANSIBLE_LIBSSH_LOOK_FOR_KEYS=False", "ANSIBLE_PARAMIKO_LOOK_FOR_KEYS=False",
 		"ANSIBLE_PERSISTENT_CONNECT_TIMEOUT="+strconv.Itoa(idle),
 		"ANSIBLE_SSH_CONTROL_PATH_DIR="+e.path("cp"),
+		// ansible.builtin.ssh logs in with a password through SSH_ASKPASS; sshpass is not used.
+		"ANSIBLE_SSH_PASSWORD_MECHANISM=ssh_askpass",
+		// libssh reads the home from the passwd entry, not $HOME: nss_wrapper gives the user the private one.
+		"LD_PRELOAD="+e.nssLib,
+		"NSS_WRAPPER_PASSWD="+e.path("nss_passwd"),
+		"NSS_WRAPPER_GROUP="+e.path("nss_group"),
 	)
 	if o.logPath != "" {
 		env = append(env, "ANSIBLE_LOG_PATH="+o.logPath)
@@ -1062,14 +1055,14 @@ func (e *l66Env) closeMasters() {
 	for _, en := range ents {
 		sock := e.path("cp", en.Name())
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, _, _, _ = l64Run(ctx, e.env(), e.home, "ssh", "-O", "exit", "-S", sock, "l66")
+		_, _, _, _ = l64Run(ctx, e.env(), e.home, "ssh", "-F", "/dev/null", "-O", "exit", "-S", sock, "l66")
 		cancel()
 		_ = os.Remove(sock)
 	}
 }
 
-// snapReal takes the snapshot of the operator's own known_hosts that a run is checked against: libssh reads
-// the home from the passwd entry, not from $HOME.
+// snapReal takes the snapshot of the operator's own known_hosts that a run is checked against. Under
+// nss_wrapper no client should reach it; this is the check that says so if one does.
 func (e *l66Env) snapReal() {
 	e.realKH = nil
 	u, err := user.Current()
@@ -1084,7 +1077,7 @@ func (e *l66Env) snapReal() {
 }
 
 // realChanged says whether a run wrote the operator's own known_hosts, and what it added. The file is left
-// as the client wrote it.
+// as the client wrote it. A change ends the run on the spot (see cell): the private passwd home did not hold.
 func (e *l66Env) realChanged() string {
 	var msgs []string
 	for _, s := range e.realKH {
@@ -1101,8 +1094,8 @@ func (e *l66Env) realChanged() string {
 		for _, l := range d.Added {
 			added = append(added, l.Short())
 		}
-		msgs = append(msgs, fmt.Sprintf("the operator's own %s was written during the run (%s; added: %s). libssh reads its "+
-			"home from the passwd entry, not $HOME. The file has not been touched by the harness: remove those lines by hand", s.Path,
+		msgs = append(msgs, fmt.Sprintf("the operator's own %s was written during the run (%s; added: %s), so the private passwd "+
+			"home did not hold. The file has not been touched by the harness: remove those lines by hand", s.Path,
 			d.Mode, strings.Join(added, " | ")))
 	}
 	return strings.Join(msgs, "; ")
@@ -1188,53 +1181,75 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 	r.hashes = l66TokenHashes(r.recs)
 	maps.Copy(e.hashes, r.hashes)
 	if msg := e.realChanged(); msg != "" {
-		e.addInvalid(msg)
+		e.fatal = msg
+		return r, errors.New(msg)
 	}
 	return r, nil
 }
 
 // spec is the inventory of the one node, over network_cli with the given ssh type.
 func (e *l66Env) spec(mode, sshType string) l66InvSpec {
-	s := l66InvSpec{Hosts: []l66Host{{e.node, e.l.p.addr}}, Socket: e.sock, Bin: filepath.Join(root, "bin", "port49"),
+	return l66InvSpec{Hosts: []l66Host{{e.node, e.l.p.addr}}, Socket: e.sock, Bin: filepath.Join(root, "bin", "port49"),
 		Platform: l66Platforms[e.l.p.name], Conn: "network_cli", SSHType: sshType, Mode: mode}
-	if sshType == "libssh" && !e.realHome {
-		s.LibsshConfig = e.libsshConf(false)
-	}
-	return s
 }
 
-// libsshConf writes the ssh_config libssh is given: its known_hosts is the private file and no other (libssh
-// reads the home from the passwd entry, which is the operator's), with a HostKeyAlias of the node's name
-// when alias is true. It returns the path.
-func (e *l66Env) libsshConf(alias bool) string {
-	name := "libssh.conf"
-	cfg := "Host *\n  UserKnownHostsFile " + e.khPath + "\n  GlobalKnownHostsFile /dev/null\n"
-	if alias {
-		name, cfg = "libssh_alias.conf", cfg+"  HostKeyAlias "+e.node+"\n"
-	}
-	p := e.path(name)
-	_ = os.WriteFile(p, []byte(cfg), 0o600)
+// libsshAliasConf writes an ssh_config that sets a HostKeyAlias of the node's name and names it to libssh
+// with `ansible_libssh_config_file`. pylibssh 1.4.0 passes no config file to libssh, so the expected answer is
+// that the alias is never honoured; the L66e-libssh-alias cell measures it. It returns the path.
+func (e *l66Env) libsshAliasConf() string {
+	p := e.path("libssh_alias.conf")
+	_ = os.WriteFile(p, []byte("Host *\n  HostKeyAlias "+e.node+"\n"), 0o600)
 	return p
 }
 
 // sshSpec is the inventory for ansible.builtin.ssh: the private ssh_config, and the extra args the collection's
-// README recommends.
+// README recommends. Each host's ssh writes its own debug log (-E, DEBUG3): ansible-core passes -v to ssh only
+// from its own `verbosity` option, and tags what it prints with the address, so the host's lines are read
+// from its file.
 func (e *l66Env) sshSpec(hosts []l66Host, p49 string) l66InvSpec {
 	cfg := e.path("ssh_config")
 	_ = os.WriteFile(cfg, []byte("Host *\n  UserKnownHostsFile "+e.khPath+"\n  GlobalKnownHostsFile /dev/null\n  UpdateHostKeys yes\n"), 0o600)
 	return l66InvSpec{Hosts: hosts, P49Name: p49, Socket: e.sock, Bin: filepath.Join(root, "bin", "port49"),
 		Platform: l66Platforms[e.l.p.name], Conn: "ssh", Mode: "fact", SSHCommonArgs: "-F " + cfg,
-		SSHExtraArgs: "-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new"}
+		SSHExtraArgs: "-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new -o LogLevel=DEBUG3 -E " +
+			e.path("ssh-{{ inventory_hostname }}.log")}
+}
+
+// sshLog is what the host's ssh wrote to its -E file; clearSSHLogs empties them before a play.
+func (e *l66Env) sshLog(host string) string {
+	b, _ := os.ReadFile(e.path("ssh-" + host + ".log"))
+	return string(b)
+}
+
+func (e *l66Env) clearSSHLogs() {
+	logs, _ := filepath.Glob(e.path("ssh-*.log"))
+	for _, p := range logs {
+		_ = os.Remove(p)
+	}
 }
 
 // cell runs fn under its own budget and records its row. fn returns whether the cell's claim held (or, for a
 // record cell, whether it could observe) and what it observed; it never calls t. A cell that has not returned
-// a minute after its budget ends the platform's run.
+// a minute after its budget ends the platform's run. It is not l64Env.cell because the outcomes differ: kinds,
+// NOT RUN, INCOMPLETE and a fatal that ends the run.
+//
+// A `go test` timeout panics without running a defer or a Cleanup (the stand-in container, the agent, port49d
+// on L66's config would stay), so a cell does not start when the test's deadline would cut it, and its budget
+// is capped to leave l66Reserve for the teardown; a skipped cell makes the run INCOMPLETE and writes no note.
 func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context.Context) (bool, string)) bool {
 	start := time.Now()
 	e.cellID = id
+	b, ok := l66CellBudget(budget, e.deadline, e.hasDeadline, start, l66Reserve, l66MinCell)
+	if !ok {
+		obs := fmt.Sprintf("**Not started: the test's deadline is too near** (less than %s would remain for it after %s kept for "+
+			"the teardown).", l66MinCell, l66Reserve)
+		e.results = append(e.results, l66Result{id, "INCOMPLETE (deadline)", obs, 0})
+		fmt.Fprintln(os.Stdout, l66Progress(e.l.p.name, id, "INCOMPLETE", 0))
+		return false
+	}
+	budget = b
 	fmt.Fprintln(os.Stdout, l66Start(e.l.p.name, id, budget))
-	e.unread, e.invalid, e.controlOK = false, "", false
+	e.unread, e.invalid, e.controlOK, e.notRun = false, "", false, ""
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	type done struct {
@@ -1262,6 +1277,10 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 	switch {
 	case outcome == "TIMEOUT":
 		d.obs = "**The cell's budget ran out.** " + d.obs
+	case e.fatal != "":
+		outcome, d.obs = "INVALID", "**INVALID: "+e.fatal+".** "+d.obs
+	case e.notRun != "":
+		outcome, d.obs = "NOT RUN ("+e.notRun+")", "**Not run: "+e.notRun+".** "+d.obs
 	case e.invalid != "":
 		outcome, d.obs = "INVALID", "**INVALID: "+e.invalid+".** "+d.obs
 	case outcome == "INVALID":
@@ -1272,6 +1291,9 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 	e.results = append(e.results, l66Result{id, outcome, d.obs, elapsed})
 	fmt.Fprintln(os.Stdout, l66Progress(e.l.p.name, id, outcome, elapsed))
 	e.t.Logf("%s: %s", id, d.obs)
+	if e.fatal != "" {
+		e.t.Fatalf("%s: %s", id, e.fatal)
+	}
 	return outcome == "PASS" || outcome == "OBSERVED"
 }
 
@@ -1288,23 +1310,22 @@ func (e *l66Env) control(ctx context.Context) (l66Run, string) {
 	return r, fmt.Sprintf("The positive control, a good login through the lookup just before: %s (control %v).", r.summary(e.node), e.controlOK)
 }
 
-// readKH is the private known_hosts file as it is now.
-func (e *l66Env) readKH() string {
-	b, _ := os.ReadFile(e.khPath)
-	return string(b)
-}
-
-// baseline writes the known_hosts file (c) and (e) start from and returns it.
-func (e *l66Env) baseline(ctx context.Context) (string, error) {
-	a, err := e.freshKey(ctx, "ssh-ed25519")
-	if err != nil {
-		return "", err
+// baseline writes the known_hosts file a cell starts from and returns it: a comment line alone, or, when
+// markers is true, with an @revoked and an @cert-authority line (L66c1). Paramiko 5.0 cannot read the second
+// kind (c1 records that), and (e) is about an address that moved, so those cells start from the comment.
+func (e *l66Env) baseline(ctx context.Context, markers bool) (string, error) {
+	kh := l66CommentKH()
+	if markers {
+		a, err := e.freshKey(ctx, "ssh-ed25519")
+		if err != nil {
+			return "", err
+		}
+		b, err := e.freshKey(ctx, "ssh-ed25519")
+		if err != nil {
+			return "", err
+		}
+		kh = l66BaselineKH(a, b)
 	}
-	b, err := e.freshKey(ctx, "ssh-ed25519")
-	if err != nil {
-		return "", err
-	}
-	kh := l66BaselineKH(a, b)
 	return kh, os.WriteFile(e.khPath, []byte(kh), 0o600)
 }
 
@@ -1379,7 +1400,7 @@ func (e *l66Env) cellGap(id, what, between string) {
 			return false, ""
 		}
 		e.controlOK = r.packets > 0 && r.counts.Redeems > 0
-		again := r.starts > 1 || r.counts.Redeems > 1
+		again := l66GradeGap(r.starts, r.counts.Redeems)
 		// ok: the first login worked, so the gap had a connection to end (mint + the first task passed).
 		return r.recap[e.node].OK >= 2, fmt.Sprintf("The minted-once play with %s (persistent_connect_timeout %ds in the inventory "+
 			"and the environment). **The next task logged in again: %v** (%d TACACS+ authentication starts, %d redeem records with "+
@@ -1391,8 +1412,8 @@ func (e *l66Env) cellGap(id, what, between string) {
 // cellD is (d): a denied device, the error text, and no token in -vvv output.
 func (e *l66Env) cellD() {
 	e.cell("L66d", "refusal", l66Budget, func(ctx context.Context) (bool, string) {
-		ctl, ctlNote := e.control(ctx)
-		_ = ctl
+		_, ctlNote := e.control(ctx)
+		quiet := e.waitQuiet(ctx) // the control's late accounting must not fall in the denied window
 		denied := l66DeniedNode(e.node)
 		ds := e.spec("fact", "libssh")
 		ds.Hosts = []l66Host{{denied, e.l.p.addr}}
@@ -1401,26 +1422,31 @@ func (e *l66Env) cellD() {
 			e.addInvalid(err.Error())
 			return false, ctlNote
 		}
-		gr, err := e.runPlay(ctx, "d-good", "once", 1, "", e.spec("fact", "libssh"), l66Opts{verbose: "-vvv"})
+		quiet += " " + e.waitQuiet(ctx)
+		gr, err := e.runPlay(ctx, "d-good", "once", l66LogTasks, "", e.spec("fact", "libssh"), l66Opts{verbose: "-vvv"})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ctlNote
 		}
-		named := strings.Contains(dr.text(), "no_grants_matched")
-		failed := !dr.recap[denied].Passed() && dr.recap[denied].Failed > 0
 		deniedHits := l66FindTokens(dr.text(), e.hashes, labcreds.TokenLen)
 		goodHits := l66FindTokens(gr.text(), e.hashes, labcreds.TokenLen)
 		if len(gr.hashes) == 0 {
 			e.addInvalid("the good run's records name no minted token, so there is no hash to look for in its -vvv output")
 		}
-		pass := failed && named && dr.counts.MintDenies > 0 && len(deniedHits) == 0 && len(goodHits) == 0 && gr.good(e.node) &&
-			dr.packets == 0 && len(dr.counts.Other) == 0
-		return pass, fmt.Sprintf("%s\n\nA device with no grant (`%s`, which the policy grants nothing on), `-vvv`: the task failed: %v; "+
-			"the output names `no_grants_matched`: %v; %s. Token-shaped words in its output that hash to a minted token's "+
-			"`credential_sha256`: %d (lines %v); the harness knows %d token hashes from this run.\n\nA good login (`%s`), `-vvv`, "+
-			"searched the same way: %d words hash to a minted token (lines %v); %d of this run's token hashes were known to search "+
-			"for. %s", ctlNote, denied, failed, named, dr.summary(denied), len(deniedHits), deniedHits, len(e.hashes), e.node,
-			len(goodHits), goodHits, len(gr.hashes), gr.summary(e.node))
+		pass, why := l66GradeDenied(l66DeniedIn{
+			Failed: !dr.recap[denied].Passed() && dr.recap[denied].Failed > 0, Named: strings.Contains(dr.text(), "no_grants_matched"),
+			GoodRunGood: gr.good(e.node), MintDenies: dr.counts.MintDenies, DeniedPackets: dr.packets, Other: dr.counts.Other,
+			DeniedHits: deniedHits, GoodHits: goodHits})
+		if why != "" {
+			why = " **Not as claimed:** " + why + "."
+		}
+		return pass, fmt.Sprintf("%s\n\nA device with no grant (`%s`, which the policy grants nothing on), `-vvv`: "+
+			"the output names `no_grants_matched`: %v; %s. The token was searched for in clear text, by hash: words of its output "+
+			"that hash to a minted token's `credential_sha256`: %d (lines %v); the harness knows %d token hashes from this run.\n\nA "+
+			"good login (`%s`), a %d-task play, `-vvv`, searched the same way: %d words hash to a minted token (lines %v); %d token "+
+			"hashes in its own window.%s %s %s", ctlNote, denied, strings.Contains(dr.text(), "no_grants_matched"), dr.summary(denied),
+			len(deniedHits), deniedHits, len(e.hashes), e.node, l66LogTasks, len(goodHits), goodHits, len(gr.hashes), why, quiet,
+			gr.summary(e.node))
 	})
 }
 
@@ -1429,15 +1455,15 @@ func (e *l66Env) cellD2() {
 	e.cell("L66d2", "claim", l66Budget, func(ctx context.Context) (bool, string) {
 		logPath := e.path("ansible-d2.log")
 		_ = os.Remove(logPath)
-		r, err := e.runPlay(ctx, "d2", "once", 1, "", e.spec("fact", "libssh"),
+		r, err := e.runPlay(ctx, "d2", "once", l66LogTasks, "", e.spec("fact", "libssh"),
 			l66Opts{verbose: "-vvvv", logPath: logPath, persistLog: true})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
 		logBytes, lerr := os.ReadFile(logPath)
-		if lerr != nil || len(logBytes) == 0 {
-			e.addInvalid(fmt.Sprintf("the persistent connection's log (%s) is empty or unreadable (%v), so its search proves nothing", logPath, lerr))
+		if lerr != nil {
+			e.addInvalid(fmt.Sprintf("the persistent connection's log (%s) is unreadable: %v", logPath, lerr))
 		}
 		if len(r.hashes) == 0 {
 			e.addInvalid("the run's records name no minted token, so there is no hash to look for")
@@ -1446,39 +1472,80 @@ func (e *l66Env) cellD2() {
 		errHits := l66FindTokens(r.stderr, e.hashes, labcreds.TokenLen)
 		logHits := l66FindTokens(string(logBytes), e.hashes, labcreds.TokenLen)
 		e.controlOK = r.good(e.node)
-		return r.good(e.node) && len(outHits)+len(errHits)+len(logHits) == 0, fmt.Sprintf("A good login with `-vvvv`, "+
-			"`ANSIBLE_PERSISTENT_LOG_MESSAGES=True` and `ANSIBLE_LOG_PATH` a private file (%d bytes, %d lines): each word of stdout "+
-			"(%d lines), stderr (%d lines) and the log was hashed and compared with the %d token hashes the decision log names "+
-			"(`credential_sha256` and the mint's `token_sha256`). Words that match: stdout %d (lines %v), stderr %d (lines %v), "+
-			"log %d (lines %v). %s", len(logBytes), strings.Count(string(logBytes), "\n"), strings.Count(r.stdout, "\n"),
-			strings.Count(r.stderr, "\n"), len(e.hashes), len(outHits), outHits, len(errHits), errHits, len(logHits), logHits, r.summary(e.node))
+		requests, setOptions := l66JSONRPC(string(logBytes))
+		pass, invalid, why := l66GradeLogSearch(l66LogSearchIn{RunGood: r.good(e.node), Log: string(logBytes),
+			OutHits: outHits, ErrHits: errHits, LogHits: logHits})
+		if invalid != "" {
+			e.addInvalid(invalid)
+		}
+		if why != "" {
+			why = " **Not as claimed:** " + why + ". Never enable `persistent_log_messages` with the lookup."
+		}
+		return pass, fmt.Sprintf("A good login, a %d-task play, with `-vvvv`, `ANSIBLE_PERSISTENT_LOG_MESSAGES=True` and "+
+			"`ANSIBLE_LOG_PATH` a private file (%d bytes, %d lines, holding %d `jsonrpc request:` lines, one of them a set_options: "+
+			"%v; the persistent socket carries the connection's options, password included, to the process on every task after "+
+			"the first, so a log that holds those lines is one a token could be in). The token was searched for in clear text: each "+
+			"word of stdout (%d lines), stderr (%d lines) and the log was hashed and compared with the %d token hashes the decision "+
+			"log names (`credential_sha256` and the mint's `token_sha256`). Words that match: stdout %d (lines %v), stderr %d "+
+			"(lines %v), log %d (lines %v).%s %s", l66LogTasks, len(logBytes), strings.Count(string(logBytes), "\n"), requests,
+			setOptions, strings.Count(r.stdout, "\n"), strings.Count(r.stderr, "\n"), len(e.hashes), len(outHits), outHits,
+			len(errHits), errHits, len(logHits), logHits, why, r.summary(e.node))
 	})
 }
 
 // cellC is (c) for one ssh type: a first contact from a file of a comment, an @revoked and an @cert-authority
-// line, then that line's key replaced by a fresh key of its type.
+// line, then that line's key replaced by a fresh key of its type. Paramiko 5.0 cannot read a file with those
+// marker lines (InvalidHostKey, which its loader does not catch), so for it the first contact is a record of
+// that refusal, and the claim is measured again from a file of a comment alone (c1b); the changed-key cell
+// runs from whichever first contact filed a line.
 func (e *l66Env) cellC(sshType string) {
-	id1, id2 := "L66c1-"+sshType, "L66c2-"+sshType
-	e.cell(id1, "claim", l66Budget, func(ctx context.Context) (bool, string) {
-		base, err := e.baseline(ctx)
+	e.cellFirstContact("L66c1-"+sshType, sshType, true)
+	if sshType == "paramiko" {
+		e.cellFirstContact("L66c1b-"+sshType, sshType, false)
+	}
+	e.cellChanged("L66c2-"+sshType, sshType)
+}
+
+func (e *l66Env) cellFirstContact(id, sshType string, markers bool) {
+	// Paramiko refusing the markers is a measured client behaviour, so that cell records it; every other
+	// first contact claims the play passes and files a line.
+	kind := "claim"
+	if sshType == "paramiko" && markers {
+		kind = "record"
+	}
+	e.cell(id, kind, l66Budget, func(ctx context.Context) (bool, string) {
+		base, err := e.baseline(ctx, markers)
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
-		r, err := e.runPlay(ctx, id1, "once", 1, "", e.spec("fact", sshType), l66Opts{hostKeys: true})
+		delete(e.cAdded, sshType)
+		r, err := e.runPlay(ctx, id, "once", 1, "", e.spec("fact", sshType), l66Opts{hostKeys: true})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
-		after := e.readKH()
+		after := e.readKnownHosts()
 		d := l66DiffKH(base, after)
-		e.cAfter[sshType], e.cAdded[sshType] = after, d.Added
+		if len(d.Added) > 0 {
+			e.cAfter[sshType], e.cAdded[sshType] = after, d.Added
+		}
 		e.controlOK = r.good(e.node)
+		if kind == "record" && !r.recap[e.node].Passed() && l66ParamikoRefusedMarkers(r.text()) {
+			_, ctlNote := e.control(ctx)
+			return true, fmt.Sprintf("%s\n\n**Paramiko refused to read the known_hosts file it was given** (`InvalidHostKey`): it holds an "+
+				"`@revoked` line and an `@cert-authority` line for unrelated patterns, which paramiko's loader takes for a key line of the type "+
+				"`unrelated.l66.invalid`. The play failed before any TACACS+ traffic (%d packets in its window). %s\n\nThe file, keys "+
+				"shortened:\n\n%s", ctlNote, r.packets, r.summary(e.node), l66Verbatim(after))
+		}
 		where := "the private known_hosts (`~/.ssh/known_hosts` of the run's home)"
-		if sshType == "libssh" && e.realHome {
-			where += ", or the operator's own file if libssh wrote that (the run is then INVALID)"
-		} else if sshType == "libssh" {
-			where += ", named to libssh by `ansible_libssh_config_file` (`UserKnownHostsFile`), since libssh reads the home from the passwd entry"
+		if sshType == "libssh" {
+			where += ", which libssh reads because the harness gives the user that home in the passwd entry (nss_wrapper); libssh " +
+				"takes its home from there, not from $HOME"
+		}
+		what := "a comment line, an `@revoked` line and an `@cert-authority` line for unrelated patterns"
+		if !markers {
+			what = "a comment line alone"
 		}
 		rewrote := ""
 		if d.Mode == "rewritten" {
@@ -1489,16 +1556,20 @@ func (e *l66Env) cellC(sshType string) {
 			rewrote += "."
 		}
 		return r.recap[e.node].Passed() && len(d.Added) > 0, fmt.Sprintf("`ansible_network_cli_ssh_type: %s`, `ANSIBLE_HOST_KEY_CHECKING=True`, "+
-			"`ANSIBLE_HOST_KEY_AUTO_ADD=True`, from a known_hosts holding a comment line, an `@revoked` line and an `@cert-authority` line "+
-			"for unrelated patterns. The play passed: %v. The file changed in: %s. Mode: **%s**.%s Lines added: %s; lines gone: %s; "+
-			"comment lines lost: %q; marker lines lost: %q. %s\n\nBefore (keys shortened to their first 16 characters):\n\n%s\n\nAfter:\n\n%s",
-			sshType, r.recap[e.node].Passed(), where, d.Mode, rewrote, l66Shorts(d.Added), l66Shorts(d.Removed), d.LostComments,
-			d.LostMarkers, r.summary(e.node), l66Verbatim(base), l66Verbatim(after))
+			"`ANSIBLE_HOST_KEY_AUTO_ADD=True`, from a known_hosts holding %s. The play passed: %v. The file changed in: %s. Mode: **%s**.%s "+
+			"Lines added: %s; lines gone: %s; comment lines lost: %q; marker lines lost: %q. %s\n\nBefore (keys shortened to their first "+
+			"16 characters):\n\n%s\n\nAfter:\n\n%s", sshType, what, r.recap[e.node].Passed(), where, d.Mode, rewrote, l66Shorts(d.Added),
+			l66Shorts(d.Removed), d.LostComments, d.LostMarkers, r.summary(e.node), l66Verbatim(base), l66Verbatim(after))
 	})
+}
+
+// cellChanged is (c)'s second half: the key the first contact filed is replaced by a fresh key of its type,
+// and the play must end at the key exchange with the client's own words and not a TACACS+ packet.
+func (e *l66Env) cellChanged(id2, sshType string) {
 	e.cell(id2, "refusal", l66Budget, func(ctx context.Context) (bool, string) {
 		added := e.cAdded[sshType]
 		if len(added) == 0 {
-			e.addInvalid("the first-contact cell filed no key line, so there is none to replace")
+			e.notRun = "no first-contact cell of " + sshType + " filed a key line, so there is none to replace"
 			return false, ""
 		}
 		_, ctlNote := e.control(ctx)
@@ -1527,14 +1598,18 @@ func (e *l66Env) cellC(sshType string) {
 			e.addInvalid(err.Error())
 			return false, ctlNote
 		}
-		d := l66DiffKH(content, e.readKH())
+		d := l66DiffKH(content, e.readKnownHosts())
 		refused := !r.recap[e.node].Passed()
-		pass := refused && r.packets == 0 && len(r.counts.Other) == 0 && r.counts.Redeems == 0
+		pass, why := l66GradeChanged(l66ChangedIn{SSHType: sshType, Failed: refused, Packets: r.packets, Redeems: r.counts.Redeems,
+			Other: r.counts.Other, ErrText: l66ErrorText(r.text(), 2000)})
+		if why != "" {
+			why = " **Not as claimed:** " + why + "."
+		}
 		return pass, fmt.Sprintf("%s\n\n`%s`: the key of each line the first contact filed (%s) replaced by a fresh key of its type, the "+
-			"comment and marker lines left. %s. The play was refused (did not pass): %v; **%d TACACS+ packets**, **%d TACACS+ "+
-			"authentication starts**, records other than mint and blob: %v (the token was never presented if there are none). The file "+
+			"other lines left. %s. The play was refused (did not pass): %v; **%d TACACS+ packets**, **%d TACACS+ "+
+			"authentication starts**, records other than mint and blob: %v (the token was never presented if there are none).%s The file "+
 			"after the refused run: %s, added %s, gone %s. %s", ctlNote, sshType, strings.Join(replaced, ", "), quiet, refused, r.packets,
-			r.starts, r.counts.Other, d.Mode, l66Shorts(d.Added), l66Shorts(d.Removed), r.summary(e.node))
+			r.starts, r.counts.Other, why, d.Mode, l66Shorts(d.Added), l66Shorts(d.Removed), r.summary(e.node))
 	})
 }
 
@@ -1547,7 +1622,7 @@ type l66ECase struct {
 // cellE is (e): after a run that filed the device's key, the inventory's address is changed to the stand-in.
 func (e *l66Env) cellE(c l66ECase) {
 	e.cell(c.id, "record", l66Budget, func(ctx context.Context) (bool, string) {
-		base, err := e.baseline(ctx)
+		base, err := e.baseline(ctx, false)
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
@@ -1560,23 +1635,26 @@ func (e *l66Env) cellE(c l66ECase) {
 			s := e.spec("fact", c.sshType)
 			s.Hosts[0].Address = addr
 			if c.alias {
-				s.LibsshConfig = e.libsshConf(true)
+				s.LibsshConfig = e.libsshAliasConf()
 			}
 			return s
 		}
 		if c.plain {
 			kind = "raw"
 		}
+		e.clearSSHLogs()
 		r1, err := e.runPlay(ctx, c.id+"-device", kind, 1, "", mk(e.l.p.addr), l66Opts{hostKeys: true})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
-		e.controlOK = r1.good(e.node)
-		kh1 := e.readKH()
+		e.controlOK = l64ControlOK(r1.packets, r1.counts.Redeems)
+		kh1 := e.readKnownHosts()
 		d1 := l66DiffKH(base, kh1)
-		if !r1.recap[e.node].Passed() || len(d1.Added) == 0 {
-			e.addInvalid("the run at the device's address did not pass and file its key, so there is no earlier contact for the move to be compared with")
+		if len(d1.Added) == 0 || r1.counts.Redeems == 0 {
+			// The premise of the move is an earlier login that filed the device's key; a client that did not
+			// file it (or did not log in) leaves nothing for the move to be compared with.
+			e.notRun = "step 1, at the device's address, filed no key or reached no login, so there is no earlier contact to move away from"
 			return false, fmt.Sprintf("Step 1, at the device's address: %s. Lines added: %s.", r1.summary(e.node), l66Shorts(d1.Added))
 		}
 		if err := e.startStandin(ctx); err != nil {
@@ -1585,57 +1663,81 @@ func (e *l66Env) cellE(c l66ECase) {
 		}
 		mark := len(l66ParseStandin(e.standinLog(ctx)))
 		quiet := e.waitQuiet(ctx)
+		e.clearSSHLogs()
 		r2, err := e.runPlay(ctx, c.id+"-standin", kind, 1, "", mk(l66StandinAddr), l66Opts{hostKeys: true})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
-		d2 := l66DiffKH(kh1, e.readKH())
+		d2 := l66DiffKH(kh1, e.readKnownHosts())
 		tally := l66TallyStandin(l66ParseStandin(e.standinLog(ctx))[mark:])
-		presented := tally.Presented(r2.hashes)
-		return true, fmt.Sprintf("**%s.** Step 1, at the device's address `%s`: %s. File after step 1: mode %s, added %s.\n\n"+
+		invalid, presented := l66GradeMoved(tally, e.hashes, r2.hashes)
+		if invalid != "" {
+			e.addInvalid(invalid)
+		}
+		extra := ""
+		if c.alias {
+			honoured := slices.ContainsFunc(d1.Added, func(l l66KHLine) bool { return l.Hosts == e.node })
+			extra = fmt.Sprintf(" **`ansible_libssh_config_file` naming `HostKeyAlias %s` was honoured (step 1 filed the key under that "+
+				"name): %v.**", e.node, honoured)
+		}
+		if c.plain {
+			a := l66ReadAlias(e.sshLog(e.node), e.node)
+			extra = fmt.Sprintf(" Step 2's own ssh log: a connection of its own %v, looked the alias up %v, filed a key under it %v.%s",
+				a.Connected, a.AliasUsed, a.Filed, l66AliasQuote(a.Lines))
+		}
+		return true, fmt.Sprintf("**%s.**%s Step 1, at the device's address `%s`: %s. File after step 1: mode %s, added %s.\n\n"+
 			"Step 2, `ansible_host` changed to the stand-in (`%s`, a throwaway sshd container on the lab bridge with its own host keys %s; "+
 			"it refuses every login and logs a password's length and hash only). %s. **The stand-in's key was auto-added: %v** (mode %s, "+
 			"added %s, gone %s). The stand-in saw %d connection(s), %d password attempt(s) and %d keyboard-interactive answer(s); "+
-			"**the minted token was presented to it: %v** (an attempt's hash is one of the %d token hashes this step's mint records name).",
-			c.desc, e.l.p.addr, r1.summary(e.node), d1.Mode, l66Shorts(d1.Added), l66StandinAddr, strings.Join(e.standinKeys, ", "), quiet+
-				" "+r2.summary(e.node), len(d2.Added) > 0, d2.Mode, l66Shorts(d2.Added), l66Shorts(d2.Removed), tally.Connects,
-			tally.Passwords, tally.Kbdint, presented, len(r2.hashes))
+			"**the minted token was presented to it: %v** (an attempt's hash is one of the token hashes the run's mint and redeem records "+
+			"name).", c.desc, extra, e.l.p.addr, r1.summary(e.node), d1.Mode, l66Shorts(d1.Added), l66StandinAddr,
+			strings.Join(e.standinKeys, ", "), quiet+" "+r2.summary(e.node), len(d2.Added) > 0, d2.Mode, l66Shorts(d2.Added),
+			l66Shorts(d2.Removed), tally.Connects, tally.Passwords, tally.Kbdint, presented)
 	})
 }
 
 // cellE2 is (e2): two inventory names at one address, over ansible.builtin.ssh.
 func (e *l66Env) cellE2() {
 	e.cell("L66e2-names", "record", l66Budget, func(ctx context.Context) (bool, string) {
-		if _, err := e.baseline(ctx); err != nil {
+		if _, err := e.baseline(ctx, false); err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
 		hosts := []l66Host{{"l66a", e.l.p.addr}, {"l66b", e.l.p.addr}}
 		s := e.sshSpec(hosts, e.node)
-		r, err := e.runPlay(ctx, "e2", "raw", 1, "", s, l66Opts{hostKeys: true, forks: 1, verbose: "-vvv"})
+		e.clearSSHLogs()
+		r, err := e.runPlay(ctx, "e2", "raw", 1, "", s, l66Opts{hostKeys: true, forks: 1})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
 		e.controlOK = r.packets > 0 && r.counts.Redeems > 0
-		kh := e.readKH()
-		d := l66DiffKH("", kh)
+		logs := map[string]string{}
+		for _, h := range hosts {
+			logs[h.Name] = e.sshLog(h.Name)
+		}
+		if why := l66GradeNames(logs); why != "" {
+			e.addInvalid(why)
+		}
+		kh := e.readKnownHosts()
+		d := l66DiffKH(l66CommentKH(), kh)
 		var per []string
 		for _, h := range hosts {
-			a := l66ReadAlias(l66HostSection(r.text(), h.Name), h.Name)
-			per = append(per, fmt.Sprintf("`%s`: recap %+v; new connection (ssh authenticated afresh): %v; reused an open master: %v; "+
-				"ssh looked its alias up or filed it on %d line(s)%s", h.Name, r.recap[h.Name], a.NewConnection, a.Muxed, len(a.Lines),
-				l66AliasQuote(a.Lines)))
+			a := l66ReadAlias(logs[h.Name], h.Name)
+			per = append(per, fmt.Sprintf("`%s`: recap %+v; opened a connection of its own: %v; authenticated on it: %v; reused an open "+
+				"master: %v; ssh looked its alias up in known_hosts: %v; ssh filed a key under its alias: %v%s", h.Name, r.recap[h.Name],
+				a.Connected, a.Authenticated, a.Muxed, a.AliasUsed, a.Filed, l66AliasQuote(a.Lines)))
 		}
 		var names []string
 		for _, l := range l66ParseKH(kh) {
 			names = append(names, l.Hosts)
 		}
 		return r.recap[hosts[0].Name].Passed(), fmt.Sprintf("Two inventory names (`l66a`, `l66b`) at one address (%s), `ansible.builtin.ssh` with "+
-			"`-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new`, one fork, `-vvv`. Per host: %s. The "+
-			"known_hosts file after the run holds key lines for: %v (filed by the run: %s). %s", e.l.p.addr, strings.Join(per, "; "),
-			names, l66Shorts(d.Added), r.summary(hosts[0].Name))
+			"`-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new -o LogLevel=DEBUG3 -E <a file per host>`, one "+
+			"fork, from a known_hosts holding a comment only. Per host, from its own ssh log: %s. The known_hosts file after the run holds "+
+			"key lines for: %v (filed by the run: %s). %s", e.l.p.addr, strings.Join(per, "; "), names, l66Shorts(d.Added),
+			r.summary(hosts[0].Name))
 	})
 }
 
@@ -1672,7 +1774,7 @@ func (e *l66Env) startStandin(ctx context.Context) error {
 	rm() // a leftover of an aborted run of this harness, by its exact name
 	e.t.Cleanup(rm)
 	if _, se, exit, err := l64Run(ctx, os.Environ(), root, "docker", "run", "-d", "--name", l66StandinName, "--network", l66DockerNet,
-		"--ip", l66StandinAddr, "-v", bin+":/standin:ro", "alpine:3.22", "/standin", "-listen", ":22"); err != nil || exit != 0 {
+		"--ip", l66StandinAddr, "-v", bin+":/standin:ro", l66StandinImage, "/standin", "-listen", ":22"); err != nil || exit != 0 {
 		return fmt.Errorf("docker run: exit %d %v %s", exit, err, trimForNote(se))
 	}
 	e.standin = true
@@ -1739,12 +1841,8 @@ func TestL66(t *testing.T) {
 		if err := l.stopDaemon(); err != nil {
 			t.Fatal(err)
 		}
-		if err := l.startDaemonWith(cfg, true); err != nil {
-			t.Fatalf("port49d would not start with the broker block, so nothing was measured: %v", err)
-		}
-		if err := l.awaitTACACS(); err != nil {
-			t.Fatal(err)
-		}
+		// The restore is registered before the restart it undoes, so a restart that fails still puts the lab
+		// config back.
 		defer func() {
 			if err := l.stopDaemon(); err != nil {
 				t.Errorf("could not stop the broker daemon: %v", err)
@@ -1758,6 +1856,12 @@ func TestL66(t *testing.T) {
 				t.Fatalf("could not put port49d back on the lab config: %v", err)
 			}
 		}()
+		if err := l.startDaemonWith(cfg, true); err != nil {
+			t.Fatalf("port49d would not start with the broker block, so nothing was measured: %v", err)
+		}
+		if err := l.awaitTACACS(); err != nil {
+			t.Fatal(err)
+		}
 
 		work, err := os.MkdirTemp("", "p49l66")
 		if err != nil {
@@ -1774,12 +1878,18 @@ func TestL66(t *testing.T) {
 		e := &l66Env{
 			l64Env: &l64Env{t: t, l: l, node: l.p.node, home: home, keyDir: keyDir, daemonCfg: cfg,
 				khPath: filepath.Join(sshDir, "known_hosts"), cfgPath: filepath.Join(sshDir, "config")},
-			work: work, collDir: collDir, versions: versions, hashes: map[string]bool{},
-			realHome: os.Getenv("PORT49_LAB_L66_REAL_HOME") == "1",
-			cAfter:   map[string]string{}, cAdded: map[string][]l66KHLine{},
+			work: work, collDir: collDir, versions: versions, hashes: map[string]bool{}, nssLib: l66NSSLib,
+			cAfter: map[string]string{}, cAdded: map[string][]l66KHLine{},
 		}
+		e.deadline, e.hasDeadline = t.Deadline()
 		if err := os.WriteFile(e.path("ansible.cfg"), []byte("[defaults]\ninterpreter_python = auto_silent\nretry_files_enabled = False\n"), 0o600); err != nil {
 			t.Fatal(err)
+		}
+		if err := e.writeNSS(); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.checkHome(); err != nil {
+			t.Fatalf("%v", err)
 		}
 		if e.sock, e.stopAgent, err = e.newAgent(); err != nil {
 			t.Fatal(err)
@@ -1790,6 +1900,36 @@ func TestL66(t *testing.T) {
 		defer stopCap()
 		runL66(e)
 	})
+}
+
+// writeNSS writes the passwd and group files nss_wrapper is given, whose entry for the current uid has the
+// private home.
+func (e *l66Env) writeNSS() error {
+	u, err := user.Current()
+	if err != nil {
+		return err
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	if err := os.WriteFile(e.path("nss_passwd"), []byte(l66NSSPasswd(u.Username, uid, gid, e.home, "/bin/sh")), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(e.path("nss_group"), []byte(l66NSSGroup(u.Username, gid)), 0o600)
+}
+
+// checkHome proves, before any play, that the venv's Python sees the private home as this user's home under
+// exactly the environment ansible-playbook runs in. libssh takes its home from the same passwd lookup: if
+// this does not hold, a libssh play would read and write the operator's own ~/.ssh.
+func (e *l66Env) checkHome() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, se, exit, err := l64Run(ctx, e.ansibleEnv(l66Opts{}), e.work, venvPython, "-I", "-B", "-c",
+		"import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)")
+	if err != nil || exit != 0 || strings.TrimSpace(out) != e.home {
+		return fmt.Errorf("under nss_wrapper (%s) the passwd home is %q, not the private home %s (exit %d %v %s): libssh would use the "+
+			"operator's own ~/.ssh, so nothing is run", e.nssLib, strings.TrimSpace(out), e.home, exit, err, trimForNote(se))
+	}
+	return nil
 }
 
 // runL66 runs the cells in order and writes the note.
@@ -1812,7 +1952,7 @@ func runL66(e *l66Env) {
 	for _, c := range []l66ECase{
 		{id: "L66e-libssh", desc: "libssh", sshType: "libssh"},
 		{id: "L66e-paramiko", desc: "paramiko", sshType: "paramiko"},
-		{id: "L66e-libssh-alias", desc: "libssh with `HostKeyAlias` in `ansible_libssh_config_file`", sshType: "libssh", alias: true},
+		{id: "L66e-libssh-alias", desc: "libssh with `ansible_libssh_config_file` naming an ssh_config with `HostKeyAlias` (is that file honoured at all?)", sshType: "libssh", alias: true},
 		{id: "L66e-ssh", desc: "ansible.builtin.ssh with `-o HostKeyAlias={{ inventory_hostname }}` (the `raw` module)", plain: true},
 	} {
 		e.cellE(c)
@@ -1831,9 +1971,6 @@ func l66WriteNotes(e *l66Env) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Versions in this run: %s.\n\n%s\n\n", e.versions, e.idleNote)
-	if e.realHome {
-		b.WriteString("`PORT49_LAB_L66_REAL_HOME=1`: libssh ran without a config file redirecting its known_hosts.\n\n")
-	}
 	b.WriteString("| cell | outcome | elapsed |\n|---|---|---|\n")
 	for _, r := range e.results {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", r.id, r.outcome, r.elapsed.Round(100*time.Millisecond))

@@ -395,16 +395,30 @@ func l64GradeE2(r l64Stderr, exit int, want l64Entry, after []l64Entry) (bool, s
 
 // l64Start and l64Stage are the lines a cell writes to stdout when it starts and at each stage of a long one.
 func l64Start(platform, cell string, budget time.Duration) string {
-	return fmt.Sprintf("L64L65 %s %s START budget %s", platform, cell, budget)
+	return labStart("L64L65", platform, cell, budget)
 }
 
 func l64Stage(platform, cell, stage string) string {
-	return fmt.Sprintf("L64L65 %s %s STAGE %s", platform, cell, stage)
+	return labStage("L64L65", platform, cell, stage)
 }
 
 // l64Progress is the line a cell writes to stdout when it ends.
 func l64Progress(platform, cell, outcome string, d time.Duration) string {
-	return fmt.Sprintf("L64L65 %s %s %s %s", platform, cell, outcome, d.Round(100*time.Millisecond))
+	return labProgress("L64L65", platform, cell, outcome, d)
+}
+
+// labStart, labStage and labProgress are the watchdog lines of a lab test whose prefix is its own (L64L65,
+// L66): the same three shapes, so that one watchdog reads them all.
+func labStart(prefix, platform, cell string, budget time.Duration) string {
+	return fmt.Sprintf("%s %s %s START budget %s", prefix, platform, cell, budget)
+}
+
+func labStage(prefix, platform, cell, stage string) string {
+	return fmt.Sprintf("%s %s %s STAGE %s", prefix, platform, cell, stage)
+}
+
+func labProgress(prefix, platform, cell, outcome string, d time.Duration) string {
+	return fmt.Sprintf("%s %s %s %s %s", prefix, platform, cell, outcome, d.Round(100*time.Millisecond))
 }
 
 // l64GradeSSHRefusal reads the L64 (c) and (d) claim: exit 255, no TACACS+ packet, no record but mint and

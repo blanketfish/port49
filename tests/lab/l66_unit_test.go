@@ -396,47 +396,6 @@ func TestL66LoadSegsKeepsTheDevicesPayloadToPort49Only(t *testing.T) {
 	}
 }
 
-const l66SSHOut = `<l66a> ESTABLISH SSH CONNECTION FOR USER: slice01
-<l66a> SSH: EXEC sshpass -d12 ssh -vvv -o HostKeyAlias=l66a l66a
-<l66a> (0, b'', b'debug3: hostkeys_foreach: reading file "/h/.ssh/known_hosts"\ndebug3: load_hostkeys_file: loaded 0 keys from l66a\nWarning: Permanently added 'l66a' (ED25519) to the list of known hosts.\ndebug1: Authenticated to 172.100.100.11 ([172.100.100.11]:22) using "keyboard-interactive".\n')
-<l66b> ESTABLISH SSH CONNECTION FOR USER: slice01
-<l66b> SSH: EXEC sshpass -d12 ssh -vvv -o HostKeyAlias=l66b l66b
-debug1: auto-mux: Trying existing master at '/h/.ansible/cp/abc'
-debug3: mux_client_request_session: master session id: 2
-<l66b> (0, b'', b'')
-`
-
-func TestL66HostSectionFollowsTheHostTagUntilTheNextOne(t *testing.T) {
-	a, b := l66HostSection(l66SSHOut, "l66a"), l66HostSection(l66SSHOut, "l66b")
-	if !strings.Contains(a, "load_hostkeys_file") || strings.Contains(a, "auto-mux") {
-		t.Errorf("l66a section = %q", a)
-	}
-	if !strings.Contains(b, "auto-mux") || strings.Contains(b, "load_hostkeys_file") {
-		t.Errorf("l66b section (untagged lines belong to the host before them) = %q", b)
-	}
-	if l66HostSection(l66SSHOut, "l66c") != "" {
-		t.Error("a host that is not in the output has no section")
-	}
-}
-
-func TestL66ReadAliasSeesWhatSSHLookedUpUnderTheName(t *testing.T) {
-	a := l66ReadAlias(l66HostSection(l66SSHOut, "l66a"), "l66a")
-	if len(a.Lines) < 2 || !a.NewConnection || a.Muxed {
-		t.Errorf("l66a = %+v: a new connection that looked its alias up", a)
-	}
-	if !strings.Contains(strings.Join(a.Lines, "\n"), "loaded 0 keys from l66a") {
-		t.Errorf("lines = %q", a.Lines)
-	}
-	b := l66ReadAlias(l66HostSection(l66SSHOut, "l66b"), "l66b")
-	if !b.Muxed || b.NewConnection || len(b.Lines) != 0 {
-		t.Errorf("l66b = %+v: a reused master that never looked its alias up", b)
-	}
-	checked := l66ReadAlias("debug1: Server host key: ssh-ed25519 SHA256:abc\ndebug3: load_hostkeys_file: loaded 1 keys from l66a\nHost 'l66a' is known and matches the ED25519 host key.\n", "l66a")
-	if !checked.KeyChecked || len(checked.Lines) != 2 {
-		t.Errorf("checked = %+v", checked)
-	}
-}
-
 func TestL66OutcomeTruthTable(t *testing.T) {
 	cases := []struct {
 		kind                      string
@@ -497,6 +456,14 @@ func TestL66AnInvalidRunWritesNoNote(t *testing.T) {
 	}
 	if ok, _ := l66Writable(nil); ok {
 		t.Error("a run with no cell measured nothing")
+	}
+	notRun := append(slices.Clone(good), l66Result{id: "L66c2-paramiko", outcome: "NOT RUN (paramiko refused the markers)"})
+	if ok, why := l66Writable(notRun); !ok {
+		t.Errorf("a cell blocked by a client behaviour another cell measured does not stop the note: %q", why)
+	}
+	cut := append(slices.Clone(good), l66Result{id: "L66e-ssh", outcome: "INCOMPLETE (deadline)"})
+	if ok, why := l66Writable(cut); ok || !strings.Contains(why, "L66e-ssh") {
+		t.Errorf("a cell skipped for the test's deadline leaves the run incomplete: %v %q", ok, why)
 	}
 }
 
