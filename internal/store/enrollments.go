@@ -8,6 +8,7 @@ import "time"
 type EnrollmentBody struct {
 	CreatedAt      time.Time                   `json:"created_at"`
 	ReopenAllUntil time.Time                   `json:"reopen_all_until,omitzero"`
+	MarkSealed     []byte                      `json:"mark_sealed,omitempty"`
 	ExportedAt     time.Time                   `json:"exported_at,omitzero"`
 	SecondFactors  map[string]EnrollmentRecord `json:"second_factors"`
 }

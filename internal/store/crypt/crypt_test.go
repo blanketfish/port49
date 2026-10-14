@@ -80,6 +80,34 @@ func TestASecondFactorCopiedToAnotherPrincipalDoesNotOpen(t *testing.T) {
 	}
 }
 
+// A raised reopen_all_until names errEnrollmentMarkMoved and reads as a lost
+// store, and so does a mark with no sealed part.
+func TestAMarkWhoseWindowWasRaisedNamesTheMismatchAndReadsAsLost(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	ctx := context.Background()
+	w := WrapEnrollments(inner, keys(), nil)
+	t0 := time.Unix(1_000_000, 0)
+	if err := w.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := inner.GetEnrollmentMark(ctx)
+	raw.ReopenAllUntil = t0.Add(24 * time.Hour)
+	if err := inner.PutEnrollmentMark(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	_, err := w.GetEnrollmentMark(ctx)
+	if !errors.Is(err, errEnrollmentMarkMoved) || !errors.Is(err, store.ErrEnrollmentStoreLost) || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a raised window: %v", err)
+	}
+	raw.Sealed = nil // a mark a writer made with no sealed part
+	if err := inner.PutEnrollmentMark(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+		t.Fatalf("an unsealed mark: %v", err)
+	}
+}
+
 // An export is sealed whole: an import under a key this broker does not hold
 // is refused naming the export's key id, and a damaged one is refused too
 // (D13).

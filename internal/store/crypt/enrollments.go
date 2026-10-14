@@ -56,7 +56,7 @@ type exportEnvelope struct {
 }
 
 type wrappedEnrollments struct {
-	store.Enrollments // the mark methods and SecondFactorPrincipals pass through
+	store.Enrollments // SecondFactorPrincipals passes through
 	w                 *wrapped
 }
 
@@ -114,6 +114,82 @@ func (e *wrappedEnrollments) GetSecondFactor(ctx context.Context, principal stri
 	f.Stale = k.Previous != nil && SealedKeyID(f.Sealed) == LineKeyID(k.Previous.ID)
 	f.Secret, f.EntryID, f.EnrolledFrom, f.Sealed = s.Secret, s.EntryID, s.EnrolledFrom, nil
 	return f, nil
+}
+
+// enrollmentMarkSecret is the mark's sealed copy of what a sign-in trusts of
+// it: its creation time and the window --all opened. A writer to the mark who
+// raises reopen_all_until would open enrollment for every principal, so a
+// read refuses a mark whose clear times differ from the sealed ones (X1).
+type enrollmentMarkSecret struct {
+	V              int       `json:"v"`
+	CreatedAt      time.Time `json:"created_at"`
+	ReopenAllUntil time.Time `json:"reopen_all_until"`
+}
+
+const enrollmentMarkForm = 1
+
+var (
+	errEnrollmentMarkMoved = errors.New("crypt: the enrollment mark's plaintext creation time or reopen window " +
+		"differs from its sealed one")
+	errEnrollmentMarkForm = errors.New("crypt: the enrollment mark's sealed part is of a form this broker does not read")
+	errEnrollmentMarkBody = errors.New("crypt: the enrollment mark's sealed part does not decode")
+)
+
+var enrollmentMarkAAD = []byte("enrollment_mark")
+
+func (e *wrappedEnrollments) sealMark(m store.EnrollmentMark) (store.EnrollmentMark, error) {
+	b, err := json.Marshal(enrollmentMarkSecret{V: enrollmentMarkForm, CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil})
+	if err != nil {
+		return m, err
+	}
+	m.Sealed, err = e.w.keys.SealBound(b, enrollmentMarkAAD)
+	return m, err
+}
+
+func (e *wrappedEnrollments) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	m, err := e.sealMark(m)
+	if err != nil {
+		return err
+	}
+	return e.Enrollments.CreateEnrollmentMark(ctx, m)
+}
+
+func (e *wrappedEnrollments) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	m, err := e.sealMark(m)
+	if err != nil {
+		return err
+	}
+	return e.Enrollments.PutEnrollmentMark(ctx, m)
+}
+
+// GetEnrollmentMark opens the mark and refuses one whose clear times differ
+// from the sealed ones. A mark that will not open is never store.ErrNotFound
+// and is never a valid mark: it is store.ErrEnrollmentStoreLost, wrapping why
+// (D7), so password sign-in fails closed and the rest serves.
+func (e *wrappedEnrollments) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, error) {
+	m, err := e.Enrollments.GetEnrollmentMark(ctx)
+	if err != nil {
+		return store.EnrollmentMark{}, err
+	}
+	lost := func(err error) error {
+		return fmt.Errorf("%w: %w", store.ErrEnrollmentStoreLost, e.w.openErr("enrollment mark", m.Sealed, err))
+	}
+	b, err := e.w.keys.OpenBound(m.Sealed, enrollmentMarkAAD)
+	if err != nil {
+		return store.EnrollmentMark{}, lost(err)
+	}
+	var s enrollmentMarkSecret
+	if err := json.Unmarshal(b, &s); err != nil {
+		return store.EnrollmentMark{}, lost(errEnrollmentMarkBody)
+	}
+	switch {
+	case s.V != enrollmentMarkForm:
+		return store.EnrollmentMark{}, lost(errEnrollmentMarkForm)
+	case !s.CreatedAt.Equal(m.CreatedAt) || !s.ReopenAllUntil.Equal(m.ReopenAllUntil):
+		return store.EnrollmentMark{}, lost(errEnrollmentMarkMoved)
+	}
+	m.Sealed = nil
+	return m, nil
 }
 
 func (e *wrappedEnrollments) Export(ctx context.Context) ([]byte, error) {

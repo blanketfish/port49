@@ -100,6 +100,7 @@ var errNoMarkTime = errors.New("etcd: a mark needs its creation time")
 type enrollmentMarkRec struct {
 	CreatedAt      time.Time `json:"created_at"`
 	ReopenAllUntil time.Time `json:"reopen_all_until,omitzero"`
+	Sealed         []byte    `json:"sealed,omitempty"`
 }
 
 func (s *Store) GetSecondFactor(ctx context.Context, principal string) (store.SecondFactor, error) {
@@ -170,7 +171,7 @@ func (s *Store) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, er
 	case !ok:
 		return store.EnrollmentMark{}, store.ErrNotFound
 	}
-	return store.EnrollmentMark{CreatedAt: r.CreatedAt, ReopenAllUntil: r.ReopenAllUntil}, nil
+	return store.EnrollmentMark{CreatedAt: r.CreatedAt, ReopenAllUntil: r.ReopenAllUntil, Sealed: r.Sealed}, nil
 }
 
 // CreateEnrollmentMark is one transaction: the mark is written where there
@@ -183,7 +184,7 @@ func (s *Store) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark
 		return errNoMarkTime
 	}
 	key := s.k.enrollmentMark()
-	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil})
+	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil, Sealed: m.Sealed})
 	if err != nil {
 		return err
 	}
@@ -204,7 +205,7 @@ func (s *Store) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) e
 	if m.CreatedAt.IsZero() {
 		return errNoMarkTime
 	}
-	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil})
+	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil, Sealed: m.Sealed})
 	if err != nil {
 		return err
 	}
@@ -236,7 +237,8 @@ func (s *Store) readEnrollments(ctx context.Context) (enrollmentsRead, error) {
 		if err := json.Unmarshal(kvs[0].Value, &m); err != nil {
 			return out, notDecoded("enrollment mark")
 		}
-		b.CreatedAt, b.ReopenAllUntil, out.haveMark, out.markMod = m.CreatedAt, m.ReopenAllUntil, true, kvs[0].ModRevision
+		b.CreatedAt, b.ReopenAllUntil, b.MarkSealed = m.CreatedAt, m.ReopenAllUntil, m.Sealed
+		out.haveMark, out.markMod = true, kvs[0].ModRevision
 	}
 	b.SecondFactors = map[string]store.EnrollmentRecord{}
 	for _, kv := range resp.Responses[1].GetResponseRange().Kvs {
@@ -307,7 +309,7 @@ func (s *Store) Import(ctx context.Context, raw []byte, replace bool) (int, time
 			ops = append(ops, clientv3.OpDelete(s.k.secondFactor(p)))
 		}
 	}
-	mark, err := json.Marshal(enrollmentMarkRec{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil})
+	mark, err := json.Marshal(enrollmentMarkRec{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed})
 	if err != nil {
 		return 0, time.Time{}, err
 	}
@@ -330,15 +332,21 @@ func (s *Store) Import(ctx context.Context, raw []byte, replace bool) (int, time
 	for chunk := 1; len(ops) > 0; chunk++ {
 		n := min(len(ops), maxTxnOps)
 		txn := s.tok.Txn(ctx)
-		if chunk == 1 {
+		switch {
+		case chunk == 1:
 			txn = txn.If(unmoved...)
+		case n == len(ops):
+			// The last chunk puts the mark back. The first deleted it, so a
+			// mark here was written since, by a reset-second-factor --all on
+			// the store the import left lost: it is not overwritten.
+			txn = txn.If(clientv3.Compare(clientv3.CreateRevision(s.k.enrollmentMark()), "=", 0))
 		}
 		resp, err := txn.Then(ops[:n]...).Commit()
 		if err != nil {
 			return 0, time.Time{}, unavailable(err)
 		}
 		if !resp.Succeeded {
-			return 0, time.Time{}, store.ErrConflict // a record or the mark was written since the read
+			return 0, time.Time{}, store.ErrConflict // a record or the mark was written since the read, or a mark since the first chunk
 		}
 		ops = ops[n:]
 		if s.importHook != nil && len(ops) > 0 {

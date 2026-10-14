@@ -74,7 +74,9 @@ func (e *enrollments) GetEnrollmentMark(context.Context) (store.EnrollmentMark, 
 	if e.mark == nil {
 		return store.EnrollmentMark{}, store.ErrNotFound
 	}
-	return *e.mark, nil
+	m := *e.mark
+	m.Sealed = slices.Clone(m.Sealed)
+	return m, nil
 }
 
 func (e *enrollments) CreateEnrollmentMark(_ context.Context, m store.EnrollmentMark) error {
@@ -107,7 +109,7 @@ func (e *enrollments) Export(context.Context) ([]byte, error) {
 		return nil, errors.New("memory: the enrollment store has no mark to export")
 	}
 	b := store.EnrollmentBody{CreatedAt: e.mark.CreatedAt, ReopenAllUntil: e.mark.ReopenAllUntil,
-		ExportedAt: e.now().UTC(), SecondFactors: make(map[string]store.EnrollmentRecord, len(e.records))}
+		MarkSealed: e.mark.Sealed, ExportedAt: e.now().UTC(), SecondFactors: make(map[string]store.EnrollmentRecord, len(e.records))}
 	for p, f := range e.records {
 		b.SecondFactors[p] = store.RecordOf(f)
 	}
@@ -139,7 +141,7 @@ func (e *enrollments) Import(_ context.Context, raw []byte, replace bool) (int, 
 		next[p] = f
 	}
 	e.records = next
-	e.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil}
+	e.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
 	return len(next), b.ExportedAt, nil
 }
 

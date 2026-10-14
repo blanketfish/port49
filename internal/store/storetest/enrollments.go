@@ -34,6 +34,7 @@ func RunEnrollments(t *testing.T, b EnrollmentsBackend) {
 		{"EnrollmentMarkIsCreatedOnce", EnrollmentMarkIsCreatedOnce},
 		{"ExportImportRoundTrips", ExportImportRoundTrips},
 		{"SecondFactorClearCopiesAreChecked", SecondFactorClearCopiesAreChecked},
+		{"EnrollmentMarkClearCopiesAreChecked", EnrollmentMarkClearCopiesAreChecked},
 		{"EnrollmentMarkNeedsItsTime", EnrollmentMarkNeedsItsTime},
 		{"ImportRefusesWhatDoesNotDecodeWithoutEchoingIt", ImportRefusesWhatDoesNotDecodeWithoutEchoingIt},
 	} {
@@ -208,6 +209,49 @@ func SecondFactorClearCopiesAreChecked(t *testing.T, b EnrollmentsBackend) {
 			}
 			if _, err := above.GetSecondFactor(ctx, p); err == nil || errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("a record whose clear %s was changed read as %v", c.field, err)
+			}
+		})
+	}
+}
+
+// EnrollmentMarkClearCopiesAreChecked: created_at and reopen_all_until are
+// sealed; a store writer who changes the clear copy of either, or writes a
+// mark with no sealed part, gets a lost store: never a mark, and never
+// ErrNotFound (D7; review X1: a raised reopen_all_until would open
+// enrollment for every principal).
+func EnrollmentMarkClearCopiesAreChecked(t *testing.T, b EnrollmentsBackend) {
+	if b.NewBelow == nil {
+		t.Skip("no sealing layer to test")
+	}
+	for _, c := range []struct {
+		field  string
+		tamper func(m *store.EnrollmentMark)
+	}{
+		{"reopen_all_until", func(m *store.EnrollmentMark) { m.ReopenAllUntil = t0.Add(24 * time.Hour) }},
+		{"reopen_all_until_lowered", func(m *store.EnrollmentMark) { m.ReopenAllUntil = t0 }},
+		{"created_at", func(m *store.EnrollmentMark) { m.CreatedAt = m.CreatedAt.Add(-time.Hour) }},
+		{"sealed_part_absent", func(m *store.EnrollmentMark) { m.Sealed = nil }},
+	} {
+		t.Run(c.field, func(t *testing.T) {
+			ctx := context.Background()
+			above, below := b.NewBelow(t, func() time.Time { return t0 })
+			if err := above.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := above.GetEnrollmentMark(ctx); err != nil || !got.ReopenAllUntil.Equal(t0.Add(time.Hour)) {
+				t.Fatalf("the untouched mark: %+v, %v", got, err)
+			}
+			raw, err := below.GetEnrollmentMark(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.tamper(&raw)
+			if err := below.PutEnrollmentMark(ctx, raw); err != nil {
+				t.Fatal(err)
+			}
+			got, err := above.GetEnrollmentMark(ctx)
+			if !errors.Is(err, store.ErrEnrollmentStoreLost) || errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("a mark whose clear %s was changed read as %+v, %v", c.field, got, err)
 			}
 		})
 	}

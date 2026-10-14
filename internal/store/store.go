@@ -1107,6 +1107,7 @@ const (
 type EnrollmentMark struct {
 	CreatedAt      time.Time
 	ReopenAllUntil time.Time
+	Sealed         []byte // the sealing layer's copy of both times; the backend keeps it as is
 }
 
 // ErrEnrollmentStoreLost is an enrollment store that will not open (D7): a

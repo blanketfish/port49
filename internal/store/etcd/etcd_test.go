@@ -160,6 +160,52 @@ func TestAnImportCutShortReadsAsLostAndCompletesWhenRunAgain(t *testing.T) {
 	}
 }
 
+// During a large import's later chunks the store reads as lost, and an
+// operator's reset-second-factor --all replaces a lost store. The import's
+// last chunk, which puts its mark back, does not overwrite that reset
+// (review N2).
+func TestALargeImportDoesNotOverwriteAResetThatLandedMidImport(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := func() time.Time { return t0 }
+	src := memory.NewEnrollments(clock)
+	if err := src.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2*maxTxnOps + 10 {
+		if err := src.SwapSecondFactor(ctx, store.SecondFactor{Principal: fmt.Sprintf("user:p%03d@example.com", i),
+			State: store.SecondFactorActive, EntryID: "uuid:1", EnrolledAt: t0}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exp, err := src.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := onShared(t, clock)
+	if err := dst.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	reset := store.EnrollmentMark{CreatedAt: t0.Add(time.Minute), ReopenAllUntil: t0.Add(24 * time.Hour)}
+	var chunks int
+	dst.importHook = func(chunk int) error {
+		chunks = chunk
+		if chunk == 2 { // after the middle chunk, before the last
+			return dst.PutEnrollmentMark(ctx, reset)
+		}
+		return nil
+	}
+	if _, _, err := dst.Import(ctx, exp, true); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("an import whose store was reset mid-way: %v", err)
+	}
+	if chunks != 2 {
+		t.Fatalf("the hook last ran after chunk %d, not before the last of three", chunks)
+	}
+	if m, err := dst.GetEnrollmentMark(ctx); err != nil || !m.ReopenAllUntil.Equal(reset.ReopenAllUntil) {
+		t.Fatalf("the import overwrote the reset: %+v %v", m, err)
+	}
+}
+
 // A mark written between an import's read and its first write is not
 // overwritten: reset-second-factor --all racing an import wins (review M6).
 func TestAnImportDoesNotOverwriteAMarkWrittenAfterItsRead(t *testing.T) {

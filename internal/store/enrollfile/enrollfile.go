@@ -131,7 +131,7 @@ func (f *File) open(raw []byte) (store.EnrollmentBody, string) {
 // no mark: records, if any, are held, and the broker reads the store as lost.
 func (f *File) load(b store.EnrollmentBody) {
 	if !b.CreatedAt.IsZero() {
-		f.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil}
+		f.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
 	}
 	for p, r := range b.SecondFactors {
 		f.records[p] = store.SecondFactorOf(p, r)
@@ -150,7 +150,7 @@ func (f *File) lostErr() error {
 func body(mark *store.EnrollmentMark, records map[string]store.SecondFactor) store.EnrollmentBody {
 	b := store.EnrollmentBody{SecondFactors: make(map[string]store.EnrollmentRecord, len(records))}
 	if mark != nil {
-		b.CreatedAt, b.ReopenAllUntil = mark.CreatedAt, mark.ReopenAllUntil
+		b.CreatedAt, b.ReopenAllUntil, b.MarkSealed = mark.CreatedAt, mark.ReopenAllUntil, mark.Sealed
 	}
 	for p, r := range records {
 		b.SecondFactors[p] = store.RecordOf(r)
@@ -369,7 +369,7 @@ func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Ti
 		sf.Rev = seq
 		next[p] = sf
 	}
-	mark := store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil}
+	mark := store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
 	if err := f.write(body(&mark, next)); err != nil {
 		return 0, time.Time{}, fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}

@@ -418,6 +418,27 @@ func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 	})
 }
 
+// A file the fence refuses (one the group can write) is a lost store whose
+// text names the fence's reason and quotes nothing from the file (review N1).
+func TestAFileTheFenceRefusesIsLostNamingTheReasonAndNothingOfItsContent(t *testing.T) {
+	const sentinel = "SENTINEL-FILE-CONTENT"
+	path := filepath.Join(dirFor(t), "enrollments.json")
+	if err := os.WriteFile(path, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	f := openAt(t, path, keys())
+	if !strings.Contains(f.Lost(), "writable by others") || strings.Contains(f.Lost(), sentinel) {
+		t.Fatalf("lost: %q", f.Lost())
+	}
+	_, err := f.GetEnrollmentMark(context.Background())
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("%v", err)
+	}
+}
+
 // Setting a file aside reports a directory it cannot look in; it does not
 // loop on it (review M2).
 func TestSettingAsideStopsOnAnErrorThatIsNotAbsence(t *testing.T) {
