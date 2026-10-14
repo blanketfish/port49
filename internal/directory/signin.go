@@ -45,8 +45,12 @@ func (p *PasswordRefusal) Error() string {
 func (p *PasswordRefusal) Unwrap() error { return ErrPasswordRefused }
 
 // State is whether the refusal names the account's state rather than a
-// wrong password (ruling 7): every Data but "", "52e" and "525".
+// wrong password (ruling 7): a 53, which 389-DS and eDirectory give an
+// inactivated or locked account, and every Data but "", "52e" and "525".
 func (p *PasswordRefusal) State() bool {
+	if p.Result == ldap.LDAPResultUnwillingToPerform {
+		return true
+	}
 	return p.Data != "" && p.Data != "52e" && p.Data != "525"
 }
 
@@ -139,6 +143,11 @@ func (r *Resolver) CheckPassword(ctx context.Context, s Server, dn, password str
 		var le *ldap.Error
 		if !errors.As(err, &le) || le.ResultCode >= 200 {
 			return fmt.Errorf("%w: %s: the bind did not complete", ErrUnavailable, s.Label())
+		}
+		// busy and unavailable are the server's state, not the person's
+		// (RFC 4511 §A.2): no server served the bind (ruling 6).
+		if le.ResultCode == ldap.LDAPResultBusy || le.ResultCode == ldap.LDAPResultUnavailable {
+			return fmt.Errorf("%w: %s: LDAP result %d", ErrUnavailable, s.Label(), le.ResultCode)
 		}
 		p = &PasswordRefusal{Result: int(le.ResultCode)}
 		if le.Err != nil {

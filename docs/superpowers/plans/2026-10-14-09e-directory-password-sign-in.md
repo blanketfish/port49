@@ -371,8 +371,11 @@ each on reasoning unless it says data:
   `525` (no such user), `530`, `531` (logon hours or workstation), `532` (password expired), `533`
   (disabled), `701` (account expired), `773` (must change), `775` (locked); the rest of the message
   is dropped, as 7g drops it. OpenLDAP's `ppolicy` response control (requested on the bind) is read
-  for `passwordExpired`, `accountLocked` and `changeAfterReset`. Any other result code is a refusal
-  carrying its code; a connection that fails is `directory_unavailable`. A refusal at the bind is
+  for `passwordExpired`, `accountLocked` and `changeAfterReset`. Results 51 (busy) and 52
+  (unavailable) are `directory_unavailable`, as a connection that fails: the server did not serve
+  the bind (RFC 4511 §A.2). 53 (unwilling to perform) is a refusal of the account's state (389-DS
+  and eDirectory give it for an inactivated or locked account), so its `State()` is true with no
+  data code. Any other result code is a refusal carrying its code; a connection that fails is `directory_unavailable`. A refusal at the bind is
   never a pool fault and never moves the pool's breakers or hold-off.
 - **R7. What the person is told.** One sentence for a wrong name, password or code
   ("the broker did not accept that name, password and code; check each and run `port49 login`

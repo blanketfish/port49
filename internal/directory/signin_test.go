@@ -250,6 +250,9 @@ func TestARefusedPasswordKeepsADsDataCode(t *testing.T) {
 			strings.Contains(err.Error(), "AcceptSecurityContext") {
 			t.Errorf("%q: %v", tc.msg, err)
 		}
+		if p.closed != p.dials {
+			t.Errorf("%q: %d dials, %d closed", tc.msg, p.dials, p.closed)
+		}
 	}
 }
 
@@ -321,7 +324,8 @@ func TestThePersonsBindIsItsOwnConnection(t *testing.T) {
 	cfg.CAFile = writeCA(t)
 	cfg.Bind.Mechanism = "external"
 	tc, err := personTLS(cfg, dc)
-	if err != nil || len(tc.Certificates) != 0 || tc.GetClientCertificate != nil {
+	if err != nil || len(tc.Certificates) != 0 || tc.GetClientCertificate != nil || tc.RootCAs == nil ||
+		tc.ServerName != "dc-01" || tc.InsecureSkipVerify {
 		t.Fatalf("the person's TLS presents a certificate: %v", err)
 	}
 }
@@ -336,6 +340,14 @@ func TestAStoppedServerIsUnavailable(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) || errors.As(err, &r) {
 		t.Fatalf("%v", err)
 	}
+	// busy and unavailable are the server's state, not a refusal.
+	for _, code := range []int64{ldap.LDAPResultBusy, ldap.LDAPResultUnavailable} {
+		p := newPersonServer(code, "")
+		err := personResolver(p).CheckPassword(context.Background(), dc, aliceDN, "x")
+		if !errors.Is(err, ErrUnavailable) || errors.As(err, &r) || p.dials != 1 || p.closed != 1 {
+			t.Errorf("code %d: %v (%d dials, %d closed)", code, err, p.dials, p.closed)
+		}
+	}
 	p = newPersonServer(0, "")
 	p.hang = true
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -344,5 +356,19 @@ func TestAStoppedServerIsUnavailable(t *testing.T) {
 	if err := personResolver(p).CheckPassword(ctx, dc, aliceDN, "x"); !errors.Is(err, ErrUnavailable) ||
 		time.Since(start) > time.Second {
 		t.Fatalf("%v after %s", err, time.Since(start))
+	}
+	if p.closed != p.dials {
+		t.Fatalf("%d dials, %d closed", p.dials, p.closed)
+	}
+}
+
+// An unwilling-to-perform bind (389-DS, eDirectory: an inactivated or
+// locked account) is a refusal of the account's state, not of the password.
+func TestAnUnwillingBindNamesTheAccountsState(t *testing.T) {
+	p := newPersonServer(ldap.LDAPResultUnwillingToPerform, "")
+	err := personResolver(p).CheckPassword(context.Background(), dc, aliceDN, "x")
+	var r *PasswordRefusal
+	if !errors.As(err, &r) || r.Result != 53 || r.Data != "" || !r.State() || p.closed != p.dials {
+		t.Fatalf("%v", err)
 	}
 }
