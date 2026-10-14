@@ -363,6 +363,38 @@ func TestL66AnsibleEnvRunsUnderNSSWrapperWithTheAskpassMechanism(t *testing.T) {
 	}
 }
 
+func TestL66PreflightAndPlaysShareOnePrivateHomeNeverTheRealOne(t *testing.T) {
+	real := os.Getenv("HOME")
+	t.Setenv("ANSIBLE_HOME", real+"/.ansible") // an inherited Ansible setting must not survive
+	home := t.TempDir()
+	pre := l66PrivateEnv(os.Environ(), home, "/l/nss.so", home+"/pw", home+"/gr")
+	e := &l66Env{l64Env: &l64Env{home: home}, work: home, nssLib: "/l/nss.so"}
+	play := e.ansibleEnv(l66Opts{})
+	getenv := func(env []string, k string) (v string, n int) {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, k+"=") {
+				v, n = strings.TrimPrefix(kv, k+"="), n+1
+			}
+		}
+		return
+	}
+	for name, env := range map[string][]string{"preflight": pre, "play": play} {
+		h, n := getenv(env, "HOME")
+		if n != 1 || h != home || h == real {
+			t.Errorf("%s: HOME = %q (%d times), want the private %q and not %q", name, h, n, home, real)
+		}
+		if lp, n := getenv(env, "LD_PRELOAD"); n != 1 || lp != "/l/nss.so" {
+			t.Errorf("%s: LD_PRELOAD = %q (%d times)", name, lp, n)
+		}
+		if p, _ := getenv(env, "NSS_WRAPPER_PASSWD"); !strings.HasPrefix(p, home) {
+			t.Errorf("%s: NSS_WRAPPER_PASSWD = %q", name, p)
+		}
+	}
+	if _, n := getenv(pre, "ANSIBLE_HOME"); n != 0 {
+		t.Error("an inherited ANSIBLE_HOME reached the preflight")
+	}
+}
+
 func TestL66CellBudgetStopsBeforeTheTestsDeadline(t *testing.T) {
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	want, reserve, min := 10*time.Minute, 5*time.Minute, 2*time.Minute

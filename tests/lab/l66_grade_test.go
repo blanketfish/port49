@@ -268,6 +268,21 @@ func l66NSSGroup(name string, gid int) string {
 	return s
 }
 
+// l66PrivateEnv is base with the home, nss_wrapper and every ANSIBLE_* setting of the caller replaced: HOME is
+// the private one, and the passwd lookup (which libssh and Python's pwd use) agrees with it. Every Ansible
+// command of the harness, the preflight's included, is run in it, so none writes the operator's ~/.ansible.
+func l66PrivateEnv(base []string, home, nssLib, passwd, group string) []string {
+	env := slices.DeleteFunc(slices.Clone(base), func(kv string) bool {
+		for _, p := range []string{"HOME=", "LD_PRELOAD=", "NSS_WRAPPER_", "ANSIBLE_"} {
+			if strings.HasPrefix(kv, p) {
+				return true
+			}
+		}
+		return false
+	})
+	return append(env, "HOME="+home, "LD_PRELOAD="+nssLib, "NSS_WRAPPER_PASSWD="+passwd, "NSS_WRAPPER_GROUP="+group)
+}
+
 // l66FindNSSWrapper is the path of libnss_wrapper.so under dirs, if there is one.
 func l66FindNSSWrapper(dirs []string) (string, bool) {
 	for _, d := range dirs {

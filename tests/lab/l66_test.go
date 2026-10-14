@@ -871,7 +871,23 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			fail("the stand-in's image %s is not local (%s): docker pull %s", l66StandinImage, trimForNote(se), l66StandinImage)
 			return
 		}
-		out, se, exit, err := l64Run(ctx, env, root, venvPython, "-I", "-B", "-c", l66PyProbe)
+		// Python and every Ansible command run in the plays' kind of environment: the private HOME, and a
+		// passwd entry that agrees with it, so nothing is created under the operator's ~/.ansible.
+		u, uerr := user.Current()
+		if uerr != nil {
+			fail("%v", uerr)
+			return
+		}
+		uid, _ := strconv.Atoi(u.Uid)
+		gid, _ := strconv.Atoi(u.Gid)
+		pw, gr := filepath.Join(pre, "nss_passwd"), filepath.Join(pre, "nss_group")
+		if werr := errors.Join(os.WriteFile(pw, []byte(l66NSSPasswd(u.Username, uid, gid, pre, "/bin/sh")), 0o600),
+			os.WriteFile(gr, []byte(l66NSSGroup(u.Username, gid)), 0o600)); werr != nil {
+			fail("%v", werr)
+			return
+		}
+		penv := append(l66PrivateEnv(os.Environ(), pre, lib, pw, gr), "PYTHONDONTWRITEBYTECODE=1")
+		out, se, exit, err := l64Run(ctx, penv, root, venvPython, "-I", "-B", "-c", l66PyProbe)
 		if err != nil || exit != 0 {
 			fail("the lab venv cannot import port49 and pylibsshext (exit %d %v %s%s): pip install ansible-pylibssh ./clients/python "+
 				"into %s", exit, err, trimForNote(out), trimForNote(se), filepath.Dir(l66Venv))
@@ -896,7 +912,7 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			fail("the lab venv's port49 library is not this tree's (%s): pip install --force-reinstall ./clients/python", strings.Join(diff, ", "))
 			return
 		}
-		cenv := append(slices.Clone(env), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "clients", "ansible")+":"+l66CollDir,
+		cenv := append(slices.Clone(penv), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "clients", "ansible")+":"+l66CollDir,
 			"ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false")
 		gout, gerr, gexit, err := l64Run(ctx, cenv, root, filepath.Join(l66Venv, "ansible-galaxy"), "collection", "list", "--format", "json")
 		if err != nil || gexit != 0 {
@@ -918,7 +934,7 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 				cols = append(cols, n+" "+have[n])
 			}
 		}
-		pv, _, _, _ := l64Run(ctx, env, root, filepath.Join(l66Venv, "ansible-playbook"), "--version")
+		pv, _, _, _ := l64Run(ctx, penv, root, filepath.Join(l66Venv, "ansible-playbook"), "--version")
 		// OpenSSH prints its version on stderr.
 		_, sv, _, _ := l64Run(ctx, env, root, "ssh", "-V")
 		sha, _, _, _ := l64Run(ctx, env, root, "git", "-C", root, "rev-parse", "HEAD")
@@ -1003,7 +1019,7 @@ func (e *l66Env) ansibleEnv(o l66Opts) []string {
 	if o.hostKeys {
 		checking, auto = "True", "True"
 	}
-	env := slices.DeleteFunc(e.env(), func(kv string) bool { return strings.HasPrefix(kv, "ANSIBLE_") })
+	env := l66PrivateEnv(e.env(), e.home, e.nssLib, e.path("nss_passwd"), e.path("nss_group"))
 	env = append(env,
 		"PATH="+l66Venv+":"+filepath.Join(root, "bin")+":"+os.Getenv("PATH"),
 		"ANSIBLE_CONFIG="+e.path("ansible.cfg"),
@@ -1019,10 +1035,6 @@ func (e *l66Env) ansibleEnv(o l66Opts) []string {
 		"ANSIBLE_SSH_CONTROL_PATH_DIR="+e.path("cp"),
 		// ansible.builtin.ssh logs in with a password through SSH_ASKPASS; sshpass is not used.
 		"ANSIBLE_SSH_PASSWORD_MECHANISM=ssh_askpass",
-		// libssh reads the home from the passwd entry, not $HOME: nss_wrapper gives the user the private one.
-		"LD_PRELOAD="+e.nssLib,
-		"NSS_WRAPPER_PASSWD="+e.path("nss_passwd"),
-		"NSS_WRAPPER_GROUP="+e.path("nss_group"),
 	)
 	if o.logPath != "" {
 		env = append(env, "ANSIBLE_LOG_PATH="+o.logPath)
