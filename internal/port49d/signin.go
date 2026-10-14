@@ -272,6 +272,14 @@ type reopenable struct {
 
 func (r *reopenable) Lost() string { return r.lost() }
 
+// Close closes what it wraps, when that has anything to close.
+func (r *reopenable) Close() error {
+	if c, ok := r.Enrollments.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
 func (l *lateEnrollments) get() (store.Enrollments, error) { return l.fetch(false) }
 
 // Refresh opens a lost or unopened store again at once (the broker's
@@ -312,17 +320,36 @@ func (l *lateEnrollments) fetch(force bool) (store.Enrollments, error) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if cur != nil {
-		// Lost: keep the new handle only if it is well; a lost one answers the
-		// same as the old, so nothing is gained.
+	// A handle this call opened and does not keep is closed, whichever branch
+	// drops it: an own etcd's is a live client.
+	discard := func() {
 		if err == nil {
-			if nr, ok := in.(*reopenable); !ok || nr.Lost() == "" {
-				l.inner = in
+			if c, ok := in.(interface{ Close() error }); ok {
+				_ = c.Close()
 			}
 		}
+	}
+	if cur != nil {
+		// Lost: keep the new handle only if it is well (a lost one answers the
+		// same as the old) and nothing moved while it opened: l.inner must be
+		// the handle this call started from and still lost. Otherwise another
+		// caller swapped in, or wrote through, a newer one, and this read is
+		// older than that write.
+		stale := l.inner != cur
+		if r, ok := l.inner.(*reopenable); !stale && (!ok || r.Lost() == "") {
+			stale = true // a write through cur cleared it meanwhile
+		}
+		if err == nil && !stale {
+			if nr, ok := in.(*reopenable); !ok || nr.Lost() == "" {
+				l.inner = in
+				return in, nil
+			}
+		}
+		discard()
 		return l.inner, nil
 	}
 	if l.inner != nil {
+		discard()
 		return l.inner, nil // another caller opened it meanwhile
 	}
 	if err != nil {
