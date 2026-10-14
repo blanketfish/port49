@@ -52,10 +52,16 @@ func TestASecondFactorUnderAnUnknownKeyIsAnError(t *testing.T) {
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
-	_, err = WrapEnrollments(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, failures).GetSecondFactor(ctx, f.Principal)
+	unread, err := WrapEnrollments(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, failures).GetSecondFactor(ctx, f.Principal)
 	if err == nil || errors.Is(err, store.ErrNotFound) || !errors.Is(err, ErrUnknownKey) ||
 		testutil.ToFloat64(failures.WithLabelValues("second factor")) != 1 {
 		t.Fatalf("a record under no held key read as %v", err)
+	}
+	// The revision comes back with the error and nothing else: a reset replaces
+	// the record at it, and no secret leaves with a record that did not open.
+	if raw.Rev == 0 || unread.Rev != raw.Rev || len(unread.Secret) != 0 || unread.EntryID != "" || unread.State != "" {
+		t.Fatalf("a record that did not open came back as rev %d (stored %d), %d secret bytes, entry %q, state %q",
+			unread.Rev, raw.Rev, len(unread.Secret), unread.EntryID, unread.State)
 	}
 }
 

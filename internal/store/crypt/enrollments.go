@@ -96,19 +96,26 @@ func (e *wrappedEnrollments) GetSecondFactor(ctx context.Context, principal stri
 		return store.SecondFactor{}, err
 	}
 	f.Principal = principal
+	// A record that will not open comes back with its revision and nothing
+	// else, beside the error: an operator's reset-second-factor replaces it at
+	// that revision, since the way past a record the broker cannot read is
+	// to write over it, and a swap needs the revision it overwrites.
+	unopened := func(why error) (store.SecondFactor, error) {
+		return store.SecondFactor{Principal: principal, Rev: f.Rev}, e.w.openErr("second factor", f.Sealed, why)
+	}
 	b, err := e.w.keys.OpenBound(f.Sealed, secondFactorAAD(principal))
 	if err != nil {
-		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, err)
+		return unopened(err)
 	}
 	var s secondFactorSecret
 	if err := json.Unmarshal(b, &s); err != nil {
-		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorBody)
+		return unopened(errSecondFactorBody)
 	}
 	switch {
 	case s.V != secondFactorForm:
-		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorForm)
+		return unopened(errSecondFactorForm)
 	case s.State != f.State || !s.EnrolledAt.Equal(f.EnrolledAt) || s.LastStep != f.LastStep || !s.Until.Equal(f.Until):
-		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorMoved)
+		return unopened(errSecondFactorMoved)
 	}
 	k := e.w.keys
 	f.Stale = k.Previous != nil && SealedKeyID(f.Sealed) == LineKeyID(k.Previous.ID)

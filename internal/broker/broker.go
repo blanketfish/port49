@@ -91,6 +91,9 @@ type Broker struct {
 	// Enrollments is the enrollment store's handle (decision 47 D12); Store
 	// keeps the attempt counts. Nil with PasswordSignIn set is a lost store.
 	Enrollments store.Enrollments
+	// EnrollmentFile is the enrollment store's file on the memory backend, ""
+	// on etcd: reset-second-factor --all names the copy it keeps of a lost one.
+	EnrollmentFile string
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
 	NoX509 bool
