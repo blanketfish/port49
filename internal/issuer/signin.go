@@ -19,14 +19,14 @@ const (
 	MethodDirectoryPassword = "directory_password"
 )
 
-// entrySubjectPrefix starts a directory sign-in's sub.
-const entrySubjectPrefix = "entry-sha256:"
+// EntrySubjectPrefix starts a directory sign-in's sub; the hex digest follows.
+const EntrySubjectPrefix = "entry-sha256:"
 
 // EntrySubject is a directory sign-in's sub: the entry's id hashed, so a
 // DN-form id fits the URI (decision 47 D6).
 func EntrySubject(entryID string) string {
 	sum := sha256.Sum256([]byte(entryID))
-	return entrySubjectPrefix + hex.EncodeToString(sum[:])
+	return EntrySubjectPrefix + hex.EncodeToString(sum[:])
 }
 
 // SignIn is the sign-in a certificate was issued on (decision 43 rulings 9
@@ -135,13 +135,13 @@ func (s SignIn) validate() error {
 			return errors.New("its sign-in's iss is not an https URL")
 		}
 	case MethodDirectoryPassword:
-		hexPart := strings.TrimPrefix(s.Subject, entrySubjectPrefix)
+		hexPart := strings.TrimPrefix(s.Subject, EntrySubjectPrefix)
 		switch {
 		case s.Issuer != "":
 			return errors.New("a directory sign-in carries no iss")
 		case s.Sid != "" || s.ACR != "":
 			return errors.New("a directory sign-in carries no sid or acr")
-		case !strings.HasPrefix(s.Subject, entrySubjectPrefix) || len(hexPart) != 64 || !isLowerHex(hexPart):
+		case !strings.HasPrefix(s.Subject, EntrySubjectPrefix) || len(hexPart) != 64 || !isLowerHex(hexPart):
 			return errors.New("a directory sign-in's sub is not entry-sha256: and 64 hex digits")
 		case len(s.AMR) == 0:
 			return errors.New("a directory sign-in names no amr")

@@ -72,7 +72,7 @@ func (b *Broker) issuedCaller(cs *tls.ConnectionState, now time.Time) (CertCalle
 // s: its methods, when, and the entry's hash (spec §5.7; decision 47).
 func directoryPasswordAuth(s issuer.SignIn) *decision.DirectoryPassword {
 	return &decision.DirectoryPassword{AMR: s.AMR, AuthTime: decision.FormatTime(s.AuthTime),
-		EntrySHA256: strings.TrimPrefix(s.Subject, "entry-sha256:")}
+		EntrySHA256: strings.TrimPrefix(s.Subject, issuer.EntrySubjectPrefix)}
 }
 
 // issuedLoggedOut answers a request made with a certificate this broker

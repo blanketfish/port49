@@ -424,15 +424,19 @@ func TestEachMethodIsHeldToItsRules(t *testing.T) {
 		u.RawQuery = q.Encode()
 		return &x509.Certificate{Subject: pkix.Name{CommonName: "user:alice@example.com"}, URIs: []*url.URL{&u}}
 	}
-	for name, cert := range map[string]*x509.Certificate{
-		"directory with iss":   mixed(func(q url.Values) { q.Set("iss", "https://kc.example") }),
-		"directory with sid":   mixed(func(q url.Values) { q.Set("sid", "s1") }),
-		"unknown method":       mixed(func(q url.Values) { q.Set("method", "saml") }),
-		"method twice":         mixed(func(q url.Values) { q.Add("method", "directory_password") }),
-		"explicit oidc method": mixed(func(q url.Values) { q.Set("method", "oidc") }),
+	for name, c := range map[string]struct {
+		cert *x509.Certificate
+		want string
+	}{
+		"directory with iss":   {mixed(func(q url.Values) { q.Set("iss", "https://kc.example") }), "carries no iss"},
+		"directory with sid":   {mixed(func(q url.Values) { q.Set("sid", "s1") }), "no sid or acr"},
+		"directory with acr":   {mixed(func(q url.Values) { q.Set("acr", "1") }), "no sid or acr"},
+		"unknown method":       {mixed(func(q url.Values) { q.Set("method", "saml") }), "a method port49 does not issue"},
+		"method twice":         {mixed(func(q url.Values) { q.Add("method", "directory_password") }), "method twice"},
+		"explicit oidc method": {mixed(func(q url.Values) { q.Set("method", "oidc") }), "a method port49 does not issue"},
 	} {
-		if _, err := ReadSignIn(cert); err == nil {
-			t.Errorf("%s: read", name)
+		if _, err := ReadSignIn(c.cert); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
 }
