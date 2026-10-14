@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 captured = {}
 EVENTS = []      # "filed" and "authenticated", in the order they happened
+CLIENT = {}      # what the fake's _build_ssh_client returns
 NEXT_ERROR = []  # what the next connection raises, as Paramiko would
 PRESENTED = ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
 
@@ -52,6 +53,9 @@ class FakeConnection:
         if isinstance(policy, str):  # Paramiko's RejectPolicy with nothing held
             raise Exception("Server '10.0.0.11' not found in known_hosts")
         policy.missing_host_key(None, self.kw["host"], key)
+
+    def _build_ssh_client(self):
+        return CLIENT["c"]  # Netmiko's own: a Paramiko client with no host keys loaded
 
     def _open(self):
         with open(self.kw["alt_key_file"], encoding="ascii") as f:
@@ -98,13 +102,18 @@ class NetmikoTest(unittest.TestCase):
     def connect(self, kh, device="leaf1", agent=None, **kw):
         remembered = []
 
-        def remember(k, t, b, stderr=None):
+        def remember(k, t, b, stderr=None, **_):
             remembered.append((k.name, t, b))
             EVENTS.append("filed")
 
-        with mock.patch.object(hostkeys, "lookup", return_value=kh), \
-                mock.patch.object(hostkeys, "remember", side_effect=remember):
-            conn = p49netmiko.connect(device, agent=agent or FakeAgent(), **kw)
+        # Kept for the whole test: the connection's pin looks the file up again at each reconnect.
+        patchers = [mock.patch.object(hostkeys, "lookup", return_value=kh),
+                    mock.patch.object(hostkeys, "remember", side_effect=remember)]
+        self.lookup = patchers[0].start()
+        patchers[1].start()
+        for p in patchers:
+            self.addCleanup(p.stop)
+        conn = p49netmiko.connect(device, agent=agent or FakeAgent(), **kw)
         return conn, remembered
 
     def test_a_known_key_is_the_only_key(self):
@@ -185,6 +194,7 @@ class NetmikoTest(unittest.TestCase):
     def test_a_reconnect_after_a_first_contact_accepts_only_the_filed_key(self):  # C1
         conn, remembered = self.connect(known())
         self.assertFalse(conn.alt_host_keys)
+        self.lookup.return_value = known(" ".join(PRESENTED))  # the file now holds what was filed
         conn.reconnect(PRESENTED)  # the filed key: accepted
         with self.assertRaises(HostKeyError) as cm:
             conn.reconnect(self.OTHER)
@@ -225,6 +235,77 @@ class NetmikoTest(unittest.TestCase):
             self.connect(known("ssh-dss AAAA1"))
         self.assertEqual(cm.exception.code, "host_key_uncheckable")
         self.assertNotIn("ssh-keygen -R", str(cm.exception))
+        self.assertNotIn("has not changed", str(cm.exception))  # N4: it cannot know
+        self.assertIn("could not be compared", str(cm.exception))
+
+    # Fix round 2.
+
+    def test_a_key_revoked_since_the_connect_is_refused_on_a_reconnect(self):  # N3
+        key = " ".join(PRESENTED)
+        conn, _ = self.connect(known(key))
+        conn.reconnect(PRESENTED)
+        self.lookup.return_value = known(revoked=(key,))  # an @revoked line, filed since: key dropped
+        with self.assertRaises(HostKeyError) as cm:
+            conn.reconnect(PRESENTED)
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+        self.lookup.side_effect = HostKeyError("host_key_revoked", "every key filed is revoked")
+        with self.assertRaises(HostKeyError) as cm:
+            conn.reconnect(PRESENTED)
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+
+    def test_a_rebuilt_client_holds_the_pinned_keys(self):  # N1, with a stand-in for paramiko
+        added = []
+
+        class HostKeys:
+            def add(self, hostname, keytype, key):
+                added.append((hostname, keytype, key))
+
+        class Client:
+            def get_host_keys(self):
+                return HostKeys()
+
+        class PKey:
+            @staticmethod
+            def from_type_string(keytype, blob):
+                return ("key", keytype, blob)
+
+        with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
+            p49netmiko._load_pinned(Client(), "[10.0.0.11]:2222", {"ssh-rsa QUJD", "ssh-dss AAAA"})
+        self.assertIn(("[10.0.0.11]:2222", "ssh-rsa", ("key", "ssh-rsa", b"ABC")), added)
+
+    def test_connect_wraps_the_clients_rebuild(self):  # N1
+        conn, _ = self.connect(known("ssh-ed25519 QUJD"))
+        built = []
+
+        class Client:
+            def get_host_keys(self):
+                return types.SimpleNamespace(add=lambda *a: built.append(a))
+
+        class PKey:
+            @staticmethod
+            def from_type_string(keytype, blob):
+                return (keytype, blob)
+
+        CLIENT["c"] = Client()
+        with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
+            self.assertIs(conn._build_ssh_client(), CLIENT["c"])
+        self.assertEqual(len(built), 1)
+        self.assertEqual(built[0][0], "10.0.0.11")
+        # a key revoked since: nothing is built that can connect
+        self.lookup.return_value = known(revoked=("ssh-ed25519 QUJD",))
+        with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
+            with self.assertRaises(HostKeyError) as cm:
+                conn._build_ssh_client()
+        self.assertEqual(cm.exception.code, "host_key_revoked")
+
+    def test_remember_and_the_recheck_use_the_given_ssh_keygen(self):  # N4
+        seen = []
+        fc = p49netmiko.FirstContact(known(), "leaf1", ssh_keygen="/x/fake-keygen")
+        key = types.SimpleNamespace(get_name=lambda: PRESENTED[0], get_base64=lambda: PRESENTED[1])
+        with mock.patch.object(hostkeys, "remember", side_effect=lambda *a, **k: seen.append(k)), \
+                mock.patch.object(hostkeys, "is_revoked", side_effect=lambda *a, **k: seen.append(k) or False):
+            fc.missing_host_key(None, "10.0.0.11", key)
+        self.assertTrue(all(k.get("ssh_keygen") == "/x/fake-keygen" for k in seen) and len(seen) == 2)
 
     def test_a_port_that_is_not_a_number_is_refused(self):  # M8
         with self.assertRaises(ValueError):

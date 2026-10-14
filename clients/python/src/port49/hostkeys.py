@@ -185,6 +185,13 @@ def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh
                                f"{'ProxyJump' if setting == 'proxyjump' else 'ProxyCommand'}, which this client "
                                f"cannot follow, so a key it filed or checked could be another host's: use port49 ssh "
                                f"for this device", device)
+    # Nor does Paramiko bind a source address or interface: on a host with a VRF per site, the default route
+    # can reach another site's address (fix round 2, N2).
+    for setting, label in (("bindinterface", "BindInterface"), ("bindaddress", "BindAddress")):
+        if conf.get(setting, "none") not in ("none", ""):
+            raise HostKeyError("host_key_uncheckable", f"your ssh_config sets {label} for {device}, which this "
+                               f"client cannot honour, so the address could be reached over another route than ssh "
+                               f"takes: use port49 ssh for this device", device)
     try:
         resolved_port = int(conf.get("port", port))
     except ValueError:
@@ -284,7 +291,7 @@ def hashed(name, salt=None):
     return f"|1|{base64.b64encode(salt).decode()}|{base64.b64encode(mac).decode()}"
 
 
-def remember(kh, keytype, key_b64, stderr=None):
+def remember(kh, keytype, key_b64, stderr=None, *, ssh_keygen="ssh-keygen"):
     """File a first contact's key under kh.name: one O_APPEND write of one whole line, as ssh does, so
     concurrent first contacts never interleave. Said on stderr as OpenSSH says it."""
     if not kh.write_to:
@@ -308,8 +315,8 @@ def remember(kh, keytype, key_b64, stderr=None):
                 line = b"\n" + line  # as OpenSSH 10.2p1 does: the last entry stays a whole line
             # Filed since lookup (another worker, port49 ssh) and different: the key presented is not the one
             # the device was known by, so it is not filed beside it (OpenSSH would then trust both).
-            filed = [k for k in _read_file(kh.name, kh.write_to, "ssh-keygen")[0]
-                     if not is_revoked(kh, *k.split(" ", 1))]
+            filed = [k for k in _read_file(kh.name, kh.write_to, ssh_keygen)[0]
+                     if not is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen)]
             if filed and f"{keytype} {key_b64}" not in filed:
                 raise HostKeyError("host_key_changed", f"a key was filed under {kh.name} while {kh.name} was being "
                                    f"reached, and it is not the one presented: the key presented was not filed. "

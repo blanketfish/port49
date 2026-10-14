@@ -132,13 +132,15 @@ Refused, with the setting named, and never filed past:
 | `device_name` | A name known_hosts would read as a pattern or a marker (`leaf*`, `a,b`, `@x`, ...). Checked before the mint. |
 | `ssh_config_unread` | `ssh -G` failed on your ssh_config. |
 | `known_hosts_unread` | `ssh-keygen -F` failed on a known_hosts file. |
-| `host_key_uncheckable` | A `KnownHostsCommand` (use `port49 ssh`); a `RevokedHostKeys` that `ssh-keygen -Q` cannot read (a plain key list, which ssh honours and this client does not: make a KRL with `ssh-keygen -k`); a path in `GlobalKnownHostsFile` or `UserKnownHostsFile` that cannot be resolved; a host covered only by `@cert-authority`, which Paramiko cannot check; a `ProxyJump` or `ProxyCommand` (Paramiko dials the address itself, so a key filed or checked could be another host's: use `port49 ssh`); a `Port` that is not the one `connect` dials (`port=`); keys filed only in types Paramiko cannot load (`ssh-dss`, `sk-*`). |
+| `host_key_uncheckable` | A `KnownHostsCommand` (use `port49 ssh`); a `RevokedHostKeys` that `ssh-keygen -Q` cannot read (a plain key list, which ssh honours and this client does not: make a KRL with `ssh-keygen -k`); a path in `GlobalKnownHostsFile` or `UserKnownHostsFile` that cannot be resolved; a host covered only by `@cert-authority`, which Paramiko cannot check; a `ProxyJump` or `ProxyCommand` (Paramiko dials the address itself, so a key filed or checked could be another host's: use `port49 ssh`); a `Port` that is not the one `connect` dials (`port=`); a `BindAddress` or `BindInterface` (Paramiko takes the default route); keys filed only in types Paramiko cannot load (`ssh-dss`, `sk-*`). |
 | `host_keys_not_kept` | Under accept-new, the first `UserKnownHostsFile` is `/dev/null`, `none`, a link to either, or not a file you can write (or create). Every connection would be a first contact. |
 | `host_key_revoked` | An `@revoked` line or `RevokedHostKeys` names the key, filed beside your entry or presented at first contact. |
 | `host_key_unknown`, `host_key_changed` | As above. |
 
-The returned connection keeps the filed key(s) in memory: a reconnect or an SCP transfer on it accepts
-a key filed under the name and refuses any other before authenticating. Initially Paramiko compares
+The returned connection keeps the filed key(s) in memory: a reconnect or an SCP transfer on it loads
+them into the new Paramiko client (so the filed key type is negotiated), looks the files up again
+(a key revoked or removed since is not loaded, and with none left nothing connects), and refuses any
+other key before authenticating (Paramiko's own `BadHostKeyException` for a different key of a held type). Initially Paramiko compares
 against the first key of the presented type, so after a rotation that appended a second key of one
 type, `connect` can refuse with `host_key_changed` until the old line is removed.
 

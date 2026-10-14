@@ -317,6 +317,27 @@ class HostKeysTest(unittest.TestCase):
         hostkeys.lookup("leaf1", "10.0.0.11", port=2222, ssh_config=self.config("Port 2222"))
         hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("ProxyJump none", "ProxyCommand none"))
 
+    # Fix round 2.
+
+    def test_a_bind_setting_the_library_cannot_honour_is_refused(self):  # N2
+        for setting, name in (("BindAddress 127.0.0.2", "BindAddress"), ("BindInterface lo", "BindInterface")):
+            e = self.refused("host_key_uncheckable", name, "leaf1", "10.0.0.11", ssh_config=self.config(setting))
+            self.assertIn("port49 ssh", str(e))
+            self.assertNotIn("ssh-keygen -R", str(e))
+        hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("BindInterface none"))
+
+    def test_remember_is_rechecked_with_the_given_ssh_keygen(self):  # N4
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        fake = os.path.join(self.dir, "fakekeygen")
+        with open(fake, "w", encoding="ascii") as f:
+            f.write("#!/bin/sh\nexit 2\n")
+        os.chmod(fake, 0o755)
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"spine1 {ED}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet(), ssh_keygen=fake)
+        self.assertEqual(cm.exception.code, "known_hosts_unread")
+
     def test_remember_with_nowhere_to_write_is_refused(self):
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("StrictHostKeyChecking yes"))
         kh = hostkeys.KnownHosts(kh.name, (), (), (), "", True, False, "")

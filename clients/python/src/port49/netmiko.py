@@ -5,6 +5,7 @@ is OpenSSH's known_hosts entry under its inventory name: the only key accepted
 once filed, and filed at first contact, before authentication, unless revoked.
 The token is never printed."""
 
+import base64
 import os
 import shutil
 import sys
@@ -33,17 +34,17 @@ class FirstContact:
     line or the operator's RevokedHostKeys revokes is refused; any other is filed under the inventory name,
     as OpenSSH's accept-new files it, before the login goes on."""
 
-    def __init__(self, kh, device, stderr=None):
-        self.kh, self.device, self.stderr = kh, device, stderr
+    def __init__(self, kh, device, stderr=None, ssh_keygen="ssh-keygen"):
+        self.kh, self.device, self.stderr, self.ssh_keygen = kh, device, stderr, ssh_keygen
         self.filed = None  # "type base64" of the key this policy filed
 
     def missing_host_key(self, client, hostname, key):
         keytype, key_b64 = key.get_name(), key.get_base64()
-        if hostkeys.is_revoked(self.kh, keytype, key_b64):
+        if hostkeys.is_revoked(self.kh, keytype, key_b64, ssh_keygen=self.ssh_keygen):
             raise HostKeyError("host_key_revoked", f"{hostname} presents a {keytype} key that is revoked (an "
                                f"@revoked line, or your RevokedHostKeys): it was not filed, and the token was not "
                                f"sent", self.device)
-        hostkeys.remember(self.kh, keytype, key_b64, stderr=self.stderr)
+        hostkeys.remember(self.kh, keytype, key_b64, stderr=self.stderr, ssh_keygen=self.ssh_keygen)
         self.filed = f"{keytype} {key_b64}"
 
 
@@ -53,14 +54,43 @@ class Pinned:
     and it accepts only a key filed under the device's name, held in memory (fix round 1, C1). Nothing is
     filed here."""
 
-    def __init__(self, keys, name, device=None):
-        self.keys, self.name, self.device = frozenset(keys), name, device
+    def __init__(self, keys, name, device=None, refresh=None):
+        self.keys, self.name, self.device, self.refresh = frozenset(keys), name, device, refresh
+
+    def current(self):
+        """The pinned keys that are still filed and not revoked, read afresh (an @revoked line or a
+        RevokedHostKeys entry added since the connect is honoured at the next one; fix round 2, N3). Raises
+        when none is left."""
+        if self.refresh is None:
+            return self.keys
+        kh = self.refresh()  # raises host_key_revoked when every key filed is revoked
+        live = self.keys & set(kh.keys)
+        if not live:
+            revoked = any(hostkeys.is_revoked(kh, *k.split(" ", 1)) for k in self.keys)
+            raise HostKeyError("host_key_revoked" if revoked else "host_key_unknown",
+                               f"no key this connection was made with is filed under {self.name} and unrevoked "
+                               f"any more; verify the device's key on its console", self.device)
+        return live
 
     def missing_host_key(self, client, hostname, key):
-        if f"{key.get_name()} {key.get_base64()}" not in self.keys:
+        if f"{key.get_name()} {key.get_base64()}" not in self.current():
             raise HostKeyError("host_key_changed", f"{hostname} presents a key that is not one filed under "
                                f"{self.name}: either the device's key changed, or this is not the device. Verify the "
                                f"key on its console", self.device)
+
+
+def _load_pinned(client, field, keys):
+    """Hold keys in client's host keys under field, so Paramiko offers the filed key types first and compares
+    the key itself, as on the first connect (fix round 2, N1). A type Paramiko cannot load is skipped."""
+    import paramiko
+
+    held = client.get_host_keys()
+    for k in sorted(keys):
+        keytype, blob = k.split(" ", 1)
+        try:
+            held.add(field, keytype, paramiko.PKey.from_type_string(keytype, base64.b64decode(blob)))
+        except Exception:
+            continue
 
 
 def _chain_text(exc):
@@ -146,7 +176,19 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             # temp file goes, and nothing may name it (fix round 1, C1).
             pinned = set(kh.keys) or ({first.filed} if first and first.filed else set())
             conn.alt_host_keys, conn.alt_key_file = False, ""
-            conn.key_policy = Pinned(pinned, kh.name, device)
+            pin = conn.key_policy = Pinned(pinned, kh.name, device, refresh=lambda: hostkeys.lookup(
+                device, tok.address, port=port, username=tok.username, ssh_config=ssh_config))
+            build = conn._build_ssh_client
+
+            def rebuild():
+                # Netmiko builds a client here for a reconnect and for SCP. The pinned keys that are still
+                # filed and unrevoked are loaded into it, so Paramiko negotiates the filed key type and
+                # compares the key; with none left it does not connect at all.
+                client = build()
+                _load_pinned(client, field, pin.current())
+                return client
+
+            conn._build_ssh_client = rebuild
         except BaseException as e:
             try:
                 conn.disconnect()
@@ -155,9 +197,10 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             if isinstance(e, HostKeyError):
                 raise
             if is_key_type_unloadable(e):
-                raise HostKeyError("host_key_uncheckable", f"the keys filed under {kh.name} are of a type Paramiko "
-                                   f"cannot load (ssh-dss, a security-key type), so none could be checked; the key "
-                                   f"has not changed: use port49 ssh for this device", device) from None
+                raise HostKeyError("host_key_uncheckable", f"Paramiko held no key for {tok.address}: the keys filed "
+                                   f"under {kh.name} may be of a type it cannot load (ssh-dss, a security-key type), "
+                                   f"so the key the device presented could not be compared with them; the token was "
+                                   f"not sent. Use port49 ssh for this device", device) from None
             if is_host_key_failure(e):
                 raise HostKeyError("host_key_changed", f"the key filed under {kh.name} is not the one {tok.address} "
                                    f"presents: either the device's key changed, or the address is not the device. "
