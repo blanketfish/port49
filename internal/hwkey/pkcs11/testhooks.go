@@ -8,7 +8,8 @@ import (
 )
 
 // The test harness's view of the module (re-review R4). The hwkey tag is set
-// only by `make test-hw`, so no release build carries these. They are a
+// only by `make test-hw` and by L60's certificate-order cell
+// (tests/lab/l60/RUNBOOK.md), so no release build carries these. They are a
 // non-test file because hwtest and cmd/port49's tests import this package and
 // a _test.go file is seen by this package's own tests alone.
 

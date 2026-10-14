@@ -36,7 +36,7 @@ func (b *lockedBuffer) String() string {
 // touch key, and stops the agent by its pid. Opt-in (it builds a binary):
 // PORT49_L60_SELFTEST=1.
 func TestL60SelfTest(t *testing.T) {
-	gate(t, "PORT49_L60_SELFTEST", "the harness with a file key; no token, no terminal")
+	gate(t, gateSelf, "the harness with a file key; no token, no terminal")
 	var out lockedBuffer
 	dir := t.TempDir()
 	h := setupLab(t, "selftest", true, nil, &out, dir)

@@ -7,7 +7,9 @@ and the cost of `GET /status` in the session with Ryan at the key on 2026-10-14.
 Every claim they cover stays *provisional on L60*.
 
 - **Date measured:** 2026-10-13 (the plan 9c session that began 2026-10-12) and 2026-10-14
-  (03:12–03:54Z, `tests/lab/l60` at commit `b23964f6`, run by `tests/lab/l60/RUNBOOK.md`)
+  (03:12–03:54Z, run by `tests/lab/l60/RUNBOOK.md`: the import through (f)'s lockout at commit
+  `4006e7ac`, the certificate order at `b23964f6`, which adds that cell and leaves the earlier
+  cells' code unchanged)
 - **Platform:** beehive, the SER8 lab machine: Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, pcscd
   reached by the lab user through a polkit rule (no sudo)
 - **Token:** YubiKey 5C Nano FIPS, firmware 5.4.3 (serial recorded locally). Slots made by Ryan with
@@ -24,18 +26,27 @@ Every claim they cover stays *provisional on L60*.
   no PIN, PUK or management key was typed into the Claude session or written to any file.
   The 2026-10-14 cells are the gated tests in `tests/lab/l60/` (`cells_*_test.go`), each run as
   `go test -tags hwkey_dlopen ./tests/lab/l60/ -run '^TestL60<Cell>$'` with its `PORT49_L60_*`
-  gate, against an in-process broker and the lab client CA the harness makes. Their observations
-  went to a local log, serial masked, from which the figures below are copied. PIN prompts were
-  counted by Ryan at the terminal, except where noted. The PIN reached the key only at port49's own
-  prompt, typed by Ryan, or from a `pin-source` file Ryan made themselves (mode 0600; the harness
-was given its path only).
+  gate (the certificate order with `-tags hwkey,hwkey_dlopen`, for its test hook), against an
+  in-process broker and the lab client CA the harness makes. Their observations went to a local
+  log, serial masked, from which the figures below are copied. PIN prompts were counted by Ryan at
+  the terminal, except where noted. The PIN reached the key only at port49's own prompt, typed by
+  Ryan, or from a `pin-source` file Ryan made themselves (mode 0600). The harness passed that
+  file's path to port49, and in (e)'s last step port49's opener, inside the test process, read it
+  and logged in once; tries stayed 3 of 3.
 
 ## Claim
 
-Spec §15 L60: a YubiKey's PIV applet through libykcs11 under purego. This note covers cell (a)
-(`C_Initialize`/`C_Finalize` with the token present), most of cell (c) (the attestation objects,
-their chain and their policies) and the touch timeout half of cell (d) (decision 45 ruling 14 says
-about 15s).
+Spec §15 L60: a YubiKey's PIV applet through libykcs11 under purego. This note covers:
+- cell (a): `C_Initialize`/`C_Finalize` with the token present;
+- cell (b): `port49 login --key` on 9a, the PIN asked once, the refresh;
+- cell (c): the attestation objects, their chain and their policies, and the certificate order
+  with an imported certificate;
+- cell (d): the touch timeout (decision 45 ruling 14 says about 15s), and `hardware_key_touch`
+  through `port49 token`;
+- cell (e): the unplug;
+- cell (e2): a second process's login and token;
+- cell (f): a wrong PIN, the `pin-source` guard, and the lockout;
+- the cost of `GET /status`.
 
 ## Observation
 
@@ -140,6 +151,10 @@ path (decision 45 ruling 14 holds).
 
 ### (e2) A second login and mint beside a running agent (`TestL60E2`, run twice)
 
+The first run's log ends after B's login: it was stopped there and the cell run again from the
+start. The second-login and token figures below are from both runs; every figure about A and B
+together is from the second run alone.
+
 - **A second `port49 login` to agent A's socket:** "already logged in to …; refreshing", exit 0,
   81–85ms. The 85ms is too quick for a PIN entry, and the session transcript shows no PIN prompt.
   Ryan's count at the terminal read 1 on both runs, so the 0 is from the timing and the
@@ -219,10 +234,13 @@ Reading the attestations on each call costs well under a millisecond.
 
 - **F1. A wrong PIN typed in another process logs a running agent off the key.** One wrong PIN at
   a second `port49 login` (lockout table, row 1) left agent A's PIV session not logged in: A's
-  next refresh said "your key needs its PIN", and the status read `locked`. The two processes share
-  nothing in port49, so this is the token's behaviour: the PIV applet's login state does not
-  survive another process's failed `C_Login`. (A second process's correct PIN in (e2) left A
-  logged in.)
+  next refresh said "your key needs its PIN", and the status read `locked`. The cause is
+  inferred, not captured: the log holds port49's words, not the return code behind them. They
+  are what port49 says for `CKR_USER_NOT_LOGGED_IN` (`classify`, `signer.go`), and the refresh
+  took 10ms, against about 80ms for a real sign. The two processes share nothing in port49, so the
+  likely cause is the token's: the PIV applet's login state does not survive another process's
+  failed `C_Login`. A second process's correct PIN in (e2) left A logged in. A later run should
+  record A's error code after the wrong PIN, as (e) does for the pull.
   It wants an operator note: a mistyped PIN anywhere on the machine sends the running agent back to
   `port49 login`.
 - **F2. port49 prompts for a blocked PIN, and a login to a running agent never says "blocked".**

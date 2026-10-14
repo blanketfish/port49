@@ -8,7 +8,9 @@
 // child processes on Ryan's terminal, against a broker it serves in-process.
 // A PIN goes from Ryan's keyboard straight to port49's own prompt on /dev/tty,
 // or from a pin-source file Ryan made (PORT49_L60_PIN_SOURCE, whose path alone
-// the harness passes on): the harness never reads, holds or prints one. A
+// the harness passes on): the harness never prints one, and reads one only in
+// cell (e)'s last step, where port49's own opener logs in with the pin-source
+// file inside the test process to read a physical pull's return code. A
 // token `port49 token` prints is read from its stdout and only its length is
 // said.
 //
@@ -35,7 +37,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +66,8 @@ const (
 	gateF      = "PORT49_L60_F"
 	gateFLock  = "PORT49_L60_FLOCK"
 	gateStatus = "PORT49_L60_STATUS"
+	gateCOrder = "PORT49_L60_C_ORDER"
+	gateSelf   = "PORT49_L60_SELFTEST"
 )
 
 const defaultModule = "/usr/lib/x86_64-linux-gnu/libykcs11.so"
@@ -274,14 +277,14 @@ func oneLine(s string) string {
 }
 
 var (
-	serialHash  = regexp.MustCompile(`#\d+`)
+	serialHash  = regexp.MustCompile(`(#|%23)\d+`)
 	serialWords = regexp.MustCompile(`(?i)(serial[^0-9\n]{0,4})\d+`)
 )
 
 // redact masks a device serial: libykcs11's token label carries it
 // ("YubiKey PIV #<serial>"), and the results note keeps it out.
 func redact(s string) string {
-	s = serialHash.ReplaceAllString(s, "#<serial>")
+	s = serialHash.ReplaceAllString(s, "${1}<serial>")
 	return serialWords.ReplaceAllString(s, "${1}<serial>")
 }
 
@@ -407,7 +410,7 @@ func (h *lab) port49(o runOpts, args ...string) result {
 		// A login to a running agent refreshes it too.
 		h.broker.stepPastPacing()
 	}
-	h.say("  $ port49 %s", strings.Join(shownArgs(args), " "))
+	h.say("  $ port49 %s", strings.Join(args, " "))
 	start := time.Now()
 	err := cmd.Run()
 	r := result{took: time.Since(start), stderr: errb.String(), timedOut: ctx.Err() != nil}
@@ -416,7 +419,7 @@ func (h *lab) port49(o runOpts, args ...string) result {
 	if cmd.ProcessState != nil {
 		r.code = cmd.ProcessState.ExitCode()
 	} else if err != nil {
-		h.t.Fatalf("running port49: %v", err)
+		h.t.Fatalf("running port49: %s", redact(err.Error()))
 	}
 	if o.token {
 		r.tokenBytes = len(bytes.TrimRight(outb.Bytes(), "\n"))
@@ -427,10 +430,6 @@ func (h *lab) port49(o runOpts, args ...string) result {
 	}
 	return r
 }
-
-// shownArgs are args as the terminal shows them: a pin-source path is said,
-// never read, so it may be shown.
-func shownArgs(args []string) []string { return slices.Clone(args) }
 
 // childEnv is the environment port49 runs in: a HOME of the run's own, so
 // no ~/.port49 of Ryan's is read or written, and no PORT49_CONFIG.

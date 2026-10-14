@@ -86,7 +86,7 @@ func TestL60Import9a(t *testing.T) {
 	h.step("2", "reading slot 9a's public key from the token (no PIN; nothing written)")
 	k, err := clientkey.Open(h.keyRef(slot9a, false), nil)
 	if err != nil {
-		t.Fatalf("opening slot 9a: %v", err)
+		t.Fatalf("opening slot 9a: %s", redact(err.Error()))
 	}
 	pub := k.Public()
 	h.obs("slot9a_state_no_pin", k.State().String())

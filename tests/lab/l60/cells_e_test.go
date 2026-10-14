@@ -17,7 +17,8 @@ import (
 // PIN and the refresh works. Then, with the agent stopped, the return code a
 // physical pull gives, read in this process.
 func TestL60E(t *testing.T) {
-	gate(t, gateE, "the unplug; you type your PIN twice and pull the key twice")
+	gate(t, gateE, "the unplug; you type your PIN twice and pull the key twice; with "+envPINSource+
+		" set, the last step also logs in once in this process with that file's PIN")
 	h := newLab(t, "e", true)
 	h.needPKCS11()
 	ca := h.needLabCA()
@@ -66,7 +67,12 @@ func TestL60E(t *testing.T) {
 func (h *lab) pullCode() {
 	h.t.Helper()
 	withPIN := os.Getenv(envPINSource) != ""
-	h.step("9", "the return code of a physical pull, in this process (agent stopped)")
+	if withPIN {
+		h.step("9", "the return code of a physical pull, in this process (agent stopped); "+
+			"%s's PIN is sent once now, in this process: a wrong file spends a try", envPINSource)
+	} else {
+		h.step("9", "the return code of a physical pull, in this process (agent stopped); no PIN")
+	}
 	k, err := clientkey.Open(h.keyRef(slot9a, withPIN), nil)
 	if err != nil {
 		h.obs("pull_code_open", err.Error())

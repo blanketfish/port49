@@ -33,13 +33,13 @@ const f9Label = "X.509 Certificate for PIV Attestation"
 //  3. Whether mfatouch.Chain picks the same chain from the objects in their
 //     order and reversed.
 func TestL60COrder(t *testing.T) {
-	gate(t, "PORT49_L60_C_ORDER", "read-only: the certificate objects' order; no PIN, no terminal")
+	gate(t, gateCOrder, "read-only: the certificate objects' order; no PIN, no terminal")
 	h := setupLab(t, "c_order", false, nil, io.Discard, labDir(t))
 	h.needPKCS11()
 
 	k, err := clientkey.Open(h.keyRef(slot9a, false), nil)
 	if err != nil {
-		t.Fatalf("opening slot 9a with no PIN: %v", err)
+		t.Fatalf("opening slot 9a with no PIN: %s", redact(err.Error()))
 	}
 	defer k.Close()
 	s, ok := k.(*pkcs11.Signer)
@@ -51,7 +51,7 @@ func TestL60COrder(t *testing.T) {
 	// 1. The objects in their order.
 	objs, err := pkcs11.CertificateObjects(s)
 	if err != nil {
-		t.Fatalf("listing the certificate objects: %v", err)
+		t.Fatalf("listing the certificate objects: %s", redact(err.Error()))
 	}
 	h.obs("object_count", strconv.Itoa(len(objs)))
 	type listed struct {

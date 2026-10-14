@@ -41,7 +41,8 @@ func TestUnitParsePINTries(t *testing.T) {
 }
 
 func TestUnitRedactMasksTheSerial(t *testing.T) {
-	in := `PIN for YubiKey PIV #12345678: token "YubiKey PIV #12345678" serial 12345678; ends 2026-10-14T10:00:00Z`
+	in := `PIN for YubiKey PIV #12345678: token "YubiKey PIV #12345678" serial 12345678; ` +
+		`pkcs11:token=YubiKey%20PIV%20%2312345678;id=%01; ends 2026-10-14T10:00:00Z`
 	got := redact(in)
 	if strings.Contains(got, "12345678") || !strings.Contains(got, "2026-10-14T10:00:00Z") {
 		t.Fatalf("%q", got)

@@ -26,7 +26,7 @@ l60() { CGO_ENABLED=0 go test -tags hwkey_dlopen ./tests/lab/l60/ -count=1 -v -t
 | 3 | **(b)** login on 9a, refresh, mint; file-key control | `PORT49_L60_B=1 l60 TestL60B` | 2 min | type your PIN once; answer "1" |
 | 4 | **(d)** token under `hardware_key_touch` (9c) | `PORT49_L60_D=1 l60 TestL60D` | 3 min | PIN once; **touch**, then **don't touch** (about 15s), then **touch** |
 | 5 | **(e2)** a second process's login and token | `PORT49_L60_E2=1 l60 TestL60E2` | 3 min | PIN twice (agents A and B); Enter on any unexpected prompt |
-| 6 | **(e)** the unplug | `PORT49_L60_E=1 l60 TestL60E` | 4 min | PIN; **pull**; **re-insert**; PIN; **pull** and **re-insert** again |
+| 6 | **(e)** the unplug | `PORT49_L60_E=1 l60 TestL60E` | 4 min | PIN; **pull**; **re-insert**; PIN; **pull** and **re-insert** again. The last pull's session logs in with the pin-source PIN (0c) in the test process itself: a stale file spends a try |
 | 7 | GET /status cost | `PORT49_L60_STATUS=1 l60 TestL60StatusCost` | 2 min | PIN twice |
 | 8 | **(f)** ONE wrong PIN (refuses under 3 tries) | `PORT49_L60_F=1 l60 TestL60F` | 3 min | a **wrong** PIN once, then your PIN once if asked |
 | 9 | **(f-lock)** three wrong PINs, then unblock. **Last.** Starts only from exactly 3 tries | `PORT49_L60_FLOCK=1 l60 TestL60FLock` | 8 min | PIN; **wrong** PIN ×3; your PIN at the blocked prompts; in a 2nd terminal `ykman piv access unblock-pin` (the PUK, then your PIN as the new PIN); PIN once more |
