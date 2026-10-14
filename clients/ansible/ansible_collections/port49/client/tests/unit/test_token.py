@@ -182,6 +182,17 @@ class Plugin(unittest.TestCase):
             self.lookup(["leaf3"], broker="https://b", broker_ca="/ca", cert="/c", key="/k")
         self.assertIn("leaf3", str(cm.exception))
 
+    def test_the_doc_names_libssh_for_host_key_auto_add(self):  # review I2, L66 (c)
+        # libssh accepted a changed key under host_key_auto_add and presented the token; paramiko
+        # refused it before authentication. The doc and the README must name the same ssh_type.
+        readme = os.path.join(HERE, "..", "..", "README.md")
+        with open(readme) as f:
+            text = f.read()
+        self.assertIn("Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`", text)
+        doc = " ".join(plugin.DOCUMENTATION.split())
+        self.assertRegex(doc, r"never set it with C\(ansible_network_cli_ssh_type=libssh\)")
+        self.assertNotIn("ssh_type=paramiko", doc)
+
 
 if __name__ == "__main__":
     unittest.main()

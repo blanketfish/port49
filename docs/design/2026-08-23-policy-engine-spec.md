@@ -9416,9 +9416,10 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   `@revoked` line or the operator's `RevokedHostKeys` revokes, or whose `RevokedHostKeys`
   `ssh-keygen -Q` cannot read. A revoked key is dropped always, beside any other filed key. A key
   known under the name is the only key accepted (a changed key, or another type, is refused
-  before authentication, *provisional on L65*); none known, a first contact's key is checked
+  before authentication, measured 2026-10-14, `tests/lab/results/L65-<platform>.md`); none known, a first contact's key is checked
   against the revocations and appended under the name, hashed when `HashKnownHosts` is `yes`,
-  after the key exchange and before authentication (*provisional on L65*); an `@cert-authority`
+  after the key exchange and before authentication (measured 2026-10-14,
+  `tests/lab/results/L65-<platform>.md`); an `@cert-authority`
   line matching the name with no plain key, or the operator's `StrictHostKeyChecking yes` with
   none, is refused before connecting, since Paramiko cannot check a host certificate. A refusal
   after the mint leaves its token unused.

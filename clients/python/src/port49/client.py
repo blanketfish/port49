@@ -11,8 +11,8 @@ from . import _run
 from .errors import (BrokerRefused, Denied, DeviceFault, Final, KeyUnavailable, MFARequired, NoAgent, Port49Error,
                      SessionOver, Temporary)
 
-# The CLI's codes (spec §12) to their classes; any other is a Port49Error (no_token and
-# agent_error are that on purpose: nothing a caller does differently).
+# The CLI's codes (spec §12) to their classes; any other is a DeviceFault (a broker item code),
+# except agent_error, which is a Port49Error.
 CLASSES = {
     "no_agent": NoAgent, "agent_too_old": NoAgent,
     "session_over": SessionOver, "credential_revoked": SessionOver,

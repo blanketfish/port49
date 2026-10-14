@@ -546,8 +546,8 @@ key_groups:
 	}
 }
 
-// port49 devices trust is gone (decision 46 ruling 4): one line, exit 2,
-// and nothing dialled or minted.
+// port49 devices trust is gone (decision 46 ruling 4): one line on stderr, exit 2, and
+// nothing on stdout.
 func TestDevicesTrustIsGone(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "trust", "--fingerprint", "SHA256:x", "leaf1"}, &out, &errb)

@@ -151,7 +151,7 @@ against the first key of the presented type, so after a rotation that appended a
 type, `connect` can refuse with `host_key_changed` until the old line is removed.
 
 A refusal after the mint leaves that token unused; it expires. That Paramiko refuses a wrong key
-before it authenticates is provisional on lab entry L65.
+before it authenticates was measured on 2026-10-14 (`tests/lab/results/L65-<platform>.md`).
 
 ## What is retried, and why
 

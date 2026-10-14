@@ -39,4 +39,5 @@ second prompt, Netmiko's Paramiko may present the token a second time: after the
 it by `password`, Paramiko can try `keyboard-interactive` with the same token. That is not
 measured; a refused token is refused again, one more refused attempt against the device's limits.
 
-The claim that Paramiko refuses a wrong key before authentication is provisional on lab entry L65.
+That Paramiko refuses a wrong key before authentication was measured on 2026-10-14
+(`tests/lab/results/L65-<platform>.md`).

@@ -9,7 +9,8 @@ description:
     C(ansible_password), which Ansible templates at every task. Never use C(cacheable) on that C(set_fact).
   - Needs the port49 Python library on the controller (C(pip install ./clients/python) from the port49 repository).
   - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name;
-    see the collection README before setting C(host_key_auto_add), and never set it with C(ssh_type=paramiko).
+    see the collection README before setting C(host_key_auto_add), and never set it with
+    C(ansible_network_cli_ssh_type=libssh), which accepted a changed key and presented the token (L66 (c)).
 options:
   _terms:
     description: Device names as port49's inventory knows them.
