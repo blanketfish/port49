@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -36,7 +37,7 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, _, cred, _, err := b.callerOf(r, now)
+	principal, _, cred, _, _, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
@@ -98,10 +99,14 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := b.Now()
-	principal, legacy, cred, issued, err := b.callerOf(r, now)
+	principal, legacy, cred, issued, signIn, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseCaller(w, r, now, principal, cred, err)
 		return
+	}
+	var viaDir *decision.DirectoryPassword
+	if signIn != nil && signIn.Method == issuer.MethodDirectoryPassword {
+		viaDir = directoryPasswordAuth(*signIn)
 	}
 	// via is the sign-in a certificate this broker issued carries: every
 	// record its refresh makes names it (decision 43 rulings 10, 11).
@@ -139,7 +144,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
 	sig, _ := base64.RawURLEncoding.DecodeString(req.Signature)
 	if nonce == nil || !now.Before(exp) || subtle.ConstantTimeCompare(nonce, got) != 1 {
-		b.refuseRefresh(w, now, principal, cred, via, decision.TrustDomainUnresolved, "refresh_challenge_missing",
+		b.refuseRefresh(w, now, principal, cred, via, viaDir, decision.TrustDomainUnresolved, "refresh_challenge_missing",
 			"no live refresh challenge on this connection; ask for one and answer it within 60s")
 		return
 	}
@@ -147,7 +152,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	ekm, err := r.TLS.ExportKeyingMaterial(api.RefreshExporterLabel, nil, 32)
 	alg, ok := api.RefreshAlgorithm(leaf.PublicKey)
 	if err != nil || !ok || leaf.CheckSignature(alg, api.RefreshMessage(nonce, ekm), sig) != nil {
-		b.refuseRefresh(w, now, principal, cred, via, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved),
+		b.refuseRefresh(w, now, principal, cred, via, viaDir, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved),
 			"the refresh challenge was not answered by this connection's key")
 		return
 	}
@@ -156,12 +161,12 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, principal, cred, via, refreshEvery,
+		b.refreshStoreError(w, now, principal, cred, via, viaDir, refreshEvery,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, now, principal, cred, via, rv)
+		b.refuseRevokedAuth(w, decision.EventRefresh, now, principal, cred, via, viaDir, rv)
 		return
 	}
 	// A certificate this broker issued answers to its sign-in's logouts
@@ -180,7 +185,8 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	if ref != nil {
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via,
+				DirectoryPassword: viaDir}})
 		b.answerRefusal(w, r, ref)
 		return
 	}
@@ -194,7 +200,8 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via,
+				DirectoryPassword: viaDir}})
 		b.answerRefusal(w, r, dref)
 		return
 	}
@@ -205,7 +212,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		p, err := b.takeProved(tctx, caller{principal: principal, cred: cred}, agentKey(r), req.PerLoginMFAChallenge)
 		tcancel()
 		if err != nil {
-			b.refreshStoreError(w, b.Now(), principal, cred, via, refreshEvery,
+			b.refreshStoreError(w, b.Now(), principal, cred, via, viaDir, refreshEvery,
 				"the broker could not read the proof you named, so it extended nothing; try again")
 			return
 		}
@@ -218,12 +225,13 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via, agentKey(r), proved)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at, via, viaDir, agentKey(r), proved)
 	if errors.Is(err, directory.ErrUsernameTaken) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.emit(decision.Record{TS: at, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via,
+				DirectoryPassword: viaDir}})
 		b.answerRefusal(w, r, dref)
 		return
 	}
@@ -234,7 +242,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 			b.failedRefresh(ctx, w, at, caller{principal: principal, cred: cred, oidc: issued}, rep, partialRefreshText)
 			return
 		}
-		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText) // fixed text (M5)
+		b.refreshStoreError(w, at, principal, cred, nil, viaDir, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
 	}
 	// The marks again, after the extension's writes, as a mint reads them
@@ -242,11 +250,11 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// while this refresh extended is answered, not reported as extended.
 	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
-		b.refreshStoreError(w, at, principal, cred, via, refreshEvery, partialRefreshText)
+		b.refreshStoreError(w, at, principal, cred, via, viaDir, refreshEvery, partialRefreshText)
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), principal, cred, via, rv)
+		b.refuseRevokedAuth(w, decision.EventRefresh, b.Now(), principal, cred, via, viaDir, rv)
 		return
 	}
 	// The logouts again, after the extension's writes, as on the OIDC path:
@@ -254,7 +262,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	if issued != nil {
 		switch l, out, err := b.loggedOut(ctx, *issued); {
 		case err != nil:
-			b.refreshStoreError(w, at, principal, cred, via, refreshEvery, partialRefreshText)
+			b.refreshStoreError(w, at, principal, cred, via, viaDir, refreshEvery, partialRefreshText)
 			return
 		case out:
 			b.markExtended(ctx, caller{principal: principal, cred: cred, oidc: issued}, rep)
@@ -277,10 +285,11 @@ const partialRefreshText = "the broker could not finish extending your live sess
 // mint's store error is answered. A non-zero retry is sent as Retry-After:
 // the connection's pacing, which a retry sooner would meet as a 429.
 func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	via *decision.OIDC, retry time.Duration, text string) {
+	via *decision.OIDC, viaDir *decision.DirectoryPassword, retry time.Duration, text string) {
 	b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
+		Reason: decision.StoreUnavailable, Principal: principal,
+		Auth: &decision.Auth{Method: cred.Method, OIDC: via, DirectoryPassword: viaDir}})
 	if retry > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 	}
@@ -300,7 +309,7 @@ func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.T
 		if errors.Is(err, ErrWorkloadUnmapped) {
 			reason = decision.IdentityUnmapped
 		}
-		b.refuseRefresh(w, now, principal, cred, nil, reason, string(reason), err.Error())
+		b.refuseRefresh(w, now, principal, cred, nil, nil, reason, string(reason), err.Error())
 		return
 	}
 	ref := directoryRefusal(directory.ErrUnavailable)
@@ -313,10 +322,11 @@ func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.T
 // refuseRefresh answers a refresh that proved nothing, and records it
 // without the nonce or the signature.
 func (b *Broker) refuseRefresh(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	via *decision.OIDC, reason decision.Reason, code, detail string) {
+	via *decision.OIDC, viaDir *decision.DirectoryPassword, reason decision.Reason, code, detail string) {
 	b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: reason,
-		Principal: principal, Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint, OIDC: via}})
+		Principal: principal, Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint, OIDC: via,
+			DirectoryPassword: viaDir}})
 	writeError(w, http.StatusUnauthorized, code, detail)
 }
 
@@ -381,7 +391,7 @@ func (a *refreshAsk) strictest() *api.PerLoginMFA {
 // must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
 // after a reload, holds no policy and writes at once.
 func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *directory.Answer,
-	cred store.Credential, at time.Time, via *decision.OIDC, agentSHA256 string,
+	cred store.Credential, at time.Time, via *decision.OIDC, viaDir *decision.DirectoryPassword, agentSHA256 string,
 	proved *provedChallenge) (SessionRefreshReport, error) {
 	principal := m.Principal
 	ask := &refreshAsk{mf: mfaRequest{agentSHA256: agentSHA256, proved: proved}}
@@ -424,7 +434,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 			visit.Outcome = "not_judged"
 		}
 		if visit.Outcome == "" {
-			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached, via, ask)
+			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached, via, viaDir, ask)
 			if err != nil {
 				return rep, err
 			}
@@ -445,7 +455,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 // no longer the caller's.
 func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, m policy.Member,
 	answer *directory.Answer, cred store.Credential, ref store.ContextRef, dev admission.Device, at time.Time,
-	unreached bool, via *decision.OIDC, ask *refreshAsk) (string, time.Time, error) {
+	unreached bool, via *decision.OIDC, viaDir *decision.DirectoryPassword, ask *refreshAsk) (string, time.Time, error) {
 	principal := m.Principal
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	c, err := b.Store.GetContext(ctx, k)
@@ -460,7 +470,8 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		return "revoked", time.Time{}, nil
 	}
 	rec := decision.Record{TS: at, Event: decision.EventRefresh, Principal: principal,
-		Auth:    &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via},
+		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via,
+			DirectoryPassword: viaDir},
 		Device:  &decision.Device{Name: ref.NAS, Platform: dev.Platform},
 		Session: &decision.Session{CtxID: c.CtxID, Username: c.Username, Unreached: unreached}}
 	if c.HasCeiling() && !at.Before(c.SessionExpires.Add(b.GraceWindow)) {

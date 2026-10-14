@@ -66,7 +66,7 @@ func TestADirectorySignInCertificateMints(t *testing.T) {
 	recs := eventsOf(f.records(t), decision.EventMint)
 	auth, _ := recs[0]["auth"].(map[string]any)
 	dp, _ := auth["directory_password"].(map[string]any)
-	want := strings.TrimPrefix(issuer.EntrySubject("uuid:alice"), "entry-sha256:")
+	want := strings.TrimPrefix(issuer.EntrySubject("uuid:alice"), issuer.EntrySubjectPrefix)
 	if dp == nil || auth["oidc"] != nil || dp["entry_sha256"] != want || auth["method"] != "cert" {
 		t.Fatalf("%v", auth)
 	}
@@ -152,6 +152,40 @@ func TestAPasswordOnlyBrokerServes(t *testing.T) {
 	if _, err := f.b.Server("127.0.0.1:0", srvCert, nil); err == nil || !strings.Contains(err.Error(), "directory_password") {
 		t.Fatalf("%v", err)
 	}
+}
+
+// A directory certificate's refresh records, extended or refused, carry
+// auth.directory_password and no auth.oidc, as a mint's do (decision 47 D6).
+func TestADirectorySignInCertificatesRefreshRecordsCarryItsSignIn(t *testing.T) {
+	f := newFixture(t, 8)
+	f.withPasswordSignIn(t)
+	addr, _ := serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) { f.b.Wire(l) })
+	c := f.issuedDirectory(t, alicePrincipal, "uuid:alice")
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, certKey(c), f.now, f.now.Add(8*time.Hour))
+	conn, br := held(t, f, addr, c)
+	if status, resp := refreshOn(t, conn, br, c); status != 200 || len(resp.Sessions) != 1 ||
+		resp.Sessions[0].Outcome != "extended" {
+		t.Fatalf("a refresh by the issued key: %d %+v", status, resp)
+	}
+	want := strings.TrimPrefix(issuer.EntrySubject("uuid:alice"), issuer.EntrySubjectPrefix)
+	signedIn := func(what string) {
+		t.Helper()
+		recs := eventsOf(f.records(t), decision.EventRefresh)
+		auth, _ := recs[len(recs)-1]["auth"].(map[string]any)
+		dp, _ := auth["directory_password"].(map[string]any)
+		if dp == nil || dp["entry_sha256"] != want || auth["oidc"] != nil {
+			t.Fatalf("%s: the refresh record's auth: %v", what, auth)
+		}
+	}
+	signedIn("extended")
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	conn2, br2 := held(t, f, addr, c)
+	if status, _ := refreshOn(t, conn2, br2, c); status != 401 {
+		t.Fatalf("a refresh after the revocation: %d", status)
+	}
+	signedIn("refused")
 }
 
 // A bearer token at a password-only broker (b.Identity nil): POST /v1/tokens
