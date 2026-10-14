@@ -86,9 +86,10 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		// People by OIDC, workloads by certificate (plan 8): the one anchor
 		// is the workloads'.
 		pool = x509.NewCertPool()
-	case anchor == nil && b.NoX509 && b.Identity != nil && b.Issuer != nil:
-		// An OIDC-only broker that issues (plan 9b; decision 43 ruling 10):
-		// its one anchor is its own issuing CA's, added below.
+	case anchor == nil && b.NoX509 && (b.Identity != nil || b.PasswordSignIn != nil) && b.Issuer != nil:
+		// An OIDC-only or directory_password-only broker that issues (plan 9b;
+		// decision 43 ruling 10; decision 47): its one anchor is its own
+		// issuing CA's, added below.
 		pool = x509.NewCertPool()
 	case anchor == nil && b.NoX509 && b.Identity != nil:
 		// An OIDC-only broker (Ruling 1): no certificate is requested, and
@@ -96,7 +97,8 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		clientAuth = tls.NoClientCert
 	case anchor == nil || anchor.Equal(x509.NewCertPool()):
 		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +
-			"roots, and an empty one trusts no one (an OIDC-only broker sets NoX509 and Identity)")
+			"roots, and an empty one trusts no one (a broker with no x509 verifier sets NoX509 and an OIDC or " +
+			"directory_password verifier)")
 	default:
 		pool = anchor.Clone()
 	}

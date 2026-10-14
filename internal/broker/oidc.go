@@ -10,6 +10,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
@@ -27,6 +28,9 @@ type caller struct {
 	authTime time.Time
 	// oidc is the verified token; nil on the certificate path.
 	oidc *oidc.Assertion
+	// signIn is the sign-in a certificate this broker issued carries, either
+	// method; nil otherwise. oidc is set for the OIDC method alone.
+	signIn *issuer.SignIn
 }
 
 // auth is a record's auth for c.
@@ -34,6 +38,9 @@ func (c caller) auth() *decision.Auth {
 	a := &decision.Auth{Method: c.cred.Method, Fingerprint: c.cred.Fingerprint}
 	if c.oidc != nil {
 		a.OIDC = oidcAuth(*c.oidc)
+	}
+	if c.signIn != nil && c.signIn.Method == issuer.MethodDirectoryPassword {
+		a.DirectoryPassword = directoryPasswordAuth(*c.signIn)
 	}
 	return a
 }

@@ -81,6 +81,10 @@ type Broker struct {
 	// Identity verifies OIDC bearer tokens (plan 7h): nil when no oidc
 	// verifier is configured, and a bearer is then refused.
 	Identity *oidc.Set
+	// PasswordSignIn is broker.identity's directory_password verifier (plan
+	// 9e; decision 47): nil when there is none. A certificate issued over a
+	// directory sign-in is taken only while it names the principal's domain.
+	PasswordSignIn *oidc.PasswordSignIn
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
 	NoX509 bool
@@ -447,7 +451,8 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			}
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
 				Reason: decision.NoGrantsMatched, Principal: principal,
-				Auth:   &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
+				Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC,
+					DirectoryPassword: c.auth().DirectoryPassword},
 				Policy: &decision.Policy{Bundle: pol.Bundle}, Sweep: sweepOf(req)})
 			resp := api.MintResponse{Principal: principal, Results: []api.MintItem{}}
 			resp.Subject, resp.Subjects = subjectNames(pol, m)
@@ -672,7 +677,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	authTime := b.authTime(r)
 	cc, err := b.CertCallerOf(r.TLS, now)
 	principal, legacy, cred := cc.Principal, cc.Legacy, cc.Cred
-	if b.Directory != nil && cc.Domain == DomainHumans && cc.Issued == nil {
+	if b.Directory != nil && cc.Domain == DomainHumans && cc.SignIn == nil {
 		if h := heldOf(r); h != nil && h.answer != nil {
 			principal = h.answer.Principal // already mapped: it names the refusal's caller
 		}
@@ -694,15 +699,21 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(reason), err.Error())
 		return caller{}, false
 	}
-	// via is the sign-in a certificate this broker issued carries: every
-	// record the certificate makes names it (decision 43 rulings 10, 11).
-	var via *decision.OIDC
+	// viaOIDC or viaDir is the sign-in a certificate this broker issued
+	// carries: every record the certificate makes names it (decision 43
+	// rulings 10, 11; decision 47).
+	var viaOIDC *decision.OIDC
+	var viaDir *decision.DirectoryPassword
 	if cc.Issued != nil {
-		via = oidcAuth(*cc.Issued)
+		viaOIDC = oidcAuth(*cc.Issued)
+	}
+	if cc.SignIn != nil && cc.SignIn.Method == issuer.MethodDirectoryPassword {
+		viaDir = directoryPasswordAuth(*cc.SignIn)
 	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
+			Reason: decision.SessionExpired, Principal: named,
+			Auth: &decision.Auth{Method: cred.Method, OIDC: viaOIDC, DirectoryPassword: viaDir}})
 		// Closing the connection is what makes the next request a handshake,
 		// and the handshake is the fresh authentication decision 17 requires.
 		w.Header().Set("Connection", "close")
@@ -720,12 +731,13 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		switch {
 		case err != nil:
 			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
+				Reason: decision.StoreUnavailable, Principal: named,
+				Auth: &decision.Auth{Method: cred.Method, OIDC: viaOIDC, DirectoryPassword: viaDir}})
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker could not read the revocations in force, so it "+nothing+"; try again")
 			return true
 		case revoked:
-			b.refuseRevokedAs(w, event, now, named, cred, via, rv)
+			b.refuseRevokedAuth(w, event, now, named, cred, viaOIDC, viaDir, rv)
 			return true
 		}
 		return false
@@ -746,11 +758,11 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	// Without a directory, for a workload, which never reaches one (decision 40 ruling 5), and for
 	// a certificate this broker issued, whose principal its sign-in gave (decision 43 ruling 10):
 	// the principal is the certificate's own.
-	if b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
+	if b.Directory == nil || cc.Domain == DomainMachines || cc.SignIn != nil {
 		if marked(principal) || status() {
 			return caller{}, false
 		}
-		c := caller{principal: principal, cred: cred, authTime: authTime, oidc: cc.Issued}
+		c := caller{principal: principal, cred: cred, authTime: authTime, oidc: cc.Issued, signIn: cc.SignIn}
 		// A certificate this broker issued answers to its sign-in's
 		// logouts (decision 43 ruling 16).
 		if cc.Issued != nil && b.issuedLoggedOut(w, r, event, nothing, now, c) {
@@ -795,7 +807,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential,
 	issued *oidc.Assertion, err error) {
 	cc, err := b.CertCallerOf(r.TLS, now)
-	if err != nil || b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
+	if err != nil || b.Directory == nil || cc.Domain == DomainMachines || cc.SignIn != nil {
 		return cc.Principal, cc.Legacy, cc.Cred, cc.Issued, err
 	}
 	if h := heldOf(r); h != nil && h.answer != nil {
@@ -946,9 +958,16 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 // endpoint's event (decision 34).
 func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
 	cred store.Credential, via *decision.OIDC, rv store.Revocation) {
+	b.refuseRevokedAuth(w, event, now, principal, cred, via, nil, rv)
+}
+
+// refuseRevokedAuth is refuseRevokedAs for a caller whose sign-in is OIDC's
+// (via), a directory password's (viaDir), or neither.
+func (b *Broker) refuseRevokedAuth(w http.ResponseWriter, event string, now time.Time, principal string,
+	cred store.Credential, via *decision.OIDC, viaDir *decision.DirectoryPassword, rv store.Revocation) {
 	rec := revokedRecord(now, principal, cred)
 	rec.Event = event
-	rec.Auth.OIDC = via
+	rec.Auth.OIDC, rec.Auth.DirectoryPassword = via, viaDir
 	b.emit(rec)
 	answerRevoked(w, rv)
 }
@@ -1154,7 +1173,8 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	var mfaRec *decision.PerLoginMFA
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
+			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer),
+				OIDC: c.auth().OIDC, DirectoryPassword: c.auth().DirectoryPassword},
 			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req), PerLoginMFA: mfaRec}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
@@ -1301,7 +1321,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			TTL:         time.Duration(req.TTLSeconds) * time.Second,
 			Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt, ReplayOnly: replayOnly,
 			Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-			Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
+			Directory: directoryAuth(answer), OIDC: c.auth().OIDC, DirectoryPassword: c.auth().DirectoryPassword, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
 	}
 	out, err := mint(replays)
 	if errors.Is(err, token.ErrReplayLapsed) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
@@ -139,6 +140,10 @@ type CertCaller struct {
 	// assertion (plan 9b; decision 43 ruling 10); nil for any other
 	// certificate.
 	Issued *oidc.Assertion
+	// SignIn is the sign-in a certificate this broker issued carries, either
+	// method (plan 9e; decision 47); nil for any other certificate. Issued is
+	// set for the OIDC method alone.
+	SignIn *issuer.SignIn
 }
 
 // CertCallerOf reads cs's verified certificate. A chain ending at the broker's

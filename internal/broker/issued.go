@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -39,6 +40,21 @@ func (b *Broker) issuedCaller(cs *tls.ConnectionState, now time.Time) (CertCalle
 		return cc, fmt.Errorf("%w: a certificate this broker's issuing CA signed does not read as one it issues: %v",
 			ErrUntrusted, err)
 	}
+	switch s.Method {
+	case issuer.MethodDirectoryPassword:
+		// The verifier must still take the principal's domain, so removing it
+		// takes its people's certificates with it.
+		if b.PasswordSignIn == nil || !slices.Contains(b.PasswordSignIn.PrincipalDomains, oidc.DomainOf(s.Principal)) {
+			return cc, fmt.Errorf("%w: the sign-in this certificate was issued on (a directory password, for %s) is "+
+				"not one this broker's directory_password verifier takes now; run `port49 login --sign-in`",
+				ErrUntrusted, printsafe.Line(s.Principal, 200))
+		}
+		cc.Principal, cc.Cred.Sub, cc.Cred.AMR, cc.SignIn = s.Principal, s.Subject, s.AMR, &s
+		return cc, nil
+	case issuer.MethodOIDC:
+	default:
+		return cc, fmt.Errorf("%w: its sign-in names a method this broker does not take", ErrUntrusted)
+	}
 	if b.Identity == nil || !slices.Contains(b.Identity.HumanDomains(s.Issuer), oidc.DomainOf(s.Principal)) {
 		return cc, fmt.Errorf("%w: the sign-in this certificate was issued on (%s, for %s) is not one this broker's "+
 			"human OIDC verifiers take now; run `port49 login --sign-in`", ErrUntrusted, printsafe.Line(s.Issuer, 200),
@@ -48,8 +64,15 @@ func (b *Broker) issuedCaller(cs *tls.ConnectionState, now time.Time) (CertCalle
 		AMR: s.AMR, ACR: s.ACR, AuthTime: s.AuthTime, IssuedAt: s.IssuedAt}
 	oc := a.Credential()
 	cc.Cred.Iss, cc.Cred.Sub, cc.Cred.Sid, cc.Cred.AMR, cc.Cred.ACR = oc.Iss, oc.Sub, oc.Sid, oc.AMR, oc.ACR
-	cc.Principal, cc.Issued = s.Principal, &a
+	cc.Principal, cc.Issued, cc.SignIn = s.Principal, &a, &s
 	return cc, nil
+}
+
+// directoryPasswordAuth is auth.directory_password for a directory sign-in
+// s: its methods, when, and the entry's hash (spec §5.7; decision 47).
+func directoryPasswordAuth(s issuer.SignIn) *decision.DirectoryPassword {
+	return &decision.DirectoryPassword{AMR: s.AMR, AuthTime: decision.FormatTime(s.AuthTime),
+		EntrySHA256: strings.TrimPrefix(s.Subject, "entry-sha256:")}
 }
 
 // issuedLoggedOut answers a request made with a certificate this broker
