@@ -987,10 +987,38 @@ type l66Env struct {
 	// cNoFile[sshType] is set when the latest first-contact cell of that type measured a play that passed
 	// and logged in without filing a key: the only measurement a later cell may be NOT RUN on.
 	cNoFile map[string]bool
+	// cfgRaised is the daemon config with token.candidate_cap raised (daemonCfg is the default cap's). The
+	// token store is in memory, so a restart empties it; every cell starts on a restarted daemon.
+	cfgRaised string
+	// capNow is the cap the running daemon was started with; freshChecked is whether the cell's first mint
+	// has been read for candidate_cap_reached.
+	capNow       int
+	freshChecked bool
 }
 
 func (e *l66Env) path(parts ...string) string {
 	return filepath.Join(append([]string{e.work}, parts...)...)
+}
+
+// restart puts the daemon on an empty token store under the cap the cell runs under, so every cell starts
+// with zero unspent tokens for its device and username. The store is in memory (the lab config has no
+// store block), so a restart is a fresh store. The decision log is appended to, so window offsets hold.
+func (e *l66Env) restart(cap int) error {
+	cfg := e.daemonCfg
+	if cap > 0 {
+		cfg = e.cfgRaised
+	}
+	if err := e.l.stopDaemon(); err != nil {
+		return err
+	}
+	if err := e.l.startDaemonWith(cfg, true); err != nil {
+		return err
+	}
+	if err := e.l.awaitTACACS(); err != nil {
+		return err
+	}
+	e.capNow = cap
+	return nil
 }
 
 func (e *l66Env) addInvalid(msg string) {
@@ -1207,6 +1235,12 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 	}
 	r.recap = l66ReadRecap(r.stdout)
 	r.counts = l66CountRecords(r.recs)
+	if !e.freshChecked && r.counts.Mints > 0 {
+		e.freshChecked = true
+		if l66MintRefusedByCap(r.recs) {
+			e.addInvalid("the cell's first mint was refused with candidate_cap_reached after a restart, so the token store was not fresh")
+		}
+	}
 	r.hashes = l66TokenHashes(r.recs)
 	maps.Copy(e.hashes, r.hashes)
 	if msg := e.realChanged(); msg != "" {
@@ -1279,6 +1313,13 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 	budget = b
 	fmt.Fprintln(os.Stdout, l66Start(e.l.p.name, id, budget))
 	e.unread, e.invalid, e.controlOK, e.notRun = false, "", false, ""
+	// Every cell starts on a restarted daemon, so its (device, username) has no unspent token left by an
+	// earlier cell. A restart is a few seconds, which the 5 min teardown reserve in the budget covers.
+	cap := l66CellCap(id)
+	if err := e.restart(cap); err != nil {
+		e.t.Fatalf("%s: could not restart port49d on an empty token store, so nothing from here is a measurement: %v", id, err)
+	}
+	e.freshChecked = false
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	type done struct {
@@ -1318,6 +1359,7 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 	case outcome == "INVALID":
 		d.obs = "**INVALID: " + l66WhyInvalid(kind, d.ok, e.controlOK, e.unread) + ".** " + d.obs
 	}
+	d.obs += " " + l66CapNote(cap)
 	d.obs = l66Scrub(d.obs, e.hashes, labcreds.TokenLen)
 	elapsed := time.Since(start)
 	e.results = append(e.results, l66Result{id, outcome, d.obs, elapsed})
@@ -1390,18 +1432,23 @@ func l66Verbatim(content string) string {
 // ---------------------------------------------------------------------------
 
 func (e *l66Env) cellA() {
-	e.cell("L66a", "record", l66Budget, func(ctx context.Context) (bool, string) {
+	e.cell("L66a", "claim", l66Budget, func(ctx context.Context) (bool, string) {
 		r, err := e.runPlay(ctx, "a", "ten", 10, "", e.spec("lookup", "libssh"), l66Opts{idle: l66DefaultIdle})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
 		}
-		e.controlOK = r.good(e.node)
-		return r.recap[e.node].Passed(), fmt.Sprintf("A ten-task play (each task a `%s` of `show version`) with "+
+		// Under the default cap the play may fail at a task, and that is the measurement: the first task's
+		// good login is the control (l66GradeCap), not the whole play passing.
+		outcome, _, reading := l66GradeCap(l66CapIn{Recap: r.recap[e.node], Counts: r.counts, Starts: r.starts,
+			FirstMintRefused: l66MintRefusedByCap(r.recs)})
+		e.controlOK = outcome == "PASS"
+		if outcome != "PASS" {
+			e.addInvalid(reading)
+		}
+		return outcome == "PASS", fmt.Sprintf("A ten-task play (each task a `%s` of `show version`) with "+
 			"`ansible_password: \"{{ lookup('port49.client.token', ...) }}\"` and `ansible_user` from a second lookup with "+
-			"`field='username'`: **%d mint records for the run** (%d redeem records, %d TACACS+ authentication starts) for ten tasks "+
-			"on one host. %s. This run is a good login, so its window is the positive control for its own counts: %v.",
-			l66Platforms[e.l.p.name].Module, r.counts.Mints, r.counts.Redeems, r.starts, r.summary(e.node), e.controlOK)
+			"`field='username'`. **%s** %s.", l66Platforms[e.l.p.name].Module, reading, r.summary(e.node))
 	})
 }
 
@@ -1900,8 +1947,17 @@ func TestL66(t *testing.T) {
 		if !strings.Contains(string(brokerYAML), "tests/lab/slice/policy.yaml") {
 			t.Fatal("slice/broker.yaml no longer names tests/lab/slice/policy.yaml, so L66's policy cannot be put in its place")
 		}
-		cfg, err := l.derivedConfig("l66", platformSessionAttributes[l.p.name],
-			strings.Replace(string(brokerYAML), "tests/lab/slice/policy.yaml", polRel, 1))
+		extra := strings.Replace(string(brokerYAML), "tests/lab/slice/policy.yaml", polRel, 1)
+		cfg, err := l.derivedConfig("l66", platformSessionAttributes[l.p.name], extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Two configs: port49's default cap for L66a, which measures it, and a raised cap for every other cell.
+		raisedExtra, err := l66CapConfig(extra, l66CellCap("L66b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfgRaised, err := l.derivedConfig("l66cap", platformSessionAttributes[l.p.name], raisedExtra)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1947,6 +2003,7 @@ func TestL66(t *testing.T) {
 				khPath: filepath.Join(sshDir, "known_hosts"), cfgPath: filepath.Join(sshDir, "config")},
 			work: work, collDir: collDir, versions: versions, hashes: map[string]bool{}, nssLib: l66NSSLib,
 			cAfter: map[string]string{}, cAdded: map[string][]l66KHLine{}, cNoFile: map[string]bool{},
+			cfgRaised: cfgRaised,
 		}
 		e.deadline, e.hasDeadline = t.Deadline()
 		if err := os.WriteFile(e.path("ansible.cfg"), []byte("[defaults]\ninterpreter_python = auto_silent\nretry_files_enabled = False\n"), 0o600); err != nil {

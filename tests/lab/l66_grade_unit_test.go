@@ -393,6 +393,117 @@ func TestL66PreflightEnvIsThePrivateEnvOfItsOwnDir(t *testing.T) {
 	}
 }
 
+func TestL66CellCapIsTheDefaultForL66aAndRaisedForEveryOtherCell(t *testing.T) {
+	if got := l66CellCap("L66a"); got != 0 {
+		t.Errorf("L66a measures the cap, so it runs under the default: %d", got)
+	}
+	for _, id := range []string{"L66b", "L66b2-idle", "L66b2-reset", "L66d", "L66d2", "L66c1-libssh", "L66e-ssh", "L66e2"} {
+		if got := l66CellCap(id); got != l48CandidateCap {
+			t.Errorf("%s runs under cap %d, want the raised %d", id, got, l48CandidateCap)
+		}
+	}
+	if l48CandidateCap <= l48DefaultCandidateCap {
+		t.Error("the raised cap is not above the default")
+	}
+}
+
+func TestL66CapConfigAddsOneTokenBlockOrNone(t *testing.T) {
+	base := "listen: x\nbroker:\n  listen: y\n"
+	if got, err := l66CapConfig(base, 0); err != nil || got != base {
+		t.Errorf("cap 0 leaves the default: %q %v", got, err)
+	}
+	got, err := l66CapConfig(base, 64)
+	if err != nil || !strings.HasPrefix(got, base) || !strings.Contains(got, "\ntoken: {candidate_cap: 64}\n") {
+		t.Errorf("cap 64: %q %v", got, err)
+	}
+	if _, err := l66CapConfig("listen: x\ntoken: {candidate_cap: 3}\n", 64); err == nil {
+		t.Error("a base with its own token block would be a duplicate key")
+	}
+}
+
+func TestL66CapNoteStatesTheCap(t *testing.T) {
+	if n := l66CapNote(0); !strings.Contains(n, "default") || !strings.Contains(n, "8") {
+		t.Errorf("default: %q", n)
+	}
+	if n := l66CapNote(64); !strings.Contains(n, "64") || !strings.Contains(n, "raised") {
+		t.Errorf("raised: %q", n)
+	}
+}
+
+func TestL66MintRefusedByCapReadsTheFirstMintOnly(t *testing.T) {
+	mint := func(verdict, reason string) map[string]any {
+		return map[string]any{"event": "mint", "verdict": verdict, "reason": reason}
+	}
+	other := map[string]any{"event": "redeem", "reason": "candidate_cap_reached"}
+	cases := []struct {
+		name string
+		recs []map[string]any
+		want bool
+	}{
+		{"none", nil, false},
+		{"a good first mint", []map[string]any{mint("permit", "")}, false},
+		{"first mint refused by the cap", []map[string]any{mint("deny", "candidate_cap_reached")}, true},
+		{"cap reached only later (L66a's own measurement)", []map[string]any{mint("permit", ""), mint("deny", "candidate_cap_reached")}, false},
+		{"a redeem before it is not a mint", []map[string]any{other, mint("permit", "")}, false},
+		{"another denial first", []map[string]any{mint("deny", "no_grant")}, false},
+	}
+	for _, c := range cases {
+		if got := l66MintRefusedByCap(c.recs); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestL66GradeCapIsTheMeasurementWhenTheControlHolds(t *testing.T) {
+	counts := func(mints, denies, redeems int) l66Counts {
+		c := l66Counts{Mints: mints, MintDenies: denies, Redeems: redeems, MintReasons: map[string]int{}, RedeemReasons: map[string]int{}}
+		if denies > 0 {
+			c.MintReasons["candidate_cap_reached"] = denies
+		}
+		return c
+	}
+	cases := []struct {
+		name     string
+		in       l66CapIn
+		outcome  string
+		failedAt int
+		want     []string
+	}{
+		{"fails at task 10 on the default cap",
+			l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1}, "PASS", 10,
+			[]string{"task 10", "candidate_cap_reached", "10 mint", "1 redeem", "1 TACACS+ authentication start"}},
+		{"fails at task 3",
+			l66CapIn{Recap: l66Recap{OK: 2, Failed: 1}, Counts: counts(3, 1, 1), Starts: 1}, "PASS", 3, []string{"task 3"}},
+		{"all ten tasks passed under the default",
+			l66CapIn{Recap: l66Recap{OK: 10}, Counts: counts(10, 0, 1), Starts: 1}, "PASS", 0, []string{"all ten", "10 mint"}},
+		{"failed for another reason, control held",
+			l66CapIn{Recap: l66Recap{OK: 4, Failed: 1}, Counts: counts(5, 0, 1), Starts: 1}, "PASS", 5, []string{"task 5", "not the cap"}},
+		{"no task passed: no good login to be the control",
+			l66CapIn{Recap: l66Recap{Failed: 1}, Counts: counts(1, 0, 0), Starts: 0}, "INVALID", 0, []string{"control"}},
+		{"tasks passed but no redeem was recorded",
+			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 0), Starts: 1}, "INVALID", 0, []string{"control"}},
+		{"tasks passed but no TACACS+ start was seen",
+			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 1), Starts: 0}, "INVALID", 0, []string{"control"}},
+		{"the very first mint was refused by the cap: the store was not fresh",
+			l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1, FirstMintRefused: true}, "INVALID", 0, []string{"fresh"}},
+	}
+	for _, c := range cases {
+		outcome, at, text := l66GradeCap(c.in)
+		if outcome != c.outcome || at != c.failedAt {
+			t.Errorf("%s: %s at %d, want %s at %d (%s)", c.name, outcome, at, c.outcome, c.failedAt, text)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(text, w) {
+				t.Errorf("%s: text lacks %q: %s", c.name, w, text)
+			}
+		}
+	}
+	_, _, text := l66GradeCap(l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1})
+	if !strings.Contains(text, "mints once per task") || !strings.Contains(text, "token.candidate_cap of 8") {
+		t.Errorf("the note states the reading plainly: %s", text)
+	}
+}
+
 func TestL66CommentKHIsACommentAlone(t *testing.T) {
 	c := l66CommentKH()
 	if !strings.HasPrefix(c, "# ") || strings.Count(c, "\n") != 1 || strings.Contains(c, "@") || len(l66ParseKH(c)) != 0 {

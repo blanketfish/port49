@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -336,6 +337,87 @@ func l66Settle(outcome, fatal, invalid, notRun string) string {
 		return "NOT RUN (" + notRun + ")"
 	}
 	return outcome
+}
+
+// l66CellCap is the token.candidate_cap a cell runs under: 0 for L66a, which measures the cap and runs under
+// port49's default (what an operator gets), and l48CandidateCap for every other cell, none of which measures
+// it and several of which mint more than the default's 8 in one cell.
+func l66CellCap(id string) int {
+	if id == "L66a" {
+		return 0
+	}
+	return l48CandidateCap
+}
+
+// l66CapConfig is a daemon config with token.candidate_cap set to cap, or base unchanged for cap 0 (the
+// default). A base that already has a top-level token block is an error: a second one is a duplicate key.
+func l66CapConfig(base string, cap int) (string, error) {
+	if cap == 0 {
+		return base, nil
+	}
+	if strings.HasPrefix(base, "token:") || strings.Contains(base, "\ntoken:") {
+		return "", errors.New("the daemon config already has a top-level token block, so a second one would be a duplicate key")
+	}
+	if !strings.HasSuffix(base, "\n") {
+		base += "\n"
+	}
+	return fmt.Sprintf("%s\ntoken: {candidate_cap: %d}\n", base, cap), nil
+}
+
+// l66CapNote is the sentence each cell's note gives for the cap it ran under.
+func l66CapNote(cap int) string {
+	if cap == 0 {
+		return fmt.Sprintf("Candidate cap: port49's default of %d unspent tokens per device and username (this cell measures it), on a port49d restarted with an empty token store.", l48DefaultCandidateCap)
+	}
+	return fmt.Sprintf("Candidate cap: raised to %d with `token.candidate_cap` (this cell does not measure the cap; port49's default is %d), on a port49d restarted with an empty token store.", cap, l48DefaultCandidateCap)
+}
+
+// l66MintRefusedByCap says whether the first mint record in a window is already a candidate_cap_reached
+// denial: the store did not start empty for this cell, so nothing the cell measured can be read.
+func l66MintRefusedByCap(recs []map[string]any) bool {
+	for _, r := range recs {
+		if str(r, "event") == "mint" {
+			return str(r, "verdict") == "deny" && str(r, "reason") == "candidate_cap_reached"
+		}
+	}
+	return false
+}
+
+// l66CapIn is what L66a read from its one play.
+type l66CapIn struct {
+	Recap            l66Recap
+	Counts           l66Counts
+	Starts           int
+	FirstMintRefused bool
+}
+
+// l66GradeCap grades L66a, the lookup in a connection variable under the default cap. The first task's good
+// login (a redeem, a TACACS+ authentication start and a task that passed) is the positive control for the
+// counts. With it, the outcome is the measurement: PASS, whether the play ran ten tasks or failed at task N
+// with candidate_cap_reached. Without it, INVALID. failedAt is 0 when no task failed.
+func l66GradeCap(in l66CapIn) (outcome string, failedAt int, text string) {
+	c := in.Counts
+	counts := fmt.Sprintf("%d mint records (%d denied), %d redeem records and %d TACACS+ authentication starts", c.Mints, c.MintDenies, c.Redeems, in.Starts)
+	switch {
+	case in.FirstMintRefused:
+		return "INVALID", 0, "the first mint of the cell was already refused with candidate_cap_reached, so the token store was not fresh " +
+			"and the count below is not this play's: " + counts
+	case in.Recap.OK == 0 || c.Redeems == 0 || in.Starts == 0:
+		return "INVALID", 0, "the positive control failed: the first task's good login (a task that passed, a redeem record and a TACACS+ " +
+			"authentication start) was not seen, so these counts are not a measurement: " + counts
+	}
+	if in.Recap.Failed == 0 && in.Recap.Unreachable == 0 {
+		return "PASS", 0, fmt.Sprintf("The lookup in a connection variable mints once per task; with the default token.candidate_cap of %d "+
+			"all ten tasks passed. %s for ten tasks on one host.", l48DefaultCandidateCap, counts)
+	}
+	at := in.Recap.OK + 1
+	if c.MintReasons["candidate_cap_reached"] > 0 {
+		return "PASS", at, fmt.Sprintf("The lookup in a connection variable mints once per task; with the default token.candidate_cap of %d "+
+			"the play fails at task %d with candidate_cap_reached. %s: one login's redeem, and a mint for each task up to and including the "+
+			"refused one.", l48DefaultCandidateCap, at, counts)
+	}
+	return "PASS", at, fmt.Sprintf("The lookup in a connection variable mints once per task. The play failed at task %d and that was not the "+
+		"cap (no mint was refused with candidate_cap_reached; mint reasons %v). %s.", at, c.MintReasons, counts)
 }
 
 // l66FindNSSWrapper is the path of libnss_wrapper.so under dirs, if there is one.
