@@ -9,6 +9,13 @@ leave the tokens out of it (__reduce__): a rebuilt exception keeps the device
 names and the codes, with None for each token."""
 
 
+def clean(text):
+    """text with every non-printable character (C0 and C1 controls, DEL, newline, ESC) made '?': a
+    device name, code, reason or detail comes from inventory or the CLI's JSON, and a message that
+    reaches a terminal must not carry an escape sequence or forge a line."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
 def _rebuild(cls, args, state):
     e = cls.__new__(cls)
     Exception.__init__(e, *args)
@@ -32,7 +39,7 @@ class Port49Error(Exception):
 
     def __str__(self):
         where = f"{self.device}: " if self.device else ""
-        return f"port49: {where}{self.detail or self.code}"
+        return clean(f"port49: {where}{self.detail or self.code}")
 
 
 class NotInstalled(Port49Error):
@@ -56,7 +63,7 @@ class Denied(Port49Error):
 
     def __str__(self):
         said = f"port49: {self.device}: {self.verdict or 'deny'} {self.reason or self.code}"
-        return said + (f": {self.detail}" if self.detail else "")
+        return clean(said + (f": {self.detail}" if self.detail else ""))
 
 
 class MFARequired(Port49Error):
@@ -69,9 +76,9 @@ class MFARequired(Port49Error):
 
     def __str__(self):
         accept = ", ".join(self.requirement.get("accept", [])) or "a second factor"
-        return (f"port49: {self.device}: asks for {accept} at each login, and it could not be given here "
-                f"({self.detail or self.code}); run `port49 token {self.device}` at a terminal, and one proof "
-                f"covers this agent's further logins for its reuse_for")
+        return clean(f"port49: {self.device}: asks for {accept} at each login, and it could not be given here "
+                     f"({self.detail or self.code}); run `port49 token {self.device}` at a terminal, and one proof "
+                     f"covers this agent's further logins for its reuse_for")
 
 
 class KeyUnavailable(Port49Error):

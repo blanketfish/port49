@@ -88,7 +88,11 @@ def _workload(*a, **kw):
 
 def _fail(message):
     """Warn, then raise: ansible-core 2.16 to 2.18 censor a failed no_log task's message, and a warning
-    is shown beside the censored result. The message is token-free by construction."""
+    is shown beside the censored result. The message is token-free by construction, and it is the one
+    place every message passes, so it is also where a device name from inventory (or any field the
+    CLI echoed) loses its terminal control bytes: each non-printable character, newline included,
+    becomes '?'. The warning and the raised error carry the same clean text."""
+    message = "".join(c if c.isprintable() else "?" for c in str(message))
     Display().warning(message)
     raise AnsibleError(message) from None
 

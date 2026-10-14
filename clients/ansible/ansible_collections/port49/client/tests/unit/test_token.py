@@ -69,6 +69,8 @@ class Plugin(unittest.TestCase):
                 calls.agent.append(("token", device, enable, ttl))
                 if device == "denied":
                     raise port49.Denied("no_grants_matched", "no grant", device, reason="no_grants_matched")
+                if device.startswith("evil"):
+                    raise port49.Denied("no_grants_matched", "d\x1b[2J", device, reason="r\x07", verdict="deny\n")
                 if device == "fault":
                     raise port49.DeviceFault("device_unconfigured", "the device has no platform", device)
                 return TOK
@@ -154,6 +156,20 @@ class Plugin(unittest.TestCase):
             self.lookup(["fault"])
         self.assertEqual(WARNINGS, [str(cm.exception)])
         self.assertNotIn("LOGINTOKEN", WARNINGS[0])
+
+    def test_no_control_byte_reaches_the_warning_or_the_error(self):  # a name from inventory
+        evil = "evil\x1b]0;PWNED\x07\x1b[2J\n\r\x9b\x7f"
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup([evil])
+        for text in (WARNINGS[0], str(cm.exception)):
+            self.assertTrue(all(c.isprintable() for c in text), repr(text))
+            self.assertIn("evil", text)
+        self.assertEqual(WARNINGS[0], str(cm.exception))
+        # the lookup's own errors too: a workload device name nobody answered for
+        del WARNINGS[:]
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["leaf9\x1b[2J"], broker="https://b", broker_ca="/ca", cert="/c", key="/k")
+        self.assertTrue(all(c.isprintable() for c in WARNINGS[0] + str(cm.exception)))
 
     def test_workload_options_alone_are_refused(self):  # m3
         for kw in ({"touch_key": "pkcs11:x"}, {"deadline": 5}, {"broker": "https://b", "broker_ca": "", "cert": "", "key": ""}):
