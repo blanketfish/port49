@@ -18,8 +18,9 @@ func TestAMatchBlockOnTheCommandIsEvaluated(t *testing.T) {
 	for name, match := range map[string]string{
 		"sessiontype exec": "Match sessiontype exec",
 		"command":          `Match command "show*"`,
-		// Round 2 R2: ssh -G has the environment the real run gets.
-		"exec on the askpass environment": `Match exec "test -n \"$SSH_ASKPASS_REQUIRE\""`,
+		// Round 2 R2: ssh -G has the environment the real run gets. printenv
+		// needs no nested quotes, which OpenSSH before 10 does not parse.
+		"exec on the askpass environment": `Match exec "printenv SSH_ASKPASS_REQUIRE"`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
