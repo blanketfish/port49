@@ -188,8 +188,22 @@ func (e *wrappedEnrollments) GetEnrollmentMark(ctx context.Context) (store.Enrol
 	case !s.CreatedAt.Equal(m.CreatedAt) || !s.ReopenAllUntil.Equal(m.ReopenAllUntil):
 		return store.EnrollmentMark{}, lost(errEnrollmentMarkMoved)
 	}
+	// Stale, as a record's is: opened under the previous key, so the
+	// scheduled pass seals it again before encryption.previous is retired.
+	k := e.w.keys
+	m.Stale = k.Previous != nil && SealedKeyID(m.Sealed) == LineKeyID(k.Previous.ID)
 	m.Sealed = nil
 	return m, nil
+}
+
+// SwapEnrollmentMark seals m afresh under the current key and writes it only
+// where the mark is still at rev (the re-seal of a Stale mark).
+func (e *wrappedEnrollments) SwapEnrollmentMark(ctx context.Context, m store.EnrollmentMark, rev uint64) error {
+	m, err := e.sealMark(m)
+	if err != nil {
+		return err
+	}
+	return e.Enrollments.SwapEnrollmentMark(ctx, m, rev)
 }
 
 func (e *wrappedEnrollments) Export(ctx context.Context) ([]byte, error) {

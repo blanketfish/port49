@@ -88,7 +88,7 @@ func (e *enrollments) CreateEnrollmentMark(_ context.Context, m store.Enrollment
 	if e.mark != nil || len(e.records) > 0 {
 		return store.ErrConflict
 	}
-	e.mark = &m
+	e.setMark(m)
 	return nil
 }
 
@@ -98,8 +98,29 @@ func (e *enrollments) PutEnrollmentMark(_ context.Context, m store.EnrollmentMar
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.mark = &m
+	e.setMark(m)
 	return nil
+}
+
+func (e *enrollments) SwapEnrollmentMark(_ context.Context, m store.EnrollmentMark, rev uint64) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.mark == nil || rev == 0 || e.mark.Rev != rev {
+		return store.ErrConflict
+	}
+	e.setMark(m)
+	return nil
+}
+
+// setMark keeps m, at a fresh revision, with its own copy of Sealed. The
+// caller holds e.mu.
+func (e *enrollments) setMark(m store.EnrollmentMark) {
+	e.seq++
+	m.Rev, m.Stale, m.Sealed = e.seq, false, slices.Clone(m.Sealed)
+	e.mark = &m
 }
 
 func (e *enrollments) Export(context.Context) ([]byte, error) {
@@ -141,7 +162,7 @@ func (e *enrollments) Import(_ context.Context, raw []byte, replace bool) (int, 
 		next[p] = f
 	}
 	e.records = next
-	e.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
+	e.setMark(store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed})
 	return len(next), b.ExportedAt, nil
 }
 

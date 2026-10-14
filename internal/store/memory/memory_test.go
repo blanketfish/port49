@@ -234,6 +234,29 @@ func TestTheMemoryStoreHoldsEveryProperty(t *testing.T) {
 }
 
 // Every enrollment property, against the in-memory enrollment store (plan 9e).
+// The store keeps its own copy of a mark's sealed part, as it does a
+// record's (review N4).
+func TestAMarkKeepsItsOwnCopyOfTheSealedPart(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Unix(1_000, 0)
+	for name, write := range map[string]func(store.Enrollments, store.EnrollmentMark) error{
+		"create": func(e store.Enrollments, m store.EnrollmentMark) error { return e.CreateEnrollmentMark(ctx, m) },
+		"put":    func(e store.Enrollments, m store.EnrollmentMark) error { return e.PutEnrollmentMark(ctx, m) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := NewEnrollments(func() time.Time { return t0 })
+			sealed := []byte("sealed")
+			if err := write(e, store.EnrollmentMark{CreatedAt: t0, Sealed: sealed}); err != nil {
+				t.Fatal(err)
+			}
+			sealed[0] = 'X'
+			if got, _ := e.GetEnrollmentMark(ctx); string(got.Sealed) != "sealed" {
+				t.Fatalf("the caller's slice reached the store: %q", got.Sealed)
+			}
+		})
+	}
+}
+
 func TestTheMemoryEnrollmentsHoldsEveryProperty(t *testing.T) {
 	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{
 		New: func(_ *testing.T, clock func() time.Time) store.Enrollments { return NewEnrollments(clock) }})

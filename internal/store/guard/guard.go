@@ -63,7 +63,7 @@ var pools = map[string]Pool{
 
 	// store.Enrollments (plan 9e), guarded by WrapEnrollments.
 	"GetSecondFactor": Token, "SwapSecondFactor": Token, "GetEnrollmentMark": Token,
-	"CreateEnrollmentMark": Token, "PutEnrollmentMark": Token,
+	"CreateEnrollmentMark": Token, "PutEnrollmentMark": Token, "SwapEnrollmentMark": Token,
 	"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk,
 }
 
@@ -786,6 +786,10 @@ func (e *guardedEnrollments) CreateEnrollmentMark(ctx context.Context, m store.E
 
 func (e *guardedEnrollments) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
 	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.PutEnrollmentMark(ctx, m) })
+}
+
+func (e *guardedEnrollments) SwapEnrollmentMark(ctx context.Context, m store.EnrollmentMark, rev uint64) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.SwapEnrollmentMark(ctx, m, rev) })
 }
 
 func (e *guardedEnrollments) Export(ctx context.Context) (b []byte, err error) {

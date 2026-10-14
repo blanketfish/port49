@@ -1108,6 +1108,8 @@ type EnrollmentMark struct {
 	CreatedAt      time.Time
 	ReopenAllUntil time.Time
 	Sealed         []byte // the sealing layer's copy of both times; the backend keeps it as is
+	Rev            uint64 // the backend's revision of the mark, set on a read; SwapEnrollmentMark's compare
+	Stale          bool   // opened under the previous encryption key: the scheduled pass seals it again
 }
 
 // ErrEnrollmentStoreLost is an enrollment store that will not open (D7): a
@@ -1133,6 +1135,11 @@ type Enrollments interface {
 	// PutEnrollmentMark writes m, creating the store when it has none, and
 	// replacing a lost one (the unreadable file renamed aside, never deleted).
 	PutEnrollmentMark(ctx context.Context, m EnrollmentMark) error
+	// SwapEnrollmentMark writes m if the mark is still at rev, the Rev a
+	// GetEnrollmentMark returned; ErrConflict otherwise (a reset --all, an
+	// import or a re-seal came between), and nothing is written. The
+	// scheduled re-seal of a Stale mark uses it, so it never reverts a reset.
+	SwapEnrollmentMark(ctx context.Context, m EnrollmentMark, rev uint64) error
 	// Export is every record and the mark, sealed (D13), stamped with the
 	// time it was taken; Import checks the seal and the mark and writes
 	// them, refusing a store holding a record enrolled or reset after the

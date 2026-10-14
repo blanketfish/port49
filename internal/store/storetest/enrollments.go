@@ -35,6 +35,7 @@ func RunEnrollments(t *testing.T, b EnrollmentsBackend) {
 		{"ExportImportRoundTrips", ExportImportRoundTrips},
 		{"SecondFactorClearCopiesAreChecked", SecondFactorClearCopiesAreChecked},
 		{"EnrollmentMarkClearCopiesAreChecked", EnrollmentMarkClearCopiesAreChecked},
+		{"EnrollmentMarkSwapsByRevision", EnrollmentMarkSwapsByRevision},
 		{"EnrollmentMarkNeedsItsTime", EnrollmentMarkNeedsItsTime},
 		{"ImportRefusesWhatDoesNotDecodeWithoutEchoingIt", ImportRefusesWhatDoesNotDecodeWithoutEchoingIt},
 	} {
@@ -254,6 +255,63 @@ func EnrollmentMarkClearCopiesAreChecked(t *testing.T, b EnrollmentsBackend) {
 				t.Fatalf("a mark whose clear %s was changed read as %+v, %v", c.field, got, err)
 			}
 		})
+	}
+}
+
+// EnrollmentMarkSwapsByRevision: a swap writes the mark only at the revision
+// read; a reset --all (Put) or an import between the read and the swap makes
+// it ErrConflict and leaves the reset in place, so a re-seal never reverts
+// one. A swap with no mark, or at revision 0, is ErrConflict.
+func EnrollmentMarkSwapsByRevision(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	e := b.New(t, func() time.Time { return t0 })
+	if err := e.SwapEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}, 1); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a swap with no mark: %v", err)
+	}
+	if err := e.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	read, err := e.GetEnrollmentMark(ctx)
+	if err != nil || read.Rev == 0 {
+		t.Fatalf("a mark read has no revision: %+v %v", read, err)
+	}
+	if err := e.SwapEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}, 0); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a swap at revision 0: %v", err)
+	}
+	// A reset --all lands between the read and the swap.
+	reset := store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(24 * time.Hour)}
+	if err := e.PutEnrollmentMark(ctx, reset); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SwapEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}, read.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a swap over a reset: %v", err)
+	}
+	if got, _ := e.GetEnrollmentMark(ctx); !got.ReopenAllUntil.Equal(reset.ReopenAllUntil) {
+		t.Fatalf("the swap reverted the reset: %+v", got)
+	}
+	// At the current revision it writes, once.
+	cur, _ := e.GetEnrollmentMark(ctx)
+	next := store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(48 * time.Hour)}
+	if err := e.SwapEnrollmentMark(ctx, next, cur.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SwapEnrollmentMark(ctx, next, cur.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a second swap at the same revision: %v", err)
+	}
+	if got, err := e.GetEnrollmentMark(ctx); err != nil || !got.ReopenAllUntil.Equal(next.ReopenAllUntil) || got.Rev == cur.Rev {
+		t.Fatalf("after the swap: %+v %v", got, err)
+	}
+	// An import moves the revision too.
+	before, _ := e.GetEnrollmentMark(ctx)
+	exp, err := e.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.Import(ctx, exp, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SwapEnrollmentMark(ctx, next, before.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a swap over an import: %v", err)
 	}
 }
 

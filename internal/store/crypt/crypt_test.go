@@ -108,6 +108,49 @@ func TestAMarkWhoseWindowWasRaisedNamesTheMismatchAndReadsAsLost(t *testing.T) {
 	}
 }
 
+// A mark sealed under the previous key opens, reports Stale as a record does,
+// and is sealed again under the current key by a swap at its revision; a
+// reset --all between the read and the swap is not reverted (review N3).
+func TestAMarkUnderThePreviousKeyIsStaleAndValidAndReSealsWithoutRevertingAReset(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	ctx := context.Background()
+	k := keys() // Current v2, Previous v1
+	t0 := time.Unix(1_000_000, 0)
+	old := WrapEnrollments(inner, Keys{Current: *k.Previous}, nil)
+	if err := old.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	w := WrapEnrollments(inner, k, nil) // after the rotation
+	m, err := w.GetEnrollmentMark(ctx)
+	if err != nil || !m.Stale || !m.CreatedAt.Equal(t0) || !m.ReopenAllUntil.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("a mark under the previous key: %+v %v", m, err)
+	}
+	// A reset --all lands first: the re-seal of the read it made is refused.
+	if err := w.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SwapEnrollmentMark(ctx, m, m.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a re-seal over a reset: %v", err)
+	}
+	// Re-read: the reset is under the current key, so not stale. Re-seal one that is.
+	if err := old.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = w.GetEnrollmentMark(ctx)
+	if !m.Stale {
+		t.Fatal("not stale")
+	}
+	if err := w.SwapEnrollmentMark(ctx, m, m.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.GetEnrollmentMark(ctx); err != nil || got.Stale || !got.CreatedAt.Equal(t0) {
+		t.Fatalf("after the re-seal: %+v %v", got, err)
+	}
+	if _, err := WrapEnrollments(inner, Keys{Current: k.Current}, nil).GetEnrollmentMark(ctx); err != nil {
+		t.Fatalf("the re-sealed mark does not open with the previous key retired: %v", err)
+	}
+}
+
 // An export is sealed whole: an import under a key this broker does not hold
 // is refused naming the export's key id, and a damaged one is refused too
 // (D13).

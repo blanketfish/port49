@@ -53,6 +53,7 @@ type File struct {
 	mark    *store.EnrollmentMark
 	records map[string]store.SecondFactor
 	seq     uint64 // the last revision handed out
+	markRev uint64 // the last mark revision handed out
 }
 
 var _ store.Enrollments = (*File)(nil)
@@ -131,7 +132,8 @@ func (f *File) open(raw []byte) (store.EnrollmentBody, string) {
 // no mark: records, if any, are held, and the broker reads the store as lost.
 func (f *File) load(b store.EnrollmentBody) {
 	if !b.CreatedAt.IsZero() {
-		f.mark = &store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
+		m := f.revised(store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed})
+		f.mark = &m
 	}
 	for p, r := range b.SecondFactors {
 		f.records[p] = store.SecondFactorOf(p, r)
@@ -248,6 +250,36 @@ func (f *File) GetEnrollmentMark(_ context.Context) (store.EnrollmentMark, error
 	return *f.mark, nil
 }
 
+// SwapEnrollmentMark writes m, keeping the records, if the mark is still at
+// rev. The revision lives in the process alone: a restart reads a mark at a
+// new one, so a swap that spans it is refused, which fails safe.
+func (f *File) SwapEnrollmentMark(_ context.Context, m store.EnrollmentMark, rev uint64) error {
+	if m.CreatedAt.IsZero() {
+		return errors.New("enrollfile: a mark needs its creation time")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.lostErr(); err != nil {
+		return err
+	}
+	if f.mark == nil || rev == 0 || f.mark.Rev != rev {
+		return store.ErrConflict
+	}
+	m = f.revised(m)
+	if err := f.write(body(&m, f.records)); err != nil {
+		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
+	}
+	f.mark = &m
+	return nil
+}
+
+// revised is m at a fresh mark revision. The caller holds f.mu.
+func (f *File) revised(m store.EnrollmentMark) store.EnrollmentMark {
+	f.markRev++
+	m.Rev, m.Stale = f.markRev, false
+	return m
+}
+
 // CreateEnrollmentMark writes a file holding only m, and refuses
 // (store.ErrConflict) where a file is at path, readable or not, or a mark or
 // a record is held (init-enrollments, D7). The file is linked into place, so
@@ -272,6 +304,7 @@ func (f *File) CreateEnrollmentMark(_ context.Context, m store.EnrollmentMark) e
 	case err != nil:
 		return fmt.Errorf("enrollfile: creating %s: %w", f.path, err)
 	}
+	m = f.revised(m)
 	f.mark, f.present = &m, true
 	return nil
 }
@@ -295,6 +328,7 @@ func (f *File) PutEnrollmentMark(_ context.Context, m store.EnrollmentMark) erro
 	if err := f.write(body(&m, records)); err != nil {
 		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
+	m = f.revised(m)
 	f.mark, f.records, f.lost, f.present = &m, records, "", true
 	return nil
 }
@@ -373,6 +407,7 @@ func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Ti
 	if err := f.write(body(&mark, next)); err != nil {
 		return 0, time.Time{}, fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
+	mark = f.revised(mark)
 	f.seq, f.records, f.mark, f.lost, f.present = seq, next, &mark, "", true
 	return len(next), b.ExportedAt, nil
 }

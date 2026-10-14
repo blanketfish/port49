@@ -164,14 +164,40 @@ func (s *Store) SecondFactorPrincipals(ctx context.Context) ([]string, error) {
 
 func (s *Store) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, error) {
 	var r enrollmentMarkRec
-	_, ok, err := getJSONAs(ctx, s.tok, s.k.enrollmentMark(), "enrollment mark", &r)
+	mod, ok, err := getJSONAs(ctx, s.tok, s.k.enrollmentMark(), "enrollment mark", &r)
 	switch {
 	case err != nil:
 		return store.EnrollmentMark{}, err
 	case !ok:
 		return store.EnrollmentMark{}, store.ErrNotFound
 	}
-	return store.EnrollmentMark{CreatedAt: r.CreatedAt, ReopenAllUntil: r.ReopenAllUntil, Sealed: r.Sealed}, nil
+	return store.EnrollmentMark{CreatedAt: r.CreatedAt, ReopenAllUntil: r.ReopenAllUntil, Sealed: r.Sealed,
+		Rev: uint64(mod)}, nil
+}
+
+// SwapEnrollmentMark writes m if the mark's mod_revision is still rev: a
+// reset --all, an import or another re-seal since the read changed it.
+func (s *Store) SwapEnrollmentMark(ctx context.Context, m store.EnrollmentMark, rev uint64) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
+	if rev == 0 {
+		return store.ErrConflict
+	}
+	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil, Sealed: m.Sealed})
+	if err != nil {
+		return err
+	}
+	key := s.k.enrollmentMark()
+	resp, err := s.tok.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(rev))).
+		Then(clientv3.OpPut(key, string(body))).Commit()
+	if err != nil {
+		return unavailable(err)
+	}
+	if !resp.Succeeded {
+		return store.ErrConflict
+	}
+	return nil
 }
 
 // CreateEnrollmentMark is one transaction: the mark is written where there
