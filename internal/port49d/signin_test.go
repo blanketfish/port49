@@ -274,7 +274,7 @@ func TestAnEnrollmentEtcdThatDoesNotAnswerNeverStopsTheStart(t *testing.T) {
 			var out syncBuffer
 			b.Say = func(format string, args ...any) { out.Write([]byte(fmt.Sprintf(format, args...) + "\n")) }
 			start := time.Now()
-			wirePasswordSignIn(context.Background(), cfg, b, signInTestKeys, m, raw, &out)
+			wireSignIn(context.Background(), cfg, b, signInTestKeys, m, raw, &out)
 			if d := time.Since(start); d > 10*time.Second {
 				t.Fatalf("the start waited %s", d)
 			}

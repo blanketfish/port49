@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -44,10 +46,20 @@ const (
 // refuses password sign-in alone, and every other path serves.
 //
 // shared is the *etcd.Store the broker runs on, for an enrollment_store that
-// names no etcd of its own; a literal nil on the memory store (never a nil
-// *etcd.Store, which is not a nil interface). It does nothing for a broker
-// with no directory_password verifier.
+// names no etcd of its own; nil on the memory store. It does nothing for a
+// broker with no directory_password verifier.
 func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
+	m *metrics.Metrics, shared *etcdstore.Store, out io.Writer) {
+	var sh store.Enrollments // a nil *Store is not a nil interface
+	if shared != nil {
+		sh = shared
+	}
+	wireSignIn(ctx, cfg, b, keys, m, sh, out)
+}
+
+// wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,
+// which a test can fake.
+func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
 	m *metrics.Metrics, shared store.Enrollments, out io.Writer) {
 	if b == nil || cfg.Broker == nil || cfg.Broker.Identity == nil || cfg.Broker.Identity.PasswordSignIn == nil {
 		return
@@ -70,13 +82,7 @@ func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker
 	var open func() (store.Enrollments, error)
 	switch {
 	case es.Backend != config.BackendEtcd:
-		open = func() (store.Enrollments, error) {
-			f, err := enrollfile.Open(es.File, keys, time.Now)
-			if err != nil {
-				return nil, fmt.Errorf("%w: %v", store.ErrEnrollmentStoreLost, err)
-			}
-			return crypt.WrapEnrollments(f, keys, m.CryptOpenFailures), nil
-		}
+		open = func() (store.Enrollments, error) { return openEnrollmentFile(es.File, keys, m.CryptOpenFailures) }
 	case es.Etcd == nil && shared != nil:
 		where = "store.etcd " + strings.Join(cfg.Store.Etcd.Endpoints, ", ")
 		gc := guardConfig(proc, "broker", cfg.Store.Etcd, m, out, func(error) {})
@@ -176,23 +182,50 @@ func defaultTOTPLabel(listen string) string {
 	return "port49 (" + h + ")"
 }
 
+// openEnrollmentFile opens the memory backend's sealed file, never creating
+// it. A refusal of the file's directory or a link at its path is lost, as an
+// unreadable file is.
+func openEnrollmentFile(path string, keys crypt.Keys, openFailures *prometheus.CounterVec) (store.Enrollments, error) {
+	f, err := enrollfile.Open(path, keys, time.Now)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", store.ErrEnrollmentStoreLost, err)
+	}
+	return &reopenable{Enrollments: crypt.WrapEnrollments(f, keys, openFailures), lost: f.Lost}, nil
+}
+
 // openEnrollmentEtcd opens an enrollment store's own etcd: its CA and
 // identity read now, the dial never waited for (clientv3 does not), so an
 // etcd that is down surfaces as store.ErrUnavailable on the first call.
 func openEnrollmentEtcd(e *directory.EnrollmentEtcd, keys crypt.Keys, m *metrics.Metrics, proc string,
 	out io.Writer) (store.Enrollments, error) {
-	pool, _, err := caCerts(e.CAFile)
+	const at = "broker.directory.enrollment_store.etcd"
+	now := time.Now()
+	pool, cas, err := caCerts(e.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("broker.directory.enrollment_store.etcd.ca_file %s: %w", e.CAFile, err)
+		return nil, &storeFault{fmt.Errorf("%s.ca_file %s: %w", at, e.CAFile, err)}
 	}
-	tc, _, err := identity("enrollment_store", config.EtcdIdentity{CertFile: e.CertFile, KeyFile: e.KeyFile}, pool,
-		time.Now())
+	for _, ca := range cas {
+		if now.After(ca.NotAfter) || now.Before(ca.NotBefore) {
+			return nil, &storeFault{fmt.Errorf("%s.ca_file %s: CA %s is valid only from %s to %s; replace it", at,
+				e.CAFile, ca.Subject, ca.NotBefore.UTC().Format(time.RFC3339), ca.NotAfter.UTC().Format(time.RFC3339))}
+		}
+	}
+	tc, leaf, err := identityAt(at+".identity", config.EtcdIdentity{CertFile: e.CertFile, KeyFile: e.KeyFile}, pool, now)
 	if err != nil {
 		return nil, err
 	}
+	pctx, cancel := context.WithTimeout(context.Background(), 4*e.CallTimeout)
+	err = probeTLS(pctx, e.Endpoints, tc, 4*e.CallTimeout)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	m.StoreCertExpiry.WithLabelValues("broker_enrollments").Set(float64(leaf.NotAfter.Unix()))
+	fmt.Fprintf(out, "%s: enrollment store: its etcd certificate (CN=%s) is valid until %s (%d days)\n", proc,
+		leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339), int(leaf.NotAfter.Sub(now).Hours()/24))
 	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": enrollment store: "+format+"\n", args...) }
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, TLS: tc, Logf: logf,
-		IndexUndecodable: m.IndexRecordsUndecodable})
+		DialTimeout: 4 * e.CallTimeout, IndexUndecodable: m.IndexRecordsUndecodable})
 	if err != nil {
 		return nil, fmt.Errorf("broker.directory.enrollment_store.etcd: %w", err)
 	}
@@ -229,10 +262,32 @@ type lateEnrollments struct {
 
 var _ store.Enrollments = (*lateEnrollments)(nil)
 
+// reopenable is a store that knows whether it opened: a file that could not be
+// read is lost for as long as the handle lives, though the operator fixes its
+// owner or mode a minute later, so lateEnrollments opens it again.
+type reopenable struct {
+	store.Enrollments
+	lost func() string
+}
+
+func (r *reopenable) Lost() string { return r.lost() }
+
 func (l *lateEnrollments) get() (store.Enrollments, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.inner != nil {
+		r, ok := l.inner.(*reopenable)
+		if !ok || r.Lost() == "" || l.now().Sub(l.tried) < enrollmentRetryEvery {
+			return l.inner, nil
+		}
+		// Lost: look at the file again, and keep the new handle only if it is
+		// well; a lost one answers the same as the old, so nothing is gained.
+		l.tried = l.now()
+		if in, err := l.open(); err == nil {
+			if nr, ok := in.(*reopenable); !ok || nr.Lost() == "" {
+				l.inner = in
+			}
+		}
 		return l.inner, nil
 	}
 	if !l.tried.IsZero() && l.now().Sub(l.tried) < enrollmentRetryEvery {
