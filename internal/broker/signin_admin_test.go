@@ -37,10 +37,12 @@ type staleEnrollments struct {
 }
 
 func (s *staleEnrollments) GetSecondFactor(ctx context.Context, p string) (store.SecondFactor, error) {
-	if s.broken[p] {
-		return store.SecondFactor{}, errors.New("crypt: opening second factor: crypt: sealed under an unknown key")
-	}
 	f, err := s.Enrollments.GetSecondFactor(ctx, p)
+	if s.broken[p] {
+		// As crypt does: the revision comes back with the error.
+		return store.SecondFactor{Principal: p, Rev: f.Rev},
+			errors.New("crypt: opening second factor: crypt: sealed under an unknown key")
+	}
 	if err == nil && s.stale[p] {
 		f.Stale = true
 	}
@@ -364,6 +366,73 @@ func TestResetAllReplacesALostStoreAndOpensTheWindow(t *testing.T) {
 	enrollAlice(t, f) // an old entry, no window but --all's: a 202
 }
 
+// I1, I2: on a backend with no file (etcd) a lost key makes the mark and every
+// record it sealed unopenable. --all replaces the mark and every record that
+// will not open with a reopened one, says how many, says nothing of an empty
+// store or a kept file (there is neither), and leaves a factor that opens.
+func TestResetAllAfterALostKeyOnEtcdReplacesWhatWillNotOpen(t *testing.T) {
+	ctx := context.Background()
+	f, _ := newSignInFixture(t)
+	mem := memory.NewEnrollments(f.b.Now)
+	f.b.Enrollments = crypt.WrapEnrollments(mem, testKeys("k1"), nil)
+	f.b.EnrollmentFile = ""
+	if err := f.b.Enrollments.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: f.now}); err != nil {
+		t.Fatal(err)
+	}
+	f.enrolled(t, alicePrincipal, "uuid:alice")
+	f.enrolled(t, bobPrincipal, "uuid:bob")
+	f.b.Enrollments = crypt.WrapEnrollments(mem, testKeys("k2"), nil) // k1 is lost
+	const carol = "user:carol@example.com"
+	if err := f.b.Enrollments.SwapSecondFactor(ctx, store.SecondFactor{Principal: carol, State: store.SecondFactorActive,
+		Secret: []byte("0123456789abcdef0123"), EntryID: "uuid:carol", EnrolledAt: f.now, EnrolledFrom: "192.0.2.0/32"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.b.CheckEnrollmentStore(ctx); err != nil || f.b.EnrollmentStoreLost() == "" {
+		t.Fatalf("setup: not lost: %v", err)
+	}
+	carolBefore := revOf(t, f.b.Enrollments, carol)
+
+	text, err := f.b.ResetSecondFactor(ctx, "", true, "admin_socket uid 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"the enrollment mark did not open and is replaced", "second factors that did not open and are replaced: 2",
+		"keep working", "etcd snapshot"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the text lacks %q: %s", want, text)
+		}
+	}
+	for _, not := range []string{"empty one", "kept beside", "kept at"} {
+		if strings.Contains(text, not) {
+			t.Errorf("the text says %q, which is false on etcd: %s", not, text)
+		}
+	}
+	for _, p := range []string{alicePrincipal, bobPrincipal} {
+		if got := revOf(t, f.b.Enrollments, p); got.State != store.SecondFactorReopened || len(got.Secret) != 0 {
+			t.Errorf("%s", shape(got))
+		}
+	}
+	if after := revOf(t, f.b.Enrollments, carol); after.State != store.SecondFactorActive || after.Rev != carolBefore.Rev {
+		t.Fatalf("a factor that opens was touched: %s", shape(after))
+	}
+	if f.b.EnrollmentStoreLost() != "" {
+		t.Fatal("the store is still lost")
+	}
+}
+
+// --all also replaces a record that will not open under a mark that does.
+func TestResetAllReplacesAnUnopenableRecordUnderAGoodMark(t *testing.T) {
+	ctx := context.Background()
+	f, _ := newSignInFixture(t)
+	sealedStore(t, f, true)
+	f.enrolled(t, alicePrincipal, "uuid:alice")
+	f.b.Enrollments = &staleEnrollments{Enrollments: f.b.Enrollments, broken: map[string]bool{alicePrincipal: true}}
+	text, err := f.b.ResetSecondFactor(ctx, "", true, "o")
+	if err != nil || !strings.Contains(text, "second factors that did not open and are replaced: 1") {
+		t.Fatalf("%q, %v", text, err)
+	}
+}
+
 func TestResetAllDropsNoActiveFactor(t *testing.T) {
 	ctx := context.Background()
 	f, _ := newSignInFixture(t)
@@ -470,9 +539,11 @@ func TestExportImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, clear := range []string{base64.StdEncoding.EncodeToString(secret), "uuid:alice", alicePrincipal, "192.0.2.0"} {
+	// Named, never printed: one of them is the secret.
+	for name, clear := range map[string]string{"secret": base64.StdEncoding.EncodeToString(secret),
+		"entry id": "uuid:alice", "principal": alicePrincipal, "source": "192.0.2.0"} {
 		if bytes.Contains(exp, []byte(clear)) {
-			t.Fatalf("the export holds %q in the clear", clear)
+			t.Fatalf("the export holds the %s in the clear", name)
 		}
 	}
 

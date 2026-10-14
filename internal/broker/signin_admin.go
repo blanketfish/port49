@@ -226,12 +226,25 @@ func (b *Broker) resetAll(ctx context.Context, origin string) (string, error) {
 		return "", fmt.Errorf("broker: reset --all failed, so nothing changed: %s", printsafe.Line(err.Error(), 300))
 	}
 	_ = b.CheckEnrollmentStore(ctx) // clears the lost state and sets the gauge; a store that is down says so itself
+	// --all means everyone enrolls again: a record that will not open (a lost
+	// key, a damaged record) is no factor anyone can use, and answers
+	// store_unavailable until it is replaced, so it is replaced here at the
+	// revision its open error returned. A record that opens is never touched.
+	unopened, sweepErr := b.reopenUnopenable(ctx, until)
+	if sweepErr != nil {
+		b.logf("broker: reset --all: %v", sweepErr)
+	}
 	b.Log.Emit(decision.Record{TS: now, Event: decision.EventSecondFactorReset,
 		SecondFactorReset: &decision.SecondFactorReset{ReopenUntil: decision.FormatTime(until), All: true, Origin: origin}})
 	b.say("sign-in: %s reopened enrollment for every entry with no active second factor, until %s", origin,
 		decision.FormatTime(until))
 	text := fmt.Sprintf("every entry with no active second factor may enroll until %s", decision.FormatTime(until))
-	if replaced {
+	switch {
+	case replaced && b.EnrollmentFile == "":
+		// etcd: only the mark key is written; every record stays where it is.
+		text += "; the enrollment mark did not open and is replaced; second factors that still open keep working; " +
+			"the etcd snapshot is the only copy of the old mark"
+	case replaced:
 		text += "; the enrollment store was lost and is replaced by an empty one, so everyone enrolls again"
 		if kept := b.unreadableCopy(); kept != "" {
 			text += "; the unreadable store was kept at " + kept
@@ -239,7 +252,46 @@ func (b *Broker) resetAll(ctx context.Context, origin string) (string, error) {
 			text += "; the unreadable store was kept beside it"
 		}
 	}
+	if unopened > 0 {
+		text += fmt.Sprintf("; second factors that did not open and are replaced: %d", unopened)
+	}
+	if sweepErr != nil {
+		return "", fmt.Errorf("broker: reset --all opened the enrollment window until %s, but the store stopped answering "+
+			"after %d unreadable second factors were replaced: run it again", decision.FormatTime(until), unopened)
+	}
 	return text, nil
+}
+
+// reopenUnopenable replaces each second factor that will not open with a
+// reopened one until until, at the revision the open error returned, and
+// returns how many. A record another write moved meanwhile is left (the
+// write stands). A lost or unreachable store stops it with that error.
+func (b *Broker) reopenUnopenable(ctx context.Context, until time.Time) (int, error) {
+	principals, err := b.Enrollments.SecondFactorPrincipals(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range principals {
+		f, err := b.Enrollments.GetSecondFactor(ctx, p)
+		switch {
+		case err == nil, errors.Is(err, store.ErrNotFound):
+			continue
+		case errors.Is(err, store.ErrEnrollmentStoreLost), errors.Is(err, store.ErrUnavailable), ctx.Err() != nil:
+			return n, err
+		case f.Rev == 0:
+			continue // no revision to replace it at
+		}
+		switch err := b.Enrollments.SwapSecondFactor(ctx,
+			store.SecondFactor{Principal: p, State: store.SecondFactorReopened, Until: until}, f.Rev); {
+		case err == nil:
+			n++
+		case errors.Is(err, store.ErrConflict):
+		default:
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // unreadableCopy is the newest file a lost enrollments file was renamed to,
