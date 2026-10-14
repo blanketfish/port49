@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
@@ -429,6 +432,28 @@ func checkEnrollmentStore(y enrollmentStoreYAML) (directory.EnrollmentStore, err
 	return directory.EnrollmentStore{Backend: BackendEtcd, Etcd: &directory.EnrollmentEtcd{Endpoints: e.Endpoints,
 		CAFile: e.CAFile, Prefix: prefix, CertFile: e.Identity.CertFile, KeyFile: e.Identity.KeyFile,
 		CallTimeout: timeout}}, nil
+}
+
+// EnrollmentEtcdOf is the enrollment store's own etcd that raw, a
+// port49-broker.yaml (or a 7d port49d.yaml), names under
+// broker.directory.enrollment_store, checked as Load checks it; nil when it
+// names none. It is for `port49d store-roles`, which reads nothing else of the
+// broker's block.
+func EnrollmentEtcdOf(raw []byte) (*directory.EnrollmentEtcd, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	if f.Broker == nil || f.Broker.DirectorySet == nil || f.Broker.DirectorySet.EnrollmentStore == nil {
+		return nil, nil
+	}
+	es, err := checkEnrollmentStore(*f.Broker.DirectorySet.EnrollmentStore)
+	if err != nil {
+		return nil, err
+	}
+	return es.Etcd, nil
 }
 
 // resolveEnrollmentStore fills what checkDirectory could not: with no
