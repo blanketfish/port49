@@ -867,7 +867,8 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			return
 		}
 		l66NSSLib = lib
-		if _, se, exit, err := l64Run(ctx, env, root, "docker", "image", "inspect", l66StandinImage); err != nil || exit != 0 {
+		// docker runs in the same environment startStandin uses, so both talk to the same daemon.
+		if _, se, exit, err := l64Run(ctx, os.Environ(), root, "docker", "image", "inspect", l66StandinImage); err != nil || exit != 0 {
 			fail("the stand-in's image %s is not local (%s): docker pull %s", l66StandinImage, trimForNote(se), l66StandinImage)
 			return
 		}
@@ -886,7 +887,7 @@ func l66Preflight(t *testing.T) (versions, collDir string) {
 			fail("%v", werr)
 			return
 		}
-		penv := append(l66PrivateEnv(os.Environ(), pre, lib, pw, gr), "PYTHONDONTWRITEBYTECODE=1")
+		penv := l66PreflightEnv(os.Environ(), pre, lib)
 		out, se, exit, err := l64Run(ctx, penv, root, venvPython, "-I", "-B", "-c", l66PyProbe)
 		if err != nil || exit != 0 {
 			fail("the lab venv cannot import port49 and pylibsshext (exit %d %v %s%s): pip install ansible-pylibssh ./clients/python "+
@@ -983,6 +984,9 @@ type l66Env struct {
 	// What (c)'s first contact left, by ssh type, for its changed-key cell.
 	cAfter map[string]string
 	cAdded map[string][]l66KHLine
+	// cNoFile[sshType] is set when the latest first-contact cell of that type measured a play that passed
+	// and logged in without filing a key: the only measurement a later cell may be NOT RUN on.
+	cNoFile map[string]bool
 }
 
 func (e *l66Env) path(parts ...string) string {
@@ -1075,17 +1079,22 @@ func (e *l66Env) closeMasters() {
 
 // snapReal takes the snapshot of the operator's own known_hosts that a run is checked against. Under
 // nss_wrapper no client should reach it; this is the check that says so if one does.
-func (e *l66Env) snapReal() {
+//
+// A guard that cannot be set ends the run: a play must not start unwatched.
+func (e *l66Env) snapReal() error {
 	e.realKH = nil
 	u, err := user.Current()
 	if err != nil {
-		return
+		return fmt.Errorf("the operator's home cannot be found, so the guard on their known_hosts cannot be set: %w", err)
 	}
 	for _, name := range []string{"known_hosts"} {
-		if s, err := l66Snapshot(filepath.Join(u.HomeDir, ".ssh", name)); err == nil {
-			e.realKH = append(e.realKH, s)
+		s, err := l66Snapshot(filepath.Join(u.HomeDir, ".ssh", name))
+		if err != nil {
+			return fmt.Errorf("the operator's %s cannot be read, so the guard on it cannot be set: %w", name, err)
 		}
+		e.realKH = append(e.realKH, s)
 	}
+	return nil
 }
 
 // realChanged says whether a run wrote the operator's own known_hosts, and what it added. The file is left
@@ -1155,6 +1164,11 @@ func (r l66Run) summary(host string) string {
 // window: the decision log, the capture, the PLAY RECAP.
 func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between string, s l66InvSpec, o l66Opts) (l66Run, error) {
 	var r l66Run
+	// Once the operator's own known_hosts was found written (or its guard could not be set), no further play
+	// starts, in this cell or after it.
+	if e.fatal != "" {
+		return r, errors.New(e.fatal)
+	}
 	o.pb, o.inv = e.path("play", name+".yml"), e.path("inv", name+".yml")
 	if err := os.WriteFile(o.pb, []byte(l66Playbook(kind, s.Platform, n, between)), 0o600); err != nil {
 		return r, err
@@ -1163,7 +1177,10 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 		return r, err
 	}
 	fmt.Fprintln(os.Stdout, l66Stage(e.l.p.name, e.cellID, "ansible-playbook "+name))
-	e.snapReal()
+	if err := e.snapReal(); err != nil {
+		e.fatal = err.Error()
+		return r, err
+	}
 	args := []string{"-i", o.inv}
 	if o.verbose != "" {
 		args = append(args, o.verbose)
@@ -1286,15 +1303,18 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 		e.t.Fatalf("cell %s did not return %s after its %s budget; the platform's run ends here", id, l66Grace, budget)
 	}
 	outcome := l66Outcome(kind, d.ok, ctx.Err() != nil, e.controlOK, e.unread)
+	// An invalid or a fatal set in the cell outranks NOT RUN (l66Settle): a cell that could not measure must
+	// not read as one that was blocked.
+	outcome = l66Settle(outcome, e.fatal, e.invalid, e.notRun)
 	switch {
 	case outcome == "TIMEOUT":
 		d.obs = "**The cell's budget ran out.** " + d.obs
 	case e.fatal != "":
-		outcome, d.obs = "INVALID", "**INVALID: "+e.fatal+".** "+d.obs
-	case e.notRun != "":
-		outcome, d.obs = "NOT RUN ("+e.notRun+")", "**Not run: "+e.notRun+".** "+d.obs
+		d.obs = "**INVALID: " + e.fatal + ".** " + d.obs
 	case e.invalid != "":
-		outcome, d.obs = "INVALID", "**INVALID: "+e.invalid+".** "+d.obs
+		d.obs = "**INVALID: " + e.invalid + ".** " + d.obs
+	case e.notRun != "":
+		d.obs = "**Not run: " + e.notRun + ".** " + d.obs
 	case outcome == "INVALID":
 		d.obs = "**INVALID: " + l66WhyInvalid(kind, d.ok, e.controlOK, e.unread) + ".** " + d.obs
 	}
@@ -1542,6 +1562,7 @@ func (e *l66Env) cellFirstContact(id, sshType string, markers bool) {
 		if len(d.Added) > 0 {
 			e.cAfter[sshType], e.cAdded[sshType] = after, d.Added
 		}
+		e.cNoFile[sshType] = r.recap[e.node].Passed() && r.counts.Redeems > 0 && len(d.Added) == 0
 		e.controlOK = r.good(e.node)
 		if kind == "record" && !r.recap[e.node].Passed() && l66ParamikoRefusedMarkers(r.text()) {
 			_, ctlNote := e.control(ctx)
@@ -1581,7 +1602,14 @@ func (e *l66Env) cellChanged(id2, sshType string) {
 	e.cell(id2, "refusal", l66Budget, func(ctx context.Context) (bool, string) {
 		added := e.cAdded[sshType]
 		if len(added) == 0 {
-			e.notRun = "no first-contact cell of " + sshType + " filed a key line, so there is none to replace"
+			// NOT RUN only if the first-contact cell of this run measured the client passing without filing a
+			// key; any other reason (the play failed, no login) means nothing was measured.
+			verdict, why := l66GradeStepOne(l66StepOneIn{Passed: true, LoggedIn: true, MeasuredNoFile: e.cNoFile[sshType]})
+			if verdict == "not run" {
+				e.notRun = "the first-contact cell of " + sshType + " measured a login that filed no key line, so there is none to replace"
+			} else {
+				e.addInvalid("the first-contact cell of " + sshType + " filed no key line and did not measure that as a passing login (" + why + ")")
+			}
 			return false, ""
 		}
 		_, ctlNote := e.control(ctx)
@@ -1616,6 +1644,14 @@ func (e *l66Env) cellChanged(id2, sshType string) {
 			Other: r.counts.Other, ErrText: l66ErrorText(r.text(), 2000)})
 		if why != "" {
 			why = " **Not as claimed:** " + why + "."
+		}
+		if !refused {
+			// A client that logs in after its filed key was replaced is a result, not a broken run: it is graded
+			// FAIL with this evidence. A redeem record carries auth.credential_sha256 and names the token the
+			// device presented; the decision log is what says it was presented.
+			why += fmt.Sprintf(" **%s accepted the changed key and logged in.** The token was presented to the device: %v (%d redeem "+
+				"records in the window, each with the `credential_sha256` of a token this run minted; %d such hashes known).",
+				sshType, r.counts.Redeems > 0, r.counts.Redeems, len(r.hashes))
 		}
 		return pass, fmt.Sprintf("%s\n\n`%s`: the key of each line the first contact filed (%s) replaced by a fresh key of its type, the "+
 			"other lines left. %s. The play was refused (did not pass): %v; **%d TACACS+ packets**, **%d TACACS+ "+
@@ -1663,10 +1699,26 @@ func (e *l66Env) cellE(c l66ECase) {
 		e.controlOK = l64ControlOK(r1.packets, r1.counts.Redeems)
 		kh1 := e.readKnownHosts()
 		d1 := l66DiffKH(base, kh1)
-		if len(d1.Added) == 0 || r1.counts.Redeems == 0 {
-			// The premise of the move is an earlier login that filed the device's key; a client that did not
-			// file it (or did not log in) leaves nothing for the move to be compared with.
-			e.notRun = "step 1, at the device's address, filed no key or reached no login, so there is no earlier contact to move away from"
+		if c.plain {
+			if why := l66GradeNames(map[string]string{e.node: e.sshLog(e.node)}); why != "" {
+				e.addInvalid("step 1: " + why)
+			}
+		}
+		// The premise of the move is an earlier login that filed the device's key. A client that logs in and
+		// files none, which the first-contact cell of this run measured, leaves nothing to compare (NOT RUN);
+		// any other failure measured nothing (INVALID).
+		sshType := c.sshType
+		if c.plain {
+			sshType = "ssh"
+		}
+		verdict, why := l66GradeStepOne(l66StepOneIn{Passed: r1.recap[e.node].Passed(), LoggedIn: r1.counts.Redeems > 0,
+			Filed: len(d1.Added), MeasuredNoFile: e.cNoFile[sshType]})
+		switch verdict {
+		case "not run":
+			e.notRun = "step 1, at the device's address, logged in and filed no key, as " + sshType + "'s first-contact cell measured, so there is no earlier contact to move away from"
+			return false, fmt.Sprintf("Step 1, at the device's address: %s. Lines added: %s.", r1.summary(e.node), l66Shorts(d1.Added))
+		case "invalid":
+			e.addInvalid("step 1: " + why)
 			return false, fmt.Sprintf("Step 1, at the device's address: %s. Lines added: %s.", r1.summary(e.node), l66Shorts(d1.Added))
 		}
 		if err := e.startStandin(ctx); err != nil {
@@ -1694,6 +1746,9 @@ func (e *l66Env) cellE(c l66ECase) {
 				"name): %v.**", e.node, honoured)
 		}
 		if c.plain {
+			if why := l66GradeNames(map[string]string{e.node: e.sshLog(e.node)}); why != "" {
+				e.addInvalid("step 2: " + why)
+			}
 			a := l66ReadAlias(e.sshLog(e.node), e.node)
 			extra = fmt.Sprintf(" Step 2's own ssh log: a connection of its own %v, looked the alias up %v, filed a key under it %v.%s",
 				a.Connected, a.AliasUsed, a.Filed, l66AliasQuote(a.Lines))
@@ -1891,7 +1946,7 @@ func TestL66(t *testing.T) {
 			l64Env: &l64Env{t: t, l: l, node: l.p.node, home: home, keyDir: keyDir, daemonCfg: cfg,
 				khPath: filepath.Join(sshDir, "known_hosts"), cfgPath: filepath.Join(sshDir, "config")},
 			work: work, collDir: collDir, versions: versions, hashes: map[string]bool{}, nssLib: l66NSSLib,
-			cAfter: map[string]string{}, cAdded: map[string][]l66KHLine{},
+			cAfter: map[string]string{}, cAdded: map[string][]l66KHLine{}, cNoFile: map[string]bool{},
 		}
 		e.deadline, e.hasDeadline = t.Deadline()
 		if err := os.WriteFile(e.path("ansible.cfg"), []byte("[defaults]\ninterpreter_python = auto_silent\nretry_files_enabled = False\n"), 0o600); err != nil {

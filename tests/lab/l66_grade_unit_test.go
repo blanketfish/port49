@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -291,6 +292,104 @@ func TestL66ParamikoRefusedMarkersReadsInvalidHostKey(t *testing.T) {
 	}
 	if l66ParamikoRefusedMarkers("Unable to connect to port 22: timed out") {
 		t.Error("a timeout is not the markers")
+	}
+}
+
+// l66AnsibleMarkerError is what Ansible prints when paramiko 5.0 loads a known_hosts file with an @revoked
+// line: str(paramiko.hostkeys.InvalidHostKey), which netcommon returns as the task's message. Produced with
+// the venv's paramiko 5.0 on a scratch file in a scratch HOME (HostKeys().load), key shortened.
+const l66AnsibleMarkerError = `fatal: [leaf1]: FAILED! => {"changed": false, "msg": "('@revoked unrelated.l66.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFpE4Ds9AoeMvg03iBi/EzHvoGYtH2hxs1RBuMFxHLHt', Error('Incorrect padding'))"}`
+
+func TestL66ParamikoRefusedMarkersReadsWhatAnsiblePrints(t *testing.T) {
+	if !l66ParamikoRefusedMarkers(l66AnsibleMarkerError) {
+		t.Error("the repr of an InvalidHostKey is the marker refusal")
+	}
+	if !l66ParamikoRefusedMarkers(`"msg": "('@cert-authority *.unrelated.l66.invalid ssh-ed25519 AAAA', Error('Incorrect padding'))"`) {
+		t.Error("an @cert-authority line is refused the same way")
+	}
+	for _, no := range []string{"host key mismatch for 172.100.100.11", "Unable to connect to port 22: timed out",
+		`"msg": "('@revoked x ssh-ed25519 AAAA'` /* no decode error: not this failure */} {
+		if l66ParamikoRefusedMarkers(no) {
+			t.Errorf("%q is not the marker refusal", no)
+		}
+	}
+}
+
+func TestL66ChangedKeyErrorKnowsNetcommonsParamikoWording(t *testing.T) {
+	// netcommon 8.7.0 catches BadHostKeyException and raises AnsibleConnectionFailure("host key mismatch for %s").
+	if !l66ChangedKeyError("paramiko", `"msg": "host key mismatch for 172.100.100.11"`) {
+		t.Error("netcommon's paramiko wording")
+	}
+	if l66ChangedKeyError("libssh", "host key mismatch for 172.100.100.11") {
+		t.Error("libssh's refusal is pylibssh's own words, not netcommon's paramiko ones")
+	}
+	if l66ChangedKeyError("paramiko", "Authentication failed.") {
+		t.Error("an unrelated failure")
+	}
+}
+
+func TestL66RunPlayStopsAtOnceWhenTheOperatorsFileWasWritten(t *testing.T) {
+	e := &l66Env{fatal: "the operator's own known_hosts was written"}
+	r, err := e.runPlay(context.Background(), "x", "once", 1, "", l66InvSpec{}, l66Opts{})
+	if err == nil || !strings.Contains(err.Error(), "operator's own") || r.stdout != "" {
+		t.Errorf("a run that has found the operator's file written starts no further play: %v %+v", err, r)
+	}
+}
+
+func TestL66GradeStepOneAllowsNotRunOnlyForAMeasuredClientBehaviour(t *testing.T) {
+	cases := []struct {
+		name string
+		in   l66StepOneIn
+		want string
+	}{
+		{"logged in and filed a key", l66StepOneIn{Passed: true, LoggedIn: true, Filed: 1}, "ok"},
+		{"filed a key and logged in though the command failed", l66StepOneIn{LoggedIn: true, Filed: 1}, "ok"},
+		{"filed a key but never logged in", l66StepOneIn{Passed: true, Filed: 1}, "invalid"},
+		{"passed, logged in, no key, and its own cell measured that", l66StepOneIn{Passed: true, LoggedIn: true, MeasuredNoFile: true}, "not run"},
+		{"passed, logged in, no key, never measured elsewhere", l66StepOneIn{Passed: true, LoggedIn: true}, "invalid"},
+		{"the play failed (docker, network, device) and filed nothing", l66StepOneIn{MeasuredNoFile: true}, "invalid"},
+		{"the play passed but no login reached port49d", l66StepOneIn{Passed: true, MeasuredNoFile: true}, "invalid"},
+		{"nothing at all", l66StepOneIn{}, "invalid"},
+	}
+	for _, c := range cases {
+		if got, why := l66GradeStepOne(c.in); got != c.want || (got != "ok" && why == "") {
+			t.Errorf("%s: = %q (%q), want %q with a reason", c.name, got, why, c.want)
+		}
+	}
+}
+
+func TestL66SettleLetsInvalidAndFatalOutrankNotRun(t *testing.T) {
+	cases := []struct{ outcome, fatal, invalid, notRun, want string }{
+		{"PASS", "", "", "", "PASS"},
+		{"FAIL", "", "", "", "FAIL"},
+		{"FAIL", "", "", "no key", "NOT RUN (no key)"},
+		{"FAIL", "", "docker is down", "no key", "INVALID"},
+		{"PASS", "wrote the real file", "", "no key", "INVALID"},
+		{"INVALID", "", "", "", "INVALID"},
+		{"TIMEOUT", "", "x", "y", "TIMEOUT"},
+	}
+	for _, c := range cases {
+		if got := l66Settle(c.outcome, c.fatal, c.invalid, c.notRun); got != c.want {
+			t.Errorf("l66Settle(%q, fatal=%q, invalid=%q, notRun=%q) = %q, want %q", c.outcome, c.fatal, c.invalid, c.notRun, got, c.want)
+		}
+	}
+}
+
+func TestL66PreflightEnvIsThePrivateEnvOfItsOwnDir(t *testing.T) {
+	pre := t.TempDir()
+	t.Setenv("ANSIBLE_HOME", "/real/.ansible")
+	env := l66PreflightEnv(os.Environ(), pre, "/l/nss.so")
+	for _, w := range []string{"HOME=" + pre, "LD_PRELOAD=/l/nss.so", "NSS_WRAPPER_PASSWD=" + pre + "/nss_passwd",
+		"NSS_WRAPPER_GROUP=" + pre + "/nss_group", "PYTHONDONTWRITEBYTECODE=1"} {
+		if !slices.Contains(env, w) {
+			t.Errorf("preflight env lacks %s", w)
+		}
+	}
+	if slices.Contains(env, "HOME="+os.Getenv("HOME")) && os.Getenv("HOME") != pre {
+		t.Error("the preflight runs in the real HOME")
+	}
+	if slices.Contains(env, "ANSIBLE_HOME=/real/.ansible") {
+		t.Error("an inherited ANSIBLE_HOME reached the preflight")
 	}
 }
 

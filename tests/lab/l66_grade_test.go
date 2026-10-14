@@ -24,7 +24,8 @@ func l66ChangedKeyError(sshType, errText string) bool {
 		return strings.Contains(errText, "Host key for server has changed") ||
 			strings.Contains(errText, "Host key type for server has changed")
 	case "paramiko":
-		return strings.Contains(errText, "BadHostKeyException") ||
+		// netcommon 8.7.0 catches BadHostKeyException and raises "host key mismatch for <host>".
+		return strings.Contains(errText, "host key mismatch for") || strings.Contains(errText, "BadHostKeyException") ||
 			(strings.Contains(errText, "Host key for server") && strings.Contains(errText, "does not match"))
 	}
 	return false
@@ -241,8 +242,15 @@ func l66GradeNames(logs map[string]string) string {
 
 // l66ParamikoRefusedMarkers is whether the error is paramiko choking on an @revoked or @cert-authority line:
 // its loader raises InvalidHostKey, which it does not catch.
+//
+// Ansible prints str(InvalidHostKey), which is the offending line and the decode error, not the class name:
+// ('@revoked unrelated.l66.invalid ssh-ed25519 AAAA...', Error('Incorrect padding')).
 func l66ParamikoRefusedMarkers(errText string) bool {
-	return strings.Contains(errText, "InvalidHostKey") || strings.Contains(errText, "Invalid key")
+	if strings.Contains(errText, "InvalidHostKey") {
+		return true
+	}
+	marker := strings.Contains(errText, "'@revoked ") || strings.Contains(errText, "'@cert-authority ")
+	return marker && strings.Contains(errText, "Error('")
 }
 
 // l66CommentKH is the known_hosts file of a comment line alone.
@@ -281,6 +289,53 @@ func l66PrivateEnv(base []string, home, nssLib, passwd, group string) []string {
 		return false
 	})
 	return append(env, "HOME="+home, "LD_PRELOAD="+nssLib, "NSS_WRAPPER_PASSWD="+passwd, "NSS_WRAPPER_GROUP="+group)
+}
+
+// l66PreflightEnv is the environment the preflight runs Python and Ansible in: l66PrivateEnv with its own
+// private directory, and no bytecode written.
+func l66PreflightEnv(base []string, pre, lib string) []string {
+	return append(l66PrivateEnv(base, pre, lib, filepath.Join(pre, "nss_passwd"), filepath.Join(pre, "nss_group")),
+		"PYTHONDONTWRITEBYTECODE=1")
+}
+
+// l66StepOneIn is what a cell that starts from an earlier contact read of that contact: the play passed,
+// a login reached port49d (a redeem), how many key lines it filed, and whether another cell of this same run
+// measured the client not filing one.
+type l66StepOneIn struct {
+	Passed, LoggedIn bool
+	Filed            int
+	MeasuredNoFile   bool
+}
+
+// l66GradeStepOne is "ok" when the contact logged in and filed a key; "not run" only when the play passed,
+// logged in, filed nothing and a cell of this run measured exactly that for the client; and "invalid" for
+// everything else (a docker, network or device failure leaves nothing measured).
+func l66GradeStepOne(in l66StepOneIn) (verdict, why string) {
+	switch {
+	case in.Filed > 0 && in.LoggedIn:
+		return "ok", ""
+	case in.Filed > 0:
+		return "invalid", "the earlier contact filed a key but no login reached port49d, so it was not a contact that logged in"
+	case in.Passed && in.LoggedIn && in.MeasuredNoFile:
+		return "not run", "the client logs in without filing a key, as the first-contact cell of this run measured"
+	case in.Passed && in.LoggedIn:
+		return "invalid", "the earlier contact filed no key and no cell of this run measured the client doing that"
+	}
+	return "invalid", "the earlier contact did not pass and log in (a device, network, docker or port49d failure), so nothing was measured"
+}
+
+// l66Settle decides a cell's final outcome. A fatal or an invalid set during the cell comes before NOT RUN:
+// a cell that could not measure must not read as one that was blocked.
+func l66Settle(outcome, fatal, invalid, notRun string) string {
+	switch {
+	case outcome == "TIMEOUT":
+		return outcome
+	case fatal != "" || invalid != "":
+		return "INVALID"
+	case notRun != "":
+		return "NOT RUN (" + notRun + ")"
+	}
+	return outcome
 }
 
 // l66FindNSSWrapper is the path of libnss_wrapper.so under dirs, if there is one.
