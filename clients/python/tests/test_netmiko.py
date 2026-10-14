@@ -238,13 +238,12 @@ class NetmikoTest(unittest.TestCase):
     def test_only_the_filed_key_types_are_negotiated(self):  # N1: OpenSSH 8.8+ does not offer ssh-rsa
         self.connect(known("ssh-rsa QUJD"))
         off = set(captured["disabled"]["keys"])
-        self.assertEqual(off, {"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
-                               "ssh-dss"})  # RSA filed: rsa-sha2-512, rsa-sha2-256 and ssh-rsa stay
+        self.assertEqual(off, {"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"})
+        # RSA filed: rsa-sha2-512, rsa-sha2-256 and ssh-rsa stay
         self.assertEqual(captured["disabled"]["pubkeys"], ["rsa-sha2-256"])  # Netmiko's own entry is kept
         self.connect(known("ssh-ed25519 QUJD", "ecdsa-sha2-nistp256 QUJD"))
         self.assertEqual(set(captured["disabled"]["keys"]), {"ssh-rsa", "rsa-sha2-512", "rsa-sha2-256",
-                                                             "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
-                                                             "ssh-dss"})
+                                                             "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"})
         self.connect(known("ssh-rsa QUJD"), disabled_algorithms={"keys": ["ssh-dss", "x-callers"]})
         self.assertIn("x-callers", captured["disabled"]["keys"])  # the caller's own list is merged
         self.connect(known())  # a first contact: nothing is filed, so nothing is narrowed
@@ -290,6 +289,25 @@ class NetmikoTest(unittest.TestCase):
         self.assertNotIn("ssh-keygen -R", str(cm.exception))
         self.assertNotIn("has not changed", str(cm.exception))  # N4: it cannot know
         self.assertIn("could not be compared", str(cm.exception))
+
+    def test_a_dsa_only_filed_key_disables_nothing(self):  # review M2: Paramiko 5 offers no ssh-dss
+        self.assertEqual(p49netmiko.host_key_algorithms_off(["ssh-dss AAAA"]), [])
+        self.assertEqual(p49netmiko.host_key_algorithms_off(["ssh-dss AAAA", "sk-ssh-ed25519@openssh.com AAAA"]), [])
+        self.assertNotIn("ssh-dss", p49netmiko._HOST_KEY_ALGORITHMS)
+        self.connect(known("ssh-dss AAAA1"))
+        self.assertEqual(captured["disabled"]["keys"], [])  # so the kex is not starved of every algorithm
+
+    def test_no_acceptable_host_key_with_nothing_filed_is_uncheckable(self):  # review M3
+        NEXT_ERROR.append(Exception("Incompatible ssh peer (no acceptable host key)"))
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known())
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
+        self.assertIn("port49 ssh", str(cm.exception))
+        self.assertNotIn("ssh-keygen -R", str(cm.exception))  # nothing is filed to remove
+        NEXT_ERROR.append(Exception("Incompatible ssh peer (no acceptable host key)"))
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known("ssh-ed25519 AAAA1"))  # a key is filed: still the changed-key refusal
+        self.assertEqual(cm.exception.code, "host_key_changed")
 
     # Fix round 2.
 

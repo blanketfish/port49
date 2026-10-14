@@ -126,11 +126,11 @@ def is_host_key_failure(exc):
     return False
 
 
-# Every host-key algorithm Paramiko 4 offers, and the one key type each belongs to.
+# Every host-key algorithm Paramiko 4 and 5 offer, and the one key type each belongs to. ssh-dss is not
+# among them (Paramiko 5 does not offer it), so a DSA-only filed key narrows nothing.
 _HOST_KEY_ALGORITHMS = {"ssh-ed25519": "ssh-ed25519", "ecdsa-sha2-nistp256": "ecdsa-sha2-nistp256",
                         "ecdsa-sha2-nistp384": "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521": "ecdsa-sha2-nistp521",
-                        "rsa-sha2-512": "ssh-rsa", "rsa-sha2-256": "ssh-rsa", "ssh-rsa": "ssh-rsa",
-                        "ssh-dss": "ssh-dss"}
+                        "rsa-sha2-512": "ssh-rsa", "rsa-sha2-256": "ssh-rsa", "ssh-rsa": "ssh-rsa"}
 
 
 def host_key_algorithms_off(keys):
@@ -253,6 +253,11 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
                                    f"under {kh.name} may be of a type it cannot load (ssh-dss, a security-key type), "
                                    f"so the key the device presented could not be compared with them; the token was "
                                    f"not sent. Use port49 ssh for this device", device) from None
+            if not kh.keys and any("no acceptable host key" in t for _, t in _chain_text(e)):
+                # Nothing is filed, so nothing changed: the device offers only key types Paramiko cannot
+                # check (DSA, a security-key type).
+                raise HostKeyError("host_key_uncheckable", f"{tok.address} offers no host-key type Paramiko can "
+                                   f"check; the token was not sent. Use port49 ssh for this device", device) from None
             if is_host_key_failure(e):
                 raise HostKeyError("host_key_changed", f"the key filed under {kh.name} is not the one {tok.address} "
                                    f"presents: either the device's key changed, or the address is not the device. "
