@@ -92,10 +92,16 @@ func l66ErrorText(out string, max int) string {
 
 // l66WarningLines are the `[WARNING]:` lines of a run: ansible-core 2.16 to 2.18 show a failed no_log
 // task's message only there.
-func l66WarningLines(out string) []string {
+func l66WarningLines(out string) []string { return l66TaggedLines(out, "[WARNING]:") }
+
+// l66ErrorLines are the `[ERROR]:` lines of a run. no_log censors a failed task's `fatal:` result but not
+// this line, so for a censored task it is the only text that says why it failed.
+func l66ErrorLines(out string) []string { return l66TaggedLines(out, "[ERROR]:") }
+
+func l66TaggedLines(out, tag string) []string {
 	var w []string
 	for _, ln := range strings.Split(out, "\n") {
-		if s := strings.TrimSpace(ln); strings.HasPrefix(s, "[WARNING]:") {
+		if s := strings.TrimSpace(ln); strings.HasPrefix(s, tag) {
 			w = append(w, s)
 		}
 	}
@@ -625,7 +631,9 @@ func l66Inventory(s l66InvSpec) string {
 		b.WriteString("    ansible_user: \"{{ lookup('port49.client.token', p49_name, field='username', socket=p49_socket, port49=p49_bin) }}\"\n")
 		b.WriteString("    ansible_password: \"{{ lookup('port49.client.token', p49_name, socket=p49_socket, port49=p49_bin) }}\"\n")
 	} else {
-		b.WriteString("    ansible_user: \"{{ p49.username }}\"\n    ansible_password: \"{{ p49.login }}\"\n")
+		// ansible-core templates these into remote_user and password for the mint's set_fact too, before the
+		// fact exists; without the default every fact play fails at its mint (the collection README's pattern).
+		b.WriteString("    ansible_user: \"{{ p49.username | default(omit) }}\"\n    ansible_password: \"{{ p49.login | default(omit) }}\"\n")
 	}
 	if s.LibsshConfig != "" {
 		b.WriteString("    ansible_libssh_config_file: " + q(s.LibsshConfig) + "\n")
@@ -640,6 +648,18 @@ func l66Inventory(s l66InvSpec) string {
 		b.WriteString("    ansible_ssh_extra_args: " + q(s.SSHExtraArgs) + "\n")
 	}
 	return b.String()
+}
+
+// l66ConnLookups is how many port49.client.token lookups an inventory puts in its connection variables
+// (ansible_*): what L66a's note says each evaluation of them costs, read from the inventory it ran.
+func l66ConnLookups(inv string) int {
+	n := 0
+	for _, ln := range strings.Split(inv, "\n") {
+		if s := strings.TrimSpace(ln); strings.HasPrefix(s, "ansible_") {
+			n += strings.Count(s, "lookup('port49.client.token'")
+		}
+	}
+	return n
 }
 
 // l66Collections are the collections a run needs, in the order its install command names them. port49.client
@@ -781,8 +801,11 @@ const (
 	l66PlayBudget = 4 * time.Minute
 	// l66Reserve is what a cell leaves of the test's deadline for the teardown; l66MinCell is the least a
 	// cell is given.
-	l66Reserve     = 5 * time.Minute
-	l66MinCell     = 2 * time.Minute
+	l66Reserve = 5 * time.Minute
+	l66MinCell = 2 * time.Minute
+	// l66RestartMax is the most a cell's restart of port49d takes: on IOS-XE a 20 s stop, 30 s for the socket
+	// to clear, a 60 s start and up to 3 min of awaitTACACS. Seconds on EOS and NX-OS.
+	l66RestartMax  = 5 * time.Minute
 	l66StandinName = "l66-standin"
 	l66StandinAddr = "172.100.100.250"
 	l66DockerNet   = "port49-lab"
@@ -990,9 +1013,7 @@ type l66Env struct {
 	// cfgRaised is the daemon config with token.candidate_cap raised (daemonCfg is the default cap's). The
 	// token store is in memory, so a restart empties it; every cell starts on a restarted daemon.
 	cfgRaised string
-	// capNow is the cap the running daemon was started with; freshChecked is whether the cell's first mint
-	// has been read for candidate_cap_reached.
-	capNow       int
+	// freshChecked is whether the cell's first mint has been read for candidate_cap_reached.
 	freshChecked bool
 }
 
@@ -1014,11 +1035,7 @@ func (e *l66Env) restart(cap int) error {
 	if err := e.l.startDaemonWith(cfg, true); err != nil {
 		return err
 	}
-	if err := e.l.awaitTACACS(); err != nil {
-		return err
-	}
-	e.capNow = cap
-	return nil
+	return e.l.awaitTACACS()
 }
 
 func (e *l66Env) addInvalid(msg string) {
@@ -1176,6 +1193,15 @@ func (r l66Run) summary(host string) string {
 	if t := l66ErrorText(r.text(), 500); t != "" {
 		s += "; the error: `" + t + "`"
 	}
+	for i, ln := range l66ErrorLines(r.text()) {
+		if i == 3 {
+			break
+		}
+		if len(ln) > 300 {
+			ln = ln[:300] + "..."
+		}
+		s += "; ansible: `" + ln + "`"
+	}
 	for i, w := range l66WarningLines(r.text()) {
 		if i == 3 {
 			break
@@ -1302,23 +1328,31 @@ func (e *l66Env) clearSSHLogs() {
 func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context.Context) (bool, string)) bool {
 	start := time.Now()
 	e.cellID = id
-	b, ok := l66CellBudget(budget, e.deadline, e.hasDeadline, start, l66Reserve, l66MinCell)
-	if !ok {
+	tooNear := func() bool {
 		obs := fmt.Sprintf("**Not started: the test's deadline is too near** (less than %s would remain for it after %s kept for "+
 			"the teardown).", l66MinCell, l66Reserve)
 		e.results = append(e.results, l66Result{id, "INCOMPLETE (deadline)", obs, 0})
 		fmt.Fprintln(os.Stdout, l66Progress(e.l.p.name, id, "INCOMPLETE", 0))
 		return false
 	}
-	budget = b
-	fmt.Fprintln(os.Stdout, l66Start(e.l.p.name, id, budget))
-	e.unread, e.invalid, e.controlOK, e.notRun = false, "", false, ""
 	// Every cell starts on a restarted daemon, so its (device, username) has no unspent token left by an
-	// earlier cell. A restart is a few seconds, which the 5 min teardown reserve in the budget covers.
+	// earlier cell; 16 cells per platform restart (a, b, b2 x2, d, d2, c x5, e x4 and e2). The restart comes
+	// before the budget is computed, so its time comes out of the cell's share of the deadline, never out of
+	// l66Reserve; it starts only when its worst case and the least budget fit.
+	if _, ok := l66CellBudget(budget, e.deadline, e.hasDeadline, start, l66Reserve+l66RestartMax, l66MinCell); !ok {
+		return tooNear()
+	}
 	cap := l66CellCap(id)
 	if err := e.restart(cap); err != nil {
 		e.t.Fatalf("%s: could not restart port49d on an empty token store, so nothing from here is a measurement: %v", id, err)
 	}
+	b, ok := l66CellBudget(budget, e.deadline, e.hasDeadline, time.Now(), l66Reserve, l66MinCell)
+	if !ok {
+		return tooNear()
+	}
+	budget = b
+	fmt.Fprintln(os.Stdout, l66Start(e.l.p.name, id, budget))
+	e.unread, e.invalid, e.controlOK, e.notRun = false, "", false, ""
 	e.freshChecked = false
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
@@ -1433,7 +1467,8 @@ func l66Verbatim(content string) string {
 
 func (e *l66Env) cellA() {
 	e.cell("L66a", "claim", l66Budget, func(ctx context.Context) (bool, string) {
-		r, err := e.runPlay(ctx, "a", "ten", 10, "", e.spec("lookup", "libssh"), l66Opts{idle: l66DefaultIdle})
+		s := e.spec("lookup", "libssh")
+		r, err := e.runPlay(ctx, "a", "ten", 10, "", s, l66Opts{idle: l66DefaultIdle})
 		if err != nil {
 			e.addInvalid(err.Error())
 			return false, ""
@@ -1441,7 +1476,7 @@ func (e *l66Env) cellA() {
 		// Under the default cap the play may fail at a task, and that is the measurement: the first task's
 		// good login is the control (l66GradeCap), not the whole play passing.
 		outcome, _, reading := l66GradeCap(l66CapIn{Recap: r.recap[e.node], Counts: r.counts, Starts: r.starts,
-			FirstMintRefused: l66MintRefusedByCap(r.recs)})
+			FirstMintRefused: l66MintRefusedByCap(r.recs), ConnLookups: l66ConnLookups(l66Inventory(s))})
 		e.controlOK = outcome == "PASS"
 		if outcome != "PASS" {
 			e.addInvalid(reading)

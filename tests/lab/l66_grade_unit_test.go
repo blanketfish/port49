@@ -469,23 +469,39 @@ func TestL66GradeCapIsTheMeasurementWhenTheControlHolds(t *testing.T) {
 		failedAt int
 		want     []string
 	}{
-		{"fails at task 10 on the default cap",
-			l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1}, "PASS", 10,
-			[]string{"task 10", "candidate_cap_reached", "10 mint", "1 redeem", "1 TACACS+ authentication start"}},
-		{"fails at task 3",
-			l66CapIn{Recap: l66Recap{OK: 2, Failed: 1}, Counts: counts(3, 1, 1), Starts: 1}, "PASS", 3, []string{"task 3"}},
-		{"all ten tasks passed under the default",
-			l66CapIn{Recap: l66Recap{OK: 10}, Counts: counts(10, 0, 1), Starts: 1}, "PASS", 0, []string{"all ten", "10 mint"}},
+		// The 72a29169 eos run: two mints per evaluation, then three more and the refused tenth, at task 8.
+		{"the eos run: refused at task 8 after two mints per evaluation",
+			l66CapIn{Recap: l66Recap{OK: 7, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1, ConnLookups: 2}, "PASS", 8,
+			[]string{"fails at task 8 with candidate_cap_reached", "10 mint records (1 denied)", "8 tasks attempted (7 ok, 1 failed",
+				"1.25 mint records per task attempted", "1 redeem", "1 TACACS+ authentication start", "2 lookups",
+				"token.candidate_cap of 8"}},
+		{"refused at task 3",
+			l66CapIn{Recap: l66Recap{OK: 2, Failed: 1}, Counts: counts(9, 1, 1), Starts: 1, ConnLookups: 2}, "PASS", 3,
+			[]string{"task 3", "3 tasks attempted", "3.00 mint records per task attempted"}},
+		{"all ten passed, and the counts leave the cap unreached",
+			l66CapIn{Recap: l66Recap{OK: 10}, Counts: counts(9, 0, 1), Starts: 1, ConnLookups: 2}, "PASS", 0,
+			[]string{"all 10 tasks passed", "9 mint records", "10 tasks attempted", "0.90 mint records per task attempted"}},
+		{"all ten passed with more unspent tokens than the cap allows: contradicts the cap",
+			l66CapIn{Recap: l66Recap{OK: 10}, Counts: counts(20, 0, 1), Starts: 1, ConnLookups: 2}, "INVALID", 0,
+			[]string{"contradicts", "at least 19", "20 mint records"}},
+		{"passed but not ten tasks",
+			l66CapIn{Recap: l66Recap{OK: 6}, Counts: counts(6, 0, 1), Starts: 1, ConnLookups: 2}, "INVALID", 0,
+			[]string{"6 ok", "ten"}},
 		{"failed for another reason, control held",
-			l66CapIn{Recap: l66Recap{OK: 4, Failed: 1}, Counts: counts(5, 0, 1), Starts: 1}, "PASS", 5, []string{"task 5", "not the cap"}},
+			l66CapIn{Recap: l66Recap{OK: 4, Failed: 1}, Counts: counts(5, 0, 1), Starts: 1, ConnLookups: 2}, "PASS", 5,
+			[]string{"task 5", "not the cap", "5 tasks attempted"}},
+		{"a cap denial, but the recap does not show one failed task: no task number is claimed",
+			l66CapIn{Recap: l66Recap{OK: 4, Unreachable: 1}, Counts: counts(9, 1, 1), Starts: 1, ConnLookups: 2}, "PASS", 0,
+			[]string{"candidate_cap_reached", "does not show", "unreachable"}},
 		{"no task passed: no good login to be the control",
-			l66CapIn{Recap: l66Recap{Failed: 1}, Counts: counts(1, 0, 0), Starts: 0}, "INVALID", 0, []string{"control"}},
+			l66CapIn{Recap: l66Recap{Failed: 1}, Counts: counts(1, 0, 0), Starts: 0, ConnLookups: 2}, "INVALID", 0, []string{"control"}},
 		{"tasks passed but no redeem was recorded",
-			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 0), Starts: 1}, "INVALID", 0, []string{"control"}},
+			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 0), Starts: 1, ConnLookups: 2}, "INVALID", 0, []string{"control"}},
 		{"tasks passed but no TACACS+ start was seen",
-			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 1), Starts: 0}, "INVALID", 0, []string{"control"}},
+			l66CapIn{Recap: l66Recap{OK: 3, Failed: 1}, Counts: counts(4, 1, 1), Starts: 0, ConnLookups: 2}, "INVALID", 0, []string{"control"}},
 		{"the very first mint was refused by the cap: the store was not fresh",
-			l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1, FirstMintRefused: true}, "INVALID", 0, []string{"fresh"}},
+			l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1, FirstMintRefused: true, ConnLookups: 2},
+			"INVALID", 0, []string{"fresh"}},
 	}
 	for _, c := range cases {
 		outcome, at, text := l66GradeCap(c.in)
@@ -497,10 +513,24 @@ func TestL66GradeCapIsTheMeasurementWhenTheControlHolds(t *testing.T) {
 				t.Errorf("%s: text lacks %q: %s", c.name, w, text)
 			}
 		}
+		// The reading states what was counted, never a per-task rate it did not measure.
+		for _, never := range []string{"once per task", "a mint for each task"} {
+			if strings.Contains(text, never) {
+				t.Errorf("%s: text claims %q: %s", c.name, never, text)
+			}
+		}
 	}
-	_, _, text := l66GradeCap(l66CapIn{Recap: l66Recap{OK: 9, Failed: 1}, Counts: counts(10, 1, 1), Starts: 1})
-	if !strings.Contains(text, "mints once per task") || !strings.Contains(text, "token.candidate_cap of 8") {
-		t.Errorf("the note states the reading plainly: %s", text)
+}
+
+func TestL66ConnLookupsCountsTheLookupsInTheConnectionVariables(t *testing.T) {
+	s := l66InvSpec{Hosts: []l66Host{{"leaf1", "172.100.100.11"}}, Platform: l66Platforms["arista_eos"], Conn: "network_cli", SSHType: "libssh"}
+	s.Mode = "lookup"
+	if got := l66ConnLookups(l66Inventory(s)); got != 2 {
+		t.Errorf("lookup inventory: %d lookups, want 2 (ansible_user and ansible_password)", got)
+	}
+	s.Mode = "fact"
+	if got := l66ConnLookups(l66Inventory(s)); got != 0 {
+		t.Errorf("fact inventory: %d lookups, want 0", got)
 	}
 }
 

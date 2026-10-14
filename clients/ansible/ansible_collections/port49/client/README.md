@@ -30,9 +30,9 @@ ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
   vars:
     ansible_connection: ansible.netcommon.network_cli
     ansible_network_os: arista.eos.eos
-    ansible_user: "{{ port49.username }}"
-    ansible_password: "{{ port49.login }}"
-    ansible_become_password: "{{ port49.enable }}"
+    ansible_user: "{{ port49.username | default(omit) }}"
+    ansible_password: "{{ port49.login | default(omit) }}"
+    ansible_become_password: "{{ port49.enable | default(omit) }}"
   tasks:
     - arista.eos.eos_facts:
 ```
@@ -40,6 +40,12 @@ ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
 `inventory_hostname` must be the name port49's inventory knows. A token is single-use and short
 lived; each call of the lookup is a mint.
 
+- **Keep `| default(omit)` on the connection variables**, in the play's `vars` or in inventory.
+  Under `network_cli`, ansible-core templates all three for every task, the mint's `set_fact`
+  included, before the fact exists; without the default the mint itself fails with
+  `Error processing keyword 'remote_user': 'port49' is undefined` (or `'password'`,
+  `'become_pass'`; measured on 2.21.4, and the collection's real-ansible test runs this play). The `omit` lasts only until the `set_fact`: a
+  host whose mint fails stops there, so no task connects without the token.
 - **Never put the lookup itself in `ansible_password`.** Ansible templates a connection variable at
   every task, so the lookup would mint at each one (lab entry L66 (a) is to measure how many
   logins a play makes). Mint in a `set_fact` and point `ansible_password` at the fact.
@@ -150,3 +156,7 @@ port49 stores no host key. Ansible keeps them its own way, and the two ways diff
 make test-python                               # stdlib unittest; Ansible is stubbed, none needed
 PORT49_TEST_ANSIBLE_PLAYBOOK=/path/to/venv/bin/ansible-playbook make test-python   # and real ansible-core
 ```
+
+The real-ansible run includes the play above under `network_cli`, against a closed local port; it
+needs `ansible.netcommon` and `arista.eos` (in that venv, or on a collections path named by
+`PORT49_TEST_ANSIBLE_COLLECTIONS`) and is skipped without them.

@@ -3,11 +3,13 @@
 package lab
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,38 @@ func TestL66WarningLinesAreTheWarningsOnly(t *testing.T) {
 	got := l66WarningLines(l66FatalPretty)
 	if len(got) != 1 || !strings.Contains(got[0], "no_grants_matched") {
 		t.Errorf("warnings = %q", got)
+	}
+}
+
+// l66UndefinedFact is ansible-core 2.21.4's output when the fact play's connection variables were read before
+// the mint: no_log censors the fatal, and only the [ERROR] line says why (re-review 3, C1).
+const l66UndefinedFact = `TASK [mint once] ***************************************************************
+[ERROR]: Task failed: Error processing keyword 'remote_user': 'p49' is undefined
+
+Task failed.
+Origin: /w/play/b.yml:4:7
+
+<<< caused by >>>
+
+Error processing keyword 'remote_user': 'p49' is undefined
+fatal: [leaf1]: FAILED! => {"censored": "the output has been hidden due to the fact that 'no_log: true' was specified for this result", "changed": false}
+
+PLAY RECAP *********************************************************************
+leaf1                      : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+`
+
+func TestL66SummaryKeepsAnsiblesErrorLines(t *testing.T) {
+	r := l66Run{stdout: l66UndefinedFact, exit: 2, recap: l66ReadRecap(l66UndefinedFact)}
+	s := r.summary("leaf1")
+	if !strings.Contains(s, "[ERROR]: Task failed: Error processing keyword 'remote_user': 'p49' is undefined") {
+		t.Errorf("the summary lost the only line that says why the censored task failed: %s", s)
+	}
+	if got := l66ErrorLines(l66FatalPretty); len(got) != 0 {
+		t.Errorf("a run without [ERROR] lines: %q", got)
+	}
+	many := strings.Repeat("[ERROR]: one\n", 5)
+	if got := (l66Run{stdout: many}).summary("leaf1"); strings.Count(got, "[ERROR]") != 3 {
+		t.Errorf("the summary keeps three [ERROR] lines: %s", got)
 	}
 }
 
@@ -663,7 +697,7 @@ func TestL66FactInventoryReadsTheFactAndNamesTheDeviceTheLookupAsks(t *testing.T
 	if hosts["l66a"]["p49_name"] != "leaf1" || hosts["l66b"]["ansible_host"] != "172.100.100.11" {
 		t.Errorf("hosts = %v", hosts)
 	}
-	if vars["ansible_password"] != "{{ p49.login }}" || vars["ansible_user"] != "{{ p49.username }}" {
+	if vars["ansible_password"] != "{{ p49.login | default(omit) }}" || vars["ansible_user"] != "{{ p49.username | default(omit) }}" {
 		t.Errorf("fact vars = %v %v", vars["ansible_user"], vars["ansible_password"])
 	}
 	if vars["ansible_connect_timeout"] != 10 || vars["ansible_libssh_config_file"] != "/w/libssh.conf" || vars["ansible_network_cli_ssh_type"] != "paramiko" {
@@ -810,5 +844,95 @@ func TestL66InstallCommandNamesTheDirectoryAndEveryCollection(t *testing.T) {
 	}
 	if strings.Contains(c, "port49.client") {
 		t.Error("port49.client comes from the tree (clients/ansible), never from Galaxy")
+	}
+}
+
+// l66StubPort49 is a port49 CLI that permits every device with a made-up token and logs each call, for a play
+// that needs no agent and no broker.
+const l66StubPort49 = `#!/bin/sh
+echo call >> "$(dirname "$0")/calls.log"
+printf '%s\n' '{"device":"leaf1","verdict":"permit","address":"127.0.0.1","platform":"arista_eos","username":"alice","login":"STUBLOGINTOKEN","expires_at":"2026-10-13T10:00:00Z"}'
+`
+
+// TestL66FactPlaysMintUnderRealAnsible runs the harness's own fact inventory and minted-once plays, for
+// network_cli and for ansible.builtin.ssh, under the lab venv's ansible-core with a stub port49, against a
+// closed local port: no device, agent or broker. ansible-core templates the connection variables into
+// remote_user and password for the mint's set_fact too, before the fact exists (2.21.4), so a fact read
+// without a default fails every fact cell at its mint (re-review 3, C1). The mint must pass, and the next
+// task must reach the connection. Skipped without the lab venv or the L66 collections.
+func TestL66FactPlaysMintUnderRealAnsible(t *testing.T) {
+	r, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, coll := filepath.Join(l66Venv, "ansible-playbook"), filepath.Join(r, "tests", "lab", "l66", ".collections")
+	for _, p := range []string{pb, filepath.Join(coll, "ansible_collections", "ansible", "netcommon"),
+		filepath.Join(coll, "ansible_collections", "arista", "eos")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("%s is not installed (the L66 preflight's venv and collections): %v", p, err)
+		}
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // closed: the connection is refused, so no login is ever attempted
+	for _, conn := range []string{"network_cli", "ssh"} {
+		t.Run(conn, func(t *testing.T) {
+			dir := t.TempDir()
+			// network_cli's and ssh's sockets: a short path, inside AF_UNIX's limit.
+			cp, err := os.MkdirTemp("", "p49cp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(cp) })
+			bin := filepath.Join(dir, "port49")
+			if err := os.WriteFile(bin, []byte(l66StubPort49), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			s := l66InvSpec{Hosts: []l66Host{{"leaf1", "127.0.0.1"}}, Socket: filepath.Join(dir, "agent.sock"), Bin: bin,
+				Platform: l66Platforms["arista_eos"], Conn: conn, SSHType: "libssh", Mode: "fact", ConnectTimeout: 5}
+			kind := "once"
+			if conn == "ssh" {
+				kind = "raw"
+				s.SSHCommonArgs = "-F /dev/null"
+				s.SSHExtraArgs = "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=" + filepath.Join(dir, "known_hosts")
+			}
+			inv, play := filepath.Join(dir, "inv.yml"), filepath.Join(dir, "play.yml")
+			if err := os.WriteFile(inv, []byte(l66Inventory(s)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(play, []byte(l66Playbook(kind, s.Platform, 1, "")), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "ANSIBLE_HOME=" + filepath.Join(dir, ".ansible"),
+				"ANSIBLE_COLLECTIONS_PATH=" + filepath.Join(r, "clients", "ansible") + ":" + coll, "ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false",
+				"PYTHONPATH=" + filepath.Join(r, "clients", "python", "src"), "PYTHONDONTWRITEBYTECODE=1", "ANSIBLE_NOCOLOR=1",
+				"ANSIBLE_REMOTE_PORT=" + strconv.Itoa(port), "ANSIBLE_HOST_KEY_CHECKING=False",
+				"ANSIBLE_PERSISTENT_CONTROL_PATH_DIR=" + cp, "ANSIBLE_SSH_CONTROL_PATH_DIR=" + cp,
+				"ANSIBLE_PERSISTENT_CONNECT_TIMEOUT=5", "ANSIBLE_SSH_PASSWORD_MECHANISM=ssh_askpass"}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			stdout, stderr, exit, err := l64Run(ctx, env, dir, pb, "-i", inv, play)
+			out := stdout + "\n" + stderr
+			if err != nil {
+				t.Fatalf("ansible-playbook: %v\n%s", err, out)
+			}
+			if strings.Contains(out, "is undefined") {
+				t.Errorf("the play read the fact before its mint set it:\n%s", out)
+			}
+			rc := l66ReadRecap(stdout)["leaf1"]
+			if rc.OK != 1 || rc.Failed+rc.Unreachable != 1 || exit == 0 {
+				t.Errorf("recap %+v, exit %d: want the mint ok and the next task failed at the closed port\n%s", rc, exit, out)
+			}
+			if !strings.Contains(out, "TASK [show version 1]") || !strings.Contains(out, "Connection refused") {
+				t.Errorf("the task after the mint did not reach the closed port:\n%s", out)
+			}
+			calls, _ := os.ReadFile(filepath.Join(dir, "calls.log"))
+			if n := strings.Count(string(calls), "call"); n != 1 {
+				t.Errorf("port49 was called %d times, want 1 (the mint)", n)
+			}
+		})
 	}
 }
