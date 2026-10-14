@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -198,6 +198,22 @@ lab-ssh:
 	  echo "=== lab-ssh platform: $$p ==="; \
 	  if ! PORT49_LAB_SSH=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE} PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL64L65' -count=1 -v -timeout 180m; then \
 	    echo "=== lab-ssh platform $$p FAILED; the platforms after it were not run ==="; \
+	    exit 1; \
+	  fi; \
+	done
+
+# L66 (plan 9d): the Ansible lookup `port49.client.token` over network_cli and
+# the host keys of Ansible's connection plugins, one platform at a time. It
+# installs nothing: the venv needs ansible-pylibssh and ./clients/python, and
+# tests/lab/l66/.collections the platform collections (the harness names the
+# command when one is missing). Needs sshpass, docker, containerlab, the images
+# and `make build`.
+lab-ansible:
+	@set -e; \
+	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
+	  echo "=== lab-ansible platform: $$p ==="; \
+	  if ! PORT49_LAB_ANSIBLE=1 PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/ -run 'TestL66' -count=1 -v -timeout 90m; then \
+	    echo "=== lab-ansible platform $$p FAILED; the platforms after it were not run ==="; \
 	    exit 1; \
 	  fi; \
 	done
