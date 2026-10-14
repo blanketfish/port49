@@ -568,6 +568,14 @@ func (noStore) PutMFAProof(context.Context, store.MFAProof, time.Duration) error
 
 func (noStore) GetMFAProof(context.Context, string) (store.MFAProof, error) { panic("store called") }
 
+func (noStore) NoteSignInAttempt(context.Context, string, time.Duration) (int, time.Time, error) {
+	panic("store called")
+}
+
+func (noStore) UndoSignInAttempt(context.Context, string) error { panic("store called") }
+
+func (noStore) ClearSignInAttempts(context.Context, string) (int, error) { panic("store called") }
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {

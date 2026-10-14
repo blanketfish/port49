@@ -1067,6 +1067,78 @@ type Store interface {
 	PutMFAProof(ctx context.Context, p MFAProof, ttl time.Duration) error
 	// GetMFAProof is the live proof under key, or ErrNotFound.
 	GetMFAProof(ctx context.Context, key string) (MFAProof, error)
+	// NoteSignInAttempt counts one attempt under key in a fixed window that
+	// starts at the first, and returns the count with it and the window's
+	// end (plan 9e, D12). The counts are regional: kept in the store the
+	// broker's other short-lived records are.
+	NoteSignInAttempt(ctx context.Context, key string, window time.Duration) (int, time.Time, error)
+	// UndoSignInAttempt takes one back (never below 0); ClearSignInAttempts
+	// drops the count and returns what it held.
+	UndoSignInAttempt(ctx context.Context, key string) error
+	ClearSignInAttempts(ctx context.Context, key string) (int, error)
+}
+
+// SecondFactor is a person's TOTP second factor (plan 9e; spec §13 decision
+// 47 rulings 4, 11, 12). Secret, EntryID and EnrolledFrom are sealed.
+// LastStep is the used-step record (D12): it lives with the enrollment.
+type SecondFactor struct {
+	Principal    string
+	State        string // SecondFactorPending | SecondFactorActive | SecondFactorReopened
+	EntryID      string
+	Secret       []byte
+	EnrolledAt   time.Time
+	EnrolledFrom string
+	LastStep     int64
+	Until        time.Time // a pending record's confirm-by, or a reopened record's end
+	Rev          uint64    // set by GetSecondFactor, compared by SwapSecondFactor
+	Sealed       []byte
+	Stale        bool // opened under the previous encryption key: the scheduled pass seals it again
+}
+
+const (
+	SecondFactorPending  = "pending"
+	SecondFactorActive   = "active"
+	SecondFactorReopened = "reopened"
+)
+
+// EnrollmentMark is the enrollment store's creation mark (D7): its absence
+// is a lost store, never "no one is enrolled". ReopenAllUntil is
+// reset-second-factor --all's window.
+type EnrollmentMark struct {
+	CreatedAt      time.Time
+	ReopenAllUntil time.Time
+}
+
+// ErrEnrollmentStoreLost is an enrollment store that will not open (D7): a
+// file that does not unseal or does not load. Every method answers it,
+// wrapped with why, until PutEnrollmentMark replaces the store.
+var ErrEnrollmentStoreLost = errors.New("store: the enrollment store is lost")
+
+// Enrollments is the enrollment store (plan 9e, D7, D12): its own handle,
+// opened from broker.directory.enrollment_store. Nothing creates it at a
+// start; CreateEnrollmentMark (init-enrollments), PutEnrollmentMark
+// (reset-second-factor --all) and Import are the only writers of the mark.
+type Enrollments interface {
+	GetSecondFactor(ctx context.Context, principal string) (SecondFactor, error) // ErrNotFound
+	// SwapSecondFactor writes f if the record is still at rev (0: none
+	// there); ErrConflict otherwise, and nothing is written. No lease.
+	SwapSecondFactor(ctx context.Context, f SecondFactor, rev uint64) error
+	SecondFactorPrincipals(ctx context.Context) ([]string, error)
+	GetEnrollmentMark(ctx context.Context) (EnrollmentMark, error) // ErrNotFound when none
+	// CreateEnrollmentMark writes m only where the store has no mark, no
+	// record and (the file) no file, lost or not; ErrConflict otherwise,
+	// and nothing is written (init-enrollments, D7).
+	CreateEnrollmentMark(ctx context.Context, m EnrollmentMark) error
+	// PutEnrollmentMark writes m, creating the store when it has none, and
+	// replacing a lost one (the unreadable file renamed aside, never deleted).
+	PutEnrollmentMark(ctx context.Context, m EnrollmentMark) error
+	// Export is every record and the mark, sealed (D13), stamped with the
+	// time it was taken; Import checks the seal and the mark and writes
+	// them, refusing a store holding a record enrolled or reset after the
+	// export unless replace (ErrConflict), and returns how many records it
+	// wrote and the export's time.
+	Export(ctx context.Context) ([]byte, error)
+	Import(ctx context.Context, sealed []byte, replace bool) (int, time.Time, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision

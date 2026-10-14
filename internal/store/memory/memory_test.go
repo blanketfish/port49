@@ -233,6 +233,12 @@ func TestTheMemoryStoreHoldsEveryProperty(t *testing.T) {
 	}})
 }
 
+// Every enrollment property, against the in-memory enrollment store (plan 9e).
+func TestTheMemoryEnrollmentsHoldsEveryProperty(t *testing.T) {
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{
+		New: func(_ *testing.T, clock func() time.Time) store.Enrollments { return NewEnrollments(clock) }})
+}
+
 // Each whole-context write returns the revision it committed at, which is
 // the Rev the next read sees, and a refused one returns zero
 // (store.RevStore; plan 7d Task 6b). A write to another key comes before

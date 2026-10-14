@@ -81,6 +81,22 @@ func TestTheSealingLayerOverEtcdHoldsEveryProperty(t *testing.T) {
 
 var sealKeys = crypt.Keys{Current: crypt.Key{ID: "k1", Bytes: [32]byte{1}}}
 
+// Every enrollment property against etcd, bare and through the sealing layer
+// (plan 9e, Task 4).
+func TestTheEtcdEnrollmentsHoldEveryProperty(t *testing.T) {
+	t.Parallel()
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{
+		New: func(t *testing.T, clock func() time.Time) store.Enrollments { return onShared(t, clock) }})
+}
+
+func TestTheSealingLayerOverEtcdHoldsEveryEnrollmentProperty(t *testing.T) {
+	t.Parallel()
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{Sealed: true,
+		New: func(t *testing.T, clock func() time.Time) store.Enrollments {
+			return crypt.WrapEnrollments(onShared(t, clock), sealKeys, nil)
+		}})
+}
+
 // With two of three members stopped, a write and a read each fail within
 // their deadline as store.ErrUnavailable: never a stale answer (Ruling 4;
 // spec §14, "Quorum lost").

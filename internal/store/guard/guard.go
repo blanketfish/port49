@@ -58,6 +58,12 @@ var pools = map[string]Pool{
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
 	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
 	"GetLogout": Token, "PutMFAProof": Token, "GetMFAProof": Token,
+	"NoteSignInAttempt": Token, "UndoSignInAttempt": Token, "ClearSignInAttempts": Token,
+
+	// store.Enrollments (plan 9e), guarded by WrapEnrollments.
+	"GetSecondFactor": Token, "SwapSecondFactor": Token, "GetEnrollmentMark": Token,
+	"CreateEnrollmentMark": Token, "PutEnrollmentMark": Token,
+	"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -714,4 +720,72 @@ func (g *guarded) GetMFAProof(ctx context.Context, key string) (p store.MFAProof
 	return
 }
 
+func (g *guarded) NoteSignInAttempt(ctx context.Context, key string, window time.Duration) (n int, end time.Time, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { n, end, e = g.inner.NoteSignInAttempt(ctx, key, window); return })
+	return
+}
+
+func (g *guarded) UndoSignInAttempt(ctx context.Context, key string) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.UndoSignInAttempt(ctx, key) })
+}
+
+func (g *guarded) ClearSignInAttempts(ctx context.Context, key string) (n int, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { n, e = g.inner.ClearSignInAttempts(ctx, key); return })
+	return
+}
+
 var _ store.Store = (*guarded)(nil)
+
+// guardedEnrollments is the enrollment store behind the same pools, circuit
+// and metrics a Store has (plan 9e, D12): every method in the token pool but
+// the three that read or write every record, which run in the bulk pool.
+type guardedEnrollments struct {
+	inner store.Enrollments
+	g     *guarded
+}
+
+// WrapEnrollments guards inner, the enrollment handle on etcd, as Wrap
+// guards a Store. Its pools are its own: give c a Component of its own, or
+// its circuit's gauge is the store's.
+func WrapEnrollments(inner store.Enrollments, c Config) store.Enrollments {
+	return &guardedEnrollments{inner: inner, g: Wrap(nil, c).(*guarded)}
+}
+
+func (e *guardedEnrollments) GetSecondFactor(ctx context.Context, principal string) (f store.SecondFactor, err error) {
+	err = e.g.do(ctx, Token, func(ctx context.Context) (x error) { f, x = e.inner.GetSecondFactor(ctx, principal); return })
+	return
+}
+
+func (e *guardedEnrollments) SwapSecondFactor(ctx context.Context, f store.SecondFactor, rev uint64) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.SwapSecondFactor(ctx, f, rev) })
+}
+
+func (e *guardedEnrollments) SecondFactorPrincipals(ctx context.Context) (ps []string, err error) {
+	err = e.g.do(ctx, Bulk, func(ctx context.Context) (x error) { ps, x = e.inner.SecondFactorPrincipals(ctx); return })
+	return
+}
+
+func (e *guardedEnrollments) GetEnrollmentMark(ctx context.Context) (m store.EnrollmentMark, err error) {
+	err = e.g.do(ctx, Token, func(ctx context.Context) (x error) { m, x = e.inner.GetEnrollmentMark(ctx); return })
+	return
+}
+
+func (e *guardedEnrollments) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.CreateEnrollmentMark(ctx, m) })
+}
+
+func (e *guardedEnrollments) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.PutEnrollmentMark(ctx, m) })
+}
+
+func (e *guardedEnrollments) Export(ctx context.Context) (b []byte, err error) {
+	err = e.g.do(ctx, Bulk, func(ctx context.Context) (x error) { b, x = e.inner.Export(ctx); return })
+	return
+}
+
+func (e *guardedEnrollments) Import(ctx context.Context, sealed []byte, replace bool) (n int, at time.Time, err error) {
+	err = e.g.do(ctx, Bulk, func(ctx context.Context) (x error) { n, at, x = e.inner.Import(ctx, sealed, replace); return })
+	return
+}
+
+var _ store.Enrollments = (*guardedEnrollments)(nil)

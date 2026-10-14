@@ -1060,6 +1060,20 @@ func (w *wrapped) GetMFAProof(ctx context.Context, key string) (store.MFAProof, 
 	return w.inner.GetMFAProof(ctx, key)
 }
 
+// The sign-in attempt counts pass through unsealed: the key is a principal
+// or a source prefix, the value a count and a window's end (plan 9e).
+func (w *wrapped) NoteSignInAttempt(ctx context.Context, key string, window time.Duration) (int, time.Time, error) {
+	return w.inner.NoteSignInAttempt(ctx, key, window)
+}
+
+func (w *wrapped) UndoSignInAttempt(ctx context.Context, key string) error {
+	return w.inner.UndoSignInAttempt(ctx, key)
+}
+
+func (w *wrapped) ClearSignInAttempts(ctx context.Context, key string) (int, error) {
+	return w.inner.ClearSignInAttempts(ctx, key)
+}
+
 // membershipSecret is a membership's sealed part, bound to its principal.
 // MapKeys and Refused are sealed as well as kept in the clear: the clear
 // copies are the backend's index, the sealed ones the truth.

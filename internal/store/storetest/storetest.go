@@ -1086,6 +1086,8 @@ func Run(t *testing.T, b Backend) {
 		{"LogoutKeepsTheLaterAndExpires", LogoutKeepsTheLaterAndExpires},
 		{"LogoutMergesUnderARace", LogoutMergesUnderARace},
 		{"MFAProofKeepsTheLaterAndExpires", MFAProofKeepsTheLaterAndExpires},
+		{"SignInAttemptsCountInAFixedWindow", SignInAttemptsCountInAFixedWindow},
+		{"SignInAttemptsCountEveryRacer", SignInAttemptsCountEveryRacer},
 		{"OIDCRecordsRefuseWhatCannotBeKept", OIDCRecordsRefuseWhatCannotBeKept},
 	} {
 		p := p

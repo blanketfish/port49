@@ -1,0 +1,169 @@
+package storetest
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// EnrollmentsBackend is a store.Enrollments implementation the enrollment
+// properties run against; New returns a fresh, empty one. Sealed says its
+// Export is sealed (the crypt layer over it), so the clear-text check runs.
+type EnrollmentsBackend struct {
+	New    func(t *testing.T, clock func() time.Time) store.Enrollments
+	Sealed bool
+}
+
+// RunEnrollments runs every enrollment property against b.
+func RunEnrollments(t *testing.T, b EnrollmentsBackend) {
+	for _, p := range []struct {
+		name string
+		f    func(*testing.T, EnrollmentsBackend)
+	}{
+		{"SecondFactorSwapsByRevision", SecondFactorSwapsByRevision},
+		{"EnrollmentMarkIsKept", EnrollmentMarkIsKept},
+		{"EnrollmentMarkIsCreatedOnce", EnrollmentMarkIsCreatedOnce},
+		{"ExportImportRoundTrips", ExportImportRoundTrips},
+	} {
+		t.Run(p.name, func(t *testing.T) { p.f(t, b) })
+	}
+}
+
+// EnrollmentMarkIsKept: none is ErrNotFound; a put reads back; a second
+// put replaces it whole.
+func EnrollmentMarkIsKept(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	e := b.New(t, func() time.Time { return t0 })
+	if _, err := e.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a new store has a mark: %v", err)
+	}
+	m := store.EnrollmentMark{CreatedAt: t0}
+	if err := e.PutEnrollmentMark(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.GetEnrollmentMark(ctx); err != nil || !got.CreatedAt.Equal(t0) || !got.ReopenAllUntil.IsZero() {
+		t.Fatalf("%+v %v", got, err)
+	}
+	m.ReopenAllUntil = t0.Add(24 * time.Hour)
+	if err := e.PutEnrollmentMark(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := e.GetEnrollmentMark(ctx); !got.ReopenAllUntil.Equal(t0.Add(24 * time.Hour)) {
+		t.Fatalf("not replaced: %+v", got)
+	}
+}
+
+// EnrollmentMarkIsCreatedOnce: CreateEnrollmentMark writes on an empty
+// store alone; a second is ErrConflict and changes nothing; a store holding
+// a record and no mark is ErrConflict too (init-enrollments never papers
+// over a store that lost its mark, D7).
+func EnrollmentMarkIsCreatedOnce(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	e := b.New(t, func() time.Time { return t0 })
+	if err := e.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a second create: %v", err)
+	}
+	if got, _ := e.GetEnrollmentMark(ctx); !got.CreatedAt.Equal(t0) {
+		t.Fatalf("the refused create wrote: %+v", got)
+	}
+	r := b.New(t, func() time.Time { return t0 })
+	if err := r.SwapSecondFactor(ctx, store.SecondFactor{Principal: "user:alice@example.com",
+		State: store.SecondFactorActive, EntryID: "uuid:1", Secret: []byte("01234567890123456789")}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a create over records with no mark: %v", err)
+	}
+}
+
+// ExportImportRoundTrips: an export imports into an empty store whole; into
+// a store holding a later enrollment it is ErrConflict and writes nothing,
+// unless replace (D13).
+func ExportImportRoundTrips(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	src := b.New(t, clock)
+	_ = src.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
+	f := store.SecondFactor{Principal: "user:alice@example.com", State: store.SecondFactorActive, EntryID: "uuid:1",
+		Secret: []byte("01234567890123456789"), EnrolledAt: t0, EnrolledFrom: "192.0.2.0/32", LastStep: 7}
+	if err := src.SwapSecondFactor(ctx, f, 0); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := src.Export(ctx)
+	if err != nil || b.Sealed && (strings.Contains(string(exp), "01234567890123456789") || strings.Contains(string(exp), "uuid:1")) {
+		t.Fatalf("an export in the clear, or %v", err)
+	}
+	dst := b.New(t, clock)
+	if n, at, err := dst.Import(ctx, exp, false); err != nil || n != 1 || !at.Equal(t0) {
+		t.Fatalf("%d %s %v", n, at, err)
+	}
+	if got, err := dst.GetSecondFactor(ctx, f.Principal); err != nil || string(got.Secret) != string(f.Secret) ||
+		got.LastStep != 7 {
+		t.Fatalf("the imported record: step %d, %v", got.LastStep, err) // never the secret
+	}
+	mu.Lock()
+	now = t0.Add(time.Hour)
+	mu.Unlock()
+	later := f
+	later.Principal, later.EnrolledAt = "user:bob@example.com", t0.Add(time.Hour)
+	if err := dst.SwapSecondFactor(ctx, later, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := dst.Import(ctx, exp, false); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("an older export over a later enrollment: %v", err)
+	}
+	if _, err := dst.GetSecondFactor(ctx, later.Principal); err != nil {
+		t.Fatalf("the refused import wrote: %v", err)
+	}
+	if _, _, err := dst.Import(ctx, exp, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dst.GetSecondFactor(ctx, later.Principal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("--replace kept a record the export does not hold: %v", err)
+	}
+}
+
+// SecondFactorSwapsByRevision: a record is written only where none is, then
+// only at the revision read; a stale revision writes nothing (plan 9e, Task 4).
+func SecondFactorSwapsByRevision(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	const p = "user:alice@example.com"
+	if _, err := s.GetSecondFactor(ctx, p); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("none written: %v", err)
+	}
+	f := store.SecondFactor{Principal: p, State: store.SecondFactorPending, EntryID: "uuid:1",
+		Secret: []byte("01234567890123456789"), Until: t0.Add(10 * time.Minute)}
+	if err := s.SwapSecondFactor(ctx, f, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapSecondFactor(ctx, f, 0); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a second first write: %v", err)
+	}
+	got, err := s.GetSecondFactor(ctx, p)
+	if err != nil || got.State != store.SecondFactorPending || string(got.Secret) != string(f.Secret) ||
+		got.EntryID != "uuid:1" || got.Rev == 0 {
+		t.Fatalf("the record read back: state %q, rev %d, %v", got.State, got.Rev, err) // never the secret
+	}
+	active := got
+	active.State, active.LastStep = store.SecondFactorActive, 42
+	if err := s.SwapSecondFactor(ctx, active, got.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapSecondFactor(ctx, active, got.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a stale revision: %v", err)
+	}
+	if ps, err := s.SecondFactorPrincipals(ctx); err != nil || len(ps) != 1 || ps[0] != p {
+		t.Fatalf("%v %v", ps, err)
+	}
+}

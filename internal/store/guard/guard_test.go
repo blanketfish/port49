@@ -480,6 +480,50 @@ func TestABulkFailureLeavesTheHotPoolsClosed(t *testing.T) {
 	}
 }
 
+// Every store.Enrollments method runs in the pool PoolOf names, as the
+// store's do: Export, Import and the principals list in the bulk pool, the
+// rest in the token pool (plan 9e, Task 4).
+func TestEveryEnrollmentMethodIsRoutedToItsPool(t *testing.T) {
+	var said, gone told
+	c := config(&said, &gone)
+	c.CallTimeout, c.BulkTimeout = 5*time.Second, 5*time.Second
+	g := reflect.ValueOf(WrapEnrollments(memory.NewEnrollments(time.Now), c))
+	et := reflect.TypeOf((*store.Enrollments)(nil)).Elem()
+	for i := 0; i < et.NumMethod(); i++ {
+		m := et.Method(i)
+		p := PoolOf(m.Name)
+		if p != Token && p != Context && p != Bulk {
+			t.Errorf("%s has no pool", m.Name)
+			continue
+		}
+		if want := map[string]Pool{"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk}[m.Name]; want != "" && p != want {
+			t.Errorf("%s is in the %s pool, want %s", m.Name, p, want)
+		} else if want == "" && p != Token {
+			t.Errorf("%s is in the %s pool, want token", m.Name, p)
+		}
+		before := poolCalls(c.Metrics.Calls, p)
+		args := []reflect.Value{reflect.ValueOf(context.Background())}
+		for j := 1; j < m.Type.NumIn(); j++ {
+			args = append(args, reflect.Zero(m.Type.In(j)))
+		}
+		g.MethodByName(m.Name).Call(args)
+		if got := poolCalls(c.Metrics.Calls, p); got != before+1 {
+			t.Errorf("%s ran %v calls in the %s pool, want 1", m.Name, got-before, p)
+		}
+	}
+}
+
+// The guard passes every enrollment method through unchanged.
+func TestTheGuardHoldsEveryEnrollmentProperty(t *testing.T) {
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{
+		New: func(t *testing.T, clock func() time.Time) store.Enrollments {
+			var said, gone told
+			c := config(&said, &gone)
+			c.CallTimeout, c.BulkTimeout = 5*time.Second, 5*time.Second
+			return WrapEnrollments(memory.NewEnrollments(clock), c)
+		}})
+}
+
 // The guard passes every method through unchanged: every storetest
 // property holds through it.
 func TestTheGuardHoldsEveryProperty(t *testing.T) {

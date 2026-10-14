@@ -87,6 +87,16 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 	if _, ms, err := d.LedgerMarks(ctx); err != nil || len(ms) != 1 || ms[0].Seq != 10 {
 		t.Fatalf("the daemon reads the ledger record: %+v %v", ms, err)
 	}
+	if _, _, err := b.NoteSignInAttempt(ctx, "principal:user:alice", time.Minute); err != nil {
+		t.Fatalf("the broker counts a sign-in attempt: %v", err)
+	}
+	if err := b.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatalf("the broker creates the enrollment mark: %v", err)
+	}
+	if err := b.SwapSecondFactor(ctx, store.SecondFactor{Principal: "user:alice",
+		State: store.SecondFactorActive}, 0); err != nil {
+		t.Fatalf("the broker writes a second factor: %v", err)
+	}
 	for name, err := range map[string]error{
 		"write a mark": d.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:x", At: t0}),
 		"overwrite a mark": func() error {
@@ -105,6 +115,15 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 			_, err := d.PutLedgerMarks(ctx, []store.LedgerMark{{Key: lk, Seq: 11}})
 			return err
 		}(),
+		"count a sign-in attempt": func() error {
+			_, _, err := d.NoteSignInAttempt(ctx, "principal:user:alice", time.Minute)
+			return err
+		}(),
+		"read a second factor": func() error { _, err := d.GetSecondFactor(ctx, "user:alice"); return err }(),
+		"write a second factor": d.SwapSecondFactor(ctx, store.SecondFactor{Principal: "user:alice",
+			State: store.SecondFactorActive}, 0),
+		"read the enrollment mark":  func() error { _, err := d.GetEnrollmentMark(ctx); return err }(),
+		"write the enrollment mark": d.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}),
 		"reserve an idempotency key": func() error {
 			_, _, err := d.ReserveIdempotency(ctx, "user:alice", "k",
 				store.Idempotency{Holder: "h", Pending: true, ExpiresAt: t0.Add(time.Minute)})
@@ -172,6 +191,7 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 	membership, membershipK := newKeys(prefix).family(famMembership), newKeys(prefix).family(famMembershipK)
 	once, owner, logout := newKeys(prefix).family(famOnce), newKeys(prefix).family(famOIDCOwner),
 		newKeys(prefix).family(famLogout)
+	secondFactor, attempts := newKeys(prefix).family(famSecondFactor), newKeys(prefix).family(famSignInAttempts)
 	srv := provisioned(t, prefix)
 	if err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false); err != nil {
 		t.Fatalf("the daemon as itself, with its read on lw/: %v", err)
@@ -206,6 +226,14 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 			"it was allowed reading " + logout},
 		{etcdtest.Grant{Role: RoleDaemon, Key: logout, RangeEnd: clientv3.GetPrefixRangeEnd(logout), Write: true},
 			"it was allowed reading " + logout}, // a write grant is read-write: the reading probe runs first
+		{etcdtest.Grant{Role: RoleDaemon, Key: secondFactor, RangeEnd: clientv3.GetPrefixRangeEnd(secondFactor)},
+			"it was allowed reading " + secondFactor},
+		{etcdtest.Grant{Role: RoleDaemon, Key: secondFactor, RangeEnd: clientv3.GetPrefixRangeEnd(secondFactor), Write: true},
+			"it was allowed reading " + secondFactor},
+		{etcdtest.Grant{Role: RoleDaemon, Key: attempts, RangeEnd: clientv3.GetPrefixRangeEnd(attempts)},
+			"it was allowed reading " + attempts},
+		{etcdtest.Grant{Role: RoleDaemon, Key: attempts, RangeEnd: clientv3.GetPrefixRangeEnd(attempts), Write: true},
+			"it was allowed reading " + attempts},
 	} {
 		loose := provisionedWith(t, prefix, []etcdtest.Grant{c.extra}, nil)
 		err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false)
