@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -525,24 +526,93 @@ var l64Versions string
 // l64Run runs a command under ctx and returns its output and exit status. A command killed at the deadline
 // is an error; one that exits non-zero is not.
 func l64Run(ctx context.Context, env []string, dir, name string, args ...string) (stdout, stderr string, exit int, err error) {
+	return l64RunGrace(ctx, 10*time.Second, env, dir, name, args...)
+}
+
+// l64Pipe is one of a command's output pipes, read by the harness itself rather than by exec's copier: exec's
+// Wait reports a descendant that holds the pipes (ErrWaitDelay) only when the command exited 0, so a non-zero
+// exit with an orphan would read as a normal end.
+type l64Pipe struct {
+	r, w *os.File
+	buf  bytes.Buffer
+	done chan struct{}
+}
+
+func newL64Pipe() (*l64Pipe, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	return &l64Pipe{r: r, w: w, done: make(chan struct{})}, nil
+}
+
+// l64Ended is how a command's end reads: its exit status, and an error for any end that is not a normal one.
+// held is whether a descendant still held the output pipes grace after the command exited.
+func l64Ended(waitErr, ctxErr error, held bool, name string) (exit int, err error) {
+	err = waitErr
+	var ee *exec.ExitError
+	if errors.As(waitErr, &ee) {
+		exit, err = ee.ExitCode(), nil
+	}
+	if held && err == nil {
+		err = fmt.Errorf("a descendant of %s held its output pipes open after it exited, so it did not end cleanly", name)
+	}
+	if ctxErr != nil {
+		err = fmt.Errorf("%s was ended at the cell's deadline: %w", name, ctxErr)
+	}
+	return exit, err
+}
+
+// l64RunGrace is l64Run with the time a descendant may keep the pipes open after the command exits. Such a
+// descendant is killed with the command's process group and makes the end an error.
+func l64RunGrace(ctx context.Context, grace time.Duration, env []string, dir, name string, args ...string) (stdout, stderr string, exit int, err error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env, cmd.Dir = env, dir
 	// Its own process group, ended whole at the deadline: the ssh under `port49 ssh` and the CLI under the
 	// driver must not outlive the cell and reach the device in a later cell's window.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	cmd.WaitDelay = 10 * time.Second // a descendant that holds the pipes cannot keep this from returning
-	err = cmd.Run()
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		exit, err = ee.ExitCode(), nil
+	so, err := newL64Pipe()
+	if err != nil {
+		return "", "", 0, err
 	}
-	if ctx.Err() != nil {
-		err = fmt.Errorf("%s was ended at the cell's deadline: %w", filepath.Base(name), ctx.Err())
+	se, err := newL64Pipe()
+	if err != nil {
+		_, _ = so.r.Close(), so.w.Close()
+		return "", "", 0, err
 	}
-	return so.String(), se.String(), exit, err
+	cmd.Stdout, cmd.Stderr = so.w, se.w
+	startErr := cmd.Start()
+	_, _ = so.w.Close(), se.w.Close() // the child holds its own copies
+	if startErr != nil {
+		_, _ = so.r.Close(), se.r.Close()
+		return "", "", 0, startErr
+	}
+	for _, p := range []*l64Pipe{so, se} {
+		go func() {
+			_, _ = io.Copy(&p.buf, p.r)
+			close(p.done)
+		}()
+	}
+	waitErr := cmd.Wait()
+	expired, stop := context.WithTimeout(context.Background(), grace)
+	defer stop()
+	held := false
+	for _, p := range []*l64Pipe{so, se} {
+		select {
+		case <-p.done:
+		case <-expired.Done():
+			held = true
+			_ = p.r.Close() // unblocks the copy
+			<-p.done
+		}
+	}
+	if held {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // the orphan must not outlive the call
+	}
+	_, _ = so.r.Close(), se.r.Close()
+	exit, err = l64Ended(waitErr, ctx.Err(), held, filepath.Base(name))
+	return so.buf.String(), se.buf.String(), exit, err
 }
 
 // l64Result is one cell's row.

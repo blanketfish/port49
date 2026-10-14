@@ -1389,7 +1389,7 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 	outcome := l66Outcome(kind, d.ok, ctx.Err() != nil, e.controlOK, e.unread)
 	// An invalid or a fatal set in the cell outranks NOT RUN (l66Settle): a cell that could not measure must
 	// not read as one that was blocked.
-	outcome = l66Settle(outcome, e.fatal, e.invalid, e.notRun)
+	outcome = l66Settle(outcome, e.fatal, e.invalid, e.notRun, e.unread)
 	switch {
 	case outcome == "TIMEOUT":
 		d.obs = "**The cell's budget ran out.** " + d.obs
@@ -1397,6 +1397,8 @@ func (e *l66Env) cell(id, kind string, budget time.Duration, fn func(ctx context
 		d.obs = "**INVALID: " + e.fatal + ".** " + d.obs
 	case e.invalid != "":
 		d.obs = "**INVALID: " + e.invalid + ".** " + d.obs
+	case e.unread:
+		d.obs = "**INVALID: " + l66WhyInvalid(kind, d.ok, e.controlOK, e.unread) + ".** " + d.obs
 	case e.notRun != "":
 		d.obs = "**Not run: " + e.notRun + ".** " + d.obs
 	case outcome == "INVALID":
@@ -1653,8 +1655,14 @@ func (e *l66Env) cellFirstContact(id, sshType string, markers bool) {
 		if len(d.Added) > 0 {
 			e.cAfter[sshType], e.cAdded[sshType] = after, d.Added
 		}
-		e.cNoFile[sshType] = r.recap[e.node].Passed() && r.counts.Redeems > 0 && len(d.Added) == 0
+		e.cNoFile[sshType] = l66NoFile(r.recap[e.node].Passed(), r.counts.Redeems, len(d.Added),
+			l66PlayEnd(id, r.exit, r.err, len(r.recap)))
 		e.controlOK = r.good(e.node)
+		if kind == "claim" {
+			if why := l66FirstContactNeverConnected(r.recap[e.node].OK, r.counts.Mints, r.counts.MintDenies); why != "" {
+				e.addInvalid(why)
+			}
+		}
 		if kind == "record" && !r.recap[e.node].Passed() && l66ParamikoRefusedMarkers(r.text()) {
 			_, ctlNote := e.control(ctx)
 			return true, fmt.Sprintf("%s\n\n**Paramiko refused to read the known_hosts file it was given** (`InvalidHostKey`): it holds an "+
@@ -1741,13 +1749,13 @@ func (e *l66Env) cellChanged(id2, sshType string) {
 			// FAIL with this evidence. A redeem record carries auth.credential_sha256 and names the token the
 			// device presented; the decision log is what says it was presented.
 			why += fmt.Sprintf(" **%s accepted the changed key and logged in.** The token was presented to the device: %v (%d redeem "+
-				"records in the window, each with the `credential_sha256` of a token this run minted; %d such hashes known).",
-				sshType, r.counts.Redeems > 0, r.counts.Redeems, len(r.hashes))
+				"records in the window, %d of them with the `credential_sha256` of a token this window minted; %d token hashes known).",
+				sshType, r.counts.Redeems > 0, r.counts.Redeems, l66RedeemsOfMinted(r.recs), len(r.hashes))
 		}
 		return pass, fmt.Sprintf("%s\n\n`%s`: the key of each line the first contact filed (%s) replaced by a fresh key of its type, the "+
 			"other lines left. %s. The play was refused (did not pass): %v; **%d TACACS+ packets**, **%d TACACS+ "+
 			"authentication starts**, records other than mint and blob: %v (the token was never presented if there are none).%s The file "+
-			"after the refused run: %s, added %s, gone %s. %s", ctlNote, sshType, strings.Join(replaced, ", "), quiet, refused, r.packets,
+			"after the run: %s, added %s, gone %s. %s", ctlNote, sshType, strings.Join(replaced, ", "), quiet, refused, r.packets,
 			r.starts, r.counts.Other, why, d.Mode, l66Shorts(d.Added), l66Shorts(d.Removed), r.summary(e.node))
 	})
 }

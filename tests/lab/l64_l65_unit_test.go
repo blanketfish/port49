@@ -3,11 +3,74 @@
 package lab
 
 import (
+	"context"
+	"errors"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestL64EndedReadsAnEndThatLeftAnOrphanAsAbnormal: a command that exits non-zero while a descendant still holds
+// its output pipes is not a normal end (review M8): Go's Wait returns the ExitError and drops ErrWaitDelay, so
+// the pipes' state is passed in.
+func TestL64EndedReadsAnEndThatLeftAnOrphanAsAbnormal(t *testing.T) {
+	exit3 := exec.Command("sh", "-c", "exit 3").Run()
+	var ee *exec.ExitError
+	if !errors.As(exit3, &ee) {
+		t.Fatalf("setup: %v", exit3)
+	}
+	boom := errors.New("fork failed")
+	cases := []struct {
+		name     string
+		wait     error
+		ctx      error
+		held     bool
+		wantExit int
+		wantErr  string // a substring, "" for none
+	}{
+		{"a clean end", nil, nil, false, 0, ""},
+		{"a non-zero exit", exit3, nil, false, 3, ""},
+		{"a clean exit that left an orphan", nil, nil, true, 0, "held its output"},
+		{"a non-zero exit that left an orphan", exit3, nil, true, 3, "held its output"},
+		{"another error passes through", boom, nil, false, 0, "fork failed"},
+		{"the deadline", exit3, context.DeadlineExceeded, false, -1, "deadline"},
+	}
+	for _, c := range cases {
+		exit, err := l64Ended(c.wait, c.ctx, c.held, "x")
+		if c.name != "the deadline" && exit != c.wantExit {
+			t.Errorf("%s: exit %d, want %d", c.name, exit, c.wantExit)
+		}
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("%s: error %v, want none", c.name, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("%s: error %v, want one naming %q", c.name, err, c.wantErr)
+		}
+	}
+	if _, err := l64Ended(exit3, context.DeadlineExceeded, false, "x"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the deadline's error does not wrap it: %v", err)
+	}
+}
+
+func TestL64RunSeesAnOrphanHoldingThePipes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	start := time.Now()
+	// The shell exits 3 at once; the sleep it left behind keeps the pipes open.
+	out, _, exit, err := l64RunGrace(ctx, 300*time.Millisecond, nil, t.TempDir(), "sh", "-c", "echo before; sleep 30 & exit 3")
+	if time.Since(start) > 10*time.Second {
+		t.Errorf("the orphan held the call for %s", time.Since(start))
+	}
+	if exit != 3 || err == nil || !strings.Contains(out, "before") {
+		t.Errorf("exit %d err %v out %q, want 3, an error and the output", exit, err, out)
+	}
+	out, _, exit, err = l64RunGrace(ctx, 300*time.Millisecond, nil, t.TempDir(), "sh", "-c", "echo fine; exit 3")
+	if exit != 3 || err != nil || !strings.Contains(out, "fine") {
+		t.Errorf("a plain non-zero exit: exit %d err %v out %q", exit, err, out)
+	}
+}
 
 // The fixtures are OpenSSH 10.2p1's wording, from
 // tests/ssh-compat/2026-10-13-openssh-accept-new.md: the Warning line of a

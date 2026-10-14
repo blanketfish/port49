@@ -413,7 +413,7 @@ func TestL66AnAbnormalPlayMakesItsCellInvalidWhateverItsGrader(t *testing.T) {
 	for _, kind := range []string{"claim", "refusal", "record"} {
 		for _, ok := range []bool{true, false} {
 			graded := l66Outcome(kind, ok, false, true, false)
-			got := l66Settle(graded, "", why, "")
+			got := l66Settle(graded, "", why, "", false)
 			if got != "INVALID" {
 				t.Errorf("%s ok=%v: graded %s, settled %s, want INVALID", kind, ok, graded, got)
 			}
@@ -425,21 +425,103 @@ func TestL66AnAbnormalPlayMakesItsCellInvalidWhateverItsGrader(t *testing.T) {
 }
 
 func TestL66SettleLetsInvalidAndFatalOutrankNotRun(t *testing.T) {
-	cases := []struct{ outcome, fatal, invalid, notRun, want string }{
-		{"PASS", "", "", "", "PASS"},
-		{"FAIL", "", "", "", "FAIL"},
-		{"FAIL", "", "", "no key", "NOT RUN (no key)"},
-		{"FAIL", "", "docker is down", "no key", "INVALID"},
-		{"PASS", "wrote the real file", "", "no key", "INVALID"},
-		{"INVALID", "", "", "", "INVALID"},
-		{"TIMEOUT", "", "", "y", "TIMEOUT"},
+	cases := []struct {
+		outcome, fatal, invalid, notRun string
+		unread                          bool
+		want                            string
+	}{
+		{"PASS", "", "", "", false, "PASS"},
+		{"FAIL", "", "", "", false, "FAIL"},
+		{"FAIL", "", "", "no key", false, "NOT RUN (no key)"},
+		{"FAIL", "", "docker is down", "no key", false, "INVALID"},
+		{"PASS", "wrote the real file", "", "no key", false, "INVALID"},
+		{"INVALID", "", "", "", false, "INVALID"},
+		{"TIMEOUT", "", "", "y", false, "TIMEOUT"},
 		// A cell whose budget ran out while a play ran: the play was ended at the deadline, so it measured nothing.
-		{"TIMEOUT", "", "ansible-playbook was ended at the cell's deadline", "", "INVALID"},
-		{"TIMEOUT", "wrote the real file", "", "", "INVALID"},
+		{"TIMEOUT", "", "ansible-playbook was ended at the cell's deadline", "", false, "INVALID"},
+		{"TIMEOUT", "wrote the real file", "", "", false, "INVALID"},
+		// A count that could not be read is INVALID alone (review M11, rr2 M2): it does not lose to NOT RUN.
+		{"INVALID", "", "", "no key", true, "INVALID"},
+		{"FAIL", "", "", "no key", true, "INVALID"},
+		{"FAIL", "", "", "", true, "INVALID"},
 	}
 	for _, c := range cases {
-		if got := l66Settle(c.outcome, c.fatal, c.invalid, c.notRun); got != c.want {
-			t.Errorf("l66Settle(%q, fatal=%q, invalid=%q, notRun=%q) = %q, want %q", c.outcome, c.fatal, c.invalid, c.notRun, got, c.want)
+		if got := l66Settle(c.outcome, c.fatal, c.invalid, c.notRun, c.unread); got != c.want {
+			t.Errorf("l66Settle(%q, fatal=%q, invalid=%q, notRun=%q, unread=%v) = %q, want %q", c.outcome, c.fatal, c.invalid,
+				c.notRun, c.unread, got, c.want)
+		}
+	}
+}
+
+// TestL66AFirstContactThatEndedAbnormallyNeverMeasuredNoFile: a play that passed and redeemed but did not end on
+// its own (it was killed, or printed no recap) says nothing about whether the client files a key (review M7).
+func TestL66AFirstContactThatEndedAbnormallyNeverMeasuredNoFile(t *testing.T) {
+	cases := []struct {
+		name           string
+		passed         bool
+		redeems, added int
+		end            string
+		want           bool
+	}{
+		{"passed, redeemed, filed nothing", true, 1, 0, "", true},
+		{"filed a line", true, 1, 1, "", false},
+		{"no redeem", true, 0, 0, "", false},
+		{"did not pass", false, 1, 0, "", false},
+		{"ended abnormally", true, 1, 0, "the play L66c-libssh was killed by a signal (exit -1), so it measured nothing", false},
+	}
+	for _, c := range cases {
+		if got := l66NoFile(c.passed, c.redeems, c.added, c.end); got != c.want {
+			t.Errorf("%s: l66NoFile = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestL66AFirstContactPlayThatDiedBeforeConnectingIsInvalidNotFail: a claim cell whose play ran no task, or
+// whose mint was not permitted, never reached the device, so FAIL would blame the client (review M10).
+func TestL66AFirstContactPlayThatDiedBeforeConnectingIsInvalidNotFail(t *testing.T) {
+	cases := []struct {
+		name                       string
+		recapOK, mints, mintDenies int
+		wantWhy                    bool
+	}{
+		{"ran, minted", 2, 1, 0, false},
+		{"ran, minted, one denied too", 2, 2, 1, false},
+		{"no task succeeded", 0, 1, 0, true},
+		{"no mint record", 2, 0, 0, true},
+		{"every mint denied", 2, 1, 1, true},
+		{"nothing at all", 0, 0, 0, true},
+	}
+	for _, c := range cases {
+		got := l66FirstContactNeverConnected(c.recapOK, c.mints, c.mintDenies)
+		if (got != "") != c.wantWhy {
+			t.Errorf("%s: l66FirstContactNeverConnected = %q, want a reason: %v", c.name, got, c.wantWhy)
+		}
+	}
+}
+
+// TestL66RedeemsOfMintedCountsOnlyTokensTheWindowMinted: c2's FAIL text says each redeem carries the hash of a
+// token this run minted, so the count must be that (review M11, rr2 M1).
+func TestL66RedeemsOfMintedCountsOnlyTokensTheWindowMinted(t *testing.T) {
+	mint := func(h string) map[string]any {
+		return map[string]any{"event": "mint", "mint": map[string]any{"token_sha256": []any{h}}}
+	}
+	redeem := func(h string) map[string]any {
+		return map[string]any{"event": "redeem", "auth": map[string]any{"credential_sha256": h}}
+	}
+	cases := []struct {
+		name string
+		recs []map[string]any
+		want int
+	}{
+		{"none", nil, 0},
+		{"a redeem of a minted token", []map[string]any{mint("aa"), redeem("aa")}, 1},
+		{"a redeem of another token", []map[string]any{mint("aa"), redeem("bb")}, 0},
+		{"two of three", []map[string]any{mint("aa"), mint("bb"), redeem("aa"), redeem("bb"), redeem("cc")}, 2},
+		{"a redeem with no mint in the window", []map[string]any{redeem("aa")}, 0},
+	}
+	for _, c := range cases {
+		if got := l66RedeemsOfMinted(c.recs); got != c.want {
+			t.Errorf("%s: l66RedeemsOfMinted = %d, want %d", c.name, got, c.want)
 		}
 	}
 }

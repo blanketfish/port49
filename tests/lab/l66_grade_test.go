@@ -341,12 +341,52 @@ func l66PlayEnd(name string, exit int, err error, recapHosts int) string {
 	return ""
 }
 
+// l66NoFile is whether a first-contact play measured a client that logs in and files no key line: it passed,
+// a login reached port49d, nothing was added to the file, and the play ended on its own (end is
+// l66PlayEnd's reading, "" for a normal end).
+func l66NoFile(passed bool, redeems, added int, end string) bool {
+	return passed && redeems > 0 && added == 0 && end == ""
+}
+
+// l66FirstContactNeverConnected says why a first-contact play never reached the device, or "" when it did:
+// no task of the play succeeded, or the mint was not permitted. Such a play says nothing about the client's
+// handling of the key, so the cell is INVALID and not a FAIL.
+func l66FirstContactNeverConnected(recapOK, mints, mintDenies int) string {
+	switch {
+	case recapOK == 0:
+		return "no task of the first-contact play succeeded, so it never reached the device"
+	case mints-mintDenies <= 0:
+		return "the first-contact play's window holds no permitted mint record, so no token was minted to present"
+	}
+	return ""
+}
+
+// l66RedeemsOfMinted counts the window's redeem records whose credential_sha256 is the token_sha256 of a mint
+// record in the same window: a login with a token this run minted.
+func l66RedeemsOfMinted(recs []map[string]any) int {
+	minted := map[string]bool{}
+	for _, r := range recs {
+		if str(r, "event") == "mint" {
+			for _, s := range strs(sub(r, "mint"), "token_sha256") {
+				minted[s] = true
+			}
+		}
+	}
+	n := 0
+	for _, r := range recs {
+		if str(r, "event") == "redeem" && minted[str(sub(r, "auth"), "credential_sha256")] {
+			n++
+		}
+	}
+	return n
+}
+
 // l66Settle decides a cell's final outcome. A fatal or an invalid set during the cell comes before NOT RUN and
 // before TIMEOUT: a cell that could not measure must not read as one that was blocked, and a cell whose budget
 // ran out while a play ran had that play ended at the deadline (l66PlayEnd).
-func l66Settle(outcome, fatal, invalid, notRun string) string {
+func l66Settle(outcome, fatal, invalid, notRun string, unread bool) string {
 	switch {
-	case fatal != "" || invalid != "":
+	case fatal != "" || invalid != "" || unread:
 		return "INVALID"
 	case outcome == "TIMEOUT":
 		return outcome
