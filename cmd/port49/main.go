@@ -42,11 +42,14 @@ import (
 
 const usage = `usage:
   port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--touch-key REF] [--cert FILE --key FILE |
-               --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in]]
+               --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in] |
+               --directory [--name NAME] [--sign-in]]
                (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
                each of whose keys overrides /etc/port49/config.yaml's; --oidc signs in at your identity
                provider and holds the certificate the broker issues, signing in again when it has under a
-               quarter of its life left, or with --sign-in)
+               quarter of its life left, or with --sign-in; --directory asks your directory name, password
+               and authenticator code at the terminal, enrolling the authenticator on first use, and holds
+               the certificate the broker issues in the same way)
   port49 login [--config FILE] [--broker URL] --delete-key
                (issued_key_store: secure_enclave: deletes this Mac's Secure Enclave keys for the broker and
                the certificate held for them, after asking; the next login makes one key)
@@ -219,6 +222,10 @@ type sessionFlags struct {
 	oidc, noBrowser, signIn bool
 	issuer, oidcCA          string
 	redirectPort            int
+	// The directory-password path (plan 9e; decision 47): signInName is the
+	// name the directory knows the person by, offered at the name prompt.
+	directory  bool
+	signInName string
 	// oidcCAPEM is oidc_ca's bytes, read by userconfig.Load through its walk.
 	oidcCAPEM []byte
 	// brokerCRL is broker_crl: check (the default), require or off (plan 9c,
@@ -303,6 +310,10 @@ const maxBrokerCA = 1 << 20
 func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&s.oidc, "oidc", false, "sign in at the identity provider the broker lists, and hold the certificate "+
 		"the broker issues, in place of your own")
+	fs.BoolVar(&s.directory, "directory", false, "sign in with your directory password and authenticator code, and hold "+
+		"the certificate the broker issues, in place of your own")
+	fs.StringVar(&s.signInName, "name", "", "with --directory: the name your directory knows you by "+
+		"(sign_in_name in the config file); the login user's otherwise")
 	fs.StringVar(&s.issuer, "issuer", "", "with --oidc: which provider, when the broker lists several")
 	fs.StringVar(&s.oidcCA, "oidc-ca", "", "with --oidc: the CA that issued your identity provider's certificate "+
 		"(PEM); the system's roots otherwise")
@@ -356,9 +367,10 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 	}
 	s.broker = cmp.Or(s.broker, f.Broker)
 	s.cert, s.key = cmp.Or(s.cert, f.Cert), cmp.Or(s.key, f.Key)
-	if !set["oidc"] && !set["cert"] && !set["key"] {
-		s.oidc = f.Method == "oidc"
+	if !set["oidc"] && !set["directory"] && !set["cert"] && !set["key"] {
+		s.oidc, s.directory = f.Method == "oidc", f.Method == "directory"
 	}
+	s.signInName = cmp.Or(s.signInName, f.SignInName)
 	s.issuer = cmp.Or(s.issuer, f.OIDCIssuer)
 	s.brokerCRL = cmp.Or(s.brokerCRL, f.BrokerCRL)
 	s.touchKey = cmp.Or(s.touchKey, f.TouchKey)
@@ -379,7 +391,7 @@ func (s *sessionFlags) fill(fs *flag.FlagSet) error {
 // complete only for the agent child, which the login has handed all of it
 // (it is the one given --broker-ca-fd).
 func (s *sessionFlags) complete() bool {
-	return !s.oidc && s.broker != "" &&
+	return !s.oidc && !s.directory && s.broker != "" &&
 		(s.cert != "" || (strings.HasPrefix(s.key, "pkcs11:") && s.brokerCAFD != 0)) && s.key != "" &&
 		s.brokerCA != "" && s.brokerCRL != ""
 }
@@ -537,9 +549,18 @@ func login(args []string, stdout, stderr io.Writer) int {
 		}
 		return deleteSecureEnclaveKey(&sf, stdout, stderr)
 	}
+	if sf.oidc && sf.directory {
+		fmt.Fprintln(stderr, "port49 login: --directory and --oidc are two logins; name one")
+		return 2
+	}
 	if sf.oidc && (set["cert"] || set["key"]) {
 		fmt.Fprintln(stderr, "port49 login: --cert and --key are a certificate login's; --oidc signs in at your "+
 			"identity provider instead")
+		return 2
+	}
+	if sf.directory && (set["cert"] || set["key"]) {
+		fmt.Fprintln(stderr, "port49 login: --cert and --key are a certificate login's; --directory signs in with "+
+			"your directory password instead")
 		return 2
 	}
 	if err := sf.fill(fs); err != nil {
@@ -550,7 +571,18 @@ func login(args []string, stdout, stderr io.Writer) int {
 	// held back for low tries; one without refuses (re-review N1).
 	clientkey.AskWhenTriesLow = loginStdinIsTerminal
 	defer func() { clientkey.AskWhenTriesLow = func() bool { return false } }()
-	if sf.oidc {
+	if sf.directory {
+		for _, name := range []string{"issuer", "oidc-ca", "redirect-port", "no-browser"} {
+			if set[name] {
+				fmt.Fprintf(stderr, "port49 login: --%s is --oidc's, not --directory's\n", name)
+				return 2
+			}
+		}
+	} else if set["name"] {
+		fmt.Fprintf(stderr, "port49 login: --name is --directory's (or method: directory in %s)\n", sf.configFile)
+		return 2
+	}
+	if sf.oidc || sf.directory {
 		return loginIssued(&sf, stdout, stderr)
 	}
 	for _, name := range []string{"issuer", "oidc-ca", "redirect-port", "no-browser", "sign-in"} {
