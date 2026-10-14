@@ -137,10 +137,15 @@ Refused, with the setting named, and never filed past:
 | `host_key_revoked` | An `@revoked` line or `RevokedHostKeys` names the key, filed beside your entry or presented at first contact. |
 | `host_key_unknown`, `host_key_changed` | As above. |
 
-The returned connection keeps the filed key(s) in memory: a reconnect or an SCP transfer on it loads
-them into the new Paramiko client (so the filed key type is negotiated), looks the files up again
-(a key revoked or removed since is not loaded, and with none left nothing connects), and refuses any
-other key before authenticating (Paramiko's own `BadHostKeyException` for a different key of a held type). Initially Paramiko compares
+Only the host-key types filed under the name are negotiated, on the first connect and on every
+rebuild (so OpenSSH 8.8 and later, which do not offer `ssh-rsa`, still present the filed RSA key).
+
+The returned connection keeps the key its connect accepted, in memory. A reconnect
+(`establish_connection()`) or an SCP transfer on it loads that key into the new Paramiko client,
+looks the files up again (a key revoked or removed since is not loaded, and with none left nothing
+connects), and refuses any other key before authenticating. Every such refusal is
+`HostKeyError` with code `host_key_changed` (or `host_key_revoked`), never Netmiko's
+`NetmikoTimeoutException` and never Paramiko's `BadHostKeyException`. Initially Paramiko compares
 against the first key of the presented type, so after a rotation that appended a second key of one
 type, `connect` can refuse with `host_key_changed` until the old line is removed.
 

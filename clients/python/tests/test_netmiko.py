@@ -31,6 +31,7 @@ class FakeConnection:
         captured.update(kw)
         self.kw = kw
         self.alt_host_keys, self.alt_key_file = kw["alt_host_keys"], kw["alt_key_file"]
+        self.disabled_algorithms = dict(kw.get("disabled_algorithms") or {"pubkeys": ["rsa-sha2-256"]})
         self.key_policy = "RejectPolicy" if kw["ssh_strict"] else "AutoAddPolicy"
         if not kw.get("auto_connect", True):
             return
@@ -62,9 +63,13 @@ class FakeConnection:
             captured["known_hosts"] = f.read()
         captured["mode"] = stat.S_IMODE(os.stat(self.kw["alt_key_file"]).st_mode)
         captured["policy"] = self.key_policy
+        captured["disabled"] = {k: list(v) for k, v in self.disabled_algorithms.items()}
         if NEXT_ERROR:
             raise NEXT_ERROR.pop()
         key = types.SimpleNamespace(get_name=lambda: PRESENTED[0], get_base64=lambda: PRESENTED[1])
+        # Paramiko: the key the connection accepted
+        self.remote_conn_pre = types.SimpleNamespace(
+            get_transport=lambda: types.SimpleNamespace(get_remote_server_key=lambda: key))
         if not captured["known_hosts"]:
             # Paramiko: no key held for the address, so the policy is asked, after the key exchange
             # and before authentication.
@@ -222,12 +227,60 @@ class NetmikoTest(unittest.TestCase):
         with self.assertRaises(HostKeyError):
             conn.reconnect(self.OTHER)
 
-    def test_the_pin_accepts_any_filed_key_of_the_name(self):  # M1
+    def test_the_pin_is_the_key_the_connect_accepted(self):  # M1, fix round 3: not every filed key
         conn, _ = self.connect(known("ssh-ed25519 AAAA1", " ".join(PRESENTED)))
         conn.reconnect(PRESENTED)
-        conn.reconnect(("ssh-ed25519", "AAAA1"))
         with self.assertRaises(HostKeyError):
-            conn.reconnect(self.OTHER)
+            conn.reconnect(("ssh-ed25519", "AAAA1"))  # filed, but not what the device presented
+
+    # Fix round 3.
+
+    def test_only_the_filed_key_types_are_negotiated(self):  # N1: OpenSSH 8.8+ does not offer ssh-rsa
+        self.connect(known("ssh-rsa QUJD"))
+        off = set(captured["disabled"]["keys"])
+        self.assertEqual(off, {"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+                               "ssh-dss"})  # RSA filed: rsa-sha2-512, rsa-sha2-256 and ssh-rsa stay
+        self.assertEqual(captured["disabled"]["pubkeys"], ["rsa-sha2-256"])  # Netmiko's own entry is kept
+        self.connect(known("ssh-ed25519 QUJD", "ecdsa-sha2-nistp256 QUJD"))
+        self.assertEqual(set(captured["disabled"]["keys"]), {"ssh-rsa", "rsa-sha2-512", "rsa-sha2-256",
+                                                             "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+                                                             "ssh-dss"})
+        self.connect(known("ssh-rsa QUJD"), disabled_algorithms={"keys": ["ssh-dss", "x-callers"]})
+        self.assertIn("x-callers", captured["disabled"]["keys"])  # the caller's own list is merged
+        self.connect(known())  # a first contact: nothing is filed, so nothing is narrowed
+        self.assertNotIn("keys", captured["disabled"])
+
+    def test_a_rebuilt_clients_host_key_mismatch_is_a_host_key_error(self):  # remap
+        conn, _ = self.connect(known(" ".join(PRESENTED)))
+
+        class Client:
+            def __init__(self, err):
+                self.err = err
+
+            def get_host_keys(self):
+                return types.SimpleNamespace(add=lambda *a: None)
+
+            def connect(self, *a, **k):
+                raise self.err
+
+        class PKey:
+            @staticmethod
+            def from_type_string(keytype, blob):
+                return (keytype, blob)
+
+        errors = (BadHostKeyException("Host key for server '10.0.0.11' does not match: got 'a', expected 'b'"),
+                  Exception("Incompatible ssh peer (no acceptable host key)"))
+        for err in errors:
+            CLIENT["c"] = Client(err)
+            with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
+                client = conn._build_ssh_client()
+                with self.assertRaises(HostKeyError) as cm:
+                    client.connect("10.0.0.11")
+            self.assertEqual(cm.exception.code, "host_key_changed", str(err))
+        CLIENT["c"] = Client(OSError("unreachable"))  # anything else passes through unchanged
+        with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
+            with self.assertRaises(OSError):
+                conn._build_ssh_client().connect("10.0.0.11")
 
     def test_a_key_type_paramiko_cannot_load_is_not_a_changed_key(self):  # M2
         NEXT_ERROR.append(Exception("Server '10.0.0.11' not found in known_hosts"))
@@ -274,7 +327,7 @@ class NetmikoTest(unittest.TestCase):
         self.assertIn(("[10.0.0.11]:2222", "ssh-rsa", ("key", "ssh-rsa", b"ABC")), added)
 
     def test_connect_wraps_the_clients_rebuild(self):  # N1
-        conn, _ = self.connect(known("ssh-ed25519 QUJD"))
+        conn, _ = self.connect(known(" ".join(PRESENTED)))
         built = []
 
         class Client:
@@ -292,7 +345,7 @@ class NetmikoTest(unittest.TestCase):
         self.assertEqual(len(built), 1)
         self.assertEqual(built[0][0], "10.0.0.11")
         # a key revoked since: nothing is built that can connect
-        self.lookup.return_value = known(revoked=("ssh-ed25519 QUJD",))
+        self.lookup.return_value = known(revoked=(" ".join(PRESENTED),))
         with mock.patch.dict(sys.modules, {"paramiko": types.SimpleNamespace(PKey=PKey)}):
             with self.assertRaises(HostKeyError) as cm:
                 conn._build_ssh_client()

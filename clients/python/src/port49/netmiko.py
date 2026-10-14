@@ -120,10 +120,62 @@ def is_host_key_failure(exc):
         seen.add(id(exc))
         text = str(exc)
         if type(exc).__name__ == "BadHostKeyException" or ("Host key for server" in text and "does not match" in text) \
-                or "not found in known_hosts" in text:
+                or "not found in known_hosts" in text or "no acceptable host key" in text:
             return True
         exc = exc.__cause__ or exc.__context__
     return False
+
+
+# Every host-key algorithm Paramiko 4 offers, and the one key type each belongs to.
+_HOST_KEY_ALGORITHMS = {"ssh-ed25519": "ssh-ed25519", "ecdsa-sha2-nistp256": "ecdsa-sha2-nistp256",
+                        "ecdsa-sha2-nistp384": "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521": "ecdsa-sha2-nistp521",
+                        "rsa-sha2-512": "ssh-rsa", "rsa-sha2-256": "ssh-rsa", "ssh-rsa": "ssh-rsa",
+                        "ssh-dss": "ssh-dss"}
+
+
+def host_key_algorithms_off(keys):
+    """The host-key algorithms to disable so that only the key types filed in keys ("type base64") are
+    negotiated (fix round 3, N1). Paramiko puts a held key's name first in its list, and for RSA that is
+    ssh-rsa, which OpenSSH 8.8 and later do not offer: the server then settles on ed25519, which is not the filed
+    type, and the connection is refused although the device is the right one. ssh-rsa filed allows all three
+    RSA algorithms. Nothing is disabled when no filed type is one Paramiko offers."""
+    filed = {k.split(" ", 1)[0] for k in keys}
+    off = sorted(a for a, t in _HOST_KEY_ALGORITHMS.items() if t not in filed)
+    return off if len(off) < len(_HOST_KEY_ALGORITHMS) else []
+
+
+def _pin(conn, kh, accepted, device, field, refresh):
+    """From here on every client conn builds (a reconnect, SCP) takes the key conn's connect accepted, and
+    nothing else: the temp known_hosts goes, the pinned key is loaded into the new client (so the filed key type
+    is the one negotiated), the files are read again (a key revoked or removed since is not loaded; with none
+    left nothing connects), and a host-key mismatch is a HostKeyError, which Netmiko lets through, not the
+    timeout it reports an SSHException as, or Paramiko's own exception (fix rounds 1 to 3)."""
+    conn.alt_host_keys, conn.alt_key_file = False, ""
+    pin = conn.key_policy = Pinned(accepted, kh.name, device, refresh=refresh)
+    build = conn._build_ssh_client
+
+    def rebuild():
+        client = build()
+        _load_pinned(client, field, pin.current())
+        inner = getattr(client, "connect", None)
+        if inner is not None:
+            def connect_(*args, **kwargs):
+                try:
+                    return inner(*args, **kwargs)
+                except Exception as e:
+                    if isinstance(e, HostKeyError) or not is_host_key_failure(e):
+                        raise
+                    raise HostKeyError("host_key_changed", _CHANGED.format(name=kh.name, address=field),
+                                       device) from None
+            client.connect = connect_
+        return client
+
+    conn._build_ssh_client = rebuild
+    return pin
+
+
+_CHANGED = ("the key {address} presents is not the one filed under {name}: either the device's key changed, or "
+            "the address is not the device. Verify the key on its console, then run 'ssh-keygen -R {name}'")
 
 
 def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwargs):
@@ -165,6 +217,12 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
                               ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
                               alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
                               **netmiko_kwargs)
+        if kh.keys:
+            # Only the filed key types are negotiated, on this connect and on every rebuild (Netmiko passes
+            # disabled_algorithms to each); the caller's own entries are kept.
+            disabled = dict(getattr(conn, "disabled_algorithms", None) or {})
+            disabled["keys"] = sorted(set(disabled.get("keys") or ()) | set(host_key_algorithms_off(kh.keys)))
+            conn.disabled_algorithms = disabled
         first = None
         if not kh.keys:
             # A first contact: the presented key is checked and filed before authentication, not after
@@ -174,21 +232,15 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             conn._open()  # what auto_connect=True runs: the connection, then the session's preparation
             # Every later connection of conn (a reconnect, SCP) takes the filed key only, from memory: the
             # temp file goes, and nothing may name it (fix round 1, C1).
-            pinned = set(kh.keys) or ({first.filed} if first and first.filed else set())
-            conn.alt_host_keys, conn.alt_key_file = False, ""
-            pin = conn.key_policy = Pinned(pinned, kh.name, device, refresh=lambda: hostkeys.lookup(
+            # The key the connect accepted, not every key filed (a rotation can leave two of one type).
+            accepted = set(kh.keys) or ({first.filed} if first and first.filed else set())
+            try:
+                key = conn.remote_conn_pre.get_transport().get_remote_server_key()
+                accepted = {f"{key.get_name()} {key.get_base64()}"}
+            except Exception:
+                pass
+            _pin(conn, kh, accepted, device, field, lambda: hostkeys.lookup(
                 device, tok.address, port=port, username=tok.username, ssh_config=ssh_config))
-            build = conn._build_ssh_client
-
-            def rebuild():
-                # Netmiko builds a client here for a reconnect and for SCP. The pinned keys that are still
-                # filed and unrevoked are loaded into it, so Paramiko negotiates the filed key type and
-                # compares the key; with none left it does not connect at all.
-                client = build()
-                _load_pinned(client, field, pin.current())
-                return client
-
-            conn._build_ssh_client = rebuild
         except BaseException as e:
             try:
                 conn.disconnect()

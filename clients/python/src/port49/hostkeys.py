@@ -188,7 +188,7 @@ def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh
     # Nor does Paramiko bind a source address or interface: on a host with a VRF per site, the default route
     # can reach another site's address (fix round 2, N2).
     for setting, label in (("bindinterface", "BindInterface"), ("bindaddress", "BindAddress")):
-        if conf.get(setting, "none") not in ("none", ""):
+        if conf.get(setting, ""):  # a literal "none" is bound as a name, and ssh fails to connect (10.2p1)
             raise HostKeyError("host_key_uncheckable", f"your ssh_config sets {label} for {device}, which this "
                                f"client cannot honour, so the address could be reached over another route than ssh "
                                f"takes: use port49 ssh for this device", device)

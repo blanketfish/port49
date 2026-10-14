@@ -324,7 +324,9 @@ class HostKeysTest(unittest.TestCase):
             e = self.refused("host_key_uncheckable", name, "leaf1", "10.0.0.11", ssh_config=self.config(setting))
             self.assertIn("port49 ssh", str(e))
             self.assertNotIn("ssh-keygen -R", str(e))
-        hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("BindInterface none"))
+        # ssh binds a literal "none" and fails to connect (10.2p1), so it is refused as well
+        for setting, name in (("BindAddress none", "BindAddress"), ("BindInterface none", "BindInterface")):
+            self.refused("host_key_uncheckable", name, "leaf1", "10.0.0.11", ssh_config=self.config(setting))
 
     def test_remember_is_rechecked_with_the_given_ssh_keygen(self):  # N4
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
