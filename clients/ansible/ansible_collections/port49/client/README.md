@@ -33,6 +33,7 @@ ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
     ansible_user: "{{ port49.username | default(omit) }}"
     ansible_password: "{{ port49.login | default(omit) }}"
     ansible_become_password: "{{ port49.enable | default(omit) }}"
+    ansible_look_for_keys: false
   tasks:
     - arista.eos.eos_facts:
 ```
@@ -46,16 +47,32 @@ lived; each call of the lookup is a mint.
   `Error processing keyword 'remote_user': 'port49' is undefined` (or `'password'`,
   `'become_pass'`; measured on 2.21.4, and the collection's real-ansible test runs this play). The `omit` lasts only until the `set_fact`: a
   host whose mint fails stops there, so no task connects without the token.
-- **Never put the lookup itself in `ansible_password`.** Ansible templates a connection variable at
-  every task, so the lookup would mint at each one (lab entry L66 (a) is to measure how many
-  logins a play makes). Mint in a `set_fact` and point `ansible_password` at the fact.
+- **Keep `gather_facts: false`, and make the mint the first `pre_tasks` entry.** Anything that
+  connects before the mint connects without the token: fact gathering would log in as you, with
+  your own credentials. **`ansible_look_for_keys: false`** stops `network_cli` offering your own
+  ssh keys ahead of the token.
+- **Never put the lookup itself in `ansible_password`.** Ansible templates connection variables
+  many times per task. Measured on EOS, NX-OS, IOS-XE, vJunos-router and vSRX (L66 (a),
+  `tests/lab/results/L66-<platform>.md`): with the lookup in `ansible_password` and `ansible_user`,
+  a ten-task play minted 10 tokens for its first 2 tasks. The ninth unspent token was refused
+  `candidate_cap_reached` (port49's `token.candidate_cap`, 8 by default), and the play failed at
+  task 2. Mint once in a `set_fact` and point `ansible_password` at the fact: the same play then
+  minted once and logged in once for all ten tasks.
 - **Never `cacheable: true` on the mint.** It writes the token to the fact-cache backend (a
   jsonfile, or Redis in a real deployment).
-- **A reconnect needs a new mint.** The token is single-use for a login. `network_cli` closes an
-  idle persistent connection (`persistent_connect_timeout`, 30 s by default), and
-  `meta: reset_connection` or a reboot closes it too; the next task would log in again with the
-  spent token and fail with an authentication error that points nowhere near port49. Mint again
-  (a second `set_fact`) before a long gap. Unmeasured; L66 (b) is to measure a play with an idle gap.
+- **A reconnect reuses the spent token, and that works only inside the receipt's window.**
+  `network_cli` closes an idle persistent connection (`persistent_connect_timeout`, 30 s by
+  default), and `meta: reset_connection` closes it too. The next task logs in again with the same
+  token. Measured on all five lab platforms (L66 (b2)): both an idle gap and a `reset_connection` led to a
+  second login, which port49 answered PASS `receipt_replayed` from the stored decision. That holds
+  within `receipt_idle_ttl` (15 m by default) of the last use and `receipt_max_age` (2 h) of the
+  first. Past either, the login fails `token_spent`, and the device reports an authentication
+  error that points nowhere near port49. Mint again (a second `set_fact`) before a gap that long.
+- **Never enable `persistent_log_messages`** (`ANSIBLE_PERSISTENT_LOG_MESSAGES`). The persistent
+  socket carries the connection's options, password included, to the connection process, and
+  with this setting the log file records them. Measured on all five lab platforms (L66 (d)): the token is
+  in that log in the clear. Ansible prints a warning saying so; believe it. `-vvv` and `-vvvv`
+  output held no token.
 - **`no_log: true` on the mint.** The fact holds the token. With `no_log`, `-v`, `-vvv` and
   `-vvvvv` print `censored` for the task and nothing else (the collection's real-ansible test
   runs all four and searches the output for the token).
@@ -111,37 +128,51 @@ way to mark one value secret, so `no_log` on every task that templates the token
 
 ## Host keys
 
-Everything in this section is provisional on lab entry L66; Task 12 completes it from the
-measurements.
+port49 stores no host key. Ansible keeps them its own way. What follows was measured with
+ansible-core 2.21.4, ansible.netcommon 8.7.1, ansible-pylibssh 1.4.0 (libssh 0.12.0) and
+paramiko 5.0.0. Each platform gave the same reading: EOS, NX-OS, IOS-XE, vJunos-router and vSRX (lab entry
+L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not the device's.
 
-port49 stores no host key. Ansible keeps them its own way, and the two ways differ.
+- **`network_cli` keys a host by `ansible_host`, the address in Ansible's inventory, not by the
+  port49 name.** Both ssh types filed the first contact under the address. `ansible_libssh_config_file`
+  naming an ssh_config with `HostKeyAlias` is not honoured: the key still went under the
+  address. So an address changed for a device in the source of truth (a dynamic inventory built
+  from it, the usual case) is a first contact for Ansible. Measured (L66 (e)): with
+  `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at the new address
+  and presented it the token. Design section 17's attack is open on this path, as it is not for
+  `port49 ssh`. What flags it is the sync diff's address-change security event (spec section 10).
+- **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
+  the first contact and kept the file's comments and `@revoked` and `@cert-authority` lines. But
+  given a changed key for a host it knew, **it accepted the new key, logged in and presented the
+  token** (L66 (c)). How libssh treats a changed key without `host_key_auto_add` is not measured.
+- **`paramiko` with `host_key_auto_add` refused a changed key before authentication.** No TACACS+
+  exchange happened and the token was never presented. It has two costs:
+  - **It refuses a known_hosts file that holds an `@revoked` or `@cert-authority` line**
+    (`InvalidHostKey`), so the play fails before connecting. That fails loudly and closed, but it
+    means `port49 ssh`'s revocation lines and Paramiko cannot share a file.
+  - **On a first contact it rewrites the file** and drops every comment.
 
-- **The connection keys a host by `ansible_host`, the address in Ansible's inventory, not by the
-  port49 name.** `network_cli` does this on any ssh type. So an address added to a device in the
-  source of truth (a dynamic inventory built from it, the usual case) is a first contact for
-  Ansible, and under `host_key_auto_add` a host at that address is accepted and given the token.
-  Design section 17's attack is open on this path, as it is not for `port49 ssh`. What flags it:
-  the sync diff's address-change security event (spec section 10). Whether the collection closes
-  the gap itself (for the Paramiko path) is undecided and waits on L66 (e).
+  Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact,
+  including an address changed in the inventory, is still accepted.
 - **Where the connection runs OpenSSH** (`ansible.builtin.ssh`), set
 
   ```yaml
   ansible_ssh_extra_args: "-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new"
   ```
 
-  which files keys under the port49 name, as `port49 ssh` and the Python client do (the name is
-  lowercased, as they lowercase it), and is expected to close the gap there. Without
-  `accept-new`, a first contact is `Host key verification failed.` (measured against a local
-  sshd: with the alias and accept-new, keys filed under the name and a changed key refused).
+  This files keys under the port49 name, as `port49 ssh` and the Python client do (the name is
+  lowercased, as they lowercase it). Measured (L66 (e)): with the alias, an address moved to
+  another host was refused, and the token was never presented to it. This is the measured path that
+  closes the gap. Without `accept-new`, a first contact is `Host key verification failed.`
   **Do not set `host_key_checking = False`**: Ansible then passes `StrictHostKeyChecking=no`
   ahead of your extra args, which overrides `accept-new`. OpenSSH still withholds a password from
-  a host whose key changed, but a first contact is accepted unchecked. One caveat, unmeasured
-  (L66 (e)): `ansible.builtin.ssh` keys its ControlPath on address, port and user, so a second
-  inventory name at an address with an open master reuses the master and its alias is never checked.
-- **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: paramiko`.** Its close
-  rewrites `~/.ssh/known_hosts` from Paramiko's parse, which drops `@revoked` and
-  `@cert-authority` lines and comments, and so silently weakens every later `port49 ssh` and Python
-  login. Use the path that leaves the file intact (`libssh`, which appends).
+  a host whose key changed, but a first contact is accepted unchecked.
+  - **One inventory name per address.** `ansible.builtin.ssh` keys its ControlPath on address,
+    port and user. Measured (L66 (e2)): a second inventory name at the same address reused the
+    first name's open master, and its own `HostKeyAlias` was never looked up.
+  - **For `raw` against Junos, also set `ansible_ssh_use_tty: false`.** The plugin runs `raw`
+    with `ssh -tt`. The Junos CLI ran the command at once, then held the session open until the
+    play was killed.
 - **A re-keyed device has two entries**: the name (`port49 ssh`, Python, `ansible.builtin.ssh` with
   the alias) and the address (`network_cli`). Remove both with `ssh-keygen -R`:
 
