@@ -363,8 +363,9 @@ func checkPasswordSignIn(at string, v identityVerifierYAML) (*oidc.PasswordSignI
 // certificate_lifetime is 12h by default, 1h to 24h.
 func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVerifierYAML, password bool) (*oidc.Issuance, error) {
 	if !password && !slices.ContainsFunc(vs, func(v oidc.VerifierConfig) bool { return v.Domain == oidc.Humans }) {
-		return nil, errors.New("config: broker.identity.issuance: a certificate is issued over an OIDC sign-in, so " +
-			"list a human oidc verifier under broker.identity.humans (or a directory_password one)")
+		return nil, errors.New("config: broker.identity.issuance: a certificate is issued over a sign-in, an OIDC " +
+			"one or a directory password: list a human oidc or directory_password verifier under " +
+			"broker.identity.humans")
 	}
 	for i, h := range humans {
 		if h.Type != "oidc" {

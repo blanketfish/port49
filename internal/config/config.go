@@ -994,7 +994,9 @@ func load(path string, role Role) (Config, error) {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	if c.Broker != nil {
-		resolveEnrollmentStore(c.Broker, c.Store)
+		if err := resolveEnrollmentStore(c.Broker, c.Store); err != nil {
+			return Config{}, err
+		}
 	}
 	if role == RoleDaemon && c.Store.Backend == BackendEtcd && c.Lab != nil && len(c.Lab.SeedTokens) > 0 {
 		return Config{}, errors.New("config: lab.seed_tokens: lab seed tokens are minted by port49-broker on etcd; " +

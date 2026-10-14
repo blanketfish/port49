@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -394,7 +395,10 @@ func checkEnrollmentStore(y enrollmentStoreYAML) (directory.EnrollmentStore, err
 				"by client certificate (decision 35)", p, i)
 		}
 	}
-	prefix := or(e.Prefix, "/port49/")
+	// Not store.etcd's /port49/: the broker's role on that prefix reaches
+	// every key under it, so a cluster holding both would give the
+	// enrollment identity the tokens too (D12).
+	prefix := or(e.Prefix, "/port49-enrollments/")
 	if !strings.HasPrefix(prefix, "/") {
 		return directory.EnrollmentStore{}, fmt.Errorf("config: %s.etcd.prefix %q: must start with /", p, prefix)
 	}
@@ -431,18 +435,47 @@ func checkEnrollmentStore(y enrollmentStoreYAML) (directory.EnrollmentStore, err
 // enrollment_store, the shape of store: (memory, or etcd with store.etcd and
 // the broker's identity), and on memory the sealed file in the broker's state
 // directory (plan 9e, D7 and D12). It does nothing without a directory_password
-// verifier.
-func resolveEnrollmentStore(b *BrokerConfig, s StoreConfig) {
+// verifier. It refuses two shapes that look like a choice and are not:
+// memory beside an etcd store:, where port49-broker runs as replicas and each
+// would keep its own enrollments (a code taken at one is fresh at another, and
+// a person enrolled at one may enroll again at another, with the password
+// alone); and an etcd of its own that shares an endpoint with store.etcd under
+// a prefix that nests with it, where the broker's role reaches both.
+func resolveEnrollmentStore(b *BrokerConfig, s StoreConfig) error {
 	if b.Directory == nil || b.Identity == nil || b.Identity.PasswordSignIn == nil {
-		return
+		return nil
 	}
 	es := &b.Directory.EnrollmentStore
 	if es.Backend == "" {
 		es.Backend = s.Backend
 	}
+	if es.Backend == BackendMemory && s.Backend == BackendEtcd {
+		return errors.New("config: broker.directory.enrollment_store.backend memory: store.backend is etcd, where " +
+			"port49-broker runs as replicas and each would keep its own enrollments (a code taken at one is fresh " +
+			"at another, and a person enrolled at one may enroll again at another); omit enrollment_store to keep " +
+			"them in store.etcd, or name an etcd of its own (decision 47 D12)")
+	}
+	if e, t := es.Etcd, s.Etcd; e != nil && t != nil &&
+		(strings.HasPrefix(e.Prefix, t.Prefix) || strings.HasPrefix(t.Prefix, e.Prefix)) {
+		host := func(ep string) string {
+			if u, err := url.Parse(ep); err == nil {
+				return strings.ToLower(u.Host)
+			}
+			return ep
+		}
+		for _, ep := range e.Endpoints {
+			if slices.ContainsFunc(t.Endpoints, func(x string) bool { return host(x) == host(ep) }) {
+				return fmt.Errorf("config: broker.directory.enrollment_store.etcd shares an endpoint with store.etcd "+
+					"and its prefix %s nests with store.etcd.prefix %s: the broker's etcd role covers every key "+
+					"under its prefix, so it would reach both; omit enrollment_store to share store.etcd, or give "+
+					"it a prefix of its own", e.Prefix, t.Prefix)
+			}
+		}
+	}
 	if es.Backend == BackendMemory {
 		es.File = filepath.Join(BrokerStateDir(b), "enrollments.json")
 	}
+	return nil
 }
 
 // refreshInterval resolves broker.refresh_interval (Ruling 12).

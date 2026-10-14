@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -419,7 +420,7 @@ func TestIssuanceRefusals(t *testing.T) {
     issuance: {}
 `
 	for body, want := range map[string]string{
-		brokerWithIdentity(machinesOnly):                                             "list a human oidc verifier",
+		brokerWithIdentity(machinesOnly):                                             "list a human oidc or directory_password verifier",
 		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 30m}\n"): "between 1h0m0s and 24h0m0s",
 		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 48h}\n"): "between 1h0m0s and 24h0m0s",
 		brokerWithIdentity(twoLists + "    issuance: {lifetime: 8h}\n"):              "unknown field",
@@ -473,6 +474,18 @@ const passwordBase = `  identity:
     issuance: {}
 `
 
+// unknownFieldLine turns want "@unknown:<text>" into the refusal Load gives
+// the line of <text> in loadWith's file (sample, then extra); any other want
+// is returned as it is.
+func unknownFieldLine(extra, want string) string {
+	needle, ok := strings.CutPrefix(want, "@unknown:")
+	if !ok {
+		return want
+	}
+	line := strings.Count(fmt.Sprintf(sample, "x"), "\n") + strings.Count(extra[:strings.Index(extra, needle)], "\n") + 1
+	return fmt.Sprintf("line %d: an unknown field", line)
+}
+
 func TestTheDirectoryPasswordVerifier(t *testing.T) {
 	const base = passwordBase
 	with := func(line string) string {
@@ -495,8 +508,9 @@ func TestTheDirectoryPasswordVerifier(t *testing.T) {
 		{"reopen too short", with("enrollment: {reopen_for: 30m}"), "reopen_for"},
 		{"open_until not RFC 3339", with("enrollment: {open_until: tomorrow}"), "open_until"},
 		{"a filter that does not parse", with(`filter: "(memberOf="`), "filter"},
-		// decodeFault (yamlfault) names a line and a category, never the key.
-		{"an unknown key", with("otp: x"), "an unknown field"},
+		// decodeFault (yamlfault) names a line and a category, never the key;
+		// the line pins the fault to the verifier's block.
+		{"an unknown key", with("otp: x"), "@unknown:otp: x"},
 		{"limits", with("rate_limits: {failures_per_principal: 0}"), "failures_per_principal"},
 		{"label with a colon", with(`totp_label: "a:b"`), "totp_label"},
 		{"under machines", strings.Replace(base, "humans:", "machines:", 1), "directory_password is a human verifier"},
@@ -507,9 +521,18 @@ func TestTheDirectoryPasswordVerifier(t *testing.T) {
         principal_claim: email
         principal_domains: [example.com]
 `, 1), "example.com is also"},
+		{"an OIDC verifier of the same domain in another case", strings.Replace(base, "    humans:\n", `    humans:
+      - type: oidc
+        issuer: https://idp.example.com
+        client_id: port49-cli
+        principal_claim: email
+        principal_domains: [Example.COM]
+`, 1), "example.com is also"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := loadWith(t, passwordBroker(t, tc.yaml, true))
+			full := passwordBroker(t, tc.yaml, true)
+			tc.want = unknownFieldLine(full, tc.want)
+			_, err := loadWith(t, full)
 			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
 				t.Fatalf("got %v, want %q", err, tc.want)
 			}
@@ -586,7 +609,7 @@ func TestTheEnrollmentStoreHandle(t *testing.T) {
 		{"an http endpoint", block(etcd("[http://etcd-global-1:2379]", id)), "enrollment_store.etcd.endpoints"},
 		{"no identity", block(etcd(eps, "")), "enrollment_store.etcd.identity"},
 		{"another backend", block("      backend: sql\n"), "memory or etcd"},
-		{"an unknown key", block("      backend: memory\n      table: x\n"), "an unknown field"},
+		{"an unknown key", block("      backend: memory\n      table: x\n"), "@unknown:table: x"},
 		{"etcd with no etcd block", block("      backend: etcd\n"), "enrollment_store.etcd"},
 		{"memory with an etcd block", block("      backend: memory\n      etcd: {endpoints: [https://e:2379]}\n"), "enrollment_store.etcd"},
 		// brokerBlock's x509 verifier, its directory with a mapping, and the block.
@@ -595,7 +618,9 @@ func TestTheEnrollmentStoreHandle(t *testing.T) {
 			"nothing is enrolled without one; remove it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			want := unknownFieldLine(tc.yaml, tc.want)
 			_, err := loadWith(t, tc.yaml)
+			tc.want = want
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %q", err, tc.want)
 			}
