@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -22,6 +21,10 @@ type enrollments struct {
 	records map[string]store.SecondFactor
 	seq     uint64 // the last revision handed out
 }
+
+// errNoMarkTime is a mark with no creation time, which an export would emit
+// and an import refuse: every backend refuses it at the write.
+var errNoMarkTime = errors.New("memory: a mark needs its creation time")
 
 // NewEnrollments is an empty enrollment store: no mark, no records.
 func NewEnrollments(now func() time.Time) store.Enrollments {
@@ -75,6 +78,9 @@ func (e *enrollments) GetEnrollmentMark(context.Context) (store.EnrollmentMark, 
 }
 
 func (e *enrollments) CreateEnrollmentMark(_ context.Context, m store.EnrollmentMark) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.mark != nil || len(e.records) > 0 {
@@ -85,6 +91,9 @@ func (e *enrollments) CreateEnrollmentMark(_ context.Context, m store.Enrollment
 }
 
 func (e *enrollments) PutEnrollmentMark(_ context.Context, m store.EnrollmentMark) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.mark = &m
@@ -107,8 +116,8 @@ func (e *enrollments) Export(context.Context) ([]byte, error) {
 
 func (e *enrollments) Import(_ context.Context, raw []byte, replace bool) (int, time.Time, error) {
 	var b store.EnrollmentBody
-	if err := json.Unmarshal(raw, &b); err != nil {
-		return 0, time.Time{}, fmt.Errorf("memory: the export does not decode: %w", err)
+	if err := json.Unmarshal(raw, &b); err != nil { // the decoder's text quotes its input: never wrapped
+		return 0, time.Time{}, errors.New("memory: the export does not decode")
 	}
 	if b.CreatedAt.IsZero() || b.ExportedAt.IsZero() {
 		return 0, time.Time{}, errors.New("memory: the export holds no creation mark or no export time")

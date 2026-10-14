@@ -17,6 +17,10 @@ import (
 type EnrollmentsBackend struct {
 	New    func(t *testing.T, clock func() time.Time) store.Enrollments
 	Sealed bool
+	// NewBelow, set for a backend with a sealing layer, returns a fresh
+	// store and the store beneath its sealing layer, where a test writes as
+	// a store writer would. SecondFactorClearCopiesAreChecked runs when set.
+	NewBelow func(t *testing.T, clock func() time.Time) (above, below store.Enrollments)
 }
 
 // RunEnrollments runs every enrollment property against b.
@@ -29,6 +33,9 @@ func RunEnrollments(t *testing.T, b EnrollmentsBackend) {
 		{"EnrollmentMarkIsKept", EnrollmentMarkIsKept},
 		{"EnrollmentMarkIsCreatedOnce", EnrollmentMarkIsCreatedOnce},
 		{"ExportImportRoundTrips", ExportImportRoundTrips},
+		{"SecondFactorClearCopiesAreChecked", SecondFactorClearCopiesAreChecked},
+		{"EnrollmentMarkNeedsItsTime", EnrollmentMarkNeedsItsTime},
+		{"ImportRefusesWhatDoesNotDecodeWithoutEchoingIt", ImportRefusesWhatDoesNotDecodeWithoutEchoingIt},
 	} {
 		t.Run(p.name, func(t *testing.T) { p.f(t, b) })
 	}
@@ -130,6 +137,79 @@ func ExportImportRoundTrips(t *testing.T, b EnrollmentsBackend) {
 	}
 	if _, err := dst.GetSecondFactor(ctx, later.Principal); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("--replace kept a record the export does not hold: %v", err)
+	}
+}
+
+// EnrollmentMarkNeedsItsTime: a mark with no creation time is refused by
+// Put and by Create, not written to be refused by the import of its own
+// export (review M5).
+func EnrollmentMarkNeedsItsTime(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	e := b.New(t, func() time.Time { return t0 })
+	if err := e.PutEnrollmentMark(ctx, store.EnrollmentMark{}); err == nil {
+		t.Fatal("a mark with no time was put")
+	}
+	if err := e.CreateEnrollmentMark(ctx, store.EnrollmentMark{}); err == nil || errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a mark with no time was created, or read as a conflict: %v", err)
+	}
+	if _, err := e.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused mark was written: %v", err)
+	}
+}
+
+// ImportRefusesWhatDoesNotDecodeWithoutEchoingIt: the JSON decoder's text
+// quotes its input, and an unvalidated body is never in an error (review M1).
+func ImportRefusesWhatDoesNotDecodeWithoutEchoingIt(t *testing.T, b EnrollmentsBackend) {
+	e := b.New(t, func() time.Time { return t0 })
+	_, _, err := e.Import(context.Background(), []byte(`{"created_at": "SENTINEL-INPUT", "second_factors": 7}`), false)
+	if err == nil || strings.Contains(err.Error(), "SENTINEL-INPUT") {
+		t.Fatalf("an undecodable import: %v", err)
+	}
+}
+
+// SecondFactorClearCopiesAreChecked: state, enrolled_at, last_step and until
+// are sealed with the secret; a store writer who changes the clear copy of
+// any one gets an error, never a record and never ErrNotFound, which would
+// read as not enrolled (D7; review C1).
+func SecondFactorClearCopiesAreChecked(t *testing.T, b EnrollmentsBackend) {
+	if b.NewBelow == nil {
+		t.Skip("no sealing layer to test")
+	}
+	for _, c := range []struct {
+		field  string
+		tamper func(f *store.SecondFactor)
+	}{
+		{"last_step", func(f *store.SecondFactor) { f.LastStep = 1 }},
+		{"state", func(f *store.SecondFactor) { f.State, f.Until = store.SecondFactorReopened, t0.Add(24*time.Hour) }},
+		{"state_alone", func(f *store.SecondFactor) { f.State = store.SecondFactorPending }},
+		{"enrolled_at", func(f *store.SecondFactor) { f.EnrolledAt = f.EnrolledAt.Add(time.Hour) }},
+		{"until", func(f *store.SecondFactor) { f.Until = f.Until.Add(24 * time.Hour) }},
+	} {
+		t.Run(c.field, func(t *testing.T) {
+			ctx := context.Background()
+			above, below := b.NewBelow(t, func() time.Time { return t0 })
+			const p = "user:alice@example.com"
+			f := store.SecondFactor{Principal: p, State: store.SecondFactorActive, EntryID: "uuid:1",
+				Secret: []byte("01234567890123456789"), EnrolledAt: t0, EnrolledFrom: "192.0.2.0/32", LastStep: 42,
+				Until: t0.Add(time.Hour)}
+			if err := above.SwapSecondFactor(ctx, f, 0); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := above.GetSecondFactor(ctx, p); err != nil || got.LastStep != 42 {
+				t.Fatalf("the untouched record: step %d, %v", got.LastStep, err)
+			}
+			raw, err := below.GetSecondFactor(ctx, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.tamper(&raw)
+			if err := below.SwapSecondFactor(ctx, raw, raw.Rev); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := above.GetSecondFactor(ctx, p); err == nil || errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("a record whose clear %s was changed read as %v", c.field, err)
+			}
+		})
 	}
 }
 

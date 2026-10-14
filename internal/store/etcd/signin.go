@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -93,6 +92,10 @@ func (s *Store) ClearSignInAttempts(ctx context.Context, key string) (int, error
 	}
 }
 
+// errNoMarkTime is a mark with no creation time, which an export would emit
+// and an import refuse: every backend refuses it at the write.
+var errNoMarkTime = errors.New("etcd: a mark needs its creation time")
+
 // enrollmentMarkRec is meta/enrollments (plan 9e, D7).
 type enrollmentMarkRec struct {
 	CreatedAt      time.Time `json:"created_at"`
@@ -176,6 +179,9 @@ func (s *Store) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, er
 // holds for every key in it, and for none it is the compare against an
 // absent key.
 func (s *Store) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
 	key := s.k.enrollmentMark()
 	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil})
 	if err != nil {
@@ -195,6 +201,9 @@ func (s *Store) CreateEnrollmentMark(ctx context.Context, m store.EnrollmentMark
 }
 
 func (s *Store) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) error {
+	if m.CreatedAt.IsZero() {
+		return errNoMarkTime
+	}
 	body, err := json.Marshal(enrollmentMarkRec{CreatedAt: m.CreatedAt, ReopenAllUntil: m.ReopenAllUntil})
 	if err != nil {
 		return err
@@ -203,47 +212,56 @@ func (s *Store) PutEnrollmentMark(ctx context.Context, m store.EnrollmentMark) e
 	return unavailable(err)
 }
 
-// readEnrollments is the mark and every record in one transaction, so one
-// revision: the body, and that revision.
-func (s *Store) readEnrollments(ctx context.Context) (store.EnrollmentBody, bool, int64, error) {
+// enrollmentsRead is the mark and every record, read in one transaction: the
+// body, whether a mark was there and its mod_revision (0 for none), and the
+// store revision of the read.
+type enrollmentsRead struct {
+	body     store.EnrollmentBody
+	haveMark bool
+	markMod  int64
+	rev      int64
+}
+
+func (s *Store) readEnrollments(ctx context.Context) (enrollmentsRead, error) {
 	prefix := s.k.family(famSecondFactor)
 	resp, err := s.tok.Txn(ctx).Then(clientv3.OpGet(s.k.enrollmentMark()),
 		clientv3.OpGet(prefix, clientv3.WithPrefix())).Commit()
 	if err != nil {
-		return store.EnrollmentBody{}, false, 0, unavailable(err)
+		return enrollmentsRead{}, unavailable(err)
 	}
-	var b store.EnrollmentBody
-	haveMark := false
+	out := enrollmentsRead{rev: resp.Header.Revision}
+	b := &out.body
 	if kvs := resp.Responses[0].GetResponseRange().Kvs; len(kvs) == 1 {
 		var m enrollmentMarkRec
 		if err := json.Unmarshal(kvs[0].Value, &m); err != nil {
-			return b, false, 0, notDecoded("enrollment mark")
+			return out, notDecoded("enrollment mark")
 		}
-		b.CreatedAt, b.ReopenAllUntil, haveMark = m.CreatedAt, m.ReopenAllUntil, true
+		b.CreatedAt, b.ReopenAllUntil, out.haveMark, out.markMod = m.CreatedAt, m.ReopenAllUntil, true, kvs[0].ModRevision
 	}
 	b.SecondFactors = map[string]store.EnrollmentRecord{}
 	for _, kv := range resp.Responses[1].GetResponseRange().Kvs {
 		p, err := url.PathUnescape(strings.TrimPrefix(string(kv.Key), prefix))
 		if err != nil {
-			return b, false, 0, notDecoded("second factor key")
+			return out, notDecoded("second factor key")
 		}
 		var r store.EnrollmentRecord
 		if err := json.Unmarshal(kv.Value, &r); err != nil {
-			return b, false, 0, notDecoded("second factor")
+			return out, notDecoded("second factor")
 		}
 		r.Rev = uint64(kv.ModRevision)
 		b.SecondFactors[p] = r
 	}
-	return b, haveMark, resp.Header.Revision, nil
+	return out, nil
 }
 
 // Export is every record and the mark, read in one revision, in the body
 // shape the sealed file keeps, unsealed (the sealing layer seals it).
 func (s *Store) Export(ctx context.Context) ([]byte, error) {
-	b, haveMark, _, err := s.readEnrollments(ctx)
+	read, err := s.readEnrollments(ctx)
 	if err != nil {
 		return nil, err
 	}
+	b, haveMark := read.body, read.haveMark
 	if !haveMark {
 		return nil, errors.New("etcd: the enrollment store has no creation mark to export")
 	}
@@ -251,23 +269,27 @@ func (s *Store) Export(ctx context.Context) ([]byte, error) {
 	return json.Marshal(b)
 }
 
-// Import writes the exported records and, last, the mark. The records go
-// first, then the deletes of those the export does not hold, then the mark,
-// in transactions of at most maxTxnOps, the first comparing that no record
-// changed since the read the conflict check made; an import cut short
-// leaves records of both, never none, and the mark where it was.
+// Import writes the exported records and, last, the mark. One that fits in
+// a transaction (maxTxnOps) is atomic. A larger one runs in chunks, and its
+// first transaction deletes the mark, so an import cut short is a store with
+// records and no mark, which reads as lost (D7) until the import is run
+// again: it completes, since no record is newer than the export. The first
+// transaction compares that no record and not the mark changed since the
+// read the conflict check made. The records go first, with the deletes of
+// those the export does not hold, and the mark last.
 func (s *Store) Import(ctx context.Context, raw []byte, replace bool) (int, time.Time, error) {
 	var b store.EnrollmentBody
-	if err := json.Unmarshal(raw, &b); err != nil {
-		return 0, time.Time{}, fmt.Errorf("etcd: the export does not decode: %w", err)
+	if err := json.Unmarshal(raw, &b); err != nil { // the decoder's text quotes its input: never wrapped
+		return 0, time.Time{}, notDecoded("enrollment export")
 	}
 	if b.CreatedAt.IsZero() || b.ExportedAt.IsZero() {
 		return 0, time.Time{}, errors.New("etcd: the export holds no creation mark or no export time")
 	}
-	have, _, rev, err := s.readEnrollments(ctx)
+	read, err := s.readEnrollments(ctx)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
+	have, rev := read.body, read.rev
 	var ops []clientv3.Op
 	for p, r := range b.SecondFactors {
 		r.Rev = 0
@@ -289,22 +311,41 @@ func (s *Store) Import(ctx context.Context, raw []byte, replace bool) (int, time
 	if err != nil {
 		return 0, time.Time{}, err
 	}
-	ops = append(ops, clientv3.OpPut(s.k.enrollmentMark(), string(mark)))
-	unmoved := clientv3.Compare(clientv3.ModRevision(s.k.family(famSecondFactor)), "<", rev+1).WithPrefix()
-	for first := true; len(ops) > 0; first = false {
+	putMark := clientv3.OpPut(s.k.enrollmentMark(), string(mark))
+	unmoved := []clientv3.Cmp{
+		clientv3.Compare(clientv3.ModRevision(s.k.family(famSecondFactor)), "<", rev+1).WithPrefix(),
+		clientv3.Compare(clientv3.ModRevision(s.k.enrollmentMark()), "=", read.markMod),
+	}
+	if len(ops)+1 > maxTxnOps {
+		// Too large for one transaction: the mark goes in the first, and the
+		// put that returns it in the last (etcd refuses both in one).
+		ops = append([]clientv3.Op{clientv3.OpDelete(s.k.enrollmentMark())}, ops...)
+	}
+	ops = append(ops, putMark)
+	if s.importHook != nil {
+		if err := s.importHook(0); err != nil { // after the read, before the first write
+			return 0, time.Time{}, err
+		}
+	}
+	for chunk := 1; len(ops) > 0; chunk++ {
 		n := min(len(ops), maxTxnOps)
 		txn := s.tok.Txn(ctx)
-		if first {
-			txn = txn.If(unmoved)
+		if chunk == 1 {
+			txn = txn.If(unmoved...)
 		}
 		resp, err := txn.Then(ops[:n]...).Commit()
 		if err != nil {
 			return 0, time.Time{}, unavailable(err)
 		}
 		if !resp.Succeeded {
-			return 0, time.Time{}, store.ErrConflict // a record was written since the read
+			return 0, time.Time{}, store.ErrConflict // a record or the mark was written since the read
 		}
 		ops = ops[n:]
+		if s.importHook != nil && len(ops) > 0 {
+			if err := s.importHook(chunk); err != nil {
+				return 0, time.Time{}, err
+			}
+		}
 	}
 	return len(b.SecondFactors), b.ExportedAt, nil
 }

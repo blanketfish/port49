@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +21,9 @@ import (
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/store/enrollfile"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/store/storetest"
 )
 
@@ -94,7 +97,152 @@ func TestTheSealingLayerOverEtcdHoldsEveryEnrollmentProperty(t *testing.T) {
 	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{Sealed: true,
 		New: func(t *testing.T, clock func() time.Time) store.Enrollments {
 			return crypt.WrapEnrollments(onShared(t, clock), sealKeys, nil)
+		},
+		NewBelow: func(t *testing.T, clock func() time.Time) (store.Enrollments, store.Enrollments) {
+			s := onShared(t, clock)
+			return crypt.WrapEnrollments(s, sealKeys, nil), s
 		}})
+}
+
+// An import too large for one transaction deletes the mark first, so one cut
+// short after its first chunk reads as a lost store, not a healthy one that
+// still holds the record --replace meant to remove; running it again
+// completes it (plan 9e, review I2).
+func TestAnImportCutShortReadsAsLostAndCompletesWhenRunAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := func() time.Time { return t0 }
+	src := memory.NewEnrollments(clock)
+	if err := src.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2*maxTxnOps + 10 {
+		if err := src.SwapSecondFactor(ctx, store.SecondFactor{Principal: fmt.Sprintf("user:p%03d@example.com", i),
+			State: store.SecondFactorActive, EntryID: "uuid:1", EnrolledAt: t0}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exp, err := src.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := onShared(t, clock)
+	// The thief's enrollment, which the export does not hold.
+	if err := dst.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.SwapSecondFactor(ctx, store.SecondFactor{Principal: "user:thief@example.com",
+		State: store.SecondFactorActive, EntryID: "uuid:9", EnrolledAt: t0.Add(-time.Hour)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("stopped after the first chunk")
+	dst.importHook = func(chunk int) error {
+		if chunk == 1 {
+			return stop
+		}
+		return nil
+	}
+	if _, _, err := dst.Import(ctx, exp, true); !errors.Is(err, stop) {
+		t.Fatalf("%v", err)
+	}
+	if _, err := dst.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an import cut short left a mark: %v", err)
+	}
+	dst.importHook = nil
+	if n, _, err := dst.Import(ctx, exp, false); err != nil || n != 2*maxTxnOps+10 {
+		t.Fatalf("running it again: %d %v", n, err)
+	}
+	if _, err := dst.GetEnrollmentMark(ctx); err != nil {
+		t.Fatalf("the completed import has no mark: %v", err)
+	}
+	if _, err := dst.GetSecondFactor(ctx, "user:thief@example.com"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the record the export does not hold survived: %v", err)
+	}
+}
+
+// A mark written between an import's read and its first write is not
+// overwritten: reset-second-factor --all racing an import wins (review M6).
+func TestAnImportDoesNotOverwriteAMarkWrittenAfterItsRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := func() time.Time { return t0 }
+	src := memory.NewEnrollments(clock)
+	if err := src.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	exp, _ := src.Export(ctx)
+	dst := onShared(t, clock)
+	if err := dst.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	reset := store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(24 * time.Hour)}
+	dst.importHook = func(chunk int) error {
+		if chunk == 0 {
+			return dst.PutEnrollmentMark(ctx, reset)
+		}
+		return nil
+	}
+	if _, _, err := dst.Import(ctx, exp, true); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("an import over a mark written after its read: %v", err)
+	}
+	if m, _ := dst.GetEnrollmentMark(ctx); !m.ReopenAllUntil.Equal(reset.ReopenAllUntil) {
+		t.Fatalf("the import overwrote the reset: %+v", m)
+	}
+}
+
+// An export moves between the file backend and etcd, in both directions,
+// with the record's used step: a single broker on the file that grows into
+// a global etcd migrates by export and import (plan 9e, review I1).
+func TestAnExportMovesBetweenTheFileAndEtcd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := enrollfile.Open(filepath.Join(dir, "enrollments.json"), sealKeys, func() time.Time { return t0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile := crypt.WrapEnrollments(file, sealKeys, nil)
+	onEtcd := crypt.WrapEnrollments(onShared(t, func() time.Time { return t0 }), sealKeys, nil)
+	const p = "user:alice@example.com"
+	if err := fromFile.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fromFile.SwapSecondFactor(ctx, store.SecondFactor{Principal: p, State: store.SecondFactorActive,
+		EntryID: "uuid:1", Secret: []byte("01234567890123456789"), EnrolledAt: t0, LastStep: 7}, 0); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := fromFile.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := onEtcd.Import(ctx, exp, false); err != nil || n != 1 {
+		t.Fatalf("file into etcd: %d %v", n, err)
+	}
+	if got, err := onEtcd.GetSecondFactor(ctx, p); err != nil || got.LastStep != 7 || got.EntryID != "uuid:1" {
+		t.Fatalf("file into etcd: step %d, %v", got.LastStep, err)
+	}
+	back, err := onEtcd.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir2 := t.TempDir()
+	if err := os.Chmod(dir2, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file2, err := enrollfile.Open(filepath.Join(dir2, "enrollments.json"), sealKeys, func() time.Time { return t0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	into := crypt.WrapEnrollments(file2, sealKeys, nil)
+	if n, _, err := into.Import(ctx, back, false); err != nil || n != 1 {
+		t.Fatalf("etcd into file: %d %v", n, err)
+	}
+	if got, err := into.GetSecondFactor(ctx, p); err != nil || got.LastStep != 7 {
+		t.Fatalf("etcd into file: step %d, %v", got.LastStep, err)
+	}
 }
 
 // With two of three members stopped, a write and a read each fail within

@@ -371,6 +371,80 @@ func TestAGroupWritableDirectoryIsRefused(t *testing.T) {
 	}
 }
 
+// A file that cannot be read, or is over the size bound, is a lost store,
+// not an Open error: the broker's other paths keep serving (review I3).
+func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
+	ctx := context.Background()
+	check := func(t *testing.T, f *File) {
+		t.Helper()
+		if f.Lost() == "" || !strings.Contains(f.Lost(), "cannot be read") {
+			t.Fatalf("lost: %q", f.Lost())
+		}
+		if _, err := f.GetSecondFactor(ctx, alice); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+			t.Fatalf("%v", err)
+		}
+		if _, err := f.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+			t.Fatalf("%v", err)
+		}
+	}
+	t.Run("unreadable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a file made 0000")
+		}
+		path := filepath.Join(dirFor(t), "enrollments.json")
+		written(t, path, keys())
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		f := openAt(t, path, keys())
+		check(t, f)
+		// It can still be replaced: the unreadable file is set aside.
+		if err := f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+			t.Fatal(err)
+		}
+		if aside, _ := filepath.Glob(path + ".unreadable-*"); len(aside) != 1 {
+			t.Fatalf("set aside: %v", aside)
+		}
+	})
+	t.Run("oversized", func(t *testing.T) {
+		path := filepath.Join(dirFor(t), "enrollments.json")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(path, maxFile+1); err != nil {
+			t.Fatal(err)
+		}
+		check(t, openAt(t, path, keys()))
+	})
+}
+
+// Setting a file aside reports a directory it cannot look in; it does not
+// loop on it (review M2).
+func TestSettingAsideStopsOnAnErrorThatIsNotAbsence(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root searches any directory")
+	}
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	written(t, path, keys())
+	tamper(t, path)
+	f := openAt(t, path, keys())
+	if err := os.Chmod(dir, 0o600); err != nil { // no search permission
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	done := make(chan error, 1)
+	go func() { done <- f.PutEnrollmentMark(context.Background(), store.EnrollmentMark{CreatedAt: t0}) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a replace in a directory it cannot search succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("setting aside loops")
+	}
+}
+
 func TestALinkAtThePathIsRefused(t *testing.T) {
 	dir := dirFor(t)
 	real := filepath.Join(dir, "real.json")
@@ -393,5 +467,12 @@ func TestTheFileHoldsEveryEnrollmentProperty(t *testing.T) {
 				t.Fatal(err)
 			}
 			return crypt.WrapEnrollments(f, keys(), nil)
+		},
+		NewBelow: func(t *testing.T, clock func() time.Time) (store.Enrollments, store.Enrollments) {
+			f, err := Open(filepath.Join(dirFor(t), "enrollments.json"), keys(), clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return crypt.WrapEnrollments(f, keys(), nil), f
 		}})
 }

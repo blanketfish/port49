@@ -113,6 +113,10 @@ func TestTheSealingLayerHoldsEveryEnrollmentProperty(t *testing.T) {
 	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{Sealed: true,
 		New: func(_ *testing.T, clock func() time.Time) store.Enrollments {
 			return WrapEnrollments(memory.NewEnrollments(clock), keys(), nil)
+		},
+		NewBelow: func(_ *testing.T, clock func() time.Time) (store.Enrollments, store.Enrollments) {
+			inner := memory.NewEnrollments(clock)
+			return WrapEnrollments(inner, keys(), nil), inner
 		}})
 }
 

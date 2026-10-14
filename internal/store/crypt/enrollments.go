@@ -13,12 +13,31 @@ import (
 )
 
 // secondFactorSecret is a second factor's sealed part, bound to its
-// principal: the secret, the entry it was enrolled for, and where from.
+// principal: the secret, the entry it was enrolled for, where from, and
+// every field a sign-in trusts: its state, when it was enrolled, the used
+// step and the window's end. The clear copies stay in the record, for the
+// store's own import check, and a read refuses a record whose copy differs
+// from the sealed one: a store writer who lowers last_step or reopens a
+// record is not obeyed (D7, review C1).
 type secondFactorSecret struct {
-	Secret       []byte `json:"secret"`
-	EntryID      string `json:"entry_id"`
-	EnrolledFrom string `json:"enrolled_from"`
+	V            int       `json:"v"`
+	Secret       []byte    `json:"secret"`
+	EntryID      string    `json:"entry_id"`
+	EnrolledFrom string    `json:"enrolled_from"`
+	State        string    `json:"state"`
+	EnrolledAt   time.Time `json:"enrolled_at"`
+	LastStep     int64     `json:"last_step"`
+	Until        time.Time `json:"until"`
 }
+
+const secondFactorForm = 1
+
+var (
+	errSecondFactorMoved = errors.New("crypt: a second factor's plaintext state, enrolment time, used step or " +
+		"window differs from its sealed one")
+	errSecondFactorForm = errors.New("crypt: a second factor's sealed part is of a form this broker does not read")
+	errSecondFactorBody = errors.New("crypt: a second factor's sealed part does not decode")
+)
 
 func secondFactorAAD(principal string) []byte { return []byte("second_factor\x00" + principal) }
 
@@ -54,7 +73,8 @@ func WrapEnrollments(inner store.Enrollments, k Keys, openFailures *prometheus.C
 }
 
 func (e *wrappedEnrollments) SwapSecondFactor(ctx context.Context, f store.SecondFactor, rev uint64) error {
-	b, err := json.Marshal(secondFactorSecret{Secret: f.Secret, EntryID: f.EntryID, EnrolledFrom: f.EnrolledFrom})
+	b, err := json.Marshal(secondFactorSecret{V: secondFactorForm, Secret: f.Secret, EntryID: f.EntryID,
+		EnrolledFrom: f.EnrolledFrom, State: f.State, EnrolledAt: f.EnrolledAt, LastStep: f.LastStep, Until: f.Until})
 	if err != nil {
 		return err
 	}
@@ -82,7 +102,13 @@ func (e *wrappedEnrollments) GetSecondFactor(ctx context.Context, principal stri
 	}
 	var s secondFactorSecret
 	if err := json.Unmarshal(b, &s); err != nil {
-		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, err)
+		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorBody)
+	}
+	switch {
+	case s.V != secondFactorForm:
+		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorForm)
+	case s.State != f.State || !s.EnrolledAt.Equal(f.EnrolledAt) || s.LastStep != f.LastStep || !s.Until.Equal(f.Until):
+		return store.SecondFactor{}, e.w.openErr("second factor", f.Sealed, errSecondFactorMoved)
 	}
 	k := e.w.keys
 	f.Stale = k.Previous != nil && SealedKeyID(f.Sealed) == LineKeyID(k.Previous.ID)

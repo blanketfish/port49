@@ -78,6 +78,10 @@ type Store struct {
 	// reads its grants, and refuses "" unless the store is in the clear.
 	user  string
 	clear bool // dialed with no TLS: tests only, and etcd's auth cannot know it
+	// importHook, set by a test, is called with 0 after an Import's read and
+	// before its first write, then after each committed chunk that leaves
+	// more to write; an error stops the import there.
+	importHook func(chunk int) error
 }
 
 var _ store.Store = (*Store)(nil)

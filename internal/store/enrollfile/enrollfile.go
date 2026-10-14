@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/fence"
@@ -75,8 +76,15 @@ func Open(path string, keys crypt.Keys, now func() time.Time) (*File, error) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return f, nil
+	case errors.Is(err, syscall.ELOOP):
+		return nil, err // a link at the path: a configuration refusal, as the fence's others
 	case err != nil:
-		return nil, err
+		// A file that cannot be read (a restore left it root's at 0600, an
+		// I/O error, one over maxFile) does not open: lost, so the broker's
+		// other paths keep serving and only password sign-in refuses (D7).
+		f.present, f.lost = true, "it cannot be read ("+err.Error()+"): fix its owner and mode, restore it, or "+
+			"run `port49 directory reset-second-factor --all`"
+		return f, nil
 	}
 	f.present = true
 	body, why := f.open(raw)
@@ -297,8 +305,12 @@ func (f *File) setAside() error {
 	stamp := f.now().UTC().Format("20060102T150405Z")
 	to := f.path + ".unreadable-" + stamp
 	for i := 2; ; i++ {
-		if _, err := os.Lstat(to); errors.Is(err, fs.ErrNotExist) {
+		_, err := os.Lstat(to)
+		if errors.Is(err, fs.ErrNotExist) {
 			break
+		}
+		if err != nil { // not "taken": an error here would loop for ever
+			return fmt.Errorf("enrollfile: setting the unreadable %s aside: %w", f.path, err)
 		}
 		to = fmt.Sprintf("%s.unreadable-%s-%d", f.path, stamp, i)
 	}
@@ -308,8 +320,8 @@ func (f *File) setAside() error {
 	return nil
 }
 
-// Export is the envelope of the body with exported_at set, sealed as the
-// file is (D13).
+// Export is the body with exported_at set, bare: the sealing layer above
+// seals it, as it does on every backend, so an export moves between them.
 func (f *File) Export(_ context.Context) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -321,16 +333,16 @@ func (f *File) Export(_ context.Context) ([]byte, error) {
 	}
 	b := body(f.mark, f.records)
 	b.ExportedAt = f.now().UTC()
-	return f.seal(b)
+	return json.Marshal(b)
 }
 
-// Import opens an export under the held keys and writes it whole, where the
+// Import takes a bare export and writes it whole, where the
 // store holds no record enrolled or reset after the export, or replace
 // (D13); a lost store is replaced as PutEnrollmentMark replaces it.
 func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Time, error) {
-	b, why := f.open(raw)
-	if why != "" {
-		return 0, time.Time{}, fmt.Errorf("enrollfile: the export does not open: %s", why)
+	var b store.EnrollmentBody
+	if err := json.Unmarshal(raw, &b); err != nil { // the decoder's text quotes its input: never wrapped
+		return 0, time.Time{}, errors.New("enrollfile: the export does not decode")
 	}
 	if b.CreatedAt.IsZero() || b.ExportedAt.IsZero() {
 		return 0, time.Time{}, errors.New("enrollfile: the export holds no creation mark or no export time")

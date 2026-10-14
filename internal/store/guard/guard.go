@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -431,8 +432,11 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		// The broker's pools serve its API; devices and break-glass are the
 		// daemon's (Task 15a review M-4).
 		impact := "devices see store_unavailable, and break-glass is refused (L4)"
-		if g.c.Component == "broker" {
+		switch {
+		case g.c.Component == "broker":
 			impact = "mints, refreshes and revocations through it fail"
+		case strings.HasSuffix(g.c.Component, enrollmentsSuffix):
+			impact = "password sign-in and second-factor enrollment through it are refused"
 		}
 		g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
 			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.c.Component, p,
@@ -744,10 +748,16 @@ type guardedEnrollments struct {
 	g     *guarded
 }
 
+// enrollmentsSuffix is what WrapEnrollments adds to c.Component, so the
+// enrollment handle's circuit gauge, calls and lines are its own: an
+// enrollment store on another etcd than the store's must not share a series
+// with it.
+const enrollmentsSuffix = "_enrollments"
+
 // WrapEnrollments guards inner, the enrollment handle on etcd, as Wrap
-// guards a Store. Its pools are its own: give c a Component of its own, or
-// its circuit's gauge is the store's.
+// guards a Store, under the component c.Component + "_enrollments".
 func WrapEnrollments(inner store.Enrollments, c Config) store.Enrollments {
+	c.Component += enrollmentsSuffix
 	return &guardedEnrollments{inner: inner, g: Wrap(nil, c).(*guarded)}
 }
 
