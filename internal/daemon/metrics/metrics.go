@@ -268,6 +268,12 @@ type Metrics struct {
 	// outcome: issued, refused, unavailable (the issuing CA not usable)
 	// (plan 9b; spec §13 decision 43 ruling 22). No principal.
 	CertificatesIssued *prometheus.CounterVec
+	// SignIns is port49_sign_ins_total{outcome}.
+	SignIns *prometheus.CounterVec
+	// DirectoryEnrollmentStoreOK is port49_directory_enrollment_store_ok, a
+	// vector with no labels so that it is absent until the broker checks the
+	// store (WithLabelValues().Set(1 or 0)); testutil.ToFloat64 reads it then.
+	DirectoryEnrollmentStoreOK *prometheus.GaugeVec
 	// port49_per_login_mfa_total{method,outcome}: per-login MFA requirements
 	// and proofs (plan 9c; spec §13 decision 45 ruling 19). method is
 	// hardware_key_touch, idp_mfa or none (a mint item with no proof);
@@ -634,6 +640,16 @@ func New(reg prometheus.Registerer) *Metrics {
 		CertificatesIssued: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_certificates_issued_total",
 			Help: "Sign-ins exchanged for a port49-issued certificate, by outcome: issued, refused, unavailable."},
 			[]string{"outcome"}),
+		SignIns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_sign_ins_total",
+			Help: "Directory-password sign-ins by outcome: issued, refused, throttled, enrollment_started, " +
+				"enrolled, enrollment_closed, enrollment_store_lost, directory_unavailable, store_unavailable; " +
+				"alert on a rise of throttled, on any enrollment_store_lost, and on enrolled outside a rollout."},
+			[]string{"outcome"}),
+		DirectoryEnrollmentStoreOK: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "port49_directory_enrollment_store_ok",
+			Help: "1 when the broker's enrollment store opened with its creation mark, 0 when it is lost " +
+				"or not yet initialised and password sign-in is refused (decision 47 D7); absent without a " +
+				"directory_password verifier. Alert on 0."}, nil),
 		PerLoginMFA: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_per_login_mfa_total",
 			Help: "Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome " +
 				"(required, proved, refused, reused, unavailable); alert on a run of refused."},
@@ -764,13 +780,18 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.PerLoginMFA, m.IssuingCANotAfter)
+		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.IssuingCANotAfter)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)
 	// Every issuance outcome exists at 0 from the first scrape.
 	for _, o := range []string{"issued", "refused", "unavailable"} {
 		m.CertificatesIssued.WithLabelValues(o)
+	}
+	// Every sign-in outcome exists at 0 from the first scrape.
+	for _, o := range []string{"issued", "refused", "throttled", "enrollment_started", "enrolled",
+		"enrollment_closed", "enrollment_store_lost", "directory_unavailable", "store_unavailable"} {
+		m.SignIns.WithLabelValues(o)
 	}
 	// Every per-login outcome exists at 0 from the first scrape.
 	for _, method := range []string{"hardware_key_touch", "idp_mfa", "none"} {

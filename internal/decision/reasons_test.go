@@ -92,3 +92,11 @@ func TestCertificateIssuedIsKnown(t *testing.T) {
 		t.Fatal("certificate_issued or issue is not §5.7's")
 	}
 }
+
+func TestTheSignInReasonsAreKnown(t *testing.T) {
+	for _, r := range []Reason{SignInRefused, SignInThrottled, EnrollmentClosed, EnrollmentStoreLost, SecondFactorEnrolled} {
+		if !Known(r) {
+			t.Errorf("%s is not in the vocabulary", r)
+		}
+	}
+}
