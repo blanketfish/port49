@@ -8,7 +8,8 @@ import (
 )
 
 // The test harness's view of the module (re-review R4). The hwkey tag is set
-// only by `make test-hw`, so no release build carries these. They are a
+// only by `make test-hw` and by L60's certificate-order cell
+// (tests/lab/l60/RUNBOOK.md), so no release build carries these. They are a
 // non-test file because hwtest and cmd/port49's tests import this package and
 // a _test.go file is seen by this package's own tests alone.
 
@@ -177,4 +178,35 @@ func ResetModules() {
 	modulesMu.Lock()
 	defer modulesMu.Unlock()
 	clear(modules)
+}
+
+// CertObject is one certificate object as the token lists it: CKA_ID,
+// CKA_LABEL and CKA_VALUE, or why the value could not be read.
+type CertObject struct {
+	ID, Label, DER []byte
+	Err            error
+}
+
+// CertificateObjects is every certificate object on s's token, in the order
+// C_FindObjects returns them, on s's own session: no login, nothing written.
+// What L60's c_order cell records (tests/lab/l60).
+func CertificateObjects(s *Signer) ([]CertObject, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.readyLocked(); err != nil {
+		return nil, err
+	}
+	objs, err := s.m.findObjects(s.session, []attr{{ckaClass, uintBytes(ckoCertificate)}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CertObject, 0, len(objs))
+	for _, o := range objs {
+		var c CertObject
+		c.ID, _ = s.m.attrValue(s.session, o, ckaID)
+		c.Label, _ = s.m.attrValue(s.session, o, ckaLabel)
+		c.DER, c.Err = s.m.attrValue(s.session, o, ckaValue)
+		out = append(out, c)
+	}
+	return out, nil
 }
