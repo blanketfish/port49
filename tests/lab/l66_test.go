@@ -620,7 +620,11 @@ func l66Inventory(s l66InvSpec) string {
 	b.WriteString("  vars:\n")
 	b.WriteString("    p49_socket: " + q(s.Socket) + "\n    p49_bin: " + q(s.Bin) + "\n")
 	if s.Conn == "ssh" {
-		b.WriteString("    ansible_connection: ssh\n")
+		// use_tty (default true) runs `raw` as `ssh -tt`. A network CLI given a terminal pages its output
+		// (Junos's ---(more)---) and waits for a key that never comes: in lab run 2 vJunos and vSRX accounted the
+		// command at once and held the session until the play's deadline. Off, ssh requests no pty and the CLI
+		// exits after the command. The host key is checked before any channel opens, so (e) reads the same.
+		b.WriteString("    ansible_connection: ssh\n    ansible_ssh_use_tty: false\n")
 	} else {
 		b.WriteString("    ansible_connection: ansible.netcommon.network_cli\n")
 		b.WriteString("    ansible_network_os: " + q(s.Platform.NetworkOS) + "\n")
@@ -1260,6 +1264,11 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 		r.starts = l66AuthStarts(segs, from, to)
 	}
 	r.recap = l66ReadRecap(r.stdout)
+	// Every play of every cell runs here, so a play that did not end on its own makes its cell INVALID whatever
+	// the cell's own grader reads (lab run 2: a raw play hung on vJunos until its deadline and was graded OBSERVED).
+	if why := l66PlayEnd(name, r.exit, r.err, len(r.recap)); why != "" {
+		e.addInvalid(why)
+	}
 	r.counts = l66CountRecords(r.recs)
 	if !e.freshChecked && r.counts.Mints > 0 {
 		e.freshChecked = true

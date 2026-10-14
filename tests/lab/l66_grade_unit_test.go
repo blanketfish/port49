@@ -4,7 +4,9 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -358,6 +360,70 @@ func TestL66GradeStepOneAllowsNotRunOnlyForAMeasuredClientBehaviour(t *testing.T
 	}
 }
 
+// TestL66PlayEndIsInvalidUnlessAnsiblePlaybookEndedOnItsOwn: lab run 2 graded L66e-ssh OBSERVED on vJunos while
+// its step 1 had hung until the play's deadline (exit -1, an empty recap). A run that was ended (the deadline, a
+// signal, a process that could not be waited on) or that printed no PLAY RECAP never ran its play to an end, so
+// whatever a cell reads from it is not a measurement. An exit of 2 or 4 is Ansible's own verdict and is read.
+func TestL66PlayEndIsInvalidUnlessAnsiblePlaybookEndedOnItsOwn(t *testing.T) {
+	deadline := fmt.Errorf("ansible-playbook was ended at the cell's deadline: %w", context.DeadlineExceeded)
+	cases := []struct {
+		name       string
+		exit       int
+		err        error
+		recapHosts int
+		want       []string // "" for a normal end; otherwise words the reason holds
+	}{
+		{"passed", 0, nil, 1, nil},
+		{"a task failed: Ansible's verdict, read by the cell", 2, nil, 1, nil},
+		{"unreachable: Ansible's verdict, read by the cell", 4, nil, 2, nil},
+		{"the vJunos hang: ended at the deadline, no recap", -1, deadline, 0, []string{"step-1", "ended abnormally", "deadline"}},
+		{"ended at the deadline after its recap was printed", -1, deadline, 1, []string{"ended abnormally", "deadline"}},
+		{"killed by a signal from elsewhere", -1, nil, 0, []string{"killed by a signal", "exit -1"}},
+		{"killed by a signal after its recap", -1, nil, 1, []string{"killed by a signal"}},
+		{"the process could not be waited on", 0, exec.ErrWaitDelay, 1, []string{"ended abnormally", "WaitDelay"}},
+		{"no PLAY RECAP: the play never ran to an end", 1, nil, 0, []string{"no PLAY RECAP", "exit 1"}},
+		{"exit 0 and no recap", 0, nil, 0, []string{"no PLAY RECAP"}},
+	}
+	for _, c := range cases {
+		got := l66PlayEnd("step-1", c.exit, c.err, c.recapHosts)
+		if len(c.want) == 0 {
+			if got != "" {
+				t.Errorf("%s: = %q, want a normal end", c.name, got)
+			}
+			continue
+		}
+		if got == "" {
+			t.Errorf("%s: read as a normal end, want INVALID", c.name)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q lacks %q", c.name, got, w)
+			}
+		}
+	}
+}
+
+// TestL66AnAbnormalPlayMakesItsCellInvalidWhateverItsGrader: whatever a cell's own grader made of a run, a play
+// that did not end on its own leaves the cell INVALID (the vJunos L66e-ssh row was OBSERVED), and no note is
+// written for the run.
+func TestL66AnAbnormalPlayMakesItsCellInvalidWhateverItsGrader(t *testing.T) {
+	why := l66PlayEnd("L66e-ssh-device", -1, fmt.Errorf("ansible-playbook was ended at the cell's deadline: %w",
+		context.DeadlineExceeded), 0)
+	for _, kind := range []string{"claim", "refusal", "record"} {
+		for _, ok := range []bool{true, false} {
+			graded := l66Outcome(kind, ok, false, true, false)
+			got := l66Settle(graded, "", why, "")
+			if got != "INVALID" {
+				t.Errorf("%s ok=%v: graded %s, settled %s, want INVALID", kind, ok, graded, got)
+			}
+			if w, _ := l66Writable([]l66Result{{id: "L66e-ssh", outcome: got}}); w {
+				t.Errorf("%s ok=%v: a run with that cell writes a note", kind, ok)
+			}
+		}
+	}
+}
+
 func TestL66SettleLetsInvalidAndFatalOutrankNotRun(t *testing.T) {
 	cases := []struct{ outcome, fatal, invalid, notRun, want string }{
 		{"PASS", "", "", "", "PASS"},
@@ -366,7 +432,10 @@ func TestL66SettleLetsInvalidAndFatalOutrankNotRun(t *testing.T) {
 		{"FAIL", "", "docker is down", "no key", "INVALID"},
 		{"PASS", "wrote the real file", "", "no key", "INVALID"},
 		{"INVALID", "", "", "", "INVALID"},
-		{"TIMEOUT", "", "x", "y", "TIMEOUT"},
+		{"TIMEOUT", "", "", "y", "TIMEOUT"},
+		// A cell whose budget ran out while a play ran: the play was ended at the deadline, so it measured nothing.
+		{"TIMEOUT", "", "ansible-playbook was ended at the cell's deadline", "", "INVALID"},
+		{"TIMEOUT", "wrote the real file", "", "", "INVALID"},
 	}
 	for _, c := range cases {
 		if got := l66Settle(c.outcome, c.fatal, c.invalid, c.notRun); got != c.want {

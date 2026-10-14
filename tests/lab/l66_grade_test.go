@@ -325,14 +325,31 @@ func l66GradeStepOne(in l66StepOneIn) (verdict, why string) {
 	return "invalid", "the earlier contact did not pass and log in (a device, network, docker or port49d failure), so nothing was measured"
 }
 
-// l66Settle decides a cell's final outcome. A fatal or an invalid set during the cell comes before NOT RUN:
-// a cell that could not measure must not read as one that was blocked.
+// l66PlayEnd is why the ansible-playbook run name did not end on its own, or "" when it did. A run that was ended
+// (the deadline, a signal: exit -1) or could not be waited on (err), or that printed no PLAY RECAP, never ran its
+// play to an end, so nothing a cell reads from it is a measurement. Any other exit, 2 and 4 included, is
+// Ansible's own verdict and is the cell's to read. runPlay makes the cell INVALID with this.
+func l66PlayEnd(name string, exit int, err error, recapHosts int) string {
+	switch {
+	case err != nil:
+		return fmt.Sprintf("the play %s ended abnormally (%v), so it measured nothing", name, err)
+	case exit < 0:
+		return fmt.Sprintf("the play %s was killed by a signal (exit %d), so it measured nothing", name, exit)
+	case recapHosts == 0:
+		return fmt.Sprintf("the play %s printed no PLAY RECAP (exit %d), so it never ran to an end and measured nothing", name, exit)
+	}
+	return ""
+}
+
+// l66Settle decides a cell's final outcome. A fatal or an invalid set during the cell comes before NOT RUN and
+// before TIMEOUT: a cell that could not measure must not read as one that was blocked, and a cell whose budget
+// ran out while a play ran had that play ended at the deadline (l66PlayEnd).
 func l66Settle(outcome, fatal, invalid, notRun string) string {
 	switch {
-	case outcome == "TIMEOUT":
-		return outcome
 	case fatal != "" || invalid != "":
 		return "INVALID"
+	case outcome == "TIMEOUT":
+		return outcome
 	case notRun != "":
 		return "NOT RUN (" + notRun + ")"
 	}

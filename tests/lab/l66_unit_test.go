@@ -5,12 +5,16 @@ package lab
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -716,6 +720,16 @@ func TestL66SSHInventoryUsesTheBuiltinConnectionAndItsArgs(t *testing.T) {
 	if _, ok := vars["ansible_network_os"]; ok {
 		t.Error("the plain ssh connection has no network_os")
 	}
+	// The ssh plugin runs `raw` with -tt by default; a network CLI given a terminal pages (Junos's ---(more)---)
+	// and waits for a key that never comes (lab run 2, vJunos and vSRX).
+	if vars["ansible_ssh_use_tty"] != false {
+		t.Errorf("ansible_ssh_use_tty = %v, want false", vars["ansible_ssh_use_tty"])
+	}
+	nc := l66Inventory(l66InvSpec{Hosts: []l66Host{{"leaf1", "172.100.100.11"}}, Platform: l66Platforms["arista_eos"], Conn: "network_cli",
+		SSHType: "libssh", Mode: "fact"})
+	if _, ncVars := l66InvDoc(t, nc); ncVars["ansible_ssh_use_tty"] != nil {
+		t.Error("ansible_ssh_use_tty is the plain ssh connection's option only")
+	}
 }
 
 func TestL66NoInventoryHoldsAToken(t *testing.T) {
@@ -934,5 +948,156 @@ func TestL66FactPlaysMintUnderRealAnsible(t *testing.T) {
 				t.Errorf("port49 was called %d times, want 1 (the mint)", n)
 			}
 		})
+	}
+}
+
+// l66PagingCLI stands in for a network CLI run with a command (an sshd's ForceCommand): it prints the command's
+// output and, on a terminal, pages as Junos does (---(more)---), waiting for a key before it exits. Without a
+// terminal it exits.
+const l66PagingCLI = `#!/bin/sh
+echo "cli: $SSH_ORIGINAL_COMMAND"
+if [ -t 0 ]; then
+  printf -- '---(more)---'
+  read -r _
+fi
+echo "cli: done"
+`
+
+// TestL66RawOverSSHEndsAtACLIThatPagesOnATerminal runs the harness's own ansible.builtin.ssh inventory and raw
+// play under the lab venv's ansible-core against a scratch sshd on 127.0.0.1 whose login runs l66PagingCLI. In
+// lab run 2 the raw play logged in to vJunos and vSRX, its `show version` was accounted at once, and the session
+// stayed open until the play's deadline: the ssh plugin's use_tty (default true) runs `raw` as `ssh -tt`, and a
+// CLI given a terminal pages. The inventory turns use_tty off, so the play ends. Everything runs under
+// nss_wrapper with a private home, a key login made for the test, and no agent. Skipped without the venv, sshd
+// or nss_wrapper.
+func TestL66RawOverSSHEndsAtACLIThatPagesOnATerminal(t *testing.T) {
+	r, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, sshd := filepath.Join(l66Venv, "ansible-playbook"), "/usr/sbin/sshd"
+	for _, p := range []string{pb, sshd} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("%s is not installed: %v", p, err)
+		}
+	}
+	lib, found := l66FindNSSWrapper(l66NSSDirs)
+	if !found {
+		t.Skip("libnss_wrapper.so is not installed")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// ssh's control sockets: a short path, inside AF_UNIX's limit.
+	cp, err := os.MkdirTemp("", "p49cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cp) })
+	p := func(name string) string { return filepath.Join(dir, name) }
+	for _, k := range []string{"host_key", "user_key"} {
+		if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "l66", "-f", p(k)).CombinedOutput(); err != nil {
+			t.Fatalf("ssh-keygen: %v %s", err, out)
+		}
+	}
+	pub, err := os.ReadFile(p("user_key.pub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	stub := strings.Replace(l66StubPort49, `"username":"alice"`, `"username":"`+u.Username+`"`, 1)
+	for name, body := range map[string]string{
+		"authorized_keys": string(pub), "nss_passwd": l66NSSPasswd(u.Username, uid, gid, home, "/bin/sh"),
+		"nss_group": l66NSSGroup(u.Username, gid),
+		"sshd_config": fmt.Sprintf("ListenAddress 127.0.0.1\nPort %d\nHostKey %s\nPidFile none\nUsePAM no\nStrictModes no\n"+
+			"PermitUserRC no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nAuthorizedKeysFile %s\nForceCommand %s\n"+
+			"AllowTcpForwarding no\nX11Forwarding no\n", port, p("host_key"), p("authorized_keys"), p("cli")),
+		"ssh_config": fmt.Sprintf("Host *\n  UserKnownHostsFile %s\n  GlobalKnownHostsFile /dev/null\n  IdentityFile %s\n"+
+			"  IdentitiesOnly yes\n  IdentityAgent none\n  StrictHostKeyChecking accept-new\n", filepath.Join(home, ".ssh", "known_hosts"),
+			p("user_key")),
+	} {
+		if err := os.WriteFile(p(name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{"cli": l66PagingCLI, "port49": stub} {
+		if err := os.WriteFile(p(name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := []string{"PATH=" + os.Getenv("PATH")}
+	srv := exec.Command(sshd, "-D", "-e", "-f", p("sshd_config"))
+	srv.Env = l66PrivateEnv(base, home, lib, p("nss_passwd"), p("nss_group"))
+	srv.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	slog, err := os.Create(p("sshd.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slog.Close()
+	srv.Stdout, srv.Stderr = slog, slog
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-srv.Process.Pid, syscall.SIGKILL)
+		_ = srv.Wait()
+	})
+	for i := 0; ; i++ {
+		c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if i == 50 {
+			b, _ := os.ReadFile(p("sshd.log"))
+			t.Fatalf("the scratch sshd never listened: %v\n%s", err, b)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	s := l66InvSpec{Hosts: []l66Host{{"srx1", "127.0.0.1"}}, Socket: p("agent.sock"), Bin: p("port49"),
+		Platform: l66Platforms["juniper_vjunos-router"], Conn: "ssh", Mode: "fact", SSHCommonArgs: "-F " + p("ssh_config")}
+	if err := os.WriteFile(p("inv.yml"), []byte(l66Inventory(s)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p("play.yml"), []byte(l66Playbook("raw", s.Platform, 1, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(l66PrivateEnv(base, home, lib, p("nss_passwd"), p("nss_group")), "ANSIBLE_HOME="+filepath.Join(home, ".ansible"),
+		"ANSIBLE_COLLECTIONS_PATH="+filepath.Join(r, "clients", "ansible"), "ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false",
+		"PYTHONPATH="+filepath.Join(r, "clients", "python", "src"), "PYTHONDONTWRITEBYTECODE=1", "ANSIBLE_NOCOLOR=1",
+		"ANSIBLE_REMOTE_PORT="+strconv.Itoa(port), "ANSIBLE_HOST_KEY_CHECKING=True", "ANSIBLE_SSH_CONTROL_PATH_DIR="+cp,
+		"ANSIBLE_SSH_PASSWORD_MECHANISM=ssh_askpass")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	// -v prints the raw task's stdout: the CLI's lines.
+	stdout, stderr, exit, err := l64Run(ctx, env, dir, pb, "-v", "-i", p("inv.yml"), p("play.yml"))
+	// The play's ControlPersist master, by its exact socket.
+	socks, _ := filepath.Glob(filepath.Join(cp, "*"))
+	for _, sock := range socks {
+		_ = exec.Command("ssh", "-F", "/dev/null", "-O", "exit", "-S", sock, "l66").Run()
+	}
+	out := stdout + "\n" + stderr
+	if err != nil {
+		t.Fatalf("the raw play did not end on its own at a CLI that pages on a terminal: %v\n%s", err, out)
+	}
+	if rc := l66ReadRecap(stdout)["srx1"]; exit != 0 || rc.OK != 2 || !rc.Passed() {
+		t.Errorf("exit %d, recap %+v: want the mint and the raw task ok\n%s", exit, rc, out)
+	}
+	if !strings.Contains(out, "cli: show version") || !strings.Contains(out, "cli: done") {
+		t.Errorf("the raw task did not reach the CLI and see it exit:\n%s", out)
 	}
 }
