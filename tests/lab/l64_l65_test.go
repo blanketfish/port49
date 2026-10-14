@@ -347,6 +347,22 @@ func l64Diff(before, after []l64Entry) (added, removed []l64Entry) {
 	return added, removed
 }
 
+// l64ReloadChanged says whether the filed lines show a key the reload changed: a line gone, or a key
+// added of a type filed before. A type first filed after it is UpdateHostKeys learning one more key
+// (EOS, 2026-10-14: ECDSA-521 learned on the first login after the reload), recorded but no change.
+func l64ReloadChanged(before, after []l64Entry) bool {
+	added, removed := l64Diff(before, after)
+	if len(removed) > 0 {
+		return true
+	}
+	for _, a := range added {
+		if slices.ContainsFunc(before, func(b l64Entry) bool { return b.Type == a.Type }) {
+			return true
+		}
+	}
+	return false
+}
+
 // l64PickEntry is the filed line of key type typ.
 func l64PickEntry(es []l64Entry, typ string) (l64Entry, bool) {
 	for _, e := range es {
@@ -1223,8 +1239,11 @@ func runL64L65(e *l64Env, versions string) {
 		if aerr != nil {
 			// An unread file is not a changed key: the cell cannot say, so it is INVALID.
 			e.invalid = fmt.Sprintf("`ssh-keygen -F %s` after the reload failed: %v", node, aerr)
-		} else if added, removed = l64Diff(before, after); len(added)+len(removed) > 0 {
-			keyChanged = true
+		} else {
+			added, removed = l64Diff(before, after)
+			if l64ReloadChanged(before, after) {
+				keyChanged = true
+			}
 		}
 		if keyChanged {
 			e.reloadKeyChanged = true

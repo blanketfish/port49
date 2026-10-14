@@ -387,6 +387,30 @@ func TestL64DiffComparesTypeAndBlobNotHost(t *testing.T) {
 	}
 }
 
+// A type first filed after the reload (UpdateHostKeys learning one more key on the first login that
+// had a filed key, as EOS showed on 2026-10-14) is not a key that changed; a line gone, or a type
+// filed before whose key is now another, is.
+func TestL64ReloadChangedIsALostOrReplacedKeyNotANewType(t *testing.T) {
+	ed := l64Entry{Host: "leaf1", Type: "ssh-ed25519", Blob: "AAA"}
+	ec := l64Entry{Host: "leaf1", Type: "ecdsa-sha2-nistp521", Blob: "EEE"}
+	ed2 := l64Entry{Host: "leaf1", Type: "ssh-ed25519", Blob: "ZZZ"}
+	for _, tc := range []struct {
+		name          string
+		before, after []l64Entry
+		want          bool
+	}{
+		{"unchanged", []l64Entry{ed}, []l64Entry{ed}, false},
+		{"a new type learned", []l64Entry{ed}, []l64Entry{ed, ec}, false},
+		{"the filed key replaced", []l64Entry{ed}, []l64Entry{ed2}, true},
+		{"a second key of a filed type", []l64Entry{ed}, []l64Entry{ed, ed2}, true},
+		{"a filed line gone", []l64Entry{ed, ec}, []l64Entry{ed}, true},
+	} {
+		if got := l64ReloadChanged(tc.before, tc.after); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // I4: the revoked line names the key the client negotiated, by the type the driver reported.
 func TestL64PickEntryTakesTheLineOfTheNegotiatedType(t *testing.T) {
 	es := []l64Entry{{Type: "ssh-rsa", Blob: "R"}, {Type: "ssh-ed25519", Blob: "E"}}
