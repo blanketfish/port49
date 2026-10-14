@@ -23,9 +23,10 @@ CLASSES = {
     "revocation_running": Temporary, "connection_changed": Temporary,
 }
 
-# The codes that are an outage or a busy moment, not an answer: the only ones retried. A key or
-# PIN failure, a deny, a broker_refused and a touch_timeout are never run again unasked.
-RETRIED = {"revocation_running", "connection_changed", "broker_unavailable"}
+# The codes that mean nothing was sent to mint with: the only ones retried (ruling 11). A
+# broker_unavailable may have minted, so it is Temporary but not retried; a key or PIN failure,
+# a deny, a broker_refused and a touch_timeout are never run again unasked.
+RETRIED = {"revocation_running", "connection_changed"}
 
 
 @dataclass(frozen=True)

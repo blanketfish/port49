@@ -136,17 +136,26 @@ class AgentTest(unittest.TestCase):
             self.agent(deny, {"stdout": PERMIT}).token("leaf1")
         self.assertEqual(len(fake.argvs(self.dir)), 1)
 
-    def test_a_broker_outage_is_retried_with_backoff(self):
-        down = {"stdout": fake.item(device="leaf1", error="broker_unavailable", detail="d"), "code": 1}
+    def test_a_connection_change_is_retried_with_backoff(self):
         changed = {"stdout": fake.item(device="leaf1", error="connection_changed", detail="d"), "code": 1}
-        self.assertEqual(self.agent(down, changed, {"stdout": PERMIT}).token("leaf1").login, "LOGINTOKEN")
+        self.assertEqual(self.agent(changed, changed, {"stdout": PERMIT}).token("leaf1").login, "LOGINTOKEN")
         self.assertEqual(self.slept, [1, 2])
         self.slept.clear()
         with self.assertRaises(Temporary) as cm:
-            self.agent(down, attempts=4).token("leaf1")
-        self.assertEqual(cm.exception.code, "broker_unavailable")
+            self.agent(changed, attempts=4).token("leaf1")
+        self.assertEqual(cm.exception.code, "connection_changed")
         self.assertEqual(self.slept, [1, 2, 4])  # doubling, and one fewer sleep than attempts
         self.assertEqual(len(fake.argvs(self.dir)), 4)
+
+    def test_a_broker_outage_is_not_retried(self):
+        # The request may have reached the broker and minted (decision 46 ruling 11): a rerun
+        # mints again and holds another candidate slot. It is Temporary; the caller decides.
+        down = {"stdout": fake.item(device="leaf1", error="broker_unavailable", detail="d"), "code": 1}
+        with self.assertRaises(Temporary) as cm:
+            self.agent(down, {"stdout": PERMIT}).token("leaf1")
+        self.assertEqual(cm.exception.code, "broker_unavailable")
+        self.assertEqual(self.slept, [])
+        self.assertEqual(len(fake.argvs(self.dir)), 1)
 
     def test_tokens_collects_denies_and_stops_at_anything_else(self):
         deny = {"stdout": fake.item(device="leaf2", verdict="deny", reason="no_grants_matched"), "code": 1}

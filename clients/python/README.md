@@ -85,7 +85,8 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 | `per_login_mfa_required` | `MFARequired` (`.requirement`) | Run `port49 token DEVICE` at a terminal; one proof covers this agent's further logins for the requirement's `reuse_for_seconds`. |
 | `touch_timeout`, `key_locked`, `key_absent` | `KeyUnavailable` | Touch the key, unlock it, or plug it in; not retried. |
 | `broker_refused` | `BrokerRefused` | The broker refused a proof, or its certificate was refused; not retried. |
-| `revocation_running`, `connection_changed`, `broker_unavailable` | `Temporary` | Retried by `Agent`; see below. `Workload` never reruns a run: run it again later. |
+| `revocation_running`, `connection_changed` | `Temporary` | Retried by `Agent`; see below. `Workload` never reruns a run: run it again later. |
+| `broker_unavailable` | `Temporary` | Not retried: the request may have reached the broker and minted. Run it again when the broker is back. |
 | `device_unconfigured`, `attribute_too_long`, `attribute_unsafe`, `broker_error`, `no_token` | `DeviceFault` | The broker could not decide this one device (or minted it no token). Fix its inventory entry (`device_unconfigured`, `attribute_*`), or read the broker's log (`broker_error`, `no_token`). Other devices are unaffected. |
 | `agent_error`, `exit_N`, `timeout` | `Port49Error` | Read `.detail`. |
 | `answer_too_large` | `Port49Error` | The CLI's answer passed the library's 64 MiB cap: the tokens may be minted but are not read. Split the sweep, or use `port49 workload token --out`. |
@@ -155,14 +156,15 @@ before it authenticates is provisional on lab entry L65.
 ## What is retried, and why
 
 `token` runs again, at most `attempts` times (default 3) with a 1 s, 2 s, 4 s ... wait between,
-only for a code that means nothing was sent to mint with or the broker did not answer:
-`revocation_running` (a revocation sweep is on), `connection_changed` and `broker_unavailable`
-(an outage or a 503). A `connection_changed` retry asks for a second touch, since the touch is
-bound to the connection that changed.
+only for a code that means nothing was sent to mint with: `revocation_running` (a revocation
+sweep is on) and `connection_changed`. A `connection_changed` retry asks for a second touch,
+since the touch is bound to the connection that changed.
 
-Never retried: a key or PIN failure (a locked key would burn its tries), `touch_timeout` (the
-person did not touch; running again would only prompt them again unasked), a deny,
-`broker_refused`, a lost session.
+Never retried: `broker_unavailable` (the request may have reached the broker before it died, and
+a rerun would mint again and hold another candidate slot until the first token expires; it is
+`Temporary`, so the caller decides), a key or PIN failure (a locked key would burn its tries),
+`touch_timeout` (the person did not touch; running again would only prompt them again unasked),
+a deny, `broker_refused`, a lost session.
 
 ## Secrets
 

@@ -113,8 +113,9 @@ message as an Ansible warning, because ansible-core 2.16 to 2.18 censor the mess
 `[WARNING]` line beside it (measured on 2.16, 2.17 and 2.18; 2.19 and later print the error
 itself, measured to 2.21). A workload option given without the other three, or given empty (an
 unset variable), is an error: the lookup never falls back to your agent. The
-lookup retries nothing beyond what the library does for an agent (a revocation sweep or a broker
-outage, three tries); a deny, a locked key and a lost session are never retried. The library's
+lookup retries nothing beyond what the library does for an agent (a revocation sweep or a
+changed connection, three tries); a broker outage, a deny, a locked key and a lost session are
+never retried. The library's
 README lists the codes and what to do for each.
 
 ## Secrets
