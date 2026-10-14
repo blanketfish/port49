@@ -853,12 +853,14 @@ func (b *Broker) markEnrollmentStore(why string) {
 	b.enrollLost = why
 	say := why != "" && why != b.enrollLostSaid
 	b.enrollLostSaid = why
-	b.enrollMu.Unlock()
-	if why == "" {
-		b.Metrics.DirectoryEnrollmentStoreOK.WithLabelValues().Set(1)
-		return
+	// The gauge is set under the lock that orders the state, so the two cannot
+	// land in opposite orders when a request and a scheduled pass race.
+	gauge := 1.0
+	if why != "" {
+		gauge = 0
 	}
-	b.Metrics.DirectoryEnrollmentStoreOK.WithLabelValues().Set(0)
+	b.Metrics.DirectoryEnrollmentStoreOK.WithLabelValues().Set(gauge)
+	b.enrollMu.Unlock()
 	if say {
 		b.say("sign-in: the enrollment store is lost (%s): password sign-in is refused until an operator acts. On a "+
 			"new install run `port49 directory init-enrollments` once; if this broker has enrolled people, restore "+

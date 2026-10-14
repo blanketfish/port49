@@ -242,3 +242,47 @@ func TestTheSkewIsSaidInTheSingular(t *testing.T) {
 		t.Fatalf("%s", shown(w))
 	}
 }
+
+// A judged failure keeps both its counts: giving back is for broker faults
+// alone (decision 47 D5).
+func TestAJudgedFailureKeepsBothCounts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		enrolled bool
+		req      func(secret []byte, f *fixture) api.SignInRequest
+		state    string
+	}{
+		"a wrong password": {true, func(s []byte, f *fixture) api.SignInRequest {
+			return api.SignInRequest{Name: "alice", Password: "wrong", Code: codeAt(t, s, f.now)}
+		}, ""},
+		"a wrong code": {true, func(s []byte, f *fixture) api.SignInRequest {
+			return api.SignInRequest{Name: "alice", Password: "right", Code: wrongCode(t, s, f.now)}
+		}, ""},
+		"a clock off": {true, func(s []byte, f *fixture) api.SignInRequest {
+			return api.SignInRequest{Name: "alice", Password: "right", Code: codeAt(t, s, f.now.Add(-90*time.Second))}
+		}, ""},
+		"the directory's state": {true, func(s []byte, f *fixture) api.SignInRequest {
+			return api.SignInRequest{Name: "alice", Password: "right", Code: codeAt(t, s, f.now)}
+		}, "532"},
+		"enrollment closed": {false, func(_ []byte, _ *fixture) api.SignInRequest {
+			return api.SignInRequest{Name: "alice", Password: "right"}
+		}, ""},
+	} {
+		f, dir := newSignInFixture(t)
+		var secret []byte
+		if tc.enrolled {
+			secret = f.enrolled(t, alicePrincipal, "uuid:alice")
+		}
+		dir.state = tc.state
+		req := tc.req(secret, f)
+		req.CSR = csrOf(t, newECKey(t))
+		if w := f.signIn(t, req); w.Code != 401 && w.Code != 403 {
+			t.Fatalf("%s: %s", name, shown(w))
+		}
+		if n := f.counted(t, aliceSource); n != 1 {
+			t.Fatalf("%s: the source holds %d", name, n)
+		}
+		if n := f.counted(t, alicePrincipalKey); n != 1 {
+			t.Fatalf("%s: the principal holds %d", name, n)
+		}
+	}
+}

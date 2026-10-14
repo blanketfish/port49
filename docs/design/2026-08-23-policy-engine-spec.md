@@ -9653,8 +9653,11 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   pending secret, makes the record active (`enrolled_at`, `enrolled_from` the source), records
   `enroll permit second_factor_enrolled`, and issues. A wrong code puts the handle back for the time
   it had left; the principal's limit bounds the tries. A pending record past its time is no
-  enrollment, and a later sign-in starts again. Two enrollments at once for one principal: the
-  second loses the compare-and-swap and is refused.
+  enrollment, and a later sign-in starts again. Over a `reopened` record the enrollment keeps the
+  record `reopened` with its own end (so a lapse leaves the operator's window in place) and holds
+  the new secret in it; that secret is accepted only under a live confirm handle, whose once-record
+  carries the principal and the enrollment's end, and never as an active factor. Two enrollments at
+  once for one principal: the second loses the compare-and-swap and is refused.
 - **5. The code.** 6 digits; a step either side of the broker's now (RFC 6238 §5.2); a step taken
   once per principal, kept as `last_step` by compare-and-swap, so a replayed code and two replicas
   racing one code are both refused. A code matching a step 2 to 10 steps away is refused and said:
@@ -9724,7 +9727,8 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   names `port49 directory reset-second-factor <principal>`.
 - **13. Operator commands,** on the broker's admin socket, as `port49 directory forget` is: `port49
   directory reset-second-factor <principal>` makes the record `reopened` for `reopen_for` (the
-  secret dropped) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
+  secret dropped; an enrollment begun inside the window may later hold a pending secret in the
+  reopened record, ruling 4) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
   nothing, lets every entry with no active second factor enroll for `reopen_for`, and replaces a
   lost enrollment store (an unreadable file renamed aside, never deleted). `port49 directory unlock
   <principal>` clears the principal's attempt count. `port49 directory init-enrollments` creates the
