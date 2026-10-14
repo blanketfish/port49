@@ -22,7 +22,8 @@ jobs:
       - run: make test-python
   # The same, under a real ansible-core: the lookup's real-ansible tests, and the README's
   # mint-once play under network_cli (no device; it connects to a closed local port). The
-  # versions are the L66 lab's.
+  # versions are the L66 lab's, ansible-pylibssh included, so network_cli runs libssh here as there;
+  # libnss-wrapper gives libssh a private passwd home (it ignores $HOME).
   real-ansible:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -32,8 +33,9 @@ jobs:
         with: {go-version-file: go.mod}
       - uses: actions/setup-python@v5
         with: {python-version: "3.x"}
-      - run: python -m pip install ansible-core==2.21.4 paramiko==5.0.0
-      - run: ansible-galaxy collection install -p "$RUNNER_TEMP/collections" ansible.netcommon==8.7.1 arista.eos==12.3.0
+      - run: sudo apt-get update && sudo apt-get install -y libnss-wrapper
+      - run: python -m pip install ansible-core==2.21.4 paramiko==5.0.0 ansible-pylibssh==1.4.0
+      - run: ansible-galaxy collection install -p "$RUNNER_TEMP/collections" ansible.netcommon==8.7.1 ansible.utils==6.1.1 arista.eos==12.3.0
       - run: PORT49_TEST_ANSIBLE_PLAYBOOK="$(command -v ansible-playbook)" make test-python
         env:
           PORT49_TEST_ANSIBLE_COLLECTIONS: ${{ runner.temp }}/collections

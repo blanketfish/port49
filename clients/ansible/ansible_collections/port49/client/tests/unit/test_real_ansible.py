@@ -4,7 +4,11 @@ Skipped unless PORT49_TEST_ANSIBLE_PLAYBOOK names an ansible-playbook (a throwaw
 `make test` needs no Ansible). The network_cli case also needs ansible.netcommon, found in that
 venv or under PORT49_TEST_ANSIBLE_COLLECTIONS (a collections path), and is skipped without it
 (failed, when that variable is set).
-The run uses a temporary HOME, so nothing of the operator's ~/.ansible or ~/.ssh is read or written.
+The run uses a temporary HOME, and nss_wrapper (libnss-wrapper) gives the user a passwd entry with that
+same home: libssh, which network_cli uses when ansible-pylibssh is installed, takes its home from the
+passwd entry, not $HOME, so without the wrapper it would read the operator's ~/.ssh. A test that needs
+the wrapper is skipped without it (failed when PORT49_TEST_ANSIBLE_COLLECTIONS is set, as in CI), and
+checks, before running Ansible, that the interpreter sees the private home. Keys are never looked for.
 """
 import json
 import os
@@ -61,8 +65,13 @@ PLAY = """- hosts: all
 """
 
 
-def run(tmp, *argv):
-    """Run an Ansible command under a HOME inside tmp; returns (exit code, stdout and stderr)."""
+NSS_LIB = next((p for p in ("/usr/lib/x86_64-linux-gnu/libnss_wrapper.so", "/usr/lib/aarch64-linux-gnu/libnss_wrapper.so",
+                             "/usr/lib/libnss_wrapper.so", "/usr/lib64/libnss_wrapper.so") if os.path.exists(p)), None)
+
+
+def private_env(tmp):
+    """The environment of every command here: HOME in tmp, and (when libnss-wrapper is installed) a passwd
+    entry whose home is the same directory, so libssh does not reach the operator's ~/.ssh."""
     home = os.path.join(tmp, "home")
     os.makedirs(home, exist_ok=True)
     collections = COLLECTIONS + (":" + EXTRA_COLLECTIONS if EXTRA_COLLECTIONS else "")
@@ -71,7 +80,23 @@ def run(tmp, *argv):
            "ANSIBLE_LOCAL_TEMP": os.path.join(tmp, "local"), "ANSIBLE_FORKS": "2",
            # network_cli's socket lives here; a long TMPDIR would pass AF_UNIX's limit.
            "ANSIBLE_PERSISTENT_CONTROL_PATH_DIR": os.path.join(tmp, "pc"),
+           # Neither client may offer a key of the operator's.
+           "ANSIBLE_LIBSSH_LOOK_FOR_KEYS": "False", "ANSIBLE_PARAMIKO_LOOK_FOR_KEYS": "False",
            "PYTHONDONTWRITEBYTECODE": "1"}
+    if NSS_LIB:
+        uid, gid = os.getuid(), os.getgid()
+        passwd, group = os.path.join(tmp, "nss_passwd"), os.path.join(tmp, "nss_group")
+        with open(passwd, "w", encoding="utf-8") as f:
+            f.write("root:x:0:0:root:/root:/bin/sh\n" + (f"test:x:{uid}:{gid}:test:{home}:/bin/sh\n" if uid else ""))
+        with open(group, "w", encoding="utf-8") as f:
+            f.write("root:x:0:\n" + (f"test:x:{gid}:\n" if gid else ""))
+        env.update({"LD_PRELOAD": NSS_LIB, "NSS_WRAPPER_PASSWD": passwd, "NSS_WRAPPER_GROUP": group})
+    return env
+
+
+def run(tmp, *argv):
+    """Run an Ansible command under a HOME inside tmp; returns (exit code, stdout and stderr)."""
+    env = private_env(tmp)
     # Through a pipe: ansible refuses a non-blocking stderr.
     ran = subprocess.run(list(argv), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, text=True, timeout=120, cwd=tmp)
@@ -184,6 +209,14 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
             if EXTRA_COLLECTIONS:  # named, so expected: CI must not pass on a skip
                 self.fail(f"{why} under PORT49_TEST_ANSIBLE_COLLECTIONS")
             self.skipTest(f"{why}; set PORT49_TEST_ANSIBLE_COLLECTIONS")
+        # libssh takes its home from the passwd entry: prove the private home is it before connecting.
+        if not NSS_LIB:
+            if EXTRA_COLLECTIONS:
+                self.fail("libnss-wrapper is not installed: libssh would read the operator's ~/.ssh")
+            self.skipTest("libnss-wrapper is not installed: libssh would read the operator's ~/.ssh")
+        code, out = run(self.tmp, sys.executable, "-I", "-B", "-c", "import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)")
+        if code != 0 or out.strip() != os.path.join(self.tmp, "home"):
+            self.fail(f"under nss_wrapper the passwd home is {out.strip()!r}, not the private home; nothing is run")
         self.log = os.path.join(self.tmp, "argv.log")
         self.fake = os.path.join(self.tmp, "port49")
         with open(self.fake, "w", encoding="utf-8") as f:
