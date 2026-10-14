@@ -426,7 +426,9 @@ func (s *Server) signInOp(ctx context.Context, req Request, uid uint32) Response
 		if req.body == nil {
 			req.body = bytes.NewReader(nil)
 		}
-		body, rerr := io.ReadAll(io.LimitReader(req.body, maxImport+1))
+		// The request line's newline leads the body: it is not counted.
+		body, rerr := io.ReadAll(io.LimitReader(req.body, maxImport+2))
+		body = bytes.TrimPrefix(body, []byte("\n"))
 		switch {
 		case rerr != nil:
 			return Response{Error: "the export did not arrive whole: send it after the request line and half-close"}
@@ -435,7 +437,7 @@ func (s *Server) signInOp(ctx context.Context, req Request, uid uint32) Response
 		case len(bytes.TrimSpace(body)) == 0:
 			return Response{Error: "enrollments_import carries the export after its request line: none arrived"}
 		}
-		text, err = s.EnrollmentsImport(ctx, bytes.TrimPrefix(body, []byte("\n")), req.Replace, uid)
+		text, err = s.EnrollmentsImport(ctx, body, req.Replace, uid)
 	}
 	if err != nil {
 		return Response{Error: err.Error()}

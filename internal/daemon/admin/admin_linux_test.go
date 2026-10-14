@@ -357,6 +357,39 @@ func TestAnUnknownKeyIsRefused(t *testing.T) {
 // An import's body follows its request line on the connection, to the
 // client's half-close, whole across the decoder's read-ahead and the socket's
 // buffers; an export's comes back whole in the answer (plan 9e, I14).
+// An export of exactly 64 MiB, which the CLI sends, is taken: the newline that
+// ends the request line is not part of the bound.
+func TestAnImportOfExactlyTheLimitIsTaken(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), maxImport)
+	got := make(chan int, 1)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		EnrollmentsImport: func(_ context.Context, sealed []byte, _ bool, _ uint32) (string, error) {
+			got <- len(sealed)
+			return "imported", nil
+		}})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := json.NewEncoder(c).Encode(Request{Op: "enrollments_import"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.(*net.UnixConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil || r.Text != "imported" || r.Error != "" {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	if n := <-got; n != maxImport {
+		t.Fatalf("the body arrived as %d bytes, want %d", n, maxImport)
+	}
+}
+
 func TestAnImportBodyFollowsItsRequestLineAndAnExportComesBack(t *testing.T) {
 	body := make([]byte, 3<<20+17)
 	for i := range body {
