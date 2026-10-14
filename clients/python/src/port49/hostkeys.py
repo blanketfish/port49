@@ -12,6 +12,7 @@ passed. The refusals follow `port49 ssh`'s (cmd/port49/ssh.go), so the two
 clients agree on what is unsafe."""
 
 import base64
+import fcntl
 import hashlib
 import hmac
 import os
@@ -37,6 +38,10 @@ _KEEPS_NOTHING = ("/dev/null", "none")
 
 # An operator's HostKeyAlias is filed as it is, so it may not read as a pattern, a marker or a hash, or hold space.
 _ALIAS_UNSAFE = re.compile(r"[\s\x00-\x1f\x7f*?!,\[\]]|^[@|]")
+
+
+# A key type or a base64 blob, as it is written to known_hosts.
+_TOKEN = re.compile(r"[A-Za-z0-9@.+/=-]+")
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,33 @@ def _cannot_keep(first, home):
     return ""
 
 
+def _read_file(name, path, ssh_keygen, device=None):
+    """The (keys, authorities, revoked) that ssh-keygen -F finds under name in one known_hosts file."""
+    keys, authorities, revoked = [], [], []
+    if not os.path.isfile(path):
+        return keys, authorities, revoked
+    try:
+        r = subprocess.run([ssh_keygen, "-F", name, "-f", path], stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: {e}", device) from None
+    if r.returncode not in (0, 1):
+        raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: "
+                           f"{_run.printable(r.stderr.strip(), 300)}", device)
+    for line in r.stdout.splitlines():
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        if fields[0] == "@revoked":
+            if len(fields) >= 4:
+                revoked.append(f"{fields[2]} {fields[3]}")
+        elif fields[0].startswith("@"):
+            authorities.append(line)
+        elif len(fields) >= 3:
+            keys.append(f"{fields[1]} {fields[2]}")
+    return keys, authorities, revoked
+
+
 def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh", ssh_keygen="ssh-keygen"):
     """What OpenSSH's files hold for device, as ssh reads them, with every revoked key dropped. Refuses,
     before anything connects, what this client cannot honour as ssh does (decision 46 ruling 13)."""
@@ -145,6 +177,22 @@ def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh
         raise HostKeyError("host_key_uncheckable", "your ssh_config sets KnownHostsCommand, which this client cannot "
                            "run as ssh does, and reading past it could accept a key ssh refuses: use port49 ssh for "
                            "this device, or file its key in a known_hosts file", device)
+    # Paramiko dials the address at the given port and follows no proxy: where ssh would go through a bastion,
+    # the key it filed or checked would be another host's. Refused, not guessed (fix round 1, I2).
+    for setting in ("proxyjump", "proxycommand"):
+        if conf.get(setting, "none") != "none":
+            raise HostKeyError("host_key_uncheckable", f"your ssh_config reaches {device} through "
+                               f"{'ProxyJump' if setting == 'proxyjump' else 'ProxyCommand'}, which this client "
+                               f"cannot follow, so a key it filed or checked could be another host's: use port49 ssh "
+                               f"for this device", device)
+    try:
+        resolved_port = int(conf.get("port", port))
+    except ValueError:
+        resolved_port = -1
+    if resolved_port != port:
+        raise HostKeyError("host_key_uncheckable", f"your ssh_config sets Port {_run.printable(conf.get('port', ''), 16)}"
+                           f" for {device} but this client would dial port {port}, a different service: pass "
+                           f"port={resolved_port} to connect, or use port49 ssh for this device", device)
     alias = conf.get("hostkeyalias", "")
     if alias and (_ALIAS_UNSAFE.search(alias) or len(alias) > 253):
         raise HostKeyError("host_key_uncheckable", f"your ssh_config's HostKeyAlias {_run.printable(alias, 64)!r} "
@@ -190,27 +238,10 @@ def lookup(device, address, *, port=22, username=None, ssh_config=None, ssh="ssh
                                f"does; use port49 ssh", device)
     keys, authorities, revoked = [], [], []
     for path in kept + glob:
-        if not os.path.isfile(path):
-            continue
-        try:
-            r = subprocess.run([ssh_keygen, "-F", name, "-f", path], stdin=subprocess.DEVNULL, capture_output=True,
-                               text=True, timeout=10)
-        except (OSError, subprocess.SubprocessError) as e:
-            raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: {e}", device) from None
-        if r.returncode not in (0, 1):
-            raise HostKeyError("known_hosts_unread", f"{ssh_keygen} -F {name} -f {path}: "
-                               f"{_run.printable(r.stderr.strip(), 300)}", device)
-        for line in r.stdout.splitlines():
-            fields = line.split()
-            if not fields or fields[0].startswith("#"):
-                continue
-            if fields[0] == "@revoked":
-                if len(fields) >= 4:
-                    revoked.append(f"{fields[2]} {fields[3]}")
-            elif fields[0].startswith("@"):
-                authorities.append(line)
-            elif len(fields) >= 3:
-                keys.append(f"{fields[1]} {fields[2]}")
+        k, a, r = _read_file(name, path, ssh_keygen, device)
+        keys += k
+        authorities += a
+        revoked += r
     kh = KnownHosts(name, (), tuple(authorities), tuple(dict.fromkeys(revoked)), krl, strict,
                     conf.get("hashknownhosts") == "yes", kept[0] if kept else "")
     filed = tuple(k for k in dict.fromkeys(keys) if not is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen))
@@ -258,12 +289,36 @@ def remember(kh, keytype, key_b64, stderr=None):
     concurrent first contacts never interleave. Said on stderr as OpenSSH says it."""
     if not kh.write_to:
         raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {kh.name} in")
+    # What is written is checked here as well, since KnownHosts is public: no pattern, marker or second line.
+    if not kh.name or len(kh.name) > 253 or _ALIAS_UNSAFE.search(kh.name):
+        raise HostKeyError("device_name", f"{str(kh.name)[:64]!r}: {NAME_RULE}")
+    if not _TOKEN.fullmatch(keytype) or not _TOKEN.fullmatch(key_b64):
+        raise HostKeyError("host_key_uncheckable", "the device presented a key that cannot be written to known_hosts")
     host = hashed(kh.name) if kh.hash_names else kh.name
     line = f"{host} {keytype} {key_b64}\n".encode("ascii")
-    os.makedirs(os.path.dirname(kh.write_to), mode=0o700, exist_ok=True)
-    fd = os.open(kh.write_to, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, line)
-    finally:
-        os.close(fd)
+        os.makedirs(os.path.dirname(kh.write_to), mode=0o700, exist_ok=True)
+        fd = os.open(kh.write_to, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            # One writer at a time (other workers of this client; ssh takes no lock), so what is read below is
+            # what the write follows.
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                line = b"\n" + line  # as OpenSSH 10.2p1 does: the last entry stays a whole line
+            # Filed since lookup (another worker, port49 ssh) and different: the key presented is not the one
+            # the device was known by, so it is not filed beside it (OpenSSH would then trust both).
+            filed = [k for k in _read_file(kh.name, kh.write_to, "ssh-keygen")[0]
+                     if not is_revoked(kh, *k.split(" ", 1))]
+            if filed and f"{keytype} {key_b64}" not in filed:
+                raise HostKeyError("host_key_changed", f"a key was filed under {kh.name} while {kh.name} was being "
+                                   f"reached, and it is not the one presented: the key presented was not filed. "
+                                   f"Verify the device's key on its console")
+            if os.write(fd, line) != len(line):
+                raise OSError("short write")
+        finally:
+            os.close(fd)
+    except OSError as e:
+        raise HostKeyError("host_keys_not_kept", f"could not file the key under {kh.name} in {kh.write_to}: "
+                           f"{e.strerror or e}") from None
     print(f"port49: permanently added '{kh.name}' ({keytype}) to {kh.write_to}", file=stderr or sys.stderr)

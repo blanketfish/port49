@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -28,10 +29,29 @@ class FakeConnection:
         EVENTS.clear()
         captured.update(kw)
         self.kw = kw
+        self.alt_host_keys, self.alt_key_file = kw["alt_host_keys"], kw["alt_key_file"]
         self.key_policy = "RejectPolicy" if kw["ssh_strict"] else "AutoAddPolicy"
         if not kw.get("auto_connect", True):
             return
         self._open()
+
+    def reconnect(self, presented=PRESENTED):
+        """What establish_connection() and SCPConn do later (base_connection.py _build_ssh_client): the
+        alt key file is loaded only if alt_host_keys is set and the file is still there; a key held for the
+        address is compared (Paramiko raises BadHostKeyException), and with none held the policy is asked."""
+        held = ""
+        if self.alt_host_keys and os.path.isfile(self.alt_key_file):
+            with open(self.alt_key_file, encoding="ascii") as f:
+                held = f.read()
+        key = types.SimpleNamespace(get_name=lambda: presented[0], get_base64=lambda: presented[1])
+        if held:
+            if f"{presented[0]} {presented[1]}" not in held:
+                raise BadHostKeyException("Host key for server '10.0.0.11' does not match")
+            return
+        policy = self.key_policy
+        if isinstance(policy, str):  # Paramiko's RejectPolicy with nothing held
+            raise Exception("Server '10.0.0.11' not found in known_hosts")
+        policy.missing_host_key(None, self.kw["host"], key)
 
     def _open(self):
         with open(self.kw["alt_key_file"], encoding="ascii") as f:
@@ -158,8 +178,76 @@ class NetmikoTest(unittest.TestCase):
             self.connect(known(), device="leaf*", agent=agent)
         self.assertEqual((cm.exception.code, agent.asked), ("device_name", []))
 
+    # Fix round 1.
+
+    OTHER = ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAIIMPOSTORIMPOSTORIMPOSTORIMPOSTORIMPOSTORIMPO")
+
+    def test_a_reconnect_after_a_first_contact_accepts_only_the_filed_key(self):  # C1
+        conn, remembered = self.connect(known())
+        self.assertFalse(conn.alt_host_keys)
+        conn.reconnect(PRESENTED)  # the filed key: accepted
+        with self.assertRaises(HostKeyError) as cm:
+            conn.reconnect(self.OTHER)
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        self.assertEqual(remembered, [("leaf1", PRESENTED[0], PRESENTED[1])])  # nothing new filed
+
+    def test_a_reconnect_after_a_known_key_connect_accepts_only_the_filed_key(self):  # C1
+        key = " ".join(PRESENTED)
+        conn, remembered = self.connect(known(key))
+        self.assertFalse(conn.alt_host_keys)
+        conn.reconnect(PRESENTED)
+        with self.assertRaises(HostKeyError) as cm:
+            conn.reconnect(self.OTHER)
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        self.assertEqual(remembered, [])
+
+    def test_a_recreated_temp_known_hosts_is_not_trusted(self):  # C1: the deleted-path attack
+        conn, _ = self.connect(known(" ".join(PRESENTED)))
+        path = captured["alt_key_file"]  # what the connection was built with, now removed
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="ascii") as f:
+            f.write("10.0.0.11 " + " ".join(self.OTHER) + "\n")
+        conn.alt_key_file = path  # even if something pointed back at it
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with self.assertRaises(HostKeyError):
+            conn.reconnect(self.OTHER)
+
+    def test_the_pin_accepts_any_filed_key_of_the_name(self):  # M1
+        conn, _ = self.connect(known("ssh-ed25519 AAAA1", " ".join(PRESENTED)))
+        conn.reconnect(PRESENTED)
+        conn.reconnect(("ssh-ed25519", "AAAA1"))
+        with self.assertRaises(HostKeyError):
+            conn.reconnect(self.OTHER)
+
+    def test_a_key_type_paramiko_cannot_load_is_not_a_changed_key(self):  # M2
+        NEXT_ERROR.append(Exception("Server '10.0.0.11' not found in known_hosts"))
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known("ssh-dss AAAA1"))
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
+        self.assertNotIn("ssh-keygen -R", str(cm.exception))
+
+    def test_a_port_that_is_not_a_number_is_refused(self):  # M8
+        with self.assertRaises(ValueError):
+            self.connect(known("ssh-ed25519 AAAA1"), port=None)
+
+    @unittest.skipUnless(__import__("shutil").which("ssh"), "needs OpenSSH's ssh")
+    def test_a_first_contact_behind_a_bastion_never_dials(self):  # I2, the 3am case
+        with tempfile.TemporaryDirectory() as d:
+            for setting in ("ProxyJump bastion-a", "ProxyCommand nc %h %p", "Port 2222"):
+                cfg = os.path.join(d, "ssh_config")
+                with open(cfg, "w", encoding="ascii") as f:
+                    f.write(f"UserKnownHostsFile {d}/kh\nGlobalKnownHostsFile /dev/null\n{setting}\n")
+                captured.clear()
+                with self.assertRaises(HostKeyError, msg=setting) as cm:
+                    p49netmiko.connect("leaf1", agent=FakeAgent(), ssh_config=cfg)
+                self.assertEqual(captured, {}, setting)
+                self.assertEqual(cm.exception.code, "host_key_uncheckable")
+                self.assertIn("port49 ssh", str(cm.exception))
+                self.assertNotIn("ssh-keygen -R", str(cm.exception))
+                self.assertFalse(os.path.exists(f"{d}/kh"))
+
     def test_the_security_options_cannot_be_overridden(self):  # pre-flight M16 adds sock and ssh_config_file; N4 ip
-        for kw in ("ssh_strict", "sock", "ssh_config_file", "auto_connect", "ip"):
+        for kw in ("ssh_strict", "sock", "ssh_config_file", "auto_connect", "ip", "pkey", "key_file"):
             with self.assertRaises(ValueError, msg=kw):
                 self.connect(known("ssh-ed25519 AAAA1"), **{kw: None})
 

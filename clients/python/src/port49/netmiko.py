@@ -22,7 +22,8 @@ DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_i
 # Paramiko to another host than the address the key was checked for (pre-flight M16); and ip, which Netmiko
 # sets self.host from before host (base_connection.py:346-349), so a caller's ip= would do the same (N4).
 OWNED = {"ssh_strict", "system_host_keys", "alt_host_keys", "alt_key_file", "use_keys", "allow_agent", "host",
-         "username", "password", "secret", "device_type", "auto_connect", "ssh_config_file", "sock", "ip"}
+         "username", "password", "secret", "device_type", "auto_connect", "ssh_config_file", "sock", "ip",
+         "pkey", "key_file"}  # Paramiko tries both even with look_for_keys off (M6)
 
 
 class FirstContact:
@@ -34,6 +35,7 @@ class FirstContact:
 
     def __init__(self, kh, device, stderr=None):
         self.kh, self.device, self.stderr = kh, device, stderr
+        self.filed = None  # "type base64" of the key this policy filed
 
     def missing_host_key(self, client, hostname, key):
         keytype, key_b64 = key.get_name(), key.get_base64()
@@ -42,6 +44,40 @@ class FirstContact:
                                f"@revoked line, or your RevokedHostKeys): it was not filed, and the token was not "
                                f"sent", self.device)
         hostkeys.remember(self.kh, keytype, key_b64, stderr=self.stderr)
+        self.filed = f"{keytype} {key_b64}"
+
+
+class Pinned:
+    """The key policy of the connection connect returns, for every later SSH connection it makes (Netmiko's
+    establish_connection() after a drop, SCPConn): no host keys are loaded, so Paramiko asks this for each,
+    and it accepts only a key filed under the device's name, held in memory (fix round 1, C1). Nothing is
+    filed here."""
+
+    def __init__(self, keys, name, device=None):
+        self.keys, self.name, self.device = frozenset(keys), name, device
+
+    def missing_host_key(self, client, hostname, key):
+        if f"{key.get_name()} {key.get_base64()}" not in self.keys:
+            raise HostKeyError("host_key_changed", f"{hostname} presents a key that is not one filed under "
+                               f"{self.name}: either the device's key changed, or this is not the device. Verify the "
+                               f"key on its console", self.device)
+
+
+def _chain_text(exc):
+    seen, texts = set(), []
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        texts.append((type(exc).__name__, str(exc)))
+        exc = exc.__cause__ or exc.__context__
+    return texts
+
+
+def is_key_type_unloadable(exc):
+    """Whether exc is RejectPolicy's "not found in known_hosts" with no changed key behind it: every key filed
+    is of a type Paramiko cannot load (ssh-dss, sk-*), so nothing was held for the address (M2)."""
+    texts = _chain_text(exc)
+    return any("not found in known_hosts" in t for _, t in texts) and not any(
+        n == "BadHostKeyException" or ("Host key for server" in t and "does not match" in t) for n, t in texts)
 
 
 def is_host_key_failure(exc):
@@ -73,7 +109,10 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
     device_type = DEVICE_TYPES.get(tok.platform)
     if device_type is None:
         raise ValueError(f"{device}: platform {tok.platform!r} has no Netmiko device type here")
-    port = int(netmiko_kwargs.get("port", 22))
+    try:
+        port = int(netmiko_kwargs.get("port", 22))
+    except (TypeError, ValueError):
+        raise ValueError("port must be a number") from None
     # After the mint, since ssh -G reads the address it gives (Match host): a refusal from here on leaves
     # the token unused, to expire.
     kh = hostkeys.lookup(device, tok.address, port=port, username=tok.username, ssh_config=ssh_config)
@@ -96,12 +135,18 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
                               ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
                               alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
                               **netmiko_kwargs)
+        first = None
         if not kh.keys:
             # A first contact: the presented key is checked and filed before authentication, not after
             # the login (pre-flight C1).
-            conn.key_policy = FirstContact(kh, device, stderr=sys.stderr)
+            first = conn.key_policy = FirstContact(kh, device, stderr=sys.stderr)
         try:
             conn._open()  # what auto_connect=True runs: the connection, then the session's preparation
+            # Every later connection of conn (a reconnect, SCP) takes the filed key only, from memory: the
+            # temp file goes, and nothing may name it (fix round 1, C1).
+            pinned = set(kh.keys) or ({first.filed} if first and first.filed else set())
+            conn.alt_host_keys, conn.alt_key_file = False, ""
+            conn.key_policy = Pinned(pinned, kh.name, device)
         except BaseException as e:
             try:
                 conn.disconnect()
@@ -109,6 +154,10 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
                 pass
             if isinstance(e, HostKeyError):
                 raise
+            if is_key_type_unloadable(e):
+                raise HostKeyError("host_key_uncheckable", f"the keys filed under {kh.name} are of a type Paramiko "
+                                   f"cannot load (ssh-dss, a security-key type), so none could be checked; the key "
+                                   f"has not changed: use port49 ssh for this device", device) from None
             if is_host_key_failure(e):
                 raise HostKeyError("host_key_changed", f"the key filed under {kh.name} is not the one {tok.address} "
                                    f"presents: either the device's key changed, or the address is not the device. "

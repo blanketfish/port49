@@ -261,6 +261,62 @@ class HostKeysTest(unittest.TestCase):
                                                                          "  HostKeyAlias by-address"))
         self.assertEqual(kh.name, "leaf1")
 
+    # Fix round 1.
+
+    def quiet(self):
+        f = open(os.devnull, "w")
+        self.addCleanup(f.close)
+        return f
+
+    def test_remember_keeps_the_last_line_of_a_file_without_a_final_newline(self):  # I1
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"spine1 {ED}")
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet())
+        self.assertEqual(hostkeys.lookup("spine1", "10.0.0.12", ssh_config=self.config()).keys, (ED,))
+        self.assertEqual(hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config()).keys, (ED,))
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"spine1 {ED}\nleaf1 {ED}\n")
+
+    def test_remember_refuses_when_another_key_is_now_filed(self):  # M3: filed during the key exchange
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        real, _ = self.newkey("real")
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {real}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet())
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"leaf1 {real}\n")
+
+    def test_remember_checks_what_it_writes(self):  # M5
+        for name, keytype, blob in (("a b", "ssh-ed25519", "AAAA"), ("leaf*", "ssh-ed25519", "AAAA"),
+                                    ("leaf1", "ssh-ed25519 x", "AAAA"), ("leaf1", "ssh-ed25519", "AA\nBB")):
+            kh = hostkeys.KnownHosts(name, (), (), (), "", False, False, self.kh)
+            with self.assertRaises(HostKeyError, msg=repr((name, keytype, blob))):
+                hostkeys.remember(kh, keytype, blob, stderr=self.quiet())
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), "")
+
+    def test_a_write_that_fails_is_a_host_key_error(self):  # M4
+        kh = hostkeys.KnownHosts("leaf1", (), (), (), "", False, False, os.path.join(self.kh, "under_a_file"))
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet())
+        self.assertEqual(cm.exception.code, "host_keys_not_kept")
+
+    def test_a_proxy_or_port_the_library_cannot_follow_is_refused(self):  # I2
+        for setting, name in (("ProxyJump bastion-a", "ProxyJump"), ("ProxyCommand nc %h %p", "ProxyCommand")):
+            e = self.refused("host_key_uncheckable", name, "leaf1", "10.0.0.11", ssh_config=self.config(setting))
+            self.assertIn("port49 ssh", str(e))
+            self.assertNotIn("ssh-keygen -R", str(e))
+        e = self.refused("host_key_uncheckable", "Port", "leaf1", "10.0.0.11", ssh_config=self.config("Port 2222"))
+        self.assertIn("2222", str(e))
+        self.assertIn("22", str(e))
+        self.assertNotIn("ssh-keygen -R", str(e))
+        # the caller's own port, and `none`, stand
+        hostkeys.lookup("leaf1", "10.0.0.11", port=2222, ssh_config=self.config("Port 2222"))
+        hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("ProxyJump none", "ProxyCommand none"))
+
     def test_remember_with_nowhere_to_write_is_refused(self):
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config("StrictHostKeyChecking yes"))
         kh = hostkeys.KnownHosts(kh.name, (), (), (), "", True, False, "")
