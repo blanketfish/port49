@@ -104,6 +104,42 @@ serialize it. `str`, `repr`, pickle and `copy` of the exception leave the tokens
 exception has the device names and `None` for each token), but `vars(e)` and `e.results` itself
 are the real thing.
 
+## Netmiko and host keys
+
+```python
+from port49.netmiko import connect
+
+conn = connect("leaf1", enable=True)    # a Netmiko connection; extra keyword arguments pass to Netmiko
+```
+
+port49 stores no host key. `connect` keeps the device's key in your OpenSSH `known_hosts`, under
+the device's inventory name (your `HostKeyAlias` if you set one), the entry `port49 ssh` uses. It
+reads your ssh_config through `ssh -G` and the key files through `ssh-keygen -F`, and parses
+neither itself.
+
+- No key filed: the key the device presents is filed before the token is sent (accept-new). Many
+  workers reaching a new device at once each write one whole line.
+- A key filed: the only key accepted. A changed key, a key of another type, or another host at the
+  address is `HostKeyError` (`host_key_changed`) before the token is sent; the message gives
+  `ssh-keygen -R NAME`.
+- Your `StrictHostKeyChecking yes` stands: nothing is filed, and a device with no key filed is
+  refused (`host_key_unknown`).
+
+Refused, with the setting named, and never filed past:
+
+| Code | When |
+|---|---|
+| `device_name` | A name known_hosts would read as a pattern or a marker (`leaf*`, `a,b`, `@x`, ...). Checked before the mint. |
+| `ssh_config_unread` | `ssh -G` failed on your ssh_config. |
+| `known_hosts_unread` | `ssh-keygen -F` failed on a known_hosts file. |
+| `host_key_uncheckable` | A `KnownHostsCommand` (use `port49 ssh`); a `RevokedHostKeys` that `ssh-keygen -Q` cannot read (a plain key list, which ssh honours and this client does not: make a KRL with `ssh-keygen -k`); a path in `GlobalKnownHostsFile` or `UserKnownHostsFile` that cannot be resolved; a host covered only by `@cert-authority`, which Paramiko cannot check. |
+| `host_keys_not_kept` | Under accept-new, the first `UserKnownHostsFile` is `/dev/null`, `none`, a link to either, or not a file you can write (or create). Every connection would be a first contact. |
+| `host_key_revoked` | An `@revoked` line or `RevokedHostKeys` names the key, filed beside your entry or presented at first contact. |
+| `host_key_unknown`, `host_key_changed` | As above. |
+
+A refusal after the mint leaves that token unused; it expires. That Paramiko refuses a wrong key
+before it authenticates is provisional on lab entry L65.
+
 ## What is retried, and why
 
 `token` runs again, at most `attempts` times (default 3) with a 1 s, 2 s, 4 s ... wait between,
