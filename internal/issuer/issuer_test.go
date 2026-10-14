@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -343,6 +344,95 @@ func TestReadSignInRefusesWhatItDidNotIssue(t *testing.T) {
 	} {
 		if _, err := ReadSignIn(c.cert); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+// dirSignIn is a directory sign-in as the issuer is asked for one.
+func dirSignIn(now time.Time) SignIn {
+	return SignIn{Method: MethodDirectoryPassword, Principal: "user:alice@example.com",
+		Subject: EntrySubject("dn:cn=alice smith,ou=staff"), AMR: []string{"pwd", "otp"}, AuthTime: now, IssuedAt: now}
+}
+
+// A directory sign-in's certificate carries method, sub, auth_time, iat and
+// amr, and no iss; it reads back as it was issued (decision 47 D6).
+func TestADirectorySignInRoundTrips(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	ca, err := Ephemeral(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := dirSignIn(now)
+	c, err := ca.Issue(newKey(t).Public(), s, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadSignIn(c)
+	if err != nil || got.Method != MethodDirectoryPassword || got.Issuer != "" || got.Subject != s.Subject ||
+		!slices.Equal(got.AMR, []string{"pwd", "otp"}) || !got.AuthTime.Equal(now) || !got.IssuedAt.Equal(now) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	q := c.URIs[0].Query()
+	if q.Get("method") != "directory_password" || q.Has("iss") || q.Has("sid") || q.Has("acr") {
+		t.Fatalf("%s", c.URIs[0])
+	}
+	if !strings.HasPrefix(s.Subject, "entry-sha256:") || len(s.Subject) != len("entry-sha256:")+64 {
+		t.Fatalf("%s", s.Subject)
+	}
+}
+
+// Each method's rules: an OIDC sign-in needs its https iss; a directory one
+// takes none, and no sid or acr; an unknown method is refused; a 9b
+// certificate with no method member still reads as OIDC.
+func TestEachMethodIsHeldToItsRules(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	edit := func(base SignIn, f func(*SignIn)) SignIn { f(&base); return base }
+	for name, c := range map[string]struct {
+		s    SignIn
+		want string
+	}{
+		"OIDC with no iss":           {edit(alice(now), func(s *SignIn) { s.Issuer = "" }), "iss"},
+		"directory with an iss":      {edit(dirSignIn(now), func(s *SignIn) { s.Issuer = "https://kc.example" }), "iss"},
+		"directory with a sid":       {edit(dirSignIn(now), func(s *SignIn) { s.Sid = "s1" }), "sid"},
+		"directory with an acr":      {edit(dirSignIn(now), func(s *SignIn) { s.ACR = "1" }), "acr"},
+		"directory with a raw sub":   {edit(dirSignIn(now), func(s *SignIn) { s.Subject = "alice" }), "entry-sha256"},
+		"directory with a short sub": {edit(dirSignIn(now), func(s *SignIn) { s.Subject = "entry-sha256:abcd" }), "entry-sha256"},
+		"directory with no amr":      {edit(dirSignIn(now), func(s *SignIn) { s.AMR = nil }), "amr"},
+		"method saml":                {edit(dirSignIn(now), func(s *SignIn) { s.Method = "saml" }), "method"},
+	} {
+		if err := c.s.validate(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	if err := dirSignIn(now).validate(); err != nil {
+		t.Errorf("a good directory sign-in: %v", err)
+	}
+	// A 9b certificate has no method member and reads as OIDC.
+	ca, _ := Ephemeral(now)
+	c, err := ca.Issue(newKey(t).Public(), alice(now), now, time.Hour)
+	if err != nil || c.URIs[0].Query().Has("method") {
+		t.Fatalf("%v %s", err, c.URIs[0])
+	}
+	if got, err := ReadSignIn(c); err != nil || got.Method != MethodOIDC {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// A URI that mixes the methods' fields is refused on read.
+	mixed := func(edit func(url.Values)) *x509.Certificate {
+		u := *dirSignIn(now).URI()
+		q := u.Query()
+		edit(q)
+		u.RawQuery = q.Encode()
+		return &x509.Certificate{Subject: pkix.Name{CommonName: "user:alice@example.com"}, URIs: []*url.URL{&u}}
+	}
+	for name, cert := range map[string]*x509.Certificate{
+		"directory with iss":   mixed(func(q url.Values) { q.Set("iss", "https://kc.example") }),
+		"directory with sid":   mixed(func(q url.Values) { q.Set("sid", "s1") }),
+		"unknown method":       mixed(func(q url.Values) { q.Set("method", "saml") }),
+		"method twice":         mixed(func(q url.Values) { q.Add("method", "directory_password") }),
+		"explicit oidc method": mixed(func(q url.Values) { q.Set("method", "oidc") }),
+	} {
+		if _, err := ReadSignIn(cert); err == nil {
+			t.Errorf("%s: read", name)
 		}
 	}
 }
