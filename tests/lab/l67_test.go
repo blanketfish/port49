@@ -136,6 +136,26 @@ func l67WrongCode(secret []byte, now time.Time) (string, error) {
 	}
 }
 
+// l67BaseCost is what reading the connection count costs, from the cost of
+// several back-to-back reads, and whether the count was quiet. A container's
+// reader costs nothing, so it is quiet when two reads in a row cost nothing;
+// the DC's reader is itself an ssh connection, so its base is the least cost
+// seen.
+func l67BaseCost(costs []int, windows bool) (base int, quiet bool) {
+	if len(costs) == 0 {
+		return 0, false
+	}
+	base = costs[0]
+	for _, c := range costs {
+		base = min(base, c)
+	}
+	if windows {
+		return base, true
+	}
+	n := len(costs)
+	return base, n >= 2 && costs[n-1] == 0 && costs[n-2] == 0
+}
+
 // l67Unchanged is whether an action left a server-side count alone. base is
 // what reading the count costs (a Windows reader's own ssh is a TCP
 // connection the DC accepts; a log read costs nothing).
@@ -217,6 +237,7 @@ type l67State struct {
 	Created                               time.Time
 }
 
+// (l67OtherFlags is below cell (c).)
 func (s l67State) String() string {
 	return fmt.Sprintf("failed %d, locked %v, expired %v, disabled %v, must_change %v", s.Count, s.Locked, s.Expired, s.Disabled, s.MustChange)
 }
@@ -226,6 +247,7 @@ func (s l67State) String() string {
 type l67X struct {
 	t      *testing.T
 	owner  *testing.T // the directory's own test: what outlives the cells
+	sec    l67Secrets // every TOTP secret and code the run handled: none may reach a note, evidence or log
 	d      *directories
 	dir    *labDir
 	pw     string // the people's password: never printed
@@ -427,6 +449,73 @@ func l67PassiveOpens(snmp string) (int, error) {
 	return 0, errors.New("no PassiveOpens in /proc/net/snmp")
 }
 
+// l67Raw is a bind as the wire answered it, before CheckPassword filters it:
+// the LDAP result code, any "data XXX" code in the diagnostic (matched with no
+// allow-list) and the ppolicy response control (absent, present_no_error, or
+// error_<n>). The diagnostic message itself is not kept.
+type l67Raw struct {
+	Result  int
+	Data    string
+	Control string
+}
+
+func (r l67Raw) show() string {
+	s := fmt.Sprintf("LDAP result %d", r.Result)
+	if r.Data != "" {
+		s += ", data " + r.Data
+	}
+	return s + ", ppolicy " + strings.ReplaceAll(r.Control, "_", " ")
+}
+
+// l67RawOf reads a go-ldap bind result and error into an l67Raw.
+func l67RawOf(res *ldap.SimpleBindResult, err error) l67Raw {
+	r := l67Raw{Control: "absent"}
+	if res != nil {
+		for _, c := range res.Controls {
+			if p, ok := c.(*ldap.ControlBeheraPasswordPolicy); ok {
+				r.Control = "present_no_error"
+				if p.Error >= 0 {
+					r.Control = fmt.Sprintf("error_%d", p.Error)
+				}
+			}
+		}
+	}
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		r.Result = int(le.ResultCode)
+		if le.Err != nil {
+			if m := l67ADData.FindStringSubmatch(le.Err.Error()); m != nil {
+				r.Data = m[1]
+			}
+		}
+	}
+	return r
+}
+
+// rawBind is a simple bind of dn with password on a connection of its own,
+// asking for the ppolicy control, and what it answered. The password is sent,
+// never kept.
+func (x *l67X) rawBind(dn, password string) (l67Raw, error) {
+	cfg, err := x.dir.d.pki.clientTLS(x.dir.uri)
+	if err != nil {
+		return l67Raw{}, err
+	}
+	c, err := ldap.DialURL(x.dir.uri, ldap.DialWithTLSConfig(cfg))
+	if err != nil {
+		return l67Raw{}, err
+	}
+	defer c.Close()
+	res, err := c.SimpleBind(&ldap.SimpleBindRequest{Username: dn, Password: password,
+		Controls: []ldap.Control{ldap.NewControlBeheraPasswordPolicy()}})
+	if res == nil && err != nil {
+		var le *ldap.Error
+		if !errors.As(err, &le) {
+			return l67Raw{}, err // no answer: not a bind's result
+		}
+	}
+	return l67RawOf(res, err), nil
+}
+
 // rawUnauth is an unauthenticated bind (a name and an empty password) as a raw
 // go-ldap client sends it, and what a WhoAmI says afterwards.
 func (x *l67X) rawUnauth(dn string) (bindErr error, who string, whoErr error) {
@@ -511,12 +600,29 @@ func (x *l67X) cellB(t *testing.T) {
 		x.row("b. raw unauthenticated bind", "SUCCEEDED, as RFC 4513 §5.1.2 warns; WhoAmI authzId %q (empty is anonymous)", who)
 	}
 	// The control: the connection count sees a connection, here a real bind's.
-	n0, err := x.conns(t)
-	if err != nil {
-		t.Fatalf("INVALID: %s: the connection count is unreadable: %v", x.dir.name, err)
+	var costs []int
+	var n1 int
+	for i := 0; i < 8; i++ {
+		a, err := x.conns(t)
+		if err != nil {
+			t.Fatalf("INVALID: %s: the connection count is unreadable: %v", x.dir.name, err)
+		}
+		b, _ := x.conns(t)
+		costs, n1 = append(costs, b-a), b
+		if i >= 1 && x.dir.name != platWindows && costs[i] == 0 && costs[i-1] == 0 {
+			break
+		}
+		if x.dir.name == platWindows && i >= 4 {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
-	n1, _ := x.conns(t)
-	base := n1 - n0
+	base, quiet := l67BaseCost(costs, x.dir.name == platWindows)
+	if !quiet {
+		x.limit("b: the %s connection count is noisy (successive reads cost %v), so \"unchanged\" is best-effort; the base is the least cost seen, %d", x.dir.name, costs, base)
+	} else if x.dir.name == platWindows {
+		x.limit("b: the DC's connection count (ConnectionsAccepted) counts the whole server, including the ssh that reads it; \"unchanged\" is judged against the least cost of %d reads, %d, and is best-effort", len(costs), base)
+	}
 	if err := x.check(t, r, e, "b: control, a real bind", x.pw); err != nil {
 		t.Fatalf("INVALID: the control bind: %v", err)
 	}
@@ -525,7 +631,7 @@ func (x *l67X) cellB(t *testing.T) {
 		t.Fatalf("INVALID: %s: the connection count did not move for a real bind (%d, %d, reading costs %d), so it cannot show that an empty password opens none", x.dir.name, n1, n2, base)
 	}
 	x.row("b. control", "a real bind moved the connection count %d -> %d (reading it costs %d)", n1, n2, base)
-	err = x.check(t, r, e, "b: CheckPassword with an empty password", "")
+	err := x.check(t, r, e, "b: CheckPassword with an empty password", "")
 	n3, _ := x.conns(t)
 	x.ev.add(evidenceLine{Event: "l67_connections", Label: "b: after the empty password", Count: &n3})
 	x.row("b. CheckPassword(..., \"\")", "%s; connections %d -> %d", l67Classify(err).show(), n2, n3)
@@ -567,6 +673,7 @@ func (x *l67X) cellC(t *testing.T) {
 			x.lock(t, r, e, u.user)
 		}
 		st, stErr := x.state(t, u.user)
+		extra := l67OtherFlags(st, u.state)
 		switch {
 		case stErr != nil:
 			x.limit("c: %s's state could not be read from the directory: %v", u.user, stErr)
@@ -574,20 +681,14 @@ func (x *l67X) cellC(t *testing.T) {
 		case !u.got(st):
 			x.limit("c: the directory does not hold %s as %s (%s); its answers below are those of an account in no such state", u.user, u.state, st)
 			x.row("c. control, "+u.state, "NOT in the state meant: %s", st)
+		case len(extra) > 0:
+			x.limit("c: the directory holds %s as %s and also as %s (%s); its answers below are those of an account in more than the one state", u.user, u.state, strings.Join(extra, ", "), st)
+			x.row("c. control, "+u.state, "in the state meant, and also %s: %s", strings.Join(extra, ", "), st)
 		default:
-			x.row("c. control, "+u.state, "the directory reports it: %s", st)
+			x.row("c. control, "+u.state, "the directory reports it, and no other state: %s", st)
 		}
-		held := stErr == nil && u.got(st)
-		for _, p := range []struct{ name, pw string }{{"right", x.pw}, {"wrong", x.wrong()}} {
-			err := x.check(t, r, e, fmt.Sprintf("c: %s, %s password", u.user, p.name), p.pw)
-			res := l67Classify(err)
-			x.row(fmt.Sprintf("c. %s, %s password", u.state, p.name), "%s", res.show())
-			if held && p.name == "right" && err == nil {
-				// A right password bound a person the directory itself holds in a
-				// state a bind should refuse.
-				x.fail("c: %s's right password bound, though the directory holds the account as %s", u.user, u.state)
-			}
-		}
+		held := stErr == nil && u.got(st) && len(extra) == 0
+		x.statePasswords(t, r, e, u.user, u.state, "", held)
 	}
 	// Alice, the positive control for the right password.
 	e := x.entry(t, x.dir, "alice")
@@ -595,6 +696,104 @@ func (x *l67X) cellC(t *testing.T) {
 	x.row("c. control", "alice's right password: %s", l67Classify(err).show())
 	if err != nil {
 		t.Fatalf("INVALID: alice's right password was refused: %v", err)
+	}
+	if x.dir.name == platOpenLDAP {
+		x.useLockoutFalse(t)
+	}
+}
+
+// l67OtherFlags names the states an account is in besides the one meant.
+func l67OtherFlags(s l67State, state string) []string {
+	var out []string
+	for _, f := range []struct {
+		state, name string
+		on          bool
+	}{{"expired", "expired", s.Expired}, {"must change", "must_change", s.MustChange},
+		{"disabled", "disabled", s.Disabled}, {"locked", "locked", s.Locked}} {
+		if f.on && f.state != state {
+			out = append(out, f.name)
+		}
+	}
+	return out
+}
+
+// statePasswords binds user with the right and with a wrong password, raw (what
+// the wire answered, before CheckPassword filters it) and through CheckPassword,
+// and records both. tag names the setting in the labels.
+func (x *l67X) statePasswords(t *testing.T, r *directory.Resolver, e directory.SignInEntry, user, state, tag string, held bool) {
+	t.Helper()
+	for _, p := range []struct{ name, pw string }{{"right", x.pw}, {"wrong", x.wrong()}} {
+		raw, rawErr := x.rawBind(e.DN, p.pw)
+		code := raw.Result
+		x.ev.add(evidenceLine{Event: "l67_raw", Label: fmt.Sprintf("c%s: %s, %s password, raw bind", tag, user, p.name),
+			ResultCode: &code, Data: raw.Data, Control: raw.Control})
+		err := x.check(t, r, e, fmt.Sprintf("c%s: %s, %s password", tag, user, p.name), p.pw)
+		res := l67Classify(err)
+		if rawErr != nil {
+			x.row(fmt.Sprintf("c%s. %s, %s password", tag, state, p.name), "CheckPassword: %s; the raw bind failed: %v", res.show(), rawErr)
+		} else {
+			x.row(fmt.Sprintf("c%s. %s, %s password", tag, state, p.name), "CheckPassword: %s; raw: %s", res.show(), raw.show())
+		}
+		if held && p.name == "right" && err == nil && state != "must change" {
+			// A right password bound a person the directory itself holds in a
+			// state a bind should refuse.
+			x.fail("c: %s's right password bound, though the directory holds the account as %s", user, state)
+		}
+	}
+}
+
+// ldapiLockout sets olcPPolicyUseLockout over ldapi in the OpenLDAP container.
+func (x *l67X) ldapiLockout(value string) error {
+	script := "printf 'dn: olcOverlay={1}ppolicy,olcDatabase={1}mdb,cn=config\\nchangetype: modify\\nreplace: olcPPolicyUseLockout\\n" +
+		"olcPPolicyUseLockout: " + value + "\\n' | ldapmodify -Y EXTERNAL -H ldapi:///"
+	out, err := x.dir.exec("sh", "-c", script)
+	if err != nil {
+		return fmt.Errorf("ldapmodify over ldapi: %v: %s", err, oneLineMax(out, 200))
+	}
+	return nil
+}
+
+// useLockoutFalse is cell (c) on OpenLDAP under the stock olcPPolicyUseLockout
+// (FALSE), where a locked account's bind carries no ppolicy control: the
+// locked and the disabled people with the right and a wrong password, raw and
+// through CheckPassword, and what a person sees signing in through the broker
+// and whether the limiter counted it. It sets TRUE back.
+func (x *l67X) useLockoutFalse(t *testing.T) {
+	t.Helper()
+	if err := x.ldapiLockout("FALSE"); err != nil {
+		x.limit("c: olcPPolicyUseLockout could not be set to FALSE, so the stock default was not measured: %v", err)
+		return
+	}
+	defer func() {
+		if err := x.ldapiLockout("TRUE"); err != nil {
+			x.fail("c: olcPPolicyUseLockout could not be set back to TRUE: %v", err)
+		}
+	}()
+	for _, u := range []struct{ user, state string }{{"l67-locked", "locked"}, {"l67-disabled", "disabled"}} {
+		e := x.entry(t, x.dir, u.user)
+		r := x.resolver(t, x.dir)
+		st, err := x.state(t, u.user)
+		if err != nil {
+			x.limit("c (UseLockout FALSE): %s's state could not be read: %v", u.user, err)
+		}
+		x.row("c (UseLockout FALSE). control, "+u.state, "the directory reports: %s", st)
+		x.statePasswords(t, r, e, u.user, u.state, " (UseLockout FALSE)", err == nil)
+	}
+	// What the person sees, and whether the limiter counted each: the broker
+	// answers sign_in_refused until the per-principal limit, then throttles.
+	x.startBroker(t, l67BrokerOpts{})
+	a := x.broker.api(t)
+	var seen []string
+	for i := 1; i <= l67Defaults+1; i++ {
+		ans := a.signIn("l67-locked", x.pw, "")
+		code := ans.Status
+		x.ev.add(evidenceLine{Event: "l67_signin", Label: fmt.Sprintf("c (UseLockout FALSE): sign-in %d for the locked person, right password", i),
+			ResultCode: &code, Data: ans.Error})
+		seen = append(seen, fmt.Sprintf("%d: %d %s", i, ans.Status, ans.Error))
+	}
+	x.row("c (UseLockout FALSE). sign-in, locked person", "%s", strings.Join(seen, "; "))
+	if !strings.Contains(seen[len(seen)-1], "sign_in_throttled") {
+		x.fail("c: under UseLockout FALSE the %dth sign-in of a locked person (right password) was not throttled (%s): the limiter did not count the refusals", l67Defaults+1, seen[len(seen)-1])
 	}
 }
 
@@ -620,7 +819,10 @@ func (x *l67X) cellF(t *testing.T) {
 		seed = m
 	}
 	if seed.IsZero() {
-		x.fail("f: the seed's time is unknown")
+		// The DC's seed has no log line of its own, and comparing a creation time
+		// with itself shows nothing: the control above (SignInEntry equals the
+		// DC's own whenCreated) is the measurement.
+		x.limit("f: the seed's time is not independently known on %s, so \"within a minute of the seed\" is not measured; only that CreatedAt is the directory's own creation time (the control row)", x.dir.name)
 		return
 	}
 	d := seed.Sub(e.CreatedAt)
@@ -634,12 +836,69 @@ func (x *l67X) cellF(t *testing.T) {
 // Persons: the second factor the harness plays.
 // ---------------------------------------------------------------------------
 
+// l67Secrets collects every TOTP secret and code a run handled, so that the
+// notes, the evidence and the logs can be checked for them. Nothing here is
+// printed; only whether they appear is reported.
+type l67Secrets struct {
+	mu      sync.Mutex
+	secrets []string
+	codes   []string
+}
+
+// addSecret registers a secret in the forms it is shown in: base32 in both
+// cases, and in the CLI's groups of four.
+func (s *l67Secrets) addSecret(secret []byte) {
+	b := l67Base32(secret)
+	var groups []string
+	for i := 0; i < len(b); i += 4 {
+		groups = append(groups, b[i:min(i+4, len(b))])
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secrets = append(s.secrets, b, strings.ToLower(b), strings.Join(groups, " "), strings.ToLower(strings.Join(groups, " ")))
+}
+
+func (s *l67Secrets) addCode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codes = append(s.codes, code)
+}
+
+// leaksIn is whether text holds a secret, or a code as a whole number.
+func (s *l67Secrets) leaksIn(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sec := range s.secrets {
+		if sec != "" && strings.Contains(text, sec) {
+			return true
+		}
+	}
+	for _, c := range s.codes {
+		for i := 0; ; {
+			j := strings.Index(text[i:], c)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			before := at == 0 || text[at-1] < '0' || text[at-1] > '9'
+			end := at + len(c)
+			after := end == len(text) || text[end] < '0' || text[end] > '9'
+			if before && after {
+				return true
+			}
+			i = at + 1
+		}
+	}
+	return false
+}
+
 // l67Person is one person's authenticator: the secret, and the last step the
 // broker was given. The secret is never printed.
 type l67Person struct {
 	name   string
 	secret []byte
 	last   int64
+	rec    *l67Secrets // told every code this person's authenticator makes
 }
 
 // code is the code of the next step the broker will take, after waiting for
@@ -652,6 +911,9 @@ func (p *l67Person) code() string {
 		panic(err)
 	}
 	p.last = step
+	if p.rec != nil {
+		p.rec.addCode(c)
+	}
 	return c
 }
 
@@ -667,7 +929,8 @@ func (x *l67X) enroll(t *testing.T, a *l67API, name string) *l67Person {
 	if err != nil {
 		t.Fatalf("INVALID: enrolling %s: %v", name, err)
 	}
-	p := &l67Person{name: name, secret: secret}
+	x.sec.addSecret(secret)
+	p := &l67Person{name: name, secret: secret, rec: &x.sec}
 	conf := a.confirm(ans.Enroll.Handle, p.code())
 	if conf.Status != http.StatusOK || !conf.Cert {
 		t.Fatalf("INVALID: confirming %s's enrollment: %d %s (%s)", name, conf.Status, conf.Error, conf.Detail)
@@ -889,6 +1152,7 @@ func (x *l67X) endToEnd(t *testing.T, which string, cli *l67CLI, device string, 
 	t.Helper()
 	label := "g. " + which
 	login := cli.login(t, l67LoginIn{name: "alice", password: x.pw, enroll: true})
+	x.noteLogin(login)
 	l67Exit(x.ev, label+": login --directory, enrolling", login.Exit, login.Said)
 	x.row(label+", login --directory", "exit %d; enrolled %v; %s", login.Exit, login.Enrolled, login.Said)
 	if login.Exit != 0 || !login.Enrolled {
@@ -897,7 +1161,7 @@ func (x *l67X) endToEnd(t *testing.T, which string, cli *l67CLI, device string, 
 	if l67ProbedTheTPM(login.Said) {
 		t.Fatalf("INVALID: %s: login looked for a TPM, so issued_key_store was not the file the lab pins", which)
 	}
-	person := &l67Person{name: "alice", secret: login.Secret, last: login.Step}
+	person := &l67Person{name: "alice", secret: login.Secret, last: login.Step, rec: &x.sec}
 	tok := cli.token(t, device)
 	l67Exit(x.ev, label+": token", tok.Exit, tok.Said)
 	x.row(label+", token "+device, "exit %d; minted %v", tok.Exit, tok.Minted)
@@ -913,6 +1177,7 @@ func (x *l67X) endToEnd(t *testing.T, which string, cli *l67CLI, device string, 
 	}
 	cli.agent.stopAgent() // login will not sign in again over a running agent that holds the session
 	again := cli.login(t, l67LoginIn{name: "alice", password: x.pw, code: person.code, extra: []string{"--sign-in"}})
+	x.noteLogin(again)
 	l67Exit(x.ev, label+": login --directory --sign-in, directory stopped", again.Exit, again.Said)
 	x.row(label+", login --directory --sign-in with the directory stopped", "exit %d; %s", again.Exit, again.Said)
 	if again.Exit != 1 || !strings.Contains(again.Said, "the directory did not answer") {
@@ -920,6 +1185,16 @@ func (x *l67X) endToEnd(t *testing.T, which string, cli *l67CLI, device string, 
 	}
 	if leak != nil {
 		leak(which)
+	}
+}
+
+// noteLogin registers the secret and the codes a login handled.
+func (x *l67X) noteLogin(l l67LoginOut) {
+	if l.Secret != nil {
+		x.sec.addSecret(l.Secret)
+	}
+	for _, c := range l.Typed {
+		x.sec.addCode(c)
 	}
 }
 
@@ -1034,6 +1309,9 @@ func (x *l67X) composeHalf(t *testing.T) {
 		if strings.Contains(logs, x.pw) {
 			x.fail("g (etcd): the broker's log holds the person's password")
 		}
+		if x.sec.leaksIn(logs) {
+			x.fail("g (etcd): the broker's log holds a TOTP secret or code")
+		}
 	})
 }
 
@@ -1042,14 +1320,22 @@ func (x *l67X) composeHalf(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // l67Directory runs the cells on dir and writes its note and evidence.
-func l67Directory(t *testing.T, d *directories, dir *labDir, pw string, seedAt time.Time) {
+func l67Directory(t *testing.T, d *directories, dir *labDir, pw string, seedAt time.Time, limits ...string) {
 	t.Helper()
 	ev := evidence(t, d, "L67-"+dir.name)
 	ev.hide(pw)
-	x := &l67X{t: t, owner: t, d: d, dir: dir, pw: pw, ev: ev, seedAt: seedAt}
+	x := &l67X{t: t, owner: t, d: d, dir: dir, pw: pw, ev: ev, seedAt: seedAt, limits: limits}
+	if dir.name != platOpenLDAP {
+		x.limit("g: the etcd half (the compose stack's broker on etcd) runs against OpenLDAP only; %s's end-to-end run is the memory-store half", dir.name)
+	}
 	defer func() {
 		note := x.note()
 		ev.assertClean(t, append([]string{pw, d.password}, d.extra...)...)
+		if raw, err := os.ReadFile(ev.Path); err != nil {
+			t.Errorf("L67 on %s: the evidence cannot be read to check it: %v", dir.name, err)
+		} else if x.sec.leaksIn(string(raw)) || x.sec.leaksIn(note) {
+			t.Fatalf("L67 on %s: the evidence or the note holds a TOTP secret or code", dir.name)
+		}
 		writeResult(t, d, "L67", dir, l67Claim, dir.version(t), note, "tests/lab/evidence/L67-"+dir.name+".json")
 		if len(x.failed) > 0 {
 			t.Errorf("L67 on %s: %s", dir.name, strings.Join(x.failed, "; "))
@@ -1108,18 +1394,19 @@ func (x *l67X) note() string {
 
 // l67Prepare is what the containers need before they start: the people's
 // password, and L67's note shape.
-func l67Prepare(pw string) func(*directories) {
-	return func(d *directories) {
+func l67Prepare(pw string) func(*testing.T, *directories) {
+	return func(t *testing.T, d *directories) {
+		t.Helper()
 		d.runSel = "^TestL67$"
 		d.extra = append(d.extra, pw)
 		l67Describe(d)
 		f, err := os.OpenFile(filepath.Join(d.dir, "lab.env"), os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
-			panic(err)
+			t.Fatal(err)
 		}
 		defer f.Close()
 		if _, err := fmt.Fprintf(f, "LAB_L67=1\nLAB_L67_PASSWORD=%s\n", pw); err != nil {
-			panic(err)
+			t.Fatal(err)
 		}
 	}
 }
@@ -1168,15 +1455,13 @@ func TestL67Windows(t *testing.T) {
 		ExpiredWhy string `json:"expired_why"`
 	}
 	dc.win.run(t, "l67", map[string]any{"step": "seed", "person_password": pw}, 30*time.Minute, &seed)
-	var created struct {
-		WhenCreated string `json:"when_created"`
-	}
-	dc.win.run(t, "l67", map[string]any{"step": "state", "name": "alice"}, 5*time.Minute, &created)
-	seedAt, _ := time.Parse(time.RFC3339Nano, created.WhenCreated)
+	var limits []string
 	if !seed.ExpiredSet {
-		t.Logf("the DC would not hold l67-expired as expired: %s", oneLineMax(seed.ExpiredWhy, 300))
+		limits = append(limits, "c: the DC would not hold l67-expired as expired (a fine-grained policy with a 30 s maximum age): "+
+			oneLineMax(seed.ExpiredWhy, 300))
 	}
-	l67Directory(t, d, dc, pw, seedAt)
+	// No seedAt: alice's own whenCreated is no independent seed time.
+	l67Directory(t, d, dc, pw, time.Time{}, limits...)
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,6 +1739,9 @@ func (b *l67Broker) leakCheck(t *testing.T, x *l67X) {
 	if strings.Contains(b.said(), x.pw) {
 		x.fail("g (memory): the broker's log holds the person's password")
 	}
+	if x.sec.leaksIn(b.said()) {
+		x.fail("g (memory): the broker's log holds a TOTP secret or code")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,6 +2005,7 @@ type l67LoginOut struct {
 	Secret   []byte
 	Step     int64
 	Said     string
+	Typed    []string // the codes typed: kept for the leak checks, never printed
 }
 
 var l67Printable = regexp.MustCompile(`^[\x20-\x7e]+$`)
@@ -1755,7 +2044,16 @@ func (c *l67CLI) login(t *testing.T, in l67LoginIn) l67LoginOut {
 	go func() { done <- cmd.Wait() }()
 	var out l67LoginOut
 	var typed []string
+	// said is the screen with every secret this login handled taken out.
+	said := func() string {
+		secrets := append([]string{in.password}, typed...)
+		if out.Secret != nil {
+			secrets = append(secrets, strings.ToLower(l67Base32(out.Secret)), l67Base32(out.Secret))
+		}
+		return l67Said(term.text(), secrets...)
+	}
 	finish := func() l67LoginOut {
+		out.Typed = typed
 		select {
 		case err := <-done:
 			var ee *exec.ExitError
@@ -1775,18 +2073,15 @@ func (c *l67CLI) login(t *testing.T, in l67LoginIn) l67LoginOut {
 			return out
 		}
 		time.Sleep(200 * time.Millisecond) // the last of the screen
-		secrets := append([]string{in.password}, typed...)
-		if out.Secret != nil {
-			secrets = append(secrets, strings.ToLower(l67Base32(out.Secret)), l67Base32(out.Secret))
-		}
-		out.Said = l67Said(term.text(), secrets...)
+		out.Said = said()
 		return out
 	}
 	stuck := func(what string) l67LoginOut {
+		out.Typed = typed
 		_ = cmd.Process.Kill()
 		<-done
 		out.Exit = -1
-		out.Said = "the CLI never showed " + what + "; its screen: " + l67Said(term.text(), in.password)
+		out.Said = "the CLI never showed " + what + "; its screen: " + said()
 		return out
 	}
 	pos, ok := term.waitFor("]: ", 0, 60*time.Second)

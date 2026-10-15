@@ -204,11 +204,11 @@ func startDirectories(t *testing.T) *directories {
 // startDirectoriesWith is startDirectories with prepare run on the described
 // directories before anything starts: L67 appends its people's password to
 // lab.env there.
-func startDirectoriesWith(t *testing.T, prepare func(*directories)) *directories {
+func startDirectoriesWith(t *testing.T, prepare func(*testing.T, *directories)) *directories {
 	t.Helper()
 	d := newDirectories(t)
 	if prepare != nil {
-		prepare(d)
+		prepare(t, d)
 	}
 	if os.Getenv("PORT49_LAB_DIRECTORY_KEEP") == "" {
 		t.Cleanup(func() { d.down(t) })
@@ -786,8 +786,11 @@ type evidenceLine struct {
 	AuthzID    string   `json:"authz_id,omitempty"`
 	// Data is a refusal's diagnostic data: AD's code (52e, 532, ...) or
 	// OpenLDAP's ppolicy error (L67).
-	Data  string `json:"data,omitempty"`
-	Count *int   `json:"count,omitempty"` // a directory's failed-password or connection count (L67)
+	Data string `json:"data,omitempty"`
+	// Control is the ppolicy response control a raw bind came back with (L67):
+	// absent, present_no_error, or error_<n>.
+	Control string `json:"ppolicy_control,omitempty"`
+	Count   *int   `json:"count,omitempty"` // a directory's failed-password or connection count (L67)
 }
 
 // evidenceDir is where evidence file name goes under the output root: the

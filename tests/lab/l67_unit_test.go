@@ -262,9 +262,12 @@ func TestL67WrongCodeIsNeverAccepted(t *testing.T) {
 
 // A directory as the broker's configuration names it, with no files behind it
 // but the CA the config loader reads.
-func l67TestDir(name string) *labDir {
-	ca := filepath.Join(os.TempDir(), "l67-unit-ca.pem")
-	_ = os.WriteFile(ca, []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o600)
+func l67TestDir(t *testing.T, name string) *labDir {
+	t.Helper()
+	ca := filepath.Join(t.TempDir(), "l67-unit-ca.pem")
+	if err := os.WriteFile(ca, []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d := &directories{pki: &dirPKI{caFile: ca}, password: "unit-test-bind-password"}
 	if name == platOpenLDAP {
 		return &labDir{name: name, d: d, uri: "ldaps://localhost:10636", bindDN: "cn=port49,ou=Svc,dc=corp,dc=example,dc=com",
@@ -274,6 +277,108 @@ func l67TestDir(name string) *labDir {
 	return &labDir{name: name, d: d, uri: "ldaps://localhost:20636", bindDN: "CN=port49,OU=Svc," + dirBase,
 		userFilter: "(&(objectCategory=person)(objectClass=user))", groupFilter: "(objectClass=group)",
 		usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase}
+}
+
+// What reading the connection count costs: a container's reader must cost
+// nothing twice in a row (or the count is noisy and says so); the DC's costs its
+// own ssh, so the least of several reads is its base.
+func TestL67BaseCost(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		costs   []int
+		windows bool
+		base    int
+		quiet   bool
+	}{
+		{"container quiet", []int{1, 0, 0}, false, 0, true},
+		{"container noisy", []int{1, 0, 1, 0}, false, 0, false},
+		{"container always one", []int{1, 1, 1}, false, 1, false},
+		{"dc least", []int{3, 2, 4, 2, 5}, true, 2, true},
+		{"no reads", nil, false, 0, false},
+	} {
+		base, quiet := l67BaseCost(tc.costs, tc.windows)
+		if base != tc.base || quiet != tc.quiet {
+			t.Errorf("%s: base %d quiet %v, want %d and %v", tc.name, base, quiet, tc.base, tc.quiet)
+		}
+	}
+}
+
+// The control for a state requires the account to be in that state and in none
+// of the others (an "expired" account that is also must-change answers as the
+// must-change one).
+func TestL67OtherFlags(t *testing.T) {
+	for _, tc := range []struct {
+		s     l67State
+		state string
+		want  string
+	}{
+		{l67State{Expired: true}, "expired", ""},
+		{l67State{Expired: true, MustChange: true}, "expired", "must_change"},
+		{l67State{MustChange: true, Disabled: true}, "must change", "disabled"},
+		{l67State{Locked: true, Expired: true, MustChange: true}, "locked", "expired, must_change"},
+		{l67State{Disabled: true}, "disabled", ""},
+	} {
+		if got := strings.Join(l67OtherFlags(tc.s, tc.state), ", "); got != tc.want {
+			t.Errorf("%+v as %s: other flags %q, want %q", tc.s, tc.state, got, tc.want)
+		}
+	}
+}
+
+// A raw bind keeps what CheckPassword filters: the result code, any AD data
+// code (the allow-list of internal/directory does not apply) and whether the
+// ppolicy control came back and with which error.
+func TestL67RawBind(t *testing.T) {
+	ad := func(code int, data string) error {
+		return ldap.NewError(uint16(code), errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data "+data+", v4563"))
+	}
+	withControl := func(e int8) *ldap.SimpleBindResult {
+		c := ldap.NewControlBeheraPasswordPolicy()
+		c.Error = e
+		return &ldap.SimpleBindResult{Controls: []ldap.Control{c}}
+	}
+	for _, tc := range []struct {
+		name string
+		res  *ldap.SimpleBindResult
+		err  error
+		want l67Raw
+	}{
+		{"success, no control", &ldap.SimpleBindResult{}, nil, l67Raw{Result: 0, Control: "absent"}},
+		{"AD wrong password", &ldap.SimpleBindResult{}, ad(49, "52e"), l67Raw{Result: 49, Data: "52e", Control: "absent"}},
+		{"AD data outside any allow-list", &ldap.SimpleBindResult{}, ad(49, "9ab"), l67Raw{Result: 49, Data: "9ab", Control: "absent"}},
+		{"ppolicy locked", withControl(1), ldap.NewError(49, errors.New("Account locked")), l67Raw{Result: 49, Control: "error_1"}},
+		{"ppolicy present, no error", withControl(-1), nil, l67Raw{Result: 0, Control: "present_no_error"}},
+		{"must change, success with the control", withControl(2), nil, l67Raw{Result: 0, Control: "error_2"}},
+	} {
+		if got := l67RawOf(tc.res, tc.err); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The leak check sees a TOTP secret in any of its forms, and a code only as a
+// whole number (a 6-digit run inside a timestamp is not a leak).
+func TestL67SecretsLeakChecks(t *testing.T) {
+	var s l67Secrets
+	secret := []byte("12345678901234567890")
+	s.addSecret(secret)
+	s.addCode("493821")
+	b32 := l67Base32(secret)
+	for _, tc := range []struct {
+		name, text string
+		leaks      bool
+	}{
+		{"the secret", "key " + b32 + " end", true},
+		{"the secret in lower case", strings.ToLower(b32), true},
+		{"the secret grouped", b32[:4] + " " + b32[4:8] + " " + b32[8:12] + " " + b32[12:16] + " " + b32[16:20] + " " + b32[20:24] + " " + b32[24:28] + " " + b32[28:32], true},
+		{"the code", `{"data":"493821"}`, true},
+		{"the code in a timestamp", "2026-10-15T20261015493821x", false},
+		{"the code inside a longer number", "1493821", false},
+		{"nothing", "a refused bind, result 49", false},
+	} {
+		if got := s.leaksIn(tc.text); got != tc.leaks {
+			t.Errorf("%s: leaksIn = %v, want %v", tc.name, got, tc.leaks)
+		}
+	}
 }
 
 // A lab CLI's home names the file key store, so port49 never probes the
@@ -377,7 +482,7 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 	t.Setenv("PORT49_LAB_KEY", labKeyDefault)
 	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
 	t.Setenv("LAB_DIRECTORY_BIND_PASSWORD", "unit-test-bind-password")
-	for name, d := range map[string]*labDir{"openldap": l67TestDir(platOpenLDAP), "samba": l67TestDir(platSamba)} {
+	for name, d := range map[string]*labDir{"openldap": l67TestDir(t, platOpenLDAP), "samba": l67TestDir(t, platSamba)} {
 		for _, window := range []time.Duration{0, 2 * time.Minute} {
 			sub := filepath.Join(dir, fmt.Sprintf("%s-%v", name, window))
 			if err := os.MkdirAll(sub, 0o700); err != nil {

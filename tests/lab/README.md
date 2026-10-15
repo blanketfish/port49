@@ -506,9 +506,15 @@ positive control first, and the evidence keeps each state's LDAP result and diag
 (AD's `data 52e`, ppolicy's error). The people's `person_password` is generated per run, held
 in memory, reaches the containers and the DC through their environment and stdin, and is
 written to the evidence as `<alice's password>`; no TOTP secret, code or token is printed.
-OpenLDAP is configured with the ppolicy overlay and `olcPPolicyUseLockout: TRUE`: with the
-default (FALSE) slapd 2.5.13 answers a locked account's bind with a plain result 49 and no
-control, which port49 cannot tell from a wrong password.
+OpenLDAP gets the ppolicy overlay only when `LAB_L67` is set (so L42, L43 and the end-to-end lab
+keep their fixture), started with `olcPPolicyUseLockout: TRUE`; cell (c) then flips it to
+FALSE (the stock default) over ldapi, re-records the locked and disabled people, signs the
+locked person in through the broker six times to see the limiter count the refusals, and sets
+TRUE back. Each state's row keeps both what `CheckPassword` returned and the raw bind's result
+code, any AD `data` code (no allow-list) and the ppolicy control (absent, present with no
+error, or its error number). Under FALSE a locked or disabled account's bind is a plain result
+49 with a control that carries no error, which port49 cannot tell from a wrong password. L67
+runs OpenLDAP with `olcSecurity: ssf=56` instead of `tls=1`, so ldapi stays open for the flip.
 
 ## Identity provider (plan 7h)
 
