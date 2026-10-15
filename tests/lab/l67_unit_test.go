@@ -17,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/totp"
+	"github.com/rhwendt/port49/internal/userconfig"
 )
 
 // L67's cells are lettered a to g in the plan; the harness runs the table, so a
@@ -273,6 +274,43 @@ func l67TestDir(name string) *labDir {
 	return &labDir{name: name, d: d, uri: "ldaps://localhost:20636", bindDN: "CN=port49,OU=Svc," + dirBase,
 		userFilter: "(&(objectCategory=person)(objectClass=user))", groupFilter: "(objectClass=group)",
 		usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase}
+}
+
+// A lab CLI's home names the file key store, so port49 never probes the
+// machine's TPM: the file is the user's own config, private, and it loads.
+func TestPinFileKeyStore(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil { // os.MkdirTemp's mode, as the lab's homes are made
+		t.Fatal(err)
+	}
+	if err := pinFileKeyStore(home); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, ".port49")
+	for p, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "config.yaml"): 0o600} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s is %v, want %v", p, fi.Mode().Perm(), want)
+		}
+	}
+	f, ok, err := userconfig.Load(filepath.Join(dir, "config.yaml"))
+	if err != nil || !ok || f.IssuedKeyStore != "file" {
+		t.Fatalf("the config loads as %+v, %v, %v; want issued_key_store file", f, ok, err)
+	}
+}
+
+// A login's screen that says it found no TPM means the key store was left to
+// auto, which probes the real device.
+func TestL67ProbedTheTPM(t *testing.T) {
+	if !l67ProbedTheTPM("port49 login: no TPM this user can use (port49 cannot open the TPM (/dev/tpmrm0))") {
+		t.Error("the TPM line is not seen")
+	}
+	if l67ProbedTheTPM("password: code from your authenticator (empty if you have none yet):") {
+		t.Error("a screen with no TPM line is read as a probe")
+	}
 }
 
 // The compose stack's broker, as l67Files makes it, loads with directory_password

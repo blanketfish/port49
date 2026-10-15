@@ -894,6 +894,9 @@ func (x *l67X) endToEnd(t *testing.T, which string, cli *l67CLI, device string, 
 	if login.Exit != 0 || !login.Enrolled {
 		t.Fatalf("INVALID: %s: login --directory exit %d: %s", which, login.Exit, login.Said)
 	}
+	if l67ProbedTheTPM(login.Said) {
+		t.Fatalf("INVALID: %s: login looked for a TPM, so issued_key_store was not the file the lab pins", which)
+	}
 	person := &l67Person{name: "alice", secret: login.Secret, last: login.Step}
 	tok := cli.token(t, device)
 	l67Exit(x.ev, label+": token", tok.Exit, tok.Said)
@@ -1605,6 +1608,21 @@ type l67CLI struct {
 	agent                       *l56CLI
 }
 
+// pinFileKeyStore writes home's $HOME/.port49/config.yaml with issued_key_store:
+// file, so a lab CLI keeps its key in a file and never probes (or makes a key
+// in) the machine's TPM, which "auto" does wherever /dev/tpmrm0 opens.
+func pinFileKeyStore(home string) error {
+	dir := filepath.Join(home, ".port49")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("issued_key_store: file\n"), 0o600)
+}
+
+// l67ProbedTheTPM is whether a login's screen says it looked for a TPM: only
+// the auto key store does, and the lab never lets it.
+func l67ProbedTheTPM(screen string) bool { return strings.Contains(screen, "no TPM this user can use") }
+
 func newL67CLI(t *testing.T, broker, ca string) *l67CLI {
 	t.Helper()
 	_, bin := l67Bins(t)
@@ -1613,6 +1631,9 @@ func newL67CLI(t *testing.T, broker, ca string) *l67CLI {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
+	if err := pinFileKeyStore(home); err != nil {
+		t.Fatal(err)
+	}
 	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "PORT49_CONFIG=") && !strings.HasPrefix(kv, "XDG_CONFIG_HOME=") {

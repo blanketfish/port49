@@ -168,6 +168,9 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
+	if err := pinFileKeyStore(home); err != nil { // never probe the machine's TPM
+		t.Fatal(err)
+	}
 	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "PORT49_CONFIG=") && !strings.HasPrefix(kv, "XDG_CONFIG_HOME=") {
