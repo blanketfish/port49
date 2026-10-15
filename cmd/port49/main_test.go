@@ -29,8 +29,10 @@ import (
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/hwkey/tpm"
 	"github.com/rhwendt/port49/internal/issuer"
@@ -40,6 +42,8 @@ import (
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/store/enrollfile"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
@@ -376,6 +380,13 @@ type labBroker struct {
 	skew time.Duration
 	stop func() // closes the broker's server: the broker is down
 	bl   *broker.Listener
+	// The directory sign-in (labOpts.signIn): the directory it asks, the
+	// sealed file its second factors live in, the key that seals it, and the
+	// admin socket `port49 directory ...` is run against.
+	signIn     *fakeSignInDirectory
+	enrollPath string
+	enrollKeys crypt.Keys
+	adminSock  string
 	// onAccept, when set, runs for each connection the broker accepts, before
 	// it is served.
 	onAccept atomic.Pointer[func()]
@@ -440,7 +451,62 @@ type labOpts struct {
 	acr      string
 	logs     io.Writer
 	spy      func(*http.Request)
+	// signIn, when set, makes the broker a password-only directory sign-in
+	// (plan 9e): an issuing CA, a directory_password verifier for example.com
+	// asking this directory, no certificate trusted but its own, and an
+	// enrollment store that does not exist until `port49 directory
+	// init-enrollments` creates it.
+	signIn *fakeSignInDirectory
 }
+
+// fakeSignInDirectory is a directory of people by name: their entry and
+// password. down makes every call fail as a directory that does not answer.
+type fakeSignInDirectory struct {
+	mu     sync.Mutex
+	people map[string]fakeDirectoryPerson
+	down   bool
+}
+
+type fakeDirectoryPerson struct {
+	entry    directory.SignInEntry
+	password string
+}
+
+func (d *fakeSignInDirectory) SignInEntry(_ context.Context, name, _ string) (directory.SignInEntry, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.down {
+		return directory.SignInEntry{}, fmt.Errorf("%w: dc-01", directory.ErrUnavailable)
+	}
+	p, ok := d.people[name]
+	if !ok {
+		return directory.SignInEntry{}, fmt.Errorf("%w: no entry", directory.ErrUnmapped)
+	}
+	return p.entry, nil
+}
+
+func (d *fakeSignInDirectory) CheckPassword(_ context.Context, _ directory.Server, dn, password string) error {
+	if strings.TrimSpace(password) == "" {
+		return directory.ErrEmptyPassword
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.down {
+		return fmt.Errorf("%w: dc-01", directory.ErrUnavailable)
+	}
+	for _, p := range d.people {
+		if p.entry.DN != dn {
+			continue
+		}
+		if p.password != password {
+			return &directory.PasswordRefusal{Result: 49, Data: "52e"}
+		}
+		return nil
+	}
+	return &directory.PasswordRefusal{Result: 49, Data: "525"}
+}
+
+func (d *fakeSignInDirectory) setDown(v bool) { d.mu.Lock(); d.down = v; d.mu.Unlock() }
 
 func newLabBrokerOpts(t *testing.T, o labOpts) *labBroker {
 	t.Helper()
@@ -530,6 +596,9 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 			l.b.Issuer = ca
 		}
 	}
+	if o.signIn != nil {
+		l.wireSignIn(t, o.signIn)
+	}
 
 	ctx := context.Background()
 	at := l.now()
@@ -554,9 +623,9 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		t.Fatal(err)
 	}
 	certKey, anchor := store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16)), pool
-	if iss != nil && !o.keepX509 {
-		// A context before an OIDC login names no certificate; an OIDC-only
-		// broker takes no anchor.
+	if (iss != nil || o.signIn != nil) && !o.keepX509 {
+		// A context before an OIDC or a directory login names no certificate; a
+		// broker that issues its own takes no anchor.
 		certKey, anchor = "", nil
 	}
 	if err := l.st.IndexContext(ctx, "user:alice@example.com", "", certKey,
@@ -583,7 +652,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		l.b.Metrics, l.b.Now, nil)
 	bl.Refused = l.b.RefusedAtBind
 	l.bl = bl
-	if iss != nil {
+	if iss != nil || o.signIn != nil {
 		// As port49d wires it: Caller reads a certificate the broker issued.
 		l.b.Wire(bl)
 	}
@@ -592,6 +661,73 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	l.stop = func() { _ = srv.Close() }
 	l.url = "https://" + raw.Addr().String()
 	return l
+}
+
+// wireSignIn is what port49d does for a broker with a directory_password
+// verifier (internal/port49d/signin.go): the verifier, the directory, an
+// issuing CA, certificates trusted only if the broker issued them, the
+// enrollment store as a sealed file in a private directory under test keys
+// (never created: `port49 directory init-enrollments` is the one creator),
+// and an admin socket answering the directory sign-in's operator commands.
+func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
+	t.Helper()
+	if l.b.Issuer == nil {
+		// A day back: the CA refuses to issue outside its window.
+		ca, err := issuer.Ephemeral(l.now().Add(-24 * time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.b.Issuer = ca
+	}
+	l.b.NoX509 = true
+	l.b.PasswordSignIn = &oidc.PasswordSignIn{PrincipalDomains: []string{"example.com"},
+		NewEntriesFor: oidc.DefaultNewEntriesFor, ReopenFor: oidc.DefaultReopenFor,
+		FailuresPerPrincipal: oidc.DefaultFailuresPerPrincipal, FailuresPerSource: oidc.DefaultFailuresPerSource,
+		Window: oidc.DefaultSignInWindow, TOTPLabel: "port49 (lab)"}
+	l.b.SignInDirectory, l.signIn = dir, dir
+
+	var key crypt.Key
+	key.ID = "lab"
+	copy(key.Bytes[:], bytes.Repeat([]byte{0x5a}, 32))
+	l.enrollKeys = crypt.Keys{Current: key}
+	l.enrollPath = filepath.Join(privateDir(t), "enrollments.json")
+	l.b.EnrollmentFile = l.enrollPath
+	l.reopenEnrollments(t)
+
+	l.adminSock = privateSocket(t)
+	ln, err := admin.Listen(l.adminSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := func(uid uint32) string { return fmt.Sprintf("admin_socket uid %d", uid) }
+	srv := &admin.Server{Now: time.Now, Proc: "port49-broker",
+		SecondFactorReset: func(ctx context.Context, p string, all bool, uid uint32) (string, error) {
+			return l.b.ResetSecondFactor(ctx, p, all, origin(uid))
+		},
+		SignInUnlock: func(ctx context.Context, p string, uid uint32) (string, error) {
+			return l.b.UnlockSignIn(ctx, p, origin(uid))
+		},
+		EnrollmentsInit: func(ctx context.Context, uid uint32) (string, error) {
+			return l.b.InitEnrollments(ctx, origin(uid))
+		}}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go srv.Serve(ctx, ln)
+}
+
+// reopenEnrollments opens the enrollment file afresh, as a broker's start
+// does, and looks at it: no file, or one that does not open, is the lost
+// state password sign-in is refused in.
+func (l *labBroker) reopenEnrollments(t *testing.T) {
+	t.Helper()
+	f, err := enrollfile.Open(l.enrollPath, l.enrollKeys, l.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.b.Enrollments = crypt.WrapEnrollments(f, l.enrollKeys, l.b.Metrics.CryptOpenFailures)
+	if err := l.b.CheckEnrollmentStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // privateSocket is an agent socket path in a fresh 0700 directory short
