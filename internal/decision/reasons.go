@@ -147,7 +147,7 @@ const (
 	EventEnrollmentsImport = "enrollments_import"
 )
 
-// EventEnroll is POST /v1/enroll: whether a person's first second-factor code
+// EventEnroll is POST /v1/sign-in/confirm: whether a person's first second-factor code
 // confirms their TOTP enrollment (spec §5.7; §13 decision 47): permit
 // second_factor_enrolled, or a deny with the refusal's reason.
 const EventEnroll = "enroll"
@@ -172,9 +172,9 @@ const EventIdentity = "identity"
 // deny api_right_missing. It never carries the command asked (spec §5.7).
 const EventExplain = "explain"
 
-// EventIssue is POST /v1/certificate: whether a person's OIDC sign-in is
-// exchanged for a certificate the broker issues (spec §5.7; §13 decision
-// 43): permit certificate_issued, or a deny with the refusal's reason.
+// EventIssue is POST /v1/certificate and POST /v1/sign-in: whether a person's
+// OIDC or directory-password sign-in is exchanged for a certificate the broker
+// issues (spec §5.7; §13 decisions 43 and 47): permit certificate_issued, or a deny with the refusal's reason.
 const EventIssue = "issue"
 
 // EventPerLoginMFA is POST /v1/mfa: whether a per-login proof is accepted

@@ -271,8 +271,9 @@ type Metrics struct {
 	// SignIns is port49_sign_ins_total{outcome}.
 	SignIns *prometheus.CounterVec
 	// DirectoryEnrollmentStoreOK is port49_directory_enrollment_store_ok, a
-	// vector with no labels so that it is absent until the broker checks the
-	// store (WithLabelValues().Set(1 or 0)); testutil.ToFloat64 reads it then.
+	// vector with no labels so that it is absent until the broker's check first
+	// gets an answer from the store (WithLabelValues().Set(1 or 0));
+	// testutil.ToFloat64 reads it then.
 	DirectoryEnrollmentStoreOK *prometheus.GaugeVec
 	// port49_per_login_mfa_total{method,outcome}: per-login MFA requirements
 	// and proofs (plan 9c; spec §13 decision 45 ruling 19). method is
@@ -649,7 +650,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "port49_directory_enrollment_store_ok",
 			Help: "1 when the broker's enrollment store opened with its creation mark, 0 when it is lost " +
 				"or not yet initialised and password sign-in is refused (decision 47 D7); absent without a " +
-				"directory_password verifier. Alert on 0."}, nil),
+				"directory_password verifier, and also until the enrollment store first answers (a broker that " +
+				"has never reached it): alert on 0 and on absent()."}, nil),
 		PerLoginMFA: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_per_login_mfa_total",
 			Help: "Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome " +
 				"(required, proved, refused, reused, unavailable); alert on a run of refused."},
