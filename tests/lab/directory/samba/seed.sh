@@ -25,6 +25,35 @@ user eve Staff eve@corp.example.com
 user eve2 Contractors eve@corp.example.com
 samba-tool user create port49 "$LAB_PORT49_PASSWORD" --userou=OU=Svc --use-username-as-cn >/dev/null
 
+# L67 (plan 9e): the people a sign-in is tried with. alice, carol and dave get
+# the run's password (LAB_L67_PASSWORD, never printed), the lockout policy is
+# 10 failures in 10 minutes for 10 minutes, and four people are put in the
+# state a bind is asked about. Only when LAB_L67 is set: L42 and L43 keep the
+# fixture, and the domain's default lockout (none), they were measured on.
+if [ -n "${LAB_L67:-}" ]; then
+  for u in alice carol dave; do
+    samba-tool user setpassword "$u" --newpassword="$LAB_L67_PASSWORD" >/dev/null
+  done
+  samba-tool domain passwordsettings set --account-lockout-threshold=10 --account-lockout-duration=10 \
+    --reset-account-lockout-after=10 >/dev/null
+  for u in l67-expired l67-disabled l67-mustchange l67-locked; do
+    samba-tool user create "$u" "$LAB_L67_PASSWORD" --userou=OU=Staff --use-username-as-cn \
+      --mail-address="$u@corp.example.com" >/dev/null
+  done
+  samba-tool user disable l67-disabled >/dev/null
+  samba-tool user setpassword l67-mustchange --newpassword="$LAB_L67_PASSWORD" --must-change-at-next-login >/dev/null
+  # An expired password: pwdLastSet in 2009, far past the domain's maximum age.
+  # Samba's password module refuses any pwdLastSet but 0 or -1 unless the write
+  # carries its bypass control (measured; local_oid 1.3.6.1.4.1.7165.4.3.12).
+  # If the write is refused the fixture still loads and says so; the test reads
+  # the state back and records the cell as not measurable.
+  if LDB_CONTROLS=local_oid:1.3.6.1.4.1.7165.4.3.12:0 /lab/set-attr.sh "CN=l67-expired,OU=Staff,$BASE" pwdLastSet 128800000000000000 2>/tmp/l67-expired.err; then
+    echo "lab: l67 expired password set"
+  else
+    echo "lab: l67 expired password NOT set: $(tr '\n' ' ' </tmp/l67-expired.err | cut -c1-200)"
+  fi
+fi
+
 group() { samba-tool group add "$1" --groupou="OU=$2" >/dev/null; }
 group g-leaf G
 group g-mid G

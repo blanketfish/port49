@@ -35,12 +35,34 @@ sn: port49
 uid: port49
 userPassword: @PORT49_PASSWORD_HASH@
 
+# Plan 9e, L67: the default password policy, and a password for the three people
+# a sign-in is tried with. The entrypoint hashes the run's password into
+# @PERSON_PASSWORD_HASH@ as it hashes the broker's; a run that sets none gets a
+# random one, so every person has a password and none is a fixed value.
+dn: ou=Policies,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Policies
+
+dn: cn=default,ou=Policies,dc=corp,dc=example,dc=com
+objectClass: device
+objectClass: pwdPolicy
+cn: default
+pwdAttribute: userPassword
+pwdMaxFailure: 10
+pwdFailureCountInterval: 600
+pwdLockout: TRUE
+pwdLockoutDuration: 600
+pwdMustChange: TRUE
+pwdMaxAge: 7776000
+pwdAllowUserChange: TRUE
+
 dn: uid=alice,ou=Staff,dc=corp,dc=example,dc=com
 objectClass: inetOrgPerson
 cn: alice
 sn: alice
 uid: alice
 mail: alice@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
 
 dn: uid=carol,ou=Staff,dc=corp,dc=example,dc=com
 objectClass: inetOrgPerson
@@ -48,6 +70,7 @@ cn: carol
 sn: carol
 uid: carol
 mail: carol@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
 
 dn: uid=dave,ou=Staff,dc=corp,dc=example,dc=com
 objectClass: inetOrgPerson
@@ -55,6 +78,7 @@ cn: dave
 sn: dave
 uid: dave
 mail: dave@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
 
 dn: uid=bob,ou=Staff,dc=corp,dc=example,dc=com
 objectClass: inetOrgPerson

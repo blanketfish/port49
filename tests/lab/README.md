@@ -490,6 +490,26 @@ as an argument, and is never printed; the notes and evidence refuse to hold it. 
 pinned worktree sets `PORT49_LAB_DIRECTORY_OUT` to the branch's worktree so the notes land where
 they are committed.
 
+**L67 (plan 9e).** `make lab-l67` (`go test -tags lab ./tests/lab/ -run '^TestL67$' -count=1 -v
+-timeout 45m`; run `make build` first) measures a person's simple bind and the
+directory-password sign-in on OpenLDAP and Samba AD, the two containers in parallel;
+`make lab-l67-windows` (`PORT49_LAB_L67_WINDOWS=1 ... -run '^TestL67Windows$'`, L44's KVM and
+ISO) runs the same cells on the Windows DC. Cells: (a) `CheckPassword` right and wrong over
+LDAPS and StartTLS; (b) an unauthenticated bind, and an empty password that opens no connection;
+(c) an expired, must-change, disabled and locked account, each with the right and a wrong
+password; (d) six wrong sign-ins at port49's default limits, then nine across a 2m window
+boundary against a lockout threshold of ten; (e) a wrong code leaves the directory's count
+alone; (f) `SignInEntry`'s creation time; (g) `login --directory`, `token` and a stopped
+directory, on port49d with the memory store and (OpenLDAP only) on the compose stack's broker
+on etcd, which also needs the containerlab platform that stack uses. Every cell runs its
+positive control first, and the evidence keeps each state's LDAP result and diagnostic data
+(AD's `data 52e`, ppolicy's error). The people's `person_password` is generated per run, held
+in memory, reaches the containers and the DC through their environment and stdin, and is
+written to the evidence as `<alice's password>`; no TOTP secret, code or token is printed.
+OpenLDAP is configured with the ppolicy overlay and `olcPPolicyUseLockout: TRUE`: with the
+default (FALSE) slapd 2.5.13 answers a locked account's bind with a plain result 49 and no
+control, which port49 cannot tell from a wrong password.
+
 ## Identity provider (plan 7h)
 
 `make lab-oidc` runs L45 and L46 on one container, Keycloak, with no network device and no

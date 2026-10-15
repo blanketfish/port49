@@ -198,7 +198,18 @@ func newDirectories(t *testing.T) *directories {
 // fault, not a measurement.
 func startDirectories(t *testing.T) *directories {
 	t.Helper()
+	return startDirectoriesWith(t, nil)
+}
+
+// startDirectoriesWith is startDirectories with prepare run on the described
+// directories before anything starts: L67 appends its people's password to
+// lab.env there.
+func startDirectoriesWith(t *testing.T, prepare func(*directories)) *directories {
+	t.Helper()
 	d := newDirectories(t)
+	if prepare != nil {
+		prepare(d)
+	}
 	if os.Getenv("PORT49_LAB_DIRECTORY_KEEP") == "" {
 		t.Cleanup(func() { d.down(t) })
 	}
@@ -753,9 +764,10 @@ func oneLineMax(s string, n int) string {
 // A line is a search, a bind or a mark; none holds a password, a keytab or a
 // ticket, and a bind line holds the error text port49 itself wrote.
 type evidenceLog struct {
-	mu   sync.Mutex
-	f    *os.File
-	Path string
+	mu     sync.Mutex
+	f      *os.File
+	Path   string
+	hidden []string // values no line may hold: each is written as <alice's password>
 }
 
 type evidenceLine struct {
@@ -772,6 +784,10 @@ type evidenceLine struct {
 	DurationMS float64  `json:"duration_ms,omitempty"`
 	DCEvents   []string `json:"dc_events,omitempty"`
 	AuthzID    string   `json:"authz_id,omitempty"`
+	// Data is a refusal's diagnostic data: AD's code (52e, 532, ...) or
+	// OpenLDAP's ppolicy error (L67).
+	Data  string `json:"data,omitempty"`
+	Count *int   `json:"count,omitempty"` // a directory's failed-password or connection count (L67)
 }
 
 // evidenceDir is where evidence file name goes under the output root: the
@@ -814,7 +830,41 @@ func (e *evidenceLog) assertClean(t *testing.T, secrets ...string) {
 	}
 }
 
+// hide registers values (L67's generated password) that no line may hold:
+// every text field of every later line has them replaced by a placeholder.
+func (e *evidenceLog) hide(secrets ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, s := range secrets {
+		if s != "" {
+			e.hidden = append(e.hidden, s)
+		}
+	}
+}
+
+// hiddenPlaceholder stands for the generated password wherever a line would
+// have held it.
+const hiddenPlaceholder = "<alice's password>"
+
+func (e *evidenceLog) scrub(s string) string {
+	e.mu.Lock()
+	hidden := e.hidden
+	e.mu.Unlock()
+	for _, h := range hidden {
+		s = strings.ReplaceAll(s, h, hiddenPlaceholder)
+	}
+	return s
+}
+
 func (e *evidenceLog) add(l evidenceLine) {
+	l.Label, l.Base, l.Filter, l.Error, l.Data, l.AuthzID = e.scrub(l.Label), e.scrub(l.Base), e.scrub(l.Filter),
+		e.scrub(l.Error), e.scrub(l.Data), e.scrub(l.AuthzID)
+	for i := range l.DNs {
+		l.DNs[i] = e.scrub(l.DNs[i])
+	}
+	for i := range l.DCEvents {
+		l.DCEvents[i] = e.scrub(l.DCEvents[i])
+	}
 	// Not escaped for HTML: a filter's & stays a &, which is what a reader greps.
 	var b strings.Builder
 	enc := json.NewEncoder(&b)
@@ -917,6 +967,9 @@ func dirRunLine(sel string) string {
 	env := ""
 	if strings.Contains(sel, "TestL44") {
 		env = "PORT49_LAB_L44=1 " // without it L44's tests skip
+	}
+	if strings.Contains(sel, "TestL67Windows") {
+		env = "PORT49_LAB_L67_WINDOWS=1 " // without it the Windows test skips
 	}
 	return fmt.Sprintf("commit `%s`, `%sgo test -tags lab ./tests/lab/ -run '%s'`", sha, env, sel)
 }

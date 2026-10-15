@@ -1,0 +1,37 @@
+# L67 (plan 9e): the four people whose account state a bind is asked about.
+# Loaded by the entrypoint only when LAB_L67 is set, after the seed; the
+# entrypoint then puts each in its state (pwdChangedTime, pwdReset,
+# pwdAccountLockedTime) as the directory's root, since an add cannot set an
+# operational attribute the overlay owns. The locked one is locked by the test,
+# with failed binds. Every password is the run's, hashed at start.
+dn: uid=l67-expired,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-expired
+sn: l67-expired
+uid: l67-expired
+mail: l67-expired@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-disabled,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-disabled
+sn: l67-disabled
+uid: l67-disabled
+mail: l67-disabled@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-mustchange,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-mustchange
+sn: l67-mustchange
+uid: l67-mustchange
+mail: l67-mustchange@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-locked,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-locked
+sn: l67-locked
+uid: l67-locked
+mail: l67-locked@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
