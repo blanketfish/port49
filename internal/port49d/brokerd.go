@@ -364,7 +364,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	wirePasswordSignIn(ctx, cfg, brk, keys, m, bs.raw, stderr)
+	signInDone := wirePasswordSignIn(ctx, cfg, brk, keys, m, bs.raw, stderr)
+	wg.Add(1)
+	go func() { defer wg.Done(); <-signInDone }()
 	if startDoc != nil {
 		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}

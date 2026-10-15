@@ -128,3 +128,26 @@ func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.
 		t.Fatalf("the start line promises a scheduled pass: %q", out.String())
 	}
 }
+
+// The recheck goroutine is joined: once ctx is cancelled, the channel the
+// wiring returns closes after the loop and the store's closer have returned,
+// so brokerd's wait group can hold the store open for them (N3).
+func TestTheWiringsGoroutinesEndWithTheContext(t *testing.T) {
+	cfg, _ := signInConfig(t, "127.0.0.1:0")
+	m := metrics.New(prometheus.NewRegistry())
+	b := builtSignInBroker(t, cfg, m)
+	b.Say = func(string, ...any) {}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := wireSignIn(ctx, cfg, b, signInTestKeys, m, nil, io.Discard)
+	select {
+	case <-done:
+		t.Fatal("the goroutines ended before the context did")
+	default:
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the goroutines did not end with the context")
+	}
+}

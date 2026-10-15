@@ -48,13 +48,16 @@ const (
 // shared is the *etcd.Store the broker runs on, for an enrollment_store that
 // names no etcd of its own; nil on the memory store. It does nothing for a
 // broker with no directory_password verifier.
+//
+// The channel it returns closes once ctx is cancelled and the goroutines the
+// wiring started have returned; a caller that closes the store joins it first.
 func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared *etcdstore.Store, out io.Writer) {
+	m *metrics.Metrics, shared *etcdstore.Store, out io.Writer) <-chan struct{} {
 	var sh store.Enrollments // a nil *Store is not a nil interface
 	if shared != nil {
 		sh = shared
 	}
-	wireSignIn(ctx, cfg, b, keys, m, sh, out)
+	return wireSignIn(ctx, cfg, b, keys, m, sh, out)
 }
 
 // setPasswordSignIn gives b its own copy of the directory_password verifier
@@ -73,12 +76,15 @@ func setPasswordSignIn(cfg config.Config, b *broker.Broker) {
 }
 
 // wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,
-// which a test can fake.
+// which a test can fake. Its channel is wirePasswordSignIn's.
 func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared store.Enrollments, out io.Writer) {
+	m *metrics.Metrics, shared store.Enrollments, out io.Writer) <-chan struct{} {
+	done := make(chan struct{})
 	if b == nil || cfg.Broker == nil || cfg.Broker.Identity == nil || cfg.Broker.Identity.PasswordSignIn == nil {
-		return
+		close(done)
+		return done
 	}
+	var wg sync.WaitGroup
 	proc := procOf(cfg)
 	say := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+format+"\n", args...) }
 	setPasswordSignIn(cfg, b) // buildBrokerAnchor did; a broker built another way gets it here
@@ -114,7 +120,8 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 		}
 	}
 	late := &lateEnrollments{open: open, now: time.Now}
-	go func() { <-ctx.Done(); late.close() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); <-ctx.Done(); late.close() }()
 	b.Enrollments = late
 
 	cctx, cancel := context.WithTimeout(ctx, enrollmentStartWait)
@@ -123,10 +130,13 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
 			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), enrollmentRecheckEvery)
 	}
-	go recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery)
+	wg.Add(1)
+	go func() { defer wg.Done(); recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery) }()
 	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
 		"limits %d per principal, %s, per %s)", strings.Join(p.PrincipalDomains, ", "), where, enrollWindow(p),
 		p.FailuresPerPrincipal, perSource(p), durText(p.Window))
+	go func() { wg.Wait(); close(done) }()
+	return done
 }
 
 // enrollmentRecheckEvery is how often a process that finds its enrollment
