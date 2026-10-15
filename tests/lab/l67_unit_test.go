@@ -517,6 +517,56 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 	}
 }
 
+// The etcd half waits for the broker's start mint gate (decision 36) before its
+// first mint. The wait matches the line that says the gate opened, and not the
+// line that says mints wait.
+func TestL67MintsOpenMatchesOnlyTheOpenLine(t *testing.T) {
+	wait := "port49-broker: policy: mints wait for a takeover to judge bundle sha256:ab (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable"
+	open := "port49-broker: policy: mints open: this replica's takeover is done"
+	if l67MintsOpen("port49-broker: listening on [::]:8443\n" + wait + "\n") {
+		t.Errorf("the mints-wait line was read as the gate being open")
+	}
+	if !l67MintsOpen("port49-broker: listening on [::]:8443\n" + wait + "\n" + open + "\n") {
+		t.Errorf("the mints-open line was not found")
+	}
+	if l67MintsOpen("") {
+		t.Errorf("empty logs were read as the gate being open")
+	}
+}
+
+// The wait polls until the marker shows, reports how long it took, and gives up
+// at the limit with the last logs so the INVALID names what the broker said.
+func TestL67WaitForMintsOpen(t *testing.T) {
+	calls := 0
+	read := func() (string, error) {
+		calls++
+		if calls >= 3 {
+			return "policy: mints open: this replica's takeover is done\n", nil
+		}
+		return "policy: mints wait for a takeover\n", nil
+	}
+	took, err := l67WaitForMintsOpen(read, time.Second, time.Millisecond)
+	if err != nil || calls != 3 {
+		t.Fatalf("took %v, err %v after %d reads, want the gate seen on the 3rd read", took, err, calls)
+	}
+	if took <= 0 {
+		t.Errorf("the wait reported %v, want a measured duration", took)
+	}
+
+	never := func() (string, error) { return "runner: waiting for the keyspace\n", nil }
+	_, err = l67WaitForMintsOpen(never, 20*time.Millisecond, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "runner: waiting for the keyspace") {
+		t.Errorf("a gate that never opens gave err %v, want one naming the broker's last log", err)
+	}
+
+	// A log that cannot be read is a fault, not "still closed": it surfaces at the limit.
+	broken := func() (string, error) { return "", errors.New("compose logs failed") }
+	_, err = l67WaitForMintsOpen(broken, 20*time.Millisecond, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "compose logs failed") {
+		t.Errorf("an unreadable log gave err %v, want one naming the read failure", err)
+	}
+}
+
 // The OpenLDAP note says L67 ran with ssf=56 and the ppolicy overlay, not the
 // 7g note's tls=1 alone (N1); the other directories' notes do not.
 func TestL67NoteSaysHowOpenLDAPWasConfigured(t *testing.T) {

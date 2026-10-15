@@ -1248,6 +1248,50 @@ func l67Files(files map[string]string) error {
 	return nil
 }
 
+// l67MintsOpen reports whether the broker's log says its start mint gate
+// (decision 36) opened. The "mints wait" line it prints at start does not match.
+func l67MintsOpen(logs string) bool {
+	return strings.Contains(logs, "policy: mints open:")
+}
+
+// l67WaitForMintsOpen polls read every `every` until the broker says its mints
+// are open, and returns how long that took. At the limit it returns an error
+// naming the broker's last runner and policy lines (or the read failure), so
+// the caller can call the half INVALID: a readiness fault, not a measurement.
+func l67WaitForMintsOpen(read func() (string, error), limit, every time.Duration) (time.Duration, error) {
+	start := time.Now()
+	var last string
+	var readErr error
+	for {
+		logs, err := read()
+		readErr = err
+		if err == nil {
+			if l67MintsOpen(logs) {
+				return time.Since(start), nil
+			}
+			last = logs
+		}
+		if time.Since(start) >= limit {
+			break
+		}
+		time.Sleep(every)
+	}
+	if readErr != nil {
+		return time.Since(start), fmt.Errorf("the broker's log could not be read: %w", readErr)
+	}
+	var lines []string
+	for _, line := range strings.Split(last, "\n") {
+		if strings.Contains(line, "runner:") || strings.Contains(line, "policy:") {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+	if len(lines) > 4 {
+		lines = lines[len(lines)-4:]
+	}
+	return time.Since(start), fmt.Errorf("the broker's mints did not open within %v; its last runner and policy lines: %s",
+		limit, oneLineMax(strings.Join(lines, " | "), 600))
+}
+
 func (x *l67X) composeHalf(t *testing.T) {
 	sel, _, err := platformSelection()
 	if err != nil {
@@ -1273,6 +1317,7 @@ func (x *l67X) composeHalf(t *testing.T) {
 	if out, err := c.run("run", "--rm", "--no-deps", "port49-broker", "init-issuer"); err != nil || !strings.Contains(out, "created the issuing CA") {
 		t.Fatalf("INVALID: port49-broker init-issuer: %v: %s", err, oneLineMax(out, 300))
 	}
+	restartedAt := time.Now()
 	if _, err := c.run("restart", "port49-broker"); err != nil {
 		t.Fatalf("INVALID: restarting the broker: %v", err)
 	}
@@ -1296,6 +1341,16 @@ func (x *l67X) composeHalf(t *testing.T) {
 		"/run/port49/port49-broker.sock"); err != nil {
 		t.Fatalf("INVALID: init-enrollments: %v: %s", err, oneLineMax(out, 300))
 	}
+	// The broker over etcd holds mints until its runner's first takeover is
+	// done: at least hold_ttl/3 (20s at the lab's 60s) after the restart. Wait
+	// for the broker to say so; the first mint is then a clean one, with no retry.
+	// hold_ttl + ttl/3 + 30s = 110s.
+	opened, err := l67WaitForMintsOpen(func() (string, error) { return c.run("logs", "port49-broker") }, 110*time.Second, 2*time.Second)
+	if err != nil {
+		t.Fatalf("INVALID: waiting for the broker's start mint gate to open (policy: mints open:): %v", err)
+	}
+	x.row("g. etcd, mint gate", "opened %.0fs after the broker restart (this wait: %.0fs, for the broker's policy: mints open: line)",
+		time.Since(restartedAt).Seconds(), opened.Seconds())
 	cli := newL67CLI(t, sliceBrokerURL, brokerCA)
 	x.endToEnd(t, "etcd", cli, l.p.node, func() {
 		if out, err := c.run("stop", "openldap"); err != nil {
