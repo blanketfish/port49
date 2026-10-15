@@ -58,7 +58,8 @@ sudo install -d -o p49lab -g p49lab -m 700 /home/p49lab/.port49
 A3. **The control user, not in `tss`:** `sudo useradd -m -s /bin/bash p49notss`
 
 A4. **pcscd for `p49lab`** (step 6 only). Find the polkit rule that lets `rwendt` reach pcscd
-(`sudo grep -l pcsc /etc/polkit-1/rules.d/*`) and add `p49lab` to it the same way. Check it:
+(`sudo grep -rl pcsc /etc/polkit-1/rules.d`; the directory is unreadable to `rwendt`, so a
+`*` glob would expand before `sudo` and find nothing) and add `p49lab` to it the same way. Check it:
 `sudo -iu p49lab ykman piv info | grep 'PIN tries'`.
 
 A5. **Build.** As `rwendt`, in the session worktree (`cd ~/git/port49/.worktrees/l62-session`,
