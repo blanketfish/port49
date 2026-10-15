@@ -32,10 +32,12 @@ type hangingContexts struct {
 	once             sync.Once
 	entered, release chan struct{}
 	landed           atomic.Int32
+	// first is the ctx the held read received: the pass's own.
+	first context.Context
 }
 
 func (h *hangingContexts) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	h.once.Do(func() { close(h.entered); <-h.release })
+	h.once.Do(func() { h.first = ctx; close(h.entered); <-h.release })
 	return h.Store.GetContext(ctx, k)
 }
 
@@ -85,6 +87,14 @@ func TestALostHoldEndsTheRunnersPassBeforeItWrites(t *testing.T) {
 	}
 	lose() // as run does on a lost hold: the duties stop, then duty is cleared
 	r.duty.Store(nil)
+	// The pass is tied to the duties by context.AfterFunc, which cancels in
+	// a new goroutine: wait for it, as a write on a loaded machine would
+	// otherwise reach land before the cancel does.
+	select {
+	case <-hung.first.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass's context was not cancelled by the lost hold")
+	}
 	close(hung.release)
 	<-done
 	if n := hung.landed.Load(); n != 0 {
