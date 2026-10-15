@@ -45,19 +45,18 @@ until ldapsearch -Y EXTERNAL -H ldapi:/// -b '' -s base -LLL namingContexts >/de
 done
 ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/seed.ldif >/dev/null
 rm -f /tmp/seed.ldif
-# The ppolicy overlay may flag an entry added with a password as one that must
-# be changed (pwdReset), which would stop the broker's own account at its first
-# search. No fixture entry starts reset: clear any flag the add set.
-for dn in $(ldapsearch -Y EXTERNAL -H ldapi:/// -o ldif-wrap=no -LLL -b dc=corp,dc=example,dc=com '(pwdReset=TRUE)' dn 2>/dev/null | sed -n 's/^dn: //p'); do
-  printf 'dn: %s\nchangetype: modify\ndelete: pwdReset\n' "$dn" | ldapmodify -e relax -Y EXTERNAL -H ldapi:/// >/dev/null
-done
-# L67: four people, each put in the state a bind is asked about, as the root DN
-# (the overlay owns these attributes, so an add cannot set them). The fourth,
-# l67-locked, is locked by the test with failed binds.
+# L67: the people's passwords and four more people, loaded before the ppolicy
+# overlay exists (so nothing the overlay owns is set by an add, pwdReset
+# included), then the overlay, then each person put in the state a bind is
+# asked about, as the root DN. The fourth, l67-locked, is locked by the test
+# with failed binds. Nothing here runs without LAB_L67, so L42, L43 and the
+# end-to-end lab keep the fixture they were measured on.
 if [ -n "${LAB_L67:-}" ]; then
+  ldapmodify -Y EXTERNAL -H ldapi:/// -f /lab/ppolicy-module.ldif >/dev/null
   sed "s|@PERSON_PASSWORD_HASH@|$phash|" /lab/l67.ldif > /tmp/l67.ldif
-  ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/l67.ldif >/dev/null
+  ldapmodify -a -Y EXTERNAL -H ldapi:/// -f /tmp/l67.ldif >/dev/null
   rm -f /tmp/l67.ldif
+  ldapmodify -Y EXTERNAL -H ldapi:/// -f /lab/ppolicy.ldif >/dev/null
   # -e relax: these are no-user-modification attributes, which only the
   # relax rules control lets the root DN write.
   ldapmodify -e relax -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
@@ -104,12 +103,24 @@ LDIF
 fi
 # From here on every operation must be under TLS: a simple bind over plain LDAP
 # is refused, and so is anything over ldapi, which nothing later uses.
-ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+# L67 keeps ldapi usable by asking for a security strength (ssf=56) that TLS and
+# the local socket (SSF 71) meet and a plain LDAP connection does not: the test
+# flips olcPPolicyUseLockout over ldapi during cell (c), which tls=1 would refuse.
+if [ -n "${LAB_L67:-}" ]; then
+  ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+dn: cn=config
+changetype: modify
+replace: olcSecurity
+olcSecurity: ssf=56
+LDIF
+else
+  ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
 dn: cn=config
 changetype: modify
 replace: olcSecurity
 olcSecurity: tls=1
 LDIF
+fi
 [ -z "${LAB_OPENLDAP_WRITER:-}" ] || touch /var/lib/ldap/.seeded
 echo "lab: openldap fixture loaded"
 wait $pid

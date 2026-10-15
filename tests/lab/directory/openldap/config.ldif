@@ -22,7 +22,6 @@ cn: module{0}
 olcModulePath: /usr/lib/ldap
 olcModuleLoad: {0}back_mdb
 olcModuleLoad: {1}memberof
-olcModuleLoad: {2}ppolicy
 
 dn: cn=schema,cn=config
 objectClass: olcSchemaConfig
@@ -68,20 +67,3 @@ olcMemberOfRefInt: TRUE
 olcMemberOfGroupOC: groupOfNames
 olcMemberOfMemberAD: member
 olcMemberOfMemberOfAD: memberOf
-
-# Plan 9e, L67: a person's bind is judged by the default policy seed.ldif
-# holds (10 failures in 600 s lock for 600 s, as Active Directory's lockout
-# is set in the same lab). olcPPolicyUseLockout is TRUE because it is the
-# setting under which slapd 2.5.13 returns the ppolicy control's accountLocked
-# with a locked (or administratively locked) account's bind: measured by hand
-# with it unset (the default, FALSE), the same bind answers a plain result 49
-# with no control, which port49 cannot tell from a wrong password. The cost is
-# that a locked account shows as locked to a wrong password too. Passwords are
-# stored hashed already, so the overlay does not hash cleartext.
-dn: olcOverlay={1}ppolicy,olcDatabase={1}mdb,cn=config
-objectClass: olcOverlayConfig
-objectClass: olcPPolicyConfig
-olcOverlay: {1}ppolicy
-olcPPolicyDefault: cn=default,ou=Policies,dc=corp,dc=example,dc=com
-olcPPolicyHashCleartext: FALSE
-olcPPolicyUseLockout: TRUE
