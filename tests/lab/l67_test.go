@@ -734,9 +734,10 @@ func (x *l67X) statePasswords(t *testing.T, r *directory.Resolver, e directory.S
 		} else {
 			x.row(fmt.Sprintf("c%s. %s, %s password", tag, state, p.name), "CheckPassword: %s; raw: %s", res.show(), raw.show())
 		}
-		if held && p.name == "right" && err == nil && state != "must change" {
+		if held && p.name == "right" && err == nil {
 			// A right password bound a person the directory itself holds in a
-			// state a bind should refuse.
+			// state a bind should refuse (a must-change account too: port49
+			// must not issue to it, plan I4).
 			x.fail("c: %s's right password bound, though the directory holds the account as %s", user, state)
 		}
 	}
@@ -1375,6 +1376,13 @@ func l67Directory(t *testing.T, d *directories, dir *labDir, pw string, seedAt t
 func (x *l67X) note() string {
 	var b strings.Builder
 	b.WriteString(x.dir.configNote())
+	if x.dir.name == platOpenLDAP {
+		b.WriteString("**L67 changes that configuration:** the entrypoint, with `LAB_L67` set, sets `olcSecurity: ssf=56` " +
+			"in place of `tls=1` (TLS and the local ldapi socket meet ssf 56, plain LDAP does not; the test flips " +
+			"`olcPPolicyUseLockout` over ldapi), and loads the " +
+			"`ppolicy` overlay with a default policy (`pwdLockout TRUE`, `pwdMaxFailure 10`) and `olcPPolicyUseLockout TRUE`. " +
+			"The (UseLockout FALSE) rows are measured with that setting flipped over ldapi.\n\n")
+	}
 	b.WriteString("The people's password is generated for each run (24 characters from `crypto/rand`) and held in memory; the evidence " +
 		"writes `<alice's password>` wherever it would have been. Every cell's first row is its positive control. \"Failed count\" " +
 		"is the directory's own: `pwdFailureTime` values on OpenLDAP, `badPwdCount` on Samba and the DC. The lockout threshold is " +

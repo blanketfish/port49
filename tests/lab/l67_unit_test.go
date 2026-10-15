@@ -516,3 +516,19 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 		}
 	}
 }
+
+// The OpenLDAP note says L67 ran with ssf=56 and the ppolicy overlay, not the
+// 7g note's tls=1 alone (N1); the other directories' notes do not.
+func TestL67NoteSaysHowOpenLDAPWasConfigured(t *testing.T) {
+	x := &l67X{dir: &labDir{name: platOpenLDAP}, ev: &evidenceLog{}}
+	n := x.note()
+	for _, want := range []string{"ssf=56", "ppolicy", "olcPPolicyUseLockout TRUE"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("the OpenLDAP note does not say %q:\n%s", want, n)
+		}
+	}
+	y := &l67X{dir: &labDir{name: platSamba}, ev: &evidenceLog{}}
+	if strings.Contains(y.note(), "ssf=56") {
+		t.Errorf("the Samba note names OpenLDAP's ssf")
+	}
+}
