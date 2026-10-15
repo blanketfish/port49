@@ -2447,7 +2447,7 @@ refused request named; any other path is recorded `mint`.
 | `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
 | `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause. An ID token decision 39 itself refuses (its signature, issuer, audience or expiry; an unmapped identity) is recorded under event `per_login_mfa` with decision 39's own reason (`trust_domain_unresolved`, `identity_unmapped`, …), not as this one, and is not counted in `port49_per_login_mfa_total`: an alert on forged tokens at `/v1/mfa` watches those reasons |
 | `per_login_mfa_unavailable` | `mint`, `refresh`: the device's requirement accepts no method this broker can verify now (no `hardware_key_touch.attestation_roots_file` loaded, no human OIDC verifier). That device alone; alertable: a configuration fault, not a person's |
-| `sign_in_refused` | `issue`, `enroll`: a directory-password sign-in whose name maps to no entry under the verifier's filters or outside its `principal_domains`, whose code is wrong, replayed or from a clock too far off, whose password the directory refused, whose entry's state the directory refuses (expired, disabled, locked, must change), or whose second factor is another entry's (§13 decision 47). One reason to the caller on purpose, so the API never says whether the name, the password or the code was wrong; past the code, the directory's state is said (§13 decision 47 ruling 7). The record's `sign_in.failed` says which. The API answers 401. Counted against the source, and against the principal once one is known |
+| `sign_in_refused` | `issue`, `enroll`: a directory-password sign-in whose name maps to no entry under the verifier's filters or outside its `principal_domains`, whose code is wrong, replayed or from a clock too far off, whose password the directory refused, whose entry's state the directory refuses (expired, disabled, locked, must change), or whose second factor is another entry's (§13 decision 47). One reason to the caller on purpose, so the API never says whether the name, the password or the code was wrong; the directory's state is said past the code, or before it only when the directory gives that state to the right password alone (§13 decision 47 ruling 7; a locked account's state is never said from a password alone, L67). The record's `sign_in.failed` says which. The API answers 401. Counted against the source, and against the principal once one is known |
 | `sign_in_throttled` | `issue`, `enroll`: the sign-in's principal or source has had `failures_per_principal` or `failures_per_source` failed attempts in the window; nothing was checked (§13 decision 47 D5). The API answers 429 with `Retry-After`. Alert on a rise: someone is spraying |
 | `enrollment_closed` | `issue`: a person with no second factor, and no enrollment window open for them; the password is not checked (§13 decision 47 D2, ruling 4). It says a name exists and has no second factor, without a bind, which is accepted (ruling 7). An operator's `port49 directory reset-second-factor` opens one. The API answers 403 |
 | `enrollment_store_lost` | `issue`, `enroll`: the broker's enrollment store is lost — it has no creation mark (its file or key is missing, a new install not yet initialised by `port49 directory init-enrollments` included), or its file will not unseal (a lost or rotated seal key, tampering) (§13 decision 47 D7). Password sign-in is refused for everyone, before anything is counted or read; certificates already issued, tokens and IdP sign-in serve. The API answers 503. On a new install the operator runs `port49 directory init-enrollments`; otherwise restores the file or the etcd snapshot (`port49 directory import`), or runs `port49 directory reset-second-factor --all`. Alertable: `port49_directory_enrollment_store_ok` reads 0 |
@@ -9537,9 +9537,12 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   1.3, verified to `broker_ca` and the broker CRL check (9c), never through a proxy → a simple bind
   as the entry's DN, the DN from the broker's own search (never the typed name), over the server's
   LDAPS or StartTLS with `broker.directory.ca_file`, on a fresh connection that presents no client
-  certificate, closed after the one bind. An empty password would be an unauthenticated bind, which
-  some servers accept as anonymous (RFC 4513 §5.1.2; measured in L67 (b), open), so port49 refuses
-  an empty password before any dial, whatever the server does. Never stored, logged, hashed (no
+  certificate, closed after the one bind. An empty password would be an unauthenticated bind (RFC
+  4513 §5.1.2), and Windows Server 2025 answers one success, as anonymous, where Samba 4.17 refuses
+  it (49, `52e`) and slapd 2.5 refuses it (53) (L67 (b), `tests/lab/results/L67-windows_ad.md`,
+  `L67-samba_ad.md`, `L67-openldap.md`). So port49 refuses an empty password before any dial, on
+  every directory, whatever the server does: the client never sends one, and the broker opens no
+  connection for one (measured on all three). Never stored, logged, hashed (no
   `credential_sha256` for a sign-in), in argv, the environment or a file; no `--password` flag and
   no `password_env`. The client never binds to the directory itself (self-asserted, design §10, and
   clients do not reach DCs), and sends no client-side hash (it would become the password).
@@ -9560,10 +9563,14 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   IPv4 /32 or an IPv6 /64. A store error is `503 store_unavailable` and nothing is checked (fail
   closed). Over the limit: `429 sign_in_throttled`, `Retry-After`, naming the time. `port49
   directory unlock <principal>` clears a principal's count at 3am. 5 is under the common directory
-  lockout threshold (AD's lockout is commonly set to 10 in 10 minutes, and L67 cell (d) sets it so and measures the
-  interaction). A fixed window lets at most `2 × failures_per_principal − 1` failures through in any
-  one window length (four at the end of one window, five at the start of the next: nine against
-  AD's ten, a margin of one); keep that under the directory's lockout threshold. Accepted: the
+  lockout threshold (AD's lockout is commonly set to 10 in 10 minutes). A fixed window lets at most
+  `2 × failures_per_principal − 1` failures through in any one window length (four at the end of
+  one window, five at the start of the next: nine against AD's ten, a margin of one); keep that
+  under the directory's lockout threshold. Measured, L67 (d), on all three directories at a lockout
+  of 10: six wrong sign-ins at the defaults answered 401 five times and 429 once, and the
+  directory's failed count stayed at 5; nine across a window boundary reached 9, not locked, a
+  margin of 1, and a tenth locked the account (`tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md`). Accepted: the
   per-principal 429 tells a caller that a typed name is a person's; port49 does not hide which names
   exist (a directory's lockout does the same), and the 429 never names the principal. Behind an L4
   load balancer or NAT that hides sources, the per-source count is everyone's: raise it or set 0
@@ -9677,15 +9684,40 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   (389-DS and eDirectory give it for an inactivated or locked account). Any other result
   code is a refusal carrying its code; a connection that fails is `directory_unavailable`. A
   refusal at the bind is never a pool fault and never moves the pool's breakers or hold-off.
-  Provisional on L67.
+  Data, L67 (2026-10-15, at a lockout of 10): Samba 4.17 and Windows Server 2025 answer a wrong
+  password `52e`, and the right one `532` (expired), `773` (must change) or `533` (disabled); a
+  wrong password on those accounts is `52e`; a locked account is `775` to either. slapd 2.5
+  answers an expired account's right password 49 with `passwordExpired`, and a must-change
+  account's right password **result 0** with `changeAfterReset`, which port49 refuses as the
+  state; a wrong password on either is a plain 49. Under `olcPPolicyUseLockout: TRUE` a locked
+  account, and a disabled one too (`pwdAccountLockedTime`), is 49 with `accountLocked` to either
+  password, so slapd's disabled reads as locked. Under slapd's stock `olcPPolicyUseLockout:
+  FALSE` a locked or disabled account is a plain 49 with the control carrying no error, to the
+  right password as to a wrong one: port49 refuses it as a wrong password, counts it against the
+  principal (the sixth is a 429), and says no state. That is a measured limit, not a fault;
+  `olcPPolicyUseLockout: TRUE` is the setting under which slapd's locked and disabled accounts are
+  said (ruling 7). `530`, `531` and `701` were not measured. `tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md` (c).
 - **7. What the person is told.** One sentence for a wrong name, password or code ("the broker did
   not accept that name, password and code; check each and run `port49 login` again"), so the API
-  tells no one which was wrong. Past the code, the directory's own state is said ("your directory
-  password has expired: change it, then sign in"; "must be changed before first use"; "is
-  disabled"; "is locked: ask your directory administrator"), since only the holder of a right code
-  gets that far; for a person enrolling, only one inside an enrollment window, which is decided
-  before the password is checked: outside every window the answer is `403 enrollment_closed` and
-  nothing is bound. `enrollment_closed` says a name exists and has no second factor, without a bind;
+  tells no one which was wrong. The directory's own state ("your directory password has expired:
+  change it, then sign in"; "must be changed before first use"; "is disabled"; "is locked: ask your
+  directory administrator") is said only past a right code, or when the refusal is one the
+  directory gives only to the right password (`Proven`: AD's `530`, `531`, `532`, `533`, `701`,
+  `773`; ppolicy's `passwordExpired` and `changeAfterReset`). Any other state (AD's `775`,
+  ppolicy's `accountLocked`, a 53, a state with no data code) is told to a person who has shown
+  only a password as the wrong-name sentence above; the record keeps the state and its data either
+  way. So no one learns which accounts are locked or disabled from a name alone. An enrolled
+  person's password is bound only past the code (D4); an enrolling person's with no code, and only
+  inside an enrollment window, which is decided before the password is checked: outside every
+  window the answer is `403 enrollment_closed` and nothing is bound. *Corrected by L67
+  (2026-10-15):* this ruling first said the state was told "since only the holder of a right code
+  gets that far". The lab showed a locked account answers `775` (Samba, Windows) or
+  `accountLocked` (OpenLDAP under `olcPPolicyUseLockout: TRUE`) to a wrong password too, and
+  OpenLDAP gives a disabled account `accountLocked` to either, so an enrolling person's sign-in
+  would have said a stranger's account was locked (`tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md` (c)). Under slapd's stock `olcPPolicyUseLockout: FALSE`
+  no locked or disabled state is said at all (ruling 6). `enrollment_closed` says a name exists and has no second factor, without a bind;
   it is the operator's signal at 3am and accepted as such. Throttled: the window's end; for the
   principal's limit, "an operator can clear it with `port49 directory unlock` for your account". The
   principal is never named to the caller. The directory down: "the directory did not answer, so no
@@ -10426,6 +10458,9 @@ Beyond those already listed in the design document's §14:
 - **The code before the password**: a wrong code never reaches the directory; a right code and a
   wrong password are one refusal to the caller.
 - **Never the empty password**: refused before any dial, by the client and the broker.
+- **No state from a password alone**: a refusal the directory also gives a wrong password (`775`,
+  `accountLocked`, a 53) is told as a wrong password unless the code was accepted; a state given
+  only to the right password (`532`, `773`, `passwordExpired`, …) is said.
 - **A step once**: a code accepted is refused again, on this replica or another; the step is taken
   before the password is tried.
 - **Counted before judged**: parallel attempts never pass the limit; a store error refuses.

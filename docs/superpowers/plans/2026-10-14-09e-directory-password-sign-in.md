@@ -128,7 +128,8 @@ plan's text assumes each recommendation; a different ruling changes the tasks it
   as the entry's DN, the DN from the broker's own search (never the typed name), over the server's
   LDAPS or StartTLS with `broker.directory.ca_file`, on a fresh connection that presents no client
   certificate, closed after the one bind. An empty password is refused before any dial (RFC 4513
-  §5.1.2's unauthenticated bind succeeds as anonymous). Never stored, logged, hashed (no
+  §5.1.2's unauthenticated bind: Windows Server 2025 answers it success as anonymous, Samba and
+  OpenLDAP refuse it; `tests/lab/results/L67-windows_ad.md` (b)). Never stored, logged, hashed (no
   `credential_sha256` for a sign-in), in argv, the environment or a file; no `--password` flag and
   no `password_env`. *Alternatives:* the client binding to the directory itself (self-asserted,
   design §10, and clients do not reach DCs); a Kerberos AS exchange at the broker (AD only); a
@@ -386,10 +387,16 @@ each on reasoning unless it says data:
   never a pool fault and never moves the pool's breakers or hold-off.
 - **R7. What the person is told.** One sentence for a wrong name, password or code
   ("the broker did not accept that name, password and code; check each and run `port49 login`
-  again"), so the API tells no one which was wrong. Past the code, the directory's own state is said
-  ("your directory password has expired: change it, then sign in"; "must be changed before first
-  use"; "is disabled"; "is locked: ask your directory administrator"), since only the holder of a
-  right code gets that far; for a person enrolling, only one inside an enrollment window, which is
+  again"), so the API tells no one which was wrong. The directory's own state ("your directory
+  password has expired: change it, then sign in"; "must be changed before first use"; "is
+  disabled"; "is locked: ask your directory administrator") is said past a right code, or when the
+  refusal is `Proven` (one the directory gives only to the right password: AD's 530, 531, 532,
+  533, 701, 773; ppolicy's `passwordExpired`, `changeAfterReset`); any other state is told a
+  person who has shown only a password as the wrong-name sentence, so no one learns which accounts
+  are locked from a name alone. *Corrected by L67:* this first said "only the holder of a right
+  code gets that far"; a locked account answers 775 or `accountLocked` to a wrong password too
+  (`tests/lab/results/L67-*.md` (c); spec decision 47 ruling 7). A person enrolling binds with no
+  code, and only inside an enrollment window, which is
   decided before the password is checked: outside every window the answer is `403
   enrollment_closed` and nothing is bound (C5). `enrollment_closed` says a name exists and has no
   second factor, without a bind; it is the operator's signal at 3am and accepted as such.
@@ -494,7 +501,8 @@ each on reasoning unless it says data:
 ## Review Focus
 
 1. **An empty or whitespace password.** RFC 4513 §5.1.2: a simple bind with a DN and an empty
-   password is an unauthenticated bind, and many servers answer success. It must be refused before
+   password is an unauthenticated bind, and some servers answer success (Windows Server 2025 did,
+   as anonymous; Samba and OpenLDAP refused it: L67 (b)). It must be refused before
    any dial, and the client must refuse to send one. Tests: Task 6
    (`TestAnEmptyPasswordIsNeverSent`), Task 9 (`TestAnEmptyPasswordIsRefusedAndCounted`); L67 cell
    (b) measures what each directory would have answered.
