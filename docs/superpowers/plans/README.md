@@ -231,7 +231,11 @@ store handle that can point at a global etcd. The global and regional split itse
 **9e executed 2026-10-14 to 2026-10-15** on `feature/directory-password-sign-in` (base `7c7bdf84`),
 each task reviewed (Plan 9e — As built, below). **L67 is closed** on OpenLDAP, Samba AD and Windows
 Server 2025 AD (2026-10-15), and the lab corrected ruling 7 (a state is named only past a right code
-or when the directory's refusal proves the password). Next, on Ryan's rulings of 2026-10-15: a small
+or when the directory's refusal proves the password). **9e merged 2026-10-15** (PR #10, merge
+`4bacd553`) after the final review (0 Critical, 2 Important: every replica now rechecks a lost
+enrollment store every 30s, and a broker-side search fault answers `directory_unavailable`) and a
+re-review. **L62 closed 2026-10-15** (PR #9, the SER8's TPM, `tests/lab/results/L62-ser8.md`).
+Next, on Ryan's rulings of 2026-10-15: a small
 fix branch for issues #5 and #8, then a small plan that closes the `network_cli` address-keying gap
 (both under 9e's Carried, below).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
