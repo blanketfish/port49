@@ -6546,6 +6546,9 @@ Task 1.
     directory's lockout threshold:** a fixed window lets up to `2 × 5 − 1 = 9` failures through
     around a window boundary, one under AD's default of 10 (L67 (d) measured it). The 429 for a
     person's limit says an operator can unlock the account; it never names the principal.
+    **Attempt counts are per `store:` (regional):** with K regions, a spray against a person inside
+    an enrollment window can reach K × (2 × `failures_per_principal` − 1) binds per window; size
+    `failures_per_principal` against the directory's lockout threshold with that in mind.
   - **Locked and disabled accounts, by directory.** port49 names an account's state to a person only
     after a right code, or when the directory's refusal proves the password (expired, must change).
     **Stock OpenLDAP answers a locked or disabled account like a wrong password** (`olcPPolicyUseLockout`

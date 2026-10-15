@@ -4817,6 +4817,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   lockout threshold:** a fixed window lets up to `2 × 5 − 1 = 9` failures through around a window
   boundary, one under AD's default of 10 (L67 (d) measured it). The 429 for a person's limit says
   an operator can unlock the account; it never names the principal.
+  **Attempt counts are per `store:` (regional):** with K regions, a spray against a person inside an
+  enrollment window can reach K × (2 × `failures_per_principal` − 1) binds per window; size
+  `failures_per_principal` against the directory's lockout threshold with that in mind.
 - **At 3am.**
   - The directory down: sign-ins fail at once, 503, saying so; everyone holding a certificate keeps
     working, new agents included, within `directory.grace`.
