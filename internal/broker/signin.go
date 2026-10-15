@@ -201,6 +201,12 @@ func (s *signInAttempt) directoryUnavailable(principal string) {
 // The line holds the LDAP result code alone, or the error's type: the
 // message may echo the search filter and so the name typed (R8).
 func (s *signInAttempt) searchFault(err error) {
+	// The hold budget ran out: the directory did not answer in time, which is
+	// no refusal and says nothing of the bind account.
+	if errors.Is(err, context.DeadlineExceeded) {
+		s.directoryUnavailable("")
+		return
+	}
 	what := fmt.Sprintf("%T", err)
 	key := "sign_in_search_fault " + what
 	var le *ldap.Error

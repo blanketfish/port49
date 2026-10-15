@@ -567,6 +567,26 @@ func TestABrokerSideSearchFaultIsNotTheNamesFault(t *testing.T) {
 	}
 }
 
+// A search that runs out of the hold budget is the directory not answering in
+// time, not a refusal of the broker's own search: the same 503, the line says
+// so, and the error's text and the name typed are in no log line (N2).
+func TestASearchThatRunsOutOfTimeIsTheDirectoryNotAnswering(t *testing.T) {
+	f, dir := newSignInFixture(t)
+	dir.fault = fmt.Errorf("search for typedname: %w", context.DeadlineExceeded)
+	w := f.signIn(t, api.SignInRequest{Name: "typedname", Password: "right", Code: "123456", CSR: csrOf(t, newECKey(t))})
+	if w.Code != 503 || apiError(w) != "directory_unavailable" {
+		t.Fatalf("%s", shown(w))
+	}
+	logs := f.logs()
+	if strings.Contains(logs, "refused the broker's own search") || strings.Contains(logs, "typedname") ||
+		!strings.Contains(logs, "the directory did not answer") {
+		t.Fatalf("log:\n%s", logs)
+	}
+	if n := f.counted(t, aliceSource); n != 0 {
+		t.Fatalf("the source count was not given back: %d", n)
+	}
+}
+
 // A phone's clock off by 90s: refused, the skew said, counted, nothing
 // bound; by 30s: accepted.
 func TestAClockOffIsSaid(t *testing.T) {
