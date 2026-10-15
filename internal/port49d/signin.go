@@ -121,7 +121,7 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 	defer cancel()
 	if err := b.CheckEnrollmentStore(cctx); err != nil {
 		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
-			"store_unavailable until a scheduled pass reaches it", printsafeErr(err))
+			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), enrollmentRecheckEvery)
 	}
 	go recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery)
 	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
@@ -134,7 +134,8 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 var enrollmentRecheckEvery = 30 * time.Second
 
 // recheckEnrollmentStore leaves the lost state without a restart (D7): while
-// the store is lost it looks at the mark every interval, in every process, so
+// the store is lost, or has not yet answered at all (the gauge is absent until
+// it does), it looks at the mark every interval, in every process, so
 // a replica that is not the runner follows an init-enrollments, an import or a
 // reset run elsewhere. It never seals and never writes; the runner's pass
 // keeps the re-seal. It stops with ctx.
@@ -146,7 +147,7 @@ func recheckEnrollmentStore(ctx context.Context, b *broker.Broker, every time.Du
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if b.EnrollmentStoreLost() == "" {
+			if b.EnrollmentStoreLost() == "" && b.EnrollmentStoreChecked() {
 				continue
 			}
 			cctx, cancel := context.WithTimeout(ctx, enrollmentStartWait)

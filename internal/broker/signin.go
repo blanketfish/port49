@@ -862,6 +862,14 @@ func (b *Broker) EnrollmentStoreLost() string {
 	return b.enrollLost
 }
 
+// EnrollmentStoreChecked is whether a check of the enrollment store has got an
+// answer, well or lost; until then the gauge is absent.
+func (b *Broker) EnrollmentStoreChecked() bool {
+	b.enrollMu.Lock()
+	defer b.enrollMu.Unlock()
+	return b.enrollChecked
+}
+
 // CheckEnrollmentStore is the start's and each scheduled pass's look at the
 // enrollment store (D7): its mark present is well (gauge 1, lost cleared);
 // no mark (ErrNotFound, a new install included) or a store that will not
@@ -896,6 +904,7 @@ func (b *Broker) CheckEnrollmentStore(ctx context.Context) error {
 func (b *Broker) markEnrollmentStore(why string) {
 	b.enrollMu.Lock()
 	b.enrollLost = why
+	b.enrollChecked = true
 	say := why != "" && why != b.enrollLostSaid
 	b.enrollLostSaid = why
 	// The gauge is set under the lock that orders the state, so the two cannot

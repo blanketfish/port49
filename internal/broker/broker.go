@@ -233,6 +233,7 @@ type Broker struct {
 	// enrollMu, which EnrollmentStoreLost takes on every sign-in.
 	enrollMu       sync.Mutex
 	enrollLost     string
+	enrollChecked  bool // a check has got an answer
 	enrollLostSaid string
 
 	// ready is what /readyz answers (SetReady).
