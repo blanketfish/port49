@@ -5710,7 +5710,11 @@ each task reviewed, most through one to three fix rounds. The ledger is
     `show log`, `show firewall` or `show policer` shortfall (what port49 sends is unchanged). The
     undenied readonly, which gets `view-configuration`, ran it. Fail closed, but it is the open
     question below.
-- **Open question for Ryan:** a readonly with a deny beneath `show` other than `show configuration`
+- **Ruled 2026-10-15 (Ryan):** permitted means it runs. When a class allows `show configuration`
+  under a deny beneath `show`, the reply sends `view-configuration` with its other reach denied, in
+  a small plan under set 1.2.0, gated on a lab cell proving the bit reaches nothing the denies
+  leave open. The question it settles:
+- **Former open question:** a readonly with a deny beneath `show` other than `show configuration`
   (`show security **`, say) cannot read `show configuration`, because the allow beyond `view` does
   not take and the reply does not send `view-configuration`. The alternative the ruling set aside is
   to send `view-configuration` with its other reach denied. Until ruled, `policy test` says the
