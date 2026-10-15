@@ -262,6 +262,9 @@ o tpm2_getcap handles-persistent
 
 **Pass:** the same as 3a, and the persistent handles are still step 0's list.
 
+`login` refreshes as it connects, so a `refresh` straight after it (3a and 3b) may get
+`refresh_too_soon` (`retry in 10s`). That is the broker's spacing, not the TPM: wait 10s and rerun.
+
 ## Part B: the second host (about 20 min, after the reboot)
 
 There is **no second machine with a real TPM**. The nearest honest stand-in is a container on
@@ -274,14 +277,15 @@ As `rwendt`:
 
 ```
 sudo modprobe tpm_vtpm_proxy
-sudo install -d -m 700 /var/lib/port49-l62/swtpm
+sudo install -d -m 700 /var/lib/swtpm/port49-l62      # swtpm's AppArmor profile allows only /var/lib/swtpm/
 ls /dev/tpmrm*                                     # before
-sudo swtpm chardev --vtpm-proxy --tpm2 --tpmstate dir=/var/lib/port49-l62/swtpm \
-  --daemon --pid file=/var/lib/port49-l62/swtpm/pid --log file=/var/lib/port49-l62/swtpm/log
+S=/var/lib/swtpm/port49-l62
+sudo swtpm chardev --vtpm-proxy --tpm2 --tpmstate dir=$S --daemon --pid file=$S/pid --log file=$S/log
 ls -l /dev/tpmrm*                                  # a new /dev/tpmrm1, group tss
 # if it is not tss 0660: sudo chgrp tss /dev/tpmrm1 && sudo chmod 660 /dev/tpmrm1
 systemd-id128 new | sudo install -o p49lab -m 444 /dev/stdin /var/lib/port49-l62/host2/machine-id
 
+sudo install -d -m 755 /etc/exports.d                # absent on a fresh Ubuntu 26.04
 echo '/home/p49lab/.port49 127.0.0.1(rw,sync,no_subtree_check)' | sudo tee /etc/exports.d/port49-l62.exports
 sudo exportfs -ra
 sudo install -d /mnt/l62-port49 && sudo mount -t nfs -o vers=4.2 127.0.0.1:/home/p49lab/.port49 /mnt/l62-port49
@@ -454,7 +458,7 @@ second real TPM.
 As `rwendt`:
 - `docker rm -f l62host2`, `sudo umount /mnt/l62-port49`,
   `sudo rm /etc/exports.d/port49-l62.exports && sudo exportfs -ra`;
-- `sudo kill $(sudo cat /var/lib/port49-l62/swtpm/pid)`, `sudo modprobe -r tpm_vtpm_proxy`;
+- `sudo kill $(sudo cat /var/lib/swtpm/port49-l62/pid)`, `sudo rm -rf /var/lib/swtpm/port49-l62`, `sudo modprobe -r tpm_vtpm_proxy`;
 - press Enter in the harness pane, then remove what it kept:
   `docker compose -p port49labl62 down -v`, `rm -rf ~/.cache/port49-l62`,
   `docker rmi port49-l62:dev port49-l62-setup:dev`;
