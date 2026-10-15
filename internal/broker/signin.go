@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
+
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
@@ -190,6 +192,28 @@ func (s *signInAttempt) storeUnavailable(principal, what string, err error, text
 func (s *signInAttempt) directoryUnavailable(principal string) {
 	s.b.sayOnce("sign_in_directory_unavailable", sayEvery, "sign-in: the directory did not answer; password "+
 		"sign-in is refused until it does")
+	s.answerUnavailable(principal)
+}
+
+// searchFault is a failure of the broker's own search that is no person's
+// name: the bind account's rights changed (LDAP 50), a base_dn renamed (32).
+// It is 503 like an unreachable directory, with one line per distinct code.
+// The line holds the LDAP result code alone, or the error's type: the
+// message may echo the search filter and so the name typed (R8).
+func (s *signInAttempt) searchFault(err error) {
+	what := fmt.Sprintf("%T", err)
+	key := "sign_in_search_fault " + what
+	var le *ldap.Error
+	if errors.As(err, &le) {
+		what = fmt.Sprintf("LDAP result code %d", le.ResultCode)
+		key = "sign_in_search_fault " + what
+	}
+	s.b.sayOnce(key, sayEvery, "sign-in: the directory refused the broker's own search (%s): password sign-in "+
+		"is refused until the bind account and base_dn are put right", what)
+	s.answerUnavailable("")
+}
+
+func (s *signInAttempt) answerUnavailable(principal string) {
 	s.giveBack()
 	s.rec(s.event, decision.DirectoryUnavailable, principal, decision.SignIn{})
 	s.b.Metrics.SignIns.WithLabelValues("directory_unavailable").Inc()
@@ -283,8 +307,11 @@ func (s *signInAttempt) entry(ctx context.Context, name string, cfg *oidc.Passwo
 		s.rec(decision.EventIssue, decision.IdentityAmbiguous, "", decision.SignIn{Failed: "name"})
 		writeError(s.w, http.StatusUnauthorized, string(decision.SignInRefused), refusedText)
 		return e, false
+	case errors.Is(err, directory.ErrUnmapped), errors.Is(err, directory.ErrUsernameTaken):
+		s.refuse("name") // no one, or no one alone, answers to what was typed
+		return e, false
 	case err != nil:
-		s.refuse("name")
+		s.searchFault(err)
 		return e, false
 	case !slicesContainsDomain(cfg, e.Principal):
 		s.refuse("name") // a principal this verifier does not take is no one's here

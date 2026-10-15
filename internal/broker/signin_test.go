@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -40,7 +41,8 @@ type fakeDir struct {
 	mu       sync.Mutex
 	people   map[string]fakePerson
 	down     bool
-	bindDown bool // only the bind is unavailable
+	bindDown bool  // only the bind is unavailable
+	fault    error // the search's own error, as a raw LDAP one
 	state    string
 	result   int // the LDAP result a state refusal carries; 49 when 0
 	// stateForAny gives the state refusal to a wrong password too.
@@ -63,6 +65,9 @@ func (d *fakeDir) SignInEntry(_ context.Context, name, _ string) (directory.Sign
 	if d.down {
 		return directory.SignInEntry{}, fmt.Errorf("%w (the last: dc-01: filter (sAMAccountName=%s): busy)",
 			directory.ErrUnavailable, name)
+	}
+	if d.fault != nil {
+		return directory.SignInEntry{}, d.fault
 	}
 	p, ok := d.people[name]
 	if !ok {
@@ -522,6 +527,43 @@ func TestTheDirectoryDownSignInSaysSoAndHoldersMint(t *testing.T) {
 	}
 	if w := f.postAt(context.Background(), f.issuedState(c), mintLeaf1, "", f.now); w.Code != 200 {
 		t.Fatalf("a holder's mint: %s", shown(w))
+	}
+}
+
+// A fault in the broker's own search (the bind account's ACL changed: LDAP 50)
+// is the directory's, not the person's wrong name: 503 directory_unavailable,
+// the counts given back, one line with the result code alone, and the name
+// typed nowhere (R8).
+func TestABrokerSideSearchFaultIsNotTheNamesFault(t *testing.T) {
+	f, dir := newSignInFixture(t)
+	dir.fault = ldap.NewError(50, errors.New("insufficient access for (sAMAccountName=typedname)"))
+	for range 2 {
+		w := f.signIn(t, api.SignInRequest{Name: "typedname", Password: "right", Code: "123456", CSR: csrOf(t, newECKey(t))})
+		if w.Code != 503 || apiError(w) != "directory_unavailable" || strings.Contains(shown(w), "typedname") {
+			t.Fatalf("%s", shown(w))
+		}
+	}
+	if n := f.counted(t, aliceSource); n != 0 {
+		t.Fatalf("the source count was not given back: %d", n)
+	}
+	logs := f.logs()
+	if strings.Contains(logs, "typedname") || strings.Contains(logs, "insufficient") {
+		t.Fatalf("the name or the server's text is in the log:\n%s", logs)
+	}
+	if got := strings.Count(logs, "result code 50"); got != 1 {
+		t.Fatalf("%d lines name code 50 (want one, said once):\n%s", got, logs)
+	}
+	if f.outcome("directory_unavailable") != 2 || f.outcome("refused") != 0 {
+		t.Fatalf("outcomes: unavailable %v refused %v", f.outcome("directory_unavailable"), f.outcome("refused"))
+	}
+	// A non-LDAP error says its type alone.
+	dir.fault = fmt.Errorf("boom for typedname")
+	f.advance(sayEvery + time.Second)
+	if w := f.signIn(t, api.SignInRequest{Name: "typedname", Password: "right", Code: "123456", CSR: csrOf(t, newECKey(t))}); w.Code != 503 {
+		t.Fatalf("%s", shown(w))
+	}
+	if logs := f.logs(); strings.Contains(logs, "typedname") || !strings.Contains(logs, "*fmt.wrapError") && !strings.Contains(logs, "*errors.errorString") {
+		t.Fatalf("log:\n%s", logs)
 	}
 }
 
