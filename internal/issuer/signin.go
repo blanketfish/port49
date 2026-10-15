@@ -1,7 +1,9 @@
 package issuer
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,10 +13,28 @@ import (
 	"time"
 )
 
-// SignIn is the OIDC sign-in a certificate was issued on (decision 43
-// rulings 9 and 16): whom the provider authenticated, when, and the
-// provider's session, which a back-channel logout names.
+// The sign-in methods a certificate can be issued on.
+const (
+	MethodOIDC              = "oidc"
+	MethodDirectoryPassword = "directory_password"
+)
+
+// EntrySubjectPrefix starts a directory sign-in's sub; the hex digest follows.
+const EntrySubjectPrefix = "entry-sha256:"
+
+// EntrySubject is a directory sign-in's sub: the entry's id hashed, so a
+// DN-form id fits the URI (decision 47 D6).
+func EntrySubject(entryID string) string {
+	sum := sha256.Sum256([]byte(entryID))
+	return EntrySubjectPrefix + hex.EncodeToString(sum[:])
+}
+
+// SignIn is the sign-in a certificate was issued on (decision 43 rulings 9
+// and 16; decision 47 D6): whom the provider or directory authenticated,
+// when, and for OIDC the provider's session, which a back-channel logout
+// names. Method "" is MethodOIDC.
 type SignIn struct {
+	Method    string
 	Principal string
 	Issuer    string
 	Subject   string
@@ -30,14 +50,20 @@ type SignIn struct {
 const signInScheme = "port49-sign-in"
 
 // signInMembers are the URI's query members; amr alone may repeat.
-var signInMembers = []string{"iss", "sub", "sid", "auth_time", "iat", "amr", "acr"}
+var signInMembers = []string{"method", "iss", "sub", "sid", "auth_time", "iat", "amr", "acr"}
 
 // URI is s as the certificate's one URI SAN (spec §13 decision 43 ruling 9,
 // R1): port49-sign-in:v1?iss=…&sub=…&auth_time=…&iat=…, with sid, acr and
 // each amr when present. The principal is the subject's CN.
 func (s SignIn) URI() *url.URL {
-	q := url.Values{"iss": {s.Issuer}, "sub": {s.Subject}, "auth_time": {strconv.FormatInt(s.AuthTime.Unix(), 10)},
+	q := url.Values{"sub": {s.Subject}, "auth_time": {strconv.FormatInt(s.AuthTime.Unix(), 10)},
 		"iat": {strconv.FormatInt(s.IssuedAt.Unix(), 10)}}
+	if s.Issuer != "" {
+		q.Set("iss", s.Issuer)
+	}
+	if s.Method == MethodDirectoryPassword {
+		q.Set("method", s.Method)
+	}
 	if s.Sid != "" {
 		q.Set("sid", s.Sid)
 	}
@@ -75,7 +101,14 @@ func ReadSignIn(leaf *x509.Certificate) (SignIn, error) {
 			return SignIn{}, fmt.Errorf("its sign-in URI names %s twice", k)
 		}
 	}
-	s := SignIn{Principal: leaf.Subject.CommonName, Issuer: q.Get("iss"), Subject: q.Get("sub"), Sid: q.Get("sid"),
+	method := MethodOIDC
+	if q.Has("method") {
+		// Only a directory sign-in names its method; a 9b certificate has none.
+		if method = q.Get("method"); method != MethodDirectoryPassword {
+			return SignIn{}, fmt.Errorf("its sign-in names a method port49 does not issue (%q)", method)
+		}
+	}
+	s := SignIn{Method: method, Principal: leaf.Subject.CommonName, Issuer: q.Get("iss"), Subject: q.Get("sub"), Sid: q.Get("sid"),
 		ACR: q.Get("acr"), AMR: q["amr"]}
 	at, errAt := strconv.ParseInt(q.Get("auth_time"), 10, 64)
 	iat, errIat := strconv.ParseInt(q.Get("iat"), 10, 64)
@@ -95,8 +128,28 @@ func (s SignIn) validate() error {
 	switch {
 	case !printable(s.Principal) || !strings.HasPrefix(s.Principal, "user:") || !strings.Contains(s.Principal, "@"):
 		return errors.New("its subject CN is not a principal (user: and an address)")
-	case CarriesIssuer(s.Issuer) != nil:
-		return errors.New("its sign-in's iss is not an https URL")
+	}
+	switch s.Method {
+	case "", MethodOIDC:
+		if CarriesIssuer(s.Issuer) != nil {
+			return errors.New("its sign-in's iss is not an https URL")
+		}
+	case MethodDirectoryPassword:
+		hexPart := strings.TrimPrefix(s.Subject, EntrySubjectPrefix)
+		switch {
+		case s.Issuer != "":
+			return errors.New("a directory sign-in carries no iss")
+		case s.Sid != "" || s.ACR != "":
+			return errors.New("a directory sign-in carries no sid or acr")
+		case !strings.HasPrefix(s.Subject, EntrySubjectPrefix) || len(hexPart) != 64 || !isLowerHex(hexPart):
+			return errors.New("a directory sign-in's sub is not entry-sha256: and 64 hex digits")
+		case len(s.AMR) == 0:
+			return errors.New("a directory sign-in names no amr")
+		}
+	default:
+		return errors.New("its sign-in names a method port49 does not issue")
+	}
+	switch {
 	case !printable(s.Subject):
 		return errors.New("its sign-in has no usable sub")
 	case s.Sid != "" && !printable(s.Sid), s.ACR != "" && !printable(s.ACR),
@@ -115,6 +168,11 @@ func CarriesIssuer(iss string) error {
 		return errors.New("it is not an https URL of printable ASCII (no space, at most 1024 bytes)")
 	}
 	return nil
+}
+
+// isLowerHex is true for a string of only 0-9 and a-f.
+func isLowerHex(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return (r < '0' || r > '9') && (r < 'a' || r > 'f') }) < 0
 }
 
 // printable is 1 to 1024 bytes of printable ASCII, no space.

@@ -666,27 +666,33 @@ func openIdentity(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 // not-yet-valid certificate is a storeFault naming the file, the CN and
 // the instant, never "not answering".
 func identity(name string, id config.EtcdIdentity, pool *x509.CertPool, now time.Time) (*tls.Config, *x509.Certificate, error) {
+	return identityAt("store.etcd."+name, id, pool, now)
+}
+
+// identityAt is identity with the config path its errors name, so an
+// enrollment store's own etcd is not reported as store.etcd.
+func identityAt(at string, id config.EtcdIdentity, pool *x509.CertPool, now time.Time) (*tls.Config, *x509.Certificate, error) {
 	pair, err := keyfile.LoadX509KeyPair(id.CertFile, id.KeyFile)
 	if err != nil {
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s (cert_file %s, key_file %s): %w", name, id.CertFile,
+		return nil, nil, &storeFault{fmt.Errorf("%s (cert_file %s, key_file %s): %w", at, id.CertFile,
 			id.KeyFile, err)}
 	}
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: certificate %s, for key_file %s, does not parse: %w",
-			name, id.CertFile, id.KeyFile, err)}
+		return nil, nil, &storeFault{fmt.Errorf("%s: certificate %s, for key_file %s, does not parse: %w",
+			at, id.CertFile, id.KeyFile, err)}
 	}
 	switch {
 	case leaf.Subject.CommonName == etcdstore.RootUser:
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: certificate %s: its CN is %q, etcd's administrator, "+
-			"which bypasses every role: give the component a certificate of its own", name, id.CertFile,
+		return nil, nil, &storeFault{fmt.Errorf("%s: certificate %s: its CN is %q, etcd's administrator, "+
+			"which bypasses every role: give the component a certificate of its own", at, id.CertFile,
 			etcdstore.RootUser)}
 	case now.After(leaf.NotAfter):
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: certificate %s (CN=%s) expired at %s; renew it", name,
+		return nil, nil, &storeFault{fmt.Errorf("%s: certificate %s (CN=%s) expired at %s; renew it", at,
 			id.CertFile, leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339))}
 	case now.Before(leaf.NotBefore):
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: certificate %s (CN=%s) is not valid until %s; check "+
-			"this host's clock", name, id.CertFile, leaf.Subject.CommonName, leaf.NotBefore.UTC().Format(time.RFC3339))}
+		return nil, nil, &storeFault{fmt.Errorf("%s: certificate %s (CN=%s) is not valid until %s; check "+
+			"this host's clock", at, id.CertFile, leaf.Subject.CommonName, leaf.NotBefore.UTC().Format(time.RFC3339))}
 	}
 	return &tls.Config{RootCAs: pool, Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, leaf, nil
 }

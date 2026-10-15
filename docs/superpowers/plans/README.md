@@ -223,6 +223,17 @@ and the docs say what Ansible's address keying leaves open, never recommending
 `network_cli` address keying stays an open gap, **awaiting Ryan's decision** (no plan yet). L66
 showed the pre-flight's paramiko guess above wrong (spec ruling 15 corrected): libssh is the
 `ssh_type` that accepted a changed key under `host_key_auto_add`.
+**9e written 2026-10-14** (`2026-10-14-09e-directory-password-sign-in.md`, fifteen tasks), on Ryan's
+rulings of that day: D1–D11 as recommended, D7 as a sealed file on the memory store that fails
+closed when lost (`enrollment_store_lost`, never a reopened window), D12 a separate enrollment
+store handle that can point at a global etcd. The global and regional split itself is plan 11a.
+**9e pre-flight 2026-10-14**, 5 Critical, 15 Important, 14 Minor, every finding applied to the plan.
+**9e executed 2026-10-14 to 2026-10-15** on `feature/directory-password-sign-in` (base `7c7bdf84`),
+each task reviewed (Plan 9e — As built, below). **L67 is closed** on OpenLDAP, Samba AD and Windows
+Server 2025 AD (2026-10-15), and the lab corrected ruling 7 (a state is named only past a right code
+or when the directory's refusal proves the password). Next, on Ryan's rulings of 2026-10-15: a small
+fix branch for issues #5 and #8, then a small plan that closes the `network_cli` address-keying gap
+(both under 9e's Carried, below).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5361,7 +5372,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
   - **Built:** see Plan 9d — As built, below, for what was built, the rows closed, what is carried
     to later plans, and the operator notes.
 
-- **9e — A directory-password sign-in** (Ryan, 2026-10-10; not yet written). The route for a company
+- **9e — A directory-password sign-in** (Ryan, 2026-10-10; written 2026-10-14, executed 2026-10-14
+  to 2026-10-15; see Plan 9e — As built, below). The route for a company
   with neither an IdP nor a PKI: `port49 login` signs the person in by an LDAP bind against
   `broker.directory`, plus a second factor, and the broker issues the same short-lived certificate
   9b issues, so everything after the sign-in is 9b's.
@@ -5375,6 +5387,8 @@ certificate. Each later plan is written after the one before it merges (CLAUDE.m
     sign-in fails, and says so.
   - **Lab:** a new row on OpenLDAP and Samba AD (the 7g harness), and Windows AD on the SER8.
   - **Order:** after 9d, before plan 10.
+  - **Built:** see Plan 9e — As built, below, for what was built, the rulings, the row closed, what
+    is carried to later plans, and the operator notes.
 
 ### Plan 9a — As built
 
@@ -6360,6 +6374,232 @@ all applied before Task 1.
   - **A wrong PIN typed elsewhere** logs a running agent off a hardware key (L60 F1, issue #6):
     see Plan 9c's operator notes above.
 
+### Plan 9e — As built
+
+Executed from `2026-10-14-09e-directory-password-sign-in.md` on `feature/directory-password-sign-in`
+(base `7c7bdf84`, the plan commit), each task reviewed, most through one to three fix rounds. The
+ledger is `.superpowers/sdd/2026-10-14-09e-directory-password-sign-in/progress.md`. The rulings are
+decision 47 of the spec (§13). Pre-flight: 5 Critical, 15 Important, 14 Minor, all applied before
+Task 1.
+
+- **Built** (`git log 7c7bdf84..HEAD`; `make test` and `make vet` pass):
+  - **Spec** (Task 1; 1a2624e5, 274bd8c9): decision 47, five §5.7 reasons, the new events, design §7,
+    §10 and §12, and L67.
+  - **TOTP** (Task 2; b0e329bb, 9f044b67): codes over `pquerna/otp` v1.5.0, the window edges tested on
+    both sides, the QR code on `boombuler/barcode` v1.1.0.
+  - **Vocabulary** (Task 3; f2fe85ca): `sign_in_refused`, `sign_in_throttled`, `enrollment_closed`,
+    `enrollment_store_lost`, `second_factor_enrolled`; the `enroll` event; `port49_sign_ins_total`
+    and `port49_directory_enrollment_store_ok`.
+  - **The stores** (Task 4; f5d6edd4, a775733b, 122aef36, 6c4cf422): attempt counts in `store:`; the
+    enrollment store as its own handle, a sealed file on memory and keys in etcd. State, enrollment
+    time, used step and the creation mark are sealed and compared clear against sealed; a mark under
+    the previous key reports `Stale` and is re-sealed by revision.
+  - **Config** (Task 5; 9f3e28ed, 076943a7): the `directory_password` verifier and
+    `directory.enrollment_store`. A memory enrollment store beside an etcd `store:` is refused
+    (per-replica files would break single use), as are an endpoint shared with `store.etcd` and an
+    overlapping prefix (default `/port49-enrollments/`).
+  - **The directory** (Task 6; d8cc713d, dfc27761): the entry a name names, and a person's bind on a
+    fresh connection. LDAP 51 and 52 are `ErrUnavailable` (503, not counted); 53 is a refusal.
+  - **The certificate** (Tasks 7 and 8; 77b4e35c, f9cb69cf, a9b5ec3e, 2c6f7ddb): a directory sign-in
+    rides in the issued certificate's URI (`method=directory_password`, `amr=pwd&amr=otp`), and the
+    broker reads it, refresh records included.
+  - **`POST /v1/sign-in` and `/v1/sign-in/confirm`** (Task 9; 5b7c298f, b6c2ca6c, 02f7d6bf): the
+    order of D4, counts given back on a broker fault, a 202 that keeps its reopened window, and a
+    handle put back after a failed confirm.
+  - **Operations** (Task 10; 5f90efc1, 31b2f03f, 0eee5e46, ad83bf72, a7a5aeb5, bcda09af, 77a2232b,
+    dd1747fe, babc5fed): the scheduled re-seal pass, `port49 directory reset-second-factor [--all]`,
+    `unlock`, `init-enrollments`, `export` and `import [--replace]` on the admin socket, port49d and
+    the broker wired, `store-roles` printing the enrollment store's own etcd role, and a stale open
+    never replacing a newer handle.
+  - **The client** (Task 11; dfbffd94, 389ced23): `port49 login --directory`, with the enrollment's QR
+    code and its own retry words.
+  - **The 3am cases through the real CLI** (Task 12; 0a483914, 5e9499fb): the directory down, a lost
+    store, a throttle, a skewed phone, each end to end.
+  - **Lab harness and run** (Tasks 13 and 14; 27e93b26, 9fb957f5, 6515ce80, 6735a7d4, 69aaf6e0,
+    13a32cbb, 0182eb53, b22bf5a2, f60d1d91, 36367e22, b6b75d14, df5c865c, 13cf173a, 1527141c). Two
+    product fixes came out of the harness review: a `directory_password`-only broker now starts with
+    no `client_ca_file` (9fb957f5), and the L67 and L56 harnesses pin `issued_key_store: file`, so a
+    lab never probes the machine's TPM (6735a7d4).
+- **Rulings as made** (decision 47; D1 to D13 are the plan's):
+  - **D1 to D11, as recommended: Ryan, 2026-10-14.** D1 TOTP held by port49, D2 enrollment as
+    trust on first use inside windows, D3 the password's path, D4 the code before the password, D5
+    the limits, D6 `auth.amr` `["pwd","otp"]`, D8 no domain shared with an IdP, D9 `pquerna/otp`,
+    D10 `totp` is not a `per_login_mfa` method in 9e (carried, below), D11 the vocabulary.
+  - **D7** a sealed file on the memory store that fails closed when lost (Ryan's rewrite of the
+    recommendation), **D12** `directory.enrollment_store`, **D13** `export` and `import`: Ryan,
+    2026-10-14.
+  - **Pre-flight, the controller's:** counts live in `store:` (regional) and enrollments in
+    `enrollment_store` (C2); the enrollment window is decided before the password, so outside every
+    window there is no bind (C5); the TOTP step is taken before the bind (I1); port49d and the
+    broker never create the enrollment store, `init-enrollments` does (I15).
+  - **During execution, the controller's:** a store sealed under an unreadable key is `Stale` and
+    re-sealed by revision (Task 4); `--all` replaces unopenable records and never drops an opening
+    factor, and mark, import and create reopen a lost file first (Task 10); the lost-store answer
+    says "missing or unreadable ... creates or restores it (the broker's log says which)", because
+    the broker cannot tell a fresh volume from a deleted one and "not initialised" would steer a
+    real loss away from the restore (Task 12); a directory_password-only broker failing to start is
+    a product bug (Task 13).
+  - **Ruling 7, corrected by the lab (df5c865c, rule 4):** a state is named to the person only past
+    a right code or when the directory's refusal proves the password (`PasswordRefusal.Proven()`:
+    AD 530, 531, 532, 533, 701 and 773, `password_expired`, `change_after_reset`). The first draft
+    named any account-state result, but L67 showed 775 and `accountLocked` also answer a wrong
+    password, so an enrolling person was told whether a name was locked. Ruled by the controller
+    as a security tightening, without Ryan; the cost, if wrong, is that a locked person sees
+    "refused" while enrolling. Rulings 6 and D3 and D5 were corrected in the same commit.
+- **Rows:** **L67 closed 2026-10-15** (`tests/lab/results/L67-openldap.md`, `L67-samba_ad.md`,
+  `L67-windows_ad.md`: OpenLDAP, Samba AD, and Windows Server 2025 AD, build 26100.32230). What it
+  changed:
+  - Stock OpenLDAP (`olcPPolicyUseLockout` FALSE) answers a locked or disabled account as a plain
+    wrong password.
+  - Windows AD answers an empty-password bind success as anonymous, so port49 refuses an empty
+    password before it dials.
+  - The lockout margin is 1: nine directory failures through a fixed window against AD's threshold
+    of ten.
+  - Cell (f): every directory's entry creation time is what the broker reads (the control row);
+    OpenLDAP's and Samba's were 1s and 7s before the fixture was logged loaded, and Windows AD's
+    `whenCreated` could not be compared with an independently known seed time.
+- **Carried:**
+  - **Ryan's rulings, 2026-10-15:** after 9e, a **small fix branch for issues #5 and #8**; **issue
+    #6 is documented as intended behaviour in plan 13**; and a **small plan closes the `network_cli`
+    address-keying gap** in the port49 Ansible lookup (9d's open gap). The lookup copies a name's
+    key to an address that has none, and refuses an address with a different key, naming both and
+    minting nothing.
+  - **D10's `totp` as a `per_login_mfa` method:** a directory-password person meets a device's
+    requirement only by `hardware_key_touch`; adding `totp` changes the policy schema and 9c's diff
+    gate. A later plan.
+  - **Plan 12:** ship `method: directory` in `/etc/port49/config.yaml`. Each shape keeps
+    `enrollments.json` on state that survives (a persistent volume on k8s, `StateDirectory=` under
+    systemd, a mounted volume in a container) and backs it up (`port49 directory export` from a cron
+    job or CronJob, under `umask 077`). `port49 directory init-enrollments` is an install step (a
+    one-off job on k8s), never a start path.
+  - **Plan 11a:** the rest of the D12 split, with the enrollment keyspace as its own store role.
+  - **Plan 13:** the guide, and these operator notes (issue #6 as intended behaviour with them).
+  - **The pre-beta review:** looks at the enrollment windows (D2), and decides whether a `Proven`
+    state (expired, must-change) telling a password-only person that the password was right is
+    acceptable. It equals what a direct LDAP bind says and is throttled per principal.
+  - **A flake to check at the final review:** `internal/port49d`
+    `TestALostHoldEndsTheRunnersPassBeforeItWrites` failed once under full-suite load, 10 of 10
+    alone, in code this plan did not touch. Known flake or real race; file an issue if pre-existing.
+- **Left for later:**
+  - **`port49 token` does not retry `store_unavailable`'s "retry in 5s"** (spec §5.7, on purpose,
+    for the agent). After a broker restart on etcd the start gate keeps mints closed until the
+    first takeover, 20s or more at the default hold, so an operator sees the refusal that long and
+    has to retry by hand. Needs a spec ruling; proposed as an issue.
+  - **A misleading log line:** `internal/directory/resolver.go` logs "minted from a membership
+    verified 0s ago (grace)" when the start gate then refuses the mint. Pre-existing; an issue.
+  - **`GET /v1/identity` shows no directory sign-in** (a certificate issued over one is not
+    described there). Operators read the `issue` and `enroll` records.
+  - **Parked review minors**, none a weakening: a doc reflow in Tasks 7 and 8, and Task 3's
+    polish items. The final whole-branch review takes them.
+- **Operator-facing notes** (the plan's "Operator notes," as built and corrected by the lab; plan 13
+  builds the guide):
+  - **New: sign in with the directory password and a second factor.** For a company with no PKI and
+    no identity provider; either store shape works. A person runs `port49 login`, types their
+    directory password and their authenticator's code, and holds a 12h certificate; after that
+    everything is the certificate path (9b). The broker's config:
+
+    ```yaml
+    broker:
+      directory: { … }                  # plan 7g's; certificate_mapping is optional without an x509 verifier
+      identity:
+        humans:
+          - type: directory_password
+            principal_domains: [corp.example.com]
+            second_factor: totp
+            filter: "(memberOf=CN=port49-people,OU=Groups,DC=corp,DC=example,DC=com)"   # keeps service accounts out
+            enrollment:
+              open_until: 2026-11-30T00:00:00Z   # the rollout
+              new_entries_for: 336h               # a new hire's first 14 days; 0s off
+              reopen_for: 24h                     # after reset-second-factor
+            rate_limits: { failures_per_principal: 5, failures_per_source: 50, window: 15m }
+        issuance: {}
+    ```
+
+    A broker whose only human verifier is `directory_password` starts without a `client_ca_file`.
+    On each host, `/etc/port49/config.yaml` has `method: directory`. `GET /v1/identity` does not
+    show a directory sign-in.
+  - **Once per install, run `port49 directory init-enrollments`** on the broker's admin socket (as the
+    broker's user or root). It creates the enrollment store; port49d never does, so a lost or
+    unmounted volume is never mistaken for a new install. Until it runs, password sign-in is refused
+    (`enrollment_store_lost`) and `port49_directory_enrollment_store_ok` reads 0. It refuses to run
+    over a store that is already there.
+  - **Back it up.** On the memory store the second factors are sealed in `enrollments.json` in the
+    broker's state directory: run `port49 directory export > enrollments.sealed` from cron under
+    `umask 077`, and restore with `port49 directory import` (`--replace` over a newer store). On
+    etcd they live in etcd or, with `broker.directory.enrollment_store`, in an etcd of their own
+    (one cluster across regions, so a code used in one region is used everywhere). With a replicated
+    store, set `totp_label` explicitly: the default is built from the host name.
+  - **First sign-in.** Inside a window, the right password shows a QR code: scan it with any
+    authenticator app (or type the key), then type the first code. Every enrollment is an `enroll`
+    record and `port49_sign_ins_total{outcome="enrolled"}`: **alert on enrollments outside your
+    rollout.** Inside a window a stolen password enrolls the thief's phone first; the real person
+    then finds a second factor they never set up, and that is the signal.
+  - **Why the code comes first.** port49 checks the code, and uses it up, before it sends the password
+    to the directory. A spray without the codes never reaches your DCs, so port49 cannot lock an AD
+    account. The person sees one refusal for a wrong name, password or code; one who mistypes the
+    password waits for the next code. Outside every enrollment window a person with no second factor
+    is told enrollment is closed, and the password is not tried at all; that answer says the name
+    exists and has not enrolled, which port49 accepts. port49 refuses an empty password before it
+    dials, because Windows AD answers an empty-password bind as success (anonymous).
+  - **Limits.** 5 failures per person and 50 per source address (an IPv6 /64) in 15 minutes, counted
+    before they are judged, in `store:` (regional); a store error refuses. **Behind a load balancer
+    or NAT that hides client addresses, every sign-in shares one source:** raise
+    `failures_per_source` or set it to 0. **Keep `2 × failures_per_principal` under your
+    directory's lockout threshold:** a fixed window lets up to `2 × 5 − 1 = 9` failures through
+    around a window boundary, one under AD's default of 10 (L67 (d) measured it). The 429 for a
+    person's limit says an operator can unlock the account; it never names the principal.
+    **Attempt counts are per `store:` (regional):** with K regions, a spray against a person inside
+    an enrollment window can reach K × (2 × `failures_per_principal` − 1) binds per window; size
+    `failures_per_principal` against the directory's lockout threshold with that in mind.
+  - **Locked and disabled accounts, by directory.** port49 names an account's state to a person only
+    after a right code, or when the directory's refusal proves the password (expired, must change).
+    **Stock OpenLDAP answers a locked or disabled account like a wrong password** (`olcPPolicyUseLockout`
+    FALSE): it is refused and counted as a wrong password, with no state message. Set it TRUE for
+    state messages and accurate records. **`port49 directory unlock` clears port49's count, not a
+    lock held in the directory**; unlock the account in the directory too.
+  - **At 3am.**
+    - The directory down: sign-ins fail at once, 503, saying so; everyone holding a certificate keeps
+      working, new agents included, within `directory.grace`.
+    - Someone locked out by a spray of their name: `port49 directory unlock <principal>` on the
+      broker's admin socket. Their held certificate works meanwhile.
+    - A lost phone: `port49 directory reset-second-factor <principal>`; they enroll at their next
+      sign-in within `reopen_for`.
+    - A phone's clock off: the refusal says by how much.
+    - "your second factor could not be read": the store's encryption key in use is not the one it was
+      sealed under, and the previous is gone; reset the person's second factor. Keep
+      `encryption.previous` until a scheduled re-seal pass has run after a rotation.
+    - "the broker's store of second factors is missing or unreadable" (`enrollment_store_lost`,
+      `port49_directory_enrollment_store_ok` 0; the answer says creating or restoring it fixes it
+      and the broker's log says which): the file or etcd key is gone, will not unseal (the seal key
+      changed), or this is a new install not yet initialised. Password sign-in alone is refused;
+      held certificates, tokens and IdP sign-in serve. On a new install run `port49 directory
+      init-enrollments`. Otherwise restore it (`port49 directory import < backup`, or the etcd
+      snapshot). With no backup, `port49 directory reset-second-factor --all` lets everyone enroll
+      again for `reopen_for` (24h): **alert on it**, as a stolen password enrolls first in that
+      window. The unreadable file is kept beside the new one. **Run `--all` only on a replica that
+      holds every current and previous key, never in the middle of a key rotation.**
+    - After an etcd restore, a `reset-second-factor` run since the snapshot is undone (the lost
+      phone's factor is back): run it again.
+    - A person's entry re-created in the directory (after `port49 directory forget`): their sign-in
+      is refused with the usual sentence, and the broker's log names `reset-second-factor` for them.
+    - A broker restarted on etcd: for 20s or more the start gate keeps mints closed and `port49
+      token` says `store_unavailable` ("retry in 5s") once; run it again.
+  - **Alert on** `second_factor_reset` records with `"all"` or `"created"` (outside an install), on
+    `port49_directory_enrollment_store_ok` 0 **and** `absent(port49_directory_enrollment_store_ok)`,
+    on `enrollment_store_lost`, `sign_in_throttled`, `second_factor_enrolled` and
+    `enrollments_import`.
+  - **What is never logged:** the password, the code, the secret, the QR code's URI, the enrollment
+    handle, and a name that matches no entry (people type passwords at name prompts).
+  - **`per_login_mfa`.** A directory-password person meets a device's requirement only by
+    `hardware_key_touch` (a YubiKey); `idp_mfa` needs a provider. A TOTP method there is carried to a
+    later plan.
+  - **New reason codes:** `sign_in_refused`, `sign_in_throttled`, `enrollment_closed`,
+    `enrollment_store_lost`, `second_factor_enrolled`; new events `enroll`, `second_factor_reset`,
+    `sign_in_unlock`, `enrollments_import`; metrics `port49_sign_ins_total{outcome}` and
+    `port49_directory_enrollment_store_ok`; commands `port49 directory reset-second-factor [--all]`,
+    `unlock`, `init-enrollments`, `export`, `import [--replace]`.
+  - **Lab:** L67 (OpenLDAP, Samba AD, Windows Server 2025 AD) is closed; the readings above are its.
+
 **Owed from plan 3 (owner's rulings 2026-09-24):**
 - **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
   `cert`, `key`) so `port49 login` needs no flags. `broker_ca` stays **required** — the file
@@ -6390,6 +6630,23 @@ Projected ServiceAccount token validation against the cluster JWKS; identity
 
 Separate listener on 300, mutual TLS replacing the shared key, device records expressing
 both. Design §11.
+
+## Plan 11a — Global and regional stores (design §13; Ryan, 2026-10-14)
+
+Not yet written. Built in, not left to the operator: a deployment in several regions (Ryan's
+shape at work is three regions, three Kubernetes clusters) runs one **global** etcd, one member
+per region, and one **regional** etcd per cluster. Global holds what is written rarely and must
+agree everywhere: enrollments (9e's `directory.enrollment_store`), revocations, unlocks,
+second-factor resets, the TOTP used-step record, and policy. Each port49d watches it and serves
+reads from a local cache. Regional holds the hot path: tokens, login contexts, receipts, and
+attempt counts (a spray across three regions gets 3×5 guesses, accepted unless the lab says
+otherwise). A region cut off from global keeps verifying from its cache and refuses new
+enrollments and revocations (fail closed). Replaces design §13's single-store default with this
+split for multi-region. Lab: three simulated regions with netem latency and a cut region,
+measuring the cache, the fail-closed edges, and the cross-region replay of a TOTP code.
+Backups stay the operator's tools (cron, Velero, etcd snapshots); the notes show one of each,
+alongside 9e's `port49 directory export` and `import`. Lands before plan 12, whose failure matrix
+includes the cut region.
 
 ## Plan 12 — Deployment (§19 step 12)
 

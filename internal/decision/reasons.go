@@ -96,6 +96,20 @@ const (
 	PerLoginMFAProved      Reason = "per_login_mfa_proved"
 	PerLoginMFARefused     Reason = "per_login_mfa_refused"
 	PerLoginMFAUnavailable Reason = "per_login_mfa_unavailable"
+
+	// The directory-password sign-in (spec §5.7; §13 decision 47).
+	// SignInRefused: the name, password or code was not accepted, one reason
+	// to the caller for the three. SignInThrottled: the principal's or the
+	// source's failed attempts reached the limit, nothing checked.
+	// EnrollmentClosed: no second factor and no window open. A permit on the
+	// enroll event, SecondFactorEnrolled.
+	SignInRefused    Reason = "sign_in_refused"
+	SignInThrottled  Reason = "sign_in_throttled"
+	EnrollmentClosed Reason = "enrollment_closed"
+	// EnrollmentStoreLost: the enrollment store has no creation mark or
+	// will not unseal (decision 47 D7); password sign-in alone is refused.
+	EnrollmentStoreLost  Reason = "enrollment_store_lost"
+	SecondFactorEnrolled Reason = "second_factor_enrolled"
 )
 
 // Events.
@@ -120,7 +134,23 @@ const (
 	// principal's directory membership, and with it the entry the principal
 	// was pinned to (spec §5.7; plan 7g, Ruling 3's escape).
 	EventDirectoryForget = "directory_forget"
+	// EventSecondFactorReset is not a decision: an operator reset a person's
+	// second factor, or init-enrollments created the store (spec §5.7; §13
+	// decision 47).
+	EventSecondFactorReset = "second_factor_reset"
+	// EventSignInUnlock is not a decision: an operator cleared a principal's
+	// failed sign-in count (spec §5.7; §13 decision 47).
+	EventSignInUnlock = "sign_in_unlock"
+	// EventEnrollmentsImport is not a decision: an operator replaced or
+	// filled the enrollment store from an export (spec §5.7; §13 decision 47
+	// D13).
+	EventEnrollmentsImport = "enrollments_import"
 )
+
+// EventEnroll is POST /v1/sign-in/confirm: whether a person's first second-factor code
+// confirms their TOTP enrollment (spec §5.7; §13 decision 47): permit
+// second_factor_enrolled, or a deny with the refusal's reason.
+const EventEnroll = "enroll"
 
 // EventRefresh is the broker carrying the policy in force into a live login
 // context (spec §5.1.3): the policy written into it, or the context revoked.
@@ -142,9 +172,9 @@ const EventIdentity = "identity"
 // deny api_right_missing. It never carries the command asked (spec §5.7).
 const EventExplain = "explain"
 
-// EventIssue is POST /v1/certificate: whether a person's OIDC sign-in is
-// exchanged for a certificate the broker issues (spec §5.7; §13 decision
-// 43): permit certificate_issued, or a deny with the refusal's reason.
+// EventIssue is POST /v1/certificate and POST /v1/sign-in: whether a person's
+// OIDC or directory-password sign-in is exchanged for a certificate the broker
+// issues (spec §5.7; §13 decisions 43 and 47): permit certificate_issued, or a deny with the refusal's reason.
 const EventIssue = "issue"
 
 // EventPerLoginMFA is POST /v1/mfa: whether a per-login proof is accepted
@@ -169,6 +199,7 @@ var reasons = []Reason{
 	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
 	APIRightMissing, CertificateIssued,
 	PerLoginMFARequired, PerLoginMFAProved, PerLoginMFARefused, PerLoginMFAUnavailable,
+	SignInRefused, SignInThrottled, EnrollmentClosed, EnrollmentStoreLost, SecondFactorEnrolled,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

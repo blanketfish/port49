@@ -26,8 +26,12 @@ slapadd -n0 -F /etc/ldap/slapd.d -l /lab/config.ldif
 chown -R openldap:openldap /etc/ldap/slapd.d /var/lib/ldap
 
 hash=$(slappasswd -h '{SSHA}' -s "$LAB_LDAP_PASSWORD")
-sed "s|@PORT49_PASSWORD_HASH@|$hash|" /lab/seed.ldif > /tmp/seed.ldif
-unset hash LAB_LDAP_PASSWORD
+# L67 (plan 9e): the people's password, the run's when LAB_L67_PASSWORD is set
+# and a random one otherwise, hashed as the broker's is. It is never printed.
+person=${LAB_L67_PASSWORD:-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')}
+phash=$(slappasswd -h '{SSHA}' -s "$person")
+sed -e "s|@PORT49_PASSWORD_HASH@|$hash|" -e "s|@PERSON_PASSWORD_HASH@|$phash|" /lab/seed.ldif > /tmp/seed.ldif
+unset hash person LAB_LDAP_PASSWORD LAB_L67_PASSWORD
 
 slapd -d 256 -F /etc/ldap/slapd.d -h "ldap:/// ldaps:/// ldapi:///" -u openldap -g openldap &
 pid=$!
@@ -41,6 +45,38 @@ until ldapsearch -Y EXTERNAL -H ldapi:/// -b '' -s base -LLL namingContexts >/de
 done
 ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/seed.ldif >/dev/null
 rm -f /tmp/seed.ldif
+# L67: the people's passwords and four more people, loaded before the ppolicy
+# overlay exists (so nothing the overlay owns is set by an add, pwdReset
+# included), then the overlay, then each person put in the state a bind is
+# asked about, as the root DN. The fourth, l67-locked, is locked by the test
+# with failed binds. Nothing here runs without LAB_L67, so L42, L43 and the
+# end-to-end lab keep the fixture they were measured on.
+if [ -n "${LAB_L67:-}" ]; then
+  ldapmodify -Y EXTERNAL -H ldapi:/// -f /lab/ppolicy-module.ldif >/dev/null
+  sed "s|@PERSON_PASSWORD_HASH@|$phash|" /lab/l67.ldif > /tmp/l67.ldif
+  ldapmodify -a -Y EXTERNAL -H ldapi:/// -f /tmp/l67.ldif >/dev/null
+  rm -f /tmp/l67.ldif
+  ldapmodify -Y EXTERNAL -H ldapi:/// -f /lab/ppolicy.ldif >/dev/null
+  # -e relax: these are no-user-modification attributes, which only the
+  # relax rules control lets the root DN write.
+  ldapmodify -e relax -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+dn: uid=l67-expired,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+replace: pwdChangedTime
+pwdChangedTime: 20200101000000Z
+
+dn: uid=l67-disabled,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+replace: pwdAccountLockedTime
+pwdAccountLockedTime: 000001010000Z
+
+dn: uid=l67-mustchange,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+replace: pwdReset
+pwdReset: TRUE
+LDIF
+fi
+unset phash
 # The end-to-end lab (plan 7g, Task 18) changes group membership while the
 # directory runs, and ldapi is closed once tls=1 is set: with LAB_OPENLDAP_WRITER
 # set, one account may write over LDAPS, bound with LAB_ADMIN_PASSWORD (a random
@@ -67,12 +103,24 @@ LDIF
 fi
 # From here on every operation must be under TLS: a simple bind over plain LDAP
 # is refused, and so is anything over ldapi, which nothing later uses.
-ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+# L67 keeps ldapi usable by asking for a security strength (ssf=56) that TLS and
+# the local socket (SSF 71) meet and a plain LDAP connection does not: the test
+# flips olcPPolicyUseLockout over ldapi during cell (c), which tls=1 would refuse.
+if [ -n "${LAB_L67:-}" ]; then
+  ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+dn: cn=config
+changetype: modify
+replace: olcSecurity
+olcSecurity: ssf=56
+LDIF
+else
+  ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
 dn: cn=config
 changetype: modify
 replace: olcSecurity
 olcSecurity: tls=1
 LDIF
+fi
 [ -z "${LAB_OPENLDAP_WRITER:-}" ] || touch /var/lib/ldap/.seeded
 echo "lab: openldap fixture loaded"
 wait $pid

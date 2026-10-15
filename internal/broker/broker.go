@@ -81,6 +81,19 @@ type Broker struct {
 	// Identity verifies OIDC bearer tokens (plan 7h): nil when no oidc
 	// verifier is configured, and a bearer is then refused.
 	Identity *oidc.Set
+	// PasswordSignIn is broker.identity's directory_password verifier (plan
+	// 9e; decision 47): nil when there is none. A certificate issued over a
+	// directory sign-in is taken only while it names the principal's domain.
+	PasswordSignIn *oidc.PasswordSignIn
+	// SignInDirectory is what a directory sign-in asks the directory;
+	// *directory.Resolver is one. Nil with PasswordSignIn set answers 404.
+	SignInDirectory SignInDirectory
+	// Enrollments is the enrollment store's handle (decision 47 D12); Store
+	// keeps the attempt counts. Nil with PasswordSignIn set is a lost store.
+	Enrollments store.Enrollments
+	// EnrollmentFile is the enrollment store's file on the memory backend, ""
+	// on etcd: reset-second-factor --all names the copy it keeps of a lost one.
+	EnrollmentFile string
 	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
 	// requests no client certificate and /v1/config offers no x509.
 	NoX509 bool
@@ -215,6 +228,14 @@ type Broker struct {
 	// said is, by key, when sayOnce last said it.
 	said map[string]time.Time
 
+	// enrollLost is why the enrollment store is lost, "" when it is not;
+	// enrollLostSaid is the why its error line last said. Guarded by
+	// enrollMu, which EnrollmentStoreLost takes on every sign-in.
+	enrollMu       sync.Mutex
+	enrollLost     string
+	enrollChecked  bool // a check has got an answer
+	enrollLostSaid string
+
 	// ready is what /readyz answers (SetReady).
 	ready atomic.Pointer[string]
 }
@@ -229,6 +250,8 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("POST /v1/certificate", b.issue)
+	mux.HandleFunc("POST /v1/sign-in", b.signIn)
+	mux.HandleFunc("POST /v1/sign-in/confirm", b.signInConfirm)
 	mux.HandleFunc("GET /v1/identity", b.identity)
 	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
 	mux.HandleFunc("POST /v1/explain", b.explain)
@@ -322,6 +345,10 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 			}
 			c.OIDC = append(c.OIDC, api.OIDCProvider{Issuer: v.Issuer, ClientID: v.ClientID, Scopes: scopes})
 		}
+	}
+	if b.PasswordSignIn != nil {
+		c.Methods = append(c.Methods, "directory_password")
+		c.SignIn = &api.SignInConfig{SecondFactor: "totp"}
 	}
 	if b.Issuer != nil {
 		available := b.Issuer.Unavailable == nil
@@ -445,9 +472,11 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			if b.mintGateRefuses(w, pol, now, c, req) {
 				return
 			}
+			ca := c.auth()
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
 				Reason: decision.NoGrantsMatched, Principal: principal,
-				Auth:   &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
+				Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: ca.OIDC,
+					DirectoryPassword: ca.DirectoryPassword},
 				Policy: &decision.Policy{Bundle: pol.Bundle}, Sweep: sweepOf(req)})
 			resp := api.MintResponse{Principal: principal, Results: []api.MintItem{}}
 			resp.Subject, resp.Subjects = subjectNames(pol, m)
@@ -672,7 +701,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	authTime := b.authTime(r)
 	cc, err := b.CertCallerOf(r.TLS, now)
 	principal, legacy, cred := cc.Principal, cc.Legacy, cc.Cred
-	if b.Directory != nil && cc.Domain == DomainHumans && cc.Issued == nil {
+	if b.Directory != nil && cc.Domain == DomainHumans && cc.SignIn == nil {
 		if h := heldOf(r); h != nil && h.answer != nil {
 			principal = h.answer.Principal // already mapped: it names the refusal's caller
 		}
@@ -694,15 +723,21 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(reason), err.Error())
 		return caller{}, false
 	}
-	// via is the sign-in a certificate this broker issued carries: every
-	// record the certificate makes names it (decision 43 rulings 10, 11).
-	var via *decision.OIDC
+	// viaOIDC or viaDir is the sign-in a certificate this broker issued
+	// carries: every record the certificate makes names it (decision 43
+	// rulings 10, 11; decision 47).
+	var viaOIDC *decision.OIDC
+	var viaDir *decision.DirectoryPassword
 	if cc.Issued != nil {
-		via = oidcAuth(*cc.Issued)
+		viaOIDC = oidcAuth(*cc.Issued)
+	}
+	if cc.SignIn != nil && cc.SignIn.Method == issuer.MethodDirectoryPassword {
+		viaDir = directoryPasswordAuth(*cc.SignIn)
 	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
+			Reason: decision.SessionExpired, Principal: named,
+			Auth: &decision.Auth{Method: cred.Method, OIDC: viaOIDC, DirectoryPassword: viaDir}})
 		// Closing the connection is what makes the next request a handshake,
 		// and the handshake is the fresh authentication decision 17 requires.
 		w.Header().Set("Connection", "close")
@@ -720,12 +755,13 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		switch {
 		case err != nil:
 			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: named, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
+				Reason: decision.StoreUnavailable, Principal: named,
+				Auth: &decision.Auth{Method: cred.Method, OIDC: viaOIDC, DirectoryPassword: viaDir}})
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker could not read the revocations in force, so it "+nothing+"; try again")
 			return true
 		case revoked:
-			b.refuseRevokedAs(w, event, now, named, cred, via, rv)
+			b.refuseRevokedAuth(w, event, now, named, cred, viaOIDC, viaDir, rv)
 			return true
 		}
 		return false
@@ -739,18 +775,19 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 			return false
 		}
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: named, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: named, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint,
+				OIDC: viaOIDC, DirectoryPassword: viaDir}})
 		b.answerRefusal(w, r, ref)
 		return true
 	}
 	// Without a directory, for a workload, which never reaches one (decision 40 ruling 5), and for
 	// a certificate this broker issued, whose principal its sign-in gave (decision 43 ruling 10):
 	// the principal is the certificate's own.
-	if b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
+	if b.Directory == nil || cc.Domain == DomainMachines || cc.SignIn != nil {
 		if marked(principal) || status() {
 			return caller{}, false
 		}
-		c := caller{principal: principal, cred: cred, authTime: authTime, oidc: cc.Issued}
+		c := caller{principal: principal, cred: cred, authTime: authTime, oidc: cc.Issued, signIn: cc.SignIn}
 		// A certificate this broker issued answers to its sign-in's
 		// logouts (decision 43 ruling 16).
 		if cc.Issued != nil && b.issuedLoggedOut(w, r, event, nothing, now, c) {
@@ -786,23 +823,23 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 
 // callerOf is the caller of a request that does not map: the principal and
 // credential of the connection's verified certificate, legacy, the
-// principal its email SAN gave before a directory ("" without one), and
-// issued, the sign-in a certificate this broker issued carries (nil for
-// any other; decision 43 ruling 10). Under a directory the principal is
+// principal its email SAN gave before a directory ("" without one), issued,
+// the OIDC sign-in a certificate this broker issued carries, and signIn, its
+// sign-in of either method (each nil for any other; decision 43 ruling 10). Under a directory the principal is
 // the one pinned to the held connection at bind (Ruling 4), never the
 // email SAN's; a connection with no pin is refused (errNoPin). An issued
 // certificate is never mapped.
 func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential,
-	issued *oidc.Assertion, err error) {
+	issued *oidc.Assertion, signIn *issuer.SignIn, err error) {
 	cc, err := b.CertCallerOf(r.TLS, now)
-	if err != nil || b.Directory == nil || cc.Domain == DomainMachines || cc.Issued != nil {
-		return cc.Principal, cc.Legacy, cc.Cred, cc.Issued, err
+	if err != nil || b.Directory == nil || cc.Domain == DomainMachines || cc.SignIn != nil {
+		return cc.Principal, cc.Legacy, cc.Cred, cc.Issued, cc.SignIn, err
 	}
 	if h := heldOf(r); h != nil && h.answer != nil {
-		return h.answer.Principal, cc.Legacy, cc.Cred, nil, nil
+		return h.answer.Principal, cc.Legacy, cc.Cred, nil, nil, nil
 	}
 	b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
-	return "", cc.Legacy, cc.Cred, nil, errNoPin
+	return "", cc.Legacy, cc.Cred, nil, nil, errNoPin
 }
 
 // errNoPin is a connection under a directory with no principal pinned to it:
@@ -939,16 +976,17 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 	return store.Revocation{}, false, nil
 }
 
-// refuseRevokedAs answers a caller a revocation stands against before it
+// refuseRevokedAuth answers a caller a revocation stands against before it
 // was answered anything else: one record under event naming whose
 // credential it was (spec §5.7), and answerRevoked. A refresh under a mark
 // is recorded as a refresh (pre-flight M2), any other call under its
-// endpoint's event (decision 34).
-func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
-	cred store.Credential, via *decision.OIDC, rv store.Revocation) {
+// endpoint's event (decision 34). The record names the caller's sign-in:
+// OIDC's (via), a directory password's (viaDir), or neither.
+func (b *Broker) refuseRevokedAuth(w http.ResponseWriter, event string, now time.Time, principal string,
+	cred store.Credential, via *decision.OIDC, viaDir *decision.DirectoryPassword, rv store.Revocation) {
 	rec := revokedRecord(now, principal, cred)
 	rec.Event = event
-	rec.Auth.OIDC = via
+	rec.Auth.OIDC, rec.Auth.DirectoryPassword = via, viaDir
 	b.emit(rec)
 	answerRevoked(w, rv)
 }
@@ -1152,9 +1190,11 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	// mfaRec is the per-login requirement's part of this item's records: set
 	// once the requirement is judged, so a deny after it carries it too.
 	var mfaRec *decision.PerLoginMFA
+	ca := c.auth()
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
+			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer),
+				OIDC: ca.OIDC, DirectoryPassword: ca.DirectoryPassword},
 			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req), PerLoginMFA: mfaRec}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
@@ -1301,7 +1341,8 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			TTL:         time.Duration(req.TTLSeconds) * time.Second,
 			Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt, ReplayOnly: replayOnly,
 			Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-			Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
+			Directory: directoryAuth(answer), OIDC: ca.OIDC, DirectoryPassword: ca.DirectoryPassword,
+			Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
 	}
 	out, err := mint(replays)
 	if errors.Is(err, token.ErrReplayLapsed) {

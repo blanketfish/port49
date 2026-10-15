@@ -1,0 +1,75 @@
+# L67 (plan 9e), loaded by the entrypoint with `ldapmodify -a` only when LAB_L67
+# is set, BEFORE the ppolicy overlay is installed (ppolicy.ldif), so that no add
+# or password write here is seen by the overlay and none sets pwdReset. The
+# entrypoint then puts three of the people in their states (pwdChangedTime,
+# pwdReset, pwdAccountLockedTime) as the directory's root, since an add cannot
+# set an operational attribute the overlay owns. The fourth, l67-locked, is
+# locked by the test with failed binds. Every password is the run's, hashed at
+# start into @PERSON_PASSWORD_HASH@.
+
+# The default password policy: 10 failures in 600 s lock for 600 s, as Active
+# Directory's lockout is set in the same lab.
+dn: ou=Policies,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Policies
+
+dn: cn=default,ou=Policies,dc=corp,dc=example,dc=com
+objectClass: device
+objectClass: pwdPolicy
+cn: default
+pwdAttribute: userPassword
+pwdMaxFailure: 10
+pwdFailureCountInterval: 600
+pwdLockout: TRUE
+pwdLockoutDuration: 600
+pwdMustChange: TRUE
+pwdMaxAge: 7776000
+pwdAllowUserChange: TRUE
+
+# The three people a sign-in is tried with.
+dn: uid=alice,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+add: userPassword
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=carol,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+add: userPassword
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=dave,ou=Staff,dc=corp,dc=example,dc=com
+changetype: modify
+add: userPassword
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-expired,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-expired
+sn: l67-expired
+uid: l67-expired
+mail: l67-expired@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-disabled,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-disabled
+sn: l67-disabled
+uid: l67-disabled
+mail: l67-disabled@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-mustchange,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-mustchange
+sn: l67-mustchange
+uid: l67-mustchange
+mail: l67-mustchange@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@
+
+dn: uid=l67-locked,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: l67-locked
+sn: l67-locked
+uid: l67-locked
+mail: l67-locked@corp.example.com
+userPassword: @PERSON_PASSWORD_HASH@

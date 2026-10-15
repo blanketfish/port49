@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
+
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/spiffe"
@@ -40,6 +42,33 @@ type identityVerifierYAML struct {
 	Algorithms         []string               `yaml:"algorithms"`
 	CAFile             string                 `yaml:"ca_file"`
 	Directory          *workloadDirectoryYAML `yaml:"directory"`
+	// directory_password's own keys (plan 9e; decision 47).
+	SecondFactor string          `yaml:"second_factor"`
+	Filter       string          `yaml:"filter"`
+	Enrollment   *enrollmentYAML `yaml:"enrollment"`
+	RateLimits   *rateLimitsYAML `yaml:"rate_limits"`
+	TOTPLabel    string          `yaml:"totp_label"`
+}
+
+// enrollmentYAML is a directory_password verifier's enrollment windows
+// (decision 47 D2).
+type enrollmentYAML struct {
+	OpenUntil     string         `yaml:"open_until"`
+	NewEntriesFor *time.Duration `yaml:"new_entries_for"`
+	ReopenFor     *time.Duration `yaml:"reopen_for"`
+}
+
+// rateLimitsYAML is its attempt limits (decision 47 D5).
+type rateLimitsYAML struct {
+	FailuresPerPrincipal *int           `yaml:"failures_per_principal"`
+	FailuresPerSource    *int           `yaml:"failures_per_source"`
+	Window               *time.Duration `yaml:"window"`
+}
+
+// passwordKeys reports whether v sets a key only a directory_password
+// verifier takes.
+func (v identityVerifierYAML) passwordKeys() bool {
+	return v.SecondFactor != "" || v.Filter != "" || v.Enrollment != nil || v.RateLimits != nil || v.TOTPLabel != ""
 }
 
 // machineClientYAML is one entry of a machine verifier's clients (Ruling
@@ -135,7 +164,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
-					v.Algorithms != nil || v.CAFile != "" {
+					v.Algorithms != nil || v.CAFile != "" || v.passwordKeys() {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file and spiffe_trust_domains alone", at)
 				}
 				tds, err := spiffeTrustDomains(at, v.SPIFFETrustDomains)
@@ -156,10 +185,27 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
-					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil {
+					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil ||
+					v.passwordKeys() {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file alone", at)
 				}
 				out.X509AnchorFile = v.TrustAnchorFile
+			case v.Type == "directory_password" && list.domain == oidc.Machines:
+				return nil, fmt.Errorf("config: %s: directory_password is a human verifier; list it under humans", at)
+			case v.Type == "directory_password":
+				if out.PasswordSignIn != nil {
+					return nil, errors.New("config: broker.identity.humans: at most one directory_password verifier " +
+						"(one directory, one password sign-in)")
+				}
+				if v.TrustAnchorFile != "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
+					v.PrincipalClaim != "" || v.Clients != nil || v.Scopes != nil || v.Algorithms != nil ||
+					v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil {
+					return nil, fmt.Errorf("config: %s: type directory_password takes principal_domains, second_factor, "+
+						"filter, enrollment, rate_limits and totp_label alone", at)
+				}
+				if out.PasswordSignIn, err = checkPasswordSignIn(at, v); err != nil {
+					return nil, err
+				}
 			case v.Type == "oidc":
 				vc, err := checkOIDCVerifier(at, list.domain, v)
 				if err != nil {
@@ -167,21 +213,26 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				out.OIDC = append(out.OIDC, vc)
 			default:
-				return nil, fmt.Errorf("config: %s.type %q: one of x509 or oidc (k8s is plan 10's)", at, v.Type)
+				return nil, fmt.Errorf("config: %s.type %q: one of x509, oidc or directory_password (k8s is plan 10's)",
+					at, v.Type)
 			}
 		}
 	}
 	if y.Issuance != nil {
-		if out.Issuance, err = checkIssuance(*y.Issuance, out.OIDC, y.Humans); err != nil {
+		if out.Issuance, err = checkIssuance(*y.Issuance, out.OIDC, y.Humans, out.PasswordSignIn != nil); err != nil {
 			return nil, err
 		}
+	}
+	if out.PasswordSignIn != nil && out.Issuance == nil {
+		return nil, errors.New("config: broker.identity.issuance: a directory_password sign-in ends in an issued " +
+			"certificate, so set broker.identity.issuance (`issuance: {}` takes its defaults)")
 	}
 	if y.PerLoginMFA != nil {
 		if out.PerLoginMFA, err = checkPerLoginMFA(*y.PerLoginMFA); err != nil {
 			return nil, err
 		}
 	}
-	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 {
+	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 && out.PasswordSignIn == nil {
 		return nil, errors.New("config: broker.identity accepts no one: list at least one verifier under humans " +
 			"or machines")
 	}
@@ -198,6 +249,110 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 	if err := distinctVerifiers(out.OIDC, *y); err != nil {
 		return nil, err
 	}
+	if p := out.PasswordSignIn; p != nil {
+		pi := slices.IndexFunc(y.Humans, func(v identityVerifierYAML) bool { return v.Type == "directory_password" })
+		for i, h := range y.Humans {
+			if h.Type != "oidc" {
+				continue
+			}
+			for _, d := range p.PrincipalDomains {
+				if slices.ContainsFunc(h.PrincipalDomains, func(x string) bool { return strings.EqualFold(x, d) }) {
+					return nil, fmt.Errorf("config: broker.identity.humans[%d].principal_domains: %s is also "+
+						"broker.identity.humans[%d]'s: a password beside an identity provider is a downgrade an "+
+						"attacker picks (decision 47 D8)", pi, d, i)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// checkPasswordSignIn resolves a directory_password verifier (plan 9e;
+// decision 47 ruling 18): totp the one second factor, the domains its
+// people's principals are in, the enrollment windows and the attempt limits,
+// each inside its bounds.
+func checkPasswordSignIn(at string, v identityVerifierYAML) (*oidc.PasswordSignIn, error) {
+	switch v.SecondFactor {
+	case "totp":
+	case "":
+		return nil, fmt.Errorf("config: %s.second_factor is required: totp, the one second factor a password "+
+			"sign-in takes (decision 47)", at)
+	default:
+		return nil, fmt.Errorf("config: %s.second_factor %q: totp is the one second factor (decision 47)", at,
+			v.SecondFactor)
+	}
+	domains, err := principalDomains(at, v.PrincipalDomains)
+	if err != nil {
+		return nil, err
+	}
+	out := &oidc.PasswordSignIn{PrincipalDomains: domains, Filter: v.Filter,
+		NewEntriesFor: oidc.DefaultNewEntriesFor, ReopenFor: oidc.DefaultReopenFor,
+		FailuresPerPrincipal: oidc.DefaultFailuresPerPrincipal, FailuresPerSource: oidc.DefaultFailuresPerSource,
+		Window: oidc.DefaultSignInWindow}
+	if v.Filter != "" {
+		if _, err := ldap.CompileFilter(v.Filter); err != nil {
+			return nil, fmt.Errorf("config: %s.filter %q: %v", at, v.Filter, err)
+		}
+	}
+	if e := v.Enrollment; e != nil {
+		if e.OpenUntil != "" {
+			t, err := time.Parse(time.RFC3339, e.OpenUntil)
+			if err != nil {
+				return nil, fmt.Errorf("config: %s.enrollment.open_until %q: an RFC 3339 time, such as "+
+					"2026-12-01T00:00:00Z", at, e.OpenUntil)
+			}
+			out.OpenUntil = t
+		}
+		if e.NewEntriesFor != nil {
+			out.NewEntriesFor = *e.NewEntriesFor
+		}
+		if e.ReopenFor != nil {
+			out.ReopenFor = *e.ReopenFor
+		}
+	}
+	if l := v.RateLimits; l != nil {
+		if l.FailuresPerPrincipal != nil {
+			out.FailuresPerPrincipal = *l.FailuresPerPrincipal
+		}
+		if l.FailuresPerSource != nil {
+			out.FailuresPerSource = *l.FailuresPerSource
+		}
+		if l.Window != nil {
+			out.Window = *l.Window
+		}
+	}
+	for _, d := range []struct {
+		key      string
+		v        time.Duration
+		min, max time.Duration
+	}{
+		{"enrollment.new_entries_for", out.NewEntriesFor, 0, 90 * 24 * time.Hour},
+		{"enrollment.reopen_for", out.ReopenFor, time.Hour, 168 * time.Hour},
+		{"rate_limits.window", out.Window, time.Minute, 24 * time.Hour},
+	} {
+		if d.v < d.min || d.v > d.max {
+			return nil, fmt.Errorf("config: %s.%s must be between %s and %s; got %s", at, d.key, d.min, d.max, d.v)
+		}
+	}
+	for _, n := range []struct {
+		key      string
+		v        int
+		min, max int
+	}{
+		{"rate_limits.failures_per_principal", out.FailuresPerPrincipal, 1, 100},
+		{"rate_limits.failures_per_source", out.FailuresPerSource, 0, 10000},
+	} {
+		if n.v < n.min || n.v > n.max {
+			return nil, fmt.Errorf("config: %s.%s must be between %d and %d; got %d", at, n.key, n.min, n.max, n.v)
+		}
+	}
+	if l := v.TOTPLabel; l != "" {
+		if len(l) > 64 || strings.ContainsRune(l, ':') || strings.IndexFunc(l, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+			return nil, fmt.Errorf("config: %s.totp_label: printable ASCII with no colon, at most 64 bytes (it is the "+
+				"issuer an authenticator app shows)", at)
+		}
+		out.TOTPLabel = l
+	}
 	return out, nil
 }
 
@@ -206,10 +361,11 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 // sign-in, so a human oidc verifier must be listed, and each one's issuer URL
 // must be one an issued certificate can carry (issuer.CarriesIssuer);
 // certificate_lifetime is 12h by default, 1h to 24h.
-func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVerifierYAML) (*oidc.Issuance, error) {
-	if !slices.ContainsFunc(vs, func(v oidc.VerifierConfig) bool { return v.Domain == oidc.Humans }) {
-		return nil, errors.New("config: broker.identity.issuance: a certificate is issued over an OIDC sign-in, so " +
-			"list a human oidc verifier under broker.identity.humans")
+func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVerifierYAML, password bool) (*oidc.Issuance, error) {
+	if !password && !slices.ContainsFunc(vs, func(v oidc.VerifierConfig) bool { return v.Domain == oidc.Humans }) {
+		return nil, errors.New("config: broker.identity.issuance: a certificate is issued over a sign-in, an OIDC " +
+			"one or a directory password: list a human oidc or directory_password verifier under " +
+			"broker.identity.humans")
 	}
 	for i, h := range humans {
 		if h.Type != "oidc" {
@@ -232,6 +388,10 @@ func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVe
 }
 
 func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.VerifierConfig, error) {
+	if v.passwordKeys() {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s: second_factor, filter, enrollment, rate_limits and "+
+			"totp_label are a directory_password verifier's", at)
+	}
 	u, err := url.Parse(v.Issuer)
 	if v.Issuer == "" || err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.issuer must be an https URL with no userinfo, query or fragment "+

@@ -56,10 +56,58 @@ type Record struct {
 	// judged under, or a proof record's method and challenge hash (spec
 	// §5.7; §13 decision 45 ruling 19).
 	PerLoginMFA *PerLoginMFA `json:"per_login_mfa,omitempty"`
+	// SignIn is a directory-password sign-in's source and, on a refusal, what
+	// failed (spec §5.7; §13 decision 47).
+	SignIn *SignIn `json:"sign_in,omitempty"`
+	// SecondFactorReset is the second_factor_reset record's body (spec §5.7).
+	SecondFactorReset *SecondFactorReset `json:"second_factor_reset,omitempty"`
+	// SignInUnlock is the sign_in_unlock record's body (spec §5.7).
+	SignInUnlock *SignInUnlock `json:"sign_in_unlock,omitempty"`
+	// EnrollmentsImport is the enrollments_import record's body (spec §5.7).
+	EnrollmentsImport *EnrollmentsImport `json:"enrollments_import,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
 	IndexError string `json:"index_error,omitempty"`
+}
+
+// SignIn is what a directory-password sign-in record says of the attempt:
+// the source network it came from, which check failed and, for a clock too
+// far off, by how much. Never the name typed, the password, the code or the
+// secret.
+type SignIn struct {
+	Source          string `json:"source"`
+	Failed          string `json:"failed,omitempty"`
+	SkewSeconds     int    `json:"skew_seconds,omitempty"`
+	DirectoryResult int    `json:"directory_result,omitempty"`
+	DirectoryData   string `json:"directory_data,omitempty"`
+}
+
+// SecondFactorReset is an operator's reset of a person's second factor, or
+// init-enrollments creating the store (Created). It names the enrollment
+// that was cleared, never its secret.
+type SecondFactorReset struct {
+	EnrolledAt   string `json:"enrolled_at,omitempty"`
+	EnrolledFrom string `json:"enrolled_from,omitempty"`
+	ReopenUntil  string `json:"reopen_until,omitempty"` // absent on created
+	All          bool   `json:"all,omitempty"`          // reset-second-factor --all
+	Created      bool   `json:"created,omitempty"`      // init-enrollments (D7)
+	Origin       string `json:"origin"`
+}
+
+// SignInUnlock is an operator clearing a principal's failed-attempt count.
+type SignInUnlock struct {
+	Failures int    `json:"failures"`
+	Origin   string `json:"origin"`
+}
+
+// EnrollmentsImport is `port49 directory import` filling or replacing the
+// enrollment store (decision 47 D13).
+type EnrollmentsImport struct {
+	Records    int    `json:"records"`
+	ExportedAt string `json:"exported_at"`
+	Replaced   bool   `json:"replaced,omitempty"`
+	Origin     string `json:"origin"`
 }
 
 // PerLoginMFA is a record's per-login part. A mint or refresh record under a
@@ -109,6 +157,18 @@ type Auth struct {
 	// OIDC is the verified token's identity on a broker event whose caller
 	// presented one (plan 7h). A bearer that did not verify has none.
 	OIDC *OIDC `json:"oidc,omitempty"`
+	// DirectoryPassword is how a directory-password sign-in authenticated,
+	// recorded because it cannot be established afterwards (spec §5.7; §13
+	// decision 47): the methods used, when, and a hash of the directory
+	// entry. Never the password or the code.
+	DirectoryPassword *DirectoryPassword `json:"directory_password,omitempty"`
+}
+
+// DirectoryPassword is a directory-password sign-in's authentication.
+type DirectoryPassword struct {
+	AMR         []string `json:"amr"`
+	AuthTime    string   `json:"auth_time"`
+	EntrySHA256 string   `json:"entry_sha256"`
 }
 
 // OIDC is what an OIDC caller's verified token said of how it

@@ -54,6 +54,8 @@ type Store struct {
 	logout map[string]logoutEntry
 	// mfaProof is plan 9c's kept per-login proofs.
 	mfaProof map[string]mfaProofEntry
+	// attempts is plan 9e's sign-in attempt counts.
+	attempts map[string]memAttempts
 
 	// tokensByPrincipal and tokensByCert are the token indexes (plan 7a):
 	// each key's set of TokenKeys, each with the expiry of the longest token
@@ -177,6 +179,7 @@ func New(now func() time.Time) *Store {
 		owners:              make(map[string]map[string]store.OwnerPrincipal),
 		logout:              make(map[string]logoutEntry),
 		mfaProof:            make(map[string]mfaProofEntry),
+		attempts:            make(map[string]memAttempts),
 		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
 		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
 		revocations:         make(map[[2]string]store.Revocation),
@@ -308,6 +311,11 @@ func (s *Store) sweepLocked() {
 	for k, e := range s.mfaProof {
 		if !now.Before(e.exp) {
 			delete(s.mfaProof, k)
+		}
+	}
+	for k, a := range s.attempts {
+		if !now.Before(a.end) {
+			delete(s.attempts, k)
 		}
 	}
 
@@ -1887,4 +1895,51 @@ func (s *Store) GetMFAProof(_ context.Context, key string) (store.MFAProof, erro
 		return store.MFAProof{}, store.ErrNotFound
 	}
 	return e.p, nil
+}
+
+// memAttempts is a sign-in attempt count and the end of its window.
+type memAttempts struct {
+	n   int
+	end time.Time
+}
+
+func (s *Store) NoteSignInAttempt(_ context.Context, key string, window time.Duration) (int, time.Time, error) {
+	if key == "" {
+		return 0, time.Time{}, store.ErrNoKey
+	}
+	if window <= 0 {
+		return 0, time.Time{}, store.ErrBadTTL
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	a := s.attempts[key]
+	if !now.Before(a.end) {
+		a = memAttempts{end: now.Add(window)}
+	}
+	a.n++
+	s.attempts[key] = a
+	s.wroteLocked()
+	return a.n, a.end, nil
+}
+
+func (s *Store) UndoSignInAttempt(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.attempts[key]; ok && s.now().Before(a.end) && a.n > 0 {
+		a.n--
+		s.attempts[key] = a
+	}
+	return nil
+}
+
+func (s *Store) ClearSignInAttempts(_ context.Context, key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.attempts[key]
+	delete(s.attempts, key)
+	if !ok || !s.now().Before(a.end) {
+		return 0, nil
+	}
+	return a.n, nil
 }

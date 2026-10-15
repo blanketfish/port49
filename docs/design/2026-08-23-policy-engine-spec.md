@@ -2227,8 +2227,9 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Eleven decision events, one at each point a decision is made, plus five report
-events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`) that share the envelope and carry no verdict:
+One envelope. Twelve decision events, one at each point a decision is made, plus eight report
+events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`,
+`second_factor_reset`, `sign_in_unlock`, `enrollments_import`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -2241,13 +2242,14 @@ events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; a revocation lifted; or, over HTTP, a principal ending its own sessions (`by: self`) or a `(device, username)` key ended (`by: key`), neither leaving a mark |
 | `identity` | broker | what `GET /v1/identity` resolved the caller to: `permit grants_matched` when its subject holds a grant unexpired now, else `deny no_grants_matched` (design document §17) |
 | `explain` | broker | a hypothetical decision `POST /v1/explain` answered, about the caller or, under `explain_others`, another principal: its verdict and reason are the answer given, or `deny api_right_missing`. It authorizes nothing, and replay passes over it |
-| `issue` | broker | whether a person's OIDC sign-in is exchanged for a port49-issued certificate (`POST /v1/certificate`; §13 decision 43 ruling 8): `permit certificate_issued`, carrying `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc`, or a deny with the refusal's reason. A broker that cannot issue (`issuance_unavailable`) records nothing |
+| `issue` | broker | whether a person's sign-in is exchanged for a port49-issued certificate: an OIDC sign-in at `POST /v1/certificate` (§13 decision 43 ruling 8), or a directory-password sign-in at `POST /v1/sign-in` or `/v1/sign-in/confirm` (§13 decision 47): `permit certificate_issued`, carrying `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc` or `auth.directory_password: {amr, auth_time, entry_sha256}`, or a deny with the refusal's reason. A directory sign-in's record carries `sign_in: {source}`, and on a deny `failed` (`name`, `second_factor`, `second_factor_skew`, `password`, `directory_state`, `enrollment`, `principal_limit`, `source_limit`) with `skew_seconds`, `directory_result` and `directory_data` where they apply. It never carries the name typed, the password, the code or the secret. A broker that cannot issue (`issuance_unavailable`) records nothing |
 | `per_login_mfa` | broker | whether a per-login proof posted to `POST /v1/mfa` is accepted (§5.1.5; §13 decision 45): `permit per_login_mfa_proved` or `deny per_login_mfa_refused`, carrying `per_login_mfa: {method, challenge_sha256}`. A proof the broker cannot judge (`store_unavailable`) records that |
+| `enroll` | broker | whether a person's TOTP second factor is enrolled (`POST /v1/sign-in/confirm`; §13 decision 47 ruling 4): `permit second_factor_enrolled`, carrying `auth.directory_password` and `sign_in: {source}`, or a deny with the sign-in's reasons. Every enrollment is alertable: inside an enrollment window a stolen password enrolls the thief's authenticator |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as the thirteenth event, `account`, and is specified in
+Device accounting shares this envelope as the fourteenth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
-A fourteenth, `account_gap`, is a report too: accounting records port49 received and did not write,
+A fifteenth, `account_gap`, is a report too: accounting records port49 received and did not write,
 `{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
 `offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
 and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
@@ -2264,7 +2266,7 @@ yet written, and port49d logs the held counts by stage when it shuts down;
 `port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
 
-A fifteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
+A sixteenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
 swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
 "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
@@ -2275,13 +2277,28 @@ addresses are new capture targets. Its `device` block names the device. It is wh
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
-A sixteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
+A seventeenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
 <principal>` on the broker's admin socket, deleting the principal's directory membership and with
 it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget":
 {"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket
 uid N"}}`. `verified_at` is the record's last verification or refusal. The principal's next
 verification pins the entry the directory gives it then, so this record is the trail for a
 principal moving to another entry by an operator's hand.
+
+An eighteenth, `second_factor_reset`, is a report too: an operator ran `port49 directory
+reset-second-factor <principal>` on the broker's admin socket (§13 decision 47 ruling 13) —
+`{"principal": ..., "second_factor_reset": {"enrolled_at": ..., "enrolled_from": ..., "reopen_until":
+..., "origin": "admin_socket uid N"}}`. The principal may enroll again until `reopen_until`. With
+`--all` it names no principal and carries `"all": true`: every entry with no active second factor
+may enroll until `reopen_until`, and a lost enrollment store (decision 47 D7) is replaced, the
+unreadable file kept beside it. `port49 directory init-enrollments` writes one too, naming no
+principal and carrying `"created": true` and no `reopen_until`: the enrollment store was created
+(D7). Alert on it as on `enroll`, and on `created` at any time but an install. A nineteenth,
+`sign_in_unlock`, is a report: an operator cleared a principal's failed-attempt count (`port49
+directory unlock`), `{"principal": ..., "sign_in_unlock": {"failures": N, "origin": ...}}`. A
+twentieth, `enrollments_import`, is a report: `port49 directory import` replaced or filled the
+enrollment store (D13), `{"enrollments_import": {"records": N, "exported_at": ..., "replaced":
+true|absent, "origin": ...}}`.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -2394,8 +2411,8 @@ refused request named; any other path is recorded `mint`.
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device; or, on a sweep page by `scope`, the page holds no device: the scope is not declared, selects no device the principal holds a grant on, or the page is past the end, which are one answer and one record carrying `sweep` and `policy.bundle` and no device (§13 decision 42 ruling 2), after the mint gate has passed. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38); or a workload under a directory mapping whose identity subject declares no username takes from its entry one a subject declares or a second entry holds (§13 decision 41 ruling 4, plan 8b). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
 | `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain`, `revoke` and `issue`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or, under a workload certificate's directory mapping (§13 decision 41, plan 8b), its issuer is not one `broker.identity.machines[].directory.issuers` pins, no entry under `base_dn` holds its SPIFFE ID in the mapping's `attribute`, or the entry found holds that attribute with other than one value equal to the SPIFFE ID byte for byte; or, while that mapping is configured, a person's entry holds in the mapping's `attribute` any value beginning `spiffe://`, so it is a workload's (§13 decision 41 ruling 4); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
-| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when two entries hold a workload's SPIFFE ID in the workload mapping's `attribute` (§13 decision 41, plan 8b); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two entries matching one identity is an impersonation path. On `refresh`: every context of the principal is revoked |
-| `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38); for a workload under a directory mapping, the membership stored for its SPIFFE ID (§13 decision 41 ruling 7, plan 8b), which `port49 workload` retries within `--deadline` and then exits 75. Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
+| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when two entries hold a workload's SPIFFE ID in the workload mapping's `attribute` (§13 decision 41, plan 8b); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone; or, on `issue` and `enroll`, when a directory sign-in's name matches two entries (§13 decision 47 ruling 9). Never resolved to the first entry (design §7). MUST be alertable on its own: two entries matching one identity is an impersonation path. On `refresh`: every context of the principal is revoked |
+| `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38); for a workload under a directory mapping, the membership stored for its SPIFFE ID (§13 decision 41 ruling 7, plan 8b), which `port49 workload` retries within `--deadline` and then exits 75. Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended. On `issue` and `enroll`, a directory-password sign-in (§13 decision 47): no server answered the entry's search or the person's bind, or the broker's own search was refused (a bind account's rights or a `base_dn` put wrong: the log holds the LDAP result code); no grace applies, since a password is never kept, so the sign-in is refused 503 at once (design §12) |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers, which is final at `port49 workload`, §13 decision 40 ruling 7) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, never a final 401, and to be retried but for an uncovered issuer. A certificate whose verified chains end at both the human and the workload trust anchor, or, on a broker with no human x509 verifier, do not end at the workload anchor (§13 decision 40 ruling 2), is refused at the TLS handshake, which leaves a log line and a `handshake_failures{identity_refused}` count, not a decision record. On `mint`, `refresh`, `identity`, `explain`, `revoke` and `issue` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`). On `issue`: a missing bearer, a client certificate presented, a sign-in older than the freshness bound, a nonce not naming the CSR's key, a spent sign-in, a bad CSR, a machine token, or a sign-in that cannot be carried in a certificate (§13 decision 43 ruling 8) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
@@ -2430,6 +2447,11 @@ refused request named; any other path is recorded `mint`.
 | `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
 | `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause. An ID token decision 39 itself refuses (its signature, issuer, audience or expiry; an unmapped identity) is recorded under event `per_login_mfa` with decision 39's own reason (`trust_domain_unresolved`, `identity_unmapped`, …), not as this one, and is not counted in `port49_per_login_mfa_total`: an alert on forged tokens at `/v1/mfa` watches those reasons |
 | `per_login_mfa_unavailable` | `mint`, `refresh`: the device's requirement accepts no method this broker can verify now (no `hardware_key_touch.attestation_roots_file` loaded, no human OIDC verifier). That device alone; alertable: a configuration fault, not a person's |
+| `sign_in_refused` | `issue`, `enroll`: a directory-password sign-in whose name maps to no entry under the verifier's filters or outside its `principal_domains`, whose code is wrong, replayed or from a clock too far off, whose password the directory refused, whose entry's state the directory refuses (expired, disabled, locked, must change), or whose second factor is another entry's (§13 decision 47). One reason to the caller on purpose, so the API never says whether the name, the password or the code was wrong; the directory's state is said past the code, or before it only when the directory gives that state to the right password alone (§13 decision 47 ruling 7; a locked account's state is never said from a password alone, L67). The record's `sign_in.failed` says which. The API answers 401. Counted against the source, and against the principal once one is known |
+| `sign_in_throttled` | `issue`, `enroll`: the sign-in's principal or source has had `failures_per_principal` or `failures_per_source` failed attempts in the window; nothing was checked (§13 decision 47 D5). The API answers 429 with `Retry-After`. Alert on a rise: someone is spraying |
+| `enrollment_closed` | `issue`: a person with no second factor, and no enrollment window open for them; the password is not checked (§13 decision 47 D2, ruling 4). It says a name exists and has no second factor, without a bind, which is accepted (ruling 7). An operator's `port49 directory reset-second-factor` opens one. The API answers 403 |
+| `enrollment_store_lost` | `issue`, `enroll`: the broker's enrollment store is lost — it has no creation mark (its file or key is missing, a new install not yet initialised by `port49 directory init-enrollments` included), or its file will not unseal (a lost or rotated seal key, tampering) (§13 decision 47 D7). Password sign-in is refused for everyone, before anything is counted or read; certificates already issued, tokens and IdP sign-in serve. The API answers 503. On a new install the operator runs `port49 directory init-enrollments`; otherwise restores the file or the etcd snapshot (`port49 directory import`), or runs `port49 directory reset-second-factor --all`. Alertable: `port49_directory_enrollment_store_ok` reads 0 |
+| `second_factor_enrolled` | `enroll`: a person's TOTP second factor was confirmed with its first code (§13 decision 47 ruling 4). A permit; alertable |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened, failing authentication (one sealed under a key port49 does not hold is left unrevoked and unrecorded, §5.1.3) — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
@@ -2455,7 +2477,9 @@ escapes are `session.staleness_ceiling: 0s` with a port49d restart, or stopping 
 break-glass applies (L4). `session_expired` is a further category: expected, and a signal
 that the re-authentication warning is not reaching operators (§5.6).
 `per_login_mfa_refused` MUST be alertable on its own: a run of them is someone trying another
-token or another person's sign-in.
+token or another person's sign-in. `sign_in_throttled`, `enrollment_store_lost` and `second_factor_enrolled` MUST be alertable on
+their own: a run of the first is a spray, the second is every password sign-in refused, and the
+third outside a rollout is someone enrolling.
 
 #### Credentials never appear
 
@@ -2463,6 +2487,12 @@ The log MUST NOT contain a token, a password, a CHAP challenge or response, or a
 which a credential can be recovered. The credential is identified by `credential_sha256`
 only — the same hash the receipt binds (§5.1.1), which is what lets a retransmission be
 recognized in the log as one decision retried rather than two decisions made.
+
+A directory-password sign-in (§13 decision 47) carries a password and a code to the broker. Neither
+is a device credential, neither is hashed into `credential_sha256` or any other field, and the
+record of a sign-in names its principal once one is known, never the name as typed: a name that maps
+to no entry may be a password typed at the wrong prompt. The TOTP secret, its `otpauth://` URI and
+an enrollment's handle are never logged either.
 
 A secret an operator types into a command — `username bob secret Hunter2` — reaches port49 on
 the command's authorization request as well as its accounting record, so both are redacted
@@ -6286,6 +6316,33 @@ issues (§13 decision 43).
 - **No sign-in** while a held certificate has more than a quarter of its life left, or while the
   provider does not answer and it is still valid; `--sign-in` forces one.
 
+**`port49 login --directory [--name NAME] [--sign-in]`**, or `method: directory` in the config file,
+gets the person a certificate the broker issues over their directory password and a TOTP code (§13
+decision 47).
+- **The sign-in.** The name (`--name`, else `sign_in_name` in the config file, else the login
+  user's) is offered at a prompt; the password and the code are read at the terminal with echo off,
+  and never from a flag, the environment or a file. With no terminal it refuses, naming it.
+- **The first sign-in** of a person with no second factor, inside an enrollment window, shows a QR
+  code and the key in groups of four on the terminal, then asks the authenticator's first code.
+- **The certificate** is 9b's: a key on this host, `certificate_lifetime`, the agent on the
+  certificate path. A held certificate is reused as `--oidc` reuses it (decision 43 rulings 12, 17).
+
+**`port49 directory reset-second-factor <principal>|--all [--socket PATH]`** drops the principal's
+TOTP second factor and lets them enroll again for `enrollment.reopen_for` (§13 decision 47 ruling
+13), printing when and from where the dropped one was enrolled. `--all` drops nothing: every entry
+with no active second factor may enroll for `reopen_for`, and a lost enrollment store is replaced
+(D7), its unreadable file kept beside it. **`port49 directory unlock <principal> [--socket
+PATH]`** clears the principal's failed sign-in count. **`port49 directory init-enrollments
+[--socket PATH]`** creates the enrollment store once per install (D7): it writes the creation
+mark, refuses when a store or a mark is already there, and records `second_factor_reset` with
+`"created": true`; port49d never creates the store itself, and until this runs password sign-in is
+refused `enrollment_store_lost`. **`port49 directory export [--socket PATH]`** writes the
+enrollment store, still sealed, to stdout (never a terminal); **`port49 directory import
+[--replace] [--socket PATH] < FILE`** checks the seal and the creation mark and fills the store
+from it, refusing to replace one holding a later enrollment or reset unless given `--replace`
+(D13). All run on the broker's admin socket, as the broker's user or root, need no directory, and
+never print a secret.
+
 **`port49 devices trust`** was removed by plan 9d (§13 decision 46 ruling 4): port49 keeps no host
 key. It answers one line naming the change and exits 2.
 
@@ -7769,6 +7826,10 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   stay).
   `simple` over LDAPS is accepted, also under `LdapEnforceChannelBinding` 2; over plain LDAP it
   is refused (8, strong auth required). Tasks 4 and 7.
+  *Amended by decision 47 (plan 9e, 2026-10-14):* the broker binds as itself, by one of these
+  three. Plan 9e (decision 47) binds as a person once per directory-password sign-in, to check the
+  password, on a connection of its own that it closes after the one bind; groups are still read as
+  the broker.
 - **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;
   sticky until a server fault or an open breaker; a refused dial (network) is "this server did not
   answer" and fails over; a refused bind (LDAP 49, 48, 8, 13 or 7, a KDC's refusal) is no breaker
@@ -8627,7 +8688,7 @@ certificate while the certificate is valid.
   - Subject CN the principal the human verifier gave; one URI SAN,
     `port49-sign-in:v1?iss=…&sub=…&sid=…&auth_time=…&iat=…&amr=…&acr=…`, carrying the sign-in, so
     the `sid` is bound to the serial under the CA's signature (R1); `clientAuth`; no email or DNS
-    SAN.
+    SAN. A directory-password sign-in's URI carries `method=directory_password` (decision 47 D6).
   - A per-role lifetime is not built: no policy value varies by role yet, and plan 9c's
     `per_login_mfa` is where per-device strength arrives.
 - **10. The broker trusts its own certificates, for people alone.**
@@ -8636,7 +8697,9 @@ certificate while the certificate is valid.
   - The principal is the certificate's CN, never mapped through the directory (membership is still
     read at mint, as for an OIDC principal). The sign-in must still name an issuer whose human
     verifier's `principal_domains` hold the principal, or it is refused `trust_domain_unresolved`:
-    a provider removed from the configuration takes its people's certificates with it.
+    a provider removed from the configuration takes its people's certificates with it. For a
+    directory-password sign-in, a `directory_password` verifier whose `principal_domains` hold the
+    principal (decision 47 ruling 10).
   - `certificate_status` is not asked: the broker's marks are such a certificate's status.
   - The credential is `{method: cert, fingerprint, issuer, serial, subject, iss, sub, sid, amr,
     acr}`: a mint indexes its contexts under the certificate and the `sid`, and its records carry
@@ -8679,7 +8742,8 @@ certificate while the certificate is valid.
   /v1/certificate`, and at `POST /v1/mfa` as an `idp_mfa` proof (decision 45 ruling 20), and refuses it on every other endpoint, `401 trust_domain_unresolved`,
   recorded. A machine's token is unaffected. A broker with a human `oidc` verifier and no
   `issuance` keeps plan 7h's bearer path (decision 39 rulings 8 and 15) as built, which no port49
-  client drives after plan 9b; retiring it is carried to the pre-beta review.
+  client drives after plan 9b; retiring it is carried to the pre-beta review. A directory-password
+  sign-in takes no ID token (decision 47).
 - **14. The issuing CA.**
   - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile`'s owner-only rule)
     in the broker's state directory (`broker.state_dir`, or the directory of
@@ -9446,6 +9510,306 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
 
+**47. The agent in full, fifth part: a directory-password sign-in.** *Plan 9e, 2026-10-14, on
+Ryan's direction of 2026-10-10: the route for a company with neither an identity provider nor a
+PKI.* Rulings rest on reasoning unless they say data. The directories' answers to a person's bind
+(rulings 6 and 7, D5's lockout interaction, D2's creation attribute) rest on L67, measured
+2026-10-15 on OpenLDAP, Samba AD and Windows Server AD.
+Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D12 and D13 by Ryan on
+2026-10-14; the pre-flight's rulings (C2, C5, I1, I15: D7's no-create-at-start, the enrollment store's own handle, the window before the password, the step before the bind) by the controller on
+2026-10-14.
+
+- **D1. TOTP held by port49.** The broker makes a 20-byte secret, shows it once as an `otpauth://`
+  URI (a QR code on the person's terminal), keeps it sealed in the enrollment store (D7, D12) bound
+  to the principal and the entry's immutable id, and checks RFC 6238 codes (SHA-1, 6 digits, 30 s;
+  what every authenticator app reads). Windows AD and Samba AD have no second factor of their own;
+  a TOTP kept in the directory would need the broker to write there (design §10 says read-only) and
+  a schema change.
+- **D2. Enrollment inside windows.** A person with no second factor enrolls at a sign-in whose
+  password is right when one of these is open for them: the rollout window (`enrollment.open_until`,
+  one line for the whole fleet); their first `enrollment.new_entries_for` (14 days) after their
+  entry's creation (`whenCreated` / `createTimestamp`), so a new hire needs no one; or
+  `enrollment.reopen_for` (24h) after an operator ran `port49 directory reset-second-factor` (a lost
+  phone). Outside them, `enrollment_closed`. Every enrollment is an `enroll` record, alertable. The
+  weakening, accepted by Ryan: inside a window a stolen password enrolls the thief's authenticator
+  first, and the real person then finds a second factor they never set up. It is the first-contact
+  window accepted for host keys (decision 46), and it is bounded per person. No admin per user: an
+  enrollment code per person is toil at scale.
+- **D3. The password's path.** Terminal (echo off) → the request body of `POST /v1/sign-in` over TLS
+  1.3, verified to `broker_ca` and the broker CRL check (9c), never through a proxy → a simple bind
+  as the entry's DN, the DN from the broker's own search (never the typed name), over the server's
+  LDAPS or StartTLS with `broker.directory.ca_file`, on a fresh connection that presents no client
+  certificate, closed after the one bind. An empty password would be an unauthenticated bind (RFC
+  4513 §5.1.2), and Windows Server 2025 answers one success, as anonymous, where Samba 4.17 refuses
+  it (49, `52e`) and slapd 2.5 refuses it (53) (L67 (b), `tests/lab/results/L67-windows_ad.md`,
+  `L67-samba_ad.md`, `L67-openldap.md`). So port49 refuses an empty password before any dial, on
+  every directory, whatever the server does: the client never sends one, and the broker opens no
+  connection for one (measured on all three). Never stored, logged, hashed (no
+  `credential_sha256` for a sign-in), in argv, the environment or a file; no `--password` flag and
+  no `password_env`. The client never binds to the directory itself (self-asserted, design §10, and
+  clients do not reach DCs), and sends no client-side hash (it would become the password).
+- **D4. The code before the password.** Source limit → the entry (a search as the broker) →
+  principal limit → TOTP → the password bind. The gain: for an enrolled person a spray never
+  reaches the directory, so port49 can never lock an AD account, and the password is never tested
+  for someone without the code. The cost, accepted by Ryan: port49 never sees "password right, code
+  wrong", the signal that a password is stolen; it sees "code right, password wrong" instead. The
+  person sees one refusal for any of the three.
+- **D5. Limits.** Two fixed windows in the store: 5 failures per principal and 50 per source per 15
+  minutes (`rate_limits.failures_per_principal`, `failures_per_source`, `window`). Each attempt is
+  counted before it is judged, so parallel attempts cannot pass the limit; a success clears the
+  principal's count and takes its own attempt back from the source's (a 202 that starts an enrollment
+  gives back its source attempt only: the confirm clears the principal's). A broker fault (`503
+  directory_unavailable`, `store_unavailable`, `issuance_unavailable`, or a lost enrollment store
+  found mid-request) gives back every count the attempt took, since nothing about the person was
+  judged: an outage must not leave an office throttled when it ends. The source is the TCP peer, an
+  IPv4 /32 or an IPv6 /64. A store error is `503 store_unavailable` and nothing is checked (fail
+  closed). Over the limit: `429 sign_in_throttled`, `Retry-After`, naming the time. `port49
+  directory unlock <principal>` clears a principal's count at 3am. 5 is under the common directory
+  lockout threshold (AD's lockout is commonly set to 10 in 10 minutes). A fixed window lets at most
+  `2 × failures_per_principal − 1` failures through in any one window length (four at the end of
+  one window, five at the start of the next: nine against AD's ten, a margin of one); keep that
+  under the directory's lockout threshold. Measured, L67 (d), on all three directories at a lockout
+  of 10: six wrong sign-ins at the defaults answered 401 five times and 429 once, and the
+  directory's failed count stayed at 5; nine across a window boundary reached 9, not locked, a
+  margin of 1, and a tenth locked the account (`tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md`). Accepted: the
+  per-principal 429 tells a caller that a typed name is a person's; port49 does not hide which names
+  exist (a directory's lockout does the same), and the 429 never names the principal. Behind an L4
+  load balancer or NAT that hides sources, the per-source count is everyone's: raise it or set 0
+  (off).
+- **D6. `auth.amr`.** `["pwd", "otp"]` (RFC 8176), in a new record block `auth.directory_password:
+  {amr, auth_time, entry_sha256}` on the `issue` and `enroll` permits and on every record a
+  directory sign-in's certificate makes, as `auth.oidc` is for 9b's. The certificate's URI carries
+  `method=directory_password`, `sub` the entry's id hashed, `amr=pwd&amr=otp`, `auth_time` and
+  `iat`, and no `iss`, `sid` or `acr`. No `mfa` value: a reader derives it, and port49 records what
+  it checked; no `auth.oidc` with a pseudo-issuer, which would claim a provider that does not exist.
+- **D7. A sealed file on memory; a lost store fails closed; never created at start.** On a memory
+  enrollment store (D12; the default when `store.backend: memory`), enrollments, the TOTP used-step
+  record and the creation mark live in a sealed file, `<broker state dir>/enrollments.json`, as
+  revocations do. On etcd they live in etcd. Attempt counts live in `store:` (D12), on memory in
+  memory: lost at a restart, they fail open by at most 5 guesses per principal, which is accepted.
+  Losing the enrollments must never reopen D2's window for everyone, so a lost store fails closed.
+  The store keeps a creation mark (the file's body; the etcd key `meta/enrollments`). **port49d and
+  the broker never create the store at start**, as decision 32 and `init-revocations` rule for
+  revocations: `port49 directory init-enrollments`, on the broker's admin socket, is its one
+  creator. It writes the mark, refuses when a store or a mark is already there, and writes one
+  `second_factor_reset` report with `"created": true`. A store with no mark (a missing file or key,
+  a new install not yet initialised included) or a file that will not unseal (a lost or rotated seal
+  key, tampering) refuses password sign-in with `enrollment_store_lost`, before anything is counted
+  or read. The log carries one error naming what to run, the metric
+  `port49_directory_enrollment_store_ok` reads 0, and every other path serves: certificates already
+  issued, tokens, and IdP sign-in. The operator restores the file or the etcd snapshot (`port49
+  directory import`), or runs `port49 directory reset-second-factor --all`, which replaces a lost
+  store (an unreadable file renamed aside, never deleted), writes one record and opens the 24h
+  reopen window for every entry with no active second factor; it is alertable, like `enroll`.
+- **D8. No overlap with an IdP.** A `directory_password` verifier's `principal_domains` may not
+  overlap a human `oidc` verifier's. A password and TOTP beside an IdP that enforces
+  phishing-resistant MFA is a downgrade an attacker picks. (Ryan: the IdP-down fallback is not
+  built; 9b already keeps certificate holders working at 3am.)
+- **D9. pquerna/otp.** `github.com/pquerna/otp v1.5.0` generates RFC 6238 codes (Vault's and
+  Gitea's TOTP use it) and brings `github.com/boombuler/barcode` for the enrollment's QR code.
+  port49 keeps the policy around it: the window, the step taken once, constant-time comparison, the
+  skew report. The rule is never to reimplement well-tested tooling; the repo has neither a TOTP nor
+  a QR library today.
+- **D10. `totp` and `per_login_mfa`.** `totp` is not a `per_login_mfa` method in 9e. A directory
+  sign-in's person meets a `per_login_mfa` device by `hardware_key_touch` alone (with a token);
+  `idp_mfa` needs a provider. Adding `totp` to 9c's methods changes the policy schema and its diff
+  gate, and no roadmap entry asks for it; it is carried to a follow-up, not cut. The operator notes
+  say so.
+- **D11. The vocabulary.** New §5.7 reasons: `sign_in_refused` (the name, password or code not
+  accepted, deliberately one reason to the caller; the record's `sign_in.failed` says which),
+  `sign_in_throttled`, `enrollment_closed`, `enrollment_store_lost` (D7), `second_factor_enrolled`.
+  New decision event `enroll`; report events `second_factor_reset` (also written by `--all` and by
+  `init-enrollments`, with `"all"` or `"created"`), `sign_in_unlock`, `enrollments_import`. Reused:
+  `directory_unavailable`, `store_unavailable`, `identity_ambiguous`, `certificate_issued`.
+- **D12. The enrollment store's own handle.** `directory.enrollment_store` names the enrollment store
+  separately from `store:` (the same shapes: `memory` with the sealed file of D7, or `etcd` with its
+  own endpoints, TLS and keyspace). It defaults to `store:`. A multi-region deployment points it at
+  a global etcd, one member per region, while tokens and contexts stay regional. The TOTP used-step
+  record lives with the enrollments, so one code cannot be replayed in another region; attempt
+  counts stay in `store:` (regional). Plan 11a builds the rest of the split (revocations, policy,
+  the regional cache).
+- **D13. Export and import.** `port49 directory export` writes the enrollments, still sealed, to
+  stdout, so a cron job can pipe it to any backup target. `import` checks the seal and the creation
+  mark, refuses to overwrite a newer store unless given `--replace`, and writes one record
+  (`enrollments_import`). Neither ever prints a secret.
+- **1. Where it fits.** `type: directory_password` is a human verifier. It requires
+  `broker.directory` and `broker.identity.issuance`, each refused at load when missing, naming it.
+  It runs on either store shape: its enrollments live in `broker.directory.enrollment_store` (D12;
+  default the shape of `store:`), on memory in a sealed file (D7). A broker may list it alone (no
+  x509 anchor, no OIDC verifier): its client certificate pool is then its issuing CA's, as a 9b
+  OIDC-only broker's is.
+- **2. `certificate_mapping` beside x509 alone.** `broker.directory.certificate_mapping` is required
+  only beside a human x509 verifier. Without one no certificate is ever mapped (an issued
+  certificate's principal is its own, decision 43 ruling 10), and a company with no PKI should not
+  write a mapping. A mapping set with no x509 verifier is still checked.
+- **3. The name.** The name a person types is matched against
+  `broker.directory.username_attribute` under `user_filter` and the verifier's `filter` (ANDed; an
+  LDAP filter, optional, for keeping service accounts out), escaped (RFC 4515). It must be 1–256
+  bytes of printable ASCII, else refused before any search (counted against the source). The entry
+  must give a principal and a username as 7g's `identityOf` does, be one entry's alone
+  (`principalUnique`, `usernameUnique`), not be a workload's (`notWorkload`), and its principal's
+  domain must be in `principal_domains`. The search runs as the broker's own bind through the pool
+  (`Pool.Do`), so the pool's breakers, hold-off and site order apply, and the server that answered
+  is the one the password is bound against.
+- **4. The enrollment.** Two calls. `POST /v1/sign-in` for a person with no second factor, with a
+  window open and then the password right, writes a pending record (the secret sealed, confirm by
+  now + 10 minutes, the one instant the handle's lifetime ends too) and a once-record of the handle
+  (32 random bytes; the store keeps its SHA-256 → principal, until that instant), and answers `202
+  {enroll: {handle, otpauth_uri, confirm_by}}` with `Cache-Control: no-store`. Nothing is issued,
+  and the 202 records nothing (the `enroll` record is the confirm's); `enrollment_started` counts
+  it. `POST /v1/sign-in/confirm {handle, code, csr}` takes the handle, checks the code against the
+  pending secret, makes the record active (`enrolled_at`, `enrolled_from` the source), records
+  `enroll permit second_factor_enrolled`, and issues. A wrong code puts the handle back for the time
+  it had left; the principal's limit bounds the tries. A pending record past its time is no
+  enrollment, and a later sign-in starts again. Over a `reopened` record the enrollment keeps the
+  record `reopened` with its own end (so a lapse leaves the operator's window in place) and holds
+  the new secret in it; that secret is accepted only under a live confirm handle, whose once-record
+  carries the principal and the enrollment's end, and never as an active factor. Two enrollments at
+  once for one principal: the second loses the compare-and-swap and is refused.
+- **5. The code.** 6 digits; a step either side of the broker's now (RFC 6238 §5.2); a step taken
+  once per principal, kept as `last_step` by compare-and-swap, so a replayed code and two replicas
+  racing one code are both refused. A code matching a step 2 to 10 steps away is refused and said:
+  "your authenticator's clock is about N minutes off; set it to the network's time and try again"
+  (it counts as a failure, and only the holder of the secret can produce one). Accepted: a
+  guess that lands 2 to 10 steps ahead is told so and so learns a code valid later, about 9×10⁻⁶
+  per guess (roughly 4× the base rate of 3×10⁻⁶); it still needs the password and stays inside the
+  per-principal limits. The comparison is constant-time. The step is taken when the code matches, before the password is tried: a code is
+  one attempt at the password whatever its answer, two sign-ins racing one code reach the directory
+  once, and a person who mistypes the password waits for the next code (at most 30 s).
+- **6. The directory's answer.** Result 49 is a refusal. AD's (and Samba's) data code in the
+  diagnostic message is read and kept only when it is one of `52e` (wrong password), `525` (no such
+  user), `530`, `531` (logon hours or workstation), `532` (password expired), `533` (disabled),
+  `701` (account expired), `773` (must change), `775` (locked); the rest of the message is dropped,
+  as 7g drops it. OpenLDAP's `ppolicy` response control (requested on the bind) is read for
+  `passwordExpired`, `accountLocked` and `changeAfterReset`, on a success too. Results 51 (busy)
+  and 52 (unavailable) are `directory_unavailable`, as a connection that fails: the server did not
+  serve the bind (RFC 4511 §A.2). 53 (unwilling to perform) is a refusal of the account's state
+  (389-DS and eDirectory give it for an inactivated or locked account). Any other result
+  code is a refusal carrying its code; a connection that fails is `directory_unavailable`. A
+  refusal at the bind is never a pool fault and never moves the pool's breakers or hold-off.
+  Data, L67 (2026-10-15, at a lockout of 10): Samba 4.17 and Windows Server 2025 answer a wrong
+  password `52e`, and the right one `532` (expired), `773` (must change) or `533` (disabled); a
+  wrong password on those accounts is `52e`; a locked account is `775` to either. slapd 2.5
+  answers an expired account's right password 49 with `passwordExpired`, and a must-change
+  account's right password **result 0** with `changeAfterReset`, which port49 refuses as the
+  state; a wrong password on either is a plain 49. Under `olcPPolicyUseLockout: TRUE` a locked
+  account, and a disabled one too (`pwdAccountLockedTime`), is 49 with `accountLocked` to either
+  password, so slapd's disabled reads as locked. Under slapd's stock `olcPPolicyUseLockout:
+  FALSE` a locked or disabled account is a plain 49 with the control carrying no error, to the
+  right password as to a wrong one: port49 refuses it as a wrong password, counts it against the
+  principal (the sixth is a 429), and says no state. That is a measured limit, not a fault;
+  `olcPPolicyUseLockout: TRUE` is the setting under which slapd's locked and disabled accounts are
+  said (ruling 7). `530`, `531` and `701` were not measured. `tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md` (c).
+- **7. What the person is told.** One sentence for a wrong name, password or code ("the broker did
+  not accept that name, password and code; check each and run `port49 login` again"), so the API
+  tells no one which was wrong. The directory's own state ("your directory password has expired:
+  change it, then sign in"; "must be changed before first use"; "is disabled"; "is locked: ask your
+  directory administrator") is said only past a right code, or when the refusal is one the
+  directory gives only to the right password (`Proven`: AD's `530`, `531`, `532`, `533`, `701`,
+  `773`; ppolicy's `passwordExpired` and `changeAfterReset`). Any other state (AD's `775`,
+  ppolicy's `accountLocked`, a 53, a state with no data code) is told to a person who has shown
+  only a password as the wrong-name sentence above; the record keeps the state and its data either
+  way. So no one learns which accounts are locked or disabled from a name alone. An enrolled
+  person's password is bound only past the code (D4); an enrolling person's with no code, and only
+  inside an enrollment window, which is decided before the password is checked: outside every
+  window the answer is `403 enrollment_closed` and nothing is bound. *Corrected by L67
+  (2026-10-15):* this ruling first said the state was told "since only the holder of a right code
+  gets that far". The lab showed a locked account answers `775` (Samba, Windows) or
+  `accountLocked` (OpenLDAP under `olcPPolicyUseLockout: TRUE`) to a wrong password too, and
+  OpenLDAP gives a disabled account `accountLocked` to either, so an enrolling person's sign-in
+  would have said a stranger's account was locked (`tests/lab/results/L67-openldap.md`,
+  `L67-samba_ad.md`, `L67-windows_ad.md` (c)). Under slapd's stock `olcPPolicyUseLockout: FALSE`
+  no locked or disabled state is said at all (ruling 6). `enrollment_closed` says a name exists and has no second factor, without a bind;
+  it is the operator's signal at 3am and accepted as such. Throttled: the window's end; for the
+  principal's limit, "an operator can clear it with `port49 directory unlock` for your account". The
+  principal is never named to the caller. The directory down: "the directory did not answer, so no
+  one can sign in with a password now; anyone already signed in keeps working until their
+  certificate ends".
+- **8. Never logged.** Nor printed, but at the person's own terminal: the password, the code, the
+  secret, the `otpauth://` URI, the handle, and a typed name that maps to no entry (people type
+  passwords into name prompts). A record names the principal once one is known, and the source
+  prefix. The broker reads the body with `DisallowUnknownFields` into a fixed struct and never
+  echoes it; a body that does not parse is answered with no part of it.
+- **9. The records.** `issue` gains the directory sign-in: `permit certificate_issued` with
+  `auth.directory_password` and `sign_in: {source}`, a deny with `sign_in: {source, failed,
+  skew_seconds, directory_result, directory_data}`, `failed` one of `name`, `second_factor`,
+  `second_factor_skew`, `password`, `directory_state`, `enrollment`, `principal_limit`,
+  `source_limit`. An unknown name is recorded `deny sign_in_refused` with no principal; two entries
+  for one name `deny identity_ambiguous` (alertable, as everywhere). `enroll`: `permit
+  second_factor_enrolled` or a deny with the same reasons. The 202 that starts an enrollment records
+  nothing. `second_factor_reset` and `sign_in_unlock` name the principal and `origin: admin_socket
+  uid N`; `second_factor_reset` with `"all": true` (`--all`) or `"created": true`
+  (`init-enrollments`) names none. `enrollments_import` names the records imported and the export's
+  time. A lost enrollment store is recorded `issue deny enrollment_store_lost`.
+- **10. The certificate.** A directory sign-in's certificate is 9b's (decision 43 ruling 9) but for
+  its URI (D6). The broker reads it as 9b's (ruling 10): the principal is its CN, never mapped; it
+  is trusted while a `directory_password` verifier is configured whose `principal_domains` hold the
+  principal's domain, so removing the verifier takes its people's certificates with it. No logout
+  reaches it (there is no provider), so revocation is by principal or serial and the short
+  lifetime. Membership is read at mint through 7g's `Resolver`, within grace, as for any issued
+  certificate.
+- **11. Seal-key rotation.** A second-factor record lives until it is reset, longer than
+  `encryption.previous` usually stays. The crypt layer marks a record it opened under the previous
+  key `Stale`, and each scheduled directory pass (`RefreshDirectory`, every `refresh_interval`)
+  seals stale records again under the current key. A record that opens under neither key is never
+  "not enrolled": the sign-in is `503 store_unavailable`, and the broker's line names `port49
+  directory reset-second-factor`.
+- **12. The entry's own.** A second factor is the entry's, not just the principal's. The record
+  keeps the entry's id. A sign-in whose entry has another id (a re-created entry, after 7g's
+  `port49 directory forget`) is refused `failed: second_factor` with the one sentence of ruling 7
+  (the caller is told nothing more), and the broker's log says once an hour which entries differ and
+  names `port49 directory reset-second-factor <principal>`.
+- **13. Operator commands,** on the broker's admin socket, as `port49 directory forget` is: `port49
+  directory reset-second-factor <principal>` makes the record `reopened` for `reopen_for` (the
+  secret dropped; an enrollment begun inside the window may later hold a pending secret in the
+  reopened record, ruling 4) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
+  nothing, lets every entry with no active second factor enroll for `reopen_for`, and replaces a
+  lost enrollment store (an unreadable file renamed aside, never deleted). `port49 directory unlock
+  <principal>` clears the principal's attempt count. `port49 directory init-enrollments` creates the
+  enrollment store once per install (D7; refused when a store or a mark is there). `port49
+  directory export` writes the store, still sealed, to stdout; `port49 directory import [--replace]`
+  fills it from an export (D13). None needs the directory, and none prints a secret.
+- **14. `/v1/config`.** It adds `"directory_password"` to `methods` and `sign_in: {second_factor:
+  "totp"}`; its `issuance.available` already says when nothing can be issued, so the client says so
+  before asking for a password.
+- **15. `port49 login --directory`,** or `method: directory`: the name from `--name`, else
+  `sign_in_name` in the config file, else the login user's name, offered at the prompt; the password
+  and code read from the terminal with echo off; no terminal is a refusal naming it. A held
+  certificate is reused while it has a quarter of its life left, and through a broker or directory
+  outage while it is valid, exactly as decision 43 rulings 12 and 17 say for `--oidc`. The
+  enrollment is shown only on a terminal: the QR code, the key in groups of four for typing, and the
+  time to confirm by.
+- **16. Service accounts** still never authenticate with a directory password (design §7): a
+  workload's entry is refused (`notWorkload`), and the verifier's `filter` is how an operator keeps
+  a person-shaped service account out; the operator notes say to set it.
+- **17. The 3am cases,** each a test: the directory down (a held certificate mints from grace, a
+  sign-in is `503 directory_unavailable` and says so); the store down (a sign-in is `503
+  store_unavailable`, nothing checked); a phone's clock off (refused, the skew said); a person
+  locked out by someone spraying their name (`429` with the time and the unlock command; the held
+  certificate still works); a lost phone (`reset-second-factor`, then a sign-in enrolls); the seal
+  key rotated (ruling 11); the enrollment store lost (`503 enrollment_store_lost`, nothing counted,
+  a held certificate mints; `reset-second-factor --all` or `import` restores sign-in).
+- **18. The config.** `broker.identity.humans[]`, `type: directory_password`: `principal_domains`
+  (required, as an `oidc` verifier's); `second_factor: totp` (required; the one value); `filter`
+  (optional LDAP filter); `enrollment: {open_until (RFC 3339, optional), new_entries_for (default
+  336h; 0s off), reopen_for (default 24h, 1h–168h)}`; `rate_limits: {failures_per_principal
+  (default 5, 1–100), failures_per_source (default 50, 0 off, at most 10000), window (default 15m,
+  1m–24h)}`; `totp_label` (the authenticator's label, default `port49 (<broker host>)`, printable
+  ASCII without `:`). At most one such verifier, and only under `humans`. Unknown keys refused.
+  `broker.directory.enrollment_store` (D12): `{backend: memory}` (the sealed file
+  `<state dir>/enrollments.json`) or `{backend: etcd, etcd: {endpoints, ca_file, prefix, identity:
+  {cert_file, key_file}, call_timeout}}`; absent, the shape of `store:` (on etcd the same cluster
+  and the broker's identity, under `<prefix>v1/sf/` and `meta/enrollments`). Set without a
+  `directory_password` verifier, it is refused.
+- **19. Metrics.** `port49_sign_ins_total{outcome}`: `issued`, `refused`, `throttled`,
+  `enrollment_started`, `enrolled`, `enrollment_closed`, `enrollment_store_lost`,
+  `directory_unavailable`, `store_unavailable`; every outcome at 0 from the first scrape.
+  `port49_directory_enrollment_store_ok`: 1 when the enrollment store opened with its mark, 0 when
+  it is lost (D7), absent without a `directory_password` verifier. No principal, no source.
+- **20. The lab.** L67.
+
 ---
 
 ## 14. Required test assertions
@@ -9581,7 +9945,7 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the eleven decision events, permits included — a corpus
+- **One record per evaluation**, at each of the twelve decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
   force gives writes no record, and nor does a pass a store error stops, for the context it
@@ -10093,6 +10457,31 @@ Beyond those already listed in the design document's §14:
   Python client; nor does a key an `@revoked` line or `RevokedHostKeys` names, filed or presented
   at first contact, from the Python client.
 
+**Directory sign-in (decision 47)**
+
+- **The code before the password**: a wrong code never reaches the directory; a right code and a
+  wrong password are one refusal to the caller.
+- **Never the empty password**: refused before any dial, by the client and the broker.
+- **No state from a password alone**: a refusal the directory also gives a wrong password (`775`,
+  `accountLocked`, a 53) is told as a wrong password unless the code was accepted; a state given
+  only to the right password (`532`, `773`, `passwordExpired`, …) is said.
+- **A step once**: a code accepted is refused again, on this replica or another; the step is taken
+  before the password is tried.
+- **Counted before judged**: parallel attempts never pass the limit; a store error refuses.
+- **Never "not enrolled" by mistake**: a second-factor record that will not open refuses the
+  sign-in; a record of another entry refuses it.
+- **A lost store never reopens enrollment**: an enrollment store with no creation mark (its file
+  or key missing, a new install not yet initialised included), or that will not unseal, refuses
+  every password sign-in, 503 `enrollment_store_lost`, until `init-enrollments` (a new install),
+  `import`, or `reset-second-factor --all` runs; nothing creates it at start; every other path
+  serves.
+- **No password outside a window**: a person with no second factor and no window open is refused
+  `enrollment_closed` before any bind.
+- **The directory down**: a sign-in says so, 503; a held certificate mints within grace.
+- **A refused password is not a fault**: it moves no breaker and no hold-off.
+- **Never logged**: no record, line or error holds the password, the code, the secret, the URI, the
+  handle or an unmapped name.
+
 ---
 
 ## 15. Lab register
@@ -10194,6 +10583,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L64** | `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the inventory name, before and after the login (its key types: `UpdateHostKeys`, on by default, may file more after authentication); (b) after a reload with the configuration saved, the device seen down and back: whether `port49 ssh` logs in again with no host-key warning, the filed key still the device's; (c) the entry under the name replaced by another key of the same type: ssh refuses before any TACACS+ exchange, the token never presented, exit 255, `port49 ssh` naming `ssh-keygen -R`; (d) the entry replaced by a key of another type only: the same. Also recorded per platform: the method ssh used and the askpass asks (L54's cells, re-run under the new command line). | §13 decision 46 rulings 2, 6 and 7 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L64-arista_eos.md, L64-cisco_nxos.md, L64-cisco_iosxe.md, L64-juniper_vjunos-router.md, L64-juniper_vsrx.md (every cell on every platform; no host key changed at a reload. (d)'s refusal reads as "changed" on EOS, vJunos-router and vSRX, which file Ed25519 and also offer the RSA key put in its place, and as "another type" on NX-OS and IOS-XE, which file RSA and offer no Ed25519; both exit 255 before the token. UpdateHostKeys files further types on a later login with a key already filed (EOS one, vJunos-router three, vSRX one), never on the first contact; the askpass count is ssh's tried methods, the redeem records the ground truth) |
 | **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s; (f) the device's own key named by an `@revoked` line beside the filed entry, and then, from an empty known_hosts, at first contact: refused before authentication, no TACACS+ exchange, the token never presented, nothing filed. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L65-arista_eos.md, L65-cisco_nxos.md, L65-cisco_iosxe.md, L65-juniper_vjunos-router.md, L65-juniper_vsrx.md (every cell on every platform, netmiko 4.8.0 and paramiko 5.0.0 on Python 3.14.4) |
 | **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host, and again with an idle gap longer than `persistent_connect_timeout` (30 s by default) or a `meta: reset_connection` between tasks: whether the next task logs in again with the spent token and how that fails; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; and, per `ssh_type`, the known_hosts file's comments, `@revoked` and `@cert-authority` lines before and after the run (whether the file is appended to or rewritten without them); (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token, nor does the persistent connection's log (`ANSIBLE_PERSISTENT_LOG_MESSAGES`, `-vvvv`); (e) an address changed in Ansible's inventory for a device reached before, leading to another host: for `libssh` and `paramiko` (and `libssh` with a `HostKeyAlias` in `ansible_libssh_config_file`), and for `ansible.builtin.ssh` with `-o HostKeyAlias={{ inventory_hostname }}`, whether the other host's key is auto-added and whether the token is presented to it; and, for `ansible.builtin.ssh`, two inventory names at one address, whose shared ControlPath (keyed on address, port and user) may let the second name reuse the first's open master: whether its `HostKeyAlias` is ever checked. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L66-arista_eos.md, L66-cisco_nxos.md, L66-cisco_iosxe.md, L66-juniper_vjunos-router.md, L66-juniper_vsrx.md. Every platform gave the same reading, because what is measured is the client. (a) With the lookup in `ansible_password`: 10 mints for the first 2 tasks, then `candidate_cap_reached` at the default cap of 8. (b) Minting once: 1 mint and 1 authentication for ten tasks. After an idle gap or `reset_connection`, the next task logged in again with the spent token, answered PASS `receipt_replayed`. (c) `libssh` appended to the file and kept its comments and marker lines, **but with `host_key_auto_add` accepted a changed key and presented the token**. `paramiko` refused a changed key before authentication, refused a file holding `@revoked` or `@cert-authority` lines (`InvalidHostKey`), and rewrote the file without its comments. (d) The deny names its reason, and `-vvv` and `-vvvv` output hold no token, **but `persistent_log_messages` writes the token to its log**. (e) Under `host_key_auto_add`, `libssh` and `paramiko` presented the token to another host at a moved address. `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured. `ansible.builtin.ssh` with the alias refused the moved address. Two names at one address: the second reused the first's master, and its alias was never looked up. Ruling 15 and the collection README now follow these readings; the ruling's guess about Paramiko was wrong (CLAUDE.md rule 4) |
+| **L67** | A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (`start_tls: true`): (a) the right password accepted, a wrong one refused with which result code and, on AD, which `data` code; (b) a DN with an empty password sent by a raw client (not port49): whether the server answers success (an unauthenticated bind, RFC 4513 §5.1.2), and the control: `port49 login --directory` with an empty password sends no bind (capture); (c) with the right password, an expired password, a must-change password, a disabled account and a locked account (AD `pwdLastSet`, `userAccountControl`, a lockout; OpenLDAP's `ppolicy`), the result and data code or `ppolicy` error each gives, and whether a wrong password gives the same; (d) with the directory's lockout at 10 failures in 10 minutes, six wrong sign-ins by port49's defaults: the account's failed count after them (`badPwdCount`; `pwdFailureTime`), and the sixth refused by port49 with no bind on the wire; and nine wrong passwords straddling a window boundary (four before it ends, five after): the account's failed count, and whether it locked; (e) a wrong code: no bind for the person on the wire; (f) whether the broker's own bind reads the entry's creation time (`whenCreated`; `createTimestamp`); (g) end to end, once on the compose stack's broker on etcd and once on port49d on the memory store (the sealed file): before `port49 directory init-enrollments` a sign-in is refused `enrollment_store_lost`; after it `bin/port49 login --directory` enrolls, confirms, gets a certificate and mints for a device of the loopback inventory; with the directory stopped, the held certificate mints and a sign-in says the directory did not answer. | §13 decision 47 rulings 6, 7, D2, D5 | OpenLDAP (slapd 2.5, `ppolicy`), Samba AD (4.17), Windows Server AD (Windows Server 2025, the SER8) | closed — measured 2026-10-15; tests/lab/results/L67-openldap.md, tests/lab/results/L67-samba_ad.md, tests/lab/results/L67-windows_ad.md |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

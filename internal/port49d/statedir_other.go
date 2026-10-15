@@ -6,8 +6,9 @@ import "errors"
 
 // The files port49-broker keeps in broker.state_dir (statedir_linux.go).
 const (
-	stateMarksFile   = "marks.json"
-	stateWitnessFile = "witness.json"
+	stateMarksFile       = "marks.json"
+	stateWitnessFile     = "witness.json"
+	stateEnrollmentsFile = "enrollments.json"
 )
 
 // ownStateDir refuses off Linux: who owns broker.state_dir is asked of

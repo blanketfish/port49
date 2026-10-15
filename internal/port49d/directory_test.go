@@ -82,6 +82,23 @@ func TestTheDirectoryStartLines(t *testing.T) {
 	}
 }
 
+// With no x509 verifier there is no certificate mapping, and the start says
+// so rather than naming a kind that is empty (plan 9e).
+func TestTheStartSaysThereIsNoCertificateMapping(t *testing.T) {
+	cfg := brokerConfig(t, directoryPolicy)
+	cfg.Broker.Directory = directoryCfg("gssapi")
+	cfg.Broker.Directory.Mapping = directory.Mapping{}
+	cfg.Broker.RefreshInterval = 5 * time.Minute
+	var out syncBuffer
+	announceDirectory(&out, "port49-broker", cfg, buildPolicy(t, cfg, directoryPolicy))
+	got := out.String()
+	if !strings.Contains(got, "port49-broker: directory: no certificate mapping (no x509 verifier); principal from "+
+		"userPrincipalName, username from sAMAccountName; nested groups in_chain under ou=groups,dc=corp,dc=example\n") ||
+		strings.Contains(got, "certificates map by") {
+		t.Errorf("the start lines:\n%s", got)
+	}
+}
+
 // A simple bind is said as the weakest, naming the env var, never its value.
 func TestASimpleBindIsSaidAsTheWeakest(t *testing.T) {
 	t.Setenv("T_DIR_BIND_PW", secretBindValue)

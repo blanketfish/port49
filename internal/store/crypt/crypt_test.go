@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,176 @@ func keys() Keys {
 	copy(a[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	copy(b[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	return Keys{Current: Key{ID: "v2", Bytes: a}, Previous: &Key{ID: "v1", Bytes: b}}
+}
+
+// A second factor's secret, entry and source are sealed bound to the
+// principal; under the previous key it opens Stale; under a key held by
+// neither it is an error, never "not enrolled" (Review Focus 4).
+func TestASecondFactorUnderAnUnknownKeyIsAnError(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	k := keys() // Current v2, Previous v1
+	old := Keys{Current: *k.Previous}
+	ctx := context.Background()
+	f := store.SecondFactor{Principal: "user:alice@example.com", State: store.SecondFactorActive,
+		Secret: []byte("01234567890123456789"), EntryID: "uuid:1", EnrolledFrom: "192.0.2.0/32"}
+	if err := WrapEnrollments(inner, old, nil).SwapSecondFactor(ctx, f, 0); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := inner.GetSecondFactor(ctx, f.Principal)
+	if len(raw.Secret) != 0 || raw.EntryID != "" || raw.EnrolledFrom != "" || len(raw.Sealed) == 0 {
+		t.Fatalf("the backend holds the secret, entry or source in the clear (%d, %q, %q, %d sealed bytes)",
+			len(raw.Secret), raw.EntryID, raw.EnrolledFrom, len(raw.Sealed))
+	}
+	got, err := WrapEnrollments(inner, k, nil).GetSecondFactor(ctx, f.Principal)
+	if err != nil || !got.Stale || string(got.Secret) != string(f.Secret) || got.EntryID != "uuid:1" {
+		t.Fatalf("under the previous key: stale %v, entry %q, %v", got.Stale, got.EntryID, err)
+	}
+	var c [32]byte
+	copy(c[:], "cccccccccccccccccccccccccccccccc")
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	unread, err := WrapEnrollments(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, failures).GetSecondFactor(ctx, f.Principal)
+	if err == nil || errors.Is(err, store.ErrNotFound) || !errors.Is(err, ErrUnknownKey) ||
+		testutil.ToFloat64(failures.WithLabelValues("second factor")) != 1 {
+		t.Fatalf("a record under no held key read as %v", err)
+	}
+	// The revision comes back with the error and nothing else: a reset replaces
+	// the record at it, and no secret leaves with a record that did not open.
+	if raw.Rev == 0 || unread.Rev != raw.Rev || len(unread.Secret) != 0 || unread.EntryID != "" || unread.State != "" {
+		t.Fatalf("a record that did not open came back as rev %d (stored %d), %d secret bytes, entry %q, state %q",
+			unread.Rev, raw.Rev, len(unread.Secret), unread.EntryID, unread.State)
+	}
+}
+
+// A record sealed for one principal and copied by the backend under
+// another does not open as that other.
+func TestASecondFactorCopiedToAnotherPrincipalDoesNotOpen(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	ctx := context.Background()
+	w := WrapEnrollments(inner, keys(), nil)
+	f := store.SecondFactor{Principal: "user:alice@example.com", State: store.SecondFactorActive,
+		Secret: []byte("01234567890123456789"), EntryID: "uuid:1"}
+	if err := w.SwapSecondFactor(ctx, f, 0); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := inner.GetSecondFactor(ctx, f.Principal)
+	raw.Principal = "user:mallory@example.com"
+	if err := inner.SwapSecondFactor(ctx, raw, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.GetSecondFactor(ctx, "user:mallory@example.com"); err == nil || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("alice's record opened as mallory's: %v", err)
+	}
+}
+
+// A raised reopen_all_until names errEnrollmentMarkMoved and reads as a lost
+// store, and so does a mark with no sealed part.
+func TestAMarkWhoseWindowWasRaisedNamesTheMismatchAndReadsAsLost(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	ctx := context.Background()
+	w := WrapEnrollments(inner, keys(), nil)
+	t0 := time.Unix(1_000_000, 0)
+	if err := w.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := inner.GetEnrollmentMark(ctx)
+	raw.ReopenAllUntil = t0.Add(24 * time.Hour)
+	if err := inner.PutEnrollmentMark(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	_, err := w.GetEnrollmentMark(ctx)
+	if !errors.Is(err, errEnrollmentMarkMoved) || !errors.Is(err, store.ErrEnrollmentStoreLost) || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a raised window: %v", err)
+	}
+	raw.Sealed = nil // a mark a writer made with no sealed part
+	if err := inner.PutEnrollmentMark(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+		t.Fatalf("an unsealed mark: %v", err)
+	}
+}
+
+// A mark sealed under the previous key opens, reports Stale as a record does,
+// and is sealed again under the current key by a swap at its revision; a
+// reset --all between the read and the swap is not reverted (review N3).
+func TestAMarkUnderThePreviousKeyIsStaleAndValidAndReSealsWithoutRevertingAReset(t *testing.T) {
+	inner := memory.NewEnrollments(time.Now)
+	ctx := context.Background()
+	k := keys() // Current v2, Previous v1
+	t0 := time.Unix(1_000_000, 0)
+	old := WrapEnrollments(inner, Keys{Current: *k.Previous}, nil)
+	if err := old.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	w := WrapEnrollments(inner, k, nil) // after the rotation
+	m, err := w.GetEnrollmentMark(ctx)
+	if err != nil || !m.Stale || !m.CreatedAt.Equal(t0) || !m.ReopenAllUntil.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("a mark under the previous key: %+v %v", m, err)
+	}
+	// A reset --all lands first: the re-seal of the read it made is refused.
+	if err := w.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0, ReopenAllUntil: t0.Add(24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SwapEnrollmentMark(ctx, m, m.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a re-seal over a reset: %v", err)
+	}
+	// Re-read: the reset is under the current key, so not stale. Re-seal one that is.
+	if err := old.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = w.GetEnrollmentMark(ctx)
+	if !m.Stale {
+		t.Fatal("not stale")
+	}
+	if err := w.SwapEnrollmentMark(ctx, m, m.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.GetEnrollmentMark(ctx); err != nil || got.Stale || !got.CreatedAt.Equal(t0) {
+		t.Fatalf("after the re-seal: %+v %v", got, err)
+	}
+	if _, err := WrapEnrollments(inner, Keys{Current: k.Current}, nil).GetEnrollmentMark(ctx); err != nil {
+		t.Fatalf("the re-sealed mark does not open with the previous key retired: %v", err)
+	}
+}
+
+// An export is sealed whole: an import under a key this broker does not hold
+// is refused naming the export's key id, and a damaged one is refused too
+// (D13).
+func TestAnEnrollmentExportUnderAnUnknownKeyIsRefusedByName(t *testing.T) {
+	ctx := context.Background()
+	k := keys()
+	src := WrapEnrollments(memory.NewEnrollments(time.Now), k, nil)
+	if err := src.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: time.Unix(1_000_000, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := src.Export(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c [32]byte
+	copy(c[:], "cccccccccccccccccccccccccccccccc")
+	dst := WrapEnrollments(memory.NewEnrollments(time.Now), Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	_, _, err = dst.Import(ctx, exp, true)
+	if !errors.Is(err, ErrUnknownKey) || !strings.Contains(err.Error(), `"v2"`) {
+		t.Fatalf("an export under a key not held: %v", err)
+	}
+	if _, err := dst.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the refused import wrote: %v", err)
+	}
+	if _, _, err := dst.Import(ctx, []byte(`{"port49_enrollments":1,"key_id":"v2","sealed":"AAAA"}`), true); err == nil {
+		t.Fatal("a damaged export was taken")
+	}
+}
+
+func TestTheSealingLayerHoldsEveryEnrollmentProperty(t *testing.T) {
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{Sealed: true,
+		New: func(_ *testing.T, clock func() time.Time) store.Enrollments {
+			return WrapEnrollments(memory.NewEnrollments(clock), keys(), nil)
+		},
+		NewBelow: func(_ *testing.T, clock func() time.Time) (store.Enrollments, store.Enrollments) {
+			inner := memory.NewEnrollments(clock)
+			return WrapEnrollments(inner, keys(), nil), inner
+		}})
 }
 
 func TestSealOpenRoundTripAndRotation(t *testing.T) {

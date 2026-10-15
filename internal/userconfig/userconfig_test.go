@@ -590,6 +590,29 @@ func TestAnOIDCCAOthersCanWriteIsRefused(t *testing.T) {
 	}
 }
 
+// A directory-password login (plan 9e): method: directory and the name the
+// directory knows the person by load, and the second file's name wins key by key.
+func TestMethodDirectoryAndSignInNameLoad(t *testing.T) {
+	p := private(t, "config.yaml", "method: directory\nsign_in_name: alice\n")
+	f, ok, err := Load(p)
+	if err != nil || !ok || f.Method != "directory" || f.SignInName != "alice" {
+		t.Fatalf("%+v %v %v", f, ok, err)
+	}
+	if got := overlay(File{Method: "oidc", SignInName: "sys"}, File{SignInName: "alice"}); got.Method != "oidc" ||
+		got.SignInName != "alice" {
+		t.Fatalf("overlay: %+v", got)
+	}
+}
+
+// method: password is a guess at the name; the refusal names the three there are.
+func TestMethodPasswordIsRefusedNamingTheThree(t *testing.T) {
+	_, _, err := Load(private(t, "config.yaml", "method: password\n"))
+	if err == nil || !strings.Contains(err.Error(), `method "password"`) ||
+		!strings.Contains(err.Error(), "x509, oidc or directory") {
+		t.Fatalf("%v", err)
+	}
+}
+
 func TestAnUnknownMethodOrABadPortIsRefused(t *testing.T) {
 	for body, want := range map[string]string{
 		"method: saml\n":              `method "saml"`,

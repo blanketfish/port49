@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -191,24 +192,34 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 		storeError()
 		return
 	}
-	cert, err := b.Issuer.Issue(csr.PublicKey, sign, now, b.certificateLifetime())
+	b.issueTo(w, now, csr.PublicKey, sign, c.auth(), nil)
+}
+
+// issueTo signs pub a certificate over sign, records the issue permit with
+// auth and extra (a directory sign-in's source), and answers it. On the CA's
+// signing fault it answers 503 issuance_unavailable, unrecorded. The caller
+// has called CanIssue, and spent whatever the sign-in spends.
+func (b *Broker) issueTo(w http.ResponseWriter, now time.Time, pub crypto.PublicKey, sign issuer.SignIn,
+	auth *decision.Auth, extra *decision.SignIn) bool {
+	cert, err := b.Issuer.Issue(pub, sign, now, b.certificateLifetime())
 	if err != nil {
 		b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
-		b.say("issuance: a certificate for %s could not be signed: %s", printsafe.Line(c.principal, 300),
+		b.say("issuance: a certificate for %s could not be signed: %s", printsafe.Line(sign.Principal, 300),
 			printsafe.Line(err.Error(), 300))
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusServiceUnavailable, "issuance_unavailable", "this broker could not sign your "+
 			"certificate; tell its operator (the broker's log says why)")
-		return
+		return false
 	}
 	serial, notAfter := cert.SerialNumber.Text(16), cert.NotAfter.UTC().Format(time.RFC3339)
 	b.Metrics.CertificatesIssued.WithLabelValues("issued").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventIssue, Verdict: decision.VerdictPermit,
-		Reason: decision.CertificateIssued, Principal: c.principal, Auth: c.auth(),
+		Reason: decision.CertificateIssued, Principal: sign.Principal, Auth: auth, SignIn: extra,
 		Certificate: &decision.Certificate{Serial: serial, Issuer: cert.Issuer.String(),
 			Fingerprint: issuer.Fingerprint(cert), NotAfter: notAfter}})
-	writeJSON(w, http.StatusOK, api.IssueResponse{Certificate: string(b.Issuer.PEM(cert)), Principal: c.principal,
+	writeJSON(w, http.StatusOK, api.IssueResponse{Certificate: string(b.Issuer.PEM(cert)), Principal: sign.Principal,
 		Serial: serial, NotAfter: notAfter})
+	return true
 }
 
 // issuableKey is why pub cannot be issued a certificate, "" when it can: a

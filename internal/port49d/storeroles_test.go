@@ -211,6 +211,66 @@ func (f *fleet) sevenDFile(t *testing.T) string {
 	return p
 }
 
+// An enrollment store on an etcd of its own (broker.directory.enrollment_store)
+// needs its own role and user on that cluster, which port49d store-roles
+// prints beside the main ones, for the endpoints, prefix and certificate CN
+// it names; a shell-unsafe name there is refused like the others, and a
+// broker with no such etcd prints no second section.
+func TestStoreRolesNamesAnOwnEnrollmentEtcd(t *testing.T) {
+	f := splitFleet(t)
+	var plain bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.broker}, &plain, &bytes.Buffer{}); code != 0 ||
+		strings.Contains(plain.String(), "enrollment store") {
+		t.Fatalf("without one: exit %d\n%s", code, plain.String())
+	}
+	now := time.Now()
+	ca, err := testpki.NewCA("enroll-ca", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "enroll-ca.pem")
+	if err := os.WriteFile(caFile, ca.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withEnrollment := func(cn, prefix string) string {
+		id := writeIdentity(t, ca, cn, now.Add(-time.Hour), now.Add(time.Hour), 0o600)
+		raw, err := os.ReadFile(f.broker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := "\nbroker:\n  directory:\n    enrollment_store:\n      backend: etcd\n      etcd:\n" +
+			"        endpoints: [https://enroll-etcd.example.com:2379]\n        ca_file: " + caFile + "\n" +
+			"        prefix: \"" + prefix + "\"\n        identity: {cert_file: " + id.CertFile + ", key_file: " + id.KeyFile + "}\n"
+		p := filepath.Join(dir, cn+".yaml")
+		if err := os.WriteFile(p, []byte(strings.Replace(string(raw), "\nbroker:\n", block, 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", withEnrollment("port49-enroll", "/e/")},
+		&out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	for _, want := range []string{
+		"enrollment store",
+		"https://enroll-etcd.example.com:2379",
+		"etcdctl role add port49_broker\netcdctl role grant-permission port49_broker readwrite --prefix=true /e/\n",
+		"etcdctl user add port49-enroll --no-password\netcdctl user grant-role port49-enroll port49_broker\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	errb.Reset()
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", withEnrollment("port49-enroll", "/e $(x)/")},
+		&out, &errb); code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "outside [A-Za-z0-9._@/-]") {
+		t.Fatalf("an unsafe prefix: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
 // store-roles reads the daemon's CN from port49d.yaml and the broker's from
 // port49-broker.yaml (Ruling 14); either alone is refused, naming the other.
 func TestStoreRolesReadsBothFiles(t *testing.T) {

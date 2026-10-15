@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/directory"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 )
 
@@ -18,7 +19,10 @@ import (
 // create port49's two roles for store.etcd.prefix and a user per component
 // named by its certificate's CN, the daemon's from port49d.yaml and the
 // broker's from port49-broker.yaml (Ruling 14). It holds no etcd credential
-// and changes nothing; etcd's root runs the output, once.
+// and changes nothing; etcd's root runs the output, once. A broker file that
+// names an enrollment store on an etcd of its own (plan 9e, D12) gets a second
+// section for that cluster: the broker's role over that prefix, and a user
+// for the certificate there.
 func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("store-roles", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -47,6 +51,7 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	// --broker-config says otherwise (Ruling 1; config.Load would refuse
 	// it, and store-roles never calls Load).
 	broker := dsc.Etcd.Broker
+	brokerFile := *cfgPath // the file that names the broker's identity, and its enrollment store
 	if dsc.Etcd.Broker != nil && !brokerGiven {
 		fmt.Fprintf(stderr, "port49d store-roles: %s names store.etcd.broker, a 7d layout: move the broker's "+
 			"identity to port49-broker.yaml and pass it with --broker-config\n", *cfgPath)
@@ -73,6 +78,7 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		broker = bsc.Etcd.Broker
+		brokerFile = *brokerPath
 	}
 	users := map[string]string{}
 	for _, id := range []struct{ role, path string }{
@@ -91,14 +97,26 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 			"component needs its own certificate (decision 35)\n", users[etcdstore.RoleDaemon])
 		return 1
 	}
+	// An enrollment store on an etcd of its own (plan 9e, D12) is another
+	// cluster with another user for the broker's certificate there.
+	enroll, enrollCN, err := enrollmentEtcdOf(brokerFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "port49d store-roles: %v\n", err)
+		return 1
+	}
 	// The output is run by etcd's root in a shell: a name that holds
 	// anything a shell reads is refused, never quoted into it (pre-flight
 	// M34).
-	for _, n := range []struct{ what, v string }{
+	names := []struct{ what, v string }{
 		{"the daemon certificate's CN", users[etcdstore.RoleDaemon]},
 		{"the broker certificate's CN", users[etcdstore.RoleBroker]},
 		{"store.etcd.prefix", dsc.Etcd.Prefix},
-	} {
+	}
+	if enroll != nil {
+		names = append(names, struct{ what, v string }{"the enrollment store's etcd certificate's CN", enrollCN},
+			struct{ what, v string }{"broker.directory.enrollment_store.etcd.prefix", enroll.Prefix})
+	}
+	for _, n := range names {
 		if !shellSafe(n.v) {
 			fmt.Fprintf(stderr, "port49d store-roles: %s %q holds a character outside [A-Za-z0-9._@/-]; "+
 				"nothing printed\n", n.what, n.v)
@@ -139,7 +157,38 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "# then, if auth is not enabled yet: etcdctl user add root --no-password &&")
 	fmt.Fprintln(stdout, "#   etcdctl user grant-role root root && etcdctl auth enable")
+	if enroll != nil {
+		// Only the broker uses it: the broker's role over this keyspace alone,
+		// on that cluster. Run against it, not the first.
+		fmt.Fprintf(stdout, "\n# port49's enrollment store has an etcd of its own (broker.directory.enrollment_store.etcd,\n"+
+			"# endpoints %s, keyspace %s). Run these as THAT cluster's root user, once (point etcdctl\n"+
+			"# at it, e.g. ETCDCTL_ENDPOINTS), not on the cluster above.\n", strings.Join(enroll.Endpoints, ","), enroll.Prefix)
+		fmt.Fprintf(stdout, "etcdctl role add %s\n", etcdstore.RoleBroker)
+		fmt.Fprintf(stdout, "etcdctl role grant-permission %s readwrite --prefix=true %s\n", etcdstore.RoleBroker, enroll.Prefix)
+		fmt.Fprintf(stdout, "etcdctl user add %s --no-password\n", enrollCN)
+		fmt.Fprintf(stdout, "etcdctl user grant-role %s %s\n", enrollCN, etcdstore.RoleBroker)
+		fmt.Fprintln(stdout, "# then, if auth is not enabled there yet: etcdctl user add root --no-password &&")
+		fmt.Fprintln(stdout, "#   etcdctl user grant-role root root && etcdctl auth enable")
+	}
 	return 0
+}
+
+// enrollmentEtcdOf is the own etcd of the enrollment store the file at path
+// names, and its certificate's CN; nil when it names none.
+func enrollmentEtcdOf(path string) (*directory.EnrollmentEtcd, string, error) {
+	raw, err := config.ReadRegular(path, config.MaxConfigSize)
+	if err != nil {
+		return nil, "", err
+	}
+	e, err := config.EnrollmentEtcdOf(raw)
+	if err != nil || e == nil {
+		return nil, "", err
+	}
+	cn, err := commonName(e.CertFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %v", e.CertFile, err)
+	}
+	return e, cn, nil
 }
 
 // storeBlocksOf reads the store: block of the file at path, checked for its

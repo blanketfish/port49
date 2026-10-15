@@ -197,8 +197,12 @@ type File struct {
 	Key      string `yaml:"key"`
 	// Method is how `port49 login` authenticates: x509, the default, or
 	// oidc, a sign-in the broker issues a certificate for (decision 43
-	// ruling 19).
+	// ruling 19), or directory, a sign-in by directory password, name and
+	// authenticator code (plan 9e; decision 47).
 	Method string `yaml:"method"`
+	// SignInName is the name the directory knows the person by, offered at
+	// the directory sign-in's name prompt; the login user's otherwise.
+	SignInName string `yaml:"sign_in_name"`
 	// OIDCIssuer names the provider to sign in at when the broker lists
 	// several.
 	OIDCIssuer string `yaml:"oidc_issuer"`
@@ -311,6 +315,7 @@ func overlay(base, over File) File {
 	base.Cert = cmp.Or(over.Cert, base.Cert)
 	base.Key = cmp.Or(over.Key, base.Key)
 	base.Method = cmp.Or(over.Method, base.Method)
+	base.SignInName = cmp.Or(over.SignInName, base.SignInName)
 	base.OIDCIssuer = cmp.Or(over.OIDCIssuer, base.OIDCIssuer)
 	base.OIDCCA = cmp.Or(over.OIDCCA, base.OIDCCA)
 	base.OIDCRedirectPort = cmp.Or(over.OIDCRedirectPort, base.OIDCRedirectPort)
@@ -367,9 +372,9 @@ func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
 	}
 	base := filepath.Dir(path)
 	switch f.Method {
-	case "", "x509", "oidc":
+	case "", "x509", "oidc", "directory":
 	default:
-		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509 or oidc", path, f.Method)
+		return File{}, false, fmt.Errorf("%s: method %q: port49 logs in by x509, oidc or directory", path, f.Method)
 	}
 	switch f.BrokerCRL {
 	case "", "check", "require", "off":

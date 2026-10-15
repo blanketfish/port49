@@ -201,3 +201,60 @@ func TestRevocationNamesAnOIDCSession(t *testing.T) {
 		t.Fatalf("record %s lacks %s", buf.String(), want)
 	}
 }
+
+func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
+	b, err := json.Marshal(Record{Event: EventIssue,
+		Auth: &Auth{Method: "cert", DirectoryPassword: &DirectoryPassword{AMR: []string{"pwd", "otp"},
+			AuthTime: "2026-10-14T00:00:00Z", EntrySHA256: "ab"}},
+		SignIn: &SignIn{Source: "192.0.2.0/32", Failed: "second_factor_skew", SkewSeconds: -90}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"directory_password":{"amr":["pwd","otp"],"auth_time":"2026-10-14T00:00:00Z","entry_sha256":"ab"}`,
+		`"sign_in":{"source":"192.0.2.0/32","failed":"second_factor_skew","skew_seconds":-90}`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("record %s lacks %s", b, want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"sign_in source only", SignIn{Source: "192.0.2.0/32"}, `{"source":"192.0.2.0/32"}`},
+		{"second_factor_reset created", SecondFactorReset{Created: true, Origin: "admin_socket uid 0"},
+			`{"created":true,"origin":"admin_socket uid 0"}`},
+	} {
+		got, err := json.Marshal(c.v)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"sign_in_unlock", SignInUnlock{Failures: 3, Origin: "admin_socket uid 0"}, `{"failures":3,"origin":"admin_socket uid 0"}`},
+		{"enrollments_import", EnrollmentsImport{Records: 2, ExportedAt: "2026-10-14T00:00:00Z", Origin: "o"},
+			`{"records":2,"exported_at":"2026-10-14T00:00:00Z","origin":"o"}`},
+	} {
+		got, err := json.Marshal(c.v)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+	b, _ = json.Marshal(Record{Event: EventSignInUnlock, SignInUnlock: &SignInUnlock{Failures: 1, Origin: "o"},
+		SecondFactorReset: &SecondFactorReset{Origin: "o"}, EnrollmentsImport: &EnrollmentsImport{Origin: "o"}})
+	for _, want := range []string{`"sign_in_unlock":`, `"second_factor_reset":`, `"enrollments_import":`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("record %s lacks %s", b, want)
+		}
+	}
+	if EventEnroll != "enroll" || EventSecondFactorReset != "second_factor_reset" ||
+		EventSignInUnlock != "sign_in_unlock" || EventEnrollmentsImport != "enrollments_import" {
+		t.Error("an event is not spelled as §5.7 spells it")
+	}
+}

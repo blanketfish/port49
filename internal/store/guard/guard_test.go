@@ -480,6 +480,80 @@ func TestABulkFailureLeavesTheHotPoolsClosed(t *testing.T) {
 	}
 }
 
+// Every store.Enrollments method runs in the pool PoolOf names, as the
+// store's do: Export, Import and the principals list in the bulk pool, the
+// rest in the token pool (plan 9e, Task 4).
+func TestEveryEnrollmentMethodIsRoutedToItsPool(t *testing.T) {
+	var said, gone told
+	c := config(&said, &gone)
+	c.CallTimeout, c.BulkTimeout = 5*time.Second, 5*time.Second
+	g := reflect.ValueOf(WrapEnrollments(memory.NewEnrollments(time.Now), c))
+	et := reflect.TypeOf((*store.Enrollments)(nil)).Elem()
+	for i := 0; i < et.NumMethod(); i++ {
+		m := et.Method(i)
+		p := PoolOf(m.Name)
+		if p != Token && p != Context && p != Bulk {
+			t.Errorf("%s has no pool", m.Name)
+			continue
+		}
+		if want := map[string]Pool{"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk}[m.Name]; want != "" && p != want {
+			t.Errorf("%s is in the %s pool, want %s", m.Name, p, want)
+		} else if want == "" && p != Token {
+			t.Errorf("%s is in the %s pool, want token", m.Name, p)
+		}
+		before := componentCalls(c.Metrics.Calls, "daemon_enrollments", p)
+		args := []reflect.Value{reflect.ValueOf(context.Background())}
+		for j := 1; j < m.Type.NumIn(); j++ {
+			args = append(args, reflect.Zero(m.Type.In(j)))
+		}
+		g.MethodByName(m.Name).Call(args)
+		if got := componentCalls(c.Metrics.Calls, "daemon_enrollments", p); got != before+1 {
+			t.Errorf("%s ran %v calls in the %s pool, want 1", m.Name, got-before, p)
+		}
+	}
+}
+
+// downEnrollments is an enrollment store that does not answer.
+type downEnrollments struct{ store.Enrollments }
+
+func (downEnrollments) GetEnrollmentMark(context.Context) (store.EnrollmentMark, error) {
+	return store.EnrollmentMark{}, store.ErrUnavailable
+}
+
+// The enrollment guard's circuit is its own series: tripping it moves
+// "<component>_enrollments", never the store guard's gauge, and the line
+// says what it means for sign-in (plan 9e, Task 4 review I4).
+func TestTheEnrollmentCircuitHasItsOwnComponent(t *testing.T) {
+	var said, gone told
+	c := config(&said, &gone)
+	c.Component = "broker"
+	g := WrapEnrollments(downEnrollments{memory.NewEnrollments(time.Now)}, c)
+	for i := 0; i < 3; i++ {
+		g.GetEnrollmentMark(context.Background())
+	}
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("broker_enrollments", "token")); v != 1 {
+		t.Fatalf("the enrollment circuit's gauge is %v", v)
+	}
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("broker", "token")); v != 0 {
+		t.Fatalf("the store's gauge moved: %v", v)
+	}
+	if l := said.all(); len(l) != 1 || !strings.Contains(l[0], "the broker_enrollments's token pool") ||
+		!strings.Contains(l[0], "password sign-in") {
+		t.Fatalf("said %q", l)
+	}
+}
+
+// The guard passes every enrollment method through unchanged.
+func TestTheGuardHoldsEveryEnrollmentProperty(t *testing.T) {
+	storetest.RunEnrollments(t, storetest.EnrollmentsBackend{
+		New: func(t *testing.T, clock func() time.Time) store.Enrollments {
+			var said, gone told
+			c := config(&said, &gone)
+			c.CallTimeout, c.BulkTimeout = 5*time.Second, 5*time.Second
+			return WrapEnrollments(memory.NewEnrollments(clock), c)
+		}})
+}
+
 // The guard passes every method through unchanged: every storetest
 // property holds through it.
 func TestTheGuardHoldsEveryProperty(t *testing.T) {
@@ -594,10 +668,12 @@ func TestEveryMethodIsRoutedToItsPool(t *testing.T) {
 	}
 }
 
-func poolCalls(c *prometheus.CounterVec, p Pool) float64 {
+func poolCalls(c *prometheus.CounterVec, p Pool) float64 { return componentCalls(c, "daemon", p) }
+
+func componentCalls(c *prometheus.CounterVec, component string, p Pool) float64 {
 	n := 0.0
 	for _, o := range outcomes {
-		n += testutil.ToFloat64(c.WithLabelValues("daemon", string(p), o))
+		n += testutil.ToFloat64(c.WithLabelValues(component, string(p), o))
 	}
 	return n
 }

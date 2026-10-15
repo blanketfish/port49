@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -419,7 +420,7 @@ func TestIssuanceRefusals(t *testing.T) {
     issuance: {}
 `
 	for body, want := range map[string]string{
-		brokerWithIdentity(machinesOnly):                                             "list a human oidc verifier",
+		brokerWithIdentity(machinesOnly):                                             "list a human oidc or directory_password verifier",
 		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 30m}\n"): "between 1h0m0s and 24h0m0s",
 		brokerWithIdentity(twoLists + "    issuance: {certificate_lifetime: 48h}\n"): "between 1h0m0s and 24h0m0s",
 		brokerWithIdentity(twoLists + "    issuance: {lifetime: 8h}\n"):              "unknown field",
@@ -448,5 +449,192 @@ func TestIssuanceRefusesAnIssuerACertificateCannotCarry(t *testing.T) {
 		if _, err := loadWith(t, brokerWithIdentity(lists)); err != nil {
 			t.Errorf("%q without issuance: %v", bad, err)
 		}
+	}
+}
+
+// passwordBroker is brokerBlock with identity in place of client_ca_file and
+// no certificate_status (no x509 verifier is configured, and checkBroker
+// refuses one then); with dir, a broker.directory with no
+// certificate_mapping (R2).
+func passwordBroker(t *testing.T, identity string, dir bool) string {
+	t.Helper()
+	cfg := brokerWithIdentity(identity)
+	if dir {
+		cfg = withDirectoryBlock(t, cfg)
+		cfg = strings.Replace(cfg, "    certificate_mapping: {kind: issuer_serial}\n", "", 1)
+	}
+	return strings.Replace(cfg, "  certificate_status: {disabled: true}\n", "", 1)
+}
+
+const passwordBase = `  identity:
+    humans:
+      - type: directory_password
+        principal_domains: [example.com]
+        second_factor: totp
+    issuance: {}
+`
+
+// unknownFieldLine turns want "@unknown:<text>" into the refusal Load gives
+// the line of <text> in loadWith's file (sample, then extra); any other want
+// is returned as it is.
+func unknownFieldLine(extra, want string) string {
+	needle, ok := strings.CutPrefix(want, "@unknown:")
+	if !ok {
+		return want
+	}
+	line := strings.Count(fmt.Sprintf(sample, "x"), "\n") + strings.Count(extra[:strings.Index(extra, needle)], "\n") + 1
+	return fmt.Sprintf("line %d: an unknown field", line)
+}
+
+func TestTheDirectoryPasswordVerifier(t *testing.T) {
+	const base = passwordBase
+	with := func(line string) string {
+		return strings.Replace(base, "second_factor: totp\n", "second_factor: totp\n        "+line+"\n", 1)
+	}
+	for _, tc := range []struct {
+		name, yaml, want string // want "" is accepted
+	}{
+		{"defaults", base, ""},
+		{"no second factor", strings.Replace(base, "        second_factor: totp\n", "", 1), "second_factor is required"},
+		{"another second factor", strings.Replace(base, "totp", "sms", 1), `second_factor "sms": totp`},
+		{"no domains", strings.Replace(base, "        principal_domains: [example.com]\n", "", 1), "principal_domains"},
+		{"no issuance", strings.Replace(base, "    issuance: {}\n", "", 1), "broker.identity.issuance"},
+		{"two", strings.Replace(base, "    issuance: {}\n", `      - type: directory_password
+        principal_domains: [other.com]
+        second_factor: totp
+    issuance: {}
+`, 1), "at most one directory_password"},
+		{"window too long", with("rate_limits: {window: 25h}"), "window"},
+		{"reopen too short", with("enrollment: {reopen_for: 30m}"), "reopen_for"},
+		{"open_until not RFC 3339", with("enrollment: {open_until: tomorrow}"), "open_until"},
+		{"a filter that does not parse", with(`filter: "(memberOf="`), "filter"},
+		// decodeFault (yamlfault) names a line and a category, never the key;
+		// the line pins the fault to the verifier's block.
+		{"an unknown key", with("otp: x"), "@unknown:otp: x"},
+		{"limits", with("rate_limits: {failures_per_principal: 0}"), "failures_per_principal"},
+		{"label with a colon", with(`totp_label: "a:b"`), "totp_label"},
+		{"under machines", strings.Replace(base, "humans:", "machines:", 1), "directory_password is a human verifier"},
+		{"an OIDC verifier of the same domain", strings.Replace(base, "    humans:\n", `    humans:
+      - type: oidc
+        issuer: https://idp.example.com
+        client_id: port49-cli
+        principal_claim: email
+        principal_domains: [example.com]
+`, 1), "example.com is also"},
+		{"an OIDC verifier of the same domain in another case", strings.Replace(base, "    humans:\n", `    humans:
+      - type: oidc
+        issuer: https://idp.example.com
+        client_id: port49-cli
+        principal_claim: email
+        principal_domains: [Example.COM]
+`, 1), "example.com is also"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			full := passwordBroker(t, tc.yaml, true)
+			tc.want = unknownFieldLine(full, tc.want)
+			_, err := loadWith(t, full)
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A loaded verifier carries ruling 18's defaults, and what the file sets.
+func TestTheDirectoryPasswordVerifierResolves(t *testing.T) {
+	c, err := loadWith(t, passwordBroker(t, passwordBase, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Broker.Identity.PasswordSignIn
+	if p == nil || strings.Join(p.PrincipalDomains, " ") != "example.com" || p.Filter != "" || !p.OpenUntil.IsZero() ||
+		p.NewEntriesFor != oidc.DefaultNewEntriesFor || p.ReopenFor != oidc.DefaultReopenFor ||
+		p.FailuresPerPrincipal != oidc.DefaultFailuresPerPrincipal || p.FailuresPerSource != oidc.DefaultFailuresPerSource ||
+		p.Window != oidc.DefaultSignInWindow || p.TOTPLabel != "" {
+		t.Fatalf("%+v", p)
+	}
+	set := strings.Replace(passwordBase, "second_factor: totp\n", `second_factor: totp
+        filter: "(memberOf=CN=net,DC=corp)"
+        enrollment: {open_until: "2026-12-01T00:00:00Z", new_entries_for: 0s, reopen_for: 48h}
+        rate_limits: {failures_per_principal: 3, failures_per_source: 0, window: 10m}
+        totp_label: "corp port49"
+`, 1)
+	c, err = loadWith(t, passwordBroker(t, set, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = c.Broker.Identity.PasswordSignIn
+	if p.Filter != "(memberOf=CN=net,DC=corp)" || !p.OpenUntil.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)) ||
+		p.NewEntriesFor != 0 || p.ReopenFor != 48*time.Hour || p.FailuresPerPrincipal != 3 || p.FailuresPerSource != 0 ||
+		p.Window != 10*time.Minute || p.TOTPLabel != "corp port49" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// The verifier runs on either store shape (D7): on memory its enrollments
+// are the sealed file in the broker's state directory; with no
+// enrollment_store it takes store:'s shape. It still needs a directory.
+func TestTheDirectoryPasswordVerifierNeedsADirectoryOnly(t *testing.T) {
+	if _, err := loadWith(t, passwordBroker(t, passwordBase, false)); err == nil || !strings.Contains(err.Error(), "broker.directory") {
+		t.Fatalf("no directory: %v", err)
+	}
+	c, err := loadWith(t, passwordBroker(t, passwordBase, true))
+	if err != nil {
+		t.Fatalf("the memory store: %v", err)
+	}
+	es := c.Broker.Directory.EnrollmentStore
+	if es.Backend != "memory" || es.Etcd != nil || es.File != filepath.Join(BrokerStateDir(c.Broker), "enrollments.json") {
+		t.Fatalf("%+v", es)
+	}
+}
+
+// enrollment_store's own etcd is checked as store.etcd is: https
+// endpoints, a CA, an identity; an unknown backend or key is refused; a
+// valid block loads with its fields; set without a directory_password
+// verifier, it is refused.
+func TestTheEnrollmentStoreHandle(t *testing.T) {
+	ca := write(t, "etcd-ca.pem", "x")
+	cert, key := write(t, "b.pem", "x"), write(t, "b-key.pem", "x")
+	block := func(body string) string {
+		return strings.Replace(passwordBroker(t, passwordBase, true), "    nested_groups: in_chain\n",
+			"    nested_groups: in_chain\n    enrollment_store:\n"+body, 1)
+	}
+	etcd := func(endpoints, identity string) string {
+		return "      backend: etcd\n      etcd:\n        endpoints: " + endpoints + "\n        ca_file: " + ca +
+			"\n        prefix: /port49-enrollments/\n" + identity + "        call_timeout: 500ms\n"
+	}
+	const eps = "[https://etcd-global-1:2379, https://etcd-global-2:2379]"
+	id := "        identity: {cert_file: " + cert + ", key_file: " + key + "}\n"
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"an http endpoint", block(etcd("[http://etcd-global-1:2379]", id)), "enrollment_store.etcd.endpoints"},
+		{"no identity", block(etcd(eps, "")), "enrollment_store.etcd.identity"},
+		{"another backend", block("      backend: sql\n"), "memory or etcd"},
+		{"an unknown key", block("      backend: memory\n      table: x\n"), "@unknown:table: x"},
+		{"etcd with no etcd block", block("      backend: etcd\n"), "enrollment_store.etcd"},
+		{"memory with an etcd block", block("      backend: memory\n      etcd: {endpoints: [https://e:2379]}\n"), "enrollment_store.etcd"},
+		// brokerBlock's x509 verifier, its directory with a mapping, and the block.
+		{"without a password verifier", strings.Replace(withDirectoryBlock(t, brokerBlock), "    nested_groups: in_chain\n",
+			"    nested_groups: in_chain\n    enrollment_store:\n"+etcd(eps, id), 1),
+			"nothing is enrolled without one; remove it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := unknownFieldLine(tc.yaml, tc.want)
+			_, err := loadWith(t, tc.yaml)
+			tc.want = want
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+	c, err := loadWith(t, block(etcd(eps, id)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	es := c.Broker.Directory.EnrollmentStore
+	e := es.Etcd
+	if es.Backend != "etcd" || es.File != "" || e == nil || strings.Join(e.Endpoints, " ") != "https://etcd-global-1:2379 https://etcd-global-2:2379" ||
+		e.CAFile != ca || e.Prefix != "/port49-enrollments/" || e.CertFile != cert || e.KeyFile != key ||
+		e.CallTimeout != 500*time.Millisecond {
+		t.Fatalf("%+v", es)
 	}
 }

@@ -1,0 +1,78 @@
+{"event":"l67_ok","label":"a: right password over LDAPS","result_code":0}
+{"event":"l67_refused","label":"a: wrong password over LDAPS","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_ok","label":"a: right password again, clearing the count","result_code":0}
+{"event":"l67_ok","label":"a: right password over StartTLS","result_code":0}
+{"event":"l67_refused","label":"a: wrong password over StartTLS","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_ok","label":"a: right password again, clearing the count","result_code":0}
+{"event":"l67_ldap","label":"b: raw UnauthenticatedBind(alice's DN)","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": 80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 52e, v1db1","data":"52e"}
+{"event":"l67_ok","label":"b: control, a real bind","result_code":0}
+{"event":"l67_empty_password","label":"b: CheckPassword with an empty password","result_code":0,"error":"directory: an empty password is never sent"}
+{"event":"l67_connections","label":"b: after the empty password","count":71}
+{"event":"l67_raw","label":"c: l67-expired, right password, raw bind","result_code":49,"data":"532","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-expired, right password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 532)","data":"532"}
+{"event":"l67_raw","label":"c: l67-expired, wrong password, raw bind","result_code":49,"data":"52e","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-expired, wrong password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_raw","label":"c: l67-mustchange, right password, raw bind","result_code":49,"data":"773","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-mustchange, right password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 773)","data":"773"}
+{"event":"l67_raw","label":"c: l67-mustchange, wrong password, raw bind","result_code":49,"data":"52e","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-mustchange, wrong password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_raw","label":"c: l67-disabled, right password, raw bind","result_code":49,"data":"533","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-disabled, right password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 533)","data":"533"}
+{"event":"l67_raw","label":"c: l67-disabled, wrong password, raw bind","result_code":49,"data":"52e","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-disabled, wrong password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 1 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 2 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 3 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 4 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 5 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 6 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 7 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 8 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 9 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_refused","label":"c: wrong password 10 to lock l67-locked","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_raw","label":"c: l67-locked, right password, raw bind","result_code":49,"data":"775","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-locked, right password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 775)","data":"775"}
+{"event":"l67_raw","label":"c: l67-locked, wrong password, raw bind","result_code":49,"data":"775","ppolicy_control":"absent"}
+{"event":"l67_refused","label":"c: l67-locked, wrong password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 775)","data":"775"}
+{"event":"l67_ok","label":"c: control, alice's right password","result_code":0}
+{"event":"l67_ok","label":"d: control, carol's right password","result_code":0}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 1","count":1}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 2","count":2}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 3","count":3}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 4","count":4}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 5","count":5}
+{"event":"l67_signin","label":"wrong password, right code for carol","result_code":429,"data":"sign_in_throttled"}
+{"event":"l67_count","label":"d: carol's count after wrong sign-in 6","count":5}
+{"event":"l67_ok","label":"d: control, a right password after the five","result_code":0}
+{"event":"l67_ok","label":"d: control, dave's right password","result_code":0}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 1 of the straddle","count":1}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 2 of the straddle","count":2}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 3 of the straddle","count":3}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 4 of the straddle","count":4}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 5 of the straddle","count":5}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 6 of the straddle","count":6}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 7 of the straddle","count":7}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 8 of the straddle","count":8}
+{"event":"l67_signin","label":"wrong password, right code for dave","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"d: dave's count after wrong sign-in 9 of the straddle","count":9}
+{"event":"l67_refused","label":"d: control, the tenth wrong password","result_code":49,"error":"directory: the password was refused (LDAP result 49, 52e)","data":"52e"}
+{"event":"l67_signin","label":"e: right password, wrong code","result_code":401,"data":"sign_in_refused"}
+{"event":"l67_count","label":"e: count before","count":0}
+{"event":"l67_count","label":"e: count after","count":0}
+{"event":"l67_cli","label":"g. memory: login --directory, enrolling","result_code":0,"error":"password: | code from your authenticator (empty if you have none yet): | Enroll your second factor: scan this with your authenticator app, or type the key | confirm by 2026-10-15T03:49:01.804Z | first code from your authenticator: | port49: signed in with your directory password as user:alice@corp.example.com; your certificate from https://127.0.0.1:35675 is valid until 2026-10-15T15:39:02Z | port..."}
+{"event":"l67_cli","label":"g. memory: token","result_code":0}
+{"event":"l67_cli","label":"g. memory: token, directory stopped","result_code":0}
+{"event":"l67_cli","label":"g. memory: login --directory --sign-in, directory stopped","result_code":1,"error":"password: | code from your authenticator (empty if you have none yet): | port49 login: the broker did not sign you in: the directory did not answer, so no one can sign in with a password now; anyone already signed in keeps working until their certificate ends (directory_unavailable)"}

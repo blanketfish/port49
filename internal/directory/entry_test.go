@@ -12,6 +12,18 @@ func adCfg() Config {
 		GroupNameAttribute: "cn", MemberAttribute: "member", MaxDepth: 16}
 }
 
+// A zero mapping asks for no attribute named "": some directories refuse
+// the whole search for it.
+func TestAZeroMappingAsksForNoEmptyAttribute(t *testing.T) {
+	cfg := adCfg()
+	cfg.Mapping = Mapping{}
+	for _, a := range cfg.entryAttrs() {
+		if a == "" {
+			t.Fatalf("an empty attribute among %q", cfg.entryAttrs())
+		}
+	}
+}
+
 // Two entries for one certificate is identity_ambiguous with both DNs,
 // never the first; none is identity_unmapped (Ruling 2).
 func TestOneEntryOrNone(t *testing.T) {

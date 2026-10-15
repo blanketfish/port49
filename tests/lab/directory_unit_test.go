@@ -61,7 +61,9 @@ func TestDirectoryEnvCoversWhatTheScriptsRead(t *testing.T) {
 		}
 		for _, v := range regexp.MustCompile(`\$\{?(LAB_[A-Z0-9_]+)`).FindAllStringSubmatch(string(b), -1) {
 			// the end-to-end overlay's, not lab.env's (TestDirectoryE2EOverlayNamesWhatTheTestWrites)
-			if v[1] != "LAB_OPENLDAP_WRITER" && !strings.Contains(env, v[1]+"=") {
+			// LAB_L67 and LAB_L67_PASSWORD are appended by TestL67 (l67Prepare), not written for every run
+			l67Only := v[1] == "LAB_L67" || v[1] == "LAB_L67_PASSWORD"
+			if v[1] != "LAB_OPENLDAP_WRITER" && !l67Only && !strings.Contains(env, v[1]+"=") {
 				t.Errorf("%s reads %s, which lab.env does not set", f, v[1])
 			}
 		}

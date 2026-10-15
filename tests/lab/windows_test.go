@@ -83,11 +83,12 @@ var winScripts = map[string][]string{
 	"service": {"name", "state", "restart_after"}, "events": {"since"}, "facts": nil,
 	"l50_seed": {"actor_password"}, "write_as": {"dn", "attribute", "value", "user", "password"},
 	"audit": {"mode", "since", "attribute", "state"}, "l50_dacl": {"step", "dn", "attribute", "user", "password", "name"},
+	"l67": {"step", "person_password", "name"},
 }
 
 // winSecretParams are the parameters that carry a secret: no script may
 // write one (TestWindowsScriptsNeverEchoASecret).
-var winSecretParams = []string{"dsrm_password", "port49_password", "actor_password", "password"}
+var winSecretParams = []string{"dsrm_password", "port49_password", "actor_password", "password", "person_password"}
 
 // winSecrets is every password the DC is built with, generated for the run.
 // It prints as its key names only, so no format verb can leak a value.

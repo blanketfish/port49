@@ -384,6 +384,10 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		})
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
+	// The directory_password verifier is set before Server, which accepts a
+	// broker with no x509 anchor only while it has an OIDC or password
+	// verifier and an issuer. wireSignIn adds the store, once the server is built.
+	setPasswordSignIn(cfg, b)
 	b.CABundle, b.CABundleRefused = caBundle, caBundleRefused
 	if id := cfg.Broker.Identity; id != nil {
 		b.PerLoginMFA = loadPerLoginMFA(id.PerLoginMFA, func(format string, args ...any) {
@@ -406,7 +410,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		// broker.identity, which must then name an OIDC verifier.
 		if cfg.Broker.ClientCAFile == "" {
 			return nil, nil, nil, fmt.Errorf("broker.identity (no x509 trust anchor is set, so it must name an oidc "+
-				"verifier): %w", err)
+				"or directory_password verifier): %w", err)
 		}
 		return nil, nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
 	}
@@ -992,6 +996,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		<-spoolDone
 		return err
 	}
+	wirePasswordSignIn(ctx, cfg, brk, keys, m, nil, stderr)
 	// The policy in force: the broker's, or with no broker the one policy:
 	// names, which port49d admits from and asks about quarantine (plan 7e),
 	// loaded as the broker loads it, and said the same. Nil with neither:
@@ -1274,12 +1279,17 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			brk.RevokeTimeout = admin.OpTimeout
 			brk.AdminSocket = cfg.AdminSocket
 			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
+			serveSignInOps(srv, brk)
 		} else if sts.persistent {
 			// Beside port49-broker on etcd (plan 7e, Ruling 13).
 			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"
 		}
 		go srv.Serve(ctx, aln)
-		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose, port49 revoke)\n", cfg.AdminSocket)
+		ops := "port49 keys diagnose, port49 revoke"
+		if brk != nil && brk.PasswordSignIn != nil {
+			ops += ", port49 directory reset-second-factor, unlock, init-enrollments, export, import"
+		}
+		fmt.Fprintf(stderr, "port49d: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
 	}
 	if brk != nil && cfg.AdminSocket == "" {
 		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+

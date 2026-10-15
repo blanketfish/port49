@@ -262,3 +262,31 @@ func TestStoreGuardIsTheRegisteredSeries(t *testing.T) {
 		t.Fatal("StoreGuard's series are not the registered ones")
 	}
 }
+
+func TestEverySignInOutcomeExistsAtZero(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	// Counted before any WithLabelValues, which would create the series.
+	if n := testutil.CollectAndCount(m.SignIns); n != 9 {
+		t.Fatalf("%d series; every outcome from the first scrape", n)
+	}
+	for _, o := range []string{"issued", "refused", "throttled", "enrollment_started", "enrolled",
+		"enrollment_closed", "enrollment_store_lost", "directory_unavailable", "store_unavailable"} {
+		if v := testutil.ToFloat64(m.SignIns.WithLabelValues(o)); v != 0 {
+			t.Errorf("%s: %v", o, v)
+		}
+	}
+}
+
+// The gauge is not set at construction: it is absent without a
+// directory_password verifier, and port49d sets it once the store is checked.
+func TestTheEnrollmentStoreGaugeIsNotSetAtConstruction(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	if n, err := testutil.GatherAndCount(reg, "port49_directory_enrollment_store_ok"); err != nil || n != 0 {
+		t.Fatalf("%d %v", n, err)
+	}
+	m.DirectoryEnrollmentStoreOK.WithLabelValues().Set(1)
+	if v := testutil.ToFloat64(m.DirectoryEnrollmentStoreOK); v != 1 {
+		t.Fatalf("%v", v)
+	}
+}

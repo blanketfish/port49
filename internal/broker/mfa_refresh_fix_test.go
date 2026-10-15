@@ -424,7 +424,7 @@ func TestAnExtensionWhosePolicyReadFailsIsNotJudged(t *testing.T) {
 	pol := f.b.Policy.Load()
 	dev, _ := pol.Device("core-sw01")
 	out, _, err := f.b.extend(context.Background(), newHeldLog(), pol, policy.Member{Principal: ghost}, nil,
-		store.Credential{}, store.ContextRef{NAS: "core-sw01", Username: "ghost"}, dev, f.clock.Now(), false, nil,
+		store.Credential{}, store.ContextRef{NAS: "core-sw01", Username: "ghost"}, dev, f.clock.Now(), false, nil, nil,
 		&refreshAsk{})
 	if err != nil || out != "not_judged" {
 		t.Fatalf("extend = %q, %v, want not_judged", out, err)

@@ -1,0 +1,17 @@
+# L67 (plan 9e): the ppolicy overlay, added over ldapi by the entrypoint when
+# LAB_L67 is set, after the people are loaded (so the overlay sees none of the
+# adds). A person's bind is then judged by cn=default (l67.ldif).
+#
+# olcPPolicyUseLockout starts TRUE: it is the setting under which slapd 2.5.13
+# returns the ppolicy control's accountLocked with a locked (or administratively
+# locked) account's bind. The test flips it to FALSE (the stock default) over
+# ldapi during cell (c), records what a bind answers under each, and sets it back.
+# Passwords are stored hashed already, so the overlay does not hash cleartext.
+dn: olcOverlay={1}ppolicy,olcDatabase={1}mdb,cn=config
+changetype: add
+objectClass: olcOverlayConfig
+objectClass: olcPPolicyConfig
+olcOverlay: {1}ppolicy
+olcPPolicyDefault: cn=default,ou=Policies,dc=corp,dc=example,dc=com
+olcPPolicyHashCleartext: FALSE
+olcPPolicyUseLockout: TRUE

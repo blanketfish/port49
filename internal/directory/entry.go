@@ -22,7 +22,10 @@ type Identity struct{ DN, EntryID, Principal, Username string }
 // directory holds one, and, under a workload mapping, its attribute, which
 // notWorkload reads (decision 41 ruling 4).
 func (c Config) entryAttrs() []string {
-	attrs := []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
+	attrs := []string{c.PrincipalAttribute, c.UsernameAttribute, "objectGUID", "entryUUID"}
+	if c.Mapping.Attribute != "" { // a sign-in with no certificate mapping has none (I8)
+		attrs = append(attrs, c.Mapping.Attribute)
+	}
 	if c.Workload != nil {
 		attrs = append(attrs, c.Workload.Attribute)
 	}

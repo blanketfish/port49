@@ -141,9 +141,8 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 	}
 	usable := heldErr == nil && now.Before(held.Leaf.NotAfter)
 	if usable && !sf.signIn && !api.LateRenewal(held.Leaf, now) {
-		fmt.Fprintf(stdout, "port49: using your certificate for %s (signed in at %s at %s), valid until %s; "+
-			"`port49 login --sign-in` signs in again\n", s.Principal, s.Issuer, rfc3339(s.AuthTime),
-			rfc3339(held.Leaf.NotAfter))
+		fmt.Fprintf(stdout, "port49: using your certificate for %s (%s), valid until %s; "+
+			"`port49 login --sign-in` signs in again\n", s.Principal, signedInWhere(s), rfc3339(held.Leaf.NotAfter))
 		return startIssued(sf, pair, true, stdout, stderr)
 	}
 	issued, code, err := issueCertificate(ctx, sf, pool, stdout, stderr)
@@ -338,8 +337,12 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 		return issuedPair{}, 1, err
 	}
 	if conf.Issuance == nil {
+		flag := "--oidc"
+		if sf.directory {
+			flag = "--directory"
+		}
 		return issuedPair{}, 1, fmt.Errorf("the broker at %s issues no certificates (its broker.identity has no "+
-			"issuance), so --oidc cannot log in there; log in with a certificate (--cert and --key)", sf.broker)
+			"issuance), so %s cannot log in there; log in with a certificate (--cert and --key)", sf.broker, flag)
 	}
 	if conf.Issuance.Unavailable() {
 		// Before the sign-in: a password and MFA for a certain 503 is the
@@ -347,15 +350,24 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 		return issuedPair{}, 1, errors.New("the broker cannot issue certificates now (its issuing CA is unavailable); " +
 			"tell its operator")
 	}
-	prov, err := pickProvider(conf, sf.issuer)
-	if err != nil {
-		return issuedPair{}, 1, err
+	var p oidcclient.Provider
+	if sf.directory {
+		// Before any prompt: a password typed for a broker that takes none is
+		// the 3am cost of finding out after.
+		if conf.SignIn == nil {
+			return issuedPair{}, 1, errNoDirectoryPassword(sf.broker)
+		}
+	} else {
+		prov, err := pickProvider(conf, sf.issuer)
+		if err != nil {
+			return issuedPair{}, 1, err
+		}
+		roots, err := sf.oidcRoots()
+		if err != nil {
+			return issuedPair{}, 2, err
+		}
+		p = oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
 	}
-	roots, err := sf.oidcRoots()
-	if err != nil {
-		return issuedPair{}, 2, err
-	}
-	p := oidcclient.Provider{Issuer: prov.Issuer, ClientID: prov.ClientID, Scopes: prov.Scopes, Roots: roots}
 	failed := func(err error) (issuedPair, int, error) { return issuedPair{}, 1, err }
 	// Before the provider is asked anything: a store that cannot be used
 	// refuses here (decision 45 ruling 7).
@@ -363,9 +375,11 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	if err != nil {
 		return failed(err)
 	}
-	e, err := oidcclient.Discover(ctx, p)
-	if err != nil {
-		return failed(err)
+	var e oidcclient.Endpoints
+	if !sf.directory {
+		if e, err = oidcclient.Discover(ctx, p); err != nil {
+			return failed(err)
+		}
 	}
 	// The key is opened or made before the browser: an issued_key naming no
 	// key, or a TPM that will not make one, costs no password.
@@ -405,22 +419,32 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 			return issuedPair{}, 1, saidError{}
 		}
 	}
-	nonce, err := api.IssuanceNonce(key.Public())
-	if err != nil {
-		return failed(err)
-	}
-	tokens, err := signIn(ctx, p, e, nonce, "", sf.redirectPort, sf.noBrowser, stderr)
-	if err != nil {
-		return failed(err)
-	}
-	warnSkew(stderr, "port49 login", tokens)
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
-	if err != nil {
-		return failed(err)
-	}
-	resp, err := requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr, verify)
-	if err != nil {
-		return failed(err)
+	var resp api.IssueResponse
+	if sf.directory {
+		csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+		if err != nil {
+			return failed(err)
+		}
+		if resp, err = directorySignIn(ctx, sf, pool, verify, csr, stdout, stderr); err != nil {
+			return failed(err)
+		}
+	} else {
+		nonce, err := api.IssuanceNonce(key.Public())
+		if err != nil {
+			return failed(err)
+		}
+		tokens, err := signIn(ctx, p, e, nonce, "", sf.redirectPort, sf.noBrowser, stderr)
+		if err != nil {
+			return failed(err)
+		}
+		warnSkew(stderr, "port49 login", tokens)
+		csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+		if err != nil {
+			return failed(err)
+		}
+		if resp, err = requestCertificate(ctx, sf.broker, pool, tokens.IDRaw, csr, verify); err != nil {
+			return failed(err)
+		}
 	}
 	blk, _ := pem.Decode([]byte(resp.Certificate))
 	var leaf *x509.Certificate
@@ -458,9 +482,28 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 	// The unnamed .key is never removed here, whatever the store: on a home
 	// shared with a file host it is that host's (decision 45 ruling 7), and
 	// pickHeldPair looks for this machine's own pair before it.
-	fmt.Fprintf(stdout, "port49: signed in at %s as %s; your certificate from %s is valid until %s\n", p.Issuer,
-		si.Principal, sf.broker, rfc3339(leaf.NotAfter))
+	fmt.Fprint(stdout, signedInLine(si, p.Issuer, sf.broker, leaf.NotAfter))
 	return target, 0, nil
+}
+
+// signedInLine is the line a login says when it has kept a new certificate:
+// the method the person signed in by, and how long the certificate lasts.
+func signedInLine(si issuer.SignIn, oidcIssuer, broker string, end time.Time) string {
+	if si.Method == issuer.MethodDirectoryPassword {
+		return fmt.Sprintf("port49: signed in with your directory password as %s; your certificate from %s is valid "+
+			"until %s\n", si.Principal, broker, rfc3339(end))
+	}
+	return fmt.Sprintf("port49: signed in at %s as %s; your certificate from %s is valid until %s\n", oidcIssuer,
+		si.Principal, broker, rfc3339(end))
+}
+
+// signedInWhere is how a held certificate's sign-in is said: by method, and
+// when the person authenticated.
+func signedInWhere(si issuer.SignIn) string {
+	if si.Method == issuer.MethodDirectoryPassword {
+		return "signed in with your directory password at " + rfc3339(si.AuthTime)
+	}
+	return fmt.Sprintf("signed in at %s at %s", si.Issuer, rfc3339(si.AuthTime))
 }
 
 // requestCertificate is POST /v1/certificate, the sign-in's ID token the

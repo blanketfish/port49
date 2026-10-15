@@ -14,11 +14,12 @@ import (
 )
 
 // The files port49-broker keeps in broker.state_dir beside the CRLs: its
-// copy of the marks (Task 15b) and the restore witness's record (Task
-// 15c).
+// copy of the marks (Task 15b), the restore witness's record (Task 15c) and,
+// on the memory backend, the sealed enrollment store (plan 9e).
 const (
-	stateMarksFile   = "marks.json"
-	stateWitnessFile = "witness.json"
+	stateMarksFile       = "marks.json"
+	stateWitnessFile     = "witness.json"
+	stateEnrollmentsFile = "enrollments.json"
 )
 
 // ownStateDir refuses broker.state_dir, or marks.json or witness.json in
@@ -34,7 +35,7 @@ func ownStateDir(dir string) error {
 	if err := ownedHere("broker.state_dir "+dir, dir, true); err != nil {
 		return err
 	}
-	for _, name := range []string{stateMarksFile, stateWitnessFile} {
+	for _, name := range []string{stateMarksFile, stateWitnessFile, stateEnrollmentsFile} {
 		if err := ownedHere(filepath.Join(dir, name), filepath.Join(dir, name), false); err != nil {
 			return err
 		}

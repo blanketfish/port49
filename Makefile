@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -151,6 +151,19 @@ lab-directory:
 # evaluation ISO and PORT49_LAB_L50=1; see tests/lab/README.md, "Directories".
 lab-l50:
 	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
+
+# L67 (plan 9e): a person's bind and the directory-password sign-in, on
+# OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+
+# and `make build`; see tests/lab/README.md, "Directories". Cell (g)'s etcd half
+# runs on the compose stack, so it also brings up the lab's arista_eos or
+# juniper_vjunos-router (TestDirectoryEndToEnd's platforms), as that test does.
+lab-l67:
+	go test -tags lab ./tests/lab/ -run '^TestL67$$' -count=1 -v -timeout 45m
+
+# L67 on the Windows Server DC (the L44 harness, on the SER8). Needs KVM, the
+# cached evaluation ISO and PORT49_LAB_L67_WINDOWS=1.
+lab-l67-windows:
+	PORT49_LAB_L67_WINDOWS=1 go test -tags lab ./tests/lab/ -run '^TestL67Windows$$' -count=1 -v -timeout 240m
 
 # The identity-provider lab (plan 7h): Keycloak as a container, no devices.
 # Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".

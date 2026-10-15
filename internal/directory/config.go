@@ -58,6 +58,25 @@ type WorkloadMapping struct {
 	TrustDomains []string // the verifier's spiffe_trust_domains: what pre-warm takes from an entry
 }
 
+// EnrollmentStore is broker.directory.enrollment_store resolved (plan 9e,
+// D12): Backend "memory" (the sealed file in the broker's state dir) or
+// "etcd" with its own endpoints, CA, prefix and identity.
+type EnrollmentStore struct {
+	Backend string
+	Etcd    *EnrollmentEtcd // nil on memory, and when it shares store.etcd
+	File    string          // memory: <BrokerStateDir>/enrollments.json
+}
+
+// EnrollmentEtcd is an enrollment store's own etcd.
+type EnrollmentEtcd struct {
+	Endpoints   []string
+	CAFile      string
+	Prefix      string
+	CertFile    string
+	KeyFile     string
+	CallTimeout time.Duration
+}
+
 // Nested is how nested group membership is resolved.
 type Nested string // "in_chain" | "recursive" | "direct"
 
@@ -77,7 +96,10 @@ type Config struct {
 	Mapping                 Mapping
 	// Workload is the workload certificate mapping, nil without one: then no
 	// workload is ever sent to the directory (decision 40 ruling 5).
-	Workload         *WorkloadMapping
+	Workload *WorkloadMapping
+	// EnrollmentStore is broker.directory.enrollment_store resolved (plan
+	// 9e, D12): zero without a directory_password verifier.
+	EnrollmentStore  EnrollmentStore
 	Nested           Nested
 	MaxDepth         int
 	QueryTimeout     time.Duration

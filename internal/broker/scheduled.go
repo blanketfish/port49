@@ -114,7 +114,30 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 			"session.staleness_ceiling", rep.UnverifiedPrincipals, rep.Unverified,
 			rep.At.Sub(rep.OldestUnverified).Round(time.Minute))
 	}
+	if b.PasswordSignIn != nil {
+		b.enrollmentPass(ctx)
+	}
 	return rep, err
+}
+
+// enrollmentPass is the directory-password sign-in's share of the scheduled
+// pass (plan 9e, D7): a look at the enrollment store, which clears or sets its
+// lost state, and, the store not lost, the re-seal of what opened under the
+// previous encryption key. Neither error fails the pass; each is said once an
+// hour.
+func (b *Broker) enrollmentPass(ctx context.Context) {
+	if err := b.CheckEnrollmentStore(ctx); err != nil {
+		b.sayOnce("sign_in_enrollment_check", time.Hour, "sign-in: the enrollment store was not checked: %s; password "+
+			"sign-in keeps the state it had, and the next pass looks again", printsafe.Line(err.Error(), 300))
+		return
+	}
+	if b.EnrollmentStoreLost() != "" {
+		return
+	}
+	if _, err := b.ResealSecondFactors(ctx); err != nil {
+		b.sayOnce("sign_in_reseal_pass", time.Hour, "sign-in: the re-seal of second factors stopped: %s; the next pass "+
+			"starts again", printsafe.Line(err.Error(), 300))
+	}
 }
 
 // verifyFailed is how the pass takes a Verify error. A refusal, the pass's

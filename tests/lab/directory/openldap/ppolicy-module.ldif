@@ -1,0 +1,7 @@
+# L67 (plan 9e): load the ppolicy module (it brings the pwdPolicy schema l67.ldif's
+# default policy entry needs) over ldapi. The overlay itself follows the people
+# (ppolicy.ldif), so it sees none of their adds.
+dn: cn=module{0},cn=config
+changetype: modify
+add: olcModuleLoad
+olcModuleLoad: {2}ppolicy

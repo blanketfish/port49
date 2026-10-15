@@ -83,7 +83,7 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 		first, err := b.Store.PutOnce(ctx, paceKey(c.principal), nil, refreshEvery)
 		switch {
 		case err != nil:
-			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
+			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, 0, "the broker could not issue a challenge; retry shortly")
 			return
 		case !first:
 			b.Metrics.SessionRefreshes.WithLabelValues("too_soon").Inc()
@@ -104,7 +104,7 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, _ := json.Marshal(cr)
 	if ok, err := b.Store.PutOnce(ctx, refreshChallengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
-		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, 0, "the broker could not issue a challenge; retry shortly")
 		return
 	}
 	writeJSON(w, http.StatusOK, api.RefreshChallenge{Nonce: nonce,
@@ -157,7 +157,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 			"and answer it within 5m, once")
 		return
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not read your challenge; "+
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, refreshEvery, "the broker could not read your challenge; "+
 			"ask for a new challenge (run `port49 refresh` again)")
 		return
 	}
@@ -172,7 +172,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := b.noteOwner(ctx, *c.oidc); err != nil {
-		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not record your new "+
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, refreshEvery, "the broker could not record your new "+
 			"session for a logout to find, so it extended nothing; ask for a new challenge (run `port49 refresh` again)")
 		return
 	}
@@ -197,13 +197,13 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 	case req.PerLoginMFAChallenge != "":
 		p, err := b.takeProved(ctx, c, "", req.PerLoginMFAChallenge)
 		if err != nil {
-			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not read the "+
+			b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, refreshEvery, "the broker could not read the "+
 				"proof you named, so it extended nothing; ask for a new challenge (run `port49 refresh` again)")
 			return
 		}
 		proved = p
 	}
-	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC, "", proved)
+	rep, err := b.RefreshSession(ctx, m, answer, c.cred, c.authTime, c.auth().OIDC, nil, "", proved)
 	switch {
 	case errors.Is(err, directory.ErrUsernameTaken):
 		dref := directoryRefusal(err)
@@ -226,10 +226,10 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, oidcPartialRefreshText)
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, refreshEvery, oidcPartialRefreshText)
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), c.principal, c.cred, c.auth().OIDC, rv)
+		b.refuseRevokedAuth(w, decision.EventRefresh, b.Now(), c.principal, c.cred, c.auth().OIDC, nil, rv)
 	case out:
 		b.markExtended(ctx, c, rep)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -314,5 +314,5 @@ func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now t
 			return
 		}
 	}
-	b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, text)
+	b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, nil, refreshEvery, text)
 }

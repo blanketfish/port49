@@ -4,13 +4,17 @@
 // revocations (plan 7a), which put a revocation in force or lift it: the
 // same people can already rewrite the policy file and cut anyone's access.
 // directory_forget (plan 7g) deletes a principal's directory membership and
-// its pin.
+// its pin. second_factor_reset, sign_in_unlock, enrollments_init,
+// enrollments_export and enrollments_import (plan 9e) are the operator's side
+// of the directory-password sign-in; an import's body, up to 64 MiB, follows
+// its request line on the connection.
 // It is off unless admin_socket is set. No answer carries a key, a held
 // body, a token or a credential: a diagnosis names key versions and nothing
 // else, and a revocation names what it revoked and what it reached.
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +23,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"syscall"
 	"time"
 
@@ -36,6 +41,15 @@ type Request struct {
 	CertIssuer string `json:"cert_issuer,omitempty"`
 	CertSerial string `json:"cert_serial,omitempty"`
 	Lift       bool   `json:"lift,omitempty"`
+	// All makes second_factor_reset the reopening of every entry with no
+	// active second factor (plan 9e, D7); Replace lets enrollments_import
+	// overwrite a store holding a second factor enrolled or reset after the
+	// export (D13).
+	All     bool `json:"all,omitempty"`
+	Replace bool `json:"replace,omitempty"`
+	// body is what follows an enrollments_import request line on the
+	// connection, set by handle: never decoded from the request.
+	body io.Reader
 }
 
 // RevokeOp is one `port49 revoke`, with the uid that asked (SO_PEERCRED),
@@ -78,6 +92,9 @@ type Response struct {
 	// Partial is a revocation or lift in force that did not finish or was
 	// not saved; `port49 revoke` exits 3 on it (plan 7a).
 	Partial bool `json:"partial,omitempty"`
+	// Sealed is enrollments_export's body, sealed whole under the broker's
+	// key (plan 9e, D13); base64 in JSON. At most maxImport bytes.
+	Sealed []byte `json:"sealed,omitempty"`
 }
 
 // Server answers the socket.
@@ -98,6 +115,16 @@ type Server struct {
 	// escape): it deletes a principal's directory membership, pin
 	// included. Nil when this process runs no broker.
 	Forget func(ctx context.Context, principal string, uid uint32) (string, error)
+	// SecondFactorReset, SignInUnlock, EnrollmentsInit, EnrollmentsExport and
+	// EnrollmentsImport answer `port49 directory reset-second-factor`,
+	// `unlock`, `init-enrollments`, `export` and `import` (plan 9e). Nil when
+	// this process runs no broker, or the broker has no directory_password
+	// verifier: the ops are then refused, saying so.
+	SecondFactorReset func(ctx context.Context, principal string, all bool, uid uint32) (string, error)
+	SignInUnlock      func(ctx context.Context, principal string, uid uint32) (string, error)
+	EnrollmentsInit   func(ctx context.Context, uid uint32) (string, error)
+	EnrollmentsExport func(ctx context.Context, uid uint32) ([]byte, error)
+	EnrollmentsImport func(ctx context.Context, sealed []byte, replace bool, uid uint32) (string, error)
 	// DiagnoseElsewhere names where keys diagnose is answered when this
 	// process holds no device packets (Held nil): port49-broker, beside
 	// port49d (plan 7e, Ruling 13; pre-flight M16).
@@ -117,6 +144,15 @@ type Server struct {
 }
 
 const maxRequest = 4096
+
+// maxImport bounds what follows an enrollments_import request line, and what
+// an enrollments_export answers: an enrollment store of a fleet's people
+// (plan 9e, pre-flight I14). Every other op stays within maxRequest.
+const maxImport = 64 << 20
+
+// signInOps are the ops of plan 9e's operator side.
+var signInOps = []string{"second_factor_reset", "sign_in_unlock", "enrollments_init", "enrollments_export",
+	"enrollments_import"}
 
 // Listen opens the socket at path, mode 0600. A stale socket at path — one
 // whose dial is refused, so nothing listens on it — is removed. Any other
@@ -208,7 +244,18 @@ func (s *Server) handle(c net.Conn) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if req.Op == "revoke" || req.Op == "revocations" || req.Op == "directory_forget" {
+	isImport := req.Op == "enrollments_import"
+	if isImport {
+		// The sealed body follows the request line, to the client's half-close.
+		// The decoder has read ahead of the line: what it holds is the body's
+		// start, after the one newline the encoder ends the line with (answer
+		// drops it). No hang-up watch: it would read the body. An import runs to
+		// its end, bounded by the op's timeout.
+		_ = c.SetDeadline(time.Now().Add(s.connTimeout(req.Op)))
+		req.body = io.MultiReader(dec.Buffered(), c)
+	}
+	if req.Op == "revoke" || req.Op == "revocations" || req.Op == "directory_forget" ||
+		slices.Contains(signInOps, req.Op) && !isImport {
 		_ = c.SetDeadline(time.Now().Add(s.connTimeout(req.Op)))
 		go func() {
 			defer cancel()
@@ -309,8 +356,93 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 			return Response{Error: err.Error()}
 		}
 		return Response{Text: text}
+	case "second_factor_reset", "sign_in_unlock", "enrollments_init", "enrollments_export", "enrollments_import":
+		return s.signInOp(ctx, req, uid)
 	}
-	return Response{Error: "unknown op; the ops are keys_diagnose, revoke, revocations and directory_forget"}
+	return Response{Error: "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, " +
+		"second_factor_reset, sign_in_unlock, enrollments_init, enrollments_export and enrollments_import"}
+}
+
+// signInCommand is the `port49 directory` subcommand that sends op.
+var signInCommand = map[string]string{"second_factor_reset": "reset-second-factor", "sign_in_unlock": "unlock",
+	"enrollments_init": "init-enrollments", "enrollments_export": "export", "enrollments_import": "import"}
+
+// signInOp answers plan 9e's operator ops. A process with no broker, or one
+// with no directory_password verifier, leaves the op's func nil and says where
+// the ops run.
+func (s *Server) signInOp(ctx context.Context, req Request, uid uint32) Response {
+	var ran bool
+	switch req.Op {
+	case "second_factor_reset":
+		ran = s.SecondFactorReset != nil
+	case "sign_in_unlock":
+		ran = s.SignInUnlock != nil
+	case "enrollments_init":
+		ran = s.EnrollmentsInit != nil
+	case "enrollments_export":
+		ran = s.EnrollmentsExport != nil
+	case "enrollments_import":
+		ran = s.EnrollmentsImport != nil
+	}
+	if !ran {
+		cmd := "port49 directory " + signInCommand[req.Op]
+		if s.RevokeElsewhere != "" {
+			return Response{Error: "port49d runs no broker; " + cmd + " is " + s.RevokeElsewhere + ": run " + cmd +
+				" --socket <that path>"}
+		}
+		return Response{Error: "this process runs no broker with a directory_password verifier, so it holds no second " +
+			"factors (" + cmd + " is answered by the process that does)"}
+	}
+	switch {
+	case req.Op == "second_factor_reset" && req.All && req.Principal != "":
+		return Response{Error: "second_factor_reset names a principal or all, not both"}
+	case req.Op == "second_factor_reset" && !req.All && req.Principal == "":
+		return Response{Error: "second_factor_reset names a principal, or all"}
+	case req.Op == "sign_in_unlock" && req.Principal == "":
+		return Response{Error: "sign_in_unlock names a principal"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opTimeout())
+	defer cancel()
+	var text string
+	var err error
+	switch req.Op {
+	case "second_factor_reset":
+		text, err = s.SecondFactorReset(ctx, req.Principal, req.All, uid)
+	case "sign_in_unlock":
+		text, err = s.SignInUnlock(ctx, req.Principal, uid)
+	case "enrollments_init":
+		text, err = s.EnrollmentsInit(ctx, uid)
+	case "enrollments_export":
+		var sealed []byte
+		if sealed, err = s.EnrollmentsExport(ctx, uid); err == nil {
+			if len(sealed) > maxImport {
+				return Response{Error: fmt.Sprintf("the export is over %d MiB, more than the admin socket carries; "+
+					"copy the enrollment store from its backend instead", maxImport>>20)}
+			}
+			return Response{Text: fmt.Sprintf("exported %d bytes", len(sealed)), Sealed: sealed}
+		}
+	case "enrollments_import":
+		// Never echoed or logged, whatever it holds.
+		if req.body == nil {
+			req.body = bytes.NewReader(nil)
+		}
+		// The request line's newline leads the body: it is not counted.
+		body, rerr := io.ReadAll(io.LimitReader(req.body, maxImport+2))
+		body = bytes.TrimPrefix(body, []byte("\n"))
+		switch {
+		case rerr != nil:
+			return Response{Error: "the export did not arrive whole: send it after the request line and half-close"}
+		case len(body) > maxImport:
+			return Response{Error: fmt.Sprintf("the export is over %d MiB, more than the admin socket takes", maxImport>>20)}
+		case len(bytes.TrimSpace(body)) == 0:
+			return Response{Error: "enrollments_import carries the export after its request line: none arrived"}
+		}
+		text, err = s.EnrollmentsImport(ctx, body, req.Replace, uid)
+	}
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+	return Response{Text: text}
 }
 
 // uidAllowed is the rule peerAllowed applies: port49d's own uid, and root.

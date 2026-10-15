@@ -532,6 +532,51 @@ func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (stri
 	}
 }
 
+// adminSecondFactorReset is the admin socket's second_factor_reset (plan 9e),
+// its origin the caller's uid.
+func adminSecondFactorReset(brk *broker.Broker) func(context.Context, string, bool, uint32) (string, error) {
+	return func(ctx context.Context, principal string, all bool, uid uint32) (string, error) {
+		return brk.ResetSecondFactor(ctx, principal, all, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+
+// adminSignInUnlock is the admin socket's sign_in_unlock.
+func adminSignInUnlock(brk *broker.Broker) func(context.Context, string, uint32) (string, error) {
+	return func(ctx context.Context, principal string, uid uint32) (string, error) {
+		return brk.UnlockSignIn(ctx, principal, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+
+// adminEnrollmentsInit is the admin socket's enrollments_init.
+func adminEnrollmentsInit(brk *broker.Broker) func(context.Context, uint32) (string, error) {
+	return func(ctx context.Context, uid uint32) (string, error) {
+		return brk.InitEnrollments(ctx, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+
+// adminEnrollmentsExport is the admin socket's enrollments_export.
+func adminEnrollmentsExport(brk *broker.Broker) func(context.Context, uint32) ([]byte, error) {
+	return func(ctx context.Context, _ uint32) ([]byte, error) { return brk.ExportEnrollments(ctx) }
+}
+
+// adminEnrollmentsImport is the admin socket's enrollments_import.
+func adminEnrollmentsImport(brk *broker.Broker) func(context.Context, []byte, bool, uint32) (string, error) {
+	return func(ctx context.Context, sealed []byte, replace bool, uid uint32) (string, error) {
+		return brk.ImportEnrollments(ctx, sealed, replace, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+
+// serveSignInOps gives srv the sign-in ops when brk runs a directory_password
+// verifier; without one they stay nil, and the socket says where they run.
+func serveSignInOps(srv *admin.Server, brk *broker.Broker) {
+	if brk == nil || brk.PasswordSignIn == nil {
+		return
+	}
+	srv.SecondFactorReset, srv.SignInUnlock = adminSecondFactorReset(brk), adminSignInUnlock(brk)
+	srv.EnrollmentsInit, srv.EnrollmentsExport = adminEnrollmentsInit(brk), adminEnrollmentsExport(brk)
+	srv.EnrollmentsImport = adminEnrollmentsImport(brk)
+}
+
 // adminRevoke is the admin socket's revoke op over brk (plan 7a). The
 // record's origin is the uid the socket read off the caller.
 func adminRevoke(brk *broker.Broker, mc *marksCopy) func(context.Context, admin.RevokeOp) (string, bool, error) {

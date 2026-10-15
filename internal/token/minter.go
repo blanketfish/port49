@@ -185,6 +185,9 @@ type Request struct {
 	// OIDC is the verified token's identity for the record's auth.oidc; nil
 	// on the certificate path (plan 7h).
 	OIDC *decision.OIDC
+	// DirectoryPassword is a directory sign-in's authentication, for the
+	// record's auth.directory_password; nil for any other caller (decision 47).
+	DirectoryPassword *decision.DirectoryPassword
 	// Sweep is the sweep this device was minted by, copied onto the permit
 	// record; nil for a mint by name (spec §13 decision 42 ruling 4).
 	Sweep *decision.Sweep
@@ -549,7 +552,8 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
-		Auth:        &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory, OIDC: r.OIDC},
+		Auth: &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory, OIDC: r.OIDC,
+			DirectoryPassword: r.DirectoryPassword},
 		Device:      &decision.Device{Name: r.Device, Platform: r.Platform},
 		Mint:        &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
 		Policy:      r.Policy,
