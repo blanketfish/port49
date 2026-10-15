@@ -165,7 +165,7 @@ func (s *signInAttempt) storeLost(why string) {
 		s.b.markEnrollmentStore(why)
 	}
 	s.giveBack()
-	s.rec(decision.EventIssue, decision.EnrollmentStoreLost, "", decision.SignIn{})
+	s.rec(s.event, decision.EnrollmentStoreLost, "", decision.SignIn{})
 	s.b.Metrics.SignIns.WithLabelValues("enrollment_store_lost").Inc()
 	s.w.Header().Set("Retry-After", "300")
 	writeError(s.w, http.StatusServiceUnavailable, string(decision.EnrollmentStoreLost), lostText)

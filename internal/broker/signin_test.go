@@ -1143,6 +1143,12 @@ func TestALostEnrollmentStoreRefusesTheConfirm(t *testing.T) {
 	if w.Code != 503 || apiError(w) != "enrollment_store_lost" {
 		t.Fatalf("%s", shown(w))
 	}
+	// spec 5.7: enrollment_store_lost is recorded under issue and enroll; a
+	// confirm's is enroll's.
+	recs := eventsOf(f.records(t), decision.EventEnroll)
+	if len(recs) == 0 || recs[len(recs)-1]["reason"] != "enrollment_store_lost" {
+		t.Fatalf("no enroll record for the lost store: %v", recs)
+	}
 	f.b.Enrollments = real
 	if err := f.b.CheckEnrollmentStore(context.Background()); err != nil {
 		t.Fatal(err)
