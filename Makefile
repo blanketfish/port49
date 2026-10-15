@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -90,8 +90,18 @@ test-race:
 # file, by anchored name, and nothing that brings a device up.
 LAB_UNIT_TESTS = $(shell grep -ho '^func Test[A-Za-z0-9_]*' tests/lab/*_unit_test.go | sed 's/^func //' | paste -sd'|' -)
 
+L62_UNIT_TESTS = $(shell grep -ho '^func Test[A-Za-z0-9_]*' tests/lab/l62/*_unit_test.go | sed 's/^func //' | paste -sd'|' -)
+
 lab-unit:
 	go test -tags lab ./tests/lab/ -run '^($(LAB_UNIT_TESTS))$$' -count=1
+	go test -tags lab ./tests/lab/l62/ -run '^($(L62_UNIT_TESTS))$$' -count=1
+
+# The L62 session's stand-up (runbooks/L62-ser8.md, P0): the lab Keycloak and
+# an issuing port49-broker as compose project port49labl62, held until Enter.
+# State is kept in ~/.cache/port49-l62 and reused; PORT49_L62_FRESH=1 starts
+# over. Needs Docker with Compose v2.24.4+. No device, no TPM.
+lab-l62-up:
+	PORT49_L62_UP=1 go test -tags lab ./tests/lab/l62/ -run '^TestL62Up$$' -count=1 -v -timeout 10h
 
 vet:
 # gofmt lists every unformatted file and fails if there is one. No tee to

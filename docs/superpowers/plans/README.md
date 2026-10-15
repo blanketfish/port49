@@ -5935,7 +5935,9 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
     three-wrong-PIN lockout.
   - **L62, the SER8's TPM:** deferred to a session with Ryan. It needs a lab user in `tss`, a reboot
     of the SER8 and a second host for the shared home, including the mixed-store (token and file)
-    cell. **L62 stays open.**
+    cell. **L62 stays open.** *(Update 2026-10-15: **L62 closed** in that session,
+    `tests/lab/results/L62-ser8.md`; the second host was a container with its own swtpm, every
+    firmware clause ran on the SER8's TPM, AMD Pluton fw 0x60004.)*
 - **Rows:** **L61 closed** (`L61-keycloak.md`, Keycloak 26.4.7, 2026-10-12: `amr` is `[pwd otp]`, or
   `[pwd mfa]` with the OTP reference set to `mfa`; `acr` is `"1"` in every cell). **L60, L62, L63
   open.**
@@ -6075,7 +6077,7 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   `.<machine>.pem`, where `<machine>` is eight hex digits of SHA-256 of `/etc/machine-id`; it is
   useless on any other machine. A token key's certificate is `<host>_<port>.<8hex>.pem`, where the hex
   is SHA-256 of the canonical `pkcs11:` reference without its query. A file key is
-  `<host>_<port>.key` and `.pem`. (Provisional on L62.)
+  `<host>_<port>.key` and `.pem`. (Measured: L62, closed 2026-10-15.)
 - **Rolling out touch keys.** A host keeps the file or TPM pair it holds until that pair renews.
   `port49 login --sign-in` switches it to the token at once.
 - **The key unplugged at 3am.** Your open device sessions and the agent's held connection keep working:
