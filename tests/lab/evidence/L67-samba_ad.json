@@ -72,7 +72,7 @@
 {"event":"l67_signin","label":"e: right password, wrong code","result_code":401,"data":"sign_in_refused"}
 {"event":"l67_count","label":"e: count before","count":0}
 {"event":"l67_count","label":"e: count after","count":0}
-{"event":"l67_cli","label":"g. memory: login --directory, enrolling","result_code":0,"error":"password: | code from your authenticator (empty if you have none yet): | Enroll your second factor: scan this with your authenticator app, or type the key | confirm by 2026-10-15T02:46:01.812Z | first code from your authenticator: | port49: signed in with your directory password as user:alice@corp.example.com; your certificate from https://127.0.0.1:33449 is valid until 2026-10-15T14:36:02Z | port..."}
+{"event":"l67_cli","label":"g. memory: login --directory, enrolling","result_code":0,"error":"password: | code from your authenticator (empty if you have none yet): | Enroll your second factor: scan this with your authenticator app, or type the key | confirm by 2026-10-15T03:49:01.804Z | first code from your authenticator: | port49: signed in with your directory password as user:alice@corp.example.com; your certificate from https://127.0.0.1:35675 is valid until 2026-10-15T15:39:02Z | port..."}
 {"event":"l67_cli","label":"g. memory: token","result_code":0}
 {"event":"l67_cli","label":"g. memory: token, directory stopped","result_code":0}
 {"event":"l67_cli","label":"g. memory: login --directory --sign-in, directory stopped","result_code":1,"error":"password: | code from your authenticator (empty if you have none yet): | port49 login: the broker did not sign you in: the directory did not answer, so no one can sign in with a password now; anyone already signed in keeps working until their certificate ends (directory_unavailable)"}
