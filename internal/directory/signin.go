@@ -54,6 +54,22 @@ func (p *PasswordRefusal) State() bool {
 	return p.Data != "" && p.Data != "52e" && p.Data != "525"
 }
 
+// Proven is whether the refusal is an answer a directory gives only after
+// the password checked out (L67): AD's 530, 531, 532, 533, 701 and 773, and
+// ppolicy's password_expired and change_after_reset. The others name a state
+// the directory also gives a wrong password: Samba's 775 and OpenLDAP's
+// account_locked (UseLockout TRUE) answer a locked account the same whatever
+// was sent, and a 53 or a state with no data code says nothing about the
+// password. Only a person who has proven more than a password may be told
+// those (ruling 7).
+func (p *PasswordRefusal) Proven() bool {
+	switch p.Data {
+	case "530", "531", "532", "533", "701", "773", "password_expired", "change_after_reset":
+		return true
+	}
+	return false
+}
+
 // adData is AD's data code in a bind's diagnostic message, kept only when it
 // is one ruling 6 names; the message itself is never kept.
 var adData = regexp.MustCompile(`\bdata ([0-9a-f]{3,4})\b`)

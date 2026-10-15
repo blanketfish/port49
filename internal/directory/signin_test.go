@@ -45,6 +45,35 @@ func signInWorld(t *testing.T) *world {
 	return w
 }
 
+// Proven is the refusals a directory gives only after the password checked
+// out (L67): 775 and account_locked are also its answer to a wrong password,
+// a 53 and a state with no data prove nothing.
+func TestPasswordRefusalProven(t *testing.T) {
+	for _, tc := range []struct {
+		r    PasswordRefusal
+		want bool
+	}{
+		{PasswordRefusal{Result: 49, Data: "530"}, true},
+		{PasswordRefusal{Result: 49, Data: "531"}, true},
+		{PasswordRefusal{Result: 49, Data: "532"}, true},
+		{PasswordRefusal{Result: 49, Data: "533"}, true},
+		{PasswordRefusal{Result: 49, Data: "701"}, true},
+		{PasswordRefusal{Result: 49, Data: "773"}, true},
+		{PasswordRefusal{Result: 49, Data: "password_expired"}, true},
+		{PasswordRefusal{Result: 0, Data: "change_after_reset"}, true},
+		{PasswordRefusal{Result: 49, Data: "775"}, false},
+		{PasswordRefusal{Result: 49, Data: "account_locked"}, false},
+		{PasswordRefusal{Result: 53}, false},
+		{PasswordRefusal{Result: 49}, false},
+		{PasswordRefusal{Result: 49, Data: "52e"}, false},
+		{PasswordRefusal{Result: 49, Data: "525"}, false},
+	} {
+		if got := tc.r.Proven(); got != tc.want {
+			t.Errorf("%+v: Proven() = %v, want %v", tc.r, got, tc.want)
+		}
+	}
+}
+
 // The name is matched on username_attribute under both filters, escaped;
 // the entry gives its principal and username; its creation time is read.
 func TestSignInEntryFindsTheOneEntry(t *testing.T) {

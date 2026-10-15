@@ -43,9 +43,11 @@ type fakeDir struct {
 	bindDown bool // only the bind is unavailable
 	state    string
 	result   int // the LDAP result a state refusal carries; 49 when 0
-	searches int
-	binds    int
-	names    []string // every name searched, as the directory saw it
+	// stateForAny gives the state refusal to a wrong password too.
+	stateForAny bool
+	searches    int
+	binds       int
+	names       []string // every name searched, as the directory saw it
 }
 
 type fakePerson struct {
@@ -82,6 +84,14 @@ func (d *fakeDir) CheckPassword(_ context.Context, _ directory.Server, dn, passw
 	for _, p := range d.people {
 		switch {
 		case p.entry.DN != dn:
+		case d.stateForAny && (d.state != "" || d.result != 0):
+			// A directory that gives a locked account's answer to any password
+			// (Samba's 775, OpenLDAP's accountLocked with UseLockout TRUE; L67).
+			res := d.result
+			if res == 0 {
+				res = 49
+			}
+			return &directory.PasswordRefusal{Result: res, Data: d.state}
 		case p.password != password:
 			return &directory.PasswordRefusal{Result: 49, Data: "52e"}
 		case d.state != "" || d.result != 0:
@@ -626,6 +636,59 @@ func TestTheDirectoryStateIsSaidPastTheCode(t *testing.T) {
 		if strings.Contains(shown(w), words) {
 			t.Fatalf("%s said without the code", data)
 		}
+	}
+}
+
+// An enrolling person has proven nothing but a password the directory has
+// not yet judged: a state that a directory also gives to a wrong password
+// (775, account_locked, a 53) must not be said to them, or any password
+// would learn which accounts are locked. They get the sentence a wrong
+// password gets; the record still keeps the state and its data (L67; Q1).
+func TestAnEnrollingPersonIsNotToldAnUnprovenState(t *testing.T) {
+	for _, tc := range []struct {
+		data   string
+		result int
+	}{{"775", 0}, {"account_locked", 0}, {"", 53}} {
+		f, dir := newSignInFixture(t)
+		f.b.PasswordSignIn.OpenUntil = f.now.Add(time.Hour)
+		dir.state, dir.result, dir.stateForAny = tc.data, tc.result, true
+		w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "not-the-password", CSR: csrOf(t, newECKey(t))})
+		rec := signInOf(f.lastIssue(t))
+		if w.Code != 401 || apiError(w) != "sign_in_refused" || !strings.Contains(shown(w), refusedText) ||
+			strings.Contains(shown(w), "locked") || strings.Contains(shown(w), "refuses this account") {
+			t.Fatalf("%q/%d: %s", tc.data, tc.result, shown(w))
+		}
+		wantData := any(tc.data)
+		if tc.data == "" {
+			wantData = nil
+		}
+		if rec["failed"] != "directory_state" || rec["directory_data"] != wantData {
+			t.Fatalf("%q/%d: the record lost the state: %v", tc.data, tc.result, rec)
+		}
+	}
+}
+
+// An enrolling person is told a state the directory gives only after the
+// password checked out (533 here).
+func TestAnEnrollingPersonIsToldAProvenState(t *testing.T) {
+	f, dir := newSignInFixture(t)
+	f.b.PasswordSignIn.OpenUntil = f.now.Add(time.Hour)
+	dir.state, dir.stateForAny = "533", true
+	w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "right", CSR: csrOf(t, newECKey(t))})
+	if w.Code != 401 || !strings.Contains(shown(w), "your directory account is disabled") {
+		t.Fatalf("%s", shown(w))
+	}
+}
+
+// An enrolled person with the right code has proven a second factor, so a
+// locked account is said to them even when the password is wrong (ruling 7).
+func TestAnEnrolledPersonPastTheCodeIsToldALockedAccount(t *testing.T) {
+	f, dir := newSignInFixture(t)
+	secret := f.enrolled(t, alicePrincipal, "uuid:alice")
+	dir.state, dir.stateForAny = "775", true
+	w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "not-the-password", Code: codeAt(t, secret, f.now), CSR: csrOf(t, newECKey(t))})
+	if w.Code != 401 || !strings.Contains(shown(w), "your directory account is locked") {
+		t.Fatalf("%s", shown(w))
 	}
 }
 

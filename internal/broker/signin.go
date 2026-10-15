@@ -379,7 +379,14 @@ func (s *signInAttempt) issuable(principal, entryID string) bool {
 // password checks the person's password at the directory and answers a
 // refusal: false when it did. A refusal naming the account's state says it;
 // the data recorded is the allow-listed one the directory package kept.
-func (s *signInAttempt) password(ctx context.Context, e directory.SignInEntry, password string) bool {
+//
+// pastCode is whether the person's TOTP code was already accepted. A state
+// the directory also gives a wrong password (775, account_locked, a 53) is
+// said only then, or when the refusal proves the password (Proven): to a
+// person who has shown only a password it would tell anyone which accounts
+// are locked. They get the wrong-password sentence; the record keeps the
+// state and its data either way (L67).
+func (s *signInAttempt) password(ctx context.Context, e directory.SignInEntry, password string, pastCode bool) bool {
 	err := s.b.SignInDirectory.CheckPassword(ctx, e.Server, e.DN, password)
 	var refusal *directory.PasswordRefusal
 	switch {
@@ -388,8 +395,12 @@ func (s *signInAttempt) password(ctx context.Context, e directory.SignInEntry, p
 	case errors.Is(err, directory.ErrEmptyPassword):
 		s.refuseAs(e.Principal, "password")
 	case errors.As(err, &refusal) && refusal.State():
+		words := refusedText
+		if pastCode || refusal.Proven() {
+			words = stateWords(refusal)
+		}
 		s.refuseWith(e.Principal, decision.SignIn{Failed: "directory_state", DirectoryResult: refusal.Result,
-			DirectoryData: refusal.Data}, stateWords(refusal))
+			DirectoryData: refusal.Data}, words)
 	case errors.As(err, &refusal):
 		s.refuseAs(e.Principal, "password")
 	default:
@@ -569,7 +580,7 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
 		s.storeUnavailable(e.Principal, "second factor", err, "") // 503 store_unavailable (I2)
 		return
 	}
-	if !s.password(ctx, e, req.Password) {
+	if !s.password(ctx, e, req.Password, true) {
 		return
 	}
 	s.succeeded(ctx, cfg, e.Principal)
@@ -621,7 +632,7 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 		return
 	}
 	// An enrolling person has only the password.
-	if !s.password(ctx, e, password) || !s.issuable(e.Principal, e.EntryID) {
+	if !s.password(ctx, e, password, false) || !s.issuable(e.Principal, e.EntryID) {
 		return
 	}
 	account := strings.TrimPrefix(e.Principal, "user:")
