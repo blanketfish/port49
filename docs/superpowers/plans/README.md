@@ -6419,14 +6419,13 @@ Task 1.
     no `client_ca_file` (9fb957f5), and the L67 and L56 harnesses pin `issued_key_store: file`, so a
     lab never probes the machine's TPM (6735a7d4).
 - **Rulings as made** (decision 47; D1 to D13 are the plan's):
-  - **D1** TOTP held by port49, **D3** the password's path, **D5** the limits, **D6** `auth.amr`
-    `["pwd","otp"]`, **D9** `pquerna/otp`, **D11** the vocabulary: the controller, as recommended.
-  - **D2** enrollment as trust on first use inside windows, **D4** the code before the password and
-    **D8** no domain shared with an IdP: security-affecting, ruled by Ryan on 2026-10-14 (D1 to D11
-    as recommended).
-  - **D7** a sealed file on the memory store that fails closed when lost, **D12**
-    `directory.enrollment_store`, **D13** `export` and `import`: Ryan, 2026-10-14.
-  - **D10** `totp` is not a `per_login_mfa` method in 9e: the controller, carried (below).
+  - **D1 to D11, as recommended: Ryan, 2026-10-14.** D1 TOTP held by port49, D2 enrollment as
+    trust on first use inside windows, D3 the password's path, D4 the code before the password, D5
+    the limits, D6 `auth.amr` `["pwd","otp"]`, D8 no domain shared with an IdP, D9 `pquerna/otp`,
+    D10 `totp` is not a `per_login_mfa` method in 9e (carried, below), D11 the vocabulary.
+  - **D7** a sealed file on the memory store that fails closed when lost (Ryan's rewrite of the
+    recommendation), **D12** `directory.enrollment_store`, **D13** `export` and `import`: Ryan,
+    2026-10-14.
   - **Pre-flight, the controller's:** counts live in `store:` (regional) and enrollments in
     `enrollment_store` (C2); the enrollment window is decided before the password, so outside every
     window there is no bind (C5); the TOTP step is taken before the bind (I1); port49d and the
@@ -6454,8 +6453,9 @@ Task 1.
     password before it dials.
   - The lockout margin is 1: nine directory failures through a fixed window against AD's threshold
     of ten.
-  - Windows AD's `whenCreated` could not be compared with the seed time (cell (f): the notes record
-    0s and 6s against the seed), so (f) is not measured to the second on Windows.
+  - Cell (f): every directory's entry creation time is what the broker reads (the control row);
+    OpenLDAP's and Samba's were 1s and 7s before the fixture was logged loaded, and Windows AD's
+    `whenCreated` could not be compared with an independently known seed time.
 - **Carried:**
   - **Ryan's rulings, 2026-10-15:** after 9e, a **small fix branch for issues #5 and #8**; **issue
     #6 is documented as intended behaviour in plan 13**; and a **small plan closes the `network_cli`
