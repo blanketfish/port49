@@ -947,21 +947,25 @@ func l67ComposePrepare(pw string) func(*composeStack) error {
 }
 
 // l67Files is e2eFiles with the directory_password verifier and issuance on the
-// compose broker: the x509 human stays, as an operator would keep it.
+// compose broker, as the only human verifier: no client_ca_file and no
+// certificate_status, the shape the plan ships (decision 47).
 func l67Files(files map[string]string) error {
 	if err := e2eFiles(files); err != nil {
 		return err
 	}
 	b := files["port49-broker.yaml"]
-	i := strings.Index(b, "  client_ca_file:")
-	if i < 0 {
-		return errors.New("port49-broker.yaml has no client_ca_file to replace")
+	for _, line := range []string{"  client_ca_file: " + e2eDirDir + "/users-ca.pem\n", "  certificate_status: {disabled: true}\n"} {
+		if !strings.Contains(b, line) {
+			return fmt.Errorf("port49-broker.yaml has no line %q to remove", strings.TrimSpace(line))
+		}
+		b = strings.Replace(b, line, "", 1)
 	}
-	j := strings.Index(b[i:], "\n") + i + 1
-	anchor := strings.TrimSpace(strings.TrimPrefix(b[i:j-1], "  client_ca_file:"))
-	files["port49-broker.yaml"] = b[:i] + "  identity:\n    humans:\n      - {type: x509, trust_anchor_file: " + anchor + "}\n" +
-		"      - type: directory_password\n        principal_domains: [corp.example.com]\n        second_factor: totp\n" +
-		"    issuance: {}\n" + b[j:]
+	const state = "  state_dir: /var/lib/port49-broker\n"
+	if !strings.Contains(b, state) {
+		return errors.New("port49-broker.yaml has no state_dir to put the identity block before")
+	}
+	files["port49-broker.yaml"] = strings.Replace(b, state, "  identity:\n    humans:\n      - type: directory_password\n"+
+		"        principal_domains: [corp.example.com]\n        second_factor: totp\n    issuance: {}\n"+state, 1)
 	return nil
 }
 
@@ -1223,7 +1227,6 @@ broker:
   tls_key_file: %[5]s
   identity:
     humans:
-      - {type: x509, trust_anchor_file: %[17]s}
       - type: directory_password
         principal_domains: [corp.example.com]
         second_factor: totp
@@ -1231,8 +1234,6 @@ broker:
   policy_file: %[7]s
   revocations_file: %[8]s
   policy_watch_interval: 1s
-  certificate_status:
-    disabled: true
   refresh_interval: 5m
   directory:
     servers:
@@ -1249,16 +1250,12 @@ broker:
     group_filter: "%[15]s"
     principal_attribute: mail
     username_attribute: %[16]s
-    certificate_mapping:
-      kind: san_email
-      allow_weak: true
-      issuers: ["%[18]s"]
     nested_groups: direct
     grace: 4h
 `, filepath.Join(dir, "admin.sock"), filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey), limits,
 		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.caFile, x.bindDN, x.baseDN,
-		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr, filepath.Join(pki, testpki.LabCA), dirUsersCAIssuer)
+		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr)
 	policy := `scopes:
   - {name: all_devices, match: {}}
 roles:

@@ -275,6 +275,63 @@ func l67TestDir(name string) *labDir {
 		usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase}
 }
 
+// The compose stack's broker, as l67Files makes it, loads with directory_password
+// as its only human verifier: no client_ca_file, no certificate_status.
+func TestL67ComposeBrokerLoads(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	files, err := composeLabFiles(read("port49d-lab.yaml"), read(filepath.Join("slice", "broker.yaml")),
+		read(filepath.Join("slice", "policy.yaml")), read("inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l67Files(files); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Setenv("PORT49_LAB_KEY", "labsecret")
+	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
+	for _, d := range []string{"etc/etcd", "etc/broker", "directory", "run", "state", "spool"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"etc/etcd/ca.pem", "etc/etcd/port49d.pem", "etc/etcd/port49d-key.pem", "etc/etcd/port49-broker.pem",
+		"etc/etcd/port49-broker-key.pem", "etc/broker/broker.pem", "etc/broker/broker-key.pem", "etc/broker/broker-ca.pem",
+		"directory/users-ca.pem", "directory/directory-ca.pem", "directory/directory-client.pem",
+		"directory/directory-client-key.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	moved := func(s string) string {
+		s = strings.ReplaceAll(s, e2eDirDir, filepath.Join(dir, "directory"))
+		s = strings.ReplaceAll(s, "/etc/port49", filepath.Join(dir, "etc"))
+		s = strings.ReplaceAll(s, "/var/lib/port49-broker", filepath.Join(dir, "state"))
+		s = strings.ReplaceAll(s, "/var/spool/port49d", filepath.Join(dir, "spool"))
+		return strings.ReplaceAll(s, "/run/port49", filepath.Join(dir, "run"))
+	}
+	for name, body := range files {
+		if strings.HasSuffix(name, ".yaml") {
+			if err := os.WriteFile(filepath.Join(dir, "etc", name), []byte(moved(body)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	b, err := config.LoadBroker(filepath.Join(dir, "etc", "port49-broker.yaml"))
+	if err != nil {
+		t.Fatalf("the compose broker's config does not load: %v\n%s", err, moved(files["port49-broker.yaml"]))
+	}
+	if b.Broker.ClientCAFile != "" || b.Broker.Identity == nil || b.Broker.Identity.PasswordSignIn == nil || b.Broker.Identity.Issuance == nil {
+		t.Fatalf("the compose broker: client_ca_file %q, identity %+v", b.Broker.ClientCAFile, b.Broker.Identity)
+	}
+}
+
 // The configuration the harness's broker starts on loads: a key it misspells
 // is a start that fails at 3am of Task 14, not here.
 func TestL67BrokerConfigLoads(t *testing.T) {
@@ -297,6 +354,9 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 			cfg, err := config.Load(filepath.Join(sub, "port49d.yaml"))
 			if err != nil {
 				t.Fatalf("%s window %v: %v\n%s", name, window, err, files["port49d.yaml"])
+			}
+			if cfg.Broker.ClientCAFile != "" {
+				t.Fatalf("%s: the broker sets client_ca_file %q; the shape under test has no x509 verifier", name, cfg.Broker.ClientCAFile)
 			}
 			ps := cfg.Broker.Identity.PasswordSignIn
 			if ps == nil || len(ps.PrincipalDomains) != 1 || ps.PrincipalDomains[0] != "corp.example.com" {
