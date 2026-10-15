@@ -384,6 +384,10 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		})
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
+	// The directory_password verifier is set before Server, which accepts a
+	// broker with no x509 anchor only while it has an OIDC or password
+	// verifier and an issuer. wireSignIn adds the store, once the server is built.
+	setPasswordSignIn(cfg, b)
 	b.CABundle, b.CABundleRefused = caBundle, caBundleRefused
 	if id := cfg.Broker.Identity; id != nil {
 		b.PerLoginMFA = loadPerLoginMFA(id.PerLoginMFA, func(format string, args ...any) {
@@ -406,7 +410,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		// broker.identity, which must then name an OIDC verifier.
 		if cfg.Broker.ClientCAFile == "" {
 			return nil, nil, nil, fmt.Errorf("broker.identity (no x509 trust anchor is set, so it must name an oidc "+
-				"verifier): %w", err)
+				"or directory_password verifier): %w", err)
 		}
 		return nil, nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
 	}

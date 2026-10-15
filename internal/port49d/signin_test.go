@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -294,5 +295,34 @@ func TestAnEnrollmentEtcdThatDoesNotAnswerNeverStopsTheStart(t *testing.T) {
 				t.Fatalf("sign-in answered %d %q", code, why)
 			}
 		})
+	}
+}
+
+// A broker whose only human verifier is directory_password sets no
+// client_ca_file and still starts: buildBrokerAnchor sets the verifier before
+// it builds the server, which then requests a certificate against the
+// issuing CA alone (spec §13 decision 47). port49d and port49-broker share
+// buildBrokerAnchor.
+func TestDirectoryPasswordOnlyBrokerStarts(t *testing.T) {
+	cfg, _ := signInConfig(t, "127.0.0.1:0")
+	cfg.Broker.ClientCAFile = ""
+	var sink syncBuffer
+	e, o, h := stderr, stdout, openDirectoryHook
+	t.Cleanup(func() { stderr, stdout, openDirectoryHook = e, o, h })
+	stderr, stdout = &sink, io.Discard
+	openDirectoryHook = func(_ config.Config, st store.Store, _ *policy.Live, _ *metrics.Metrics,
+		_ func(string, ...any)) (*directory.Resolver, error) {
+		return directory.ForTestsStaticResolver(st, map[string]directory.Answer{}, nil), nil
+	}
+	srv, b, _, err := buildBrokerAnchor(cfg, "inventory_file", memory.New(time.Now), seedMinter(),
+		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatalf("a directory_password-only broker did not start: %v\n%s", err, sink.String())
+	}
+	if b.PasswordSignIn == nil || b.PasswordSignIn.TOTPLabel != "port49 (127.0.0.1)" {
+		t.Fatalf("the verifier is %+v", b.PasswordSignIn)
+	}
+	if srv.TLSConfig == nil || srv.TLSConfig.ClientAuth != tls.VerifyClientCertIfGiven || srv.TLSConfig.ClientCAs == nil {
+		t.Fatalf("the server does not request a certificate against the issuing CA: %+v", srv.TLSConfig)
 	}
 }

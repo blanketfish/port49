@@ -57,6 +57,21 @@ func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker
 	wireSignIn(ctx, cfg, b, keys, m, sh, out)
 }
 
+// setPasswordSignIn gives b its own copy of the directory_password verifier
+// (the config's is not edited), with the default TOTP label. It does nothing
+// for a config with none, or a broker that has one.
+func setPasswordSignIn(cfg config.Config, b *broker.Broker) {
+	if b == nil || b.PasswordSignIn != nil || cfg.Broker == nil || cfg.Broker.Identity == nil ||
+		cfg.Broker.Identity.PasswordSignIn == nil {
+		return
+	}
+	p := *cfg.Broker.Identity.PasswordSignIn
+	if p.TOTPLabel == "" {
+		p.TOTPLabel = defaultTOTPLabel(cfg.Broker.Listen)
+	}
+	b.PasswordSignIn = &p
+}
+
 // wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,
 // which a test can fake.
 func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
@@ -66,11 +81,8 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 	}
 	proc := procOf(cfg)
 	say := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+format+"\n", args...) }
-	p := *cfg.Broker.Identity.PasswordSignIn // the config's own is not edited
-	if p.TOTPLabel == "" {
-		p.TOTPLabel = defaultTOTPLabel(cfg.Broker.Listen)
-	}
-	b.PasswordSignIn = &p
+	setPasswordSignIn(cfg, b) // buildBrokerAnchor did; a broker built another way gets it here
+	p := *b.PasswordSignIn
 	// A nil *Resolver in the interface would be a non-nil interface that
 	// panics on its first call: sign-in answers 404 for a nil one instead.
 	if b.Directory != nil {
