@@ -474,8 +474,13 @@ func TestLoginDirectoryEnrollsIssuesAndMints(t *testing.T) {
 			nowhere(t, where, text, compact, groupsOfFour(compact))
 		}
 	}
-	// On the terminal the key is only in its groups, beside the QR code.
+	// On the terminal the key is only in its groups, beside the QR code: on
+	// stdout, exactly once, and never on stderr.
 	nowhere(t, "the terminal as one word", r.screen+r.err, compact)
+	nowhere(t, "stderr", r.err, groupsOfFour(compact))
+	if n := strings.Count(r.screen, groupsOfFour(compact)); n != 1 {
+		t.Errorf("the key is shown %d times on stdout, want exactly once", n)
+	}
 	// The enrollment is on the record, and the factor works: the next login with
 	// its code signs in.
 	if !strings.Contains(d.logs.String(), `"reason":"second_factor_enrolled"`) {
@@ -561,17 +566,18 @@ func TestAClockOffAtThreeAM(t *testing.T) {
 	d.enrolled(t)
 	sock := privateSocket(t)
 	// Codes in a step of their own, so a step boundary between the phone and the
-	// broker moves them by one step and the minutes stay two.
-	step := d.now().Truncate(totp.Period)
+	// broker moves them by one step and the minutes stay two. The step is taken
+	// afresh for each case, so a slow run cannot carry the first over two.
 	for _, c := range []struct {
 		label string
-		at    time.Time
+		steps time.Duration
 		words string
 	}{
-		{"ahead", step.Add(4*totp.Period + time.Second), "(ahead of the broker's)"},
-		{"behind", step.Add(-3*totp.Period + time.Second), "(behind the broker's)"},
+		{"ahead", 4 * totp.Period, "(ahead of the broker's)"},
+		{"behind", -3 * totp.Period, "(behind the broker's)"},
 	} {
-		r := d.login(t, sock, signingIn(t, labDirPassword, codeAt(t, labSecret, c.at)))
+		at := d.now().Truncate(totp.Period).Add(c.steps + time.Second)
+		r := d.login(t, sock, signingIn(t, labDirPassword, codeAt(t, labSecret, at)))
 		if r.code != 1 || r.out != "" || !strings.Contains(r.err, "your authenticator's clock is about 2 minutes off "+c.words+
 			": set it to the network time and run `port49 login` again (sign_in_refused)") {
 			t.Fatalf("%s: code %d stdout %q stderr %q", c.label, r.code, r.out, r.err)
@@ -672,7 +678,10 @@ func TestALostPhoneAtThreeAM(t *testing.T) {
 	}
 }
 
-// The broker down with a held certificate: said, try again; the same as --oidc.
+// The broker down with a held certificate: said, try again. The wording is
+// the --oidc path's (TestABrokerThatDoesNotAnswerSaysToTryAgain and
+// TestAFreshHeldCertificateWithTheBrokerDownSaysToTryAgain pin the same
+// phrases), asserted here by the same strings.
 func TestTheBrokerDownWithAHeldCertificate(t *testing.T) {
 	d := newDirectoryLab(t)
 	d.enrolled(t)
@@ -730,9 +739,9 @@ func TestALostEnrollmentStoreAtThreeAM(t *testing.T) {
 	}
 
 	r := d.login(t, sock, signingIn(t, labDirPassword, codeAt(t, labSecret, d.now())), "--sign-in")
-	if r.code != 1 || r.out != "" || !strings.Contains(r.err, "the broker's store of second factors is lost, so no one can "+
-		"sign in with a password until an operator restores it; anyone already signed in keeps working until their "+
-		"certificate ends (enrollment_store_lost)") {
+	if r.code != 1 || r.out != "" || !strings.Contains(r.err, "the broker's store of second factors is missing or "+
+		"unreadable, so no one can sign in with a password until an operator creates or restores it (the broker's "+
+		"log says which); anyone already signed in keeps working until their certificate ends (enrollment_store_lost)") {
 		t.Fatalf("a sign-in with the store lost: code %d stdout %q stderr %q", r.code, r.out, r.err)
 	}
 	noAgent(t, sock)
@@ -775,16 +784,20 @@ func TestALostEnrollmentStoreAtThreeAM(t *testing.T) {
 }
 
 // D7, I15: a new install. Before `port49 directory init-enrollments` a
-// login is refused, saying the store is lost to the person and, in the
-// broker's own line, that init-enrollments creates it; after it the first
-// login enrolls. A second init-enrollments exits 1, writing nothing.
+// login is refused, saying the store is missing or unreadable and that an
+// operator creates or restores it, the broker's log saying which: the broker
+// cannot tell a new install from a store lost after rollout, so the person's
+// text never says "not initialised" (which would send the operator to
+// init-enrollments over a store a restore would have recovered). The broker's
+// own line names init-enrollments. After init the first login enrolls. A
+// second init-enrollments exits 1, writing nothing.
 func TestAFreshInstallNeedsInitEnrollments(t *testing.T) {
 	d := newDirectoryLab(t)
 	sock := privateSocket(t)
 	r := d.login(t, sock, signingIn(t, labDirPassword, "123456"))
-	if r.code != 1 || r.out != "" || !strings.Contains(r.err, "the broker's store of second factors is lost, so no one can "+
-		"sign in with a password until an operator restores it; anyone already signed in keeps working until their "+
-		"certificate ends (enrollment_store_lost)") {
+	if r.code != 1 || r.out != "" || !strings.Contains(r.err, "the broker's store of second factors is missing or "+
+		"unreadable, so no one can sign in with a password until an operator creates or restores it (the broker's "+
+		"log says which); anyone already signed in keeps working until their certificate ends (enrollment_store_lost)") {
 		t.Fatalf("before init: code %d stdout %q stderr %q", r.code, r.out, r.err)
 	}
 	noAgent(t, sock)

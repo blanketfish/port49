@@ -669,6 +669,9 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // enrollment store as a sealed file in a private directory under test keys
 // (never created: `port49 directory init-enrollments` is the one creator),
 // and an admin socket answering the directory sign-in's operator commands.
+// The admin server's three handlers are hand-built here, not port49d's own
+// (serveSignInOps): this suite tests the broker and the CLI, and L67(g) covers
+// port49d's wiring of them.
 func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	t.Helper()
 	if l.b.Issuer == nil {

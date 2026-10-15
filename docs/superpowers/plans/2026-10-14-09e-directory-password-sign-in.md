@@ -4094,8 +4094,9 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
   with ruling 7's words. `storeLost` (D7) is C1's answer: the `issue deny enrollment_store_lost`
   record (`Auth: &decision.Auth{Method: "directory_password"}`, `SignIn: {Source}`),
   `enrollment_store_lost` counted, `Retry-After: 300`, and `503 enrollment_store_lost`: "the
-  broker's store of second factors is lost, so no one can sign in with a password until an
-  operator restores it; anyone already signed in keeps working until their certificate ends".
+  broker's store of second factors is missing or unreadable, so no one can sign in with a
+  password until an operator creates or restores it (the broker's log says which); anyone
+  already signed in keeps working until their certificate ends".
   `underSourceLimit`, with `cfg.FailuresPerSource > 0` (0 is off: no count is written, and
   `succeeded` undoes none, M6), calls `NoteSignInAttempt("source:"+src, cfg.Window)` and, with the
   count above the limit, answers `429 sign_in_throttled`, `Retry-After` the seconds to the window's
@@ -4819,7 +4820,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - "your second factor could not be read": the store's encryption key in use is not the one it was
     sealed under, and the previous is gone; reset the person's second factor. Keep
     `encryption.previous` until a scheduled pass has run after a rotation (it re-seals them).
-  - "the broker's store of second factors is lost" (`enrollment_store_lost`,
+  - "the broker's store of second factors is missing or unreadable" (`enrollment_store_lost`,
     `port49_directory_enrollment_store_ok` 0): the file or etcd key is gone, or will not unseal
     (the seal key changed), or this is a new install not yet initialised. Password sign-in alone
     is refused; held certificates, tokens and IdP sign-in serve. On a new install run `port49

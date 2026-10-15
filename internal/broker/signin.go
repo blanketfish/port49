@@ -51,8 +51,9 @@ const (
 // directory, a store or the person typed is ever put in one.
 const (
 	refusedText = "the broker did not accept that name, password and code; check each and run `port49 login` again"
-	lostText    = "the broker's store of second factors is lost, so no one can sign in with a password until an " +
-		"operator restores it; anyone already signed in keeps working until their certificate ends"
+	lostText    = "the broker's store of second factors is missing or unreadable, so no one can sign in with a " +
+		"password until an operator creates or restores it (the broker's log says which); anyone already " +
+		"signed in keeps working until their certificate ends"
 	directoryDownText = "the directory did not answer, so no one can sign in with a password now; anyone " +
 		"already signed in keeps working until their certificate ends"
 	storeDownText = "the broker could not reach its store, so it signed no one in; try again shortly"

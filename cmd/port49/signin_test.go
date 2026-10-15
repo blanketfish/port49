@@ -390,9 +390,10 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 		{"the directory down", 503, "directory_unavailable", "the directory did not answer, so no one can sign in with a " +
 			"password now; anyone already signed in keeps working until their certificate ends", nil,
 			[]string{"anyone already signed in keeps working"}, nil},
-		{"the enrollment store lost", 503, "enrollment_store_lost", "the broker's store of second factors is lost, so no one " +
-			"can sign in with a password until an operator restores it; anyone already signed in keeps working until " +
-			"their certificate ends", nil, []string{"operator restores it", "keeps working"}, nil},
+		{"the enrollment store lost", 503, "enrollment_store_lost", "the broker's store of second factors is missing or " +
+			"unreadable, so no one can sign in with a password until an operator creates or restores it (the broker's log " +
+			"says which); anyone already signed in keeps working until their certificate ends", nil,
+			[]string{"creates or restores it", "keeps working"}, nil},
 		{"a principal no certificate carries", 401, "sign_in_not_certifiable", "your account's principal cannot be carried in " +
 			"a certificate; tell the operator", nil, []string{"cannot be carried in a certificate", "tell the operator"}, nil},
 		{"no directory password at the broker", 404, "not_signing_in", "this broker takes no directory password", nil,
