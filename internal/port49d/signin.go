@@ -123,9 +123,37 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
 			"store_unavailable until a scheduled pass reaches it", printsafeErr(err))
 	}
+	go recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery)
 	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
 		"limits %d per principal, %s, per %s)", strings.Join(p.PrincipalDomains, ", "), where, enrollWindow(p),
 		p.FailuresPerPrincipal, perSource(p), durText(p.Window))
+}
+
+// enrollmentRecheckEvery is how often a process that finds its enrollment
+// store lost looks again; a variable so a test can shorten it.
+var enrollmentRecheckEvery = 30 * time.Second
+
+// recheckEnrollmentStore leaves the lost state without a restart (D7): while
+// the store is lost it looks at the mark every interval, in every process, so
+// a replica that is not the runner follows an init-enrollments, an import or a
+// reset run elsewhere. It never seals and never writes; the runner's pass
+// keeps the re-seal. It stops with ctx.
+func recheckEnrollmentStore(ctx context.Context, b *broker.Broker, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if b.EnrollmentStoreLost() == "" {
+				continue
+			}
+			cctx, cancel := context.WithTimeout(ctx, enrollmentStartWait)
+			_ = b.CheckEnrollmentStore(cctx) // an unreachable store stays as it was; the next tick looks again
+			cancel()
+		}
+	}
 }
 
 // enrollWindow is the start line's account of when a person may enroll.
