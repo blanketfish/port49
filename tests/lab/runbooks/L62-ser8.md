@@ -17,11 +17,10 @@ A9) filters every line it logs.
 
 ## Blocking prerequisite P0 (controller, before the session)
 
-**A harness for this does not exist yet.** L62 needs `port49 login --oidc`, so it needs an
-identity provider and a broker that issues certificates. The L60 harness has an in-process
-broker with no OIDC. L56's harness has both, but it needs containerlab and vEOS, and it tears
-the stack down when its run ends. The controller has an agent build
-`tests/lab/l62/up_test.go`, gated by `PORT49_L62_UP=1`, which:
+**Done:** the harness is `tests/lab/l62/up_test.go` (`make lab-l62-up`), on branch
+`test/l62-session`. L62 needs `port49 login --oidc`, so it needs an identity provider and a
+broker that issues certificates; the L60 and L56 harnesses don't fit (no OIDC; vEOS and a
+torn-down stack). Gated by `PORT49_L62_UP=1`, it:
 
 - brings up compose project `port49labl62`: the lab Keycloak (`tests/lab/oidc`, realm
   `port49-lab`, `port49-cli` redirect `http://127.0.0.1:18749/callback`) on `127.0.0.1:18443`,
@@ -30,13 +29,18 @@ the stack down when its run ends. The controller has an agent build
   CA made by `init-issuer`;
 - keeps the PKI and the broker's state in `~rwendt/.cache/port49-l62/` and reuses them on the
   next run. A certificate issued before the reboot then stays valid after it.
-  `PORT49_L62_FRESH=1` starts over;
+  `PORT49_L62_FRESH=1` starts over. The lab PKI lasts 24h: a kept state is reused only with at
+  least 6h of validity left, otherwise it starts over with a new issuing CA;
 - writes `broker-ca.pem` and `oidc-ca.pem` (public certificates) there, and the broker log,
   filtered, as `broker.log`;
-- prints `L62 UP`, holds until Enter, then stops the stack (keeping its volumes);
+- prints `L62 UP` and the issuing CA's status (`reused (already there)`, or `NEW: certificates
+  issued before are no longer valid`), holds until Enter, then stops the stack (keeping its
+  volumes);
+- refuses to start if 8449 or 18443 is held by anything else;
 - never opens a TPM and never runs `port49 login`.
 
-It is only a stand-up script. The agent can build it and run it once with no one present.
+It was run once with no one present (2026-10-15): broker and Keycloak answered, and a second
+start reused the kept CA.
 
 ## Part A: SER8 prerequisites (about 20 min)
 
@@ -57,7 +61,8 @@ A4. **pcscd for `p49lab`** (step 6 only). Find the polkit rule that lets `rwendt
 (`sudo grep -l pcsc /etc/polkit-1/rules.d/*`) and add `p49lab` to it the same way. Check it:
 `sudo -iu p49lab ykman piv info | grep 'PIN tries'`.
 
-A5. **Build.** As `rwendt`, at the repo root on `main`:
+A5. **Build.** As `rwendt`, in the session worktree (`cd ~/git/port49/.worktrees/l62-session`,
+branch `test/l62-session`; every later `go test` and `make` runs here too):
 
 ```
 make build-client && sudo install -m 755 bin/port49-client /usr/local/bin/port49-l62
@@ -79,11 +84,16 @@ CA's certificate warning once. If a redirect page fails to load, copy its addres
 paste prompt (input is hidden). Sign in as `alice`. The password is in
 `tests/lab/oidc/keycloak/realm.json` (lab-only); type it only into the browser.
 
-A8. **Start the stack** (as `rwendt`, in its own tmux pane; it stays up):
+A8. **Start the stack** (as `rwendt`, in its own tmux pane, which must be a real terminal; it
+stays up). This first start of the session is fresh, so step 1's certificate can't be
+invalidated by a CA remade at the reboot:
 
 ```
-PORT49_L62_UP=1 go test -tags lab ./tests/lab/l62/ -run '^TestL62Up$' -count=1 -v -timeout 10h
+PORT49_L62_FRESH=1 PORT49_L62_UP=1 go test -tags lab ./tests/lab/l62/ -run '^TestL62Up$' -count=1 -v -timeout 10h
 ```
+
+It reads Enter from `/dev/tty`. Run in the background, Enter does nothing, and only Ctrl-C
+(SIGINT/SIGTERM) stops it. Check that its output says `issuing CA: NEW` this time.
 
 Then set up `p49lab`'s local config. It is per host and lives outside the shared home:
 
@@ -444,7 +454,9 @@ As `rwendt`:
 - `docker rm -f l62host2`, `sudo umount /mnt/l62-port49`,
   `sudo rm /etc/exports.d/port49-l62.exports && sudo exportfs -ra`;
 - `sudo kill $(sudo cat /var/lib/port49-l62/swtpm/pid)`, `sudo modprobe -r tpm_vtpm_proxy`;
-- press Enter in the harness pane;
+- press Enter in the harness pane, then remove what it kept:
+  `docker compose -p port49labl62 down -v`, `rm -rf ~/.cache/port49-l62`,
+  `docker rmi port49-l62:dev port49-l62-setup:dev`;
 - remove the `keycloak.port49.lab` line from `/etc/hosts` and from the workstation's hosts file.
 
 Then, as `p49lab`, stop the agent (`kill N`), and delete the users and files:
