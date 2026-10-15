@@ -3,7 +3,8 @@
 Spec §15 L62 on beehive, the SER8. `issued_key_store: tpm` on a real TPM 2.0 through
 `/dev/tpmrm0`, for a non-root user in `tss`. Eight steps: one session-start step (0), then one
 per clause. Steps 1 to 3 need only the SER8. Steps 4 to 7 also need the second host (Part B).
-Decision 45 rulings 5 and 7 stay *provisional on L62* until the row closes.
+L62 closed on 2026-10-15 (`tests/lab/results/L62-ser8.md`); this runbook is kept to re-run it,
+for example on new TPM firmware or a second machine with a real TPM.
 
 **Who runs what.** You type every command that reaches a TPM, as `p49lab` on the SER8 or
 through `docker exec` into the second host. No agent runs anything as `p49lab`. `rwendt` is
@@ -451,7 +452,7 @@ From those the controller writes `tests/lab/results/L62-ser8.md`, with:
 container with swtpm, not against a second box with real firmware. The note must say so. If
 Ryan rules that the reverse direction on real firmware plus the container stand-in measures
 the row as written, it closes. Otherwise the row stays open for step 5's forward direction on a
-second real TPM.
+second real TPM. (Ryan ruled on 2026-10-15 that it closes.)
 
 ## Cleanup (5 min, after the controller confirms the note)
 

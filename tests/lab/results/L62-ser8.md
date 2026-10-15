@@ -10,6 +10,7 @@ real TPM.
   before the reboot and 7.0.0-38-generic after it (the reboot installed a pending kernel)
 - **TPM:** `/dev/tpmrm0` (`crw-rw---- tss tss`), ACPI `MSFT0101`; family "2.0", revision 1.38,
   manufacturer `MSFT`, vendor string "Pluton.TPM.A", firmware 0x60004 / 0x1017F (AMD Pluton)
+- **Keycloak:** 26.4 (`quay.io/keycloak/keycloak:26.4@sha256:9409c59b…`, `tests/lab/oidc/compose.yaml`)
 - **Build:** `port49-l62`, the static binary built from `8b3dc921` and installed at
   `/usr/local/bin/port49-l62`; the broker and Keycloak came from the `tests/lab/l62` harness
   (`PORT49_L62_UP=1`) at the same commit
@@ -69,7 +70,8 @@ The agent started, so the real TPM loaded the key under port49's ECC SRK templat
 The agent log shows `connected`, then two `refreshed`, and no TPM error. The pcap holds four
 ServerHellos from the broker, every one with `supported_versions` 0x0304 (TLS 1.3; legacy
 version 0x0303), parsed from the raw capture because tshark is not installed on beehive. The
-refresh signs the TLS exporter of its session, so the TPM key signed inside TLS 1.3.
+agent's connection is mTLS with the issued key (`internal/agent/agent.go`), so the TPM signed
+the TLS 1.3 handshake itself, and the refresh signs that session's TLS exporter.
 
 ### Step 3: an agent restart and a reboot
 
@@ -145,6 +147,9 @@ The clauses that depend on firmware all ran on the real TPM:
 The shared-home clauses test port49's naming and its held-pair logic, which work the same over
 any TPM. One direction of step 5 (a real-TPM key offered to another real TPM) is the only cell
 that a second real-TPM machine would add.
+
+**Ruling (Ryan, 2026-10-15):** this container stand-in, together with the real firmware's refusal
+of a foreign key in step 5, measures the row as written. L62 closes on it.
 
 ## Runbook corrections found in the session
 
