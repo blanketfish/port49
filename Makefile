@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
