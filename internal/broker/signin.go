@@ -658,8 +658,9 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 		writeError(s.w, http.StatusForbidden, string(decision.EnrollmentClosed), closedText)
 		return
 	}
-	// An enrolling person has only the password.
-	if !s.password(ctx, e, password, false) || !s.issuable(e.Principal, e.EntryID) {
+	// What cannot pass is checked before the bind (C3). An enrolling person
+	// has only the password.
+	if !s.issuable(e.Principal, e.EntryID) {
 		return
 	}
 	account := strings.TrimPrefix(e.Principal, "user:")
@@ -669,6 +670,9 @@ func (s *signInAttempt) enrollOrRefuse(ctx context.Context, cfg *oidc.PasswordSi
 		b.sayOnce("sign_in_totp_label "+e.Principal, time.Hour, "sign-in: %s cannot be enrolled: a ':' is in the "+
 			"totp_label or the account, and an authenticator reads one as the label's end", printsafe.Line(e.Principal, 300))
 		s.notCertifiable(e.Principal)
+		return
+	}
+	if !s.password(ctx, e, password, false) {
 		return
 	}
 	secret, err := totp.NewSecret()

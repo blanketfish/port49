@@ -1105,12 +1105,27 @@ func TestAColonInTheTOTPLabelRefusesTheEnrollment(t *testing.T) {
 		w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "right", CSR: csrOf(t, newECKey(t))})
 		rec := f.lastIssue(t)
 		if w.Code != 401 || apiError(w) != "sign_in_not_certifiable" || strings.Contains(w.Body.String(), "otpauth") ||
-			f.outcome("enrollment_started") != 0 || rec["reason"] != "trust_domain_unresolved" {
+			f.outcome("enrollment_started") != 0 || rec["reason"] != "trust_domain_unresolved" || dir.bindCount() != 0 {
 			t.Fatalf("%s: %s %v", name, shown(w), rec)
 		}
 		if ps, _ := f.b.Enrollments.SecondFactorPrincipals(context.Background()); len(ps) != 0 {
 			t.Fatalf("%s: a record for %v", name, ps)
 		}
+	}
+}
+
+// What cannot pass is checked before the bind (C3): a principal no
+// certificate carries, inside an enrollment window, is refused with the
+// directory never asked.
+func TestAnEnrollmentOfANotCertifiablePrincipalBindsNothing(t *testing.T) {
+	f, dir := newSignInFixture(t)
+	f.b.PasswordSignIn.OpenUntil = f.now.Add(time.Hour)
+	p := dir.people["alice"]
+	p.entry.Principal = "user:a b@example.com" // a space: not carried in a certificate
+	dir.people["alice"] = p
+	w := f.signIn(t, api.SignInRequest{Name: "alice", Password: "right", CSR: csrOf(t, newECKey(t))})
+	if w.Code != 401 || apiError(w) != "sign_in_not_certifiable" || dir.bindCount() != 0 {
+		t.Fatalf("%s, %d binds", shown(w), dir.bindCount())
 	}
 }
 
