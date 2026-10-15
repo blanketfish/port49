@@ -319,7 +319,7 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 		"(PEM); the system's roots otherwise")
 	fs.IntVar(&s.redirectPort, "redirect-port", 0, "with --oidc: the loopback port the sign-in returns to; 0 picks a free one")
 	fs.BoolVar(&s.noBrowser, "no-browser", false, "with --oidc: open no browser; print the address to sign in at")
-	fs.BoolVar(&s.signIn, "sign-in", false, "with --oidc: sign in again even while your certificate has life left")
+	fs.BoolVar(&s.signIn, "sign-in", false, "with --oidc or --directory: sign in again even while your certificate has life left")
 	fs.StringVar(&s.broker, "broker", "", "the broker, https://host:port")
 	fs.StringVar(&s.cert, "cert", "", "your client certificate (PEM)")
 	fs.StringVar(&s.key, "key", "", "its private key (PEM)")

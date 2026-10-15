@@ -425,7 +425,7 @@ func issueCertificate(ctx context.Context, sf *sessionFlags, pool *x509.CertPool
 		if err != nil {
 			return failed(err)
 		}
-		if resp, err = directorySignIn(ctx, sf, pool, verify, csr, conf, stdout, stderr); err != nil {
+		if resp, err = directorySignIn(ctx, sf, pool, verify, csr, stdout, stderr); err != nil {
 			return failed(err)
 		}
 	} else {

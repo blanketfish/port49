@@ -177,8 +177,7 @@ func TestTheSignInSendsTheBodyOnce(t *testing.T) {
 		sf.signInName = c.flagName
 		asked := typing(t, c.typed, fakePassword, fakeCode)
 		var stdout, stderr bytes.Buffer
-		resp, err := directorySignIn(context.Background(), sf, b.pool, nil, fakeCSR, api.Config{SignIn: &api.SignInConfig{}},
-			&stdout, &stderr)
+		resp, err := directorySignIn(context.Background(), sf, b.pool, nil, fakeCSR, &stdout, &stderr)
 		if err != nil || resp.Certificate != fakeCertPEM {
 			t.Fatalf("%s: %v", c.label, err)
 		}
@@ -227,8 +226,7 @@ func TestNoTerminalIsRefused(t *testing.T) {
 		t.Error("a password was asked for with no terminal")
 		return "", errors.New("no")
 	}
-	_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+	_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "terminal") || !strings.Contains(err.Error(), "ssh -t") {
 		t.Fatalf("%v", err)
 	}
@@ -243,16 +241,14 @@ func TestAnEmptyPasswordIsNotSent(t *testing.T) {
 	for _, pw := range []string{"", "   "} {
 		b := newSignInBroker(t, nil, issuedAnswer(), nil)
 		typing(t, "", pw, fakeCode)
-		_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-			api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+		_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "an empty password is never sent") || len(b.sent) != 0 {
 			t.Fatalf("%q-long password: %v, %d requests", strings.Repeat("x", len(pw)), err, len(b.sent))
 		}
 	}
 	b := newSignInBroker(t, nil, issuedAnswer(), nil)
 	typing(t, "", "typed-with-space ", fakeCode)
-	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard); err != nil {
+	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.to("/v1/sign-in"); len(got) != 1 || decodeSignIn(t, got[0]).Password != "typed-with-space " {
@@ -267,8 +263,7 @@ func TestEnrollmentIsShownAndConfirmed(t *testing.T) {
 	b := newSignInBroker(t, nil, enrollAnswer(), issuedAnswer())
 	typing(t, "", fakePassword, "", fakeCode2)
 	var stdout, stderr bytes.Buffer
-	resp, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, &stdout, &stderr)
+	resp, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, &stdout, &stderr)
 	if err != nil || resp.Certificate != fakeCertPEM {
 		t.Fatalf("%v", err)
 	}
@@ -296,13 +291,24 @@ func TestEnrollmentIsShownAndConfirmed(t *testing.T) {
 		t.Errorf("the confirm: %v, handle %q, code as typed %v", err, cr.Handle, cr.Code == fakeCode2)
 	}
 
-	// Stdout not a terminal: refused before the secret is shown, no confirm.
+	// Stdout not a terminal and no code typed: refused before anything is sent,
+	// so no attempt is counted for an enrollment that could not be shown.
 	b = newSignInBroker(t, nil, enrollAnswer(), issuedAnswer())
 	typing(t, "", fakePassword, "")
 	stdoutIsTerminal = func() bool { return false }
 	stdout.Reset()
-	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, &stdout, io.Discard)
+	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, &stdout, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "run `port49 login` at a terminal") || len(b.sent) != 0 {
+		t.Fatalf("%v, %d requests", err, len(b.sent))
+	}
+
+	// A code typed, but the broker starts an enrollment all the same (a reopened
+	// window): refused before the secret is shown, no confirm.
+	b = newSignInBroker(t, nil, enrollAnswer(), issuedAnswer())
+	typing(t, "", fakePassword, fakeCode)
+	stdoutIsTerminal = func() bool { return false }
+	stdout.Reset()
+	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, &stdout, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "run `port49 login` at a terminal") {
 		t.Fatalf("%v", err)
 	}
@@ -329,27 +335,25 @@ func TestAWrongEnrollmentCodeIsAskedAgain(t *testing.T) {
 	})
 	typing(t, "", fakePassword, "", "000333", fakeCode2)
 	var stderr bytes.Buffer
-	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, &stderr); err != nil {
+	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	conf := b.to("/v1/sign-in/confirm")
-	if len(conf) != 2 || !strings.Contains(stderr.String(), "did not accept") {
+	if len(conf) != 2 || !strings.Contains(stderr.String(), "that code was not accepted; type the next one (2 tries left)") ||
+		strings.Contains(stderr.String(), "login` again") {
 		t.Fatalf("%d confirms, stderr %q", len(conf), stderr.String())
 	}
 
 	b = newSignInBroker(t, nil, enrollAnswer(), refused)
 	typing(t, "", fakePassword, "", "1", "2", "3")
-	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard); err == nil || len(b.to("/v1/sign-in/confirm")) != 3 {
+	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard); err == nil || len(b.to("/v1/sign-in/confirm")) != 3 {
 		t.Fatalf("%v, %d confirms", err, len(b.to("/v1/sign-in/confirm")))
 	}
 
 	b = newSignInBroker(t, nil, enrollAnswer(), answerWith(http.StatusUnauthorized, "sign_in_refused",
 		"this enrollment ended or was confirmed; run `port49 login` again"))
 	typing(t, "", fakePassword, "", "1")
-	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard); err == nil || len(b.to("/v1/sign-in/confirm")) != 1 {
+	if _, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard); err == nil || len(b.to("/v1/sign-in/confirm")) != 1 {
 		t.Fatalf("%v, %d confirms", err, len(b.to("/v1/sign-in/confirm")))
 	}
 }
@@ -398,8 +402,7 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 	} {
 		b := newSignInBroker(t, nil, answerWith(c.status, c.code, c.detail, c.header...), nil)
 		typing(t, "", fakePassword, fakeCode)
-		_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-			api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+		_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 		if err == nil {
 			t.Errorf("%s: no error", c.label)
 			continue
@@ -422,8 +425,7 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 	// The enrollment's confirm names the typed name on a throttle too.
 	b := newSignInBroker(t, nil, enrollAnswer(), answerWith(429, "sign_in_throttled", throttled, "Retry-After", "300"))
 	typing(t, "", fakePassword, "", fakeCode2)
-	_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+	_, err := directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "too many failed sign-ins for alice-cfg") {
 		t.Errorf("a throttled confirm: %v", err)
 	}
@@ -434,8 +436,7 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 		_, _ = io.WriteString(w, "UNVALIDATED-BODY-TEXT")
 	}, nil)
 	typing(t, "", fakePassword, fakeCode)
-	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 	if err == nil || strings.Contains(err.Error(), "UNVALIDATED") || !strings.Contains(err.Error(), "500") {
 		t.Errorf("an unvalidated body: %v", err)
 	}
@@ -443,8 +444,7 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 	// A revoked person is the refusal a held certificate is no way round.
 	b = newSignInBroker(t, nil, answerWith(401, "credential_revoked", "you are revoked"), nil)
 	typing(t, "", fakePassword, fakeCode)
-	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 	var refused *refusedError
 	if !errors.As(err, &refused) {
 		t.Errorf("credential_revoked: %T %v", err, err)
@@ -454,8 +454,7 @@ func TestTheBrokersRefusalsAreSaid(t *testing.T) {
 	b = newSignInBroker(t, nil, issuedAnswer(), nil)
 	b.srv.Close()
 	typing(t, "", fakePassword, fakeCode)
-	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR,
-		api.Config{SignIn: &api.SignInConfig{}}, io.Discard, io.Discard)
+	_, err = directorySignIn(context.Background(), signInFlags(b), b.pool, nil, fakeCSR, io.Discard, io.Discard)
 	var down *brokerDownError
 	if !errors.As(err, &down) {
 		t.Errorf("a dead broker: %T %v", err, err)
@@ -538,6 +537,22 @@ func TestTheDirectoryFlags(t *testing.T) {
 	}
 	if (&sessionFlags{directory: true, broker: "https://b", cert: "c", key: "k", brokerCA: "ca", brokerCRL: "check"}).complete() {
 		t.Error("a directory login is complete without reading the file")
+	}
+}
+
+// A name over the cap is read to its newline, so the rest never reaches the
+// password prompt that follows; the line keeps its first maxLine bytes.
+func TestALongLineIsDrained(t *testing.T) {
+	r := strings.NewReader(strings.Repeat("n", maxLine+300) + "\nnext line\n")
+	got, err := readLineFrom(r)
+	if err != nil || got != strings.Repeat("n", maxLine) {
+		t.Fatalf("the long line: %d bytes, %v", len(got), err)
+	}
+	if next, err := readLineFrom(r); err != nil || next != "next line" {
+		t.Fatalf("the line after: %q, %v", next, err)
+	}
+	if _, err := readLineFrom(strings.NewReader("no newline")); err == nil {
+		t.Fatal("a line cut off by EOF was taken")
 	}
 }
 

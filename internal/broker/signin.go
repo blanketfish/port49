@@ -58,6 +58,8 @@ const (
 	storeDownText = "the broker could not reach its store, so it signed no one in; try again shortly"
 	closedText    = "you have no second factor, and enrollment is closed for you: ask an operator to run " +
 		"`port49 directory reset-second-factor` for your account"
+	// endedText: `port49 login` (cmd/port49 wrongCode) tells it from a wrong
+	// code by its word "ended"; change both together.
 	endedText = "this enrollment ended or was confirmed; run `port49 login` again"
 )
 

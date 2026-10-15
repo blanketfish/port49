@@ -51,25 +51,37 @@ var (
 		fmt.Fprintln(stderr)
 		return s, err
 	}
-	// readLine reads one line from stdin, echoed, a byte at a time so nothing
-	// past the line is taken from the terminal's buffer.
+	// readLine reads one line from stdin, echoed.
 	readLine = func(prompt string, stderr io.Writer) (string, error) {
 		fmt.Fprint(stderr, prompt)
-		var line []byte
-		for one := make([]byte, 1); len(line) < 512; {
-			if _, err := os.Stdin.Read(one); err != nil {
-				return "", err
-			}
-			if one[0] == '\n' {
-				break
-			}
-			line = append(line, one[0])
-		}
-		return strings.TrimSpace(string(line)), nil
+		return readLineFrom(os.Stdin)
 	}
 	// stdoutIsTerminal is whether the enrollment's secret may be shown.
 	stdoutIsTerminal = func() bool { return isTerminal(os.Stdout) }
 )
+
+// maxLine is the longest line readLineFrom keeps; the broker refuses a name
+// over 256 bytes anyway.
+const maxLine = 512
+
+// readLineFrom reads one line from r a byte at a time, so nothing past the
+// line is taken from the terminal's buffer, and drains the rest of a line
+// longer than maxLine, so it cannot spill into the next prompt (the password's).
+func readLineFrom(r io.Reader) (string, error) {
+	var line []byte
+	for one := make([]byte, 1); ; {
+		if _, err := io.ReadFull(r, one); err != nil {
+			return "", err
+		}
+		if one[0] == '\n' {
+			break
+		}
+		if len(line) < maxLine {
+			line = append(line, one[0])
+		}
+	}
+	return strings.TrimSpace(string(line)), nil
+}
 
 // confirmTries is how many first codes an enrollment is asked for: a mistyped
 // one must not cost the person a new secret to scan.
@@ -82,10 +94,11 @@ func errNoDirectoryPassword(broker string) error {
 
 // directorySignIn is the sign-in half of issueCertificate for --directory:
 // name, password and code to POST /v1/sign-in, the enrollment when the
-// broker answers 202, and the certificate. issueCertificate has checked that
-// conf lists the sign-in, before the store or the key.
+// broker answers 202, and the certificate. It does not check that the broker
+// takes a directory password: its caller, issueCertificate, does that from
+// the broker's config before the store, the key or any prompt.
 func directorySignIn(ctx context.Context, sf *sessionFlags, pool *x509.CertPool, verify func(tls.ConnectionState) error,
-	csr []byte, _ api.Config, stdout, stderr io.Writer) (api.IssueResponse, error) {
+	csr []byte, stdout, stderr io.Writer) (api.IssueResponse, error) {
 	if !loginStdinIsTerminal() {
 		return api.IssueResponse{}, errors.New("a directory sign-in reads your password at a terminal, and stdin " +
 			"is not one; run `port49 login --directory` at a terminal (use `ssh -t` on a remote host)")
@@ -113,6 +126,12 @@ func directorySignIn(ctx context.Context, sf *sessionFlags, pool *x509.CertPool,
 	if err != nil {
 		return api.IssueResponse{}, err
 	}
+	if strings.TrimSpace(code) == "" && !stdoutIsTerminal() {
+		// No code says no authenticator yet: the broker would start an enrollment
+		// and count an attempt, and the secret could not be shown here.
+		return api.IssueResponse{}, errors.New("with no code, the broker would start an enrollment, which shows your " +
+			"second factor's secret; run `port49 login` at a terminal, or type your authenticator's code")
+	}
 	resp, enroll, err := postSignIn(ctx, sf.broker, pool, verify, api.SignInRequest{Name: name, Password: password,
 		Code: stripSpace(code), CSR: base64.RawURLEncoding.EncodeToString(csr)}, name)
 	password, code = "", ""
@@ -135,6 +154,7 @@ func postSignIn(ctx context.Context, broker string, pool *x509.CertPool, verify 
 		return api.IssueResponse{}, nil, err
 	}
 	status, header, raw, err := postJSON(ctx, broker, "/v1/sign-in", pool, verify, body)
+	clear(body) // hygiene: the password and code were in it
 	if err != nil {
 		return api.IssueResponse{}, nil, err
 	}
@@ -248,7 +268,11 @@ func signInError(status int, header http.Header, raw []byte, name string) error 
 }
 
 // wrongCode is a refusal the person may answer with another code: the
-// broker's sign_in_refused, but not its word that the enrollment is over.
+// broker's sign_in_refused, but not its word that the enrollment is over. The
+// API gives nothing but the detail's words to tell the two apart (both are 401
+// sign_in_refused, with no field of their own), so this keys on the "ended"
+// of the broker's endedText; a retry of an ended handle costs only a source
+// count.
 func wrongCode(err error) bool {
 	var a *signInAnswer
 	return errors.As(err, &a) && a.status == http.StatusUnauthorized && a.code == string(decision.SignInRefused) &&
@@ -280,7 +304,7 @@ func confirmEnrollment(ctx context.Context, sf *sessionFlags, pool *x509.CertPoo
 	fmt.Fprintf(stdout, "key: %s\nconfirm by %s\n", groupsOfFour(printsafe.Line(secret, 128)),
 		printsafe.Line(enroll.ConfirmBy, 40))
 	var last error
-	for range confirmTries {
+	for try := range confirmTries {
 		code, err := readSecret("first code from your authenticator: ", stderr)
 		if err != nil {
 			return api.IssueResponse{}, err
@@ -296,7 +320,9 @@ func confirmEnrollment(ctx context.Context, sf *sessionFlags, pool *x509.CertPoo
 			return resp, err
 		}
 		last = err
-		fmt.Fprintln(stderr, "port49 login:", err)
+		if left := confirmTries - 1 - try; left > 0 {
+			fmt.Fprintf(stderr, "port49 login: that code was not accepted; type the next one (%d tries left)\n", left)
+		}
 	}
 	return api.IssueResponse{}, last
 }
