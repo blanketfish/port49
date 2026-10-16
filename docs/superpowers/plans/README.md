@@ -263,6 +263,8 @@ the reply falls back to the 1.2.0-style one, and CI warns `projection_reach_deny
 - the budget fallback's recursion is guarded;
 - Task 6 gates `show configuration` running;
 - the plan ends with operator notes.
+**9g executed 2026-10-16** on `feature/junos-view-configuration`, each task reviewed (Plan 9g — As
+built, below); L68 closed.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -5738,8 +5740,9 @@ each task reviewed, most through one to three fix rounds. The ledger is
 - **Ruled 2026-10-15 (Ryan):** permitted means it runs. When a class allows `show configuration`
   under a deny beneath `show`, the reply sends `view-configuration` with its other reach denied, in
   a small plan under set 1.2.0, gated on a lab cell proving the bit reaches nothing the denies
-  leave open. The question it settles:
-- **Former open question:** a readonly with a deny beneath `show` other than `show configuration`
+  leave open. Built as set 1.3.0 by plan 9g (decision 48; the controller's R3 ruling): set 1.2.0
+  is released and stays as it was. The question it settles:
+- **Former open question (closed under set 1.3.0 by plan 9g; it stays as measured under 1.2.0):** a readonly with a deny beneath `show` other than `show configuration`
   (`show security **`, say) cannot read `show configuration`, because the allow beyond `view` does
   not take and the reply does not send `view-configuration`. The alternative the ruling set aside is
   to send `view-configuration` with its other reach denied. Until ruled, `policy test` says the
@@ -6683,6 +6686,91 @@ Opus review (0 Critical, 4 Important, 9 Minor) and one fix round.
 - **Carried:** three `ssh -G` calls per device (final review m8; fold into one); the
   `ansible_network_os` fallback for a hidden connection is unit-tested only (the lab's play keyword
   reached the lookup); the e3 cells ran on one platform (client behaviour, as L66 says).
+
+### Plan 9g — As built
+
+`feature/junos-view-configuration`, base `681867cb`, 2026-10-16. Seven tasks, each reviewed; a
+narrow fix (Opus review) and a second fix after Task 6's first lab run.
+
+- **Built, with the task commits:**
+  - Task 1, the L68 lab and gate G1 (`059d5548`, `a440bdd3`, `226b97ba`, `a19ad30a`, `5fba3a80`;
+    L68 closed `0bacaa3f`; review fix `dd939078`).
+  - Task 2, decision 48 (`3c0d0b27`).
+  - Task 3, platform set 1.3.0 with `juniper_junos`'s `deny_reach_bits` (`613c69f1`).
+  - Task 4, the reply sends `view-configuration` with its undecided reach denied (`e70bff04`,
+    `6637d85c`).
+  - Task 5, `policy test` names set 1.3.0's reach denies and predicts the configuration runs
+    (`e5f5ddfd`, `aebbe484`).
+  - Task 6, the projection differential and L68 through the broker (`539d5f82`, `efc6494c`),
+    after the fix below (`909500e6`, `4aa55dea`).
+  - Task 7, this entry.
+- **Shipped as set 1.3.0, not 1.2.0.** Set 1.2.0 is released and frozen; 1.3.0 is 1.2.0 plus
+  `juniper_junos`'s `deny_reach_bits: [view-configuration]`. A policy pinned to 1.2.0 renders as
+  before. Where the added denies would pass 255 bytes, the reply falls back to the 1.2.0-style one
+  and CI warns `projection_reach_deny_overflow` (as ruled).
+- **Lab (L68, 2026-10-16, vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15):** G1 and G1-operator
+  passed on both images, so the operator gets the bit too. `show configuration` ran and the
+  rest of view-configuration's reach was refused in rows P, H and O where C took it; V
+  (`view` alone) did not run it. Through the broker, set 1.3.0's rendered replies ran
+  `show configuration` and refused `monitor`, for the readonly and the operator, on both images;
+  the readonly's reply is the 173-byte `deny-commands`. One word runs nowhere: on vSRX
+  `request unified-edge` and `req vir` are refused in C too.
+- **Task 6's lab found a bug:** a plain readonly (granted `show **` alone) rendered the capability
+  shape under 1.3.0, where spec and plan say the narrow shape as 1.2.0. Fixed (`909500e6`,
+  `4aa55dea`) so set 1.3.0 renders exactly as 1.2.0 except where 1.2.0 refuses a permitted
+  `show configuration`. Where 1.2.0 fails closed (`show **` less exactly `show configuration`),
+  1.3.0 sends 1.2.0's reply plus `deny monitor **`; the controller ruled this within Ryan's ruling.
+  The rerun was valid on both images; every vJunos disagreement with the model was the device
+  being narrower (uppercase, image refusals), none wider.
+- **Harness reader fixes (L68):** a BEL before the caret, a caret at the end of the echo, and an
+  exec refusal tied to the probe's own word (a refusal of another word is not the probe's).
+- **Recorded, not gated:** `show log` ran in P, H and O (a carve-out); `show firewall` and
+  `show policer` were not refused; `file list /config` and `file show /config/juniper.conf.gz`
+  were refused in P and O and taken in H; an scp read of `/config/juniper.conf.gz` was refused in
+  P, V and C. `show configuration | save` wrote its file in P, H, O and C, and the pager's `s`
+  was not graded (the pager did not appear where `set cli` is denied; elsewhere the harness's
+  keystrokes were mangled); the `| save`, pager and `/config` readings stay L59's.
+- **Carried:**
+  - **L59 unchanged.**
+  - **Hidden commands** are unmeasured.
+  - **R2's fallback past 255 bytes:** the 1.2.0-style reply and `projection_reach_deny_overflow`,
+    as ruled.
+  - **Bit sets other than the two L68 measured** (readonly's and operator's) are covered by the
+    model only.
+  - **M5, for the final review:** reserve the role names `reach_deny` and `baseline` at policy
+    load.
+
+**Operator notes (plan 13).** These go in the pull request body; plan 13's docs pick them up.
+
+- **What changes for a readonly and an operator under set 1.3.0.** Take a Junos grant that
+  permits `show **` but denies something beneath it other than the configuration, such as
+  `show security **`.
+  - Under set 1.2.0 it could not read the configuration: the device refused `show configuration`,
+    and `policy test` listed that refusal.
+  - Under 1.3.0 the reply sends `view-configuration` too, and denies the rest of that bit's reach
+    the grant does not grant (`monitor`, for a readonly). So `show configuration` runs.
+  - Secrets stay hidden as they are for any session without the `secret` bit.
+  - `monitor` stays refused. NETCONF stays closed for that subject, as it already was under 1.2.0
+    (`projection_netconf_closed`).
+  - Nothing changes for a grant that denies `show configuration` itself, or for one with no deny
+    beneath `show`.
+- **Getting it: `port49 platform upgrade --to 1.3.0`.** A policy pinned to 1.2.0 renders exactly
+  as before on the new binary; the change arrives only with the pin.
+  - The upgrade report lists `platforms.juniper_junos.deny_reach_bits` as a gated change, with the
+    `acknowledge:` entry to paste.
+  - `port49 policy diff` on the move shows each reply that gains `view-configuration`.
+  - To stay on 1.2.0's behaviour while taking the rest of 1.3.0, write
+    `platforms: {juniper_junos: {deny_reach_bits: []}}`.
+- **`projection_reach_deny_overflow`, at 3am.** It is a warning, not a failure. It means:
+  - this subject's reply would have carried `view-configuration`, but the extra denies it needs
+    would push `deny-commands` past RFC 8907's 255 bytes, which locks a Junos user out;
+  - so port49 sent the 1.2.0-style reply instead: the session works, and `show configuration` is
+    refused on the device.
+
+  Nothing is broken and nobody is locked out. There are two remedies:
+  - deny fewer commands beneath `show` in that subject's roles;
+  - move the denies into the template's class on the device (`port49 platform export --classes`),
+    where the 255-byte limit does not apply.
 
 ## Plan 10 — Kubernetes path (§19 step 10)
 
