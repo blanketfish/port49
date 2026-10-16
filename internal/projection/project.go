@@ -102,7 +102,12 @@ type Input struct {
 	// each redacted, since %q escapes a `"` or `\` in one past any writer's
 	// pass (platform.QuoteShown; spec §5.8).
 	Hidden []string
-	Facts  Facts
+	// Redactions is the pattern set Secret checks a rule against: the wire
+	// platform's rules and the block's extra patterns. The rendered reply
+	// is registered against the same set (platform.Rendered). Nil is the
+	// built-in patterns of Platform.
+	Redactions []platform.Redaction
+	Facts      Facts
 	// Keywords is the platform's keyword tree, from the policy's pinned set
 	// (platform.KeywordsFor): a rule reaches the wire only where it proves
 	// the rule's words keywords. Nil proves nothing.
@@ -1449,6 +1454,10 @@ func (g generator) attributes(res *Result) error {
 // Called for the reply that goes out and for the overflowing line an operator
 // is told to paste.
 func (g generator) rendered(res *Result, attrs ...string) {
+	rules := g.in.Redactions
+	if rules == nil {
+		rules = platform.Redactions(g.in.Platform)
+	}
 	var proven []string
 	for _, d := range res.Denies {
 		proven = append(proven, strings.Fields(d.Rule)...)
@@ -1456,8 +1465,8 @@ func (g generator) rendered(res *Result, attrs ...string) {
 	for _, a := range attrs {
 		name, value, _ := strings.Cut(a, "=")
 		if name == "deny-commands" || name == "allow-commands" {
-			platform.Rendered(platform.Redactions(g.in.Platform), a, proven)
-			platform.Rendered(platform.Redactions(g.in.Platform), value, proven)
+			platform.Rendered(rules, a, proven)
+			platform.Rendered(rules, value, proven)
 		}
 	}
 }

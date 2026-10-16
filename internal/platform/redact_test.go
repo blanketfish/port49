@@ -682,3 +682,16 @@ func oneProseWord(word string) bool {
 	sp := proseWord.FindAllStringIndex(word, -1)
 	return len(sp) == 1 && sp[0][0] == 0 && sp[0][1] == len(word) && word[0] != '\\'
 }
+
+// Rendered's whitespace pass refuses text a URL's password hides, which the
+// prose pass cannot see: the URL's pieces are no keyword (issue 17, review m3).
+func TestRenderedRefusesATextTheWhitespacePassHides(t *testing.T) {
+	rules := Redactions("default")
+	text := "copy scp://u:fakesecret123@h/x t"
+	if Rendered(rules, text, nil) {
+		t.Fatal("a URL password was registered")
+	}
+	if got := RedactQuoted(rules, strconv.Quote(text)); strings.Contains(got, "fakesecret123") {
+		t.Fatalf("the literal was printed: %s", got)
+	}
+}

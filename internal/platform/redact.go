@@ -356,7 +356,12 @@ var rendered sync.Map
 // as written: the class line and reply a projection hands an operator to
 // paste into a device. The word-level patterns match a regex's pieces by
 // accident, `cli` as an abbreviation of `client-secret`, and hid the words
-// after them (issue 17).
+// after them (issue 17). It guarantees no word the rules passed in hide, the
+// platform's own and a block's extras as the secret check applies them, not
+// every word the printer, which holds every platform's rules, would hide.
+// port49d registers too, as it projects at runtime; the registry is
+// append-only for the life of the process, so it grows with each distinct
+// reply across reloads.
 //
 // The rule that makes the exemption safe: text is registered only when every
 // word the printer's word-level pass (RedactProse) would hide is regex
