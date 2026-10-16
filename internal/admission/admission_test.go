@@ -461,7 +461,7 @@ func TestTLSNameClashes(t *testing.T) {
 		{Name: "tcp-1", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.5")}},
 		tls("Kr", "10.0.0.6"), tls("kr", "10.0.0.7")}
 	devs[5].Name = "\u212ar" // a Kelvin sign is not ASCII: it folds to nothing
-	got := TLSNameClashes(devs)
+	got := TLSNameClashes(devs, nil)
 	if len(got) != 2 || got["LEAF-01"] == "" || got["leaf-01"] == "" {
 		t.Fatalf("want exactly LEAF-01 and leaf-01, got %v", got)
 	}
@@ -479,5 +479,58 @@ func TestTLSNameClashes(t *testing.T) {
 	}
 	if _, ok := tr.Lookup(netip.MustParseAddr("10.0.0.3")); !ok {
 		t.Error("leaf-02 was refused with them")
+	}
+}
+
+func TestTLSNameClashesUnderDNSSuffixes(t *testing.T) {
+	tls := func(n, addr string) Device {
+		return Device{Name: n, Transport: TransportTLS, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	devs := []Device{tls("leaf-01", "10.0.0.1"), tls("Leaf-01.Example.NET", "10.0.0.2"), tls("leaf-02", "10.0.0.3"),
+		{Name: "leaf-02.example.net", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.4")}}}
+	if got := TLSNameClashes(devs, nil); len(got) != 0 {
+		t.Fatalf("without suffixes the names differ: %v", got)
+	}
+	got := TLSNameClashes(devs, []string{"example.net"})
+	if len(got) != 2 || got["leaf-01"] == "" || got["Leaf-01.Example.NET"] == "" {
+		t.Fatalf("want exactly leaf-01 and Leaf-01.Example.NET, got %v", got)
+	}
+	// A tcp device is never affected, and a suffix that joins nothing refuses nothing.
+	if got := TLSNameClashes(devs, []string{"other.org"}); len(got) != 0 {
+		t.Fatalf("an unrelated suffix: %v", got)
+	}
+	tr, err := Build(Inventory{Devices: devs, DNSSuffixes: []string{"example.net"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"10.0.0.1", "10.0.0.2"} {
+		if _, ok := tr.Lookup(netip.MustParseAddr(a)); ok {
+			t.Errorf("%s is indexed as admitted", a)
+		}
+	}
+	if _, ok := tr.Lookup(netip.MustParseAddr("10.0.0.3")); !ok {
+		t.Error("leaf-02 was refused with them")
+	}
+}
+
+func TestTLSNameInvalid(t *testing.T) {
+	tls := func(n, addr string) Device {
+		return Device{Name: n, Transport: TransportTLS, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	devs := []Device{tls("l\u00e9af-01", "10.0.0.1"), tls("leaf-02", "10.0.0.2"),
+		{Name: "l\u00e9af-03", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.3")}}}
+	got := TLSNameInvalid(devs)
+	if len(got) != 1 || got["l\u00e9af-01"] == "" {
+		t.Fatalf("want exactly the non-ASCII tls device, got %v", got)
+	}
+	tr, err := Build(Inventory{Devices: devs, KeyGroups: []KeyGroup{{Name: "l\u00e9af-03", KeyRef: "k"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tr.Lookup(netip.MustParseAddr("10.0.0.1")); ok {
+		t.Error("the non-ASCII tls device is indexed as admitted")
+	}
+	if _, ok := tr.Lookup(netip.MustParseAddr("10.0.0.2")); !ok {
+		t.Error("leaf-02 was refused with it")
 	}
 }

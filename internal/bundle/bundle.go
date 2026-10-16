@@ -111,6 +111,7 @@ func Parse(policyRaw []byte, inv admission.Inventory, env policy.Env) (*policy.P
 		return nil, err
 	}
 	env.Devices, env.InventoryKeyGroups, env.Bundle = inv.Devices, inv.KeyGroups, ID(policyRaw, inv)
+	env.DNSSuffixes = inv.DNSSuffixes
 	return policy.Parse(policyRaw, env)
 }
 

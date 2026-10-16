@@ -55,6 +55,11 @@ type KeyGroup struct {
 type Inventory struct {
 	Devices   []Device
 	KeyGroups []KeyGroup
+	// DNSSuffixes are tls_listener.device_identity.dns_suffixes: with them a
+	// certificate names a tls device by its name or its name plus a suffix,
+	// so TLSNameClashes judges those spellings too. Not part of the inventory
+	// file; the loader sets it from port49d.yaml.
+	DNSSuffixes []string
 }
 
 type Resolved struct {
@@ -70,7 +75,7 @@ type Resolved struct {
 	// Empty is admitted. A refused device is in the index all the same, so its packets are told apart from an unknown source's.
 	Refused string
 	// Refusal is which of the five it is (RefusedTransport, RefusedNoGroup,
-	// RefusedTie, RefusedUnknownKey, RefusedTLSNameClash), for a reader that decides by it. `port49 policy
+	// RefusedTie, RefusedUnknownKey, RefusedTLSNameClash, RefusedTLSNameInvalid), for a reader that decides by it. `port49 policy
 	// test` fails on every one (plan 6a, N1).
 	Refusal string
 }
@@ -85,6 +90,10 @@ const (
 	// case folding (decision 50 ruling 6). A tls device has no key group, so
 	// it is not RefusedTie.
 	RefusedTLSNameClash = "tls_name_clash"
+	// RefusedTLSNameInvalid is a tls device whose name has a non-ASCII byte:
+	// no certificate can name it (decision 50 ruling 6), so it is refused at
+	// load where the start log names it, not per connection.
+	RefusedTLSNameInvalid = "tls_name_invalid"
 )
 
 // KeyRefShape is what a key_ref looks like wherever one is named: port49d.yaml's
@@ -305,14 +314,16 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 	return r
 }
 
-// TLSNameClashes are the tls devices whose names are equal under ASCII case
-// folding, by name, each with the refusal text. A certificate names a device by
-// its name compared that way (decision 50 ruling 6), so such a pair would admit
-// each other's certificates: both are refused, and nothing else in the load
-// fails. A tcp device is unaffected. Callers set Refusal to
-// RefusedTLSNameClash.
-func TLSNameClashes(devices []Device) map[string]string {
-	byFold := map[string][]string{}
+// TLSNameClashes are the tls devices a certificate could not tell apart, by
+// name, each with the refusal text. A certificate names a device by its name
+// compared under ASCII case folding, or, with dns_suffixes, by its name plus
+// "." plus a suffix (decision 50 ruling 6): a device's candidate names are
+// those, and any candidate two tls devices share refuses both, so leaf-01 and
+// leaf-01.example.net clash under the suffix example.net. The rest of the load
+// is unaffected. A tcp device and a non-ASCII name (TLSNameInvalid) are not
+// considered. Callers set Refusal to RefusedTLSNameClash.
+func TLSNameClashes(devices []Device, dnsSuffixes []string) map[string]string {
+	byCandidate := map[string][]string{}
 	for _, d := range devices {
 		if d.EffectiveTransport() != TransportTLS || transportRefusal(d) != "" {
 			continue
@@ -321,16 +332,56 @@ func TLSNameClashes(devices []Device) map[string]string {
 		if !ascii {
 			continue // never matches a certificate, so nothing to tell apart
 		}
-		byFold[f] = append(byFold[f], d.Name)
+		cands := map[string]bool{f: true}
+		for _, s := range dnsSuffixes {
+			if fs, ok := FoldASCII(strings.Trim(s, ".")); ok && fs != "" {
+				cands[f+"."+fs] = true
+			}
+		}
+		for c := range cands {
+			byCandidate[c] = append(byCandidate[c], d.Name)
+		}
 	}
-	out := map[string]string{}
-	for _, names := range byFold {
+	with := map[string]map[string]bool{} // device -> every device it clashes with, itself included
+	for _, names := range byCandidate {
 		if len(names) < 2 {
 			continue
 		}
 		for _, n := range names {
-			out[n] = fmt.Sprintf("is one of tls devices %q whose names are equal under ASCII case folding, so a "+
-				"certificate could not tell them apart and all are refused (decision 50 ruling 6)", names)
+			if with[n] == nil {
+				with[n] = map[string]bool{}
+			}
+			for _, m := range names {
+				with[n][m] = true
+			}
+		}
+	}
+	out := map[string]string{}
+	for n, set := range with {
+		names := make([]string, 0, len(set))
+		for m := range set {
+			names = append(names, m)
+		}
+		sort.Strings(names)
+		out[n] = fmt.Sprintf("is one of tls devices %q that a certificate could not tell apart (equal under ASCII case "+
+			"folding, or once a dns_suffixes suffix is added), so all are refused (decision 50 ruling 6)", names)
+	}
+	return out
+}
+
+// TLSNameInvalid are the tls devices whose name has a non-ASCII byte, by name,
+// each with the refusal text: no certificate can name one (FoldASCII), so each
+// is refused at load as RefusedTLSNameInvalid rather than failing every
+// connection. A tcp device is unaffected.
+func TLSNameInvalid(devices []Device) map[string]string {
+	out := map[string]string{}
+	for _, d := range devices {
+		if d.EffectiveTransport() != TransportTLS || transportRefusal(d) != "" {
+			continue
+		}
+		if _, ascii := FoldASCII(d.Name); !ascii {
+			out[d.Name] = "is a tls device whose name has a non-ASCII byte, which no certificate can name, so it is " +
+				"refused (decision 50 ruling 6)"
 		}
 	}
 	return out
@@ -379,13 +430,16 @@ func Build(inv Inventory) (*Trie, error) {
 		return nil, err
 	}
 	entries := make([]Resolved, 0, len(inv.Devices))
-	clashes := TLSNameClashes(inv.Devices)
+	clashes, invalid := TLSNameClashes(inv.Devices, inv.DNSSuffixes), TLSNameInvalid(inv.Devices)
 	for _, d := range inv.Devices {
 		if transportRefusal(d) != "" {
 			continue // refused alone (spec §10)
 		}
 		if _, clash := clashes[d.Name]; clash {
 			continue // both refused, nothing else (decision 50 ruling 6)
+		}
+		if _, bad := invalid[d.Name]; bad {
+			continue
 		}
 		if d.EffectiveTransport() == TransportTLS {
 			entries = append(entries, Resolved{Device: d}) // admitted, no key (decision 50 ruling 18)

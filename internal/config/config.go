@@ -1110,6 +1110,11 @@ func load(path string, role Role) (Config, error) {
 	if err := admission.Validate(inv.Devices); err != nil {
 		return Config{}, err
 	}
+	if c.TLSListener != nil {
+		// The suffixes widen the names a certificate gives a tls device, so
+		// admission refuses two that share one (decision 50 ruling 6).
+		inv.DNSSuffixes = c.TLSListener.DeviceIdentity.DNSSuffixes
+	}
 	c.Inventory = inv
 	// No broker: plan 1's mode, the lab's. The inventory's own key groups
 	// are read once, here, and a device none admits refuses the start.
@@ -1141,7 +1146,28 @@ func load(path string, role Role) (Config, error) {
 	// simply omits it from the table) and then fails every packet at runtime as
 	// an unresolved key. That is a configuration mistake, not a device it's fine
 	// to leave unreachable, so it is refused here rather than discovered later.
+	// A tls device whose name no certificate can carry, or that another's
+	// shares, is refused alone: the start says so, and the load goes on
+	// (decision 50 ruling 6).
+	nameRefused := map[string]bool{}
+	for _, r := range []struct {
+		refusal string
+		set     map[string]string
+	}{
+		{admission.RefusedTLSNameClash, admission.TLSNameClashes(inv.Devices, inv.DNSSuffixes)},
+		{admission.RefusedTLSNameInvalid, admission.TLSNameInvalid(inv.Devices)},
+	} {
+		for _, d := range inv.Devices {
+			if why, ok := r.set[d.Name]; ok {
+				nameRefused[d.Name] = true
+				c.Notices = append(c.Notices, fmt.Sprintf("inventory: device %q is refused (%s): %s", d.Name, r.refusal, why))
+			}
+		}
+	}
 	for _, d := range inv.Devices {
+		if nameRefused[d.Name] {
+			continue
+		}
 		resolved := false
 		for _, a := range d.Addresses {
 			// Admitted is Refused == "", never an index hit or a key_ref

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,5 +145,71 @@ func TestTheBrokerRefusesATLSListener(t *testing.T) {
 	_, err := LoadBroker(p)
 	if err == nil || !strings.Contains(err.Error(), "tls_listener is not port49-broker.yaml's") {
 		t.Fatalf("port49-broker.yaml with tls_listener: %v", err)
+	}
+}
+
+// tlsInventory replaces the inventory tlsBase wrote.
+func tlsInventory(t *testing.T, cfgPath, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "inventory.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTLSNamesThatCannotBeToldApartAreRefusedNotFatal(t *testing.T) {
+	const inv = "devices:\n" +
+		"  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n" +
+		"  - {name: Leaf-01.Example.NET, platform: arista_eos, addresses: [10.0.0.2], transport: tls}\n" +
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], transport: tls}\n"
+	suffixed := tlsMinimal + "  device_identity: {dns_suffixes: [example.net]}\n"
+	p := tlsBase(t, "listen: 127.0.0.1:0\n", suffixed)
+	tlsInventory(t, p, inv)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("a clash refuses the two devices, never the load: %v", err)
+	}
+	for _, a := range []string{"10.0.0.1", "10.0.0.2"} {
+		if _, ok := c.Admission.Lookup(netip.MustParseAddr(a)); ok {
+			t.Errorf("%s is admitted", a)
+		}
+	}
+	if r, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.3")); !ok || r.Refused != "" {
+		t.Errorf("leaf-02 was refused with them: %+v", r)
+	}
+	notices := strings.Join(c.Notices, "\n")
+	for _, want := range []string{"leaf-01", "Leaf-01.Example.NET", "tls_name_clash"} {
+		if !strings.Contains(notices, want) {
+			t.Errorf("the start notices do not name %q: %q", want, notices)
+		}
+	}
+	// Without the suffix the two names differ and both are admitted.
+	p = tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal)
+	tlsInventory(t, p, inv)
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.1")); !ok || len(c.Notices) != 0 {
+		t.Errorf("no suffix, no clash: %q", c.Notices)
+	}
+}
+
+func TestANonASCIITLSNameIsRefusedAtLoad(t *testing.T) {
+	p := tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal)
+	tlsInventory(t, p, "devices:\n"+
+		"  - {name: \"léaf-01\", platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], transport: tls}\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("a name no certificate can carry refuses the device, never the load: %v", err)
+	}
+	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.1")); ok {
+		t.Error("the non-ASCII device is admitted")
+	}
+	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.3")); !ok {
+		t.Error("leaf-02 was refused with it")
+	}
+	if n := strings.Join(c.Notices, "\n"); !strings.Contains(n, "tls_name_invalid") || !strings.Contains(n, "léaf-01") {
+		t.Errorf("the start notices do not name it: %q", n)
 	}
 }
