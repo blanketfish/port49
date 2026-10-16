@@ -278,3 +278,24 @@ func TestL68Gate(t *testing.T) {
 		t.Errorf("completion beyond the reach: %v", stop)
 	}
 }
+
+// What set 1.3.0 sends a readonly granted `show **` less `show security **`
+// is row P, byte for byte, and what it sends the operator also granted
+// `clear **` is row O: the replies L68 measured. If G1-operator stopped (Task
+// 4 Step 3b), drop the operator case: it then renders set 1.2.0's reply.
+func TestL68ProjectedIsSet130sRender(t *testing.T) {
+	for _, c := range []struct {
+		level, bits string
+		extra       []engine.Rule
+	}{
+		{"readonly", "user-permissions=view view-configuration", nil},
+		{"operator", "user-permissions=clear view view-configuration", []engine.Rule{l68Rule(engine.Permit, "clear **")}},
+	} {
+		rules := append([]engine.Rule{l68Rule(engine.Permit, "show **"), l68Rule(engine.Deny, "show security **")},
+			c.extra...)
+		res, err := l68Shipped("1.3.0", c.level, rules...)
+		if err != nil || !slices.Equal(res.Attributes, []string{c.bits, l68Projected}) {
+			t.Fatalf("%s: %s %q %+v %v", c.level, res.Shape, res.Attributes, res.Refusal, err)
+		}
+	}
+}
