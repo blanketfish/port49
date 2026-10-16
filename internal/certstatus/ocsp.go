@@ -131,8 +131,13 @@ func (c *Checker) ask(ctx context.Context, key string, call *ocspCall, cert, iss
 				}
 			}
 		}
-		// A refresh that fails never shortens an answer in force.
-		if e, ok := c.ocsp[key]; res.Verdict != Unknown || !ok || !now.Before(e.expires) {
+		// A refresh that fails never shortens an answer in force, and is not
+		// asked again at once: a responder down is asked once per ocspFailCache
+		// (M15), by the cached path too.
+		if e, ok := c.ocsp[key]; res.Verdict == Unknown && ok && now.Before(e.expires) {
+			e.refresh = now.Add(ocspFailCache)
+			c.ocsp[key] = e
+		} else {
 			c.ocsp[key] = ocspEntry{res: res, expires: now.Add(ttl), refresh: now.Add(ttl / 2)}
 		}
 	}

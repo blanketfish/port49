@@ -663,6 +663,16 @@ func TestCRL(t *testing.T) {
 		if got := testutil.ToFloat64(m.CRLLoads.WithLabelValues("broker", "issuing", "loaded")); got != 0 {
 			t.Fatalf("broker loads = %v, want 0: two checkers naming one CRL are two series", got)
 		}
+		c.CheckCached(nil) // an empty chain is unknown, and unavailable
+		if got := testutil.ToFloat64(m.CertStatusChecks.WithLabelValues("tls_listener", "none", "unknown")); got != 1 {
+			t.Fatalf("tls_listener checks = %v, want 1", got)
+		}
+		if got := testutil.ToFloat64(m.CertStatusUnavailable.WithLabelValues("tls_listener")); got != 1 {
+			t.Fatalf("tls_listener unavailable = %v, want 1", got)
+		}
+		if got := testutil.ToFloat64(m.CertStatusUnavailable.WithLabelValues("broker")); got != 0 {
+			t.Fatalf("broker unavailable = %v, want 0", got)
+		}
 	})
 
 	t.Run("a list coming into force is said", func(t *testing.T) {

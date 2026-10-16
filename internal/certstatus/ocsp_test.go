@@ -672,11 +672,26 @@ func TestCheckCachedNeverWaits(t *testing.T) {
 		t.Fatalf("past half life again, responder down: %+v, want the cached good", r)
 	}
 	until("the failed refresh", func() bool { return resp.count() == 3 && idle() })
+	// The failure is not asked again at once: a down responder is asked once per 30s.
+	for i := 0; i < 3; i++ {
+		if r := c.CheckCached(chain); r.Verdict != Good {
+			t.Fatalf("within 30s of the failed refresh: %+v", r)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := resp.count(); n != 3 {
+		t.Fatalf("responder asked %d times within 30s of a failed refresh, want 3", n)
+	}
+	clk.advance(31 * time.Second)
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("31s on: %+v", r)
+	}
+	until("one more question", func() bool { return resp.count() == 4 && idle() })
 	clk.advance(time.Minute) // past the 30s a stored failure would last
 	if r := c.CheckCached(chain); r.Verdict != Good {
 		t.Fatalf("after a failed refresh: %+v, want the answer still in force", r)
 	}
-	until("the second failed refresh", func() bool { return resp.count() == 4 && idle() })
+	until("the second failed refresh", func() bool { return resp.count() == 5 && idle() })
 
 	// Past the answer's own expiry: Unknown.
 	clk.advance(14 * time.Minute)
