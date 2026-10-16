@@ -724,3 +724,68 @@ func TestAGlueSeparatorNeverCarriesAValuePast(t *testing.T) {
 		}
 	}
 }
+
+// A part of a word split at a glue separator is a credential keyword only
+// whole or at three characters: an IPv6 hextet `a` is not `area-password` and
+// a typed `ping 2001:db8:a::1` is kept in a record (round 3 of issue 19).
+func TestAnIPv6LiteralIsNotReadAsAGluedKeyword(t *testing.T) {
+	for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+		rules := Redactions(name)
+		for _, line := range []string{"ping 2001:db8:a::1", "traceroute 2001:db8:c::1", "ping 2001:db8:d::1",
+			"ping 2001:db8:e::1", "show route 2001:db8:a::/48", "show ip route vrf a/b", "show route k/l"} {
+			if got, redacted := Redact(rules, []string{line}); redacted || got[0] != line {
+				t.Errorf("%s: Redact(%q) = %q", name, line, got[0])
+			}
+			// A hidden value is learned by the CLI writer and blanked wherever
+			// it prints: `1` would turn `platform_set: 1.3.0` into `«redacted».3.0`.
+			if v := HiddenValues(rules, strings.Fields(line)); len(v) != 0 {
+				t.Errorf("%s: HiddenValues(%q) = %q", name, line, v)
+			}
+			raw, vec, redacted := RedactRecord(rules, []string{"cmd=" + line, "cmd-arg=<cr>"}, []string{line})
+			if redacted || strings.Join(raw, " ") != "cmd="+line+" cmd-arg=<cr>" || vec[0] != line {
+				t.Errorf("%s: RedactRecord(%q) = %q %q", name, line, raw, vec)
+			}
+		}
+	}
+}
+
+// A keyword abbreviated to three characters or more, glued to a value with
+// any separator, is still a credential on every path.
+func TestAnAbbreviatedGluedKeywordIsStillRedacted(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			rules := Redactions(name)
+			for _, kw := range []string{"pas", "pass", "sec", "secr"} {
+				line := "request " + kw + sep + lit
+				got, _ := Redact(rules, []string{line})
+				if strings.Contains(got[0], lit) {
+					t.Errorf("%s: sep %q: Redact(%q) = %q", name, sep, line, got[0])
+				}
+			}
+		}
+	}
+}
+
+// A word that starts with a separator is split after it (round 3).
+func TestAWordStartingWithASeparatorIsStillSplit(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ";", "+", "|", "/"} {
+		for _, word := range []string{sep + "password" + sep + lit, sep + "password=" + lit, sep + "password:" + lit} {
+			for _, name := range []string{"default", "cisco_iosxe", "juniper_junos"} {
+				rules := Redactions(name)
+				got, _ := Redact(rules, []string{"request " + word})
+				if strings.Contains(got[0], lit) {
+					t.Errorf("%s: Redact(%q) = %q", name, word, got[0])
+				}
+				if p := RedactProse(rules, "request "+word); strings.Contains(p, lit) {
+					t.Errorf("%s: RedactProse(%q) = %q", name, word, p)
+				}
+			}
+		}
+	}
+	got, _ := Redact(Redactions("default"), []string{"request ,password", lit})
+	if strings.Contains(strings.Join(got, " "), lit) {
+		t.Errorf("a leading-separator keyword word: %q", got)
+	}
+}

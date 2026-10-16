@@ -175,17 +175,30 @@ func redact(rules []Redaction, elements []string, seps string) ([]string, bool) 
 	// password (task 15 re-review N1).
 	var split []glued
 	for i, w := range words {
-		j := strings.IndexAny(w, seps)
-		if rewritten[i] || j <= 0 || strings.Contains(w, "://") {
+		// With glueAll a leading separator is not the keyword's: `/password,X`
+		// and `,password=X` are the keyword and a value (round 3 of issue 19).
+		base := 0
+		if seps == glueAll {
+			base = len(w) - len(strings.TrimLeft(w, seps))
+		}
+		body := w[base:]
+		j := strings.IndexAny(body, seps)
+		if rewritten[i] || body == "" || j == 0 || strings.Contains(w, "://") {
 			lead, text := option(w)
 			split = append(split, glued{word: i, lead: lead, text: text})
 			continue
 		}
-		lead, text := option(w[:j])
-		split = append(split, glued{word: i, lead: lead, text: text, sep: w[j : j+1]})
+		if j < 0 {
+			// No separator after the leading ones: the word is its keyword.
+			lead, text := option(body)
+			split = append(split, glued{word: i, lead: lead, text: text})
+			continue
+		}
+		lead, text := option(body[:j])
+		split = append(split, glued{word: i, lead: lead, text: text, sep: body[j : j+1], part: seps == glueAll})
 		// The first separator splits the word in two; with glueAll every
 		// one splits the rest too, and a hidden part hides the word's tail.
-		rest, at := w[j+1:], j+1
+		rest, at := body[j+1:], base+j+1
 		for len(rest) > 0 {
 			end := len(rest)
 			if seps == glueAll {
@@ -194,7 +207,7 @@ func redact(rules []Redaction, elements []string, seps string) ([]string, bool) 
 				}
 			}
 			if end > 0 {
-				split = append(split, glued{word: i, text: rest[:end], value: true, offset: at})
+				split = append(split, glued{word: i, text: rest[:end], value: true, offset: at, part: seps == glueAll})
 			}
 			if end == len(rest) {
 				break
@@ -225,7 +238,7 @@ func redact(rules []Redaction, elements []string, seps string) ([]string, bool) 
 			// `pre-shared-key local X` in an IKEv2 keyring. The command
 			// word is still never removed.
 			for k := 0; k < len(matched); k++ {
-				if sameWord(r.After, matched[k]) && (k > command || keywordShaped(r.After, matched, k)) {
+				if sameWord(r.After, matched[k]) && (!split[k].part || keywordPart(r.After, matched[k])) && (k > command || keywordShaped(r.After, matched, k)) {
 					start = k + 1
 					break
 				}
@@ -295,6 +308,15 @@ func keywordShaped(keyword string, words []string, k int) bool {
 	return false
 }
 
+// keywordPart reports whether text, a part of a word split at the glue
+// separators, reads as keyword: whole, or at three characters or more. A
+// shorter part is a letter of an IPv6 literal or a slash-joined name, `a` in
+// `2001:db8:a::1`, and no hex string of three or more characters abbreviates
+// a keyword (round 3 of issue 19).
+func keywordPart(keyword, text string) bool {
+	return strings.EqualFold(keyword, text) || len(text) >= 3
+}
+
 // glued is one word as Redact matches it: a whole word, or the keyword or
 // the value part of one glued with sep, with an option's leading `-` or `/`
 // as lead.
@@ -306,6 +328,8 @@ type glued struct {
 	value bool
 	// offset is where a value part begins in its word.
 	offset int
+	// part is set on every part of a word split at the glue separators.
+	part bool
 }
 
 // option splits an option's leading `-` and `/` from w; a word of nothing

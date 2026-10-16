@@ -1287,3 +1287,18 @@ func TestAGluedCredentialIsASecretRuleWhateverTheSeparator(t *testing.T) {
 		}
 	}
 }
+
+// An IPv6 literal or a slash-joined name in a rule is not a credential: the
+// policy loads and no finding calls it a secret_rule (round 3 of issue 19).
+func TestAnIPv6RuleIsNotASecretRule(t *testing.T) {
+	for _, rule := range []string{"ping 2001:db8:a::1", "ping 2001:db8:c::1", "ping 2001:db8:d::1",
+		"ping 2001:db8:e::1", "show route 2001:db8:a::/48 **", "show ip route vrf a/b"} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+			`permit: ["show **", "`+rule+`"]}`+"\n"+subjOK+grantOK)
+		for _, f := range p.Lint(noon) {
+			if strings.Contains(f.Message, "secret_rule") {
+				t.Errorf("%q: %s", rule, f.Message)
+			}
+		}
+	}
+}
