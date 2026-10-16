@@ -222,6 +222,12 @@ type Device struct {
 	// §10). `port49 keys status` reads a rotation's phase-out from them.
 	KeyRef     string `json:"key_ref,omitempty"`
 	KeyVersion int    `json:"key_version,omitempty"`
+	// Transport is "tls" on a record of an exchange on the RFC 9887
+	// listener, absent on the RFC 8907 listener's; CertSHA256 is then the
+	// device's verified leaf certificate (spec §5.7; §13 decision 50 ruling
+	// 16). Such a record has no KeyRef.
+	Transport  string `json:"transport,omitempty"`
+	CertSHA256 string `json:"cert_sha256,omitempty"`
 }
 
 type Session struct {
@@ -487,6 +493,13 @@ type Unvalidated struct {
 	SessionID  uint32 `json:"session_id"`
 	Length     uint32 `json:"length"`
 	BodySHA256 string `json:"body_sha256,omitempty"`
+	// Transport is "tls" on a record from the RFC 9887 listener. TLSOutcome,
+	// Detail and CertSHA256 are a tls_refused record's (spec §10): Detail is
+	// bounded and printable, never a body.
+	Transport  string `json:"transport,omitempty"`
+	TLSOutcome string `json:"tls_outcome,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	CertSHA256 string `json:"cert_sha256,omitempty"`
 }
 
 type Emitter interface {

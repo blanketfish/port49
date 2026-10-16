@@ -3201,3 +3201,10 @@ func TestAVerifiedAtAheadOfTheDaemonIsNow(t *testing.T) {
 		t.Fatalf("refreshed_at %v, want now", got.RefreshedAt)
 	}
 }
+
+func TestATLSPeersDeviceBlock(t *testing.T) {
+	d := Peer{NAS: "tls-1", NASAddr: "10.0.0.9", Platform: "arista_eos", Transport: "tls", CertSHA256: "ab"}.Device()
+	if d.Transport != "tls" || d.CertSHA256 != "ab" || d.KeyRef != "" {
+		t.Fatalf("%+v", d)
+	}
+}

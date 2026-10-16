@@ -35,6 +35,11 @@ type Peer struct {
 	// which every record of it names (spec §5.7).
 	KeyRef     string
 	KeyVersion int
+	// Transport and CertSHA256 are "tls" and the device's verified leaf on
+	// the RFC 9887 listener, which every record of the connection names
+	// (spec §5.7; decision 50 ruling 16); empty on the RFC 8907 listener.
+	Transport  string
+	CertSHA256 string
 	// WirePlatform is the shipped platform whose wire facts this device's
 	// packets are read by: its own, or the base of a based_on variant (spec
 	// §8). Empty is Platform.
@@ -51,7 +56,8 @@ func (p Peer) Wire() string {
 
 // Device is the device block of every record this peer's exchanges write.
 func (p Peer) Device() *decision.Device {
-	return &decision.Device{NAS: p.NASAddr, Name: p.NAS, Platform: p.Platform, KeyRef: p.KeyRef, KeyVersion: p.KeyVersion}
+	return &decision.Device{NAS: p.NASAddr, Name: p.NAS, Platform: p.Platform, KeyRef: p.KeyRef, KeyVersion: p.KeyVersion,
+		Transport: p.Transport, CertSHA256: p.CertSHA256}
 }
 
 type Handler struct {
