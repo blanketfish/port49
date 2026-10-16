@@ -1212,3 +1212,44 @@ func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
 		t.Errorf("no beneath warning: %v", denies.Projections(noon))
 	}
 }
+
+// The class line a projection_overflow finding tells an operator to paste is
+// what the projection rendered, byte for byte, after the printer's
+// redaction pass too: `cli` in `show cli` abbreviates `client-secret`, and
+// the word-level pass hid the regex that follows it (issue 17). A real
+// secret printed in the same output is still redacted.
+func TestTheOverflowClassLineSurvivesThePrinter(t *testing.T) {
+	bindingRPCs(t)
+	// `key` is a redaction keyword: the word-level pass hid every word of the
+	// regex after `show +key`.
+	body := scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show key **\""
+	for _, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+		"juliett", "kilo", "lima", "mike", "november", "oscar", "papa"} {
+		body += `, "show ` + w + ` **"`
+	}
+	p := parseProjected(t, platform.BitDeliveryLocalUserName, body+"]}\n"+subjOK+grantOK)
+	var msg string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionOverflow {
+			msg = f.Message
+		}
+	}
+	const lead = "set system login class p49-readonly deny-commands "
+	i := strings.Index(msg, lead)
+	if i < 0 {
+		t.Fatalf("no class line: %q %+v", msg, p.Lint(noon))
+	}
+	line := msg[i : i+strings.Index(msg[i:], "; on ")]
+	if !strings.Contains(line, "show +key( .*)?") || strings.Contains(line, platform.Redacted) {
+		t.Fatalf("the finding's own class line: %s", line)
+	}
+	printed := platform.RedactQuoted(p.Redactions(), msg)
+	if !strings.Contains(printed, line) {
+		t.Fatalf("the printer changed the class line:\nwant %s\ngot  %s", line, printed)
+	}
+	// The same pass still redacts a real secret quoted beside it.
+	secret := platform.RedactQuoted(p.Redactions(), msg+` rule "snmp-server community Hunter2 **"`)
+	if strings.Contains(secret, "Hunter2") || !strings.Contains(secret, "community «redacted»") {
+		t.Fatalf("a secret reached the output: %s", secret)
+	}
+}

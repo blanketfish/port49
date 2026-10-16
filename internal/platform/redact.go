@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -337,7 +338,7 @@ func RedactQuoted(rules []Redaction, line string) string {
 // redactQuotedValue is one quoted value as RedactQuoted prints it, and
 // whether redaction changed it.
 func redactQuotedValue(rules []Redaction, value string) (string, bool) {
-	if ShippedText(value) {
+	if ShippedText(value) || isRendered(value) {
 		return value, false
 	}
 	shown := RedactProse(rules, value)
@@ -345,6 +346,25 @@ func redactQuotedValue(rules []Redaction, value string) (string, bool) {
 		return value, false
 	}
 	return shown, true
+}
+
+// rendered holds the text a writer registered with Rendered.
+var rendered sync.Map
+
+// Rendered registers text port49 itself rendered, from the platform set and
+// rules that passed the secret check, and found unchanged by every
+// redaction the writer applies: the class line a projection_overflow finding
+// tells an operator to paste. RedactQuoted prints it as written, because
+// the word-level patterns match a regex's pieces by accident, `cli` as an
+// abbreviation of `client-secret`, and an operator pastes this line into a
+// device. Only exact text is exempt, and a writer registers only text its
+// own pass left whole, so no value a pattern or a hidden value would remove
+// is ever registered.
+func Rendered(text string) { rendered.Store(text, struct{}{}) }
+
+func isRendered(text string) bool {
+	_, ok := rendered.Load(text)
+	return ok
 }
 
 // RedactRecord applies rules to a record's raw pairs and its vector, which are
