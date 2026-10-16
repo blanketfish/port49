@@ -275,6 +275,13 @@ immediate effect (not built; `port49 revoke --principal` closes the 2h window). 
 (Plan 10 — As built, below). Ryan's Q1 ruling reversed the plan's recommendation: clusters may
 share a namespace, and each k8s verifier is named by a required `cluster:`. Q2 stands: no
 TokenReview. L69 closed on kind (v0.29.0, Kubernetes v1.33.1); L70 (managed clusters) stays open.
+**11 written 2026-10-16** (`2026-10-16-11-tls-listener.md`, fourteen tasks: one spec, nine code, two
+lab harnesses, one lab run, one docs; nineteen rulings recorded as decision 50 by its Task 1; two
+questions for Ryan, each with a recommendation: Q1 the images that carry an RFC 9887 client
+(fetch C8000V 17.18 first), Q2 one host serving both listeners (keep the start notice). It opens
+L71 (which lab images carry a client; every lab image predates the vendors' documented floors), L72
+(port49 against reference clients, closed in the plan) and L73 (device behaviour, open until Q1's
+images).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6955,6 +6962,9 @@ was applied before Task 1.
 
 Separate listener on 300, mutual TLS replacing the shared key, device records expressing
 both. Design §11.
+
+Status: **written 2026-10-16** (`2026-10-16-11-tls-listener.md`, branch `feature/tls-listener`;
+fourteen tasks; decision 50; Q1 and Q2 open; opens L71, L72 and L73).
 
 ## Plan 11a — Global and regional stores (design §13; Ryan, 2026-10-14)
 
