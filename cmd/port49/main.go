@@ -61,14 +61,16 @@ const usage = `usage:
              [--socket PATH] DEVICE [-- COMMAND...]
              (mints through your agent and runs your OpenSSH, 8.5 or later; host keys are your OpenSSH
              known_hosts', accepted at first contact and refused if changed; exits with ssh's status)
-  port49 workload token --broker URL --broker-ca FILE --cert FILE --key FILE [--devices-file FILE]
+  port49 workload token --broker URL --broker-ca FILE (--cert FILE --key FILE | --token-file FILE)
+                        [--devices-file FILE]
                         [--enable] [--ttl DURATION] [--purpose TEXT] [--format tsv|json] [--out FILE]
                         [--deadline DURATION] [--scope NAME | DEVICE...]
-                        (no agent: the certificate and key are read each run; under cron, always
+                        (no agent: the certificate and key, or the pod's projected service account
+                        token (--token-file), are read each run; under cron, always
                         --out, since cron mails a job's stdout; exits 1 when some devices were
                         written and some not, 75 when the broker did not answer by the deadline,
                         77 when nothing was minted and a run again will not change that)
-  port49 workload identity --broker URL --broker-ca FILE --cert FILE --key FILE [--json]
+  port49 workload identity --broker URL --broker-ca FILE (--cert FILE --key FILE | --token-file FILE) [--json]
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
   port49 explain --device NAME [--command "LINE"] [--principal ID] [--socket PATH]

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,8 +66,12 @@ type Config struct {
 	Broker            string // https://host:port
 	BrokerCA          *x509.CertPool
 	CertFile, KeyFile string
-	Deadline          time.Duration // 0 is DefaultDeadline
-	Now               func() time.Time
+	// TokenFile, in place of CertFile and KeyFile, is a projected service
+	// account token presented as a bearer, read at every request (plan 10;
+	// decision 49 ruling 14).
+	TokenFile string
+	Deadline  time.Duration // 0 is DefaultDeadline
+	Now       func() time.Time
 	// Warn says a late renewal; nil says nothing.
 	Warn func(format string, args ...any)
 	// VerifyBroker, when set, is the TLS config's VerifyConnection: it runs
@@ -82,6 +87,56 @@ type Config struct {
 	// Say tells the operator a touch is wanted, while the key waits for it;
 	// nil says nothing. It is never given a challenge, token or PIN.
 	Say func(format string, args ...any)
+}
+
+// MaxTokenFile is the most a token file may hold: a JWS port49 accepts is
+// at most 16 KiB (decision 39 ruling 3).
+const MaxTokenFile = 16 << 10
+
+// TokenFileError is a token file the client cannot present: unreadable,
+// empty, over MaxTokenFile, or holding whitespace inside the token. It never
+// carries the file's content.
+type TokenFileError struct {
+	File string
+	Err  error
+}
+
+func (e *TokenFileError) Error() string {
+	return fmt.Sprintf("the token file %s: %v (a projected service account token, as the pod's volume writes it)",
+		e.File, e.Err)
+}
+
+func (e *TokenFileError) Unwrap() error { return e.Err }
+
+// readToken reads the file once, as it is now: the kubelet replaces it whole
+// (decision 49 ruling 14). One trailing newline is trimmed.
+func readToken(file string) (string, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		// The bare errno, so the message does not repeat the path; a fixed
+		// text when err is not an *os.PathError (pre-flight M5).
+		why := errors.Unwrap(err)
+		if why == nil {
+			why = errors.New("it could not be opened")
+		}
+		return "", &TokenFileError{File: file, Err: why}
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxTokenFile+1))
+	switch {
+	case err != nil:
+		return "", &TokenFileError{File: file, Err: errors.New("it could not be read")}
+	case len(b) > MaxTokenFile:
+		return "", &TokenFileError{File: file, Err: fmt.Errorf("it is over %d bytes", MaxTokenFile)}
+	}
+	tok := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+	switch {
+	case tok == "":
+		return "", &TokenFileError{File: file, Err: errors.New("it is empty")}
+	case strings.IndexFunc(tok, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0:
+		return "", &TokenFileError{File: file, Err: errors.New("it holds whitespace or a character no token has")}
+	}
+	return tok, nil
 }
 
 // CertError is a certificate the client will not present.
@@ -244,26 +299,45 @@ func New(cfg Config) (*Client, error) {
 	if cfg.BrokerCA == nil {
 		return nil, errors.New("a broker CA is required: the client trusts it alone, never the system's roots")
 	}
+	if cfg.TokenFile != "" {
+		if cfg.CertFile != "" || cfg.KeyFile != "" || cfg.TouchKey != nil {
+			return nil, errors.New("a workload presents a certificate or a token file, not both (and a touch key is " +
+				"bound to a certificate's key)")
+		}
+		if _, err := readToken(cfg.TokenFile); err != nil {
+			return nil, err
+		}
+		tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
+			VerifyConnection: verifyOf(cfg)}}
+		hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		return &Client{cfg: cfg, http: hc, sleep: sleepCtx}, nil
+	}
 	cert, err := LoadCertificate(cfg.CertFile, cfg.KeyFile, cfg.Now(), cfg.Warn)
 	if err != nil {
 		return nil, err
 	}
-	var verify func(tls.ConnectionState) error
-	if cfg.VerifyBroker != nil {
-		verify = func(cs tls.ConnectionState) error {
-			if err := cfg.VerifyBroker(cs); err != nil {
-				return &BrokerRefusedError{Err: err}
-			}
-			return nil
-		}
-	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: cfg.BrokerCA,
-		VerifyConnection:     verify,
+		VerifyConnection:     verifyOf(cfg),
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}}
 	// A redirect is never followed; its 3xx comes back as a RedirectError.
 	hc := &http.Client{Transport: tr, Timeout: 30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return &Client{cfg: cfg, http: hc, sleep: sleepCtx, session: cert.Leaf.PublicKey}, nil
+}
+
+// verifyOf is cfg.VerifyBroker as the TLS config's VerifyConnection, its
+// refusal wrapped final; nil when none is set.
+func verifyOf(cfg Config) func(tls.ConnectionState) error {
+	if cfg.VerifyBroker == nil {
+		return nil
+	}
+	return func(cs tls.ConnectionState) error {
+		if err := cfg.VerifyBroker(cs); err != nil {
+			return &BrokerRefusedError{Err: err}
+		}
+		return nil
+	}
 }
 
 // MintOptions is one run's mint: Devices by name, or every device Scope
@@ -538,6 +612,13 @@ func (c *Client) do(ctx context.Context, deadline time.Time, method, path string
 		}
 		if key != "" {
 			req.Header.Set("Idempotency-Key", key)
+		}
+		if c.cfg.TokenFile != "" {
+			tok, err := readToken(c.cfg.TokenFile)
+			if err != nil {
+				return err // final: the file went away under the run
+			}
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 		var last error
 		var pause time.Duration
