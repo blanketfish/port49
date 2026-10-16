@@ -724,9 +724,12 @@ func checkK8sVerifier(at string, v identityVerifierYAML) (oidc.VerifierConfig, e
 			"from (the API server's https://<host>:<port>/openid/v1/jwks, or where your cluster publishes them)", at)
 	case !httpsURL(v.JWKS):
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.jwks must be an https URL with no userinfo, query or fragment", at)
-	case !printableKey(v.Audience):
+	case v.Audience == "":
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.audience is required: the audience your pods' projected "+
 			"token volume asks for (port49 in the examples)", at)
+	case !printableKey(v.Audience):
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.audience must be 1 to 255 printable ASCII characters with "+
+			"no space: the audience your pods' projected token volume asks for", at)
 	case len(v.Namespaces) == 0:
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.namespaces is required: the namespaces whose service "+
 			"accounts this cluster may name, by name", at)
