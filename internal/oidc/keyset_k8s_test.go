@@ -106,7 +106,7 @@ func TestAClusterKeySetSaysNoIssuer(t *testing.T) {
 // discovery is read (pre-flight I8).
 func TestAStalledDiscoveryHoldsNoFetch(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
-	_, release := iss.HoldDiscovery()
+	arrived, release := iss.HoldDiscovery()
 	defer release()
 	ks := clusterKeys(t, iss, c, s)
 	done := make(chan error, 1)
@@ -118,6 +118,11 @@ func TestAStalledDiscoveryHoldsNoFetch(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Fetch waited on a stalled discovery")
+	}
+	select { // the discovery was asked, and is what stalls: the test holds something
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("discovery was never read, so nothing was held")
 	}
 }
 

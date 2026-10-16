@@ -199,14 +199,20 @@ func TestATokenFileThatGoesAwayMidRunIsFinal(t *testing.T) {
 	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){gone, permitAll}}
 	cfg, file := tokenHarness(t, f, "first.a.b")
 	p = file
+	cfg.Deadline = 3 * time.Second
 	c, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.sleep = func(context.Context, time.Duration) error { return nil }
-	_, err = c.Mint(context.Background(), MintOptions{Devices: devices(1)})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = c.Mint(ctx, MintOptions{Devices: devices(1)})
 	var te *TokenFileError
 	if !errors.As(err, &te) || strings.Contains(err.Error(), "first.a.b") {
 		t.Fatalf("%v", err)
+	}
+	if len(f.auths) != 1 {
+		t.Fatalf("%d requests: a file that went away is final, not retried", len(f.auths))
 	}
 }
