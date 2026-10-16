@@ -441,6 +441,13 @@ class AddressHelpersTest(unittest.TestCase):
         self.assertEqual(paths, [f"{home}/.ssh/a", f"{self.dir}/b", f"{home}/g"])
         self.assertEqual((write_to, hash_names), (f"{home}/.ssh/a", True))
 
+    def test_revoked_keys_file_is_the_one_ssh_g_names(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "RevokedHostKeys ~/krl\n")
+        self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), f"{hostkeys._passwd_home()}/krl")
+        self.put(cfg, "")
+        self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), "")
+
     def test_known_files_with_nowhere_to_write(self):
         cfg = os.path.join(self.dir, "ssh_config")
         self.put(cfg, "UserKnownHostsFile none\nGlobalKnownHostsFile /dev/null\n")

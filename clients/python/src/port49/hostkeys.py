@@ -319,6 +319,12 @@ def known_files(name, *, ssh="ssh", ssh_config=None):
     return user + glob, user[0] if user else "", conf.get("hashknownhosts") == "yes"
 
 
+def revoked_keys_file(name, *, ssh="ssh", ssh_config=None):
+    """The RevokedHostKeys file `ssh -G name` names, ~ expanded, or "" for none (read it with is_revoked)."""
+    krl = _ssh_g(name, name, 22, None, ssh_config, ssh).get("revokedhostkeys", "")
+    return "" if krl in ("", "none") else _expand([krl], _passwd_home())[0]
+
+
 def fingerprint(key):
     """SHA256:<unpadded base64> of a key ("<type> <b64>" or the bare blob), as ssh-keygen -lf prints it."""
     try:
