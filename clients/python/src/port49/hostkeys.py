@@ -304,7 +304,7 @@ def filed(name, paths, *, ssh_keygen="ssh-keygen"):
 
 def address_entry(address, port):
     """address as known_hosts files it: bare for port 22, else [address]:port."""
-    if not isinstance(address, str) or not address or re.search(r'[\s"\x00-\x1f\x7f]', address):
+    if (not isinstance(address, str) or not address or re.search(r'[\s"\x00-\x1f\x7f*?!,]|^[@|]', address)):
         raise HostKeyError("address", f"{str(address)[:64]!r} cannot be written to known_hosts as an address")
     return address if port == 22 else f"[{address}]:{port}"
 
@@ -317,6 +317,20 @@ def known_files(name, *, ssh="ssh", ssh_config=None):
     user = [p for p in _expand(conf.get("userknownhostsfile", "").split(), home) if p not in _KEEPS_NOTHING]
     glob = [p for p in _expand(conf.get("globalknownhostsfile", "").split(), home) if p not in _KEEPS_NOTHING]
     return user + glob, user[0] if user else "", conf.get("hashknownhosts") == "yes"
+
+
+def key_alias(name, *, ssh="ssh", ssh_config=None):
+    """(alias, command): the HostKeyAlias `ssh -G name` reports ("" for none), and whether a KnownHostsCommand
+    is set. An alias known_hosts would read as a pattern, a marker or a hash is host_key_uncheckable, as lookup
+    refuses it: it is the name port49 ssh files a key under, and the name the operator's own ssh reads."""
+    conf = _ssh_g(name, name, 22, None, ssh_config, ssh)
+    command = conf.get("knownhostscommand", "")
+    alias = conf.get("hostkeyalias", "")
+    if alias and (_ALIAS_UNSAFE.search(alias) or len(alias) > 253):
+        raise HostKeyError("host_key_uncheckable", f"your ssh_config's HostKeyAlias {_run.printable(alias, 64)!r} "
+                           f"would be filed in known_hosts as a pattern or a marker: use a plain alias, or port49 "
+                           f"ssh", name)
+    return alias, bool(command) and command != "none"
 
 
 def revoked_keys_file(name, *, ssh="ssh", ssh_config=None):

@@ -427,7 +427,7 @@ class AddressHelpersTest(unittest.TestCase):
         self.assertEqual(hostkeys.address_entry("10.0.0.1", 830), "[10.0.0.1]:830")
         self.assertEqual(hostkeys.address_entry("2001:db8::1", 830), "[2001:db8::1]:830")
         self.assertEqual(hostkeys.address_entry("2001:db8::1", 22), "2001:db8::1")
-        for bad in ("", "a b", "a\nb", 'a"b', " "):
+        for bad in ("", "a b", "a\nb", 'a"b', " ", "a,b", "a*", "a?", "!a", "@a", "|a"):
             with self.assertRaises(HostKeyError, msg=repr(bad)) as cm:
                 hostkeys.address_entry(bad, 22)
             self.assertEqual(cm.exception.code, "address")
@@ -447,6 +447,17 @@ class AddressHelpersTest(unittest.TestCase):
         self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), f"{hostkeys._passwd_home()}/krl")
         self.put(cfg, "")
         self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), "")
+
+    def test_key_alias_reports_the_alias_and_a_known_hosts_command(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "")
+        self.assertEqual(hostkeys.key_alias("leaf1", ssh_config=cfg), ("", False))
+        self.put(cfg, "HostKeyAlias corp-leaf1\nKnownHostsCommand /bin/true %H\n")
+        self.assertEqual(hostkeys.key_alias("leaf1", ssh_config=cfg), ("corp-leaf1", True))
+        self.put(cfg, "HostKeyAlias a*b\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.key_alias("leaf1", ssh_config=cfg)
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
 
     def test_known_files_with_nowhere_to_write(self):
         cfg = os.path.join(self.dir, "ssh_config")

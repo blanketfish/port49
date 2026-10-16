@@ -567,6 +567,83 @@ class HostKeys(PluginCase):
         self.assertIn("[host_key_revoked]", self.refused())
         self.assertEqual(self.calls.agent, [])
 
+    def alias(self, *extra):
+        self.use_ssh_config("Host leaf1", "HostKeyAlias corp-leaf1", *extra)
+
+    def test_a_host_key_alias_keys_are_the_names_keys(self):  # final fix round, I1
+        other = self.newkey("other")
+        self.alias()
+        self.put(self.names, f"corp-leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        self.assertIn("[host_key_changed]", self.refused())
+        self.assertEqual(self.calls.agent, [])
+        self.put(self.kh, "")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])  # filed under the alias: copied to the address
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+        self.assertEqual(self.read(self.names), f"corp-leaf1 {ED}\n")  # nothing filed under the bare name
+
+    def test_a_name_and_its_alias_that_disagree_refuse_naming_both(self):  # final fix round, I1
+        other = self.newkey("other")
+        self.alias()
+        self.put(self.names, f"leaf1 {ED}\ncorp-leaf1 {other}\n")
+        said = self.refused()
+        self.assertIn("[host_key_changed]", said)
+        for text in ("leaf1", "corp-leaf1", hostkeys.fingerprint(ED), hostkeys.fingerprint(other)):
+            self.assertIn(text, said)
+        self.assertEqual(self.calls.agent, [])
+        self.assertIsNone(self.read(self.kh))
+
+    def test_a_name_and_its_alias_that_agree_mint(self):  # final fix round, I1
+        self.alias()
+        self.put(self.names, f"leaf1 {ED}\ncorp-leaf1 {ED}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_case_3_with_an_alias_files_the_copy_under_the_port49_name(self):  # final fix round, I1
+        self.alias()
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.names), f"leaf1 {ED}\n")
+
+    def test_a_known_hosts_command_refuses_before_any_mint(self):  # final fix round, I1
+        self.use_ssh_config("KnownHostsCommand /bin/true %H")
+        said = self.refused()
+        self.assertIn("[host_key_uncheckable]", said)
+        self.assertIn("KnownHostsCommand", said)
+        self.assertIn("leaf1", said)
+        self.assertEqual(self.calls.agent, [])
+
+    def test_an_alias_known_hosts_would_misread_is_refused(self):  # final fix round, I1
+        self.use_ssh_config("Host leaf1", "HostKeyAlias corp,leaf1")
+        self.assertIn("[host_key_uncheckable]", self.refused())
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_name_whose_only_key_is_revoked_refuses_naming_the_device(self):  # final fix round, m1
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n@revoked * {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        said = self.refused()
+        self.assertIn("[host_key_revoked]", said)
+        self.assertIn("leaf1", said)
+        self.assertEqual(self.calls.agent, [])
+        self.assertEqual(self.read(self.names), f"leaf1 {ED}\n@revoked * {ED}\n")
+
+    def test_the_revoked_refusal_names_the_key_and_the_clearing_command(self):  # final fix round, m3
+        self.put(self.kh, f"10.0.0.11 {ED}\n@revoked * {ED}\n")
+        said = self.refused()
+        self.assertIn(hostkeys.fingerprint(ED), said)
+        self.assertIn(f"ssh-keygen -R 10.0.0.11 -f {self.kh}", said)
+
+    def test_an_address_known_hosts_would_read_as_a_pattern_is_an_address_error(self):  # final fix round, m2
+        for bad in ("a,b", "a*", "a?", "!a", "@a", "|a"):
+            del WARNINGS[:]
+            self.hostvars["leaf1"]["ansible_host"] = bad
+            said = self.refused()
+            self.assertIn("cannot be written to known_hosts as an address", said, bad)
+            self.assertNotIn("port49 takes devices named", said, bad)
+            self.assertIn("leaf1", said)
+        self.assertEqual(self.calls.agent, [])
+
     def test_no_output_carries_the_token(self):
         other = self.newkey("other")
         self.put(self.names, f"leaf1 {ED}\n")

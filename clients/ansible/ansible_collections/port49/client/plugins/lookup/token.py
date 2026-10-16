@@ -179,33 +179,71 @@ def _check_host_keys(device, variables, known_hosts_file):
         port = int(_hostvar(variables, device, "ansible_port") or _hostvar(variables, device, "ansible_ssh_port") or 22)
     except (TypeError, ValueError):
         raise port49.HostKeyError("address", "ansible_port is not a number", device) from None
-    entry = hostkeys.address_entry(address, port)
+    try:
+        entry = hostkeys.address_entry(address, port)
+    except port49.HostKeyError as e:
+        raise port49.HostKeyError(e.code, e.detail, device) from None
     ssh = _ssh_options()
+    alias, command = hostkeys.key_alias(name, **ssh)
+    if command:  # as hostkeys.lookup refuses it: reading past a KnownHostsCommand could accept a key ssh refuses
+        raise port49.HostKeyError("host_key_uncheckable", "your ssh_config sets KnownHostsCommand, which the lookup "
+                                  "cannot run as ssh does, so it cannot tell whether the address's key is the "
+                                  "device's: remove it for this device, or use port49 ssh", device)
     paths, write_to, hash_names = hostkeys.known_files(name, **ssh)
     krl = hostkeys.revoked_keys_file(name, **ssh)
+    # The name's keys are the port49 name's and, if the operator's ssh_config gives the device a HostKeyAlias
+    # (which port49 ssh lets stand), the alias's: ssh reads the alias, so that is where its keys live.
     name_keys, name_revoked = hostkeys.filed(name, paths)
+    alias_keys = []
+    if alias and alias != name:
+        alias_keys, alias_revoked = hostkeys.filed(alias, paths)
+        name_revoked = name_revoked + [r for r in alias_revoked if r not in name_revoked]
     addr_keys, addr_revoked = hostkeys.filed(entry, [known_hosts_file])
     addr_revoked += hostkeys.filed(entry, paths)[1]  # an @revoked line for the address in the ssh files counts too
 
     def revoked(revoked_lines, key):
-        kh = hostkeys.KnownHosts(name, (), (), tuple(revoked_lines), krl, False, hash_names, write_to)
+        kh = hostkeys.KnownHosts(name=name, keys=(), authorities=(), revoked=tuple(revoked_lines), krl=krl,
+                                 strict=False, hash_names=hash_names, write_to=write_to)
         return hostkeys.is_revoked(kh, *key.split(" ", 1))
 
+    def append(path, host, keys):  # the library's refusals carry no device: this one does
+        try:
+            return hostkeys.append(path, host, keys, hash_names=hash_names,
+                                   revoked=lambda k: revoked(name_revoked, k))
+        except port49.HostKeyError as e:
+            if e.code == "host_keys_not_kept":
+                raise
+            raise port49.HostKeyError(e.code, e.detail, device) from None
+
     if any(revoked(addr_revoked + name_revoked, k) for k in addr_keys):
-        raise port49.HostKeyError("host_key_revoked", f"a key filed for {address} is revoked (an @revoked line, or "
-                                  f"your RevokedHostKeys): verify the device's key on its console before filing "
+        key = next(k for k in addr_keys if revoked(addr_revoked + name_revoked, k))
+        raise port49.HostKeyError("host_key_revoked", f"the key {hostkeys.fingerprint(key)} filed for {address} is "
+                                  f"revoked (an @revoked line, or your RevokedHostKeys): verify the device's key on "
+                                  f"its console before filing another; to drop the address's entry, "
+                                  f"ssh-keygen -R {shlex.quote(entry)} -f {shlex.quote(known_hosts_file)}", device)
+    both = name_keys + [k for k in alias_keys if k not in name_keys]
+    if both and all(revoked(name_revoked, k) for k in both):  # as hostkeys.lookup: nothing left to trust
+        raise port49.HostKeyError("host_key_revoked", f"every key filed under {device} is revoked (an @revoked line, "
+                                  f"or your RevokedHostKeys): verify the device's key on its console before filing "
                                   f"another", device)
     name_keys = [k for k in name_keys if not revoked(name_revoked, k)]
+    alias_keys = [k for k in alias_keys if not revoked(name_revoked, k)]
+    split = _differing(name_keys, alias_keys)
+    if split:
+        seen = "; ".join(f"{k.split(' ', 1)[0]}: {name} has {hostkeys.fingerprint(k)}, {alias} has "
+                         f"{hostkeys.fingerprint(a)}" for k, a in split)
+        raise port49.HostKeyError(
+            "host_key_changed", f"the keys filed for {device} disagree with the keys filed for its HostKeyAlias "
+            f"{alias} ({seen}). Verify the device's key on its console, then clear the stale entry with "
+            f"ssh-keygen -R", device)
+    name_keys = name_keys + [k for k in alias_keys if k not in name_keys]
     if name_keys and not addr_keys:
-        hostkeys.append(known_hosts_file, entry, name_keys, hash_names=hash_names)
+        append(known_hosts_file, entry, name_keys)
     elif name_keys:
         have = {}
         for k in addr_keys:
             have.setdefault(k.split(" ", 1)[0], []).append(k)
-        # A type matches when any of the address's keys of it is one of the name's.
-        changed = [(k, have[t][0]) for t in dict.fromkeys(k.split(" ", 1)[0] for k in name_keys) if t in have
-                   for k in [next(k for k in name_keys if k.split(" ", 1)[0] == t)]
-                   if not set(have[t]) & {k for k in name_keys if k.split(" ", 1)[0] == t}]
+        changed = _differing(name_keys, addr_keys)
         if changed:
             seen = "; ".join(f"{k.split(' ', 1)[0]}: {device} has {hostkeys.fingerprint(k)}, {address} has "
                              f"{hostkeys.fingerprint(a)}" for k, a in changed)
@@ -214,16 +252,29 @@ def _check_host_keys(device, variables, known_hosts_file):
                 f"Verify the device's key on its console; if the address now belongs to this device, clear the "
                 f"old entry with: ssh-keygen -R {shlex.quote(entry)} -f "
                 f"{shlex.quote(known_hosts_file)}", device)
-        hostkeys.append(known_hosts_file, entry, [k for k in name_keys if k.split(" ", 1)[0] not in have],
-                        hash_names=hash_names)
+        append(known_hosts_file, entry, [k for k in name_keys if k.split(" ", 1)[0] not in have])
     elif addr_keys:
         try:  # a courtesy: without it the next address change is a first contact, which is today's behaviour
-            hostkeys.append(write_to, name, addr_keys, hash_names=hash_names)
+            append(write_to, name, addr_keys)
         except port49.HostKeyError as e:
             if e.code != "host_keys_not_kept":
                 raise
             _warn(f"port49: {device}: the key filed for {address} could not be copied under {device}, so a later "
                   f"address change will be a first contact again: {e.detail}")
+
+
+def _differing(want, have):
+    """[(a key of want, a key of have)] for each key type both hold where none of have's keys of the type is one
+    of want's: a type matches when any of the keys of it is shared."""
+    by_type = {}
+    for k in have:
+        by_type.setdefault(k.split(" ", 1)[0], []).append(k)
+    out = []
+    for t in dict.fromkeys(k.split(" ", 1)[0] for k in want):
+        mine = [k for k in want if k.split(" ", 1)[0] == t]
+        if t in by_type and not set(by_type[t]) & set(mine):
+            out.append((mine[0], by_type[t][0]))
+    return out
 
 
 class LookupModule(LookupBase):
