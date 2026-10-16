@@ -374,10 +374,76 @@ func (g generator) render() (Result, error) {
 	return res2, nil
 }
 
-// shape is the capability shape, or the narrow one where only it can carry
+// shape is the reply as the set renders it without DenyReachBits (set
+// 1.2.0's), except where that reply leaves refused on the device a carve-out
+// of a listed bit the grant permits, `show configuration`: there it is the
+// reply sending the bit with its undecided reach denied (decision 48), where
+// the grant allows it (reachDenies). A grant whose 1.2.0 reply already runs
+// the carve-out, a plain readonly's narrow `view view-configuration` say,
+// keeps that reply byte for byte.
+//
+// Where the reach denies take deny-commands past RFC 8907's length, the reply
+// is the one without them: the bit unsent, and the device refusing the
+// carve-out it would have shown, which is narrower than port49 and measured
+// (decision 48 ruling 4). Where that reply does not carry the grant either,
+// its own refusal stands: its length where it overflows too, the grant's own
+// denies without a reach deny the operator never wrote. ReachOverflow is set
+// only where the fallback kept the capability shape: a narrow fallback means
+// the grant's own denies overflow too, and the warning would blame the wrong
+// denies (pre-flight M4).
+func (g generator) shape() (Result, error) {
+	if g.noReach || len(g.in.Dialect.DenyReachBits) == 0 {
+		return g.shapeOf()
+	}
+	h := g
+	h.noReach = true
+	base, berr := h.shapeOf()
+	if berr == nil {
+		refused, err := g.refusesCarve(base)
+		if err != nil || !refused {
+			return base, err
+		}
+	}
+	res, err := g.shapeOf()
+	var over *Refusal
+	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		if berr == nil && base.Shape == ShapeCapability {
+			base.ReachOverflow = over.reach
+		}
+		return base, berr
+	}
+	// A reach reply refused for another reason is no reason to lose the one
+	// 1.2.0 sends; where 1.2.0 sends none, the reach reply is tried as it is.
+	if err != nil && berr == nil {
+		return base, nil
+	}
+	return res, err
+}
+
+// refusesCarve reports whether the device refuses, under res, a carve-out of
+// a DenyReachBits bit that the grant permits and no deny holds: the model's
+// prediction for the carve-out's command, its words before `**`.
+func (g generator) refusesCarve(res Result) (bool, error) {
+	m, err := g.model(res)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range g.in.Dialect.DenyReachBits {
+		for _, c := range g.in.Dialect.CarveOuts[b] {
+			v := strings.Fields(strings.TrimSuffix(c, "**"))
+			if len(v) == 0 || !m.port.Command(raw(v)).Permit || m.predicts(v) {
+				continue
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// shapeOf is the capability shape, or the narrow one where only it can carry
 // the grant, or where the capability shape's deny-commands is past the
 // budget: the narrow shape's `.*` holds every deny in four bytes.
-func (g generator) shape() (Result, error) {
+func (g generator) shapeOf() (Result, error) {
 	res, err := g.capability()
 	var no *narrowOnly
 	if errors.As(err, &no) {
@@ -408,33 +474,11 @@ func (g generator) shape() (Result, error) {
 		return n, nerr
 	}
 	res, err = g.finish(res, err)
-	// Where the reach denies take deny-commands past RFC 8907's length, the
-	// reply is the one without them, as the set renders it without
-	// DenyReachBits: the bit unsent, and the device refusing the carve-out it
-	// would have shown, which is narrower than port49 and measured (decision
-	// 48 ruling 4). Where that reply does not carry the grant either, the
-	// overflow stands and the composition fails closed.
-	// It runs once: the fallback's own generator has noReach set, so a
-	// fallback that overflowed again could not recurse (pre-flight I1).
-	// ReachOverflow is set only where the fallback kept the capability
-	// shape: a narrow fallback means the grant's own denies overflow too, and
-	// the warning would blame the wrong denies (pre-flight M4).
+	// An overflow the reach denies made is shape's to fall back from, to the
+	// reply without them, not the narrow shape's.
 	var over *Refusal
-	if !g.noReach && errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
-		h := g
-		h.noReach = true
-		if fb, ferr := h.shape(); ferr == nil {
-			if fb.Shape == ShapeCapability {
-				fb.ReachOverflow = over.reach
-			}
-			return fb, nil
-		} else {
-			// The refusal is the fallback's own: its length where it
-			// overflows too, the grant's own denies without a reach deny the
-			// operator never wrote, and its own reason where it fails for
-			// another. Project fails closed on it either way.
-			return Result{}, ferr
-		}
+	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		return Result{}, err
 	}
 	// Under the entry deny, a capability reply that sends an allow its bits
 	// do not reach yields to a narrow one whose bits reach every allow and

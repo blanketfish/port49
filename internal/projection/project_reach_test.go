@@ -300,3 +300,99 @@ func TestADoubleOverflowQuotesTheFallbacksLength(t *testing.T) {
 		t.Fatalf("1.3.0 %+v %v\n1.2.0 %+v", res.Refusal, err, was.Refusal)
 	}
 }
+
+// l68 are the attributes L68 measured for rows P and O
+// (tests/lab/results/L68-juniper_*.md): set 1.3.0's readonly and operator
+// replies where the grant permits `show configuration` under a deny beneath
+// `show`.
+var l68 = map[string][]string{
+	"P": {"user-permissions=view view-configuration", l68Deny},
+	"O": {"user-permissions=clear view view-configuration", l68Deny},
+}
+
+const l68Deny = `deny-commands=^( *show +security( .*)? *(\|.*)?| *(monitor|help|quit|exit|file|load|op|request|save|scp|set|start|test|junoscript)( .*)? *(\|.*)?| *set +cli( .*)? *(\|.*)?)$`
+
+// Set 1.3.0 renders byte for byte as set 1.2.0 for every grant, except where
+// 1.2.0's reply leaves a permitted `show configuration` refused on the device
+// (controller's ruling on the Task 6 lab run, 2026-10-16). There it sends L68's
+// measured reply. A plain readonly keeps the narrow shape and both bits (§8).
+func TestSet130RendersAsSet120ButWhereShowConfigurationIsRefused(t *testing.T) {
+	grp := func(r engine.Rule, role string) engine.Rule { r.Role = role; return r }
+	for _, c := range []struct {
+		name, level string
+		rules       []engine.Rule
+		// row is where 1.3.0 differs from 1.2.0: L68's row, or "ruled", where
+		// it is 1.2.0's reply to the grant writing `deny: [monitor **]` (decision
+		// 48 ruling 2)
+		row string
+	}{
+		{"plain readonly", "readonly", []engine.Rule{permit("show **")}, ""},
+		{"plain operator", "operator", []engine.Rule{permit("**")}, ""},
+		{"operator show clear", "operator", []engine.Rule{permit("show **"), permit("clear **")}, ""},
+		{"readonly less show configuration", "readonly", []engine.Rule{permit("show **"), deny("show configuration **")}, ""},
+		{"operator less show configuration", "operator", []engine.Rule{permit("**"), deny("show configuration **")}, ""},
+		{"operator show clear less show configuration", "operator",
+			[]engine.Rule{permit("show **"), permit("clear **"), deny("show configuration **")}, ""},
+		{"readonly less show security", "readonly", []engine.Rule{permit("show **"), deny("show security **")}, "P"},
+		{"operator less show security", "operator",
+			[]engine.Rule{permit("show **"), permit("clear **"), deny("show security **")}, "O"},
+		{"groups less show security", "readonly",
+			[]engine.Rule{grp(permit("show **"), "noc"), grp(deny("show security **"), "contractors")}, "P"},
+		{"groups less show security, operator", "operator", []engine.Rule{grp(permit("show **"), "noc"),
+			grp(permit("clear **"), "ops"), grp(deny("show security **"), "contractors")}, "O"},
+		{"groups plain", "readonly", []engine.Rule{grp(permit("show **"), "noc"), grp(permit("show version"), "ops")}, ""},
+		{"readonly less show security and monitor", "readonly",
+			[]engine.Rule{permit("show **"), deny("show security **"), deny("monitor **")}, ""},
+		{"readonly less show log", "readonly", []engine.Rule{permit("show **"), deny("show log **")}, "ruled"},
+		{"readonly less show configuration interfaces", "readonly",
+			[]engine.Rule{permit("show **"), deny("show configuration interfaces **")}, ""},
+		{"readonly less show configuration and show security", "readonly",
+			[]engine.Rule{permit("show **"), deny("show configuration **"), deny("show security **")}, ""},
+		{"readonly with monitor interface", "readonly",
+			[]engine.Rule{permit("show **"), permit("monitor interface **"), deny("show security **")}, ""},
+		{"configuration hierarchies", "readonly", []engine.Rule{permit("show configuration **"), permit("show log **"),
+			permit("show firewall **"), permit("show policer **")}, ""},
+		{"show configuration alone", "readonly", []engine.Rule{permit("show configuration **")}, ""},
+		{"show configuration protocols", "readonly",
+			[]engine.Rule{permit("show bgp **"), permit("show configuration protocols **")}, ""},
+		{"show log alone", "readonly", []engine.Rule{permit("show log **")}, ""},
+		{"show version", "readonly", []engine.Rule{permit("show version")}, ""},
+		{"show interfaces and route", "readonly", []engine.Rule{permit("show interfaces **"), permit("show route **")}, ""},
+		{"nothing under show", "readonly", []engine.Rule{permit("ping **")}, ""},
+		{"nothing under show, operator", "operator", []engine.Rule{permit("clear **"), permit("request **")}, ""},
+		{"no permit", "readonly", []engine.Rule{deny("show security **")}, ""},
+		{"readonly less show route", "readonly", []engine.Rule{permit("show **"), deny("show route **")}, "ruled"},
+		{"operator all less show security", "operator", []engine.Rule{permit("**"), deny("show security **")}, ""},
+		{"readonly less show chassis", "readonly", []engine.Rule{permit("show **"), deny("show chassis **")}, "ruled"},
+		{"overflow falls back", "readonly", []engine.Rule{permit("show **"), deny("show security **"),
+			deny("show chassis **"), deny("show interfaces **"), deny("show route **"), deny("show system **"),
+			deny("show bgp **"), deny("show ospf **")}, ""},
+	} {
+		was, werr := Project(shipped("1.2.0", c.level, c.rules...))
+		is, ierr := Project(shipped("1.3.0", c.level, c.rules...))
+		if (werr == nil) != (ierr == nil) {
+			t.Errorf("%s: 1.2.0 %v, 1.3.0 %v", c.name, werr, ierr)
+			continue
+		}
+		if c.row == "" {
+			if is.Shape != was.Shape || !slices.Equal(is.Attributes, was.Attributes) || len(is.ReachDenies()) != 0 {
+				t.Errorf("%s: 1.3.0 differs from 1.2.0\n 1.3.0 %s %q\n 1.2.0 %s %q",
+					c.name, is.Shape, is.Attributes, was.Shape, was.Attributes)
+			}
+			continue
+		}
+		if c.row == "ruled" {
+			want, _ := Project(shipped("1.2.0", c.level, append(slices.Clone(c.rules), deny("monitor **"))...))
+			if !slices.Equal(is.Attributes, want.Attributes) || len(is.ReachDenies()) != 1 {
+				t.Errorf("%s: not 1.2.0's reply with monitor denied\n 1.3.0 %q\n want  %q", c.name, is.Attributes,
+					want.Attributes)
+			}
+		} else if !slices.Equal(is.Attributes, l68[c.row]) || len(denyCommands(is)) != 173 {
+			t.Errorf("%s: not L68's row %s\n 1.3.0 %q", c.name, c.row, is.Attributes)
+		}
+		if was.Device([]string{"show", "configuration"}) || !is.Device([]string{"show", "configuration"}) {
+			t.Errorf("%s: 1.2.0 runs show configuration %v, 1.3.0 %v", c.name,
+				was.Device([]string{"show", "configuration"}), is.Device([]string{"show", "configuration"}))
+		}
+	}
+}
