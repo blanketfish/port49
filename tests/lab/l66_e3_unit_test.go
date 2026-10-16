@@ -3,6 +3,8 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -60,5 +62,31 @@ func TestL66KeywordPlay(t *testing.T) {
 	if !strings.Contains(got, "  connection: ansible.netcommon.network_cli\n") || !strings.Contains(got, "L66PROBE[") ||
 		strings.Index(got, "L66PROBE") > strings.Index(got, "mint once") {
 		t.Fatalf("play = %s", got)
+	}
+}
+
+func TestL66E3Heading(t *testing.T) {
+	for _, only := range []string{"e3", "e3d"} {
+		title, run := l66E3Heading(only, "2026-10-16")
+		if title != "## ("+only+") — 2026-10-16\n\n" || run != "`PORT49_L66_ONLY="+only+"`" {
+			t.Errorf("%s: title %q run %q", only, title, run)
+		}
+	}
+}
+
+func TestLabGuardAt(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "STOP")
+	if err := labGuardAt(sentinel, dir, 1); err != nil {
+		t.Fatalf("no sentinel and room: %v", err)
+	}
+	if err := labGuardAt(sentinel, dir, 1<<40); err == nil || !strings.Contains(err.Error(), "floor") {
+		t.Fatalf("a floor above the free space: %v", err)
+	}
+	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := labGuardAt(sentinel, dir, 1); err == nil || !strings.Contains(err.Error(), "STOP") {
+		t.Fatalf("a sentinel: %v", err)
 	}
 }

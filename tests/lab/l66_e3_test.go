@@ -19,7 +19,7 @@ import (
 
 // L66 (e3) (plan 9f, Task 4): (e)'s moved address, run through the lookup, which checks the address's keys
 // against the keys filed under the port49 name before it mints. Run it alone with PORT49_L66_ONLY=e3; it writes
-// tests/lab/logs/l66e3-<platform>.md, a section for the results note, and never the note itself.
+// tests/lab/logs/l66<only>-<platform>.md (<only> is e3 or e3d), a section for the results note, and never the note itself.
 //
 // The premise is `port49 ssh`'s: the device's keys are filed under its name. The cell files them from
 // ssh-keyscan. A control then logs in at the device's own address, which has no entry: the lookup copies the
@@ -276,7 +276,7 @@ func runL66E3(e *l66Env, only string) {
 		for _, t := range []string{"libssh", "paramiko"} {
 			e.cellE3("L66e3d-"+t, t, "noauto")
 		}
-		l66WriteE3(e)
+		l66WriteE3(e, only)
 		return
 	}
 	for _, t := range []string{"libssh", "paramiko"} {
@@ -288,12 +288,17 @@ func runL66E3(e *l66Env, only string) {
 	for _, t := range []string{"libssh", "paramiko"} {
 		e.cellE3("L66e3b-"+t, t, "fresh")
 	}
-	l66WriteE3(e)
+	l66WriteE3(e, only)
+}
+
+// l66E3Heading is the title and run line of a fragment written for PORT49_L66_ONLY=only.
+func l66E3Heading(only, day string) (title, run string) {
+	return fmt.Sprintf("## (%s) — %s\n\n", only, day), fmt.Sprintf("`PORT49_L66_ONLY=%s`", only)
 }
 
 // l66WriteE3 writes the section a results note gets, unless a cell was INVALID. It is a fragment in
 // tests/lab/logs, copied into the note by hand after the run is read; nothing here overwrites a note.
-func l66WriteE3(e *l66Env) {
+func l66WriteE3(e *l66Env, only string) {
 	t, l := e.t, e.l
 	if ok, why := l66Writable(e.results); !ok {
 		fmt.Fprintf(os.Stdout, "L66 %s NO_NOTE %s\n", l.p.name, why)
@@ -302,9 +307,10 @@ func l66WriteE3(e *l66Env) {
 	}
 	var b strings.Builder
 	day := time.Now().UTC().Format("2006-01-02")
-	fmt.Fprintf(&b, "## (e3) — %s\n\n", day)
-	fmt.Fprintf(&b, "- **Platform:** %s (containerlab node `%s`, %s)\n- **Image version:** %s (`%s`)\n- **Capture:** %s\n- **Run:** %s, `PORT49_L66_ONLY=e3`\n\n",
-		l.p.name, l.p.node, l.p.addr, l.p.version, l.p.image, l.captureLine(t), runLine())
+	title, run := l66E3Heading(only, day)
+	b.WriteString(title)
+	fmt.Fprintf(&b, "- **Platform:** %s (containerlab node `%s`, %s)\n- **Image version:** %s (`%s`)\n- **Capture:** %s\n- **Run:** %s, %s\n\n",
+		l.p.name, l.p.node, l.p.addr, l.p.version, l.p.image, l.captureLine(t), runLine(), run)
 	fmt.Fprintf(&b, "Versions in this run: %s.\n\n", e.versions)
 	b.WriteString("| cell | outcome | elapsed |\n|---|---|---|\n")
 	for _, r := range e.results {
@@ -315,7 +321,7 @@ func l66WriteE3(e *l66Env) {
 	}
 	dir := filepath.Join(root, "tests", "lab", "logs")
 	_ = os.MkdirAll(dir, 0o755)
-	p := filepath.Join(dir, "l66e3-"+l.p.name+".md")
+	p := filepath.Join(dir, "l66"+only+"-"+l.p.name+".md")
 	if err := os.WriteFile(p, []byte(labcreds.RedactNote(l66Scrub(b.String(), e.hashes, labcreds.TokenLen))), 0o644); err != nil {
 		t.Fatalf("write %s: %v", p, err)
 	}
@@ -332,14 +338,22 @@ const (
 // labGuard ends the run (a Fatal, so the teardown defers run) when the stop sentinel exists or the disk is below
 // the floor. It runs before each cell.
 func (e *l66Env) labGuard() {
-	if _, err := os.Stat(l66StopSentinel); err == nil {
-		e.t.Fatalf("%s exists: the lab run stops before %s", l66StopSentinel, "the next cell")
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		e.t.Fatalf("%v", err)
+	}
+}
+
+// labGuardAt is the guard's test: an error when sentinel exists or path has under floorMB free.
+func labGuardAt(sentinel, path string, floorMB int64) error {
+	if _, err := os.Stat(sentinel); err == nil {
+		return fmt.Errorf("%s exists: the lab run stops before the next cell", sentinel)
 	}
 	var st syscall.Statfs_t
-	if err := syscall.Statfs("/", &st); err != nil {
-		e.t.Fatalf("statfs /: %v", err)
+	if err := syscall.Statfs(path, &st); err != nil {
+		return fmt.Errorf("statfs %s: %v", path, err)
 	}
-	if free := int64(st.Bavail) * int64(st.Bsize) / (1 << 20); free < l66DiskFloorMB {
-		e.t.Fatalf("%dM free on /, below the %dM floor: the lab run stops", free, l66DiskFloorMB)
+	if free := int64(st.Bavail) * int64(st.Bsize) / (1 << 20); free < floorMB {
+		return fmt.Errorf("%dM free on %s, below the %dM floor: the lab run stops", free, path, floorMB)
 	}
+	return nil
 }
