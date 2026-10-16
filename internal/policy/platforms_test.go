@@ -732,6 +732,44 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	}
 }
 
+// A block may drop set 1.3.0's deny_reach_bits and never add a bit the set
+// did not measure; a platform the set does not project may not carry it
+// (decision 48 ruling 3).
+func TestABlockMayDropDenyReachBitsNotAddOne(t *testing.T) {
+	head := "platform_set: 1.3.0\nplatforms:\n  juniper_junos:\n"
+	for _, c := range []struct {
+		block string
+		ok    bool
+	}{
+		{"    deny_reach_bits: []\n", true},
+		{"    deny_reach_bits: [view-configuration]\n", true},
+		{"    deny_reach_bits: [view-configuration, view]\n", false},
+	} {
+		_, err := Parse([]byte(head+c.block+scopeOK+"roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"]}\n"+
+			subjOK+grantOK), env())
+		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), "deny_reach_bits") {
+			t.Errorf("%q: %v", c.block, err)
+		}
+	}
+	_, err := Parse([]byte("platform_set: 1.3.0\nplatforms:\n  arista_eos:\n    deny_reach_bits: [view]\n"+
+		scopeOK+"roles:\n  - {name: r, permit: [\"show **\"]}\n"+subjOK+grantOK), env())
+	if err == nil || !strings.Contains(err.Error(), "deny_reach_bits") {
+		t.Errorf("a platform the set does not project: %v", err)
+	}
+}
+
+// A block that drops view-configuration's carve-out leaves deny_reach_bits
+// inert: the policy loads on 1.3.0, so `platform upgrade --to 1.3.0` is not
+// refused (pre-flight M3). reachDenies finds no carve-out to need the bit.
+func TestABlockDroppingTheCarveOutLoadsOn130(t *testing.T) {
+	_, err := Parse([]byte("platform_set: 1.3.0\nplatforms:\n  juniper_junos:\n    carve_outs: {view-configuration: []}\n"+
+		scopeOK+"roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show security **\"]}\n"+
+		subjOK+grantOK), env())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A block keeps set 1.2.0's whole entry deny list or drops it with `[]`, and
 // never adds one the set did not measure; a partial list leaves an RPC entry
 // open and is refused, naming what it left out (decision 44 ruling 5).

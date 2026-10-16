@@ -1094,6 +1094,86 @@ func TestThePredictionFollowsTheMeasuredAllowsPastTheBits(t *testing.T) {
 	}
 }
 
+// Under set 1.3.0 the readonly denying `show security` is sent
+// view-configuration (decision 48): explain says the device runs `show
+// configuration` and refuses `monitor`; the projection finding names the
+// reach deny and no shortfall; the view-configuration warning does not fire,
+// and the netconf-closed one does.
+func TestSet130PredictsTheConfigurationRuns(t *testing.T) {
+	p := mustParse(t, "platform_set: 1.3.0\n"+scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}
+`+subjOK+grantOK)
+	caveats := func(cmd string) string {
+		e, err := p.Explain("s", "", "srx-fw-04", cmd, noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(e.Caveats, "\n")
+	}
+	if c := caveats("show configuration system host-name"); !strings.Contains(c, "the device runs it;") ||
+		strings.Contains(c, "does not carry it") || strings.Contains(c, "may refuse") {
+		t.Errorf("show configuration: %q", c)
+	}
+	if c := caveats("monitor interface fxp0"); !strings.Contains(c, "the device refuses it;") {
+		t.Errorf("monitor: %q", c)
+	}
+	kinds := map[string][]string{}
+	for _, f := range p.Projections(noon) {
+		kinds[f.Kind] = append(kinds[f.Kind], f.Message)
+	}
+	msg := strings.Join(kinds[FindingProjection], "\n")
+	if !strings.Contains(msg, "capability shape, bits view view-configuration") ||
+		!strings.Contains(msg, "(deny_reach_bits; decision 48): monitor **") ||
+		strings.Contains(msg, "probe commands") {
+		t.Errorf("projection finding: %q", msg)
+	}
+	if len(kinds[FindingProjectionDenyBeneathViewConfiguration]) != 0 || len(kinds[FindingProjectionNetconfClosed]) != 1 {
+		t.Errorf("warnings: %v", kinds)
+	}
+	if ProjectionRefusals(p.Projections(noon)) != 0 {
+		t.Error("the composition is refused")
+	}
+}
+
+// Past 255 bytes the reach denies are left off under 1.3.0 and the reply falls
+// back to 1.2.0's (R2, controller's ruling): nothing is refused, policy test
+// warns projection_reach_deny_overflow naming the deny and the remedy, explain
+// says the device refuses `show configuration`, and policy diff prints the
+// warning the change brings.
+func TestSet130OverflowWarnsAndFallsBack(t *testing.T) {
+	role := `roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **", "show route **", "show bgp **", "show ospf **"]}
+`
+	was := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+role+subjOK+grantOK)
+	p := mustParse(t, "platform_set: 1.3.0\n"+scopeOK+role+subjOK+grantOK)
+	fs := p.Projections(noon)
+	var warn []string
+	for _, f := range fs {
+		if f.Kind == FindingProjectionReachDenyOverflow {
+			warn = append(warn, f.Message)
+		}
+	}
+	if ProjectionRefusals(fs) != 0 || len(warn) != 1 || !strings.Contains(warn[0], "monitor **") ||
+		!strings.Contains(warn[0], "255") || !strings.Contains(warn[0], "port49 platform export --classes") ||
+		!strings.Contains(warn[0], "where they bind every subject at that template") {
+		t.Errorf("refusals %d, warning %q", ProjectionRefusals(fs), warn)
+	}
+	e, err := p.Explain("s", "", "srx-fw-04", "show configuration system host-name", noon)
+	if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), "the device refuses it;") {
+		t.Errorf("explain: %+v %v", e.Caveats, err)
+	}
+	for _, f := range was.Projections(noon) {
+		if f.Kind == FindingProjectionReachDenyOverflow {
+			t.Errorf("1.2.0 warns: %q", f.Message)
+		}
+	}
+	if d := Compare(was, p, noon); !slices.ContainsFunc(d.ProjectionWarnings, func(f Finding) bool {
+		return f.Kind == FindingProjectionReachDenyOverflow
+	}) {
+		t.Errorf("policy diff does not print the warning: %+v", d.ProjectionWarnings)
+	}
+}
+
 const narrowRole = `roles:
   - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}
 `

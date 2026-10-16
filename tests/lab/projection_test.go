@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ const (
 // carries no entry deny, and the canonical `op url` did not run in it: every
 // `op` refusal in the other rows is then unisolated, and the run is INVALID.
 func opControlMissing(set, row, cmd string, ran bool) bool {
-	return set == "1.2.0" && row == "operator, all it reaches" && cmd == opURLCmd && !ran
+	return (set == "1.2.0" || set == "1.3.0") && row == "operator, all it reaches" && cmd == opURLCmd && !ran
 }
 
 var projectionProbes = []projectionProbe{
@@ -231,6 +232,35 @@ var projectionShapes120 = []struct{ name, roles, want string }{
 	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, projection.ShapeNarrow},
 }
 
+// projectionShapes130 are set 1.3.0's (plan 9g; L68). The readonly denying
+// `show security` now gets `view view-configuration` with `monitor **`
+// denied, and its `show configuration` must run; so must the operator's, at
+// `clear view view-configuration` (pre-flight I6). The readonly denying `show
+// configuration` keeps 1.2.0's reply; the operator control keeps NETCONF.
+var projectionShapes130 = []struct{ name, roles, want string }{
+	{"readonly denying show security", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **"]}`, projection.ShapeCapability},
+	{"operator denying show security", `  - {name: r, privilege: operator, permit: ["show **", "clear **"], deny: ["show security **"]}`, projection.ShapeCapability},
+	{"readonly denying show configuration", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeCapability},
+	{"operator, all it reaches", `  - {name: r, privilege: operator, permit: ["**"]}`, projection.ShapeCapability},
+	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, projection.ShapeNarrow},
+}
+
+// projectionProbes130 are typed in set 1.3.0's rows besides projectionProbes:
+// view-configuration's other reach as commands that run in the control
+// ("operator, all it reaches"), so a reply that let one through is seen. The
+// `request` words, which run in no row, are Task 1's (L68), with their
+// isolation.
+var projectionProbes130 = []projectionProbe{
+	{junosProbe{cmd: "monitor list"}, "monitor list"},
+	{junosProbe{cmd: "mon list"}, "monitor list"},
+	{junosProbe{cmd: "monitor list | no-more"}, "monitor list"},
+}
+
+// viewConfigurationRows130 are the set 1.3.0 rows sent view-configuration for
+// `show configuration`: the device refusing it there is a STOP, since that
+// delivery is plan 9g's point (pre-flight I2).
+var viewConfigurationRows130 = []string{"readonly denying show security", "operator denying show security"}
+
 // TestProjectionDifferential runs the differential once per set
 // PORT49_LAB_PROJECTION_SETS names (comma-separated, default 1.1.0,1.2.0):
 // 1.1.0 with projectionShapes into L12-projection, 1.2.0 with
@@ -255,12 +285,17 @@ func TestProjectionDifferential(t *testing.T) {
 func (l *lab) projectionSet(t *testing.T, v string) {
 	t.Helper()
 	shapes, entry := projectionShapes, "L12-projection"
-	capName := map[string]string{"1.1.0": "projection", "1.2.0": "L26c-projected"}[v]
+	capName := map[string]string{"1.1.0": "projection", "1.2.0": "L26c-projected", "1.3.0": "L68-projected"}[v]
 	if capName == "" {
 		t.Fatalf("INVALID: no capture name for set %s; L12's evidence must not be overwritten", v)
 	}
 	if v == "1.2.0" {
 		shapes, entry = projectionShapes120, "L26c-projected"
+	}
+	probes := projectionProbes
+	if v == "1.3.0" {
+		shapes, entry = projectionShapes130, "L68-projected"
+		probes = slices.Concat(projectionProbes, projectionProbes130)
 	}
 	port49 := filepath.Join(root, "bin", "port49")
 	if _, err := os.Stat(port49); err != nil {
@@ -312,7 +347,7 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	for _, shape := range shapes {
 		fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
 		b.WriteString(l.projectionShape(t, v, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
-			netconfOff, &rendered))
+			netconfOff, probes, &rendered))
 	}
 	b.WriteString("\n### the commit checker (L9)\n\n")
 	b.WriteString(l.projectionCommitCheck(t, rendered))
@@ -329,6 +364,12 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 			"subsystem are refused under port49's rendered reply, and the shipped readonly's nested deny " +
 			"(decision 44 rulings 1, 4 and 10; spec §15 L26c, L58)."
 	}
+	if v == "1.3.0" {
+		claim = "Set 1.3.0's projection end to end (plan 9g Task 6; L68): for each shape, the reply port49 " +
+			"renders, the readonly and the operator denying `show security` sent view-configuration with " +
+			"`monitor **` denied (decision 48), what the CLI runs and refuses, `show configuration` running " +
+			"where it is sent, and the XML entries and NETCONF under port49's rendered reply (spec §15 L68)."
+	}
 	// entryResult writes no note after a failed or INVALID run, and withholds
 	// one that holds a pool token: a note under either set is a valid run's.
 	l.entryResult(t, entry, claim, b.String())
@@ -336,8 +377,12 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 
 // projectionShape runs one shape and renders its section of the note.
 func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []admission.Device, name, roles string,
-	want string, netconfOff bool, rendered *[]string) string {
+	want string, netconfOff bool, probes []projectionProbe, rendered *[]string) string {
 	t.Helper()
+	// The lab's rules before each row: the STOP sentinel and the disk floor.
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("%v", err)
+	}
 	body := "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
 		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
 		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
@@ -423,7 +468,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		"`, `"), shape, precReply(l16TrimEcho(auth, "show cli authorization")))
 	b.WriteString("| typed | port49 on | port49 | projection predicts | device | agrees |\n|---|---|---|---|---|---|\n")
 	var shortfalls []string
-	for _, p := range projectionProbes {
+	for _, p := range probes {
 		devOut, err := l.junosProbe(c, p.junosProbe)
 		if err != nil {
 			t.Errorf("%s: %q not observed within %s: %v", name, p.cmd, junosPer, err)
@@ -461,6 +506,10 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 		case keepsDeny && res.Projection.FailClosed == "" && predicts && o.Permit && !ran && !p.complete &&
 			!configEntry(p.cmd) && !projectionReadings[p.cmd] && !upperCaseTyped(p.cmd):
 			t.Errorf("%s: the device refused %q, which port49 permits and the reply was proven to let run", name, p.cmd)
+		case set == "1.3.0" && slices.Contains(viewConfigurationRows130, name) && p.evidence == hostEvidence &&
+			!upperCaseTyped(p.cmd) && predicts && o.Permit && !ran:
+			t.Errorf("STOP: %s: the device refused %q under set 1.3.0's reply, which sends view-configuration "+
+				"so that it runs: the reply does not deliver what plan 9g ships; report to the controller", name, p.cmd)
 		case ran && !o.Permit:
 			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
 		case ran && !predicts:

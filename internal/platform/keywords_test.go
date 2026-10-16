@@ -396,6 +396,17 @@ func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 var releasedKeywords = map[string]string{
 	"1.1.0/juniper_junos": "aa1440897d46146ee4f6ae0b5be8b0ec89643b95f0bd0992b5062c142a4b0168",
 	"1.2.0/juniper_junos": "2017ca9e10d5e3e7c53fb78cd65a5480aa91387212cef7a6924aa87110912688",
+	"1.3.0/juniper_junos": "2017ca9e10d5e3e7c53fb78cd65a5480aa91387212cef7a6924aa87110912688",
+}
+
+// Set 1.3.0's Junos tree is 1.2.0's, byte for byte (decision 48 changes no
+// keyword).
+func TestTheSet130JunosTreeIsSet120s(t *testing.T) {
+	was, err1 := fs.ReadFile(platforms.Keywords, "keywords/1.2.0/juniper_junos.yaml")
+	is, err2 := fs.ReadFile(platforms.Keywords, "keywords/1.3.0/juniper_junos.yaml")
+	if err1 != nil || err2 != nil || string(is) != string(was) {
+		t.Fatal("platforms/keywords/1.3.0/juniper_junos.yaml is not 1.2.0's", err1, err2)
+	}
 }
 
 func TestReleasedKeywordTreesAreFrozen(t *testing.T) {

@@ -3642,6 +3642,7 @@ attribute is complete in four lines:
 | `carve_outs` | the commands a bit alone makes available, whatever other bit reaches them: each rule held by that bit's own reach, measured in the lab (L12). The only subtraction from the union: a bit not held removes no command another bit reaches except these. A block may drop one and never add one. A `platforms:` block for a platform the pinned set does not project may not declare `carve_outs` at all, and is refused at load (`command_projection`): only a measured set subtracts reach | optional, with `bits` |
 | `local_user_names` | under `bit_delivery: local_user_name`, each level's template user on the device, whose class `port49 platform export --classes` renders with the level's bits. Each is `p49-<name>`, in the set and in a block alike, and never `remote` or a platform system user such as `root`: a template the device already has under another class would put the session in that class, whatever bits the projection proved | with `local_user_name` |
 | `rpc_entry_denies` | on a projected platform, the denies a reply adds where a wire deny is the only guard beneath a sent bit or the baseline, closing the CLI's ways into a native RPC for that session (decision 44). Set 1.2.0's `juniper_junos` carries `["junoscript **", "op **"]` (L26c-scripts: `op` reaches past the `junoscript` deny). Each is words and a trailing `**`. A block keeps the whole list or drops it with `[]`, and the platform then renders as set 1.1.0 does; a partial list is refused at load, because it leaves an entry open (`op url` reaches past the `junoscript` deny, L26c-scripts); it may never add one the set did not measure | optional |
+| `deny_reach_bits` | on a projected platform whose adapter carries `rpc_entry_denies`, the bits a reply may send where the grant permits a carve-out of the bit that an allow past the bits is not measured to run, with the rest of the bit's reach that the grant decides nothing of denied on the wire, role `reach_deny` (decision 48). Set 1.3.0's `juniper_junos` carries `[view-configuration]` (L68). Each is a declared bit, never `baseline` or `all`; a bit with no carve-out (a block may drop it) is inert. A block may drop one, `[]` all, and never add one; where the block drops `rpc_entry_denies` the key is inert | optional |
 | `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
@@ -4065,9 +4066,57 @@ carries them beside the entry deny. Each change below renders only where the ada
 So a readonly granted `show **` less `show configuration **` gets `view`, a `deny-commands` of
 170 bytes (its twelve `word **` denies and `junoscript` in one alternative, `set cli` and its
 own deny), and allows of `show log`, `show firewall` and `show policer`, view-configuration's
-other carve-outs. view-configuration is not sent: the grant decides none of its other reach
-(`monitor`, `request mpls` and the rest). A readonly granted `show **` alone keeps the narrow
-shape and both bits, as under set 1.1.0.
+other carve-outs. view-configuration stays out: the grant denies the configuration, the one
+thing only it adds. A readonly granted `show **` alone keeps the narrow shape and both bits, as
+under set 1.1.0.
+
+**A grant that permits `show configuration` under a deny beneath `show`** (decision 48), at any
+level whose ceiling holds view-configuration. Take a readonly granted `show **` less `show
+security **`. Only view-configuration shows the configuration: under `view`
+an allow of `show configuration` was refused on both images (`L26c-projected-juniper_*.md`).
+Under set 1.2.0 that readonly gets `view` and allows of the four carve-outs, and the device
+refuses `show configuration`; CI says so. Under set 1.3.0, whose `juniper_junos` carries
+`deny_reach_bits: [view-configuration]`, the reply sends `view view-configuration`. It denies
+the reach of view-configuration that the grant decides nothing of: here `monitor **`, since the
+baseline denies already hold `request **`, `load **` and `save **`. Its `deny-commands` is 173
+bytes, the grant's deny, then `monitor` in the baseline's alternative. An operator granted `show
+**` and `clear **` less `show security **` gets `clear view view-configuration` and the same
+`deny-commands`.
+
+L68 measured those replies on both images (`tests/lab/results/L68-juniper_*.md`,
+`L68-netconf-juniper_*.md`, `L68-netconf-operator-juniper_*.md`):
+- `show cli authorization` listed each reply's bits exactly;
+- `show configuration` ran, at the CLI and over the SSH exec channel;
+- `show security` was refused;
+- each word of view-configuration's other reach was refused, typed in full and abbreviated, and
+  `monitor list` over the exec channel; on vSRX `request unified-edge` and `req vir` run nowhere,
+  refused in the control too, so that image measured them as refused, not as reached;
+- no row entered configuration mode (`configure`, `edit`, `configure private`);
+- `<get-configuration/>` was refused on every way into NETCONF, and so was `op url`;
+- the control, with the same bits and no deny, reached each one it reaches;
+- a deny of exactly view-configuration's other reach, with no baseline denies, was refused the same way;
+- view-configuration's completion over `view` offered no word its declared reach does not hold.
+
+The operator row passed on both images, so the operator reply is measured safe as well.
+
+Completion lists no hidden command, so that reach is an upper bound only as far as completion
+shows it (L12-bits). The bit goes out this way only where all of these hold:
+
+- the adapter lists it in `deny_reach_bits` and carries `rpc_entry_denies`, under
+  `user_permissions` (a template's class carries every bit, so `local_user_name` is unchanged);
+- the grant permits a carve-out of the bit that no deny holds whole, and an allow of it past the
+  bits is not measured to run (`show configuration`, not `show log`);
+- a bit the reply already sends reaches that carve-out (view-configuration alone shows no
+  configuration, `L12-bits-juniper_*.md`);
+- no permit meets the reach it denies, and the keyword tree proves each of those denies.
+
+Otherwise the reply is set 1.2.0's. The reach denies follow the grant's own and precede the
+baseline's, so a 1.2.0 grant that writes `deny: [monitor **]` itself renders the same bytes.
+Where they would take `deny-commands` past 255 bytes, the reply falls back to set 1.2.0's: no
+view-configuration, the carved allows, and the device refusing `show configuration`, as
+measured. That reply is no wider than port49. CI warns `projection_reach_deny_overflow`, naming
+the reach denies and the remedy. The composition fails closed only where that reply cannot
+carry it either.
 
 Where the reply must send an allow that meets an entry deny, the allow would beat it (L11), so the
 entry is not closed. The composition then falls to the narrow shape, whose `.*` refuses every
@@ -4075,12 +4124,20 @@ entry point, or to the fail-closed reply (`refused_shape`, its message naming RP
 allow that would run `xml-mode`, `junoscript` or `op` is refused the same way, and the fail-closed
 reply leaves it off.
 
-CI reports two warnings. `projection_netconf_closed` names each subject a reply closes NETCONF
+CI reports three warnings. `projection_netconf_closed` names each subject a reply closes NETCONF
 for. `projection_deny_beneath_view_configuration` names each sent deny that meets `show
 configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but
 the bit is what grants the configuration, so withholding the bit is the real fence.
+A reach deny is never named. A reply that sends view-configuration under decision 48 can still
+carry the grant's own deny that meets `show configuration` (`show **` less bare `show
+configuration`), and that deny is named.
+`projection_reach_deny_overflow` names each composition whose reach denies would pass 255 bytes,
+which keeps set 1.2.0's reply (decision 48 ruling 4).
 
-**Set 1.1.0 is unchanged**, since a released set is never edited. It sends no entry deny, so a
+**Sets 1.1.0 and 1.2.0 are unchanged**, since a released set is never edited. Set 1.2.0 renders
+the readonly above without view-configuration on every binary; decision 48 ships as set 1.3.0,
+the default, and a policy moves to it with `port49 platform upgrade --to 1.3.0`, whose gated
+`deny_reach_bits` entry is the review. Set 1.1.0 sends no entry deny, so a
 composition whose only guard beneath a sent bit is a wire deny gets the narrow shape or the
 fail-closed reply there, as before (option C).
 
@@ -5883,7 +5940,8 @@ added here before any code emits it:
 | `projection_overflow` | a reply attribute past RFC 8907's length, with the class line for an overflowing deny set only (§8) | yes |
 | `projection_argument_allow` | a permit whose allow is left off because Junos would not match it as port49 does: it names an argument, or an argument may be typed among its words (decision 27); the device refuses what port49 permits there | no, a warning |
 | `projection_netconf_closed` | on a platform whose pinned set carries `rpc_entry_denies`, a composition whose Junos reply refuses `junoscript`: the entry deny beneath a deny, or the narrow shape's `.*`. The subject has no NETCONF, `xml-mode` or XML API session on those devices (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
-| `projection_deny_beneath_view_configuration` | a sent deny that meets `show configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but the bit is what grants the configuration; withhold the bit instead (§8; decision 44) | no, a warning; `policy diff` prints the ones the change brings |
+| `projection_deny_beneath_view_configuration` | a sent deny that meets `show configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but the bit is what grants the configuration; withhold the bit instead (§8; decision 44); a reach deny (decision 48) is never named | no, a warning; `policy diff` prints the ones the change brings |
+| `projection_reach_deny_overflow` | on a platform whose pinned set carries `deny_reach_bits`, a composition whose reply would send a bit with its undecided reach denied (decision 48), except that those denies take `deny-commands` past RFC 8907's 255 bytes. The reply falls back to the one the set renders without the key: the bit not sent, and the device refusing the carve-out it would have shown (`show configuration`). The warning names the reach denies and the remedy: fewer denies beneath `show`, or the denies moved into the template's class (`port49 platform export --classes`) | no, a warning; `policy diff` prints the ones the change brings |
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
@@ -9001,8 +9059,9 @@ data. Ruling 6's `rest`, XML API and `outbound-ssh` clauses, and its file-read n
   carve-out of an unsent ceiling bit, whose allow would beat a deny beneath it, goes out as allows
   of those carve-outs, each within the ceiling and meeting no deny, reported as sent beyond the
   bits; and a capability reply sending an allow its bits do not reach yields to a narrow one
-  that reaches every allow and leaves off no more. view-configuration is not sent to such a
-  readonly, whose grant decides none of its other reach; ruling 4's warning stays an operator's
+  that reaches every allow and leaves off no more. Under set 1.2.0 view-configuration is not
+  sent to such a readonly, whose grant decides none of its other reach; set 1.3.0 sends it where
+  the grant permits `show configuration` (decision 48). Ruling 4's warning stays an operator's
   and an admin's.
 
 **45. The agent in full, third part: hardware-backed client keys, `per_login_mfa`, and the broker
@@ -9843,6 +9902,54 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   it is lost (D7), absent without a `directory_password` verifier. No principal, no source.
 - **20. The lab.** L67.
 
+**48. Junos: view-configuration sent with the rest of its reach denied.** *Plan 9g, 2026-10-16,
+on Ryan's ruling of 2026-10-15: "permitted means it runs".* Rulings rest on reasoning unless they
+say data.
+
+- **1. The rule** (data: `tests/lab/results/L68-juniper_*.md`, `L68-netconf-juniper_*.md`,
+  `L68-netconf-operator-juniper_*.md`). Under a set whose platform carries `deny_reach_bits` and
+  `rpc_entry_denies`, under `user_permissions`, at any level whose ceiling holds the bit (a
+  readonly's and an operator's alike), a ceiling bit the grant decides only in part is sent where:
+  - the key lists it;
+  - the grant permits a carve-out of it that no deny holds whole and whose allow past the bits
+    is not measured to run (`JunosFacts.AllowPastCarve`);
+  - a bit the reply already sends reaches that carve-out;
+  - no permit meets the rest of its reach, each rule of which the keyword tree proves.
+
+  That rest goes out as denies, role `reach_deny`, after the grant's own denies and before the
+  baseline's. The deny beneath the bit brings the entry denies (decision 44 ruling 1). L68's
+  operator row passed on both images (G1-operator), so the operator reply ships too.
+- **2. A new set** (§8, "the platform set is pinned"). Ryan's ruling named set 1.2.0. Set 1.2.0 is
+  released: its files are frozen, and a binary upgrade must not change what a pinned policy
+  renders. So the change is set 1.3.0, which is 1.2.0 plus `juniper_junos`'s `deny_reach_bits:
+  [view-configuration]`, 1.2.0's keyword tree unchanged. `DefaultSet` is 1.3.0. A policy pinned to
+  1.2.0 renders byte for byte as before. A policy writing `deny: [monitor **]` under 1.2.0 already
+  gets the 1.3.0 reply (L68's row P). (Controller's ruling on plan 9g R3, 2026-10-16.)
+- **3. The key is adapter data**, read only on a projected platform. A block may drop an entry and
+  never add one the set did not measure. A block that drops `rpc_entry_denies` makes it inert: a
+  wire deny binds no native RPC, so the bit is never sent with denies alone guarding it. A block
+  that adds reach to a listed bit has that reach denied too where the tree proves it, and the
+  bit is not sent where it does not. A block that drops the bit's carve-out leaves the key inert,
+  and the policy loads: no permit can need the bit sent.
+- **4. The budget** (RFC 8907; Ryan's production experience that over 255 bytes locks the user
+  out). The readonly granted `show **` less `show security **` renders 173 bytes, measured in a
+  test. Where the reach denies would take it past 255, the reply falls back to the one the set
+  renders without the key (set 1.2.0's): no bit, the carved allows, and `show configuration`
+  refused, as measured (`L26c-projected-juniper_*.md`). Failing closed would take a working
+  readonly to nothing for a narrowing the device already makes safely. CI warns
+  `projection_reach_deny_overflow` (§12). (Controller's ruling, 2026-10-16.)
+- **5. Warnings and predictions.** `projection_deny_beneath_view_configuration` never names a reach
+  deny. `policy test` and `explain` predict `show configuration` runs under the reply, and the
+  projection finding names the reach denies.
+- **6. Unmeasured.** Hidden commands under view-configuration that completion does not list (L12-bits
+  holds the reach as an upper bound for every bit). Bit sets other than the two L68 measured
+  (`view view-configuration`, `clear view view-configuration`); the model covers them. L59's
+  cells: REST, the XML API, `outbound-ssh`, NETCONF off, file reads of `/config` (L68 recorded
+  them, ungated: `file list` and `file show` of `/config/juniper.conf.gz` refused in P and O and
+  taken in H, whose deny leaves `file` open; an scp read refused in P, V and C), `show
+  configuration | save` (L68 recorded that it wrote its file in P, H, O and C, ungated), and
+  the pager's `s`, which L68 did not grade and which stays with L59.
+
 ---
 
 ## 14. Required test assertions
@@ -10617,6 +10724,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s; (f) the device's own key named by an `@revoked` line beside the filed entry, and then, from an empty known_hosts, at first contact: refused before authentication, no TACACS+ exchange, the token never presented, nothing filed. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L65-arista_eos.md, L65-cisco_nxos.md, L65-cisco_iosxe.md, L65-juniper_vjunos-router.md, L65-juniper_vsrx.md (every cell on every platform, netmiko 4.8.0 and paramiko 5.0.0 on Python 3.14.4) |
 | **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host, and again with an idle gap longer than `persistent_connect_timeout` (30 s by default) or a `meta: reset_connection` between tasks: whether the next task logs in again with the spent token and how that fails; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; and, per `ssh_type`, the known_hosts file's comments, `@revoked` and `@cert-authority` lines before and after the run (whether the file is appended to or rewritten without them); (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token, nor does the persistent connection's log (`ANSIBLE_PERSISTENT_LOG_MESSAGES`, `-vvvv`); (e) an address changed in Ansible's inventory for a device reached before, leading to another host: for `libssh` and `paramiko` (and `libssh` with a `HostKeyAlias` in `ansible_libssh_config_file`), and for `ansible.builtin.ssh` with `-o HostKeyAlias={{ inventory_hostname }}`, whether the other host's key is auto-added and whether the token is presented to it; and, for `ansible.builtin.ssh`, two inventory names at one address, whose shared ControlPath (keyed on address, port and user) may let the second name reuse the first's open master: whether its `HostKeyAlias` is ever checked. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L66-arista_eos.md, L66-cisco_nxos.md, L66-cisco_iosxe.md, L66-juniper_vjunos-router.md, L66-juniper_vsrx.md. Every platform gave the same reading, because what is measured is the client. (a) With the lookup in `ansible_password`: 10 mints for the first 2 tasks, then `candidate_cap_reached` at the default cap of 8. (b) Minting once: 1 mint and 1 authentication for ten tasks. After an idle gap or `reset_connection`, the next task logged in again with the spent token, answered PASS `receipt_replayed`. (c) `libssh` appended to the file and kept its comments and marker lines, **but with `host_key_auto_add` accepted a changed key and presented the token**. `paramiko` refused a changed key before authentication, refused a file holding `@revoked` or `@cert-authority` lines (`InvalidHostKey`), and rewrote the file without its comments. (d) The deny names its reason, and `-vvv` and `-vvvv` output hold no token, **but `persistent_log_messages` writes the token to its log**. (e) Under `host_key_auto_add`, `libssh` and `paramiko` presented the token to another host at a moved address. `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured. `ansible.builtin.ssh` with the alias refused the moved address. Two names at one address: the second reused the first's master, and its alias was never looked up. Ruling 15 and the collection README now follow these readings; the ruling's guess about Paramiko was wrong (CLAUDE.md rule 4). (e3)–(e3d), the port49 lookup's check before minting, added by plan 9f, measured 2026-10-16 on arista_eos only (client behaviour, as above): a moved address holding another key is refused before the mint; with no entry, the lookup's copy makes both `ssh_type`s refuse the other host without `host_key_auto_add`, while libssh with it still presents the token; tests/lab/results/L66-arista_eos.md |
 | **L67** | A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (`start_tls: true`): (a) the right password accepted, a wrong one refused with which result code and, on AD, which `data` code; (b) a DN with an empty password sent by a raw client (not port49): whether the server answers success (an unauthenticated bind, RFC 4513 §5.1.2), and the control: `port49 login --directory` with an empty password sends no bind (capture); (c) with the right password, an expired password, a must-change password, a disabled account and a locked account (AD `pwdLastSet`, `userAccountControl`, a lockout; OpenLDAP's `ppolicy`), the result and data code or `ppolicy` error each gives, and whether a wrong password gives the same; (d) with the directory's lockout at 10 failures in 10 minutes, six wrong sign-ins by port49's defaults: the account's failed count after them (`badPwdCount`; `pwdFailureTime`), and the sixth refused by port49 with no bind on the wire; and nine wrong passwords straddling a window boundary (four before it ends, five after): the account's failed count, and whether it locked; (e) a wrong code: no bind for the person on the wire; (f) whether the broker's own bind reads the entry's creation time (`whenCreated`; `createTimestamp`); (g) end to end, once on the compose stack's broker on etcd and once on port49d on the memory store (the sealed file): before `port49 directory init-enrollments` a sign-in is refused `enrollment_store_lost`; after it `bin/port49 login --directory` enrolls, confirms, gets a certificate and mints for a device of the loopback inventory; with the directory stopped, the held certificate mints and a sign-in says the directory did not answer. | §13 decision 47 rulings 6, 7, D2, D5 | OpenLDAP (slapd 2.5, `ppolicy`), Samba AD (4.17), Windows Server AD (Windows Server 2025, the SER8) | closed — measured 2026-10-15; tests/lab/results/L67-openldap.md, tests/lab/results/L67-samba_ad.md, tests/lab/results/L67-windows_ad.md |
+| **L68** | A Junos reply sending view-configuration with the rest of its reach denied (plan 9g; decision 48). Under `user-permissions` over the bitless `p49-remote`, six rows: P, `view view-configuration` and set 1.2.0's render of a readonly granted `show **` less `show security **` and `monitor **` (173 bytes); H, the same bits and a deny of exactly `show security`, view-configuration's other reach and the entry denies (235 bytes); O, `clear view view-configuration` and P's deny, set 1.2.0's render of the operator granted `show **` and `clear **` less the same; V, `view` alone under P's deny; Vc, `view` alone; C, `view view-configuration` and no deny, the control. Whether `show cli authorization` lists each row's bits exactly; whether `show configuration` runs in P, H and O and not in V; whether `show security` and each word of view-configuration's other reach (`monitor`, `request mpls`, `request path-computation-client`, `request security`, `request unified-edge`, `request virtual-chassis`, `load` and `save dhcp-security-snoop`), typed in full and abbreviated, is refused in P, H and O where C takes it; whether `configure`, `edit` or `configure private` enters configuration mode in any row; whether, over the SSH exec channel, `show configuration` runs and `monitor list` and `show security zones` are refused in P, H and O where C takes them; whether `<get-configuration/>` through `xml-mode`, port 830, the port-22 subsystem and the exec channel's NETCONF, and `op url` and its abbreviation, are refused in P, H and O where C reaches them; whether view-configuration's completion over `view` (C against Vc) offers a word its declared reach does not hold. Recorded, not gated: `show log`, `show firewall`, `show policer`, `file list /config`, `file show /config/juniper.conf.gz`, an scp read of `/config/juniper.conf.gz` (P, V, C), and `show configuration`'s `\| save` and pager `s` (L59). Row O gates the operator reply alone (G1-operator). Measured 2026-10-16, both images: G1 and G1-operator pass. Recorded, not gated: `show log` ran in P, H and O (a carve-out), `show firewall` and `show policer` were not refused in P, H or O; `file list /config` and `file show /config/juniper.conf.gz` were refused in P and O and taken in H, whose deny leaves `file` open; an scp read of `/config/juniper.conf.gz` was refused in P, V and C; `show configuration | save` wrote its file in P, H, O and C; pager `s` was not graded (the pager did not appear in P, O and V, where `set cli` is denied; in H, Vc and C it appeared and prompted for a filename, but the harness's following keystrokes were mangled) and stays L59's. On vSRX `request unified-edge` and `req vir` run nowhere (refused in C too). | Decision 48: set 1.3.0's `deny_reach_bits: [view-configuration]` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-16; `tests/lab/results/L68-juniper_vjunos-router.md`, `L68-juniper_vsrx.md`, `L68-netconf-juniper_vjunos-router.md`, `L68-netconf-juniper_vsrx.md`, `L68-netconf-operator-juniper_vjunos-router.md`, `L68-netconf-operator-juniper_vsrx.md`, `L68-projected-juniper_vjunos-router.md`, `L68-projected-juniper_vsrx.md`. Set 1.3.0's rendered replies, through the broker, ran `show configuration` and refused `monitor` on both images, for the readonly and the operator. |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

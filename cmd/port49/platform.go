@@ -354,7 +354,8 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 		}
 	}
 	for _, f := range after.Projections(now) {
-		if f.Kind == policy.FindingProjectionRefused || f.Kind == policy.FindingProjectionOverflow {
+		if f.Kind == policy.FindingProjectionRefused || f.Kind == policy.FindingProjectionOverflow ||
+			f.Kind == policy.FindingProjectionReachDenyOverflow {
 			fmt.Fprintf(w, "  %s on %s: %s\n", f.Kind, after.PlatformSet(), f.Message)
 		}
 	}

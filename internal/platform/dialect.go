@@ -189,6 +189,14 @@ type Dialect struct {
 	// whole list or drops it with `[]`, and never adds one: a partial list is
 	// refused at load, since it leaves an entry open (spec §8).
 	RPCEntryDenies []string
+	// DenyReachBits are the bits a reply may send where the grant permits a
+	// carve-out of the bit that an allow past the bits is not measured to
+	// run, with the rest of the bit's reach the grant decides nothing of
+	// denied on the wire (decision 48; tests/lab/results/L68-juniper_*.md).
+	// Set 1.3.0's juniper_junos carries view-configuration. Read only where
+	// RPCEntryDenies is kept: a wire deny binds no native RPC. A block may
+	// drop one and never add one (spec §8).
+	DenyReachBits []string
 }
 
 // The command projections port49 renders (spec §8).
@@ -207,6 +215,11 @@ const BaselineBit = "baseline"
 // RPCEntryRole is the role of a deny the projection adds from RPCEntryDenies:
 // none of the grant's, as BaselineBit's is none (decision 44).
 const RPCEntryRole = "rpc_entry"
+
+// ReachDenyRole is the role of a deny the projection adds from DenyReachBits:
+// a bit's reach the grant decides nothing of, none of the grant's (decision
+// 48).
+const ReachDenyRole = "reach_deny"
 
 // projectionOwned is every attribute a projection's platform reads as a
 // login class's template, bits or command or configuration regex, numbered
@@ -308,6 +321,9 @@ var generics = map[string]Dialect{
 	// 1.2.0 changes no generic value: the entry deny is juniper_junos's.
 	"1.2.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+	// 1.3.0 changes no generic value: deny_reach_bits is juniper_junos's.
+	"1.3.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
 }
 
 // Generic returns set version's generic adapter, copied, and whether the
@@ -402,6 +418,7 @@ func (d Dialect) clone() Dialect {
 	d.CarveOuts = cloneLists(d.CarveOuts)
 	d.CeilingBits = cloneLists(d.CeilingBits)
 	d.RPCEntryDenies = slices.Clone(d.RPCEntryDenies)
+	d.DenyReachBits = slices.Clone(d.DenyReachBits)
 	if d.LocalUserNames != nil {
 		d.LocalUserNames = maps.Clone(d.LocalUserNames)
 	}

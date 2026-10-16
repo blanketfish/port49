@@ -674,14 +674,23 @@ const FindingProjectionNetconfClosed = "projection_netconf_closed"
 // FindingProjectionDenyBeneathViewConfiguration is a sent deny that meets
 // `show configuration` beneath a held view-configuration: the CLI refuses it
 // and NETCONF is closed, but the bit grants the configuration (decision 44
-// ruling 4). A warning.
+// ruling 4); never a reach deny, which a reply sent under decision 48 carries.
+// A warning.
 const FindingProjectionDenyBeneathViewConfiguration = "projection_deny_beneath_view_configuration"
+
+// FindingProjectionReachDenyOverflow is a composition whose reply would send
+// a bit with its undecided reach denied (decision 48), except that those
+// denies take deny-commands past RFC 8907's 255 bytes: the reply falls back to
+// the one without them, the bit unsent and its carve-out refused on the
+// device (spec §12; decision 48 ruling 4). A warning.
+const FindingProjectionReachDenyOverflow = "projection_reach_deny_overflow"
 
 // projectionNote reports whether a projection finding is a report or warning
 // written after its subject and platform with a colon, rather than a refusal.
 func projectionNote(kind string) bool {
 	return kind == FindingProjection || kind == FindingProjectionArgumentAllow ||
-		kind == FindingProjectionNetconfClosed || kind == FindingProjectionDenyBeneathViewConfiguration
+		kind == FindingProjectionNetconfClosed || kind == FindingProjectionDenyBeneathViewConfiguration ||
+		kind == FindingProjectionReachDenyOverflow
 }
 
 // Projections reports each composition on a projected platform (spec §8,
@@ -744,6 +753,10 @@ func (p *Policy) Projections(now time.Time) []Finding {
 				if len(pr.ConfigurationBeneath) > 0 {
 					reports[i] = append(reports[i], item{FindingProjectionDenyBeneathViewConfiguration,
 						configurationBeneathMessage(*pr, patterns, secrets)})
+				}
+				if len(pr.ReachOverflow) > 0 {
+					reports[i] = append(reports[i], item{FindingProjectionReachDenyOverflow,
+						reachOverflowMessage(*pr, patterns, secrets)})
 				}
 			}
 			for i := range replies {
@@ -940,6 +953,25 @@ func configurationBeneathMessage(pr projection.Result, patterns []platform.Redac
 		"configuration; withhold view-configuration instead (spec §8; decision 44 ruling 4)"
 }
 
+// reachOverflowMessage is a projection_reach_deny_overflow warning after its
+// subject and platform, each rule redacted and quoted as
+// configurationBeneathMessage quotes its own: a block may add reach rules.
+func reachOverflowMessage(pr projection.Result, patterns []platform.Redaction, secrets []string) string {
+	var rules []string
+	for _, r := range pr.ReachOverflow {
+		rules = append(rules, r.Rule)
+	}
+	var quoted []string
+	for _, r := range redacted(patterns, rules) {
+		quoted = append(quoted, platform.QuoteShown(secrets, r))
+	}
+	return " the reach denies " + strings.Join(quoted, ", ") + " would let the reply send view-configuration " +
+		"(deny_reach_bits), but they take deny-commands past RFC 8907's 255 bytes; the reply leaves the bit off " +
+		"and the device refuses show configuration for this subject: deny fewer commands beneath show, or move " +
+		"the denies into the template's class on the device, where they bind every subject at that template " +
+		"(port49 platform export --classes) (spec §8; decision 48 ruling 4)"
+}
+
 // projectionMessage is a composition's finding after its subject, platform
 // and moment, which Projections writes before it. The commands it gives
 // where the device is narrower are probes, each argument made from a value
@@ -962,6 +994,10 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 	msg := fmt.Sprintf(" %s shape, %s", pr.Shape, carrier)
 	if len(pr.Denies) > 0 {
 		msg += "; deny-commands: " + rules(pr.Denies)
+	}
+	if rd := pr.ReachDenies(); len(rd) > 0 {
+		msg += "; of those, the reach of a bit the grant decides only in part, denied so the bit can be sent " +
+			"(deny_reach_bits; decision 48): " + rules(rd)
 	}
 	if pr.Shape == projection.ShapeNarrow {
 		msg += "; deny-commands: everything"

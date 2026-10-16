@@ -148,13 +148,20 @@ type Result struct {
 	// ConfigurationBeneath are the grant's sent denies that meet `show
 	// configuration` while the session holds view-configuration: the CLI
 	// refuses them, but the bit is what grants the configuration, and policy
-	// test warns (projection_deny_beneath_view_configuration; decision 44).
+	// test warns (projection_deny_beneath_view_configuration; decision 44);
+	// never a reach deny (decision 48).
 	ConfigurationBeneath []engine.Rule
 	// Closed are baseline denies the reply's entry deny refuses on the
 	// device, sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
 	// and a deny naming `xml-mode` does not bind
 	// (tests/lab/results/L26c-junoscript-juniper_*.md; decision 44 ruling 10).
 	Closed []engine.Rule
+	// ReachOverflow are the reach denies left off because they took
+	// deny-commands past RFC 8907's 255 bytes: the reply fell back to the one
+	// without them, the bit unsent and its carve-out refused on the device,
+	// and policy test warns (projection_reach_deny_overflow; decision 48
+	// ruling 4).
+	ReachOverflow []engine.Rule
 	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
 	// constants; empty otherwise. Refusal says it for the report.
 	FailClosed string
@@ -177,6 +184,9 @@ type Refusal struct {
 	// every session in the class, past each subject's own denies (L11), so
 	// an allow is never moved there.
 	Attribute, Value, Class string
+	// reach are the reach denies an overflowing deny-commands carried: where
+	// set, shape falls back to the reply without them.
+	reach []engine.Rule
 }
 
 func (r *Refusal) Error() string { return r.Why }
@@ -198,6 +208,7 @@ func (r Result) Clone() Result {
 	r.ConfigurationDropped, r.Unsent = slices.Clone(r.ConfigurationDropped), slices.Clone(r.Unsent)
 	r.ConfigurationBeneath = slices.Clone(r.ConfigurationBeneath)
 	r.Closed = slices.Clone(r.Closed)
+	r.ReachOverflow = slices.Clone(r.ReachOverflow)
 	if r.Refusal != nil {
 		rf := *r.Refusal
 		r.Refusal = &rf
@@ -264,6 +275,10 @@ type generator struct {
 	in              Input
 	permits, denies []engine.Rule
 	ceiling         []string
+	// noReach turns reachDenies off: the reply as the set renders it without
+	// DenyReachBits, the fallback where the reach denies overflow (decision 48
+	// ruling 4).
+	noReach bool
 }
 
 // quote is text derived from a rule as a refusal or a why quotes it: each
@@ -359,10 +374,84 @@ func (g generator) render() (Result, error) {
 	return res2, nil
 }
 
-// shape is the capability shape, or the narrow one where only it can carry
+// shape is the reply as the set renders it without DenyReachBits (set
+// 1.2.0's), except where that reply leaves refused on the device a carve-out
+// of a listed bit the grant permits, `show configuration`: there it is the
+// reply sending the bit with its undecided reach denied (decision 48), where
+// the grant allows it (reachDenies). A grant whose 1.2.0 reply already runs
+// the carve-out, a plain readonly's narrow `view view-configuration` say,
+// keeps that reply byte for byte.
+//
+// Where the reach denies take deny-commands past RFC 8907's length, the reply
+// is the one without them: the bit unsent, and the device refusing the
+// carve-out it would have shown, which is narrower than port49 and measured
+// (decision 48 ruling 4). Where that reply does not carry the grant either,
+// its own refusal stands: its length where it overflows too, the grant's own
+// denies without a reach deny the operator never wrote. ReachOverflow is set
+// only where the fallback kept the capability shape: a narrow fallback means
+// the grant's own denies overflow too, and the warning would blame the wrong
+// denies (pre-flight M4).
+func (g generator) shape() (Result, error) {
+	if g.noReach || len(g.in.Dialect.DenyReachBits) == 0 {
+		return g.shapeOf()
+	}
+	h := g
+	h.noReach = true
+	base, berr := h.shapeOf()
+	if berr == nil {
+		refused, err := g.refusesCarve(base)
+		if err != nil || !refused {
+			return base, err
+		}
+	}
+	// Where 1.2.0 fails closed (berr), the reach reply is tried without the
+	// refusesCarve probe: that reply also runs sub-hierarchies of a bare
+	// `show configuration` the grant denies, and 1.2.0's refusal runs nothing.
+	res, err := g.shapeOf()
+	var over *Refusal
+	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		// Defensive: no input reaches the narrow case. The reach reply differs
+		// from base only by the reach denies, so whatever sends base narrow
+		// (its own denies overflowing, a narrowOnly refusal, unreached allows)
+		// sends the reach reply narrow too, and a narrow reply never carries
+		// a reach overflow. A test would need one, and none can be built.
+		if berr == nil && base.Shape == ShapeCapability {
+			base.ReachOverflow = over.reach
+		}
+		return base, berr
+	}
+	// A reach reply refused for another reason is no reason to lose the one
+	// 1.2.0 sends (defensive: no shipped grant reaches it); where 1.2.0 sends none, the reach reply is tried as it is.
+	if err != nil && berr == nil {
+		return base, nil
+	}
+	return res, err
+}
+
+// refusesCarve reports whether the device refuses, under res, a carve-out of
+// a DenyReachBits bit that the grant permits and no deny holds: the model's
+// prediction for the carve-out's command, its words before `**`.
+func (g generator) refusesCarve(res Result) (bool, error) {
+	m, err := g.model(res)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range g.in.Dialect.DenyReachBits {
+		for _, c := range g.in.Dialect.CarveOuts[b] {
+			v := strings.Fields(strings.TrimSuffix(c, "**"))
+			if len(v) == 0 || !m.port.Command(raw(v)).Permit || m.predicts(v) {
+				continue
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// shapeOf is the capability shape, or the narrow one where only it can carry
 // the grant, or where the capability shape's deny-commands is past the
 // budget: the narrow shape's `.*` holds every deny in four bytes.
-func (g generator) shape() (Result, error) {
+func (g generator) shapeOf() (Result, error) {
 	res, err := g.capability()
 	var no *narrowOnly
 	if errors.As(err, &no) {
@@ -393,6 +482,12 @@ func (g generator) shape() (Result, error) {
 		return n, nerr
 	}
 	res, err = g.finish(res, err)
+	// An overflow the reach denies made is shape's to fall back from, to the
+	// reply without them, not the narrow shape's.
+	var over *Refusal
+	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		return Result{}, err
+	}
 	// Under the entry deny, a capability reply that sends an allow its bits
 	// do not reach yields to a narrow one whose bits reach every allow and
 	// that leaves off no more: the bits are measured, an allow beyond them is
@@ -634,6 +729,22 @@ func (g generator) capability() (Result, error) {
 				bits = append(bits, b)
 			}
 		}
+		// A bit the grant decides only in part goes out where the grant needs
+		// what only it shows, the rest of its reach denied (reachDenies;
+		// decision 48). The denies follow the grant's own and precede the
+		// baseline's, so the reply is the one L68 measured, byte for byte.
+		for _, b := range g.ceiling {
+			if slices.Contains(bits, b) {
+				continue
+			}
+			if rest, ok := g.reachDenies(b, bits); ok {
+				bits = append(bits, b)
+				g.denies = insertReachDenies(g.denies, rest)
+			}
+		}
+		slices.SortStableFunc(bits, func(x, y string) int {
+			return slices.Index(g.ceiling, x) - slices.Index(g.ceiling, y)
+		})
 		// `all` holds every bit, so it is sent alone: the smallest set.
 		if slices.Contains(bits, "all") {
 			bits = []string{"all"}
@@ -825,6 +936,72 @@ func (g generator) carvedAllows(p engine.Rule, bits []string) ([]engine.Rule, bo
 	return out, true
 }
 
+// reachDenies is bit b's reach the grant decides nothing of, as denies, where
+// the reply may send b with that reach denied (decision 48). That is where b
+// is in the adapter's DenyReachBits and the dialect closes the entry points;
+// the grant permits a carve-out of b that no deny holds and that an allow
+// past the bits is not measured to run (Facts.AllowPastCarve), `show
+// configuration`; the bits already chosen reach that carve-out, since
+// view-configuration alone shows no configuration
+// (tests/lab/results/L12-bits-juniper_*.md); and no permit meets a rule it
+// denies, each of which the keyword tree proves. ok is false otherwise, and
+// the reply is what set 1.2.0 renders.
+func (g generator) reachDenies(b string, bits []string) ([]engine.Rule, bool) {
+	if g.noReach || !g.closesEntries() || !slices.Contains(g.in.Dialect.DenyReachBits, b) {
+		return nil, false
+	}
+	reached := g.reach(g.held(bits))
+	needed := false
+	for _, c := range g.in.Dialect.CarveOuts[b] {
+		if g.in.Facts.AllowPastCarve[c] ||
+			slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) }) ||
+			!slices.ContainsFunc(g.permits, func(p engine.Rule) bool { return g.mayMeet(p.Rule, c) }) {
+			continue
+		}
+		if !slices.ContainsFunc(reached, func(r string) bool { return g.contains(r, c) }) {
+			return nil, false
+		}
+		needed = true
+	}
+	if !needed {
+		return nil, false
+	}
+	var out []engine.Rule
+	for _, r := range g.in.Dialect.Bits[b] {
+		if g.covered(r) {
+			continue
+		}
+		if slices.ContainsFunc(g.permits, func(p engine.Rule) bool { return g.mayMeet(p.Rule, r) }) ||
+			!g.denyProvable(r) {
+			return nil, false
+		}
+		out = append(out, engine.Rule{Verdict: engine.Deny, Rule: r, Role: platform.ReachDenyRole})
+	}
+	return out, true
+}
+
+// insertReachDenies is denies with rest after the grant's own denies, before
+// the first baseline deny (newGenerator appends those last), in a new slice.
+func insertReachDenies(denies, rest []engine.Rule) []engine.Rule {
+	i := slices.IndexFunc(denies, func(d engine.Rule) bool { return d.Role == platform.BaselineBit })
+	if i < 0 {
+		i = len(denies)
+	}
+	return slices.Concat(denies[:i], rest, denies[i:])
+}
+
+// ReachDenies are the reply's denies of a bit's reach the grant decides
+// nothing of, sent so the bit can go out (decision 48).
+func (r Result) ReachDenies() []engine.Rule {
+	var out []engine.Rule
+	for _, d := range r.Denies {
+		if d.Role == platform.ReachDenyRole {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // viewConfiguration is the bit that grants the configuration, and
 // configurationRead the command it reads it with.
 const viewConfiguration, configurationRead = "view-configuration", "show configuration **"
@@ -837,7 +1014,8 @@ func (g generator) configurationBeneath(res Result) []engine.Rule {
 	}
 	var out []engine.Rule
 	for _, dn := range res.Denies {
-		if dn.Role != platform.BaselineBit && dn.Role != platform.RPCEntryRole && g.mayMeet(configurationRead, dn.Rule) {
+		if dn.Role != platform.BaselineBit && dn.Role != platform.RPCEntryRole && dn.Role != platform.ReachDenyRole &&
+			g.mayMeet(configurationRead, dn.Rule) {
 			out = append(out, dn)
 		}
 	}
@@ -1246,6 +1424,7 @@ func (g generator) attributes(res *Result) error {
 					"a device sent part of a deny is sent none of it (spec §8, \"Generator constraints\")",
 					g.in.Platform, engine.AttributeName(a), len(a), engine.MaxAttribute)}
 			if r.Attribute == "deny-commands" {
+				r.reach = res.ReachDenies()
 				r.Class = res.Template
 				if r.Class == "" {
 					r.Class = platform.RemoteClass
