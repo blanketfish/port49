@@ -32,10 +32,10 @@ class HostKeysTest(unittest.TestCase):
             f.write("\n".join([*head, *lines]) + "\n")
         return path
 
-    def newkey(self, name):
-        """A fresh Ed25519 public key, "type base64", and its .pub file."""
+    def newkey(self, name, keytype="ed25519"):
+        """A fresh public key (Ed25519 by default), "type base64", and its .pub file."""
         path = os.path.join(self.dir, name)
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path], check=True)
+        subprocess.run(["ssh-keygen", "-q", "-t", keytype, "-N", "", "-f", path], check=True)
         with open(path + ".pub", encoding="ascii") as f:
             return " ".join(f.read().split()[:2]), path + ".pub"
 
@@ -301,6 +301,17 @@ class HostKeysTest(unittest.TestCase):
         with open(self.kh, encoding="ascii") as f:
             self.assertEqual(f.read(), f"leaf1 {real}\n")
 
+    def test_remember_refuses_when_a_key_of_another_type_is_filed(self):  # OpenSSH would trust both
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        ecdsa = self.newkey("ec", "ecdsa")[0].split()
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {ecdsa[0]} {ecdsa[1]}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet())
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"leaf1 {ecdsa[0]} {ecdsa[1]}\n")
+
     def test_remember_checks_what_it_writes(self):  # M5
         for name, keytype, blob in (("a b", "ssh-ed25519", "AAAA"), ("leaf*", "ssh-ed25519", "AAAA"),
                                     ("leaf1", "ssh-ed25519 x", "AAAA"), ("leaf1", "ssh-ed25519", "AA\nBB")):
@@ -489,6 +500,15 @@ class AddressHelpersTest(unittest.TestCase):
         want = subprocess.run(["ssh-keygen", "-lf", pub], capture_output=True, text=True, check=True).stdout.split()[1]
         self.assertEqual(hostkeys.fingerprint(key), want)
         self.assertTrue(want.startswith("SHA256:") and "=" not in want)
+
+    def test_append_files_another_type_unless_told_to_refuse_it(self):
+        k2, _ = self.newkey("k2", "ecdsa")
+        self.put(self.kh, f"10.0.0.1 {k2}\n")
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False), [ED])
+        self.put(self.kh, f"10.0.0.2 {k2}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.append(self.kh, "10.0.0.2", [ED], hash_names=False, refuse_other_types=True)
+        self.assertEqual(cm.exception.code, "host_key_changed")
 
 
 if __name__ == "__main__":

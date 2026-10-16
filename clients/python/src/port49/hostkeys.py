@@ -328,12 +328,14 @@ def fingerprint(key):
     return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
-def append(path, host, keys, *, hash_names, ssh_keygen="ssh-keygen", revoked=None):
+def append(path, host, keys, *, hash_names, ssh_keygen="ssh-keygen", revoked=None,
+           refuse_other_types=False):
     """File each of keys ("<type> <b64>") under host in path: one O_APPEND write of whole lines, as ssh does,
     under a flock, so concurrent writers never interleave. Under the lock the file is read again: a key already
     filed is skipped, and a different key of the same type filed under host is host_key_changed, not filed
-    beside it (OpenSSH would trust both). revoked, if given, says which filed keys no longer count. Returns the
-    keys written."""
+    beside it (OpenSSH would trust both). With refuse_other_types, a key of any other type filed under host
+    refuses as well: a first contact must not be filed beside what is known. A copy of a key the name already
+    trusts leaves it off. revoked, if given, says which filed keys no longer count. Returns the keys written."""
     if not path:
         raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {host} in")
     # What is written is checked here as well: no pattern, marker or second line.
@@ -361,7 +363,7 @@ def append(path, host, keys, *, hash_names, ssh_keygen="ssh-keygen", revoked=Non
                 key = f"{t} {b}"
                 if key in have:
                     continue
-                if t in have_types:
+                if (have and refuse_other_types) or t in have_types:
                     raise HostKeyError("host_key_changed", f"a key was filed under {host} while {host} was being "
                                        f"reached, and it is not the one presented: the key presented was not filed. "
                                        f"Verify the device's key on its console")
@@ -387,6 +389,7 @@ def remember(kh, keytype, key_b64, stderr=None, *, ssh_keygen="ssh-keygen"):
     if not kh.write_to:
         raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {kh.name} in")
     written = append(kh.write_to, kh.name, [f"{keytype} {key_b64}"], hash_names=kh.hash_names, ssh_keygen=ssh_keygen,
-                     revoked=lambda k: is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen))
+                     revoked=lambda k: is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen),
+                     refuse_other_types=True)
     if written:
         print(f"port49: permanently added '{kh.name}' ({keytype}) to {kh.write_to}", file=stderr or sys.stderr)
