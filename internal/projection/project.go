@@ -404,6 +404,9 @@ func (g generator) shape() (Result, error) {
 			return base, err
 		}
 	}
+	// Where 1.2.0 fails closed (berr), the reach reply is tried without the
+	// refusesCarve probe: that reply also runs sub-hierarchies of a bare
+	// `show configuration` the grant denies, and 1.2.0's refusal runs nothing.
 	res, err := g.shapeOf()
 	var over *Refusal
 	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
@@ -413,7 +416,7 @@ func (g generator) shape() (Result, error) {
 		return base, berr
 	}
 	// A reach reply refused for another reason is no reason to lose the one
-	// 1.2.0 sends; where 1.2.0 sends none, the reach reply is tried as it is.
+	// 1.2.0 sends (defensive: no shipped grant reaches it); where 1.2.0 sends none, the reach reply is tried as it is.
 	if err != nil && berr == nil {
 		return base, nil
 	}

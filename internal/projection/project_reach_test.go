@@ -364,6 +364,11 @@ func TestSet130RendersAsSet120ButWhereShowConfigurationIsRefused(t *testing.T) {
 		{"readonly less show route", "readonly", []engine.Rule{permit("show **"), deny("show route **")}, "ruled"},
 		{"operator all less show security", "operator", []engine.Rule{permit("**"), deny("show security **")}, ""},
 		{"readonly less show chassis", "readonly", []engine.Rule{permit("show **"), deny("show chassis **")}, "ruled"},
+		// 1.2.0 fails closed on these (the allow of `show **` beats the deny of
+		// a carve-out beneath it); 1.3.0 sends the reach reply
+		{"readonly less exactly show configuration", "readonly", []engine.Rule{permit("show **"), deny("show configuration")}, "ruled-fc"},
+		{"readonly less exactly show log", "readonly", []engine.Rule{permit("show **"), deny("show log")}, "ruled-fc"},
+		{"readonly less exactly show firewall", "readonly", []engine.Rule{permit("show **"), deny("show firewall")}, "ruled-fc"},
 		{"overflow falls back", "readonly", []engine.Rule{permit("show **"), deny("show security **"),
 			deny("show chassis **"), deny("show interfaces **"), deny("show route **"), deny("show system **"),
 			deny("show bgp **"), deny("show ospf **")}, ""},
@@ -381,6 +386,16 @@ func TestSet130RendersAsSet120ButWhereShowConfigurationIsRefused(t *testing.T) {
 			}
 			continue
 		}
+		failClosed := c.row == "ruled-fc"
+		if failClosed {
+			if was.Shape != ShapeFailClosed {
+				t.Errorf("%s: 1.2.0 is %s, want %s", c.name, was.Shape, ShapeFailClosed)
+			}
+			if is.Shape == ShapeFailClosed {
+				t.Errorf("%s: 1.3.0 failed closed too", c.name)
+			}
+			c.row = "ruled"
+		}
 		if c.row == "ruled" {
 			want, _ := Project(shipped("1.2.0", c.level, append(slices.Clone(c.rules), deny("monitor **"))...))
 			if !slices.Equal(is.Attributes, want.Attributes) || len(is.ReachDenies()) != 1 {
@@ -390,9 +405,12 @@ func TestSet130RendersAsSet120ButWhereShowConfigurationIsRefused(t *testing.T) {
 		} else if !slices.Equal(is.Attributes, l68[c.row]) || len(denyCommands(is)) != 173 {
 			t.Errorf("%s: not L68's row %s\n 1.3.0 %q", c.name, c.row, is.Attributes)
 		}
-		if was.Device([]string{"show", "configuration"}) || !is.Device([]string{"show", "configuration"}) {
-			t.Errorf("%s: 1.2.0 runs show configuration %v, 1.3.0 %v", c.name,
-				was.Device([]string{"show", "configuration"}), is.Device([]string{"show", "configuration"}))
+		probe := []string{"show", "configuration"}
+		if c.name == "readonly less exactly show configuration" {
+			probe = []string{"show", "configuration", "system"} // the grant denies the bare words
+		}
+		if was.Device(probe) || !is.Device(probe) {
+			t.Errorf("%s: 1.2.0 runs %v %v, 1.3.0 %v", c.name, probe, was.Device(probe), is.Device(probe))
 		}
 	}
 }

@@ -4128,8 +4128,9 @@ CI reports three warnings. `projection_netconf_closed` names each subject a repl
 for. `projection_deny_beneath_view_configuration` names each sent deny that meets `show
 configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but
 the bit is what grants the configuration, so withholding the bit is the real fence.
-A reply that sends view-configuration under decision 48 carries no deny that meets `show
-configuration`, and a reach deny is never named, so it gets no such warning.
+A reach deny is never named. A reply that sends view-configuration under decision 48 can still
+carry the grant's own deny that meets `show configuration` (`show **` less bare `show
+configuration`), and that deny is named.
 `projection_reach_deny_overflow` names each composition whose reach denies would pass 255 bytes,
 which keeps set 1.2.0's reply (decision 48 ruling 4).
 
