@@ -52,9 +52,10 @@ separation" (:447), §17 (the error list, :2025), §19 step 10 (:2390). The road
 - `port49 workload` never prints, logs or writes a token it read; the token file is never
   copied.
 - The lab register is the source of truth: a claim about cluster behaviour cites L69 or L70,
-  and one cited to an open row is unmeasured, so the docs say "measured on kind" and nothing
-  more. If a result contradicts a doc, the doc is wrong: fix it, cite the note, say so in the
-  commit.
+  and one cited to an open row is unmeasured. Until Task 11 closes L69, every such claim reads
+  "provisional on L69 (<cell>)", never "measured"; Task 11 Step 5 turns each into "measured on
+  kind (L69 (<cell>))", and nothing more while L70 (managed clusters) is open. If a result
+  contradicts a doc, the doc is wrong: fix it, cite the note, say so in the commit.
 - Lab runs: single occupant; the STOP sentinel `/tmp/port49-STOP-LAB` checked before every cell
   (`labGuardAt`); a background stall watchdog, re-armed on every wake; a detached run worktree
   pinned at the commit. An INVALID run writes no note. The harness never prints a token: every
@@ -78,10 +79,13 @@ Recorded as spec §13 decision 49 by Task 1. Each rests on reasoning unless it s
   issuer is often `https://kubernetes.default.svc.cluster.local`, which nothing outside the
   cluster resolves. The fetch, refresh, refetch-on-unknown-`kid`, `jwks_max_age`, persistence and
   timings are decision 39 ruling 4's, unchanged. After each JWKS fetch the broker reads the
-  discovery document at the JWKS URL's own origin (`/.well-known/openid-configuration`), only to
-  say, once per change: an `issuer` other than the configured one (every token will be refused);
-  a `jwks_uri` other than the configured `jwks` (informational; the configured one is used); or
-  that discovery could not be read. Discovery never decides a key and never fails a fetch. The
+  discovery document at the JWKS URL's own origin (`/.well-known/openid-configuration`), after
+  the fetch's outcome is out and on its own 3s timeout, only to say, once per change: an `issuer`
+  other than the configured one and other than any issuer another k8s verifier on the same `jwks`
+  names (every token will be refused); no `issuer` at all; or that discovery could not be read.
+  Its `jwks_uri` is not compared: a self-managed cluster's names the issuer's host, which the
+  broker reaches by the API server's address instead, so the note would fire on every correct
+  config. Discovery never decides a key, never fails a fetch and never holds one. The
   fetch is anonymous: the broker holds no cluster credential (design §7, "no secret at rest").
   A self-managed cluster publishes its keys to it with one ClusterRoleBinding of
   `system:service-account-issuer-discovery` to `system:unauthenticated`, which Task 9 ships as a
@@ -106,7 +110,7 @@ Recorded as spec §13 decision 49 by Task 1. Each rests on reasoning unless it s
   than `max_token_age`; a date that is a JSON string refused; a claim name repeated in two cases
   refused; header `typ` absent or `JWT` (never `at+jwt`); a person's session or delegation claim
   (`auth_time`, `sid`, `nonce`, `scp`, `amr`, `act`, `may_act`) refused. The refusal for an `iat`
-  past `max_token_age` adds, for a k8s token: "the kubelet refreshes a projected token at 80% of
+  past `max_token_age` adds, for a k8s token: "the kubelet refreshes a projected token at about 80% of
   its expirationSeconds, so keep expirationSeconds at or under 3600" (provisional on L69 cell b).
 - **R7. A projected token, bound to a pod.** The `kubernetes.io` claim is required and read by
   exact name at every level: its `namespace` and `serviceaccount.name` equal the `sub`'s parts,
@@ -129,8 +133,9 @@ Recorded as spec §13 decision 49 by Task 1. Each rests on reasoning unless it s
   carries `auth: {method: k8s, k8s: {issuer, sub, serviceaccount_uid, pod, pod_uid, node, jti}}`,
   each a verified value: which pod minted is unrecoverable afterwards, the reason §5.1.4 records
   `amr`. A bearer that did not verify is recorded `auth: {method: k8s}` when every verifier its
-  routing `iss` reached is a k8s one, else `{method: oidc}` as today: the method is
-  configuration's word, and nothing of the token is recorded.
+  routing `iss` reached is a k8s one (or, when its `iss` reached none, when every configured
+  verifier is a k8s one), else `{method: oidc}` as today: the method is configuration's word,
+  and nothing of the token is recorded.
 - **R10. The session clock is `iat`**, as for a machine OIDC token (decision 39 ruling 9). No
   owner record is written and no logout reaches it (machines, ruling 11).
 - **R11. A deleted service account or pod.** Validation is against the JWKS alone, as the design
@@ -162,21 +167,31 @@ Recorded as spec §13 decision 49 by Task 1. Each rests on reasoning unless it s
   minted, as for any workload without `--touch-key`. The operator notes say so.
 - **R16. The lab.** L69 is opened and measured on kind (the cluster behaviour R2, R6, R7 and R11
   rest on). L70 is opened for managed clusters (EKS, GKE, AKS) and left open: plan 10 has no
-  account on any of them, and the docs say "measured on kind" until it closes.
+  account on any of them. Until Task 11 closes L69 the docs say "provisional on L69 (<cell>)";
+  after, "measured on kind" and nothing more until L70 closes.
 
 ## Questions for Ryan
 
 Each has a recommendation, and the plan builds the recommendation until Ryan rules.
 
-- **Q1. One service account name in several clusters** (R4). Your three-region shape may run the
-  same workload, `netops:oxidized`, in each region's cluster. R4 refuses two clusters listing one
-  namespace, so that shape names the service account per region (`netops:oxidized-us`,
-  `netops:oxidized-eu`, `netops:oxidized-ap`) and lists all three in one subject's `identity:`
-  (spec §2's multi-identity subject; the records then say which region minted). **Recommended:
-  keep R4.** The alternative, letting clusters share a namespace, means a dev cluster's
-  administrator mints as prod's workloads; a cluster-qualified principal
-  (`system:serviceaccount:<ns>:<name>@<cluster>`) would change spec §2's principal form, which
-  plan 10 does not do without your word.
+- **Q1. One namespace in several clusters** (R4). Your three-region shape may run the same
+  workload, `netops:oxidized`, in each region's cluster. R4 compares namespaces, so naming the
+  service account per region (`netops:oxidized-us`, …) does not help: all three are in `netops`,
+  and listing `netops` in more than one region's verifier is R4's load error. **The true cost of
+  R4:** a namespace per cluster (`netops-us`, `netops-eu`, `netops-ap`). For a GitOps fleet every
+  manifest is overlaid per cluster, and the policy's subject lists three identities per workload
+  (spec §2's multi-identity subject; the records then say which region minted). The choices:
+  - (a) keep R4: a namespace per cluster, the cost above.
+  - (b) a cluster-qualified principal (`system:serviceaccount:<ns>:<name>@<cluster>`): one
+    namespace everywhere, but a change to spec §2's principal form, which plan 10 does not make
+    without your word.
+  - (c) an explicit opt-in that declares several clusters one trust group (prod-us, prod-eu and
+    prod-ap, run by one team) so they may share namespaces; a dev cluster is never in prod's
+    group. It keeps R4's reason (a dev cluster's administrator minting as prod) without the
+    per-region overlay.
+  **Recommended (pre-flight):** (a) for plan 10, with (c) recorded as a question for plan 11a/12.
+  Pending your ruling, the plan builds R4 as written, and the README, the operator notes and
+  `distinctClusters`' error text are marked "pending Q1" where the remedy follows it.
 - **Q2. Immediate effect of a deleted service account** (R11). Calling the cluster's TokenReview
   at each mint would refuse a deleted pod's token at once, but puts every cluster's API server on
   the mint path (a control-plane outage at 3am stops every k8s workload's mints, where today keys
@@ -189,6 +204,15 @@ Each has a recommendation, and the plan builds the recommendation until Ryan rul
 Each case says what the operator sees: the workload's stderr (`port49 workload` prints the
 broker's detail through `printsafe`), the broker's log line, the record and the metric.
 
+- **The first start, no kept keys, and the JWKS unreachable.** The broker says `identity:
+  <issuer>: no keys fetched yet (<the error>); every token from it is refused
+  identity_provider_unavailable until a fetch succeeds`, and retries on the refetch schedule.
+  The workload gets 503 `identity_provider_unavailable`, retries within `--deadline` and exits
+  75; the record is `deny trust_domain_unresolved`, `auth: {method: k8s}`, as past 24h below.
+  `port49_oidc_keys_fetch_failures_total{issuer}` climbs and
+  `port49_oidc_keys_last_success_timestamp_seconds{issuer}` stays 0 (set at construction), so
+  the staleness alert fires at once. Fix the path to `jwks` (the start's "is fetched directly /
+  through the proxy" line names the JWKS host the broker dials).
 - **The cluster's JWKS unreachable** (the API server down, a network cut, an expired binding).
   The broker keeps the keys it holds (and restores them across a restart from its state
   directory) and accepts tokens signed by them until `jwks_max_age` (24h) after the last good
@@ -223,14 +247,17 @@ broker's detail through `printsafe`), the broker's log line, the record and the 
   `iat` + 2h (R11; L69 cell e); the kubelet writes no new one. Stop it at once with `port49 revoke
   --principal system:serviceaccount:<ns>:<name>`; the answer says the mark also stands for a
   service account re-created under that name until `port49 revoke --lift`.
-- **Discovery differs from the configured JWKS.** Keys still come from `jwks`, and the start of
-  each change says it: `identity: <issuer>: the cluster's discovery (<origin>/.well-known/openid-configuration)
-  names issuer <X>: its tokens carry that iss, so each is refused until
-  broker.identity.machines[].issuer is <X>`, or `… names jwks_uri <Y>, not the configured jwks <Z>;
-  port49 fetches the configured one: check both serve the cluster's keys`. A discovery document
-  the broker cannot read (anonymous access denied, 404) is said once and changes nothing.
+- **Discovery names another issuer.** Keys still come from `jwks`, and each change is said once:
+  `identity: <issuer>: the cluster's discovery (<origin>/.well-known/openid-configuration) names
+  issuer <X>: its tokens carry that iss, so each is refused until
+  broker.identity.machines[].issuer is <X>`. Not said when `<X>` is another k8s verifier's issuer
+  on the same `jwks` (an issuer migration). A discovery document with no `issuer` says "names no
+  issuer"; one the broker cannot read (anonymous access denied, 404, a 3s timeout) is said once
+  and changes nothing. Discovery is read after the key fetch is done, so a slow discovery
+  endpoint never holds a mint. Its `jwks_uri` is never compared (it names the issuer's host,
+  which the broker reaches by another address).
 - **A token past `max_token_age`.** 401 `trust_domain_unresolved` "issued 2h41m ago, past
-  broker.identity.max_token_age (2h0m0s); the kubelet refreshes a projected token at 80% of its
+  broker.identity.max_token_age (2h0m0s); the kubelet refreshes a projected token at about 80% of its
   expirationSeconds, so keep expirationSeconds at or under 3600": the pod's volume asks for too
   long a token, or its kubelet has stopped rotating.
 
@@ -265,10 +292,10 @@ The five uncovered inputs most likely to bite, each pinned by a test in its owni
 | `internal/policy/load.go`, `member.go`, `load_test.go` | the parser at load; `ServiceAccountIdentities` (Task 2) |
 | `internal/oidc/config.go` | `KindK8s`, `VerifierConfig.Kind/JWKS/Namespaces`, `Config.K8s` (Task 3) |
 | `internal/config/identity.go`, `config.go`, `identity_test.go` | `type: k8s` (Task 3) |
-| `internal/oidc/keyset.go`, `keyset_k8s_test.go` | `KeySetConfig.JWKS`, the discovery check (Task 4) |
+| `internal/oidc/keyset.go`, `keyset_k8s_test.go`, `export_test.go`, `oidctest/issuer.go` | `KeySetConfig.JWKS` and `Migrating`, the discovery check (Task 4) |
 | `internal/oidc/k8s.go`, `verify.go`, `k8s_test.go`, `oidctest/issuer.go` | the k8s claims (Task 5) |
 | `internal/decision/log.go`, `internal/broker/oidc.go`, `revoke.go`, `k8s_test.go`, `revoke_test.go` | the record, the principal in revoke and explain (Task 6) |
-| `internal/port49d/identity.go`, `main.go`, `identity_test.go`, `internal/daemon/metrics/metrics.go` | key sets, start lines (Task 7) |
+| `internal/port49d/identity.go`, `main.go`, `identity_test.go`, `identity_linux_test.go`, `internal/daemon/metrics/metrics.go`, `internal/oidc/keyset.go` (`ProxyFor`) | key sets, start lines (Task 7) |
 | `internal/workload/client.go`, `client_token_test.go`, `cmd/port49/workload.go`, `workload_test.go` | `--token-file` (Task 8) |
 | `examples/kubernetes/` | the binding, a CronJob, a policy snippet, the README (Task 9) |
 | `tests/lab/l69_test.go`, `l69_unit_test.go`, `tests/lab/k8s/`, `Makefile`, `tests/lab/README.md` | the L69 harness (Task 10) |
@@ -320,8 +347,9 @@ The five uncovered inputs most likely to bite, each pinned by a test in its owni
 - `auth.k8s`: on a broker event whose caller presented a Kubernetes service account token (plan
   10), `{issuer, sub, serviceaccount_uid, pod, pod_uid, node, jti}`, each from the verified token
   (`node` and `jti` when it carries them). A bearer that did not verify is recorded `auth: {method:
-  k8s}` when every verifier its `iss` reached is a `k8s` one, else `{method: oidc}`, with no
-  principal: none of its claims is a validated value (§13 decision 49 ruling 9).
+  k8s}` when every verifier its `iss` reached is a `k8s` one (or, when it reached none, every
+  configured verifier is), else `{method: oidc}`, with no principal: none of its claims is a
+  validated value (§13 decision 49 ruling 9).
 ```
 
   In the `identity_unmapped` row (:2413), after "or a machine token with neither `azp` nor
@@ -350,7 +378,7 @@ The five uncovered inputs most likely to bite, each pinned by a test in its owni
 **49. Kubernetes service accounts: a verifier per cluster, keys from its JWKS, a pod-bound token,
 and a namespace one cluster's alone.** *Plan 10, 2026-10-16.* Rulings rest on reasoning unless
 they say data. The planner ruled each where this document was silent; Ryan may override any, and
-Q1 and Q2 are his.
+Q1 and Q2 are theirs.
 
 - **1. The verifier.** `type: k8s` under `broker.identity.machines` alone: `issuer` (an https
   URL, the cluster's `--service-account-issuer`, compared with `iss` byte for byte), `jwks` (an
@@ -358,10 +386,12 @@ Q1 and Q2 are his.
   `algorithms` (decision 39 ruling 3), nothing else; one per cluster, any number.
 - **2. Keys from `jwks`.** Decision 39 ruling 4's fetch, refresh, refetch, `jwks_max_age`,
   persistence and timings, from the configured URL, never from discovery (a cluster's issuer is
-  often a name only the cluster resolves). After each fetch the discovery document at the JWKS
-  URL's origin is read to say, once per change, an `issuer` other than the configured one, a
-  `jwks_uri` other than `jwks`, or that it could not be read; it decides no key and fails no fetch.
-  The fetch is anonymous: the broker holds no cluster credential. Provisional on L69 (c).
+  often a name only the cluster resolves). After each fetch, once its outcome is out, the
+  discovery document at the JWKS URL's origin is read to say, once per change, an `issuer` other
+  than the configured one (and than another `k8s` verifier's on the same `jwks`), no `issuer`, or
+  that it could not be read; its `jwks_uri` is not compared; it decides no key, fails no fetch and
+  holds none. The fetch is anonymous: the broker holds no cluster credential. Provisional on L69
+  (c).
 - **3. One issuer, one cluster.** Two `k8s` verifiers with one issuer, or a `k8s` issuer an `oidc`
   verifier names, refuse the start.
 - **4. A namespace is one cluster's.** `namespaces` is required, by name. Two `k8s` verifiers with
@@ -370,7 +400,7 @@ Q1 and Q2 are his.
 - **5. The audience.** `aud` is exactly one value, the configured `audience`.
 - **6. The claims.** Decision 39 ruling 5's, with `typ` absent or `JWT` and decision 39 ruling 21's
   session and delegation claims refused. Past `max_token_age`, the refusal names the kubelet's
-  refresh at 80% of expirationSeconds (provisional on L69 (b)).
+  refresh at about 80% of expirationSeconds (provisional on L69 (b)).
 - **7. Bound to a pod.** `kubernetes.io` required and read by exact name at every level: its
   `namespace` and `serviceaccount.name` the `sub`'s, `serviceaccount.uid`, `pod.name` and
   `pod.uid` present, `secret` absent. No group, role or username is read (design §7). Provisional
@@ -382,7 +412,7 @@ Q1 and Q2 are his.
   unverified bearer recorded by configuration's method alone.
 - **10. The session clock** is `iat`; no owner record; no logout.
 - **11. A deleted service account or pod.** No TokenReview call: a token stays valid at port49
-  until `exp` or `iat` + `max_token_age` (measured, L69 (e)); `port49 revoke --principal` ends it
+  until `exp` or `iat` + `max_token_age` (provisional on L69 (e)); `port49 revoke --principal` ends it
   at once, and says the mark stands for a re-created account of that name until lifted.
 - **12. Metrics.** `port49_oidc_*`, labelled by the configured issuer; no principal, namespace or
   device label.
@@ -394,15 +424,16 @@ Q1 and Q2 are his.
 - **15. Per-login MFA** on a `k8s` workload is never proved: `per_login_mfa_required`, not minted.
 - **16. The lab.** L69 on kind; L70 (managed clusters) open.
 
-*Open for Ryan:* **Q1**, one service account name in several clusters (ruling 4 refuses it; the
-recommendation keeps it and names accounts per region). **Q2**, TokenReview for immediate effect
+*Open for Ryan:* **Q1**, one namespace in several clusters (ruling 4 refuses it, so a fleet
+running one workload in each region's cluster needs a namespace per cluster; a service account
+name per region does not satisfy ruling 4; pending Q1). **Q2**, TokenReview for immediate effect
 (ruling 11; recommended not built).
 ```
 
 - [ ] **Step 6: §15.** After the L68 row add (one line each in the file):
 
 ```markdown
-| **L69** | A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets them (plan 10), on kind: (a) a projected token's claims for `audience: port49-lab`, `expirationSeconds: 600` (`iss`, `aud`, `exp` − `iat`, `nbf`, `sub`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod`, `node`, `jti`; the header's `alg`, `kid` and `typ`); (b) when the kubelet rewrites the file, as a fraction of `expirationSeconds`; (c) the issuer discovery document and `/openid/v1/jwks` read anonymously before and after binding `system:service-account-issuer-discovery` to `system:unauthenticated`, and discovery's `issuer` and `jwks_uri` against the API server's flags; (d) a signing key rotated at the API server, and whether port49 mints with the new key's token without a restart; (e) a token after its pod, then its service account, is deleted: what TokenReview answers and what port49 does; (f) a second cluster's token at a broker that lists only the first, and for a namespace only the first lists; (g) a token for another audience, an unbound `kubectl create token`, and a Secret-bound token; (h) the default `kube-api-access` token's `aud` and lifetime. | §13 decision 49 rulings 2, 6, 7 and 11; `examples/kubernetes` | kind v0.29.0 (`kindest/node:v1.33.1`) | open |
+| **L69** | A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets them (plan 10), on kind: (a) a projected token's claims for `audience: port49-lab`, `expirationSeconds: 600` (`iss`, `aud`, `exp` − `iat`, `nbf`, `sub`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod`, `node`, `jti`; the header's `alg`, `kid` and `typ`); (b) when the kubelet rewrites the file, as a fraction of `expirationSeconds`; (c) the issuer discovery document and `/openid/v1/jwks` read anonymously before and after binding `system:service-account-issuer-discovery` to `system:unauthenticated`, and discovery's `issuer` and `jwks_uri` against the API server's flags; (d) a signing key rotated at the API server, and whether port49 mints with the new key's token without a restart; (e) a token after its pod, then its service account, is deleted: what TokenReview answers and what port49 does; (f) a second cluster's token at a broker that lists only the first, and for a namespace only the first lists; (g) a token for another audience, an unbound `kubectl create token`, a Secret-bound and a Node-bound `kubectl create token`, and a legacy Secret token; (h) the default `kube-api-access` token's `aud` and lifetime. | §13 decision 49 rulings 2, 6, 7 and 11; `examples/kubernetes` | kind v0.29.0 (`kindest/node:v1.33.1`) | open |
 | **L70** | L69's (a), (c) and (d) on managed clusters: whether EKS, GKE and AKS publish issuer discovery and the JWKS anonymously over the internet, the form of their issuer and `kid`, and how they rotate signing keys. | decision 49 ruling 2's anonymous fetch on managed clusters; the docs' managed-cluster section | EKS, GKE, AKS | open |
 ```
 
@@ -501,27 +532,24 @@ func TestTheLongestServiceAccountParses(t *testing.T) {
 func TestAServiceAccountIdentityIsTheVerifiersForm(t *testing.T) {
 	for _, id := range []string{"system:serviceaccount:NetOps:oxidized", "system:serviceaccount:netops:a_b",
 		"system:serviceaccount:netops:oxidized:x"} {
-		src := strings.Replace(specPolicyWithSA, "system:serviceaccount:netops:oxidized", id, 1)
-		if _, err := Load([]byte(src), Options{}); err == nil || !strings.Contains(err.Error(), "system:serviceaccount:<namespace>:<name>") {
+		src := strings.Replace(good, "system:serviceaccount:netops:oxidized", id, 1)
+		if _, err := Parse([]byte(src), env()); err == nil || !strings.Contains(err.Error(), "system:serviceaccount:<namespace>:<name>") {
 			t.Errorf("%s: %v", id, err)
 		}
 	}
 }
 
 func TestServiceAccountIdentities(t *testing.T) {
-	p, err := Load([]byte(specPolicyWithSA), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := mustParse(t, good)
 	if got := p.ServiceAccountIdentities(); len(got) != 1 || got["system:serviceaccount:netops:oxidized"] != "svc_oxidized" {
 		t.Fatalf("%v", got)
 	}
 }
 ```
 
-  where `specPolicyWithSA` is the policy at `load_test.go:72` (the `svc_oxidized` subject listing
-  `system:serviceaccount:netops:oxidized` and a `spiffe://` ID); if it is inline in a test today,
-  lift it to a package-level `const specPolicyWithSA` first and use it from both.
+  `good` is the package const at `load_test.go:61` (spec §11's shape; its `svc_oxidized` subject
+  lists `system:serviceaccount:netops:oxidized` and a `spiffe://` ID); `mustParse` and `env()` are
+  the file's helpers (`Parse(raw []byte, env Env)`, `load.go:305`).
 
 - [ ] **Step 2: Run them to see them fail.**
 
@@ -928,9 +956,12 @@ func distinctClusters(ks, os []oidc.VerifierConfig, y identityYAML) error {
 			}
 			for _, ns := range b.Namespaces {
 				if a.ListsNamespace(ns) {
+					// Pending Q1: the remedy this text gives follows Ryan's
+					// ruling. A service account name per region is NOT one: the
+					// namespace is what R4 compares (pre-flight C1).
 					return fmt.Errorf("config: %s.namespaces: %s is also %s's, another cluster's: either cluster could "+
 						"name the other's service accounts (decision 49 ruling 4); give each cluster's workloads their "+
-						"own namespace or service account name", at(i), ns, at(j))
+						"own namespace", at(i), ns, at(j))
 				}
 			}
 		}
@@ -965,12 +996,13 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 **Files:**
 - Modify: `internal/oidc/keyset.go` (`KeySetConfig`, `KeySet`, `fetch`, `fetchOnce`)
 - Create: `internal/oidc/keyset_k8s_test.go`
-- Modify: `internal/oidc/oidctest/issuer.go` (a `jwks_uri` hook already exists via `Discovery`; add nothing unless a test needs it)
+- Modify: `internal/oidc/oidctest/issuer.go` (`DiscoveryStatus`, `HoldDiscovery`), `internal/oidc/export_test.go` (`WaitDiscoveryForTest`)
 
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: `KeySetConfig.JWKS string`: when set, keys are fetched from it, and discovery is read
-  at its origin only to say (decision 49 ruling 2).
+  at its origin, after the fetch's outcome is out, only to say (decision 49 ruling 2);
+  `KeySetConfig.Migrating []string`, the other issuers on the same `jwks` (Task 7 fills it).
 
 - [ ] **Step 1: Write the failing tests.** `internal/oidc/keyset_k8s_test.go`:
 
@@ -994,25 +1026,37 @@ import (
 const k8sIssuer = "https://kubernetes.default.svc.cluster.local"
 
 // clusterKeys is a key set reading iss's /jwks directly, configured with
-// k8sIssuer, which nothing resolves.
-func clusterKeys(t *testing.T, iss *oidctest.Issuer, c *clock, s *said) *oidc.KeySet {
+// k8sIssuer, which nothing resolves; migrating are the other issuers on the
+// same jwks.
+func clusterKeys(t *testing.T, iss *oidctest.Issuer, c *clock, s *said, migrating ...string) *oidc.KeySet {
 	t.Helper()
-	return oidc.NewKeySet(oidc.KeySetConfig{Issuer: k8sIssuer, JWKS: iss.URL + "/jwks",
+	return oidc.NewKeySet(oidc.KeySetConfig{Issuer: k8sIssuer, JWKS: iss.URL + "/jwks", Migrating: migrating,
 		Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now,
 		M: metrics.New(prometheus.NewRegistry()), Say: s.Say})
 }
 
-func TestAClusterKeySetReadsTheConfiguredJWKS(t *testing.T) {
-	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
-	iss.Discovery(func(d map[string]any) { d["issuer"] = k8sIssuer; d["jwks_uri"] = iss.URL + "/jwks" })
-	ks := clusterKeys(t, iss, c, s)
+// fetch fetches once and waits for the discovery read that follows it, which
+// runs after Fetch returns (pre-flight I8).
+func fetch(t *testing.T, ks *oidc.KeySet) {
+	t.Helper()
 	if err := ks.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	ks.WaitDiscoveryForTest()
+}
+
+// A discovery that agrees is silent, and so is its jwks_uri naming the
+// issuer's host, as every self-managed cluster's does (pre-flight I7): the
+// configured jwks is the API server's address, which discovery never names.
+func TestAClusterKeySetReadsTheConfiguredJWKS(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	iss.Discovery(func(d map[string]any) { d["issuer"] = k8sIssuer; d["jwks_uri"] = k8sIssuer + "/openid/v1/jwks" })
+	ks := clusterKeys(t, iss, c, s)
+	fetch(t, ks)
 	if keys, _, _ := ks.Status(); len(keys) != 1 {
 		t.Fatalf("keys %v", keys)
 	}
-	if strings.Contains(s.all(), "discovery") {
+	if strings.Contains(s.all(), "discovery") || strings.Contains(s.all(), "jwks_uri") {
 		t.Fatalf("a matching discovery is said: %s", s.all())
 	}
 }
@@ -1024,9 +1068,7 @@ func TestAClusterKeySetNeedsNoDiscovery(t *testing.T) {
 	iss.DiscoveryStatus(http.StatusForbidden)
 	ks := clusterKeys(t, iss, c, s)
 	for range 2 {
-		if err := ks.Fetch(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		fetch(t, ks)
 	}
 	if n := strings.Count(s.all(), "the cluster's discovery at "+iss.URL+"/.well-known/openid-configuration could not be read"); n != 1 {
 		t.Fatalf("said %d times: %s", n, s.all())
@@ -1037,9 +1079,7 @@ func TestAClusterKeySetSaysADifferentIssuer(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
 	iss.Discovery(func(d map[string]any) { d["issuer"] = "https://l69-a.port49.lab" })
 	ks := clusterKeys(t, iss, c, s)
-	if err := ks.Fetch(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	fetch(t, ks)
 	want := "names issuer https://l69-a.port49.lab: its tokens carry that iss, so each is refused until " +
 		"broker.identity.machines[].issuer is https://l69-a.port49.lab"
 	if !strings.Contains(s.all(), want) {
@@ -1047,18 +1087,46 @@ func TestAClusterKeySetSaysADifferentIssuer(t *testing.T) {
 	}
 }
 
-func TestAClusterKeySetSaysADifferentJWKSURI(t *testing.T) {
+// During an issuer migration (decision 49 ruling 4) discovery names the
+// other configured issuer: no false alarm (pre-flight I7).
+func TestAClusterKeySetIsQuietDuringAMigration(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
-	iss.Discovery(func(d map[string]any) { d["issuer"] = k8sIssuer; d["jwks_uri"] = "https://keys.example.net/jwks" })
+	iss.Discovery(func(d map[string]any) { d["issuer"] = "https://new.port49.lab" })
+	ks := clusterKeys(t, iss, c, s, "https://new.port49.lab")
+	fetch(t, ks)
+	if strings.Contains(s.all(), "names issuer") {
+		t.Fatalf("said %s", s.all())
+	}
+}
+
+// A discovery document with no issuer says so, not "names issuer :"
+// (pre-flight M2).
+func TestAClusterKeySetSaysNoIssuer(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	iss.Discovery(func(d map[string]any) { delete(d, "issuer") })
 	ks := clusterKeys(t, iss, c, s)
-	for range 2 {
-		if err := ks.Fetch(context.Background()); err != nil {
+	fetch(t, ks)
+	if !strings.Contains(s.all(), "names no issuer") || strings.Contains(s.all(), "names issuer :") {
+		t.Fatalf("said %s", s.all())
+	}
+}
+
+// A stalled discovery holds no mint: the fetch's outcome is out before
+// discovery is read (pre-flight I8).
+func TestAStalledDiscoveryHoldsNoFetch(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	_, release := iss.HoldDiscovery()
+	defer release()
+	ks := clusterKeys(t, iss, c, s)
+	done := make(chan error, 1)
+	go func() { done <- ks.Fetch(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	want := "names jwks_uri https://keys.example.net/jwks, not the configured jwks " + iss.URL + "/jwks"
-	if strings.Count(s.all(), want) != 1 {
-		t.Fatalf("said %s", s.all())
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fetch waited on a stalled discovery")
 	}
 }
 
@@ -1086,12 +1154,15 @@ func TestAClusterJWKSOutageKeepsTheHeldKeys(t *testing.T) {
 
   `oidctest.Issuer.Fail` today fails discovery and /jwks together; add
   `func (i *Issuer) DiscoveryStatus(status int)`, which fails discovery alone (a field read by the
-  discovery handler only), and make `Fail` set both as before.
+  discovery handler only), and make `Fail` set both as before. Add
+  `func (i *Issuer) HoldDiscovery() (arrived <-chan struct{}, release func())`, `Hold`'s twin for
+  the discovery handler (its own gate fields, the handler waiting on the gate or the request's
+  context). In `export_test.go` add `func (s *KeySet) WaitDiscoveryForTest() { s.noted.Wait() }`.
 
 - [ ] **Step 2: Run them to see them fail.**
 
 Run: `go test ./internal/oidc/ -run 'TestACluster' -count=1`
-Expected: FAIL: `unknown field JWKS in struct literal`.
+Expected: FAIL: `unknown field JWKS in struct literal` (and `Migrating`, `HoldDiscovery`, `WaitDiscoveryForTest`).
 
 - [ ] **Step 3: Implement.** In `KeySetConfig` add:
 
@@ -1100,23 +1171,29 @@ Expected: FAIL: `unknown field JWKS in struct literal`.
 	// verifier's (decision 49 ruling 2). Discovery is then read at its
 	// origin only to say where it differs, never to find a key.
 	JWKS string
+	// Migrating are the issuers of the other k8s verifiers on this JWKS:
+	// one cluster under several issuers (decision 49 ruling 4). A
+	// discovery naming one of them is not said.
+	Migrating []string
 ```
 
-  In `KeySet` add `disco string // the last discovery note said, "" for none`. Split `fetch`:
+  In `KeySet` add `disco string // the last discovery note said, "" for none` and
+  `noted sync.WaitGroup // discovery reads under way, for WaitDiscoveryForTest`, and a constant
+  `discoveryTimeout = 3 * time.Second`. `fetch` keeps its five returns; its k8s arm comes first:
 
 ```go
-func (s *KeySet) fetch(ctx context.Context) (string, []byte, []Key, []string, string, error) {
+func (s *KeySet) fetch(ctx context.Context) (string, []byte, []Key, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	if s.c.JWKS != "" {
 		body, keys, skipped, err := s.readJWKS(ctx, s.c.JWKS)
 		if err != nil {
-			return "", nil, nil, nil, "", err
+			return "", nil, nil, nil, err
 		}
-		return s.c.JWKS, body, keys, skipped, s.discoveryNote(ctx), nil
+		return s.c.JWKS, body, keys, skipped, nil
 	}
 	// … the existing discovery-then-jwks_uri body, unchanged, its JWKS read and
-	// parse moved into readJWKS, returning "" as the note …
+	// parse moved into readJWKS …
 }
 
 // readJWKS is one JWKS read: a set with no usable key is a failed fetch.
@@ -1136,8 +1213,11 @@ func (s *KeySet) readJWKS(ctx context.Context, u string) ([]byte, []Key, []strin
 }
 
 // discoveryNote is what a cluster's discovery says against the configured
-// issuer and jwks, read at the jwks URL's origin: "" when it agrees. It
-// never fails the fetch (decision 49 ruling 2).
+// issuer, read at the jwks URL's origin: "" when it agrees, or when it names
+// another issuer configured on this jwks (a migration). It never fails the
+// fetch (decision 49 ruling 2). jwks_uri is not compared: a self-managed
+// cluster's names the issuer's host, which the broker reaches by another
+// address, so the note would fire on every correct config (pre-flight I7).
 func (s *KeySet) discoveryNote(ctx context.Context) string {
 	u, _ := url.Parse(s.c.JWKS)
 	at := u.Scheme + "://" + u.Host + "/.well-known/openid-configuration"
@@ -1151,26 +1231,43 @@ func (s *KeySet) discoveryNote(ctx context.Context) string {
 		return fmt.Sprintf("the cluster's discovery at %s is not a JSON object of distinct members; keys are still "+
 			"read from jwks", at)
 	}
-	iss, _ := discoveryMember(doc, "issuer")
-	jwks, _ := discoveryMember(doc, "jwks_uri")
+	iss, ok := discoveryMember(doc, "issuer")
 	switch {
-	case iss != s.c.Issuer:
-		return fmt.Sprintf("the cluster's discovery (%s) names issuer %s: its tokens carry that iss, so each is "+
-			"refused until broker.identity.machines[].issuer is %s", at, printsafe.Line(iss, 200), printsafe.Line(iss, 200))
-	case jwks != "" && jwks != s.c.JWKS:
-		return fmt.Sprintf("the cluster's discovery names jwks_uri %s, not the configured jwks %s; port49 fetches the "+
-			"configured one: check both serve the cluster's keys", printsafe.Line(jwks, 200), s.c.JWKS)
+	case !ok:
+		return fmt.Sprintf("the cluster's discovery (%s) names no issuer: its issuer is not checked against the "+
+			"configured one; keys are still read from jwks", at)
+	case iss == s.c.Issuer || slices.Contains(s.c.Migrating, iss):
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("the cluster's discovery (%s) names issuer %s: its tokens carry that iss, so each is "+
+		"refused until broker.identity.machines[].issuer is %s", at, printsafe.Line(iss, 200), printsafe.Line(iss, 200))
+}
+
+// sayDiscovery reads discovery after the fetch's outcome is out, on its own
+// short timeout, and says a note that changed. A slow or dropped discovery
+// endpoint then holds no mint waiting on a refetch (pre-flight I8).
+func (s *KeySet) sayDiscovery() {
+	defer s.noted.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	defer cancel()
+	note := s.discoveryNote(ctx)
+	s.mu.Lock()
+	changed := note != s.disco
+	s.disco = note
+	s.mu.Unlock()
+	if changed && note != "" {
+		s.c.Say("identity: %s: %s", s.c.Issuer, note)
+	}
 }
 ```
 
-  In `fetchOnce`, take the note from `fetch` and, under the lock with the other "said when it
-  changes" fields: `sayDisco := err == nil && note != s.disco; if err == nil { s.disco = note }`;
-  after unlocking, `if sayDisco && note != "" { s.c.Say("identity: %s: %s", iss, note) }`. A
-  discovery read shares the fetch's 10s context and is counted in no metric. (The discovery's
-  `issuer` is a public document's value from a URL configuration names, not a token's claim, so
-  ruling 18 of decision 39 does not reach it; it is bounded by `printsafe.Line`.)
+  In `fetchOnce`, before `close(ch)`: `disco := err == nil && s.c.JWKS != ""; if disco {
+  s.noted.Add(1) }`; and at the end of the success path (after the `saySkips` lines, before the
+  save): `if disco { go s.sayDiscovery() }`. The JWKS read's outcome and its waiters are released
+  first, and the save does not wait either, so a mint waiting on a refetch never waits on
+  discovery; the read is counted in no metric. (The discovery's `issuer` is a public document's value from a URL configuration names,
+  not a token's claim, so ruling 18 of decision 39 does not reach it; it is bounded by
+  `printsafe.Line`.)
 
 - [ ] **Step 4: Run the tests.**
 
@@ -1209,14 +1306,20 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 // ServiceAccountToken is a projected service account token as a cluster
 // issues one (L69 (a) records a real one): iss, aud [aud], sub, iat, nbf,
 // exp (now+10m), jti, and kubernetes.io binding it to a pod on a node; extra
-// overrides, a nil value deleting.
+// overrides, a nil value deleting. The pod is sa-7d9f, cut at 253 bytes
+// (Kubernetes' own pod-name limit), so a 253-byte account's pod is still one
+// a cluster could name (pre-flight I5).
 func (i *Issuer) ServiceAccountToken(t testing.TB, kid, issuer, aud, ns, sa string, now time.Time, extra map[string]any) string {
+	pod := sa + "-7d9f"
+	if len(pod) > 253 {
+		pod = pod[:253]
+	}
 	c := map[string]any{"iss": issuer, "aud": []string{aud}, "sub": "system:serviceaccount:" + ns + ":" + sa,
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix(),
 		"jti": "6f1c2d3e-0000-4000-8000-000000000069",
 		"kubernetes.io": map[string]any{"namespace": ns,
 			"serviceaccount": map[string]any{"name": sa, "uid": "0b5d7c1a-0000-4000-8000-000000000001"},
-			"pod":            map[string]any{"name": sa + "-7d9f", "uid": "9e1c4b2d-0000-4000-8000-000000000002"},
+			"pod":            map[string]any{"name": pod, "uid": "9e1c4b2d-0000-4000-8000-000000000002"},
 			"node":           map[string]any{"name": "l69-a-worker", "uid": "44aa1f3b-0000-4000-8000-000000000003"}}}
 	for k, v := range extra {
 		if v == nil {
@@ -1300,7 +1403,7 @@ func TestK8sRefusals(t *testing.T) {
 		"no exp":           {map[string]any{"exp": nil}, oidc.ErrInvalid, "it has no exp"},
 		"no iat":           {map[string]any{"iat": nil}, oidc.ErrInvalid, "it has no iat"},
 		"old":              {map[string]any{"iat": now.Add(-3 * time.Hour).Unix(), "exp": now.Add(time.Hour).Unix()}, oidc.ErrInvalid,
-			"the kubelet refreshes a projected token at 80% of its expirationSeconds, so keep expirationSeconds at or under 3600"},
+			"the kubelet refreshes a projected token at about 80% of its expirationSeconds, so keep expirationSeconds at or under 3600"},
 		"ahead":            {map[string]any{"iat": now.Add(2 * time.Minute).Unix()}, oidc.ErrInvalid, "ahead of the broker's clock"},
 		"a session claim":  {map[string]any{"auth_time": now.Unix()}, oidc.ErrInvalid, "it carries auth_time"},
 		"no binding":       {map[string]any{"kubernetes.io": nil}, oidc.ErrInvalid, "it carries no kubernetes.io claim"},
@@ -1379,6 +1482,18 @@ func TestALongServiceAccountVerifies(t *testing.T) {
 	a, err := set.Verify(context.Background(), iss.ServiceAccountToken(t, "k1", k8sIssuer, "port49", "netops", name, c.Now(), nil))
 	if err != nil || a.Principal != "system:serviceaccount:netops:"+name {
 		t.Fatalf("%v %q", err, a.Principal)
+	}
+}
+
+// On a broker whose verifiers are all k8s, a token from an unknown cluster
+// is recorded k8s: oidc is a word its operator never configured (pre-flight M1).
+func TestAnUnknownIssuerAtAClusterOnlySetIsK8s(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := k8sSet(t, iss, c, cluster("netops"))
+	_, err := set.Verify(context.Background(), iss.ServiceAccountToken(t, "k1", "https://elsewhere.port49.lab", "port49", "netops", "oxidized", c.Now(), nil))
+	if !errors.Is(err, oidc.ErrInvalid) || !strings.Contains(err.Error(), "no configured verifier accepts its issuer") ||
+		oidc.MethodOf(err) != "k8s" {
+		t.Fatalf("%v %q", err, oidc.MethodOf(err))
 	}
 }
 
@@ -1552,8 +1667,9 @@ func (a Assertion) Credential() store.Credential {
 
   - `Set.verify`: when every verifier in `vs` has `Kind == KindK8s`, set the method of the
     refusals it builds itself (the "unavailable" and "two verifiers" ones, and the default
-    `first`) to `KindK8s`. The "no configured verifier accepts its issuer" refusal keeps
-    `method` empty: no verifier was reached.
+    `first`) to `KindK8s`. The "no configured verifier accepts its issuer" refusal is `KindK8s`
+    when every verifier in `s.Verifiers` is k8s (no verifier was reached, and `oidc` is a word a
+    k8s-only broker's operator never configured; pre-flight M1), else empty.
   - `Verifier.verify`, in order:
     - the `typ` allowlist becomes `typ == "" || typ == "jwt" || (v.Domain == Machines && v.Kind
       != KindK8s && typ == "at+jwt")`;
@@ -1562,7 +1678,7 @@ func (a Assertion) Credential() store.Credential {
       "invalid", "its aud is not exactly [%s]: a token another audience accepts could be replayed
       here (decision 49 ruling 5)", v.Audience) } }`, else the existing check;
     - the `now.Sub(iat) > t.MaxTokenAge` refusal appends, for a k8s verifier, "; the kubelet
-      refreshes a projected token at 80% of its expirationSeconds, so keep expirationSeconds at or
+      refreshes a projected token at about 80% of its expirationSeconds, so keep expirationSeconds at or
       under 3600";
     - the `printableID(c.Sub)` check is skipped for a k8s verifier (`k8sid.Parse` bounds it, up to
       `k8sid.MaxLen`);
@@ -1714,12 +1830,16 @@ func TestARefusedClusterTokenIsRecordedAsK8s(t *testing.T) {
 	}
 }
 
+// A k8s identity_unmapped refusal reaches the workload with its reason: it
+// names only the caller's own verified namespace and the configured issuer
+// (pre-flight I1; the 3am section and L69 (f) rely on it).
 func TestAnUnlistedNamespaceIsUnmapped(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, clusterPolicy)
 	iss := f.withCluster(t)
 	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", "backup", "oxidized", f.b.Now(), nil)
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
-	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.IdentityUnmapped)) {
+	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.IdentityUnmapped)) ||
+		!strings.Contains(w.Body.String(), "its namespace backup is not one "+k8sTestIssuer+"'s k8s verifier lists in namespaces") {
 		t.Fatalf("%s", shown(w))
 	}
 }
@@ -1819,6 +1939,25 @@ func k8sAuth(a oidc.Assertion) *decision.K8s {
   `method = a.Credential().Method` and the record's auth comes from `c.auth()` (as it does for a
   revoked caller now), so a k8s deny past verification carries `auth.k8s`, not `auth.oidc`. The
   `b.Identity == nil` text becomes "no oidc or k8s verifier is configured under broker.identity".
+  The `ErrUnmapped` arm answers a k8s refusal with its own text (pre-flight I1):
+
+```go
+	case errors.Is(err, oidc.ErrUnmapped):
+		deny(decision.IdentityUnmapped, "", nil)
+		b.sayOnce("oidc_unmapped", sayEvery, "identity: a bearer token was refused (identity_unmapped): %s",
+			printsafe.Line(err.Error(), 300))
+		why := "your token names no principal this broker can use; tell the operator"
+		if oidc.MethodOf(err) == oidc.KindK8s {
+			// A k8s refusal names only the caller's own verified sub or
+			// namespace and the configured issuer (decision 49 ruling 8).
+			why = err.Error()
+		}
+		writeError(w, http.StatusUnauthorized, string(decision.IdentityUnmapped), why)
+		return caller{}, false
+```
+
+  An OIDC `ErrUnmapped` keeps the generic answer: its text can name claims of a provider's
+  token the operator mapped, which is the operator's to read, not the caller's.
   The `MaxSessionAge` refusal, for `a.Domain == oidc.Machines`, says "your token was issued at %s,
   more than max_session_age (%s) ago; a workload's platform renews its token" instead of naming
   `port49 login`.
@@ -1841,11 +1980,14 @@ func k8sAuth(a oidc.Assertion) *decision.K8s {
 
   Add `k8sid.Prefix` to `principalPrefixes` (its comment loses "system:serviceaccount: is refused
   until its verifier exists") and `system:serviceaccount:netops:oxidized` to the error's examples.
-  In the revocation report's text, for a principal mark whose principal begins `k8sid.Prefix`, add
-  the line: "a token its cluster issued stays valid at port49 until its exp, or max_token_age
-  after it was issued, whatever the cluster does; this mark refuses it now, and stands for a
-  service account re-created under that name until `port49 revoke --lift`". Find where the
-  `workload` note is written and add this beside it under its own flag.
+  In `RevokeReport.markText` (`revoke.go:602`), the text is chosen by the principal's prefix, as
+  the spiffe line is; no new flag. The `spelled` switch gains, beside the `spiffe.Scheme` arm,
+  `case strings.HasPrefix(r.Request.Principal, k8sid.Prefix): spelled = "a service account's
+  principal is system:serviceaccount:<namespace>:<name>, verbatim, as its token's sub names it"`.
+  And for a principal mark whose principal begins `k8sid.Prefix`, after the `revoked …` line, add:
+  "\na token its cluster issued stays valid at port49 until its exp, or max_token_age after it
+  was issued, whatever the cluster does; this mark refuses it now, and stands for a service
+  account re-created under that name until `port49 revoke --lift`".
 
 - [ ] **Step 5: Run the tests.**
 
@@ -1868,11 +2010,11 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 **Files:**
 - Modify: `internal/port49d/identity.go` (`openOIDC`, `runKeySets`, `announceIdentity`; new
   `announceServiceAccountIdentities`), `internal/port49d/main.go:370-378`,
-  `internal/daemon/metrics/metrics.go:334-345, 681-689`
-- Test: `internal/port49d/identity_test.go`
+  `internal/daemon/metrics/metrics.go:334-345, 681-689`, `internal/oidc/keyset.go` (`ProxyFor`'s parameter name and comment)
+- Test: `internal/port49d/identity_test.go`, `internal/port49d/identity_linux_test.go`
 
 **Interfaces:**
-- Consumes: `oidc.Config.K8s` (Task 3), `KeySetConfig.JWKS` (Task 4), `Policy.ServiceAccountIdentities` (Task 2).
+- Consumes: `oidc.Config.K8s` (Task 3), `KeySetConfig.JWKS` and `KeySetConfig.Migrating` (Task 4), `Policy.ServiceAccountIdentities` (Task 2).
 - Produces: `announceServiceAccountIdentities(w io.Writer, proc string, cfg config.Config, pol *policy.Policy)`.
 
 - [ ] **Step 1: Write the failing tests.** In `identity_test.go` (it builds `cfg` with
@@ -1896,7 +2038,9 @@ func TestTheStartSaysEachCluster(t *testing.T) {
 			"listed namespace mints as it",
 		"a token stays valid here until its exp or max_token_age after its pod or service account is deleted; " +
 			"port49 revoke --principal ends it at once",
-		"identity: https://l69-a.port49.lab is fetched directly (no HTTPS_PROXY)",
+		// The egress line is computed for the jwks host the fetch dials, and
+		// names it (pre-flight I9).
+		"identity: https://l69-a.port49.lab is fetched directly (no HTTPS_PROXY) (its jwks host 10.0.0.10:6443)",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s", want, out.String())
@@ -1908,7 +2052,7 @@ func TestTheStartSaysEachCluster(t *testing.T) {
 }
 
 func TestServiceAccountsNoClusterCanGiveAreSaid(t *testing.T) {
-	pol, err := policy.Load([]byte(`
+	pol, err := policy.Parse([]byte(`
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects:
@@ -1917,7 +2061,7 @@ subjects:
 grants:
   - {subject: a, scope: all_devices, roles: [r], max_privilege: admin}
   - {subject: b, scope: all_devices, roles: [r], max_privilege: admin}
-`), policy.Options{})
+`), policy.Env{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1939,6 +2083,12 @@ grants:
 	}
 }
 
+```
+
+  In `identity_linux_test.go`, beside the existing `openOIDC` tests (they set up the state
+  directory `ownStateDir` checks; mirror `TestOpenOIDCSharesOneKeySetPerIssuer`'s setup):
+
+```go
 // openOIDC builds a key set for a k8s verifier, reading its jwks.
 func TestOpenOIDCBuildsAClusterKeySet(t *testing.T) {
 	iss := oidctest.NewIssuer(t)
@@ -1961,7 +2111,8 @@ func TestOpenOIDCBuildsAClusterKeySet(t *testing.T) {
 ```
 
   (`os.Chmod(cfg.Broker.StateDir, 0o700)` if `ownStateDir` asks for it; mirror the existing
-  `openOIDC` test's setup.)
+  `openOIDC` test's setup.) The first block's imports are `identity_test.go`'s; the second needs
+  `oidctest`, `os`, `filepath` and `context` in `identity_linux_test.go` if it lacks them.
 
 - [ ] **Step 2: Run them to see them fail.**
 
@@ -1969,7 +2120,9 @@ Run: `go test ./internal/port49d/ -run 'TestTheStartSaysEachCluster|TestServiceA
 Expected: FAIL: `announceServiceAccountIdentities undefined`; `openOIDC` returns nil for a k8s-only config.
 
 - [ ] **Step 3: Implement.** In `openOIDC`: `vs := append(slices.Clone(id.OIDC), id.K8s...)`;
-  return nil when `len(vs) == 0`; loop over `vs`; pass `JWKS: v.JWKS` in the `KeySetConfig`; its
+  return nil when `len(vs) == 0`; loop over `vs`; pass `JWKS: v.JWKS` in the `KeySetConfig`, and
+  for a k8s verifier `Migrating`: the issuers of the other k8s verifiers in `id.K8s` with the same
+  `JWKS` (decision 49 ruling 4's migration; Task 4 stays quiet when discovery names one); its
   `ca_file` error names `broker.identity machines k8s verifier %d` for a k8s one. In
   `announceIdentity`, after the oidc machine lines:
 
@@ -1992,7 +2145,26 @@ Expected: FAIL: `announceServiceAccountIdentities undefined`; `openOIDC` returns
 ```
 
   The once-per-issuer "is fetched …" and "… system's root certificates" loops iterate
-  `append(slices.Clone(id.OIDC), id.K8s...)`. `announceServiceAccountIdentities` mirrors
+  `append(slices.Clone(id.OIDC), id.K8s...)`. For a k8s verifier the fetch dials `v.JWKS`, not the
+  issuer (often a name only the cluster resolves), so its egress line is computed with
+  `oidc.ProxyFor(v.JWKS)` and names that host (pre-flight I9):
+
+```go
+		target, host := v.Issuer, ""
+		if v.Kind == oidc.KindK8s {
+			target = v.JWKS
+			if u, err := url.Parse(v.JWKS); err == nil {
+				host = " (its jwks host " + u.Host + ")"
+			}
+		}
+		how := "directly (no HTTPS_PROXY)"
+		if u, err := oidc.ProxyFor(target); err == nil {
+		// … unchanged …
+		fmt.Fprintf(w, "%s: identity: %s is fetched %s%s\n", proc, v.Issuer, how, host)
+```
+
+  (`ProxyFor`'s parameter is a URL; rename it `target` in `keyset.go`, its comment saying a k8s
+  verifier's is the JWKS URL.) `announceServiceAccountIdentities` mirrors
   `announceWorkloadIdentities`:
 
 ```go
@@ -2041,7 +2213,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add internal/port49d internal/daemon/metrics/metrics.go
+git add internal/port49d internal/daemon/metrics/metrics.go internal/oidc/keyset.go
 git commit -m "feat: port49d builds each cluster's key set and says what it trusts
 
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
@@ -2186,7 +2358,9 @@ func TestAnUnusableTokenFileIsRefusedAtTheStart(t *testing.T) {
 
   In `cmd/port49/workload_test.go`, add a test that `port49 workload token --broker … --broker-ca …
   --token-file <missing> leaf1` exits 2 and its stderr names the file and never its content, and
-  that `--token-file` with `--cert` exits 2 with "a certificate or a token file, not both".
+  that `--token-file` with `--cert`, and `--token-file` with `--touch-key pkcs11:nothing-here`,
+  each exit 2 with "a certificate or a token file, not both" (the second proves the refusal comes
+  before any key is opened: an unopenable reference would otherwise say `--touch-key: …`).
 
 - [ ] **Step 2: Run them to see them fail.**
 
@@ -2220,7 +2394,13 @@ func (e *TokenFileError) Unwrap() error { return e.Err }
 func readToken(file string) (string, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return "", &TokenFileError{File: file, Err: errors.Unwrap(err)}
+		// The bare errno, so the message does not repeat the path; a fixed
+		// text when err is not an *os.PathError (pre-flight M5).
+		why := errors.Unwrap(err)
+		if why == nil {
+			why = errors.New("it could not be opened")
+		}
+		return "", &TokenFileError{File: file, Err: why}
 	}
 	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, MaxTokenFile+1))
@@ -2291,7 +2471,10 @@ func readToken(file string) (string, error) {
   `errWorkloadUsage` becomes `"--broker and --broker-ca are required, with --cert and --key or
   --token-file"`. `client()` checks `w.broker == "" || w.brokerCA == "" || (w.tokenFile == "") ==
   (w.cert == "" && w.key == "")`: usage when neither or both, with the "not both" text when both;
-  it passes `TokenFile: w.tokenFile`. At both `client()` call sites a `*workload.TokenFileError`
+  and `w.tokenFile != "" && w.touchKey != ""` is refused there too, with the same "not both" text,
+  before `clientkey.Open(w.touchKey, …)` (`workload.go:113`) runs, so no key is opened for a run
+  that is refused (pre-flight M3); `New`'s own check stays as the library's guard. It passes
+  `TokenFile: w.tokenFile`. At both `client()` call sites a `*workload.TokenFileError`
   exits 2 (it already falls to `return 2`; add a test that pins it). In `stopOf`, a
   `*workload.TokenFileError` is `failAgent, "the token file could not be read during the run; see
   stderr"`. The usage text names `--token-file`.
@@ -2447,7 +2630,8 @@ Expected: FAIL: `open backup-cronjob.yaml: no such file or directory`.
 ```yaml
 # Lets port49-broker read this cluster's service account keys without a
 # credential (spec §13 decision 49 ruling 2): issuer discovery and the JWKS
-# are public keys. Measured on kind (L69 (c)); managed clusters are L70.
+# are public keys. Provisional on L69 (c) until Task 11 closes it (then
+# "measured on kind, L69 (c)"); managed clusters are L70, open.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -2467,7 +2651,10 @@ subjects:
 ```yaml
 # A nightly backup's tokens, minted with the pod's projected token alone
 # (design §7). The default API token is not mounted: its audience is the API
-# server's and port49 refuses it (L69 (h)).
+# server's and port49 refuses it (provisional on L69 (h)). This example stops
+# at the mint: /work/tokens.tsv is on an emptyDir, so the job that reads the
+# tokens (your backup tool) runs in this pod, after this container, sharing
+# the work volume; it is not shown here.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -2523,7 +2710,8 @@ spec:
 # One k8s verifier per cluster (decision 49). issuer is the cluster's
 # --service-account-issuer, set per cluster; jwks is where the broker reads
 # its keys; namespaces are the ones whose service accounts it may name, and no
-# two clusters share one.
+# two clusters share one (decision 49 ruling 4; how a fleet running one
+# workload in several clusters names its namespaces is pending Q1).
 broker:
   identity:
     machines:
@@ -2546,23 +2734,44 @@ subjects:
     token_ttl: 900s
 ```
 
-  `README.md`, sections, each short, every cluster claim cited to L69 or L70:
+  `README.md`, sections, each short, every cluster claim cited to L69 or L70 and written
+  "provisional on L69 (<cell>)" until Task 11 closes the row (Task 11 Step 5 rewrites them):
   1. **What it is**: the projected token as the workload's identity; no CA, no secret at rest.
-  2. **The cluster**: set `--service-account-issuer` per cluster (kubeadm's default is the same
-     everywhere, and port49 refuses one issuer twice); apply `issuer-discovery.yaml` (measured
-     on kind, L69 (c); managed clusters unmeasured, L70); find `jwks` (`kubectl get --raw
-     /.well-known/openid-configuration`) and the cluster CA (`kubectl config view --raw -o
-     jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d`).
+  2. **The cluster**:
+     - Set `--service-account-issuer` per cluster (kubeadm's default is the same everywhere, and
+       port49 refuses one issuer twice). This is the main onboarding cost for a self-managed
+       fleet, so give the safe sequence (pre-flight M13): add the new issuer as the *first*
+       `--service-account-issuer` flag with the old one kept as a second (the API server signs
+       with the first and accepts both); list both issuers in port49 as two `k8s` verifiers on
+       the same `jwks` (decision 49 ruling 4's migration case); roll the pods; after the longest
+       `expirationSeconds` in use has passed, remove the old flag and the old verifier.
+     - Apply `issuer-discovery.yaml` (provisional on L69 (c); managed clusters unmeasured, L70).
+       Issuer discovery needs `--anonymous-auth` on; a CIS-hardened cluster turns it off. On 1.32+
+       use the structured authentication configuration (`AuthenticationConfiguration`'s
+       `anonymous.conditions`) to allow anonymous requests to `/.well-known/openid-configuration`
+       and `/openid/v1/jwks` alone (pre-flight M12).
+     - `jwks` is the API server's own address, not the issuer's host (discovery's `jwks_uri`
+       names the issuer's host, which nothing outside the cluster may resolve, the reason ruling
+       2 reads `jwks` directly): `$(kubectl config view --minify -o
+       jsonpath='{.clusters[0].cluster.server}')/openid/v1/jwks` (pre-flight I7). It may be any
+       https mirror of the keys (a bucket, a reverse proxy) for a cluster whose API server the
+       broker must not reach.
+     - The cluster CA for `ca_file`: `kubectl config view --raw --minify -o
+       jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d`.
   3. **The broker**: the `port49d-identity.yaml` fragment and what each key means; one verifier
-     per cluster; namespaces one cluster's alone (decision 49 ruling 4) and what to do in several
-     regions (per-region service account names, one subject listing them; Q1).
+     per cluster; namespaces one cluster's alone (decision 49 ruling 4). What a fleet running one
+     workload in several clusters does: **pending Q1** (the next pass fills this in from Ryan's
+     ruling). Do not advise per-region service account names: they share the namespace, which is
+     what ruling 4 compares (pre-flight C1).
   4. **The workload**: the CronJob; `automountServiceAccountToken: false`; `expirationSeconds:
-     3600` and why (the kubelet's 80% refresh, L69 (b), against `max_token_age`); the image is
-     the repository's `Dockerfile` target `port49` (`docker build --target port49 -t port49:local .`).
+     3600` and why (the kubelet refreshes at about 80% of it, provisional on L69 (b), against
+     `max_token_age`); the example stops at the mint (the consumer runs in the same pod, sharing
+     the work volume, not shown); the image is the repository's `Dockerfile` target `port49`
+     (`docker build --target port49 -t port49:local .`).
   5. **The policy**: the subject; `username:` required; `port49 policy test`.
-  6. **3am**: the eight cases of this plan's "The operator at 3am", as the operator sees them.
+  6. **3am**: every case of this plan's "The operator at 3am", as the operator sees them.
   7. **Stopping a workload**: `port49 revoke --principal system:serviceaccount:netops:oxidized`,
-     and why deleting the service account alone is not immediate (R11; L69 (e)).
+     and why deleting the service account alone is not immediate (R11; provisional on L69 (e)).
   8. **What is not measured**: managed clusters (L70); a CronJob run in a cluster against a
      broker outside it is plan 12's deployment test.
 
@@ -2625,9 +2834,16 @@ nodes:
             service-account-issuer: https://l69-a.port49.lab
 ```
 
+  kind v0.29.0 generates kubeadm `v1beta3` for every Kubernetes 1.23+ (its
+  `pkg/cluster/internal/kubeadm/config.go` has no `v1beta4` template, checked 2026-10-16), so
+  `extraArgs` is a map, as above; the patch sets no `apiVersion`, so it matches by kind alone.
+  `up(t)` checks the flag took (`docker exec <name>-control-plane grep -q -- '--service-account-issuer=<issuer>'
+  /etc/kubernetes/manifests/kube-apiserver.yaml`) and fails as a harness fault before any cell
+  if not (pre-flight M11).
+
   `kind-b.yaml` is the same with `name: l69-b`, port `16444`, issuer `https://l69-b.port49.lab`,
-  and `service-account-jwks-uri: https://l69-b.invalid/openid/v1/jwks` (cell c's discovery that
-  differs from the configured `jwks`). `workload.yaml` holds namespaces `netops` and `backup`,
+  and `service-account-jwks-uri: https://l69-b.invalid/openid/v1/jwks` (cell c records a discovery
+  `jwks_uri` that differs from the configured `jwks`; port49 does not compare it). `workload.yaml` holds namespaces `netops` and `backup`,
   service account `netops:oxidized`, and pod `netops/oxidized` (`busybox:1.36.1`, `sleep
   infinity`, `automountServiceAccountToken: false`) with the projected volume of
   `examples/kubernetes/backup-cronjob.yaml` but `audience: port49-lab` and
@@ -2714,11 +2930,13 @@ Expected: FAIL: `l69Claim undefined`.
 
   - Constants: `l69Claim` (the row's claim text, exactly), `l69KindVersion = "v0.29.0"`,
     `l69NodeImage = "kindest/node:v1.33.1"`, `l69Audience = "port49-lab"`, the issuers, the
-    API ports 16443 and 16444.
+    API ports 16443 and 16444, `l69DiskFloorMB = 20480`.
   - `type tokenFactsT struct { Header, Claims map[string]any; Lifetime int64; SHA256 string }` and
     `func tokenFacts(raw string) (tokenFactsT, error)` (split on `.`, decode the first two parts,
     `Lifetime = exp − iat`, `SHA256` of the raw token); `func rotationFraction(iat time.Time,
-    life, changedAfter time.Duration) float64` rounded to two places.
+    life time.Duration, changedAt time.Time) float64`, `changedAt.Sub(iat) / life` rounded to two
+    places: measured against the old token's `iat`, never against when polling began (pre-flight
+    I4, M10).
   - `type kindCluster struct{ name, kubeconfig string; apiPort int }` with `up(t)` (`kind create
     cluster --config … --kubeconfig <tmp>`; refuses to start when `kind version` is not
     `l69KindVersion`; records `docker image inspect --format '{{index .RepoDigests 0}}'` of the
@@ -2734,10 +2952,15 @@ Expected: FAIL: `l69Claim undefined`.
     (issuer, jwks, ca_file, audience `port49-lab`, namespaces) and `certificate_status`
     `disabled: true` (no x509 verifier), and a policy whose subject `svc_backup` lists
     `system:serviceaccount:netops:oxidized` with `username: svc-backup` and `token_ttl: 60s`.
+    It adds `admin_socket: <dir>/admin.sock` to the config (`localBrokerFiles` sets none), and
+    `(*localBroker).revoke(args ...string)` runs `revokeCLI(<dir>/admin.sock, args...)`
+    (`tests/lab/revoke_test.go:93`, `port49 revoke --socket …`) for cell (e) (pre-flight M8).
     `(*localBroker).workloadTokenFile(tokenFile string) (exit int, stdout, stderr string)` runs
     `bin/port49 workload token --broker … --broker-ca … --token-file … leaf1`; the harness keeps
     exit and stderr, and drops stdout after checking it is non-empty on exit 0.
-  - `TestL69`, guarded by `PORT49_LAB_K8S=1`, `labGuardAt` before each cell, cells in order, each
+  - `TestL69`, guarded by `PORT49_LAB_K8S=1`, `labGuardAt(l66StopSentinel, "/", l69DiskFloorMB)`
+    before each cell (`l69DiskFloorMB = 20480`: two kind node images, their containers and the
+    clusters' etcd want several GB; the sentinel is `/tmp/port49-STOP-LAB`), cells in order, each
     an `l69Cell{Name, Observed map[string]any, Pass bool, Why string}` in the evidence:
     - **(a) claims.** Up cluster A, apply `workload.yaml`, wait for `netops/oxidized` Ready; read
       its token; record `tokenFacts`. Pass when `iss` is A's issuer, `aud` is exactly
@@ -2749,16 +2972,23 @@ Expected: FAIL: `l69Claim undefined`.
       and `/openid/v1/jwks` with A's CA and no credential: record both statuses. Apply
       `examples/kubernetes/issuer-discovery.yaml`; again: record both statuses and discovery's
       `issuer` and `jwks_uri`. Pass when the second pair is 200 and discovery's `issuer` is A's.
-      Up cluster B (in parallel with A's later cells is fine; one at a time is simpler): record
-      B's discovery `jwks_uri` (expect `https://l69-b.invalid/openid/v1/jwks`); start a broker
-      with B's verifier (`jwks` B's API server); pass when its stderr has "names jwks_uri
-      https://l69-b.invalid/openid/v1/jwks, not the configured jwks" and a B token mints exit 0.
+      Start a broker with A's verifier (`jwks` A's API server, `https://127.0.0.1:16443/…`, while
+      discovery's `jwks_uri` names A's issuer host): pass when its stderr has no "names issuer"
+      and no "jwks_uri" line, the correct config silent (pre-flight I7). Up cluster B (one at a
+      time is simpler): record B's discovery `jwks_uri` (expect
+      `https://l69-b.invalid/openid/v1/jwks`); start a broker with B's verifier (`jwks` B's API
+      server); pass when a B token mints exit 0 and its stderr says nothing of B's `jwks_uri`
+      (the configured `jwks` is used, never discovery's).
     - **port49 mints** (the precondition of b, d, e, f, g): a broker with A's verifier; A's pod
       token mints exit 0.
-    - **(b) rotation.** Poll A's pod token hash every 10s for up to 660s; at the first change,
-      record `rotationFraction(iat, 600s, elapsed)` from the old token's facts, read the new
-      token, and mint with it (exit 0). Pass when the file changed and the new token minted;
-      record the fraction (the docs' 80% is provisional until this records it).
+    - **(b) rotation.** Read A's pod token afresh at the start of (b) (the one (a) read may have
+      rotated during (c)) and keep its facts; poll its hash every 10s for up to 660s; at the first
+      change, record `rotationFraction(iat, 600s, changedAt)` with the old token's `iat` and the
+      poll time the change was seen, read the new token, and mint with it (exit 0). Pass when the
+      file changed, the new token minted, and the fraction is in [0.75, 0.97] (the kubelet checks
+      a token's age on its volume sync, every 60–90s, so it lands at about 0.80–0.95, almost never
+      exactly 0.80); record the fraction (the docs' "about 80%" is provisional until this records
+      it).
     - **(d) key rotation.** On A's control plane (`docker exec l69-a-control-plane`): generate
       `/etc/kubernetes/pki/sa2.key` and `sa2.pub` (`openssl genrsa 2048`; `openssl rsa -pubout`);
       edit `/etc/kubernetes/manifests/kube-apiserver.yaml` so `--service-account-key-file` is given
@@ -2772,8 +3002,8 @@ Expected: FAIL: `l69Claim undefined`.
       `audiences: [port49-lab]`, its output parsed for `status.authenticated` and
       `status.error`; the request body and the output never logged), record it; mint with T1:
       record the exit. Re-create the pod, read T2, delete the service account `netops/oxidized`;
-      TokenReview T2; mint with T2. Then `port49 revoke --principal
-      system:serviceaccount:netops:oxidized` on the broker's admin socket and mint with T2 again.
+      TokenReview T2; mint with T2. Then `port49 revoke --socket <dir>/admin.sock --principal
+      system:serviceaccount:netops:oxidized` (`(*localBroker).revoke`) and mint with T2 again.
       Pass when TokenReview answered `authenticated: false` for each, port49 minted with each
       (exit 0, the window R11 states), and after the revoke refused it (exit 77, stderr
       `credential_revoked`). Record the revoke's answer text.
@@ -2785,12 +3015,19 @@ Expected: FAIL: `l69Claim undefined`.
       Pass when both.
     - **(g) shapes refused.** On A: `kubectl create token oxidized -n netops --audience other
       --bound-object-kind Pod --bound-object-name oxidized` (wrong audience); `kubectl create
-      token oxidized -n netops --audience port49-lab` (unbound); a Secret of type
+      token oxidized -n netops --audience port49-lab` (unbound); a Secret `netops/l69-bound`
+      (an Opaque Secret, created for the purpose) and `kubectl create token oxidized -n netops
+      --audience port49-lab --bound-object-kind Secret --bound-object-name l69-bound`
+      (Secret-bound: the shape ruling 7's `secret` check assumes, pre-flight I6); `kubectl create
+      token oxidized -n netops --audience port49-lab --bound-object-kind Node
+      --bound-object-name l69-a-control-plane` (Node-bound, 1.33); and a Secret of type
       `kubernetes.io/service-account-token` for `oxidized`, its `.data.token` read (a legacy
-      token). Each minted with: pass when all three exit 77 with `trust_domain_unresolved`, the
-      details "its aud is not exactly", "it is not bound to a pod", and (legacy) "no configured
-      verifier accepts its issuer" (its `iss` is `kubernetes/serviceaccount`). Record each
-      token's facts.
+      token). Each minted with: pass when all five exit 77 with `trust_domain_unresolved`, the
+      details "its aud is not exactly", "it is not bound to a pod" (unbound), "it is bound to a
+      Secret" (Secret-bound; record its `kubernetes.io.secret` member as the cluster wrote it),
+      "it is not bound to a pod" (Node-bound; record its `kubernetes.io.node` member), and
+      (legacy) "no configured verifier accepts its issuer" (its `iss` is
+      `kubernetes/serviceaccount`). Record each token's facts.
     - **(h) the default token.** `netops/defaulted`'s
       `/var/run/secrets/kubernetes.io/serviceaccount/token`: record `aud`, `exp − iat` and
       `warnafter`; mint with it: pass when exit 77 "its aud is not exactly".
@@ -2838,32 +3075,38 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 **Files:**
 - Create: `tests/lab/results/L69-kind.md`, `tests/lab/evidence/L69-kind.json`
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 L69's Status; decision 49's
-  "provisional on L69" words where a cell measured them), `examples/kubernetes/README.md` and
-  this plan's operator notes where a cell contradicts them
+  "provisional on L69" words where a cell measured them), `examples/kubernetes/` (the README and
+  the manifests' comments: "provisional on L69" becomes "measured on kind", and anything a cell
+  contradicts) and this plan's operator notes likewise
 
 **Interfaces:**
 - Consumes: Task 10's harness at this branch's head.
 
 - [ ] **Step 1: Prepare.** A detached run worktree at the head commit; `make build` in it;
-  `kind version` prints `v0.29.0`; `docker pull kindest/node:v1.33.1`; no other lab run active
+  kind is not installed on the lab host: `go install sigs.k8s.io/kind@v0.29.0`, check
+  `$(go env GOPATH)/bin` is on `PATH` (`command -v kind`), then `kind version` prints `v0.29.0`
+  (kubectl, docker and openssl are present); `docker pull kindest/node:v1.33.1`; no other lab run active
   (single occupant); a background stall watchdog armed (re-armed on every wake); the STOP
   sentinel absent.
 - [ ] **Step 2: Run.** `make lab-k8s` in the run worktree. Expected: PASS, every cell.
 - [ ] **Step 3: Judge.** A failed cell is real or harness. A harness fault: fix the harness in its
   own commit (`test:`), reviewed, and run again; nothing is committed from the faulted run. A real
   result that contradicts R2, R6, R7 or R11's text: the doc is wrong. Fix decision 49, the README
-  and the operator notes to the note, and say so in the commit. If (b) records a fraction other
-  than 0.8, the refusal's hint text (Task 5) and the README change to the measured value in the
-  same commit.
+  and the operator notes to the note, and say so in the commit. If (b) records a fraction outside
+  [0.75, 0.97], "about 80%" is wrong: the refusal's hint text (Task 5) and the README change to
+  the measured range in the same commit. A fraction inside it keeps "about 80%".
 - [ ] **Step 4: Copy the results to the branch** (they are in the run worktree), then remove the
   run worktree.
 - [ ] **Step 5: Close the row.** Spec §15 L69's Status becomes `closed — measured <date>;
   tests/lab/results/L69-kind.md`, followed by one sentence per cell of what was measured, as L48's
-  row does. L70 stays open. Decision 49's "Provisional on L69 (x)" words become "measured, L69
-  (x)".
+  row does. L70 stays open. Every "provisional on L69 (x)" written before this run becomes
+  "measured on kind, L69 (x)": decision 49's rulings, R-text quoted in the spec, the
+  `examples/kubernetes/issuer-discovery.yaml` and `backup-cronjob.yaml` comments,
+  `examples/kubernetes/README.md`, and this plan's operator notes (pre-flight I2). Check: `grep -rn "provisional on L69"
+  docs/design examples/kubernetes` prints nothing.
 
 ```bash
-git add tests/lab/results/L69-kind.md tests/lab/evidence/L69-kind.json docs/design/2026-08-23-policy-engine-spec.md examples/kubernetes/README.md
+git add tests/lab/results/L69-kind.md tests/lab/evidence/L69-kind.json docs/design/2026-08-23-policy-engine-spec.md examples/kubernetes
 git commit -m "docs: close lab register entry L69 on kind
 
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
@@ -2914,8 +3157,14 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   > jwks_max_age/2 or absent(...)` covers clusters with no change.
 - **L70:** managed clusters, when an account on EKS, GKE or AKS exists.
 - **Plan 13:** `examples/kubernetes/README.md` as the Kubernetes workload page, and the notes below.
-- **Plan 11a:** a k8s verifier's kept keys are per broker state directory, like an OIDC issuer's;
-  nothing in the global/regional split changes for them.
+- **Plan 11a:** a k8s verifier's kept keys are per broker state directory, like an OIDC issuer's.
+  With one config across three regional brokers, each broker builds a key set for every cluster:
+  one that cannot reach another region's API server says "keys not refreshed" hourly and fires
+  the staleness alert for clusters it never serves (pre-flight M14). 11a decides whether a
+  regional broker's config lists only its own region's clusters, or the alert is scoped per
+  broker.
+- **Plan 11a/12 (if Ryan rules Q1 (a)):** an explicit trust group of clusters that may share
+  namespaces (Q1 (c)), recorded as a question there.
 
 ---
 
@@ -2925,16 +3174,20 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   certificate, no secret at rest: the kubelet writes and rotates a projected service account
   token, and the broker validates it against the cluster's keys.
   - **Configuration:** `broker.identity.machines: [{type: k8s, issuer: <the cluster's
-    --service-account-issuer>, jwks: <https://api-server:6443/openid/v1/jwks>, ca_file: <the
+    --service-account-issuer>, jwks: <the API server's own address + /openid/v1/jwks, never the
+    issuer's host>, ca_file: <the
     cluster CA>, audience: port49, namespaces: [netops]}]`, one per cluster. `issuer` is matched
     byte for byte with the token's `iss`; set it per cluster (kubeadm's default is the same on
     every cluster, and port49 refuses one issuer twice).
   - **The cluster** publishes its keys to the broker with one ClusterRoleBinding,
-    `examples/kubernetes/issuer-discovery.yaml` (measured on kind; managed clusters are L70,
-    unmeasured).
+    `examples/kubernetes/issuer-discovery.yaml` (provisional on L69 (c) until the L69 run;
+    managed clusters are L70, unmeasured). Issuer discovery needs anonymous access to two paths;
+    a CIS-hardened cluster with `--anonymous-auth=false` allows them through the 1.32+ structured
+    authentication configuration.
   - **Namespaces are one cluster's alone.** Two clusters listing one namespace refuse the start:
     either cluster's administrators could mint as the other's workloads. Running one workload in
-    several regions: name its service account per region and list each in one policy subject.
+    several regions' clusters: **pending Q1** (filled in from Ryan's ruling; a service account
+    name per region does not help, since the namespace is what is compared).
   - **The principal** is `system:serviceaccount:<namespace>:<name>`, verbatim. The policy refuses
     one outside that form at load, and the start says which a configured cluster cannot give.
 - **The workload:** `port49 workload token --broker … --broker-ca … --token-file
@@ -2943,17 +3196,17 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   `expirationSeconds: 3600`, and `automountServiceAccountToken: false` (the default token's
   audience is the API server's, and it is refused). Exit codes are `port49 workload`'s: 0, 1, 2
   (a missing or unusable token file), 75 (retry later), 77 (final).
-- **What is refused, and how it reads:** another audience, an unbound or Secret-bound token, a
+- **What is refused, and how it reads:** another audience, an unbound, Secret- or Node-bound token, a
   token older than `max_token_age` (2h), a namespace the cluster does not list, a cluster not
   configured. Each is 401 with the reason and a detail naming the check.
 - **A cluster's API server unreachable:** keys held are used for `jwks_max_age` (24h) after the
   last good fetch, said hourly and on `port49_oidc_keys_fetch_failures_total{issuer}`; then 503
   `identity_provider_unavailable`, retried by `port49 workload`.
 - **Key rotation at the cluster** needs nothing from port49: a new key is fetched on first sight
-  (measured on kind, L69 (d)).
+  (provisional on L69 (d)).
 - **To stop a workload at once:** `port49 revoke --principal system:serviceaccount:<ns>:<name>`.
   Deleting its service account or pod is not immediate at port49: a token already issued stays
-  valid until its `exp` or 2h after issue (measured, L69 (e)). The mark also stands for a service
+  valid until its `exp` or 2h after issue (provisional on L69 (e)). The mark also stands for a service
   account re-created under that name until `port49 revoke --lift`.
 - **Records:** a cluster caller's records carry `auth: {method: k8s, k8s: {issuer, sub,
   serviceaccount_uid, pod, pod_uid, node, jti}}`: which pod minted.
