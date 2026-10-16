@@ -835,8 +835,12 @@ func load(path string, role Role) (Config, error) {
 	}
 	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
 		tlsKey.TLSListener.Tag == "!!null" {
-		return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
-			"certificate_status, or remove the key")
+		if role == RoleBroker {
+			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
+		} else {
+			return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
+				"certificate_status, or remove the key")
+		}
 	}
 	switch role {
 	case RoleBroker:

@@ -109,18 +109,16 @@ func bounded(s []string) string {
 //     dNSName can carry it and no address identifies it. With ip_address the
 //     address still names the device, so it is not flagged.
 //
-// A tcp device, and a tls device already refused for the name clash
-// admission.TLSNameClashes finds, are not judged. A reason never holds a key,
+// A tcp device is not judged. A tls device already refused for the name clash
+// admission.TLSNameClashes finds is not reported, but its names still count: its
+// certificate exists and can name another device. A reason never holds a key,
 // a pin or certificate bytes.
 func (r Rule) Unidentifiable(devs []admission.Device) map[string]string {
 	out := map[string]string{}
 	refused := admission.TLSNameClashes(devs)
 	byCandidate := map[string][]string{}
 	for _, d := range devs {
-		if d.EffectiveTransport() != admission.TransportTLS || d.Transport != admission.TransportTLS {
-			continue
-		}
-		if _, done := refused[d.Name]; done {
+		if d.EffectiveTransport() != admission.TransportTLS {
 			continue
 		}
 		f, ascii := admission.FoldASCII(d.Name)
@@ -159,6 +157,9 @@ func (r Rule) Unidentifiable(devs []admission.Device) map[string]string {
 		}
 	}
 	for n, set := range with {
+		if _, done := refused[n]; done {
+			continue // admission refused it already; it only counted as a claimant
+		}
 		names := make([]string, 0, len(set))
 		for m := range set {
 			names = append(names, m)

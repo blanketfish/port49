@@ -132,3 +132,14 @@ func TestRuleUnidentifiable(t *testing.T) {
 		}
 	}
 }
+
+func TestUnidentifiableCountsDevicesAdmissionRefused(t *testing.T) {
+	tls := func(n, addr string) admission.Device {
+		return admission.Device{Name: n, Transport: admission.TransportTLS, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	devs := []admission.Device{tls("leaf-01", "10.0.0.1"), tls("LEAF-01", "10.0.0.2"), tls("leaf-01.example.net", "10.0.0.3")}
+	got := Rule{DNSName: true, DNSSuffixes: []string{"example.net"}}.Unidentifiable(devs)
+	if len(got) != 1 || got["leaf-01.example.net"] == "" {
+		t.Fatalf("want only leaf-01.example.net flagged (the other two are admission's), got %v", got)
+	}
+}

@@ -241,3 +241,13 @@ func TestTLSListenerAndBrokerKeepListsApart(t *testing.T) {
 		t.Fatalf("separate directories: %v", err)
 	}
 }
+
+func TestTheBrokerRefusesAnEmptyTLSListenerAsPort49ds(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "port49-broker.yaml")
+	if err := os.WriteFile(p, []byte("tls_listener:\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadBroker(p); err == nil || !strings.Contains(err.Error(), "tls_listener is not port49-broker.yaml's") {
+		t.Fatalf("empty tls_listener in the broker file: %v", err)
+	}
+}
