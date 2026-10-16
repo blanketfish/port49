@@ -98,7 +98,6 @@ func TestIdentityRefusals(t *testing.T) {
 	for name, c := range map[string]struct{ block, want string }{
 		"client_ca_file beside identity": {strings.Replace(twoLists, "  identity:", "  client_ca_file: /etc/port49/clients-ca.pem\n  identity:", 1),
 			"broker.client_ca_file: moved to broker.identity.humans[].trust_anchor_file"},
-		"k8s": {"  identity:\n    machines: [{type: k8s}]\n", "broker.identity.machines[0]: type k8s is plan 10's"},
 		"two anchors": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem}, {type: x509, trust_anchor_file: /b.pem}]\n",
 			"broker.identity.humans: at most one x509 verifier"},
 		"domains on an x509 verifier": {"  identity:\n    humans: [{type: x509, trust_anchor_file: /a.pem, principal_domains: [corp.example.com]}]\n",
@@ -636,5 +635,130 @@ func TestTheEnrollmentStoreHandle(t *testing.T) {
 		e.CAFile != ca || e.Prefix != "/port49-enrollments/" || e.CertFile != cert || e.KeyFile != key ||
 		e.CallTimeout != 500*time.Millisecond {
 		t.Fatalf("%+v", es)
+	}
+}
+
+// k8sOnly is brokerWithIdentity for a broker with no x509 verifier, which
+// takes no certificate_status.
+func k8sOnly(identity string) string {
+	return strings.Replace(brokerWithIdentity(identity), "  certificate_status: {disabled: true}\n", "", 1)
+}
+
+const k8sCluster = `  identity:
+    machines:
+      - type: k8s
+        cluster: l69_a
+        issuer: https://l69-a.port49.lab
+        jwks: https://10.0.0.10:6443/openid/v1/jwks
+        audience: port49
+        namespaces: [netops, backup]
+`
+
+func TestAK8sVerifierLoads(t *testing.T) {
+	c, err := loadWith(t, k8sOnly(k8sCluster))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := c.Broker.Identity
+	if len(id.K8s) != 1 || len(id.OIDC) != 0 {
+		t.Fatalf("identity %+v", id)
+	}
+	v := id.K8s[0]
+	if v.Domain != oidc.Machines || v.Kind != oidc.KindK8s || v.Cluster != "l69_a" || v.Issuer != "https://l69-a.port49.lab" ||
+		v.JWKS != "https://10.0.0.10:6443/openid/v1/jwks" || v.Audience != "port49" ||
+		strings.Join(v.Namespaces, " ") != "netops backup" || len(v.Algorithms) != 1 || v.Algorithms[0] != oidc.RS256 {
+		t.Fatalf("k8s %+v", v)
+	}
+	if !v.ListsNamespace("netops") || v.ListsNamespace("kube-system") {
+		t.Fatal("ListsNamespace")
+	}
+	if v.Who() != "cluster l69_a (https://l69-a.port49.lab)" {
+		t.Fatal(v.Who())
+	}
+}
+
+func TestK8sRefusals(t *testing.T) {
+	ok := "type: k8s, cluster: l69_a, issuer: \"https://l69-a.port49.lab\", jwks: \"https://10.0.0.10:6443/openid/v1/jwks\", audience: port49, namespaces: [netops]"
+	// b is another cluster: its own name, issuer and jwks.
+	b := "type: k8s, cluster: l69_b, issuer: \"https://l69-b.port49.lab\", jwks: \"https://10.0.0.20:6443/openid/v1/jwks\", audience: port49"
+	for name, c := range map[string]struct{ block, want string }{
+		"under humans": {"  identity:\n    humans: [{" + ok + "}]\n", "broker.identity.humans[0]: k8s is a machine verifier"},
+		"no issuer":    {"  identity:\n    machines: [{type: k8s, cluster: c, jwks: \"https://h/j\", audience: a, namespaces: [n]}]\n", "broker.identity.machines[0].issuer must be an https URL"},
+		"no cluster":   {"  identity:\n    machines: [{" + strings.Replace(ok, "cluster: l69_a, ", "", 1) + "}]\n", "broker.identity.machines[0].cluster is required"},
+		"bad cluster":  {"  identity:\n    machines: [{" + strings.Replace(ok, "cluster: l69_a", "cluster: US-East", 1) + "}]\n", "broker.identity.machines[0].cluster must match"},
+		"cluster twice": {"  identity:\n    machines: [{" + ok + "}, {" + strings.Replace(b, "cluster: l69_b", "cluster: l69_a", 1) + ", namespaces: [backup]}]\n",
+			"broker.identity.machines[1].cluster l69_a is also broker.identity.machines[0]'s: each cluster's name is its own (decision 49 ruling 1)"},
+		"one jwks, two names": {"  identity:\n    machines: [{" + ok + "}, {" + strings.Replace(strings.Replace(ok, "l69_a", "l69_c", 1), "https://l69-a", "https://l69-new", 1) + "}]\n",
+			"read one jwks, so they are one cluster under two issuers"},
+		"http jwks":     {"  identity:\n    machines: [{" + strings.Replace(ok, "https://10.0.0.10", "http://10.0.0.10", 1) + "}]\n", "broker.identity.machines[0].jwks must be an https URL"},
+		"jwks query":    {"  identity:\n    machines: [{" + strings.Replace(ok, "/jwks\"", "/jwks?x=1\"", 1) + "}]\n", "broker.identity.machines[0].jwks must be an https URL"},
+		"no jwks":       {"  identity:\n    machines: [{type: k8s, cluster: c, issuer: \"https://l69-a.port49.lab\", audience: a, namespaces: [n]}]\n", "broker.identity.machines[0].jwks is required"},
+		"no audience":   {"  identity:\n    machines: [{" + strings.Replace(ok, "audience: port49, ", "", 1) + "}]\n", "broker.identity.machines[0].audience is required"},
+		"no namespaces": {"  identity:\n    machines: [{" + strings.Replace(ok, ", namespaces: [netops]", "", 1) + "}]\n", "broker.identity.machines[0].namespaces is required"},
+		"bad namespace": {"  identity:\n    machines: [{" + strings.Replace(ok, "[netops]", "[NetOps]", 1) + "}]\n", "broker.identity.machines[0].namespaces: \"NetOps\""},
+		"wildcard":      {"  identity:\n    machines: [{" + strings.Replace(ok, "[netops]", "[\"*\"]", 1) + "}]\n", "broker.identity.machines[0].namespaces: \"*\""},
+		"clients":       {"  identity:\n    machines: [{" + ok + ", clients: [{client_id: x, sub: y}]}]\n", "broker.identity.machines[0]: type k8s takes issuer, cluster, jwks, audience, namespaces, ca_file and algorithms alone"},
+		"trust anchor":  {"  identity:\n    machines: [{" + ok + ", trust_anchor_file: /a.pem}]\n", "type k8s takes issuer, cluster, jwks, audience, namespaces, ca_file and algorithms alone"},
+		"cluster on oidc": {"  identity:\n    machines: [{type: oidc, cluster: x, issuer: \"https://idp.example.com\", audience: x, clients: [{client_id: c, sub: s}]}]\n",
+			"broker.identity.machines[0]: jwks, namespaces and cluster are a k8s verifier's"},
+		"HS256": {"  identity:\n    machines: [{" + ok + ", algorithms: [HS256]}]\n", "broker.identity.machines[0].algorithms: HS256 is refused"},
+		"one issuer twice": {"  identity:\n    machines: [{" + ok + "}, {" + strings.Replace(strings.Replace(ok, "[netops]", "[backup]", 1), "l69_a", "l69_c", 1) + "}]\n",
+			"broker.identity.machines[1].issuer https://l69-a.port49.lab is also broker.identity.machines[0]'s"},
+		"issuer folds": {"  identity:\n    machines: [{" + ok + "}, {" + strings.Replace(strings.Replace(strings.Replace(ok, "https://l69-a", "HTTPS://L69-A", 1), "[netops]", "[backup]", 1), "l69_a", "l69_c", 1) + "}]\n",
+			"differ only by a trailing slash or by case"},
+		"an oidc issuer": {"  identity:\n    machines: [{" + ok + "}, {type: oidc, issuer: \"https://l69-a.port49.lab\", audience: x, clients: [{client_id: c, sub: s}]}]\n",
+			"broker.identity.machines[1].issuer https://l69-a.port49.lab is also broker.identity.machines[0]'s, a k8s verifier's"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadWith(t, brokerWithIdentity(c.block))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// Several clusters may vouch for one namespace (decision 49 ruling 4, ruled
+// 2026-10-16): a workload deployed to each region is one identity.
+func TestTwoClustersMayListOneNamespace(t *testing.T) {
+	block := `  identity:
+    machines:
+      - {type: k8s, cluster: us_east, issuer: "https://us-east.k8s.example.com", jwks: "https://10.0.0.10:6443/openid/v1/jwks", audience: port49, namespaces: [netops]}
+      - {type: k8s, cluster: eu_west, issuer: "https://eu-west.k8s.example.com", jwks: "https://10.1.0.10:6443/openid/v1/jwks", audience: port49, namespaces: [backup, netops]}
+`
+	c, err := loadWith(t, k8sOnly(block))
+	if err != nil || len(c.Broker.Identity.K8s) != 2 {
+		t.Fatalf("%v", err)
+	}
+	for _, v := range c.Broker.Identity.K8s {
+		if !v.ListsNamespace("netops") {
+			t.Fatalf("%s does not list netops", v.Cluster)
+		}
+	}
+}
+
+// Review Focus 4: one cluster under two issuers (a migration) loads, its
+// two verifiers sharing the cluster's name.
+func TestAK8sIssuerMigrationLoads(t *testing.T) {
+	block := `  identity:
+    machines:
+      - {type: k8s, cluster: l69_a, issuer: "https://old.port49.lab", jwks: "https://10.0.0.10:6443/openid/v1/jwks", audience: port49, namespaces: [netops]}
+      - {type: k8s, cluster: l69_a, issuer: "https://new.port49.lab", jwks: "https://10.0.0.10:6443/openid/v1/jwks", audience: port49, namespaces: [netops]}
+`
+	c, err := loadWith(t, k8sOnly(block))
+	if err != nil || len(c.Broker.Identity.K8s) != 2 {
+		t.Fatalf("%v", err)
+	}
+}
+
+// The kept key files of a k8s issuer are in the collision lists, as an OIDC
+// issuer's are (pre-flight M-11 of plan 7h).
+func TestAK8sIssuersKeyFileIsChecked(t *testing.T) {
+	c, err := loadWith(t, k8sOnly(k8sCluster))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := identityIssuers(c.Broker); len(got) != 1 || got[0] != "https://l69-a.port49.lab" {
+		t.Fatalf("%v", got)
 	}
 }
