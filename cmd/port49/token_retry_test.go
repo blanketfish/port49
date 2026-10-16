@@ -173,3 +173,16 @@ func TestTokenCommandGivesUpWithTheSameWords(t *testing.T) {
 		t.Fatalf("code %d out %q err %q, waited %v", code, out.String(), errb.String(), fc.slept)
 	}
 }
+
+// A proof (touch or sign-in) refused store_unavailable is not retried: a retry
+// would ask the person to prove again unasked. Only the mint is retried.
+func TestTokenDoesNotRetryAProofRefusedStoreUnavailable(t *testing.T) {
+	fc := &fakeClock{at: time.Unix(1000, 0)}
+	calls := 0
+	want := &mfaUnprovedError{Err: storeDown(5 * time.Second)}
+	_, err := mintRetrying(func() (api.MintItem, error) { calls++; return api.MintItem{}, want }, fc.clock(),
+		"port49 token", &strings.Builder{})
+	if err != want || calls != 1 || len(fc.slept) != 0 {
+		t.Fatalf("err %v after %d calls, waits %v; want the proof's error at once", err, calls, fc.slept)
+	}
+}

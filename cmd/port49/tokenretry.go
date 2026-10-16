@@ -30,14 +30,16 @@ var tokenRetryClock = retryClock{now: time.Now, sleep: time.Sleep}
 // mintRetrying is mint, run again while the broker refuses it
 // store_unavailable (its start gate after a restart, spec §5.7): after the
 // reply's Retry-After, 5s when it carries none, for up to 30s from the first
-// try. It retries no other failure, and a wait that would pass the 30s is not
+// try. It retries no other failure, and not a proof (touch or sign-in) refused
+// the same way, which would ask the person to prove again unasked, and a wait that would pass the 30s is not
 // made: the last error stands, as it did before the retry existed.
 func mintRetrying(mint func() (api.MintItem, error), clk retryClock, cmd string, stderr io.Writer) (api.MintItem, error) {
 	start := clk.now()
 	for {
 		item, err := mint()
 		var su *agent.StoreUnavailableError
-		if !errors.As(err, &su) {
+		var unproved *mfaUnprovedError
+		if !errors.As(err, &su) || errors.As(err, &unproved) {
 			return item, err
 		}
 		wait := cmp.Or(su.RetryAfter, storeRetryDefault)
