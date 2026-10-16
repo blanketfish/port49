@@ -26,9 +26,16 @@ spec:
           serviceAccountName: oxidized
           automountServiceAccountToken: false
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
           containers:
             - name: tokens
               image: port49:local
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
               command: ["/usr/local/bin/port49", "workload", "token",
                         "--broker", "https://port49-broker.netops.svc:8443",
                         "--broker-ca", "/etc/port49/broker-ca.pem",

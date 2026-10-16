@@ -1,7 +1,17 @@
 # Lets port49-broker read this cluster's service account keys without a
-# credential (spec §13 decision 49 ruling 2): issuer discovery and the JWKS
-# are public keys. Provisional on L69 (c) until Task 11 closes it (then
-# "measured on kind, L69 (c)"); managed clusters are L70, open.
+# credential (spec §13 decision 49 ruling 2).
+#
+# EXPOSURE: this binds system:unauthenticated, so anyone who can reach the API
+# server's address can read the issuer discovery document and the JWKS without
+# authenticating. They are public keys only: no secret, and the binding grants
+# no other anonymous access. If that is not acceptable for your API server's
+# network, narrow it instead: restrict anonymous requests to the two discovery
+# paths with the structured authentication configuration's anonymous
+# `conditions` (exact form provisional on L69 (c)), or publish a mirror of the
+# keys and point `jwks` at it (no binding needed).
+#
+# Provisional on L69 (c) until Task 11 closes it (then "measured on kind,
+# L69 (c)"); managed clusters are L70, open.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

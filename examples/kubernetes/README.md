@@ -32,7 +32,14 @@ against the cluster's published keys.
   4. After the longest `expirationSeconds` in use has passed, remove the old flag and the old
      verifier.
 - **Apply `issuer-discovery.yaml`** (provisional on L69 (c); managed clusters are unmeasured,
-  L70). Issuer discovery needs `--anonymous-auth` on; a CIS-hardened cluster turns it off. On
+  L70). Know what it exposes: the binding is to `system:unauthenticated`, so anyone who can
+  reach the API server's address can read the issuer discovery document and the JWKS without
+  authenticating. They are public keys only, no secret, and the binding grants no other
+  anonymous access. Where that reach is too wide, use a narrower route instead of the binding:
+  the API server's structured authentication configuration (1.32+) with `anonymous.conditions`
+  limited to the two discovery paths (below; exact form provisional on L69 (c)), or publish a
+  mirror of the keys and point `jwks` at it (no binding at all; see the `jwks` item). Issuer
+  discovery needs `--anonymous-auth` on; a CIS-hardened cluster turns it off. On
   1.32+ use the structured authentication configuration (`AuthenticationConfiguration`'s
   `anonymous.conditions`) to allow anonymous requests to `/.well-known/openid-configuration` and
   `/openid/v1/jwks` alone.
@@ -86,6 +93,9 @@ the overlap would buy nothing.
 - `expirationSeconds: 3600`. The kubelet refreshes a projected token at about 80% of its
   lifetime (provisional on L69 (b)), and the broker refuses a token issued longer ago than
   `broker.identity.max_token_age` (2h by default), so keep it at or under 3600.
+- Least privilege: the pod sets `runAsNonRoot: true` (the image runs as 65532) and
+  `seccompProfile: RuntimeDefault`; the container sets `allowPrivilegeEscalation: false`,
+  `readOnlyRootFilesystem: true` (`/work` is the writable `emptyDir`) and drops all capabilities.
 - `--token-file` is read at every request, so a rotated token is picked up without a restart.
 - The example stops at the mint. `/work/tokens.tsv` is on an `emptyDir`; the consumer (your backup
   tool) runs in the same pod after this container, sharing the work volume. It is not shown.

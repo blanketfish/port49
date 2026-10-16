@@ -27,7 +27,20 @@ type cronJob struct {
 					Spec struct {
 						AutomountServiceAccountToken *bool  `yaml:"automountServiceAccountToken"`
 						ServiceAccountName           string `yaml:"serviceAccountName"`
-						Containers                   []struct {
+						SecurityContext              struct {
+							RunAsNonRoot   *bool `yaml:"runAsNonRoot"`
+							SeccompProfile struct {
+								Type string `yaml:"type"`
+							} `yaml:"seccompProfile"`
+						} `yaml:"securityContext"`
+						Containers []struct {
+							SecurityContext struct {
+								AllowPrivilegeEscalation *bool `yaml:"allowPrivilegeEscalation"`
+								ReadOnlyRootFilesystem   *bool `yaml:"readOnlyRootFilesystem"`
+								Capabilities             struct {
+									Drop []string `yaml:"drop"`
+								} `yaml:"capabilities"`
+							} `yaml:"securityContext"`
 							Command      []string `yaml:"command"`
 							VolumeMounts []struct {
 								Name      string `yaml:"name"`
@@ -96,6 +109,25 @@ func TestTheCronJobMatchesTheIdentitySnippet(t *testing.T) {
 	}
 	if !mounted {
 		t.Fatal("the token volume is not mounted where --token-file reads it")
+	}
+	// Least privilege: the pod runs as the image's non-root user, with the
+	// runtime's seccomp profile, no escalation, a read-only root and no
+	// capabilities (/work is an emptyDir).
+	psc, csc := pod.SecurityContext, pod.Containers[0].SecurityContext
+	if psc.RunAsNonRoot == nil || !*psc.RunAsNonRoot {
+		t.Error("the pod does not set runAsNonRoot: true")
+	}
+	if psc.SeccompProfile.Type != "RuntimeDefault" {
+		t.Errorf("the pod's seccompProfile is %q, want RuntimeDefault", psc.SeccompProfile.Type)
+	}
+	if csc.AllowPrivilegeEscalation == nil || *csc.AllowPrivilegeEscalation {
+		t.Error("the container does not set allowPrivilegeEscalation: false")
+	}
+	if csc.ReadOnlyRootFilesystem == nil || !*csc.ReadOnlyRootFilesystem {
+		t.Error("the container does not set readOnlyRootFilesystem: true")
+	}
+	if !slices.Equal(csc.Capabilities.Drop, []string{"ALL"}) {
+		t.Errorf("the container drops %v, want [ALL]", csc.Capabilities.Drop)
 	}
 	var id identitySnippet
 	read(t, "port49d-identity.yaml", &id)
