@@ -410,6 +410,11 @@ func (g generator) shape() (Result, error) {
 	res, err := g.shapeOf()
 	var over *Refusal
 	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		// Defensive: no input reaches the narrow case. The reach reply differs
+		// from base only by the reach denies, so whatever sends base narrow
+		// (its own denies overflowing, a narrowOnly refusal, unreached allows)
+		// sends the reach reply narrow too, and a narrow reply never carries
+		// a reach overflow. A test would need one, and none can be built.
 		if berr == nil && base.Shape == ShapeCapability {
 			base.ReachOverflow = over.reach
 		}

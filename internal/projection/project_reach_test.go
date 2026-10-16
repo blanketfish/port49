@@ -194,6 +194,20 @@ func TestReachDeniesGuards(t *testing.T) {
 	if _, ok := newGenerator(alone, alone.Bits).reachDenies("view-configuration", nil); ok {
 		t.Error("sent beside no bit that reaches the carve-out")
 	}
+	// A carve-out an allow past the bits is not measured to run, or a deny
+	// holds, is no carve-out the reach denies are sent for.
+	pastCarve := shipped("1.3.0", "readonly", permit("show **"), deny("show security **"))
+	pastCarve.Facts.AllowPastCarve = map[string]bool{}
+	for _, c := range pastCarve.Dialect.CarveOuts["view-configuration"] {
+		pastCarve.Facts.AllowPastCarve[c] = true
+	}
+	if _, ok := newGenerator(pastCarve, pastCarve.Bits).reachDenies("view-configuration", view); ok {
+		t.Error("sent for a carve-out an allow past the bits runs")
+	}
+	held := shipped("1.3.0", "readonly", permit("show **"), deny("show security **"), deny("show configuration **"))
+	if _, ok := newGenerator(held, held.Bits).reachDenies("view-configuration", view); ok {
+		t.Error("sent for a carve-out a deny holds")
+	}
 	unproven := shipped("1.3.0", "readonly", permit("show **"), deny("show security **"))
 	unproven.Dialect.Bits["view-configuration"] = append(slices.Clone(unproven.Dialect.Bits["view-configuration"]),
 		"clear zzz **")
