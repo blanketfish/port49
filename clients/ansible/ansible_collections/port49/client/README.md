@@ -141,7 +141,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
   (L66 (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
   the new address and presented it the token.
-- **The lookup closes that gap before it mints.** *Provisional on L66 (e3): not yet measured.* For a
+- **The lookup closes that gap before it mints.** *Measured on L66 (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`.* For a
   device on `network_cli` (`ansible_connection` is `network_cli` or `ansible.netcommon.network_cli`,
   or none is visible and `ansible_network_os` is set), it compares the keys filed under the port49
   name with the keys filed under the address in `~/.ssh/known_hosts`. The address is

@@ -9424,7 +9424,7 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   name, and design §17's replay attack fails at the key exchange for every device the operator
   has reached through `port49 ssh` or the Python client (ruling 13). It does not hold for
   Ansible's `network_cli`, which keys host keys by address (ruling 15); the lookup closes that
-  gap before it mints (ruling 15, *provisional on L66 (e3)*).
+  gap before it mints (ruling 15, measured on L66 (e3)).
 - **3. Names.** Decision 42 ruling 8 stands, for `port49 ssh` and for the Python client, which
   checks it before any mint and any known_hosts write: the name is written into the operator's
   known_hosts.
@@ -9507,8 +9507,12 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   on a first contact rewrites the file without its comments. No `network_cli` `ssh_type` files a
   key under the name: `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured (L66 (e)).
   Measured 2026-10-14, `tests/lab/results/L66-<platform>.md`.
-  **The lookup closes the gap before it mints** (*provisional on L66 (e3)*: unmeasured until the lab
-  run of plan 9f Task 4). For a device whose `ansible_connection` is `network_cli` or
+  **The lookup closes the gap before it mints** (*measured on L66 (e3)*, 2026-10-16,
+  `tests/lab/results/L66-arista_eos.md`, "(e3)": with the stand-in's keys filed under the moved address, the
+  lookup refused `host_key_changed` naming both keys before any mint, for `libssh` and `paramiko`, and
+  the same when the connection is named by the play's `connection:` keyword; at a moved address with no
+  entry, `libssh` with `host_key_auto_add` still accepted the stand-in's key and presented the token,
+  and `paramiko` refused it). For a device whose `ansible_connection` is `network_cli` or
   `ansible.netcommon.network_cli`, or that has none visible but an `ansible_network_os`, the lookup
   compares the keys filed under the port49 name with the keys filed under the address (`ansible_host`,
   else the inventory name; `[address]:port` when `ansible_port` is not 22) in `known_hosts_file`
