@@ -232,7 +232,11 @@ func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, li
 		return true
 	}
 	if d.TLS != nil {
-		if _, bad := d.TLS.Material().Unidentifiable[dev.Device.Name]; bad {
+		mat := d.TLS.Material()
+		if mat == nil {
+			return true // startTLS says so and declines it
+		}
+		if _, bad := mat.Unidentifiable[dev.Device.Name]; bad {
 			return true
 		}
 	}

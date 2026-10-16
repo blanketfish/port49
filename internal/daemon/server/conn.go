@@ -149,7 +149,7 @@ func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
 	if diag == keyring.DiagAdmissionWithdrawn {
 		// Renamed, re-keyed or re-platformed: still admitted, so its next
 		// connection is served and there is nothing to decline.
-		reset(s.raw)
+		s.reset()
 		return
 	}
 	s.decline()
@@ -193,6 +193,14 @@ func reset(c net.Conn) {
 	}
 }
 
+// reset ends the connection with a TCP reset. A TLS connection is
+// abandoned, not closed: no close_notify goes out before the reset (L73 has
+// not measured what a device does with one).
+func (s *conn) reset() {
+	s.c = s.raw
+	reset(s.raw)
+}
+
 // keyMiss closes a connection whose packet no accepted key validates — a
 // first packet, or one past its version's retire_after — as L28 branch H
 // does: the record, a strike, and a reset at once, never a silent hold. The
@@ -200,7 +208,7 @@ func reset(c net.Conn) {
 func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, version int) {
 	s.unvalidated(h, obf, diag, version)
 	s.d.Limits.Malformed(s.src)
-	reset(s.raw)
+	s.reset()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 }
 
@@ -214,7 +222,7 @@ func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, versio
 func (s *conn) unadmitted(h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 	s.d.Limits.Malformed(s.src)
-	reset(s.raw)
+	s.reset()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("unadmitted_source").Inc()
 }
 
@@ -228,7 +236,7 @@ func (s *conn) unadmitted(h wire.Header) {
 // reset.
 func (s *conn) decline() {
 	s.d.Limits.Decline(s.src)
-	reset(s.raw)
+	s.reset()
 }
 
 // protocolError closes a connection whose key validated but whose packet
@@ -245,6 +253,7 @@ func (s *conn) decline() {
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
+	s.c = s.raw // a TLS connection is dropped without close_notify, as a reset's is
 }
 
 func (s *conn) serve(ctx context.Context) {

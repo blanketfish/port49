@@ -635,8 +635,14 @@ func TestTLSDetailNeverCarriesRawErrorText(t *testing.T) {
 // the device's public certificate gets nothing from the server either.
 func TestTLSUnidentifiableDeviceIsDecidedAtAccept(t *testing.T) {
 	log := &syncBuffer{}
+	var said atomic.Int32
 	f := newTLSFixture(t, log, func(d *Deps, f *tlsFixture) {
 		d.Limits = slowBackoff()
+		d.TLS.Said = func(dev, _ string, v devicecert.Verdict) {
+			if dev == "leaf-01" && v.Outcome == devicecert.IdentityMismatch && strings.Contains(v.Detail, "leaf-09") {
+				said.Add(1)
+			}
+		}
 		m := f.material(f.ca, true)
 		m.Unidentifiable = map[string]string{"leaf-01": "shares its name with leaf-09 under dns_suffixes"}
 		f.mat.Store(m)
@@ -663,6 +669,9 @@ func TestTLSUnidentifiableDeviceIsDecidedAtAccept(t *testing.T) {
 		if n := testutil.ToFloat64(f.ts.metrics.TLSHandshakes.WithLabelValues(string(o))); n != 0 {
 			t.Fatalf("a handshake ran: %s %v", o, n)
 		}
+	}
+	if n := said.Load(); n != 1 {
+		t.Fatalf("Said called %d times, want 1 (stderr line)", n)
 	}
 	// One record: the window stood for the later dials.
 	if n := strings.Count(log.String(), `"tls_outcome":"identity_mismatch"`); n != 1 {
@@ -818,5 +827,78 @@ func TestTLSDeviceOnTheTCPListenerGetsTheShortHeaderBound(t *testing.T) {
 	}
 	if d := time.Since(start); d > 8*time.Second {
 		t.Fatalf("closed after %v, want about 5s", d)
+	}
+}
+
+// A reload between Accept and the handshake that makes the device
+// unidentifiable must not admit it for the connection's life: the load the
+// connection began on is the one the first packet is compared with.
+func TestTLSReloadBetweenAcceptAndHandshakeIsCaught(t *testing.T) {
+	log := &syncBuffer{}
+	var calls atomic.Int32
+	f := newTLSFixture(t, log, func(d *Deps, f *tlsFixture) {
+		d.Limits = slowBackoff()
+		a := f.material(f.ca, true)
+		b := f.material(f.ca, true)
+		b.Unidentifiable = map[string]string{"leaf-01": "a reload cannot tell it apart"}
+		d.TLS.Material = func() *Material {
+			if calls.Add(1) == 1 {
+				return a
+			}
+			return b
+		}
+	})
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	if _, r, err := f.login(t, &cert, nil); err == nil {
+		t.Fatalf("the packet was answered, status %d", r.Status)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"identity_mismatch"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// No material is a fault in port49d: the connection is declined, not
+// struck, and nothing panics.
+func TestTLSNilMaterialDeclinesWithoutAStrike(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, f *tlsFixture) {
+		d.Limits = slowBackoff()
+		d.TLS.Material = func() *Material { return nil }
+	})
+	acceptRefused(t, f.ts.addr)
+	if !waitFor(t, func() bool { return f.ts.limits.Declined(loopback) }) || f.ts.limits.Holding(loopback) {
+		t.Fatalf("declined %v struck %v", f.ts.limits.Declined(loopback), f.ts.limits.Holding(loopback))
+	}
+	acceptRefused(t, f.ts.addr) // inside the window: declining() must not panic either
+}
+
+// A quarantine that starts while a TLS connection is open ends it with a
+// bare reset: no close_notify first.
+func TestTLSQuarantineResetsWithoutCloseNotify(t *testing.T) {
+	log := &syncBuffer{}
+	var quar atomic.Bool
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) {
+		d.Limits = slowBackoff()
+		d.Quarantined = func(string, time.Time) (string, bool) { return "a grant expired", quar.Load() }
+	})
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	c, err := f.dialTLS(t, &cert, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := uint8(wire.FlagUnencrypted | wire.FlagSingleConnect)
+	if err := c.send(wire.TypeAuthen, aliceLogin, flags); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.recv(); err != nil {
+		t.Fatal(err)
+	}
+	quar.Store(true)
+	c.seq, c.sid = 1, 0x300
+	if err := c.send(wire.TypeAuthen, aliceLogin, flags); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.recv(); err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "remote error") {
+		t.Fatalf("want a bare reset, got %v", err)
 	}
 }

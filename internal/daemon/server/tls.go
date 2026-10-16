@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"log"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -110,6 +112,16 @@ func judgeDevice(mat *Material, certs []*x509.Certificate, dev admission.Device)
 // Then it runs the handshake. It reports whether the connection goes on to
 // its packets.
 func (s *conn) startTLS(ctx context.Context) bool {
+	// The material is read once: this load decides the connection at Accept,
+	// runs its handshake, and is what recheckTLS compares later loads to, so
+	// a reload between them is caught at the first packet.
+	mat := s.d.TLS.Material()
+	if mat == nil {
+		sayNoMaterial()
+		s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
+		s.decline()
+		return false
+	}
 	switch {
 	case s.refused:
 		s.acceptRecord(keyring.DiagAdmissionRefused, "", "")
@@ -117,7 +129,7 @@ func (s *conn) startTLS(ctx context.Context) bool {
 	case !s.admitted:
 		s.acceptRecord(keyring.DiagUnadmittedSource, "", "")
 		s.d.Limits.Malformed(s.src)
-		reset(s.raw)
+		s.reset()
 		s.d.Metrics.ConnectionEvents.WithLabelValues("unadmitted_source").Inc()
 	case s.mismatch:
 		s.acceptRecord(keyring.DiagTransportMismatch, "", mismatchDetail(s.dev.Device, "the RFC 9887 listener"))
@@ -126,7 +138,7 @@ func (s *conn) startTLS(ctx context.Context) bool {
 	case s.quarantined():
 		s.acceptRecord(keyring.DiagDeviceQuarantined, decision.DeviceQuarantined, "")
 		s.decline()
-	case s.unidentifiable() != "":
+	case s.unidentifiable(mat) != "":
 		// The rule cannot tell this device's certificate from another's, so
 		// no certificate can admit it. That is the loaded files' fault and
 		// needs no TLS byte to know: no handshake, no strike (a peer holding
@@ -136,20 +148,34 @@ func (s *conn) startTLS(ctx context.Context) bool {
 		s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
 			Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),
 				Transport: admission.TransportTLS, TLSOutcome: string(devicecert.IdentityMismatch),
-				Detail: printsafe.Line(s.unidentifiable(), 300)}})
+				Detail: printsafe.Line(s.unidentifiable(mat), 300)}})
 		s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagTLSRefused)).Inc()
 		s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
+		if s.d.TLS.Said != nil {
+			s.d.TLS.Said(s.dev.Device.Name, s.src.String(), devicecert.Verdict{Outcome: devicecert.IdentityMismatch,
+				Detail: printsafe.Line(s.unidentifiable(mat), 300)})
+		}
 		s.decline()
 	default:
-		return s.handshake(ctx)
+		return s.handshake(ctx, mat)
 	}
 	return false
 }
 
 // unidentifiable is why the loaded material cannot identify this
 // connection's device, or "".
-func (s *conn) unidentifiable() string {
-	return s.d.TLS.Material().Unidentifiable[s.dev.Device.Name]
+func (s *conn) unidentifiable(mat *Material) string {
+	return mat.Unidentifiable[s.dev.Device.Name]
+}
+
+var noMaterialSaid atomic.Bool
+
+// sayNoMaterial says once that the RFC 9887 listener has no material to
+// judge a device by, a fault in port49d: every connection is then declined.
+func sayNoMaterial() {
+	if noMaterialSaid.CompareAndSwap(false, true) {
+		log.Print("server: the RFC 9887 listener has no loaded material; declining its connections")
+	}
 }
 
 // mismatchDetail says which transport the device record names and which
@@ -194,8 +220,7 @@ func (s *conn) acceptRecord(diag keyring.Diagnosis, reason decision.Reason, deta
 // 8). A ticket crypto/tls sends before the client's Finished therefore
 // precedes the status check; a resumption with it runs VerifyConnection and
 // the status check again.
-func (s *conn) handshake(ctx context.Context) bool {
-	mat := s.d.TLS.Material()
+func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	hctx, cancel := context.WithTimeout(ctx, s.d.TLS.HandshakeTimeout)
 	defer cancel()
 	var v devicecert.Verdict
@@ -292,7 +317,7 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 		return
 	}
 	s.d.Limits.Malformed(s.src)
-	reset(s.raw)
+	s.reset()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
 }
 
@@ -302,7 +327,7 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 // the handshake the window spares (ruling 8).
 func (s *conn) declineStatus() {
 	s.d.Limits.DeclineStatus(s.src)
-	reset(s.raw)
+	s.reset()
 }
 
 // recheckTLS judges the open connection's certificate again at a packet
@@ -315,6 +340,9 @@ func (s *conn) declineStatus() {
 // may go on.
 func (s *conn) recheckTLS(h wire.Header) bool {
 	mat := s.d.TLS.Material()
+	if mat == nil {
+		mat = s.tls.mat // no new load to judge by: the one it was verified under stands
+	}
 	v := s.tls.verdict
 	if mat != s.tls.mat {
 		v = judgeDevice(mat, s.tls.peer, s.dev.Device)
@@ -347,12 +375,11 @@ func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
 	// established keeps a window; the spec (decision 50 ruling 9) gives no
 	// window to another refusal, and the device is still admitted, so a plain
 	// one would be dropped at the next Accept.
-	s.c = s.raw
 	if v.Outcome == devicecert.StatusUnavailable {
 		s.declineStatus()
 		return
 	}
-	reset(s.raw)
+	s.reset()
 }
 
 // obfuscatedOverTLS answers a packet whose unencrypted flag is clear on the
