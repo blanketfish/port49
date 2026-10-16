@@ -173,6 +173,7 @@ def _check_host_keys(device, variables, known_hosts_file):
     krl = hostkeys.revoked_keys_file(name, **ssh)
     name_keys, name_revoked = hostkeys.filed(name, paths)
     addr_keys, addr_revoked = hostkeys.filed(entry, [known_hosts_file])
+    addr_revoked += hostkeys.filed(entry, paths)[1]  # an @revoked line for the address in the ssh files counts too
 
     def revoked(revoked_lines, key):
         kh = hostkeys.KnownHosts(name, (), (), tuple(revoked_lines), krl, False, hash_names, write_to)
@@ -186,9 +187,13 @@ def _check_host_keys(device, variables, known_hosts_file):
     if name_keys and not addr_keys:
         hostkeys.append(known_hosts_file, entry, name_keys, hash_names=hash_names)
     elif name_keys:
-        have = {k.split(" ", 1)[0]: k for k in addr_keys}
-        changed = [(k, have[k.split(" ", 1)[0]]) for k in name_keys
-                   if k.split(" ", 1)[0] in have and have[k.split(" ", 1)[0]] != k]
+        have = {}
+        for k in addr_keys:
+            have.setdefault(k.split(" ", 1)[0], []).append(k)
+        # A type matches when any of the address's keys of it is one of the name's.
+        changed = [(k, have[t][0]) for t in dict.fromkeys(k.split(" ", 1)[0] for k in name_keys) if t in have
+                   for k in [next(k for k in name_keys if k.split(" ", 1)[0] == t)]
+                   if not set(have[t]) & {k for k in name_keys if k.split(" ", 1)[0] == t}]
         if changed:
             seen = "; ".join(f"{k.split(' ', 1)[0]}: {device} has {hostkeys.fingerprint(k)}, {address} has "
                              f"{hostkeys.fingerprint(a)}" for k, a in changed)

@@ -508,6 +508,30 @@ class HostKeys(PluginCase):
         self.run_lookup(["leaf1"])
         self.assertIsNone(self.read(self.kh))
 
+    def test_an_address_with_two_keys_of_a_type_matches_if_one_is_the_names(self):  # fix round 2, M1
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n10.0.0.11 {ED}\n")
+        before = self.read(self.kh)
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual(self.read(self.kh), before)
+
+    def test_an_address_with_two_keys_of_a_type_refuses_if_none_is_the_names(self):  # fix round 2, M1
+        a, b = self.newkey("a"), self.newkey("b")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {a}\n10.0.0.11 {b}\n")
+        self.assertIn("[host_key_changed]", self.refused())
+
+    def test_a_revoked_line_for_the_address_in_another_ssh_file_refuses(self):  # fix round 2, M2
+        extra = os.path.join(self.dir, "global_known_hosts")
+        self.put(extra, f"@revoked 10.0.0.11 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.use_ssh_config(user=self.names)
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, f"UserKnownHostsFile {self.names}\nGlobalKnownHostsFile {extra}\n")
+        self.assertIn("[host_key_revoked]", self.refused())
+        self.assertEqual(self.calls.agent, [])
+
     def test_no_output_carries_the_token(self):
         other = self.newkey("other")
         self.put(self.names, f"leaf1 {ED}\n")
