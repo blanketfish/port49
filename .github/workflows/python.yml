@@ -31,8 +31,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version-file: go.mod}
+      # 3.14 is the newest Python ansible-pylibssh 1.4.0 has wheels for; "3.x" would move past it.
       - uses: actions/setup-python@v5
-        with: {python-version: "3.x"}
+        with: {python-version: "3.14"}
       - run: sudo apt-get update && sudo apt-get install -y libnss-wrapper
       - run: python -m pip install ansible-core==2.21.4 paramiko==5.0.0 ansible-pylibssh==1.4.0
       - run: ansible-galaxy collection install -p "$RUNNER_TEMP/collections" ansible.netcommon==8.7.1 ansible.utils==6.1.1 arista.eos==12.3.0

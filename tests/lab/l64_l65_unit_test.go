@@ -5,8 +5,10 @@ package lab
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,31 @@ func TestL64RunSeesAnOrphanHoldingThePipes(t *testing.T) {
 	out, _, exit, err = l64RunGrace(ctx, 300*time.Millisecond, nil, t.TempDir(), "sh", "-c", "echo fine; exit 3")
 	if exit != 3 || err != nil || !strings.Contains(out, "fine") {
 		t.Errorf("a plain non-zero exit: exit %d err %v out %q", exit, err, out)
+	}
+}
+
+// The orphan's process group is killed while the leader is still a zombie, unreaped, so its pgid cannot have
+// been reused by then (9d minor N2).
+func TestL64RunKillsTheOrphanGroupBeforeReapingTheLeader(t *testing.T) {
+	var state string
+	defer func(f func(int)) { l64BeforeOrphanKill = f }(l64BeforeOrphanKill)
+	l64BeforeOrphanKill = func(pid int) {
+		raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			state = "reaped: " + err.Error()
+			return
+		}
+		// "pid (comm) S ...": the state follows the last ")".
+		state = strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))[0]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, _, exit, err := l64RunGrace(ctx, 300*time.Millisecond, nil, t.TempDir(), "sh", "-c", "sleep 30 & exit 3")
+	if state != "Z" {
+		t.Errorf("the leader's state at the kill was %q, want Z (exited, not yet reaped)", state)
+	}
+	if exit != 3 || err == nil {
+		t.Errorf("exit %d err %v, want 3 and an error for the orphan", exit, err)
 	}
 }
 

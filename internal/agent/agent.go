@@ -125,6 +125,19 @@ type BrokerUnavailableError struct{ Err error }
 func (e *BrokerUnavailableError) Error() string { return e.Err.Error() }
 func (e *BrokerUnavailableError) Unwrap() error { return e.Err }
 
+// StoreUnavailableError is a broker outage whose reason is store_unavailable:
+// the broker's start gate, or a store that did not answer. It is a
+// BrokerUnavailableError (Unwrap) that also carries the broker's Retry-After,
+// zero when it sent none, so `port49 token` can wait it out; no other outage
+// is one (spec §5.7, store_unavailable).
+type StoreUnavailableError struct {
+	Err        *BrokerUnavailableError
+	RetryAfter time.Duration
+}
+
+func (e *StoreUnavailableError) Error() string { return e.Err.Error() }
+func (e *StoreUnavailableError) Unwrap() error { return e.Err }
+
 // BrokerFaultError is a broker failure the agent could say no more of than
 // "broker_error" (its 502 on the socket): a fault, not an outage and not a
 // refusal. Its text is the agent's own.
@@ -990,8 +1003,12 @@ func unavailable(resp *http.Response, e api.Error) error {
 		return &BrokerUnavailableError{fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now; try again%s",
 			retryHint(resp.Header))}
 	}
-	return &BrokerUnavailableError{fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail,
+	down := &BrokerUnavailableError{fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail,
 		retryHint(resp.Header))}
+	if e.Error == codeStoreUnavailable {
+		return &StoreUnavailableError{Err: down, RetryAfter: retryAfterHeader(resp.Header)}
+	}
+	return down
 }
 
 // retryHint is "; retry in Ns" for a Retry-After in whole seconds, or "".
@@ -1666,8 +1683,9 @@ type Status struct {
 	// one: what `port49 ssh` reads when its in-session warning is due, so a
 	// `port49 refresh` in another terminal moves it (decision 42 ruling 11).
 	Sessions []api.RefreshedSession `json:"sessions,omitempty"`
-	// KeyState is whether the session key can sign now: present, absent or
-	// locked; "present" for a file key.
+	// KeyState is whether the session key can sign now: present, absent,
+	// locked, or blocked (locked, and the token's PIN is blocked: only its
+	// PUK unlocks it); "present" for a file key.
 	KeyState string `json:"key_state"`
 	// TouchKey is true only when the touch key opened and sits on the same
 	// token (module and token serial) as a pkcs11 session key (ruling 12);
@@ -1757,6 +1775,7 @@ func (a *Agent) Handler() http.Handler {
 		case writeRefusal(w, err):
 			// The CRL check refused the broker: broker_refused, for the client
 			// to rebuild; never retried and never "unreachable".
+		case writeStoreUnavailable(w, err):
 		case errors.As(err, new(*BrokerUnavailableError)):
 			// An outage, not a fault: the client rebuilds it as one, so a
 			// caller may try again.
@@ -1880,8 +1899,16 @@ func (a *Agent) keyState() string {
 	if a.key == nil {
 		return hwkey.Present.String()
 	}
-	return a.probeKey().String()
+	st := a.probeKey()
+	if st == hwkey.Locked && a.pinBlocked() {
+		return KeyStateBlocked
+	}
+	return st.String()
 }
+
+// KeyStateBlocked is Status.KeyState for a locked key whose token says its PIN
+// is blocked: a login cannot unlock it, only the PUK can.
+const KeyStateBlocked = "blocked"
 
 // Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most
 // maxUnlockBody.
@@ -2036,6 +2063,7 @@ func answer(w http.ResponseWriter, out any, err error) {
 	case KeyCode(err) != "":
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 	case writeRefusal(w, err):
+	case writeStoreUnavailable(w, err):
 	case errors.As(err, new(*BrokerUnavailableError)):
 		// An outage, after the key's own code and a refusal (as POST /token
 		// orders them): the client rebuilds it as one.
@@ -2046,6 +2074,21 @@ func answer(w http.ResponseWriter, out any, err error) {
 	default:
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 	}
+}
+
+// writeStoreUnavailable answers a StoreUnavailableError 503 under its own
+// code with the broker's Retry-After, for the client to rebuild; false for any
+// other error.
+func writeStoreUnavailable(w http.ResponseWriter, err error) bool {
+	var su *StoreUnavailableError
+	if !errors.As(err, &su) {
+		return false
+	}
+	if su.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(su.RetryAfter/time.Second)))
+	}
+	writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: codeStoreUnavailable, Detail: err.Error()})
+	return true
 }
 
 // drain reads a response to its end before closing it. A body closed unread

@@ -142,6 +142,11 @@ func unlockForAgent(sf *sessionFlags, k hwkey.Key, stderr io.Writer) bool {
 		fmt.Fprintln(stderr, "port49 login: the key is not present: insert it and run `port49 login` again")
 		return false
 	case hwkey.Locked:
+		// The token says before any PIN is typed that it takes none (L60 F2).
+		if b, ok := k.(hwkey.Blocker); ok && b.PINBlocked() {
+			fmt.Fprintln(stderr, "port49 login:", pinBlockedWords)
+			return false
+		}
 		pin, err := askPIN(tokenLabel(k))
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 login:", err)
@@ -198,6 +203,9 @@ func loginThroughAgent(ctx context.Context, sf *sessionFlags, c *agent.Client, s
 	case hwkey.Absent.String():
 		fmt.Fprintf(stderr, "port49 login: insert your key and run `port49 login` again; your session goes on until %s\n",
 			st.SessionEndsAt)
+		return 1
+	case agent.KeyStateBlocked:
+		fmt.Fprintln(stderr, "port49 login:", pinBlockedWords)
 		return 1
 	case hwkey.Locked.String():
 		pin, err := askPIN(label)

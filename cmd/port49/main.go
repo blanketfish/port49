@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/brokercrl"
 	"github.com/rhwendt/port49/internal/clientkey"
 	"github.com/rhwendt/port49/internal/hwkey"
@@ -963,8 +964,10 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	device := fs.Arg(0)
-	item, err := mintProved(context.Background(), proveFlags(*socket),
-		agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
+	item, err := mintRetrying(func() (api.MintItem, error) {
+		return mintProved(context.Background(), proveFlags(*socket),
+			agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
+	}, tokenRetryClock, "port49 token", stderr)
 	if mintFailed("port49 token", *socket, device, item, err, stderr) {
 		if *asJSON {
 			_ = json.NewEncoder(stdout).Encode(tokenFailureOf(device, item, err))

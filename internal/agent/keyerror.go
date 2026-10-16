@@ -54,6 +54,10 @@ type KeyAbsentError struct {
 	// still minted on it: a refresh's challenge came on one, a reconnect's
 	// handshake has none.
 	Back, Held bool
+	// Blocked says the locked key's token reports its PIN blocked
+	// (CKF_USER_PIN_LOCKED): `port49 login` would ask a PIN the token will
+	// not take, so the words name the PUK instead.
+	Blocked bool
 }
 
 func (e *KeyAbsentError) Error() string {
@@ -63,7 +67,9 @@ func (e *KeyAbsentError) Error() string {
 	}
 	if e.State == hwkey.Locked {
 		words := "agent: your key needs its PIN: run `port49 login`"
-		if e.Back {
+		if e.Blocked {
+			words = "agent: " + hwkey.PINBlockedWords
+		} else if e.Back {
 			words = "agent: your key is back and needs its PIN: run `port49 login`"
 		}
 		if until != "" {
@@ -107,7 +113,13 @@ func (a *Agent) absentOrLocked(err error, held bool) error {
 		return err
 	}
 	return &KeyAbsentError{State: state, SessionEnds: a.SessionEndsAt(), KeyErr: ke,
-		Back: a.keySeenAbsent.Load(), Held: held}
+		Back: a.keySeenAbsent.Load(), Held: held, Blocked: state == hwkey.Locked && a.pinBlocked()}
+}
+
+// pinBlocked is whether the session key's token says its PIN is blocked.
+func (a *Agent) pinBlocked() bool {
+	b, ok := a.key.(hwkey.Blocker)
+	return ok && b.PINBlocked()
 }
 
 // probeKey is the session key's State, remembering whether the key has been
