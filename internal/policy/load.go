@@ -29,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/token"
@@ -1366,8 +1367,6 @@ func (p *Policy) buildScopes(f file) error {
 	return nil
 }
 
-var serviceAccount = regexp.MustCompile(`^system:serviceaccount:[^:\s]+:[^:\s]+$`)
-
 // identityDomain classifies an identity string by its form (spec §2), which is
 // how CI tells a human from a machine without a verifier to ask. A string in
 // no recognized form is itself a load error.
@@ -1396,8 +1395,16 @@ func identityDomain(id string) (string, error) {
 				"spiffe://<trust domain>/<path>, verbatim (spec §2; §13 decision 40): %w", id, err)
 		}
 		return DomainMachines, nil
-	case serviceAccount.MatchString(id),
-		strings.HasPrefix(id, "app:") && len(id) > len("app:"):
+	case strings.HasPrefix(strings.ToLower(id), k8sid.Prefix):
+		// A cluster's service account (plan 10): checked as the verifier
+		// checks it, so a policy naming one no cluster can give fails CI
+		// (decision 49 ruling 8).
+		if _, err := k8sid.Parse(id); err != nil {
+			return "", fmt.Errorf("identity %q: a service account's principal is "+
+				"system:serviceaccount:<namespace>:<name>, as its cluster names it (spec §2; §13 decision 49): %w", id, err)
+		}
+		return DomainMachines, nil
+	case strings.HasPrefix(id, "app:") && len(id) > len("app:"):
 		return DomainMachines, nil
 	}
 	return "", fmt.Errorf("identity %q is in no recognized form: user:<email>, spiffe://…, "+

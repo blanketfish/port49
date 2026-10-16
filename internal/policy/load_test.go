@@ -602,3 +602,22 @@ grants: [{subject: svc, scope: all_devices, roles: [r]}]
 		t.Fatalf("SPIFFEIdentities %v", got)
 	}
 }
+
+// The policy's load reads a service account as the verifier will give it
+// (decision 49 ruling 8): one that no cluster can name fails CI.
+func TestAServiceAccountIdentityIsTheVerifiersForm(t *testing.T) {
+	for _, id := range []string{"system:serviceaccount:NetOps:oxidized", "system:serviceaccount:netops:a_b",
+		"system:serviceaccount:netops:oxidized:x"} {
+		src := strings.Replace(good, "system:serviceaccount:netops:oxidized", id, 1)
+		if _, err := Parse([]byte(src), env()); err == nil || !strings.Contains(err.Error(), "system:serviceaccount:<namespace>:<name>") {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+}
+
+func TestServiceAccountIdentities(t *testing.T) {
+	p := mustParse(t, good)
+	if got := p.ServiceAccountIdentities(); len(got) != 1 || got["system:serviceaccount:netops:oxidized"] != "svc_oxidized" {
+		t.Fatalf("%v", got)
+	}
+}
