@@ -114,8 +114,12 @@ type Assertion struct {
 
 // String withholds the nonce, which answers a refresh challenge (Ruling 18).
 func (a Assertion) String() string {
-	return fmt.Sprintf("Assertion{%s %s issuer %s sub %s sid %s auth_time %s}", a.Domain, a.Principal, a.Issuer,
-		a.Subject, a.Sid, a.AuthTime.UTC().Format(time.RFC3339))
+	cluster := ""
+	if a.K8s != nil {
+		cluster = " cluster " + a.K8s.Cluster
+	}
+	return fmt.Sprintf("Assertion{%s %s issuer %s%s sub %s sid %s auth_time %s}", a.Domain, a.Principal, a.Issuer,
+		cluster, a.Subject, a.Sid, a.AuthTime.UTC().Format(time.RFC3339))
 }
 
 // GoString is String.
@@ -198,8 +202,12 @@ func (s *Set) verify(ctx context.Context, raw string) (Assertion, string, error)
 	// another accepted: a lost race is never a pass (fail closed).
 	switch {
 	case unavailable && (len(accepted) > 0 || !errors.Is(first, ErrUnmapped)):
+		who := head.Iss
+		if k8sOnly {
+			who = vs[0].Who() // a cluster has one verifier (config refuses two for an issuer)
+		}
 		r := refuse(ErrUnavailable, "unavailable", "the keys of %s are not available "+
-			"(none fetched, or none refreshed within broker.identity.jwks_max_age)", head.Iss)
+			"(none fetched, or none refreshed within broker.identity.jwks_max_age)", who)
 		r.method = k8sMethod(k8sOnly)
 		return Assertion{}, head.Iss, r
 	case len(accepted) == 1:
@@ -457,7 +465,8 @@ func (v *Verifier) verifyClaims(ctx context.Context, j *JWS, t Timing, now time.
 			if r != nil {
 				return Assertion{}, r
 			}
-			a.Principal, a.AuthTime, a.K8s, a.Sid = p, iat, b, ""
+			// A workload proves no per-login MFA (decision 49 ruling 15): none of a cluster's acr or amr is carried.
+			a.Principal, a.AuthTime, a.K8s, a.Sid, a.ACR, a.AMR, a.Nonce = p, iat, b, "", "", nil, ""
 			return a, nil
 		}
 		// Ruling 21: a client-credentials token of a listed client, never a

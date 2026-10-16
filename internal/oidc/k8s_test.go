@@ -122,6 +122,8 @@ func TestAK8sBindingIsReadByExactName(t *testing.T) {
 		"Pod beside":           `"kubernetes.io":{"namespace":"netops","serviceaccount":{"name":"oxidized","uid":"u"},"pod":{"name":"p","uid":"u"},"Pod":{"name":"q","uid":"v"}}`,
 		"Name beside":          `"kubernetes.io":{"namespace":"netops","serviceaccount":{"name":"oxidized","Name":"x","uid":"u"},"pod":{"name":"p","uid":"u"}}`,
 		"UID beside":           `"kubernetes.io":{"namespace":"netops","serviceaccount":{"name":"oxidized","uid":"u"},"pod":{"name":"p","uid":"u","UID":"v"}}`,
+		"Namespace beside":     `"kubernetes.io":{"namespace":"netops","Namespace":"backup","serviceaccount":{"name":"oxidized","uid":"u"},"pod":{"name":"p","uid":"u"}}`,
+		"Secret alone":         `"kubernetes.io":{"namespace":"netops","serviceaccount":{"name":"oxidized","uid":"u"},"pod":{"name":"p","uid":"u"},"Secret":{"name":"s","uid":"u"}}`,
 		"two pods":             `"kubernetes.io":{"namespace":"netops","serviceaccount":{"name":"oxidized","uid":"u"},"pod":{"name":"p","uid":"u"},"pod":{"name":"q","uid":"v"}}`,
 	} {
 		raw := iss.TokenRaw(t, "k1", fmt.Sprintf(`{"iss":%q,"aud":["port49"],"sub":"system:serviceaccount:netops:oxidized",`+
@@ -175,5 +177,42 @@ func TestAForgedClusterTokenIsNotQuoted(t *testing.T) {
 	_, err := set.Verify(context.Background(), raw)
 	if !errors.Is(err, oidc.ErrInvalid) || strings.Contains(err.Error(), "marker-sa") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// When a cluster's keys cannot be had, the line an operator reads at 3am names the cluster.
+func TestAnUnavailableClusterIsNamed(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := k8sSet(t, iss, c, cluster("netops"))
+	raw := iss.ServiceAccountToken(t, "k1", k8sIssuer, "port49", "netops", "oxidized", c.Now(), nil)
+	iss.Fail(500)
+	_, err := set.Verify(context.Background(), raw)
+	if !errors.Is(err, oidc.ErrUnavailable) || !strings.Contains(err.Error(), "cluster l69_a ("+k8sIssuer+")") ||
+		oidc.MethodOf(err) != "k8s" {
+		t.Fatalf("%v %q", err, oidc.MethodOf(err))
+	}
+}
+
+// Decision 49 ruling 15: a workload never proves a per-login MFA, so what a
+// cluster says in acr is not carried, whatever it says.
+func TestAK8sAssertionCarriesNoACRNorAMR(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := k8sSet(t, iss, c, cluster("netops"))
+	a, err := set.Verify(context.Background(), iss.ServiceAccountToken(t, "k1", k8sIssuer, "port49", "netops", "oxidized", c.Now(),
+		map[string]any{"acr": "phr"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ACR != "" || a.AMR != nil || a.Sid != "" || a.Nonce != "" {
+		t.Fatalf("assertion carries %q %v %q %q", a.ACR, a.AMR, a.Sid, a.Nonce)
+	}
+}
+
+func TestAK8sAssertionNamesItsCluster(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := k8sSet(t, iss, c, cluster("netops"))
+	a, err := set.Verify(context.Background(), iss.ServiceAccountToken(t, "k1", k8sIssuer, "port49", "netops", "oxidized", c.Now(), nil))
+	if err != nil || !strings.Contains(a.String(), "cluster l69_a") {
+		t.Fatalf("%v %s", err, a)
 	}
 }
