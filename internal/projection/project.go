@@ -1418,6 +1418,7 @@ func (g generator) attributes(res *Result) error {
 	}
 	for _, a := range res.Attributes {
 		if err := engine.CheckAttribute(a); err != nil {
+			g.rendered(res, a)
 			i := strings.IndexByte(a, '=')
 			r := &Refusal{Category: FailOverflow, Attribute: a[:i], Value: a[i+1:],
 				Why: fmt.Sprintf("on %s the reply's %s is %d bytes, and RFC 8907 carries at most %d in one attribute; "+
@@ -1438,7 +1439,27 @@ func (g generator) attributes(res *Result) error {
 			return r
 		}
 	}
+	g.rendered(res, res.Attributes...)
 	return nil
+}
+
+// rendered registers the command attributes as the printer shows them (issue
+// 17, platform.Rendered): a deny-commands or allow-commands this projection
+// wrote, whose every word the printer would hide is a deny word it proved.
+// Called for the reply that goes out and for the overflowing line an operator
+// is told to paste.
+func (g generator) rendered(res *Result, attrs ...string) {
+	var proven []string
+	for _, d := range res.Denies {
+		proven = append(proven, strings.Fields(d.Rule)...)
+	}
+	for _, a := range attrs {
+		name, value, _ := strings.Cut(a, "=")
+		if name == "deny-commands" || name == "allow-commands" {
+			platform.Rendered(platform.Redactions(g.in.Platform), a, proven)
+			platform.Rendered(platform.Redactions(g.in.Platform), value, proven)
+		}
+	}
 }
 
 // alternation is rules as one group, `(a|b)`, or one rule bare; empty for

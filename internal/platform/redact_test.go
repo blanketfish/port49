@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"io/fs"
 	"reflect"
 	"slices"
 	"strconv"
@@ -616,4 +617,68 @@ func TestAValueIsMatchedInAnyUnicodeCase(t *testing.T) {
 	if got := QuoteShown([]string{v}, `show pä"SS9 **`); got != `"show `+Redacted+` **"` {
 		t.Errorf("%s", got)
 	}
+}
+
+// Rendered registers only text whose every hidden word is regex syntax or a
+// proven deny keyword. A keyword glued to a literal, `community,X`, is not one
+// prose word, so the literal is never proven and prints redacted (issue 17,
+// review I2 and M3).
+func TestRenderedRefusesAKeywordGluedToALiteral(t *testing.T) {
+	rules := Redactions("juniper_junos")
+	glued := `^( *snmp-server +community,fakesecret123( .*)? *(\|.*)?)$`
+	if Rendered(rules, glued, []string{"snmp-server", "community,fakesecret123"}) ||
+		Rendered(rules, glued, []string{"snmp-server", "community"}) {
+		t.Fatal("a keyword glued to a literal was registered")
+	}
+	printed := RedactQuoted(rules, strconv.Quote(glued))
+	if strings.Contains(printed, "fakesecret123") {
+		t.Fatalf("the literal was printed: %s", printed)
+	}
+	// The same line with a clean keyword registers, and prints whole.
+	clean := `^( *show +key( .*)? *(\|.*)?)$`
+	if !Rendered(rules, clean, []string{"show", "key", "**"}) || RedactQuoted(rules, strconv.Quote(clean)) != strconv.Quote(clean) {
+		t.Fatalf("a proven keyword's line was not printed as rendered: %s", RedactQuoted(rules, strconv.Quote(clean)))
+	}
+	// A word no rule proved is not exempt, even without a literal's look.
+	unproven := `^( *show +key( foo)?)$`
+	if Rendered(rules, unproven, []string{"show", "key"}) || !Rendered(rules, unproven, []string{"show", "key", "foo"}) {
+		t.Fatal("a hidden word is exempt only when proven")
+	}
+}
+
+// The safety of Rendered rests on a shipped deny keyword being exactly one
+// prose word as the printer tokenizes it: a keyword with a separator in it
+// would split into pieces the proof does not cover.
+func TestEveryShippedKeywordIsOneProseWord(t *testing.T) {
+	versions, err := fs.ReadDir(platforms.Keywords, "keywords")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, v := range versions {
+		if !v.IsDir() {
+			continue
+		}
+		k := KeywordsFor(v.Name(), "juniper_junos")
+		if k == nil {
+			continue
+		}
+		for path, node := range k.nodes {
+			for _, w := range node.Words {
+				n++
+				if !oneProseWord(w) {
+					t.Errorf("%s: keyword %q after %q is not one prose word", v.Name(), w, path)
+				}
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no shipped keyword was checked")
+	}
+}
+
+// oneProseWord is whether word is a single word as the printer tokenizes.
+func oneProseWord(word string) bool {
+	sp := proseWord.FindAllStringIndex(word, -1)
+	return len(sp) == 1 && sp[0][0] == 0 && sp[0][1] == len(word) && word[0] != '\\'
 }

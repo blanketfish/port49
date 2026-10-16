@@ -1857,3 +1857,34 @@ func TestPolicyTestReportsTheSet130Reply(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// The reply lists `policy diff` prints, and the RAISES hint an operator pastes
+// into a session test, print the projection's deny-commands as it rendered it:
+// the word-level redaction read `key` in `show +key` as an abbreviation and hid
+// the regex after it (issue 17).
+func TestPolicyDiffPrintsTheRenderedDenyReply(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, deny string) string {
+		path := filepath.Join(dir, name)
+		body := "platform_set: 1.3.0\nscopes: [{name: all_devices, match: {}}]\n" +
+			"roles: [{name: r, privilege: readonly, permit: [\"show **\"]" + deny + "}]\n" +
+			"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n" +
+			"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "diff", "--old", write("old.yaml", ""), "--new", write("new.yaml", `, deny: ["show cli **"]`),
+		"--inventory", inv}, &out, &errb)
+	const want = `-> ["user-permissions=view view-configuration", "deny-commands=^( *show +cli( .*)? *(\\|.*)?| *(monitor|help|quit|exit|file|load|op|request|save|scp|set|start|test|junoscript)( .*)? *(\\|.*)?| *set +cli( .*)? *(\\|.*)?)$"]`
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("the reply line:\n%s%s", out.String(), errb.String())
+	}
+}

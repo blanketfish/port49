@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -894,16 +893,10 @@ func refusedMessage(pr projection.Result, patterns []platform.Redaction, secrets
 		return FindingProjectionRefused, msg
 	}
 	if r.Class != "" {
-		value := strings.Join(redacted(patterns, []string{r.Value}), "")
-		shown := platform.QuoteShown(secrets, platform.RegexShown(secrets, value))
-		// A line this pass left whole prints as written: the printer's
-		// word-level pass would otherwise corrupt the line an operator
-		// pastes into a device (platform.Rendered; issue 17).
-		if shown == strconv.Quote(r.Value) {
-			platform.Rendered(r.Value)
-		}
 		msg += fmt.Sprintf("; the class line that carries the denies on the device instead, binding every subject at "+
-			"that template: set system login class %s %s %s", r.Class, r.Attribute, shown)
+			"that template: set system login class %s %s %s", r.Class, r.Attribute,
+			platform.QuoteShown(secrets, platform.RegexShown(secrets, strings.Join(redacted(patterns,
+				[]string{r.Value}), ""))))
 	}
 	return FindingProjectionOverflow, msg
 }

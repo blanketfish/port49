@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -351,16 +352,43 @@ func redactQuotedValue(rules []Redaction, value string) (string, bool) {
 // rendered holds the text a writer registered with Rendered.
 var rendered sync.Map
 
-// Rendered registers text port49 itself rendered, from the platform set and
-// rules that passed the secret check, and found unchanged by every
-// redaction the writer applies: the class line a projection_overflow finding
-// tells an operator to paste. RedactQuoted prints it as written, because
-// the word-level patterns match a regex's pieces by accident, `cli` as an
-// abbreviation of `client-secret`, and an operator pastes this line into a
-// device. Only exact text is exempt, and a writer registers only text its
-// own pass left whole, so no value a pattern or a hidden value would remove
-// is ever registered.
-func Rendered(text string) { rendered.Store(text, struct{}{}) }
+// Rendered registers text port49 itself rendered, so RedactQuoted prints it
+// as written: the class line and reply a projection hands an operator to
+// paste into a device. The word-level patterns match a regex's pieces by
+// accident, `cli` as an abbreviation of `client-secret`, and hid the words
+// after them (issue 17).
+//
+// The rule that makes the exemption safe: text is registered only when every
+// word the printer's word-level pass (RedactProse) would hide is regex
+// syntax, a word with no letter or digit in it such as `.`, or a word of
+// proven, the rule words the projection proved against the shipped keyword
+// tree, and the whitespace pass hides nothing. A hidden word is one prose
+// word, so a proven word matches it only when the keyword has no separator
+// in it. Anything else, a keyword glued to a literal as `community,X`, a
+// word proven nowhere, prints redacted as it would unregistered. Rendered
+// reports whether it registered text. Only exact text is exempt.
+func Rendered(rules []Redaction, text string, proven []string) bool {
+	if _, hid := RedactRule(rules, strings.Fields(text)); hid {
+		return false
+	}
+	var words []string
+	for _, sp := range proseWord.FindAllStringIndex(text, -1) {
+		if text[sp[0]] != '\\' {
+			words = append(words, text[sp[0]:sp[1]])
+		}
+	}
+	out, hid := RedactRule(rules, words)
+	for i, w := range words {
+		if !hid || out[i] == w || !strings.ContainsFunc(w, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			continue
+		}
+		if !slices.ContainsFunc(proven, func(p string) bool { return strings.EqualFold(p, w) }) {
+			return false
+		}
+	}
+	rendered.Store(text, struct{}{})
+	return true
+}
 
 func isRendered(text string) bool {
 	_, ok := rendered.Load(text)
