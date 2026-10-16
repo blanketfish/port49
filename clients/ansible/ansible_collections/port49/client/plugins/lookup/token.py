@@ -8,8 +8,10 @@ description:
   - Each call is a mint. Mint once per host per play in a C(set_fact) with C(no_log), not in
     C(ansible_password), which Ansible templates at every task. Never use C(cacheable) on that C(set_fact).
   - Needs the port49 Python library on the controller (C(pip install ./clients/python) from the port49 repository).
-  - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name;
-    see the collection README before setting C(host_key_auto_add), and never set it with
+  - Host keys are Ansible's own, and C(network_cli) keys them by C(ansible_host), not by the port49 name.
+    For a C(network_cli) device the lookup checks the address's key against the name's before it mints,
+    and refuses a changed or revoked key; see the collection README. It cannot see a key that changes later
+    in a run, so see the README before setting C(host_key_auto_add), and never set it with
     C(ansible_network_cli_ssh_type=libssh), which accepted a changed key and presented the token (L66 (c)).
 options:
   _terms:
@@ -57,7 +59,8 @@ options:
   known_hosts_file:
     description:
       - The file C(network_cli) keeps a device's address in. Only a device whose C(ansible_connection) is
-        C(network_cli) or C(ansible.netcommon.network_cli) is checked, before any token is minted.
+        C(network_cli) or C(ansible.netcommon.network_cli), or that has none visible but an C(ansible_network_os),
+        is checked, before any token is minted.
       - The address (C(ansible_host), else the inventory name; C([address]:port) when C(ansible_port) is not 22)
         is checked against the keys filed under the port49 name in your ssh files. A key the address lacks is
         filed there, and a different key of the same type refuses with C(host_key_changed). When only the address

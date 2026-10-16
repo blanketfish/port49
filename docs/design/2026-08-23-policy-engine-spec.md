@@ -9423,7 +9423,8 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   so an address added to a device in the source of truth meets the key already known under its
   name, and design §17's replay attack fails at the key exchange for every device the operator
   has reached through `port49 ssh` or the Python client (ruling 13). It does not hold for
-  Ansible's `network_cli`, which keys host keys by address (ruling 15).
+  Ansible's `network_cli`, which keys host keys by address (ruling 15); the lookup closes that
+  gap before it mints (ruling 15, *provisional on L66 (e3)*).
 - **3. Names.** Decision 42 ruling 8 stands, for `port49 ssh` and for the Python client, which
   checks it before any mint and any known_hosts write: the name is written into the operator's
   known_hosts.
@@ -9506,6 +9507,29 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   on a first contact rewrites the file without its comments. No `network_cli` `ssh_type` files a
   key under the name: `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured (L66 (e)).
   Measured 2026-10-14, `tests/lab/results/L66-<platform>.md`.
+  **The lookup closes the gap before it mints** (*provisional on L66 (e3)*: unmeasured until the lab
+  run of plan 9f Task 4). For a device whose `ansible_connection` is `network_cli` or
+  `ansible.netcommon.network_cli`, or that has none visible but an `ansible_network_os`, the lookup
+  compares the keys filed under the port49 name with the keys filed under the address (`ansible_host`,
+  else the inventory name; `[address]:port` when `ansible_port` is not 22) in `known_hosts_file`
+  (default `~/.ssh/known_hosts`, where both `ssh_type`s file it). There are four cases:
+  1. The name has keys and the address has none: the lookup files the name's keys under the
+     address, then mints.
+  2. Both have keys: every key type in both must match, or the lookup refuses `host_key_changed`
+     and mints nothing. The message names both keys' SHA256 fingerprints and the shell-quoted
+     `ssh-keygen -R <address> -f <file>` that clears the stale entry. A type only the name has is
+     filed under the address; a type only the address has is left alone.
+  3. The name has none and the address has keys: the lookup copies them under the name, in the first
+     user known_hosts file, and mints. Ansible already trusts that key, so this widens nothing, and
+     the next address change is no longer a first contact. If no user file is writable, it warns and
+     mints anyway. This goes beyond the owner's ruling of 2026-10-15, which names cases 1 and 2.
+  4. Neither has a key: a first contact, as before. It mints and changes nothing.
+
+  A key of the address that a `@revoked` line or `RevokedHostKeys` revokes is refused as
+  `host_key_revoked`. In workload mode every device is checked before the one mint. Nothing else
+  changes: a device not on `network_cli` is not checked, and `host_key_auto_add` with
+  `ssh_type: libssh` is still never recommended, because libssh accepts a key that changes after
+  the check.
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).

@@ -135,13 +135,32 @@ paramiko 5.0.0. Each platform gave the same reading: EOS, NX-OS, IOS-XE, vJunos-
 L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not the device's.
 
 - **`network_cli` keys a host by `ansible_host`, the address in Ansible's inventory, not by the
-  port49 name.** Both ssh types filed the first contact under the address. `ansible_libssh_config_file`
-  naming an ssh_config with `HostKeyAlias` is not honoured: the key still went under the
-  address. So an address changed for a device in the source of truth (a dynamic inventory built
-  from it, the usual case) is a first contact for Ansible. Measured (L66 (e)): with
-  `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at the new address
-  and presented it the token. Design section 17's attack is open on this path, as it is not for
-  `port49 ssh`. What flags it is the sync diff's address-change security event (spec section 10).
+  port49 name.** Both ssh types filed the first contact under the address.
+  `ansible_libssh_config_file` naming an ssh_config with `HostKeyAlias` is not honoured: the key
+  still went under the address. So an address changed for a device in the source of truth (a
+  dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
+  (L66 (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
+  the new address and presented it the token.
+- **The lookup closes that gap before it mints.** *Provisional on L66 (e3): not yet measured.* For a
+  device on `network_cli` (`ansible_connection` is `network_cli` or `ansible.netcommon.network_cli`,
+  or none is visible and `ansible_network_os` is set), it compares the keys filed under the port49
+  name with the keys filed under the address in `~/.ssh/known_hosts`. The address is
+  `ansible_host`, else the inventory name, and `[address]:port` when `ansible_port` is not 22.
+  - Name has keys, address has none: it files them under the address, then mints.
+  - Both have keys, and a key type in both differs: it mints nothing and fails with
+    `host_key_changed`. The message gives both fingerprints and the command that clears the stale
+    address, for example `ssh-keygen -R '[10.0.0.9]:2222' -f /home/ops/.ssh/known_hosts`. Check
+    the device's key on its console first. Run the command only if the address now belongs to this device.
+  - Name has none, address has keys: it copies them under the name, then mints. If no user
+    known_hosts file is writable, it warns and mints anyway.
+  - Neither has a key: a first contact, as before.
+  - A key of the address that `@revoked` or `RevokedHostKeys` revokes fails with `host_key_revoked`.
+  - `known_hosts_file` is the file to check, if `ansible_ssh_common_args` or the ssh type points
+    Ansible elsewhere. It defaults to `~/.ssh/known_hosts`.
+  - In workload mode every device is checked before the one mint.
+  - A device not on `network_cli` is not checked. Use the `HostKeyAlias` setting below there.
+  - The check runs before the connection. It cannot see a key that changes later, and libssh
+    accepts one (next bullet).
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
   the first contact and kept the file's comments and `@revoked` and `@cert-authority` lines. But
   given a changed key for a host it knew, **it accepted the new key, logged in and presented the
