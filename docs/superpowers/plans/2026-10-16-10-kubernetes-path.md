@@ -127,7 +127,7 @@ Recorded as spec §13 decision 49 by Task 1. Each rests on reasoning unless it s
   refused; header `typ` absent or `JWT` (never `at+jwt`); a person's session or delegation claim
   (`auth_time`, `sid`, `nonce`, `scp`, `amr`, `act`, `may_act`) refused. The refusal for an `iat`
   past `max_token_age` adds, for a k8s token: "the kubelet refreshes a projected token at about 80% of
-  its expirationSeconds, so keep expirationSeconds at or under 3600" (provisional on L69 cell b).
+  its expirationSeconds, so keep expirationSeconds at or under 3600" (measured on kind, L69 (b)).
 - **R7. A projected token, bound to a pod.** The `kubernetes.io` claim is required and read by
   exact name at every level: its `namespace` and `serviceaccount.name` equal the `sub`'s parts,
   `serviceaccount.uid` and `pod.name` and `pod.uid` are present, and `secret` is absent. A token
@@ -433,7 +433,7 @@ any.
 - **5. The audience.** `aud` is exactly one value, the configured `audience`.
 - **6. The claims.** Decision 39 ruling 5's, with `typ` absent or `JWT` and decision 39 ruling 21's
   session and delegation claims refused. Past `max_token_age`, the refusal names the kubelet's
-  refresh at about 80% of expirationSeconds (provisional on L69 (b)).
+  refresh at about 80% of expirationSeconds (measured on kind, L69 (b)).
 - **7. Bound to a pod.** `kubernetes.io` required and read by exact name at every level: its
   `namespace` and `serviceaccount.name` the `sub`'s, `serviceaccount.uid`, `pod.name` and
   `pod.uid` present, `secret` absent. No group, role or username is read (design §7). Provisional
@@ -446,7 +446,7 @@ any.
 - **10. The session clock** is `iat`; no owner record; no logout.
 - **11. A deleted service account or pod.** No TokenReview call (ruled 2026-10-16: it would put
   every cluster's API server, and a stored cluster credential, on the mint path): a token stays valid at port49
-  until `exp` or `iat` + `max_token_age` (provisional on L69 (e)); `port49 revoke --principal` ends it
+  until `exp` or `iat` + `max_token_age` (measured on kind, L69 (e)); `port49 revoke --principal` ends it
   at once, and says the mark stands for a re-created account of that name until lifted.
 - **12. Metrics.** `port49_oidc_*`, labelled by the configured issuer (shared with OIDC
   verifiers, and the key set's own key); no cluster, principal, namespace or device label.
@@ -2835,7 +2835,7 @@ subjects:
 ```yaml
 # A nightly backup's tokens, minted with the pod's projected token alone
 # (design §7). The default API token is not mounted: its audience is the API
-# server's and port49 refuses it (provisional on L69 (h)). This example stops
+# server's and port49 refuses it (measured on kind, L69 (h)). This example stops
 # at the mint: /work/tokens.tsv is on an emptyDir, so the job that reads the
 # tokens (your backup tool) runs in this pod, after this container, sharing
 # the work volume; it is not shown here.
@@ -2939,7 +2939,7 @@ subjects:
        with the first and accepts both); list both issuers in port49 as two `k8s` verifiers on
        the same `jwks` (decision 49 ruling 4's migration case); roll the pods; after the longest
        `expirationSeconds` in use has passed, remove the old flag and the old verifier.
-     - Apply `issuer-discovery.yaml` (provisional on L69 (c); managed clusters unmeasured, L70).
+     - Apply `issuer-discovery.yaml` (measured on kind, L69 (c); managed clusters unmeasured, L70).
        Issuer discovery needs `--anonymous-auth` on; a CIS-hardened cluster turns it off. On 1.32+
        use the structured authentication configuration (`AuthenticationConfiguration`'s
        `anonymous.conditions`) to allow anonymous requests to `/.well-known/openid-configuration`
@@ -2964,14 +2964,14 @@ subjects:
      a compromised cluster already holds a genuine token for its own copy of the workload, so
      refusing the overlap would buy nothing.
   4. **The workload**: the CronJob; `automountServiceAccountToken: false`; `expirationSeconds:
-     3600` and why (the kubelet refreshes at about 80% of it, provisional on L69 (b), against
+     3600` and why (the kubelet refreshes at about 80% of it, measured on kind, L69 (b), against
      `max_token_age`); the example stops at the mint (the consumer runs in the same pod, sharing
      the work volume, not shown); the image is the repository's `Dockerfile` target `port49`
      (`docker build --target port49 -t port49:local .`).
   5. **The policy**: the subject; `username:` required; `port49 policy test`.
   6. **3am**: every case of this plan's "The operator at 3am", as the operator sees them.
   7. **Stopping a workload**: `port49 revoke --principal system:serviceaccount:netops:oxidized`,
-     and why deleting the service account alone is not immediate (R11; provisional on L69 (e)).
+     and why deleting the service account alone is not immediate (R11; measured on kind, L69 (e)).
   8. **What is not measured**: managed clusters (L70); a CronJob run in a cluster against a
      broker outside it is plan 12's deployment test.
 
@@ -3388,7 +3388,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
     byte for byte with the token's `iss`; set it per cluster (kubeadm's default is the same on
     every cluster, and port49 refuses one issuer twice).
   - **The cluster** publishes its keys to the broker with one ClusterRoleBinding,
-    `examples/kubernetes/issuer-discovery.yaml` (provisional on L69 (c) until the L69 run;
+    `examples/kubernetes/issuer-discovery.yaml` (measured on kind, L69 (c);
     managed clusters are L70, unmeasured). Issuer discovery needs anonymous access to two paths;
     a CIS-hardened cluster with `--anonymous-auth=false` allows them through the 1.32+ structured
     authentication configuration.
@@ -3413,10 +3413,10 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   last good fetch, said hourly and on `port49_oidc_keys_fetch_failures_total{issuer}`; then 503
   `identity_provider_unavailable`, retried by `port49 workload`.
 - **Key rotation at the cluster** needs nothing from port49: a new key is fetched on first sight
-  (provisional on L69 (d)).
+  (measured on kind, L69 (d)).
 - **To stop a workload at once:** `port49 revoke --principal system:serviceaccount:<ns>:<name>`.
   Deleting its service account or pod is not immediate at port49: a token already issued stays
-  valid until its `exp` or 2h after issue (provisional on L69 (e)). The mark also stands for a service
+  valid until its `exp` or 2h after issue (measured on kind, L69 (e)). The mark also stands for a service
   account re-created under that name until `port49 revoke --lift`, and, since the principal names
   no cluster, for that service account in every cluster that lists its namespace.
 - **Records:** a cluster caller's records carry `auth: {method: k8s, k8s: {cluster, issuer, sub,

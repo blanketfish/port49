@@ -1,6 +1,6 @@
 # A nightly backup's tokens, minted with the pod's projected token alone
 # (design §7). The default API token is not mounted: its audience is the API
-# server's and port49 refuses it (provisional on L69 (h)). This example stops
+# server's and port49 refuses it (measured on kind, L69 (h)). This example stops
 # at the mint: /work/tokens.tsv is on an emptyDir, so the job that reads the
 # tokens (your backup tool) runs in this pod, after this container, sharing
 # the work volume; it is not shown here.

@@ -7,11 +7,11 @@
 # no other anonymous access. If that is not acceptable for your API server's
 # network, narrow it instead: restrict anonymous requests to the two discovery
 # paths with the structured authentication configuration's anonymous
-# `conditions` (exact form provisional on L69 (c)), or publish a mirror of the
+# `conditions` (exact form not measured: L69 (c) measured the binding alone), or publish a mirror of the
 # keys and point `jwks` at it (no binding needed).
 #
-# Provisional on L69 (c) until Task 11 closes it (then "measured on kind,
-# L69 (c)"); managed clusters are L70, open.
+# Measured on kind, L69 (c): the binding below turns anonymous discovery and JWKS
+# reads from 403 to 200. Managed clusters are L70, open.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
