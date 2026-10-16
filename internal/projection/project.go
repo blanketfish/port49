@@ -148,8 +148,8 @@ type Result struct {
 	// ConfigurationBeneath are the grant's sent denies that meet `show
 	// configuration` while the session holds view-configuration: the CLI
 	// refuses them, but the bit is what grants the configuration, and policy
-	// test warns (projection_deny_beneath_view_configuration; decision 44); never a reach
-	// deny (decision 48).
+	// test warns (projection_deny_beneath_view_configuration; decision 44);
+	// never a reach deny (decision 48).
 	ConfigurationBeneath []engine.Rule
 	// Closed are baseline denies the reply's entry deny refuses on the
 	// device, sent as nothing: Junos authorizes `xml-mode` as `junoscript`,
@@ -428,6 +428,11 @@ func (g generator) shape() (Result, error) {
 				fb.ReachOverflow = over.reach
 			}
 			return fb, nil
+		} else if errors.As(ferr, &over) && over.Category == FailOverflow {
+			// The refusal quotes the fallback's own length, the one the
+			// grant's denies make, not a length with a reach deny the
+			// operator never wrote.
+			return Result{}, ferr
 		}
 	}
 	// Under the entry deny, a capability reply that sends an allow its bits

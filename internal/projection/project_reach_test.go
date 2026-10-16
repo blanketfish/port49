@@ -272,3 +272,31 @@ func TestConfigurationBeneathSkipsAReachDeny(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+// A readonly permitting exactly the hierarchies the bits do not reach, `show
+// configuration` among them, is rendered as set 1.2.0 renders it, with no reach
+// deny: the `reached` guard. The reach words are all permitted, so view-
+// configuration would send the device's refusal of what port49 permits.
+func TestAPermitOfTheConfigurationHierarchiesSendsNoReachDeny(t *testing.T) {
+	rules := []engine.Rule{permit("show configuration **"), permit("show log **"), permit("show firewall **"),
+		permit("show policer **")}
+	res, err := Project(shipped("1.3.0", "readonly", rules...))
+	was, werr := Project(shipped("1.2.0", "readonly", rules...))
+	if err != nil || werr != nil || len(res.ReachDenies()) != 0 || !slices.Equal(res.Attributes, was.Attributes) {
+		t.Fatalf("1.3.0 %q %v\n1.2.0 %q %v", res.Attributes, err, was.Attributes, werr)
+	}
+}
+
+// Where the fallback overflows too, the refusal is the fallback's, quoting the
+// length the grant's own denies make, not one with the reach deny added.
+func TestADoubleOverflowQuotesTheFallbacksLength(t *testing.T) {
+	rules := []engine.Rule{permit("show **"), deny("show security **"), deny("show route **"), deny("show bgp **"),
+		deny("show ospf **"), deny("show isis **"), deny("show chassis **"), deny("show system **"),
+		deny("show interfaces **")}
+	was, _ := Project(shipped("1.2.0", "readonly", rules...))
+	res, err := Project(shipped("1.3.0", "readonly", rules...))
+	if err != nil || was.FailClosed != FailOverflow || res.FailClosed != FailOverflow ||
+		res.Refusal.Value != was.Refusal.Value || strings.Contains(res.Refusal.Value, "monitor") {
+		t.Fatalf("1.3.0 %+v %v\n1.2.0 %+v", res.Refusal, err, was.Refusal)
+	}
+}
