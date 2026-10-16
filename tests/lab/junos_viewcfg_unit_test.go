@@ -147,6 +147,7 @@ func TestL68Cell(t *testing.T) {
 func TestL68ExecCell(t *testing.T) {
 	show := l68Probe{cmd: "show configuration system host-name", evidence: hostEvidence}
 	mon := l68Probe{cmd: "monitor list", prefix: 1}
+	zones := l68Probe{cmd: "show security zones", prefix: 2}
 	for _, c := range []struct {
 		p    l68Probe
 		out  string
@@ -156,6 +157,12 @@ func TestL68ExecCell(t *testing.T) {
 		{show, hostEvidence + ";\n", nil, "ran"},
 		{show, "", nil, "not observed"},
 		{mon, "error: syntax error: monitor\n", errors.New("Process exited with status 1"), "refused"},
+		// This run's raw output (L68 vjunos-router): the control took `show
+		// security` and refused `zones`, which is past the prefix; a deny row
+		// refused `security`.
+		{zones, "\nerror: syntax error, expecting <command>: zones\n", errors.New("Process exited with status 1"), "past"},
+		{zones, "\nerror: permission denied: security\n", errors.New("Process exited with status 1"), "refused"},
+		{zones, "\nerror: permission denied\n", nil, "not observed"},
 		{mon, "", nil, "past"},
 		{mon, "", errors.New("no exit within 45s"), "not observed"},
 	} {

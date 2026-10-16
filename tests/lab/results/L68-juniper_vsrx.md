@@ -18,6 +18,10 @@ Whether `user-permissions` holding view-configuration, with deny-commands coveri
 
 The reference configuration was committed: commit complete.
 
+**Re-read, not rerun (plan 9g Task 1 fix round 1).** The exec-channel cells were re-read from this run's recorded raw output by the fixed `l68ExecCell`, which ties a refusal to the word Junos names after the last `: `. No cell changed. The Gate lines are unchanged.
+
+**Pager `s` was not graded.** The `pager s` cells read `no pager`, which is not what the raw output shows. In P, O and V the `set` deny refused `set cli screen-length 5`, so no pager appeared and `s` was not typed. In H, Vc and C the pager appeared and `s` prompted `Filename:`, but the harness's following keystrokes were mangled (the file written is named `et cli screen-length 0`), so the cell does not say what the pager did. The reading stays with L59.
+
 | row | reply | why | `show cli authorization` bits |
 |---|---|---|---|
 | P | `["user-permissions=view view-configuration", "deny-commands=^( *show +security( .*)? *(\\\|.*)?\| *(monitor\|help\|quit\|exit\|file\|load\|op\|request\|save\|scp\|set\|start\|test\|junoscript)( .*)? *(\\\|.*)?\| *set +cli( .*)? *(\\\|.*)?)$"]` | set 1.2.0's render of a readonly granted show ** less show security ** and monitor **: set 1.3.0's reply | view view-configuration |
@@ -103,7 +107,8 @@ monitor, monitor interface, monitor label-switched-path, monitor list, monitor s
 ### Files under /var/tmp after the rows (`| save`, pager `s`)
 
 ```
-file list /var/tmp/ breakglass@srx1> file list /var/tmp/    | match p49-l68 
+file list /var/tmp/ 
+breakglass@srx1> file list /var/tmp/    | match p49-l68 
 p49-l68-pipe-C
 p49-l68-pipe-H
 p49-l68-pipe-O
@@ -120,13 +125,16 @@ breakglass@srx1>
 monitor
               ^
 unknown command.
-alice01@srx1> monitor   
+
+alice01@srx1> monitor   
               ^
 unknown command.
-alice01@srx1> monitor   
+
+alice01@srx1> monitor   
               ^
 unknown command.
-alice01@srx1> monitor   list
+
+alice01@srx1> monitor   list
               ^
 unknown command.
 
@@ -139,7 +147,8 @@ alice01@srx1>
 MONITOR
               ^
 unknown command.
-alice01@srx1> MONITOR   LIST
+
+alice01@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -162,7 +171,8 @@ alice01@srx1>
 configure
               ^
 unknown command.
-alice01@srx1> configure   private
+
+alice01@srx1> configure   private
               ^
 unknown command.
 
@@ -208,10 +218,12 @@ error: permission denied: security
 file
               ^
 unknown command.
-alice01@srx1> file   list
+
+alice01@srx1> file   list
               ^
 unknown command.
-alice01@srx1> filelist   /config
+
+alice01@srx1> filelist   /config
               ^
 unknown command.
 
@@ -224,16 +236,20 @@ alice01@srx1>
 file
               ^
 unknown command.
-alice01@srx1> file   show
+
+alice01@srx1> file   show
               ^
 unknown command.
-alice01@srx1> fileshow   /config/juniper.conf.gz
+
+alice01@srx1> fileshow   /config/juniper.conf.gz
               ^
 unknown command.
-alice01@srx1> fileshow/config/juniper.conf.gz   |
+
+alice01@srx1> fileshow/config/juniper.conf.gz   |
               ^
 unknown command.
-alice01@srx1> fileshow/config/juniper.conf.gz|   count
+
+alice01@srx1> fileshow/config/juniper.conf.gz|   count
               ^
 unknown command.
 
@@ -246,10 +262,12 @@ alice01@srx1>
 load
               ^
 unknown command.
-alice01@srx1> load   dhcp-security-snoop
+
+alice01@srx1> load   dhcp-security-snoop
               ^
 unknown command.
-alice01@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
+
+alice01@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
               ^
 unknown command.
 
@@ -262,7 +280,8 @@ alice01@srx1>
 mon
               ^
 unknown command.
-alice01@srx1> mon   p49-none
+
+alice01@srx1> mon   p49-none
               ^
 unknown command.
 
@@ -275,7 +294,8 @@ alice01@srx1>
 monitor
               ^
 unknown command.
-alice01@srx1> monitor   list
+
+alice01@srx1> monitor   list
               ^
 unknown command.
 
@@ -288,13 +308,16 @@ alice01@srx1>
 monitor
               ^
 unknown command.
-alice01@srx1> monitor   list
+
+alice01@srx1> monitor   list
               ^
 unknown command.
-alice01@srx1> monitorlist   |
+
+alice01@srx1> monitorlist   |
               ^
 unknown command.
-alice01@srx1> monitorlist|   no-more
+
+alice01@srx1> monitorlist|   no-more
               ^
 unknown command.
 
@@ -307,7 +330,8 @@ alice01@srx1>
 monitor
               ^
 unknown command.
-alice01@srx1> monitor   p49-none
+
+alice01@srx1> monitor   p49-none
               ^
 unknown command.
 
@@ -320,10 +344,12 @@ alice01@srx1>
 op
               ^
 unknown command.
-alice01@srx1> op   ur
+
+alice01@srx1> op   ur
               ^
 unknown command.
-alice01@srx1> opur   /var/tmp/p49-entry-op.slax
+
+alice01@srx1> opur   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -336,10 +362,12 @@ alice01@srx1>
 op
               ^
 unknown command.
-alice01@srx1> op   url
+
+alice01@srx1> op   url
               ^
 unknown command.
-alice01@srx1> opurl   /var/tmp/p49-entry-op.slax
+
+alice01@srx1> opurl   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -352,13 +380,16 @@ alice01@srx1>
 set
               ^
 unknown command.
-alice01@srx1> set   cli
+
+alice01@srx1> set   cli
               ^
 unknown command.
-alice01@srx1> setcli   screen-length
+
+alice01@srx1> setcli   screen-length
               ^
 unknown command.
-alice01@srx1> setcliscreen-length   5
+
+alice01@srx1> setcliscreen-length   5
               ^
 unknown command.
 
@@ -378,10 +409,12 @@ system {
 req
               ^
 unknown command.
-alice01@srx1> req   mpls
+
+alice01@srx1> req   mpls
               ^
 unknown command.
-alice01@srx1> reqmpls   p49-none
+
+alice01@srx1> reqmpls   p49-none
               ^
 unknown command.
 
@@ -394,10 +427,12 @@ alice01@srx1>
 req
               ^
 unknown command.
-alice01@srx1> req   path-computation-client
+
+alice01@srx1> req   path-computation-client
               ^
 unknown command.
-alice01@srx1> reqpath-computation-client   p49-none
+
+alice01@srx1> reqpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -410,10 +445,12 @@ alice01@srx1>
 req
               ^
 unknown command.
-alice01@srx1> req   sec
+
+alice01@srx1> req   sec
               ^
 unknown command.
-alice01@srx1> reqsec   p49-none
+
+alice01@srx1> reqsec   p49-none
               ^
 unknown command.
 
@@ -426,10 +463,12 @@ alice01@srx1>
 req
               ^
 unknown command.
-alice01@srx1> req   vir
+
+alice01@srx1> req   vir
               ^
 unknown command.
-alice01@srx1> reqvir   p49-none
+
+alice01@srx1> reqvir   p49-none
               ^
 unknown command.
 
@@ -442,10 +481,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   mp
+
+alice01@srx1> request   mp
               ^
 unknown command.
-alice01@srx1> requestmp   p49-none
+
+alice01@srx1> requestmp   p49-none
               ^
 unknown command.
 
@@ -458,10 +499,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   mpls
+
+alice01@srx1> request   mpls
               ^
 unknown command.
-alice01@srx1> requestmpls   p49-none
+
+alice01@srx1> requestmpls   p49-none
               ^
 unknown command.
 
@@ -474,10 +517,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   path-computation-client
+
+alice01@srx1> request   path-computation-client
               ^
 unknown command.
-alice01@srx1> requestpath-computation-client   p49-none
+
+alice01@srx1> requestpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -490,10 +535,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   security
+
+alice01@srx1> request   security
               ^
 unknown command.
-alice01@srx1> requestsecurity   p49-none
+
+alice01@srx1> requestsecurity   p49-none
               ^
 unknown command.
 
@@ -506,10 +553,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   unified-edge
+
+alice01@srx1> request   unified-edge
               ^
 unknown command.
-alice01@srx1> requestunified-edge   p49-none
+
+alice01@srx1> requestunified-edge   p49-none
               ^
 unknown command.
 
@@ -522,10 +571,12 @@ alice01@srx1>
 request
               ^
 unknown command.
-alice01@srx1> request   virtual-chassis
+
+alice01@srx1> request   virtual-chassis
               ^
 unknown command.
-alice01@srx1> requestvirtual-chassis   p49-none
+
+alice01@srx1> requestvirtual-chassis   p49-none
               ^
 unknown command.
 
@@ -538,13 +589,16 @@ alice01@srx1>
 save
               ^
 unknown command.
-alice01@srx1> save   dhcp-security-snoop
+
+alice01@srx1> save   dhcp-security-snoop
               ^
 unknown command.
-alice01@srx1> savedhcp-security-snoop   |
+
+alice01@srx1> savedhcp-security-snoop   |
               ^
 unknown command.
-alice01@srx1> savedhcp-security-snoop|   count
+
+alice01@srx1> savedhcp-security-snoop|   count
               ^
 unknown command.
 
@@ -572,7 +626,8 @@ alice01@srx1>
 show sec
                    ^
 syntax error, expecting <command>.
-alice01@srx1> show sec   p49-none
+
+alice01@srx1> show sec   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -665,7 +720,8 @@ __policer_tmpl__-fc4                                    0                    0
 show security
                    ^
 syntax error, expecting <command>.
-alice01@srx1> show security   p49-none
+
+alice01@srx1> show security   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -689,13 +745,16 @@ alice01@srx1>
 monitor
               ^
 unknown command.
-alice04@srx1> monitor   
+
+alice04@srx1> monitor   
               ^
 unknown command.
-alice04@srx1> monitor   
+
+alice04@srx1> monitor   
               ^
 unknown command.
-alice04@srx1> monitor   list
+
+alice04@srx1> monitor   list
               ^
 unknown command.
 
@@ -708,7 +767,8 @@ alice04@srx1>
 MONITOR
               ^
 unknown command.
-alice04@srx1> MONITOR   LIST
+
+alice04@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -731,7 +791,8 @@ alice04@srx1>
 configure
               ^
 unknown command.
-alice04@srx1> configure   private
+
+alice04@srx1> configure   private
               ^
 unknown command.
 
@@ -803,7 +864,8 @@ alice04@srx1>
 load dhcp-security-snoop
                    ^
 syntax error, expecting <command>.
-alice04@srx1> load dhcp-security-snoop   /var/tmp/p49-l68-none
+
+alice04@srx1> load dhcp-security-snoop   /var/tmp/p49-l68-none
                    ^
 syntax error, expecting <command>.
 
@@ -816,7 +878,8 @@ alice04@srx1>
 mon
               ^
 unknown command.
-alice04@srx1> mon   p49-none
+
+alice04@srx1> mon   p49-none
               ^
 unknown command.
 
@@ -829,7 +892,8 @@ alice04@srx1>
 monitor
               ^
 unknown command.
-alice04@srx1> monitor   list
+
+alice04@srx1> monitor   list
               ^
 unknown command.
 
@@ -842,13 +906,16 @@ alice04@srx1>
 monitor
               ^
 unknown command.
-alice04@srx1> monitor   list
+
+alice04@srx1> monitor   list
               ^
 unknown command.
-alice04@srx1> monitorlist   |
+
+alice04@srx1> monitorlist   |
               ^
 unknown command.
-alice04@srx1> monitorlist|   no-more
+
+alice04@srx1> monitorlist|   no-more
               ^
 unknown command.
 
@@ -861,7 +928,8 @@ alice04@srx1>
 monitor
               ^
 unknown command.
-alice04@srx1> monitor   p49-none
+
+alice04@srx1> monitor   p49-none
               ^
 unknown command.
 
@@ -874,10 +942,12 @@ alice04@srx1>
 op
               ^
 unknown command.
-alice04@srx1> op   ur
+
+alice04@srx1> op   ur
               ^
 unknown command.
-alice04@srx1> opur   /var/tmp/p49-entry-op.slax
+
+alice04@srx1> opur   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -890,10 +960,12 @@ alice04@srx1>
 op
               ^
 unknown command.
-alice04@srx1> op   url
+
+alice04@srx1> op   url
               ^
 unknown command.
-alice04@srx1> opurl   /var/tmp/p49-entry-op.slax
+
+alice04@srx1> opurl   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -911,7 +983,9 @@ alice04@srx1> show configuration
 version 21.4R3.15;
 system {
     host-name srx1;
----(more)---                                        Filename: et cli screen-length 0
+---(more)---
+                                        
+Filename: et cli screen-length 0
 Wrote 178 lines of output to 'et cli screen-length 0'
 ---(more 2%)---
 ```
@@ -922,7 +996,8 @@ Wrote 178 lines of output to 'et cli screen-length 0'
 request mpls
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request mpls   p49-none
+
+alice04@srx1> request mpls   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -935,7 +1010,8 @@ alice04@srx1>
 request path-computation-client
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request path-computation-client   p49-none
+
+alice04@srx1> request path-computation-client   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -948,7 +1024,8 @@ alice04@srx1>
 request sec
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request sec   p49-none
+
+alice04@srx1> request sec   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -961,7 +1038,8 @@ alice04@srx1>
 request vir
                          ^
 syntax error.
-alice04@srx1> request vir   p49-none
+
+alice04@srx1> request vir   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -974,7 +1052,8 @@ alice04@srx1>
 request mp
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request mp   p49-none
+
+alice04@srx1> request mp   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -987,7 +1066,8 @@ alice04@srx1>
 request mpls
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request mpls   p49-none
+
+alice04@srx1> request mpls   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -1000,7 +1080,8 @@ alice04@srx1>
 request path-computation-client
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request path-computation-client   p49-none
+
+alice04@srx1> request path-computation-client   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -1013,7 +1094,8 @@ alice04@srx1>
 request security
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request security   p49-none
+
+alice04@srx1> request security   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -1026,7 +1108,8 @@ alice04@srx1>
 request unified-edge
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request unified-edge   p49-none
+
+alice04@srx1> request unified-edge   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -1039,7 +1122,8 @@ alice04@srx1>
 request virtual-chassis
                       ^
 syntax error, expecting <command>.
-alice04@srx1> request virtual-chassis   p49-none
+
+alice04@srx1> request virtual-chassis   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -1052,10 +1136,12 @@ alice04@srx1>
 save dhcp-security-snoop
                    ^
 syntax error, expecting <command>.
-alice04@srx1> save dhcp-security-snoop   |
+
+alice04@srx1> save dhcp-security-snoop   |
                    ^
 permission denied.
-alice04@srx1> save dhcp-security-snoop|   count
+
+alice04@srx1> save dhcp-security-snoop|   count
                    ^
 permission denied.
 
@@ -1077,7 +1163,8 @@ alice04@srx1>
 show sec
                    ^
 syntax error, expecting <command>.
-alice04@srx1> show sec   p49-none
+
+alice04@srx1> show sec   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -1170,7 +1257,8 @@ __policer_tmpl__-fc4                                    0                    0
 show security
                    ^
 syntax error, expecting <command>.
-alice04@srx1> show security   p49-none
+
+alice04@srx1> show security   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -1194,13 +1282,16 @@ alice04@srx1>
 monitor
               ^
 unknown command.
-alice06@srx1> monitor   
+
+alice06@srx1> monitor   
               ^
 unknown command.
-alice06@srx1> monitor   
+
+alice06@srx1> monitor   
               ^
 unknown command.
-alice06@srx1> monitor   list
+
+alice06@srx1> monitor   list
               ^
 unknown command.
 
@@ -1213,7 +1304,8 @@ alice06@srx1>
 MONITOR
               ^
 unknown command.
-alice06@srx1> MONITOR   LIST
+
+alice06@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -1236,7 +1328,8 @@ alice06@srx1>
 configure
               ^
 unknown command.
-alice06@srx1> configure   private
+
+alice06@srx1> configure   private
               ^
 unknown command.
 
@@ -1282,10 +1375,12 @@ error: permission denied: security
 file
               ^
 unknown command.
-alice06@srx1> file   list
+
+alice06@srx1> file   list
               ^
 unknown command.
-alice06@srx1> filelist   /config
+
+alice06@srx1> filelist   /config
               ^
 unknown command.
 
@@ -1298,16 +1393,20 @@ alice06@srx1>
 file
               ^
 unknown command.
-alice06@srx1> file   show
+
+alice06@srx1> file   show
               ^
 unknown command.
-alice06@srx1> fileshow   /config/juniper.conf.gz
+
+alice06@srx1> fileshow   /config/juniper.conf.gz
               ^
 unknown command.
-alice06@srx1> fileshow/config/juniper.conf.gz   |
+
+alice06@srx1> fileshow/config/juniper.conf.gz   |
               ^
 unknown command.
-alice06@srx1> fileshow/config/juniper.conf.gz|   count
+
+alice06@srx1> fileshow/config/juniper.conf.gz|   count
               ^
 unknown command.
 
@@ -1320,10 +1419,12 @@ alice06@srx1>
 load
               ^
 unknown command.
-alice06@srx1> load   dhcp-security-snoop
+
+alice06@srx1> load   dhcp-security-snoop
               ^
 unknown command.
-alice06@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
+
+alice06@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
               ^
 unknown command.
 
@@ -1336,7 +1437,8 @@ alice06@srx1>
 mon
               ^
 unknown command.
-alice06@srx1> mon   p49-none
+
+alice06@srx1> mon   p49-none
               ^
 unknown command.
 
@@ -1349,7 +1451,8 @@ alice06@srx1>
 monitor
               ^
 unknown command.
-alice06@srx1> monitor   list
+
+alice06@srx1> monitor   list
               ^
 unknown command.
 
@@ -1362,13 +1465,16 @@ alice06@srx1>
 monitor
               ^
 unknown command.
-alice06@srx1> monitor   list
+
+alice06@srx1> monitor   list
               ^
 unknown command.
-alice06@srx1> monitorlist   |
+
+alice06@srx1> monitorlist   |
               ^
 unknown command.
-alice06@srx1> monitorlist|   no-more
+
+alice06@srx1> monitorlist|   no-more
               ^
 unknown command.
 
@@ -1381,7 +1487,8 @@ alice06@srx1>
 monitor
               ^
 unknown command.
-alice06@srx1> monitor   p49-none
+
+alice06@srx1> monitor   p49-none
               ^
 unknown command.
 
@@ -1394,10 +1501,12 @@ alice06@srx1>
 op
               ^
 unknown command.
-alice06@srx1> op   ur
+
+alice06@srx1> op   ur
               ^
 unknown command.
-alice06@srx1> opur   /var/tmp/p49-entry-op.slax
+
+alice06@srx1> opur   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -1410,10 +1519,12 @@ alice06@srx1>
 op
               ^
 unknown command.
-alice06@srx1> op   url
+
+alice06@srx1> op   url
               ^
 unknown command.
-alice06@srx1> opurl   /var/tmp/p49-entry-op.slax
+
+alice06@srx1> opurl   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -1426,13 +1537,16 @@ alice06@srx1>
 set
               ^
 unknown command.
-alice06@srx1> set   cli
+
+alice06@srx1> set   cli
               ^
 unknown command.
-alice06@srx1> setcli   screen-length
+
+alice06@srx1> setcli   screen-length
               ^
 unknown command.
-alice06@srx1> setcliscreen-length   5
+
+alice06@srx1> setcliscreen-length   5
               ^
 unknown command.
 
@@ -1452,10 +1566,12 @@ system {
 req
               ^
 unknown command.
-alice06@srx1> req   mpls
+
+alice06@srx1> req   mpls
               ^
 unknown command.
-alice06@srx1> reqmpls   p49-none
+
+alice06@srx1> reqmpls   p49-none
               ^
 unknown command.
 
@@ -1468,10 +1584,12 @@ alice06@srx1>
 req
               ^
 unknown command.
-alice06@srx1> req   path-computation-client
+
+alice06@srx1> req   path-computation-client
               ^
 unknown command.
-alice06@srx1> reqpath-computation-client   p49-none
+
+alice06@srx1> reqpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -1484,10 +1602,12 @@ alice06@srx1>
 req
               ^
 unknown command.
-alice06@srx1> req   sec
+
+alice06@srx1> req   sec
               ^
 unknown command.
-alice06@srx1> reqsec   p49-none
+
+alice06@srx1> reqsec   p49-none
               ^
 unknown command.
 
@@ -1500,10 +1620,12 @@ alice06@srx1>
 req
               ^
 unknown command.
-alice06@srx1> req   vir
+
+alice06@srx1> req   vir
               ^
 unknown command.
-alice06@srx1> reqvir   p49-none
+
+alice06@srx1> reqvir   p49-none
               ^
 unknown command.
 
@@ -1516,10 +1638,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   mp
+
+alice06@srx1> request   mp
               ^
 unknown command.
-alice06@srx1> requestmp   p49-none
+
+alice06@srx1> requestmp   p49-none
               ^
 unknown command.
 
@@ -1532,10 +1656,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   mpls
+
+alice06@srx1> request   mpls
               ^
 unknown command.
-alice06@srx1> requestmpls   p49-none
+
+alice06@srx1> requestmpls   p49-none
               ^
 unknown command.
 
@@ -1548,10 +1674,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   path-computation-client
+
+alice06@srx1> request   path-computation-client
               ^
 unknown command.
-alice06@srx1> requestpath-computation-client   p49-none
+
+alice06@srx1> requestpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -1564,10 +1692,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   security
+
+alice06@srx1> request   security
               ^
 unknown command.
-alice06@srx1> requestsecurity   p49-none
+
+alice06@srx1> requestsecurity   p49-none
               ^
 unknown command.
 
@@ -1580,10 +1710,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   unified-edge
+
+alice06@srx1> request   unified-edge
               ^
 unknown command.
-alice06@srx1> requestunified-edge   p49-none
+
+alice06@srx1> requestunified-edge   p49-none
               ^
 unknown command.
 
@@ -1596,10 +1728,12 @@ alice06@srx1>
 request
               ^
 unknown command.
-alice06@srx1> request   virtual-chassis
+
+alice06@srx1> request   virtual-chassis
               ^
 unknown command.
-alice06@srx1> requestvirtual-chassis   p49-none
+
+alice06@srx1> requestvirtual-chassis   p49-none
               ^
 unknown command.
 
@@ -1612,13 +1746,16 @@ alice06@srx1>
 save
               ^
 unknown command.
-alice06@srx1> save   dhcp-security-snoop
+
+alice06@srx1> save   dhcp-security-snoop
               ^
 unknown command.
-alice06@srx1> savedhcp-security-snoop   |
+
+alice06@srx1> savedhcp-security-snoop   |
               ^
 unknown command.
-alice06@srx1> savedhcp-security-snoop|   count
+
+alice06@srx1> savedhcp-security-snoop|   count
               ^
 unknown command.
 
@@ -1640,7 +1777,8 @@ alice06@srx1>
 show sec
                    ^
 syntax error, expecting <command>.
-alice06@srx1> show sec   p49-none
+
+alice06@srx1> show sec   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -1734,7 +1872,8 @@ __policer_tmpl__-fc4                                    0                    0
 show security
                    ^
 syntax error, expecting <command>.
-alice06@srx1> show security   p49-none
+
+alice06@srx1> show security   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -1758,13 +1897,16 @@ alice06@srx1>
 monitor
               ^
 unknown command.
-alice08@srx1> monitor   
+
+alice08@srx1> monitor   
               ^
 unknown command.
-alice08@srx1> monitor   
+
+alice08@srx1> monitor   
               ^
 unknown command.
-alice08@srx1> monitor   list
+
+alice08@srx1> monitor   list
               ^
 unknown command.
 
@@ -1777,7 +1919,8 @@ alice08@srx1>
 MONITOR
               ^
 unknown command.
-alice08@srx1> MONITOR   LIST
+
+alice08@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -1800,7 +1943,8 @@ alice08@srx1>
 configure
               ^
 unknown command.
-alice08@srx1> configure   private
+
+alice08@srx1> configure   private
               ^
 unknown command.
 
@@ -1823,10 +1967,12 @@ alice08@srx1>
 file
               ^
 unknown command.
-alice08@srx1> file   list
+
+alice08@srx1> file   list
               ^
 unknown command.
-alice08@srx1> filelist   /config
+
+alice08@srx1> filelist   /config
               ^
 unknown command.
 
@@ -1839,16 +1985,20 @@ alice08@srx1>
 file
               ^
 unknown command.
-alice08@srx1> file   show
+
+alice08@srx1> file   show
               ^
 unknown command.
-alice08@srx1> fileshow   /config/juniper.conf.gz
+
+alice08@srx1> fileshow   /config/juniper.conf.gz
               ^
 unknown command.
-alice08@srx1> fileshow/config/juniper.conf.gz   |
+
+alice08@srx1> fileshow/config/juniper.conf.gz   |
               ^
 unknown command.
-alice08@srx1> fileshow/config/juniper.conf.gz|   count
+
+alice08@srx1> fileshow/config/juniper.conf.gz|   count
               ^
 unknown command.
 
@@ -1861,10 +2011,12 @@ alice08@srx1>
 load
               ^
 unknown command.
-alice08@srx1> load   dhcp-security-snoop
+
+alice08@srx1> load   dhcp-security-snoop
               ^
 unknown command.
-alice08@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
+
+alice08@srx1> loaddhcp-security-snoop   /var/tmp/p49-l68-none
               ^
 unknown command.
 
@@ -1877,7 +2029,8 @@ alice08@srx1>
 mon
               ^
 unknown command.
-alice08@srx1> mon   p49-none
+
+alice08@srx1> mon   p49-none
               ^
 unknown command.
 
@@ -1890,7 +2043,8 @@ alice08@srx1>
 monitor
               ^
 unknown command.
-alice08@srx1> monitor   list
+
+alice08@srx1> monitor   list
               ^
 unknown command.
 
@@ -1903,13 +2057,16 @@ alice08@srx1>
 monitor
               ^
 unknown command.
-alice08@srx1> monitor   list
+
+alice08@srx1> monitor   list
               ^
 unknown command.
-alice08@srx1> monitorlist   |
+
+alice08@srx1> monitorlist   |
               ^
 unknown command.
-alice08@srx1> monitorlist|   no-more
+
+alice08@srx1> monitorlist|   no-more
               ^
 unknown command.
 
@@ -1922,7 +2079,8 @@ alice08@srx1>
 monitor
               ^
 unknown command.
-alice08@srx1> monitor   p49-none
+
+alice08@srx1> monitor   p49-none
               ^
 unknown command.
 
@@ -1935,10 +2093,12 @@ alice08@srx1>
 op
               ^
 unknown command.
-alice08@srx1> op   ur
+
+alice08@srx1> op   ur
               ^
 unknown command.
-alice08@srx1> opur   /var/tmp/p49-entry-op.slax
+
+alice08@srx1> opur   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -1951,10 +2111,12 @@ alice08@srx1>
 op
               ^
 unknown command.
-alice08@srx1> op   url
+
+alice08@srx1> op   url
               ^
 unknown command.
-alice08@srx1> opurl   /var/tmp/p49-entry-op.slax
+
+alice08@srx1> opurl   /var/tmp/p49-entry-op.slax
               ^
 unknown command.
 
@@ -1967,13 +2129,16 @@ alice08@srx1>
 set
               ^
 unknown command.
-alice08@srx1> set   cli
+
+alice08@srx1> set   cli
               ^
 unknown command.
-alice08@srx1> setcli   screen-length
+
+alice08@srx1> setcli   screen-length
               ^
 unknown command.
-alice08@srx1> setcliscreen-length   5
+
+alice08@srx1> setcliscreen-length   5
               ^
 unknown command.
 
@@ -1983,7 +2148,8 @@ alice08@srx1> show configuration
 alice08@srx1> set
               ^
 unknown command.
-alice08@srx1> set   cli
+
+alice08@srx1> set   cli
 … (10 more lines)
 ```
 
@@ -1993,10 +2159,12 @@ unknown command.
 req
               ^
 unknown command.
-alice08@srx1> req   mpls
+
+alice08@srx1> req   mpls
               ^
 unknown command.
-alice08@srx1> reqmpls   p49-none
+
+alice08@srx1> reqmpls   p49-none
               ^
 unknown command.
 
@@ -2009,10 +2177,12 @@ alice08@srx1>
 req
               ^
 unknown command.
-alice08@srx1> req   path-computation-client
+
+alice08@srx1> req   path-computation-client
               ^
 unknown command.
-alice08@srx1> reqpath-computation-client   p49-none
+
+alice08@srx1> reqpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -2025,10 +2195,12 @@ alice08@srx1>
 req
               ^
 unknown command.
-alice08@srx1> req   sec
+
+alice08@srx1> req   sec
               ^
 unknown command.
-alice08@srx1> reqsec   p49-none
+
+alice08@srx1> reqsec   p49-none
               ^
 unknown command.
 
@@ -2041,10 +2213,12 @@ alice08@srx1>
 req
               ^
 unknown command.
-alice08@srx1> req   vir
+
+alice08@srx1> req   vir
               ^
 unknown command.
-alice08@srx1> reqvir   p49-none
+
+alice08@srx1> reqvir   p49-none
               ^
 unknown command.
 
@@ -2057,10 +2231,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   mp
+
+alice08@srx1> request   mp
               ^
 unknown command.
-alice08@srx1> requestmp   p49-none
+
+alice08@srx1> requestmp   p49-none
               ^
 unknown command.
 
@@ -2073,10 +2249,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   mpls
+
+alice08@srx1> request   mpls
               ^
 unknown command.
-alice08@srx1> requestmpls   p49-none
+
+alice08@srx1> requestmpls   p49-none
               ^
 unknown command.
 
@@ -2089,10 +2267,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   path-computation-client
+
+alice08@srx1> request   path-computation-client
               ^
 unknown command.
-alice08@srx1> requestpath-computation-client   p49-none
+
+alice08@srx1> requestpath-computation-client   p49-none
               ^
 unknown command.
 
@@ -2105,10 +2285,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   security
+
+alice08@srx1> request   security
               ^
 unknown command.
-alice08@srx1> requestsecurity   p49-none
+
+alice08@srx1> requestsecurity   p49-none
               ^
 unknown command.
 
@@ -2121,10 +2303,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   unified-edge
+
+alice08@srx1> request   unified-edge
               ^
 unknown command.
-alice08@srx1> requestunified-edge   p49-none
+
+alice08@srx1> requestunified-edge   p49-none
               ^
 unknown command.
 
@@ -2137,10 +2321,12 @@ alice08@srx1>
 request
               ^
 unknown command.
-alice08@srx1> request   virtual-chassis
+
+alice08@srx1> request   virtual-chassis
               ^
 unknown command.
-alice08@srx1> requestvirtual-chassis   p49-none
+
+alice08@srx1> requestvirtual-chassis   p49-none
               ^
 unknown command.
 
@@ -2153,13 +2339,16 @@ alice08@srx1>
 save
               ^
 unknown command.
-alice08@srx1> save   dhcp-security-snoop
+
+alice08@srx1> save   dhcp-security-snoop
               ^
 unknown command.
-alice08@srx1> savedhcp-security-snoop   |
+
+alice08@srx1> savedhcp-security-snoop   |
               ^
 unknown command.
-alice08@srx1> savedhcp-security-snoop|   count
+
+alice08@srx1> savedhcp-security-snoop|   count
               ^
 unknown command.
 
@@ -2178,7 +2367,8 @@ alice08@srx1>
 show configuration sys
                                  ^
 syntax error.
-alice08@srx1> show configuration sys   host-name
+
+alice08@srx1> show configuration sys   host-name
                                  ^
 syntax error.
 
@@ -2191,7 +2381,8 @@ alice08@srx1>
 show sec
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show sec   p49-none
+
+alice08@srx1> show sec   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -2220,7 +2411,8 @@ alice08@srx1>
 show configuration system
                                  ^
 syntax error.
-alice08@srx1> show configuration system   host-name
+
+alice08@srx1> show configuration system   host-name
                                  ^
 syntax error.
 
@@ -2233,16 +2425,20 @@ alice08@srx1>
 show configuration system
                                  ^
 syntax error.
-alice08@srx1> show configuration system   host-name
+
+alice08@srx1> show configuration system   host-name
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name   |
+
+alice08@srx1> show configuration systemhost-name   |
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name|   display
+
+alice08@srx1> show configuration systemhost-name|   display
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name|display   set
+
+alice08@srx1> show configuration systemhost-name|display   set
                                  ^
 syntax error.
 
@@ -2255,10 +2451,12 @@ alice08@srx1>
 show firewall
                            ^
 syntax error.
-alice08@srx1> show firewall   |
+
+alice08@srx1> show firewall   |
                    ^
 permission denied.
-alice08@srx1> show firewall|   no-more
+
+alice08@srx1> show firewall|   no-more
                    ^
 permission denied.
 
@@ -2271,13 +2469,16 @@ alice08@srx1>
 show log
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show log   messages
+
+alice08@srx1> show log   messages
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show logmessages   |
+
+alice08@srx1> show logmessages   |
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show logmessages|   count
+
+alice08@srx1> show logmessages|   count
                    ^
 syntax error, expecting <command>.
 
@@ -2290,10 +2491,12 @@ alice08@srx1>
 show policer
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show policer   |
+
+alice08@srx1> show policer   |
                    ^
 permission denied.
-alice08@srx1> show policer|   no-more
+
+alice08@srx1> show policer|   no-more
                    ^
 permission denied.
 
@@ -2306,7 +2509,8 @@ alice08@srx1>
 show security
                    ^
 syntax error, expecting <command>.
-alice08@srx1> show security   p49-none
+
+alice08@srx1> show security   p49-none
                    ^
 syntax error, expecting <command>.
 
@@ -2319,16 +2523,20 @@ alice08@srx1>
 show configuration system
                                  ^
 syntax error.
-alice08@srx1> show configuration system   host-name
+
+alice08@srx1> show configuration system   host-name
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name   |
+
+alice08@srx1> show configuration systemhost-name   |
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name|   save
+
+alice08@srx1> show configuration systemhost-name|   save
                                  ^
 syntax error.
-alice08@srx1> show configuration systemhost-name|save   /var/tmp/p49-l68-pipe-V
+
+alice08@srx1> show configuration systemhost-name|save   /var/tmp/p49-l68-pipe-V
                                  ^
 syntax error.
 
@@ -2343,13 +2551,16 @@ alice08@srx1>
 monitor
               ^
 unknown command.
-alice10@srx1> monitor   
+
+alice10@srx1> monitor   
               ^
 unknown command.
-alice10@srx1> monitor   
+
+alice10@srx1> monitor   
               ^
 unknown command.
-alice10@srx1> monitor   list
+
+alice10@srx1> monitor   list
               ^
 unknown command.
 
@@ -2362,7 +2573,8 @@ alice10@srx1>
 MONITOR
               ^
 unknown command.
-alice10@srx1> MONITOR   LIST
+
+alice10@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -2385,7 +2597,8 @@ alice10@srx1>
 configure
               ^
 unknown command.
-alice10@srx1> configure   private
+
+alice10@srx1> configure   private
               ^
 unknown command.
 
@@ -2434,7 +2647,8 @@ alice10@srx1>
 load dhcp-security-snoop
                    ^
 syntax error, expecting <command>.
-alice10@srx1> load dhcp-security-snoop   /var/tmp/p49-l68-none
+
+alice10@srx1> load dhcp-security-snoop   /var/tmp/p49-l68-none
                    ^
 syntax error, expecting <command>.
 
@@ -2447,7 +2661,8 @@ alice10@srx1>
 mon
               ^
 unknown command.
-alice10@srx1> mon   p49-none
+
+alice10@srx1> mon   p49-none
               ^
 unknown command.
 
@@ -2460,7 +2675,8 @@ alice10@srx1>
 monitor
               ^
 unknown command.
-alice10@srx1> monitor   list
+
+alice10@srx1> monitor   list
               ^
 unknown command.
 
@@ -2473,13 +2689,16 @@ alice10@srx1>
 monitor
               ^
 unknown command.
-alice10@srx1> monitor   list
+
+alice10@srx1> monitor   list
               ^
 unknown command.
-alice10@srx1> monitorlist   |
+
+alice10@srx1> monitorlist   |
               ^
 unknown command.
-alice10@srx1> monitorlist|   no-more
+
+alice10@srx1> monitorlist|   no-more
               ^
 unknown command.
 
@@ -2492,7 +2711,8 @@ alice10@srx1>
 monitor
               ^
 unknown command.
-alice10@srx1> monitor   p49-none
+
+alice10@srx1> monitor   p49-none
               ^
 unknown command.
 
@@ -2530,7 +2750,9 @@ alice10@srx1> show configuration
 version /* ACCESS-DENIED */;
 system { /* ACCESS-DENIED */ };
 interfaces { /* ACCESS-DENIED */ };
----(more)---                                        Filename: et cli screen-length 0
+---(more)---
+                                        
+Filename: et cli screen-length 0
 Wrote 5 lines of output to 'et cli screen-length 0'
 ---(more 80%)---
 ```
@@ -2541,7 +2763,8 @@ Wrote 5 lines of output to 'et cli screen-length 0'
 request mpls
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request mpls   p49-none
+
+alice10@srx1> request mpls   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2564,7 +2787,8 @@ alice10@srx1>
 request sec
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request sec   p49-none
+
+alice10@srx1> request sec   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2577,7 +2801,8 @@ alice10@srx1>
 request vir
                          ^
 syntax error.
-alice10@srx1> request vir   p49-none
+
+alice10@srx1> request vir   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2590,7 +2815,8 @@ alice10@srx1>
 request mp
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request mp   p49-none
+
+alice10@srx1> request mp   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2603,7 +2829,8 @@ alice10@srx1>
 request mpls
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request mpls   p49-none
+
+alice10@srx1> request mpls   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2626,7 +2853,8 @@ alice10@srx1>
 request security
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request security   p49-none
+
+alice10@srx1> request security   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2639,7 +2867,8 @@ alice10@srx1>
 request unified-edge
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request unified-edge   p49-none
+
+alice10@srx1> request unified-edge   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2652,7 +2881,8 @@ alice10@srx1>
 request virtual-chassis
                       ^
 syntax error, expecting <command>.
-alice10@srx1> request virtual-chassis   p49-none
+
+alice10@srx1> request virtual-chassis   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -2665,10 +2895,12 @@ alice10@srx1>
 save dhcp-security-snoop
                    ^
 syntax error, expecting <command>.
-alice10@srx1> save dhcp-security-snoop   |
+
+alice10@srx1> save dhcp-security-snoop   |
                    ^
 permission denied.
-alice10@srx1> save dhcp-security-snoop|   count
+
+alice10@srx1> save dhcp-security-snoop|   count
                    ^
 permission denied.
 
@@ -2681,7 +2913,8 @@ alice10@srx1>
 show configuration sys
                                  ^
 syntax error.
-alice10@srx1> show configuration sys   host-name
+
+alice10@srx1> show configuration sys   host-name
                                  ^
 syntax error.
 
@@ -2720,7 +2953,8 @@ alice10@srx1>
 show configuration system
                                  ^
 syntax error.
-alice10@srx1> show configuration system   host-name
+
+alice10@srx1> show configuration system   host-name
                                  ^
 syntax error.
 
@@ -2733,16 +2967,20 @@ alice10@srx1>
 show configuration system
                                  ^
 syntax error.
-alice10@srx1> show configuration system   host-name
+
+alice10@srx1> show configuration system   host-name
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name   |
+
+alice10@srx1> show configuration systemhost-name   |
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name|   display
+
+alice10@srx1> show configuration systemhost-name|   display
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name|display   set
+
+alice10@srx1> show configuration systemhost-name|display   set
                                  ^
 syntax error.
 
@@ -2755,10 +2993,12 @@ alice10@srx1>
 show firewall
                            ^
 syntax error.
-alice10@srx1> show firewall   |
+
+alice10@srx1> show firewall   |
                    ^
 permission denied.
-alice10@srx1> show firewall|   no-more
+
+alice10@srx1> show firewall|   no-more
                    ^
 permission denied.
 
@@ -2771,13 +3011,16 @@ alice10@srx1>
 show log
                    ^
 syntax error, expecting <command>.
-alice10@srx1> show log   messages
+
+alice10@srx1> show log   messages
                    ^
 syntax error, expecting <command>.
-alice10@srx1> show logmessages   |
+
+alice10@srx1> show logmessages   |
                    ^
 syntax error, expecting <command>.
-alice10@srx1> show logmessages|   count
+
+alice10@srx1> show logmessages|   count
                    ^
 syntax error, expecting <command>.
 
@@ -2790,10 +3033,12 @@ alice10@srx1>
 show policer
                    ^
 syntax error, expecting <command>.
-alice10@srx1> show policer   |
+
+alice10@srx1> show policer   |
                    ^
 permission denied.
-alice10@srx1> show policer|   no-more
+
+alice10@srx1> show policer|   no-more
                    ^
 permission denied.
 
@@ -2813,19 +3058,24 @@ alice10@srx1>
 `| save`:
 
 ```
-alice10@srx1>        show configuration system
+
+alice10@srx1>        show configuration system
                                  ^
 syntax error.
-alice10@srx1> show configuration system   host-name
+
+alice10@srx1> show configuration system   host-name
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name   |
+
+alice10@srx1> show configuration systemhost-name   |
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name|   save
+
+alice10@srx1> show configuration systemhost-name|   save
                                  ^
 syntax error.
-alice10@srx1> show configuration systemhost-name|save   /var/tmp/p49-l68-pipe-Vc
+
+alice10@srx1> show configuration systemhost-name|save   /var/tmp/p49-l68-pipe-Vc
                                  ^
 syntax error.
 
@@ -2849,7 +3099,8 @@ alice11@srx1>
 MONITOR
               ^
 unknown command.
-alice11@srx1> MONITOR   LIST
+
+alice11@srx1> MONITOR   LIST
               ^
 unknown command.
 
@@ -2872,7 +3123,8 @@ alice11@srx1>
 configure
               ^
 unknown command.
-alice11@srx1> configure   private
+
+alice11@srx1> configure   private
               ^
 unknown command.
 
@@ -3023,7 +3275,9 @@ alice11@srx1> show configuration
 version 21.4R3.15;
 system {
     host-name srx1;
----(more)---                                        Filename: et cli screen-length 0
+---(more)---
+                                        
+Filename: et cli screen-length 0
 Wrote 180 lines of output to 'et cli screen-length 0'
 ---(more 2%)---
 ```
@@ -3064,7 +3318,8 @@ alice11@srx1>
 request vir
                          ^
 syntax error.
-alice11@srx1> request vir   p49-none
+
+alice11@srx1> request vir   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -3117,7 +3372,8 @@ alice11@srx1>
 request unified-edge
                       ^
 syntax error, expecting <command>.
-alice11@srx1> request unified-edge   p49-none
+
+alice11@srx1> request unified-edge   p49-none
                       ^
 syntax error, expecting <command>.
 
@@ -3262,7 +3518,8 @@ alice11@srx1>
 `| save`:
 
 ```
-alice11@srx1>        show configuration system host-name | save /var/tmp/p49-l68-pipe-C 
+
+alice11@srx1>        show configuration system host-name | save /var/tmp/p49-l68-pipe-C 
 Wrote 1 line of output to '/var/tmp/p49-l68-pipe-C'
 
 alice11@srx1> 

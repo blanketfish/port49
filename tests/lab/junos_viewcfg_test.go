@@ -203,7 +203,9 @@ func l68Cell(p l68Probe, out string, promptLen int) string {
 	if at := caretAt(out, promptLen); at != "" {
 		// The caret stands at the start of the input, under any leading spaces
 		// (the CLI echoes each as a BEL): the word it points at is the first one.
-		at = strings.TrimLeft(at, " \t\a")
+		if strings.TrimLeft(p.cmd, " \t") != p.cmd {
+			at = strings.TrimLeft(at, " \t\a")
+		}
 		for _, w := range words[:n] {
 			if caretOn(at, w) {
 				return "refused"
@@ -258,21 +260,55 @@ func l68CaretAtEnd(out string, promptLen int) (int, bool) {
 }
 
 // l68ExecCell reads an exec-channel command: "ran" (its evidence), "refused"
-// (a refusal word), "past" (it exited and said neither, for a probe with no
-// evidence), else "not observed" (a hang, or no evidence where one is due).
+// (a refusal naming one of the probe's first prefix words), "past" (it exited
+// and said nothing, or refused a word after the prefix, for a probe with no
+// evidence), else "not observed" (a hang, a refusal that names no word of the
+// probe, or no evidence where one is due). Junos names the word it refused
+// after the last `: ` (`unknown command: monitor`, `permission denied:
+// security`, `expecting <command>: zones`), so `show security` taken and
+// `zones` refused is past the prefix, not a refusal of it.
 func l68ExecCell(p l68Probe, out string, err error) string {
 	refused := containsAny(strings.ToLower(out), junosL26bRefusal)
+	words := strings.Fields(p.cmd)
+	n := p.prefix
+	if n == 0 || n > len(words) {
+		n = len(words)
+	}
 	switch {
 	case p.evidence != "" && strings.Contains(out, p.evidence) && !refused:
 		return "ran"
 	case refused:
-		return "refused"
+		named := l68RefusedWord(out)
+		switch {
+		case named == "":
+			return "not observed"
+		case slices.Contains(words[:n], named):
+			return "refused"
+		case slices.Contains(words[n:], named) && p.evidence == "":
+			return "past"
+		}
+		return "not observed"
 	case err != nil && strings.Contains(err.Error(), "no exit"):
 		return "not observed"
 	case p.evidence == "":
 		return "past"
 	}
 	return "not observed"
+}
+
+// l68RefusedWord is the word a refusal line names after its last `: `, or "".
+func l68RefusedWord(out string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
+		if !containsAny(strings.ToLower(line), junosL26bRefusal) {
+			continue
+		}
+		if i := strings.LastIndex(line, ": "); i >= 0 {
+			if f := strings.Fields(line[i+2:]); len(f) == 1 {
+				return f[0]
+			}
+		}
+	}
+	return ""
 }
 
 // l68AuthBits are the bits `show cli authorization` lists under
