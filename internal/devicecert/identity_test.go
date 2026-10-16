@@ -1,0 +1,70 @@
+package devicecert
+
+import (
+	"crypto/x509"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/admission"
+)
+
+func leafNaming(dns []string, ips ...string) *x509.Certificate {
+	c := &x509.Certificate{DNSNames: dns}
+	for _, s := range ips {
+		c.IPAddresses = append(c.IPAddresses, net.ParseIP(s))
+	}
+	return c
+}
+
+func TestRuleMatch(t *testing.T) {
+	dev := admission.Device{Name: "leaf-01", Addresses: []netip.Addr{netip.MustParseAddr("10.0.1.5"),
+		netip.MustParseAddr("2001:db8::5")}}
+	both := Rule{DNSName: true, IPAddress: true, DNSSuffixes: []string{"net.example.com"}}
+	for name, c := range map[string]struct {
+		rule Rule
+		leaf *x509.Certificate
+		ok   bool
+	}{
+		"exact name":                 {both, leafNaming([]string{"leaf-01"}), true},
+		"name under a suffix":        {both, leafNaming([]string{"leaf-01.net.example.com"}), true},
+		"case and trailing dot":      {both, leafNaming([]string{"LEAF-01.Net.Example.COM."}), true},
+		"an unlisted suffix":         {both, leafNaming([]string{"leaf-01.other.example.com"}), false},
+		"another device":             {both, leafNaming([]string{"leaf-02.net.example.com"}), false},
+		"a wildcard never":           {both, leafNaming([]string{"*.net.example.com"}), false},
+		"a name only as a prefix":    {both, leafNaming([]string{"leaf-01x"}), false},
+		"one of its addresses":       {both, leafNaming(nil, "10.0.1.5"), true},
+		"its v6 address":             {both, leafNaming(nil, "2001:db8::5"), true},
+		"an address not its own":     {both, leafNaming(nil, "10.0.1.6"), false},
+		"dns only ignores addresses": {Rule{DNSName: true}, leafNaming(nil, "10.0.1.5"), false},
+		"ip only ignores names":      {Rule{IPAddress: true}, leafNaming([]string{"leaf-01"}), false},
+	} {
+		err := c.rule.Match(c.leaf, dev)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v, want ok=%v", name, err, c.ok)
+		}
+	}
+}
+
+func TestRuleMatchNeverReadsTheCommonName(t *testing.T) {
+	leaf := leafNaming(nil)
+	leaf.Subject.CommonName = "leaf-01"
+	if err := (Rule{DNSName: true, IPAddress: true}).Match(leaf, admission.Device{Name: "leaf-01"}); err == nil {
+		t.Fatal("the common name named the device (RFC 9525: it is never read)")
+	}
+}
+
+func TestAMismatchSaysWhatWasNamedAndWanted(t *testing.T) {
+	dev := admission.Device{Name: "leaf-01", Addresses: []netip.Addr{netip.MustParseAddr("10.0.1.5")}}
+	err := Rule{DNSName: true, IPAddress: true, DNSSuffixes: []string{"example.net"}}.Match(
+		leafNaming([]string{"leaf-02.example.net"}, "10.9.9.9"), dev)
+	if err == nil {
+		t.Fatal("matched")
+	}
+	for _, want := range []string{"leaf-02.example.net", "10.9.9.9", "leaf-01 or leaf-01.example.net", "10.0.1.5"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q lacks %q", err, want)
+		}
+	}
+}
