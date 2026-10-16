@@ -968,7 +968,7 @@ func reachOverflowMessage(pr projection.Result, patterns []platform.Redaction, s
 	return " the reach denies " + strings.Join(quoted, ", ") + " would let the reply send view-configuration " +
 		"(deny_reach_bits), but they take deny-commands past RFC 8907's 255 bytes; the reply leaves the bit off " +
 		"and the device refuses show configuration for this subject: deny fewer commands beneath show, or move " +
-		"the denies into the template's class on the device " +
+		"the denies into the template's class on the device, where they bind every subject at that template " +
 		"(port49 platform export --classes) (spec §8; decision 48 ruling 4)"
 }
 

@@ -6752,8 +6752,11 @@ narrow fix (Opus review) and a second fix after Task 6's first lab run.
   - Secrets stay hidden as they are for any session without the `secret` bit.
   - `monitor` stays refused. NETCONF stays closed for that subject, as it already was under 1.2.0
     (`projection_netconf_closed`).
-  - Nothing changes for a grant that denies `show configuration` itself, or for one with no deny
+  - Nothing changes for a grant that denies `show configuration **`, or for one with no deny
     beneath `show`.
+  - A grant of `show **` less exactly `show configuration` (no `**`) does change: under 1.2.0 it
+    failed closed; under 1.3.0 it gets `view view-configuration` with `deny show configuration`
+    and `deny monitor **`. `policy diff` shows it as a RAISE.
 - **Getting it: `port49 platform upgrade --to 1.3.0`.** A policy pinned to 1.2.0 renders exactly
   as before on the new binary; the change arrives only with the pin.
   - The upgrade report lists `platforms.juniper_junos.deny_reach_bits` as a gated change, with the
@@ -6770,7 +6773,8 @@ narrow fix (Opus review) and a second fix after Task 6's first lab run.
   Nothing is broken and nobody is locked out. There are two remedies:
   - deny fewer commands beneath `show` in that subject's roles;
   - move the denies into the template's class on the device (`port49 platform export --classes`),
-    where the 255-byte limit does not apply.
+    where the 255-byte limit does not apply but they bind every subject at that template: every
+    remote user on that device loses those commands, so move only denies all of them should have.
 
 ## Plan 10 — Kubernetes path (§19 step 10)
 

@@ -2739,7 +2739,7 @@ func reachOverflowMessage(pr projection.Result, patterns []platform.Redaction, s
 		"the bit whose carve-out the grant permits (deny_reach_bits), take deny-commands past RFC 8907's 255 " +
 		"bytes, so the reply does not send that bit and the device refuses what only it shows (show " +
 		"configuration): deny fewer commands beneath show, or move the denies into the template's class on the " +
-		"device (port49 platform export --classes) (spec §8; decision 48 ruling 4)"
+		"device, where they bind every subject at that template (port49 platform export --classes) (spec §8; decision 48 ruling 4)"
 }
 ```
 
@@ -2999,8 +2999,11 @@ as built: if G1-operator stopped, every "and operator" below becomes "readonly o
   - Secrets stay hidden as they are for any session without the `secret` bit.
   - `monitor` stays refused. NETCONF stays closed for that subject, as it already was under 1.2.0
     (`projection_netconf_closed`).
-  - Nothing changes for a grant that denies `show configuration` itself, or for one with no deny
+  - Nothing changes for a grant that denies `show configuration **`, or for one with no deny
     beneath `show`.
+  - A grant of `show **` less exactly `show configuration` (no `**`) does change: under 1.2.0 it
+    failed closed; under 1.3.0 it gets `view view-configuration` with `deny show configuration`
+    and `deny monitor **`. `policy diff` shows it as a RAISE.
 - **Getting it: `port49 platform upgrade --to 1.3.0`.** A policy pinned to 1.2.0 renders exactly
   as before on the new binary; the change arrives only with the pin.
   - The upgrade report lists `platforms.juniper_junos.deny_reach_bits` as a gated change, with the
@@ -3017,4 +3020,5 @@ as built: if G1-operator stopped, every "and operator" below becomes "readonly o
   Nothing is broken and nobody is locked out. There are two remedies:
   - deny fewer commands beneath `show` in that subject's roles;
   - move the denies into the template's class on the device (`port49 platform export --classes`),
-    where the 255-byte limit does not apply.
+    where the 255-byte limit does not apply but they bind every subject at that template: every
+    remote user on that device loses those commands, so move only denies all of them should have.

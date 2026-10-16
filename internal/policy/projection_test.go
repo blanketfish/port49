@@ -1154,7 +1154,8 @@ func TestSet130OverflowWarnsAndFallsBack(t *testing.T) {
 		}
 	}
 	if ProjectionRefusals(fs) != 0 || len(warn) != 1 || !strings.Contains(warn[0], "monitor **") ||
-		!strings.Contains(warn[0], "255") || !strings.Contains(warn[0], "port49 platform export --classes") {
+		!strings.Contains(warn[0], "255") || !strings.Contains(warn[0], "port49 platform export --classes") ||
+		!strings.Contains(warn[0], "where they bind every subject at that template") {
 		t.Errorf("refusals %d, warning %q", ProjectionRefusals(fs), warn)
 	}
 	e, err := p.Explain("s", "", "srx-fw-04", "show configuration system host-name", noon)
