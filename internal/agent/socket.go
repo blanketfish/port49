@@ -192,6 +192,10 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		if e.Error == codeBrokerUnavailable {
 			return api.MintItem{}, &BrokerUnavailableError{errors.New(e.Detail)}
 		}
+		if e.Error == codeStoreUnavailable {
+			return api.MintItem{}, &StoreUnavailableError{Err: &BrokerUnavailableError{errors.New(e.Detail)},
+				RetryAfter: retryAfterHeader(resp.Header)}
+		}
 		return api.MintItem{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	default:
 		var e refusalBody
@@ -331,6 +335,8 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		return &RevocationRunningError{Detail: e.Detail}
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == codeBrokerUnavailable:
 		return &BrokerUnavailableError{errors.New(e.Detail)}
+	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == codeStoreUnavailable:
+		return &StoreUnavailableError{Err: &BrokerUnavailableError{errors.New(e.Detail)}, RetryAfter: retryAfterHeader(resp.Header)}
 	case e.Error != "":
 		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}

@@ -19,6 +19,11 @@ const codeBrokerRefused = "broker_refused"
 // try again, not a broker that answered and refused (that stays broker_error).
 const codeBrokerUnavailable = "broker_unavailable"
 
+// codeStoreUnavailable is the socket code for a 503 the broker gave as
+// store_unavailable (a StoreUnavailableError); the socket's Retry-After is the
+// broker's.
+const codeStoreUnavailable = "store_unavailable"
+
 // codeNoAttestation is the socket code for a token that shows none of the
 // attestations a touch proof needs (mfatouch.ErrNoAttestation): sent before
 // the key blinked, so the command may prove another way.

@@ -87,6 +87,7 @@ type fakeBroker struct {
 	dropRefresh     int
 	nonce           []byte
 	refreshRefusals []refusal
+	mintRefusals    []refusal // answer that many /v1/tokens calls with their refusal first, in order
 	tooSoon         bool
 	certStatus      bool
 	answers         map[string]refusal
@@ -234,7 +235,19 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		revoked := fb.revoked
 		itemError, hollow := fb.itemError, fb.hollow
 		busy := n <= fb.inProgress
+		var mintRef *refusal
+		if len(fb.mintRefusals) > 0 {
+			mintRef = &fb.mintRefusals[0]
+			fb.mintRefusals = fb.mintRefusals[1:]
+		}
 		fb.mu.Unlock()
+		if mintRef != nil {
+			if mintRef.retryAfter != "" {
+				w.Header().Set("Retry-After", mintRef.retryAfter)
+			}
+			writeJSON(w, mintRef.status, mintRef.e)
+			return
+		}
 		if drop {
 			c, _, _ := w.(http.Hijacker).Hijack()
 			c.Close()
@@ -2682,5 +2695,44 @@ func TestCertificateEndIsTheCertificatesNotAfter(t *testing.T) {
 	}
 	if !(&Agent{}).CertificateEnd().IsZero() {
 		t.Fatal("an agent with no certificate has an end")
+	}
+}
+
+// A mint the broker refuses 503 store_unavailable (the start gate) reaches
+// `port49 token` through the socket as a *StoreUnavailableError carrying the
+// broker's Retry-After, still a *BrokerUnavailableError; any other 503 does
+// not, so `port49 token` retries this reason and no other (issue #11).
+func TestAStoreUnavailableMintCarriesItsRetryAfterThroughTheSocket(t *testing.T) {
+	r := newRig(t)
+	c := socketFor(t, r.a)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		ref   refusal
+		store bool
+		after time.Duration
+	}{
+		{"store_unavailable with Retry-After", refusal{status: 503, retryAfter: "7", e: api.Error{Error: "store_unavailable",
+			Detail: "the broker has not yet recorded what it serves; retry shortly"}}, true, 7 * time.Second},
+		{"store_unavailable without one", refusal{status: 503, e: api.Error{Error: "store_unavailable", Detail: "d"}}, true, 0},
+		{"another 503", refusal{status: 503, retryAfter: "60", e: api.Error{Error: "certificate_status_unavailable", Detail: "d"}}, false, 0},
+	} {
+		r.fb.mu.Lock()
+		r.fb.mintRefusals = []refusal{tc.ref, tc.ref}
+		r.fb.mu.Unlock()
+		for how, mint := range map[string]func() error{
+			"the agent":  func() error { _, err := r.a.Mint(ctx, "leaf1", false, 0, ""); return err },
+			"the socket": func() error { _, err := c.Token(ctx, TokenRequest{Device: "leaf1"}); return err },
+		} {
+			err := mint()
+			var su *StoreUnavailableError
+			var down *BrokerUnavailableError
+			if !errors.As(err, &down) {
+				t.Fatalf("%s, %s: %v, want a *BrokerUnavailableError", tc.name, how, err)
+			}
+			if got := errors.As(err, &su); got != tc.store || (got && su.RetryAfter != tc.after) {
+				t.Fatalf("%s, %s: %v (store %v, retry after %v), want store %v after %v", tc.name, how, err, got, su, tc.store, tc.after)
+			}
+		}
 	}
 }
