@@ -244,7 +244,8 @@ built, below): the lookup checks `network_cli` host keys before it mints, measur
 (e3d) on arista_eos.
 **9g written 2026-10-16** (`2026-10-16-09g-junos-view-configuration.md`, seven tasks: one lab
 cell first, gate G1 (L68); one spec; three code; one lab run through the broker; one docs). It
-builds Ryan's ruling of 2026-10-15 ("Ruled 2026-10-15 (Ryan)", below): where a readonly permits
+builds Ryan's ruling of 2026-10-15 ("Ruled 2026-10-15 (Ryan)", below). Where a readonly (or an
+operator, gated separately by L68's row O) permits
 `show configuration` under a deny beneath `show`, the reply sends `view view-configuration` and
 denies the rest of view-configuration's reach that the grant leaves undecided. For `show **` less
 `show security **` that is `monitor **`, in a 173-byte `deny-commands`. Nothing after Task 1
@@ -254,7 +255,14 @@ reported for Ryan. It ships as **set 1.3.0, not 1.2.0**: the controller ruled on
 `juniper_junos`'s `deny_reach_bits: [view-configuration]`. Set 1.2.0 already renders this reply
 to a grant that writes `deny: [monitor **]` itself. Where the added denies would pass 255 bytes,
 the reply falls back to the 1.2.0-style one, and CI warns `projection_reach_deny_overflow`
-(controller's ruling). Decision 48 holds its rulings. It opens and closes L68.
+(controller's ruling). Decision 48 holds its rulings. It opens and closes L68. **9g pre-flight
+2026-10-16**: 0 Critical, 8 Important, 11 Minor, every finding applied to the plan. Among them:
+- L68 gains an operator row, the exec channel, `show cli authorization`, configuration-mode entries
+  and an scp reading;
+- a STOP note is written only for a run that is otherwise valid;
+- the budget fallback's recursion is guarded;
+- Task 6 gates `show configuration` running;
+- the plan ends with operator notes.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
