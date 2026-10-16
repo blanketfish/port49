@@ -28,7 +28,7 @@ type retryClock struct {
 var tokenRetryClock = retryClock{now: time.Now, sleep: time.Sleep}
 
 // mintRetrying is mint, run again while the broker refuses it
-// store_unavailable (its start gate after a restart, spec §5.7): after the
+// store_unavailable (its start gate or an unreachable store, spec §5.7): after the
 // reply's Retry-After, 5s when it carries none, for up to 30s from the first
 // try. It retries no other failure, and not a proof (touch or sign-in) refused
 // the same way, which would ask the person to prove again unasked, and a wait that would pass the 30s is not
@@ -46,7 +46,7 @@ func mintRetrying(mint func() (api.MintItem, error), clk retryClock, cmd string,
 		if wait > storeRetryBudget-clk.now().Sub(start) {
 			return item, err
 		}
-		fmt.Fprintf(stderr, "%s: the broker is not ready yet; trying again in %ds\n", cmd, int(wait/time.Second))
+		fmt.Fprintf(stderr, "%s: the broker's store is not ready (it may be starting or unreachable); retrying in %ds\n", cmd, int(wait/time.Second))
 		clk.sleep(wait)
 	}
 }

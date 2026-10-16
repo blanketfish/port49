@@ -186,3 +186,21 @@ func TestTokenDoesNotRetryAProofRefusedStoreUnavailable(t *testing.T) {
 		t.Fatalf("err %v after %d calls, waits %v; want the proof's error at once", err, calls, fc.slept)
 	}
 }
+
+// The retry line does not blame a restart: a store outage is refused the same
+// way, and the operator must not be sent to the wrong place.
+func TestTokenRetryLineIsNeutral(t *testing.T) {
+	fc := &fakeClock{at: time.Unix(1000, 0)}
+	calls := 0
+	var errb strings.Builder
+	_, _ = mintRetrying(func() (api.MintItem, error) {
+		if calls++; calls == 1 {
+			return api.MintItem{}, storeDown(5 * time.Second)
+		}
+		return permit, nil
+	}, fc.clock(), "port49 token", &errb)
+	got := errb.String()
+	if !strings.Contains(got, "store is not ready (it may be starting or unreachable)") || strings.Contains(got, "broker is not ready") {
+		t.Fatalf("retry line %q", got)
+	}
+}
