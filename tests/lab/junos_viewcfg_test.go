@@ -202,8 +202,8 @@ func l68Cell(p l68Probe, out string, promptLen int) string {
 	}
 	if at := caretAt(out, promptLen); at != "" {
 		// The caret stands at the start of the input, under any leading spaces
-		// the line kept: the word it points at is the first one.
-		at = strings.TrimLeft(at, " \t")
+		// (the CLI echoes each as a BEL): the word it points at is the first one.
+		at = strings.TrimLeft(at, " \t\a")
 		for _, w := range words[:n] {
 			if caretOn(at, w) {
 				return "refused"
