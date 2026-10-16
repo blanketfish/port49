@@ -1,7 +1,7 @@
 # Kubernetes: a CronJob's projected token as its port49 identity
 
-Every cluster claim below is provisional on lab entry L69 (kind) or L70 (managed clusters),
-named by cell, until `tests/lab/results/L69-kind.md` closes the row. Nothing here is measured yet.
+A cluster claim below cites the L69 cell that measured it on kind (`tests/lab/results/L69-kind.md`).
+A claim with no cell is not measured. Managed clusters are L70, open.
 
 | File | What it is |
 |---|---|
@@ -23,7 +23,9 @@ against the cluster's published keys.
 
 - **Set `--service-account-issuer` per cluster.** kubeadm's default is the same everywhere, and
   port49 refuses one issuer twice. This is the main onboarding cost for a self-managed fleet.
-  The safe sequence when changing an issuer (measured on kind, L69 (a), (d)):
+  The safe sequence when changing an issuer (not measured: it is reasoned from decision 49
+  rulings 3 and 4, and the two-verifier config is unit-tested; no L69 cell changed a real
+  cluster's issuer, and (d) rotated a signing key under one issuer):
   1. Add the new issuer as the *first* `--service-account-issuer` flag, keeping the old one as a
      second (the API server signs with the first and accepts both).
   2. In port49 list both issuers as two `k8s` verifiers on the same `jwks` (decision 49 ruling 4's
@@ -39,7 +41,7 @@ against the cluster's published keys.
   the API server's structured authentication configuration (1.32+) with `anonymous.conditions`
   limited to the two discovery paths (below; exact form not measured: L69 (c) measured the binding alone), or publish a
   mirror of the keys and point `jwks` at it (no binding at all; see the `jwks` item). Issuer
-  discovery needs `--anonymous-auth` on; a CIS-hardened cluster turns it off. On
+  discovery needs `--anonymous-auth` on (not measured; kind's default had it on); a CIS-hardened cluster turns it off. On
   1.32+ use the structured authentication configuration (`AuthenticationConfiguration`'s
   `anonymous.conditions`) to allow anonymous requests to `/.well-known/openid-configuration` and
   `/openid/v1/jwks` alone.
@@ -136,7 +138,9 @@ port49 revoke --principal system:serviceaccount:netops:oxidized
 Deleting the service account alone is not immediate. The broker does not call the cluster's
 TokenReview (decision 49 ruling 11): doing so would put every cluster's API server on the mint
 path, and needs a broker credential on each cluster. A token already in hand mints until its
-`exp` or `iat` plus `max_token_age`, at most 2h (measured on kind, L69 (e)). `revoke` closes the
+`exp` or `iat` plus `max_token_age`, at most 2h. L69 (e) measured that TokenReview answers
+unauthenticated after the pod and then the service account are deleted and port49 still mints, and
+that `revoke` then refuses at once (the 2h bound is the configured limit, not measured). `revoke` closes the
 window at once; the mark also stands for a service account re-created under that name until
 `port49 revoke --lift`.
 
@@ -144,4 +148,4 @@ window at once; the mark also stands for a service account re-created under that
 
 - Managed clusters (EKS, GKE, AKS): L70, open.
 - A CronJob run in a cluster against a broker outside it is plan 12's deployment test.
-- Every cell cited above to L69 is unmeasured until Task 11 closes it.
+- Changing a real cluster's `--service-account-issuer` (section 2): not measured.
