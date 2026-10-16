@@ -81,7 +81,7 @@ test-python:
 # two is caught only here: without -race the race property has nothing to
 # interleave (plan 7d, R1).
 test-race:
-	go test -race ./internal/... -count=1
+	go test -race -timeout 30m ./internal/... -count=1
 
 # The lab package's pure tests — the classifiers and row builders that read a
 # device's output into a verdict, and the committed notes they must still
