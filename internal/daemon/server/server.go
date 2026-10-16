@@ -1,4 +1,4 @@
-// Package server owns the TCP listener and the per-connection loop: admission,
+// Package server owns the TACACS+ listeners, RFC 8907 and RFC 9887, and the per-connection loop: admission,
 // key trial, dispatch, and every limit of design §11.
 //
 // Shutdown is orderly on purpose. When ctx is cancelled the listener closes so
@@ -71,6 +71,9 @@ type Deps struct {
 	// measured devices falling to their local method on at once. Nil is a
 	// shutdown, closed as before.
 	Abort func() bool
+	// TLS, when set, makes this the RFC 9887 listener (spec §13 decision 50);
+	// nil is the RFC 8907 listener.
+	TLS *TLS
 }
 
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
@@ -138,6 +141,13 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		// refused device is in the index, and is given no key (spec §10).
 		dev, found := d.Admission.Lookup(src)
 		admitted := found && dev.Refused == ""
+		listener := admission.TransportTCP
+		if d.TLS != nil {
+			listener = admission.TransportTLS
+		}
+		// A device speaks one transport, and the other listener declines it
+		// (spec §13 decision 50 ruling 4).
+		mismatch := admitted && dev.Device.EffectiveTransport() != listener
 		// A source inside a decline window is refused at Accept, before the
 		// device writes, but only while port49d still declines it. A reload
 		// that admits it again, or the end of its quarantine, drops the
@@ -156,7 +166,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		// record and, on IOS-XE and NX-OS with single-connection on, one ~5 s
 		// wait, never an admission. A refusal here opens no new window.
 		if d.Limits.Declined(src) {
-			if declining(d, dev, admitted) {
+			if declining(d, src, dev, admitted, listener) {
 				release()
 				d.Metrics.ConnectionEvents.WithLabelValues("declined_refused").Inc()
 				reset(c)
@@ -167,9 +177,9 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
-		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted,
+		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
 			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
-		if cc.admitted {
+		if cc.admitted && !mismatch && d.TLS == nil {
 			cc.keys = d.Keys[dev.KeyRef]
 		}
 
@@ -211,12 +221,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}
 }
 
-// declining reports whether port49d would decline a packet from dev as
-// admission and the policy stand now: a source the inventory does not name, a
-// device admission refuses, or a quarantined one. It is asked only at an
-// Accept inside a decline window.
-func declining(d Deps, dev admission.Resolved, admitted bool) bool {
-	if !admitted {
+// declining reports whether port49d would decline a connection from dev on
+// this listener as admission and the policy stand now: a source the
+// inventory does not name, a device admission refuses, one of the other
+// transport, a quarantined one, or one whose certificate status could not
+// be established, whose window stands until it lapses (spec §13 decision 50
+// ruling 8). It is asked only at an Accept inside a decline window.
+func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, listener string) bool {
+	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedForStatus(src) {
 		return true
 	}
 	if d.Quarantined == nil {

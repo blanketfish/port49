@@ -217,3 +217,22 @@ func TestTheDeclinedMapIsBoundedAndSwept(t *testing.T) {
 		t.Fatalf("the sweep a Decline triggered left declined=%d (a kept: %v)", len(l.declined), ok)
 	}
 }
+
+func TestDeclineStatusIsMarkedUntilAPlainDecline(t *testing.T) {
+	now := time.Now()
+	l := New(cfg(), func() time.Time { return now })
+	a := netip.MustParseAddr("10.0.0.1")
+	l.DeclineStatus(a)
+	if !l.Declined(a) || !l.DeclinedForStatus(a) || l.Holding(a) {
+		t.Fatalf("after DeclineStatus: declined %v for_status %v holding %v", l.Declined(a), l.DeclinedForStatus(a), l.Holding(a))
+	}
+	l.Decline(a)
+	if !l.Declined(a) || l.DeclinedForStatus(a) {
+		t.Fatalf("after Decline: declined %v for_status %v", l.Declined(a), l.DeclinedForStatus(a))
+	}
+	l.DeclineStatus(a)
+	now = now.Add(time.Hour)
+	if l.Declined(a) || l.DeclinedForStatus(a) {
+		t.Fatal("the window outlasted its backoff")
+	}
+}
