@@ -119,6 +119,12 @@ func TestL68Cell(t *testing.T) {
 		{mpls, "request mpls p49-none\nerror: permission denied\n" + prompt, "refused"},
 		{l68Probe{cmd: "save dhcp-security-snoop | count", prefix: 2},
 			"save dhcp-security-snoop | count\nerror: command is not valid on the vsrx\n" + prompt, "platform refused"},
+		// The spaced probe: the echo keeps its leading spaces and the caret
+		// stands at their start (vjunos-router, rows P, H, O, V, Vc).
+		{l68Probe{cmd: "   monitor   list", prefix: 1}, "   monitor\n" + caret(0) + "\nunknown command.\n" + prompt +
+			"monitor   \n" + caret(0) + "\nunknown command.\n" + prompt, "refused"},
+		// The control runs it.
+		{l68Probe{cmd: "   monitor   list", prefix: 1}, "   monitor   list\nNo monitored files\n\n" + prompt, "past"},
 		{l68Probe{cmd: "monitor list", prefix: 1}, "monitor list\n" + prompt, "past"},
 		{l68Probe{cmd: "junoscript", prefix: 1}, "junoscript\nerror: unknown command: junoscript\n" + prompt, "refused"},
 		{l68Probe{cmd: "show configuration system host-name", evidence: hostEvidence},
