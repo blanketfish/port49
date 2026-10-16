@@ -349,7 +349,7 @@ func TestAURLPasswordIsRedacted(t *testing.T) {
 func TestEachPatternIsJudgedOnBothForms(t *testing.T) {
 	rules := []Redaction{{Match: []string{"tunnel", "psk", "*", "key", "*"}, After: "psk"},
 		{Match: []string{"**"}, After: "key"}}
-	raw := []string{"cmd=tunnel", "cmd-arg=psk", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1", "cmd-arg=|",
+	raw := []string{"cmd=tunnel", "cmd-arg=password", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1", "cmd-arg=|",
 		"cmd-arg=no-more"}
 	vector := []string{"tunnel", "psk", "S3cret", "key", "K1"}
 	r, v, redacted := RedactRecord(rules, raw, vector)
@@ -693,5 +693,34 @@ func TestRenderedRefusesATextTheWhitespacePassHides(t *testing.T) {
 	}
 	if got := RedactQuoted(rules, strconv.Quote(text)); strings.Contains(got, "fakesecret123") {
 		t.Fatalf("the literal was printed: %s", got)
+	}
+}
+
+// A credential keyword glued to a value with any separator hides the value on
+// every path a line is printed by (issue 19): the whitespace pass, the quoted
+// prose pass, a rule's words and a record's two forms.
+func TestAGlueSeparatorNeverCarriesAValuePast(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			rules := Redactions(name)
+			line := "request password" + sep + lit
+			paths := map[string]string{}
+			got, _ := Redact(rules, []string{line})
+			paths["Redact"] = got[0]
+			words, _ := RedactRule(rules, strings.Fields(line))
+			paths["RedactRule"] = strings.Join(words, " ")
+			paths["RedactProse"] = RedactProse(rules, line)
+			paths["RedactQuoted"] = RedactQuoted(rules, strconv.Quote(line))
+			paths["RedactQuoted regex"] = RedactQuoted(rules, strconv.Quote("^( *request +password"+sep+lit+"( .*)? *)$"))
+			raw, vec, _ := RedactRecord(rules, []string{"cmd=request", "cmd-arg=password" + sep + lit, "cmd-arg=<cr>"},
+				[]string{"request", "password" + sep + lit, "<cr>"})
+			paths["RedactRecord"] = strings.Join(raw, " ") + " " + strings.Join(vec, " ")
+			for path, out := range paths {
+				if strings.Contains(out, lit) {
+					t.Errorf("%s: sep %q: %s printed the literal: %s", name, sep, path, out)
+				}
+			}
+		}
 	}
 }

@@ -1253,3 +1253,37 @@ func TestTheOverflowClassLineSurvivesThePrinter(t *testing.T) {
 		t.Fatalf("a secret reached the output: %s", secret)
 	}
 }
+
+// A credential keyword glued to a value with any separator is a secret rule,
+// refused as secret_rule, and no finding or caveat prints the value (issue
+// 19): the separator the splitter missed, `,`, passed the secret check and
+// printed the value.
+func TestAGluedCredentialIsASecretRuleWhateverTheSeparator(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		rule := "show system radius-server 10.0.0.1 secret" + sep + lit
+		for _, roles := range []string{
+			`permit: ["show **", "` + rule + `"]`,
+			`permit: ["show **"], deny: ["` + rule + `"]`,
+		} {
+			p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+				roles+"}\n"+subjOK+grantOK)
+			var all []string
+			secretRule := false
+			for _, f := range p.Lint(noon) {
+				all = append(all, f.Message)
+				secretRule = secretRule || strings.Contains(f.Message, `(secret_rule): role "r" has a rule`)
+			}
+			for _, line := range []string{"", "show version", rule} {
+				e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+				if err != nil {
+					t.Fatal(err)
+				}
+				all = append(all, e.Caveats...)
+			}
+			if !secretRule || strings.Contains(strings.Join(all, "\n"), lit) {
+				t.Errorf("sep %q, %s:\n%s", sep, roles, strings.Join(all, "\n"))
+			}
+		}
+	}
+}

@@ -131,6 +131,27 @@ func Redactions(platformName string) []Redaction {
 // (task 10 review I1). A URL's password is replaced whatever the patterns
 // say (redactURL). An element nothing touches comes back as it was.
 func Redact(rules []Redaction, elements []string) ([]string, bool) {
+	out, first := redact(rules, elements, glueFirst)
+	// A value glued to its keyword with `,` `;` `+` `|` or `/` is read the
+	// same way, by a second pass that splits a word at every one of them
+	// (issue 19). It is a second pass, run over the first's output, so a
+	// word with such a character keeps its place in the first pass's
+	// pattern positions, `Gi0/1` as one argument, and only ever loses more.
+	out, second := redact(rules, out, glueAll)
+	if !first && !second {
+		return elements, false
+	}
+	return out, true
+}
+
+// How a word is split where a value is glued to its keyword: at the first
+// `=` or `:`, or at every separator the printer and the devices accept.
+const (
+	glueFirst = "=:"
+	glueAll   = "=:,;+|/"
+)
+
+func redact(rules []Redaction, elements []string, seps string) ([]string, bool) {
 	var words []string
 	var owner []int
 	for i, e := range elements {
@@ -154,7 +175,7 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	// password (task 15 re-review N1).
 	var split []glued
 	for i, w := range words {
-		j := strings.IndexAny(w, "=:")
+		j := strings.IndexAny(w, seps)
 		if rewritten[i] || j <= 0 || strings.Contains(w, "://") {
 			lead, text := option(w)
 			split = append(split, glued{word: i, lead: lead, text: text})
@@ -162,8 +183,23 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		}
 		lead, text := option(w[:j])
 		split = append(split, glued{word: i, lead: lead, text: text, sep: w[j : j+1]})
-		if j+1 < len(w) {
-			split = append(split, glued{word: i, text: w[j+1:], value: true})
+		// The first separator splits the word in two; with glueAll every
+		// one splits the rest too, and a hidden part hides the word's tail.
+		rest, at := w[j+1:], j+1
+		for len(rest) > 0 {
+			end := len(rest)
+			if seps == glueAll {
+				if k := strings.IndexAny(rest, seps); k >= 0 {
+					end = k
+				}
+			}
+			if end > 0 {
+				split = append(split, glued{word: i, text: rest[:end], value: true, offset: at})
+			}
+			if end == len(rest) {
+				break
+			}
+			rest, at = rest[end+1:], at+end+1
 		}
 	}
 	matched := make([]string, len(split))
@@ -211,9 +247,10 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	for k, g := range split {
 		switch {
 		case !hideSplit[k]:
+		case g.value && !hide[g.word] && !rewritten[g.word]:
+			words[g.word], rewritten[g.word] = words[g.word][:g.offset]+Redacted, true
 		case g.value && !hide[g.word]:
-			kw := split[k-1]
-			words[g.word], rewritten[g.word] = kw.lead+kw.text+kw.sep+Redacted, true
+			// An earlier part already hid this part with the tail.
 		default:
 			hide[g.word] = true
 		}
@@ -267,6 +304,8 @@ type glued struct {
 	text  string
 	sep   string
 	value bool
+	// offset is where a value part begins in its word.
+	offset int
 }
 
 // option splits an option's leading `-` and `/` from w; a word of nothing
