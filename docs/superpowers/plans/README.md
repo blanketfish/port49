@@ -6892,7 +6892,7 @@ API is a question for this plan; it is not decided here.
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
-GitHub Action — written when the repository goes public. Five sections:
+GitHub Action — written when the repository goes public. Six sections:
 
 - **Concepts:** the token, the receipt and the login context; revocation; trust domains.
 - **Operator guide:** install, the broker and the agent, `port49 login`, and troubleshooting
@@ -6909,8 +6909,13 @@ GitHub Action — written when the repository goes public. Five sections:
   agent's context or its transcript. A refusal reaches it as `port49 token --json`'s reason code,
   which it can act on. Every command it runs is recorded under its principal. A device under
   per-login MFA is refused to it (`per_login_mfa_required`): those stay human. Worked example: one
-  read-only agent, from identity to a recorded `show` command. The site also publishes an
-  `llms.txt` pointing agents that deploy or configure port49 at the pages they need.
+  read-only agent, from identity to a recorded `show` command.
+- **Agent setup runbook** (Ryan, 2026-10-16): one page an AI agent follows to set up a port49
+  environment, linking the operator guide rather than restating it so it cannot drift. It lists
+  the decisions the agent asks its human first (deployment shape, identity provider, trust
+  domain, devices); the path per shape with a check after every step (`port49 policy test`, a
+  smoke login); and where it stops for a human: secrets, hardware keys, and any device's AAA
+  configuration. The site publishes an `llms.txt` naming the pages in reading order.
 
 **Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
 this file). From plan 9a's final review: the install must be 0755 with no setgid or file
