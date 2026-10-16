@@ -1063,3 +1063,28 @@ func TestPlatformUpgradeTo130GatesDenyReachBits(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// platform upgrade previews projection_reach_deny_overflow too: a subject
+// whose 1.3.0 reply would pass 255 bytes stays on the 1.2.0-style reply, and
+// the report the operator notes send people to first says so.
+func TestPlatformUpgradeTo130PreviewsReachDenyOverflow(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(pol, []byte("platform_set: 1.2.0\nscopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show security **\", "+
+		"\"show route **\", \"show bgp **\", \"show ospf **\"]}]\n"+
+		"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n"+
+		"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.3.0"}, &out,
+		&errb); code != 0 || !strings.Contains(out.String(), "  projection_reach_deny_overflow on 1.3.0: subject \"noc\"") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
