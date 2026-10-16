@@ -1832,3 +1832,28 @@ key_groups:
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// `port49 policy test` on a 1.3.0 readonly denying `show security` reports
+// the capability reply with both bits and the reach deny, and passes.
+func TestPolicyTestReportsTheSet130Reply(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(pol, []byte("platform_set: 1.3.0\nscopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show security **\"]}]\n"+
+		"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n"+
+		"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "capability shape, bits view view-configuration") ||
+		!strings.Contains(out.String(), "monitor **") ||
+		strings.Contains(out.String(), "projection_deny_beneath_view_configuration") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

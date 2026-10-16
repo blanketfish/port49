@@ -453,7 +453,8 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	c.principals(now)
 	c.adapters()
 	warning := func(k string) bool {
-		return k == FindingProjectionNetconfClosed || k == FindingProjectionDenyBeneathViewConfiguration
+		return k == FindingProjectionNetconfClosed || k == FindingProjectionDenyBeneathViewConfiguration ||
+			k == FindingProjectionReachDenyOverflow
 	}
 	var had []Finding
 	for _, f := range before.Projections(now) {
