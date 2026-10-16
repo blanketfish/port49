@@ -248,11 +248,13 @@ builds Ryan's ruling of 2026-10-15 ("Ruled 2026-10-15 (Ryan)", below): where a r
 `show configuration` under a deny beneath `show`, the reply sends `view view-configuration` and
 denies the rest of view-configuration's reach that the grant leaves undecided. For `show **` less
 `show security **` that is `monitor **`, in a 173-byte `deny-commands`. Nothing after Task 1
-starts unless L68 passes on both images. It ships as **set 1.3.0, not 1.2.0**, for the
-controller to rule on (plan R3). Set 1.2.0 is released, so its files and what a pinned policy
-renders stay as they are. Set 1.3.0 is 1.2.0 plus `juniper_junos`'s `deny_reach_bits:
-[view-configuration]`. Set 1.2.0 already renders this reply to a grant that writes `deny:
-[monitor **]` itself. Decision 48 holds its rulings. It opens and closes L68.
+starts unless L68 passes on both images. A refused probe running in row P is a live 1.2.0 hole,
+reported for Ryan. It ships as **set 1.3.0, not 1.2.0**: the controller ruled on 2026-10-16 that
+1.2.0 is released and frozen, and the behaviour is the one Ryan ruled. Set 1.3.0 is 1.2.0 plus
+`juniper_junos`'s `deny_reach_bits: [view-configuration]`. Set 1.2.0 already renders this reply
+to a grant that writes `deny: [monitor **]` itself. Where the added denies would pass 255 bytes,
+the reply falls back to the 1.2.0-style one, and CI warns `projection_reach_deny_overflow`
+(controller's ruling). Decision 48 holds its rulings. It opens and closes L68.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a

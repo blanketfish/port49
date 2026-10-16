@@ -2,21 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **For the controller, before anything runs: this plan ships the change as set 1.3.0, not
-> 1.2.0 (R3, below).** Ryan's ruling of 2026-10-15 says "under set 1.2.0". But set 1.2.0 is
-> released: it is in `released` (`internal/platform/adapter_test.go:197`), its YAML is frozen
-> value for value, and the spec says a binary upgrade must not change what a pinned policy
-> renders (§8 "the platform set is pinned"; `platforms/platforms.go:7`). Today a 1.2.0 readonly
-> granted `show **` less `show security **` renders `view` and four carved allows, and two shipped
-> tests pin that (`TestAReadonlyWithAShowDenyFitsTheBudget`, `TestThePredictionFollowsTheMeasuredAllowsPastTheBits`).
-> Changing that under 1.2.0 is the edit the rule forbids. **Rule on R3 before Task 2 starts.**
-> Task 1, the lab cell, is the same under either answer.
+> **Ruling (controller, 2026-10-16): ships as set 1.3.0, not 1.2.0, because 1.2.0 is released
+> and frozen; same behaviour Ryan ruled.** (R3, below. Set 1.2.0's YAML is frozen value for
+> value by `TestEveryReleasedSetIsFrozen`, and a binary upgrade must not change what a pinned
+> policy renders, spec §8 "the platform set is pinned".)
 >
 > **A finding from writing this plan.** Set 1.2.0 already sends the reply Task 1 measures,
 > today, to a readonly whose grant also writes `deny: [monitor **]`. Its `deny-commands` is
 > 173 bytes (measured from the shipped code; Task 1 pins it). Two consequences:
-> - If Task 1 finds a refused probe that runs, that is a live hole in set 1.2.0, not only a
->   reason to drop this plan. Report it as a security finding.
+> - **If Task 1 finds a refused probe running in row P, that is a live hole in set 1.2.0.**
+>   Stop, write the note, and report it to the controller for Ryan's attention. Do not continue
+>   silently, and do not start any later task.
 > - An operator can get "permitted means it runs" under 1.2.0 now, with no code, by adding that
 >   deny.
 
@@ -89,11 +85,17 @@ The ruling is Ryan's of 2026-10-15, recorded in `docs/superpowers/plans/README.m
 - **R1. Lab first.** Task 1 is the lab cell L68, on vJunos-router and vSRX, before any production
   code changes the reply. Its rows and probes are below. **If any refused probe runs, the plan stops
   at Task 1.** No reply change ships. The results note says so, and the plan is reported back to
-  the controller. Tasks 2 to 7 depend on gate **G1** (Task 1 passed on both images).
-- **R2. The 255-byte limit.** The rendered `deny-commands` stays within 255 bytes. A test measures
-  its real length: 173 bytes for the canonical readonly. Past 255 the composition fails closed
-  (`overflow`), as the 1.1.0 readonly does, and the refusal (and so the `policy test` finding)
-  names the reach denies.
+  the controller. A refused probe running in row P is a live hole in set 1.2.0: stop, write the
+  note, and report it to the controller for Ryan's attention. Tasks 2 to 7 depend on gate **G1**
+  (Task 1 passed on both images).
+- **R2. The 255-byte limit** (controller's ruling, 2026-10-16: the fallback). The rendered
+  `deny-commands` stays within 255 bytes. A test measures its real length: 173 bytes for the
+  canonical readonly. Where the added reach denies would take it past 255, the reply falls back
+  to the 1.2.0-style reply: no `view-configuration`, the carved allows, and `show configuration`
+  refused, as today. That reply is measured (`L26c-projected-juniper_*.md`) and no wider. Lint
+  warns with a new warning, `projection_reach_deny_overflow`, which Task 2 adds to spec §12
+  before any code uses it. The composition fails closed only where the fallback cannot carry
+  it either, as any overflow does.
 - **R3. Sets.** The rule (spec §8, `platforms/platforms.go:7`, `adapter_test.go:192-197`): a
   released set is never edited, and a binary upgrade must not change what a pinned policy renders.
   Neither route under 1.2.0 meets it:
@@ -111,7 +113,7 @@ The ruling is Ryan's of 2026-10-15, recorded in `docs/superpowers/plans/README.m
   - `DefaultSet` moves to 1.3.0.
   - A policy gets the change by `port49 platform upgrade --to 1.3.0`. Its gated `deny_reach_bits`
     entry is the review, so "permitted means it runs" reaches a fleet as a reviewed pin move.
-  - **Flagged above for the controller to rule on.**
+  - Accepted by the controller, 2026-10-16 (recorded at the top).
 - **R4.** The spec is edited first among the post-gate tasks, in its own task (Task 2):
   - §8's text at :4066-4072;
   - the warning paragraph;
@@ -986,8 +988,12 @@ Expected: four PASS runs and four notes, each reading `**Gate:** G1: pass`. Othe
 - **`INVALID:`** writes no note. Fix the harness or the cell reader, then rerun. A control that
   cannot reach is a harness or image fault.
 - **`STOP:`** writes its note with `G1: STOP — …`. **Stop the plan here.** Report to the
-  controller with the note's tables. Say that row P is a reply set 1.2.0 sends today to a grant
-  that writes `deny: [monitor **]`, so a P STOP is a live 1.2.0 finding. Do not start Task 2.
+  controller with the note's tables. Do not start Task 2.
+- **A `STOP:` in row P** is a live hole in set 1.2.0. Row P is a reply set 1.2.0 sends today to
+  a grant that writes `deny: [monitor **]`. Stop, still do Step 8 (copy the outputs out) so the
+  note is kept, and report it to the controller as a security finding for Ryan's attention,
+  naming the probe and the image. Do not continue silently. Do not start any later task, and do
+  not rerun to get a different answer.
 
 - [ ] **Step 8: Copy the outputs out and remove the run worktree**
 
@@ -998,6 +1004,14 @@ cp "$run"/tests/lab/results/L68-*.md "$feat"/tests/lab/results/
 cp "$run"/tests/lab/evidence/L68-*.pcap "$feat"/tests/lab/evidence/
 mkdir -p /home/rwendt/git/port49/tests/lab/captures && cp "$run"/tests/lab/captures/L68* /home/rwendt/git/port49/tests/lab/captures/
 git -C /home/rwendt/git/port49 worktree remove "$run"
+```
+
+On a STOP, commit the notes and evidence and leave the L68 row open. Add to its Status:
+"STOP measured <date>; see the notes". Then report:
+
+```bash
+git add tests/lab/results/L68-*.md tests/lab/evidence/L68-*.pcap docs/design/2026-08-23-policy-engine-spec.md
+git commit -m "docs: L68 STOP, a refused probe ran under view-configuration"
 ```
 
 - [ ] **Step 9: Close L68 and commit (only on G1: pass on both images)**
@@ -1021,7 +1035,7 @@ git commit -m "docs: close lab register entries L68"
 ```
 
 **Gate G1:** Tasks 2 to 7 start only when both images' L68 and L68-netconf notes read `G1:
-pass`, and the controller has ruled on R3.
+pass`. R3 is ruled: set 1.3.0.
 
 ---
 
@@ -1092,8 +1106,11 @@ shows it (L12-bits). The bit goes out this way only where all of these hold:
 
 Otherwise the reply is set 1.2.0's. The reach denies follow the grant's own and precede the
 baseline's, so a 1.2.0 grant that writes `deny: [monitor **]` itself renders the same bytes.
-Where they take `deny-commands` past 255 bytes, the composition fails closed (`overflow`), as set
-1.1.0's readonly does, and the refusal names them.
+Where they would take `deny-commands` past 255 bytes, the reply falls back to set 1.2.0's: no
+view-configuration, the carved allows, and the device refusing `show configuration`, as
+measured. That reply is no wider than port49. CI warns `projection_reach_deny_overflow`, naming
+the reach denies and the remedy. The composition fails closed only where that reply cannot
+carry it either.
 ```
 
 - [ ] **Step 3: Amend the warning paragraph** (:4078-4081). After "...so withholding the bit is the
@@ -1118,7 +1135,12 @@ the default, and a policy moves to it with `port49 platform upgrade --to 1.3.0`,
 
 - [ ] **Step 5: The §12 row.** In `projection_deny_beneath_view_configuration`'s Condition cell,
   after "withhold the bit instead (§8; decision 44)", add "; a reach deny (decision 48) is never
-  named".
+  named". Then, after that row, add the new warning. It must be in the spec before Task 4 or
+  Task 5 uses the name:
+
+```markdown
+| `projection_reach_deny_overflow` | on a platform whose pinned set carries `deny_reach_bits`, a composition whose reply would send a bit with its undecided reach denied (decision 48), except that those denies take `deny-commands` past RFC 8907's 255 bytes. The reply falls back to the one the set renders without the key: the bit not sent, and the device refusing the carve-out it would have shown (`show configuration`). The warning names the reach denies and the remedy: fewer denies beneath `show`, or the denies moved into the template's class (`port49 platform export --classes`) | no, a warning; `policy diff` prints the ones the change brings |
+```
 
 - [ ] **Step 6: Decision 44 ruling 10.** Replace its last sentence, "view-configuration is not
   sent to such a readonly, whose grant decides none of its other reach; ruling 4's warning stays
@@ -1162,8 +1184,11 @@ say data.
   bit is not sent where it does not.
 - **4. The budget** (RFC 8907; Ryan's production experience that over 255 bytes locks the user
   out). The readonly granted `show **` less `show security **` renders 173 bytes, measured in a
-  test. Past 255 the composition fails closed (`overflow`) and the refusal names the reach
-  denies; the reply does not fall back to set 1.2.0's.
+  test. Where the reach denies would take it past 255, the reply falls back to the one the set
+  renders without the key (set 1.2.0's): no bit, the carved allows, and `show configuration`
+  refused, as measured (`L26c-projected-juniper_*.md`). Failing closed would take a working
+  readonly to nothing for a narrowing the device already makes safely. CI warns
+  `projection_reach_deny_overflow` (§12). (Controller's ruling, 2026-10-16.)
 - **5. Warnings and predictions.** `projection_deny_beneath_view_configuration` never names a reach
   deny. `policy test` and `explain` predict `show configuration` runs under the reply, and the
   projection finding names the reach denies.
@@ -1535,7 +1560,12 @@ git commit -m "feat: platform set 1.3.0 with juniper_junos deny_reach_bits"
   - `capability` user_permissions branch :631-641;
   - `configurationBeneath` :840;
   - `attributes`, the deny-commands overflow branch :1248-1255;
+  - `shape`, after `res, err = g.finish(res, err)` :395 (the fallback);
+  - the `generator` struct :263 (`noReach`), `Refusal` :169 (`reach`), `Result` :115
+    (`ReachOverflow`) and `Clone` :194;
   - new `reachDenies`, `insertReachDenies` and `Result.ReachDenies`, after `carvedAllows` :826.
+- Modify: `internal/projection/project_test.go` (`TestCloneCopiesEverySlice` :554, if it lists
+  `Result`'s slices: add `ReachOverflow`)
 - Test: create `internal/projection/project_reach_test.go`
 
 **Interfaces:**
@@ -1544,7 +1574,8 @@ git commit -m "feat: platform set 1.3.0 with juniper_junos deny_reach_bits"
 - Produces:
   - `func (r Result) ReachDenies() []engine.Rule`: the reply's denies with role
     `platform.ReachDenyRole`;
-  - the overflow refusal's `Why` naming them;
+  - `Result.ReachOverflow []engine.Rule`: the reach denies left off because they took
+    `deny-commands` past 255 bytes, where the reply fell back (R2). Task 5's warning reads it;
   - `Result.ConfigurationBeneath` never holding one.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1719,10 +1750,13 @@ func TestTheBitIsNotSentAloneForItsCarveOut(t *testing.T) {
 	}
 }
 
-// R2: past 255 bytes the composition fails closed as overflow, the refusal
-// names the reach denies, and it does not fall back to 1.2.0's reply. Under
-// 1.2.0 the same grant fits (249 bytes); `monitor` takes 1.3.0's past.
-func TestAReachDenyPastTheBudgetFailsClosed(t *testing.T) {
+// R2 (controller's ruling, 2026-10-16): where the reach denies would take
+// deny-commands past 255 bytes, the reply falls back to set 1.2.0's. That
+// means no view-configuration, the carved allows, and the device refusing
+// `show configuration`, here byte for byte the 249-byte reply 1.2.0 sends.
+// ReachOverflow names the denies left off, for the warning. `monitor` alone
+// takes 1.3.0's past 255.
+func TestAReachDenyPastTheBudgetFallsBackToTheCarvedReply(t *testing.T) {
 	rules := []engine.Rule{permit("show **"), deny("show security **"), deny("show route **"), deny("show bgp **"),
 		deny("show ospf **")}
 	was, err := Project(shipped("1.2.0", "readonly", rules...))
@@ -1730,9 +1764,19 @@ func TestAReachDenyPastTheBudgetFailsClosed(t *testing.T) {
 		t.Fatalf("1.2.0: %s %q %v", was.Shape, was.Attributes, err)
 	}
 	res, err := Project(shipped("1.3.0", "readonly", rules...))
-	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailOverflow ||
-		!strings.Contains(res.Refusal.Why, "deny_reach_bits") || !strings.Contains(res.Refusal.Why, "monitor **") {
-		t.Fatalf("%s %s %+v %v", res.Shape, res.FailClosed, res.Refusal, err)
+	if err != nil || res.Shape != ShapeCapability || res.FailClosed != "" || !slices.Equal(res.Attributes, was.Attributes) ||
+		slices.Contains(res.Bits, "view-configuration") || len(res.ReachDenies()) != 0 {
+		t.Fatalf("not 1.2.0's reply: %s %q %+v %v\n 1.2.0 %q", res.Shape, res.Attributes, res.Refusal, err, was.Attributes)
+	}
+	if len(res.ReachOverflow) != 1 || res.ReachOverflow[0].Rule != "monitor **" {
+		t.Errorf("reach overflow: %v", res.ReachOverflow)
+	}
+	if res.Device([]string{"show", "configuration", "system", "host-name"}) || !res.Device([]string{"show", "version"}) {
+		t.Error("the fallback is not 1.2.0's measured reading")
+	}
+	// A reply that fits records no overflow.
+	if fits, _ := Project(shipped("1.3.0", "readonly", permit("show **"), deny("show security **"))); len(fits.ReachOverflow) != 0 {
+		t.Errorf("a fitting reply records an overflow: %v", fits.ReachOverflow)
 	}
 }
 
@@ -1806,7 +1850,7 @@ After `carvedAllows` (:826), add:
 // denies, each of which the keyword tree proves. ok is false otherwise, and
 // the reply is what set 1.2.0 renders.
 func (g generator) reachDenies(b string, bits []string) ([]engine.Rule, bool) {
-	if !g.closesEntries() || !slices.Contains(g.in.Dialect.DenyReachBits, b) {
+	if g.noReach || !g.closesEntries() || !slices.Contains(g.in.Dialect.DenyReachBits, b) {
 		return nil, false
 	}
 	reached := g.reach(g.held(bits))
@@ -1869,21 +1913,64 @@ In `configurationBeneath` (:840), extend the role check:
 			g.mayMeet(configurationRead, dn.Rule) {
 ```
 
-In `attributes`, in the `if r.Attribute == "deny-commands" {` branch, before
-`r.Class = res.Template`:
+**The fallback (R2).** Add to `generator` (:263):
 
 ```go
-				if rd := res.ReachDenies(); len(rd) > 0 {
-					var rules []string
-					for _, d := range rd {
-						rules = append(rules, d.Rule)
-					}
-					r.Why += fmt.Sprintf("; it carries the denies of a bit's reach the grant does not decide, sent so "+
-						"the bit can go out (deny_reach_bits; decision 48): %s", strings.Join(rules, ", "))
-				}
+	// noReach turns reachDenies off: the reply as the set renders it without
+	// DenyReachBits, the fallback where the reach denies overflow (decision 48
+	// ruling 4).
+	noReach bool
 ```
 
-Update the `Result.ConfigurationBeneath` field comment (:148-151). After "(projection_deny_beneath_view_configuration; decision 44)", add "; never a reach deny (decision 48)".
+To `Refusal` (:169), after `Attribute, Value, Class string`:
+
+```go
+	// reach are the reach denies an overflowing deny-commands carried: where
+	// set, shape falls back to the reply without them.
+	reach []engine.Rule
+```
+
+To `Result` (:115), after `Closed`:
+
+```go
+	// ReachOverflow are the reach denies left off because they took
+	// deny-commands past RFC 8907's 255 bytes: the reply fell back to the one
+	// without them, the bit unsent and its carve-out refused on the device,
+	// and policy test warns (projection_reach_deny_overflow; decision 48
+	// ruling 4).
+	ReachOverflow []engine.Rule
+```
+
+In `Clone`, after `r.Closed = slices.Clone(r.Closed)`: `r.ReachOverflow =
+slices.Clone(r.ReachOverflow)`.
+
+In `attributes`, in the `if r.Attribute == "deny-commands" {` branch, before
+`r.Class = res.Template`: `r.reach = res.ReachDenies()`.
+
+In `shape`, directly after `res, err = g.finish(res, err)` (:395) and before the narrow
+preference:
+
+```go
+	// Where the reach denies take deny-commands past RFC 8907's length, the
+	// reply is the one without them, as the set renders it without
+	// DenyReachBits: the bit unsent, and the device refusing the carve-out it
+	// would have shown, which is narrower than port49 and measured (decision
+	// 48 ruling 4). Where that reply does not carry the grant either, the
+	// overflow stands and the composition fails closed.
+	var over *Refusal
+	if errors.As(err, &over) && over.Category == FailOverflow && len(over.reach) > 0 {
+		h := g
+		h.noReach = true
+		if fb, ferr := h.shape(); ferr == nil {
+			fb.ReachOverflow = over.reach
+			return fb, nil
+		}
+	}
+```
+
+Update the `Result.ConfigurationBeneath` field comment (:148-151). After
+"(projection_deny_beneath_view_configuration; decision 44)", add "; never a reach deny (decision
+48)".
 
 - [ ] **Step 4: Run the tests**
 
@@ -1898,13 +1985,14 @@ Prove each new test with a mutation, and revert each:
 | drop the `closesEntries()` check | `TestReachDeniesNeedTheEntryDeny` |
 | drop the permit-meets check | `TestReachDeniesDeclineAPermittedReach` |
 | drop the `reached` check | `TestTheBitIsNotSentAloneForItsCarveOut` |
-| drop the overflow clause | `TestAReachDenyPastTheBudgetFailsClosed` |
+| drop the fallback in `shape` | `TestAReachDenyPastTheBudgetFallsBackToTheCarvedReply` |
+| `reachDenies` ignores `noReach` | `TestAReachDenyPastTheBudgetFallsBackToTheCarvedReply` |
 | drop the `ReachDenyRole` check in `configurationBeneath` | `TestConfigurationBeneathSkipsAReachDeny` |
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/projection/project.go internal/projection/project_reach_test.go
+git add internal/projection/project.go internal/projection/project_reach_test.go internal/projection/project_test.go
 git commit -m "feat: set 1.3.0 sends view-configuration with its undecided reach denied"
 ```
 
@@ -1913,14 +2001,23 @@ git commit -m "feat: set 1.3.0 sends view-configuration with its undecided reach
 ### Task 5: `policy test`, `explain` and the warnings follow (depends on G1)
 
 **Files:**
-- Modify: `internal/policy/lint.go` (`projectionMessage` :964-990; the
-  `FindingProjectionDenyBeneathViewConfiguration` comment :674-677)
+- Modify: `internal/policy/lint.go`:
+  - `projectionMessage` :964-990;
+  - the `FindingProjectionDenyBeneathViewConfiguration` comment :674-677;
+  - a new `FindingProjectionReachDenyOverflow` beside it, and in `projectionNote` :682-685;
+  - its emission in `Projections` beside the view-configuration warning :745-748;
+  - a new `reachOverflowMessage` after `configurationBeneathMessage`.
+- Modify: `internal/policy/diff.go:456` (the warning kinds `policy diff` prints)
 - Test: `internal/policy/projection_test.go`, `cmd/port49/policy_test.go`
 
 **Interfaces:**
-- Consumes: `projection.Result.ReachDenies()` (Task 4); `platform_set: 1.3.0` (Task 3).
-- Produces: the projection finding's clause `; of those, the reach of a bit the grant decides
-  only in part, denied so the bit can be sent (deny_reach_bits; decision 48): <rules>`.
+- Consumes: `projection.Result.ReachDenies()` and `Result.ReachOverflow` (Task 4);
+  `platform_set: 1.3.0` (Task 3); the warning name `projection_reach_deny_overflow`, which spec
+  §12 already carries (Task 2).
+- Produces:
+  - the projection finding's clause `; of those, the reach of a bit the grant decides only in
+    part, denied so the bit can be sent (deny_reach_bits; decision 48): <rules>`;
+  - the warning `FindingProjectionReachDenyOverflow = "projection_reach_deny_overflow"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1970,26 +2067,41 @@ func TestSet130PredictsTheConfigurationRuns(t *testing.T) {
 	}
 }
 
-// Past 255 bytes the readonly fails closed under 1.3.0, and the refusal
-// policy test prints names the reach deny (R2); under 1.2.0 it fits.
-func TestSet130OverflowIsARefusalNamingTheReachDeny(t *testing.T) {
+// Past 255 bytes the reach denies are left off under 1.3.0 and the reply falls
+// back to 1.2.0's (R2, controller's ruling): nothing is refused, policy test
+// warns projection_reach_deny_overflow naming the deny and the remedy, explain
+// says the device refuses `show configuration`, and policy diff prints the
+// warning the change brings.
+func TestSet130OverflowWarnsAndFallsBack(t *testing.T) {
 	role := `roles:
   - {name: r, privilege: readonly, permit: ["show **"], deny: ["show security **", "show route **", "show bgp **", "show ospf **"]}
 `
-	if p := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+role+subjOK+grantOK); ProjectionRefusals(p.Projections(noon)) != 0 {
-		t.Fatal("1.2.0 refuses it")
-	}
+	was := mustParse(t, "platform_set: 1.2.0\n"+scopeOK+role+subjOK+grantOK)
 	p := mustParse(t, "platform_set: 1.3.0\n"+scopeOK+role+subjOK+grantOK)
 	fs := p.Projections(noon)
-	var msg string
+	var warn []string
 	for _, f := range fs {
-		if f.Kind == FindingProjectionOverflow {
-			msg = f.Message
+		if f.Kind == FindingProjectionReachDenyOverflow {
+			warn = append(warn, f.Message)
 		}
 	}
-	if ProjectionRefusals(fs) != 1 || !strings.Contains(msg, "RFC 8907 carries at most") ||
-		!strings.Contains(msg, "monitor **") || !strings.Contains(msg, "deny_reach_bits") {
-		t.Errorf("%q", msg)
+	if ProjectionRefusals(fs) != 0 || len(warn) != 1 || !strings.Contains(warn[0], "monitor **") ||
+		!strings.Contains(warn[0], "255") || !strings.Contains(warn[0], "port49 platform export --classes") {
+		t.Errorf("refusals %d, warning %q", ProjectionRefusals(fs), warn)
+	}
+	e, err := p.Explain("s", "", "srx-fw-04", "show configuration system host-name", noon)
+	if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), "the device refuses it;") {
+		t.Errorf("explain: %+v %v", e.Caveats, err)
+	}
+	for _, f := range was.Projections(noon) {
+		if f.Kind == FindingProjectionReachDenyOverflow {
+			t.Errorf("1.2.0 warns: %q", f.Message)
+		}
+	}
+	if d := Compare(was, p, noon); !slices.ContainsFunc(d.ProjectionWarnings, func(f Finding) bool {
+		return f.Kind == FindingProjectionReachDenyOverflow
+	}) {
+		t.Errorf("policy diff does not print the warning: %+v", d.ProjectionWarnings)
 	}
 }
 ```
@@ -2042,16 +2154,61 @@ In `internal/policy/lint.go` `projectionMessage`, after the `if len(pr.Denies) >
 Extend `FindingProjectionDenyBeneathViewConfiguration`'s comment. After "(decision 44 ruling
 4)", add: "; never a reach deny, which a reply sent under decision 48 carries".
 
+After `FindingProjectionDenyBeneathViewConfiguration`, add:
+
+```go
+// FindingProjectionReachDenyOverflow is a composition whose reply would send
+// a bit with its undecided reach denied (decision 48), except that those
+// denies take deny-commands past RFC 8907's 255 bytes: the reply falls back to
+// the one without them, the bit unsent and its carve-out refused on the
+// device (spec §12; decision 48 ruling 4). A warning.
+const FindingProjectionReachDenyOverflow = "projection_reach_deny_overflow"
+```
+
+Add `|| kind == FindingProjectionReachDenyOverflow` to `projectionNote`. In `Projections`, after
+the `len(pr.ConfigurationBeneath) > 0` block:
+
+```go
+				if len(pr.ReachOverflow) > 0 {
+					reports[i] = append(reports[i], item{FindingProjectionReachDenyOverflow,
+						reachOverflowMessage(*pr, patterns)})
+				}
+```
+
+After `configurationBeneathMessage`:
+
+```go
+// reachOverflowMessage is a projection_reach_deny_overflow warning after its
+// subject and platform.
+func reachOverflowMessage(pr projection.Result, patterns []platform.Redaction) string {
+	var rules []string
+	for _, r := range pr.ReachOverflow {
+		rules = append(rules, r.Rule)
+	}
+	return " the denies of " + strings.Join(redacted(patterns, rules), ", ") + ", which would let the reply send " +
+		"the bit whose carve-out the grant permits (deny_reach_bits), take deny-commands past RFC 8907's 255 " +
+		"bytes, so the reply does not send that bit and the device refuses what only it shows (show " +
+		"configuration): deny fewer commands beneath show, or move the denies into the template's class on the " +
+		"device (port49 platform export --classes) (spec §8; decision 48 ruling 4)"
+}
+```
+
+In `internal/policy/diff.go:456`, add `|| k == FindingProjectionReachDenyOverflow` to the
+warning kinds, so `policy diff` prints the ones a change brings.
+
 - [ ] **Step 4: Run the tests**
 
 Run: `go test ./internal/policy/ ./cmd/port49/ -count=1 && make test && make vet`
 Expected: PASS, with `TestThePredictionFollowsTheMeasuredAllowsPastTheBits` (set 1.2.0) and
-`TestTheEntryDenyWarnings` unchanged. Prove the clause by deleting it, and revert.
+`TestTheEntryDenyWarnings` unchanged. Prove each by a mutation, and revert:
+- delete the reach clause in `projectionMessage`;
+- delete the `ReachOverflow` emission;
+- delete the `diff.go` kind.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/policy/lint.go internal/policy/projection_test.go cmd/port49/policy_test.go
+git add internal/policy/lint.go internal/policy/diff.go internal/policy/projection_test.go cmd/port49/policy_test.go
 git commit -m "feat: policy test names set 1.3.0's reach denies and predicts the configuration runs"
 ```
 
@@ -2205,7 +2362,7 @@ git commit -m "docs: L68 measures set 1.3.0's reply through the broker"
   - "Carried" items:
     - L59 unchanged;
     - hidden commands unmeasured;
-    - R2's fail-closed past 255, with no 1.2.0 fallback, as ruled.
+    - R2's fallback past 255 bytes (the 1.2.0-style reply and `projection_reach_deny_overflow`), as ruled.
 
 - [ ] **Step 4: Commit**
 
