@@ -104,6 +104,25 @@ func TestALockedKeyAtARefreshSaysToLogIn(t *testing.T) {
 	}
 }
 
+// A key whose PIN is blocked says so at a refresh, not that it needs its PIN
+// (L60 F2): running `port49 login` for it would only ask a PIN the token will
+// not take.
+func TestABlockedKeyAtARefreshSaysBlocked(t *testing.T) {
+	r := newRigWith(t, rigOpts{hw: true})
+	r.key.mu.Lock()
+	r.key.state, r.key.blocked = hwkey.Locked, true
+	r.key.mu.Unlock()
+	_, err := r.a.Refresh(context.Background(), "")
+	var locked *KeyAbsentError
+	if !errors.As(err, &locked) || !strings.Contains(err.Error(), hwkey.PINBlockedWords) ||
+		strings.Contains(err.Error(), "needs its PIN") || !strings.Contains(err.Error(), "your session goes on until") {
+		t.Fatalf("refresh with a blocked key = %v", err)
+	}
+	if KeyCode(err) != "key_locked" {
+		t.Fatalf("code %q, want key_locked (the socket codes are closed)", KeyCode(err))
+	}
+}
+
 // A key that never left but is not logged in is not "back".
 func TestALockedKeyThatNeverLeftIsNotBack(t *testing.T) {
 	r := newRigWith(t, rigOpts{hw: true})

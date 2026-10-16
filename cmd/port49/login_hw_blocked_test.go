@@ -21,12 +21,12 @@ import (
 
 // loginOnce is one `port49 login` with the PIN typed at its prompt, and what
 // it said.
-func loginOnce(t *testing.T, l *labBroker, sock, ref, pin string) (code int, stderr string) {
+func loginOnce(t *testing.T, l *labBroker, sock, ref, pin string) (code int, stderr string, prompts int) {
 	t.Helper()
-	pinPty(t, pin)
+	asked, _ := pinPty(t, pin)
 	var out, errb bytes.Buffer
 	code = run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb)
-	return code, errb.String()
+	return code, errb.String(), int(asked.Load())
 }
 
 // A token whose PIN is blocked is told so, with the way out, on both paths a
@@ -45,9 +45,9 @@ func TestABlockedPINIsSaidAsBlockedOnBothPaths(t *testing.T) {
 	// as blocked (pkcs11.BlockPIN): a wrong PIN, the try that was the last,
 	// says blocked; and the right PIN, which a blocked token answers
 	// CKR_PIN_LOCKED to, says it too.
-	check := func(path string, run func(pin string) (int, string)) {
+	check := func(path string, run func(pin string) (int, string, int)) {
 		t.Helper()
-		code, msg := run("000000")
+		code, msg, _ := run("000000")
 		if code != 1 || !strings.Contains(msg, "the token refused the PIN") || strings.Contains(msg, "blocked") {
 			t.Fatalf("%s, a wrong PIN: code %d %q, want an ordinary refusal", path, code, msg)
 		}
@@ -68,8 +68,14 @@ func TestABlockedPINIsSaidAsBlockedOnBothPaths(t *testing.T) {
 				restore()
 				restore = pkcs11.BlockPINWithoutFlag()
 			}
-			code, msg := run(tc.pin)
+			code, msg, prompts := run(tc.pin)
 			restore()
+			// The token says CKF_USER_PIN_LOCKED before any PIN is typed, so
+			// none is asked for (L60 F2); a token that says it only at
+			// C_Login is found out by the try.
+			if !tc.noFlag && prompts != 0 {
+				t.Errorf("%s, %s: asked for the PIN %d times on a token that already says it is blocked", path, tc.name, prompts)
+			}
 			if code != 1 || !strings.Contains(msg, hwkey.PINBlockedWords) || strings.Contains(msg, "refused the PIN") {
 				t.Errorf("%s, %s: code %d %q, want the blocked PIN's words and no refusal", path, tc.name, code, msg)
 			}
@@ -83,7 +89,7 @@ func TestABlockedPINIsSaidAsBlockedOnBothPaths(t *testing.T) {
 	ref := tokenWithTheLabKey(t, l)
 	sock := privateSocket(t)
 	t.Cleanup(func() { stopAgentAt(sock) })
-	check("the login's own key", func(pin string) (int, string) {
+	check("the login's own key", func(pin string) (int, string, int) {
 		return loginOnce(t, l, sock, ref, pin)
 	})
 	if _, err := agent.NewClient(sock).Status(t.Context()); err == nil {
@@ -118,7 +124,7 @@ func TestABlockedPINIsSaidAsBlockedOnBothPaths(t *testing.T) {
 	srv := &http.Server{Handler: a.Handler()}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	check("the agent's /unlock", func(pin string) (int, string) {
+	check("the agent's /unlock", func(pin string) (int, string, int) {
 		return loginOnce(t, l, sock2, ref2, pin)
 	})
 }

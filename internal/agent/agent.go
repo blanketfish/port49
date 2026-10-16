@@ -1666,8 +1666,9 @@ type Status struct {
 	// one: what `port49 ssh` reads when its in-session warning is due, so a
 	// `port49 refresh` in another terminal moves it (decision 42 ruling 11).
 	Sessions []api.RefreshedSession `json:"sessions,omitempty"`
-	// KeyState is whether the session key can sign now: present, absent or
-	// locked; "present" for a file key.
+	// KeyState is whether the session key can sign now: present, absent,
+	// locked, or blocked (locked, and the token's PIN is blocked: only its
+	// PUK unlocks it); "present" for a file key.
 	KeyState string `json:"key_state"`
 	// TouchKey is true only when the touch key opened and sits on the same
 	// token (module and token serial) as a pkcs11 session key (ruling 12);
@@ -1880,8 +1881,16 @@ func (a *Agent) keyState() string {
 	if a.key == nil {
 		return hwkey.Present.String()
 	}
-	return a.probeKey().String()
+	st := a.probeKey()
+	if st == hwkey.Locked && a.pinBlocked() {
+		return stateBlocked
+	}
+	return st.String()
 }
+
+// stateBlocked is Status.KeyState for a locked key whose token says its PIN
+// is blocked: a login cannot unlock it, only the PUK can.
+const stateBlocked = "blocked"
 
 // Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most
 // maxUnlockBody.

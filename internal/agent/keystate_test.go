@@ -248,8 +248,8 @@ func TestABlockedPINComesBackAsBlocked(t *testing.T) {
 	if strings.Contains(log.String(), "123456") {
 		t.Fatalf("the agent's log holds the PIN: %q", log.String())
 	}
-	if st, _ := c.Status(context.Background()); st.KeyState != "locked" {
-		t.Fatalf("%+v", st)
+	if st, _ := c.Status(context.Background()); st.KeyState != "blocked" {
+		t.Fatalf("%+v, want key_state blocked", st)
 	}
 	// The raw answer carries its own code and the way out.
 	rec := httptest.NewRecorder()
