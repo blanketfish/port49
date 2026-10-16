@@ -54,6 +54,16 @@ options:
   deadline:
     description: Workload mode, how long to retry the broker, in seconds.
     type: int
+  known_hosts_file:
+    description:
+      - The file C(network_cli) keeps a device's address in. Only a device whose C(ansible_connection) is
+        C(network_cli) or C(ansible.netcommon.network_cli) is checked, before any token is minted.
+      - The address (C(ansible_host), else the inventory name; C([address]:port) when C(ansible_port) is not 22)
+        is checked against the keys filed under the port49 name in your ssh files. A key the address lacks is
+        filed there, and a different key of the same type refuses with C(host_key_changed). When only the address
+        has a key, it is also filed under the name.
+    type: path
+    default: ~/.ssh/known_hosts
 """
 
 EXAMPLES = r"""
@@ -69,10 +79,13 @@ _raw:
   type: list
 """
 
+import os
+
 from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
 from ansible.utils.display import Display
 
+NETWORK_CLI = ("network_cli", "ansible.netcommon.network_cli")
 WORKLOAD = ("broker", "broker_ca", "cert", "key")
 WORKLOAD_ONLY = ("touch_key", "deadline")
 
@@ -85,6 +98,11 @@ def _agent(**kw):
 def _workload(*a, **kw):
     import port49
     return port49.Workload(*a, **kw)
+
+
+def _ssh_options():
+    """Extra arguments for the library's ssh calls (a test points them at its own ssh_config)."""
+    return {}
 
 
 def _fail(message):
@@ -106,6 +124,67 @@ def _value(tok, field):
     if value is None:
         _fail(f"port49: {tok.device}: no {field} token was minted; pass enable=true")
     return value
+
+
+def _hostvar(variables, device, name):
+    """The variable name of device: from its hostvars, else the play's (the current host's)."""
+    try:
+        value = variables["hostvars"][device].get(name)
+    except (KeyError, TypeError, AttributeError):
+        value = None
+    return value if value is not None else variables.get(name)
+
+
+def _check_host_keys(device, variables, known_hosts_file):
+    """Plan 9f R2: before a mint for a network_cli device, check the address's keys in known_hosts_file against
+    the keys filed under the port49 name, and copy what is missing either way. Refuses, before anything is
+    minted, a key of the address that differs from the name's (host_key_changed) or is revoked. Raises the
+    library's HostKeyError; the caller's handler makes it the lookup's error."""
+    import port49
+    from port49 import hostkeys
+    if _hostvar(variables, device, "ansible_connection") not in NETWORK_CLI:
+        return
+    if not hostkeys.valid_name(device):
+        raise port49.HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
+    name = device.lower()
+    address = str(_hostvar(variables, device, "ansible_host") or device)
+    try:
+        port = int(_hostvar(variables, device, "ansible_port") or 22)
+    except (TypeError, ValueError):
+        raise port49.HostKeyError("address", "ansible_port is not a number", device) from None
+    entry = hostkeys.address_entry(address, port)
+    ssh = _ssh_options()
+    paths, write_to, hash_names = hostkeys.known_files(name, **ssh)
+    krl = hostkeys.revoked_keys_file(name, **ssh)
+    name_keys, name_revoked = hostkeys.filed(name, paths)
+    addr_keys, addr_revoked = hostkeys.filed(entry, [known_hosts_file])
+
+    def revoked(revoked_lines, key):
+        kh = hostkeys.KnownHosts(name, (), (), tuple(revoked_lines), krl, False, hash_names, write_to)
+        return hostkeys.is_revoked(kh, *key.split(" ", 1))
+
+    if any(revoked(addr_revoked + name_revoked, k) for k in addr_keys):
+        raise port49.HostKeyError("host_key_revoked", f"a key filed for {address} is revoked (an @revoked line, or "
+                                  f"your RevokedHostKeys): verify the device's key on its console before filing "
+                                  f"another", device)
+    name_keys = [k for k in name_keys if not revoked(name_revoked, k)]
+    if name_keys and not addr_keys:
+        hostkeys.append(known_hosts_file, entry, name_keys, hash_names=hash_names)
+    elif name_keys:
+        have = {k.split(" ", 1)[0]: k for k in addr_keys}
+        changed = [(k, have[k.split(" ", 1)[0]]) for k in name_keys
+                   if k.split(" ", 1)[0] in have and have[k.split(" ", 1)[0]] != k]
+        if changed:
+            seen = "; ".join(f"{k.split(' ', 1)[0]}: {device} has {hostkeys.fingerprint(k)}, {address} has "
+                             f"{hostkeys.fingerprint(a)}" for k, a in changed)
+            raise port49.HostKeyError(
+                "host_key_changed", f"the key filed for {address} is not the key filed for {device} ({seen}). "
+                f"Verify the device's key on its console; if the address now belongs to this device, clear the "
+                f"old entry with: ssh-keygen -R {entry} -f {known_hosts_file}", device)
+        hostkeys.append(known_hosts_file, entry, [k for k in name_keys if k.split(" ", 1)[0] not in have],
+                        hash_names=hash_names)
+    elif addr_keys:
+        hostkeys.append(write_to, name, addr_keys, hash_names=hash_names)
 
 
 class LookupModule(LookupBase):
@@ -130,6 +209,9 @@ class LookupModule(LookupBase):
         if not given and any(opt(k) is not None for k in WORKLOAD_ONLY):
             _fail(f"port49: {' and '.join(WORKLOAD_ONLY)} are workload mode options: give {', '.join(WORKLOAD)} too")
         try:
+            known_hosts = os.path.expanduser(opt("known_hosts_file") or "~/.ssh/known_hosts")
+            for d in terms:  # every device, before the one mint (R4)
+                _check_host_keys(d, variables or {}, known_hosts)
             if given:
                 wl = _workload(opt("broker"), opt("broker_ca"), opt("cert"), opt("key"), touch_key=opt("touch_key"),
                                port49=opt("port49") or "port49", deadline=opt("deadline"))

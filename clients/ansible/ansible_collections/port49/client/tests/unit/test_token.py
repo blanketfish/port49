@@ -1,5 +1,8 @@
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import types
 import unittest
 
@@ -39,6 +42,7 @@ for name, mod in {"ansible": types.ModuleType("ansible"), "ansible.errors": type
 import importlib.util  # noqa: E402
 
 import port49  # noqa: E402  (clients/python/src on PYTHONPATH)
+from port49 import hostkeys  # noqa: E402
 
 # Loaded by path: the standard library's `token` is imported already (unittest
 # imports traceback, which imports tokenize), so `import token` would not
@@ -56,7 +60,7 @@ class Calls:
         self.agent, self.workload = [], []
 
 
-class Plugin(unittest.TestCase):
+class PluginCase(unittest.TestCase):
     def setUp(self):
         self.calls = Calls()
         calls = self.calls
@@ -95,6 +99,9 @@ class Plugin(unittest.TestCase):
 
     def lookup(self, terms, **kw):
         return plugin.LookupModule().run(terms, variables={}, **kw)
+
+
+class Plugin(PluginCase):
 
     def test_the_login_token_by_default(self):
         self.assertEqual(self.lookup(["leaf1"]), ["LOGINTOKEN"])
@@ -192,6 +199,252 @@ class Plugin(unittest.TestCase):
         doc = " ".join(plugin.DOCUMENTATION.split())
         self.assertRegex(doc, r"never set it with C\(ansible_network_cli_ssh_type=libssh\)")
         self.assertNotIn("ssh_type=paramiko", doc)
+
+
+NETWORK_CLI = "ansible.netcommon.network_cli"
+ED = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+
+@unittest.skipUnless(shutil.which("ssh") and shutil.which("ssh-keygen"), "needs OpenSSH's ssh and ssh-keygen")
+class HostKeys(PluginCase):
+    """Plan 9f Task 2: network_cli's host keys are checked and copied before a mint (R1 to R5)."""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.home = os.path.join(self.dir, "home")
+        os.makedirs(os.path.join(self.home, ".ssh"))
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old) if old is not None else os.environ.pop("HOME"))
+        self.kh = os.path.join(self.home, ".ssh", "known_hosts")  # the lookup's default known_hosts_file
+        self.names = os.path.join(self.dir, "port49_known_hosts")  # the first UserKnownHostsFile
+        self.use_ssh_config()
+        self.hostvars = {"leaf1": {"ansible_connection": NETWORK_CLI, "ansible_host": "10.0.0.11"},
+                         "leaf2": {"ansible_connection": NETWORK_CLI, "ansible_host": "10.0.0.12"}}
+
+    def use_ssh_config(self, *lines, user=None):
+        # ssh reads ~/.ssh/config through the passwd home, not $HOME: the test names its own config.
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "\n".join([f"UserKnownHostsFile {user or self.names}", "GlobalKnownHostsFile /dev/null",
+                                 *lines]) + "\n")
+        saved = plugin._ssh_options
+        plugin._ssh_options = lambda: {"ssh_config": cfg}
+        self.addCleanup(setattr, plugin, "_ssh_options", saved)
+
+    def put(self, path, text):
+        with open(path, "w", encoding="ascii") as f:
+            f.write(text)
+
+    def read(self, path):
+        try:
+            with open(path, encoding="ascii") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    def newkey(self, name, keytype="ed25519"):
+        path = os.path.join(self.dir, name)
+        subprocess.run(["ssh-keygen", "-q", "-t", keytype, "-N", "", "-f", path], check=True)
+        return self.read(path + ".pub").split()[0] + " " + self.read(path + ".pub").split()[1]
+
+    def run_lookup(self, terms, variables=None, **kw):
+        variables = {"inventory_hostname": "leaf1", "hostvars": self.hostvars} if variables is None else variables
+        return plugin.LookupModule().run(terms, variables=variables, **kw)
+
+    def minted(self):
+        return [c for c in self.calls.agent if c[0] == "token"]
+
+    def refused(self, terms=("leaf1",), **kw):
+        with self.assertRaises(AnsibleError) as cm:
+            self.run_lookup(list(terms), **kw)
+        self.assertEqual(WARNINGS, [str(cm.exception)])
+        for text in (str(cm.exception), *WARNINGS):
+            self.assertNotIn("LOGINTOKEN", text)
+            self.assertNotIn("ENABLETOKEN", text)
+        return str(cm.exception)
+
+    def test_case_1_files_the_names_key_under_the_address_then_mints(self):
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+        self.assertEqual(len(self.minted()), 1)
+
+    def test_case_2_a_mismatch_refuses_before_any_mint(self):
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        said = self.refused()
+        self.assertIn("[host_key_changed]", said)
+        self.assertIn("leaf1", said)
+        self.assertIn("10.0.0.11", said)
+        self.assertIn(hostkeys.fingerprint(ED), said)
+        self.assertIn(hostkeys.fingerprint(other), said)
+        self.assertIn(f"ssh-keygen -R 10.0.0.11 -f {self.kh}", said)
+        self.assertEqual(self.calls.agent, [])  # not even the agent was built
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {other}\n")
+
+    def test_the_clearing_command_names_the_bracketed_entry_of_a_non_default_port(self):
+        other = self.newkey("other")
+        self.hostvars["leaf1"]["ansible_port"] = 830
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"[10.0.0.11]:830 {other}\n")
+        self.assertIn(f"ssh-keygen -R [10.0.0.11]:830 -f {self.kh}", self.refused())
+
+    def test_case_2_a_match_mints_and_writes_nothing(self):
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_case_2_a_type_the_address_lacks_is_appended_and_only_it(self):
+        ec = self.newkey("ec", "ecdsa")
+        self.put(self.names, f"leaf1 {ED}\nleaf1 {ec}\n")
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n10.0.0.11 {ec}\n")
+
+    def test_case_2_a_type_the_name_lacks_is_left_alone(self):
+        ec = self.newkey("ec", "ecdsa")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {ED}\n10.0.0.11 {ec}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n10.0.0.11 {ec}\n")
+        self.assertEqual(self.read(self.names), f"leaf1 {ED}\n")
+
+    def test_case_3_the_addresses_key_is_copied_under_the_name(self):
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.names), f"leaf1 {ED}\n")
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+        self.assertEqual(len(self.minted()), 1)
+
+    def test_case_4_a_first_contact_writes_nothing_and_mints(self):
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertIsNone(self.read(self.kh))
+        self.assertIsNone(self.read(self.names))
+
+    def test_a_revoked_address_key_refuses_with_no_mint(self):
+        self.put(self.kh, f"10.0.0.11 {ED}\n@revoked * {ED}\n")
+        self.assertIn("[host_key_revoked]", self.refused())
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_key_revoked_by_revoked_host_keys_refuses_with_no_mint(self):
+        bad = self.newkey("bad")
+        krl = os.path.join(self.dir, "krl")
+        subprocess.run(["ssh-keygen", "-q", "-k", "-f", krl, os.path.join(self.dir, "bad.pub")], check=True)
+        self.use_ssh_config(f"RevokedHostKeys {krl}")
+        self.put(self.kh, f"10.0.0.11 {bad}\n")
+        self.assertIn("[host_key_revoked]", self.refused())
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_revoked_key_of_the_name_is_not_copied(self):
+        good = self.newkey("good", "ecdsa")
+        self.put(self.names, f"leaf1 {ED}\nleaf1 {good}\n@revoked * {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {good}\n")
+
+    def test_another_connection_does_nothing_to_the_file(self):
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        for conn in ("ssh", "netconf", None):
+            self.hostvars["leaf1"].pop("ansible_connection", None)
+            if conn:
+                self.hostvars["leaf1"]["ansible_connection"] = conn
+            self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"], conn)
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {other}\n")
+        self.assertEqual(self.read(self.names), f"leaf1 {ED}\n")
+
+    def test_plain_network_cli_counts_and_the_plays_connection_is_the_fallback(self):
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.hostvars["leaf1"]["ansible_connection"] = "network_cli"
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+        os.remove(self.kh)
+        del self.hostvars["leaf1"]["ansible_connection"]
+        self.run_lookup(["leaf1"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                              "ansible_connection": NETWORK_CLI})
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_workload_mode_with_one_conflicting_device_mints_nothing(self):
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\nleaf2 {ED}\n")
+        self.put(self.kh, f"10.0.0.12 {other}\n")
+        said = self.refused(("leaf1", "leaf2"), broker="https://b", broker_ca="/ca", cert="/c", key="/k")
+        self.assertIn("leaf2", said)
+        self.assertEqual([c for c in self.calls.workload if c[0] == "tokens"], [])
+        self.assertEqual(self.calls.workload, [])  # the broker was not even built
+
+    def test_a_non_default_port_files_the_bracketed_address(self):
+        self.hostvars["leaf1"]["ansible_port"] = 830
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"[10.0.0.11]:830 {ED}\n")
+        self.hostvars["leaf1"]["ansible_port"] = "830"  # a string from inventory
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"[10.0.0.11]:830 {ED}\n")
+
+    def test_another_devices_hostvars_are_used(self):
+        self.put(self.names, f"leaf2 {ED}\n")
+        self.run_lookup(["leaf2"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.12 {ED}\n")
+
+    def test_a_device_without_ansible_host_uses_its_name_as_the_address(self):
+        self.hostvars["leaf1"].pop("ansible_host")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.use_ssh_config(user=self.names)
+        self.run_lookup(["leaf1"], known_hosts_file=self.kh)
+        self.assertEqual(self.read(self.kh), f"leaf1 {ED}\n")
+
+    def test_the_known_hosts_file_option_names_the_addresss_file(self):
+        mine = os.path.join(self.dir, "ansible_known_hosts")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"], known_hosts_file=mine)
+        self.assertEqual(self.read(mine), f"10.0.0.11 {ED}\n")
+        self.assertIsNone(self.read(self.kh))
+
+    def test_hashed_names_are_found_and_copies_are_hashed(self):
+        self.use_ssh_config("HashKnownHosts yes")
+        self.put(self.names, f"{hostkeys.hashed('leaf1')} {ED}\n")
+        self.run_lookup(["leaf1"])
+        line = self.read(self.kh)
+        self.assertTrue(line.startswith("|1|") and line.endswith(f" {ED}\n"), line)
+        self.assertEqual(hostkeys.filed("10.0.0.11", [self.kh])[0], [ED])
+        before = self.read(self.kh)
+        self.run_lookup(["leaf1"])  # the hashed address is found again: nothing is added
+        self.assertEqual(self.read(self.kh), before)
+
+    def test_cert_authority_lines_are_not_keys_and_are_not_copied(self):
+        self.put(self.names, f"@cert-authority leaf1 {ED}\n")
+        self.put(self.kh, f"@cert-authority 10.0.0.11 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"@cert-authority 10.0.0.11 {ED}\n")
+        self.assertEqual(self.read(self.names), f"@cert-authority leaf1 {ED}\n")
+
+    def test_a_device_name_known_hosts_would_misread_is_refused(self):
+        self.hostvars["leaf*"] = {"ansible_connection": NETWORK_CLI}
+        self.assertIn("[device_name]", self.refused(("leaf*",)))
+        self.assertEqual(self.calls.agent, [])
+
+    def test_an_address_known_hosts_cannot_hold_is_refused(self):
+        self.hostvars["leaf1"]["ansible_host"] = "10.0.0.11 evil"
+        self.assertIn("cannot be written to known_hosts as an address", self.refused())
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_port_that_is_not_a_number_is_refused(self):
+        self.hostvars["leaf1"]["ansible_port"] = "ssh"
+        self.refused()
+        self.assertEqual(self.calls.agent, [])
+
+    def test_no_output_carries_the_token(self):
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        self.refused()
+        for path in (self.kh, self.names):
+            self.assertNotIn("LOGINTOKEN", self.read(path))
 
 
 if __name__ == "__main__":
