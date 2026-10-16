@@ -98,7 +98,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	if code := run([]string{"platform", "show", "cisco_iosxe"}, &out, &errb); code != 0 {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
-	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.2.0\n", "      operator:\n        - priv-lvl=7\n",
+	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.3.0\n", "      operator:\n        - priv-lvl=7\n",
 		"    accepted_attributes:\n      - priv-lvl\n", "      - privilege exec level 7 clear counters\n",
 		"    verified: containerlab\n",
 		"#   {match: ['**'], after: secret}\n"} {
@@ -652,11 +652,11 @@ func TestPlatformExportClasses(t *testing.T) {
 	}
 	out.Reset()
 	if code := run([]string{"platform", "export", "--classes", "--config", cfg, "juniper_junos"}, &out, &errb); code != 0 ||
-		!strings.Contains(out.String(), "platform set 1.2.0") ||
+		!strings.Contains(out.String(), "platform set 1.3.0") ||
 		!strings.Contains(out.String(), "delete system login class p49-remote\n"+
 			"set system login class p49-remote idle-timeout 480\n") ||
 		!strings.Contains(out.String(), "set system login user remote class p49-remote\n") {
-		t.Fatalf("1.2.0: code %d\n%s%s", code, out.String(), errb.String())
+		t.Fatalf("1.3.0: code %d\n%s%s", code, out.String(), errb.String())
 	}
 	// Each level's template, where the delivery is one, is a replace too.
 	if d, _ := platform.DialectFor("juniper_junos"); d.BitDelivery == platform.BitDeliveryLocalUserName &&
@@ -1036,5 +1036,30 @@ key_groups:
 			!strings.Contains(out.String(), "batch: 3 configurations checked, 2 failed\n") {
 			t.Fatalf("%q: code %d\n%s%s", files, code, out.String(), errb.String())
 		}
+	}
+}
+
+// Moving a pin from 1.2.0 to 1.3.0 reports juniper_junos's deny_reach_bits as
+// a gated adapter change, with the acknowledge entry that clears it
+// (decision 48 ruling 2).
+func TestPlatformUpgradeTo130GatesDenyReachBits(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(pol, []byte("platform_set: 1.2.0\nscopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show security **\"]}]\n"+
+		"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n"+
+		"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.3.0"}, &out,
+		&errb); code != 0 || !strings.Contains(out.String(), "platform_set 1.2.0 -> 1.3.0\n") ||
+		!strings.Contains(out.String(), "field: deny_reach_bits") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }

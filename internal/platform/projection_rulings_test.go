@@ -37,6 +37,14 @@ func TestValidateProjectionMessages(t *testing.T) {
 		{"no privilege", func(d *Dialect) { d.CeilingBits = nil }, "privilege is required with command_projection"},
 		{"an empty privilege", func(d *Dialect) { d.CeilingBits = map[string][]string{} },
 			"privilege is required with command_projection"},
+		{"a reach bit that is not a bit", func(d *Dialect) {
+			d.RPCEntryDenies = []string{"junoscript **"}
+			d.DenyReachBits = []string{"zzz"}
+		}, "deny_reach_bits[0]: zzz is not a bit under bits"},
+		{"baseline as a reach bit", func(d *Dialect) {
+			d.RPCEntryDenies = []string{"junoscript **"}
+			d.DenyReachBits = []string{BaselineBit}
+		}, "deny_reach_bits[0]: baseline"},
 	} {
 		d := with(junosProjected(BitDeliveryUserPermissions), c.edit)
 		if err := Validate("juniper_junos", d); err == nil || !strings.Contains(err.Error(), c.want) {

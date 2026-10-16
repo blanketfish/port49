@@ -2,6 +2,7 @@ package platform
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"reflect"
 	"slices"
@@ -177,12 +178,84 @@ var shipped120 = func() map[string]Dialect {
 	return out
 }()
 
+// shipped130 is set 1.3.0, value for value: 1.2.0 and juniper_junos's
+// deny_reach_bits (decision 48).
+var shipped130 = func() map[string]Dialect {
+	out := map[string]Dialect{}
+	for name, d := range shipped120 {
+		out[name] = d.clone()
+	}
+	j := out["juniper_junos"]
+	j.DenyReachBits = []string{"view-configuration"}
+	out["juniper_junos"] = j
+	return out
+}()
+
+// Set 1.3.0's files are 1.2.0's, byte for byte, but for juniper_junos's
+// deny_reach_bits block after rpc_entry_denies: nothing else moves.
+func TestTheSet130FilesAreSet120AndDenyReachBits(t *testing.T) {
+	for _, name := range []string{"arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+		was, err1 := fs.ReadFile(platforms.FS, "1.2.0/"+name+".yaml")
+		is, err2 := fs.ReadFile(platforms.FS, "1.3.0/"+name+".yaml")
+		if err1 != nil || err2 != nil {
+			t.Fatal(name, err1, err2)
+		}
+		want := string(was)
+		if name == "juniper_junos" {
+			const at = "    rpc_entry_denies: [\"junoscript **\", \"op **\"]\n"
+			want = strings.Replace(want, at, at+denyReachBlock, 1)
+		}
+		if string(is) != want {
+			t.Errorf("platforms/1.3.0/%s.yaml is not 1.2.0's%s", name,
+				map[bool]string{true: " with the deny_reach_bits block", false: ""}[name == "juniper_junos"])
+		}
+	}
+}
+
+const denyReachBlock = `    # Set 1.3.0: the bits a reply may send where the grant permits a carve-out
+    # of the bit that an allow past the bits is not measured to run, with the
+    # rest of the bit's reach the grant decides nothing of denied on the wire
+    # (decision 48). view-configuration is the one: under view alone an allow
+    # of show configuration was refused on both images
+    # (tests/lab/results/L26c-projected-juniper_*.md), and under view and
+    # view-configuration with its other reach denied, show configuration ran
+    # and that reach, NETCONF and op url were refused on both images
+    # (tests/lab/results/L68-juniper_*.md, L68-netconf-juniper_*.md). Read only
+    # where rpc_entry_denies is kept: a wire deny binds no native RPC. A block
+    # may drop an entry, never add one.
+    deny_reach_bits: [view-configuration]
+`
+
+// Every bit a released set lists in deny_reach_bits has a carve-out: no
+// permit could need it sent otherwise (decision 48).
+func TestShippedReachBitsHaveCarveOuts(t *testing.T) {
+	for version, set := range released {
+		for name, d := range set {
+			for _, bit := range d.DenyReachBits {
+				if len(d.CarveOuts[bit]) == 0 {
+					t.Errorf("set %s, %s: deny_reach_bits names %s, which has no carve-out", version, name, bit)
+				}
+			}
+		}
+	}
+}
+
+// deny_reach_bits is read only with command_projection.
+func TestDenyReachBitsNeedAProjection(t *testing.T) {
+	d, _ := Generic("1.2.0")
+	d.DenyReachBits = []string{"view"}
+	if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "deny_reach_bits is read only with "+
+		"command_projection") {
+		t.Errorf("%v", err)
+	}
+}
+
 func TestTheDefaultSetValueForValue(t *testing.T) {
 	got := Dialects()
-	if len(got) != len(shipped120) {
-		t.Fatalf("%d platforms, want %d", len(got), len(shipped120))
+	if len(got) != len(shipped130) {
+		t.Fatalf("%d platforms, want %d", len(got), len(shipped130))
 	}
-	for name, want := range shipped120 {
+	for name, want := range shipped130 {
 		if !reflect.DeepEqual(got[name], want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got[name], want)
 		}
@@ -194,7 +267,8 @@ func TestTheDefaultSetValueForValue(t *testing.T) {
 // becomes the default, 1.0.0's entry stays here as it is and the new set is
 // added beside it, so a binary upgrade cannot change what a pinned policy
 // renders without this test failing.
-var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110, "1.2.0": shipped120}
+var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110, "1.2.0": shipped120,
+	"1.3.0": shipped130}
 
 func TestEveryReleasedSetIsFrozen(t *testing.T) {
 	for version, want := range released {
@@ -223,6 +297,9 @@ var releasedGeneric = map[string]Dialect{
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
 		EnableUsername: EnablePrincipal},
 	"1.2.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
+		EnableUsername: EnablePrincipal},
+	"1.3.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
 		EnableUsername: EnablePrincipal},
 }
@@ -260,7 +337,7 @@ func TestEmbeddedSetsLoad(t *testing.T) {
 	if _, ok := all[DefaultSet]; !ok {
 		t.Fatalf("no set %s in %v", DefaultSet, Sets())
 	}
-	if !reflect.DeepEqual(Sets(), []string{"1.0.0", "1.1.0", "1.2.0"}) {
+	if !reflect.DeepEqual(Sets(), []string{"1.0.0", "1.1.0", "1.2.0", "1.3.0"}) {
 		t.Fatalf("sets: %v", Sets())
 	}
 	set, ok := Set(DefaultSet)
@@ -637,8 +714,8 @@ func TestAdapterValuesMarshalSnakeCase(t *testing.T) {
 func TestSet120IsSet110AndTheEntryDeny(t *testing.T) {
 	was, ok1 := Set("1.1.0")
 	is, ok2 := Set("1.2.0")
-	if !ok1 || !ok2 || DefaultSet != "1.2.0" {
-		t.Fatalf("sets: %v %v, default %s", ok1, ok2, DefaultSet)
+	if !ok1 || !ok2 {
+		t.Fatalf("sets: %v %v", ok1, ok2)
 	}
 	for name, d := range was {
 		got := is[name]

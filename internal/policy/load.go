@@ -556,7 +556,8 @@ func (p *Policy) buildPlatforms(f file) error {
 				set bool
 			}{{"command_projection", b.Spec.CommandProjection != nil}, {"bits", b.Spec.Bits != nil},
 				{"carve_outs", b.Spec.CarveOuts != nil}, {"bit_delivery", b.Spec.BitDelivery != nil},
-				{"local_user_names", b.Spec.LocalUserNames != nil}, {"rpc_entry_denies", b.Spec.RPCEntryDenies != nil}} {
+				{"local_user_names", b.Spec.LocalUserNames != nil}, {"rpc_entry_denies", b.Spec.RPCEntryDenies != nil},
+				{"deny_reach_bits", b.Spec.DenyReachBits != nil}} {
 				if k.set {
 					return fmt.Errorf("%s.%s: platform set %s does not project %s, and only a platform the pinned set "+
 						"projects is projected: nothing measured there sets a floor under a bit's reach or measures a "+
@@ -764,6 +765,13 @@ func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version stri
 					"says the held bits reach less, so a block may drop one, not add one (spec §8, §15 L12)", at, bit,
 					version, shippedAs)
 			}
+		}
+	}
+	for i, bit := range d.DenyReachBits {
+		if !slices.Contains(ref.DenyReachBits, bit) {
+			return fmt.Errorf("%s.deny_reach_bits[%d]: platform set %s does not measure %s sent with its other "+
+				"reach denied on %s; a block may drop one, not add one (spec §8, §15 L68)", at, i, version, bit,
+				shippedAs)
 		}
 	}
 	// Both faults are reported in one error: a block that adds an entry and
