@@ -59,3 +59,24 @@ func (h Header) Validate() error {
 	}
 	return nil
 }
+
+// ValidateTLS is Validate for a packet on the RFC 9887 listener (spec §10;
+// §13 decision 50 ruling 13): the same checks, but the unencrypted flag MUST
+// be set, since TLS is the boundary and obfuscation never runs over it (RFC
+// 9887 §4). Length comes before the flag, so a packet too long to be TACACS+
+// is noise whatever its flag says.
+func (h Header) ValidateTLS() error {
+	switch {
+	case h.MajorVersion != MajorVersion:
+		return ErrBadVersion
+	case h.Type < TypeAuthen || h.Type > TypeAcct:
+		return ErrBadType
+	case h.SeqNo%2 == 0:
+		return ErrSeqNotOdd
+	case h.Length > MaxBodyLen:
+		return ErrTooLong
+	case h.Flags&FlagUnencrypted == 0:
+		return ErrObfuscatedOverTLS
+	}
+	return nil
+}
