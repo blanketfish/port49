@@ -1,6 +1,7 @@
 package oidctest
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
@@ -21,17 +22,20 @@ import (
 type Issuer struct {
 	URL string
 
-	srv       *httptest.Server
-	mu        sync.Mutex
-	keys      map[string]held
-	published map[string]bool
-	status    int
-	discovery func(map[string]any)
-	raw       []byte
-	gate      chan struct{} // non-nil: /jwks waits for it to close (Hold)
-	arrive    func()
-	fetches   atomic.Int64
-	auth      *AuthServer // nil: /authorize and /token answer 404
+	srv             *httptest.Server
+	mu              sync.Mutex
+	keys            map[string]held
+	published       map[string]bool
+	status          int
+	discoveryStatus int
+	discovery       func(map[string]any)
+	raw             []byte
+	gate            chan struct{} // non-nil: /jwks waits for it to close (Hold)
+	arrive          func()
+	dgate           chan struct{} // non-nil: discovery waits for it to close (HoldDiscovery)
+	darrive         func()
+	fetches         atomic.Int64
+	auth            *AuthServer // nil: /authorize and /token answer 404
 }
 
 type held struct {
@@ -44,10 +48,19 @@ func NewIssuer(t testing.TB) *Issuer {
 	t.Helper()
 	i := &Issuer{keys: map[string]held{}, published: map[string]bool{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		i.mu.Lock()
-		status, hook, auth := i.status, i.discovery, i.auth
+		status, hook, auth := cmp.Or(i.status, i.discoveryStatus), i.discovery, i.auth
+		gate, arrive := i.dgate, i.darrive
 		i.mu.Unlock()
+		if gate != nil {
+			arrive()
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if status != 0 {
 			w.WriteHeader(status)
 			return
@@ -163,6 +176,14 @@ func (i *Issuer) Fail(status int) {
 	i.status = status
 }
 
+// DiscoveryStatus answers discovery alone with status; 0 answers it again.
+// Fail sets this and the JWKS's together.
+func (i *Issuer) DiscoveryStatus(status int) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.discoveryStatus = status
+}
+
 // ServeJWKS serves raw at /jwks in place of the keys; nil serves the keys.
 func (i *Issuer) ServeJWKS(raw []byte) {
 	i.mu.Lock()
@@ -188,6 +209,22 @@ func (i *Issuer) Hold() (arrived <-chan struct{}, release func()) {
 	return in, func() {
 		i.mu.Lock()
 		i.gate, i.arrive = nil, nil
+		i.mu.Unlock()
+		close(gate)
+	}
+}
+
+// HoldDiscovery is Hold's twin for the discovery document: it stalls every
+// discovery request until release is called, or the request's context ends.
+func (i *Issuer) HoldDiscovery() (arrived <-chan struct{}, release func()) {
+	gate, in := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	i.mu.Lock()
+	i.dgate, i.darrive = gate, func() { once.Do(func() { close(in) }) }
+	i.mu.Unlock()
+	return in, func() {
+		i.mu.Lock()
+		i.dgate, i.darrive = nil, nil
 		i.mu.Unlock()
 		close(gate)
 	}
