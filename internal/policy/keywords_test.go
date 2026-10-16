@@ -21,7 +21,7 @@ import (
 const projectedKeywords = `platform: juniper_junos
 nodes:
   "": {words: ["clear", "configure", "help", "monitor", "ping", "quit", "request", "set", "show", "traceroute"], argument: false}
-  "show": {words: ["alpha", "bravo", "charlie", "configuration", "delta", "echo", "foxtrot", "golf", "hotel", "india", "interfaces", "juliett", "kilo", "lima", "log", "mike", "november", "oscar", "papa", "route", "system", "version"], argument: false}
+  "show": {words: ["alpha", "bravo", "charlie", "configuration", "delta", "echo", "foxtrot", "golf", "hotel", "india", "interfaces", "juliett", "key", "kilo", "lima", "log", "mike", "november", "oscar", "papa", "route", "system", "version"], argument: false}
   "show configuration": {words: [], argument: true}
   "show interfaces": {words: ["terse"], argument: true}
   "show route": {words: [], argument: true}

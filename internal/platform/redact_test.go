@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"io/fs"
 	"reflect"
 	"slices"
 	"strconv"
@@ -348,7 +349,7 @@ func TestAURLPasswordIsRedacted(t *testing.T) {
 func TestEachPatternIsJudgedOnBothForms(t *testing.T) {
 	rules := []Redaction{{Match: []string{"tunnel", "psk", "*", "key", "*"}, After: "psk"},
 		{Match: []string{"**"}, After: "key"}}
-	raw := []string{"cmd=tunnel", "cmd-arg=psk", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1", "cmd-arg=|",
+	raw := []string{"cmd=tunnel", "cmd-arg=password", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1", "cmd-arg=|",
 		"cmd-arg=no-more"}
 	vector := []string{"tunnel", "psk", "S3cret", "key", "K1"}
 	r, v, redacted := RedactRecord(rules, raw, vector)
@@ -615,5 +616,176 @@ func TestAValueIsMatchedInAnyUnicodeCase(t *testing.T) {
 	}
 	if got := QuoteShown([]string{v}, `show pä"SS9 **`); got != `"show `+Redacted+` **"` {
 		t.Errorf("%s", got)
+	}
+}
+
+// Rendered registers only text whose every hidden word is regex syntax or a
+// proven deny keyword. A keyword glued to a literal, `community,X`, is not one
+// prose word, so the literal is never proven and prints redacted (issue 17,
+// review I2 and M3).
+func TestRenderedRefusesAKeywordGluedToALiteral(t *testing.T) {
+	rules := Redactions("juniper_junos")
+	glued := `^( *snmp-server +community,fakesecret123( .*)? *(\|.*)?)$`
+	if Rendered(rules, glued, []string{"snmp-server", "community,fakesecret123"}) ||
+		Rendered(rules, glued, []string{"snmp-server", "community"}) {
+		t.Fatal("a keyword glued to a literal was registered")
+	}
+	printed := RedactQuoted(rules, strconv.Quote(glued))
+	if strings.Contains(printed, "fakesecret123") {
+		t.Fatalf("the literal was printed: %s", printed)
+	}
+	// The same line with a clean keyword registers, and prints whole.
+	clean := `^( *show +key( .*)? *(\|.*)?)$`
+	if !Rendered(rules, clean, []string{"show", "key", "**"}) || RedactQuoted(rules, strconv.Quote(clean)) != strconv.Quote(clean) {
+		t.Fatalf("a proven keyword's line was not printed as rendered: %s", RedactQuoted(rules, strconv.Quote(clean)))
+	}
+	// A word no rule proved is not exempt, even without a literal's look.
+	unproven := `^( *show +key( foo)?)$`
+	if Rendered(rules, unproven, []string{"show", "key"}) || !Rendered(rules, unproven, []string{"show", "key", "foo"}) {
+		t.Fatal("a hidden word is exempt only when proven")
+	}
+}
+
+// The safety of Rendered rests on a shipped deny keyword being exactly one
+// prose word as the printer tokenizes it: a keyword with a separator in it
+// would split into pieces the proof does not cover.
+func TestEveryShippedKeywordIsOneProseWord(t *testing.T) {
+	versions, err := fs.ReadDir(platforms.Keywords, "keywords")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, v := range versions {
+		if !v.IsDir() {
+			continue
+		}
+		k := KeywordsFor(v.Name(), "juniper_junos")
+		if k == nil {
+			continue
+		}
+		for path, node := range k.nodes {
+			for _, w := range node.Words {
+				n++
+				if !oneProseWord(w) {
+					t.Errorf("%s: keyword %q after %q is not one prose word", v.Name(), w, path)
+				}
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no shipped keyword was checked")
+	}
+}
+
+// oneProseWord is whether word is a single word as the printer tokenizes.
+func oneProseWord(word string) bool {
+	sp := proseWord.FindAllStringIndex(word, -1)
+	return len(sp) == 1 && sp[0][0] == 0 && sp[0][1] == len(word) && word[0] != '\\'
+}
+
+// Rendered's whitespace pass refuses text a URL's password hides, which the
+// prose pass cannot see: the URL's pieces are no keyword (issue 17, review m3).
+func TestRenderedRefusesATextTheWhitespacePassHides(t *testing.T) {
+	rules := Redactions("default")
+	text := "copy scp://u:fakesecret123@h/x t"
+	if Rendered(rules, text, nil) {
+		t.Fatal("a URL password was registered")
+	}
+	if got := RedactQuoted(rules, strconv.Quote(text)); strings.Contains(got, "fakesecret123") {
+		t.Fatalf("the literal was printed: %s", got)
+	}
+}
+
+// A credential keyword glued to a value with any separator hides the value on
+// every path a line is printed by (issue 19): the whitespace pass, the quoted
+// prose pass, a rule's words and a record's two forms.
+func TestAGlueSeparatorNeverCarriesAValuePast(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			rules := Redactions(name)
+			line := "request password" + sep + lit
+			paths := map[string]string{}
+			got, _ := Redact(rules, []string{line})
+			paths["Redact"] = got[0]
+			words, _ := RedactRule(rules, strings.Fields(line))
+			paths["RedactRule"] = strings.Join(words, " ")
+			paths["RedactProse"] = RedactProse(rules, line)
+			paths["RedactQuoted"] = RedactQuoted(rules, strconv.Quote(line))
+			paths["RedactQuoted regex"] = RedactQuoted(rules, strconv.Quote("^( *request +password"+sep+lit+"( .*)? *)$"))
+			raw, vec, _ := RedactRecord(rules, []string{"cmd=request", "cmd-arg=password" + sep + lit, "cmd-arg=<cr>"},
+				[]string{"request", "password" + sep + lit, "<cr>"})
+			paths["RedactRecord"] = strings.Join(raw, " ") + " " + strings.Join(vec, " ")
+			for path, out := range paths {
+				if strings.Contains(out, lit) {
+					t.Errorf("%s: sep %q: %s printed the literal: %s", name, sep, path, out)
+				}
+			}
+		}
+	}
+}
+
+// A part of a word split at a glue separator is a credential keyword only
+// whole or at three characters: an IPv6 hextet `a` is not `area-password` and
+// a typed `ping 2001:db8:a::1` is kept in a record (round 3 of issue 19).
+func TestAnIPv6LiteralIsNotReadAsAGluedKeyword(t *testing.T) {
+	for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+		rules := Redactions(name)
+		for _, line := range []string{"ping 2001:db8:a::1", "traceroute 2001:db8:c::1", "ping 2001:db8:d::1",
+			"ping 2001:db8:e::1", "show route 2001:db8:a::/48", "show ip route vrf a/b", "show route k/l"} {
+			if got, redacted := Redact(rules, []string{line}); redacted || got[0] != line {
+				t.Errorf("%s: Redact(%q) = %q", name, line, got[0])
+			}
+			// A hidden value is learned by the CLI writer and blanked wherever
+			// it prints: `1` would turn `platform_set: 1.3.0` into `«redacted».3.0`.
+			if v := HiddenValues(rules, strings.Fields(line)); len(v) != 0 {
+				t.Errorf("%s: HiddenValues(%q) = %q", name, line, v)
+			}
+			raw, vec, redacted := RedactRecord(rules, []string{"cmd=" + line, "cmd-arg=<cr>"}, []string{line})
+			if redacted || strings.Join(raw, " ") != "cmd="+line+" cmd-arg=<cr>" || vec[0] != line {
+				t.Errorf("%s: RedactRecord(%q) = %q %q", name, line, raw, vec)
+			}
+		}
+	}
+}
+
+// A keyword abbreviated to three characters or more, glued to a value with
+// any separator, is still a credential on every path.
+func TestAnAbbreviatedGluedKeywordIsStillRedacted(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			rules := Redactions(name)
+			for _, kw := range []string{"pas", "pass", "sec", "secr"} {
+				line := "request " + kw + sep + lit
+				got, _ := Redact(rules, []string{line})
+				if strings.Contains(got[0], lit) {
+					t.Errorf("%s: sep %q: Redact(%q) = %q", name, sep, line, got[0])
+				}
+			}
+		}
+	}
+}
+
+// A word that starts with a separator is split after it (round 3).
+func TestAWordStartingWithASeparatorIsStillSplit(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ";", "+", "|", "/"} {
+		for _, word := range []string{sep + "password" + sep + lit, sep + "password=" + lit, sep + "password:" + lit} {
+			for _, name := range []string{"default", "cisco_iosxe", "juniper_junos"} {
+				rules := Redactions(name)
+				got, _ := Redact(rules, []string{"request " + word})
+				if strings.Contains(got[0], lit) {
+					t.Errorf("%s: Redact(%q) = %q", name, word, got[0])
+				}
+				if p := RedactProse(rules, "request "+word); strings.Contains(p, lit) {
+					t.Errorf("%s: RedactProse(%q) = %q", name, word, p)
+				}
+			}
+		}
+	}
+	got, _ := Redact(Redactions("default"), []string{"request ,password", lit})
+	if strings.Contains(strings.Join(got, " "), lit) {
+		t.Errorf("a leading-separator keyword word: %q", got)
 	}
 }

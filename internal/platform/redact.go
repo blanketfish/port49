@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -129,6 +131,27 @@ func Redactions(platformName string) []Redaction {
 // (task 10 review I1). A URL's password is replaced whatever the patterns
 // say (redactURL). An element nothing touches comes back as it was.
 func Redact(rules []Redaction, elements []string) ([]string, bool) {
+	out, first := redact(rules, elements, glueFirst)
+	// A value glued to its keyword with `,` `;` `+` `|` or `/` is read the
+	// same way, by a second pass that splits a word at every one of them
+	// (issue 19). It is a second pass, run over the first's output, so a
+	// word with such a character keeps its place in the first pass's
+	// pattern positions, `Gi0/1` as one argument, and only ever loses more.
+	out, second := redact(rules, out, glueAll)
+	if !first && !second {
+		return elements, false
+	}
+	return out, true
+}
+
+// How a word is split where a value is glued to its keyword: at the first
+// `=` or `:`, or at every separator the printer and the devices accept.
+const (
+	glueFirst = "=:"
+	glueAll   = "=:,;+|/"
+)
+
+func redact(rules []Redaction, elements []string, seps string) ([]string, bool) {
 	var words []string
 	var owner []int
 	for i, e := range elements {
@@ -152,16 +175,44 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	// password (task 15 re-review N1).
 	var split []glued
 	for i, w := range words {
-		j := strings.IndexAny(w, "=:")
-		if rewritten[i] || j <= 0 || strings.Contains(w, "://") {
+		// With glueAll a leading separator is not the keyword's: `/password,X`
+		// and `,password=X` are the keyword and a value (round 3 of issue 19).
+		base := 0
+		if seps == glueAll {
+			base = len(w) - len(strings.TrimLeft(w, seps))
+		}
+		body := w[base:]
+		j := strings.IndexAny(body, seps)
+		if rewritten[i] || body == "" || j == 0 || strings.Contains(w, "://") {
 			lead, text := option(w)
 			split = append(split, glued{word: i, lead: lead, text: text})
 			continue
 		}
-		lead, text := option(w[:j])
-		split = append(split, glued{word: i, lead: lead, text: text, sep: w[j : j+1]})
-		if j+1 < len(w) {
-			split = append(split, glued{word: i, text: w[j+1:], value: true})
+		if j < 0 {
+			// No separator after the leading ones: the word is its keyword.
+			lead, text := option(body)
+			split = append(split, glued{word: i, lead: lead, text: text})
+			continue
+		}
+		lead, text := option(body[:j])
+		split = append(split, glued{word: i, lead: lead, text: text, sep: body[j : j+1], part: seps == glueAll})
+		// The first separator splits the word in two; with glueAll every
+		// one splits the rest too, and a hidden part hides the word's tail.
+		rest, at := body[j+1:], base+j+1
+		for len(rest) > 0 {
+			end := len(rest)
+			if seps == glueAll {
+				if k := strings.IndexAny(rest, seps); k >= 0 {
+					end = k
+				}
+			}
+			if end > 0 {
+				split = append(split, glued{word: i, text: rest[:end], value: true, offset: at, part: seps == glueAll})
+			}
+			if end == len(rest) {
+				break
+			}
+			rest, at = rest[end+1:], at+end+1
 		}
 	}
 	matched := make([]string, len(split))
@@ -187,7 +238,7 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 			// `pre-shared-key local X` in an IKEv2 keyring. The command
 			// word is still never removed.
 			for k := 0; k < len(matched); k++ {
-				if sameWord(r.After, matched[k]) && (k > command || keywordShaped(r.After, matched, k)) {
+				if sameWord(r.After, matched[k]) && (!split[k].part || keywordPart(r.After, matched[k])) && (k > command || keywordShaped(r.After, matched, k)) {
 					start = k + 1
 					break
 				}
@@ -209,9 +260,10 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	for k, g := range split {
 		switch {
 		case !hideSplit[k]:
+		case g.value && !hide[g.word] && !rewritten[g.word]:
+			words[g.word], rewritten[g.word] = words[g.word][:g.offset]+Redacted, true
 		case g.value && !hide[g.word]:
-			kw := split[k-1]
-			words[g.word], rewritten[g.word] = kw.lead+kw.text+kw.sep+Redacted, true
+			// An earlier part already hid this part with the tail.
 		default:
 			hide[g.word] = true
 		}
@@ -256,6 +308,15 @@ func keywordShaped(keyword string, words []string, k int) bool {
 	return false
 }
 
+// keywordPart reports whether text, a part of a word split at the glue
+// separators, reads as keyword: whole, or at three characters or more. A
+// shorter part is a letter of an IPv6 literal or a slash-joined name, `a` in
+// `2001:db8:a::1`, and no hex string of three or more characters abbreviates
+// a keyword (round 3 of issue 19).
+func keywordPart(keyword, text string) bool {
+	return strings.EqualFold(keyword, text) || len(text) >= 3
+}
+
 // glued is one word as Redact matches it: a whole word, or the keyword or
 // the value part of one glued with sep, with an option's leading `-` or `/`
 // as lead.
@@ -265,6 +326,10 @@ type glued struct {
 	text  string
 	sep   string
 	value bool
+	// offset is where a value part begins in its word.
+	offset int
+	// part is set on every part of a word split at the glue separators.
+	part bool
 }
 
 // option splits an option's leading `-` and `/` from w; a word of nothing
@@ -337,7 +402,7 @@ func RedactQuoted(rules []Redaction, line string) string {
 // redactQuotedValue is one quoted value as RedactQuoted prints it, and
 // whether redaction changed it.
 func redactQuotedValue(rules []Redaction, value string) (string, bool) {
-	if ShippedText(value) {
+	if ShippedText(value) || isRendered(value) {
 		return value, false
 	}
 	shown := RedactProse(rules, value)
@@ -345,6 +410,57 @@ func redactQuotedValue(rules []Redaction, value string) (string, bool) {
 		return value, false
 	}
 	return shown, true
+}
+
+// rendered holds the text a writer registered with Rendered.
+var rendered sync.Map
+
+// Rendered registers text port49 itself rendered, so RedactQuoted prints it
+// as written: the class line and reply a projection hands an operator to
+// paste into a device. The word-level patterns match a regex's pieces by
+// accident, `cli` as an abbreviation of `client-secret`, and hid the words
+// after them (issue 17). It guarantees no word the rules passed in hide, the
+// platform's own and a block's extras as the secret check applies them, not
+// every word the printer, which holds every platform's rules, would hide.
+// port49d registers too, as it projects at runtime; the registry is
+// append-only for the life of the process, so it grows with each distinct
+// reply across reloads.
+//
+// The rule that makes the exemption safe: text is registered only when every
+// word the printer's word-level pass (RedactProse) would hide is regex
+// syntax, a word with no letter or digit in it such as `.`, or a word of
+// proven, the rule words the projection proved against the shipped keyword
+// tree, and the whitespace pass hides nothing. A hidden word is one prose
+// word, so a proven word matches it only when the keyword has no separator
+// in it. Anything else, a keyword glued to a literal as `community,X`, a
+// word proven nowhere, prints redacted as it would unregistered. Rendered
+// reports whether it registered text. Only exact text is exempt.
+func Rendered(rules []Redaction, text string, proven []string) bool {
+	if _, hid := RedactRule(rules, strings.Fields(text)); hid {
+		return false
+	}
+	var words []string
+	for _, sp := range proseWord.FindAllStringIndex(text, -1) {
+		if text[sp[0]] != '\\' {
+			words = append(words, text[sp[0]:sp[1]])
+		}
+	}
+	out, hid := RedactRule(rules, words)
+	for i, w := range words {
+		if !hid || out[i] == w || !strings.ContainsFunc(w, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			continue
+		}
+		if !slices.ContainsFunc(proven, func(p string) bool { return strings.EqualFold(p, w) }) {
+			return false
+		}
+	}
+	rendered.Store(text, struct{}{})
+	return true
+}
+
+func isRendered(text string) bool {
+	_, ok := rendered.Load(text)
+	return ok
 }
 
 // RedactRecord applies rules to a record's raw pairs and its vector, which are

@@ -1212,3 +1212,93 @@ func TestTheNarrowNetconfClosedWarningAdvises(t *testing.T) {
 		t.Errorf("no beneath warning: %v", denies.Projections(noon))
 	}
 }
+
+// The class line a projection_overflow finding tells an operator to paste is
+// what the projection rendered, byte for byte, after the printer's
+// redaction pass too: `cli` in `show cli` abbreviates `client-secret`, and
+// the word-level pass hid the regex that follows it (issue 17). A real
+// secret printed in the same output is still redacted.
+func TestTheOverflowClassLineSurvivesThePrinter(t *testing.T) {
+	bindingRPCs(t)
+	// `key` is a redaction keyword: the word-level pass hid every word of the
+	// regex after `show +key`.
+	body := scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show key **\""
+	for _, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+		"juliett", "kilo", "lima", "mike", "november", "oscar", "papa"} {
+		body += `, "show ` + w + ` **"`
+	}
+	p := parseProjected(t, platform.BitDeliveryLocalUserName, body+"]}\n"+subjOK+grantOK)
+	var msg string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionOverflow {
+			msg = f.Message
+		}
+	}
+	const lead = "set system login class p49-readonly deny-commands "
+	i := strings.Index(msg, lead)
+	if i < 0 {
+		t.Fatalf("no class line: %q %+v", msg, p.Lint(noon))
+	}
+	line := msg[i : i+strings.Index(msg[i:], "; on ")]
+	if !strings.Contains(line, "show +key( .*)?") || strings.Contains(line, platform.Redacted) {
+		t.Fatalf("the finding's own class line: %s", line)
+	}
+	printed := platform.RedactQuoted(p.Redactions(), msg)
+	if !strings.Contains(printed, line) {
+		t.Fatalf("the printer changed the class line:\nwant %s\ngot  %s", line, printed)
+	}
+	// The same pass still redacts a real secret quoted beside it.
+	secret := platform.RedactQuoted(p.Redactions(), msg+` rule "snmp-server community Hunter2 **"`)
+	if strings.Contains(secret, "Hunter2") || !strings.Contains(secret, "community «redacted»") {
+		t.Fatalf("a secret reached the output: %s", secret)
+	}
+}
+
+// A credential keyword glued to a value with any separator is a secret rule,
+// refused as secret_rule, and no finding or caveat prints the value (issue
+// 19): the separator the splitter missed, `,`, passed the secret check and
+// printed the value.
+func TestAGluedCredentialIsASecretRuleWhateverTheSeparator(t *testing.T) {
+	const lit = "fakesecret123"
+	for _, sep := range []string{",", ":", "=", "+", "|", ";", "/"} {
+		rule := "show system radius-server 10.0.0.1 secret" + sep + lit
+		for _, roles := range []string{
+			`permit: ["show **", "` + rule + `"]`,
+			`permit: ["show **"], deny: ["` + rule + `"]`,
+		} {
+			p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+				roles+"}\n"+subjOK+grantOK)
+			var all []string
+			secretRule := false
+			for _, f := range p.Lint(noon) {
+				all = append(all, f.Message)
+				secretRule = secretRule || strings.Contains(f.Message, `(secret_rule): role "r" has a rule`)
+			}
+			for _, line := range []string{"", "show version", rule} {
+				e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+				if err != nil {
+					t.Fatal(err)
+				}
+				all = append(all, e.Caveats...)
+			}
+			if !secretRule || strings.Contains(strings.Join(all, "\n"), lit) {
+				t.Errorf("sep %q, %s:\n%s", sep, roles, strings.Join(all, "\n"))
+			}
+		}
+	}
+}
+
+// An IPv6 literal or a slash-joined name in a rule is not a credential: the
+// policy loads and no finding calls it a secret_rule (round 3 of issue 19).
+func TestAnIPv6RuleIsNotASecretRule(t *testing.T) {
+	for _, rule := range []string{"ping 2001:db8:a::1", "ping 2001:db8:c::1", "ping 2001:db8:d::1",
+		"ping 2001:db8:e::1", "show route 2001:db8:a::/48 **", "show ip route vrf a/b"} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+			`permit: ["show **", "`+rule+`"]}`+"\n"+subjOK+grantOK)
+		for _, f := range p.Lint(noon) {
+			if strings.Contains(f.Message, "secret_rule") {
+				t.Errorf("%q: %s", rule, f.Message)
+			}
+		}
+	}
+}

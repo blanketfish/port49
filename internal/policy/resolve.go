@@ -319,6 +319,7 @@ func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dial
 	// The reply is logged whole, in the authorize_session record and the
 	// blob event, so a rule redaction would hide is never sent (spec §5.8).
 	patterns := append(platform.Redactions(p.WirePlatform(b.Platform)), dialect.Redact...)
+	in.Redactions = patterns
 	in.Secret = func(rule string) bool {
 		_, hidden := platform.RedactRule(patterns, strings.Fields(rule))
 		return hidden
