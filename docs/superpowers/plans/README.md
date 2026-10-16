@@ -220,7 +220,7 @@ and the docs say what Ansible's address keying leaves open, never recommending
 **9d executed 2026-10-13 to 2026-10-14** on `feature/openssh-host-keys-and-python-clients` (base
 `b898e1c4`), each code task reviewed (Plan 9d — As built, below). G1 passed on OpenSSH 8.5p1 to
 10.2p1, so the 8.5 floor stands. L64, L65 and L66 are closed on all five platforms. Ansible's
-`network_cli` address keying stays an open gap, **awaiting Ryan's decision** (no plan yet). L66
+`network_cli` address keying stays an open gap; Ryan ruled 2026-10-15 to close it in the lookup (plan 9f, `2026-10-16-09f-network-cli-host-keys.md`). L66
 showed the pre-flight's paramiko guess above wrong (spec ruling 15 corrected): libssh is the
 `ssh_type` that accepted a changed key under `host_key_auto_add`.
 **9e written 2026-10-14** (`2026-10-14-09e-directory-password-sign-in.md`, fifteen tasks), on Ryan's
@@ -6263,8 +6263,8 @@ all applied before Task 1.
   each; this is the list):**
   - **Ansible `network_cli` keys host keys by address** (`ansible_host`), not by name. Under
     `host_key_auto_add`, both libssh and paramiko presented the token to another host at a moved
-    address (L66 (e)). No `network_cli` `ssh_type` honoured a `HostKeyAlias`. **Awaiting Ryan's
-    decision: whether and how port49 closes this (no plan yet).** Design §17's attack stays open for
+    address (L66 (e)). No `network_cli` `ssh_type` honoured a `HostKeyAlias`. **Ruled 2026-10-15; plan 9f
+    (`2026-10-16-09f-network-cli-host-keys.md`) closes it in the lookup.** Design §17's attack stays open for
     `network_cli` under `host_key_auto_add`, documented as a gap.
   - **libssh with `host_key_auto_add` accepts a changed key** and presents the token (L66 (c)).
   - **paramiko refuses a known_hosts that holds any `@revoked` or `@cert-authority` line**
