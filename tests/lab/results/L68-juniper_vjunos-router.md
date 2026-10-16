@@ -4,9 +4,9 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L68-juniper_vjunos-router.pcap` — 4784 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L68-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L68-juniper_vjunos-router.pcap` — 4786 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L68-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `226b97ba894b84e03d7124f03e5bff92aedb4eb7`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL68ViewConfigurationCLI$`
+- **Run:** commit `5fba3a804ab7115d7a37b93b2527dc71564a9ade`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL68ViewConfigurationCLI$`
 
 ## Claim
 
@@ -14,7 +14,7 @@ Whether `user-permissions` holding view-configuration, with deny-commands coveri
 
 ## Observation
 
-**Gate:** G1: STOP —    monitor   list: P took it past its deny;    monitor   list: H took it past its deny; G1-operator: STOP —    monitor   list: O took it past its deny
+**Gate:** G1: pass; G1-operator: pass
 
 The reference configuration was committed: commit complete.
 
@@ -38,7 +38,7 @@ The reference configuration was committed: commit complete.
 | mon p49-none | refused | refused | refused | refused | refused | past |
 | monitor list | refused | refused | refused | refused | refused | past |
 | monitor list \| no-more | refused | refused | refused | refused | refused | past |
-|    monitor   list | past | past | past | past | past | past |
+|    monitor   list | refused | refused | refused | refused | refused | past |
 | MONITOR LIST | refused | refused | refused | refused | refused | refused |
 | request mpls p49-none | refused | refused | refused | refused | refused | past |
 | req mpls p49-none | refused | refused | refused | refused | refused | past |
@@ -78,7 +78,7 @@ The reference configuration was committed: commit complete.
 | mon p49-none | deny | deny | deny |
 | monitor list | deny | deny | deny |
 | monitor list \| no-more | deny | deny | deny |
-|    monitor   list | reached | reached | reached |
+|    monitor   list | deny | deny | deny |
 | request mpls p49-none | deny | deny | deny |
 | req mpls p49-none | deny | deny | deny |
 | request mp p49-none | deny | deny | deny |
@@ -363,7 +363,7 @@ unknown command.
 unknown command.
 
 alice01@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
@@ -916,7 +916,7 @@ set cli screen-length 5
 Screen length set to 5
 
 alice04@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
@@ -1446,7 +1446,7 @@ unknown command.
 unknown command.
 
 alice06@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
@@ -1987,7 +1987,7 @@ unknown command.
 unknown command.
 
 alice08@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 
 alice08@srx1> set
               ^
@@ -2544,7 +2544,7 @@ set cli screen-length 5
 Screen length set to 5
 
 alice10@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 version /* ACCESS-DENIED */;
 system { /* ACCESS-DENIED */ };
 chassis { /* ACCESS-DENIED */ };
@@ -3044,7 +3044,7 @@ set cli screen-length 5
 Screen length set to 5
 
 alice11@srx1> show configuration 
-## Last commit: 2026-10-16 08:16:09 UTC by breakglass
+## Last commit: 2026-10-16 08:36:58 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
