@@ -643,3 +643,21 @@ func TestTheRefusalsCarryTheWordsThatArePerProcess(t *testing.T) {
 		t.Fatalf("the bound's remedy: %s", reloadRemedy)
 	}
 }
+
+func TestATransportFlipIsOneSecurityChange(t *testing.T) {
+	tcp := dev("leaf-01", "10.0.1.1", map[string]string{"site": "dc1"})
+	tls := tcp
+	tls.Transport = admission.TransportTLS
+	var kinds []string
+	for _, c := range Diff(mustBundle(t, tcp), mustBundle(t, tls), time.Now()).Changes {
+		if c.Device == "leaf-01" {
+			kinds = append(kinds, c.Kind)
+			if c.Kind == TransportChanged && (c.From != "tcp" || c.To != "tls" || !c.Security) {
+				t.Errorf("transport_changed: %+v", c)
+			}
+		}
+	}
+	if !slices.Equal(kinds, []string{TransportChanged}) {
+		t.Fatalf("changes for leaf-01: %v, want only transport_changed", kinds)
+	}
+}

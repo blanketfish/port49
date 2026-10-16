@@ -228,3 +228,19 @@ func TestKeysNeverPrintAPastedPin(t *testing.T) {
 		}
 	}
 }
+
+func TestKeysShowSaysATLSDeviceHasNoKey(t *testing.T) {
+	pol, _, cfg, _ := keysFiles(t)
+	inv := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: tls-7, platform: arista_eos, addresses: [10.20.0.70], transport: tls}\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "tls-7"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if want := "tls-7: transport tls (RFC 9887): no shared key; its credential is its certificate"; !strings.Contains(out.String(), want) {
+		t.Fatalf("got %q", out.String())
+	}
+}

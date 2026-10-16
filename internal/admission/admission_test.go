@@ -300,20 +300,45 @@ key_groups:
 			t.Errorf("%s: %+v", name, r)
 		}
 	}
-	for name, why := range map[string]string{"tls-1": "plan 11", "udp-1": `transport "udp"`} {
-		r := Resolve(byName[name], inv.KeyGroups)
-		if r.Refusal != RefusedTransport || r.KeyRef != "" || !strings.Contains(r.Refused, why) {
-			t.Errorf("%s: want refused_transport naming %s, got %+v", name, why, r)
-		}
+	if r := Resolve(byName["tls-1"], inv.KeyGroups); r.Refused != "" || r.KeyRef != "" {
+		t.Errorf("tls-1: a TLS device is admitted with no key_ref (decision 50 ruling 4), got %+v", r)
+	}
+	r := Resolve(byName["udp-1"], inv.KeyGroups)
+	if r.Refusal != RefusedTransport || r.KeyRef != "" || !strings.Contains(r.Refused, `transport "udp"`) {
+		t.Errorf("udp-1: want refused_transport, got %+v", r)
 	}
 	tr, err := Build(inv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for addr, admitted := range map[string]bool{"10.0.0.1": true, "10.0.0.2": true, "10.0.0.3": false, "10.0.0.4": false} {
+	for addr, admitted := range map[string]bool{"10.0.0.1": true, "10.0.0.2": true, "10.0.0.3": true, "10.0.0.4": false} {
 		if _, ok := tr.Lookup(netip.MustParseAddr(addr)); ok != admitted {
 			t.Errorf("%s: admitted %v, want %v", addr, ok, admitted)
 		}
+	}
+}
+
+func TestATLSDeviceIgnoresKeyGroupsAndItsPin(t *testing.T) {
+	d := Device{Name: "tls-9", Platform: "arista_eos", Transport: TransportTLS, KeyRef: "pinned_key",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.9.0.1")}}
+	groups := []KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "prod_key"},
+		{Name: "tls-9", KeyRef: "other_key"}}
+	r := Resolve(d, groups)
+	if r.Refused != "" || r.KeyRef != "" {
+		t.Fatalf("a TLS device takes no key, pinned or grouped: %+v", r)
+	}
+	if got := d.EffectiveTransport(); got != TransportTLS {
+		t.Fatalf("EffectiveTransport: %q", got)
+	}
+	if got := (Device{}).EffectiveTransport(); got != TransportTCP {
+		t.Fatalf("an absent transport is tcp: %q", got)
+	}
+	tr, err := Build(Inventory{Devices: []Device{d}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := tr.Lookup(netip.MustParseAddr("10.9.0.1")); !ok || got.Refused != "" || got.KeyRef != "" {
+		t.Fatalf("Build: %+v %v", got, ok)
 	}
 }
 

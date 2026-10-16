@@ -1115,6 +1115,9 @@ func load(path string, role Role) (Config, error) {
 		}
 	}
 	for _, d := range inv.Devices {
+		if d.EffectiveTransport() == admission.TransportTLS {
+			continue // its pin is ignored, as with a broker (decision 50 rulings 3, 18)
+		}
 		if d.KeyRef != "" && !admission.KeyRefShape.MatchString(d.KeyRef) {
 			// Not printed: a pin that is not a name may be a secret.
 			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s)",
@@ -1130,7 +1133,7 @@ func load(path string, role Role) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// A device that matches no key group builds without error (admission.Build
+	// A tcp device that matches no key group builds without error (admission.Build
 	// simply omits it from the table) and then fails every packet at runtime as
 	// an unresolved key. That is a configuration mistake, not a device it's fine
 	// to leave unreachable, so it is refused here rather than discovered later.
@@ -1139,7 +1142,8 @@ func load(path string, role Role) (Config, error) {
 		for _, a := range d.Addresses {
 			// Admitted is Refused == "", never an index hit or a key_ref
 			// alone (Task 3 review M3).
-			if r, ok := trie.Lookup(a); ok && r.Refused == "" && r.KeyRef != "" {
+			if r, ok := trie.Lookup(a); ok && r.Refused == "" &&
+				(r.KeyRef != "" || r.Device.EffectiveTransport() == admission.TransportTLS) {
 				resolved = true
 				break
 			}

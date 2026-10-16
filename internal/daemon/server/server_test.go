@@ -1311,7 +1311,7 @@ func TestARefusedEntryIsNeverValidatedUnderItsKey(t *testing.T) {
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		dev := admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
 		trie, err := admission.NewTrie([]admission.Resolved{{Device: dev, KeyRef: "prod_key",
-			Refused: "has transport tls, RFC 9887, which port49d does not serve until plan 11", Refusal: admission.RefusedTransport}})
+			Refused: "has transport \"udp\", which is not tcp or tls", Refusal: admission.RefusedTransport}})
 		if err != nil {
 			t.Fatal(err)
 		}

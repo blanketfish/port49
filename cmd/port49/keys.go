@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/keystatus"
@@ -122,6 +123,9 @@ func keysStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	var devices []keystatus.Device
 	for _, d := range p.Devices() {
+		if d.EffectiveTransport() == admission.TransportTLS {
+			continue // no key to phase out (decision 50 ruling 3)
+		}
 		r, _ := p.Admitted(d.Name)
 		devices = append(devices, keystatus.Device{Name: d.Name, KeyRef: r.KeyRef, Addresses: d.Addresses})
 	}
@@ -172,6 +176,10 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	if r.Refused != "" {
 		fmt.Fprintf(stdout, "%s: refused admission: %s\n", name, r.Refused)
 		return 1
+	}
+	if r.Device.EffectiveTransport() == admission.TransportTLS {
+		fmt.Fprintf(stdout, "%s: transport tls (RFC 9887): no shared key; its credential is its certificate\n", name)
+		return 0
 	}
 	as, _ := p.KeyAssignment(name)
 	fmt.Fprintf(stdout, "%s: key_ref %s, by the %s tier (%s)\n", name, r.KeyRef, as.Tier, as.Group)

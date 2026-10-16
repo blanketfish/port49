@@ -24,6 +24,7 @@ const (
 	AddressAdded      = "address_added"
 	AddressRemoved    = "address_removed"
 	KeyRefChanged     = "key_ref_changed"
+	TransportChanged  = "transport_changed"
 	AdmissionChanged  = "admission_changed"
 	ScopeJoined       = "scope_joined"
 	ScopeLeft         = "scope_left"
@@ -139,7 +140,12 @@ func Diff(old, new *policy.Policy, now time.Time) Report {
 			// changes (plan 6a, I5). A refused entry carries no key_ref, so
 			// the keys are compared only where both sides admit the device;
 			// a flip is the admission_changed below.
-			if ro.Refused == "" && rn.Refused == "" && ro.KeyRef != rn.KeyRef {
+			// A transport change swaps the device's credential, a shared key
+			// for a certificate or back (decision 50 ruling 4): a security
+			// change, and the key_ref change it implies is not said twice.
+			if ot, nt := o.EffectiveTransport(), n.EffectiveTransport(); ot != nt {
+				add(Change{Kind: TransportChanged, Device: name, Platform: n.Platform, From: ot, To: nt, Security: true})
+			} else if ro.Refused == "" && rn.Refused == "" && ro.KeyRef != rn.KeyRef {
 				add(Change{Kind: KeyRefChanged, Device: name, Platform: n.Platform, From: ro.KeyRef, To: rn.KeyRef,
 					Security: true})
 			}

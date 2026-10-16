@@ -115,7 +115,7 @@ func matchKey(m map[string]string) string {
 }
 
 // admit decides each inventory device's admission (spec §10): its key_ref by
-// tier, or why it is refused — a transport port49d does not serve, no group
+// tier, or why it is refused — a transport that is neither tcp nor tls, no group
 // matches it, two tie on it (admission.Resolve), or its key_ref is not one
 // port49d.yaml defines (Env.KeyRefs). A refused device is refused alone; the
 // policy and the rest of the fleet load (plan 6a Decided 5).
@@ -127,16 +127,20 @@ func (p *Policy) admit(file) error {
 	for _, d := range p.env.Devices {
 		r := admission.Resolve(d, p.keyGroups)
 		r.WirePlatform = p.WirePlatform(d.Platform)
-		if r.Refused == "" && p.env.KeyRefs != nil && !slices.Contains(p.env.KeyRefs, r.KeyRef) {
+		if r.Refused == "" && d.EffectiveTransport() != admission.TransportTLS && p.env.KeyRefs != nil &&
+			!slices.Contains(p.env.KeyRefs, r.KeyRef) {
 			// A refused entry carries no key_ref, since a reader takes one as
 			// admitted; the text names the key instead (Task 3 review M3).
 			r.Refused, r.Refusal = fmt.Sprintf("is assigned key_ref %s, which port49d.yaml defines no key for, so "+
 				"it fails closed (spec §10)", r.KeyRef), admission.RefusedUnknownKey
 			r.KeyRef = ""
 		}
-		// How the key_ref was chosen, for `port49 keys show`; a tie has none.
-		if as, err := admission.Assign(d, p.keyGroups); err == nil {
-			p.assigned[d.Name] = as
+		// How the key_ref was chosen, for `port49 keys show`; a tie has none,
+		// and a TLS device takes no key (decision 50 ruling 3).
+		if d.EffectiveTransport() != admission.TransportTLS {
+			if as, err := admission.Assign(d, p.keyGroups); err == nil {
+				p.assigned[d.Name] = as
+			}
 		}
 		p.admitted[d.Name] = r
 		entries = append(entries, r)
