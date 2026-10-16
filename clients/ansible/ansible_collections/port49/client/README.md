@@ -141,7 +141,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
   (L66 (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
   the new address and presented it the token.
-- **The lookup closes that gap before it mints.** *Measured on L66 (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`.* For a
+- **The lookup closes that gap before it mints.** *Measured on L66 (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`. Measured also without `host_key_auto_add` (L66 (e3d)): the lookup copies the name's key to a new address, the play logs in at the device's own address, and both `libssh` and `paramiko` refuse another host's key at a moved address without presenting the token. **With the lookup, run `network_cli` without `host_key_auto_add`, for either ssh type.** Only a device's very first contact (case 4 below) needs its key filed some other way: connect once with `port49 ssh`, or file a key from `ssh-keyscan` after checking it on the console.* For a
   device on `network_cli` (`ansible_connection` is `network_cli` or `ansible.netcommon.network_cli`,
   or none is visible and `ansible_network_os` is set), it compares the keys filed under the port49
   name with the keys filed under the address in `~/.ssh/known_hosts`. The address is
@@ -164,7 +164,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
   the first contact and kept the file's comments and `@revoked` and `@cert-authority` lines. But
   given a changed key for a host it knew, **it accepted the new key, logged in and presented the
-  token** (L66 (c)). How libssh treats a changed key without `host_key_auto_add` is not measured.
+  token** (L66 (c), (e3b)). Without `host_key_auto_add`, and with the lookup's copy of the name's key at the address, libssh refused another host's key and presented nothing (L66 (e3d)).
 - **`paramiko` with `host_key_auto_add` refused a changed key before authentication.** No TACACS+
   exchange happened and the token was never presented. It has two costs:
   - **It refuses a known_hosts file that holds an `@revoked` or `@cert-authority` line**

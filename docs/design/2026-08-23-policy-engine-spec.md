@@ -9512,7 +9512,11 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   lookup refused `host_key_changed` naming both keys before any mint, for `libssh` and `paramiko`, and
   the same when the connection is named by the play's `connection:` keyword; at a moved address with no
   entry, `libssh` with `host_key_auto_add` still accepted the stand-in's key and presented the token,
-  and `paramiko` refused it). For a device whose `ansible_connection` is `network_cli` or
+  and `paramiko` refused it. Without `host_key_auto_add` (L66 (e3d), same note), the control at the device's
+  own address logged in after the lookup's copy, and at a moved address with no entry both `libssh` and
+  `paramiko` refused the stand-in's key and presented nothing. So with the lookup, `network_cli` runs
+  without `host_key_auto_add`, and only a device's first contact (case 4) needs a key filed some other
+  way: `port49 ssh` once, or `ssh-keygen`/`ssh-keyscan` checked on the console). For a device whose `ansible_connection` is `network_cli` or
   `ansible.netcommon.network_cli`, or that has none visible but an `ansible_network_os`, the lookup
   compares the keys filed under the port49 name with the keys filed under the address (`ansible_host`,
   else the inventory name; `[address]:port` when `ansible_port` is not 22) in `known_hosts_file`
@@ -9533,7 +9537,7 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   `host_key_revoked`. In workload mode every device is checked before the one mint. Nothing else
   changes: a device not on `network_cli` is not checked, and `host_key_auto_add` with
   `ssh_type: libssh` is still never recommended, because libssh accepts a key that changes after
-  the check.
+  the check (L66 (e3b)); without it, libssh refuses (L66 (e3d)).
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
