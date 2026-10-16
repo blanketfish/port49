@@ -2,7 +2,9 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 
@@ -120,12 +122,24 @@ func TestRevokingAServiceAccountRefusesItsToken(t *testing.T) {
 	}
 }
 
-// Review Focus 5: a 339-byte principal revokes whole.
+// Review Focus 5: a 339-byte principal revokes whole, and the mark refuses its token.
 func TestALongServiceAccountRevokes(t *testing.T) {
-	name := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
-	p := "system:serviceaccount:" + strings.Repeat("n", 63) + ":" + name
-	if got, err := normalPrincipal(p); err != nil || got != p {
+	sa := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	ns := strings.Repeat("n", 63)
+	p := "system:serviceaccount:" + ns + ":" + sa
+	if got, err := normalPrincipal(p); err != nil || got != p || len(p) != 339 {
 		t.Fatalf("%q %v", got, err)
+	}
+	f := newFixtureWithPolicy(t, 8, clusterPolicy)
+	iss := f.withCluster(t)
+	f.b.Identity.Verifiers[0].Namespaces = []string{ns}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: p, Origin: "admin_socket uid 0"}); err != nil {
+		t.Fatal(err)
+	}
+	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", ns, sa, f.b.Now(), nil)
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), string(decision.CredentialRevoked)) {
+		t.Fatalf("%s", shown(w))
 	}
 }
 
@@ -180,5 +194,39 @@ func TestAK8sAssertionIsNeverRecordedAsOIDC(t *testing.T) {
 	got := caller{principal: a.Principal, cred: a.Credential(), oidc: &a}.auth()
 	if got.K8s == nil || got.OIDC != nil || got.Method != "k8s" || got.K8s.Cluster != "l69_a" {
 		t.Fatalf("auth = %+v", got)
+	}
+}
+
+// GET /v1/identity answers a workload as k8s, never as a person's oidc caller.
+func TestAK8sCallersIdentityAnswerHasNoOIDC(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, clusterPolicy)
+	iss := f.withCluster(t)
+	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", "netops", "oxidized", f.b.Now(), nil)
+	w := f.bearer(context.Background(), "GET", "/v1/identity", "", raw)
+	var got map[string]any
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("%s", shown(w))
+	}
+	if got["method"] != "k8s" || got["principal"] != "system:serviceaccount:netops:oxidized" || got["oidc"] != nil {
+		t.Fatalf("the identity answer: %v", got)
+	}
+}
+
+// The operator line for a refused cluster token says so, and is its own line:
+// an oidc refusal inside the same window does not silence it.
+func TestAClusterRefusalsOperatorLineSaysK8s(t *testing.T) {
+	logs := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	f := newFixtureWithPolicy(t, 8, clusterPolicy)
+	iss := f.withCluster(t)
+	f.b.Say = nil
+	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "not-a-token") // an oidc-worded refusal first
+	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", "backup", "oxidized", f.b.Now(), nil)
+	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
+	out := logs.String()
+	if !strings.Contains(out, "a k8s token was refused (identity_unmapped): its namespace backup is not one cluster l69_a") {
+		t.Fatalf("the operator's lines: %s", out)
 	}
 }

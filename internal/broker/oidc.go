@@ -108,10 +108,16 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 	if err != nil {
 		method = oidc.MethodOf(err)
 	}
+	// said is the operator line's key prefix and noun: a cluster's refusals
+	// are their own lines, not an oidc provider's.
+	said, what := "oidc", "a bearer token"
+	if method == oidc.KindK8s {
+		said, what = "k8s", "a k8s token"
+	}
 	switch {
 	case errors.Is(err, oidc.ErrUnavailable):
 		deny(decision.TrustDomainUnresolved, "", nil)
-		b.sayOnce("oidc_unavailable", sayEvery, "identity: a bearer token was refused (identity_provider_unavailable): %s",
+		b.sayOnce(said+"_unavailable", sayEvery, "identity: %s was refused (identity_provider_unavailable): %s", what,
 			printsafe.Line(err.Error(), 300))
 		w.Header().Set("Retry-After", "30")
 		writeError(w, http.StatusServiceUnavailable, "identity_provider_unavailable",
@@ -119,7 +125,7 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case errors.Is(err, oidc.ErrUnmapped):
 		deny(decision.IdentityUnmapped, "", nil)
-		b.sayOnce("oidc_unmapped", sayEvery, "identity: a bearer token was refused (identity_unmapped): %s",
+		b.sayOnce(said+"_unmapped", sayEvery, "identity: %s was refused (identity_unmapped): %s", what,
 			printsafe.Line(err.Error(), 300))
 		why := "your token names no principal this broker can use; tell the operator"
 		if method == oidc.KindK8s {
@@ -131,7 +137,7 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case err != nil:
 		deny(decision.TrustDomainUnresolved, "", nil)
-		b.sayOnce("oidc_invalid", sayEvery, "identity: a bearer token was refused (trust_domain_unresolved): %s",
+		b.sayOnce(said+"_invalid", sayEvery, "identity: %s was refused (trust_domain_unresolved): %s", what,
 			printsafe.Line(err.Error(), 300))
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
 		return caller{}, false

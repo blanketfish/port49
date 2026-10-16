@@ -23,7 +23,7 @@ func (b *Broker) identity(w http.ResponseWriter, r *http.Request) {
 	now, at := b.Now(), c.authTime
 	out := api.Identity{Principal: principal, Method: cred.Method, Fingerprint: cred.Fingerprint,
 		Groups: []string{}, Grants: []api.IdentityGrant{}, API: []string{}, AuthTime: at.UTC().Format(time.RFC3339)}
-	if c.oidc != nil {
+	if c.oidc != nil && c.oidc.K8s == nil {
 		out.OIDC = &api.IdentityOIDC{Issuer: c.oidc.Issuer, Sub: c.oidc.Subject, Sid: c.oidc.Sid,
 			AMR: c.oidc.AMR, ACR: c.oidc.ACR}
 	}
