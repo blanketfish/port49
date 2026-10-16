@@ -693,3 +693,40 @@ ban 60`). Each run also makes a refused login as `l53-control` and requires the 
 it: a log that does not is no evidence about what the scan wrote, and the note says the log clause is
 unmeasured. The Junos images log to `messages` through the `system syslog` stanza in
 `configs/vjunos-startup.conf`.
+
+## Kubernetes (L69)
+
+`make lab-k8s` runs L69 (plan 10, spec §15): a Kubernetes cluster's service account tokens as
+port49's `k8s` verifier meets them, on two kind clusters and a local `bin/port49d` with a broker.
+It touches no device. It needs Docker, kind v0.29.0 (`go install sigs.k8s.io/kind@v0.29.0`; the run
+looks on `PATH`, then in `~/go/bin`, and refuses any other version), `kubectl` and `make build`.
+The node image is `kindest/node:v1.33.1`, pulled by tag and recorded by digest. `make lab-unit`
+runs its pure tests (`l69_unit_test.go`) without any of that.
+
+- Two clusters, `port49-l69-a` and `port49-l69-b` (API servers on 127.0.0.1:16443 and :16444), each
+  with its own `--service-account-issuer` (`tests/lab/k8s/kind-a.yaml`, `kind-b.yaml`; B also sets a
+  `--service-account-jwks-uri` that differs from where its keys are read). `tests/lab/k8s/workload.yaml`
+  is the workload: namespaces `netops` and `backup`, service account `netops:oxidized`, a pod with the
+  projected token of `examples/kubernetes/backup-cronjob.yaml` (audience `port49-lab`,
+  `expirationSeconds: 600`, the API server's minimum) and a pod with the default token.
+- The cells, in order: (a) the projected token's claims; (c) issuer discovery and the JWKS read
+  anonymously before and after `examples/kubernetes/issuer-discovery.yaml`, then a broker on each
+  cluster's verifier; (b) when the kubelet rewrites the file (about ten minutes: the poll reads the
+  file's hash, never the token); (d) a signing key added at A's API server and whether the running
+  broker mints with the new key's token; (e) a token after its pod, then its service account, is
+  deleted (TokenReview and port49), then after `port49 revoke`; (f) B's token at a broker that lists
+  A alone, at one that lists a namespace only A lists, and at one where both list it; (g) the
+  shapes port49 refuses (another audience, unbound, Secret-bound, Node-bound, a legacy Secret
+  token); (h) the default `kube-api-access` token. A "no" in a cell is a measurement; a fault in the
+  setup is `t.Fatal`, INVALID, and writes no note.
+- Tokens are read into memory only (`kubectl exec ... cat`, `kubectl create token`), written to a
+  0600 file under `t.TempDir()` for `port49 workload token --token-file`, and registered as secrets.
+  The evidence (`tests/lab/evidence/L69-kind.json`) keeps a token's decoded header and claims and its
+  sha256, never the compact token; the note (`tests/lab/results/L69-kind.md`) and the evidence are
+  checked against every token read, and against any compact JWS, before they are written.
+- The sentinel `/tmp/port49-STOP-LAB` and the disk floor (67584M free on `/`) are checked before each
+  cell and before each cluster is made.
+- Both clusters are deleted when the run ends, however it ends (a signal included). After a run killed
+  hard (`go test`'s timeout skips cleanup), delete them by hand: `kind delete cluster --name
+  port49-l69-a` and `--name port49-l69-b`. A run refuses to start while either exists. The run never
+  touches another kind cluster or any other container.
