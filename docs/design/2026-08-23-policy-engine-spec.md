@@ -9495,11 +9495,12 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
 - **15. The Ansible lookup** `port49.client.token`, in collection `port49.client` (ansible-core
   2.16+), over the library; person mode by default, workload mode with `broker`, `broker_ca`,
   `cert` and `key`. Host keys are Ansible's own (§15 L66), and `network_cli` keys them by
-  `ansible_host`, the address in Ansible's inventory: there an address added to a device is a
-  first contact, and design §17's attack is open under `host_key_auto_add`. Under it, both
-  `ssh_type`s presented the token to another host at a moved address (L66 (e)). The README says
-  so, and sets `HostKeyAlias={{ inventory_hostname }}` where the connection runs OpenSSH: the one
-  measured path that refused the moved address. It never recommends `host_key_auto_add` with
+  `ansible_host`, the address in Ansible's inventory: without the lookup's check below, an address
+  added to a device is a first contact to Ansible, and design §17's attack is open under
+  `host_key_auto_add`. Under it, both `ssh_type`s presented the token to another host at a moved
+  address (L66 (e)). The README says so, and sets `HostKeyAlias={{ inventory_hostname }}` where the
+  connection runs OpenSSH: before the lookup's check, the one measured path that refused the moved
+  address (L66 (e)). It never recommends `host_key_auto_add` with
   `ssh_type: libssh`, which accepted a changed key and presented the token (L66 (c)). This ruling
   first named Paramiko as the path to avoid, on the guess that it rewrites `~/.ssh/known_hosts`
   without its `@revoked` and `@cert-authority` lines; the lab showed that guess wrong. Paramiko

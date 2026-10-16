@@ -6264,8 +6264,11 @@ all applied before Task 1.
   - **Ansible `network_cli` keys host keys by address** (`ansible_host`), not by name. Under
     `host_key_auto_add`, both libssh and paramiko presented the token to another host at a moved
     address (L66 (e)). No `network_cli` `ssh_type` honoured a `HostKeyAlias`. **Ruled 2026-10-15; plan 9f
-    (`2026-10-16-09f-network-cli-host-keys.md`) closes it in the lookup.** Design §17's attack stays open for
-    `network_cli` under `host_key_auto_add`, documented as a gap.
+    (`2026-10-16-09f-network-cli-host-keys.md`) closes it in the lookup.** With the lookup, a moved address is refused
+    before the mint when the address holds another host's key, and `paramiko` refuses it when the address has
+    no entry (L66 (e3), (e3b), (e3d)). The gap that stays: `libssh` with `host_key_auto_add` accepts a
+    changed key and presents the token (L66 (e3b)), and a device whose name holds no key (case 4) is a first
+    contact; both are documented.
   - **libssh with `host_key_auto_add` accepts a changed key** and presents the token (L66 (c)).
   - **paramiko refuses a known_hosts that holds any `@revoked` or `@cert-authority` line**
     (`InvalidHostKey`), and on a first contact rewrites the file without its comments (L66 (c)). A

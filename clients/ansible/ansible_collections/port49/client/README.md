@@ -172,8 +172,11 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
     means `port49 ssh`'s revocation lines and Paramiko cannot share a file.
   - **On a first contact it rewrites the file** and drops every comment.
 
-  Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact,
-  including an address changed in the inventory, is still accepted.
+  Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact is
+  still accepted. With the lookup (below), an address changed in the inventory is not a first
+  contact when the device's name holds a key: the lookup copies the name's key to the new address
+  first, so `paramiko` meets a changed key and refuses it (L66 (e3b), (e3d)). It stays a first
+  contact for a device whose name holds no key.
 - **Where the connection runs OpenSSH** (`ansible.builtin.ssh`), set
 
   ```yaml
