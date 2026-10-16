@@ -511,10 +511,10 @@ class HostKeys(PluginCase):
     def test_an_address_with_two_keys_of_a_type_matches_if_one_is_the_names(self):  # fix round 2, M1
         other = self.newkey("other")
         self.put(self.names, f"leaf1 {ED}\n")
-        self.put(self.kh, f"10.0.0.11 {other}\n10.0.0.11 {ED}\n")
-        before = self.read(self.kh)
-        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
-        self.assertEqual(self.read(self.kh), before)
+        for text in (f"10.0.0.11 {other}\n10.0.0.11 {ED}\n", f"10.0.0.11 {ED}\n10.0.0.11 {other}\n"):  # either order
+            self.put(self.kh, text)
+            self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+            self.assertEqual(self.read(self.kh), text)
 
     def test_an_address_with_two_keys_of_a_type_refuses_if_none_is_the_names(self):  # fix round 2, M1
         a, b = self.newkey("a"), self.newkey("b")
