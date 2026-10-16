@@ -41,7 +41,9 @@ type Metrics struct {
 	// no strike),
 	// "panic" (a connection recovered from a panic), "accept_error"
 	// (Accept failed and the listener is being retried), "tls_refused" (the
-	// RFC 9887 listener refused a handshake and struck the source),
+	// RFC 9887 listener refused a connection: a handshake refusal struck the
+	// source; an unidentifiable device, or no loaded material, is declined at
+	// Accept with no handshake and no strike),
 	// "transport_mismatch" (an admitted device on the listener it does not
 	// speak: declined, no strike), and "obfuscated_over_tls" (a packet over
 	// TLS with the unencrypted flag clear: an ERROR, then closed).
