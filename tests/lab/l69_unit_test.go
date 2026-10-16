@@ -93,3 +93,27 @@ func TestL69BrokerFilesLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// mintClustersOf reads the accepting cluster off permitted mint records, in
+// order, and nothing off other events or records without one.
+func TestMintClustersOf(t *testing.T) {
+	lines := []string{
+		`{"event":"mint","verdict":"permit","auth":{"method":"k8s","k8s":{"cluster":"l69_a"}}}`,
+		`{"event":"mint","verdict":"deny","reason":"identity_unmapped"}`,
+		`{"event":"redeem","auth":{"k8s":{"cluster":"l69_z"}}}`,
+		`not json`,
+		`{"event":"mint","verdict":"permit","auth":{"k8s":{"cluster":"l69_b"}}}`,
+	}
+	got := mintClustersOf(lines)
+	if len(got) != 2 || got[0] != "l69_a" || got[1] != "l69_b" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestMintResultRefused(t *testing.T) {
+	m := mintResult{Exit: 77, Stderr: "401 trust_domain_unresolved: its aud is not exactly [x]"}
+	if !m.refused("trust_domain_unresolved", "its aud is not exactly") || m.refused("identity_unmapped") ||
+		(mintResult{Exit: 0, Stderr: m.Stderr}).refused("trust_domain_unresolved") {
+		t.Fatal("refused is not exit 77 with the code and every detail")
+	}
+}

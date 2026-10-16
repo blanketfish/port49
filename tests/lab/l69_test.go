@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -156,6 +157,7 @@ type l69Run struct {
 	obs     strings.Builder
 	meta    map[string]any
 	live    []*kindCluster
+	brokers []*localBroker
 	seq     int
 }
 
@@ -195,7 +197,7 @@ func (r *l69Run) run(timeout time.Duration, stdin, name string, args ...string) 
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	if err := cmd.Run(); err != nil {
-		return out.String(), fmt.Errorf("%s %s: %v: %s", filepath.Base(name), firstWord(args), err, r.scrub(tailOf(strings.TrimSpace(errb.String()), 400)))
+		return out.String(), fmt.Errorf("%s %s: %v: %s", filepath.Base(name), firstWord(args), err, tailOf(r.scrub(strings.TrimSpace(errb.String())), 400))
 	}
 	return out.String(), nil
 }
@@ -375,17 +377,29 @@ func (c *kindCluster) anonGet(path string) (int, []byte, error) {
 // jwksKeys is the number of keys the cluster serves (read through kubectl,
 // which authenticates, so it needs no binding).
 func (c *kindCluster) jwksKeys() (int, error) {
+	kids, err := c.jwksKids()
+	return len(kids), err
+}
+
+// jwksKids is the kid of each key the cluster serves.
+func (c *kindCluster) jwksKids() ([]string, error) {
 	out, err := c.kubectl("get", "--raw", "/openid/v1/jwks")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var d struct {
-		Keys []json.RawMessage `json:"keys"`
+		Keys []struct {
+			Kid string `json:"kid"`
+		} `json:"keys"`
 	}
 	if err := json.Unmarshal([]byte(out), &d); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return len(d.Keys), nil
+	var kids []string
+	for _, k := range d.Keys {
+		kids = append(kids, k.Kid)
+	}
+	return kids, nil
 }
 
 // k8sVerifier is one k8s entry of broker.identity.machines.
@@ -473,6 +487,9 @@ func (r *l69Run) startK8sBroker(vs ...k8sVerifier) *localBroker {
 		}
 	}
 	b, _ := startBrokerProcess(t, r.repo, dir, pki, "")
+	r.mu.Lock()
+	r.brokers = append(r.brokers, b)
+	r.mu.Unlock()
 	return b
 }
 
@@ -488,9 +505,12 @@ func (b *localBroker) decisions() []string {
 }
 
 // mintClusters is the auth.k8s.cluster of each permitted mint record so far.
-func (b *localBroker) mintClusters() []string {
+func (b *localBroker) mintClusters() []string { return mintClustersOf(b.decisions()) }
+
+// mintClustersOf is mintClusters over decision-log lines.
+func mintClustersOf(lines []string) []string {
 	var out []string
-	for _, ln := range b.decisions() {
+	for _, ln := range lines {
 		var rec struct {
 			Event   string `json:"event"`
 			Verdict string `json:"verdict"`
@@ -549,7 +569,7 @@ func (r *l69Run) mint(b *localBroker, token string) mintResult {
 	if exit == 0 && strings.TrimSpace(out) == "" {
 		exit = -2
 	}
-	return mintResult{Exit: exit, Stderr: oneLine(r.scrub(tailOf(strings.TrimSpace(errs), 500)))}
+	return mintResult{Exit: exit, Stderr: oneLine(tailOf(r.scrub(strings.TrimSpace(errs)), 500))}
 }
 
 func (m mintResult) refused(code string, details ...string) bool {
@@ -779,15 +799,31 @@ func (r *l69Run) cellC(a *kindCluster) *kindCluster {
 		c.Observed["discovery_jwks_uri"] = juri
 		ok := after == [2]int{200, 200} && iss == l69IssuerA
 
-		// A's correct verifier is silent about discovery.
-		brokerA := r.startK8sBroker(r.verifier(a, "netops"))
 		ta, err := a.podToken()
 		if err != nil {
 			r.t.Fatalf("(c) A's token (INVALID): %v", err)
 		}
+		// The positive control: a verifier whose issuer is wrong for A's
+		// keys must say that discovery names another issuer. The note is
+		// said after the fetch, on its own goroutine, so the channel is
+		// waited on; a silent control means silence below proves nothing.
+		wrong := r.verifier(a, "netops")
+		wrong.Issuer = l69IssuerB
+		ctl := r.startK8sBroker(wrong)
+		r.mint(ctl, ta)
+		if !ctl.saidWithin(discoveryNoteWait, "names issuer") {
+			r.t.Fatalf("(c) the control broker (a wrong issuer) never said \"names issuer\": the discovery check cannot be " +
+				"observed, so silence proves nothing (INVALID)")
+		}
+		c.Observed["control_said_names_issuer"] = true
+
+		// A's correct verifier is silent about discovery. jwks_uri is not
+		// checked: no k8s path says it, the broker does not compare it
+		// (internal/oidc/keyset.go discoveryNote).
+		brokerA := r.startK8sBroker(r.verifier(a, "netops"))
 		mA := r.mint(brokerA, ta)
-		saidA := brokerA.said()
-		silentA := mA.Exit == 0 && !strings.Contains(saidA, "names issuer") && !strings.Contains(saidA, "jwks_uri")
+		time.Sleep(discoveryNoteWait)
+		silentA := mA.Exit == 0 && !strings.Contains(brokerA.said(), "names issuer")
 		c.Observed["a_mint"] = mA
 		c.Observed["a_broker_silent_about_discovery"] = silentA
 
@@ -806,16 +842,32 @@ func (r *l69Run) cellC(a *kindCluster) *kindCluster {
 			r.t.Fatalf("(c) B's token (INVALID): %v", err)
 		}
 		mB := r.mint(brokerB, tb)
-		saidB := brokerB.said()
-		quietB := mB.Exit == 0 && !strings.Contains(saidB, "jwks_uri")
+		time.Sleep(discoveryNoteWait)
+		quietB := mB.Exit == 0 && !strings.Contains(brokerB.said(), "names issuer")
 		c.Observed["b_mint"] = mB
-		c.Observed["b_broker_quiet_about_jwks_uri"] = quietB
+		c.Observed["b_broker_quiet_about_discovery"] = quietB
 		c.Pass = ok && silentA && quietB && bjuri == "https://l69-b.invalid/openid/v1/jwks"
 		c.Why = fmt.Sprintf("anonymous discovery/jwks before the binding %v, after %v; discovery issuer %q, jwks_uri %q; "+
 			"A's broker silent %t (mint exit %d); B's discovery jwks_uri %q, B's broker mint exit %d, quiet %t",
 			before, after, iss, juri, silentA, mA.Exit, bjuri, mB.Exit, quietB)
 	})
 	return b
+}
+
+// discoveryNoteWait is longer than the 3s the broker gives the discovery read
+// it makes after a fetch.
+const discoveryNoteWait = 5 * time.Second
+
+// saidWithin polls the broker's stderr for sub until wait has passed.
+func (b *localBroker) saidWithin(wait time.Duration, sub string) bool {
+	for end := time.Now().Add(wait); ; time.Sleep(250 * time.Millisecond) {
+		if strings.Contains(b.said(), sub) {
+			return true
+		}
+		if time.Now().After(end) {
+			return false
+		}
+	}
 }
 
 // cellMints is the precondition of b, d, e, f and g: a broker with A's
@@ -897,6 +949,7 @@ cp /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/kas.yaml
 sed -i -e 's|^\( *\)- --service-account-key-file=/etc/kubernetes/pki/sa.pub$|&\n\1- --service-account-key-file=/etc/kubernetes/pki/sa2.pub|' \
   -e 's|--service-account-signing-key-file=/etc/kubernetes/pki/sa.key|--service-account-signing-key-file=/etc/kubernetes/pki/sa2.key|' /tmp/kas.yaml
 grep -c 'service-account-key-file' /tmp/kas.yaml | grep -qx 2
+grep -q -- '--service-account-signing-key-file=/etc/kubernetes/pki/sa2.key' /tmp/kas.yaml
 cp /tmp/kas.yaml /etc/kubernetes/manifests/kube-apiserver.yaml`
 		if _, err := a.nodeSh(script); err != nil {
 			r.t.Fatalf("(d) rotate the signing key on A's control plane (INVALID): %v", err)
@@ -918,6 +971,12 @@ cp /tmp/kas.yaml /etc/kubernetes/manifests/kube-apiserver.yaml`
 			r.t.Fatalf("(d) read the new token (INVALID): %v", err)
 		}
 		nf := c.facts("token_after", raw, r)
+		if nf.hdr("kid") == "" || nf.hdr("kid") == of.hdr("kid") {
+			r.t.Fatal("(d) the new token carries the old kid: the signing key did not change (INVALID)")
+		}
+		if kids, err := a.jwksKids(); err != nil || !slices.Contains(kids, nf.hdr("kid")) {
+			r.t.Fatal("(d) the API server's JWKS does not serve the new token's kid (INVALID)")
+		}
 		start := time.Now()
 		var m mintResult
 		first := -1
@@ -938,7 +997,7 @@ cp /tmp/kas.yaml /etc/kubernetes/manifests/kube-apiserver.yaml`
 		c.Observed["kid_before"], c.Observed["kid_after"] = of.hdr("kid"), nf.hdr("kid")
 		c.Observed["first_mint_exit"], c.Observed["last_mint"] = first, m
 		c.Observed["mint_attempts"], c.Observed["seconds_to_mint"] = attempts, took.Seconds()
-		c.Pass = m.Exit == 0 && took <= 75*time.Second && before == 1 && after == 2
+		c.Pass = m.Exit == 0 && took <= 75*time.Second && before == 1 && after == 2 && of.hdr("kid") != nf.hdr("kid")
 		c.Why = fmt.Sprintf("JWKS keys %d then %d; kid %q then %q (differs %t); the new key's token minted on the running broker "+
 			"after %s (first attempt exit %d, %d attempts), last exit %d", before, after, of.hdr("kid"), nf.hdr("kid"),
 			of.hdr("kid") != nf.hdr("kid"), took, first, attempts, m.Exit)
@@ -1122,7 +1181,7 @@ func (r *l69Run) cellH(a *kindCluster) {
 		c.Observed["recorded_warnafter"] = f.claimAny("warnafter")
 		m := r.mint(r.startK8sBroker(r.verifier(a, "netops")), raw)
 		c.Observed["mint"] = m
-		c.Pass = m.refused("", "its aud is not exactly")
+		c.Pass = m.refused("trust_domain_unresolved", "its aud is not exactly")
 		c.Why = fmt.Sprintf("the default token's aud is %v, exp-iat %ds, warnafter %s; port49 exit %d: %s", f.Claims["aud"],
 			f.Lifetime, numStr(f.claimAny("warnafter")), m.Exit, m.Stderr)
 	})
@@ -1222,7 +1281,11 @@ func TestL69(t *testing.T) {
 		if s, ok := <-sig; ok {
 			r.mu.Lock()
 			live := append([]*kindCluster(nil), r.live...)
+			brokers := append([]*localBroker(nil), r.brokers...)
 			r.mu.Unlock()
+			for _, b := range brokers {
+				b.stop()
+			}
 			for _, c := range live {
 				c.down()
 			}
@@ -1244,4 +1307,9 @@ func TestL69(t *testing.T) {
 	r.cellH(a)
 
 	r.finish()
+	for _, c := range r.cells {
+		if !c.Pass {
+			t.Errorf("cell %s FAILED (the note records it): %s", c.Name, c.Why)
+		}
+	}
 }
