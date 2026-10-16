@@ -410,34 +410,3 @@ func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
 		}
 	}
 }
-
-func TestTLSNamesTheDNSSuffixesJoinAreRefusedAndANonASCIINameIsInvalid(t *testing.T) {
-	e := env()
-	e.KeyRefs = []string{"prod_key"}
-	e.DNSSuffixes = []string{"example.net"}
-	for i, n := range []string{"leaf-01", "leaf-01.example.net", "l\u00e9af-09", "tcp-a", "tcp-a.example.net"} {
-		tr := admission.TransportTLS
-		if i >= 3 {
-			tr = admission.TransportTCP
-		}
-		e.Devices = append(e.Devices, admission.Device{Name: n, Platform: "arista_eos", Transport: tr,
-			Addresses: []netip.Addr{netip.MustParseAddr("10.0.8." + string(rune('1'+i)))}})
-	}
-	p, err := Parse([]byte(keyGrouped), e)
-	if err != nil {
-		t.Fatalf("the load must not fail: %v", err)
-	}
-	for _, n := range []string{"leaf-01", "leaf-01.example.net"} {
-		if r, _ := p.Admitted(n); r.Refusal != admission.RefusedTLSNameClash || r.Refused == "" || r.KeyRef != "" {
-			t.Errorf("%s: %+v", n, r)
-		}
-	}
-	if r, _ := p.Admitted("l\u00e9af-09"); r.Refusal != admission.RefusedTLSNameInvalid || r.Refused == "" {
-		t.Errorf("non-ASCII tls name: %+v", r)
-	}
-	for _, n := range []string{"tcp-a", "tcp-a.example.net"} {
-		if r, _ := p.Admitted(n); r.Refused != "" || r.KeyRef != "prod_key" {
-			t.Errorf("tcp device %s is not admitted on prod_key: %+v", n, r)
-		}
-	}
-}

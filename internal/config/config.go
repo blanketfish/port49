@@ -828,6 +828,16 @@ func load(path string, role Role) (Config, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
 	}
+	// `tls_listener:` with nothing under it decodes to nil, the same as no
+	// block: an operator who wrote the key meant a listener, so it is said.
+	var tlsKey struct {
+		TLSListener yaml.Node `yaml:"tls_listener"`
+	}
+	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
+		tlsKey.TLSListener.Tag == "!!null" {
+		return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
+			"certificate_status, or remove the key")
+	}
 	switch role {
 	case RoleBroker:
 		if err := brokerRefusals(f); err != nil {
@@ -1110,11 +1120,6 @@ func load(path string, role Role) (Config, error) {
 	if err := admission.Validate(inv.Devices); err != nil {
 		return Config{}, err
 	}
-	if c.TLSListener != nil {
-		// The suffixes widen the names a certificate gives a tls device, so
-		// admission refuses two that share one (decision 50 ruling 6).
-		inv.DNSSuffixes = c.TLSListener.DeviceIdentity.DNSSuffixes
-	}
 	c.Inventory = inv
 	// No broker: plan 1's mode, the lab's. The inventory's own key groups
 	// are read once, here, and a device none admits refuses the start.
@@ -1146,22 +1151,15 @@ func load(path string, role Role) (Config, error) {
 	// simply omits it from the table) and then fails every packet at runtime as
 	// an unresolved key. That is a configuration mistake, not a device it's fine
 	// to leave unreachable, so it is refused here rather than discovered later.
-	// A tls device whose name no certificate can carry, or that another's
-	// shares, is refused alone: the start says so, and the load goes on
-	// (decision 50 ruling 6).
+	// Two tls devices equal under ASCII case folding are refused alone: the
+	// start says so, and the load goes on (decision 50 ruling 6).
 	nameRefused := map[string]bool{}
-	for _, r := range []struct {
-		refusal string
-		set     map[string]string
-	}{
-		{admission.RefusedTLSNameClash, admission.TLSNameClashes(inv.Devices, inv.DNSSuffixes)},
-		{admission.RefusedTLSNameInvalid, admission.TLSNameInvalid(inv.Devices)},
-	} {
-		for _, d := range inv.Devices {
-			if why, ok := r.set[d.Name]; ok {
-				nameRefused[d.Name] = true
-				c.Notices = append(c.Notices, fmt.Sprintf("inventory: device %q is refused (%s): %s", d.Name, r.refusal, why))
-			}
+	clashes := admission.TLSNameClashes(inv.Devices)
+	for _, d := range inv.Devices {
+		if why, ok := clashes[d.Name]; ok {
+			nameRefused[d.Name] = true
+			c.Notices = append(c.Notices, fmt.Sprintf("inventory: device %q is refused (%s): %s", d.Name,
+				admission.RefusedTLSNameClash, why))
 		}
 	}
 	for _, d := range inv.Devices {
@@ -1373,6 +1371,15 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 			return nil, err
 		}
 		b.CertificateStatus = &cs
+		if tl := c.TLSListener; tl != nil && len(cs.CRLs) > 0 && len(tl.CertificateStatus.CRLs) > 0 {
+			// Two checkers keep crl-<name>.der in their directory: it is one
+			// directory for both only by an accident of the paths.
+			if dir, err := brokerKeptDir(b); err == nil && filepath.Clean(TLSListenerStateDir(tl)) == dir {
+				return nil, fmt.Errorf("config: tls_listener.state_dir's lists directory %s is also where "+
+					"broker.certificate_status keeps its lists; two checkers would write one crl-<name>.der: move "+
+					"tls_listener.state_dir or broker.state_dir", dir)
+			}
+		}
 	}
 	if b.DirectorySet != nil {
 		d, err := checkDirectory(*b.DirectorySet, os.Getenv, b.ClientCAFile != "")
@@ -1820,19 +1827,27 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 // crl_next_update metric's label.
 var crlName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// brokerKeptDir is where the broker's checker keeps its lists: in
+// broker.state_dir under the broker's role, and beside
+// broker.revocations_file under the daemon's (plan 7e, Ruling 12).
+func brokerKeptDir(b BrokerConfig) (string, error) {
+	if b.StateDir != "" {
+		return b.StateDir, nil
+	}
+	revAbs, err := filepath.Abs(b.RevocationsFile)
+	if err != nil {
+		return "", fmt.Errorf("config: broker.revocations_file: %w", err)
+	}
+	return filepath.Dir(revAbs), nil
+}
+
 // checkCertificateStatus checks broker.certificate_status and applies its
 // defaults in place. A refusal names the key, and never repeats a URL,
 // which may carry a credential.
 func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
-	// The kept lists sit in broker.state_dir under the broker's role, and
-	// beside broker.revocations_file under the daemon's (plan 7e, Ruling 12).
-	stateDir := b.StateDir
-	if stateDir == "" {
-		revAbs, err := filepath.Abs(b.RevocationsFile)
-		if err != nil {
-			return fmt.Errorf("config: broker.revocations_file: %w", err)
-		}
-		stateDir = filepath.Dir(revAbs)
+	stateDir, err := brokerKeptDir(b)
+	if err != nil {
+		return err
 	}
 	marker := ""
 	if b.RevocationsFile != "" {

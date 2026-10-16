@@ -97,3 +97,75 @@ func bounded(s []string) string {
 	}
 	return "[" + strings.Join(s, " ") + "]"
 }
+
+// Unidentifiable are the tls devices this Rule cannot tell apart or cannot
+// name, by name, each with a one-line reason (decision 50 ruling 6). The
+// listener alone refuses them: a connection from one is declined
+// identity_mismatch, and the policy means the same on every replica.
+//   - Clash, when DNSName is in the Rule: two devices share a candidate
+//     dNSName (the name, or the name plus "." plus a suffix, ASCII-folded), so
+//     one certificate would name both. Both are flagged.
+//   - A name with a non-ASCII byte, when IPAddress is not in the Rule: no
+//     dNSName can carry it and no address identifies it. With ip_address the
+//     address still names the device, so it is not flagged.
+//
+// A tcp device, and a tls device already refused for the name clash
+// admission.TLSNameClashes finds, are not judged. A reason never holds a key,
+// a pin or certificate bytes.
+func (r Rule) Unidentifiable(devs []admission.Device) map[string]string {
+	out := map[string]string{}
+	refused := admission.TLSNameClashes(devs)
+	byCandidate := map[string][]string{}
+	for _, d := range devs {
+		if d.EffectiveTransport() != admission.TransportTLS || d.Transport != admission.TransportTLS {
+			continue
+		}
+		if _, done := refused[d.Name]; done {
+			continue
+		}
+		f, ascii := admission.FoldASCII(d.Name)
+		if !ascii {
+			if !r.IPAddress {
+				out[d.Name] = "has a name with a non-ASCII byte, which no dNSName can carry, and match does not " +
+					"include ip_address, so no certificate can name it"
+			}
+			continue
+		}
+		if !r.DNSName {
+			continue
+		}
+		cands := map[string]bool{f: true}
+		for _, s := range r.DNSSuffixes {
+			if fs, ok := admission.FoldASCII(strings.Trim(s, ".")); ok && fs != "" {
+				cands[f+"."+fs] = true
+			}
+		}
+		for c := range cands {
+			byCandidate[c] = append(byCandidate[c], d.Name)
+		}
+	}
+	with := map[string]map[string]bool{}
+	for _, names := range byCandidate {
+		if len(names) < 2 {
+			continue
+		}
+		for _, n := range names {
+			if with[n] == nil {
+				with[n] = map[string]bool{}
+			}
+			for _, m := range names {
+				with[n][m] = true
+			}
+		}
+	}
+	for n, set := range with {
+		names := make([]string, 0, len(set))
+		for m := range set {
+			names = append(names, m)
+		}
+		slices.Sort(names)
+		out[n] = fmt.Sprintf("is one of tls devices %q that one certificate dNSName could name (the name, or the "+
+			"name plus a dns_suffixes suffix), so a certificate could not tell them apart", names)
+	}
+	return out
+}

@@ -10198,11 +10198,11 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   The common name is never read (RFC 9525). Names are compared ASCII case-insensitively (A-Z
   only, never Unicode folding); a name with a non-ASCII byte never matches; and two `tls` devices
   whose names are equal under that folding are both refused admission (`tls_name_clash`), the rest
-  of the load unaffected. With `dns_suffixes` a certificate also names a device by its name plus
-  `.` plus a suffix, so two `tls` devices sharing any such name (`leaf-01` and `leaf-01.<suffix>`)
-  are both refused as `tls_name_clash` too, and a `tls` device whose name has a non-ASCII byte,
-  which no certificate can carry, is refused at load as `tls_name_invalid`, so the start log names
-  it rather than every connection failing; a `tcp` device is never affected. The mapping comes from the inventory alone, with no
+  of the load unaffected. A suffix clash (with `dns_suffixes`, `leaf-01` and `leaf-01.<suffix>` are named by one
+  certificate) and a non-ASCII name when `ip_address` is not in `match` (no certificate can name
+  it) are not admission refusals: the policy and its meaning stay the same on every replica, and
+  only the TLS listener refuses them, naming each at start and at reload. A connection from such a
+  device is declined `identity_mismatch`. A `tcp` device is never affected. The mapping comes from the inventory alone, with no
   per-device configuration, so a fleet enrolled by SCEP, ACME or EST under one naming rule needs
   nothing from the operator per device. A certificate naming another device is
   `identity_mismatch`, and the record says what it named and what was wanted. Because any

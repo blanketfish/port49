@@ -145,7 +145,7 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 	if y.ExpiryWarningFractionSet != nil {
 		t.ExpiryWarningFraction = *y.ExpiryWarningFractionSet
 	}
-	if t.ExpiryWarningFraction < 0 || t.ExpiryWarningFraction >= 1 {
+	if !(t.ExpiryWarningFraction >= 0 && t.ExpiryWarningFraction < 1) { // NaN fails both
 		return nil, fmt.Errorf("config: %s.expiry_warning_fraction must be at least 0 and below 1 (0 is off; "+
 			"0.33 warns in a certificate's last third); got %g", key, t.ExpiryWarningFraction)
 	}
@@ -158,9 +158,13 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 			"checking): name crls or an ocsp block, or set disabled: true", key)
 	}
 	if len(t.CertificateStatus.CRLs) > 0 {
-		if t.StateDir == "" || !filepath.IsAbs(t.StateDir) {
+		if t.StateDir == "" {
 			return nil, fmt.Errorf("config: %s.state_dir is required with certificate_status.crls, an absolute "+
 				"directory: each verified list is kept there across a restart", key)
+		}
+		if !filepath.IsAbs(t.StateDir) {
+			return nil, fmt.Errorf("config: %s.state_dir must be absolute, so the lists are kept in one place "+
+				"whatever the working directory", key)
 		}
 	}
 	others := []namedPath{{key + ".cert_file", t.CertFile}, {key + ".key_file", t.KeyFile},

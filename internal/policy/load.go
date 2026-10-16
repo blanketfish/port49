@@ -43,11 +43,6 @@ type Env struct {
 	// Devices is the inventory: the file inventory the daemon admits from,
 	// until plan 6's bundle.
 	Devices []admission.Device
-	// DNSSuffixes are tls_listener.device_identity.dns_suffixes, which widen
-	// the names a certificate gives a tls device, so admission refuses two
-	// that share one (admission.TLSNameClashes). bundle.Parse sets it from
-	// admission.Inventory.DNSSuffixes.
-	DNSSuffixes []string
 	// KeyRefs are the key_refs port49d.yaml defines keys for, by name only:
 	// a device assigned one outside them is refused admission (spec §10).
 	// nil is not known — an offline tool given no --config — and refuses no

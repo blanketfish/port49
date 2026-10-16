@@ -95,6 +95,12 @@ func TestTLSListenerRefusals(t *testing.T) {
 		"tickets too long":     {"", tlsMinimal + "  session_ticket_lifetime: 2h\n", "between 0s and 1h"},
 		"reload too fast":      {"", tlsMinimal + "  reload_interval: 1s\n", "between 10s and 1h"},
 		"a fraction of 1":      {"", tlsMinimal + "  expiry_warning_fraction: 1\n", "at least 0 and below 1"},
+		"no key_file":          {"", strings.Replace(tlsMinimal, "  key_file: DIR/srv.key\n", "", 1), "tls_listener.key_file is required"},
+		"a NaN fraction":       {"", tlsMinimal + "  expiry_warning_fraction: .nan\n", "at least 0 and below 1"},
+		"an empty block":       {"", "tls_listener:\n", "tls_listener is empty"},
+		"relative state_dir": {"", strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
+			"certificate_status: {crls: [{name: issuing, file: DIR/ca.pem, issuer_file: DIR/ca.pem}]}", 1) +
+			"  state_dir: rel/dir\n", "tls_listener.state_dir must be absolute"},
 		"crls without state_dir": {"", strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
 			"certificate_status: {crls: [{name: issuing, file: DIR/ca.pem, issuer_file: DIR/ca.pem}]}", 1),
 			"tls_listener.state_dir is required"},
@@ -156,14 +162,12 @@ func tlsInventory(t *testing.T, cfgPath, body string) {
 	}
 }
 
-func TestTLSNamesThatCannotBeToldApartAreRefusedNotFatal(t *testing.T) {
-	const inv = "devices:\n" +
-		"  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n" +
-		"  - {name: Leaf-01.Example.NET, platform: arista_eos, addresses: [10.0.0.2], transport: tls}\n" +
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], transport: tls}\n"
-	suffixed := tlsMinimal + "  device_identity: {dns_suffixes: [example.net]}\n"
-	p := tlsBase(t, "listen: 127.0.0.1:0\n", suffixed)
-	tlsInventory(t, p, inv)
+func TestTLSNamesEqualUnderCaseFoldingAreRefusedNotFatal(t *testing.T) {
+	p := tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal)
+	tlsInventory(t, p, "devices:\n"+
+		"  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n"+
+		"  - {name: LEAF-01, platform: arista_eos, addresses: [10.0.0.2], transport: tls}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], transport: tls}\n")
 	c, err := Load(p)
 	if err != nil {
 		t.Fatalf("a clash refuses the two devices, never the load: %v", err)
@@ -177,39 +181,63 @@ func TestTLSNamesThatCannotBeToldApartAreRefusedNotFatal(t *testing.T) {
 		t.Errorf("leaf-02 was refused with them: %+v", r)
 	}
 	notices := strings.Join(c.Notices, "\n")
-	for _, want := range []string{"leaf-01", "Leaf-01.Example.NET", "tls_name_clash"} {
+	for _, want := range []string{"leaf-01", "LEAF-01", "tls_name_clash"} {
 		if !strings.Contains(notices, want) {
 			t.Errorf("the start notices do not name %q: %q", want, notices)
 		}
 	}
-	// Without the suffix the two names differ and both are admitted.
-	p = tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal)
-	tlsInventory(t, p, inv)
-	c, err = Load(p)
+}
+
+func TestTLSListenerNamesAreLowerCasedAndTrimmed(t *testing.T) {
+	block := tlsMinimal + "  device_identity: {dns_suffixes: [\"Example.NET.\"]}\n  server_names: [\"Srv.Example.NET.\"]\n"
+	c, err := Load(tlsBase(t, "listen: 127.0.0.1:0\n", block))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.1")); !ok || len(c.Notices) != 0 {
-		t.Errorf("no suffix, no clash: %q", c.Notices)
+	tl := c.TLSListener
+	if len(tl.DeviceIdentity.DNSSuffixes) != 1 || tl.DeviceIdentity.DNSSuffixes[0] != "example.net" ||
+		len(tl.ServerNames) != 1 || tl.ServerNames[0] != "srv.example.net" {
+		t.Fatalf("suffixes %v, server names %v", tl.DeviceIdentity.DNSSuffixes, tl.ServerNames)
 	}
 }
 
-func TestANonASCIITLSNameIsRefusedAtLoad(t *testing.T) {
-	p := tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal)
-	tlsInventory(t, p, "devices:\n"+
-		"  - {name: \"léaf-01\", platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n"+
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], transport: tls}\n")
-	c, err := Load(p)
-	if err != nil {
-		t.Fatalf("a name no certificate can carry refuses the device, never the load: %v", err)
+func TestTLSListenerKeptListsAreNoOtherFile(t *testing.T) {
+	block := strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
+		"certificate_status: {crls: [{name: issuing, file: DIR/ca.pem, issuer_file: DIR/ca.pem}]}", 1) + "  state_dir: DIR\n"
+	p := tlsBase(t, "listen: 127.0.0.1:0\n", strings.Replace(block, "cert_file: DIR/srv.crt",
+		"cert_file: DIR/tls_listener/crl-issuing.der", 1))
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(filepath.Join(dir, "tls_listener"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.1")); ok {
-		t.Error("the non-ASCII device is admitted")
+	if err := os.WriteFile(filepath.Join(dir, "tls_listener", "crl-issuing.der"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := c.Admission.Lookup(netip.MustParseAddr("10.0.0.3")); !ok {
-		t.Error("leaf-02 was refused with it")
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "would be tls_listener.cert_file") {
+		t.Fatalf("a kept list over cert_file: %v", err)
 	}
-	if n := strings.Join(c.Notices, "\n"); !strings.Contains(n, "tls_name_invalid") || !strings.Contains(n, "léaf-01") {
-		t.Errorf("the start notices do not name it: %q", n)
+}
+
+func TestTLSListenerAndBrokerKeepListsApart(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"srv.crt", "srv.key", "ca.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tlsBlock := "tls_listener:\n  cert_file: " + dir + "/srv.crt\n  key_file: " + dir + "/srv.key\n  client_ca_file: " + dir +
+		"/ca.pem\n  state_dir: " + dir + "\n  certificate_status: {crls: [{name: issuing, file: " + dir +
+		"/ca.pem, issuer_file: " + dir + "/ca.pem}]}\n"
+	broker := func(revocations string) string {
+		return strings.Replace(withStatus("  certificate_status: {crls: [{name: issuing, file: /a.crl, issuer_file: /a.pem}]}\n"),
+			"/var/lib/port49/revocations.json", revocations, 1)
+	}
+	// The broker's lists sit beside its revocations file: <dir>/tls_listener is the TLS listener's too.
+	if _, err := loadWith(t, broker(dir+"/tls_listener/revocations.json")+tlsBlock); err == nil ||
+		!strings.Contains(err.Error(), "two checkers would write one crl-<name>.der") {
+		t.Fatalf("one directory for both: %v", err)
+	}
+	if _, err := loadWith(t, broker(dir+"/revocations.json")+tlsBlock); err != nil {
+		t.Fatalf("separate directories: %v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,5 +84,51 @@ func TestRuleMatchFoldsASCIIOnly(t *testing.T) {
 	}
 	if err := r.Match(leafNaming([]string{"KR1"}), admission.Device{Name: "kr1"}); err != nil {
 		t.Fatalf("ASCII case folding lost: %v", err)
+	}
+}
+
+func TestRuleUnidentifiable(t *testing.T) {
+	tls := func(n, addr string) admission.Device {
+		return admission.Device{Name: n, Transport: admission.TransportTLS, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	tcp := func(n, addr string) admission.Device {
+		return admission.Device{Name: n, Transport: admission.TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	devs := []admission.Device{tls("leaf-01", "10.0.0.1"), tls("Leaf-01.Example.NET", "10.0.0.2"), tls("leaf-02", "10.0.0.3"),
+		tls("léaf-09", "10.0.0.4"), tcp("tcp-a", "10.0.0.5"), tcp("tcp-a.example.net", "10.0.0.6"),
+		tcp("tçp-b", "10.0.0.7"), tls("Dup", "10.0.0.8"), tls("dup", "10.0.0.9")}
+	names := func(m map[string]string) []string {
+		var out []string
+		for n := range m {
+			out = append(out, n)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for name, c := range map[string]struct {
+		rule Rule
+		want []string
+	}{
+		"dns with a suffix: the pair, and the non-ASCII name": {Rule{DNSName: true, DNSSuffixes: []string{"example.net"}},
+			[]string{"Leaf-01.Example.NET", "leaf-01", "léaf-09"}},
+		"dns without a suffix: only the non-ASCII name": {Rule{DNSName: true}, []string{"léaf-09"}},
+		"both kinds: the address names the non-ASCII device": {Rule{DNSName: true, IPAddress: true, DNSSuffixes: []string{"example.net"}},
+			[]string{"Leaf-01.Example.NET", "leaf-01"}},
+		"ip_address only: nothing, names are not read": {Rule{IPAddress: true, DNSSuffixes: []string{"example.net"}}, nil},
+		"an uppercase, dotted suffix still joins":      {Rule{DNSName: true, IPAddress: true, DNSSuffixes: []string{"Example.NET."}}, []string{"Leaf-01.Example.NET", "leaf-01"}},
+	} {
+		got := c.rule.Unidentifiable(devs)
+		if !slices.Equal(names(got), c.want) {
+			t.Errorf("%s: %v, want %v", name, names(got), c.want)
+		}
+		for n, why := range got {
+			if why == "" || strings.Contains(why, "\n") {
+				t.Errorf("%s: %s: reason %q is not one line", name, n, why)
+			}
+		}
+		// The case-folding pair is admission's refusal already; never reported twice.
+		if _, dup := got["Dup"]; dup {
+			t.Errorf("%s: Dup is already refused by admission", name)
+		}
 	}
 }
