@@ -32,6 +32,7 @@ type fakeBroker struct {
 	keys     []string
 	bodies   []api.MintRequest
 	presents []string // the client certificate's fingerprint, per request
+	auths    []string // the Authorization header of each /v1/tokens request
 	// mfa is every POST /v1/mfa, with the exporter value of the connection
 	// it came on; mfaStatus answers it (200 when 0).
 	mfa       []mfaPost
@@ -71,6 +72,7 @@ func (f *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req api.MintRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.keys = append(f.keys, r.Header.Get("Idempotency-Key"))
+		f.auths = append(f.auths, r.Header.Get("Authorization"))
 		f.bodies = append(f.bodies, req)
 		i := min(len(f.keys)-1, len(f.answers)-1)
 		f.answers[i](w, req)

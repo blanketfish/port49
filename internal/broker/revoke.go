@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
@@ -96,10 +97,9 @@ type RevokeReport struct {
 
 // principalPrefixes are the forms a verifier gives a principal (spec §2):
 // user: for people, app: for an OIDC machine (plan 7h), spiffe:// for a
-// workload certificate (plan 8). system:serviceaccount: is refused until
-// its verifier exists (plan 10), rather than marked under a key nothing
-// spells.
-var principalPrefixes = []string{"user:", "app:", spiffe.Scheme}
+// workload certificate (plan 8), system:serviceaccount: for a cluster's
+// service account (plan 10).
+var principalPrefixes = []string{"user:", "app:", spiffe.Scheme, k8sid.Prefix}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
@@ -166,6 +166,17 @@ func normalPrincipal(p string) (string, error) {
 		}
 		return p, nil
 	}
+	if strings.HasPrefix(strings.ToLower(p), k8sid.Prefix) {
+		// Verbatim: a cluster names accounts in lower case alone, and the
+		// verifier gives one only in the form k8sid.Parse accepts (decision 49
+		// ruling 8). Before the 1024-byte guard, as a spiffe ID is.
+		id, err := k8sid.Parse(p)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s is not a service account as its cluster names one (%v)", ErrBadRevocation,
+				printsafe.Line(p, 200), err)
+		}
+		return id.String(), nil
+	}
 	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
 		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
 	}
@@ -177,7 +188,7 @@ func normalPrincipal(p string) (string, error) {
 			return pre + strings.ToLower(p[len(pre):]), nil
 		}
 	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci, spiffe://corp.example.com/host/oxidized-01)",
+	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci, spiffe://corp.example.com/host/oxidized-01, system:serviceaccount:netops:oxidized)",
 		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
 }
 
@@ -611,6 +622,9 @@ func (r RevokeReport) markText() string {
 		if strings.HasPrefix(r.Request.Principal, spiffe.Scheme) {
 			spelled = "a workload's principal is its certificate's SPIFFE ID, verbatim"
 		}
+		if strings.HasPrefix(r.Request.Principal, k8sid.Prefix) {
+			spelled = "a service account's principal is system:serviceaccount:<namespace>:<name>, verbatim, as its token's sub names it"
+		}
 		fmt.Fprintf(&b, "%s; %s, so check the spelling (the mark is written anyway)\n", lead, spelled)
 	}
 	mints := "by " + r.Request.Principal
@@ -620,6 +634,11 @@ func (r RevokeReport) markText() string {
 	fmt.Fprintf(&b, "revoked %s at %s: %d live context(s) marked, the unspent tokens under %d (device, username) "+
 		"key(s) deleted, %d held broker connection(s) closed; every mint %s is refused until `port49 revoke --lift %s`",
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
+	if r.Mark.Kind == store.RevocationPrincipal && strings.HasPrefix(r.Request.Principal, k8sid.Prefix) {
+		b.WriteString("\na token its cluster issued stays valid at port49 until its exp, or max_token_age after it was " +
+			"issued, whatever the cluster does; this mark refuses it now, and stands for a service account " +
+			"re-created under that name until `port49 revoke --lift`")
+	}
 	if r.Mark.Kind == store.RevocationCert && r.decimal {
 		fmt.Fprintf(&b, "\nthe serial %s was read as hexadecimal; if you copied a decimal serial (openssl prints a "+
 			"small one as 4096 (0x1000)), revoke it again with --cert FILE, then lift this one", r.Request.Serial)

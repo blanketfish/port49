@@ -265,6 +265,16 @@ the reply falls back to the 1.2.0-style one, and CI warns `projection_reach_deny
 - the plan ends with operator notes.
 **9g executed 2026-10-16** on `feature/junos-view-configuration`, each task reviewed (Plan 9g — As
 built, below); L68 closed.
+**10 written 2026-10-16** (`2026-10-16-10-kubernetes-path.md`, twelve tasks: one spec, seven code,
+one example, one lab harness, one lab run, one docs; sixteen rulings recorded as decision 49 by
+its Task 1; two questions for Ryan, each with a recommendation: Q1 one service account name in
+several clusters (refused; name accounts per region), Q2 TokenReview for a deleted account's
+immediate effect (not built; `port49 revoke --principal` closes the 2h window). It opens L69
+(kind) and L70 (managed clusters, left open).
+**10 executed 2026-10-16** on `feature/kubernetes-path` (rebased onto main `02ca1ce8`), each task reviewed
+(Plan 10 — As built, below). Ryan's Q1 ruling reversed the plan's recommendation: clusters may
+share a namespace, and each k8s verifier is named by a required `cluster:`. Q2 stands: no
+TokenReview. L69 closed on kind (v0.29.0, Kubernetes v1.33.1); L70 (managed clusters) stays open.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6780,6 +6790,166 @@ narrow fix (Opus review) and a second fix after Task 6's first lab run.
 
 Projected ServiceAccount token validation against the cluster JWKS; identity
 `system:serviceaccount:<ns>:<name>`; the `k8s` verifier type. Design §7.
+
+Status: **executed 2026-10-16** (`2026-10-16-10-kubernetes-path.md`, branch
+`feature/kubernetes-path`; twelve tasks; decision 49; Q1 and Q2 ruled; L69 closed, L70 open).
+See "Plan 10 — As built", below.
+
+### Plan 10 — As built
+
+Executed from `2026-10-16-10-kubernetes-path.md` on `feature/kubernetes-path` (rebased onto main `02ca1ce8`; the plan
+commits `c81d68f0`, `62f51e2b` and `aef54b9d` hold the plan, its pre-flight fixes and the Q1 ruling), each task reviewed, several through
+a fix round. The ledger is `.superpowers/sdd/2026-10-16-10-kubernetes-path/progress.md`, with each
+task's brief, report and review beside it. The Opus pre-flight (1 critical, 9 important, 15 minor)
+was applied before Task 1.
+
+- **Built, with the task commits:**
+  - Task 1, spec: decision 49, L69 and L70 opened (`025c564e`).
+  - Task 2, `internal/k8sid`, one parser for a service account principal (`d4e0af99`).
+  - Task 3, `k8s` under `broker.identity.machines` (`9fa796a4`).
+  - Task 4, a key set reads a cluster's JWKS directly and says where discovery differs
+    (`e01c9998`).
+  - Task 5, the k8s verifier: a pod-bound token, the exact audience, a listed namespace
+    (`58efe511`, fix `73ef78c0`).
+  - Task 6, the broker mints for a service account and records `auth.k8s` (`4a0bdbe9`, fix
+    `153b37ee`).
+  - Task 7, port49d builds each cluster's key set and says what it trusts (`a1e5cd23`, fix
+    `79fdbfc8`).
+  - Task 8, `port49 workload token --token-file` (`fbe9f79d`).
+  - Task 9, `examples/kubernetes` (`87b42ee7`, fix `aa7a7832`).
+  - Task 10, the L69 harness (`c164aa4e`, fix `e5ff120d`).
+  - Task 11, the L69 run and its close (`ab54076a`).
+  - Task 12, this entry (`7a42b0fb`).
+  - The final-review fix wave: a bearer that is no JWS is recorded and said `k8s` on a broker whose
+    verifiers are all clusters (`656e1700`, spec §5.7); test comments reworded (`f992a629`); the
+    stalled-discovery and vanished-token-file tests (`30749596`); the k8s audience wording and the
+    x509 and `directory_password` k8s-key refusals (`4f1db10a`); `NewClient`'s comment
+    (`5198be7f`); `make test-race` takes `-timeout 30m` (`730641dc`); the example README claims only
+    what an L69 cell measured (`9be5eaaa`); and the commit of this record's IDs.
+- **Rulings as made.**
+  - **Q1 (Ryan, ruled 2026-10-16):** several clusters may list one namespace. The same workload
+    in every region's cluster is one identity and one policy subject. Each `k8s` verifier takes a
+    required, unique `cluster:` name (`^[a-z][a-z0-9_]{0,63}$`) that port49 uses in records and
+    log lines; nothing in the cluster changes. The start names the clusters that vouch for each
+    namespace. The plan's text refused a name in two clusters; that was changed before Task 1.
+    Cost if wrong: a cluster-qualified principal later, as an opt-in.
+  - **Q2:** no TokenReview. `port49 revoke --principal` closes the window a deleted service
+    account leaves (up to `exp` or `max_token_age`, 2h). L69 (e) measured it.
+- **What differs from the plan's text.**
+  - **Task 2.** Policy load now refuses a service-account principal Kubernetes can never issue
+    (upper case, `_`, a dot in the namespace, a leading or trailing `-`, over length). Such a
+    principal never matched a token, so nothing working breaks; the operator notes carry the
+    upgrade note.
+  - **Task 5.** A k8s assertion carries no `acr` or `amr`: the review found they could satisfy
+    `per_login_mfa` (ruling 15). A token with `amr` is refused at the verifier; an `acr`-only
+    token is still `per_login_mfa_required`. Its refusals and `String()` name the cluster.
+  - **Task 6.** `K8s` is added to `token.MintRequest` and copied at the broker and minter; the
+    identity answer shows a k8s caller as `k8s`, not `oidc`.
+  - **Task 7.** The migrating case (one issuer moving between two `jwks`) shares a cluster name
+    and is tested quiet about discovery naming the other issuer.
+  - **Task 8.** The token file is read at every request and never printed; a missing or unusable
+    file is exit 2.
+  - **Task 10.** Names `port49-l69-a` and `-b`; the disk floor is 67584M; cell (c) has a positive
+    control, (d) proves the key swapped, and a FAIL cell fails the run.
+- **Interfaces added.** `internal/k8sid`; `oidc.KindK8s`; `VerifierConfig.Kind`, `.Cluster`,
+  `.JWKS`, `.Namespaces`, `.Who`; `Config.K8s`; `KeySetConfig.JWKS`, `.Migrating`, `.Who`;
+  `K8sBinding`; `Assertion.K8s`; `MethodOf`; `decision.K8s`; `workload.Config.TokenFile`;
+  `TokenFileError`; `Policy.ServiceAccountIdentities`.
+- **Lab.** L69 closed on kind v0.29.0 with `kindest/node:v1.33.1` (2026-10-16, all eight cells,
+  `tests/lab/results/L69-kind.md`): the projected token's claims, the kubelet's rewrite at 0.87 of
+  `expirationSeconds` (the docs' "about 80%" stands), anonymous discovery only after the
+  ClusterRoleBinding, a rotated key fetched on first sight, a deleted pod's and service account's
+  token still minting until revoked, a second cluster's token refused where unlisted and minted
+  where both list the namespace, and the five refused shapes and the default token's audience.
+  The anonymous `conditions` form of the structured authentication configuration is not
+  measured. **L70** (EKS, GKE, AKS) stays open until an account exists.
+- **Parked minors, carried** (the final fix wave fixed the rest):
+  - Task 2: a mixed-case-prefix load test; a redundant length check; a wrapped error's wording.
+  - Task 3: the `distinctClusters` compare of `jwks` is exact-string (it fails closed); the k8s
+    `ca_file` load path is untested at config.
+  - Task 4: overlapping discovery reads can land out of order; the "could not be read" note
+    varies per attempt and prints the URL twice; no all-clear when discovery agrees again;
+    no test sets `Who` on the key set's own lines.
+  - Task 7: a migrating cluster prints two "is fetched" lines.
+  - Task 8: a library test for a cert alone or a key alone; a `MaxTokenFile` boundary test.
+  - Final review M2 and M3: `serviceAccount` checks the namespace before the `kubernetes.io`
+    binding (messages only, fails closed); the unmapped answer names the configured cluster to a
+    verified caller (a cluster name is not a secret).
+
+**Carried forward.**
+
+- **Plan 12:** a Kubernetes deployment test that runs the CronJob in a cluster against a broker
+  outside it (and one inside it); the Helm chart's `issuer-discovery` binding per cluster; L39
+  (b) and (c) stay plan 12's. The alert `time() - port49_oidc_keys_last_success_timestamp_seconds
+  > jwks_max_age/2 or absent(...)` covers clusters with no change.
+- **L70:** managed clusters, when an account on EKS, GKE or AKS exists.
+- **Plan 13:** `examples/kubernetes/README.md` as the Kubernetes workload page, and the notes below.
+- **Plan 11a:** a k8s verifier's kept keys are per broker state directory, like an OIDC issuer's.
+  With one config across three regional brokers, each broker builds a key set for every cluster:
+  one that cannot reach another region's API server says "keys not refreshed" hourly and fires
+  the staleness alert for clusters it never serves (pre-flight M14). 11a decides whether a
+  regional broker's config lists only its own region's clusters, or the alert is scoped per
+  broker.
+- **Left for later:** a cluster-qualified principal (`system:serviceaccount:<ns>:<name>`
+  qualified by the verifier's `cluster`) as an opt-in, for an operator whose clusters'
+  namespaces mean different tenants and who would rather name them apart than list different
+  namespaces per verifier (decision 49, "Left for later"). Not planned to a plan yet.
+
+**Operator notes (plan 13).** These go in the pull request body; plan 13's docs pick them up.
+
+- **Upgrade note.** Policy load now refuses service-account principals Kubernetes can never issue:
+  upper case, `_`, a dot in the namespace, a leading or trailing `-`, or over length. Such a
+  principal never matched a token, so remove or correct it.
+- **Kubernetes workloads mint with their pod's token** (spec §13 decision 49). No CA, no
+  certificate, no secret at rest: the kubelet writes and rotates a projected service account
+  token, and the broker validates it against the cluster's keys.
+  - **Configuration:** `broker.identity.machines: [{type: k8s, cluster: us_east, issuer: <the
+    cluster's --service-account-issuer>, jwks: <the API server's own address + /openid/v1/jwks,
+    never the issuer's host>, ca_file: <the cluster CA>, audience: port49, namespaces:
+    [netops]}]`, one per cluster. `cluster` is port49's name for it (`^[a-z][a-z0-9_]{0,63}$`,
+    unique; nothing in the cluster changes), used in records and log lines. `issuer` is matched
+    byte for byte with the token's `iss`; set it per cluster (kubeadm's default is the same on
+    every cluster, and port49 refuses one issuer twice).
+  - **The cluster** publishes its keys to the broker with one ClusterRoleBinding,
+    `examples/kubernetes/issuer-discovery.yaml` (measured on kind, L69 (c); managed clusters are
+    L70, unmeasured). Issuer discovery needs anonymous access to two paths; a CIS-hardened
+    cluster with `--anonymous-auth=false` allows them through the 1.32+ structured
+    authentication configuration (its anonymous `conditions` form is not measured).
+  - **Several clusters may list one namespace.** The same workload deployed to every region's
+    cluster is one identity and one policy subject: list `netops` in each region's verifier, no
+    per-cluster namespace or overlay. The start says which clusters vouch for each namespace
+    (`identity: k8s namespaces: netops: eu_west, us_east`); check it after adding a cluster.
+    Where a namespace means different tenants in different clusters, list different namespaces
+    per verifier.
+  - **The principal** is `system:serviceaccount:<namespace>:<name>`, verbatim. The policy refuses
+    one outside that form at load, and the start says which a configured cluster cannot give.
+- **The workload:** `port49 workload token --broker … --broker-ca … --token-file
+  /var/run/secrets/port49/token leaf1`. The token is read at every request, never printed. The
+  pod mounts a projected `serviceAccountToken` volume with `audience: port49` and
+  `expirationSeconds: 3600`, and `automountServiceAccountToken: false` (the default token's
+  audience is the API server's, and it is refused). Exit codes are `port49 workload`'s: 0, 1, 2
+  (a missing or unusable token file), 75 (retry later), 77 (final).
+- **What is refused, and how it reads:** another audience, an unbound, Secret- or Node-bound
+  token, a token older than `max_token_age` (2h), a namespace the cluster does not list, a
+  cluster not configured. Each is 401 with the reason and a detail naming the check.
+- **A cluster's API server unreachable:** keys held are used for `jwks_max_age` (24h) after the
+  last good fetch, said hourly and on `port49_oidc_keys_fetch_failures_total{issuer}`; then 503
+  `identity_provider_unavailable`, retried by `port49 workload`.
+- **Key rotation at the cluster** needs nothing from port49: a new key is fetched on first sight
+  (measured on kind, L69 (d)).
+- **To stop a workload at once:** `port49 revoke --principal system:serviceaccount:<ns>:<name>`.
+  Deleting its service account or pod is not immediate at port49: a token already issued stays
+  valid until its `exp` or 2h after issue (measured on kind, L69 (e)). The mark also stands for a
+  service account re-created under that name until `port49 revoke --lift`, and, since the
+  principal names no cluster, for that service account in every cluster that lists its namespace.
+- **Records:** a cluster caller's records carry `auth: {method: k8s, k8s: {cluster, issuer, sub,
+  serviceaccount_uid, pod, pod_uid, node, jti}}`: which cluster and pod minted. Log lines and
+  refusals name a cluster as `cluster us_east (<issuer>)`.
+- **Metrics:** the `port49_oidc_*` series cover clusters, labelled by the configured issuer (not
+  by `cluster`).
+- **Per-login MFA** applying to machines cannot be proved by a k8s workload: such a device is
+  reported `per_login_mfa_required`, not minted.
+- **Lab:** L69 (kind v0.29.0, Kubernetes v1.33.1); L70 (managed clusters) open.
 
 ## Plan 11 — RFC 9887 TLS listener (§19 step 11)
 

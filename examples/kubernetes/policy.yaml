@@ -1,0 +1,6 @@
+subjects:
+  - name: svc_backup
+    identity:
+      - "system:serviceaccount:netops:oxidized"
+    username: svc-backup
+    token_ttl: 900s

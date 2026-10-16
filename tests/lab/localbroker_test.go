@@ -23,10 +23,10 @@ import (
 // behind it: L48 measures what the broker does with step-ca's certificates,
 // and a mint touches no device.
 type localBroker struct {
-	addr, stderrPath, pki string
-	cmd                   *exec.Cmd
-	repo                  string
-	stop                  func() // stops the process; safe to call more than once
+	addr, stderrPath, stdoutPath, pki, dir string
+	cmd                                    *exec.Cmd
+	repo                                   string
+	stop                                   func() // stops the process; safe to call more than once
 }
 
 const (
@@ -198,24 +198,40 @@ func launchLocalBroker(t *testing.T, dir, anchorFile, crlURL, crlIssuer, crlRoot
 	if err != nil {
 		t.Fatal(err)
 	}
+	return startBrokerProcess(t, repo, dir, pki, crlRoot)
+}
+
+// startBrokerProcess runs bin/port49d on the port49d.yaml in dir (already
+// written, its revocations file already initialised by initRevocations) and
+// waits for "broker listening on". Its stdout, the decision log, is dir's
+// port49d.out. A start port49d refuses over the CRL source returns (nil, the
+// refusal line); every other fault is t.Fatal.
+func startBrokerProcess(t *testing.T, repo, dir, pki, crlRoot string) (*localBroker, string) {
+	t.Helper()
 	if err := initRevocations(filepath.Join(repo, "bin", "port49d"), filepath.Join(dir, "port49d.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	b := &localBroker{repo: repo, pki: pki, stderrPath: filepath.Join(dir, "port49d.err")}
+	b := &localBroker{repo: repo, pki: pki, stderrPath: filepath.Join(dir, "port49d.err"), stdoutPath: filepath.Join(dir, "port49d.out"), dir: dir}
 	errf, err := os.Create(b.stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outf, err := os.Create(b.stdoutPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.cmd = exec.Command(filepath.Join(repo, "bin", "port49d"), "-config", filepath.Join(dir, "port49d.yaml"))
 	b.cmd.Dir = repo
 	b.cmd.Stderr = errf
+	b.cmd.Stdout = outf
 	b.cmd.Env = localBrokerEnv(crlRoot)
 	if err := b.cmd.Start(); err != nil {
 		errf.Close()
+		outf.Close()
 		t.Fatalf("start port49d: %v", err)
 	}
 	done := make(chan struct{})
-	go func() { b.cmd.Wait(); errf.Close(); close(done) }()
+	go func() { b.cmd.Wait(); errf.Close(); outf.Close(); close(done) }()
 	b.stop = func() {
 		_ = b.cmd.Process.Signal(syscall.SIGTERM)
 		select {

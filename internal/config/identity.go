@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/spiffe"
 )
@@ -29,19 +31,23 @@ type workloadDirectoryYAML struct {
 // identityVerifierYAML is one entry of broker.identity.humans or .machines
 // (plan 7h, Ruling 1).
 type identityVerifierYAML struct {
-	Type               string                 `yaml:"type"`
-	TrustAnchorFile    string                 `yaml:"trust_anchor_file"`
-	SPIFFETrustDomains []string               `yaml:"spiffe_trust_domains"`
-	Issuer             string                 `yaml:"issuer"`
-	ClientID           string                 `yaml:"client_id"`
-	Audience           string                 `yaml:"audience"`
-	PrincipalClaim     string                 `yaml:"principal_claim"`
-	PrincipalDomains   []string               `yaml:"principal_domains"`
-	Clients            []machineClientYAML    `yaml:"clients"`
-	Scopes             []string               `yaml:"scopes"`
-	Algorithms         []string               `yaml:"algorithms"`
-	CAFile             string                 `yaml:"ca_file"`
-	Directory          *workloadDirectoryYAML `yaml:"directory"`
+	Type               string              `yaml:"type"`
+	TrustAnchorFile    string              `yaml:"trust_anchor_file"`
+	SPIFFETrustDomains []string            `yaml:"spiffe_trust_domains"`
+	Issuer             string              `yaml:"issuer"`
+	ClientID           string              `yaml:"client_id"`
+	Audience           string              `yaml:"audience"`
+	PrincipalClaim     string              `yaml:"principal_claim"`
+	PrincipalDomains   []string            `yaml:"principal_domains"`
+	Clients            []machineClientYAML `yaml:"clients"`
+	Scopes             []string            `yaml:"scopes"`
+	Algorithms         []string            `yaml:"algorithms"`
+	CAFile             string              `yaml:"ca_file"`
+	// k8s's own keys (plan 10; decision 49).
+	Cluster    string                 `yaml:"cluster"`
+	JWKS       string                 `yaml:"jwks"`
+	Namespaces []string               `yaml:"namespaces"`
+	Directory  *workloadDirectoryYAML `yaml:"directory"`
 	// directory_password's own keys (plan 9e; decision 47).
 	SecondFactor string          `yaml:"second_factor"`
 	Filter       string          `yaml:"filter"`
@@ -49,6 +55,16 @@ type identityVerifierYAML struct {
 	RateLimits   *rateLimitsYAML `yaml:"rate_limits"`
 	TOTPLabel    string          `yaml:"totp_label"`
 }
+
+// k8sKeys reports whether v sets a key only a k8s verifier takes.
+func (v identityVerifierYAML) k8sKeys() bool {
+	return v.Cluster != "" || v.JWKS != "" || v.Namespaces != nil
+}
+
+// clusterName is a k8s verifier's cluster: a CRL source's name shape
+// (config.go's crlName), since it is configuration's word for a cluster, not
+// the cluster's own (decision 49 ruling 1).
+var clusterName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // enrollmentYAML is a directory_password verifier's enrollment windows
 // (decision 47 D2).
@@ -164,7 +180,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
-					v.Algorithms != nil || v.CAFile != "" || v.passwordKeys() {
+					v.Algorithms != nil || v.CAFile != "" || v.passwordKeys() || v.k8sKeys() {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file and spiffe_trust_domains alone", at)
 				}
 				tds, err := spiffeTrustDomains(at, v.SPIFFETrustDomains)
@@ -176,8 +192,15 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 					out.X509Machine.Directory = &oidc.WorkloadDirectory{Kind: d.Kind, Attribute: d.Attribute,
 						UserFilter: d.UserFilter, AllowWeak: d.AllowWeak, Issuers: d.Issuers}
 				}
+			case v.Type == "k8s" && list.domain == oidc.Humans:
+				return nil, fmt.Errorf("config: %s: k8s is a machine verifier: a cluster's service accounts are "+
+					"workloads; list it under machines", at)
 			case v.Type == "k8s":
-				return nil, fmt.Errorf("config: %s: type k8s is plan 10's; remove it", at)
+				vc, err := checkK8sVerifier(at, v)
+				if err != nil {
+					return nil, err
+				}
+				out.K8s = append(out.K8s, vc)
 			case v.Type == "x509":
 				if out.X509AnchorFile != "" {
 					return nil, errors.New("config: broker.identity.humans: at most one x509 verifier (the broker " +
@@ -186,7 +209,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				if v.TrustAnchorFile == "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil ||
 					v.Algorithms != nil || v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil ||
-					v.passwordKeys() {
+					v.passwordKeys() || v.k8sKeys() {
 					return nil, fmt.Errorf("config: %s: type x509 takes trust_anchor_file alone", at)
 				}
 				out.X509AnchorFile = v.TrustAnchorFile
@@ -199,7 +222,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				if v.TrustAnchorFile != "" || v.Issuer != "" || v.ClientID != "" || v.Audience != "" ||
 					v.PrincipalClaim != "" || v.Clients != nil || v.Scopes != nil || v.Algorithms != nil ||
-					v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil {
+					v.CAFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil || v.k8sKeys() {
 					return nil, fmt.Errorf("config: %s: type directory_password takes principal_domains, second_factor, "+
 						"filter, enrollment, rate_limits and totp_label alone", at)
 				}
@@ -213,7 +236,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				out.OIDC = append(out.OIDC, vc)
 			default:
-				return nil, fmt.Errorf("config: %s.type %q: one of x509, oidc or directory_password (k8s is plan 10's)",
+				return nil, fmt.Errorf("config: %s.type %q: one of x509, oidc, k8s or directory_password",
 					at, v.Type)
 			}
 		}
@@ -232,7 +255,8 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			return nil, err
 		}
 	}
-	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 && out.PasswordSignIn == nil {
+	if out.X509AnchorFile == "" && out.X509Machine == nil && len(out.OIDC) == 0 && len(out.K8s) == 0 &&
+		out.PasswordSignIn == nil {
 		return nil, errors.New("config: broker.identity accepts no one: list at least one verifier under humans " +
 			"or machines")
 	}
@@ -247,6 +271,9 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			"issuing CA")
 	}
 	if err := distinctVerifiers(out.OIDC, *y); err != nil {
+		return nil, err
+	}
+	if err := distinctClusters(out.K8s, out.OIDC, *y); err != nil {
 		return nil, err
 	}
 	if p := out.PasswordSignIn; p != nil {
@@ -388,6 +415,9 @@ func checkIssuance(y issuanceYAML, vs []oidc.VerifierConfig, humans []identityVe
 }
 
 func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.VerifierConfig, error) {
+	if v.k8sKeys() {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s: jwks, namespaces and cluster are a k8s verifier's", at)
+	}
 	if v.passwordKeys() {
 		return oidc.VerifierConfig{}, fmt.Errorf("config: %s: second_factor, filter, enrollment, rate_limits and "+
 			"totp_label are a directory_password verifier's", at)
@@ -637,11 +667,11 @@ func printableKey(s string) bool {
 	return s != "" && len(s) <= 255 && strings.IndexFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e }) < 0
 }
 
-// identityIssuers is each OIDC issuer of b's identity, once.
+// identityIssuers is each OIDC or k8s issuer of b's identity, once.
 func identityIssuers(b *BrokerConfig) []string {
 	var out []string
 	if b.Identity != nil {
-		for _, v := range b.Identity.OIDC {
+		for _, v := range append(slices.Clone(b.Identity.OIDC), b.Identity.K8s...) {
 			if !slices.Contains(out, v.Issuer) {
 				out = append(out, v.Issuer)
 			}
@@ -669,4 +699,127 @@ func issuerForm(iss string) string {
 		return iss
 	}
 	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + strings.TrimSuffix(u.EscapedPath(), "/")
+}
+
+// checkK8sVerifier resolves a k8s verifier (plan 10; spec §13 decision 49
+// rulings 1, 4 and 5). Its namespaces may be another cluster's too (ruling 4).
+func checkK8sVerifier(at string, v identityVerifierYAML) (oidc.VerifierConfig, error) {
+	if v.TrustAnchorFile != "" || v.SPIFFETrustDomains != nil || v.Directory != nil || v.ClientID != "" ||
+		v.PrincipalClaim != "" || v.PrincipalDomains != nil || v.Clients != nil || v.Scopes != nil || v.passwordKeys() {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s: type k8s takes issuer, cluster, jwks, audience, namespaces, "+
+			"ca_file and algorithms alone", at)
+	}
+	if !httpsURL(v.Issuer) {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.issuer must be an https URL with no userinfo, query or "+
+			"fragment: the cluster's --service-account-issuer, as its tokens carry it in iss", at)
+	}
+	switch {
+	case v.Cluster == "":
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.cluster is required: this cluster's name in port49's "+
+			"records and lines (us_east, say); nothing in the cluster changes", at)
+	case !clusterName.MatchString(v.Cluster):
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.cluster must match %s", at, clusterName)
+	case v.JWKS == "":
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.jwks is required: the URL the cluster's keys are read "+
+			"from (the API server's https://<host>:<port>/openid/v1/jwks, or where your cluster publishes them)", at)
+	case !httpsURL(v.JWKS):
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.jwks must be an https URL with no userinfo, query or fragment", at)
+	case v.Audience == "":
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.audience is required: the audience your pods' projected "+
+			"token volume asks for (port49 in the examples)", at)
+	case !printableKey(v.Audience):
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.audience must be 1 to 255 printable ASCII characters with "+
+			"no space: the audience your pods' projected token volume asks for", at)
+	case len(v.Namespaces) == 0:
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.namespaces is required: the namespaces whose service "+
+			"accounts this cluster may name, by name", at)
+	}
+	var nss []string
+	for _, ns := range v.Namespaces {
+		if err := k8sid.CheckNamespace(ns); err != nil {
+			return oidc.VerifierConfig{}, fmt.Errorf("config: %s.namespaces: %q: %v", at, ns, err)
+		}
+		if !slices.Contains(nss, ns) {
+			nss = append(nss, ns)
+		}
+	}
+	algs, err := oidc.ParseAlgs(v.Algorithms)
+	if err != nil {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.algorithms: %w", at, err)
+	}
+	if v.CAFile != "" {
+		if err := readableFile(at+".ca_file", v.CAFile); err != nil {
+			return oidc.VerifierConfig{}, fmt.Errorf("config: %w", err)
+		}
+	}
+	return oidc.VerifierConfig{Domain: oidc.Machines, Kind: oidc.KindK8s, Issuer: v.Issuer, Cluster: v.Cluster,
+		JWKS: v.JWKS, Audience: v.Audience, Namespaces: nss, Algorithms: algs, CAFile: v.CAFile}, nil
+}
+
+// httpsURL is an https URL with a host and no userinfo, query or fragment.
+func httpsURL(s string) bool {
+	u, err := url.Parse(s)
+	return s != "" && err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Opaque == "" &&
+		u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
+}
+
+// distinctClusters is decision 49 rulings 1 and 3: one issuer per cluster,
+// never an oidc verifier's issuer, and one name per cluster. Two verifiers on
+// one jwks are one cluster under two issuers (a migration), and share its
+// name. Namespaces are not compared: several clusters may vouch for one
+// (ruling 4), which the start says.
+func distinctClusters(ks, os []oidc.VerifierConfig, y identityYAML) error {
+	at := func(i int) string {
+		n := -1
+		for j, v := range y.Machines {
+			if v.Type == "k8s" {
+				if n++; n == i {
+					return fmt.Sprintf("broker.identity.machines[%d]", j)
+				}
+			}
+		}
+		return "broker.identity.machines[?]"
+	}
+	// oidcAt is where the oidc verifier of issuer iss is listed.
+	oidcAt := func(iss string) string {
+		for j, v := range y.Humans {
+			if v.Type == "oidc" && issuerForm(v.Issuer) == issuerForm(iss) {
+				return fmt.Sprintf("broker.identity.humans[%d]", j)
+			}
+		}
+		for j, v := range y.Machines {
+			if v.Type == "oidc" && issuerForm(v.Issuer) == issuerForm(iss) {
+				return fmt.Sprintf("broker.identity.machines[%d]", j)
+			}
+		}
+		return "an oidc verifier"
+	}
+	for i, b := range ks {
+		for _, o := range os {
+			if issuerForm(o.Issuer) == issuerForm(b.Issuer) {
+				return fmt.Errorf("config: %s.issuer %s is also %s's, a k8s verifier's: one issuer is one cluster's "+
+					"or one provider's (decision 49 ruling 3)", oidcAt(o.Issuer), o.Issuer, at(i))
+			}
+		}
+		for j := range i {
+			a := ks[j]
+			switch {
+			case a.Issuer == b.Issuer:
+				return fmt.Errorf("config: %s.issuer %s is also %s's: each cluster needs its own "+
+					"--service-account-issuer (kubeadm's default is the same on every cluster) (decision 49 ruling 3)",
+					at(i), b.Issuer, at(j))
+			case issuerForm(a.Issuer) == issuerForm(b.Issuer):
+				return fmt.Errorf("config: %s.issuer and %s.issuer differ only by a trailing slash or by case in the "+
+					"scheme or host; list each issuer once, spelled as the cluster spells it", at(i), at(j))
+			case a.Cluster == b.Cluster && a.JWKS != b.JWKS:
+				return fmt.Errorf("config: %s.cluster %s is also %s's: each cluster's name is its own (decision 49 "+
+					"ruling 1); two verifiers share one only on the same jwks, one cluster under two issuers",
+					at(i), b.Cluster, at(j))
+			case a.Cluster != b.Cluster && a.JWKS == b.JWKS:
+				return fmt.Errorf("config: %s and %s read one jwks, so they are one cluster under two issuers: give "+
+					"them one cluster name, not %s and %s", at(j), at(i), a.Cluster, b.Cluster)
+			}
+		}
+	}
+	return nil
 }

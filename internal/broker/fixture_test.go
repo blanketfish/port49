@@ -438,3 +438,28 @@ func httptestServe(f *fixture, r *http.Request) *httptest.ResponseRecorder {
 	f.b.Handler().ServeHTTP(w, r)
 	return w
 }
+
+// k8sTestIssuer is the issuer withCluster's cluster signs as.
+const k8sTestIssuer = "https://l69-a.port49.lab"
+
+// withCluster adds a k8s verifier for iss's keys, cluster l69_a, issuer
+// k8sTestIssuer, audience port49, namespaces netops, to f's set.
+func (f *fixture) withCluster(t *testing.T) *oidctest.Issuer {
+	t.Helper()
+	return f.withClusterNamed(t, "l69_a", k8sTestIssuer)
+}
+
+// withClusterNamed adds another cluster's verifier, listing netops too.
+func (f *fixture) withClusterNamed(t *testing.T, cluster, issuer string) *oidctest.Issuer {
+	t.Helper()
+	iss := oidctest.NewIssuer(t)
+	v := oidc.VerifierConfig{Domain: oidc.Machines, Kind: oidc.KindK8s, Cluster: cluster, Issuer: issuer,
+		JWKS: iss.URL + "/jwks", Audience: "port49", Namespaces: []string{"netops"}, Algorithms: []oidc.Alg{oidc.RS256}}
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: issuer, JWKS: v.JWKS, Who: v.Who(),
+		Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: f.b.Now, M: f.b.Metrics})
+	if f.b.Identity == nil {
+		f.b.Identity = &oidc.Set{Timing: oidc.DefaultTiming, Now: f.b.Now, M: f.b.Metrics}
+	}
+	f.b.Identity.Verifiers = append(f.b.Identity.Verifiers, &oidc.Verifier{VerifierConfig: v, Keys: ks})
+	return iss
+}

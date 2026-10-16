@@ -53,6 +53,30 @@ type VerifierConfig struct {
 	Algorithms []Alg
 	// CAFile is the provider's TLS anchor; "" is the system roots.
 	CAFile string
+	// Kind is "" for an oidc verifier and KindK8s for a cluster's (plan 10;
+	// spec §13 decision 49): a k8s verifier is a machine verifier keyed by
+	// Issuer, named Cluster on the port49 side, its keys fetched from JWKS,
+	// its principals in Namespaces.
+	Kind       string
+	Cluster    string
+	JWKS       string
+	Namespaces []string
+}
+
+// KindK8s is a Kubernetes cluster's verifier (decision 49 ruling 1).
+const KindK8s = "k8s"
+
+// ListsNamespace reports whether a k8s verifier may name ns's service
+// accounts (decision 49 ruling 8).
+func (v VerifierConfig) ListsNamespace(ns string) bool { return slices.Contains(v.Namespaces, ns) }
+
+// Who is how the operator's lines name v: a k8s verifier by its cluster,
+// the issuer beside it; any other by its issuer (decision 49 ruling 1).
+func (v VerifierConfig) Who() string {
+	if v.Kind == KindK8s {
+		return "cluster " + v.Cluster + " (" + v.Issuer + ")"
+	}
+	return v.Issuer
 }
 
 // DomainOf is a user: principal's domain, after its last @; "" for any
@@ -118,6 +142,7 @@ type Config struct {
 	// X509Machine is the workload verifier, nil without one (plan 8).
 	X509Machine *X509Machine
 	OIDC        []VerifierConfig
+	K8s         []VerifierConfig // the k8s verifiers, one per cluster (plan 10)
 	Timing      Timing
 	// Issuance is broker.identity.issuance (plan 9b; spec §13 decision 43
 	// rulings 9 and 14): nil when the broker issues no certificate.

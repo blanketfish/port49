@@ -36,7 +36,10 @@ type caller struct {
 // auth is a record's auth for c.
 func (c caller) auth() *decision.Auth {
 	a := &decision.Auth{Method: c.cred.Method, Fingerprint: c.cred.Fingerprint}
-	if c.oidc != nil {
+	switch {
+	case c.oidc != nil && c.oidc.K8s != nil:
+		a.K8s = k8sAuth(*c.oidc)
+	case c.oidc != nil:
 		a.OIDC = oidcAuth(*c.oidc)
 	}
 	if c.signIn != nil && c.signIn.Method == issuer.MethodDirectoryPassword {
@@ -50,6 +53,12 @@ func (c caller) auth() *decision.Auth {
 func oidcAuth(a oidc.Assertion) *decision.OIDC {
 	return &decision.OIDC{Issuer: a.Issuer, Sub: a.Subject, Sid: a.Sid, AMR: a.AMR, ACR: a.ACR,
 		AuthTime: decision.FormatTime(a.AuthTime)}
+}
+
+// k8sAuth is auth.k8s (spec §5.7; decision 49 ruling 9).
+func k8sAuth(a oidc.Assertion) *decision.K8s {
+	return &decision.K8s{Cluster: a.K8s.Cluster, Issuer: a.Issuer, Sub: a.Subject, ServiceAccountUID: a.K8s.ServiceAccountUID,
+		Pod: a.K8s.Pod, PodUID: a.K8s.PodUID, Node: a.K8s.Node, JTI: a.K8s.JTI}
 }
 
 // errBearer is an Authorization header that is not one Bearer token.
@@ -76,27 +85,39 @@ func bearerOf(r *http.Request) (string, bool, error) {
 // no principal and no claim when the token did not verify.
 func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, nothing, raw string) (caller, bool) {
 	now := b.Now()
+	// method is the record's: oidc until a verifier's refusal or a verified
+	// token says k8s.
+	method := "oidc"
 	deny := func(reason decision.Reason, principal string, a *oidc.Assertion) {
 		rec := decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: "oidc"}}
+			Principal: principal, Auth: &decision.Auth{Method: method}}
 		if a != nil {
-			rec.Auth.OIDC = oidcAuth(*a)
+			rec.Auth = caller{oidc: a, cred: a.Credential()}.auth()
 		}
 		b.emit(rec)
 	}
 	if b.Identity == nil {
 		deny(decision.TrustDomainUnresolved, "", nil)
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved),
-			"this broker accepts no OIDC token: no oidc verifier is configured under broker.identity")
+			"this broker accepts no OIDC or k8s token: no oidc or k8s verifier is configured under broker.identity")
 		return caller{}, false
 	}
 	vctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	a, err := b.Identity.Verify(vctx, raw)
 	cancel()
+	if err != nil {
+		method = oidc.MethodOf(err)
+	}
+	// said is the operator line's key prefix and noun: a cluster's refusals
+	// are their own lines, not an oidc provider's.
+	said, what := "oidc", "a bearer token"
+	if method == oidc.KindK8s {
+		said, what = "k8s", "a k8s token"
+	}
 	switch {
 	case errors.Is(err, oidc.ErrUnavailable):
 		deny(decision.TrustDomainUnresolved, "", nil)
-		b.sayOnce("oidc_unavailable", sayEvery, "identity: a bearer token was refused (identity_provider_unavailable): %s",
+		b.sayOnce(said+"_unavailable", sayEvery, "identity: %s was refused (identity_provider_unavailable): %s", what,
 			printsafe.Line(err.Error(), 300))
 		w.Header().Set("Retry-After", "30")
 		writeError(w, http.StatusServiceUnavailable, "identity_provider_unavailable",
@@ -104,14 +125,19 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case errors.Is(err, oidc.ErrUnmapped):
 		deny(decision.IdentityUnmapped, "", nil)
-		b.sayOnce("oidc_unmapped", sayEvery, "identity: a bearer token was refused (identity_unmapped): %s",
+		b.sayOnce(said+"_unmapped", sayEvery, "identity: %s was refused (identity_unmapped): %s", what,
 			printsafe.Line(err.Error(), 300))
-		writeError(w, http.StatusUnauthorized, string(decision.IdentityUnmapped),
-			"your token names no principal this broker can use; tell the operator")
+		why := "your token names no principal this broker can use; tell the operator"
+		if method == oidc.KindK8s {
+			// A k8s refusal names only the caller's own verified sub or
+			// namespace and the configured issuer (decision 49 ruling 8).
+			why = err.Error()
+		}
+		writeError(w, http.StatusUnauthorized, string(decision.IdentityUnmapped), why)
 		return caller{}, false
 	case err != nil:
 		deny(decision.TrustDomainUnresolved, "", nil)
-		b.sayOnce("oidc_invalid", sayEvery, "identity: a bearer token was refused (trust_domain_unresolved): %s",
+		b.sayOnce(said+"_invalid", sayEvery, "identity: %s was refused (trust_domain_unresolved): %s", what,
 			printsafe.Line(err.Error(), 300))
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
 		return caller{}, false
@@ -121,6 +147,12 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 	// nothing, and the refresh's token is checked against its challenge.
 	if event != decision.EventRefresh && b.MaxSessionAge > 0 && now.Sub(a.AuthTime) > b.MaxSessionAge {
 		deny(decision.SessionExpired, a.Principal, &a)
+		if a.Domain == oidc.Machines {
+			writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
+				"your token was issued at %s, more than max_session_age (%s) ago; a workload's platform renews its token",
+				a.AuthTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
+			return caller{}, false
+		}
 		writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
 			"your identity provider last authenticated you at %s, more than max_session_age (%s) ago; run "+
 				"`port49 login` (it asks the provider to authenticate you again)",

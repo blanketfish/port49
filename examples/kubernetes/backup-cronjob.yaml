@@ -1,0 +1,60 @@
+# A nightly backup's tokens, minted with the pod's projected token alone
+# (design §7). The default API token is not mounted: its audience is the API
+# server's and port49 refuses it (measured on kind, L69 (h)). This example stops
+# at the mint: /work/tokens.tsv is on an emptyDir, so the job that reads the
+# tokens (your backup tool) runs in this pod, after this container, sharing
+# the work volume; it is not shown here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oxidized
+  namespace: netops
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: port49-backup-tokens
+  namespace: netops
+spec:
+  schedule: "15 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: oxidized
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: tokens
+              image: port49:local
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              command: ["/usr/local/bin/port49", "workload", "token",
+                        "--broker", "https://port49-broker.netops.svc:8443",
+                        "--broker-ca", "/etc/port49/broker-ca.pem",
+                        "--token-file", "/var/run/secrets/port49/token",
+                        "--devices-file", "/etc/port49/devices",
+                        "--purpose", "nightly backup", "--out", "/work/tokens.tsv"]
+              volumeMounts:
+                - {name: port49-token, mountPath: /var/run/secrets/port49, readOnly: true}
+                - {name: port49-config, mountPath: /etc/port49, readOnly: true}
+                - {name: work, mountPath: /work}
+          volumes:
+            - name: port49-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      audience: port49
+                      expirationSeconds: 3600
+                      path: token
+            - name: port49-config
+              configMap: {name: port49-backup}
+            - name: work
+              emptyDir: {}

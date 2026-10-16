@@ -104,6 +104,7 @@ subjects:
   - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s}
   - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
+  - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}
 grants:
   - {subject: netops, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: netops, scope: edge, roles: [network_admin], max_privilege: admin}%s
@@ -111,6 +112,8 @@ grants:
   - {subject: bobs, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
+  - {subject: svc_k8s, scope: core, roles: [network_admin], max_privilege: admin}
+  - {subject: svc_k8s, scope: edge, roles: [network_admin], max_privilege: admin}
 `, coreMFA, ceilingRole, ceilingGrant)
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -47,15 +49,19 @@ func stateDirWords(cfg config.Config, stateDir string, err error) string {
 		"the broker's own state is kept there; chmod it 0700, or move broker.revocations_file into a 0700 directory")
 }
 
-// openOIDC builds broker.identity's OIDC set: one key set per issuer,
+// openOIDC builds broker.identity's OIDC and k8s set: one key set per issuer,
 // shared by the issuer's verifiers, restored from stateDir and kept there.
 // It fetches nothing: runKeySets does, so a start never waits on a
-// provider (Ruling 4). Nil without an oidc verifier. A state directory it
+// provider (Ruling 4). Nil without an oidc or k8s verifier. A state directory it
 // cannot keep keys in is said now, in one line, not first at a save an
 // hour into a provider outage (pre-flight M-21); the broker still starts.
 func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(string, ...any)) (*oidc.Set, error) {
 	id := cfg.Broker.Identity
-	if id == nil || len(id.OIDC) == 0 {
+	if id == nil {
+		return nil, nil
+	}
+	vs := append(slices.Clone(id.OIDC), id.K8s...)
+	if len(vs) == 0 {
 		return nil, nil
 	}
 	if err := ownStateDir(stateDir); err != nil {
@@ -64,23 +70,27 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 	}
 	set := &oidc.Set{Timing: id.Timing, Now: time.Now, M: m}
 	byIssuer := map[string]*oidc.KeySet{}
-	for i, v := range id.OIDC {
+	for i, v := range vs {
+		if v.Kind == oidc.KindK8s {
+			i -= len(id.OIDC) // a k8s verifier's index among the k8s ones, as the config lists them
+		}
 		ks := byIssuer[v.Issuer]
 		if ks == nil {
 			var roots *x509.CertPool
 			if v.CAFile != "" {
 				pem, err := os.ReadFile(v.CAFile)
 				if err != nil {
-					return nil, fmt.Errorf("config: broker.identity %s verifier %d: ca_file: %w", v.Domain, i, err)
+					return nil, fmt.Errorf("config: broker.identity %s: ca_file: %w", verifierName(v, i), err)
 				}
 				roots = x509.NewCertPool()
 				if !roots.AppendCertsFromPEM(pem) {
-					return nil, fmt.Errorf("config: broker.identity %s verifier %d: ca_file %s holds no certificate",
-						v.Domain, i, v.CAFile)
+					return nil, fmt.Errorf("config: broker.identity %s: ca_file %s holds no certificate",
+						verifierName(v, i), v.CAFile)
 				}
 			}
 			path := keyFile(stateDir, v.Issuer)
-			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, Client: oidc.NewClient(roots),
+			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, JWKS: v.JWKS, Who: v.Who(),
+				Migrating: migrating(id.K8s, v), Client: oidc.NewClient(roots),
 				Refresh: id.Timing.JWKSRefresh, MaxAge: id.Timing.JWKSMaxAge, Now: time.Now, Say: say, M: m, Proc: procOf(cfg),
 				Save: func(b []byte) error {
 					if err := writeOwnerOnly(path, b); err != nil {
@@ -100,6 +110,32 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 		set.Verifiers = append(set.Verifiers, &oidc.Verifier{VerifierConfig: v, Keys: ks})
 	}
 	return set, nil
+}
+
+// verifierName is how a ca_file error names verifier i of vs (OIDC verifiers
+// first, then k8s): "machines verifier 1", "machines k8s verifier 2".
+func verifierName(v oidc.VerifierConfig, i int) string {
+	if v.Kind == oidc.KindK8s {
+		return fmt.Sprintf("%s k8s verifier %d", v.Domain, i)
+	}
+	return fmt.Sprintf("%s verifier %d", v.Domain, i)
+}
+
+// migrating is the issuers of the other k8s verifiers on v's JWKS: one
+// cluster changing its issuer is two verifiers on one JWKS (decision 49
+// ruling 4), and the key set says nothing about the discovery document naming
+// either. Nil for an OIDC verifier.
+func migrating(ks []oidc.VerifierConfig, v oidc.VerifierConfig) []string {
+	if v.Kind != oidc.KindK8s {
+		return nil
+	}
+	var out []string
+	for _, o := range ks {
+		if o.JWKS == v.JWKS && o.Issuer != v.Issuer && !slices.Contains(out, o.Issuer) {
+			out = append(out, o.Issuer)
+		}
+	}
+	return out
 }
 
 // runKeySets runs each issuer's refresh loop until ctx ends.
@@ -193,6 +229,11 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 				"algorithms %s)", v.Issuer, v.Audience, strings.Join(clients, ", "), algs(v.Algorithms)))
 		}
 	}
+	for _, v := range id.K8s {
+		machines = append(machines, fmt.Sprintf("k8s cluster %s (issuer %s; keys from %s; audience %s; namespaces %s; "+
+			"principal system:serviceaccount:<namespace>:<name>; algorithms %s)", v.Cluster, v.Issuer, v.JWKS,
+			v.Audience, strings.Join(v.Namespaces, ", "), algs(v.Algorithms)))
+	}
 	if m := id.X509Machine; m != nil {
 		machines = append([]string{fmt.Sprintf("x509 (trust anchor %s; SPIFFE trust domains %s; principal: the "+
 			"certificate's one URI SAN)", m.AnchorFile, strings.Join(m.TrustDomains, ", "))}, machines...)
@@ -202,6 +243,12 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 	}
 	if len(machines) > 0 {
 		fmt.Fprintf(w, "%s: identity: machines: %s\n", proc, strings.Join(machines, "; "))
+	}
+	if len(id.K8s) > 0 {
+		fmt.Fprintf(w, "%s: identity: a k8s verifier trusts its cluster's administrators: whoever can create a pod or a "+
+			"token for a service account in a listed namespace mints as it; a token stays valid here until its exp or "+
+			"max_token_age after its pod or service account is deleted; port49 revoke --principal ends it at once\n", proc)
+		fmt.Fprintf(w, "%s: identity: k8s namespaces: %s\n", proc, vouching(id.K8s))
 	}
 	if id.X509Machine != nil {
 		fmt.Fprintf(w, "%s: identity: workload certificates are issued and renewed by your CA, never by port49; "+
@@ -218,13 +265,24 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 	}
 	// Once per issuer: how it is reached (pre-flight I-5) and what anchors it.
 	seen := map[string]bool{}
-	for _, v := range id.OIDC {
+	fetched := append(slices.Clone(id.OIDC), id.K8s...)
+	for _, v := range fetched {
 		if seen[v.Issuer] {
 			continue
 		}
 		seen[v.Issuer] = true
+		// A k8s verifier's fetch dials its jwks, not its issuer (often a name
+		// only the cluster resolves), so the proxy is the jwks host's and the
+		// line names it (pre-flight I9).
+		target, host := v.Issuer, ""
+		if v.Kind == oidc.KindK8s {
+			target = v.JWKS
+			if u, err := url.Parse(v.JWKS); err == nil {
+				host = " (its jwks host " + u.Host + ")"
+			}
+		}
 		how := "directly (no HTTPS_PROXY)"
-		if u, err := oidc.ProxyFor(v.Issuer); err == nil {
+		if u, err := oidc.ProxyFor(target); err == nil {
 			how = oidc.DescribeProxy(u)
 		} else {
 			// The transport takes the environment's proxy as it parses it: a
@@ -234,17 +292,71 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 				"'%' in its password): the key fetch drops it and dials directly, or misreads it and dials a host nobody " +
 				"configured, which a proxy-only egress refuses"
 		}
-		fmt.Fprintf(w, "%s: identity: %s is fetched %s\n", proc, v.Issuer, how)
+		fmt.Fprintf(w, "%s: identity: %s is fetched %s%s\n", proc, v.Who(), how, host)
 	}
 	clear(seen)
-	for _, v := range id.OIDC {
+	for _, v := range fetched {
 		if v.CAFile == "" && !seen[v.Issuer] {
 			seen[v.Issuer] = true
 			fmt.Fprintf(w, "%s: identity: %s is trusted through the system's root certificates (no ca_file)\n", proc,
-				v.Issuer)
+				v.Who())
 		}
 	}
 	fmt.Fprintf(w, "%s: identity: keys refreshed every %s; trusted without a refresh until %s after the last "+
 		"(broker.identity.jwks_max_age); clock_skew %s; max_token_age %s\n", proc, id.Timing.JWKSRefresh,
 		id.Timing.JWKSMaxAge, id.Timing.ClockSkew, id.Timing.MaxTokenAge)
+}
+
+// announceServiceAccountIdentities says the policy's system:serviceaccount:
+// identities no verifier can give (decision 49 ruling 13): with no k8s
+// verifier, all of them; with some, those whose namespace none lists.
+func announceServiceAccountIdentities(w io.Writer, proc string, cfg config.Config, pol *policy.Policy) {
+	ids := pol.ServiceAccountIdentities()
+	if len(ids) == 0 || cfg.Broker == nil {
+		return
+	}
+	var ks []oidc.VerifierConfig
+	if cfg.Broker.Identity != nil {
+		ks = cfg.Broker.Identity.K8s
+	}
+	var lines []string
+	for _, id := range slices.Sorted(maps.Keys(ids)) {
+		parsed, err := k8sid.Parse(id)
+		switch {
+		case err != nil:
+			continue // the policy's load refused it already
+		case len(ks) == 0:
+			lines = append(lines, fmt.Sprintf("%s (subject %s): no broker.identity.machines k8s verifier is configured",
+				id, ids[id]))
+		case !slices.ContainsFunc(ks, func(v oidc.VerifierConfig) bool { return v.ListsNamespace(parsed.Namespace) }):
+			lines = append(lines, fmt.Sprintf("%s (subject %s): no k8s verifier lists namespace %s", id, ids[id],
+				parsed.Namespace))
+		}
+	}
+	if len(lines) > 0 {
+		fmt.Fprintf(w, "%s: policy: %d service account identities mint for no one: %s\n", proc, len(lines),
+			strings.Join(lines, "; "))
+	}
+}
+
+// vouching is, for each namespace a k8s verifier lists, every cluster that
+// vouches for it: "backup: eu_west; netops: eu_west, us_east". Several
+// clusters may list one namespace (decision 49 ruling 4); the start says
+// which, so an overlap nobody meant is seen (ruling 13). A cluster under two
+// issuers is named once.
+func vouching(ks []oidc.VerifierConfig) string {
+	by := map[string][]string{}
+	for _, v := range ks {
+		for _, ns := range v.Namespaces {
+			if !slices.Contains(by[ns], v.Cluster) {
+				by[ns] = append(by[ns], v.Cluster)
+			}
+		}
+	}
+	var parts []string
+	for _, ns := range slices.Sorted(maps.Keys(by)) {
+		slices.Sort(by[ns])
+		parts = append(parts, ns+": "+strings.Join(by[ns], ", "))
+	}
+	return strings.Join(parts, "; ")
 }

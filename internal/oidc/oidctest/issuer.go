@@ -1,6 +1,7 @@
 package oidctest
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
@@ -21,17 +22,20 @@ import (
 type Issuer struct {
 	URL string
 
-	srv       *httptest.Server
-	mu        sync.Mutex
-	keys      map[string]held
-	published map[string]bool
-	status    int
-	discovery func(map[string]any)
-	raw       []byte
-	gate      chan struct{} // non-nil: /jwks waits for it to close (Hold)
-	arrive    func()
-	fetches   atomic.Int64
-	auth      *AuthServer // nil: /authorize and /token answer 404
+	srv             *httptest.Server
+	mu              sync.Mutex
+	keys            map[string]held
+	published       map[string]bool
+	status          int
+	discoveryStatus int
+	discovery       func(map[string]any)
+	raw             []byte
+	gate            chan struct{} // non-nil: /jwks waits for it to close (Hold)
+	arrive          func()
+	dgate           chan struct{} // non-nil: discovery waits for it to close (HoldDiscovery)
+	darrive         func()
+	fetches         atomic.Int64
+	auth            *AuthServer // nil: /authorize and /token answer 404
 }
 
 type held struct {
@@ -44,10 +48,19 @@ func NewIssuer(t testing.TB) *Issuer {
 	t.Helper()
 	i := &Issuer{keys: map[string]held{}, published: map[string]bool{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		i.mu.Lock()
-		status, hook, auth := i.status, i.discovery, i.auth
+		status, hook, auth := cmp.Or(i.status, i.discoveryStatus), i.discovery, i.auth
+		gate, arrive := i.dgate, i.darrive
 		i.mu.Unlock()
+		if gate != nil {
+			arrive()
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if status != 0 {
 			w.WriteHeader(status)
 			return
@@ -163,6 +176,14 @@ func (i *Issuer) Fail(status int) {
 	i.status = status
 }
 
+// DiscoveryStatus answers discovery alone with status; 0 answers it again.
+// Fail sets this and the JWKS's together.
+func (i *Issuer) DiscoveryStatus(status int) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.discoveryStatus = status
+}
+
 // ServeJWKS serves raw at /jwks in place of the keys; nil serves the keys.
 func (i *Issuer) ServeJWKS(raw []byte) {
 	i.mu.Lock()
@@ -188,6 +209,22 @@ func (i *Issuer) Hold() (arrived <-chan struct{}, release func()) {
 	return in, func() {
 		i.mu.Lock()
 		i.gate, i.arrive = nil, nil
+		i.mu.Unlock()
+		close(gate)
+	}
+}
+
+// HoldDiscovery is Hold's twin for the discovery document: it stalls every
+// discovery request until release is called, or the request's context ends.
+func (i *Issuer) HoldDiscovery() (arrived <-chan struct{}, release func()) {
+	gate, in := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	i.mu.Lock()
+	i.dgate, i.darrive = gate, func() { once.Do(func() { close(in) }) }
+	i.mu.Unlock()
+	return in, func() {
+		i.mu.Lock()
+		i.dgate, i.darrive = nil, nil
 		i.mu.Unlock()
 		close(gate)
 	}
@@ -231,6 +268,34 @@ func (i *Issuer) TokenRaw(t testing.TB, kid, body string) string {
 func (i *Issuer) IDToken(t testing.TB, kid, clientID, sub string, now time.Time, extra map[string]any) string {
 	c := map[string]any{"iss": i.URL, "aud": clientID, "sub": sub, "iat": now.Unix(),
 		"exp": now.Add(5 * time.Minute).Unix(), "auth_time": now.Unix(), "sid": "s-" + sub}
+	for k, v := range extra {
+		if v == nil {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+	}
+	return i.Token(t, kid, c)
+}
+
+// ServiceAccountToken is a projected service account token as a cluster
+// issues one (L69 (a) records a real one): iss, aud [aud], sub, iat, nbf,
+// exp (now+10m), jti, and kubernetes.io binding it to a pod on a node; extra
+// overrides, a nil value deleting. The pod is sa-7d9f, cut at 253 bytes
+// (Kubernetes' own pod-name limit), so a 253-byte account's pod is still one
+// a cluster could name (pre-flight I5).
+func (i *Issuer) ServiceAccountToken(t testing.TB, kid, issuer, aud, ns, sa string, now time.Time, extra map[string]any) string {
+	pod := sa + "-7d9f"
+	if len(pod) > 253 {
+		pod = pod[:253]
+	}
+	c := map[string]any{"iss": issuer, "aud": []string{aud}, "sub": "system:serviceaccount:" + ns + ":" + sa,
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix(),
+		"jti": "6f1c2d3e-0000-4000-8000-000000000069",
+		"kubernetes.io": map[string]any{"namespace": ns,
+			"serviceaccount": map[string]any{"name": sa, "uid": "0b5d7c1a-0000-4000-8000-000000000001"},
+			"pod":            map[string]any{"name": pod, "uid": "9e1c4b2d-0000-4000-8000-000000000002"},
+			"node":           map[string]any{"name": "l69-a-worker", "uid": "44aa1f3b-0000-4000-8000-000000000003"}}}
 	for k, v := range extra {
 		if v == nil {
 			delete(c, k)

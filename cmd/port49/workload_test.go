@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/workload"
 )
 
 // workloadBroker serves /v1/config and /v1/tokens as answer says, over TLS
@@ -851,5 +854,82 @@ func TestWorkloadJSONRefusesAnErroredItemAndATokenlessPermit(t *testing.T) {
 		got.Refused[0].Error != "broker_error" || strings.ContainsRune(got.Refused[0].Detail, 0x1b) ||
 		got.Refused[1].Device != "nolog" {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// tokenFileFlags is the broker flags of workloadBroker without its certificate
+// pair, with --token-file in their place.
+func tokenFileFlags(t *testing.T, tokenFile string) []string {
+	t.Helper()
+	var out []string
+	flags := workloadBroker(t, mixed)
+	for i := 0; i < len(flags); i += 2 {
+		if flags[i] == "--cert" || flags[i] == "--key" {
+			continue
+		}
+		out = append(out, flags[i], flags[i+1])
+	}
+	return append(out, "--token-file", tokenFile)
+}
+
+// An unusable token file is usage, exit 2, on both commands: stderr names the
+// file and never its content.
+func TestAnUnusableTokenFileExitsUsageAndNeverPrintsItsContent(t *testing.T) {
+	const secret = "FAKESECRET.tok.en"
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+	spaced := filepath.Join(dir, "spaced")
+	if err := os.WriteFile(spaced, []byte(secret+" tail"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{"missing": missing, "spaced": spaced} {
+		for _, args := range [][]string{{"token", "leaf1"}, {"identity"}} {
+			var out, errb bytes.Buffer
+			cmdArgs := append(append([]string{"workload", args[0]}, tokenFileFlags(t, file)...), args[1:]...)
+			code := run(cmdArgs, &out, &errb)
+			if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), file) ||
+				strings.Contains(errb.String(), secret) || strings.Contains(out.String(), secret) {
+				t.Errorf("%s %s: exit %d stdout %q stderr %q", name, args[0], code, out.String(), errb.String())
+			}
+		}
+	}
+}
+
+// --token-file beside --cert or --touch-key is refused before any key is opened.
+func TestATokenFileIsRefusedBesideACertOrATouchKey(t *testing.T) {
+	tok := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tok, []byte("a.b.c"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, extra := range map[string][]string{
+		"cert":      {"--cert", "/nowhere.pem"},
+		"key":       {"--key", "/nowhere-key.pem"},
+		"touch key": {"--touch-key", "pkcs11:nothing-here"},
+	} {
+		var out, errb bytes.Buffer
+		args := append(append([]string{"workload", "token"}, tokenFileFlags(t, tok)...), extra...)
+		code := run(append(args, "leaf1"), &out, &errb)
+		if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "a certificate or a token file, not both") {
+			t.Errorf("%s: exit %d stdout %q stderr %q", name, code, out.String(), errb.String())
+		}
+	}
+}
+
+// With a token file and neither pair, the usage error stays for a missing broker.
+func TestWorkloadWithNeitherACertNorATokenFileIsUsage(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"workload", "token", "--broker", "https://127.0.0.1:1", "--broker-ca", "/x", "leaf1"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "--token-file") {
+		t.Fatalf("exit %d stderr %q", code, errb.String())
+	}
+}
+
+// A token file that went away mid-run stops the run as an agent error, in
+// words that never carry the file's content.
+func TestATokenFileLostMidRunStopsAsAnAgentError(t *testing.T) {
+	err := fmt.Errorf("page: %w", &workload.TokenFileError{File: "/var/run/t", Err: errors.New("no such file or directory")})
+	s := stopOf(err, []string{"leaf1"}, nil)
+	if s == nil || s.code != failAgent || !strings.Contains(s.detail, "token file") || len(s.left) != 1 {
+		t.Fatalf("%+v", s)
 	}
 }

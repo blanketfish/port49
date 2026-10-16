@@ -42,6 +42,10 @@ const (
 	fetchTimeout  = 10 * time.Second
 	maxBody       = 1 << 20
 	sayStaleEvery = time.Hour
+
+	// discoveryTimeout bounds the discovery read a cluster's key set makes
+	// after a fetch, on its own context (pre-flight I8).
+	discoveryTimeout = 3 * time.Second
 )
 
 // KeySetConfig is one issuer's key set (Ruling 4).
@@ -62,15 +66,29 @@ type KeySetConfig struct {
 	// restart it: the broker may be embedded in port49d. Empty says "the
 	// broker's process".
 	Proc string
+	// JWKS, when set, is where keys are fetched from, directly: a k8s
+	// verifier's (decision 49 ruling 2). Discovery is then read at its
+	// origin only to say where it differs, never to find a key.
+	JWKS string
+	// Migrating are the issuers of the other k8s verifiers on this JWKS:
+	// one cluster under several issuers (decision 49 ruling 4). A
+	// discovery naming one of them is not said.
+	Migrating []string
+	// Who names the key set in every line it says and every error it
+	// gives: VerifierConfig.Who, "cluster us_east (<issuer>)" for a k8s
+	// verifier (decision 49 ruling 1). "" is the issuer, as today.
+	Who string
 }
 
 // NewClient is a provider's HTTP client: TLS 1.2 or later against roots
 // (nil: the system's), fetchTimeout, no redirect followed, and the
 // environment's proxy (HTTPS_PROXY, NO_PROXY), which DefaultTransport's
 // clone keeps: a site whose egress is a proxy would otherwise never fetch a
-// key (pre-flight I-5). The targets are the configured issuer and the
-// jwks_uri its own discovery names, so no request goes where configuration
-// did not send it.
+// key (pre-flight I-5). The targets are the configured issuer (its
+// discovery document) and the jwks_uri that discovery names; for a k8s
+// cluster, the configured jwks URL and the discovery at that URL's origin
+// (not the issuer's own), so no request goes where configuration did not
+// send it.
 func NewClient(roots *x509.CertPool) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
@@ -102,11 +120,12 @@ func parseProxy(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// ProxyFor is the proxy NewClient's transport takes to reach issuer: the
-// environment's, or nil for none. An HTTPS_PROXY that does not parse as a
+// ProxyFor is the proxy NewClient's transport takes to reach target: the
+// environment's, or nil for none. target is the URL the fetch dials: an
+// OIDC verifier's issuer, a k8s verifier's JWKS URL. An HTTPS_PROXY that does not parse as a
 // proxy URL is an error, never "no proxy": the transport would drop it
 // silently or dial a host nobody configured.
-func ProxyFor(issuer string) (*url.URL, error) {
+func ProxyFor(target string) (*url.URL, error) {
 	raw := os.Getenv("HTTPS_PROXY")
 	if raw == "" {
 		raw = os.Getenv("https_proxy")
@@ -116,7 +135,7 @@ func ProxyFor(issuer string) (*url.URL, error) {
 			return nil, err
 		}
 	}
-	req, err := http.NewRequest(http.MethodGet, issuer, nil)
+	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +155,10 @@ func DescribeProxy(u *url.URL) string {
 	return "through the proxy " + u.Scheme + "://" + u.Host + with + " (HTTPS_PROXY)"
 }
 
+// WaitNotes waits for the discovery reads a fetch started, which run after
+// Fetch returns and say their note when it changed.
+func (s *KeySet) WaitNotes() { s.noted.Wait() }
+
 // KeyFileName is the name of the file an issuer's fetched keys are kept in,
 // in the broker's state directory (Ruling 4): config checks no other file
 // collides with it, and port49d writes it.
@@ -154,9 +177,11 @@ type KeySet struct {
 	lastTry   time.Time
 	lastErr   error
 	saidStale time.Time
-	jwksURI   string        // the last fetch's, said when it changes (pre-flight M-7)
-	skipped   []string      // the last fetch's skips, said when they change (pre-flight M-3)
-	flight    chan struct{} // a fetch in progress; nil when none
+	jwksURI   string         // the last fetch's, said when it changes (pre-flight M-7)
+	skipped   []string       // the last fetch's skips, said when they change (pre-flight M-3)
+	flight    chan struct{}  // a fetch in progress; nil when none
+	disco     string         // the last discovery note said, "" for none
+	noted     sync.WaitGroup // discovery reads under way, for WaitDiscoveryForTest
 
 	afterFirstTry func()     // test hook, nil in production
 	saveMu        sync.Mutex // guards saving, pending and newest
@@ -176,6 +201,9 @@ func NewKeySet(c KeySetConfig) *KeySet {
 	c.M.OIDCKeysFetchFailures.WithLabelValues(c.Issuer).Add(0)
 	return &KeySet{c: c}
 }
+
+// who names the key set in what it says.
+func (s *KeySet) who() string { return cmp.Or(s.c.Who, s.c.Issuer) }
 
 // Issuer is the configured issuer.
 func (s *KeySet) Issuer() string { return s.c.Issuer }
@@ -291,6 +319,10 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	if stale {
 		s.saidStale = now
 	}
+	disco := err == nil && s.c.JWKS != ""
+	if disco {
+		s.noted.Add(1)
+	}
 	sayURI := err == nil && uri != s.jwksURI
 	saySkips := err == nil && !slices.Equal(skipped, s.skipped)
 	if err == nil {
@@ -309,12 +341,15 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	}
 	s.c.M.OIDCKeysLastSuccess.WithLabelValues(iss).Set(float64(now.Unix()))
 	if sayURI {
-		s.c.Say("identity: %s: keys from %s", iss, printsafe.Line(uri, 300))
+		s.c.Say("identity: %s: keys from %s", s.who(), printsafe.Line(uri, 300))
 	}
 	if saySkips {
 		for _, why := range skipped {
-			s.c.Say("identity: %s: a key in the JWKS is skipped: %s", iss, why)
+			s.c.Say("identity: %s: a key in the JWKS is skipped: %s", s.who(), why)
 		}
+	}
+	if disco {
+		go s.sayDiscovery()
 	}
 	if s.c.Save != nil {
 		file, _ := json.Marshal(persisted{Issuer: iss, FetchedAt: now, JWKS: body})
@@ -346,7 +381,7 @@ func (s *KeySet) save(file []byte, at time.Time) {
 	s.saveMu.Unlock()
 	for file != nil {
 		if err := s.c.Save(file); err != nil {
-			s.c.Say("identity: %s: the keys were fetched but could not be kept for a restart: %v", s.c.Issuer, err)
+			s.c.Say("identity: %s: the keys were fetched but could not be kept for a restart: %v", s.who(), err)
 		}
 		s.saveMu.Lock()
 		file, s.pending = s.pending, nil
@@ -356,7 +391,7 @@ func (s *KeySet) save(file []byte, at time.Time) {
 }
 
 func (s *KeySet) sayStale(fetched time.Time, held int, err error, now time.Time) {
-	iss, why := s.c.Issuer, printsafe.Line(err.Error(), 300)
+	iss, why := s.who(), printsafe.Line(err.Error(), 300)
 	switch {
 	case fetched.IsZero():
 		s.c.Say("identity: %s: no keys fetched yet (%s); every token from it is refused "+
@@ -388,6 +423,13 @@ func discoveryMember(doc map[string]json.RawMessage, name string) (string, bool)
 func (s *KeySet) fetch(ctx context.Context) (string, []byte, []Key, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
+	if s.c.JWKS != "" {
+		body, keys, skipped, err := s.readJWKS(ctx, s.c.JWKS)
+		if err != nil {
+			return "", nil, nil, nil, err
+		}
+		return s.c.JWKS, body, keys, skipped, nil
+	}
 	raw, err := s.get(ctx, strings.TrimSuffix(s.c.Issuer, "/")+"/.well-known/openid-configuration")
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -406,18 +448,78 @@ func (s *KeySet) fetch(ctx context.Context) (string, []byte, []Key, []string, er
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
 		return "", nil, nil, nil, errors.New("the discovery document's jwks_uri is not an https URL without credentials")
 	}
-	body, err := s.get(ctx, u.String())
+	body, keys, skipped, err := s.readJWKS(ctx, u.String())
 	if err != nil {
 		return "", nil, nil, nil, err
+	}
+	return u.String(), body, keys, skipped, nil
+}
+
+// readJWKS is one JWKS read: a set with no usable key is a failed fetch.
+func (s *KeySet) readJWKS(ctx context.Context, u string) ([]byte, []Key, []string, error) {
+	body, err := s.get(ctx, u)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	keys, skipped, err := ParseJWKS(body)
 	switch {
 	case err != nil:
-		return "", nil, nil, nil, err
+		return nil, nil, nil, err
 	case len(keys) == 0:
-		return "", nil, nil, nil, fmt.Errorf("the JWKS holds no key port49 can verify with (%d skipped)", len(skipped))
+		return nil, nil, nil, fmt.Errorf("the JWKS holds no key port49 can verify with (%d skipped)", len(skipped))
 	}
-	return u.String(), body, keys, skipped, nil
+	return body, keys, skipped, nil
+}
+
+// discoveryNote is what a cluster's discovery says against the configured
+// issuer, read at the jwks URL's origin: "" when it agrees, or when it names
+// another issuer configured on this jwks (a migration). It never fails the
+// fetch (decision 49 ruling 2). jwks_uri is not compared: a self-managed
+// cluster's names the issuer's host, which the broker reaches by another
+// address, so the note would fire on every correct config (pre-flight I7).
+func (s *KeySet) discoveryNote(ctx context.Context) string {
+	u, err := url.Parse(s.c.JWKS)
+	if err != nil {
+		return ""
+	}
+	at := u.Scheme + "://" + u.Host + "/.well-known/openid-configuration"
+	raw, err := s.get(ctx, at)
+	if err != nil {
+		return fmt.Sprintf("the cluster's discovery at %s could not be read (%s): its issuer is not checked against "+
+			"the configured one; keys are still read from jwks", at, printsafe.Line(err.Error(), 200))
+	}
+	doc, err := exactObject(raw)
+	if err != nil {
+		return fmt.Sprintf("the cluster's discovery at %s is not a JSON object of distinct members; keys are still "+
+			"read from jwks", at)
+	}
+	iss, ok := discoveryMember(doc, "issuer")
+	switch {
+	case !ok:
+		return fmt.Sprintf("the cluster's discovery (%s) names no issuer: its issuer is not checked against the "+
+			"configured one; keys are still read from jwks", at)
+	case iss == s.c.Issuer || slices.Contains(s.c.Migrating, iss):
+		return ""
+	}
+	return fmt.Sprintf("the cluster's discovery (%s) names issuer %s: its tokens carry that iss, so each is "+
+		"refused until broker.identity.machines[].issuer is %s", at, printsafe.Line(iss, 200), printsafe.Line(iss, 200))
+}
+
+// sayDiscovery reads discovery after the fetch's outcome is out, on its own
+// short timeout, and says a note that changed. A slow or dropped discovery
+// endpoint then holds no mint waiting on a refetch (pre-flight I8).
+func (s *KeySet) sayDiscovery() {
+	defer s.noted.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	defer cancel()
+	note := s.discoveryNote(ctx)
+	s.mu.Lock()
+	changed := note != s.disco
+	s.disco = note
+	s.mu.Unlock()
+	if changed && note != "" {
+		s.c.Say("identity: %s: %s", s.who(), note)
+	}
 }
 
 func (s *KeySet) get(ctx context.Context, u string) ([]byte, error) {

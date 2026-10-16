@@ -1,0 +1,14 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: port49-l69-b
+networking: {apiServerAddress: 127.0.0.1, apiServerPort: 16444}
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.33.1
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            service-account-issuer: https://l69-b.port49.lab
+            service-account-jwks-uri: https://l69-b.invalid/openid/v1/jwks

@@ -42,7 +42,11 @@ const safeLimit = 512
 func safe(s string) string { return printsafe.Line(s, safeLimit) }
 
 // errWorkloadUsage is a run missing a required flag: usage, exit 2.
-var errWorkloadUsage = errors.New("--broker, --broker-ca, --cert and --key are all required")
+var errWorkloadUsage = errors.New("--broker and --broker-ca are required, with --cert and --key or --token-file")
+
+// errNotBoth is a token file beside a certificate, key or touch key: usage, exit 2.
+var errNotBoth = errors.New("a workload presents a certificate or a token file, not both (and a touch key is " +
+	"bound to a certificate's key)")
 
 // workloadCmd is `port49 workload`: a workload's own commands, with no agent
 // (design §17; plan 8).
@@ -64,6 +68,7 @@ func workloadCmd(args []string, stdout, stderr io.Writer) int {
 // workloadFlags are a workload's broker and certificate files.
 type workloadFlags struct {
 	broker, brokerCA, cert, key string
+	tokenFile                   string
 	deadline                    time.Duration
 	brokerCRL                   string
 	// touchKey is a key reference whose touch proves a per-login requirement
@@ -79,6 +84,8 @@ func (w *workloadFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&w.key, "key", "", "its private key (PEM, readable by its owner alone), or a key reference "+
 		"(pkcs11:…;pin-source=file:///path, tpm:file=…): a workload has no terminal, so a token's PIN is read from the "+
 		"reference's pin-source")
+	fs.StringVar(&w.tokenFile, "token-file", "", "a projected service account token (the pod's "+
+		"serviceAccountToken volume), read at every request, in place of --cert and --key")
 	fs.StringVar(&w.touchKey, "touch-key", "", "a key reference on the same token as --key, touched to prove a device's "+
 		"per-login second factor (pkcs11:…;pin-source=file:///path); without it such a device is reported, not minted")
 	fs.StringVar(&w.brokerCRL, "broker-crl", "", "the broker certificate's CRL check: check (default) refuses a "+
@@ -87,8 +94,12 @@ func (w *workloadFlags) register(fs *flag.FlagSet) {
 }
 
 func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, error) {
-	if w.broker == "" || w.brokerCA == "" || w.cert == "" || w.key == "" {
+	if w.broker == "" || w.brokerCA == "" || (w.tokenFile == "" && (w.cert == "" || w.key == "")) {
 		return nil, errWorkloadUsage
+	}
+	if w.tokenFile != "" && (w.cert != "" || w.key != "" || w.touchKey != "") {
+		// Before any key is opened: a refused run opens nothing.
+		return nil, errNotBoth
 	}
 	caPEM, err := os.ReadFile(w.brokerCA)
 	if err != nil {
@@ -102,7 +113,7 @@ func (w *workloadFlags) client(stderr io.Writer, cmd string) (*workload.Client, 
 	if err != nil {
 		return nil, err
 	}
-	cfg := workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key,
+	cfg := workload.Config{Broker: w.broker, BrokerCA: pool, CertFile: w.cert, KeyFile: w.key, TokenFile: w.tokenFile,
 		VerifyBroker: verify, Deadline: w.deadline, Warn: func(format string, args ...any) {
 			fmt.Fprintf(stderr, cmd+": "+format+"\n", args...)
 		}, Say: func(format string, args ...any) {
@@ -328,9 +339,12 @@ func stopOf(err error, devices []string, answered []api.MintItem) *stoppedRun {
 		}
 	}
 	var te *workload.TemporaryError
+	var tfe *workload.TokenFileError
 	var ae *workload.APIError
 	var refused *workload.BrokerRefusedError
 	switch {
+	case errors.As(err, &tfe):
+		s.code, s.detail = failAgent, "the token file could not be read during the run; see stderr"
 	case errors.As(err, &te):
 		s.code, s.detail = failBrokerUnavailable, fmt.Sprintf("the broker did not answer within %s", te.Deadline)
 	case errors.As(err, &refused):

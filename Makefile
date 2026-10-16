@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -81,7 +81,7 @@ test-python:
 # two is caught only here: without -race the race property has nothing to
 # interleave (plan 7d, R1).
 test-race:
-	go test -race ./internal/... -count=1
+	go test -race -timeout 30m ./internal/... -count=1
 
 # The lab package's pure tests — the classifiers and row builders that read a
 # device's output into a verdict, and the committed notes they must still
@@ -186,6 +186,13 @@ lab-mfa-idp:
 # containerlab, the EOS image and `make build`.
 lab-oidc-agent:
 	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run 'TestL56' -count=1 -v -timeout 60m
+
+# L69 (plan 10): a Kubernetes cluster's service account tokens, on two kind
+# clusters and a local port49d, no devices. Needs Docker, kind v0.29.0 on PATH
+# (go install sigs.k8s.io/kind@v0.29.0), kubectl and `make build`; see
+# tests/lab/README.md, "Kubernetes (L69)".
+lab-k8s:
+	PORT49_LAB_K8S=1 go test -tags lab ./tests/lab/ -run '^TestL69$$' -count=1 -v -timeout 60m
 
 # The workload CA lab (plan 8, L48): step-ca as a container and a local
 # port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;

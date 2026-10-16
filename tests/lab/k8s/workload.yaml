@@ -1,0 +1,54 @@
+# L69's workload (tests/lab/l69_test.go): the projected token of
+# examples/kubernetes/backup-cronjob.yaml with the lab's audience and the API
+# server's minimum lifetime, so cell (b)'s rotation is measured within 10
+# minutes; and a pod with the default token for cell (h).
+apiVersion: v1
+kind: Namespace
+metadata: {name: netops}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: backup}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oxidized
+  namespace: netops
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oxidized
+  namespace: netops
+spec:
+  serviceAccountName: oxidized
+  automountServiceAccountToken: false
+  containers:
+    - name: tokens
+      image: busybox:1.36.1
+      command: ["sleep", "infinity"]
+      volumeMounts:
+        - {name: port49-token, mountPath: /var/run/secrets/port49, readOnly: true}
+  volumes:
+    - name: port49-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: port49-lab
+              expirationSeconds: 600
+              path: token
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: defaulted
+  namespace: netops
+spec:
+  serviceAccountName: oxidized
+  automountServiceAccountToken: true
+  containers:
+    - name: tokens
+      image: busybox:1.36.1
+      command: ["sleep", "infinity"]

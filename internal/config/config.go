@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -1723,7 +1724,7 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 	others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
 		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
 	if b.Identity != nil {
-		for _, v := range b.Identity.OIDC {
+		for _, v := range append(slices.Clone(b.Identity.OIDC), b.Identity.K8s...) {
 			others = append(others, struct{ key, path string }{"broker.identity's ca_file for " + v.Issuer, v.CAFile})
 		}
 	}

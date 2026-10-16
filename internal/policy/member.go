@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/spiffe"
 )
 
@@ -297,6 +298,19 @@ func (p *Policy) SPIFFEIdentities() map[string]string {
 	out := map[string]string{}
 	for id, name := range p.byID {
 		if strings.HasPrefix(id, spiffe.Scheme) {
+			out[id] = name
+		}
+	}
+	return out
+}
+
+// ServiceAccountIdentities is every system:serviceaccount: identity a subject
+// lists, with the subject that lists it: the ones the start checks against
+// the k8s verifiers' namespaces (decision 49 ruling 13).
+func (p *Policy) ServiceAccountIdentities() map[string]string {
+	out := map[string]string{}
+	for id, name := range p.byID {
+		if strings.HasPrefix(id, k8sid.Prefix) {
 			out[id] = name
 		}
 	}

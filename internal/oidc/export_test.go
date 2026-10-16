@@ -19,3 +19,7 @@ func (s *KeySet) SetLoadForTest(load func() ([]byte, error)) { s.c.Load = load }
 // SetAfterFirstTryForTest runs f in Key between its first look at the set
 // and the minute gate, where another caller's fetch can land.
 func (s *KeySet) SetAfterFirstTryForTest(f func()) { s.afterFirstTry = f }
+
+// WaitDiscoveryForTest waits for the discovery reads a fetch started, which
+// run after Fetch returns.
+func (s *KeySet) WaitDiscoveryForTest() { s.WaitNotes() }

@@ -330,14 +330,16 @@ type Metrics struct {
 	// a fetch or a restore, and after a restore the kept set's fetched_at,
 	// so a restart during an outage keeps the alert firing (plan 7h,
 	// pre-flight I-4). Alert on time() - it > jwks_max_age / 2 or absent(it),
-	// with a for: of a few minutes to pass a start's first fetch.
+	// with a for: of a few minutes to pass a start's first fetch. A k8s
+	// verifier's issuer is one too (plan 10).
 	OIDCKeysLastSuccess *prometheus.GaugeVec
 	// port49_oidc_keys_fetch_failures_total{issuer}: discovery or JWKS
-	// fetches that failed.
+	// fetches that failed (plan 10: a k8s verifier's issuer too).
 	OIDCKeysFetchFailures *prometheus.CounterVec
 	// port49_oidc_tokens_total{issuer, outcome}: OIDC bearer tokens by the
 	// configured issuer ("unknown" for any other) and outcome: accepted,
-	// invalid, expired, unavailable, unmapped, logged_out (plan 7h).
+	// invalid, expired, unavailable, unmapped, logged_out (plan 7h; plan 10:
+	// a k8s verifier's issuer too).
 	OIDCTokens *prometheus.CounterVec
 	// port49_oidc_logouts_total{outcome}: back-channel logouts: applied,
 	// nothing (a valid logout that reached no context or token), replayed,
@@ -680,12 +682,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has."}),
 		OIDCKeysLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_oidc_keys_last_success_timestamp_seconds",
-			Help: "Unix time the OIDC issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
+			Help: "Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
 		OIDCKeysFetchFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "port49_oidc_keys_fetch_failures_total",
-			Help: "OIDC discovery or JWKS fetches that failed, by configured issuer."}, []string{"issuer"}),
+			Help: "OIDC or cluster discovery or JWKS fetches that failed, by configured issuer."}, []string{"issuer"}),
 		OIDCTokens: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_oidc_tokens_total",
-			Help: "OIDC bearer tokens by configured issuer and outcome: accepted, invalid, expired, unavailable, unmapped, logged_out."},
+			Help: "OIDC or cluster bearer tokens by configured issuer and outcome: accepted, invalid, expired, unavailable, unmapped, logged_out."},
 			[]string{"issuer", "outcome"}),
 		OIDCLogouts: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_oidc_logouts_total",
 			Help: "OIDC back-channel logouts by outcome: applied, nothing, replayed, invalid, unavailable, store_error, partial."},

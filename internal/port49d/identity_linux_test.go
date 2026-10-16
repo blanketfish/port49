@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 )
 
@@ -272,5 +274,88 @@ func TestTheStaleKeysLineNamesTheRunningProcess(t *testing.T) {
 		if !strings.Contains(said.String(), tc.want) {
 			t.Errorf("role %v: the stale line:\n%s", tc.role, said.String())
 		}
+	}
+}
+
+// openOIDC builds a key set for a k8s verifier, reading its jwks.
+func TestOpenOIDCBuildsAClusterKeySet(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	dir := stateDirT(t)
+	caFile := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caFile, iss.CertPEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := k8sConfig()
+	cfg.Broker.Identity.K8s[0].JWKS, cfg.Broker.Identity.K8s[0].CAFile = iss.URL+"/jwks", caFile
+	cfg.Broker.StateDir = dir
+	set, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(string, ...any) {})
+	if err != nil || set == nil || len(set.Verifiers) != 1 || set.Verifiers[0].Kind != oidc.KindK8s {
+		t.Fatalf("%v %+v", err, set)
+	}
+	if err := set.Verifiers[0].Keys.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A cluster whose ca_file does not load is refused naming the k8s verifier.
+func TestAClusterCAFileThatDoesNotLoadIsRefusedByName(t *testing.T) {
+	cfg := k8sConfig()
+	cfg.Broker.StateDir = stateDirT(t)
+	cfg.Broker.Identity.K8s[0].CAFile = filepath.Join(cfg.Broker.StateDir, "missing.pem")
+	_, err := openOIDC(cfg, cfg.Broker.StateDir, metrics.New(prometheus.NewRegistry()), func(string, ...any) {})
+	if err == nil || !strings.Contains(err.Error(), "broker.identity machines k8s verifier 0") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A cluster migrating its issuer has two verifiers on one jwks; discovery
+// names only the new issuer, and that is no mismatch for the old one's key
+// set (decision 49 ruling 4). The control: the old verifier alone, over the
+// same discovery, says its tokens are refused.
+func TestAMigratingClusterKeySetsAreQuietAboutDiscoveryNamingTheOtherIssuer(t *testing.T) {
+	const oldIssuer, newIssuer = "https://l69-a.port49.lab", "https://l69-a-new.port49.lab"
+	notes := func(verifiers ...string) string {
+		iss := oidctest.NewIssuer(t)
+		iss.Discovery(func(d map[string]any) { d["issuer"] = newIssuer })
+		dir := stateDirT(t)
+		caFile := filepath.Join(dir, "ca.pem")
+		if err := os.WriteFile(caFile, iss.CertPEM(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := k8sConfig()
+		cfg.Broker.StateDir = dir
+		base := cfg.Broker.Identity.K8s[0]
+		base.JWKS, base.CAFile = iss.URL+"/jwks", caFile
+		cfg.Broker.Identity.K8s = nil
+		for _, issuer := range verifiers {
+			v := base
+			v.Issuer = issuer
+			cfg.Broker.Identity.K8s = append(cfg.Broker.Identity.K8s, v)
+		}
+		var mu sync.Mutex
+		var said strings.Builder
+		set, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(f string, a ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(&said, f+"\n", a...)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range set.Verifiers {
+			if err := v.Keys.Fetch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			v.Keys.WaitNotes()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return said.String()
+	}
+	if got := notes(oldIssuer); !strings.Contains(got, "names issuer "+newIssuer) {
+		t.Fatalf("the control says nothing, so the test below proves nothing: %q", got)
+	}
+	if got := notes(oldIssuer, newIssuer); strings.Contains(got, "names issuer") {
+		t.Fatalf("a migration is said to be a mismatch: %q", got)
 	}
 }
