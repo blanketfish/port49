@@ -24,6 +24,11 @@ class HostKeysTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.kh = os.path.join(self.dir, "known_hosts")
         open(self.kh, "w").close()
+        self.home = os.path.join(self.dir, "home")  # no test reads or writes the real ~/.ssh
+        os.mkdir(self.home)
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old) if old is not None else os.environ.pop("HOME"))
 
     def config(self, *lines, user=None, glob="/dev/null"):
         path = os.path.join(self.dir, "ssh_config")
@@ -32,12 +37,15 @@ class HostKeysTest(unittest.TestCase):
             f.write("\n".join([*head, *lines]) + "\n")
         return path
 
-    def newkey(self, name):
-        """A fresh Ed25519 public key, "type base64", and its .pub file."""
+    def newkey(self, name, keytype="ed25519"):
+        """A fresh public key (Ed25519 by default), "type base64", and its .pub file."""
         path = os.path.join(self.dir, name)
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path], check=True)
+        subprocess.run(["ssh-keygen", "-q", "-t", keytype, "-N", "", "-f", path], check=True)
         with open(path + ".pub", encoding="ascii") as f:
             return " ".join(f.read().split()[:2]), path + ".pub"
+
+    def test_the_tests_run_under_a_temp_home(self):
+        self.assertTrue(os.environ["HOME"].startswith(self.dir))
 
     def test_nothing_known(self):
         kh = hostkeys.lookup("Leaf1", "10.0.0.11", ssh_config=self.config())
@@ -145,7 +153,7 @@ class HostKeysTest(unittest.TestCase):
         found = subprocess.run(["ssh-keygen", "-F", "leaf1", "-f", self.kh], capture_output=True, text=True).stdout
         self.assertIn(ED.split()[1], found)
 
-    def test_concurrent_first_contacts_write_whole_lines(self):  # Review Focus 4
+    def test_concurrent_first_contacts_file_one_whole_line(self):  # Review Focus 4; append skips a key already filed
         kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
         null = open(os.devnull, "w")
         threads = [threading.Thread(target=hostkeys.remember, args=(kh, "ssh-ed25519", ED.split()[1], null))
@@ -156,8 +164,20 @@ class HostKeysTest(unittest.TestCase):
             t.join()
         with open(self.kh, encoding="ascii") as f:
             lines = f.read().splitlines()
-        self.assertEqual(len(lines), 20)
-        self.assertTrue(all(line == f"leaf1 {ED}" for line in lines))
+        self.assertEqual(lines, [f"leaf1 {ED}"])
+        self.assertEqual(kh.name, "leaf1")
+
+    def test_concurrent_appends_under_other_names_write_whole_lines(self):  # Review Focus 3
+        threads = [threading.Thread(target=hostkeys.append, args=(self.kh, f"10.0.0.{i}", [ED]),
+                                    kwargs={"hash_names": False}) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        with open(self.kh, encoding="ascii") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(sorted(lines), sorted(f"10.0.0.{i} {ED}" for i in range(20)))
+
 
     def test_hashed_is_openssh_form(self):
         salt = b"\x01" * 20
@@ -289,6 +309,17 @@ class HostKeysTest(unittest.TestCase):
         with open(self.kh, encoding="ascii") as f:
             self.assertEqual(f.read(), f"leaf1 {real}\n")
 
+    def test_remember_refuses_when_a_key_of_another_type_is_filed(self):  # OpenSSH would trust both
+        kh = hostkeys.lookup("leaf1", "10.0.0.11", ssh_config=self.config())
+        ecdsa = self.newkey("ec", "ecdsa")[0].split()
+        with open(self.kh, "w", encoding="ascii") as f:
+            f.write(f"leaf1 {ecdsa[0]} {ecdsa[1]}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=self.quiet())
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"leaf1 {ecdsa[0]} {ecdsa[1]}\n")
+
     def test_remember_checks_what_it_writes(self):  # M5
         for name, keytype, blob in (("a b", "ssh-ed25519", "AAAA"), ("leaf*", "ssh-ed25519", "AAAA"),
                                     ("leaf1", "ssh-ed25519 x", "AAAA"), ("leaf1", "ssh-ed25519", "AA\nBB")):
@@ -346,6 +377,176 @@ class HostKeysTest(unittest.TestCase):
         with self.assertRaises(HostKeyError) as cm:
             hostkeys.remember(kh, "ssh-ed25519", ED.split()[1], stderr=open(os.devnull, "w"))
         self.assertEqual(cm.exception.code, "host_keys_not_kept")
+
+
+@unittest.skipUnless(shutil.which("ssh") and shutil.which("ssh-keygen"), "needs OpenSSH's ssh and ssh-keygen")
+class AddressHelpersTest(unittest.TestCase):
+    """Plan 9f Task 1: reading and filing keys under an address."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.home = os.path.join(self.dir, "home")
+        os.mkdir(self.home)
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old) if old is not None else os.environ.pop("HOME"))
+        self.kh = os.path.join(self.dir, "known_hosts")
+
+    def put(self, path, text):
+        with open(path, "w", encoding="ascii") as f:
+            f.write(text)
+
+    def newkey(self, name, keytype="ed25519"):
+        path = os.path.join(self.dir, name)
+        subprocess.run(["ssh-keygen", "-q", "-t", keytype, "-N", "", "-f", path], check=True)
+        with open(path + ".pub", encoding="ascii") as f:
+            return " ".join(f.read().split()[:2]), path + ".pub"
+
+    def test_filed_reads_across_files_plain_and_hashed(self):
+        other = os.path.join(self.dir, "other")
+        k2, _ = self.newkey("k2")
+        self.put(self.kh, f"{hostkeys.hashed('10.0.0.1')} {ED}\n")
+        self.put(other, f"10.0.0.1 {k2}\n10.0.0.1 {ED}\nspine {k2}\n")
+        keys, revoked = hostkeys.filed("10.0.0.1", [self.kh, other, os.path.join(self.dir, "missing")])
+        self.assertEqual((keys, revoked), ([ED, k2], []))
+
+    def test_filed_leaves_cert_authorities_out_and_returns_revoked(self):
+        k2, _ = self.newkey("k2")
+        self.put(self.kh, f"@cert-authority 10.0.0.* {ED}\n@revoked 10.0.0.1 {k2}\n")
+        self.assertEqual(hostkeys.filed("10.0.0.1", [self.kh]), ([], [k2]))
+
+    def test_filed_with_a_broken_ssh_keygen_is_refused(self):
+        self.put(self.kh, f"10.0.0.1 {ED}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.filed("10.0.0.1", [self.kh], ssh_keygen="/nonexistent/ssh-keygen")
+        self.assertEqual(cm.exception.code, "known_hosts_unread")
+
+    def test_address_entry(self):
+        self.assertEqual(hostkeys.address_entry("10.0.0.1", 22), "10.0.0.1")
+        self.assertEqual(hostkeys.address_entry("10.0.0.1", 830), "[10.0.0.1]:830")
+        self.assertEqual(hostkeys.address_entry("2001:db8::1", 830), "[2001:db8::1]:830")
+        self.assertEqual(hostkeys.address_entry("2001:db8::1", 22), "2001:db8::1")
+        for bad in ("", "a b", "a\nb", 'a"b', " ", "a,b", "a*", "a?", "!a", "@a", "|a"):
+            with self.assertRaises(HostKeyError, msg=repr(bad)) as cm:
+                hostkeys.address_entry(bad, 22)
+            self.assertEqual(cm.exception.code, "address")
+
+    def test_known_files_are_the_ones_ssh_g_names(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, f"UserKnownHostsFile ~/.ssh/a {self.dir}/b\nGlobalKnownHostsFile ~/g /dev/null\n"
+                      "HashKnownHosts yes\n")
+        paths, write_to, hash_names = hostkeys.known_files("leaf1", ssh_config=cfg)
+        home = hostkeys._passwd_home()  # ssh's ~ is the passwd home, not $HOME
+        self.assertEqual(paths, [f"{home}/.ssh/a", f"{self.dir}/b", f"{home}/g"])
+        self.assertEqual((write_to, hash_names), (f"{home}/.ssh/a", True))
+
+    def test_revoked_keys_file_is_the_one_ssh_g_names(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "RevokedHostKeys ~/krl\n")
+        self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), f"{hostkeys._passwd_home()}/krl")
+        self.put(cfg, "")
+        self.assertEqual(hostkeys.revoked_keys_file("leaf1", ssh_config=cfg), "")
+
+    def test_key_alias_reports_the_alias_and_a_known_hosts_command(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "")
+        self.assertEqual(hostkeys.key_alias("leaf1", ssh_config=cfg), ("", False))
+        self.put(cfg, "HostKeyAlias corp-leaf1\nKnownHostsCommand /bin/true %H\n")
+        self.assertEqual(hostkeys.key_alias("leaf1", ssh_config=cfg), ("corp-leaf1", True))
+        self.put(cfg, "HostKeyAlias a*b\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.key_alias("leaf1", ssh_config=cfg)
+        self.assertEqual(cm.exception.code, "host_key_uncheckable")
+
+    def test_known_files_with_nowhere_to_write(self):
+        cfg = os.path.join(self.dir, "ssh_config")
+        self.put(cfg, "UserKnownHostsFile none\nGlobalKnownHostsFile /dev/null\n")
+        self.assertEqual(hostkeys.known_files("leaf1", ssh_config=cfg), ([], "", False))
+
+    def test_append_writes_plain_and_hashed(self):
+        k2, _ = self.newkey("k2", "ecdsa")
+        self.assertEqual(hostkeys.append(self.kh, "[10.0.0.1]:830", [ED], hash_names=False), [ED])
+        hostkeys.append(self.kh, "10.0.0.2", [ED, k2], hash_names=True)
+        with open(self.kh, encoding="ascii") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0], f"[10.0.0.1]:830 {ED}")
+        self.assertTrue(all(line.startswith("|1|") for line in lines[1:]))
+        self.assertEqual(hostkeys.filed("[10.0.0.1]:830", [self.kh])[0], [ED])
+        self.assertEqual(hostkeys.filed("10.0.0.2", [self.kh])[0], [ED, k2])
+        self.assertEqual(os.stat(self.kh).st_mode & 0o777, 0o600)
+
+    def test_append_adds_a_missing_final_newline(self):
+        self.put(self.kh, f"spine1 {ED}")
+        hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False)
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"spine1 {ED}\n10.0.0.1 {ED}\n")
+
+    def test_append_skips_a_key_already_filed(self):
+        k2, _ = self.newkey("k2", "ecdsa")
+        self.put(self.kh, f"{hostkeys.hashed('10.0.0.1')} {ED}\n")
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED, k2], hash_names=False), [k2])
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED, k2], hash_names=False), [])
+        self.assertEqual(hostkeys.filed("10.0.0.1", [self.kh])[0], [ED, k2])
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(len(f.read().splitlines()), 2)
+
+    def test_append_writes_nothing_when_every_key_is_filed(self):
+        self.put(self.kh, f"10.0.0.1 {ED}")  # no final newline: a skipped key adds no bare newline either
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False), [])
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"10.0.0.1 {ED}")
+
+    def test_append_does_not_count_a_revoked_filed_key(self):
+        old, _ = self.newkey("old")
+        self.put(self.kh, f"10.0.0.1 {old}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False)
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False, revoked=lambda k: k == old),
+                         [ED])
+
+    def test_append_refuses_a_different_key_of_the_same_type(self):
+        k2, _ = self.newkey("k2")
+        self.put(self.kh, f"10.0.0.1 {k2}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False)
+        self.assertEqual(cm.exception.code, "host_key_changed")
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"10.0.0.1 {k2}\n")
+
+    def test_append_refuses_what_cannot_be_written(self):
+        for host, key in (("a b", ED), ("10.0.0.1", "ssh-ed25519 AA\nBB"), ("10.0.0.1", "nokeyblob")):
+            with self.assertRaises(HostKeyError, msg=repr((host, key))):
+                hostkeys.append(self.kh, host, [key], hash_names=False)
+        self.assertFalse(os.path.exists(self.kh))
+
+    def test_append_files_a_key_given_twice_once(self):
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED, ED], hash_names=False), [ED])
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"10.0.0.1 {ED}\n")
+
+    def test_append_refuses_a_host_ssh_keygen_would_misread_as_an_address(self):
+        for host in ('10.0.0.1"', "10.0.0.1 x", "10.0.0.1\nx"):
+            with self.assertRaises(HostKeyError, msg=repr(host)) as cm:
+                hostkeys.append(self.kh, host, [ED], hash_names=False)
+            self.assertEqual(cm.exception.code, "address", repr(host))
+        self.assertFalse(os.path.exists(self.kh))
+
+    def test_fingerprint_matches_ssh_keygen(self):
+        key, pub = self.newkey("fp")
+        want = subprocess.run(["ssh-keygen", "-lf", pub], capture_output=True, text=True, check=True).stdout.split()[1]
+        self.assertEqual(hostkeys.fingerprint(key), want)
+        self.assertTrue(want.startswith("SHA256:") and "=" not in want)
+
+    def test_append_files_another_type_unless_told_to_refuse_it(self):
+        k2, _ = self.newkey("k2", "ecdsa")
+        self.put(self.kh, f"10.0.0.1 {k2}\n")
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED], hash_names=False), [ED])
+        self.put(self.kh, f"10.0.0.2 {k2}\n")
+        with self.assertRaises(HostKeyError) as cm:
+            hostkeys.append(self.kh, "10.0.0.2", [ED], hash_names=False, refuse_other_types=True)
+        self.assertEqual(cm.exception.code, "host_key_changed")
 
 
 if __name__ == "__main__":

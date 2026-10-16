@@ -135,17 +135,42 @@ paramiko 5.0.0. Each platform gave the same reading: EOS, NX-OS, IOS-XE, vJunos-
 L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not the device's.
 
 - **`network_cli` keys a host by `ansible_host`, the address in Ansible's inventory, not by the
-  port49 name.** Both ssh types filed the first contact under the address. `ansible_libssh_config_file`
-  naming an ssh_config with `HostKeyAlias` is not honoured: the key still went under the
-  address. So an address changed for a device in the source of truth (a dynamic inventory built
-  from it, the usual case) is a first contact for Ansible. Measured (L66 (e)): with
-  `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at the new address
-  and presented it the token. Design section 17's attack is open on this path, as it is not for
-  `port49 ssh`. What flags it is the sync diff's address-change security event (spec section 10).
+  port49 name.** Both ssh types filed the first contact under the address.
+  `ansible_libssh_config_file` naming an ssh_config with `HostKeyAlias` is not honoured: the key
+  still went under the address. So an address changed for a device in the source of truth (a
+  dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
+  (L66 (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
+  the new address and presented it the token.
+- **The lookup closes that gap before it mints.** *Measured on L66 (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`. Measured also without `host_key_auto_add` (L66 (e3d)): the lookup copies the name's key to a new address, the play logs in at the device's own address, and both `libssh` and `paramiko` refuse another host's key at a moved address without presenting the token. **With the lookup, run `network_cli` without `host_key_auto_add`, for either ssh type.** Only a device's very first contact (case 4 below) needs its key filed some other way: connect once with `port49 ssh`, or file a key from `ssh-keyscan` after checking it on the console.* For a
+  device on `network_cli` (`ansible_connection` is `network_cli` or `ansible.netcommon.network_cli`,
+  or none is visible and `ansible_network_os` is set), it compares the keys filed under the port49
+  name with the keys filed under the address in `~/.ssh/known_hosts`. The address is
+  `ansible_host`, else the inventory name, and `[address]:port` when `ansible_port` is not 22.
+  - Name has keys, address has none: it files them under the address, then mints.
+  - Both have keys, and a key type in both differs: it mints nothing and fails with
+    `host_key_changed`. The message gives both fingerprints and the command that clears the stale
+    address, for example `ssh-keygen -R '[10.0.0.9]:2222' -f /home/ops/.ssh/known_hosts`. Check
+    the device's key on its console first. Run the command only if the address now belongs to this device.
+  - Name has none, address has keys: it copies them under the name, then mints. If no user
+    known_hosts file is writable, it warns and mints anyway.
+  - Neither has a key: a first contact, as before.
+  - A key of the address that `@revoked` or `RevokedHostKeys` revokes fails with `host_key_revoked`.
+  - `known_hosts_file` is the file to check, if `ansible_ssh_common_args` or the ssh type points
+    Ansible elsewhere. It defaults to `~/.ssh/known_hosts`.
+  - In workload mode every device is checked before the one mint.
+  - A device not on `network_cli` is not checked. Use the `HostKeyAlias` setting below there.
+    For a device other than the current host, only its own `hostvars` count: a `localhost` play's
+    `ansible_connection: local` does not turn off the check for it.
+  - If your ssh_config gives the device a `HostKeyAlias`, the keys filed under the alias count as the
+    name's. A key type where the name and the alias disagree fails with `host_key_changed`. A
+    `KnownHostsCommand` fails with `host_key_uncheckable`: the lookup cannot run it as ssh does.
+  - The port is `ansible_port`, else `ansible_ssh_port`.
+  - The check runs before the connection. It cannot see a key that changes later, and libssh
+    accepts one (next bullet).
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
   the first contact and kept the file's comments and `@revoked` and `@cert-authority` lines. But
   given a changed key for a host it knew, **it accepted the new key, logged in and presented the
-  token** (L66 (c)). How libssh treats a changed key without `host_key_auto_add` is not measured.
+  token** (L66 (c), (e3b)). Without `host_key_auto_add`, and with the lookup's copy of the name's key at the address, libssh refused another host's key and presented nothing (L66 (e3d)).
 - **`paramiko` with `host_key_auto_add` refused a changed key before authentication.** No TACACS+
   exchange happened and the token was never presented. It has two costs:
   - **It refuses a known_hosts file that holds an `@revoked` or `@cert-authority` line**
@@ -153,8 +178,11 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
     means `port49 ssh`'s revocation lines and Paramiko cannot share a file.
   - **On a first contact it rewrites the file** and drops every comment.
 
-  Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact,
-  including an address changed in the inventory, is still accepted.
+  Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact is
+  still accepted. With the lookup (below), an address changed in the inventory is not a first
+  contact when the device's name holds a key: the lookup copies the name's key to the new address
+  first, so `paramiko` meets a changed key and refuses it (L66 (e3b), (e3d)). It stays a first
+  contact for a device whose name holds no key.
 - **Where the connection runs OpenSSH** (`ansible.builtin.ssh`), set
 
   ```yaml
