@@ -1152,6 +1152,17 @@ source covers) is refused unless `on_unavailable: allow`. The refusal is answere
 never affects a live session: the daemon never reads certificate status (decision 13). The
 configuration is required with a broker, and `disabled: true` is the explicit choice not to check.
 
+The RFC 9887 listener has a checker of its own, `tls_listener.certificate_status`, of the same
+shape (§13 decision 50 ruling 8). It judges device certificates only: what this section says of
+principals' certificates, the daemon's not reading their status included, is unchanged. It keeps
+its lists in `<tls_listener.state_dir>/tls_listener/`, never in the broker's files. Each
+certificate-status metric carries a closed label `component`, `broker` or `tls_listener`:
+`port49_cert_status_checks_total{component, source, result}`,
+`port49_crl_loads_total{component, crl, outcome}`,
+`port49_crl_next_update_timestamp_seconds{component, crl}` and
+`port49_cert_status_unavailable_total{component}`. A CRL named alike in both blocks is two series,
+so one checker's fresh list never masks the other's stale one.
+
 **Back-channel logout, as built (plan 7h; §13 decision 39).** An identity provider ends a
 session by posting a logout token (OpenID Connect Back-Channel Logout 1.0) to `POST
 /v1/logout`. It needs no client certificate and no `api:` right: it authenticates by the
@@ -2232,6 +2243,12 @@ a divergence like an altered verdict (plan 4).
 and the version that admitted it, so a rotation's phase-out is read from the log (§10, `port49
 keys status`).
 
+`device.transport` is `"tls"` on every record of an exchange on the RFC 9887 listener, and absent
+on the RFC 8907 listener's, which are unchanged. With it, `device.cert_sha256` is the SHA-256 of
+the device's verified leaf certificate, lower-case hex. Such a record has no `key_ref`: no key
+validated it (§13 decision 50 ruling 16). An `unvalidated` record from that listener carries
+`transport`, and a `tls_refused` one `tls_outcome`, `detail` and `cert_sha256` (§10).
+
 **Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
 artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
 of the product, not a problem to optimize away.
@@ -2282,7 +2299,8 @@ swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle
 "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
 true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
-changing, `admission_changed` with `"to": "admitted"` for a device already in inventory becoming
+changing, `transport_changed` with `"from"` and `"to"` for a device's `transport` changing (its
+`key_ref_changed` is then not also written), `admission_changed` with `"to": "admitted"` for a device already in inventory becoming
 admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
 addresses are new capture targets. Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
@@ -4919,8 +4937,8 @@ close it.
 
 **A device is refused on its own, never the daemon.** A device no group admits, one two groups tie
 on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref` that
-is not a name (above; the pin is not printed), and one whose `transport` port49d does not serve
-(below), are each refused admission: named at start and at every reload that loads, counted in
+is not a name (above; the pin is not printed), and one whose `transport`
+is neither `tcp` nor `tls` (below), are each refused admission: named at start and at every reload that loads, counted in
 `port49_devices_admission_refused`, and each connection from them closed after its first header,
 with nothing decrypted, no reply, no strike, and the report bucket `admission_refused`, and their
 next connections refused at Accept inside a decline window (below). The rest of the
@@ -4935,9 +4953,15 @@ keeps plan 1's behaviour: the inventory file's key groups, read at start, and a 
 either fault.
 
 RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
-both: `transport: tcp` (the default, RFC 8907 under a shared key) or `transport: tls`. Until
-plan 11 serves RFC 9887, a device with `transport: tls` is refused admission, as is one whose
-`transport` is neither; the file and the rest of the fleet load (above).
+both: `transport: tcp` (the default, RFC 8907 under a shared key, served on `listen`) or
+`transport: tls` (RFC 9887, TLS 1.3 with mutual certificates, served on `tls_listener`; §13
+decision 50). A `tls` device is admitted with no `key_ref`: key groups do not apply to it, and a
+pin on its record or a policy name group naming it is ignored. Its credential is its certificate.
+A device whose `transport` is neither is refused admission (`refused_transport`); the file and the
+rest of the fleet load (above). Which listener serves a device is decided per connection, never at
+admission. A connection on the listener the device does not speak is declined as a refused
+device's is, and recorded `transport_mismatch`. So one policy admits the same devices on every
+replica, whichever listeners each runs (decision 50 ruling 4).
 
 #### Addresses must resolve to one device
 
@@ -5114,7 +5138,7 @@ to 65535 bytes; a legitimate packet larger than this is not known to exist (L10)
 port scanner fails that and is counted as `not TACACS+`, so it never pollutes the key report.
 This distinction is the difference between a report an operator reads and one they mute.
 
-**The unencrypted flag is refused.** RFC 8907 defines `TAC_PLUS_UNENCRYPTED_FLAG` in the
+**The unencrypted flag is refused.** On the RFC 8907 listener, RFC 8907 defines `TAC_PLUS_UNENCRYPTED_FLAG` in the
 header's flags octet, marking a body sent in the clear. The shared key is the admission
 boundary (above), and a server that honors the flag has no boundary: anything able to
 complete a TCP handshake from an admitted address could then tear down a live context with a
@@ -5123,7 +5147,9 @@ without key material. The daemon MUST refuse such a packet without parsing the b
 report carries its own bucket — `unencrypted — refused` — so a device misconfigured with no
 key is diagnosable rather than counted as noise. `TAC_PLUS_SINGLE_CONNECT_FLAG` is honored;
 the per-connection key cache (above) and the per-NAS connection cap (design document §11)
-both apply to the one connection it produces.
+both apply to the one connection it produces. On the RFC 9887 listener the opposite holds:
+TLS is the boundary, and the flag MUST be set on every packet in both directions (RFC 9887 §4;
+`obfuscated_over_tls` above).
 
 A packet whose key validates but which the daemon then cannot answer is a fifth bucket,
 `malformed after validation`: either its body fails to decode, or the exchange it belongs to
@@ -5140,6 +5166,53 @@ device is not at fault, so it is kept apart from both the key report and the noi
 another `key_ref`, or gave another platform or `based_on:` base ("How a daemon refreshes its
 snapshot"); a reload that refuses or removes the device is recorded under `admission_refused` or
 `unadmitted_source`, with no strike either way.
+
+An eighth, `transport_mismatch`, is a connection from an admitted device on the listener it does
+not speak: a `tls` device's first header on the RFC 8907 listener, or a `tcp` device at Accept on
+the RFC 9887 listener. It is declined as `admission_refused` is, with no strike (decision 50
+ruling 4).
+
+A ninth, `tls_refused`, is a connection the RFC 9887 listener refused at its handshake, or an open
+one it ended because the certificate stopped verifying. The record carries `transport: "tls"`, a
+`tls_outcome`, a bounded printable `detail` and, where a certificate was sent, its `cert_sha256`
+(decision 50 rulings 7–14):
+
+| `tls_outcome` | Means | Strike |
+|---|---|---|
+| `version_refused` | the ClientHello offered no TLS 1.3 | yes |
+| `no_client_certificate` | the device sent no certificate | yes |
+| `unknown_ca` | its chain reaches no `client_ca_file` anchor | yes |
+| `certificate_expired` | a certificate in its chain is expired or not yet valid | yes |
+| `certificate_invalid` | any other path error, a serverAuth-only leaf included | yes |
+| `certificate_revoked` | a certificate in its chain is revoked | yes |
+| `status_unavailable` | its status could not be established under `on_unavailable: refuse` | no: declined, and the window stands until it lapses |
+| `identity_mismatch` | the leaf does not name the device its source address is | yes |
+| `sni_mismatch` | the ClientHello asked for a server name not in `server_names` | yes |
+| `early_data_refused` | the ClientHello carried `early_data` (RFC 9887 §5.1.2) | yes |
+| `handshake_timeout` | no handshake within `handshake_timeout` | yes |
+| `handshake_failed` | anything else: a bad signature, a client abort | yes |
+
+The path and the identity are judged inside the handshake. The status is judged only once the
+handshake has completed, so the peer has proven it holds the certificate's key: a refusal then is
+a reset, not an alert. A `status_unavailable` decline's window stands until it lapses, so the
+device's next connections inside it are reset at Accept before any TLS byte, though it is admitted
+on this listener (§13 decision 50 ruling 8). An alert at a refused handshake is best-effort: the
+reset that follows can discard it.
+
+At a later packet an open connection is ended as `tls_refused` with the packet's header fields,
+and with no strike. Its status there is read from what the checker holds, never fetched
+(decision 50 ruling 9).
+
+A record the RFC 9887 listener makes at Accept, before any byte is read, has zero header fields:
+`type` 0, which no TACACS+ packet has, says no header was read.
+
+A tenth, `obfuscated_over_tls`, is a packet on the RFC 9887 listener whose unencrypted flag is
+clear. It is answered with its type's ERROR status, the flag set, and the connection closed
+(RFC 9887 §4). Its body is read and discarded, never hashed or logged, so the close does not
+reset the ERROR away. It is no strike: the peer's certificate verified.
+
+On the RFC 9887 listener no body is hashed into any record: there a body is the cleartext of a
+peer that holds a certificate, and may carry a credential.
 
 **Retired versions are retained for diagnosis and never for admission.** This is what turns
 "something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
@@ -5292,9 +5365,9 @@ it can actually provision. port49 neither builds nor claims that path.
 
 The real answer for per-device credentials is RFC 9887: mutual TLS makes the device credential
 a certificate, and certificate rotation is automatable in a way that a secret pasted into
-`tacacs-server key` is not. That is a reason to prefer the TLS transport as clients appear,
-and it is recorded rather than acted on because no mainstream network OS ships a TLS-capable
-TACACS+ client (design document §2).
+`tacacs-server key` is not. That is a reason to prefer the TLS transport where a device has a
+client. Plan 11 serves it (`transport: tls`, §13 decision 50). Vendor documentation puts clients in
+recent releases; no lab image has one, and what devices do is unmeasured (§15 L71, L73).
 
 #### Three key types, and only one is hard
 
@@ -5325,7 +5398,13 @@ obviously trace back to inventory. `ip tacacs source-interface` — or the platf
 
 `name`, `platform`, `addresses` and `attributes` are the facts; `key_ref` pins a key (tier 1,
 with `inventory_file` only; with the inventory service a pin is the policy's name group);
-`transport` is above. An inventory is refused whole when it does not parse, names a device twice
+`transport` is above. A `tls` device's certificate must name it: by a subjectAltName dNSName equal
+to its `name`, or to `name` under one of `tls_listener.device_identity.dns_suffixes`, or by a
+subjectAltName iPAddress among its `addresses` (decision 50 ruling 6). Nothing per device is
+configured at port49: the inventory's name and addresses are the mapping, so a fleet enrolled
+under one naming rule needs no step per device.
+
+An inventory is refused whole when it does not parse, names a device twice
 or with no name, or gives one address to two devices.
 
 ### Connectors and sync cadence
@@ -7999,7 +8078,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 
 ### Deferred, with reasons
 
-Neither of these is an open question about the design. Both are closed for v1 on the
+None of these is an open question about the design. All are closed for v1 on the
 reasoning below.
 
 **Inventory-sourced entity classes.** Defining `@core_uplinks` from interface tags in the
@@ -8018,6 +8097,11 @@ device's own view (`show cli authorization`). Decision 22 states the rendering r
 one shape it refuses; L12 is the lab work that confirms or narrows both, in sequencing step 5.
 The outcome is a per-platform list of shapes CI refuses. Recorded here only so it is not
 mistaken for an unresolved design question.
+
+**RFC 9887's PSK and raw-public-key authentication, configurable TLS 1.3 cipher suites, and the
+TLS Cached Information Extension** (decision 50 rulings 2 and 3): PSKs and raw public keys are a
+MAY, and a PSK is the shared secret mutual TLS replaces; `crypto/tls` offers neither a TLS 1.3
+suite setting nor RFC 7924, and port49 takes no cgo.
 
 **39. OIDC: a verifier per trust domain, a token validated per request, keys aged out, a logout
 that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless they say data.
@@ -10038,6 +10122,263 @@ any.
 by `cluster`), as an opt-in, for an operator whose clusters' namespaces mean different tenants
 and who would rather name them apart than list different namespaces.
 
+**50. RFC 9887: a second listener, a certificate in place of the key, decided at Accept where it
+can be.** *Plan 11, 2026-10-16.* Rulings rest on reasoning unless they say data. The planner ruled
+each where this document and RFC 9887 were silent; Ryan may override any.
+
+- **1. Two listeners, independently configured and separable** (design §11; RFC 9887 §3.1, §5.2).
+  `tls_listener:` is a new port49d.yaml block; `tls_listener.listen` defaults to `:300` (RFC 9887
+  §7, IANA `tacacss`). `listen: none` turns the RFC 8907 listener off: this is RFC 9887 §5.2's
+  "single option to disable all non-TLS operations". A port49d with neither listener is refused
+  at load. Two listeners on one bind (same port, and the same host or either a wildcard) are
+  refused at load; port `0` never conflicts. One port49d may run both. RFC 9887 §5.1.1 does
+  not recommend TLS and non-TLS servers on one host. So the start says, in a notice, that the
+  two run on one host, and why it is still downgrade-safe here: each device record names one
+  transport, and the other listener refuses that device (R4). The notice also says the two limits
+  of that. First, the protection is only as strong as the inventory's `transport` field: a sync
+  that flips a device from `tls` to `tcp` is a downgrade, recorded as `transport_changed` (a
+  security change, with its alarm) but not blocked. Second, one process holds both the shared
+  keys and the TLS key, so a compromise of this host exposes both: RFC 9887 §5.1.1's other reason
+  for separate hosts, which R4 does not address. The notice is said at every start and asks
+  nothing. Ruled with Ryan told (Q2). Cisco's documents for IOS XE
+  17.18 and NX-OS 10.6 configure port 6049, Cisco ISE's default. The default here stays 300 (RFC),
+  and the operator notes name 6049 as the vendor default to override on the device or listen on.
+  What a device defaults to is L73 (a).
+- **2. TLS 1.3 only, Go's cipher suites.** `MinVersion: tls.VersionTLS13`, no `MaxVersion`
+  (RFC 9887 §3.2 says "a minimum of TLS 1.3"). A ClientHello without 1.3 is refused by
+  `crypto/tls` with `protocol_version`, and recorded `version_refused`. `crypto/tls` does not let
+  TLS 1.3 suites be configured. It offers `TLS_AES_128_GCM_SHA256` (RFC 8446 §9.1's mandatory
+  suite), `TLS_AES_256_GCM_SHA384` and `TLS_CHACHA20_POLY1305_SHA256`. RFC 9887 §3.4.3's SHOULD
+  (configurable suites) is therefore not met, and the docs say so. FIPS 140-3 deployments run
+  `GODEBUG=fips140=on`, which narrows the suites. The TLS Cached Information Extension (RFC 7924;
+  RFC 9887 §3.4.1, SHOULD) is not in `crypto/tls`, and no cgo means no other library: not
+  implemented, and said.
+- **3. Certificates only; no shared key on a TLS device.** RFC 9887 §3.3 requires
+  certificate-based mutual authentication and makes PSKs and raw public keys a MAY. Neither is
+  built: design §11 names mutual TLS, and a PSK is a shared secret again, which is what the
+  transport replaces. A `transport: tls` device takes no key. Key groups do not apply to it, a
+  `key_ref` pin on its record and a policy name group naming it are ignored, and `port49 keys
+  show` says "transport tls (RFC 9887): no shared key; its credential is its certificate".
+  `port49 keys status` leaves it out. Obfuscation never runs on the TLS listener (RFC 9887 §4).
+- **4. Admission: a TLS device is admitted, and served only by the TLS listener.** Spec §10's
+  "until plan 11, `transport: tls` is refused admission" is replaced. `tls` is admitted with no
+  `key_ref`, and an unknown transport is still refused (`refused_transport`). Which listener a
+  device may use is decided per connection, not at admission. A connection on the listener its
+  device does not speak is declined: diagnosis `transport_mismatch`, recorded, no strike, and a
+  decline window, as an admission refusal is (spec §10). Admission takes no account of which
+  listeners this port49d runs. This keeps one policy meaning one thing on every replica, so a
+  split deployment (a TLS-only port49d beside a TCP-only one, RFC 9887 §5.1.1's recommendation)
+  never refuses, mints nothing different, and raises no `admission_refused` alarm for the other
+  host's devices. A port49d holding devices of a transport it does not serve says so at start and
+  at every reload that changes the count: "N devices have transport tls and port49d serves no
+  tls_listener; their connections here are declined transport_mismatch: leaf-01, ...". It also
+  exports `port49_devices_by_transport{transport}`. A swap that changes a device's transport is
+  a security change, `transport_changed` (inventory_change, `port49 inventory diff`), and its
+  `key_ref_changed` is not also reported. An open connection whose device's transport a reload
+  changed is withdrawn at its next packet (`admission_withdrawn`), as a re-key is.
+- **5. Everything that needs no TLS byte is decided at Accept.** On the TLS listener an
+  unadmitted source is struck and reset. A refused device, a quarantined one and one of the
+  other transport are recorded, declined and reset. Each happens before the handshake, so
+  none of them costs a key exchange or a signature: the listener is unauthenticated until the
+  handshake ends, and a handshake is the CPU amplifier spec §10 forbids. Their records' header
+  fields are zero, `type: 0` included, which no TACACS+ packet has: it says no header was read.
+  They carry `transport: tls`, and the device block where one is known. The
+  RFC 8907 listener is unchanged, except that a `tls` device's first header there is recorded
+  `transport_mismatch` and declined, as `admission_refused` is today.
+- **6. A device is found by its source address and must be named by its certificate** (RFC 9887
+  §3.4.2). The source address still finds the device (spec §10's binding, unchanged). The
+  verified leaf must also name that device, by `device_identity.match` (default both, either
+  suffices):
+  - `dns_name`: a subjectAltName dNSName equal, case-insensitively and with a trailing dot
+    dropped, to the inventory name, or to the name plus `.` plus one of
+    `device_identity.dns_suffixes`.
+  - `ip_address`: a subjectAltName iPAddress that is one of the device's inventory addresses.
+
+  RFC 9887 requires both match kinds to be supported. A wildcard dNSName never names a device.
+  The common name is never read (RFC 9525). The mapping comes from the inventory alone, with no
+  per-device configuration, so a fleet enrolled by SCEP, ACME or EST under one naming rule needs
+  nothing from the operator per device. A certificate naming another device is
+  `identity_mismatch`, and the record says what it named and what was wanted. Because any
+  clientAuth (or no-EKU) leaf the anchors issue that names a device's inventory name or address
+  *is* that device from that device's source address, `client_ca_file` should be a CA dedicated to
+  devices, not one that also issues to people or services; the operator notes say so. An open
+  connection whose device's inventory addresses a reload changed is withdrawn at its next packet
+  (`admission_withdrawn`), since its certificate may have named it by an address it no longer
+  has; its next handshake is judged against the record in force.
+- **7. The chain** (RFC 9887 §3.4, §3.4.1). It is verified by `x509.Certificate.Verify` against
+  `client_ca_file` (each a CA certificate), with the peer's own intermediates plus
+  `intermediates_file`'s. A device sending only its leaf therefore verifies, as RFC 9887
+  §3.4.1's stored chain requires. The leaf must carry the clientAuth extended key usage or none
+  (RFC 5280): a serverAuth-only certificate is `certificate_invalid`, and what devices'
+  enrolments issue is L73 (e). An unknown anchor is `unknown_ca`. A leaf expired or not yet
+  valid is `certificate_expired`. Every other path error is `certificate_invalid`.
+- **8. Revocation is required, refuse by default** (RFC 9887 §3.4: "MUST validate the
+  certificate path ... including revocation checking"). `tls_listener.certificate_status` is
+  required and has the broker's shape exactly (decision 33): `crls`, `ocsp`,
+  `refresh_interval`, `on_unavailable` (refuse, the default, or allow), or `disabled: true`
+  explicitly. A second `certstatus.Checker` serves it, its lines begun `tls_listener:
+  certificate status:`, and its kept lists in a subdirectory of its own,
+  `<tls_listener.state_dir>/tls_listener/` (`state_dir` is required with `crls`), so it never
+  writes the file an in-process broker's checker keeps under the same CRL name, even when both
+  name one directory. The certificate-status metrics (`port49_cert_status_checks_total`,
+  `port49_crl_loads_total`, `port49_crl_next_update_timestamp_seconds`,
+  `port49_cert_status_unavailable_total`) gain a closed label `component`, `broker` or
+  `tls_listener`, so a stale device CRL is never masked by a fresh broker CRL of the same name,
+  and the 3am signal says which checker failed. The status is checked only once the handshake
+  has completed: crypto/tls runs `VerifyConnection` before it checks the client's
+  CertificateVerify, so a status check there would run, and could wait on the network, for a
+  peer that holds only a device's public certificate. `VerifyConnection` does the path and the
+  identity, which are local and cheap; the status follows once possession is proven, inside the
+  handshake's deadline, and a refusal then is a reset (the device sees no alert). A revoked
+  chain is `certificate_revoked`. A status that cannot be established is `status_unavailable`
+  under refuse. That is port49's fault, not the device's, so it is a decline (no strike). Its
+  decline window stands until it lapses: at the next Accept inside it the device is reset
+  before any TLS byte, even though it is admitted on its own listener, because nothing at Accept
+  can tell the status is back without the handshake the window exists to spare. Each window
+  doubles on the strike schedule to `malformed_backoff_max`, so an outage costs each device at
+  most one full handshake per window. Under allow the device is admitted and the checker's own
+  lines and `port49_cert_status_unavailable_total{component="tls_listener"}` say so. At 3am a
+  CRL server down past the list's `nextUpdate` declines every TLS device to its local method.
+  The operator sees the checker's line, one gathered line per 10 minutes naming how many devices
+  were declined (R16), the `status_unavailable` records and outcome counter, and the start line
+  naming the CRL's next update. The escape is a `file:` CRL source the operator copies in, or
+  `on_unavailable: allow`, a reviewed change.
+- **9. An open connection is judged at every packet.** Holding a connection open never extends a
+  certificate's life (as spec §10 says of a key version). Each packet re-checks every chain
+  certificate's `NotAfter` and the chain's status from what the checker holds now, never a
+  network call: a CRL in force is in memory, and an OCSP answer is the cached one
+  (`certstatus.Checker.CheckCached`, a map lookup). Refreshes happen in the background: a CRL on
+  `refresh_interval`, and an OCSP answer asked again, shared and bounded by `ocsp.timeout`, once
+  it is past half its cached life, so a working responder never lets the answer an open
+  connection relies on expire. A cached answer that has expired, or none, is `status_unavailable`
+  as R8 says (declined under refuse; admitted and counted under allow), and its question is asked
+  in the background for the next packet. So no packet ever waits on a responder, which a
+  device's reply timeout (3s at the shortest, L13) would not survive. When the listener's files
+  have been reloaded since the handshake, the chain's path and identity are verified again in
+  full, and its status is read the same cached way. A failure is recorded (`tls_refused`, with
+  the packet's header fields) and the connection reset, with no strike: the device did nothing
+  on this connection. Its next handshake is judged, and struck, as any other.
+- **10. SNI** (RFC 9887 §3.4.2, §5.1.5). `server_names`, when set, are the names a
+  ClientHello's SNI may carry. Any other is refused at the ClientHello (`sni_mismatch`;
+  `crypto/tls` sends `internal_error`). An absent SNI is accepted, because a device configured with
+  the server's address sends none (RFC 6066 forbids an IP literal there). SNI is not identity, and it
+  travels in clear. The check is there to catch a device pointed at the wrong port49 (a lab device
+  at production).
+- **11. Resumption: off by default; single-use and age-bounded when on** (RFC 9887 §3.6).
+  `session_ticket_lifetime` is `0s` by default (no ticket issued: every connection a full
+  handshake), and at most `1h`. With tickets on, each ticket carries its issue time. One
+  older than the lifetime, or presented twice, is ignored and the connection does a full
+  handshake (RFC 9887 §3.6, "SHOULD allow resumption if the ticket ... has not expired and has
+  not been used before"). The ticket keys are random per load of the listener's files, so a
+  reload invalidates every ticket outstanding, and they are never written anywhere. A resumption
+  runs `VerifyConnection` again: the chain is verified against the anchors in force and its
+  status checked after it (RFC 9887 §3.6, "certificates must be verified to check for
+  revocation"). The lifetime a ticket advertises is `crypto/tls`'s fixed seven days; port49
+  enforces its own, a departure decision 50 names. A ticket is marked used before crypto/tls
+  checks its binder, so a passive observer who copies a ticket identity from a clear ClientHello
+  can "burn" it with a bad binder. That needs an admitted source address and costs the device
+  only a full handshake, so it is accepted and said. Off is the default because every full
+  handshake re-verifies everything, and how often devices resume is unmeasured (L73 (g)).
+- **12. 0-RTT is refused.** `crypto/tls` aborts a ClientHello carrying `early_data` with
+  `unsupported_extension`, the abrupt disconnect RFC 9887 §5.1.2 requires. It is recorded
+  `early_data_refused` and struck. Task 7's `TestTLSEarlyDataIsRefused` sends a ClientHello
+  carrying `early_data` and pins the abort; a port49 ticket never permits early data (measured,
+  L72 (k)).
+- **13. An obfuscated packet over TLS gets an ERROR and a close** (RFC 9887 §4). A header whose
+  unencrypted flag is clear is answered with the ERROR status of its type
+  (`TAC_PLUS_AUTHEN_STATUS_ERROR`, `_AUTHOR_`, `_ACCT_`), with the flag set and `seq_no + 1`, and
+  then the connection closes. Its body, which the header check has bounded at 4096 bytes, is
+  read and discarded, never hashed or logged: closing a socket with unread data sends a reset
+  that can drop the ERROR, so reading it makes the close a clean close_notify and FIN. It is
+  recorded `obfuscated_over_tls` with no strike, because the peer holds a valid certificate and
+  is misconfigured, not hostile. Every
+  reply on the TLS listener sets the unencrypted flag. A packet that fails another header check
+  is `not_tacacs` and struck, as on 49.
+- **14. The handshake has a deadline**: `handshake_timeout`, default 5s, 1s to 30s. That bounds
+  the slot a stalled peer holds under the per-NAS cap. A timeout is `handshake_timeout`, struck.
+  The default sits above the shortest measured reply timeout (3s, L13) only because a
+  handshake that takes longer is already lost to that device, and the deadline exists to free
+  the slot.
+- **15. The listener's files reload without a restart.** `cert_file`, `key_file`,
+  `client_ca_file` and `intermediates_file` are read again every `reload_interval` (default 1m,
+  10s to 1h) and at every SIGHUP. A set whose bytes changed and that loads is swapped in whole
+  and said: the anchors by subject and SHA-256, and the server certificate's expiry. A set
+  that does not load is refused and said once per distinct failure, and the set in force stays.
+  A server certificate already expired at load is loaded and said loudly, because refusing it
+  would also take down nothing the device can use. With a short-lived certificate issued by
+  automation, rotation needs no step from the operator.
+- **16. What is recorded and counted.**
+  - A record of an exchange on the TLS listener carries `device.transport: "tls"` and
+    `device.cert_sha256`, and no `key_ref`. A TCP record is byte-for-byte unchanged.
+  - A refusal is `unvalidated` with diagnosis `tls_refused`, `transport: "tls"`, `tls_outcome`,
+    `detail` (bounded, printable) and `cert_sha256` where a certificate was sent.
+  - `port49_tls_handshakes_total{outcome}` counts `ok`, `resumed`, and every refusal outcome.
+  - `port49_tls_device_certificate_lifetime_left_ratio` is the least fraction of its own
+    lifetime (`NotAfter - NotBefore`) a device certificate verified in the last 24h has left,
+    `1` with none.
+  - `port49_tls_server_certificate_lifetime_left_ratio` is the same fraction for the server
+    certificate in force; below 0 it has expired.
+  - `port49_devices_by_transport{transport}` counts admitted devices.
+  - A device whose verified certificate has less than `expiry_warning_fraction` of its own
+    lifetime left (default `0.33`; `0` is off) is named in one line at most every 24h. A fraction,
+    not a duration, because R15 recommends short-lived certificates issued by automation: any
+    fixed duration (14 days, say) sits forever inside the life of a 7-day certificate, and would
+    name every device every day. ACME clients and cert-manager renew at two thirds of a
+    certificate's life by default, so a certificate in its last third is one whose renewal is
+    already late: the device that stopped renewing. A 90-day certificate warns in its last 30
+    days; a 24h one, renewed on schedule at 16h, never warns, and one whose renewal failed warns
+    8h before it expires.
+  - A refusal is also said on stderr, at most once per device and outcome every 10 minutes:
+    the decision log is the audit trail, and stderr is where the 3am reader looks first. A
+    `status_unavailable` is port49's own and reaches every device at once, so it is said once,
+    at the first device, then gathered: one line every 10 minutes gives how many devices were
+    declined and names up to five, as the start's transport lines do.
+  - An alert crypto/tls writes at a refused handshake is best-effort: the reset that follows can
+    discard it before it leaves the host. The record is the authority; L72 records what each
+    reference client saw.
+  - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch` and
+    `obfuscated_over_tls`.
+- **17. One device, one set of limits.** The per-NAS cap, strikes, backoff and decline windows
+  are per source address, shared by both listeners. A device struck on 300 is held on 49 too, so
+  it cannot double its slots or reset its backoff by changing port.
+- **18. plan 1's mode serves TLS too.** port49d with no `broker:` block reads the inventory
+  file's key groups. A `tls` device needs none, and "a device that matches no key group refuses
+  the start" exempts it, as do the two pin checks ("pins a key_ref that is not a valid key_ref
+  name", "pins key_ref ... which is not in keys"): R3 ignores a `tls` device's pin, in this mode
+  as with a broker.
+- **19. The lab.** Vendor documentation (read 2026-10-16) puts RFC 9887 clients in Arista EOS
+  4.36.1F (Arista TOI "TACACS+ over TLS", EOS-4.36.1F), Cisco IOS XE 17.18.1 (Cisco document
+  225097), Cisco NX-OS 10.6(1)F on Nexus 9000 (Cisco document 224882) and Junos (Juniper
+  "TACACS+ over TLS overview", release not stated). Every lab image predates these:
+  - vEOS-lab 4.31.2F (tagged 4.32.2F);
+  - Catalyst 8000V 17.13.01a;
+  - Nexus 9300v 10.4(2)F;
+  - vJunos-router 23.4R2-S2.1;
+  - vSRX3 21.4R3.15.
+
+  So:
+  - **L71** measures, on each image, whether its CLI offers a TLS TACACS+ client at all,
+    expected none.
+  - **L72** measures port49 itself against reference clients (`openssl s_client` 3.x and a Go
+    client in `tests/lab/cmd/tacacs-tls-client`), and closes in this plan.
+  - **L73** holds every claim about a device's RFC 9887 behaviour and stays open until Q1's
+    images arrive. Device configuration and reference AAA configs for TLS are plan 12's, on L73.
+- **Departures from RFC 9887, named.** Three:
+  1. **§3.4, revocation (a MUST).** `certificate_status: {disabled: true}` and `on_unavailable:
+     allow` depart from "MUST validate the certificate path ... including revocation checking".
+     Each is an explicit operator choice, never a default, and each is said at every start
+     (ruling 8).
+  2. **§3.6, the ticket lifetime (a SHOULD).** §3.6 says the lifetime SHOULD be configurable,
+     zero included. port49 enforces `session_ticket_lifetime` itself, and `0s` (the default)
+     issues no ticket, but the lifetime a ticket advertises to the device is crypto/tls's fixed
+     seven days and cannot be set (ruling 11).
+  3. **§5.1.1, one host (a SHOULD NOT).** One port49d may serve both listeners, with a notice at
+     every start; per-device transport keeps a device from being downgraded, but not a sync that
+     flips its record, nor a host compromise exposing both kinds of credential (ruling 1).
+
+  Two SHOULDs are not built, and are deferred with reasons: §3.4.1's TLS Cached Information
+  Extension (RFC 7924) and §3.4.3's configurable cipher suites (ruling 2).
+
 ---
 
 ## 14. Required test assertions
@@ -10815,6 +11156,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L68** | A Junos reply sending view-configuration with the rest of its reach denied (plan 9g; decision 48). Under `user-permissions` over the bitless `p49-remote`, six rows: P, `view view-configuration` and set 1.2.0's render of a readonly granted `show **` less `show security **` and `monitor **` (173 bytes); H, the same bits and a deny of exactly `show security`, view-configuration's other reach and the entry denies (235 bytes); O, `clear view view-configuration` and P's deny, set 1.2.0's render of the operator granted `show **` and `clear **` less the same; V, `view` alone under P's deny; Vc, `view` alone; C, `view view-configuration` and no deny, the control. Whether `show cli authorization` lists each row's bits exactly; whether `show configuration` runs in P, H and O and not in V; whether `show security` and each word of view-configuration's other reach (`monitor`, `request mpls`, `request path-computation-client`, `request security`, `request unified-edge`, `request virtual-chassis`, `load` and `save dhcp-security-snoop`), typed in full and abbreviated, is refused in P, H and O where C takes it; whether `configure`, `edit` or `configure private` enters configuration mode in any row; whether, over the SSH exec channel, `show configuration` runs and `monitor list` and `show security zones` are refused in P, H and O where C takes them; whether `<get-configuration/>` through `xml-mode`, port 830, the port-22 subsystem and the exec channel's NETCONF, and `op url` and its abbreviation, are refused in P, H and O where C reaches them; whether view-configuration's completion over `view` (C against Vc) offers a word its declared reach does not hold. Recorded, not gated: `show log`, `show firewall`, `show policer`, `file list /config`, `file show /config/juniper.conf.gz`, an scp read of `/config/juniper.conf.gz` (P, V, C), and `show configuration`'s `\| save` and pager `s` (L59). Row O gates the operator reply alone (G1-operator). Measured 2026-10-16, both images: G1 and G1-operator pass. Recorded, not gated: `show log` ran in P, H and O (a carve-out), `show firewall` and `show policer` were not refused in P, H or O; `file list /config` and `file show /config/juniper.conf.gz` were refused in P and O and taken in H, whose deny leaves `file` open; an scp read of `/config/juniper.conf.gz` was refused in P, V and C; `show configuration | save` wrote its file in P, H, O and C; pager `s` was not graded (the pager did not appear in P, O and V, where `set cli` is denied; in H, Vc and C it appeared and prompted for a filename, but the harness's following keystrokes were mangled) and stays L59's. On vSRX `request unified-edge` and `req vir` run nowhere (refused in C too). | Decision 48: set 1.3.0's `deny_reach_bits: [view-configuration]` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-16; `tests/lab/results/L68-juniper_vjunos-router.md`, `L68-juniper_vsrx.md`, `L68-netconf-juniper_vjunos-router.md`, `L68-netconf-juniper_vsrx.md`, `L68-netconf-operator-juniper_vjunos-router.md`, `L68-netconf-operator-juniper_vsrx.md`, `L68-projected-juniper_vjunos-router.md`, `L68-projected-juniper_vsrx.md`. Set 1.3.0's rendered replies, through the broker, ran `show configuration` and refused `monitor` on both images, for the readonly and the operator. |
 | **L69** | A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets them (plan 10), on kind: (a) a projected token's claims for `audience: port49-lab`, `expirationSeconds: 600` (`iss`, `aud`, `exp` − `iat`, `nbf`, `sub`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod`, `node`, `jti`; the header's `alg`, `kid` and `typ`); (b) when the kubelet rewrites the file, as a fraction of `expirationSeconds`; (c) the issuer discovery document and `/openid/v1/jwks` read anonymously before and after binding `system:service-account-issuer-discovery` to `system:unauthenticated`, and discovery's `issuer` and `jwks_uri` against the API server's flags; (d) a signing key rotated at the API server, and whether port49 mints with the new key's token without a restart; (e) a token after its pod, then its service account, is deleted: what TokenReview answers and what port49 does; (f) a second cluster's token at a broker that lists only the first, for a namespace only the first lists, and for a namespace both list; (g) a token for another audience, an unbound `kubectl create token`, a Secret-bound and a Node-bound `kubectl create token`, and a legacy Secret token; (h) the default `kube-api-access` token's `aud` and lifetime. | §13 decision 49 rulings 2, 6, 7 and 11; `examples/kubernetes` | kind v0.29.0 (`kindest/node:v1.33.1`) | closed — measured 2026-10-16; tests/lab/results/L69-kind.md. Measured on kind v0.29.0 (`kindest/node:v1.33.1`): (a) a projected token carries `iss`, `aud` `[port49-lab]`, `exp` − `iat` 600s, `nbf`, `sub` `system:serviceaccount:netops:oxidized`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod` and `node`, `jti`, header `alg` RS256 with a `kid` and no `typ`, and no `warnafter`; (b) the kubelet rewrote the file at 0.87 of `expirationSeconds`, inside [0.75, 0.97], so "about 80%" stands; (c) anonymous discovery and JWKS answered 403 before the binding and 200 after, discovery's `issuer` is the flag and its `jwks_uri` the API server's address (not compared), and the broker stayed silent for the matching cluster and for a mirror-style `jwks_uri`; (d) after a signing key rotation the new `kid` minted on the running broker with no restart, first attempt; (e) after the pod and then the service account were deleted TokenReview answered `authenticated=false` while port49 still minted (ruling 11 as written), and `port49 revoke` ended it at once, exit 77 `credential_revoked`; (f) a second cluster's token was refused (exit 77) at a broker listing the first alone, and both minted where both list the namespace, with the overlap named at the start and `cluster` in the record; (g) a wrong-audience, an unbound, a Secret-bound, a Node-bound and a legacy Secret token were each refused `trust_domain_unresolved` with its own reason, exit 77; (h) the default `kube-api-access` token's `aud` is the API server's and its lifetime 31536000s, refused `trust_domain_unresolved`, exit 77. |
 | **L70** | L69's (a), (c) and (d) on managed clusters: whether EKS, GKE and AKS publish issuer discovery and the JWKS anonymously over the internet, the form of their issuer and `kid`, and how they rotate signing keys. | decision 49 ruling 2's anonymous fetch on managed clusters; the docs' managed-cluster section | EKS, GKE, AKS | open |
+| **L71** | Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with nothing left configured: EOS `tacacs-server host <ip> ?` (an `ssl-profile` or `tls` option), IOS-XE `tacacs server <name>` then `tls ?` (IOS has no commit, so this creates a `tacacs server l71probe` object, which the probe removes on every path), NX-OS `tacacs-server host <ip> ?` and `tacacs-server secure ?`, Junos `set system tacplus-server <ip> ?` (a `tls` option). Vendor documentation puts the floors at EOS 4.36.1F, IOS XE 17.18.1, NX-OS 10.6(1)F and an unnamed Junos release, all after every lab image. | §13 decision 50 ruling 19; whether L73 can be measured on an image in hand | vEOS-lab 4.31.2F, C8000V 17.13.01a, N9300v 10.4(2)F, vJunos-router 23.4R2-S2.1, vSRX3 21.4R3.15 | open |
+| **L72** | port49's RFC 9887 listener against reference clients (`openssl s_client` 3.x and `tests/lab/cmd/tacacs-tls-client`, Go `crypto/tls`), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and the record carries `device.transport` and `device.cert_sha256` and no `key_ref`; (b) a TLS 1.2-only client: the alert the client reports and `version_refused`; (c) no client certificate: the alert and `no_client_certificate`; (d) an unknown CA, (e) an expired leaf, (f) a leaf naming another device: each one's alert and outcome; (g) a leaf a CRL file lists: a reset after the completed handshake (the status is checked only then, so no alert) and `certificate_revoked`; (h) a CRL source past its `nextUpdate` and unreachable: the handshake completes and the connection is then reset (no alert), `status_unavailable`, and the next connection, inside the decline window, reset at Accept with no strike and no second record; (i) a server name not in `server_names`: the alert and `sni_mismatch`; (j) with `session_ticket_lifetime: 10m`, a second connection resumes, and one ticket presented twice resumes once; (k) `openssl s_client -early_data` with a port49 session: whether any early data is sent; (l) a packet with the unencrypted flag clear: the reply's status and flags and the close; (m) a `tcp` device's address and an address not in the inventory on the TLS listener: whether any TLS byte comes back before the reset, and the records; (n) a `tls` device's address on the RFC 8907 listener: the reset after its header and `transport_mismatch`; (o) a TCP connection that sends nothing: when it is closed and `handshake_timeout`. | §13 decision 50 rulings 2, 5, 8, 10–14 | reference clients on the lab host | open |
+| **L73** | Each device's RFC 9887 client against port49, per platform, once an image carries one (L71): (a) the port it uses with none configured (RFC 9887 says 300; Cisco's documents use 6049); (b) whether every packet has the unencrypted flag set; (c) whether it sends SNI, and what; (d) whether it checks port49's certificate's dNSName or iPAddress against what it was configured with, and what it does on a mismatch and on an expired server certificate; (e) the client certificate its documented enrolment issues: subjectAltName entries, extended key usage, chain sent; (f) TLS 1.3 negotiated, and the suite; (g) whether it resumes with a port49 ticket; (h) single-connection over TLS; (i) what it does on each port49 refusal (an alert at the handshake, a reset at Accept, a decline window, an ERROR for an obfuscated packet), and how fast it falls to its next server or local method, as L28 and L31 measured on 49; (j) whether it ever falls back to a non-TLS server for the same host (RFC 9887 §5.1.1 forbids it). | §13 decision 50 rulings 1, 6, 7, 10, 11; plan 12's reference device configurations for `transport: tls` | Arista EOS ≥ 4.36.1F, Cisco IOS XE ≥ 17.18.1, Cisco NX-OS ≥ 10.6(1)F, Junos (release unknown) | open — no lab image carries a client (L71); needs images (plan 11 Q1) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
