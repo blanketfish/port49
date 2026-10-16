@@ -265,6 +265,12 @@ the reply falls back to the 1.2.0-style one, and CI warns `projection_reach_deny
 - the plan ends with operator notes.
 **9g executed 2026-10-16** on `feature/junos-view-configuration`, each task reviewed (Plan 9g — As
 built, below); L68 closed.
+**10 written 2026-10-16** (`2026-10-16-10-kubernetes-path.md`, twelve tasks: one spec, seven code,
+one example, one lab harness, one lab run, one docs; sixteen rulings recorded as decision 49 by
+its Task 1; two questions for Ryan, each with a recommendation: Q1 one service account name in
+several clusters (refused; name accounts per region), Q2 TokenReview for a deleted account's
+immediate effect (not built; `port49 revoke --principal` closes the 2h window). It opens L69
+(kind) and L70 (managed clusters, left open).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6780,6 +6786,9 @@ narrow fix (Opus review) and a second fix after Task 6's first lab run.
 
 Projected ServiceAccount token validation against the cluster JWKS; identity
 `system:serviceaccount:<ns>:<name>`; the `k8s` verifier type. Design §7.
+
+Status: **written 2026-10-16** (`2026-10-16-10-kubernetes-path.md`, branch
+`feature/kubernetes-path`; twelve tasks; decision 49; Q1 and Q2 for Ryan; L69 and L70 opened).
 
 ## Plan 11 — RFC 9887 TLS listener (§19 step 11)
 
