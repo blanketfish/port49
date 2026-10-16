@@ -242,6 +242,17 @@ also #11, `port49 token` retries `store_unavailable` for up to 30s). **9f writte
 2026-10-16** (`2026-10-16-09f-network-cli-host-keys.md`, four tasks, each reviewed; Plan 9f — As
 built, below): the lookup checks `network_cli` host keys before it mints, measured as L66 (e3) to
 (e3d) on arista_eos.
+**9g written 2026-10-16** (`2026-10-16-09g-junos-view-configuration.md`, seven tasks: one lab
+cell first, gate G1 (L68); one spec; three code; one lab run through the broker; one docs). It
+builds Ryan's ruling of 2026-10-15 ("Ruled 2026-10-15 (Ryan)", below): where a readonly permits
+`show configuration` under a deny beneath `show`, the reply sends `view view-configuration` and
+denies the rest of view-configuration's reach that the grant leaves undecided. For `show **` less
+`show security **` that is `monitor **`, in a 173-byte `deny-commands`. Nothing after Task 1
+starts unless L68 passes on both images. It ships as **set 1.3.0, not 1.2.0**, for the
+controller to rule on (plan R3). Set 1.2.0 is released, so its files and what a pinned policy
+renders stay as they are. Set 1.3.0 is 1.2.0 plus `juniper_junos`'s `deny_reach_bits:
+[view-configuration]`. Set 1.2.0 already renders this reply to a grant that writes `deny:
+[monitor **]` itself. Decision 48 holds its rulings. It opens and closes L68.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
