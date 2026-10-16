@@ -1,7 +1,7 @@
 # L69 — kind
 
 - **Date measured:** 2026-10-16
-- **Run:** commit `d7b55571045bd6d17a19f4d1eea800eb1dee5500`, `make lab-k8s` (`-run TestL69`)
+- **Run:** commit `d7b55571045bd6d17a19f4d1eea800eb1dee5500`, `make lab-k8s` (`-run TestL69`) (the measured commit, what ran; rebased as `e5ff120d` with no change to plan 10's code: `git diff d7b55571 e5ff120d` touches only main's files)
 - **Platform:** kind
 - **Image version:** kind v0.29.0, node image `kindest/node:v1.33.1` (kindest/node@sha256:050072256b9a903bd914c0b2866828150cb229cea0efe5892e2b644d5dd3b34f), Kubernetes v1.33.1
 - **Capture:** `tests/lab/evidence/L69-kind.json`

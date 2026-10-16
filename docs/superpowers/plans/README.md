@@ -271,7 +271,7 @@ its Task 1; two questions for Ryan, each with a recommendation: Q1 one service a
 several clusters (refused; name accounts per region), Q2 TokenReview for a deleted account's
 immediate effect (not built; `port49 revoke --principal` closes the 2h window). It opens L69
 (kind) and L70 (managed clusters, left open).
-**10 executed 2026-10-16** on `feature/kubernetes-path` (base `7b34b16f`), each task reviewed
+**10 executed 2026-10-16** on `feature/kubernetes-path` (rebased onto main `02ca1ce8`), each task reviewed
 (Plan 10 — As built, below). Ryan's Q1 ruling reversed the plan's recommendation: clusters may
 share a namespace, and each k8s verifier is named by a required `cluster:`. Q2 stands: no
 TokenReview. L69 closed on kind (v0.29.0, Kubernetes v1.33.1); L70 (managed clusters) stays open.
@@ -6797,29 +6797,35 @@ See "Plan 10 — As built", below.
 
 ### Plan 10 — As built
 
-Executed from `2026-10-16-10-kubernetes-path.md` on `feature/kubernetes-path` (base `7b34b16f`,
-which holds the plan, its pre-flight fixes and the Q1 ruling), each task reviewed, several through
+Executed from `2026-10-16-10-kubernetes-path.md` on `feature/kubernetes-path` (rebased onto main `02ca1ce8`; the plan
+commits `c81d68f0`, `62f51e2b` and `aef54b9d` hold the plan, its pre-flight fixes and the Q1 ruling), each task reviewed, several through
 a fix round. The ledger is `.superpowers/sdd/2026-10-16-10-kubernetes-path/progress.md`, with each
 task's brief, report and review beside it. The Opus pre-flight (1 critical, 9 important, 15 minor)
 was applied before Task 1.
 
 - **Built, with the task commits:**
-  - Task 1, spec: decision 49, L69 and L70 opened (`e53c05bb`).
-  - Task 2, `internal/k8sid`, one parser for a service account principal (`bd623ee8`).
-  - Task 3, `k8s` under `broker.identity.machines` (`fb4c8def`).
+  - Task 1, spec: decision 49, L69 and L70 opened (`025c564e`).
+  - Task 2, `internal/k8sid`, one parser for a service account principal (`d4e0af99`).
+  - Task 3, `k8s` under `broker.identity.machines` (`9fa796a4`).
   - Task 4, a key set reads a cluster's JWKS directly and says where discovery differs
-    (`accbc975`).
+    (`e01c9998`).
   - Task 5, the k8s verifier: a pod-bound token, the exact audience, a listed namespace
-    (`0585e682`, fix `fa250068`).
-  - Task 6, the broker mints for a service account and records `auth.k8s` (`54edd20f`, fix
-    `eca2c69e`).
-  - Task 7, port49d builds each cluster's key set and says what it trusts (`f3e7e531`, fix
-    `d42d317e`).
-  - Task 8, `port49 workload token --token-file` (`36049d35`).
-  - Task 9, `examples/kubernetes` (`45e31dd3`, fix `2238c295`).
-  - Task 10, the L69 harness (`f00d23e3`, fix `d7b55571`).
-  - Task 11, the L69 run and its close (`fefaa9c5`).
-  - Task 12, this entry.
+    (`58efe511`, fix `73ef78c0`).
+  - Task 6, the broker mints for a service account and records `auth.k8s` (`4a0bdbe9`, fix
+    `153b37ee`).
+  - Task 7, port49d builds each cluster's key set and says what it trusts (`a1e5cd23`, fix
+    `79fdbfc8`).
+  - Task 8, `port49 workload token --token-file` (`fbe9f79d`).
+  - Task 9, `examples/kubernetes` (`87b42ee7`, fix `aa7a7832`).
+  - Task 10, the L69 harness (`c164aa4e`, fix `e5ff120d`).
+  - Task 11, the L69 run and its close (`ab54076a`).
+  - Task 12, this entry (`7a42b0fb`).
+  - The final-review fix wave: a bearer that is no JWS is recorded and said `k8s` on a broker whose
+    verifiers are all clusters (`656e1700`, spec §5.7); test comments reworded (`f992a629`); the
+    stalled-discovery and vanished-token-file tests (`30749596`); the k8s audience wording and the
+    x509 and `directory_password` k8s-key refusals (`4f1db10a`); `NewClient`'s comment
+    (`5198be7f`); `make test-race` takes `-timeout 30m` (`730641dc`); the example README claims only
+    what an L69 cell measured (`9be5eaaa`); and the commit of this record's IDs.
 - **Rulings as made.**
   - **Q1 (Ryan, ruled 2026-10-16):** several clusters may list one namespace. The same workload
     in every region's cluster is one identity and one policy subject. Each `k8s` verifier takes a
@@ -6857,19 +6863,18 @@ was applied before Task 1.
   where both list the namespace, and the five refused shapes and the default token's audience.
   The anonymous `conditions` form of the structured authentication configuration is not
   measured. **L70** (EKS, GKE, AKS) stays open until an account exists.
-- **Parked minors, for the final fix wave.**
-  - Task 2: a mixed-case-prefix load test; a redundant length check; a stray comment; a wrapped
-    error's wording.
-  - Task 3: `k8sKeys` refusals (x509 machine, human, `directory_password`) untested; the
-    `distinctClusters` compare of `jwks` is exact-string; the audience error wording; `ca_file`
-    untested.
+- **Parked minors, carried** (the final fix wave fixed the rest):
+  - Task 2: a mixed-case-prefix load test; a redundant length check; a wrapped error's wording.
+  - Task 3: the `distinctClusters` compare of `jwks` is exact-string (it fails closed); the k8s
+    `ca_file` load path is untested at config.
   - Task 4: overlapping discovery reads can land out of order; the "could not be read" note
     varies per attempt and prints the URL twice; no all-clear when discovery agrees again;
-    `TestAStalledDiscoveryHoldsNoFetch` ignores `arrived`; no test sets `Who`; `NewClient`'s doc
-    is stale.
+    no test sets `Who` on the key set's own lines.
   - Task 7: a migrating cluster prints two "is fetched" lines.
-  - Task 8: a mid-run test under a context timeout; a library test for a cert alone or a key
-    alone; a `MaxTokenFile` boundary test.
+  - Task 8: a library test for a cert alone or a key alone; a `MaxTokenFile` boundary test.
+  - Final review M2 and M3: `serviceAccount` checks the namespace before the `kubernetes.io`
+    binding (messages only, fails closed); the unmapped answer names the configured cluster to a
+    verified caller (a cluster name is not a secret).
 
 **Carried forward.**
 
