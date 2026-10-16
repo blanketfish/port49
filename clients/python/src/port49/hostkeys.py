@@ -291,41 +291,102 @@ def hashed(name, salt=None):
     return f"|1|{base64.b64encode(salt).decode()}|{base64.b64encode(mac).decode()}"
 
 
-def remember(kh, keytype, key_b64, stderr=None, *, ssh_keygen="ssh-keygen"):
-    """File a first contact's key under kh.name: one O_APPEND write of one whole line, as ssh does, so
-    concurrent first contacts never interleave. Said on stderr as OpenSSH says it."""
-    if not kh.write_to:
-        raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {kh.name} in")
-    # What is written is checked here as well, since KnownHosts is public: no pattern, marker or second line.
-    if not kh.name or len(kh.name) > 253 or _ALIAS_UNSAFE.search(kh.name):
-        raise HostKeyError("device_name", f"{str(kh.name)[:64]!r}: {NAME_RULE}")
-    if not _TOKEN.fullmatch(keytype) or not _TOKEN.fullmatch(key_b64):
-        raise HostKeyError("host_key_uncheckable", "the device presented a key that cannot be written to known_hosts")
-    host = hashed(kh.name) if kh.hash_names else kh.name
-    line = f"{host} {keytype} {key_b64}\n".encode("ascii")
+def filed(name, paths, *, ssh_keygen="ssh-keygen"):
+    """The (keys, revoked) filed under name across paths, each "<type> <b64>", deduplicated in order. A
+    @cert-authority line is not a key and is left out; a path that is not a file holds nothing."""
+    keys, revoked = [], []
+    for path in paths:
+        k, _, r = _read_file(name, path, ssh_keygen)
+        keys += k
+        revoked += r
+    return list(dict.fromkeys(keys)), list(dict.fromkeys(revoked))
+
+
+def address_entry(address, port):
+    """address as known_hosts files it: bare for port 22, else [address]:port."""
+    if not isinstance(address, str) or not address or re.search(r'[\s"\x00-\x1f\x7f]', address):
+        raise HostKeyError("address", f"{str(address)[:64]!r} cannot be written to known_hosts as an address")
+    return address if port == 22 else f"[{address}]:{port}"
+
+
+def known_files(name, *, ssh="ssh", ssh_config=None):
+    """(paths, write_to, hash_names): the known_hosts files `ssh -G name` names (user then global, ~ expanded),
+    the first user file, which is where ssh files a key, and HashKnownHosts."""
+    conf = _ssh_g(name, name, 22, None, ssh_config, ssh)
+    home = _passwd_home()
+    user = [p for p in _expand(conf.get("userknownhostsfile", "").split(), home) if p not in _KEEPS_NOTHING]
+    glob = [p for p in _expand(conf.get("globalknownhostsfile", "").split(), home) if p not in _KEEPS_NOTHING]
+    return user + glob, user[0] if user else "", conf.get("hashknownhosts") == "yes"
+
+
+def fingerprint(key):
+    """SHA256:<unpadded base64> of a key ("<type> <b64>" or the bare blob), as ssh-keygen -lf prints it."""
     try:
-        os.makedirs(os.path.dirname(kh.write_to), mode=0o700, exist_ok=True)
-        fd = os.open(kh.write_to, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        blob = base64.b64decode(key.split()[-1], validate=True)
+    except (ValueError, IndexError):
+        raise HostKeyError("host_key_uncheckable", "a key that is not base64 cannot be fingerprinted") from None
+    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+
+
+def append(path, host, keys, *, hash_names, ssh_keygen="ssh-keygen", revoked=None):
+    """File each of keys ("<type> <b64>") under host in path: one O_APPEND write of whole lines, as ssh does,
+    under a flock, so concurrent writers never interleave. Under the lock the file is read again: a key already
+    filed is skipped, and a different key of the same type filed under host is host_key_changed, not filed
+    beside it (OpenSSH would trust both). revoked, if given, says which filed keys no longer count. Returns the
+    keys written."""
+    if not path:
+        raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {host} in")
+    # What is written is checked here as well: no pattern, marker or second line.
+    if not host or len(host) > 253 or re.search(r"[\s\x00-\x1f\x7f*?!,]|^[@|]", host):
+        raise HostKeyError("device_name", f"{str(host)[:64]!r}: {NAME_RULE}")
+    pairs = []
+    for key in keys:
+        t, _, b = key.partition(" ")
+        if not _TOKEN.fullmatch(t) or not _TOKEN.fullmatch(b):
+            raise HostKeyError("host_key_uncheckable", "the device presented a key that cannot be written to known_hosts")
+        pairs.append((t, b))
+    written = []
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             # One writer at a time (other workers of this client; ssh takes no lock), so what is read below is
             # what the write follows.
             fcntl.flock(fd, fcntl.LOCK_EX)
-            size = os.fstat(fd).st_size
-            if size and os.pread(fd, 1, size - 1) != b"\n":
-                line = b"\n" + line  # as OpenSSH 10.2p1 does: the last entry stays a whole line
-            # Filed since lookup (another worker, port49 ssh) and different: the key presented is not the one
-            # the device was known by, so it is not filed beside it (OpenSSH would then trust both).
-            filed = [k for k in _read_file(kh.name, kh.write_to, ssh_keygen)[0]
-                     if not is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen)]
-            if filed and f"{keytype} {key_b64}" not in filed:
-                raise HostKeyError("host_key_changed", f"a key was filed under {kh.name} while {kh.name} was being "
-                                   f"reached, and it is not the one presented: the key presented was not filed. "
-                                   f"Verify the device's key on its console")
-            if os.write(fd, line) != len(line):
-                raise OSError("short write")
+            have = [k for k in filed(host, [path], ssh_keygen=ssh_keygen)[0]
+                    if not (revoked and revoked(k))]
+            have_types = {k.split(" ", 1)[0]: k for k in have}
+            out = b""
+            for t, b in pairs:
+                key = f"{t} {b}"
+                if key in have:
+                    continue
+                if t in have_types:
+                    raise HostKeyError("host_key_changed", f"a key was filed under {host} while {host} was being "
+                                       f"reached, and it is not the one presented: the key presented was not filed. "
+                                       f"Verify the device's key on its console")
+                name = hashed(host) if hash_names else host
+                out += f"{name} {t} {b}\n".encode("ascii")
+                written.append(key)
+            if out:
+                size = os.fstat(fd).st_size
+                if size and os.pread(fd, 1, size - 1) != b"\n":
+                    out = b"\n" + out  # as OpenSSH 10.2p1 does: the last entry stays a whole line
+                if os.write(fd, out) != len(out):
+                    raise OSError("short write")
         finally:
             os.close(fd)
     except OSError as e:
-        raise HostKeyError("host_keys_not_kept", f"could not file the key under {kh.name} in {kh.write_to}: "
+        raise HostKeyError("host_keys_not_kept", f"could not file the key under {host} in {path}: "
                            f"{e.strerror or e}") from None
-    print(f"port49: permanently added '{kh.name}' ({keytype}) to {kh.write_to}", file=stderr or sys.stderr)
+    return written
+
+
+def remember(kh, keytype, key_b64, stderr=None, *, ssh_keygen="ssh-keygen"):
+    """File a first contact's key under kh.name (see append). Said on stderr as OpenSSH says it."""
+    if not kh.write_to:
+        raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {kh.name} in")
+    written = append(kh.write_to, kh.name, [f"{keytype} {key_b64}"], hash_names=kh.hash_names, ssh_keygen=ssh_keygen,
+                     revoked=lambda k: is_revoked(kh, *k.split(" ", 1), ssh_keygen=ssh_keygen))
+    if written:
+        print(f"port49: permanently added '{kh.name}' ({keytype}) to {kh.write_to}", file=stderr or sys.stderr)
