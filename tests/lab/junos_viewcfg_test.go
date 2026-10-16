@@ -513,12 +513,12 @@ func TestL68ViewConfigurationCLI(t *testing.T) {
 					break // the session's state is unknown past a missed prompt
 				}
 			}
-			pipe := "show configuration system host-name | save /var/tmp/p49-l68-pipe-" + v.name
-			r.outs["| save"], _ = l26cSend(c, pipe)
-			r.cells["pager s"], r.outs["pager s"] = l68PagerSave(c, "/var/tmp/p49-l68-pager-"+v.name)
 			if v.name == "C" || v.name == "Vc" {
 				surveys[v.name] = l.junosSurvey(t, "L68 "+v.name, c, &run)
 			}
+			pipe := "show configuration system host-name | save /var/tmp/p49-l68-pipe-" + v.name
+			r.outs["| save"], _ = l26cSend(c, pipe)
+			r.cells["pager s"], r.outs["pager s"] = l68PagerSave(c, "/var/tmp/p49-l68-pager-"+v.name)
 			if len(run.unobserved) > 0 {
 				invalid = append(invalid, fmt.Sprintf("%s: not observed: %s", v.name, strings.Join(run.unobserved, ", ")))
 			}
@@ -547,6 +547,7 @@ func TestL68ViewConfigurationCLI(t *testing.T) {
 			for _, n := range rows {
 				if cell, ok := runs[n].cells[p.key()]; !ok || cell == "not observed" || cell == "login refused" {
 					invalid = append(invalid, fmt.Sprintf("%s in %s: %s", p.key(), n, cellOr(runs[n], p.key())))
+					t.Logf("raw %s in %s: %q", p.key(), n, firstLines(runs[n].outs[p.key()], 12))
 				}
 			}
 		}
