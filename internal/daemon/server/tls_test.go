@@ -629,9 +629,11 @@ func TestTLSDetailNeverCarriesRawErrorText(t *testing.T) {
 	}
 }
 
-// A tls device the loaded material cannot tell apart is refused
-// identity_mismatch with the reason, though its certificate would match.
-func TestTLSUnidentifiableDeviceIsRefused(t *testing.T) {
+// A tls device the loaded material cannot tell apart is decided at Accept,
+// from its address alone: no TLS byte, no handshake, no strike. Its window
+// stands while it stays in the map, whoever dials, so a peer holding only
+// the device's public certificate gets nothing from the server either.
+func TestTLSUnidentifiableDeviceIsDecidedAtAccept(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, func(d *Deps, f *tlsFixture) {
 		d.Limits = slowBackoff()
@@ -639,10 +641,32 @@ func TestTLSUnidentifiableDeviceIsRefused(t *testing.T) {
 		m.Unidentifiable = map[string]string{"leaf-01": "shares its name with leaf-09 under dns_suffixes"}
 		f.mat.Store(m)
 	})
-	cert := f.deviceCert(t, nil, testpki.Leaf{})
-	refusedAtHandshake(t, f, log, &cert, nil, devicecert.IdentityMismatch, true)
-	if !log.contains("shares its name with leaf-09") {
-		t.Fatalf("the reason is not the detail: %s", log.String())
+	real := f.deviceCert(t, nil, testpki.Leaf{})
+	other := f.deviceCert(t, nil, testpki.Leaf{})
+	impostor := tls.Certificate{Certificate: real.Certificate, Leaf: real.Leaf, PrivateKey: other.PrivateKey}
+	for i, cert := range []*tls.Certificate{&real, &impostor, &impostor} {
+		if _, _, err := f.login(t, cert, nil); err == nil {
+			t.Fatalf("dial %d was answered", i)
+		}
+	}
+	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"identity_mismatch"`) }) ||
+		!log.contains("shares its name with leaf-09") || !log.contains(`"type":0,"seq_no":0,"session_id":0,"length":0`) {
+		t.Fatalf("record: %s", log.String())
+	}
+	if f.ts.limits.Holding(loopback) || !f.ts.limits.Declined(loopback) {
+		t.Fatalf("struck %v declined %v", f.ts.limits.Holding(loopback), f.ts.limits.Declined(loopback))
+	}
+	if n := f.statusCalls.Load(); n != 0 {
+		t.Fatalf("status asked %d times", n)
+	}
+	for _, o := range append([]devicecert.Outcome{devicecert.OK}, devicecert.Outcomes...) {
+		if n := testutil.ToFloat64(f.ts.metrics.TLSHandshakes.WithLabelValues(string(o))); n != 0 {
+			t.Fatalf("a handshake ran: %s %v", o, n)
+		}
+	}
+	// One record: the window stood for the later dials.
+	if n := strings.Count(log.String(), `"tls_outcome":"identity_mismatch"`); n != 1 {
+		t.Fatalf("%d records, want 1", n)
 	}
 }
 
@@ -689,6 +713,8 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 			}
 			if _, body, err := cl.recv(); err == nil || len(body) != 0 {
 				t.Fatalf("the packet was answered: %v", err)
+			} else if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "remote error") {
+				t.Fatalf("close_notify or an alert before the reset: %v", err)
 			}
 			if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"` + string(c.outcome) + `"`) }) {
 				t.Fatalf("no %s record: %s", c.outcome, log.String())
@@ -696,8 +722,11 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 			if f.ts.limits.Holding(loopback) {
 				t.Fatal("a refusal at a later packet is struck")
 			}
-			if !f.ts.limits.Declined(loopback) {
-				t.Fatal("not declined")
+			if got := f.ts.limits.Declined(loopback); got != c.status {
+				t.Fatalf("declined %v, want %v: only a lost status keeps a window", got, c.status)
+			}
+			if n := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 1 {
+				t.Fatalf("admission_closed = %v", n)
 			}
 			if got := f.ts.limits.DeclinedForStatus(loopback); got != c.status {
 				t.Fatalf("declined for status %v, want %v", got, c.status)
@@ -709,16 +738,85 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 	}
 }
 
-// Possession is proven before the status is asked: the status check never
-// runs inside VerifyConnection (the peer there has proven nothing).
-func TestTLSStatusIsAskedOncePerHandshakeAfterItCompletes(t *testing.T) {
+// The status is asked exactly once per handshake, when it completes. (The
+// impostor test pins that it is never asked before.)
+func TestTLSStatusIsAskedExactlyOncePerHandshake(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, nil)
 	cert := f.deviceCert(t, nil, testpki.Leaf{})
-	if _, r, err := f.login(t, &cert, nil); err != nil || r.Status != wire.AuthenStatusPass {
-		t.Fatalf("login: %v", err)
+	if _, err := f.dialTLS(t, &cert, nil); err != nil {
+		t.Fatal(err)
 	}
-	if n := f.statusCalls.Load(); n < 1 {
-		t.Fatalf("the status was never asked (%d)", n)
+	if !waitFor(t, func() bool { return f.statusCalls.Load() >= 1 }) {
+		t.Fatal("the status was never asked")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := f.statusCalls.Load(); n != 1 {
+		t.Fatalf("the status was asked %d times, want 1", n)
+	}
+}
+
+// A device configured by IP sends no SNI (ruling 10): it is accepted, and
+// a name is matched case-insensitively.
+func TestTLSAbsentSNIIsAcceptedAndNamesFoldCase(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, nil)
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	noSNI := func(c *tls.Config) { c.ServerName = ""; c.InsecureSkipVerify = true }
+	if _, r, err := f.login(t, &cert, noSNI); err != nil || r.Status != wire.AuthenStatusPass {
+		t.Fatalf("no SNI: %v", err)
+	}
+	upper := func(c *tls.Config) { c.ServerName = "TACACS.example.net"; c.InsecureSkipVerify = true }
+	if _, r, err := f.login(t, &cert, upper); err != nil || r.Status != wire.AuthenStatusPass {
+		t.Fatalf("upper-case SNI: %v", err)
+	}
+}
+
+// Material with weaker settings is still forced to TLS 1.3 and a client
+// certificate.
+func TestTLSForcesVersionAndClientAuth(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, f *tlsFixture) {
+		d.Limits = slowBackoff()
+		m := f.material(f.ca, true)
+		m.Config.MinVersion, m.Config.ClientAuth = tls.VersionTLS12, tls.NoClientCert
+		f.mat.Store(m)
+	})
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	if _, _, err := f.login(t, &cert, func(c *tls.Config) { c.MaxVersion = tls.VersionTLS12 }); err == nil {
+		t.Fatal("a TLS 1.2 client was served")
+	}
+	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"version_refused"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	f2 := newTLSFixture(t, &syncBuffer{}, func(d *Deps, f *tlsFixture) {
+		m := f.material(f.ca, true)
+		m.Config.ClientAuth = tls.NoClientCert
+		f.mat.Store(m)
+	})
+	if _, _, err := f2.login(t, nil, nil); err == nil {
+		t.Fatal("a client with no certificate was served")
+	}
+}
+
+// A tls device on the RFC 8907 listener sends its first header within the
+// short unadmitted bound (5s), not the configured idle timeout.
+func TestTLSDeviceOnTheTCPListenerGetsTheShortHeaderBound(t *testing.T) {
+	log := &syncBuffer{}
+	adm := &swapAdmitter{}
+	adm.swap(t, admission.Resolved{Device: leaf01TLS, KeyRef: "prod_key"})
+	ts := newTestServerWith(t, log, seededStore(t), nil, func(d *Deps) { d.Admission = adm; d.IdleTimeout = time.Minute })
+	conn, err := net.Dial("tcp", ts.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("the server sent something to a silent peer")
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("closed after %v, want about 5s", d)
 	}
 }

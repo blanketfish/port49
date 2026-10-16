@@ -231,6 +231,11 @@ func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, li
 	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedForStatus(src) {
 		return true
 	}
+	if d.TLS != nil {
+		if _, bad := d.TLS.Material().Unidentifiable[dev.Device.Name]; bad {
+			return true
+		}
+	}
 	if d.Quarantined == nil {
 		return false
 	}

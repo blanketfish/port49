@@ -258,7 +258,7 @@ func (s *conn) serve(ctx context.Context) {
 		// The deadline is wall-clock I/O, so it uses the real clock even when a
 		// test injects Deps.Now for record timestamps.
 		deadline := s.d.IdleTimeout
-		if !s.admitted && deadline > unadmittedHeaderDeadline {
+		if (!s.admitted || s.mismatch) && deadline > unadmittedHeaderDeadline {
 			deadline = unadmittedHeaderDeadline
 		}
 		if err := s.c.SetReadDeadline(time.Now().Add(deadline)); err != nil {

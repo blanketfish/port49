@@ -89,9 +89,10 @@ type tlsSession struct {
 	started bool // the first packet was read; its single-connect flag decides
 }
 
-// judgeDevice is the local, cheap judgement of certs for the device: the
-// verifier's path and identity, then the loaded inventory's list of devices
-// this rule cannot identify.
+// judgeDevice is the verifier's judgement of certs for the device, then the
+// loaded inventory's list of devices this rule cannot identify. The
+// handshake leaves the list to Accept (startTLS); a reload that changes it
+// mid-connection is caught here, at the next packet.
 func judgeDevice(mat *Material, certs []*x509.Certificate, dev admission.Device) devicecert.Verdict {
 	v := mat.Verifier.Verify(certs, dev)
 	if v.Outcome != devicecert.OK {
@@ -125,10 +126,30 @@ func (s *conn) startTLS(ctx context.Context) bool {
 	case s.quarantined():
 		s.acceptRecord(keyring.DiagDeviceQuarantined, decision.DeviceQuarantined, "")
 		s.decline()
+	case s.unidentifiable() != "":
+		// The rule cannot tell this device's certificate from another's, so
+		// no certificate can admit it. That is the loaded files' fault and
+		// needs no TLS byte to know: no handshake, no strike (a peer holding
+		// only the device's public certificate gets nothing to strike or to
+		// exploit), and a window that stands while the device stays in the
+		// map (declining).
+		s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
+			Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),
+				Transport: admission.TransportTLS, TLSOutcome: string(devicecert.IdentityMismatch),
+				Detail: printsafe.Line(s.unidentifiable(), 300)}})
+		s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagTLSRefused)).Inc()
+		s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
+		s.decline()
 	default:
 		return s.handshake(ctx)
 	}
 	return false
+}
+
+// unidentifiable is why the loaded material cannot identify this
+// connection's device, or "".
+func (s *conn) unidentifiable() string {
+	return s.d.TLS.Material().Unidentifiable[s.dev.Device.Name]
 }
 
 // mismatchDetail says which transport the device record names and which
@@ -179,12 +200,14 @@ func (s *conn) handshake(ctx context.Context) bool {
 	defer cancel()
 	var v devicecert.Verdict
 	cfg := mat.Config.Clone()
+	// Whatever Material holds, RFC 9887 is TLS 1.3 with a client certificate.
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS13
+	cfg.ClientAuth = tls.RequireAnyClientCert
 	cfg.GetConfigForClient = func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
 		if !slices.Contains(hi.SupportedVersions, tls.VersionTLS13) {
 			// crypto/tls refuses it next with protocol_version; this only
 			// names why.
-			v = devicecert.Verdict{Outcome: devicecert.VersionRefused,
-				Detail: fmt.Sprintf("offered TLS versions %x; RFC 9887 requires TLS 1.3", hi.SupportedVersions)}
+			v = devicecert.Verdict{Outcome: devicecert.VersionRefused, Detail: failureDetail(devicecert.VersionRefused, false)}
 			return nil, nil
 		}
 		if name := hi.ServerName; name != "" && len(s.d.TLS.ServerNames) > 0 &&
@@ -197,7 +220,7 @@ func (s *conn) handshake(ctx context.Context) bool {
 	}
 	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
 		// The path and the identity: local and cheap (ruling 8).
-		v = judgeDevice(mat, cs.PeerCertificates, s.dev.Device)
+		v = mat.Verifier.Verify(cs.PeerCertificates, s.dev.Device)
 		if v.Outcome != devicecert.OK {
 			return &devicecert.Refusal{Verdict: v}
 		}
@@ -315,15 +338,21 @@ func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
 			Transport: admission.TransportTLS, TLSOutcome: string(v.Outcome), Detail: v.Detail,
 			CertSHA256: s.tls.certSHA, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagTLSRefused)).Inc()
-	s.d.Metrics.ConnectionEvents.WithLabelValues("tls_closed").Inc()
+	s.d.Metrics.ConnectionEvents.WithLabelValues("admission_closed").Inc()
 	if s.d.TLS.Said != nil {
 		s.d.TLS.Said(s.dev.Device.Name, s.src.String(), v)
 	}
+	// A bare RST: no close_notify first (L73 has not measured what a device
+	// does with one before a reset). Only a status that cannot be
+	// established keeps a window; the spec (decision 50 ruling 9) gives no
+	// window to another refusal, and the device is still admitted, so a plain
+	// one would be dropped at the next Accept.
+	s.c = s.raw
 	if v.Outcome == devicecert.StatusUnavailable {
 		s.declineStatus()
 		return
 	}
-	s.decline()
+	reset(s.raw)
 }
 
 // obfuscatedOverTLS answers a packet whose unencrypted flag is clear on the
