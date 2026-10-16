@@ -6651,7 +6651,7 @@ Opus review (0 Critical, 4 Important, 9 Minor) and one fix round.
   gate reads the device's own `hostvars` (`ansible_connection`, else `ansible_network_os`), and the
   play's variables only for the current host; the name's keys are the port49 name's and the
   ssh_config `HostKeyAlias`'s, and a disagreement refuses; `KnownHostsCommand` refuses
-  `host_key_uncheckable`; a name whose every key of a type is revoked refuses `host_key_revoked`;
+  `host_key_uncheckable`; a name whose every filed key is revoked refuses `host_key_revoked`;
   `remember` keeps refusing a filed key of another type.
 - **Lab (L66 (e3)–(e3d), arista_eos, 2026-10-16):** a moved address holding another key is refused
   before the mint on both ssh types, also with `connection:` as a play keyword (e3, e3c). A moved
