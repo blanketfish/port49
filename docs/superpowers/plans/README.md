@@ -237,7 +237,11 @@ enrollment store every 30s, and a broker-side search fault answers `directory_un
 re-review. **L62 closed 2026-10-15** (PR #9, the SER8's TPM, `tests/lab/results/L62-ser8.md`).
 Next, on Ryan's rulings of 2026-10-15: a small
 fix branch for issues #5 and #8, then a small plan that closes the `network_cli` address-keying gap
-(both under 9e's Carried, below).
+(both under 9e's Carried, below). **The fix branch merged 2026-10-16** (PR #14, `647f5e30`;
+also #11, `port49 token` retries `store_unavailable` for up to 30s). **9f written and executed
+2026-10-16** (`2026-10-16-09f-network-cli-host-keys.md`, four tasks, each reviewed; Plan 9f — As
+built, below): the lookup checks `network_cli` host keys before it mints, measured as L66 (e3) to
+(e3d) on arista_eos.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6470,7 +6474,7 @@ Task 1.
     OpenLDAP's and Samba's were 1s and 7s before the fixture was logged loaded, and Windows AD's
     `whenCreated` could not be compared with an independently known seed time.
 - **Carried:**
-  - **Ryan's rulings, 2026-10-15:** after 9e, a **small fix branch for issues #5 and #8**; **issue
+  - **Done 2026-10-16 (PR #14 and plan 9f).** **Ryan's rulings, 2026-10-15:** after 9e, a **small fix branch for issues #5 and #8**; **issue
     #6 is documented as intended behaviour in plan 13**; and a **small plan closes the `network_cli`
     address-keying gap** in the port49 Ansible lookup (9d's open gap). The lookup copies a name's
     key to an address that has none, and refuses an address with a different key, naming both and
@@ -6631,6 +6635,33 @@ Task 1.
   the caller holds a grant on, so it is no enumeration oracle; per-item results; paging against
   `batch_max`. Then `port49 workload token --scope` (plan 8's client) and the Oxidized wrapper
   can ask for "every device I may back up" instead of a node list.
+
+### Plan 9f — As built
+
+`feature/network-cli-host-keys`, base `647f5e30`, 2026-10-16. Four tasks, each reviewed; a final
+Opus review (0 Critical, 4 Important, 9 Minor) and one fix round.
+
+- **Built:** `port49.hostkeys` gains `filed`, `address_entry`, `known_files`, `key_alias`,
+  `revoked_keys_file`, `append` (the one O_APPEND, flock'd writer, which `remember` now calls with
+  `refuse_other_types=True`) and `fingerprint`. The lookup `port49.client.token` checks every
+  `network_cli` device before any mint (R2's four cases, R4 workload mode first), with the option
+  `known_hosts_file` (default `~/.ssh/known_hosts`).
+- **Rulings (controller):** case 3 (the name has no key, the address has) copies the address's key
+  under the name, beyond Ryan's ruling, and warns and mints when no user file is writable; the
+  gate reads the device's own `hostvars` (`ansible_connection`, else `ansible_network_os`), and the
+  play's variables only for the current host; the name's keys are the port49 name's and the
+  ssh_config `HostKeyAlias`'s, and a disagreement refuses; `KnownHostsCommand` refuses
+  `host_key_uncheckable`; a name whose every key of a type is revoked refuses `host_key_revoked`;
+  `remember` keeps refusing a filed key of another type.
+- **Lab (L66 (e3)–(e3d), arista_eos, 2026-10-16):** a moved address holding another key is refused
+  before the mint on both ssh types, also with `connection:` as a play keyword (e3, e3c). A moved
+  address with no entry: with `host_key_auto_add`, libssh still presents the token (e3b); without
+  it, libssh and paramiko both refuse the stand-in after the lookup's copy (e3d). The README now
+  says to run `network_cli` without `host_key_auto_add`; only a device's first contact needs its
+  key filed another way. Results: `tests/lab/results/L66-arista_eos.md`.
+- **Carried:** three `ssh -G` calls per device (final review m8; fold into one); the
+  `ansible_network_os` fallback for a hidden connection is unit-tested only (the lab's play keyword
+  reached the lookup); the e3 cells ran on one platform (client behaviour, as L66 says).
 
 ## Plan 10 — Kubernetes path (§19 step 10)
 
