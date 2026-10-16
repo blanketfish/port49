@@ -159,6 +159,12 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
     Ansible elsewhere. It defaults to `~/.ssh/known_hosts`.
   - In workload mode every device is checked before the one mint.
   - A device not on `network_cli` is not checked. Use the `HostKeyAlias` setting below there.
+    For a device other than the current host, only its own `hostvars` count: a `localhost` play's
+    `ansible_connection: local` does not turn off the check for it.
+  - If your ssh_config gives the device a `HostKeyAlias`, the keys filed under the alias count as the
+    name's. A key type where the name and the alias disagree fails with `host_key_changed`. A
+    `KnownHostsCommand` fails with `host_key_uncheckable`: the lookup cannot run it as ssh does.
+  - The port is `ansible_port`, else `ansible_ssh_port`.
   - The check runs before the connection. It cannot see a key that changes later, and libssh
     accepts one (next bullet).
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
