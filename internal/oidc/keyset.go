@@ -84,9 +84,11 @@ type KeySetConfig struct {
 // (nil: the system's), fetchTimeout, no redirect followed, and the
 // environment's proxy (HTTPS_PROXY, NO_PROXY), which DefaultTransport's
 // clone keeps: a site whose egress is a proxy would otherwise never fetch a
-// key (pre-flight I-5). The targets are the configured issuer and the
-// jwks_uri its own discovery names, so no request goes where configuration
-// did not send it.
+// key (pre-flight I-5). The targets are the configured issuer (its
+// discovery document) and the jwks_uri that discovery names; for a k8s
+// cluster, the configured jwks URL and the discovery at that URL's origin
+// (not the issuer's own), so no request goes where configuration did not
+// send it.
 func NewClient(roots *x509.CertPool) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
