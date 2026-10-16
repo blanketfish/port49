@@ -317,7 +317,10 @@ func TLSNameClashes(devices []Device) map[string]string {
 		if d.EffectiveTransport() != TransportTLS || transportRefusal(d) != "" {
 			continue
 		}
-		f := foldName(d.Name)
+		f, ascii := FoldASCII(d.Name)
+		if !ascii {
+			continue // never matches a certificate, so nothing to tell apart
+		}
 		byFold[f] = append(byFold[f], d.Name)
 	}
 	out := map[string]string{}
@@ -333,15 +336,20 @@ func TLSNameClashes(devices []Device) map[string]string {
 	return out
 }
 
-// foldName lower-cases A-Z only, as the certificate match does.
-func foldName(s string) string {
+// FoldASCII lower-cases A-Z and nothing else. ok is false when s holds a
+// non-ASCII byte: such a name never matches, since Unicode folding would
+// let a Kelvin sign stand for a k (decision 50 ruling 6).
+func FoldASCII(s string) (folded string, ok bool) {
 	b := []byte(s)
 	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
+		switch {
+		case c >= 0x80:
+			return "", false
+		case c >= 'A' && c <= 'Z':
 			b[i] = c + 'a' - 'A'
 		}
 	}
-	return string(b)
+	return string(b), true
 }
 
 // NewTrie indexes entries by every address each carries, a refused entry's

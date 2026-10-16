@@ -405,8 +405,8 @@ func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
 		}
 	}
 	for _, n := range []string{"tcp-A", "tcp-a"} {
-		if r, _ := p.Admitted(n); r.Refusal == admission.RefusedTie {
-			t.Errorf("tcp device %s refused as a clash: %+v", n, r)
+		if r, _ := p.Admitted(n); r.Refused != "" || r.KeyRef != "prod_key" {
+			t.Errorf("tcp device %s is not admitted on prod_key: %+v", n, r)
 		}
 	}
 }

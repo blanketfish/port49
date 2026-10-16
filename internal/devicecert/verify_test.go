@@ -242,6 +242,12 @@ func TestRecheckAndCheckStatusNeverAdmitWhatWasNotAdmitted(t *testing.T) {
 	if asked {
 		t.Error("the status was asked about a verdict with no verified chain")
 	}
+	if got := v.CheckStatus(context.Background(), Verdict{Outcome: OK}); got.Outcome != CertificateInvalid {
+		t.Errorf("CheckStatus, OK without a chain, status disabled: %s", got.Outcome)
+	}
+	if got := w.CheckStatus(context.Background(), Verdict{Outcome: OK}); got.Outcome != CertificateInvalid {
+		t.Errorf("CheckStatus, OK without a chain: %s", got.Outcome)
+	}
 	if got := v.Recheck(Verdict{Outcome: OK}); got.Outcome != CertificateInvalid {
 		t.Errorf("OK without a chain: %s", got.Outcome)
 	}

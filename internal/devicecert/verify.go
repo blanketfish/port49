@@ -108,11 +108,14 @@ func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdi
 // completed, waiting within ctx (the handshake's deadline) for an OCSP
 // answer not cached (ruling 8).
 func (v *Verifier) CheckStatus(ctx context.Context, ok Verdict) Verdict {
-	if ok.Outcome != OK || v.Status == nil {
+	if ok.Outcome != OK {
 		return ok
 	}
 	if len(ok.Chain) == 0 {
 		return noChain(ok)
+	}
+	if v.Status == nil {
+		return ok
 	}
 	st, detail := v.Status(ctx, ok.Chain)
 	return v.judge(ok, st, detail)
