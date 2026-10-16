@@ -595,7 +595,9 @@ type l66InvSpec struct {
 	Socket, Bin string
 	Platform    l66Platform
 	Conn        string // network_cli, or ssh for ansible.builtin.ssh
-	SSHType     string // libssh or paramiko, for network_cli
+	// NoConn leaves ansible_connection out of a network_cli inventory: the play's `connection:` keyword names it.
+	NoConn  bool
+	SSHType string // libssh or paramiko, for network_cli
 	// Mode is lookup (the lookups sit in ansible_user and ansible_password, cell a) or fact (they read the
 	// fact the play's pre_tasks minted).
 	Mode           string
@@ -626,7 +628,9 @@ func l66Inventory(s l66InvSpec) string {
 		// exits after the command. The host key is checked before any channel opens, so (e) reads the same.
 		b.WriteString("    ansible_connection: ssh\n    ansible_ssh_use_tty: false\n")
 	} else {
-		b.WriteString("    ansible_connection: ansible.netcommon.network_cli\n")
+		if !s.NoConn {
+			b.WriteString("    ansible_connection: ansible.netcommon.network_cli\n")
+		}
 		b.WriteString("    ansible_network_os: " + q(s.Platform.NetworkOS) + "\n")
 		b.WriteString("    ansible_network_cli_ssh_type: " + s.SSHType + "\n")
 		b.WriteString("    ansible_look_for_keys: false\n")
@@ -1061,6 +1065,8 @@ type l66Opts struct {
 	idle       int
 	logPath    string
 	persistLog bool
+	// playbook, when set, rewrites the rendered playbook before it is written (the (e3) keyword cell).
+	playbook func(string) string
 }
 
 func (e *l66Env) ansibleEnv(o l66Opts) []string {
@@ -1228,7 +1234,11 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 		return r, errors.New(e.fatal)
 	}
 	o.pb, o.inv = e.path("play", name+".yml"), e.path("inv", name+".yml")
-	if err := os.WriteFile(o.pb, []byte(l66Playbook(kind, s.Platform, n, between)), 0o600); err != nil {
+	pbText := l66Playbook(kind, s.Platform, n, between)
+	if o.playbook != nil {
+		pbText = o.playbook(pbText)
+	}
+	if err := os.WriteFile(o.pb, []byte(pbText), 0o600); err != nil {
 		return r, err
 	}
 	if err := os.WriteFile(o.inv, []byte(l66Inventory(s)), 0o600); err != nil {
@@ -2110,6 +2120,10 @@ func (e *l66Env) checkHome() error {
 
 // runL66 runs the cells in order and writes the note.
 func runL66(e *l66Env) {
+	if os.Getenv("PORT49_L66_ONLY") == "e3" {
+		runL66E3(e)
+		return
+	}
 	{
 		from, off := time.Now(), e.l.mark()
 		time.Sleep(10 * time.Second)
