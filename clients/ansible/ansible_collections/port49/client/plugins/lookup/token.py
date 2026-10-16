@@ -143,14 +143,23 @@ def _hostvar(variables, device, name):
         return None
 
 
+def _visible(variables, device, name):
+    """The variable name as device sees it: its own hostvars, and the lookup's variables (the play's keywords
+    and the current host's) only when device is the current host. Another device's play is not visible here."""
+    value = _hostvar(variables, device, name)
+    if value is None and device == variables.get("inventory_hostname"):
+        value = variables.get(name)
+    return value
+
+
 def _is_network_cli(variables, device):
-    """Whether device connects with network_cli: its ansible_connection, else the play's. A play's `connection:`
+    """Whether device connects with network_cli: its ansible_connection, else its play's. A play's `connection:`
     keyword may not reach a lookup as a variable, so with none visible, an ansible_network_os (which network_cli
     always needs) says so. Checking a device that is not network_cli only files a key the name already trusts."""
-    connection = _hostvar(variables, device, "ansible_connection") or variables.get("ansible_connection")
+    connection = _visible(variables, device, "ansible_connection")
     if connection:
         return connection in NETWORK_CLI
-    return bool(_hostvar(variables, device, "ansible_network_os") or variables.get("ansible_network_os"))
+    return bool(_visible(variables, device, "ansible_network_os"))
 
 
 def _check_host_keys(device, variables, known_hosts_file):
@@ -167,7 +176,7 @@ def _check_host_keys(device, variables, known_hosts_file):
     name = device.lower()
     address = str(_hostvar(variables, device, "ansible_host") or device)
     try:
-        port = int(_hostvar(variables, device, "ansible_port") or 22)
+        port = int(_hostvar(variables, device, "ansible_port") or _hostvar(variables, device, "ansible_ssh_port") or 22)
     except (TypeError, ValueError):
         raise port49.HostKeyError("address", "ansible_port is not a number", device) from None
     entry = hostkeys.address_entry(address, port)

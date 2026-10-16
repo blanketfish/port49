@@ -440,6 +440,16 @@ class HostKeys(PluginCase):
         self.assertIn("cannot be written to known_hosts as an address", self.refused())
         self.assertEqual(self.calls.agent, [])
 
+    def test_ansible_ssh_port_is_read_after_ansible_port(self):  # final fix round, m4
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.hostvars["leaf1"]["ansible_ssh_port"] = 830
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"[10.0.0.11]:830 {ED}\n")
+        os.remove(self.kh)
+        self.hostvars["leaf1"]["ansible_port"] = 2222  # ansible_port wins
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"[10.0.0.11]:2222 {ED}\n")
+
     def test_a_port_that_is_not_a_number_is_refused(self):
         self.hostvars["leaf1"]["ansible_port"] = "ssh"
         self.refused()
@@ -454,9 +464,34 @@ class HostKeys(PluginCase):
 
     def test_a_device_missing_from_hostvars_is_its_name_on_port_22(self):  # fix round 1, I1
         self.put(self.names, f"leaf3 {ED}\n")
-        self.run_lookup(["leaf3"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+        self.run_lookup(["leaf3"], variables={"inventory_hostname": "leaf3", "hostvars": self.hostvars,
                                               "ansible_connection": NETWORK_CLI, "ansible_host": "10.0.0.11"})
         self.assertEqual(self.read(self.kh), f"leaf3 {ED}\n")
+
+    def test_another_devices_check_does_not_use_the_current_hosts_connection(self):  # final fix round, I2
+        other = self.newkey("other")
+        del self.hostvars["leaf1"]["ansible_connection"]  # leaf1 gets network_cli from its own play's keyword
+        self.hostvars["leaf1"]["ansible_network_os"] = "arista.eos.eos"
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        said = self.refused(variables={"inventory_hostname": "localhost", "hostvars": self.hostvars,
+                                       "ansible_connection": "local"})  # a `hosts: localhost` play
+        self.assertIn("[host_key_changed]", said)
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_device_that_is_not_the_current_host_with_nothing_visible_is_not_checked(self):  # final fix round, I2
+        self.hostvars["leaf1"] = {"ansible_host": "10.0.0.11"}
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"], variables={"inventory_hostname": "localhost", "hostvars": self.hostvars,
+                                              "ansible_connection": NETWORK_CLI, "ansible_network_os": "eos"})
+        self.assertIsNone(self.read(self.kh))
+
+    def test_the_current_hosts_own_keywords_still_count_for_itself(self):  # final fix round, I2
+        del self.hostvars["leaf1"]["ansible_connection"]
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                              "ansible_connection": NETWORK_CLI})
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
 
     def test_case_3_without_a_user_known_hosts_file_warns_and_mints(self):  # fix round 1, I2
         self.use_ssh_config(user="none")
