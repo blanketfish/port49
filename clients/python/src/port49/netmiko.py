@@ -133,6 +133,11 @@ _HOST_KEY_ALGORITHMS = {"ssh-ed25519": "ssh-ed25519", "ecdsa-sha2-nistp256": "ec
                         "rsa-sha2-512": "ssh-rsa", "rsa-sha2-256": "ssh-rsa", "ssh-rsa": "ssh-rsa"}
 
 
+def _checkable_filed(keys):
+    """Whether any of keys ("type base64") is of a type Paramiko can load and check a host key against."""
+    return any(k.split(" ", 1)[0] in _HOST_KEY_ALGORITHMS.values() for k in keys)
+
+
 def host_key_algorithms_off(keys):
     """The host-key algorithms to disable so that only the key types filed in keys ("type base64") are
     negotiated (fix round 3, N1). Paramiko puts a held key's name first in its list, and for RSA that is
@@ -253,9 +258,10 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
                                    f"under {kh.name} may be of a type it cannot load (ssh-dss, a security-key type), "
                                    f"so the key the device presented could not be compared with them; the token was "
                                    f"not sent. Use port49 ssh for this device", device) from None
-            if not kh.keys and any("no acceptable host key" in t for _, t in _chain_text(e)):
-                # Nothing is filed, so nothing changed: the device offers only key types Paramiko cannot
-                # check (DSA, a security-key type).
+            if not _checkable_filed(kh.keys) and any("no acceptable host key" in t for _, t in _chain_text(e)):
+                # Nothing checkable is filed (nothing, or only types Paramiko cannot load), so nothing is known
+                # to have changed: the device offers only key types Paramiko cannot check (DSA, a security-key
+                # type).
                 raise HostKeyError("host_key_uncheckable", f"{tok.address} offers no host-key type Paramiko can "
                                    f"check; the token was not sent. Use port49 ssh for this device", device) from None
             if is_host_key_failure(e):

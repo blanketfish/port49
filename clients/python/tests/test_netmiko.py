@@ -309,6 +309,21 @@ class NetmikoTest(unittest.TestCase):
             self.connect(known("ssh-ed25519 AAAA1"))  # a key is filed: still the changed-key refusal
         self.assertEqual(cm.exception.code, "host_key_changed")
 
+    def test_no_acceptable_host_key_with_only_unloadable_types_filed_is_uncheckable(self):  # 9d minor N1
+        # Paramiko 5 offers no ssh-dss, so a device offering only DSA can never be checked against its filed DSA
+        # key: that is not a changed key.
+        for filed in (("ssh-dss AAAA1",), ("ssh-dss AAAA1", "sk-ssh-ed25519@openssh.com AAAA2")):
+            NEXT_ERROR.append(Exception("Incompatible ssh peer (no acceptable host key)"))
+            with self.assertRaises(HostKeyError) as cm:
+                self.connect(known(*filed))
+            self.assertEqual(cm.exception.code, "host_key_uncheckable", filed)
+            self.assertIn("port49 ssh", str(cm.exception))
+            self.assertNotIn("ssh-keygen -R", str(cm.exception))
+        NEXT_ERROR.append(Exception("Incompatible ssh peer (no acceptable host key)"))
+        with self.assertRaises(HostKeyError) as cm:
+            self.connect(known("ssh-dss AAAA1", "ssh-ed25519 AAAA2"))  # a checkable type is filed: still changed
+        self.assertEqual(cm.exception.code, "host_key_changed")
+
     # Fix round 2.
 
     def test_a_key_revoked_since_the_connect_is_refused_on_a_reconnect(self):  # N3
