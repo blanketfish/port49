@@ -244,3 +244,32 @@ func TestKeysShowSaysATLSDeviceHasNoKey(t *testing.T) {
 		t.Fatalf("got %q", out.String())
 	}
 }
+
+func TestKeysStatusSkipsATLSDevice(t *testing.T) {
+	pol, _, cfg, _ := keysFiles(t)
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	body := "devices:\n  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9]}\n" +
+		"  - {name: tls-7, platform: arista_eos, addresses: [10.20.0.70], transport: tls}\n"
+	if err := os.WriteFile(inv, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	sink := decision.NewJSONLines(&log)
+	now := keysNow()
+	// Only leaf-19 appears in the log; a keyed device never seen is listed,
+	// and a TLS device, which has no key to see, must not be.
+	sink.Emit(decision.Record{TS: now.Add(-time.Minute), Event: decision.EventRedeem,
+		Device: &decision.Device{Name: "leaf-19", Platform: "arista_eos", KeyRef: "prod_key", KeyVersion: 2}})
+	logPath := filepath.Join(dir, "decisions.jsonl")
+	if err := os.WriteFile(logPath, log.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, logPath}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "leaf-19") || strings.Contains(out.String(), "tls-7") {
+		t.Fatalf("a TLS device has no key to phase out, and leaf-19 is the control: %s", out.String())
+	}
+}

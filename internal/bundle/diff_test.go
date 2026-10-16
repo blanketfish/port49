@@ -661,3 +661,19 @@ func TestATransportFlipIsOneSecurityChange(t *testing.T) {
 		t.Fatalf("changes for leaf-01: %v, want only transport_changed", kinds)
 	}
 }
+
+func TestATLSToTCPFlipIsOneSecurityChange(t *testing.T) {
+	tls := dev("leaf-01", "10.0.1.1", map[string]string{"site": "dc1"})
+	tls.Transport = admission.TransportTLS
+	tcp := tls
+	tcp.Transport = ""
+	var got []Change
+	for _, c := range Diff(mustBundle(t, tls), mustBundle(t, tcp), time.Now()).Changes {
+		if c.Device == "leaf-01" {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 || got[0].Kind != TransportChanged || got[0].From != "tls" || got[0].To != "tcp" || !got[0].Security {
+		t.Fatalf("changes for leaf-01: %+v, want one security transport_changed tls to tcp", got)
+	}
+}

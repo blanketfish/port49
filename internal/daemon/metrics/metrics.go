@@ -418,7 +418,8 @@ type Metrics struct {
 	// swap made (spec §10) — "address_added" (an address on a device already
 	// in inventory, which a mint hands to an SSH client), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
-	// device moved onto another key), "admission_changed" (a device already
+	// device moved onto another key), "transport_changed" (a device moved
+	// between tcp and tls), "admission_changed" (a device already
 	// in inventory newly admitted) and "device_added" (a device added and
 	// admitted). Each is an inventory_change record naming the device; the
 	// label is the kind only.

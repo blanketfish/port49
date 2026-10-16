@@ -66,8 +66,8 @@ type Resolved struct {
 	WirePlatform string
 	// Refused says why a device in the inventory is not admitted — its
 	// transport is neither tcp nor tls, no key group matches it, two
-	// tie on it, or its key_ref is one port49d holds no key for (spec §10). Empty is admitted. A refused device is in the index
-	// all the same, so its packets are told apart from an unknown source's.
+	// tie on it, or its key_ref is one port49d holds no key for (spec §10).
+	// Empty is admitted. A refused device is in the index all the same, so its packets are told apart from an unknown source's.
 	Refused string
 	// Refusal is which of the four it is (RefusedTransport, RefusedNoGroup,
 	// RefusedTie, RefusedUnknownKey), for a reader that decides by it. `port49 policy
@@ -320,8 +320,8 @@ func NewTrie(entries []Resolved) (*Trie, error) {
 // Build is the admission index port49d with no broker reads (plan 1): the
 // inventory file's own key groups, a tie refused whole, and a device no
 // group admits, or whose transport is neither tcp nor tls, left out of the
-// index, as it always was. A tls device is indexed with no key_ref. With a broker, the
-// policy file assigns keys and refuses a device on its own
+// index, as it always was. A tls device is indexed with no key_ref. With a
+// broker, the policy file assigns keys and refuses a device on its own
 // (policy.Policy.Admission).
 func Build(inv Inventory) (*Trie, error) {
 	if err := Validate(inv.Devices); err != nil {
