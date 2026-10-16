@@ -1852,7 +1852,7 @@ func TestPolicyTestReportsTheSet130Reply(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "capability shape, bits view view-configuration") ||
-		!strings.Contains(out.String(), "monitor **") ||
+		!strings.Contains(out.String(), "(deny_reach_bits; decision 48): monitor **") ||
 		strings.Contains(out.String(), "projection_deny_beneath_view_configuration") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}

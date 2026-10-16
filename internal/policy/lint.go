@@ -965,11 +965,11 @@ func reachOverflowMessage(pr projection.Result, patterns []platform.Redaction, s
 	for _, r := range redacted(patterns, rules) {
 		quoted = append(quoted, platform.QuoteShown(secrets, r))
 	}
-	return " the denies " + strings.Join(quoted, ", ") + ", which would let the reply send " +
-		"the bit whose carve-out the grant permits (deny_reach_bits), take deny-commands past RFC 8907's 255 " +
-		"bytes, so the reply does not send that bit and the device refuses what only it shows (show " +
-		"configuration): deny fewer commands beneath show, or move the denies into the template's class on the " +
-		"device (port49 platform export --classes) (spec §8; decision 48 ruling 4)"
+	return " the reach denies " + strings.Join(quoted, ", ") + " would let the reply send view-configuration " +
+		"(deny_reach_bits), but they take deny-commands past RFC 8907's 255 bytes; the reply leaves the bit off " +
+		"and the device refuses show configuration for this subject: deny fewer commands beneath show, or move " +
+		"the denies into the template's class on the device " +
+		"(port49 platform export --classes) (spec §8; decision 48 ruling 4)"
 }
 
 // projectionMessage is a composition's finding after its subject, platform

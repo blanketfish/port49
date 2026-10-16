@@ -428,10 +428,11 @@ func (g generator) shape() (Result, error) {
 				fb.ReachOverflow = over.reach
 			}
 			return fb, nil
-		} else if errors.As(ferr, &over) && over.Category == FailOverflow {
-			// The refusal quotes the fallback's own length, the one the
-			// grant's denies make, not a length with a reach deny the
-			// operator never wrote.
+		} else {
+			// The refusal is the fallback's own: its length where it
+			// overflows too, the grant's own denies without a reach deny the
+			// operator never wrote, and its own reason where it fails for
+			// another. Project fails closed on it either way.
 			return Result{}, ferr
 		}
 	}
