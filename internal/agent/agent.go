@@ -1901,14 +1901,14 @@ func (a *Agent) keyState() string {
 	}
 	st := a.probeKey()
 	if st == hwkey.Locked && a.pinBlocked() {
-		return stateBlocked
+		return KeyStateBlocked
 	}
 	return st.String()
 }
 
-// stateBlocked is Status.KeyState for a locked key whose token says its PIN
+// KeyStateBlocked is Status.KeyState for a locked key whose token says its PIN
 // is blocked: a login cannot unlock it, only the PUK can.
-const stateBlocked = "blocked"
+const KeyStateBlocked = "blocked"
 
 // Unlock's limits: a PIN is at most maxPIN bytes inside a body of at most
 // maxUnlockBody.

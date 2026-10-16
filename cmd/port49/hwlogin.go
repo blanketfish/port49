@@ -97,10 +97,6 @@ func askPIN(label string) ([]byte, error) {
 // pinBlockedWords is what a token whose PIN is blocked says to do.
 const pinBlockedWords = hwkey.PINBlockedWords
 
-// stateBlocked is the agent's key_state for a locked key whose token says its
-// PIN is blocked (agent.Status.KeyState).
-const stateBlocked = "blocked"
-
 // pinRefusedWords is what a PIN the token refused says, with the token's own
 // tries-left flags.
 func pinRefusedWords(pe *hwkey.PINError) string {
@@ -208,7 +204,7 @@ func loginThroughAgent(ctx context.Context, sf *sessionFlags, c *agent.Client, s
 		fmt.Fprintf(stderr, "port49 login: insert your key and run `port49 login` again; your session goes on until %s\n",
 			st.SessionEndsAt)
 		return 1
-	case stateBlocked:
+	case agent.KeyStateBlocked:
 		fmt.Fprintln(stderr, "port49 login:", pinBlockedWords)
 		return 1
 	case hwkey.Locked.String():
