@@ -34,6 +34,8 @@ type refusal struct {
 	why  string
 	// outcome is the metric's: invalid, expired, unavailable, unmapped.
 	outcome string
+	// method is the record's: KindK8s when a k8s verifier made the refusal, else empty (oidc).
+	method string
 }
 
 func (r *refusal) Error() string { return r.why }
@@ -104,8 +106,10 @@ type Assertion struct {
 	AMR       []string
 	ACR       string
 	AuthTime  time.Time
-	IssuedAt  time.Time
-	Expires   time.Time
+	// K8s is non-nil exactly when a k8s verifier accepted the token.
+	K8s      *K8sBinding
+	IssuedAt time.Time
+	Expires  time.Time
 }
 
 // String withholds the nonce, which answers a refresh challenge (Ruling 18).
@@ -120,6 +124,9 @@ func (a Assertion) GoString() string { return a.String() }
 // Credential is what a token and its login context record (spec §5.1.4;
 // Ruling 10): the sid issuer-qualified, no certificate.
 func (a Assertion) Credential() store.Credential {
+	if a.K8s != nil {
+		return store.Credential{Method: KindK8s, Iss: a.Issuer, Sub: a.Subject}
+	}
 	return store.Credential{Method: "oidc", Iss: a.Issuer, Sub: a.Subject, Sid: store.SidKey(a.Issuer, a.Sid),
 		AMR: slices.Clone(a.AMR), ACR: a.ACR}
 }
@@ -158,8 +165,13 @@ func (s *Set) verify(ctx context.Context, raw string) (Assertion, string, error)
 	}
 	vs := s.ByIssuer(head.Iss)
 	if len(vs) == 0 {
-		return Assertion{}, "", refuse(ErrInvalid, "invalid", "no configured verifier accepts its issuer")
+		r := refuse(ErrInvalid, "invalid", "no configured verifier accepts its issuer")
+		if allK8s(s.Verifiers) {
+			r.method = KindK8s // oidc is a word a k8s-only broker's operator never configured
+		}
+		return Assertion{}, "", r
 	}
+	k8sOnly := allK8s(vs)
 	var accepted []Assertion
 	var first *refusal
 	unavailable := false
@@ -180,20 +192,42 @@ func (s *Set) verify(ctx context.Context, raw string) (Assertion, string, error)
 	}
 	if first == nil {
 		first = refuse(ErrInvalid, "invalid", "no configured verifier accepts it")
+		first.method = k8sMethod(k8sOnly)
 	}
 	// An issuer whose keys one verifier could not get is unavailable, whatever
 	// another accepted: a lost race is never a pass (fail closed).
 	switch {
 	case unavailable && (len(accepted) > 0 || !errors.Is(first, ErrUnmapped)):
-		return Assertion{}, head.Iss, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available "+
+		r := refuse(ErrUnavailable, "unavailable", "the keys of %s are not available "+
 			"(none fetched, or none refreshed within broker.identity.jwks_max_age)", head.Iss)
+		r.method = k8sMethod(k8sOnly)
+		return Assertion{}, head.Iss, r
 	case len(accepted) == 1:
 		return accepted[0], head.Iss, nil
 	case len(accepted) > 1:
-		return Assertion{}, head.Iss, refuse(ErrInvalid, "invalid", "two verifiers of %s accept it, so neither "+
+		r := refuse(ErrInvalid, "invalid", "two verifiers of %s accept it, so neither "+
 			"does (decision 39)", head.Iss)
+		r.method = k8sMethod(k8sOnly)
+		return Assertion{}, head.Iss, r
 	}
 	return Assertion{}, head.Iss, first
+}
+
+// allK8s is true when vs is not empty and every verifier in it is a cluster's.
+func allK8s(vs []*Verifier) bool {
+	for _, v := range vs {
+		if v.Kind != KindK8s {
+			return false
+		}
+	}
+	return len(vs) > 0
+}
+
+func k8sMethod(k8s bool) string {
+	if k8s {
+		return KindK8s
+	}
+	return ""
 }
 
 // claims is what port49 reads of a payload, taken from it by exact name
@@ -283,7 +317,7 @@ func humanAudience(auds []string, azp, clientID string) *refusal {
 // of its issuer's set the token's kid names, and a signature that key
 // verifies. Its refusals name the configured issuer alone.
 func (v *Verifier) signature(ctx context.Context, j *JWS) error {
-	iss := v.Issuer
+	iss := v.Who()
 	if !slices.Contains(v.Algorithms, j.Header.Alg) {
 		return refuse(ErrInvalid, "invalid", "its algorithm is not one %s's %s verifier pins", iss, v.Domain)
 	}
@@ -302,8 +336,19 @@ func (v *Verifier) signature(ctx context.Context, j *JWS) error {
 	return nil
 }
 
-// verify is one verifier's whole check of j (Rulings 2, 3, 5, 6, 21, 22).
+// verify is verifyClaims with a k8s verifier's refusals marked k8s, for the
+// record's method (decision 49 ruling 9).
 func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) (Assertion, error) {
+	a, err := v.verifyClaims(ctx, j, t, now)
+	var r *refusal
+	if errors.As(err, &r) && v.Kind == KindK8s {
+		r.method = KindK8s
+	}
+	return a, err
+}
+
+// verifyClaims is one verifier's whole check of j (Rulings 2, 3, 5, 6, 21, 22).
+func (v *Verifier) verifyClaims(ctx context.Context, j *JWS, t Timing, now time.Time) (Assertion, error) {
 	iss := v.Issuer
 	if err := v.signature(ctx, j); err != nil {
 		return Assertion{}, err
@@ -311,7 +356,7 @@ func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) 
 	// From here every claim is the provider's, and may be said.
 	// typ is an allowlist (RFC 8725 §3.11; decision 39 ruling 2).
 	typ := strings.TrimPrefix(strings.ToLower(j.Header.Typ), "application/")
-	if !(typ == "" || typ == "jwt" || (v.Domain == Machines && typ == "at+jwt")) {
+	if !(typ == "" || typ == "jwt" || (v.Domain == Machines && v.Kind != KindK8s && typ == "at+jwt")) {
 		return Assertion{}, refuse(ErrInvalid, "invalid", "its typ %q is not one a %s verifier accepts (RFC 8725 §3.11)",
 			printsafe.Line(typ, 40), v.Domain)
 	}
@@ -339,6 +384,10 @@ func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) 
 			return Assertion{}, r
 		}
 	case Machines:
+		if v.Kind == KindK8s && (len(auds) != 1 || auds[0] != v.Audience) {
+			return Assertion{}, refuseK8s(ErrInvalid, "invalid", "its aud is not exactly [%s]: a token another "+
+				"audience accepts could be replayed here (decision 49 ruling 5)", v.Audience)
+		}
 		if !slices.Contains(auds, v.Audience) {
 			return Assertion{}, refuse(ErrInvalid, "invalid", "its aud does not name audience %s", v.Audience)
 		}
@@ -364,10 +413,14 @@ func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) 
 		return Assertion{}, refuse(ErrInvalid, "invalid", "it was issued at %s, ahead of the broker's clock by more "+
 			"than broker.identity.clock_skew (%s)", iat.UTC().Format(time.RFC3339), t.ClockSkew)
 	case now.Sub(iat) > t.MaxTokenAge:
-		return Assertion{}, refuse(ErrInvalid, "expired", "issued %s ago, past broker.identity.max_token_age (%s)",
-			now.Sub(iat).Round(time.Minute), t.MaxTokenAge)
+		why := fmt.Sprintf("issued %s ago, past broker.identity.max_token_age (%s)", now.Sub(iat).Round(time.Minute), t.MaxTokenAge)
+		if v.Kind == KindK8s {
+			why += "; the kubelet refreshes a projected token at about 80% of its expirationSeconds, so keep " +
+				"expirationSeconds at or under 3600"
+		}
+		return Assertion{}, refuse(ErrInvalid, "expired", "%s", why)
 	}
-	if !printableID(c.Sub) {
+	if v.Kind != KindK8s && !printableID(c.Sub) {
 		return Assertion{}, refuse(ErrInvalid, "invalid", "its sub is absent or not 1 to 255 printable ASCII characters")
 	}
 	if c.Sid != "" && !printableID(c.Sid) {
@@ -399,6 +452,14 @@ func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) 
 		}
 		a.Principal = p
 	case Machines:
+		if v.Kind == KindK8s {
+			p, b, r := v.serviceAccount(all, c.Sub)
+			if r != nil {
+				return Assertion{}, r
+			}
+			a.Principal, a.AuthTime, a.K8s, a.Sid = p, iat, b, ""
+			return a, nil
+		}
 		// Ruling 21: a client-credentials token of a listed client, never a
 		// person's delegated token for it.
 		for _, name := range MachineSessionClaims {

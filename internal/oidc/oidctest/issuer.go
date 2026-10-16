@@ -278,5 +278,33 @@ func (i *Issuer) IDToken(t testing.TB, kid, clientID, sub string, now time.Time,
 	return i.Token(t, kid, c)
 }
 
+// ServiceAccountToken is a projected service account token as a cluster
+// issues one (L69 (a) records a real one): iss, aud [aud], sub, iat, nbf,
+// exp (now+10m), jti, and kubernetes.io binding it to a pod on a node; extra
+// overrides, a nil value deleting. The pod is sa-7d9f, cut at 253 bytes
+// (Kubernetes' own pod-name limit), so a 253-byte account's pod is still one
+// a cluster could name (pre-flight I5).
+func (i *Issuer) ServiceAccountToken(t testing.TB, kid, issuer, aud, ns, sa string, now time.Time, extra map[string]any) string {
+	pod := sa + "-7d9f"
+	if len(pod) > 253 {
+		pod = pod[:253]
+	}
+	c := map[string]any{"iss": issuer, "aud": []string{aud}, "sub": "system:serviceaccount:" + ns + ":" + sa,
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix(),
+		"jti": "6f1c2d3e-0000-4000-8000-000000000069",
+		"kubernetes.io": map[string]any{"namespace": ns,
+			"serviceaccount": map[string]any{"name": sa, "uid": "0b5d7c1a-0000-4000-8000-000000000001"},
+			"pod":            map[string]any{"name": pod, "uid": "9e1c4b2d-0000-4000-8000-000000000002"},
+			"node":           map[string]any{"name": "l69-a-worker", "uid": "44aa1f3b-0000-4000-8000-000000000003"}}}
+	for k, v := range extra {
+		if v == nil {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+	}
+	return i.Token(t, kid, c)
+}
+
 // Close stops the server: the provider is unreachable.
 func (i *Issuer) Close() { i.srv.Close() }
