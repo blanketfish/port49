@@ -80,6 +80,7 @@ _raw:
 """
 
 import os
+import shlex
 
 from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
@@ -105,15 +106,20 @@ def _ssh_options():
     return {}
 
 
+def _warn(message):
+    """Warn with message, its non-printable characters made '?'; returns the clean text."""
+    message = "".join(c if c.isprintable() else "?" for c in str(message))
+    Display().warning(message)
+    return message
+
+
 def _fail(message):
     """Warn, then raise: ansible-core 2.16 to 2.18 censor a failed no_log task's message, and a warning
     is shown beside the censored result. The message is token-free by construction, and it is the one
     place every message passes, so it is also where a device name from inventory (or any field the
     CLI echoed) loses its terminal control bytes: each non-printable character, newline included,
     becomes '?'. The warning and the raised error carry the same clean text."""
-    message = "".join(c if c.isprintable() else "?" for c in str(message))
-    Display().warning(message)
-    raise AnsibleError(message) from None
+    raise AnsibleError(_warn(message)) from None
 
 
 def _value(tok, field):
@@ -127,12 +133,21 @@ def _value(tok, field):
 
 
 def _hostvar(variables, device, name):
-    """The variable name of device: from its hostvars, else the play's (the current host's)."""
+    """The variable name of device, from its own hostvars only (None if it has none)."""
     try:
-        value = variables["hostvars"][device].get(name)
+        return variables["hostvars"][device].get(name)
     except (KeyError, TypeError, AttributeError):
-        value = None
-    return value if value is not None else variables.get(name)
+        return None
+
+
+def _is_network_cli(variables, device):
+    """Whether device connects with network_cli: its ansible_connection, else the play's. A play's `connection:`
+    keyword may not reach a lookup as a variable, so with none visible, an ansible_network_os (which network_cli
+    always needs) says so. Checking a device that is not network_cli only files a key the name already trusts."""
+    connection = _hostvar(variables, device, "ansible_connection") or variables.get("ansible_connection")
+    if connection:
+        return connection in NETWORK_CLI
+    return bool(_hostvar(variables, device, "ansible_network_os") or variables.get("ansible_network_os"))
 
 
 def _check_host_keys(device, variables, known_hosts_file):
@@ -142,7 +157,7 @@ def _check_host_keys(device, variables, known_hosts_file):
     library's HostKeyError; the caller's handler makes it the lookup's error."""
     import port49
     from port49 import hostkeys
-    if _hostvar(variables, device, "ansible_connection") not in NETWORK_CLI:
+    if not _is_network_cli(variables, device):
         return
     if not hostkeys.valid_name(device):
         raise port49.HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
@@ -180,11 +195,18 @@ def _check_host_keys(device, variables, known_hosts_file):
             raise port49.HostKeyError(
                 "host_key_changed", f"the key filed for {address} is not the key filed for {device} ({seen}). "
                 f"Verify the device's key on its console; if the address now belongs to this device, clear the "
-                f"old entry with: ssh-keygen -R {entry} -f {known_hosts_file}", device)
+                f"old entry with: ssh-keygen -R {shlex.quote(entry)} -f "
+                f"{shlex.quote(known_hosts_file)}", device)
         hostkeys.append(known_hosts_file, entry, [k for k in name_keys if k.split(" ", 1)[0] not in have],
                         hash_names=hash_names)
     elif addr_keys:
-        hostkeys.append(write_to, name, addr_keys, hash_names=hash_names)
+        try:  # a courtesy: without it the next address change is a first contact, which is today's behaviour
+            hostkeys.append(write_to, name, addr_keys, hash_names=hash_names)
+        except port49.HostKeyError as e:
+            if e.code != "host_keys_not_kept":
+                raise
+            _warn(f"port49: {device}: the key filed for {address} could not be copied under {device}, so a later "
+                  f"address change will be a first contact again: {e.detail}")
 
 
 class LookupModule(LookupBase):

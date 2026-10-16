@@ -290,7 +290,14 @@ class HostKeys(PluginCase):
         self.hostvars["leaf1"]["ansible_port"] = 830
         self.put(self.names, f"leaf1 {ED}\n")
         self.put(self.kh, f"[10.0.0.11]:830 {other}\n")
-        self.assertIn(f"ssh-keygen -R [10.0.0.11]:830 -f {self.kh}", self.refused())
+        self.assertIn(f"ssh-keygen -R '[10.0.0.11]:830' -f {self.kh}", self.refused())  # zsh would glob it bare
+
+    def test_the_clearing_command_quotes_a_file_with_a_space(self):
+        other = self.newkey("other")
+        spaced = os.path.join(self.dir, "my known_hosts")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(spaced, f"10.0.0.11 {other}\n")
+        self.assertIn(f"-f '{spaced}'", self.refused(known_hosts_file=spaced))
 
     def test_case_2_a_match_mints_and_writes_nothing(self):
         self.put(self.names, f"leaf1 {ED}\n")
@@ -437,6 +444,69 @@ class HostKeys(PluginCase):
         self.hostvars["leaf1"]["ansible_port"] = "ssh"
         self.refused()
         self.assertEqual(self.calls.agent, [])
+
+    def test_another_device_does_not_take_the_current_hosts_address_or_port(self):  # fix round 1, I1
+        del self.hostvars["leaf2"]["ansible_host"]
+        self.put(self.names, f"leaf2 {ED}\n")
+        self.run_lookup(["leaf2"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                              "ansible_host": "10.0.0.11", "ansible_port": 830})
+        self.assertEqual(self.read(self.kh), f"leaf2 {ED}\n")
+
+    def test_a_device_missing_from_hostvars_is_its_name_on_port_22(self):  # fix round 1, I1
+        self.put(self.names, f"leaf3 {ED}\n")
+        self.run_lookup(["leaf3"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                              "ansible_connection": NETWORK_CLI, "ansible_host": "10.0.0.11"})
+        self.assertEqual(self.read(self.kh), f"leaf3 {ED}\n")
+
+    def test_case_3_without_a_user_known_hosts_file_warns_and_mints(self):  # fix round 1, I2
+        self.use_ssh_config(user="none")
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual(len(self.minted()), 1)
+        self.assertEqual(len(WARNINGS), 1)
+        self.assertIn("leaf1", WARNINGS[0])
+        self.assertNotIn("LOGINTOKEN", WARNINGS[0])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_case_3_into_an_unwritable_file_warns_and_mints(self):  # fix round 1, I2
+        blocker = os.path.join(self.dir, "blocker")
+        self.put(blocker, "")
+        self.use_ssh_config(user=os.path.join(blocker, "known_hosts"))
+        self.put(self.kh, f"10.0.0.11 {ED}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+        self.assertEqual((len(self.minted()), len(WARNINGS)), (1, 1))
+
+    def test_a_case_1_write_that_fails_still_refuses(self):  # only the name copy is a courtesy
+        blocker = os.path.join(self.dir, "blocker")
+        self.put(blocker, "")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.assertIn("[host_keys_not_kept]", self.refused(known_hosts_file=os.path.join(blocker, "kh")))
+        self.assertEqual(self.calls.agent, [])
+
+    def test_without_ansible_connection_a_network_os_means_network_cli(self):  # fix round 1, gating
+        del self.hostvars["leaf1"]["ansible_connection"]
+        self.hostvars["leaf1"]["ansible_network_os"] = "arista.eos.eos"
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+        os.remove(self.kh)
+        del self.hostvars["leaf1"]["ansible_network_os"]  # the play's network os, for a device with none of its own
+        self.run_lookup(["leaf1"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                              "ansible_network_os": "arista.eos.eos"})
+        self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_a_visible_other_connection_beats_a_network_os(self):  # fix round 1, gating
+        other = self.newkey("other")
+        self.hostvars["leaf1"].update(ansible_connection="ansible.netcommon.netconf", ansible_network_os="junipernetworks.junos.junos")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        self.assertEqual(self.run_lookup(["leaf1"]), ["LOGINTOKEN"])
+
+    def test_no_connection_and_no_network_os_does_nothing(self):  # fix round 1, gating
+        del self.hostvars["leaf1"]["ansible_connection"]
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.run_lookup(["leaf1"])
+        self.assertIsNone(self.read(self.kh))
 
     def test_no_output_carries_the_token(self):
         other = self.newkey("other")
