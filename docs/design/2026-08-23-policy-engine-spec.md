@@ -9116,7 +9116,7 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
   with nothing signing in between; `Refresh` never refuses on a cached `Absent` without that
   probe. A key that is back and needs its PIN is `Locked` (PKCS#11 `CKR_USER_NOT_LOGGED_IN` too),
   and `port49 login` with the agent running asks the PIN and unlocks it over the agent's socket
-  (`POST /unlock`), then refreshes. A key whose PIN is blocked (`CKF_USER_PIN_LOCKED` in its token info) is `Blocked`: `GET /status` and `port49 refresh` say `blocked`, and `port49 login`, fresh or against the running agent, reads the flag before asking the PIN and refuses at once naming the PUK, never prompting for a PIN that cannot work (L60 F2, issue #5). Its socket code stays `key_locked`. With a reference key, `login` asks the running agent's `Status`
+  (`POST /unlock`), then refreshes. A key whose PIN is blocked (`CKF_USER_PIN_LOCKED` in its token info) is still `Locked` to the agent, but `GET /status` and `port49 refresh` say `blocked` (a fourth word beside `present`, `absent` and `locked`), and `port49 login`, fresh or against the running agent, reads the flag before asking the PIN and refuses at once naming the PUK, never prompting for a PIN that cannot work (L60 F2, issue #5). Its socket code stays `key_locked`. With a reference key, `login` asks the running agent's `Status`
   first and, when it holds this broker with the same certificate fingerprint and is `absent` or
   `locked`, goes to the insert-or-unlock path without opening the token in the login process: an
   unplugged key never turns into "loading the client certificate: no token matches", and a second
