@@ -400,7 +400,7 @@ func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
 	}
 	for _, n := range []string{"Leaf-01", "leaf-01"} {
 		r, _ := p.Admitted(n)
-		if r.Refusal != admission.RefusedTie || r.Refused == "" || r.KeyRef != "" {
+		if r.Refusal != admission.RefusedTLSNameClash || r.Refused == "" || r.KeyRef != "" {
 			t.Errorf("%s: %+v", n, r)
 		}
 	}

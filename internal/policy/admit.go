@@ -128,7 +128,7 @@ func (p *Policy) admit(file) error {
 	for _, d := range p.env.Devices {
 		r := admission.Resolve(d, p.keyGroups)
 		if why, clash := clashes[d.Name]; clash {
-			r.Refused, r.Refusal = why, admission.RefusedTie
+			r.Refused, r.Refusal = why, admission.RefusedTLSNameClash
 		}
 		r.WirePlatform = p.WirePlatform(d.Platform)
 		if r.Refused == "" && d.EffectiveTransport() != admission.TransportTLS && p.env.KeyRefs != nil &&

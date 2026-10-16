@@ -69,8 +69,8 @@ type Resolved struct {
 	// tie on it, or its key_ref is one port49d holds no key for (spec §10).
 	// Empty is admitted. A refused device is in the index all the same, so its packets are told apart from an unknown source's.
 	Refused string
-	// Refusal is which of the four it is (RefusedTransport, RefusedNoGroup,
-	// RefusedTie, RefusedUnknownKey), for a reader that decides by it. `port49 policy
+	// Refusal is which of the five it is (RefusedTransport, RefusedNoGroup,
+	// RefusedTie, RefusedUnknownKey, RefusedTLSNameClash), for a reader that decides by it. `port49 policy
 	// test` fails on every one (plan 6a, N1).
 	Refusal string
 }
@@ -81,6 +81,10 @@ const (
 	RefusedNoGroup    = "no_key_group"
 	RefusedTie        = "key_group_tie"
 	RefusedUnknownKey = "key_ref_undefined"
+	// RefusedTLSNameClash is two tls devices whose names are equal under ASCII
+	// case folding (decision 50 ruling 6). A tls device has no key group, so
+	// it is not RefusedTie.
+	RefusedTLSNameClash = "tls_name_clash"
 )
 
 // KeyRefShape is what a key_ref looks like wherever one is named: port49d.yaml's
@@ -305,8 +309,8 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 // folding, by name, each with the refusal text. A certificate names a device by
 // its name compared that way (decision 50 ruling 6), so such a pair would admit
 // each other's certificates: both are refused, and nothing else in the load
-// fails. A tcp device is unaffected. Refusal is RefusedTie, as for any
-// ambiguity admission will not guess at.
+// fails. A tcp device is unaffected. Callers set Refusal to
+// RefusedTLSNameClash.
 func TLSNameClashes(devices []Device) map[string]string {
 	byFold := map[string][]string{}
 	for _, d := range devices {

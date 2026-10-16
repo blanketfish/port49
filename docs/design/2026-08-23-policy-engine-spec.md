@@ -10197,7 +10197,7 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   RFC 9887 requires both match kinds to be supported. A wildcard dNSName never names a device.
   The common name is never read (RFC 9525). Names are compared ASCII case-insensitively (A-Z
   only, never Unicode folding); a name with a non-ASCII byte never matches; and two `tls` devices
-  whose names are equal under that folding are both refused admission (`key_group_tie`), the rest
+  whose names are equal under that folding are both refused admission (`tls_name_clash`), the rest
   of the load unaffected. The mapping comes from the inventory alone, with no
   per-device configuration, so a fleet enrolled by SCEP, ACME or EST under one naming rule needs
   nothing from the operator per device. A certificate naming another device is
