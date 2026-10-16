@@ -165,6 +165,7 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 	if mode == "fresh" {
 		kind = "record"
 	}
+	fresh := mode == "fresh" || mode == "noauto"
 	e.cell(id, kind, l66Budget, func(ctx context.Context) (bool, string) {
 		if _, err := e.baseline(ctx, false); err != nil {
 			e.addInvalid(err.Error())
@@ -194,7 +195,7 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 			s.NoConn = mode == "keyword"
 			return s
 		}
-		opts := l66Opts{hostKeys: true}
+		opts := l66Opts{hostKeys: true, noAutoAdd: mode == "noauto"}
 		if mode == "keyword" {
 			opts.playbook = l66KeywordPlay
 		}
@@ -216,7 +217,7 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 		ctl := fmt.Sprintf("The control, at the device's own address `%s` with no entry for it, the device's keys filed under `%s` (%s): "+
 			"%s. The lookup or Ansible filed %d line(s) (%s); control %v.%s", e.l.p.addr, e.node, l66FPs(dev), r1.summary(e.node),
 			len(d1.Added), l66Shorts(d1.Added), e.controlOK, probe)
-		if mode != "fresh" {
+		if !fresh {
 			if err := e.fileKeys(l66StandinAddr, stand); err != nil {
 				e.addInvalid("filing the stand-in's keys under its address: " + err.Error())
 				return false, ""
@@ -233,7 +234,7 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 		tally := l66TallyStandin(l66ParseStandin(e.standinLog(ctx))[mark:])
 		errText := l66ErrorText(r2.text(), 3000)
 		move := fmt.Sprintf("Step 2, `ansible_host` moved to the stand-in `%s` (host keys %s)", l66StandinAddr, l66FPs(stand))
-		if mode != "fresh" {
+		if !fresh {
 			move += ", whose keys were filed under that address first (the contact an earlier auto-add made)"
 		} else {
 			move += ", with no entry for that address"
@@ -242,6 +243,14 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 			"for this play; TACACS+ packets %d, redeems %d. The stand-in saw %d connection(s), %d password attempt(s), %d keyboard-interactive "+
 			"answer(s).", quiet, r2.summary(e.node), errText, l66Shorts(d2.Added), l66Shorts(d2.Removed), r2.counts.Mints, r2.packets,
 			r2.counts.Redeems, tally.Connects, tally.Passwords, tally.Kbdint)
+		if mode == "noauto" {
+			_, presented := l66GradeMoved(tally, e.hashes, r2.hashes)
+			ok := !r2.recap[e.node].Passed() && !presented && r2.packets == 0 && r2.counts.Redeems == 0 && e.controlOK
+			note := fmt.Sprintf(" With host_key_checking true and host_key_auto_add false: the play was refused: %v; the minted token was "+
+				"presented to the stand-in: %v. The lookup minted %d time(s) (it copies the name's key to the address first).",
+				!r2.recap[e.node].Passed(), presented, r2.counts.Mints)
+			return ok, ctl + "\n\n" + move + note
+		}
 		if mode == "fresh" {
 			invalid, presented := l66GradeMoved(tally, e.hashes, r2.hashes)
 			if invalid != "" {
@@ -262,7 +271,14 @@ func (e *l66Env) cellE3(id, sshType, mode string) {
 }
 
 // runL66E3 runs the (e3) cells and writes their section.
-func runL66E3(e *l66Env) {
+func runL66E3(e *l66Env, only string) {
+	if only == "e3d" {
+		for _, t := range []string{"libssh", "paramiko"} {
+			e.cellE3("L66e3d-"+t, t, "noauto")
+		}
+		l66WriteE3(e)
+		return
+	}
 	for _, t := range []string{"libssh", "paramiko"} {
 		e.cellE3("L66e3-"+t, t, "std")
 	}

@@ -1061,6 +1061,8 @@ type l66Opts struct {
 	// hostKeys sets host_key_checking and host_key_auto_add to true; otherwise host_key_checking is false and
 	// the connection plugin reads and writes no known_hosts file.
 	hostKeys bool
+	// noAutoAdd, with hostKeys, leaves host_key_checking true and host_key_auto_add false.
+	noAutoAdd bool
 	// idle is persistent_connect_timeout in seconds; 0 is l66ShortIdle.
 	idle       int
 	logPath    string
@@ -1077,6 +1079,9 @@ func (e *l66Env) ansibleEnv(o l66Opts) []string {
 	checking, auto := "False", "False"
 	if o.hostKeys {
 		checking, auto = "True", "True"
+		if o.noAutoAdd {
+			auto = "False"
+		}
 	}
 	env := l66PrivateEnv(e.env(), e.home, e.nssLib, e.path("nss_passwd"), e.path("nss_group"))
 	env = append(env,
@@ -2120,8 +2125,8 @@ func (e *l66Env) checkHome() error {
 
 // runL66 runs the cells in order and writes the note.
 func runL66(e *l66Env) {
-	if os.Getenv("PORT49_L66_ONLY") == "e3" {
-		runL66E3(e)
+	if only := os.Getenv("PORT49_L66_ONLY"); only == "e3" || only == "e3d" {
+		runL66E3(e, only)
 		return
 	}
 	{
