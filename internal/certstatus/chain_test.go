@@ -156,7 +156,7 @@ func TestChain(t *testing.T) {
 		if r := check(t, c); r.Verdict != Unknown {
 			t.Errorf("%+v, want unknown", r)
 		}
-		if got := testutil.ToFloat64(m.CertStatusUnavailable); got != 1 {
+		if got := testutil.ToFloat64(m.CertStatusUnavailable.WithLabelValues("broker")); got != 1 {
 			t.Errorf("unavailable = %v, want 1", got)
 		}
 	})
@@ -175,14 +175,14 @@ func TestChain(t *testing.T) {
 		for _, tc := range []struct {
 			source, result string
 		}{{"crl", "good"}, {"crl", "revoked"}, {"none", "unknown"}} {
-			if got := testutil.ToFloat64(m.CertStatusChecks.WithLabelValues(tc.source, tc.result)); got != 1 {
+			if got := testutil.ToFloat64(m.CertStatusChecks.WithLabelValues("broker", tc.source, tc.result)); got != 1 {
 				t.Errorf("checks{%s,%s} = %v, want 1", tc.source, tc.result, got)
 			}
 		}
-		if got := testutil.ToFloat64(m.CertStatusUnavailable); got != 1 {
+		if got := testutil.ToFloat64(m.CertStatusUnavailable.WithLabelValues("broker")); got != 1 {
 			t.Errorf("unavailable = %v, want 1", got)
 		}
-		if got := testutil.ToFloat64(m.CRLNextUpdate.WithLabelValues("issuing")); got != float64(t0.Add(time.Hour).Unix()) {
+		if got := testutil.ToFloat64(m.CRLNextUpdate.WithLabelValues("broker", "issuing")); got != float64(t0.Add(time.Hour).Unix()) {
 			t.Errorf("next update gauge = %v, want %d", got, t0.Add(time.Hour).Unix())
 		}
 	})

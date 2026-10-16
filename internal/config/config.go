@@ -513,6 +513,7 @@ type sessionYAML struct {
 
 type fileConfig struct {
 	Listen        string            `yaml:"listen"`
+	TLSListener   *tlsListenerYAML  `yaml:"tls_listener"`
 	MetricsListen string            `yaml:"metrics_listen"`
 	InventoryFile string            `yaml:"inventory_file"`
 	Keys          map[string]KeySet `yaml:"keys"`
@@ -582,7 +583,10 @@ type Config struct {
 	// block, policy: with none, and nil with neither.
 	Policy *PolicyConfig
 
-	Listen        string
+	Listen string
+	// TLSListener is tls_listener:, nil without it (spec §13 decision 50).
+	// Listen is "" under listen: none.
+	TLSListener   *TLSListenerConfig
 	MetricsListen string
 	InventoryFile string
 	// InventoryService is nil without an inventory.service block; with one,
@@ -1168,6 +1172,19 @@ func daemonDefaults(c *Config, f fileConfig) error {
 		return err
 	}
 	c.Listen = or(f.Listen, ":49")
+	if f.Listen == ListenNone {
+		c.Listen = ""
+	}
+	if f.TLSListener != nil {
+		tl, err := checkTLSListener(f.TLSListener, c.Listen)
+		if err != nil {
+			return err
+		}
+		c.TLSListener = tl
+	}
+	if c.Listen == "" && c.TLSListener == nil {
+		return errNoListener
+	}
 	c.ReceiptIdleTTL = orD(f.ReceiptIdleTTL, 15*time.Minute)
 	c.ReceiptMaxAge = orD(f.ReceiptMaxAge, 2*time.Hour)
 	c.Accounting = f.Accounting
@@ -1420,6 +1437,7 @@ func brokerRefusals(f fileConfig) error {
 		why string
 	}{
 		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
+		{"tls_listener", f.TLSListener != nil, "port49-broker never speaks TACACS+; that is port49d's"},
 		{"keys:", len(f.Keys) > 0, "device keys are port49d's alone; name the key references under key_refs"},
 		{"accounting", f.Accounting != (AccountingConfig{}), "accounting is port49d's"},
 		{"limits", f.Limits != (limitsYAML{}), "TACACS+ limits are port49d's"},
@@ -1780,7 +1798,40 @@ var crlName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // defaults in place. A refusal names the key, and never repeats a URL,
 // which may carry a credential.
 func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
-	const key = "broker.certificate_status"
+	// The kept lists sit in broker.state_dir under the broker's role, and
+	// beside broker.revocations_file under the daemon's (plan 7e, Ruling 12).
+	stateDir := b.StateDir
+	if stateDir == "" {
+		revAbs, err := filepath.Abs(b.RevocationsFile)
+		if err != nil {
+			return fmt.Errorf("config: broker.revocations_file: %w", err)
+		}
+		stateDir = filepath.Dir(revAbs)
+	}
+	marker := ""
+	if b.RevocationsFile != "" {
+		marker = b.RevocationsFile + ".created"
+	}
+	others := []namedPath{
+		{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
+		{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
+		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+		{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
+	}
+	for _, iss := range identityIssuers(&b) {
+		others = append(others, namedPath{"broker.identity's kept keys for " + iss,
+			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
+	}
+	others = append(others, namedPath{"broker.directory.enrollment_store's file",
+		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
+	return checkStatusBlock(cs, "broker.certificate_status", stateDir, others)
+}
+
+// checkStatusBlock checks a certificate_status block under key and applies
+// its defaults in place: the broker's, and the RFC 9887 listener's. stateDir
+// is where its kept lists sit ("" keeps none), and others the files none of
+// them may be.
+func checkStatusBlock(cs *CertificateStatusConfig, key, stateDir string, others []namedPath) error {
 	if cs.Disabled {
 		// Every other key does nothing beside it, and one an operator reads
 		// as meaningful (on_unavailable: allow, say) is refused, not ignored.
@@ -1803,16 +1854,6 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 	if len(cs.CRLs) == 0 && cs.OCSP == nil {
 		return fmt.Errorf("config: %s: name at least one crls entry or an ocsp block, or set disabled: true", key)
 	}
-	// The kept lists sit in broker.state_dir under the broker's role, and
-	// beside broker.revocations_file under the daemon's (plan 7e, Ruling 12).
-	stateDir := b.StateDir
-	if stateDir == "" {
-		revAbs, err := filepath.Abs(b.RevocationsFile)
-		if err != nil {
-			return fmt.Errorf("config: broker.revocations_file: %w", err)
-		}
-		stateDir = filepath.Dir(revAbs)
-	}
 	seen := map[string]bool{}
 	for i, src := range cs.CRLs {
 		at := fmt.Sprintf("%s.crls[%d]", key, i)
@@ -1832,25 +1873,12 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 		seen[src.Name] = true
 		// The kept list is port49d's own state, written beside the
 		// revocations file: it may be no file an operator gave it.
+		if stateDir == "" {
+			continue
+		}
 		kept := filepath.Join(stateDir, "crl-"+src.Name+".der")
-		marker := ""
-		if b.RevocationsFile != "" {
-			marker = b.RevocationsFile + ".created"
-		}
-		others := []struct{ key, path string }{
-			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
-			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
-			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
-			{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
-			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
-		}
-		for _, iss := range identityIssuers(&b) {
-			others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
-				filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
-		}
-		others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
-			filepath.Join(BrokerStateDir(&b), "enrollments.json")})
-		for _, o := range others {
+		for _, o := range append(slices.Clone(others), namedPath{at + ".file", src.File},
+			namedPath{at + ".issuer_file", src.IssuerFile}) {
 			if o.path == "" {
 				continue
 			}

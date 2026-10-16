@@ -202,7 +202,7 @@ func newChecker(t *testing.T, cfg Config, clk *clock) (*Checker, *metrics.Metric
 }
 
 func loads(m *metrics.Metrics, name, outcome string) float64 {
-	return testutil.ToFloat64(m.CRLLoads.WithLabelValues(name, outcome))
+	return testutil.ToFloat64(m.CRLLoads.WithLabelValues("broker", name, outcome))
 }
 
 // entries records OnNewEntry's calls.
@@ -643,6 +643,28 @@ func TestCRL(t *testing.T) {
 
 	// A list coming into force from none, from a stale one, or after a
 	// failure is said once; a steady reload is not (Task 11 review I1).
+	t.Run("a tls_listener checker says its own component", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		srv := newCRLServer(t)
+		clk := newClock()
+		c, m, lg := newChecker(t, Config{CRLs: []CRLSource{{Name: "issuing", URL: srv.URL + "/crl", Issuer: ca.Cert}},
+			RefreshInterval: 10 * time.Minute, StateDir: stateDir(t), Component: "tls_listener"}, clk)
+		srv.serve(signCRL(t, ca, crlSpec{number: 1}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if got := lg.all()[0]; got != "tls_listener: certificate status: CRL issuing loaded (next update "+
+			t0.Add(time.Hour).Format(time.RFC3339)+")" {
+			t.Fatalf("the line: %q", got)
+		}
+		if got := testutil.ToFloat64(m.CRLLoads.WithLabelValues("tls_listener", "issuing", "loaded")); got != 1 {
+			t.Fatalf("tls_listener loads = %v, want 1", got)
+		}
+		if got := testutil.ToFloat64(m.CRLLoads.WithLabelValues("broker", "issuing", "loaded")); got != 0 {
+			t.Fatalf("broker loads = %v, want 0: two checkers naming one CRL are two series", got)
+		}
+	})
+
 	t.Run("a list coming into force is said", func(t *testing.T) {
 		ca := newCA(t, "issuing CA")
 		c, _, lg, srv, clk, _ := one(t, ca)

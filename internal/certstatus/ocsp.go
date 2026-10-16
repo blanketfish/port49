@@ -26,6 +26,7 @@ import (
 type ocspEntry struct {
 	res     Result
 	expires time.Time
+	refresh time.Time // past it, a cached read asks again in the background
 }
 
 // ocspCall is one question in flight, shared by every caller asking it.
@@ -74,26 +75,45 @@ const (
 // 30s. Concurrent questions about one certificate share one request (M15),
 // and that request belongs to none of them: a caller that hangs up stops
 // waiting, never the question, so it cannot leave its failure to the rest.
-func (c *Checker) checkOCSP(ctx context.Context, cert, issuer *x509.Certificate) Result {
+// With wait false it never blocks (decision 50 ruling 9): a fresh answer is
+// returned, and refreshed in the background once past half its life; none is
+// Unknown at once, its question asked in the background for the next caller.
+// Either background question is the shared one, bounded by OCSP.Timeout alone.
+func (c *Checker) checkOCSP(ctx context.Context, cert, issuer *x509.Certificate, wait bool) Result {
 	key := ocspKey(cert, issuer)
+	now := c.now()
 	c.mu.Lock()
-	if e, ok := c.ocsp[key]; ok && c.now().Before(e.expires) {
+	if e, ok := c.ocsp[key]; ok && now.Before(e.expires) {
+		if !wait && !now.Before(e.refresh) {
+			c.startLocked(ctx, key, cert, issuer)
+		}
 		c.mu.Unlock()
 		return e.res
 	}
-	call, busy := c.ocspInflight[key]
-	if !busy {
-		call = &ocspCall{done: make(chan struct{})}
-		c.ocspInflight[key] = call
-		go c.ask(context.WithoutCancel(ctx), key, call, cert, issuer)
-	}
+	call := c.startLocked(ctx, key, cert, issuer)
 	c.mu.Unlock()
+	if !wait {
+		return Result{Verdict: Unknown, Source: "none",
+			Detail: "OCSP: no fresh OCSP answer cached; asked in the background"}
+	}
 	select {
 	case <-call.done:
 		return call.res
 	case <-ctx.Done():
 		return Result{Verdict: Unknown, Source: "none", Detail: "OCSP: the question was abandoned"}
 	}
+}
+
+// startLocked is the question in flight about key, started if there is
+// none. c.mu is held.
+func (c *Checker) startLocked(ctx context.Context, key string, cert, issuer *x509.Certificate) *ocspCall {
+	call, busy := c.ocspInflight[key]
+	if !busy {
+		call = &ocspCall{done: make(chan struct{})}
+		c.ocspInflight[key] = call
+		go c.ask(context.WithoutCancel(ctx), key, call, cert, issuer)
+	}
+	return call
 }
 
 // ask runs one shared question to its end, bounded by OCSP.Timeout alone,
@@ -111,7 +131,10 @@ func (c *Checker) ask(ctx context.Context, key string, call *ocspCall, cert, iss
 				}
 			}
 		}
-		c.ocsp[key] = ocspEntry{res: res, expires: now.Add(ttl)}
+		// A refresh that fails never shortens an answer in force.
+		if e, ok := c.ocsp[key]; res.Verdict != Unknown || !ok || !now.Before(e.expires) {
+			c.ocsp[key] = ocspEntry{res: res, expires: now.Add(ttl), refresh: now.Add(ttl / 2)}
+		}
 	}
 	call.res = res
 	delete(c.ocspInflight, key)
