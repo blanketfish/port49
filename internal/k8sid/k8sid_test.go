@@ -41,7 +41,7 @@ func TestParseRefuses(t *testing.T) {
 	}
 }
 
-// Review Focus 5: a name of 253 bytes, the principal 339, parses whole.
+// A name of 253 bytes, the principal 339, parses whole.
 func TestTheLongestServiceAccountParses(t *testing.T) {
 	name := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
 	ns := strings.Repeat("n", 63)

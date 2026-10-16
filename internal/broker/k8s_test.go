@@ -122,7 +122,7 @@ func TestRevokingAServiceAccountRefusesItsToken(t *testing.T) {
 	}
 }
 
-// Review Focus 5: a 339-byte principal revokes whole, and the mark refuses its token.
+// A 339-byte principal revokes whole, and the mark refuses its token.
 func TestALongServiceAccountRevokes(t *testing.T) {
 	sa := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
 	ns := strings.Repeat("n", 63)

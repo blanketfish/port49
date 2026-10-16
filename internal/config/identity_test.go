@@ -737,7 +737,7 @@ func TestTwoClustersMayListOneNamespace(t *testing.T) {
 	}
 }
 
-// Review Focus 4: one cluster under two issuers (a migration) loads, its
+// One cluster under two issuers (a migration) loads, its
 // two verifiers sharing the cluster's name.
 func TestAK8sIssuerMigrationLoads(t *testing.T) {
 	block := `  identity:

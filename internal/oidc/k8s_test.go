@@ -108,7 +108,7 @@ func TestAK8sTokenTypIsJWTOrNone(t *testing.T) {
 	}
 }
 
-// Review Focus 1: the binding is read by exact name at every level.
+// The binding is read by exact name at every level.
 func TestAK8sBindingIsReadByExactName(t *testing.T) {
 	iss, c := oidctest.NewIssuer(t), newClock()
 	set := k8sSet(t, iss, c, cluster("netops"))
@@ -134,7 +134,7 @@ func TestAK8sBindingIsReadByExactName(t *testing.T) {
 	}
 }
 
-// Review Focus 3: a cluster signing ES256 under the default RS256 pin.
+// A cluster signing ES256 under the default RS256 pin.
 func TestAK8sTokenUnderAnUnpinnedAlgorithmIsRefused(t *testing.T) {
 	iss, c := oidctest.NewIssuer(t), newClock()
 	iss.AddKey(t, "e1", oidc.ES256)
@@ -145,7 +145,7 @@ func TestAK8sTokenUnderAnUnpinnedAlgorithmIsRefused(t *testing.T) {
 	}
 }
 
-// Review Focus 5: a 253-byte name verifies whole.
+// A 253-byte name verifies whole.
 func TestALongServiceAccountVerifies(t *testing.T) {
 	iss, c := oidctest.NewIssuer(t), newClock()
 	set := k8sSet(t, iss, c, cluster("netops"))

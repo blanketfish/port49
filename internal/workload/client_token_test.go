@@ -60,7 +60,7 @@ func TestATokenFileIsPresentedAsABearer(t *testing.T) {
 	}
 }
 
-// Review Focus 2: a retry presents the token the kubelet wrote since.
+// A retry presents the token the kubelet wrote since.
 func TestTheTokenFileIsReadAtEveryAttempt(t *testing.T) {
 	var p string
 	rotate := func(w http.ResponseWriter, req api.MintRequest) {
