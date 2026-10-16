@@ -62,6 +62,9 @@ func (r *Refusal) Error() string {
 // texts are crypto/tls's (handshake_server.go, handshake_server_tls13.go,
 // Go 1.26); TestClassify pins them, and L72 measures them.
 func Classify(err error, timedOut bool) Outcome {
+	if err == nil {
+		return HandshakeFailed
+	}
 	var r *Refusal
 	switch {
 	case errors.As(err, &r):

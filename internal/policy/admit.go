@@ -124,8 +124,12 @@ func (p *Policy) admit(file) error {
 	p.admitted = make(map[string]admission.Resolved, len(p.env.Devices))
 	p.assigned = make(map[string]admission.Assignment, len(p.env.Devices))
 	entries := make([]admission.Resolved, 0, len(p.env.Devices))
+	clashes := admission.TLSNameClashes(p.env.Devices)
 	for _, d := range p.env.Devices {
 		r := admission.Resolve(d, p.keyGroups)
+		if why, clash := clashes[d.Name]; clash {
+			r.Refused, r.Refusal = why, admission.RefusedTie
+		}
 		r.WirePlatform = p.WirePlatform(d.Platform)
 		if r.Refused == "" && d.EffectiveTransport() != admission.TransportTLS && p.env.KeyRefs != nil &&
 			!slices.Contains(p.env.KeyRefs, r.KeyRef) {

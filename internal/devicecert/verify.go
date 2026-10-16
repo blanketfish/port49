@@ -61,6 +61,15 @@ type Verifier struct {
 	Now          func() time.Time
 }
 
+// now is Now, or the clock when none is set: a nil func must not panic a
+// handshake.
+func (v *Verifier) now() time.Time {
+	if v.Now == nil {
+		return time.Now()
+	}
+	return v.Now()
+}
+
 // Verify judges certs, as the device sent them, leaf first, for dev: a path
 // to an anchor through the sent and stored intermediates, with the
 // clientAuth usage (or none), then the device's identity. Both are local and
@@ -73,6 +82,10 @@ func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdi
 		return Verdict{Outcome: NoClientCertificate, Detail: "the device sent no certificate"}
 	}
 	leaf := certs[0]
+	if v.Anchors == nil {
+		// Never the platform's roots: Verify falls back to them on nil.
+		return Verdict{Outcome: UnknownCA, Detail: "no client_ca_file anchors are loaded", Leaf: leaf}
+	}
 	pool := x509.NewCertPool()
 	for _, c := range certs[1:] {
 		pool.AddCert(c)
@@ -80,7 +93,7 @@ func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdi
 	for _, c := range v.Intermediates {
 		pool.AddCert(c)
 	}
-	chains, err := leaf.Verify(x509.VerifyOptions{Roots: v.Anchors, Intermediates: pool, CurrentTime: v.Now(),
+	chains, err := leaf.Verify(x509.VerifyOptions{Roots: v.Anchors, Intermediates: pool, CurrentTime: v.now(),
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
 	if err != nil {
 		return Verdict{Outcome: chainOutcome(err), Detail: printsafe.Line(err.Error(), 300), Leaf: leaf}
@@ -95,8 +108,11 @@ func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdi
 // completed, waiting within ctx (the handshake's deadline) for an OCSP
 // answer not cached (ruling 8).
 func (v *Verifier) CheckStatus(ctx context.Context, ok Verdict) Verdict {
-	if v.Status == nil {
+	if ok.Outcome != OK || v.Status == nil {
 		return ok
+	}
+	if len(ok.Chain) == 0 {
+		return noChain(ok)
 	}
 	st, detail := v.Status(ctx, ok.Chain)
 	return v.judge(ok, st, detail)
@@ -111,7 +127,10 @@ func (v *Verifier) Recheck(was Verdict) Verdict {
 	if was.Outcome != OK {
 		return was
 	}
-	now := v.Now()
+	if len(was.Chain) == 0 {
+		return noChain(was)
+	}
+	now := v.now()
 	for _, c := range was.Chain {
 		if now.After(c.NotAfter) {
 			return Verdict{Outcome: CertificateExpired, Leaf: was.Leaf, Detail: printsafe.Line(fmt.Sprintf(
@@ -130,16 +149,23 @@ func (v *Verifier) Recheck(was Verdict) Verdict {
 // as status_unavailable, or under on_unavailable: allow admits and says so.
 func (v *Verifier) judge(ok Verdict, st Status, detail string) Verdict {
 	switch st {
+	case StatusGood:
+		return ok
 	case StatusRevoked:
 		return Verdict{Outcome: CertificateRevoked, Detail: printsafe.Line(detail, 300), Leaf: ok.Leaf}
-	case StatusUnknown:
+	default: // StatusUnknown, and any value this code does not know: fail closed
 		if v.AllowUnknown {
 			ok.StatusUnknown, ok.Detail = true, printsafe.Line(detail, 300)
 			return ok
 		}
 		return Verdict{Outcome: StatusUnavailable, Detail: printsafe.Line(detail, 300), Leaf: ok.Leaf}
 	}
-	return ok
+}
+
+// noChain refuses an OK verdict that carries no verified chain: there is
+// nothing its status or expiry could be judged on.
+func noChain(was Verdict) Verdict {
+	return Verdict{Outcome: CertificateInvalid, Leaf: was.Leaf, Detail: "no verified chain"}
 }
 
 func chainOutcome(err error) Outcome {

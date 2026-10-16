@@ -451,3 +451,33 @@ func TestARecordPinAndANameGroupMustAgree(t *testing.T) {
 		t.Fatalf("%+v %v", as, err)
 	}
 }
+
+func TestTLSNameClashes(t *testing.T) {
+	tls := func(n, addr string) Device {
+		return Device{Name: n, Transport: TransportTLS, Addresses: []netip.Addr{netip.MustParseAddr(addr)}}
+	}
+	devs := []Device{tls("LEAF-01", "10.0.0.1"), tls("leaf-01", "10.0.0.2"), tls("leaf-02", "10.0.0.3"),
+		{Name: "TCP-1", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.4")}},
+		{Name: "tcp-1", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.5")}},
+		tls("Kr", "10.0.0.6"), tls("kr", "10.0.0.7")}
+	devs[5].Name = "\u212ar" // a Kelvin sign is not ASCII: it folds to nothing
+	got := TLSNameClashes(devs)
+	if len(got) != 2 || got["LEAF-01"] == "" || got["leaf-01"] == "" {
+		t.Fatalf("want exactly LEAF-01 and leaf-01, got %v", got)
+	}
+	if err := Validate(devs); err != nil {
+		t.Fatalf("nothing else in the load fails: %v", err)
+	}
+	tr, err := Build(Inventory{Devices: devs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"10.0.0.1", "10.0.0.2"} {
+		if _, ok := tr.Lookup(netip.MustParseAddr(a)); ok {
+			t.Errorf("%s is indexed as admitted", a)
+		}
+	}
+	if _, ok := tr.Lookup(netip.MustParseAddr("10.0.0.3")); !ok {
+		t.Error("leaf-02 was refused with them")
+	}
+}

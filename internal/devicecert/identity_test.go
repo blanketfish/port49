@@ -39,6 +39,9 @@ func TestRuleMatch(t *testing.T) {
 		"an address not its own":     {both, leafNaming(nil, "10.0.1.6"), false},
 		"dns only ignores addresses": {Rule{DNSName: true}, leafNaming(nil, "10.0.1.5"), false},
 		"ip only ignores names":      {Rule{IPAddress: true}, leafNaming([]string{"leaf-01"}), false},
+		"a prefix before the name":   {both, leafNaming([]string{"evil-leaf-01.net.example.com"}), false},
+		"a label after the suffix":   {both, leafNaming([]string{"leaf-01.net.example.com.evil"}), false},
+		"a doubled trailing dot":     {both, leafNaming([]string{"leaf-01.net.example.com.."}), false},
 	} {
 		err := c.rule.Match(c.leaf, dev)
 		if (err == nil) != c.ok {
@@ -66,5 +69,19 @@ func TestAMismatchSaysWhatWasNamedAndWanted(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q lacks %q", err, want)
 		}
+	}
+}
+
+// strings.ToLower is Unicode folding: a Kelvin sign would stand for a k.
+func TestRuleMatchFoldsASCIIOnly(t *testing.T) {
+	r := Rule{DNSName: true}
+	if err := r.Match(leafNaming([]string{"kr1"}), admission.Device{Name: "\u212ar1"}); err == nil {
+		t.Fatal("a Kelvin-sign device name matched kr1")
+	}
+	if err := r.Match(leafNaming([]string{"\u212ar1"}), admission.Device{Name: "kr1"}); err == nil {
+		t.Fatal("a non-ASCII SAN matched kr1")
+	}
+	if err := r.Match(leafNaming([]string{"KR1"}), admission.Device{Name: "kr1"}); err != nil {
+		t.Fatalf("ASCII case folding lost: %v", err)
 	}
 }

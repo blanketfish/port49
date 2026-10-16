@@ -25,7 +25,7 @@ type Rule struct {
 // Match is nil when leaf names dev: a dNSName equal to its name, or its
 // name under a suffix, case-insensitively and with a trailing dot dropped;
 // or an iPAddress among its inventory addresses. A wildcard never names a
-// device. The error says what the certificate named and what was wanted.
+// device, and a non-ASCII name never matches (FoldASCII). The error says what the certificate named and what was wanted.
 func (r Rule) Match(leaf *x509.Certificate, dev admission.Device) error {
 	if r.DNSName {
 		for _, san := range leaf.DNSNames {
@@ -45,9 +45,9 @@ func (r Rule) Match(leaf *x509.Certificate, dev admission.Device) error {
 }
 
 func (r Rule) namesDevice(san, name string) bool {
-	san = strings.TrimSuffix(strings.ToLower(san), ".")
-	name = strings.ToLower(name)
-	if san == "" || strings.Contains(san, "*") {
+	san, sanOK := FoldASCII(strings.TrimSuffix(san, "."))
+	name, nameOK := FoldASCII(name)
+	if !sanOK || !nameOK || san == "" || strings.Contains(san, "*") {
 		return false
 	}
 	if san == name {
@@ -59,6 +59,22 @@ func (r Rule) namesDevice(san, name string) bool {
 		}
 	}
 	return false
+}
+
+// FoldASCII lower-cases A-Z and nothing else. ok is false when s holds a
+// non-ASCII byte: such a name never matches, since Unicode folding would
+// let a Kelvin sign stand for a k (decision 50 ruling 6).
+func FoldASCII(s string) (folded string, ok bool) {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 0x80:
+			return "", false
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b), true
 }
 
 func (r Rule) describe(leaf *x509.Certificate, dev admission.Device) string {

@@ -382,3 +382,31 @@ func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
 		}
 	}
 }
+
+func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
+	e := env()
+	e.KeyRefs = []string{"prod_key"}
+	for i, n := range []string{"Leaf-01", "leaf-01", "tcp-A", "tcp-a"} {
+		tr := admission.TransportTLS
+		if i >= 2 {
+			tr = admission.TransportTCP
+		}
+		e.Devices = append(e.Devices, admission.Device{Name: n, Platform: "arista_eos", Transport: tr,
+			Addresses: []netip.Addr{netip.MustParseAddr("10.0.7." + string(rune('1'+i)))}})
+	}
+	p, err := Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatalf("the load must not fail: %v", err)
+	}
+	for _, n := range []string{"Leaf-01", "leaf-01"} {
+		r, _ := p.Admitted(n)
+		if r.Refusal != admission.RefusedTie || r.Refused == "" || r.KeyRef != "" {
+			t.Errorf("%s: %+v", n, r)
+		}
+	}
+	for _, n := range []string{"tcp-A", "tcp-a"} {
+		if r, _ := p.Admitted(n); r.Refusal == admission.RefusedTie {
+			t.Errorf("tcp device %s refused as a clash: %+v", n, r)
+		}
+	}
+}

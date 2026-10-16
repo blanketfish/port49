@@ -2,7 +2,9 @@ package devicecert
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/netip"
@@ -187,7 +189,8 @@ func TestRecheck(t *testing.T) {
 func TestFingerprint(t *testing.T) {
 	p := newPKI(t)
 	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
-	if f := Fingerprint(leaf); len(f) != 64 || Fingerprint(nil) != "" {
+	sum := sha256.Sum256(leaf.Raw)
+	if f := Fingerprint(leaf); f != hex.EncodeToString(sum[:]) || Fingerprint(nil) != "" {
 		t.Fatalf("%q", f)
 	}
 }
@@ -197,5 +200,67 @@ func TestRefusalUnwrapsToItsVerdict(t *testing.T) {
 	var r *Refusal
 	if !errors.As(err, &r) || Classify(err, false) != IdentityMismatch {
 		t.Fatal(err)
+	}
+}
+
+// An unrecognised Status is not Good: it goes through ruling 8 as unknown.
+func TestAnUnrecognisedStatusFailsClosed(t *testing.T) {
+	p := newPKI(t)
+	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
+	odd := func(context.Context, []*x509.Certificate) (Status, string) { return Status(99), "pending" }
+	for _, allow := range []bool{false, true} {
+		v := p.verifier(odd, allow)
+		was := v.Verify([]*x509.Certificate{leaf}, dev01)
+		for name, got := range map[string]Verdict{"CheckStatus": v.CheckStatus(context.Background(), was), "Recheck": v.Recheck(was)} {
+			if allow && (got.Outcome != OK || !got.StatusUnknown) {
+				t.Errorf("%s allow: %+v", name, got)
+			}
+			if !allow && got.Outcome != StatusUnavailable {
+				t.Errorf("%s refuse: %+v", name, got)
+			}
+		}
+	}
+}
+
+func TestRecheckAndCheckStatusNeverAdmitWhatWasNotAdmitted(t *testing.T) {
+	p := newPKI(t)
+	v := p.verifier(nil, false) // no status check: nothing else could refuse
+	asked := false
+	w := p.verifier(func(context.Context, []*x509.Certificate) (Status, string) { asked = true; return StatusGood, "" }, false)
+	for name, was := range map[string]Verdict{"zero": {}, "mismatch": {Outcome: IdentityMismatch, Detail: "x"},
+		"ok without a chain": {Outcome: OK}} {
+		if got := v.Recheck(was); got.Outcome == OK {
+			t.Errorf("Recheck %s came back OK", name)
+		}
+		if got := w.Recheck(was); got.Outcome == OK {
+			t.Errorf("Recheck %s with a status came back OK", name)
+		}
+		if got := w.CheckStatus(context.Background(), was); got.Outcome == OK {
+			t.Errorf("CheckStatus %s came back OK", name)
+		}
+	}
+	if asked {
+		t.Error("the status was asked about a verdict with no verified chain")
+	}
+	if got := v.Recheck(Verdict{Outcome: OK}); got.Outcome != CertificateInvalid {
+		t.Errorf("OK without a chain: %s", got.Outcome)
+	}
+}
+
+func TestANilAnchorPoolRefusesAndANilClockDefaults(t *testing.T) {
+	p := newPKI(t)
+	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
+	v := p.verifier(good, false)
+	v.Anchors = nil
+	if got := v.Verify([]*x509.Certificate{leaf}, dev01); got.Outcome != UnknownCA {
+		t.Fatalf("nil anchors: %s", got.Outcome)
+	}
+	v = p.verifier(good, false)
+	v.Now = nil
+	if got := v.Verify([]*x509.Certificate{leaf}, dev01); got.Outcome != OK {
+		t.Fatalf("nil clock: %s %s", got.Outcome, got.Detail)
+	}
+	if got := v.Recheck(v.Verify([]*x509.Certificate{leaf}, dev01)); got.Outcome != OK {
+		t.Fatalf("nil clock at a packet: %s", got.Outcome)
 	}
 }

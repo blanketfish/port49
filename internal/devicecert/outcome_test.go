@@ -40,3 +40,9 @@ func TestOnlyStatusUnavailableIsNotStruck(t *testing.T) {
 		t.Fatalf("%d refusal outcomes, want spec §10's 12", len(Outcomes))
 	}
 }
+
+func TestClassifyNil(t *testing.T) {
+	if got := Classify(nil, false); got != HandshakeFailed {
+		t.Fatalf("nil: %s", got)
+	}
+}

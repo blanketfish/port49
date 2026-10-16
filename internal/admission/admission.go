@@ -301,6 +301,45 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 	return r
 }
 
+// TLSNameClashes are the tls devices whose names are equal under ASCII case
+// folding, by name, each with the refusal text. A certificate names a device by
+// its name compared that way (decision 50 ruling 6), so such a pair would admit
+// each other's certificates: both are refused, and nothing else in the load
+// fails. A tcp device is unaffected. Refusal is RefusedTie, as for any
+// ambiguity admission will not guess at.
+func TLSNameClashes(devices []Device) map[string]string {
+	byFold := map[string][]string{}
+	for _, d := range devices {
+		if d.EffectiveTransport() != TransportTLS || transportRefusal(d) != "" {
+			continue
+		}
+		f := foldName(d.Name)
+		byFold[f] = append(byFold[f], d.Name)
+	}
+	out := map[string]string{}
+	for _, names := range byFold {
+		if len(names) < 2 {
+			continue
+		}
+		for _, n := range names {
+			out[n] = fmt.Sprintf("is one of tls devices %q whose names are equal under ASCII case folding, so a "+
+				"certificate could not tell them apart and all are refused (decision 50 ruling 6)", names)
+		}
+	}
+	return out
+}
+
+// foldName lower-cases A-Z only, as the certificate match does.
+func foldName(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 // NewTrie indexes entries by every address each carries, a refused entry's
 // included. Two entries on one address is an error: Validate refuses that
 // inventory first, so reaching it here is a caller's defect.
@@ -328,9 +367,13 @@ func Build(inv Inventory) (*Trie, error) {
 		return nil, err
 	}
 	entries := make([]Resolved, 0, len(inv.Devices))
+	clashes := TLSNameClashes(inv.Devices)
 	for _, d := range inv.Devices {
 		if transportRefusal(d) != "" {
 			continue // refused alone (spec §10)
+		}
+		if _, clash := clashes[d.Name]; clash {
+			continue // both refused, nothing else (decision 50 ruling 6)
 		}
 		if d.EffectiveTransport() == TransportTLS {
 			entries = append(entries, Resolved{Device: d}) // admitted, no key (decision 50 ruling 18)
