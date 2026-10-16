@@ -9,10 +9,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
@@ -164,5 +166,132 @@ func TestAMalformedProxyIsSaidMalformedNotAbsent(t *testing.T) {
 	announceIdentity(&out, "port49d", cfg, nil)
 	if !strings.Contains(out.String(), "is fetched directly (no HTTPS_PROXY)") {
 		t.Fatalf("with no proxy set the line must say so:\n%s", out.String())
+	}
+}
+
+func k8sConfig() config.Config {
+	return config.Config{Broker: &config.BrokerConfig{Identity: &oidc.Config{Timing: oidc.DefaultTiming,
+		K8s: []oidc.VerifierConfig{{Domain: oidc.Machines, Kind: oidc.KindK8s, Cluster: "l69_a", Issuer: "https://l69-a.port49.lab",
+			JWKS: "https://10.0.0.10:6443/openid/v1/jwks", Audience: "port49", Namespaces: []string{"netops"},
+			Algorithms: []oidc.Alg{oidc.RS256}, CAFile: "/etc/port49/l69-a-ca.pem"}}}}}
+}
+
+func TestTheStartSaysEachCluster(t *testing.T) {
+	var out strings.Builder
+	announceIdentity(&out, "port49-broker", k8sConfig(), nil)
+	for _, want := range []string{
+		"port49-broker: identity: machines: k8s cluster l69_a (issuer https://l69-a.port49.lab; keys from " +
+			"https://10.0.0.10:6443/openid/v1/jwks; audience port49; namespaces netops; principal " +
+			"system:serviceaccount:<namespace>:<name>; algorithms RS256)",
+		"port49-broker: identity: k8s namespaces: netops: l69_a\n",
+		"a k8s verifier trusts its cluster's administrators: whoever can create a pod or a token for a service account in a " +
+			"listed namespace mints as it",
+		"a token stays valid here until its exp or max_token_age after its pod or service account is deleted; " +
+			"port49 revoke --principal ends it at once",
+		// The egress line is computed for the jwks host the fetch dials, and
+		// names it (pre-flight I9).
+		"identity: cluster l69_a (https://l69-a.port49.lab) is fetched directly (no HTTPS_PROXY) (its jwks host 10.0.0.10:6443)",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "is trusted through the system's root certificates") {
+		t.Fatal("a ca_file was set")
+	}
+}
+
+// The egress line is for the jwks host, not the issuer: NO_PROXY naming only
+// the jwks host makes the fetch direct though the issuer would be proxied.
+func TestTheClusterEgressLineIsComputedForTheJWKSHost(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:3128")
+	t.Setenv("https_proxy", "")
+	t.Setenv("NO_PROXY", "10.0.0.10")
+	t.Setenv("no_proxy", "")
+	var out strings.Builder
+	announceIdentity(&out, "port49-broker", k8sConfig(), nil)
+	if !strings.Contains(out.String(), "is fetched directly (no HTTPS_PROXY) (its jwks host 10.0.0.10:6443)") {
+		t.Fatalf("the proxy was computed for the issuer:\n%s", out.String())
+	}
+}
+
+func TestAClusterWithNoCAFileIsSaidToUseTheSystemRoots(t *testing.T) {
+	cfg := k8sConfig()
+	cfg.Broker.Identity.K8s[0].CAFile = ""
+	var out strings.Builder
+	announceIdentity(&out, "port49-broker", cfg, nil)
+	if !strings.Contains(out.String(), "identity: cluster l69_a (https://l69-a.port49.lab) is trusted through the system's root certificates (no ca_file)") {
+		t.Fatal(out.String())
+	}
+}
+
+// Every cluster vouching for a namespace is named, so an overlap is seen at
+// every start (decision 49 rulings 4 and 13); a migration's two verifiers on
+// one jwks are one cluster, named once.
+func TestTheStartNamesEveryClusterVouchingForANamespace(t *testing.T) {
+	cfg := k8sConfig()
+	a := cfg.Broker.Identity.K8s[0]
+	b := a
+	b.Cluster, b.Issuer, b.JWKS, b.Namespaces = "eu_west", "https://eu-west.port49.lab", "https://10.1.0.10:6443/openid/v1/jwks", []string{"backup", "netops"}
+	m := a
+	m.Issuer = "https://l69-a-new.port49.lab" // l69_a migrating its issuer
+	cfg.Broker.Identity.K8s = []oidc.VerifierConfig{a, b, m}
+	var out strings.Builder
+	announceIdentity(&out, "port49-broker", cfg, nil)
+	if want := "port49-broker: identity: k8s namespaces: backup: eu_west; netops: eu_west, l69_a\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("missing %q in\n%s", want, out.String())
+	}
+}
+
+func TestServiceAccountsNoClusterCanGiveAreSaid(t *testing.T) {
+	pol, err := policy.Parse([]byte(`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects:
+  - {name: a, identity: ["system:serviceaccount:netops:oxidized"], username: a, token_ttl: 60s}
+  - {name: b, identity: ["system:serviceaccount:kube-system:default"], username: b, token_ttl: 60s}
+grants:
+  - {subject: a, scope: all_devices, roles: [r], max_privilege: admin}
+  - {subject: b, scope: all_devices, roles: [r], max_privilege: admin}
+`), policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	announceServiceAccountIdentities(&out, "port49d", k8sConfig(), pol)
+	want := "port49d: policy: 1 service account identities mint for no one: system:serviceaccount:kube-system:default " +
+		"(subject b): no k8s verifier lists namespace kube-system\n"
+	if out.String() != want {
+		t.Fatalf("%q", out.String())
+	}
+	out.Reset()
+	cfg := k8sConfig()
+	cfg.Broker.Identity.K8s = nil
+	cfg.Broker.Identity.X509AnchorFile = "/a.pem"
+	announceServiceAccountIdentities(&out, "port49d", cfg, pol)
+	if !strings.Contains(out.String(), "2 service account identities mint for no one") ||
+		!strings.Contains(out.String(), "no broker.identity.machines k8s verifier is configured") {
+		t.Fatalf("%q", out.String())
+	}
+}
+
+// A cluster changing its issuer is two verifiers on one jwks: each key set is
+// told the other's issuer, so discovery naming either is not a mismatch; a
+// verifier on another jwks, or an oidc one, is not one.
+func TestAMigratingClustersKeySetsAreToldTheOtherIssuer(t *testing.T) {
+	a := k8sConfig().Broker.Identity.K8s[0]
+	m := a
+	m.Issuer = "https://l69-a-new.port49.lab"
+	other := a
+	other.Cluster, other.Issuer, other.JWKS = "eu_west", "https://eu-west.port49.lab", "https://10.1.0.10:6443/openid/v1/jwks"
+	ks := []oidc.VerifierConfig{a, m, other}
+	if got := migrating(ks, a); len(got) != 1 || got[0] != m.Issuer {
+		t.Fatalf("a: %v", got)
+	}
+	if got := migrating(ks, other); len(got) != 0 {
+		t.Fatalf("other: %v", got)
+	}
+	if got := migrating(ks, oidc.VerifierConfig{Issuer: "https://idp.example.com"}); got != nil {
+		t.Fatalf("oidc: %v", got)
 	}
 }

@@ -368,6 +368,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	}
 	announceDirectory(stderr, proc, cfg, pol)
 	announceWorkloadIdentities(stderr, proc, cfg, pol)
+	announceServiceAccountIdentities(stderr, proc, cfg, pol)
 	if b.Identity, err = openOIDC(cfg, brokerStateDir(cfg), m, func(format string, args ...any) {
 		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
 	}); err != nil {

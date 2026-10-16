@@ -118,11 +118,12 @@ func parseProxy(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// ProxyFor is the proxy NewClient's transport takes to reach issuer: the
-// environment's, or nil for none. An HTTPS_PROXY that does not parse as a
+// ProxyFor is the proxy NewClient's transport takes to reach target: the
+// environment's, or nil for none. target is the URL the fetch dials: an OIDC
+// verifier's issuer, a k8s verifier's JWKS URL. An HTTPS_PROXY that does not parse as a
 // proxy URL is an error, never "no proxy": the transport would drop it
 // silently or dial a host nobody configured.
-func ProxyFor(issuer string) (*url.URL, error) {
+func ProxyFor(target string) (*url.URL, error) {
 	raw := os.Getenv("HTTPS_PROXY")
 	if raw == "" {
 		raw = os.Getenv("https_proxy")
@@ -132,7 +133,7 @@ func ProxyFor(issuer string) (*url.URL, error) {
 			return nil, err
 		}
 	}
-	req, err := http.NewRequest(http.MethodGet, issuer, nil)
+	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
