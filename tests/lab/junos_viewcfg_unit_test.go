@@ -112,6 +112,10 @@ func TestL68Cell(t *testing.T) {
 		{mpls, "request mpls p49-none\n" + caret(13) + "\nsyntax error, expecting <command>.\n" + prompt, "past"},
 		{l68Probe{cmd: "req mpls p49-none", prefix: 2}, "req mpls p49-none\n" + caret(4) + "\nsyntax error.\n" + prompt,
 			"refused"},
+		// The CLI refused `vir`, which a deny hides, where the space was typed:
+		// the caret sits at the end of the echo (vjunos-router, row H).
+		{l68Probe{cmd: "req vir p49-none", prefix: 2}, "request vir\n" + caret(11) + "\nsyntax error.\n" + prompt, "refused"},
+		{l68Probe{cmd: "req mpls p49-none", prefix: 2}, "request mpls p49-none\n" + caret(21) + "\nsyntax error.\n" + prompt, "past"},
 		{mpls, "request mpls p49-none\nerror: permission denied\n" + prompt, "refused"},
 		{l68Probe{cmd: "save dhcp-security-snoop | count", prefix: 2},
 			"save dhcp-security-snoop | count\nerror: command is not valid on the vsrx\n" + prompt, "platform refused"},

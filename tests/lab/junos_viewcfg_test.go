@@ -208,6 +208,15 @@ func l68Cell(p l68Probe, out string, promptLen int) string {
 		}
 		return "past"
 	}
+	// A caret at the end of the echoed line: the CLI refused a word it had no
+	// completion for, where the space after it was typed (a deny hides a hidden
+	// command's abbreviation, so `request vir ` has none).
+	if k, ok := l68CaretAtEnd(out, promptLen); ok {
+		if k <= n {
+			return "refused"
+		}
+		return "past"
+	}
 	if strings.Contains(lower, "permission denied") {
 		return "refused"
 	}
@@ -221,6 +230,28 @@ func l68Cell(p l68Probe, out string, promptLen int) string {
 		return "past"
 	}
 	return "not observed"
+}
+
+// l68CaretAtEnd reads the first caret when it sits at the very end of the echo
+// above it (caretAt returns "" there): ok, and how many words the echo has
+// before the caret, so the word the CLI stopped at is the last of them.
+func l68CaretAtEnd(out string, promptLen int) (int, bool) {
+	lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+	for i := 1; i < len(lines); i++ {
+		col := strings.Index(lines[i], "^")
+		if col < 0 || strings.TrimSpace(lines[i]) != "^" {
+			continue
+		}
+		echo, off := lines[i-1], col-promptLen
+		if j := strings.Index(echo, "> "); j >= 0 && strings.Contains(echo[:j], "@") {
+			off, echo = col-(j+2), echo[j+2:]
+		}
+		if off != len(echo) || strings.TrimSpace(echo) == "" || strings.ContainsAny(echo, "\b") {
+			return 0, false
+		}
+		return len(strings.Fields(echo)), true
+	}
+	return 0, false
 }
 
 // l68ExecCell reads an exec-channel command: "ran" (its evidence), "refused"
