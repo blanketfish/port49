@@ -563,6 +563,10 @@ func l64Ended(waitErr, ctxErr error, held bool, name string) (exit int, err erro
 	return exit, err
 }
 
+// l64BeforeOrphanKill is called with the command's pid just before its process group is killed for holding the
+// pipes; a test sets it to see the leader's state then.
+var l64BeforeOrphanKill = func(pid int) {}
+
 // l64RunGrace is l64Run with the time a descendant may keep the pipes open after the command exits. Such a
 // descendant is killed with the command's process group and makes the end an error.
 func l64RunGrace(ctx context.Context, grace time.Duration, env []string, dir, name string, args ...string) (stdout, stderr string, exit int, err error) {
@@ -594,7 +598,9 @@ func l64RunGrace(ctx context.Context, grace time.Duration, env []string, dir, na
 			close(p.done)
 		}()
 	}
-	waitErr := cmd.Wait()
+	// The leader's end is waited for without reaping it: reaped, its pid could be reused before the group is
+	// killed below, and the kill would reach a stranger's group. Wait reaps it after the kill.
+	l64WaitLeader(cmd.Process.Pid)
 	expired, stop := context.WithTimeout(context.Background(), grace)
 	defer stop()
 	held := false
@@ -608,8 +614,10 @@ func l64RunGrace(ctx context.Context, grace time.Duration, env []string, dir, na
 		}
 	}
 	if held {
+		l64BeforeOrphanKill(cmd.Process.Pid)
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // the orphan must not outlive the call
 	}
+	waitErr := cmd.Wait()
 	_, _ = so.r.Close(), se.r.Close()
 	exit, err = l64Ended(waitErr, ctx.Err(), held, filepath.Base(name))
 	return so.buf.String(), se.buf.String(), exit, err
