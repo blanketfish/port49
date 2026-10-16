@@ -1097,8 +1097,7 @@ func TestASpiffePrincipalIsNormalisedVerbatimOrRefused(t *testing.T) {
 			t.Errorf("%s: %q %v", in, got, err)
 		}
 	}
-	for _, in := range []string{"SPIFFE://corp.example.com/x", "spiffe://Corp.example.com/x", "spiffe://corp.example.com",
-		"system:serviceaccount:netops:oxidized"} {
+	for _, in := range []string{"SPIFFE://corp.example.com/x", "spiffe://Corp.example.com/x", "spiffe://corp.example.com"} {
 		if got, err := normalPrincipal(in); !errors.Is(err, ErrBadRevocation) {
 			t.Errorf("%s: %q %v", in, got, err)
 		}

@@ -157,6 +157,9 @@ type Auth struct {
 	// OIDC is the verified token's identity on a broker event whose caller
 	// presented one (plan 7h). A bearer that did not verify has none.
 	OIDC *OIDC `json:"oidc,omitempty"`
+	// K8s is a verified service account token's identity on a broker event
+	// whose caller presented one (plan 10); never set with OIDC.
+	K8s *K8s `json:"k8s,omitempty"`
 	// DirectoryPassword is how a directory-password sign-in authenticated,
 	// recorded because it cannot be established afterwards (spec §5.7; §13
 	// decision 47): the methods used, when, and a hash of the directory
@@ -183,6 +186,21 @@ type OIDC struct {
 	AMR      []string `json:"amr,omitempty"`
 	ACR      string   `json:"acr,omitempty"`
 	AuthTime string   `json:"auth_time,omitempty"`
+}
+
+// K8s is a verified service account token's identity on a broker event (plan
+// 10; spec §5.7 auth.k8s): which cluster and pod minted, unrecoverable
+// afterwards. Cluster is the accepting verifier's configured name: several
+// clusters may vouch for one namespace (decision 49 ruling 4).
+type K8s struct {
+	Cluster           string `json:"cluster"`
+	Issuer            string `json:"issuer"`
+	Sub               string `json:"sub"`
+	ServiceAccountUID string `json:"serviceaccount_uid"`
+	Pod               string `json:"pod"`
+	PodUID            string `json:"pod_uid"`
+	Node              string `json:"node,omitempty"`
+	JTI               string `json:"jti,omitempty"`
 }
 
 // Directory says where a broker event's directory membership was read:

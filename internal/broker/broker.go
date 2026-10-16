@@ -476,7 +476,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
 				Reason: decision.NoGrantsMatched, Principal: principal,
 				Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: ca.OIDC,
-					DirectoryPassword: ca.DirectoryPassword},
+					K8s: ca.K8s, DirectoryPassword: ca.DirectoryPassword},
 				Policy: &decision.Policy{Bundle: pol.Bundle}, Sweep: sweepOf(req)})
 			resp := api.MintResponse{Principal: principal, Results: []api.MintItem{}}
 			resp.Subject, resp.Subjects = subjectNames(pol, m)
@@ -1194,7 +1194,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer),
-				OIDC: ca.OIDC, DirectoryPassword: ca.DirectoryPassword},
+				OIDC: ca.OIDC, K8s: ca.K8s, DirectoryPassword: ca.DirectoryPassword},
 			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req), PerLoginMFA: mfaRec}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
@@ -1341,7 +1341,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			TTL:         time.Duration(req.TTLSeconds) * time.Second,
 			Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt, ReplayOnly: replayOnly,
 			Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-			Directory: directoryAuth(answer), OIDC: ca.OIDC, DirectoryPassword: ca.DirectoryPassword,
+			Directory: directoryAuth(answer), OIDC: ca.OIDC, K8s: ca.K8s, DirectoryPassword: ca.DirectoryPassword,
 			Log: buf, Sweep: sweepOf(req), PerLoginMFA: perLogin})
 	}
 	out, err := mint(replays)
