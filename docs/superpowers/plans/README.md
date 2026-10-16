@@ -6892,7 +6892,7 @@ API is a question for this plan; it is not decided here.
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
-GitHub Action — written when the repository goes public. Four sections:
+GitHub Action — written when the repository goes public. Five sections:
 
 - **Concepts:** the token, the receipt and the login context; revocation; trust domains.
 - **Operator guide:** install, the broker and the agent, `port49 login`, and troubleshooting
@@ -6901,6 +6901,16 @@ GitHub Action — written when the repository goes public. Four sections:
   page per platform built from `tests/lab/results/`, including the traps the lab measured.
 - **Reference:** config keys, reason codes, metrics and the decision-log schema, generated from the
   code so it cannot drift.
+- **Agent quick start** (Ryan, 2026-10-16), for people who let an AI agent reach devices through
+  port49. The agent gets its own machine identity (a workload certificate or, plan 10, a
+  Kubernetes service account), never a person's login or a password, and a policy subject of its
+  own with the narrowest roles that do its job. Its tooling mints and presents the token
+  (`port49 ssh`'s askpass, the Python client, the Ansible lookup) so the token never enters the
+  agent's context or its transcript. A refusal reaches it as `port49 token --json`'s reason code,
+  which it can act on. Every command it runs is recorded under its principal. A device under
+  per-login MFA is refused to it (`per_login_mfa_required`): those stay human. Worked example: one
+  read-only agent, from identity to a recorded `show` command. The site also publishes an
+  `llms.txt` pointing agents that deploy or configure port49 at the pages they need.
 
 **Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
 this file). From plan 9a's final review: the install must be 0755 with no setgid or file
