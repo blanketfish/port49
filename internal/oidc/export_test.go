@@ -22,4 +22,4 @@ func (s *KeySet) SetAfterFirstTryForTest(f func()) { s.afterFirstTry = f }
 
 // WaitDiscoveryForTest waits for the discovery reads a fetch started, which
 // run after Fetch returns.
-func (s *KeySet) WaitDiscoveryForTest() { s.noted.Wait() }
+func (s *KeySet) WaitDiscoveryForTest() { s.WaitNotes() }

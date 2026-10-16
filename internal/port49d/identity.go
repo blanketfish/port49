@@ -49,10 +49,10 @@ func stateDirWords(cfg config.Config, stateDir string, err error) string {
 		"the broker's own state is kept there; chmod it 0700, or move broker.revocations_file into a 0700 directory")
 }
 
-// openOIDC builds broker.identity's OIDC set: one key set per issuer,
+// openOIDC builds broker.identity's OIDC and k8s set: one key set per issuer,
 // shared by the issuer's verifiers, restored from stateDir and kept there.
 // It fetches nothing: runKeySets does, so a start never waits on a
-// provider (Ruling 4). Nil without an oidc verifier. A state directory it
+// provider (Ruling 4). Nil without an oidc or k8s verifier. A state directory it
 // cannot keep keys in is said now, in one line, not first at a save an
 // hour into a provider outage (pre-flight M-21); the broker still starts.
 func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(string, ...any)) (*oidc.Set, error) {
@@ -89,7 +89,8 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 				}
 			}
 			path := keyFile(stateDir, v.Issuer)
-			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, JWKS: v.JWKS, Who: v.Who(), Migrating: migrating(id.K8s, v), Client: oidc.NewClient(roots),
+			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, JWKS: v.JWKS, Who: v.Who(),
+				Migrating: migrating(id.K8s, v), Client: oidc.NewClient(roots),
 				Refresh: id.Timing.JWKSRefresh, MaxAge: id.Timing.JWKSMaxAge, Now: time.Now, Say: say, M: m, Proc: procOf(cfg),
 				Save: func(b []byte) error {
 					if err := writeOwnerOnly(path, b); err != nil {

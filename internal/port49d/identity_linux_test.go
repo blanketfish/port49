@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -304,5 +305,57 @@ func TestAClusterCAFileThatDoesNotLoadIsRefusedByName(t *testing.T) {
 	_, err := openOIDC(cfg, cfg.Broker.StateDir, metrics.New(prometheus.NewRegistry()), func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "broker.identity machines k8s verifier 0") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A cluster migrating its issuer has two verifiers on one jwks; discovery
+// names only the new issuer, and that is no mismatch for the old one's key
+// set (decision 49 ruling 4). The control: the old verifier alone, over the
+// same discovery, says its tokens are refused.
+func TestAMigratingClusterKeySetsAreQuietAboutDiscoveryNamingTheOtherIssuer(t *testing.T) {
+	const oldIssuer, newIssuer = "https://l69-a.port49.lab", "https://l69-a-new.port49.lab"
+	notes := func(verifiers ...string) string {
+		iss := oidctest.NewIssuer(t)
+		iss.Discovery(func(d map[string]any) { d["issuer"] = newIssuer })
+		dir := stateDirT(t)
+		caFile := filepath.Join(dir, "ca.pem")
+		if err := os.WriteFile(caFile, iss.CertPEM(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := k8sConfig()
+		cfg.Broker.StateDir = dir
+		base := cfg.Broker.Identity.K8s[0]
+		base.JWKS, base.CAFile = iss.URL+"/jwks", caFile
+		cfg.Broker.Identity.K8s = nil
+		for _, issuer := range verifiers {
+			v := base
+			v.Issuer = issuer
+			cfg.Broker.Identity.K8s = append(cfg.Broker.Identity.K8s, v)
+		}
+		var mu sync.Mutex
+		var said strings.Builder
+		set, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(f string, a ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(&said, f+"\n", a...)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range set.Verifiers {
+			if err := v.Keys.Fetch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			v.Keys.WaitNotes()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return said.String()
+	}
+	if got := notes(oldIssuer); !strings.Contains(got, "names issuer "+newIssuer) {
+		t.Fatalf("the control says nothing, so the test below proves nothing: %q", got)
+	}
+	if got := notes(oldIssuer, newIssuer); strings.Contains(got, "names issuer") {
+		t.Fatalf("a migration is said to be a mismatch: %q", got)
 	}
 }

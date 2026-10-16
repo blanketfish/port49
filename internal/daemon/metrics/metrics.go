@@ -327,17 +327,19 @@ type Metrics struct {
 	DirectoryRefreshLastComplete prometheus.Gauge
 	// port49_oidc_keys_last_success_timestamp_seconds{issuer}: the Unix
 	// time the keys held were fetched: 0 from the key set's creation until
-	// a fetch or a restore (plan 10: a k8s verifier's issuer too), and after a restore the kept set's fetched_at,
+	// a fetch or a restore, and after a restore the kept set's fetched_at,
 	// so a restart during an outage keeps the alert firing (plan 7h,
 	// pre-flight I-4). Alert on time() - it > jwks_max_age / 2 or absent(it),
-	// with a for: of a few minutes to pass a start's first fetch.
+	// with a for: of a few minutes to pass a start's first fetch. A k8s
+	// verifier's issuer is one too (plan 10).
 	OIDCKeysLastSuccess *prometheus.GaugeVec
 	// port49_oidc_keys_fetch_failures_total{issuer}: discovery or JWKS
 	// fetches that failed (plan 10: a k8s verifier's issuer too).
 	OIDCKeysFetchFailures *prometheus.CounterVec
 	// port49_oidc_tokens_total{issuer, outcome}: OIDC bearer tokens by the
-	// configured issuer, a k8s verifier's included ("unknown" for any other) and outcome: accepted,
-	// invalid, expired, unavailable, unmapped, logged_out (plan 7h).
+	// configured issuer ("unknown" for any other) and outcome: accepted,
+	// invalid, expired, unavailable, unmapped, logged_out (plan 7h; plan 10:
+	// a k8s verifier's issuer too).
 	OIDCTokens *prometheus.CounterVec
 	// port49_oidc_logouts_total{outcome}: back-channel logouts: applied,
 	// nothing (a valid logout that reached no context or token), replayed,

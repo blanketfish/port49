@@ -119,8 +119,8 @@ func parseProxy(raw string) (*url.URL, error) {
 }
 
 // ProxyFor is the proxy NewClient's transport takes to reach target: the
-// environment's, or nil for none. target is the URL the fetch dials: an OIDC
-// verifier's issuer, a k8s verifier's JWKS URL. An HTTPS_PROXY that does not parse as a
+// environment's, or nil for none. target is the URL the fetch dials: an
+// OIDC verifier's issuer, a k8s verifier's JWKS URL. An HTTPS_PROXY that does not parse as a
 // proxy URL is an error, never "no proxy": the transport would drop it
 // silently or dial a host nobody configured.
 func ProxyFor(target string) (*url.URL, error) {
@@ -152,6 +152,10 @@ func DescribeProxy(u *url.URL) string {
 	}
 	return "through the proxy " + u.Scheme + "://" + u.Host + with + " (HTTPS_PROXY)"
 }
+
+// WaitNotes waits for the discovery reads a fetch started, which run after
+// Fetch returns and say their note when it changed.
+func (s *KeySet) WaitNotes() { s.noted.Wait() }
 
 // KeyFileName is the name of the file an issuer's fetched keys are kept in,
 // in the broker's state directory (Ruling 4): config checks no other file
