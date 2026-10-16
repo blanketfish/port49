@@ -222,11 +222,35 @@ func TestAClusterRefusalsOperatorLineSaysK8s(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, clusterPolicy)
 	iss := f.withCluster(t)
 	f.b.Say = nil
-	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "not-a-token") // an oidc-worded refusal first
+	f.addIssuer(t, oidctest.NewIssuer(t), "example.com", false) // a provider beside the cluster, so garbage is oidc-worded
+	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "not-a-token")
+	if out := logs.String(); !strings.Contains(out, "a bearer token was refused (trust_domain_unresolved)") {
+		t.Fatalf("garbage beside an oidc verifier is an oidc refusal: %s", out)
+	}
 	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", "backup", "oxidized", f.b.Now(), nil)
 	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
 	out := logs.String()
 	if !strings.Contains(out, "a k8s token was refused (identity_unmapped): its namespace backup is not one cluster l69_a") {
 		t.Fatalf("the operator's lines: %s", out)
+	}
+}
+
+// A bearer that is not a compact JWS reaches no verifier, so on a broker whose
+// every verifier is a cluster's it is recorded and said k8s (spec 5.7).
+func TestAGarbageBearerOnAClusterOnlyBrokerIsK8s(t *testing.T) {
+	logs := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	f := newFixtureWithPolicy(t, 8, clusterPolicy)
+	f.withCluster(t)
+	f.b.Say = nil
+	f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "not-a-token")
+	if out := logs.String(); !strings.Contains(out, "a k8s token was refused (trust_domain_unresolved)") {
+		t.Fatalf("the operator's line: %s", out)
+	}
+	recs := eventsOf(f.records(t), decision.EventMint)
+	if m := recs[len(recs)-1]["auth"].(map[string]any)["method"]; m != "k8s" {
+		t.Fatalf("the record's method is %v", m)
 	}
 }

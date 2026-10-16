@@ -155,11 +155,17 @@ func (s *Set) Verify(ctx context.Context, raw string) (Assertion, error) {
 func (s *Set) verify(ctx context.Context, raw string) (Assertion, string, error) {
 	j, err := ParseCompact(raw)
 	if err != nil {
+		// A token that is no JWS reaches no verifier: it is k8s when every
+		// configured verifier is (spec 5.7).
+		var r *refusal
 		if errors.Is(err, ErrCrit) {
-			return Assertion{}, "", refuse(ErrInvalid, "invalid", "it names a critical header extension")
+			r = refuse(ErrInvalid, "invalid", "it names a critical header extension")
+		} else {
+			r = refuse(ErrInvalid, "invalid", "it is not a compact JWS (an encrypted, unsigned or "+
+				"malformed token, or over %d bytes)", MaxToken)
 		}
-		return Assertion{}, "", refuse(ErrInvalid, "invalid", "it is not a compact JWS (an encrypted, unsigned or "+
-			"malformed token, or over %d bytes)", MaxToken)
+		r.method = k8sMethod(allK8s(s.Verifiers))
+		return Assertion{}, "", r
 	}
 	// The iss only routes the token to its verifiers; each reads every claim
 	// again, after its signature. A repeated member is no one's token.
