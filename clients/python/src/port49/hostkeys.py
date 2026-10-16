@@ -339,10 +339,12 @@ def append(path, host, keys, *, hash_names, ssh_keygen="ssh-keygen", revoked=Non
     if not path:
         raise HostKeyError("host_keys_not_kept", f"no known_hosts file to file the key under {host} in")
     # What is written is checked here as well: no pattern, marker or second line.
+    if isinstance(host, str) and re.search(r'[\s"]', host):
+        raise HostKeyError("address", f"{str(host)[:64]!r} cannot be written to known_hosts as an address")
     if not host or len(host) > 253 or re.search(r"[\s\x00-\x1f\x7f*?!,]|^[@|]", host):
         raise HostKeyError("device_name", f"{str(host)[:64]!r}: {NAME_RULE}")
     pairs = []
-    for key in keys:
+    for key in dict.fromkeys(keys):
         t, _, b = key.partition(" ")
         if not _TOKEN.fullmatch(t) or not _TOKEN.fullmatch(b):
             raise HostKeyError("host_key_uncheckable", "the device presented a key that cannot be written to known_hosts")

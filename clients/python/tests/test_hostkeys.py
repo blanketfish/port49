@@ -24,6 +24,11 @@ class HostKeysTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.kh = os.path.join(self.dir, "known_hosts")
         open(self.kh, "w").close()
+        self.home = os.path.join(self.dir, "home")  # no test reads or writes the real ~/.ssh
+        os.mkdir(self.home)
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old) if old is not None else os.environ.pop("HOME"))
 
     def config(self, *lines, user=None, glob="/dev/null"):
         path = os.path.join(self.dir, "ssh_config")
@@ -38,6 +43,9 @@ class HostKeysTest(unittest.TestCase):
         subprocess.run(["ssh-keygen", "-q", "-t", keytype, "-N", "", "-f", path], check=True)
         with open(path + ".pub", encoding="ascii") as f:
             return " ".join(f.read().split()[:2]), path + ".pub"
+
+    def test_the_tests_run_under_a_temp_home(self):
+        self.assertTrue(os.environ["HOME"].startswith(self.dir))
 
     def test_nothing_known(self):
         kh = hostkeys.lookup("Leaf1", "10.0.0.11", ssh_config=self.config())
@@ -493,6 +501,18 @@ class AddressHelpersTest(unittest.TestCase):
         for host, key in (("a b", ED), ("10.0.0.1", "ssh-ed25519 AA\nBB"), ("10.0.0.1", "nokeyblob")):
             with self.assertRaises(HostKeyError, msg=repr((host, key))):
                 hostkeys.append(self.kh, host, [key], hash_names=False)
+        self.assertFalse(os.path.exists(self.kh))
+
+    def test_append_files_a_key_given_twice_once(self):
+        self.assertEqual(hostkeys.append(self.kh, "10.0.0.1", [ED, ED], hash_names=False), [ED])
+        with open(self.kh, encoding="ascii") as f:
+            self.assertEqual(f.read(), f"10.0.0.1 {ED}\n")
+
+    def test_append_refuses_a_host_ssh_keygen_would_misread_as_an_address(self):
+        for host in ('10.0.0.1"', "10.0.0.1 x", "10.0.0.1\nx"):
+            with self.assertRaises(HostKeyError, msg=repr(host)) as cm:
+                hostkeys.append(self.kh, host, [ED], hash_names=False)
+            self.assertEqual(cm.exception.code, "address", repr(host))
         self.assertFalse(os.path.exists(self.kh))
 
     def test_fingerprint_matches_ssh_keygen(self):
