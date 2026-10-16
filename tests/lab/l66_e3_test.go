@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -159,6 +160,7 @@ func l66FPs(keys []string) string {
 // cellE3 is one (e3) cell. mode is "std" (the stand-in's keys are filed under its address), "fresh" (the stand-in
 // has no entry: record) or "keyword" (std, with the connection named by the play's keyword alone).
 func (e *l66Env) cellE3(id, sshType, mode string) {
+	e.labGuard()
 	kind := "refusal"
 	if mode == "fresh" {
 		kind = "record"
@@ -302,4 +304,26 @@ func l66WriteE3(e *l66Env) {
 		t.Fatalf("write %s: %v", p, err)
 	}
 	t.Logf("wrote %s", p)
+}
+
+// l66StopSentinel and l66DiskFloorMB are the lab's rules: a file there stops every run at its next cell, and a
+// free root filesystem below the floor does too.
+const (
+	l66StopSentinel = "/tmp/port49-STOP-LAB"
+	l66DiskFloorMB  = 67584
+)
+
+// labGuard ends the run (a Fatal, so the teardown defers run) when the stop sentinel exists or the disk is below
+// the floor. It runs before each cell.
+func (e *l66Env) labGuard() {
+	if _, err := os.Stat(l66StopSentinel); err == nil {
+		e.t.Fatalf("%s exists: the lab run stops before %s", l66StopSentinel, "the next cell")
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs("/", &st); err != nil {
+		e.t.Fatalf("statfs /: %v", err)
+	}
+	if free := int64(st.Bavail) * int64(st.Bsize) / (1 << 20); free < l66DiskFloorMB {
+		e.t.Fatalf("%dM free on /, below the %dM floor: the lab run stops", free, l66DiskFloorMB)
+	}
 }
