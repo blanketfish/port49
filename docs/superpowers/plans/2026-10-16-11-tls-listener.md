@@ -242,8 +242,8 @@ override any.
 - **R12. 0-RTT is refused.** `crypto/tls` aborts a ClientHello carrying `early_data` with
   `unsupported_extension`, the abrupt disconnect RFC 9887 §5.1.2 requires. It is recorded
   `early_data_refused` and struck. Task 7's `TestTLSEarlyDataIsRefused` sends a ClientHello
-  carrying `early_data` and pins the abort; a port49 ticket never permits early data (measured,
-  L72 (k)).
+  carrying `early_data` and pins the abort; a port49 ticket never permits early data (unmeasured
+  until L72 (k) closes).
 - **R13. An obfuscated packet over TLS gets an ERROR and a close** (RFC 9887 §4). A header whose
   unencrypted flag is clear is answered with the ERROR status of its type
   (`TAC_PLUS_AUTHEN_STATUS_ERROR`, `_AUTHOR_`, `_ACCT_`), with the flag set and `seq_no + 1`, and
