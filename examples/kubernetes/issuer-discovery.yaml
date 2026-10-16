@@ -1,0 +1,16 @@
+# Lets port49-broker read this cluster's service account keys without a
+# credential (spec §13 decision 49 ruling 2): issuer discovery and the JWKS
+# are public keys. Provisional on L69 (c) until Task 11 closes it (then
+# "measured on kind, L69 (c)"); managed clusters are L70, open.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: port49-service-account-issuer-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated

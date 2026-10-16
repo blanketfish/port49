@@ -1,0 +1,24 @@
+# One k8s verifier per cluster (decision 49). cluster is port49's name for it,
+# in records and log lines (nothing in the cluster changes); issuer is the
+# cluster's --service-account-issuer, set per cluster; jwks is where the
+# broker reads its keys (the API server's own address); namespaces are the
+# ones whose service accounts it may name. The same workload deployed to both
+# regions is one identity, so both list netops (decision 49 ruling 4): list
+# different namespaces where a namespace means different tenants per cluster.
+broker:
+  identity:
+    machines:
+      - type: k8s
+        cluster: us_east
+        issuer: https://us-east.k8s.example.com
+        jwks: https://10.20.0.10:6443/openid/v1/jwks
+        ca_file: /etc/port49/us-east-cluster-ca.pem
+        audience: port49
+        namespaces: [netops]
+      - type: k8s
+        cluster: eu_west
+        issuer: https://eu-west.k8s.example.com
+        jwks: https://10.40.0.10:6443/openid/v1/jwks
+        ca_file: /etc/port49/eu-west-cluster-ca.pem
+        audience: port49
+        namespaces: [netops]
