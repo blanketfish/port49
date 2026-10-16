@@ -46,13 +46,14 @@ TLS-capable TACACS+ client"), §11 (:1270), §15 (:1853), §19 step 11 (:2401). 
 - Data is snake_case: the config block `tls_listener` and its keys `listen`, `cert_file`,
   `key_file`, `client_ca_file`, `intermediates_file`, `device_identity.match`,
   `device_identity.dns_suffixes`, `server_names`, `handshake_timeout`,
-  `session_ticket_lifetime`, `expiry_warning`, `reload_interval`, `state_dir`,
+  `session_ticket_lifetime`, `expiry_warning_fraction`, `reload_interval`, `state_dir`,
   `certificate_status`; `listen: none`; the record fields `device.transport`, `device.cert_sha256`,
   `unvalidated.transport`, `unvalidated.tls_outcome`, `unvalidated.detail`,
   `unvalidated.cert_sha256`; the diagnoses `transport_mismatch`, `tls_refused`,
   `obfuscated_over_tls`; the change kind `transport_changed`; the metrics
-  `port49_tls_handshakes_total{outcome}`, `port49_tls_device_certificate_expiry_seconds`,
-  `port49_tls_server_certificate_expiry_seconds`, `port49_devices_by_transport{transport}`.
+  `port49_tls_handshakes_total{outcome}`, `port49_tls_device_certificate_lifetime_left_ratio`,
+  `port49_tls_server_certificate_lifetime_left_ratio`, `port49_devices_by_transport{transport}`, and
+  the label `component` (`broker`, `tls_listener`) on the certificate-status metrics.
 - Reason codes are spec §5.7's closed vocabulary (`internal/decision/reasons.go`). This plan adds
   none. A TLS refusal is an `unvalidated` record with a diagnosis, as a key miss is. A quarantined
   device keeps `device_quarantined`, and an admission a reload withdrew keeps `device_unknown`.
@@ -62,7 +63,8 @@ TLS-capable TACACS+ client"), §11 (:1270), §15 (:1853), §19 step 11 (:2401). 
   subjectAltName entries and subject are recorded, each through `printsafe.Line` with a bound.
   An unvalidated body is never logged or hashed on the TLS listener: there it is the cleartext of
   a peer that holds a certificate, and may carry a credential.
-- No device identity in a metric label. `outcome` and `transport` are closed vocabularies.
+- No device identity in a metric label. `outcome`, `transport` and `component` are closed
+  vocabularies.
 - The lab register is the source of truth. No lab image today carries an RFC 9887 client
   (vendor documentation, Rulings R19). Every device-behaviour claim cites L73 and reads
   "unmeasured (L73)" until a row cell closes. L71 (which lab images carry a client) and L72 (port49
@@ -92,8 +94,13 @@ override any.
   refused at load; port `0` never conflicts. One port49d may run both. RFC 9887 §5.1.1 does
   not recommend TLS and non-TLS servers on one host. So the start says, in a notice, that the
   two run on one host, and why it is still downgrade-safe here: each device record names one
-  transport, and the other listener refuses that device (R4). The notice is said at every start
-  and asks nothing. Q2 asks whether to require an opt-in instead. Cisco's documents for IOS XE
+  transport, and the other listener refuses that device (R4). The notice also says the two limits
+  of that. First, the protection is only as strong as the inventory's `transport` field: a sync
+  that flips a device from `tls` to `tcp` is a downgrade, recorded as `transport_changed` (a
+  security change, with its alarm) but not blocked. Second, one process holds both the shared
+  keys and the TLS key, so a compromise of this host exposes both: RFC 9887 §5.1.1's other reason
+  for separate hosts, which R4 does not address. The notice is said at every start and asks
+  nothing. Ruled with Ryan told (Q2). Cisco's documents for IOS XE
   17.18 and NX-OS 10.6 configure port 6049, Cisco ISE's default. The default here stays 300 (RFC),
   and the operator notes name 6049 as the vendor default to override on the device or listen on.
   What a device defaults to is L73 (a).
@@ -133,8 +140,9 @@ override any.
   unadmitted source is struck and reset. A refused device, a quarantined one and one of the
   other transport are recorded, declined and reset. Each happens before the handshake, so
   none of them costs a key exchange or a signature: the listener is unauthenticated until the
-  handshake ends, and a handshake is the CPU amplifier spec §10 forbids. Their records carry no
-  header fields (none was read), `transport: tls`, and the device block where one is known. The
+  handshake ends, and a handshake is the CPU amplifier spec §10 forbids. Their records' header
+  fields are zero, `type: 0` included, which no TACACS+ packet has: it says no header was read.
+  They carry `transport: tls`, and the device block where one is known. The
   RFC 8907 listener is unchanged, except that a `tls` device's first header there is recorded
   `transport_mismatch` and declined, as `admission_refused` is today.
 - **R6. A device is found by its source address and must be named by its certificate** (RFC 9887
@@ -150,7 +158,13 @@ override any.
   The common name is never read (RFC 9525). The mapping comes from the inventory alone, with no
   per-device configuration, so a fleet enrolled by SCEP, ACME or EST under one naming rule needs
   nothing from the operator per device. A certificate naming another device is
-  `identity_mismatch`, and the record says what it named and what was wanted.
+  `identity_mismatch`, and the record says what it named and what was wanted. Because any
+  clientAuth (or no-EKU) leaf the anchors issue that names a device's inventory name or address
+  *is* that device from that device's source address, `client_ca_file` should be a CA dedicated to
+  devices, not one that also issues to people or services; the operator notes say so. An open
+  connection whose device's inventory addresses a reload changed is withdrawn at its next packet
+  (`admission_withdrawn`), since its certificate may have named it by an address it no longer
+  has; its next handshake is judged against the record in force.
 - **R7. The chain** (RFC 9887 §3.4, §3.4.1). It is verified by `x509.Certificate.Verify` against
   `client_ca_file` (each a CA certificate), with the peer's own intermediates plus
   `intermediates_file`'s. A device sending only its leaf therefore verifies, as RFC 9887
@@ -163,22 +177,47 @@ override any.
   required and has the broker's shape exactly (decision 33): `crls`, `ocsp`,
   `refresh_interval`, `on_unavailable` (refuse, the default, or allow), or `disabled: true`
   explicitly. A second `certstatus.Checker` serves it, its lines begun `tls_listener:
-  certificate status:`, and its kept lists in `tls_listener.state_dir` (required with `crls`).
-  A revoked chain is `certificate_revoked`. A status that cannot be established is
-  `status_unavailable` under refuse. That is port49's fault, not the device's, so it is a
-  decline (no strike). Under allow the device is admitted and the checker's own lines and
-  `port49_cert_status_unavailable_total` say so. At 3am a CRL server down past the list's
-  `nextUpdate` declines every TLS device to its local method. The operator sees the checker's
-  line, the `status_unavailable` records and outcome counter, and the start line naming the
-  CRL's next update. The escape is a `file:` CRL source the operator copies in, or
+  certificate status:`, and its kept lists in a subdirectory of its own,
+  `<tls_listener.state_dir>/tls_listener/` (`state_dir` is required with `crls`), so it never
+  writes the file an in-process broker's checker keeps under the same CRL name, even when both
+  name one directory. The certificate-status metrics (`port49_cert_status_checks_total`,
+  `port49_crl_loads_total`, `port49_crl_next_update_timestamp_seconds`,
+  `port49_cert_status_unavailable_total`) gain a closed label `component`, `broker` or
+  `tls_listener`, so a stale device CRL is never masked by a fresh broker CRL of the same name,
+  and the 3am signal says which checker failed. The status is checked only once the handshake
+  has completed: crypto/tls runs `VerifyConnection` before it checks the client's
+  CertificateVerify, so a status check there would run, and could wait on the network, for a
+  peer that holds only a device's public certificate. `VerifyConnection` does the path and the
+  identity, which are local and cheap; the status follows once possession is proven, inside the
+  handshake's deadline, and a refusal then is a reset (the device sees no alert). A revoked
+  chain is `certificate_revoked`. A status that cannot be established is `status_unavailable`
+  under refuse. That is port49's fault, not the device's, so it is a decline (no strike). Its
+  decline window stands until it lapses: at the next Accept inside it the device is reset
+  before any TLS byte, even though it is admitted on its own listener, because nothing at Accept
+  can tell the status is back without the handshake the window exists to spare. Each window
+  doubles on the strike schedule to `malformed_backoff_max`, so an outage costs each device at
+  most one full handshake per window. Under allow the device is admitted and the checker's own
+  lines and `port49_cert_status_unavailable_total{component="tls_listener"}` say so. At 3am a
+  CRL server down past the list's `nextUpdate` declines every TLS device to its local method.
+  The operator sees the checker's line, one gathered line per 10 minutes naming how many devices
+  were declined (R16), the `status_unavailable` records and outcome counter, and the start line
+  naming the CRL's next update. The escape is a `file:` CRL source the operator copies in, or
   `on_unavailable: allow`, a reviewed change.
 - **R9. An open connection is judged at every packet.** Holding a connection open never extends a
   certificate's life (as spec §10 says of a key version). Each packet re-checks every chain
-  certificate's `NotAfter` and the chain's status (the checker's lists are cached, so this is a
-  map lookup). When the listener's files have been reloaded since the handshake, the chain is
-  verified again in full. A failure is recorded (`tls_refused`, with the packet's header fields)
-  and the connection reset, with no strike: the device did nothing on this connection. Its next
-  handshake is judged, and struck, as any other.
+  certificate's `NotAfter` and the chain's status from what the checker holds now, never a
+  network call: a CRL in force is in memory, and an OCSP answer is the cached one
+  (`certstatus.Checker.CheckCached`, a map lookup). Refreshes happen in the background: a CRL on
+  `refresh_interval`, and an OCSP answer asked again, shared and bounded by `ocsp.timeout`, once
+  it is past half its cached life, so a working responder never lets the answer an open
+  connection relies on expire. A cached answer that has expired, or none, is `status_unavailable`
+  as R8 says (declined under refuse; admitted and counted under allow), and its question is asked
+  in the background for the next packet. So no packet ever waits on a responder, which a
+  device's reply timeout (3s at the shortest, L13) would not survive. When the listener's files
+  have been reloaded since the handshake, the chain's path and identity are verified again in
+  full, and its status is read the same cached way. A failure is recorded (`tls_refused`, with
+  the packet's header fields) and the connection reset, with no strike: the device did nothing
+  on this connection. Its next handshake is judged, and struck, as any other.
 - **R10. SNI** (RFC 9887 §3.4.2, §5.1.5). `server_names`, when set, are the names a
   ClientHello's SNI may carry. Any other is refused at the ClientHello (`sni_mismatch`;
   `crypto/tls` sends `internal_error`). An absent SNI is accepted, because a device configured with
@@ -193,18 +232,26 @@ override any.
   not been used before"). The ticket keys are random per load of the listener's files, so a
   reload invalidates every ticket outstanding, and they are never written anywhere. A resumption
   runs `VerifyConnection` again: the chain is verified against the anchors in force and its
-  status checked (RFC 9887 §3.6, "certificates must be verified to check for revocation"). The
-  lifetime a ticket advertises is `crypto/tls`'s fixed seven days; port49 enforces its own. Off
-  is the default because every full handshake re-verifies everything, and how often devices
-  resume is unmeasured (L73 (g)).
+  status checked after it (RFC 9887 §3.6, "certificates must be verified to check for
+  revocation"). The lifetime a ticket advertises is `crypto/tls`'s fixed seven days; port49
+  enforces its own, a departure decision 50 names. A ticket is marked used before crypto/tls
+  checks its binder, so a passive observer who copies a ticket identity from a clear ClientHello
+  can "burn" it with a bad binder. That needs an admitted source address and costs the device
+  only a full handshake, so it is accepted and said. Off is the default because every full
+  handshake re-verifies everything, and how often devices resume is unmeasured (L73 (g)).
 - **R12. 0-RTT is refused.** `crypto/tls` aborts a ClientHello carrying `early_data` with
   `unsupported_extension`, the abrupt disconnect RFC 9887 §5.1.2 requires. It is recorded
-  `early_data_refused` and struck. A port49 ticket never permits early data (measured, L72 (k)).
+  `early_data_refused` and struck. Task 7's `TestTLSEarlyDataIsRefused` sends a ClientHello
+  carrying `early_data` and pins the abort; a port49 ticket never permits early data (measured,
+  L72 (k)).
 - **R13. An obfuscated packet over TLS gets an ERROR and a close** (RFC 9887 §4). A header whose
   unencrypted flag is clear is answered with the ERROR status of its type
   (`TAC_PLUS_AUTHEN_STATUS_ERROR`, `_AUTHOR_`, `_ACCT_`), with the flag set and `seq_no + 1`, and
-  then the connection closes. Its body is never read. It is recorded `obfuscated_over_tls` with
-  no strike, because the peer holds a valid certificate and is misconfigured, not hostile. Every
+  then the connection closes. Its body, which the header check has bounded at 4096 bytes, is
+  read and discarded, never hashed or logged: closing a socket with unread data sends a reset
+  that can drop the ERROR, so reading it makes the close a clean close_notify and FIN. It is
+  recorded `obfuscated_over_tls` with no strike, because the peer holds a valid certificate and
+  is misconfigured, not hostile. Every
   reply on the TLS listener sets the unencrypted flag. A packet that fails another header check
   is `not_tacacs` and struck, as on 49.
 - **R14. The handshake has a deadline**: `handshake_timeout`, default 5s, 1s to 30s. That bounds
@@ -226,15 +273,29 @@ override any.
   - A refusal is `unvalidated` with diagnosis `tls_refused`, `transport: "tls"`, `tls_outcome`,
     `detail` (bounded, printable) and `cert_sha256` where a certificate was sent.
   - `port49_tls_handshakes_total{outcome}` counts `ok`, `resumed`, and every refusal outcome.
-  - `port49_tls_device_certificate_expiry_seconds` is the least time to expiry among device
-    certificates verified in the last 24h, `+Inf` with none.
-  - `port49_tls_server_certificate_expiry_seconds` is the server certificate's time to
-    expiry.
+  - `port49_tls_device_certificate_lifetime_left_ratio` is the least fraction of its own
+    lifetime (`NotAfter - NotBefore`) a device certificate verified in the last 24h has left,
+    `1` with none.
+  - `port49_tls_server_certificate_lifetime_left_ratio` is the same fraction for the server
+    certificate in force; below 0 it has expired.
   - `port49_devices_by_transport{transport}` counts admitted devices.
-  - A device whose verified certificate expires within `expiry_warning` (default 336h; `0s` is
-    off) is named in one line at most every 24h.
+  - A device whose verified certificate has less than `expiry_warning_fraction` of its own
+    lifetime left (default `0.33`; `0` is off) is named in one line at most every 24h. A fraction,
+    not a duration, because R15 recommends short-lived certificates issued by automation: any
+    fixed duration (14 days, say) sits forever inside the life of a 7-day certificate, and would
+    name every device every day. ACME clients and cert-manager renew at two thirds of a
+    certificate's life by default, so a certificate in its last third is one whose renewal is
+    already late: the device that stopped renewing. A 90-day certificate warns in its last 30
+    days; a 24h one, renewed on schedule at 16h, never warns, and one whose renewal failed warns
+    8h before it expires.
   - A refusal is also said on stderr, at most once per device and outcome every 10 minutes:
-    the decision log is the audit trail, and stderr is where the 3am reader looks first.
+    the decision log is the audit trail, and stderr is where the 3am reader looks first. A
+    `status_unavailable` is port49's own and reaches every device at once, so it is said once,
+    at the first device, then gathered: one line every 10 minutes gives how many devices were
+    declined and names up to five, as the start's transport lines do.
+  - An alert crypto/tls writes at a refused handshake is best-effort: the reset that follows can
+    discard it before it leaves the host. The record is the authority; L72 records what each
+    reference client saw.
   - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch` and
     `obfuscated_over_tls`.
 - **R17. One device, one set of limits.** The per-NAS cap, strikes, backoff and decline windows
@@ -242,7 +303,9 @@ override any.
   it cannot double its slots or reset its backoff by changing port.
 - **R18. plan 1's mode serves TLS too.** port49d with no `broker:` block reads the inventory
   file's key groups. A `tls` device needs none, and "a device that matches no key group refuses
-  the start" exempts it.
+  the start" exempts it, as do the two pin checks ("pins a key_ref that is not a valid key_ref
+  name", "pins key_ref ... which is not in keys"): R3 ignores a `tls` device's pin, in this mode
+  as with a broker.
 - **R19. The lab.** Vendor documentation (read 2026-10-16) puts RFC 9887 clients in Arista EOS
   4.36.1F (Arista TOI "TACACS+ over TLS", EOS-4.36.1F), Cisco IOS XE 17.18.1 (Cisco document
   225097), Cisco NX-OS 10.6(1)F on Nexus 9000 (Cisco document 224882) and Junos (Juniper
@@ -264,7 +327,7 @@ override any.
 ## Questions for Ryan
 
 - **Q1. Images that carry an RFC 9887 client.** L73 cannot close without one. The floors are
-  vendor-documented and unmeasured. Each needs your vendor account:
+  vendor-documented and unmeasured. Each needs Ryan's vendor accounts:
   - cEOS-lab or vEOS-lab 4.36.1F or later (arista.com);
   - Catalyst 8000V 17.18.1 or later (CCO);
   - Nexus 9300v at 10.6(1)F or later. Cisco's document tests a C9364D-GX2A and does not say
@@ -275,12 +338,15 @@ override any.
   Recommendation: fetch C8000V 17.18 first. Cisco's document is the most specific, and the
   C8000V is the lab's fastest boot. Until then the device column is open, and the reference
   harness (L72) is the only measurement.
-- **Q2. One host serving both listeners.** RFC 9887 §5.1.1 says it is NOT RECOMMENDED (a SHOULD
-  NOT). Ruled (R1) as allowed with a start notice. The design requires separable, not
-  separated, and per-device transport (R4) already refuses the downgrade. The stricter
-  alternative is to refuse both on one port49d unless `tls_listener.share_host: true`. That
-  costs every migrating deployment one more key, and buys no protection R4 does not already
-  give. Recommendation: keep the notice.
+- **Q2. One host serving both listeners. Ruled 2026-10-16: allowed, with the start notice;
+  Ryan told.** RFC 9887 §5.1.1 says it is NOT RECOMMENDED (a SHOULD NOT). The design requires
+  separable, not separated, and per-device transport (R4) already refuses the downgrade. The
+  stricter alternative, refusing both on one port49d unless `tls_listener.share_host: true`,
+  costs every migrating deployment one more key and buys no protection R4 does not already give.
+  The pre-flight review added two caveats, now in the notice, R1 and the operator notes: the
+  protection is as strong as the inventory's `transport` field (a `tls` to `tcp` flip is a
+  recorded security change, not blocked), and one process holds both the shared keys and the TLS
+  key (RFC 9887 §5.1.1).
 
 ## The operator at 3am
 
@@ -288,15 +354,17 @@ What each case looks like, and what fixes it. "Record" is the decision log; "lin
 
 | Case | The device sees | port49d says | Fix |
 |---|---|---|---|
-| A device's certificate expired | `bad_certificate` alert, falls to its next server or local method; retries inside the backoff are reset at Accept | record `tls_refused`/`certificate_expired` naming the device, the subject and `NotAfter`; line once per 10m; `port49_tls_handshakes_total{outcome="certificate_expired"}`; before it happened, the `expiry_warning` line and `port49_tls_device_certificate_expiry_seconds` | renew it on the device; nothing at port49 |
+| A device's certificate expired | `bad_certificate` alert (best-effort: the reset can drop it), falls to its next server or local method; retries inside the backoff are reset at Accept | record `tls_refused`/`certificate_expired` naming the device, the subject and `NotAfter`; line once per 10m; `port49_tls_handshakes_total{outcome="certificate_expired"}`; before it happened, the `expiry_warning_fraction` line and `port49_tls_device_certificate_lifetime_left_ratio` | renew it on the device; nothing at port49 |
+| A device stopped renewing its short-lived certificate | nothing until it expires | once it is in the last third of its own lifetime, one line a day naming it; `port49_tls_device_certificate_lifetime_left_ratio` below 0.33. A fleet renewing on schedule says nothing, whatever its certificates' lifetime | fix the device's enrolment before the certificate expires |
 | The device CA rotated | old certificates: `unknown_ca` per device once `client_ca_file` lost the old CA; open connections close at their next packet | reload line naming the anchors in force by SHA-256; records `unknown_ca` | keep both CAs in `client_ca_file` until every device re-enrolled; `port49_tls_handshakes_total{outcome="unknown_ca"}` reads zero before removing the old one |
-| The CRL is unreachable | until the list's `nextUpdate`, nothing; after it, every TLS device is declined (local method at once, decline window) | `tls_listener: certificate status: CRL x: ...` lines; records `status_unavailable`; `port49_cert_status_unavailable_total` | restore the CRL source; a `file:` source copied in by hand works at once; `on_unavailable: allow` is the reviewed escape |
+| The CRL is unreachable | until the list's `nextUpdate`, nothing; after it, every TLS device completes its handshake and is then reset (no alert), and its next connections are reset at Accept until the decline window lapses (local method at once) | `tls_listener: certificate status: CRL x: ...` lines; the first device's refusal, then one line per 10m with how many devices were declined and up to five names; records `status_unavailable`; `port49_cert_status_unavailable_total{component="tls_listener"}` and `port49_crl_next_update_timestamp_seconds{component="tls_listener"}` (a broker CRL of the same name has its own series) | restore the CRL source; a `file:` source copied in by hand works at once; `on_unavailable: allow` is the reviewed escape |
 | A device speaks TLS 1.2 only | `protocol_version` alert | record `version_refused`, "offered 303; RFC 9887 requires TLS 1.3" | upgrade the device, or set it back to `transport: tcp` and the RFC 8907 server |
 | A device on the wrong port or transport | a reset before any TLS byte (TCP device on 300), or a reset after its first header (TLS device on 49) | record `transport_mismatch` naming the device and its record's transport; line | correct the device's server port, or the record's `transport` |
 | SNI mismatch | `internal_error` alert at ClientHello | record `sni_mismatch`, "asked for server name X" | correct the device's configured server name, or `server_names` |
 | Mixed fleet | each device on its own listener; nothing | start line counts each transport; `port49_devices_by_transport` | none |
 | Certificate names another device | `bad_certificate` | record `identity_mismatch`: "the certificate names dns_name [leaf-02.example.net]; device leaf-01 is dns_name leaf-01 or leaf-01.example.net, or ip_address 10.0.1.5" | reissue the certificate, or fix the inventory name or address |
-| port49d's own certificate expired | the device refuses port49 (its side; L73 (d)) | start or reload line "server certificate ... expired"; `port49_tls_server_certificate_expiry_seconds` < 0 | replace `cert_file`; picked up within `reload_interval` |
+| port49d's own certificate expired | the device refuses port49 (its side; L73 (d)) | start or reload line "server certificate ... expired"; `port49_tls_server_certificate_lifetime_left_ratio` < 0; every device's handshake is recorded `handshake_failed` (and struck) with a `detail` beginning "the device aborted the handshake (it may refuse port49's certificate)" and the device's alert | replace `cert_file`; picked up within `reload_interval`; the strikes lapse within `malformed_backoff_max` |
+| A sync flipped a device from `tls` to `tcp` | it is served on 49 under a shared key if it has one; its open TLS connection ends at its next packet | `inventory_change` record `transport_changed` (a security change) and `port49_inventory_changes_total{kind="transport_changed"}` | if not intended, revert the record: port49 records a downgrade by the inventory, it does not block one |
 
 ## Review Focus
 
@@ -312,7 +380,14 @@ What each case looks like, and what fixes it. "Record" is the decision log; "lin
   longer speaks. Task 8's `TestTLSTransportChangeWithdrawsAnOpenConnection` pins it.
 - **A CRL outage under `on_unavailable: refuse`**: a person expects the device to fall to its local
   method at once (decline, no strike). They do not expect it to be struck into a backoff that
-  outlives the outage. Task 7's `TestTLSStatusUnavailableIsDeclinedNotStruck` pins it.
+  outlives the outage, nor each retry to cost port49 a full handshake. Task 7's
+  `TestTLSStatusUnavailableIsDeclinedNotStruck` pins both: the second dial inside the window is
+  reset at Accept with no new record.
+- **A peer holding only a device's public certificate, during a status outage**: a person expects
+  it to fail the handshake as an impostor (struck), never to reach the status check and be
+  declined unstruck. Task 7's `TestTLSAPublicCertificateAloneNeverReachesTheStatusCheck` pins it.
+- **A device on short-lived certificates**: a person expects no expiry line while it renews on
+  schedule, and one when it stops. Task 4's `TestExpiryWarnsByFractionOfLifetime` pins it.
 - **A ticket presented twice, or after a reload**: a person expects a full handshake, never an
   error or a refusal. Task 9's `TestTicketsAreSingleUse` and `TestAReloadInvalidatesTickets` pin
   them.
@@ -328,7 +403,8 @@ What each case looks like, and what fixes it. "Record" is the decision log; "lin
 | `internal/admission/admission.go` | `tls` admitted without a key; `Device.EffectiveTransport` | 3 |
 | `internal/policy/admit.go`, `internal/config/config.go` (no-broker check), `internal/bundle/diff.go`, `cmd/port49/keys.go` | key checks skip TLS devices; `transport_changed`; `keys show`/`status` | 3 |
 | `internal/devicecert/{outcome,identity,verify,expiry}.go` (new) | the device certificate's verdict | 4 |
-| `internal/certstatus/certstatus.go`, `crl.go` | `Config.Component` for the line prefix | 5 |
+| `internal/certstatus/certstatus.go`, `crl.go`, `ocsp.go`; `internal/daemon/metrics/metrics.go` (the four certificate-status metrics) | `Config.Component` for the line prefix and the `component` label; `CheckCached` | 5 |
+| `internal/daemon/limits/limits.go` | `DeclineStatus`, `DeclinedForStatus` | 7 |
 | `internal/config/config.go`, `internal/config/tlslistener.go` (new) | `tls_listener:`, `listen: none` | 5 |
 | `internal/decision/log.go`, `internal/keyring/keyring.go`, `internal/daemon/metrics/metrics.go`, `internal/daemon/authen/authen.go` | record fields, diagnoses, metrics, the peer | 6 |
 | `internal/daemon/server/tls.go` (new), `server.go`, `conn.go` | Accept decisions, the handshake, the packet path | 7, 8 |
@@ -416,19 +492,31 @@ one it ended because the certificate stopped verifying. The record carries `tran
 | `certificate_expired` | a certificate in its chain is expired or not yet valid | yes |
 | `certificate_invalid` | any other path error, a serverAuth-only leaf included | yes |
 | `certificate_revoked` | a certificate in its chain is revoked | yes |
-| `status_unavailable` | its status could not be established under `on_unavailable: refuse` | no: declined |
+| `status_unavailable` | its status could not be established under `on_unavailable: refuse` | no: declined, and the window stands until it lapses |
 | `identity_mismatch` | the leaf does not name the device its source address is | yes |
 | `sni_mismatch` | the ClientHello asked for a server name not in `server_names` | yes |
 | `early_data_refused` | the ClientHello carried `early_data` (RFC 9887 §5.1.2) | yes |
 | `handshake_timeout` | no handshake within `handshake_timeout` | yes |
 | `handshake_failed` | anything else: a bad signature, a client abort | yes |
 
+The path and the identity are judged inside the handshake. The status is judged only once the
+handshake has completed, so the peer has proven it holds the certificate's key: a refusal then is
+a reset, not an alert. A `status_unavailable` decline's window stands until it lapses, so the
+device's next connections inside it are reset at Accept before any TLS byte, though it is admitted
+on this listener (§13 decision 50 ruling 8). An alert at a refused handshake is best-effort: the
+reset that follows can discard it.
+
 At a later packet an open connection is ended as `tls_refused` with the packet's header fields,
-and with no strike.
+and with no strike. Its status there is read from what the checker holds, never fetched
+(decision 50 ruling 9).
+
+A record the RFC 9887 listener makes at Accept, before any byte is read, has zero header fields:
+`type` 0, which no TACACS+ packet has, says no header was read.
 
 A tenth, `obfuscated_over_tls`, is a packet on the RFC 9887 listener whose unencrypted flag is
 clear. It is answered with its type's ERROR status, the flag set, and the connection closed
-(RFC 9887 §4). Its body is not read, and it is no strike: the peer's certificate verified.
+(RFC 9887 §4). Its body is read and discarded, never hashed or logged, so the close does not
+reset the ERROR away. It is no strike: the peer's certificate verified.
 
 On the RFC 9887 listener no body is hashed into any record: there a body is the cleartext of a
 peer that holds a certificate, and may carry a credential.
@@ -455,6 +543,22 @@ In the `inventory_change` paragraph (:2281), after "`key_ref_changed` with `"fro
 a device's key assignment changing," insert "`transport_changed` with `"from"` and `"to"` for a
 device's `transport` changing (its `key_ref_changed` is then not also written),".
 
+In §5.1.4, after the paragraph ending "and `disabled: true` is the explicit choice not to check."
+(:1153), add:
+
+```markdown
+The RFC 9887 listener has a checker of its own, `tls_listener.certificate_status`, of the same
+shape (§13 decision 50 ruling 8). It judges device certificates only: what this section says of
+principals' certificates, the daemon's not reading their status included, is unchanged. It keeps
+its lists in `<tls_listener.state_dir>/tls_listener/`, never in the broker's files. Each
+certificate-status metric carries a closed label `component`, `broker` or `tls_listener`:
+`port49_cert_status_checks_total{component, source, result}`,
+`port49_crl_loads_total{component, crl, outcome}`,
+`port49_crl_next_update_timestamp_seconds{component, crl}` and
+`port49_cert_status_unavailable_total{component}`. A CRL named alike in both blocks is two series,
+so one checker's fresh list never masks the other's stale one.
+```
+
 - [ ] **Step 5: "Per-device keys are not supported" and the three-key table**
 
 At :5293–5297, replace "That is a reason to prefer the TLS transport as clients appear, and it is
@@ -475,8 +579,28 @@ each where this document and RFC 9887 were silent; Ryan may override any.
 ```
 
 followed by one bullet per ruling R1 to R19 of this plan's "Rulings" section, numbered 1 to 19,
-each `- **N. <its bold title without "RN.">** <its text>`, copied word for word. Then append to
-the "Deferred, with reasons" list (:8000) one bullet:
+each `- **N. <its bold title without "RN.">** <its text>`, copied word for word. After ruling 19,
+add:
+
+```markdown
+- **Departures from RFC 9887, named.** Three:
+  1. **§3.4, revocation (a MUST).** `certificate_status: {disabled: true}` and `on_unavailable:
+     allow` depart from "MUST validate the certificate path ... including revocation checking".
+     Each is an explicit operator choice, never a default, and each is said at every start
+     (ruling 8).
+  2. **§3.6, the ticket lifetime (a SHOULD).** §3.6 says the lifetime SHOULD be configurable,
+     zero included. port49 enforces `session_ticket_lifetime` itself, and `0s` (the default)
+     issues no ticket, but the lifetime a ticket advertises to the device is crypto/tls's fixed
+     seven days and cannot be set (ruling 11).
+  3. **§5.1.1, one host (a SHOULD NOT).** One port49d may serve both listeners, with a notice at
+     every start; per-device transport keeps a device from being downgraded, but not a sync that
+     flips its record, nor a host compromise exposing both kinds of credential (ruling 1).
+
+  Two SHOULDs are not built, and are deferred with reasons: §3.4.1's TLS Cached Information
+  Extension (RFC 7924) and §3.4.3's configurable cipher suites (ruling 2).
+```
+
+Then append to the "Deferred, with reasons" list (:8000) one bullet:
 
 ```markdown
 - **RFC 9887's PSK and raw-public-key authentication, configurable TLS 1.3 cipher suites, and the
@@ -490,8 +614,8 @@ the "Deferred, with reasons" list (:8000) one bullet:
 After the L70 row, add:
 
 ```markdown
-| **L71** | Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with no configuration committed: EOS `tacacs-server host <ip> ?` (an `ssl-profile` or `tls` option), IOS-XE `tacacs server <name>` then `tls ?`, NX-OS `tacacs-server host <ip> ?` and `tacacs-server secure ?`, Junos `set system tacplus-server <ip> ?` (a `tls` option). Vendor documentation puts the floors at EOS 4.36.1F, IOS XE 17.18.1, NX-OS 10.6(1)F and an unnamed Junos release, all after every lab image. | §13 decision 50 ruling 19; whether L73 can be measured on an image in hand | vEOS-lab 4.31.2F, C8000V 17.13.01a, N9300v 10.4(2)F, vJunos-router 23.4R2-S2.1, vSRX3 21.4R3.15 | open |
-| **L72** | port49's RFC 9887 listener against reference clients (`openssl s_client` 3.x and `tests/lab/cmd/tacacs-tls-client`, Go `crypto/tls`), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and the record carries `device.transport` and `device.cert_sha256` and no `key_ref`; (b) a TLS 1.2-only client: the alert the client reports and `version_refused`; (c) no client certificate: the alert and `no_client_certificate`; (d) an unknown CA, (e) an expired leaf, (f) a leaf naming another device, (g) a leaf a CRL file lists: each one's alert and outcome; (h) a CRL source past its `nextUpdate` and unreachable: `status_unavailable`, and the next connection reset at Accept with no strike; (i) a server name not in `server_names`: the alert and `sni_mismatch`; (j) with `session_ticket_lifetime: 10m`, a second connection resumes, and one ticket presented twice resumes once; (k) `openssl s_client -early_data` with a port49 session: whether any early data is sent; (l) a packet with the unencrypted flag clear: the reply's status and flags and the close; (m) a `tcp` device's address and an address not in the inventory on the TLS listener: whether any TLS byte comes back before the reset, and the records; (n) a `tls` device's address on the RFC 8907 listener: the reset after its header and `transport_mismatch`; (o) a TCP connection that sends nothing: when it is closed and `handshake_timeout`. | §13 decision 50 rulings 2, 5, 8, 10–14 | reference clients on the lab host | open |
+| **L71** | Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with nothing left configured: EOS `tacacs-server host <ip> ?` (an `ssl-profile` or `tls` option), IOS-XE `tacacs server <name>` then `tls ?` (IOS has no commit, so this creates a `tacacs server l71probe` object, which the probe removes on every path), NX-OS `tacacs-server host <ip> ?` and `tacacs-server secure ?`, Junos `set system tacplus-server <ip> ?` (a `tls` option). Vendor documentation puts the floors at EOS 4.36.1F, IOS XE 17.18.1, NX-OS 10.6(1)F and an unnamed Junos release, all after every lab image. | §13 decision 50 ruling 19; whether L73 can be measured on an image in hand | vEOS-lab 4.31.2F, C8000V 17.13.01a, N9300v 10.4(2)F, vJunos-router 23.4R2-S2.1, vSRX3 21.4R3.15 | open |
+| **L72** | port49's RFC 9887 listener against reference clients (`openssl s_client` 3.x and `tests/lab/cmd/tacacs-tls-client`, Go `crypto/tls`), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and the record carries `device.transport` and `device.cert_sha256` and no `key_ref`; (b) a TLS 1.2-only client: the alert the client reports and `version_refused`; (c) no client certificate: the alert and `no_client_certificate`; (d) an unknown CA, (e) an expired leaf, (f) a leaf naming another device: each one's alert and outcome; (g) a leaf a CRL file lists: a reset after the completed handshake (the status is checked only then, so no alert) and `certificate_revoked`; (h) a CRL source past its `nextUpdate` and unreachable: the handshake completes and the connection is then reset (no alert), `status_unavailable`, and the next connection, inside the decline window, reset at Accept with no strike and no second record; (i) a server name not in `server_names`: the alert and `sni_mismatch`; (j) with `session_ticket_lifetime: 10m`, a second connection resumes, and one ticket presented twice resumes once; (k) `openssl s_client -early_data` with a port49 session: whether any early data is sent; (l) a packet with the unencrypted flag clear: the reply's status and flags and the close; (m) a `tcp` device's address and an address not in the inventory on the TLS listener: whether any TLS byte comes back before the reset, and the records; (n) a `tls` device's address on the RFC 8907 listener: the reset after its header and `transport_mismatch`; (o) a TCP connection that sends nothing: when it is closed and `handshake_timeout`. | §13 decision 50 rulings 2, 5, 8, 10–14 | reference clients on the lab host | open |
 | **L73** | Each device's RFC 9887 client against port49, per platform, once an image carries one (L71): (a) the port it uses with none configured (RFC 9887 says 300; Cisco's documents use 6049); (b) whether every packet has the unencrypted flag set; (c) whether it sends SNI, and what; (d) whether it checks port49's certificate's dNSName or iPAddress against what it was configured with, and what it does on a mismatch and on an expired server certificate; (e) the client certificate its documented enrolment issues: subjectAltName entries, extended key usage, chain sent; (f) TLS 1.3 negotiated, and the suite; (g) whether it resumes with a port49 ticket; (h) single-connection over TLS; (i) what it does on each port49 refusal (an alert at the handshake, a reset at Accept, a decline window, an ERROR for an obfuscated packet), and how fast it falls to its next server or local method, as L28 and L31 measured on 49; (j) whether it ever falls back to a non-TLS server for the same host (RFC 9887 §5.1.1 forbids it). | §13 decision 50 rulings 1, 6, 7, 10, 11; plan 12's reference device configurations for `transport: tls` | Arista EOS ≥ 4.36.1F, Cisco IOS XE ≥ 17.18.1, Cisco NX-OS ≥ 10.6(1)F, Junos (release unknown) | open — no lab image carries a client (L71); needs images (plan 11 Q1) |
 ```
 
@@ -520,13 +644,15 @@ listeners.
 ```
 
 In design §15's "The daemon exports, at minimum:" sentence, after "unvalidated packets by
-diagnosis;" insert "TLS handshakes by outcome, and the soonest device and server certificate
-expiry;".
+diagnosis;" insert "TLS handshakes by outcome, and the least fraction of its own lifetime a device
+certificate and the server certificate have left;".
 
 - [ ] **Step 9: Check and commit**
 
-Run: `grep -n "until plan 11\|does not serve until" docs/design/*.md internal/admission/admission.go`
-Expected: only `internal/admission/admission.go` lines (Task 3 changes them); no design hit.
+Run: `grep -n "until plan 11" docs/design/*.md internal/admission/admission.go`
+Expected: only `internal/admission/admission.go` lines (Task 3 changes them); no design hit. (The
+pattern is narrow on purpose: "does not serve until" also matches an unrelated spec line about the
+runner.)
 
 Run: `grep -c "^| \*\*L7[123]\*\*" docs/design/2026-08-23-policy-engine-spec.md`
 Expected: `3`
@@ -789,20 +915,23 @@ func TestATLSDeviceIgnoresKeyGroupsAndItsPin(t *testing.T) {
 }
 ```
 
-In `internal/policy/admit_test.go`, add (using the file's existing helper that loads a policy
-against an inventory with `Env.KeyRefs`; it is the one the `RefusedUnknownKey` test uses, find
-it with `grep -n "RefusedUnknownKey" internal/policy/admit_test.go`):
+In `internal/policy/admit_test.go`, add. It uses the file's own `env()` (`load_test.go:39`, whose
+`inventory()` holds no 10.0.0.9) and `keyGrouped` (`admit_test.go:12`, CIDR `10.0.0.0/8` to
+`prod_key` and `site: campus` to `campus_key`):
 
 ```go
 func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
-	inv := []admission.Device{
-		{Name: "tls-1", Platform: "arista_eos", Transport: admission.TransportTLS,
-			Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}},
-	}
-	p, err := Parse([]byte(minimalPolicyForAdmit), Env{Devices: inv, KeyRefs: []string{"prod_key"}})
+	e := env()
+	e.KeyRefs = []string{"prod_key"}
+	e.Devices = append(e.Devices, admission.Device{Name: "tls-1", Platform: "arista_eos",
+		Transport: admission.TransportTLS, Attributes: map[string]string{"site": "campus"},
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}})
+	p, err := Parse([]byte(keyGrouped), e)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// campus_key is not held, and the campus group would pick it for tls-1:
+	// a TLS device takes no key, so it is admitted anyway.
 	r, ok := p.Admitted("tls-1")
 	if !ok || r.Refused != "" || r.KeyRef != "" {
 		t.Fatalf("tls-1: %+v %v", r, ok)
@@ -810,27 +939,25 @@ func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
 	if _, has := p.KeyAssignment("tls-1"); has {
 		t.Fatal("a TLS device has no key assignment for keys show to print")
 	}
-	if n := len(p.AdmissionRefusals()); n != 0 {
-		t.Fatalf("refusals: %d", n)
+	for _, ref := range p.AdmissionRefusals() {
+		if ref.Device.Name == "tls-1" {
+			t.Fatalf("tls-1 refused: %+v", ref)
+		}
 	}
 }
 ```
 
-If the file has no `minimalPolicyForAdmit`, use the smallest policy body another test in that
-file parses with key groups `[{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]`, copied as a
-`const` above the test.
-
-In `internal/bundle/diff_test.go`, add a case beside the existing `KeyRefChanged` test (find it
-with `grep -n KeyRefChanged internal/bundle/diff_test.go`), building `old` with `leaf-01`
-`transport: tcp` under a group's key and `new` with `leaf-01` `transport: tls`:
+In `internal/bundle/diff_test.go`, add, with the file's own `mustBundle` (`diff_test.go:27`, the
+`withScopes` policy whose key group is CIDR `10.0.0.0/8` to `prod_key`) and `dev`
+(`bundle_test.go:23`). `Diff` returns a `Report` whose changes are `.Changes`:
 
 ```go
 func TestATransportFlipIsOneSecurityChange(t *testing.T) {
-	old := loadDiffBundle(t, diffPolicy, "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}\n")
-	new := loadDiffBundle(t, diffPolicy,
-		"devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1], transport: tls}\n")
+	tcp := dev("leaf-01", "10.0.1.1", map[string]string{"site": "dc1"})
+	tls := tcp
+	tls.Transport = admission.TransportTLS
 	var kinds []string
-	for _, c := range Diff(old, new, time.Now()) {
+	for _, c := range Diff(mustBundle(t, tcp), mustBundle(t, tls), time.Now()).Changes {
 		if c.Device == "leaf-01" {
 			kinds = append(kinds, c.Kind)
 			if c.Kind == TransportChanged && (c.From != "tcp" || c.To != "tls" || !c.Security) {
@@ -844,19 +971,20 @@ func TestATransportFlipIsOneSecurityChange(t *testing.T) {
 }
 ```
 
-`loadDiffBundle`, `diffPolicy` and `Diff`'s exact name and signature are the file's own. Read
-`internal/bundle/diff_test.go`'s first `KeyRefChanged` test and use its helpers and call form,
-renaming here to match; `diffPolicy` must carry `key_groups: [{match: {cidr: 10.0.0.0/8},
-key_ref: prod_key}]`.
-
-In `cmd/port49/keys_test.go`, add (using the file's fixture writer for `--policy`/`--inventory`,
-as the `leaf-19` tests do):
+In `cmd/port49/keys_test.go`, add. The file's fixture writer is `keysFiles(t)` (`keys_test.go:37`),
+which writes `keysPolicy` (CIDR `10.0.0.0/8` to `prod_key`) and `keysInventory`; this test writes
+its own inventory beside them:
 
 ```go
 func TestKeysShowSaysATLSDeviceHasNoKey(t *testing.T) {
-	pol, inv := writeKeysFixture(t, "devices:\n  - {name: tls-7, platform: arista_eos, addresses: [10.20.0.7], transport: tls}\n")
+	pol, _, cfg, _ := keysFiles(t)
+	inv := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: tls-7, platform: arista_eos, addresses: [10.20.0.70], transport: tls}\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
 	var out, errOut bytes.Buffer
-	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "tls-7"}, &out, &errOut); code != 0 {
+	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "tls-7"}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	if want := "tls-7: transport tls (RFC 9887): no shared key; its credential is its certificate"; !strings.Contains(out.String(), want) {
@@ -865,9 +993,6 @@ func TestKeysShowSaysATLSDeviceHasNoKey(t *testing.T) {
 }
 ```
 
-`writeKeysFixture` is whatever the file's existing `keys show` tests use to write `pol` and `inv`;
-reuse it with this inventory.
-
 In `internal/config/config_test.go`, add a no-broker load whose inventory file holds one `tls`
 device and no key group matching it, and which loads (the start is not refused):
 
@@ -875,8 +1000,12 @@ device and no key group matching it, and which loads (the start is not refused):
 func TestNoBrokerModeAdmitsATLSDeviceWithNoKeyGroup(t *testing.T) {
 	dir := t.TempDir()
 	inv := filepath.Join(dir, "inventory.yaml")
+	// tls-1 pins a key port49d does not hold, and tls-2 a pin that is no
+	// key_ref name: R3 ignores a TLS device's pin, so neither refuses the
+	// start (decision 50 ruling 18).
 	writeFile(t, inv, "devices:\n"+
-		"  - {name: tls-1, platform: arista_eos, addresses: [10.0.0.9], transport: tls}\n"+
+		"  - {name: tls-1, platform: arista_eos, addresses: [10.0.0.9], transport: tls, key_ref: absent_key}\n"+
+		"  - {name: tls-2, platform: arista_eos, addresses: [10.0.0.10], transport: tls, key_ref: \"not a name!\"}\n"+
 		"  - {name: tcp-1, platform: arista_eos, addresses: [10.0.0.1]}\n"+
 		"key_groups:\n  - {match: {cidr: 10.0.0.1/32}, key_ref: k}\n")
 	t.Setenv("T_K", "secret")
@@ -903,7 +1032,7 @@ error.
 Run: `go test ./internal/admission/ ./internal/policy/ ./internal/bundle/ ./cmd/port49/ ./internal/config/ -run 'TLS|Transport' -v`
 Expected: FAIL. `Resolve` refuses `tls-1` (`refused_transport`), `EffectiveTransport` is
 undefined, `TransportChanged` is undefined, `keys show` prints "refused admission", and the
-config load fails "matches no key group".
+config load fails "pins key_ref \"absent_key\" which is not in keys".
 
 - [ ] **Step 3: Implement admission**
 
@@ -1004,7 +1133,17 @@ and guard the assignment record:
 		}
 ```
 
-In `internal/config/config.go`, change the no-broker check's condition (:1142) to:
+In `internal/config/config.go`, in the no-broker pin loop (:1117, `for _, d := range inv.Devices {
+if d.KeyRef != "" && !admission.KeyRefShape...`), skip a TLS device first:
+
+```go
+		if d.EffectiveTransport() == admission.TransportTLS {
+			continue // its pin is ignored, as with a broker (decision 50 rulings 3, 18)
+		}
+```
+
+so neither "pins a key_ref that is not a valid key_ref name" nor "pins key_ref %q which is not in
+keys" refuses the start for one. Then change the no-broker check's condition (:1142) to:
 
 ```go
 			if r, ok := trie.Lookup(a); ok && r.Refused == "" &&
@@ -1097,15 +1236,20 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   - `type Rule struct{ DNSName, IPAddress bool; DNSSuffixes []string }`; `func (r Rule)
     Match(leaf *x509.Certificate, dev admission.Device) error`.
   - `type Status int`, with `StatusGood`, `StatusRevoked` and `StatusUnknown`; `type StatusFunc
-    func(ctx context.Context, chain []*x509.Certificate) (Status, string)`.
+    func(ctx context.Context, chain []*x509.Certificate) (Status, string)`, which may wait on the
+    network within ctx; `type CachedStatusFunc func(chain []*x509.Certificate) (Status, string)`,
+    which never does.
   - `type Verifier struct{ Anchors *x509.CertPool; Intermediates []*x509.Certificate; Rule Rule;
-    Status StatusFunc; AllowUnknown bool; Now func() time.Time }`, with `func (v *Verifier)
-    Verify(ctx context.Context, certs []*x509.Certificate, dev admission.Device) Verdict` and
-    `func (v *Verifier) Recheck(ctx context.Context, was Verdict) Verdict`.
+    Status StatusFunc; CachedStatus CachedStatusFunc; AllowUnknown bool; Now func() time.Time }`,
+    with `func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdict` (the
+    path and the identity: local, for `VerifyConnection`), `func (v *Verifier) CheckStatus(ctx
+    context.Context, ok Verdict) Verdict` (after the handshake) and `func (v *Verifier)
+    Recheck(was Verdict) Verdict` (at a packet: expiry, then the cached status).
   - `func Fingerprint(leaf *x509.Certificate) string`.
-  - `type Expiry struct{ Warn time.Duration; Say func(string, ...any) }`, with `func (e *Expiry)
+  - `type Expiry struct{ Fraction float64; Say func(string, ...any) }`, with `func (e *Expiry)
     Seen(device string, leaf *x509.Certificate, now time.Time)` and `func (e *Expiry)
-    Soonest(now time.Time) (time.Duration, bool)`.
+    LeastLeft(now time.Time) (float64, bool)`; `func LifetimeLeft(c *x509.Certificate, now
+    time.Time) float64`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1236,10 +1380,16 @@ func (p pki) leaf(t *testing.T, l testpki.Leaf) *x509.Certificate {
 	return c.Leaf
 }
 
+// verifier has status answer both the waiting and the cached question; nil
+// is certificate_status disabled.
 func (p pki) verifier(status StatusFunc, allow bool) *Verifier {
-	return &Verifier{Anchors: p.root.Pool(), Intermediates: []*x509.Certificate{p.issuing.Cert},
+	v := &Verifier{Anchors: p.root.Pool(), Intermediates: []*x509.Certificate{p.issuing.Cert},
 		Rule: Rule{DNSName: true, IPAddress: true}, Status: status, AllowUnknown: allow,
 		Now: func() time.Time { return p.now }}
+	if status != nil {
+		v.CachedStatus = func(chain []*x509.Certificate) (Status, string) { return status(context.Background(), chain) }
+	}
+	return v
 }
 
 func good(context.Context, []*x509.Certificate) (Status, string) { return StatusGood, "" }
@@ -1271,7 +1421,7 @@ func TestVerify(t *testing.T) {
 		"serverAuth only": {[]*x509.Certificate{p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}})}, CertificateInvalid},
 		"another device":  {[]*x509.Certificate{p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-02"}, Client: true})}, IdentityMismatch},
 	} {
-		v := p.verifier(good, false).Verify(context.Background(), c.certs, dev01)
+		v := p.verifier(good, false).Verify(c.certs, dev01)
 		if v.Outcome != c.want {
 			t.Errorf("%s: %s (%s), want %s", name, v.Outcome, v.Detail, c.want)
 		}
@@ -1286,35 +1436,49 @@ func TestVerifyUsesStoredIntermediates(t *testing.T) {
 	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
 	v := p.verifier(good, false)
 	v.Intermediates = nil
-	if got := v.Verify(context.Background(), []*x509.Certificate{leaf}, dev01); got.Outcome != UnknownCA {
+	if got := v.Verify([]*x509.Certificate{leaf}, dev01); got.Outcome != UnknownCA {
 		t.Fatalf("leaf alone, no stored intermediate: %s", got.Outcome)
 	}
-	if got := v.Verify(context.Background(), []*x509.Certificate{leaf, p.issuing.Cert}, dev01); got.Outcome != OK {
+	if got := v.Verify([]*x509.Certificate{leaf, p.issuing.Cert}, dev01); got.Outcome != OK {
 		t.Fatalf("leaf with its intermediate sent: %s %s", got.Outcome, got.Detail)
 	}
 	v.Intermediates = []*x509.Certificate{p.issuing.Cert}
-	if got := v.Verify(context.Background(), []*x509.Certificate{leaf}, dev01); got.Outcome != OK {
+	if got := v.Verify([]*x509.Certificate{leaf}, dev01); got.Outcome != OK {
 		t.Fatalf("leaf alone, intermediate stored (RFC 9887 §3.4.1): %s %s", got.Outcome, got.Detail)
 	}
 }
 
-func TestVerifyStatus(t *testing.T) {
+// Verify is the path and the identity alone: it never asks the status, which
+// runs only after the handshake has proven possession (decision 50 ruling 8).
+func TestVerifyNeverAsksTheStatus(t *testing.T) {
+	p := newPKI(t)
+	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
+	asked := 0
+	v := p.verifier(func(context.Context, []*x509.Certificate) (Status, string) { asked++; return StatusRevoked, "" }, false)
+	if got := v.Verify([]*x509.Certificate{leaf}, dev01); got.Outcome != OK || asked != 0 {
+		t.Fatalf("Verify: %s, status asked %d times", got.Outcome, asked)
+	}
+}
+
+func TestCheckStatus(t *testing.T) {
 	p := newPKI(t)
 	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
 	revoked := func(context.Context, []*x509.Certificate) (Status, string) { return StatusRevoked, "crl issuing: revoked" }
 	unknown := func(context.Context, []*x509.Certificate) (Status, string) { return StatusUnknown, "crl issuing: stale" }
-	if v := p.verifier(revoked, false).Verify(context.Background(), []*x509.Certificate{leaf}, dev01); v.Outcome != CertificateRevoked {
-		t.Fatalf("revoked: %s", v.Outcome)
+	verified := func(v *Verifier) Verdict { return v.Verify([]*x509.Certificate{leaf}, dev01) }
+	if v := p.verifier(revoked, false); v.CheckStatus(context.Background(), verified(v)).Outcome != CertificateRevoked {
+		t.Fatal("revoked")
 	}
-	if v := p.verifier(unknown, false).Verify(context.Background(), []*x509.Certificate{leaf}, dev01); v.Outcome != StatusUnavailable {
-		t.Fatalf("unknown under refuse: %s", v.Outcome)
+	if v := p.verifier(unknown, false); v.CheckStatus(context.Background(), verified(v)).Outcome != StatusUnavailable {
+		t.Fatal("unknown under refuse")
 	}
-	v := p.verifier(unknown, true).Verify(context.Background(), []*x509.Certificate{leaf}, dev01)
-	if v.Outcome != OK || !v.StatusUnknown || v.Detail != "crl issuing: stale" {
-		t.Fatalf("unknown under allow: %+v", v)
+	v := p.verifier(unknown, true)
+	got := v.CheckStatus(context.Background(), verified(v))
+	if got.Outcome != OK || !got.StatusUnknown || got.Detail != "crl issuing: stale" {
+		t.Fatalf("unknown under allow: %+v", got)
 	}
-	if v := p.verifier(nil, false).Verify(context.Background(), []*x509.Certificate{leaf}, dev01); v.Outcome != OK {
-		t.Fatalf("certificate_status disabled: %s", v.Outcome)
+	if v := p.verifier(nil, false); v.CheckStatus(context.Background(), verified(v)).Outcome != OK {
+		t.Fatal("certificate_status disabled")
 	}
 }
 
@@ -1322,18 +1486,29 @@ func TestRecheck(t *testing.T) {
 	p := newPKI(t)
 	leaf := p.leaf(t, testpki.Leaf{DNSNames: []string{"leaf-01"}, Client: true})
 	st := StatusGood
-	ver := p.verifier(func(context.Context, []*x509.Certificate) (Status, string) { return st, "per crl" }, false)
-	was := ver.Verify(context.Background(), []*x509.Certificate{leaf}, dev01)
-	if got := ver.Recheck(context.Background(), was); got.Outcome != OK {
+	ver := p.verifier(good, false)
+	// At a packet only the cached answer is read: the waiting question is
+	// never asked (decision 50 ruling 9).
+	ver.Status = func(context.Context, []*x509.Certificate) (Status, string) {
+		t.Fatal("Recheck asked the status that may wait on the network")
+		return StatusUnknown, ""
+	}
+	ver.CachedStatus = func([]*x509.Certificate) (Status, string) { return st, "per crl" }
+	was := ver.Verify([]*x509.Certificate{leaf}, dev01)
+	if got := ver.Recheck(was); got.Outcome != OK {
 		t.Fatalf("unchanged: %s", got.Outcome)
 	}
 	st = StatusRevoked
-	if got := ver.Recheck(context.Background(), was); got.Outcome != CertificateRevoked {
+	if got := ver.Recheck(was); got.Outcome != CertificateRevoked {
 		t.Fatalf("revoked since: %s", got.Outcome)
+	}
+	st = StatusUnknown // the cached answer expired: R8, as at the handshake
+	if got := ver.Recheck(was); got.Outcome != StatusUnavailable {
+		t.Fatalf("no fresh cached answer: %s", got.Outcome)
 	}
 	st = StatusGood
 	ver.Now = func() time.Time { return leaf.NotAfter.Add(time.Second) }
-	if got := ver.Recheck(context.Background(), was); got.Outcome != CertificateExpired {
+	if got := ver.Recheck(was); got.Outcome != CertificateExpired {
 		t.Fatalf("expired since: %s", got.Outcome)
 	}
 }
@@ -1416,30 +1591,46 @@ import (
 	"time"
 )
 
-func TestExpiryWarnsOncePerDayAndKnowsTheSoonest(t *testing.T) {
+// cert is a certificate valid from issued for life, as Seen reads it.
+func cert(issued time.Time, life time.Duration, serial int64) *x509.Certificate {
+	return &x509.Certificate{NotBefore: issued, NotAfter: issued.Add(life), SerialNumber: big.NewInt(serial)}
+}
+
+func TestExpiryWarnsByFractionOfLifetime(t *testing.T) {
 	var lines []string
-	e := &Expiry{Warn: 14 * 24 * time.Hour, Say: func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }}
+	e := &Expiry{Fraction: 0.33, Say: func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }}
 	now := time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
-	soon := &x509.Certificate{NotAfter: now.Add(9 * 24 * time.Hour), SerialNumber: big.NewInt(0xbeef)}
-	late := &x509.Certificate{NotAfter: now.Add(90 * 24 * time.Hour), SerialNumber: big.NewInt(1)}
-	e.Seen("leaf-07", soon, now)
-	e.Seen("leaf-07", soon, now.Add(time.Hour))
-	e.Seen("leaf-08", late, now)
+	day := 24 * time.Hour
+	late := cert(now.Add(-70*day), 90*day, 0xbeef) // 20 of 90 days left: past two thirds
+	fresh := cert(now.Add(-10*day), 90*day, 1)     // 80 of 90 days left
+	daily := cert(now.Add(-15*time.Hour), day, 2)  // 9 of 24h left, before its renewal at 16h
+	stalled := cert(now.Add(-20*time.Hour), day, 3) // its renewal at 16h failed: 4 of 24h left
+	e.Seen("leaf-07", late, now)
+	e.Seen("leaf-07", late, now.Add(time.Hour))
+	e.Seen("leaf-08", fresh, now)
+	e.Seen("leaf-09", daily, now)
 	if len(lines) != 1 || !strings.Contains(lines[0], "leaf-07") || !strings.Contains(lines[0], "beef") {
-		t.Fatalf("lines: %q", lines)
+		t.Fatalf("a 90-day certificate in its last third warns, once; the rest do not: %q", lines)
 	}
-	e.Seen("leaf-07", soon, now.Add(25*time.Hour))
-	if len(lines) != 2 {
+	e.Seen("leaf-10", stalled, now)
+	if len(lines) != 2 || !strings.Contains(lines[1], "leaf-10") {
+		t.Fatalf("a 24h certificate whose renewal failed warns: %q", lines)
+	}
+	e.Seen("leaf-07", late, now.Add(25*time.Hour))
+	if len(lines) != 3 {
 		t.Fatalf("a day later it is said again: %q", lines)
 	}
-	if d, ok := e.Soonest(now.Add(25 * time.Hour)); !ok || d != soon.NotAfter.Sub(now.Add(25*time.Hour)) {
-		t.Fatalf("soonest: %v %v", d, ok)
+	at := now.Add(25 * time.Hour)
+	if f, ok := e.LeastLeft(at); !ok || f != LifetimeLeft(late, at) {
+		t.Fatalf("least left: %v %v, want leaf-07's %v", f, ok, LifetimeLeft(late, at))
 	}
-	// At +50h leaf-07 was last seen 25h before and leaf-08 50h before: both
+	// At +50h leaf-07 was last seen 25h before and the rest 50h before: all
 	// are outside the 24h window, so nothing counts.
-	if _, ok := e.Soonest(now.Add(50 * time.Hour)); ok {
+	if _, ok := e.LeastLeft(now.Add(50 * time.Hour)); ok {
 		t.Fatal("nothing was seen in the last 24h")
 	}
+	off := &Expiry{Say: func(string, ...any) { t.Fatal("expiry_warning_fraction 0 is off") }}
+	off.Seen("leaf-07", late, now)
 }
 ```
 
@@ -1672,9 +1863,14 @@ const (
 )
 
 // StatusFunc is a verified chain's status, leaf first and anchor last, and a
-// line saying which source decided and, when unknown, why. port49d adapts
-// certstatus.Checker.Check to it.
+// line saying which source decided and, when unknown, why. It may wait on an
+// OCSP responder within ctx. port49d adapts certstatus.Checker.Check to it.
 type StatusFunc func(ctx context.Context, chain []*x509.Certificate) (Status, string)
+
+// CachedStatusFunc is StatusFunc from what the checker holds now, never a
+// network wait: a CRL in force, or a cached OCSP answer. None fresh is
+// StatusUnknown. port49d adapts certstatus.Checker.CheckCached to it.
+type CachedStatusFunc func(chain []*x509.Certificate) (Status, string)
 
 // Verdict is one judgement of a device's certificate.
 type Verdict struct {
@@ -1696,16 +1892,23 @@ type Verifier struct {
 	Anchors       *x509.CertPool
 	Intermediates []*x509.Certificate // intermediates_file's (RFC 9887 §3.4.1)
 	Rule          Rule
-	Status        StatusFunc // nil when certificate_status is disabled
-	AllowUnknown  bool       // on_unavailable: allow
-	Now           func() time.Time
+	// Status is asked once a handshake has completed; CachedStatus at each
+	// later packet (rulings 8, 9). Both nil when certificate_status is
+	// disabled.
+	Status       StatusFunc
+	CachedStatus CachedStatusFunc
+	AllowUnknown bool // on_unavailable: allow
+	Now          func() time.Time
 }
 
 // Verify judges certs, as the device sent them, leaf first, for dev: a path
 // to an anchor through the sent and stored intermediates, with the
-// clientAuth usage (or none); the device's identity; then the chain's
-// status. It runs at a full handshake and at a resumption alike.
-func (v *Verifier) Verify(ctx context.Context, certs []*x509.Certificate, dev admission.Device) Verdict {
+// clientAuth usage (or none), then the device's identity. Both are local and
+// cheap. It runs in VerifyConnection, at a full handshake and at a
+// resumption alike. crypto/tls calls that before it checks the client's
+// CertificateVerify, so the peer has proven nothing yet: the status, which
+// may wait on the network, is CheckStatus's, after the handshake (ruling 8).
+func (v *Verifier) Verify(certs []*x509.Certificate, dev admission.Device) Verdict {
 	if len(certs) == 0 {
 		return Verdict{Outcome: NoClientCertificate, Detail: "the device sent no certificate"}
 	}
@@ -1725,13 +1928,25 @@ func (v *Verifier) Verify(ctx context.Context, certs []*x509.Certificate, dev ad
 	if err := v.Rule.Match(leaf, dev); err != nil {
 		return Verdict{Outcome: IdentityMismatch, Detail: err.Error(), Leaf: leaf}
 	}
-	return v.status(ctx, Verdict{Outcome: OK, Leaf: leaf, Chain: chains[0]})
+	return Verdict{Outcome: OK, Leaf: leaf, Chain: chains[0]}
 }
 
-// Recheck judges an open connection's chain again at a later packet:
-// expiry of every certificate in it, then its status (decision 50 ruling 9).
-// The path itself is verified again only by Verify, when the anchors changed.
-func (v *Verifier) Recheck(ctx context.Context, was Verdict) Verdict {
+// CheckStatus judges an OK verdict's chain status once its handshake has
+// completed, waiting within ctx (the handshake's deadline) for an OCSP
+// answer not cached (ruling 8).
+func (v *Verifier) CheckStatus(ctx context.Context, ok Verdict) Verdict {
+	if v.Status == nil {
+		return ok
+	}
+	st, detail := v.Status(ctx, ok.Chain)
+	return v.judge(ok, st, detail)
+}
+
+// Recheck judges an open connection's chain again at a later packet: expiry
+// of every certificate in it, then its status as the checker holds it now,
+// with no network wait (ruling 9). The path itself is verified again only by
+// Verify, when the anchors changed.
+func (v *Verifier) Recheck(was Verdict) Verdict {
 	now := v.Now()
 	for _, c := range was.Chain {
 		if now.After(c.NotAfter) {
@@ -1739,14 +1954,17 @@ func (v *Verifier) Recheck(ctx context.Context, was Verdict) Verdict {
 				"%s expired at %s", c.Subject, c.NotAfter.UTC().Format(time.RFC3339)), 300)}
 		}
 	}
-	return v.status(ctx, Verdict{Outcome: OK, Leaf: was.Leaf, Chain: was.Chain})
-}
-
-func (v *Verifier) status(ctx context.Context, ok Verdict) Verdict {
-	if v.Status == nil {
+	ok := Verdict{Outcome: OK, Leaf: was.Leaf, Chain: was.Chain}
+	if v.CachedStatus == nil {
 		return ok
 	}
-	st, detail := v.Status(ctx, ok.Chain)
+	st, detail := v.CachedStatus(ok.Chain)
+	return v.judge(ok, st, detail)
+}
+
+// judge applies a status to an OK verdict: revoked refuses; unknown refuses
+// as status_unavailable, or under on_unavailable: allow admits and says so.
+func (v *Verifier) judge(ok Verdict, st Status, detail string) Verdict {
 	switch st {
 	case StatusRevoked:
 		return Verdict{Outcome: CertificateRevoked, Detail: printsafe.Line(detail, 300), Leaf: ok.Leaf}
@@ -1797,58 +2015,79 @@ import (
 )
 
 // seenWindow is how long a device's last verified certificate counts
-// toward the soonest expiry: a device not seen for a day may be gone.
+// toward the least lifetime left: a device not seen for a day may be gone.
 const seenWindow = 24 * time.Hour
 
-// Expiry remembers when each device's last verified certificate expires,
-// for tls_listener.expiry_warning's line and
-// port49_tls_device_certificate_expiry_seconds (decision 50 ruling 16).
+// LifetimeLeft is the fraction of c's own lifetime (NotAfter - NotBefore)
+// still to run at now: 1 when just issued, 0 at expiry, below 0 after.
+func LifetimeLeft(c *x509.Certificate, now time.Time) float64 {
+	life := c.NotAfter.Sub(c.NotBefore)
+	if life <= 0 {
+		return 0
+	}
+	return float64(c.NotAfter.Sub(now)) / float64(life)
+}
+
+// Expiry remembers each device's last verified certificate, for
+// tls_listener.expiry_warning_fraction's line and
+// port49_tls_device_certificate_lifetime_left_ratio (decision 50 ruling 16).
+// It judges by the fraction of a certificate's own lifetime left, never a
+// fixed duration: a duration sits forever inside a short-lived
+// certificate's life and would name every device every day. Renewal by
+// ACME or cert-manager happens at two thirds by default, so a certificate
+// in its last third is one whose renewal is late.
 type Expiry struct {
-	Warn time.Duration // 0 is off
-	Say  func(format string, args ...any)
+	Fraction float64 // warn below this fraction left; 0 is off
+	Say      func(format string, args ...any)
 
 	mu   sync.Mutex
 	seen map[string]seenCert
 }
 
-type seenCert struct{ notAfter, at, warned time.Time }
+type seenCert struct {
+	cert       *x509.Certificate
+	at, warned time.Time
+}
 
-// Seen notes leaf as device's at now, and says once a day when it expires
-// within Warn.
+// Seen notes leaf as device's at now, and says once a day while it has
+// less than Fraction of its lifetime left.
 func (e *Expiry) Seen(device string, leaf *x509.Certificate, now time.Time) {
+	left := LifetimeLeft(leaf, now)
 	e.mu.Lock()
 	if e.seen == nil {
 		e.seen = map[string]seenCert{}
 	}
 	s := e.seen[device]
-	s.notAfter, s.at = leaf.NotAfter, now
-	warn := e.Warn > 0 && leaf.NotAfter.Sub(now) < e.Warn && now.Sub(s.warned) >= seenWindow
+	s.cert, s.at = leaf, now
+	warn := e.Fraction > 0 && left < e.Fraction && now.Sub(s.warned) >= seenWindow
 	if warn {
 		s.warned = now
 	}
 	e.seen[device] = s
 	e.mu.Unlock()
 	if warn && e.Say != nil {
-		e.Say("tls_listener: %s's certificate (serial %s, issuer %s) expires %s, in %s; renew it before then",
+		e.Say("tls_listener: %s's certificate (serial %s, issuer %s) expires %s, in %s, with %.0f%% of its "+
+			"%s lifetime left: its renewal is late; renew it before then",
 			device, leaf.SerialNumber.Text(16), printsafe.Line(leaf.Issuer.String(), 200),
-			leaf.NotAfter.UTC().Format(time.RFC3339), leaf.NotAfter.Sub(now).Round(time.Hour))
+			leaf.NotAfter.UTC().Format(time.RFC3339), leaf.NotAfter.Sub(now).Round(time.Minute), left*100,
+			leaf.NotAfter.Sub(leaf.NotBefore).Round(time.Hour))
 	}
 }
 
-// Soonest is the least time to expiry among certificates seen in the last
-// 24h, and whether there was one. Older entries are dropped.
-func (e *Expiry) Soonest(now time.Time) (time.Duration, bool) {
+// LeastLeft is the least lifetime fraction left among certificates seen in
+// the last 24h, and whether there was one. Older entries are dropped.
+func (e *Expiry) LeastLeft(now time.Time) (float64, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	var least time.Duration
+	var least float64
 	found := false
 	for name, s := range e.seen {
 		if now.Sub(s.at) > seenWindow {
 			delete(e.seen, name)
 			continue
 		}
-		if d := s.notAfter.Sub(now); !found || d < least {
-			least, found = d, true
+		if f := LifetimeLeft(s.cert, now); !found || f < least {
+			least, found = f, true
 		}
 	}
 	return least, found
@@ -1878,9 +2117,15 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 - Create: `internal/config/tlslistener.go`
 - Modify: `internal/config/config.go` (`fileConfig` :514, `Config` :577, `daemonDefaults`
   :1166, `checkCertificateStatus` :1778, `brokerRefusals` :1408, `load`)
-- Modify: `internal/certstatus/certstatus.go` (`Config`, `New`), `internal/certstatus/crl.go` (the
-  four `"broker: certificate status: "` literals)
-- Test: `internal/config/tlslistener_test.go`, `internal/certstatus/crl_test.go`
+- Modify: `internal/certstatus/certstatus.go` (`Config`, `New`, `Check`, `checkOne`),
+  `internal/certstatus/crl.go` (the four `"broker: certificate status: "` literals, the two
+  `CRLLoads`/`CRLNextUpdate` calls), `internal/certstatus/ocsp.go` (`ocspEntry`, `checkOCSP`,
+  `ask`)
+- Modify: `internal/daemon/metrics/metrics.go` (the four certificate-status metrics, :244–261 and
+  :632–639)
+- Test: `internal/config/tlslistener_test.go`, `internal/certstatus/crl_test.go`,
+  `internal/certstatus/chain_test.go`, `internal/certstatus/ocsp_test.go`,
+  `internal/daemon/metrics/metrics_test.go`
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -1890,8 +2135,15 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   - `Config.TLSListener *TLSListenerConfig`, nil without the block;
   - `Config.Listen == ""` meaning `listen: none`;
   - `const ListenNone = "none"`;
+  - `func TLSListenerStateDir(t *TLSListenerConfig) string`: where its checker keeps its lists,
+    `<state_dir>/tls_listener`;
   - `func checkStatusBlock(cs *CertificateStatusConfig, key, stateDir string, others []namedPath) error`;
-  - `certstatus.Config.Component string`: the line prefix, `"broker"` when empty.
+  - `certstatus.Config.Component string`: the line prefix and the metrics' `component` label,
+    `"broker"` when empty;
+  - `func (c *Checker) CheckCached(chain []*x509.Certificate) Result`;
+  - the metrics `CertStatusChecks{component, source, result}`, `CRLLoads{component, crl,
+    outcome}`, `CRLNextUpdate{component, crl}`, and `CertStatusUnavailable` as a
+    `*prometheus.CounterVec{component}`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1948,8 +2200,12 @@ func TestTLSListenerDefaults(t *testing.T) {
 	}
 	tl := c.TLSListener
 	if tl == nil || tl.Listen != ":300" || tl.HandshakeTimeout != 5*time.Second || tl.SessionTicketLifetime != 0 ||
-		tl.ExpiryWarning != 336*time.Hour || tl.ReloadInterval != time.Minute {
+		tl.ExpiryWarningFraction != 0.33 || tl.ReloadInterval != time.Minute {
 		t.Fatalf("defaults: %+v", tl)
+	}
+	off, err := Load(tlsBase(t, "listen: 127.0.0.1:0\n", tlsMinimal+"  expiry_warning_fraction: 0\n"))
+	if err != nil || off.TLSListener.ExpiryWarningFraction != 0 {
+		t.Fatalf("an explicit 0 is off, not the default: %v %+v", err, off.TLSListener)
 	}
 	if got := tl.DeviceIdentity.Match; len(got) != 2 || got[0] != "dns_name" || got[1] != "ip_address" {
 		t.Fatalf("match default: %v", got)
@@ -1989,6 +2245,7 @@ func TestTLSListenerRefusals(t *testing.T) {
 		"handshake too long":   {"", tlsMinimal + "  handshake_timeout: 1m\n", "between 1s and 30s"},
 		"tickets too long":     {"", tlsMinimal + "  session_ticket_lifetime: 2h\n", "between 0s and 1h"},
 		"reload too fast":      {"", tlsMinimal + "  reload_interval: 1s\n", "between 10s and 1h"},
+		"a fraction of 1":      {"", tlsMinimal + "  expiry_warning_fraction: 1\n", "at least 0 and below 1"},
 		"crls without state_dir": {"", strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
 			"certificate_status: {crls: [{name: issuing, file: DIR/ca.pem, issuer_file: DIR/ca.pem}]}", 1),
 			"tls_listener.state_dir is required"},
@@ -2014,6 +2271,11 @@ func TestTLSListenerStatusIsTheBrokersShape(t *testing.T) {
 	cs := c.TLSListener.CertificateStatus
 	if cs.OnUnavailable != "refuse" || cs.RefreshInterval != 10*time.Minute {
 		t.Fatalf("the broker's defaults apply: %+v", cs)
+	}
+	// Its lists are kept in a subdirectory of their own, so a state_dir the
+	// broker's checker also uses never holds one crl-issuing.der for both.
+	if got, want := TLSListenerStateDir(c.TLSListener), filepath.Join(filepath.Dir(c.TLSListener.CertFile), "tls_listener"); got != want {
+		t.Fatalf("TLSListenerStateDir: %s, want %s", got, want)
 	}
 	bad := strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
 		"certificate_status: {crls: [{name: issuing, url: \"http://crl.example.net/i.crl\", issuer_file: DIR/ca.pem}], "+
@@ -2042,13 +2304,46 @@ In `internal/certstatus/crl_test.go`, beside the test at :665 that checks the `"
 certificate status: CRL issuing loaded (next update "` line, add a copy that builds the checker
 with `Config{..., Component: "tls_listener"}` and expects `"tls_listener: certificate status: CRL
 issuing loaded (next update "`. Copy that test's setup exactly; only the `Component` and the
-expected prefix differ.
+expected prefix differ. In the copy, also assert the series carry the component:
+`testutil.ToFloat64(m.CRLLoads.WithLabelValues("tls_listener", "issuing", "loaded")) == 1` and
+`m.CRLLoads.WithLabelValues("broker", "issuing", "loaded")` reads 0, so two checkers naming one
+CRL `issuing` are two series.
+
+Update the existing assertions to the new label order, with `"broker"` first (a checker built
+with no `Component`): `crl_test.go:205`'s `loads` helper becomes
+`m.CRLLoads.WithLabelValues("broker", name, outcome)`; `chain_test.go:159` and `:182` read
+`m.CertStatusUnavailable.WithLabelValues("broker")`; `:178` reads
+`m.CertStatusChecks.WithLabelValues("broker", tc.source, tc.result)`; `:185` reads
+`m.CRLNextUpdate.WithLabelValues("broker", "issuing")`. In
+`internal/daemon/metrics/metrics_test.go:52–55`, add `"broker"` as the first label value of each
+and call `m.CertStatusUnavailable.WithLabelValues("broker").Inc()`.
+
+In `internal/certstatus/ocsp_test.go`, add, with the file's own responder fixture (the one its
+caching tests use, a test server whose answers it counts and can make fail):
+
+```go
+// CheckCached never waits: a miss is Unknown at once and asks in the
+// background; a cached answer past half its life is served and refreshed in
+// the background; a refresh that fails never replaces a fresh answer
+// (decision 50 ruling 9).
+func TestCheckCachedNeverWaits(t *testing.T)
+```
+
+It asserts, in order: on an empty cache `CheckCached` returns `Unknown` with a detail containing
+"no fresh OCSP answer cached" before the responder has answered, and the responder is asked
+once; once that question completes, `CheckCached` returns the responder's `Good` and asks
+nothing; with the clock moved past half the answer's cached life it still returns `Good` and
+the responder is asked once more in the background; with the responder then failing and the
+clock moved past half again, `CheckCached` still returns `Good` until the answer's own
+expiry, and `Unknown` after it. Write it against the fixture's real names
+(`grep -n "func Test.*Cache\|httptest" internal/certstatus/ocsp_test.go`).
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/config/ ./internal/certstatus/ -run 'TLS|Listen|Component|loaded' -v`
+Run: `go test ./internal/config/ ./internal/certstatus/ ./internal/daemon/metrics/ -run 'TLS|Listen|Component|loaded|CheckCached|Status' -v`
 Expected: FAIL. `tls_listener` is an unknown field (`KnownFields`), `listen: none` is taken as an
-address, and `certstatus.Config` has no `Component`.
+address, `certstatus.Config` has no `Component`, `CheckCached` is undefined, and the metrics
+take one label value too many.
 
 - [ ] **Step 3: Implement certstatus's prefix**
 
@@ -2071,6 +2366,15 @@ func (c *Checker) prefix() string {
 	}
 	return c.cfg.Component + ": certificate status: "
 }
+
+// component is the metrics' component label: "broker" or "tls_listener", a
+// closed set, never a device (decision 50 ruling 8).
+func (c *Checker) component() string {
+	if c.cfg.Component == "" {
+		return "broker"
+	}
+	return c.cfg.Component
+}
 ```
 
 In `internal/certstatus/crl.go`, replace each of the four `"broker: certificate status: ` string
@@ -2079,6 +2383,93 @@ certificate status: CRL %s ...", ...)` becomes `c.say(key, c.prefix()+"CRL %s ..
 the `New` doc comment's "each begun \"broker: certificate status: \"" to "each begun with
 Config.Component's prefix". Run `grep -rn '"broker: certificate status' internal/certstatus/ |
 grep -v _test`; expect no output.
+
+Give every certificate-status metric the component as its first label value:
+`c.m.CRLLoads.WithLabelValues(c.component(), src.Name, ...)` (crl.go :365, :376, :385, :389),
+`c.m.CRLNextUpdate.WithLabelValues(c.component(), l.name)` (:565),
+`c.m.CertStatusChecks.WithLabelValues(c.component(), res.Source, res.Verdict.String())` and
+`c.m.CertStatusUnavailable.WithLabelValues(c.component()).Inc()` (certstatus.go :156–157,
+:188–190). In `internal/daemon/metrics/metrics.go`, add `"component"` as the first label of
+`CertStatusChecks`, `CRLLoads` and `CRLNextUpdate`, and make `CertStatusUnavailable` a
+`*prometheus.CounterVec` with the one label `component`; in their comments replace "broker
+certificate status checks" with "certificate status checks, by component (`broker`, or
+`tls_listener` for the RFC 9887 listener's device checker, spec §13 decision 50 ruling 8)" and
+"No labels." with "Its one label is the component." At the end of `New`, pre-create
+`m.CertStatusUnavailable.WithLabelValues(c)` for `c` in `broker` and `tls_listener`, so its alarm
+has a zero to start from. An existing alarm on these series (plan 7e's
+`time() - port49_crl_next_update_timestamp_seconds > -3600`) still matches: the label is added,
+none removed.
+
+Add the cached check. In `internal/certstatus/ocsp.go`, give `ocspEntry` a `refresh time.Time`,
+set in `ask` to `now.Add(ttl/2)` beside `expires`, and split `checkOCSP` into a waiting and a
+non-waiting form:
+
+```go
+// checkOCSP asks the responder about cert ... (the existing comment). With
+// wait false it never blocks (decision 50 ruling 9): a fresh answer is
+// returned, and refreshed in the background once past half its life; none
+// is Unknown at once, its question asked in the background for the next
+// caller. Either background question is the shared one, bounded by
+// OCSP.Timeout alone.
+func (c *Checker) checkOCSP(ctx context.Context, cert, issuer *x509.Certificate, wait bool) Result {
+	key := ocspKey(cert, issuer)
+	now := c.now()
+	c.mu.Lock()
+	if e, ok := c.ocsp[key]; ok && now.Before(e.expires) {
+		if !wait && !now.Before(e.refresh) {
+			c.startLocked(ctx, key, cert, issuer)
+		}
+		c.mu.Unlock()
+		return e.res
+	}
+	call := c.startLocked(ctx, key, cert, issuer)
+	c.mu.Unlock()
+	if !wait {
+		return Result{Verdict: Unknown, Source: "none",
+			Detail: "OCSP: no fresh OCSP answer cached; asked in the background"}
+	}
+	select {
+	case <-call.done:
+		return call.res
+	case <-ctx.Done():
+		return Result{Verdict: Unknown, Source: "none", Detail: "OCSP: the question was abandoned"}
+	}
+}
+
+// startLocked is the question in flight about key, started if there is
+// none. c.mu is held.
+func (c *Checker) startLocked(ctx context.Context, key string, cert, issuer *x509.Certificate) *ocspCall {
+	call, busy := c.ocspInflight[key]
+	if !busy {
+		call = &ocspCall{done: make(chan struct{})}
+		c.ocspInflight[key] = call
+		go c.ask(context.WithoutCancel(ctx), key, call, cert, issuer)
+	}
+	return call
+}
+```
+
+In `ask`, keep a still-fresh answer when a refresh fails: write the new entry only when `ttl > 0`
+and either the answer is not `Unknown` or no entry for `key` is still fresh. A refresh failure
+never shortens an answer in force; the broker's path is unchanged, since it asks only when no
+fresh entry exists.
+
+Thread `wait` through: `checkOne(ctx, cert, issuer, depth, wait)` passes it to `checkOCSP`;
+`Check` becomes `check(ctx, chain, wait)` with `Check(ctx, chain)` calling `check(ctx, chain,
+true)`, and add:
+
+```go
+// CheckCached is Check from what the checker holds now, never a network
+// wait: a CRL in force is in memory, and an OCSP answer is the cached one
+// (decision 50 ruling 9). It is the RFC 9887 listener's check at each packet
+// of an open connection; refreshes happen in the background.
+func (c *Checker) CheckCached(chain []*x509.Certificate) Result {
+	return c.check(context.Background(), chain, false)
+}
+```
+
+The detail "OCSP: no fresh OCSP answer cached; asked in the background" does not end with any of
+`ocspNotApplying`'s phrases, so `checkOne` treats it as an outage, as it should.
 
 - [ ] **Step 4: Implement the config**
 
@@ -2121,12 +2512,16 @@ type TLSListenerConfig struct {
 	ServerNames           []string      `yaml:"server_names"`
 	HandshakeTimeout      time.Duration `yaml:"handshake_timeout"`       // default 5s; 1s to 30s
 	SessionTicketLifetime time.Duration `yaml:"session_ticket_lifetime"` // default 0s (off); up to 1h
-	// ExpiryWarning is expiry_warning, read through tlsListenerYAML so an
-	// absent key (336h) is told from 0s (off).
-	ExpiryWarning  time.Duration `yaml:"-"`
-	ReloadInterval time.Duration `yaml:"reload_interval"` // default 1m; 10s to 1h
-	// StateDir keeps certificate_status's verified CRLs across a restart,
-	// crl-<name>.der; required with crls.
+	// ExpiryWarningFraction is expiry_warning_fraction (ruling 16): a device
+	// certificate with less than this fraction of its own lifetime left is
+	// named once a day. Read through tlsListenerYAML so an absent key (0.33,
+	// the last third, past where ACME and cert-manager renew) is told from 0
+	// (off).
+	ExpiryWarningFraction float64       `yaml:"-"`
+	ReloadInterval        time.Duration `yaml:"reload_interval"` // default 1m; 10s to 1h
+	// StateDir keeps certificate_status's verified CRLs across a restart, in
+	// its subdirectory tls_listener/ (TLSListenerStateDir), crl-<name>.der;
+	// required with crls.
 	StateDir          string                   `yaml:"state_dir"`
 	CertificateStatus *CertificateStatusConfig `yaml:"certificate_status"`
 }
@@ -2137,11 +2532,22 @@ type DeviceIdentityConfig struct {
 	DNSSuffixes []string `yaml:"dns_suffixes"` // lower-cased, dots trimmed at load
 }
 
-// tlsListenerYAML tells an absent expiry_warning (the default) from an
-// explicit 0s (off).
+// tlsListenerYAML tells an absent expiry_warning_fraction (the default)
+// from an explicit 0 (off).
 type tlsListenerYAML struct {
-	TLSListenerConfig `yaml:",inline"`
-	ExpiryWarningSet  *time.Duration `yaml:"expiry_warning"`
+	TLSListenerConfig        `yaml:",inline"`
+	ExpiryWarningFractionSet *float64 `yaml:"expiry_warning_fraction"`
+}
+
+// TLSListenerStateDir is where the RFC 9887 listener's checker keeps its
+// lists: a subdirectory of state_dir of its own, so it never writes the
+// crl-<name>.der an in-process broker's checker keeps under the same name,
+// even when both name one directory (decision 50 ruling 8).
+func TLSListenerStateDir(t *TLSListenerConfig) string {
+	if t.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(t.StateDir, "tls_listener")
 }
 
 // namedPath is a config key and the file it names, for the kept-list
@@ -2213,12 +2619,13 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 		return nil, fmt.Errorf("config: %s.session_ticket_lifetime must be between 0s and 1h; got %s", key,
 			t.SessionTicketLifetime)
 	}
-	t.ExpiryWarning = 336 * time.Hour
-	if y.ExpiryWarningSet != nil {
-		t.ExpiryWarning = *y.ExpiryWarningSet
+	t.ExpiryWarningFraction = 0.33
+	if y.ExpiryWarningFractionSet != nil {
+		t.ExpiryWarningFraction = *y.ExpiryWarningFractionSet
 	}
-	if t.ExpiryWarning < 0 || t.ExpiryWarning > 2160*time.Hour {
-		return nil, fmt.Errorf("config: %s.expiry_warning must be between 0s (off) and 2160h; got %s", key, t.ExpiryWarning)
+	if t.ExpiryWarningFraction < 0 || t.ExpiryWarningFraction >= 1 {
+		return nil, fmt.Errorf("config: %s.expiry_warning_fraction must be at least 0 and below 1 (0 is off; "+
+			"0.33 warns in a certificate's last third); got %g", key, t.ExpiryWarningFraction)
 	}
 	t.ReloadInterval = orD(t.ReloadInterval, time.Minute)
 	if t.ReloadInterval < 10*time.Second || t.ReloadInterval > time.Hour {
@@ -2236,7 +2643,8 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 	}
 	others := []namedPath{{key + ".cert_file", t.CertFile}, {key + ".key_file", t.KeyFile},
 		{key + ".client_ca_file", t.ClientCAFile}, {key + ".intermediates_file", t.IntermediatesFile}}
-	if err := checkStatusBlock(t.CertificateStatus, key+".certificate_status", t.StateDir, others); err != nil {
+	if err := checkStatusBlock(t.CertificateStatus, key+".certificate_status", TLSListenerStateDir(&t),
+		others); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -2358,15 +2766,17 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 
 - [ ] **Step 5: Run the tests to see them pass**
 
-Run: `go test ./internal/config/ ./internal/certstatus/ ./internal/port49d/`
-Expected: PASS: the new tests, every broker `certificate_status` test unchanged, and port49d's
-tests (whose configs carry no `tls_listener`).
+Run: `go test ./internal/config/ ./internal/certstatus/ ./internal/daemon/metrics/ ./internal/broker/... ./internal/brokercrl/ ./internal/port49d/`
+Expected: PASS: the new tests, every broker `certificate_status` test unchanged but for the
+label order above, and port49d's tests (whose configs carry no `tls_listener`). Then
+`grep -rn 'CertStatusUnavailable.Inc()\|CRLLoads.WithLabelValues(src\|CRLNextUpdate.WithLabelValues(l' internal/ | grep -v _test`
+prints nothing.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/config internal/certstatus
-git commit -m "feat: tls_listener and listen: none in port49d.yaml
+git add internal/config internal/certstatus internal/daemon/metrics
+git commit -m "feat: tls_listener and listen: none in port49d.yaml; certificate status by component, and a cached check
 
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 ```
@@ -2390,7 +2800,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
     `.Detail`, `.CertSHA256`;
   - `keyring.DiagTransportMismatch`, `DiagTLSRefused`, `DiagObfuscatedOverTLS`;
   - `metrics.Metrics.TLSHandshakes *prometheus.CounterVec`;
-  - `func (m *Metrics) WatchTLSExpiry(device func() (time.Duration, bool), server func() time.Duration)`;
+  - `func (m *Metrics) WatchTLSLifetime(device func() (float64, bool), server func() float64)`;
   - `func (m *Metrics) CountDevicesByTransport(count func() map[string]int)`;
   - `authen.Peer.Transport`, `authen.Peer.CertSHA256`.
 
@@ -2436,7 +2846,7 @@ func TestTLSMetrics(t *testing.T) {
 	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
 		m.TLSHandshakes.WithLabelValues(string(o)).Inc()
 	}
-	m.WatchTLSExpiry(func() (time.Duration, bool) { return 90 * time.Second, true }, func() time.Duration { return time.Hour })
+	m.WatchTLSLifetime(func() (float64, bool) { return 0.25, true }, func() float64 { return 0.5 })
 	m.CountDevicesByTransport(func() map[string]int { return map[string]int{"tcp": 3, "tls": 2} })
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -2454,7 +2864,7 @@ func TestTLSMetrics(t *testing.T) {
 			}
 		}
 	}
-	if got["port49_tls_device_certificate_expiry_seconds"] != 90 || got["port49_tls_server_certificate_expiry_seconds"] != 3600 ||
+	if got["port49_tls_device_certificate_lifetime_left_ratio"] != 0.25 || got["port49_tls_server_certificate_lifetime_left_ratio"] != 0.5 ||
 		got["port49_devices_by_transport{transport=tcp}"] != 3 || got["port49_devices_by_transport{transport=tls}"] != 2 {
 		t.Fatalf("gauges: %v", got)
 	}
@@ -2463,17 +2873,20 @@ func TestTLSMetrics(t *testing.T) {
 	}
 }
 
-func TestTLSExpiryWithNoneSeenIsInfinite(t *testing.T) {
+func TestTLSLifetimeWithNoneSeenIsWhole(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := New(reg)
-	m.WatchTLSExpiry(func() (time.Duration, bool) { return 0, false }, nil)
-	if v := testutil.ToFloat64(m.TLSDeviceCertExpiry); !math.IsInf(v, 1) {
-		t.Fatalf("none seen: %v, want +Inf so an expiry alarm never fires on nothing", v)
+	m.WatchTLSLifetime(func() (float64, bool) { return 0, false }, nil)
+	if v := testutil.ToFloat64(m.TLSDeviceCertLifetime); v != 1 {
+		t.Fatalf("none seen: %v, want 1 so a lifetime alarm never fires on nothing", v)
+	}
+	if v := testutil.ToFloat64(m.TLSServerCertLifetime); v != 1 {
+		t.Fatalf("no listener: %v, want 1", v)
 	}
 }
 ```
 
-(Imports: `math`, `time`, `prometheus`, `testutil`, and `devicecert`. `devicecert` imports
+(Imports: `prometheus`, `testutil`, and `devicecert`. `devicecert` imports
 nothing from `metrics`, so there is no cycle.)
 
 In `internal/daemon/authen/authen_test.go`, add:
@@ -2491,7 +2904,7 @@ func TestATLSPeersDeviceBlock(t *testing.T) {
 
 Run: `go test ./internal/decision/ ./internal/daemon/metrics/ ./internal/daemon/authen/ -run 'TLS' -v`
 Expected: FAIL to build: unknown fields `Transport`, `CertSHA256`, `TLSOutcome`, `Detail`;
-`m.TLSHandshakes`, `WatchTLSExpiry`, `CountDevicesByTransport` and `TLSDeviceCertExpiry`
+`m.TLSHandshakes`, `WatchTLSLifetime`, `CountDevicesByTransport` and `TLSDeviceCertLifetime`
 undefined.
 
 - [ ] **Step 3: Implement**
@@ -2536,11 +2949,14 @@ In `internal/daemon/metrics/metrics.go`:
 	// handshakes by devicecert.Outcome, ok and resumed included (spec §13
 	// decision 50 ruling 16). No device label.
 	TLSHandshakes *prometheus.CounterVec
-	// port49_tls_device_certificate_expiry_seconds: the least time to
-	// expiry among device certificates verified in the last 24h, +Inf with
-	// none; port49_tls_server_certificate_expiry_seconds: the listener's own.
-	TLSDeviceCertExpiry prometheus.GaugeFunc
-	TLSServerCertExpiry prometheus.GaugeFunc
+	// port49_tls_device_certificate_lifetime_left_ratio: the least fraction
+	// of its own lifetime a device certificate verified in the last 24h has
+	// left, 1 with none; port49_tls_server_certificate_lifetime_left_ratio:
+	// the listener's own, below 0 once expired, 1 with no listener. A
+	// fraction, so one alarm threshold fits a 24h certificate and a 1-year
+	// one alike (decision 50 ruling 16).
+	TLSDeviceCertLifetime prometheus.GaugeFunc
+	TLSServerCertLifetime prometheus.GaugeFunc
 	// port49_devices_by_transport{transport}: admitted devices, one gauge
 	// each for tcp and tls.
 	DevicesByTransport []prometheus.GaugeFunc
@@ -2549,8 +2965,8 @@ In `internal/daemon/metrics/metrics.go`:
    and the unexported holders beside `admissionRefused`:
 
 ```go
-	tlsDeviceExpiry  atomic.Pointer[func() (time.Duration, bool)]
-	tlsServerExpiry  atomic.Pointer[func() time.Duration]
+	tlsDeviceLife    atomic.Pointer[func() (float64, bool)]
+	tlsServerLife    atomic.Pointer[func() float64]
 	devicesTransport atomic.Pointer[func() map[string]int]
 ```
 
@@ -2564,23 +2980,23 @@ In `internal/daemon/metrics/metrics.go`:
 ```go
 	m.TLSHandshakes = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_tls_handshakes_total",
 		Help: "RFC 9887 listener handshakes by outcome."}, []string{"outcome"})
-	m.TLSDeviceCertExpiry = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_device_certificate_expiry_seconds",
-		Help: "Seconds until the soonest-expiring device certificate verified in the last 24h; +Inf with none."},
+	m.TLSDeviceCertLifetime = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_device_certificate_lifetime_left_ratio",
+		Help: "The least fraction of its own lifetime a device certificate verified in the last 24h has left; 1 with none."},
 		func() float64 {
-			if f := m.tlsDeviceExpiry.Load(); f != nil {
-				if d, ok := (*f)(); ok {
-					return d.Seconds()
+			if f := m.tlsDeviceLife.Load(); f != nil {
+				if v, ok := (*f)(); ok {
+					return v
 				}
 			}
-			return math.Inf(1)
+			return 1
 		})
-	m.TLSServerCertExpiry = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_server_certificate_expiry_seconds",
-		Help: "Seconds until the RFC 9887 listener's own certificate expires; +Inf with no listener."},
+	m.TLSServerCertLifetime = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_server_certificate_lifetime_left_ratio",
+		Help: "The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener."},
 		func() float64 {
-			if f := m.tlsServerExpiry.Load(); f != nil && *f != nil {
-				return (*f)().Seconds()
+			if f := m.tlsServerLife.Load(); f != nil && *f != nil {
+				return (*f)()
 			}
-			return math.Inf(1)
+			return 1
 		})
 	for _, tr := range []string{"tcp", "tls"} {
 		m.DevicesByTransport = append(m.DevicesByTransport, prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -2594,17 +3010,17 @@ In `internal/daemon/metrics/metrics.go`:
 	}
 ```
 
-   and add `m.TLSHandshakes, m.TLSDeviceCertExpiry, m.TLSServerCertExpiry` and
+   and add `m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime` and
    `m.DevicesByTransport...` to the `reg.MustRegister` calls (the last as its own
    `for _, g := range m.DevicesByTransport { reg.MustRegister(g) }`).
 
 4. Add the setters:
 
 ```go
-// WatchTLSExpiry sets what the two certificate expiry gauges report.
-func (m *Metrics) WatchTLSExpiry(device func() (time.Duration, bool), server func() time.Duration) {
-	m.tlsDeviceExpiry.Store(&device)
-	m.tlsServerExpiry.Store(&server)
+// WatchTLSLifetime sets what the two certificate lifetime gauges report.
+func (m *Metrics) WatchTLSLifetime(device func() (float64, bool), server func() float64) {
+	m.tlsDeviceLife.Store(&device)
+	m.tlsServerLife.Store(&server)
 }
 
 // CountDevicesByTransport sets what port49_devices_by_transport reports.
@@ -2614,7 +3030,7 @@ func (m *Metrics) CountDevicesByTransport(count func() map[string]int) { m.devic
 5. At the end of `New`, pre-create every outcome series so a rate alarm has a zero to start
    from: `for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed},
    devicecert.Outcomes...) { m.TLSHandshakes.WithLabelValues(string(o)) }`. Import
-   `internal/devicecert` and `math`.
+   `internal/devicecert`.
 
 In `internal/daemon/authen/authen.go`, add to `Peer` after `KeyVersion`:
 
@@ -2654,7 +3070,8 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 - Modify: `internal/daemon/server/conn.go` (`conn` :41, `unvalidated` :61, `quarantine` :76,
   `refusedAdmission` :90, `admissionWithdrawn` :129, every `reset(s.c)`, `serve` :237, `write`
   :412, `dispatch` :441)
-- Test: `internal/daemon/server/tls_test.go`
+- Modify: `internal/daemon/limits/limits.go` (`failure` :23, `Decline` :90)
+- Test: `internal/daemon/server/tls_test.go`, `internal/daemon/limits/limits_test.go`
 
 **Interfaces:**
 - Consumes:
@@ -2671,7 +3088,11 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
     func(device, source string, v devicecert.Verdict) }`;
   - `type Material struct{ Config *tls.Config; Verifier *devicecert.Verifier }`;
   - `Serve` serving RFC 9887 when `Deps.TLS != nil`;
-  - the test fixture `newTLSFixture` (in `tls_test.go`), which Tasks 8 and 9 use.
+  - `func (l *Limiter) DeclineStatus(src netip.Addr)` and `func (l *Limiter)
+    DeclinedForStatus(src netip.Addr) bool`;
+  - the test fixture `newTLSFixture` (in `tls_test.go`), which Tasks 8 and 9 use. It drives
+    admission through `server_test.go`'s existing `swapAdmitter` (:1898, field `p`, method
+    `swap(t, rs...)`), which this task does not redeclare.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2682,6 +3103,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -2707,30 +3129,17 @@ var loopback = netip.MustParseAddr("127.0.0.1")
 
 // tlsFixture is a server on the RFC 9887 listener: leaf-01 at 127.0.0.1
 // with transport tls, a device CA, a server certificate for
-// tacacs.example.net, and a status the test sets.
+// tacacs.example.net, and a status the test sets. admit is server_test.go's
+// swapAdmitter (:1898), swapped as a reload does.
 type tlsFixture struct {
-	ts     *testServer
-	ca     *testpki.CA
-	server tls.Certificate
-	status atomic.Int32 // a devicecert.Status
-	allow  bool
-	mat    atomic.Pointer[Material]
-	admit  *swapAdmitter
-}
-
-// swapAdmitter is an Admitter a test can change under a running server, as
-// a reload does.
-type swapAdmitter struct{ cur atomic.Pointer[admission.Trie] }
-
-func (a *swapAdmitter) Lookup(addr netip.Addr) (admission.Resolved, bool) { return a.cur.Load().Lookup(addr) }
-
-func (a *swapAdmitter) set(t *testing.T, rs ...admission.Resolved) {
-	t.Helper()
-	tr, err := admission.NewTrie(rs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.cur.Store(tr)
+	ts          *testServer
+	ca          *testpki.CA
+	server      tls.Certificate
+	status      atomic.Int32 // a devicecert.Status
+	statusCalls atomic.Int32 // how often either status question was asked
+	allow       bool
+	mat         atomic.Pointer[Material]
+	admit       *swapAdmitter
 }
 
 var leaf01TLS = admission.Device{Name: "leaf-01", Platform: "arista_eos", Transport: admission.TransportTLS,
@@ -2760,7 +3169,7 @@ func newTLSFixture(t *testing.T, log *syncBuffer, adjust func(*Deps, *tlsFixture
 		t.Fatal(err)
 	}
 	f := &tlsFixture{ca: ca, server: srv, admit: &swapAdmitter{}}
-	f.admit.set(t, admission.Resolved{Device: leaf01TLS})
+	f.admit.swap(t, admission.Resolved{Device: leaf01TLS})
 	f.mat.Store(f.material(ca, true))
 	f.ts = newTestServerWith(t, log, seededStore(t), nil, func(d *Deps) {
 		d.Admission = f.admit
@@ -2773,16 +3182,20 @@ func newTLSFixture(t *testing.T, log *syncBuffer, adjust func(*Deps, *tlsFixture
 }
 
 // material is a load of the listener's files with anchor as the device CA;
-// ticketsOff is session_ticket_lifetime: 0s.
+// ticketsOff is session_ticket_lifetime: 0s. Both status questions answer
+// f.status and count in f.statusCalls.
 func (f *tlsFixture) material(anchor *testpki.CA, ticketsOff bool) *Material {
+	status := func() (devicecert.Status, string) {
+		f.statusCalls.Add(1)
+		return devicecert.Status(f.status.Load()), "test status source"
+	}
 	return &Material{
 		Config: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{f.server},
 			ClientAuth: tls.RequireAnyClientCert, SessionTicketsDisabled: ticketsOff},
 		Verifier: &devicecert.Verifier{Anchors: anchor.Pool(), Rule: devicecert.Rule{DNSName: true, IPAddress: true},
 			AllowUnknown: f.allow, Now: time.Now,
-			Status: func(context.Context, []*x509.Certificate) (devicecert.Status, string) {
-				return devicecert.Status(f.status.Load()), "test status source"
-			}}}
+			Status:       func(context.Context, []*x509.Certificate) (devicecert.Status, string) { return status() },
+			CachedStatus: func([]*x509.Certificate) (devicecert.Status, string) { return status() }}}
 }
 
 // deviceCert is a client certificate from ca: by default leaf-01's, valid
@@ -2998,12 +3411,99 @@ func TestTLSRevokedIsStruck(t *testing.T) {
 	refusedAtHandshake(t, f, log, &cert, nil, devicecert.CertificateRevoked, true)
 }
 
+// A status that cannot be established declines, with no strike, and its
+// window stands: the next dial inside it is reset at Accept, before any TLS
+// byte, with no second handshake and no second record, though leaf-01 is
+// admitted on this listener (decision 50 ruling 8).
 func TestTLSStatusUnavailableIsDeclinedNotStruck(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
 	f.status.Store(int32(devicecert.StatusUnknown))
 	cert := f.deviceCert(t, nil, testpki.Leaf{})
 	refusedAtHandshake(t, f, log, &cert, nil, devicecert.StatusUnavailable, false)
+	declinedBefore := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("declined_refused"))
+	acceptRefused(t, f.ts.addr)
+	if got := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); got != declinedBefore+1 {
+		t.Fatalf("declined_refused %v, want %v: the window did not stand", got, declinedBefore+1)
+	}
+	if n := strings.Count(log.String(), `"tls_outcome":"status_unavailable"`); n != 1 {
+		t.Fatalf("%d status_unavailable records, want 1: the second dial ran a handshake", n)
+	}
+	if f.ts.limits.Holding(loopback) {
+		t.Fatal("struck")
+	}
+}
+
+// A peer that holds only a device's public certificate (not its key) fails
+// the handshake at CertificateVerify, struck as an impostor. It never
+// reaches the status check, which runs only once possession is proven, so
+// a CRL outage gives it no unstruck decline (decision 50 ruling 8;
+// pre-flight I1).
+func TestTLSAPublicCertificateAloneNeverReachesTheStatusCheck(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
+	f.status.Store(int32(devicecert.StatusUnknown)) // an outage: the old order would decline it unstruck
+	real := f.deviceCert(t, nil, testpki.Leaf{})
+	other := f.deviceCert(t, nil, testpki.Leaf{})
+	impostor := tls.Certificate{Certificate: real.Certificate, Leaf: real.Leaf, PrivateKey: other.PrivateKey}
+	refusedAtHandshake(t, f, log, &impostor, nil, devicecert.HandshakeFailed, true)
+	if n := f.statusCalls.Load(); n != 0 {
+		t.Fatalf("the status was asked %d times for a peer that proved nothing", n)
+	}
+	if log.contains(`"tls_outcome":"status_unavailable"`) {
+		t.Fatalf("an impostor was declined, not struck: %s", log.String())
+	}
+}
+
+// clientHelloWithEarlyData is a TLS 1.3 ClientHello carrying the early_data
+// extension, which no Go client sends: RFC 9887 §5.1.2's case. crypto/tls
+// aborts it with unsupported_extension, "tls: client sent unexpected early
+// data" (handshake_server_tls13.go, Go 1.26).
+func clientHelloWithEarlyData(t *testing.T) []byte {
+	t.Helper()
+	u16 := func(b []byte, v int) []byte { return append(b, byte(v>>8), byte(v)) }
+	ext := func(b []byte, typ int, data []byte) []byte { return append(u16(u16(b, typ), len(data)), data...) }
+	random, share := make([]byte, 32), make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(share); err != nil {
+		t.Fatal(err)
+	}
+	var exts []byte
+	exts = ext(exts, 0x002b, []byte{2, 0x03, 0x04})                                // supported_versions: TLS 1.3
+	exts = ext(exts, 0x000a, []byte{0, 2, 0x00, 0x1d})                             // supported_groups: x25519
+	exts = ext(exts, 0x000d, []byte{0, 2, 0x04, 0x03})                             // signature_algorithms: ecdsa_secp256r1_sha256
+	exts = ext(exts, 0x0033, append([]byte{0, 36, 0x00, 0x1d, 0, 32}, share...)) // key_share: x25519
+	exts = ext(exts, 0x002a, nil)                                                  // early_data
+	body := append([]byte{0x03, 0x03}, random...)
+	body = append(body, 0)                // legacy_session_id: empty
+	body = append(body, 0, 2, 0x13, 0x01) // cipher_suites: TLS_AES_128_GCM_SHA256
+	body = append(body, 1, 0)             // legacy_compression_methods: null
+	body = append(u16(body, len(exts)), exts...)
+	hs := append([]byte{0x01, byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}, body...)
+	return append(u16([]byte{0x16, 0x03, 0x01}, len(hs)), hs...)
+}
+
+func TestTLSEarlyDataIsRefused(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
+	conn, err := net.Dial("tcp", f.ts.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(clientHelloWithEarlyData(t)); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	io.ReadAll(conn) // the alert, then the reset
+	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"early_data_refused"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !f.ts.limits.Holding(loopback) {
+		t.Fatal("early data is struck")
+	}
 }
 
 func TestTLSAllowUnknownAdmits(t *testing.T) {
@@ -3045,12 +3545,12 @@ func TestTLSDecidesAtAcceptBeforeAnyTLSByte(t *testing.T) {
 		diag   string
 		struck bool
 	}{
-		"not in the inventory": {func(t *testing.T, f *tlsFixture) { f.admit.set(t) }, false, "unadmitted_source", true},
+		"not in the inventory": {func(t *testing.T, f *tlsFixture) { f.admit.swap(t) }, false, "unadmitted_source", true},
 		"refused admission": {func(t *testing.T, f *tlsFixture) {
-			f.admit.set(t, admission.Resolved{Device: admission.Device{Name: "leaf-01", Transport: "udp",
+			f.admit.swap(t, admission.Resolved{Device: admission.Device{Name: "leaf-01", Transport: "udp",
 				Addresses: []netip.Addr{loopback}}, Refused: `has transport "udp"`, Refusal: admission.RefusedTransport})
 		}, false, "admission_refused", false},
-		"a tcp device": {func(t *testing.T, f *tlsFixture) { f.admit.set(t, admission.Resolved{Device: tcpDev, KeyRef: "prod_key"}) },
+		"a tcp device": {func(t *testing.T, f *tlsFixture) { f.admit.swap(t, admission.Resolved{Device: tcpDev, KeyRef: "prod_key"}) },
 			false, "transport_mismatch", false},
 		"quarantined": {func(*testing.T, *tlsFixture) {}, true, "device_quarantined", false},
 	} {
@@ -3067,8 +3567,10 @@ func TestTLSDecidesAtAcceptBeforeAnyTLSByte(t *testing.T) {
 			if !waitFor(t, func() bool { return log.contains(`"diagnosis":"` + c.diag + `"`) }) {
 				t.Fatalf("no %s record: %s", c.diag, log.String())
 			}
-			if !log.contains(`"transport":"tls"`) || log.contains(`"seq_no":1`) {
-				t.Fatalf("an Accept record has transport tls and no header: %s", log.String())
+			// No header was read: its fields are zero, and type 0 is no
+			// TACACS+ type (decision 50 ruling 5).
+			if !log.contains(`"transport":"tls"`) || !log.contains(`"type":0,"seq_no":0,"session_id":0,"length":0`) {
+				t.Fatalf("an Accept record has transport tls and zero header fields: %s", log.String())
 			}
 			var total float64
 			for _, o := range append([]devicecert.Outcome{devicecert.OK}, devicecert.Outcomes...) {
@@ -3111,6 +3613,9 @@ func TestTLSObfuscatedPacketGetsAnErrorAndAClose(t *testing.T) {
 	}
 	if log.contains("body_sha256") || f.ts.limits.Holding(loopback) {
 		t.Fatalf("a body hash, or a strike: %s", log.String())
+	}
+	if !log.contains(`"name":"leaf-01"`) {
+		t.Fatalf("the record names the device: %s", log.String())
 	}
 }
 
@@ -3275,10 +3780,15 @@ func (s *conn) acceptRecord(diag keyring.Diagnosis, reason decision.Reason, deta
 }
 
 // handshake runs TLS 1.3 with the material in force. The ClientHello is
-// read first for its versions and its SNI; the device's chain is judged in
-// VerifyConnection, which crypto/tls runs on a full handshake and a
-// resumption alike, with its status checked inside the handshake's
-// deadline.
+// read first for its versions and its SNI. The device's path and identity
+// are judged in VerifyConnection, which crypto/tls runs on a full handshake
+// and a resumption alike. crypto/tls runs it before it checks the client's
+// CertificateVerify (handshake_server_tls13.go, Go 1.26), so the peer has
+// proven nothing there: the status, which may wait on the network, is asked
+// only once HandshakeContext has returned, inside the same deadline (ruling
+// 8). A ticket crypto/tls sends before the client's Finished therefore
+// precedes the status check; a resumption with it runs VerifyConnection and
+// the status check again.
 func (s *conn) handshake(ctx context.Context) bool {
 	mat := s.d.TLS.Material()
 	hctx, cancel := context.WithTimeout(ctx, s.d.TLS.HandshakeTimeout)
@@ -3302,7 +3812,8 @@ func (s *conn) handshake(ctx context.Context) bool {
 		return nil, nil
 	}
 	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
-		v = mat.Verifier.Verify(hctx, cs.PeerCertificates, s.dev.Device)
+		// The path and the identity: local and cheap (ruling 8).
+		v = mat.Verifier.Verify(cs.PeerCertificates, s.dev.Device)
 		if v.Outcome != devicecert.OK {
 			return &devicecert.Refusal{Verdict: v}
 		}
@@ -3319,8 +3830,25 @@ func (s *conn) handshake(ctx context.Context) bool {
 			return false // shutdown, not the device
 		}
 		if v.Outcome == "" || v.Outcome == devicecert.OK {
-			v = devicecert.Verdict{Outcome: devicecert.Classify(err, hctx.Err() != nil),
-				Detail: printsafe.Line(err.Error(), 300), Leaf: v.Leaf}
+			detail := printsafe.Line(err.Error(), 300)
+			if strings.HasPrefix(err.Error(), "remote error: tls:") {
+				// The device sent the alert: most often it refused port49's
+				// own certificate (expired, or a name it was not configured
+				// with). Every device then fails alike (pre-flight M3).
+				detail = "the device aborted the handshake (it may refuse port49's certificate; see " +
+					"port49_tls_server_certificate_lifetime_left_ratio): " + detail
+			}
+			v = devicecert.Verdict{Outcome: devicecert.Classify(err, hctx.Err() != nil), Detail: detail, Leaf: v.Leaf}
+		}
+		s.tlsRefused(v)
+		return false
+	}
+	// Possession is proven: the chain's status now, within the handshake's
+	// deadline. A refusal here is a reset after a completed handshake; the
+	// device sees no alert (ruling 8).
+	if v = mat.Verifier.CheckStatus(hctx, v); v.Outcome != devicecert.OK {
+		if ctx.Err() != nil {
+			return false
 		}
 		s.tlsRefused(v)
 		return false
@@ -3341,7 +3869,9 @@ func (s *conn) handshake(ctx context.Context) bool {
 
 // tlsRefused records a refused handshake and ends the connection: struck
 // and reset, as a key miss is, or for status_unavailable, which is port49's
-// fault, declined (ruling 8).
+// fault, declined under a window that stands until it lapses (ruling 8). An
+// alert crypto/tls wrote before this is best-effort: the reset can discard
+// it before it leaves the host (ruling 16).
 func (s *conn) tlsRefused(v devicecert.Verdict) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),
@@ -3353,7 +3883,7 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 		s.d.TLS.Said(s.dev.Device.Name, s.src.String(), v)
 	}
 	if !v.Outcome.Struck() {
-		s.decline()
+		s.declineStatus()
 		return
 	}
 	s.d.Limits.Malformed(s.src)
@@ -3361,13 +3891,28 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 	s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
 }
 
+// declineStatus is decline for status_unavailable: the window it opens
+// stands at the next Accept until it lapses, though the device is admitted
+// on this listener, since nothing there can tell the status is back without
+// the handshake the window spares (ruling 8).
+func (s *conn) declineStatus() {
+	s.d.Limits.DeclineStatus(s.src)
+	reset(s.raw)
+}
+
 // obfuscatedOverTLS answers a packet whose unencrypted flag is clear on the
 // RFC 9887 listener as RFC 9887 §4 requires: its type's ERROR with the flag
 // set, then the connection closes (serve's deferred Close sends
-// close_notify). The body is never read. The peer's certificate verified,
-// so it is no strike (ruling 13).
+// close_notify). The body, which ValidateTLS bounded at wire.MaxBodyLen, is
+// read and discarded first, never hashed or logged: a socket closed with
+// unread data sends a reset, which can drop the ERROR still queued
+// (pre-flight M1). The peer's certificate verified, so it is no strike
+// (ruling 13).
 func (s *conn) obfuscatedOverTLS(h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagObfuscatedOverTLS, 0)
+	if _, err := io.CopyN(io.Discard, s.c, int64(h.Length)); err != nil {
+		return // the peer is gone, or the read deadline passed: nothing to answer
+	}
 	rh, body := wire.ErrorReply(h)
 	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err == nil {
 		_, _ = s.c.Write(append(rh.Encode(), body...))
@@ -3376,11 +3921,14 @@ func (s *conn) obfuscatedOverTLS(h wire.Header) {
 }
 
 // deviceBlock names the device this connection's source is; on the RFC
-// 9887 listener it says so.
+// 9887 listener it says so, with the certificate once one verified.
 func (s *conn) deviceBlock() *decision.Device {
 	d := &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform}
 	if s.d.TLS != nil {
 		d.Transport = admission.TransportTLS
+		if s.tls != nil {
+			d.CertSHA256 = s.tls.certSHA
+		}
 	}
 	return d
 }
@@ -3395,7 +3943,42 @@ func (s *conn) transportName() string {
 }
 ```
 
-Add `"github.com/rhwendt/port49/internal/tacacs/wire"` to its imports.
+Add `"io"` and `"github.com/rhwendt/port49/internal/tacacs/wire"` to its imports.
+
+In `internal/daemon/limits/limits.go`, mark a status decline (ruling 8; pre-flight I1). Give
+`failure` a field `status bool // the last decline was DeclineStatus's`, make `Decline` clear it
+after `countLocked` (`f := l.declined[src]; f.status = false; l.declined[src] = f`), and add:
+
+```go
+// DeclineStatus is Decline for a device whose certificate status could not
+// be established (spec §13 decision 50 ruling 8): the same window on the same
+// schedule, marked, so the RFC 9887 listener keeps it in force at the next
+// Accept, before any TLS byte, rather than dropping it because the device
+// is still admitted. Nothing at Accept can tell the status is back without
+// the handshake the window exists to spare, so an outage costs each device
+// at most one full handshake per window.
+func (l *Limiter) DeclineStatus(src netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.countLocked(l.declined, src)
+	f := l.declined[src]
+	f.status = true
+	l.declined[src] = f
+}
+
+// DeclinedForStatus reports whether src is inside a window DeclineStatus
+// opened last.
+func (l *Limiter) DeclinedForStatus(src netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inWindowLocked(l.declined, src) && l.declined[src].status
+}
+```
+
+In `internal/daemon/limits/limits_test.go`, add `TestDeclineStatusIsMarkedUntilAPlainDecline`:
+after `DeclineStatus(a)`, `Declined(a)` and `DeclinedForStatus(a)` are true and `Holding(a)` is
+false; after `Decline(a)`, `DeclinedForStatus(a)` is false and `Declined(a)` still true; with
+the clock past the window, both are false. Use the file's own limiter and clock helpers.
 
 - [ ] **Step 4: Wire it into `server.go` and `conn.go`**
 
@@ -3419,8 +4002,8 @@ In the Accept loop, after `admitted := found && dev.Refused == ""`, add:
 		mismatch := admitted && dev.Device.EffectiveTransport() != listener
 ```
 
-change `if declining(d, dev, admitted) {` to `if declining(d, dev, admitted, listener) {`, and
-change the `conn` construction and key choice to:
+change `if declining(d, dev, admitted) {` to `if declining(d, src, dev, admitted, listener) {`,
+and change the `conn` construction and key choice to:
 
 ```go
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
@@ -3436,10 +4019,11 @@ Replace `declining` with:
 // declining reports whether port49d would decline a connection from dev on
 // this listener as admission and the policy stand now: a source the
 // inventory does not name, a device admission refuses, one of the other
-// transport, or a quarantined one. It is asked only at an Accept inside a
-// decline window.
-func declining(d Deps, dev admission.Resolved, admitted bool, listener string) bool {
-	if !admitted || dev.Device.EffectiveTransport() != listener {
+// transport, a quarantined one, or one whose certificate status could not
+// be established, whose window stands until it lapses (spec §13 decision 50
+// ruling 8). It is asked only at an Accept inside a decline window.
+func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, listener string) bool {
+	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedForStatus(src) {
 		return true
 	}
 	if d.Quarantined == nil {
@@ -3471,7 +4055,11 @@ In `conn.go`:
 
 3. In `unvalidated`, `quarantine`, `refusedAdmission` and `admissionWithdrawn`, add `Transport:
    s.transportName()` to the `decision.Unvalidated` literal. In the three that build a
-   `&decision.Device{NAS: ..., Name: ..., Platform: ...}`, use `s.deviceBlock()` instead.
+   `&decision.Device{NAS: ..., Name: ..., Platform: ...}`, use `s.deviceBlock()` instead. In
+   `unvalidated`, which builds no device block, add `Device: s.deviceBlock()` to the record when
+   `s.d.TLS != nil`: every TLS path that reaches it (`obfuscated_over_tls`, `not_tacacs`,
+   `malformed_after_validation`) has an admitted device, and the 3am reader expects its name
+   (pre-flight M11). The RFC 8907 listener's records are unchanged.
 
 4. Replace `serve`'s opening and its header-to-body section. The full new function, with the
    parts after `body` unchanged, is:
@@ -3615,14 +4203,14 @@ blocks this step does not touch.
 
 - [ ] **Step 5: Run the tests to see them pass**
 
-Run: `go test ./internal/daemon/server/ -run TestTLS -v -count=1`
+Run: `go test ./internal/daemon/limits/ && go test ./internal/daemon/server/ -run TestTLS -v -count=1`
 Expected: PASS. Then run the whole package with the race detector: `go test -race
 ./internal/daemon/server/`. Expected: PASS, with every RFC 8907 test unchanged.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/daemon/server/
+git add internal/daemon/server/ internal/daemon/limits/
 git commit -m "feat: the RFC 9887 listener: decide at Accept, then TLS 1.3 with mutual certificates
 
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
@@ -3639,9 +4227,8 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 7's fixture, `swapAdmitter`, `tlsSession`; `devicecert.Verifier.Recheck`.
-- Produces: `func (s *conn) transportMismatch(h wire.Header)`, `func (s *conn) recheckTLS(ctx
-  context.Context) devicecert.Verdict`, `func (s *conn) tlsWithdrawn(h wire.Header, v
-  devicecert.Verdict)`.
+- Produces: `func (s *conn) transportMismatch(h wire.Header)`, `func (s *conn) recheckTLS()
+  devicecert.Verdict`, `func (s *conn) tlsWithdrawn(h wire.Header, v devicecert.Verdict)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3751,7 +4338,7 @@ func TestTLSTransportChangeWithdrawsAnOpenConnection(t *testing.T) {
 	c := openSession(t, f)
 	tcpDev := leaf01TLS
 	tcpDev.Transport = admission.TransportTCP
-	f.admit.set(t, admission.Resolved{Device: tcpDev, KeyRef: "prod_key"})
+	f.admit.swap(t, admission.Resolved{Device: tcpDev, KeyRef: "prod_key"})
 	nextPacketEnds(t, c)
 	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_withdrawn"`) }) {
 		t.Fatalf("log: %s", log.String())
@@ -3765,10 +4352,10 @@ func TestTLSTransportChangeWithdrawsAnOpenConnection(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/daemon/server/ -run 'TestATLSDeviceOnTheTCPListener|TestTLSRecheck|TestTLSReloaded|TestTLSTransportChange' -v -count=1`
+Run: `go test ./internal/daemon/server/ -run 'TestATLSDeviceOnTheTCPListener|TestTLSRecheck|TestTLSReloaded|TestTLSTransportChange|TestTLSAddressChange' -v -count=1`
 Expected: FAIL. On 49 the TLS device's packet is tried under an empty key set and recorded
-`no_known_key_matches`, struck. On the TLS listener the revoked, re-anchored and re-transported
-sessions are answered.
+`no_known_key_matches`, struck. On the TLS listener the revoked, re-anchored, re-transported
+and re-addressed sessions are answered.
 
 - [ ] **Step 3: Implement**
 
@@ -3777,11 +4364,33 @@ In `conn.go`'s `readmitted`, change the withdrawn case to:
 ```go
 	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
 		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform ||
-		now.Device.EffectiveTransport() != s.dev.Device.EffectiveTransport():
+		now.Device.EffectiveTransport() != s.dev.Device.EffectiveTransport() ||
+		(s.tls != nil && !slices.Equal(now.Device.Addresses, s.dev.Device.Addresses)):
 		return keyring.DiagAdmissionWithdrawn
 ```
 
-and add "or re-transports" to its doc comment's list of what a reload can do.
+and add "or re-transports" to its doc comment's list of what a reload can do, and: "On the RFC 9887
+listener a change to the device's addresses also withdraws it: its certificate may have named it
+by an address it no longer has, and its next handshake is judged against the record in force
+(decision 50 ruling 6). On 49 an address change is not a withdrawal, as before." Import `slices`
+in `conn.go` if absent.
+
+Add to `tls_test.go`, beside `TestTLSTransportChangeWithdrawsAnOpenConnection`:
+
+```go
+func TestTLSAddressChangeWithdrawsAnOpenConnection(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, nil)
+	c := openSession(t, f)
+	moved := leaf01TLS
+	moved.Addresses = []netip.Addr{loopback, netip.MustParseAddr("192.0.2.77")}
+	f.admit.swap(t, admission.Resolved{Device: moved})
+	nextPacketEnds(t, c)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_withdrawn"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+```
 
 In `serve`, after the `if !s.admitted { ... }` block and before `readmitted`, add:
 
@@ -3801,7 +4410,7 @@ and after the quarantine block, before the header checks:
 		// An open TLS connection is judged again at every packet: holding it
 		// open never extends a certificate's life (ruling 9).
 		if s.tls != nil {
-			if v := s.recheckTLS(ctx); v.Outcome != devicecert.OK {
+			if v := s.recheckTLS(); v.Outcome != devicecert.OK {
 				s.tlsWithdrawn(h, v)
 				return
 			}
@@ -3829,25 +4438,28 @@ func (s *conn) transportMismatch(h wire.Header) {
 Add to `tls.go`:
 
 ```go
-// recheckTLS judges an open connection's certificate at this packet: in
-// full against the material in force when a reload replaced the one its
-// handshake used, else its chain's expiry and status (ruling 9).
-func (s *conn) recheckTLS(ctx context.Context) devicecert.Verdict {
+// recheckTLS judges an open connection's certificate at this packet: its
+// path and identity again against the material in force when a reload
+// replaced the one its handshake used, then its chain's expiry and status
+// as the checker holds them now. It never waits on the network: a device's
+// reply timeout would not survive a responder's round trip (ruling 9).
+func (s *conn) recheckTLS() devicecert.Verdict {
 	mat := s.d.TLS.Material()
 	if mat != s.tls.mat {
-		v := mat.Verifier.Verify(ctx, s.tls.peer, s.dev.Device)
-		if v.Outcome == devicecert.OK {
-			s.tls.mat, s.tls.verdict = mat, v
+		v := mat.Verifier.Verify(s.tls.peer, s.dev.Device)
+		if v.Outcome != devicecert.OK {
+			return v
 		}
-		return v
+		s.tls.mat, s.tls.verdict = mat, v
 	}
-	return mat.Verifier.Recheck(ctx, s.tls.verdict)
+	return mat.Verifier.Recheck(s.tls.verdict)
 }
 
 // tlsWithdrawn ends an open connection whose certificate no longer admits
 // it: recorded with the packet's header, and reset with no strike, since
 // the device did nothing on this connection. A status that cannot be
-// established is port49's, and declines (ruling 8).
+// established is port49's, and declines under a window that stands
+// (ruling 8).
 func (s *conn) tlsWithdrawn(h wire.Header, v devicecert.Verdict) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),
@@ -3859,7 +4471,7 @@ func (s *conn) tlsWithdrawn(h wire.Header, v devicecert.Verdict) {
 		s.d.TLS.Said(s.dev.Device.Name, s.src.String(), v)
 	}
 	if !v.Outcome.Struck() {
-		s.decline()
+		s.declineStatus()
 		return
 	}
 	reset(s.raw)
@@ -4174,9 +4786,9 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   - `server.TLS`, `server.Material`, `server.NewTicketGuard` (Tasks 7, 9);
   - `devicecert.*` (Task 4);
   - `certstatus.Config.Component` (Task 5);
-  - `metrics.WatchTLSExpiry`, `CountDevicesByTransport` (Task 6).
+  - `metrics.WatchTLSLifetime`, `CountDevicesByTransport` (Task 6).
 - Produces:
-  - `type tlsListener` with `Material() *server.Material`, `ServerExpiry() time.Duration`,
+  - `type tlsListener` with `Material() *server.Material`, `ServerLifetimeLeft() float64`,
     `reload(why string)` and `watch(ctx context.Context)`;
   - `func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...any))
     (*tlsListener, *certstatus.Checker, error)`;
@@ -4380,7 +4992,8 @@ devices:
 	tcpAddr := find(`port49d: listening on (127\.0\.0\.1:\d+)`)
 	tlsAddr := find(`port49d: RFC 9887 listener on (127\.0\.0\.1:\d+)`)
 	brokerAddr := find(`broker listening on (127\.0\.0\.1:\d+)`)
-	for _, want := range []string{"RFC 9887 §5.1.1", "1 devices transport tls", "tls_listener: anchors CN=Device CA"} {
+	for _, want := range []string{"RFC 9887 §5.1.1", "recorded transport_changed, not blocked",
+		"holds both the shared keys and the TLS key", "1 devices transport tls", "tls_listener: anchors CN=Device CA"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stderr lacks %q: %s", want, out.String())
 		}
@@ -4441,7 +5054,7 @@ func TestTLSMaterialReloadKeepsTheOldOnABadFile(t *testing.T) {
 	say := func(f string, a ...any) { lines = append(lines, strings.TrimSpace(fmt.Sprintf(f, a...))) }
 	cfg := config.TLSListenerConfig{Listen: ":0", CertFile: p.certFile, KeyFile: p.keyFile, ClientCAFile: p.caFile,
 		DeviceIdentity: config.DeviceIdentityConfig{Match: []string{"dns_name", "ip_address"}}}
-	l, err := newTLSListener(cfg, nil, false, time.Now, say)
+	l, err := newTLSListener(cfg, nil, nil, false, time.Now, say)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4493,7 +5106,7 @@ func TestTLSMaterialRefusesANonCAAnchor(t *testing.T) {
 	os.WriteFile(p.caFile, certPEM, 0o600)
 	cfg := config.TLSListenerConfig{CertFile: p.certFile, KeyFile: p.keyFile, ClientCAFile: p.caFile,
 		DeviceIdentity: config.DeviceIdentityConfig{Match: []string{"dns_name"}}}
-	if _, err := newTLSListener(cfg, nil, false, time.Now, func(string, ...any) {}); err == nil ||
+	if _, err := newTLSListener(cfg, nil, nil, false, time.Now, func(string, ...any) {}); err == nil ||
 		!strings.Contains(err.Error(), "is not a CA certificate") {
 		t.Fatalf("a leaf as an anchor: %v", err)
 	}
@@ -4502,7 +5115,7 @@ func TestTLSMaterialRefusesANonCAAnchor(t *testing.T) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/port49d/ -run 'TestRunServesBoth|TestListenNone|TestTLSMaterial' -v -count=1`
+Run: `go test ./internal/port49d/ -run 'TestRunServesBoth|TestListenNone|TestTLSMaterial|TestRefusalSayer' -v -count=1`
 Expected: FAIL to build: `undefined: newTLSListener`. Once that builds, `run` ignores
 `tls_listener` and prints no "RFC 9887 listener on" line.
 
@@ -4548,6 +5161,7 @@ const tlsFileMax = 1 << 20
 type tlsListener struct {
 	cfg          config.TLSListenerConfig
 	status       devicecert.StatusFunc
+	cached       devicecert.CachedStatusFunc
 	allowUnknown bool
 	now          func() time.Time
 	say          func(format string, args ...any)
@@ -4560,9 +5174,9 @@ type tlsListener struct {
 	failed string
 }
 
-func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, allowUnknown bool,
-	now func() time.Time, say func(string, ...any)) (*tlsListener, error) {
-	l := &tlsListener{cfg: cfg, status: status, allowUnknown: allowUnknown, now: now, say: say}
+func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, cached devicecert.CachedStatusFunc,
+	allowUnknown bool, now func() time.Time, say func(string, ...any)) (*tlsListener, error) {
+	l := &tlsListener{cfg: cfg, status: status, cached: cached, allowUnknown: allowUnknown, now: now, say: say}
 	files, sum, err := l.read()
 	if err != nil {
 		return nil, err
@@ -4582,8 +5196,9 @@ func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, 
 // Material is the set in force, for server.TLS.
 func (l *tlsListener) Material() *server.Material { return l.cur.Load() }
 
-// ServerExpiry is the time until the server certificate in force expires.
-func (l *tlsListener) ServerExpiry() time.Duration { return l.serverLeaf.Load().NotAfter.Sub(l.now()) }
+// ServerLifetimeLeft is the fraction of its own lifetime the server
+// certificate in force has left (devicecert.LifetimeLeft).
+func (l *tlsListener) ServerLifetimeLeft() float64 { return devicecert.LifetimeLeft(l.serverLeaf.Load(), l.now()) }
 
 // reload reads the files again. Unchanged bytes do nothing; a set that loads
 // replaces the one in force and is said; one that does not is said once per
@@ -4698,8 +5313,8 @@ func (l *tlsListener) build(f tlsFiles) (*server.Material, *x509.Certificate, st
 		tickets = "single-use, " + l.cfg.SessionTicketLifetime.String()
 	}
 	id := l.cfg.DeviceIdentity
-	ver := &devicecert.Verifier{Anchors: pool, Intermediates: inters, Status: l.status, AllowUnknown: l.allowUnknown,
-		Now: l.now, Rule: devicecert.Rule{DNSName: slices.Contains(id.Match, "dns_name"),
+	ver := &devicecert.Verifier{Anchors: pool, Intermediates: inters, Status: l.status, CachedStatus: l.cached,
+		AllowUnknown: l.allowUnknown, Now: l.now, Rule: devicecert.Rule{DNSName: slices.Contains(id.Match, "dns_name"),
 			IPAddress: slices.Contains(id.Match, "ip_address"), DNSSuffixes: id.DNSSuffixes}}
 	names := make([]string, 0, len(anchors))
 	for _, a := range anchors {
@@ -4749,19 +5364,27 @@ func describeCert(c *x509.Certificate) string {
 	return printsafe.Line(c.Subject.String(), 120) + " (sha256 " + hex.EncodeToString(sum[:8]) + ")"
 }
 
-// deviceStatus adapts the TLS listener's certstatus.Checker to devicecert.
-func deviceStatus(c *certstatus.Checker) devicecert.StatusFunc {
+// deviceStatus adapts the TLS listener's certstatus.Checker to devicecert:
+// Check after a handshake, which may wait on a responder within the
+// handshake's deadline, and CheckCached at each packet, which never does
+// (rulings 8, 9).
+func deviceStatus(c *certstatus.Checker) (devicecert.StatusFunc, devicecert.CachedStatusFunc) {
 	return func(ctx context.Context, chain []*x509.Certificate) (devicecert.Status, string) {
-		r := c.Check(ctx, chain)
-		switch r.Verdict {
-		case certstatus.Revoked:
-			return devicecert.StatusRevoked, fmt.Sprintf("%s %s: the certificate at depth %d was revoked at %s",
-				r.Source, r.Name, r.Depth, r.RevokedAt.UTC().Format(time.RFC3339))
-		case certstatus.Unknown:
-			return devicecert.StatusUnknown, r.Detail
+			return statusOf(c.Check(ctx, chain))
+		}, func(chain []*x509.Certificate) (devicecert.Status, string) {
+			return statusOf(c.CheckCached(chain))
 		}
-		return devicecert.StatusGood, ""
+}
+
+func statusOf(r certstatus.Result) (devicecert.Status, string) {
+	switch r.Verdict {
+	case certstatus.Revoked:
+		return devicecert.StatusRevoked, fmt.Sprintf("%s %s: the certificate at depth %d was revoked at %s",
+			r.Source, r.Name, r.Depth, r.RevokedAt.UTC().Format(time.RFC3339))
+	case certstatus.Unknown:
+		return devicecert.StatusUnknown, r.Detail
 	}
+	return devicecert.StatusGood, ""
 }
 
 // tlsListenerOf builds the RFC 9887 listener's material and its status
@@ -4773,71 +5396,181 @@ func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...an
 	}
 	var checker *certstatus.Checker
 	var status devicecert.StatusFunc
+	var cached devicecert.CachedStatusFunc
 	if cs := tc.CertificateStatus; !cs.Disabled {
 		var trusted []*x509.Certificate
-		for _, p := range []string{tc.ClientCAFile, tc.IntermediatesFile} {
-			if p == "" {
+		for _, f := range []struct{ key, path string }{{"client_ca_file", tc.ClientCAFile},
+			{"intermediates_file", tc.IntermediatesFile}} {
+			if f.path == "" {
 				continue
 			}
-			b, err := config.ReadRegular(p, tlsFileMax)
+			b, err := config.ReadRegular(f.path, tlsFileMax)
 			if err != nil {
 				return nil, nil, err
 			}
-			cs, err := caCerts("client_ca_file", b)
+			cs, err := caCerts(f.key, b) // the error names the file it is about (pre-flight M12)
 			if err != nil {
 				return nil, nil, err
 			}
 			trusted = append(trusted, cs...)
 		}
-		ccfg, err := certStatusConfig(*cs, trusted, tc.StateDir, "tls_listener.client_ca_file or intermediates_file",
+		// Its own subdirectory of state_dir, so it never writes the file an
+		// in-process broker's checker keeps under the same CRL name (ruling 8).
+		stateDir := config.TLSListenerStateDir(tc)
+		if stateDir != "" {
+			if err := os.MkdirAll(stateDir, 0o700); err != nil {
+				return nil, nil, fmt.Errorf("tls_listener.state_dir: %w", err)
+			}
+		}
+		ccfg, err := certStatusConfig(*cs, trusted, stateDir, "tls_listener.client_ca_file or intermediates_file",
 			"the TLS listener")
 		if err != nil {
 			return nil, nil, fmt.Errorf("tls_listener.certificate_status.%w", err)
 		}
-		ccfg.Component = "tls_listener"
+		ccfg.Component = "tls_listener" // its lines' prefix and its metrics' component label
 		checker = certstatus.New(ccfg, time.Now, m, say)
 		for _, err := range checker.LoadPersisted() {
 			say("tls_listener: certificate status: %s", printsafe.Line(err.Error(), 300))
 		}
-		status = deviceStatus(checker)
+		status, cached = deviceStatus(checker)
 	}
-	l, err := newTLSListener(*tc, status, tc.CertificateStatus.OnUnavailable == "allow", time.Now, say)
+	l, err := newTLSListener(*tc, status, cached, tc.CertificateStatus.OnUnavailable == "allow", time.Now, say)
 	if err != nil {
 		return nil, nil, err
 	}
 	return l, checker, nil
 }
 
+// sayEvery is how often a device's refusal, or the gathered
+// status_unavailable line, is said on stderr.
+const sayEvery = 10 * time.Minute
+
 // refusalSayer says each device's TLS refusal on stderr at most once per
 // device and outcome every ten minutes (ruling 16): the decision log has
-// every one.
+// every one. A status_unavailable is port49's own and reaches every device
+// at once, so it is said for the first device and then gathered: run says
+// one line every ten minutes with how many devices were declined and up to
+// five names, as announceTransports does (pre-flight M9).
 type refusalSayer struct {
-	now  func() time.Time
-	say  func(string, ...any)
-	mu   sync.Mutex
-	last map[string]time.Time
+	now func() time.Time
+	say func(string, ...any)
+
+	mu         sync.Mutex
+	last       map[string]time.Time
+	gathered   map[string]bool // device names declined status_unavailable since the last line
+	detail     string          // the last such refusal's detail
+	statusSaid time.Time       // when a status_unavailable line was last said
 }
 
 func (r *refusalSayer) said(device, source string, v devicecert.Verdict) {
-	key := device + "\x00" + source + "\x00" + string(v.Outcome)
+	name := device
+	if name == "" {
+		name = "an unknown device"
+	}
 	now := r.now()
 	r.mu.Lock()
+	if v.Outcome == devicecert.StatusUnavailable {
+		quiet := now.Sub(r.statusSaid) >= sayEvery && len(r.gathered) == 0
+		if quiet {
+			r.statusSaid = now
+		} else {
+			if r.gathered == nil {
+				r.gathered = map[string]bool{}
+			}
+			r.gathered[name], r.detail = true, v.Detail
+		}
+		r.mu.Unlock()
+		if quiet {
+			r.say("tls_listener: %s (%s) declined: status_unavailable: %s; devices declined so from now on are "+
+				"counted and said together every 10m", name, source, v.Detail)
+		}
+		return
+	}
+	key := device + "\x00" + source + "\x00" + string(v.Outcome)
 	if r.last == nil {
 		r.last = map[string]time.Time{}
 	}
-	if at, ok := r.last[key]; ok && now.Sub(at) < 10*time.Minute {
+	if at, ok := r.last[key]; ok && now.Sub(at) < sayEvery {
 		r.mu.Unlock()
 		return
 	}
 	r.last[key] = now
 	r.mu.Unlock()
-	name := device
-	if name == "" {
-		name = "an unknown device"
-	}
 	r.say("tls_listener: %s (%s) refused: %s: %s (said once per 10m)", name, source, v.Outcome, v.Detail)
 }
+
+// flush says the status_unavailable refusals gathered since the last line
+// as one line, and nothing when there were none.
+func (r *refusalSayer) flush() {
+	r.mu.Lock()
+	names := slices.Sorted(maps.Keys(r.gathered))
+	detail := r.detail
+	r.gathered, r.detail = nil, ""
+	if len(names) > 0 {
+		r.statusSaid = r.now()
+	}
+	r.mu.Unlock()
+	if len(names) == 0 {
+		return
+	}
+	shown, more := names, ""
+	if len(shown) > 5 {
+		shown, more = shown[:5], fmt.Sprintf(" and %d more", len(names)-5)
+	}
+	r.say("tls_listener: %d devices declined status_unavailable in the last 10m (%s): %s%s", len(names), detail,
+		strings.Join(shown, ", "), more)
+}
+
+// run flushes every ten minutes until ctx ends.
+func (r *refusalSayer) run(ctx context.Context) {
+	t := time.NewTicker(sayEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.flush()
+		}
+	}
+}
 ```
+
+Add `"maps"` and `"os"` to `tlslistener.go`'s imports. Add to `tlslistener_test.go`:
+
+```go
+func TestRefusalSayerGathersStatusUnavailable(t *testing.T) {
+	var lines []string
+	now := time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
+	r := &refusalSayer{now: func() time.Time { return now }, say: func(f string, a ...any) {
+		lines = append(lines, fmt.Sprintf(f, a...))
+	}}
+	stale := devicecert.Verdict{Outcome: devicecert.StatusUnavailable, Detail: "CRL issuing: past its next update"}
+	for i := 1; i <= 8; i++ {
+		r.said(fmt.Sprintf("leaf-%02d", i), "10.0.0.1", stale)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "leaf-01") {
+		t.Fatalf("the first device is said at once, the rest gathered: %q", lines)
+	}
+	r.flush()
+	if len(lines) != 2 || !strings.Contains(lines[1], "7 devices declined status_unavailable") ||
+		!strings.Contains(lines[1], "leaf-02, leaf-03, leaf-04, leaf-05, leaf-06 and 2 more") {
+		t.Fatalf("one gathered line: %q", lines)
+	}
+	r.flush()
+	if len(lines) != 2 {
+		t.Fatalf("nothing gathered, nothing said: %q", lines)
+	}
+	expired := devicecert.Verdict{Outcome: devicecert.CertificateExpired, Detail: "x"}
+	r.said("leaf-01", "10.0.0.1", expired)
+	r.said("leaf-01", "10.0.0.1", expired)
+	if len(lines) != 3 {
+		t.Fatalf("a device's own refusal is said once per 10m: %q", lines)
+	}
+}
+```
+
+(Add `"github.com/rhwendt/port49/internal/devicecert"` to the test file's imports.)
 
 In `internal/port49d/certstatus.go`, change `certStatusConfig`'s signature to
 `certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certificate, stateDir,
@@ -4869,10 +5602,11 @@ In `internal/port49d/main.go`:
 		return err
 	}
 	var tlsDeps *server.TLS
+	var said *refusalSayer
 	if tl != nil {
-		expiry := &devicecert.Expiry{Warn: cfg.TLSListener.ExpiryWarning, Say: sayf}
-		said := &refusalSayer{now: time.Now, say: sayf}
-		m.WatchTLSExpiry(func() (time.Duration, bool) { return expiry.Soonest(time.Now()) }, tl.ServerExpiry)
+		expiry := &devicecert.Expiry{Fraction: cfg.TLSListener.ExpiryWarningFraction, Say: sayf}
+		said = &refusalSayer{now: time.Now, say: sayf}
+		m.WatchTLSLifetime(func() (float64, bool) { return expiry.LeastLeft(time.Now()) }, tl.ServerLifetimeLeft)
 		tlsDeps = &server.TLS{Material: tl.Material, ServerNames: cfg.TLSListener.ServerNames,
 			HandshakeTimeout: cfg.TLSListener.HandshakeTimeout, Seen: expiry.Seen, Said: said.said}
 	}
@@ -4949,7 +5683,10 @@ func announceTransports(w io.Writer, cfg config.Config, live *policy.Live, ln, t
 	if ln != nil && tln != nil {
 		fmt.Fprintf(w, "port49d: notice: RFC 9887 §5.1.1 does not recommend TLS and non-TLS TACACS+ on one host; "+
 			"here each device's record names one transport and the other listener declines it "+
-			"(transport_mismatch), so no device can be downgraded from %s to %s\n", tln.Addr(), ln.Addr())
+			"(transport_mismatch), so blocking %s cannot move a device to %s. Two limits: that is only as strong "+
+			"as each record's transport field (a sync flipping tls to tcp is recorded transport_changed, not "+
+			"blocked); and this one process holds both the shared keys and the TLS key, so a compromise of "+
+			"this host exposes both\n", tln.Addr(), ln.Addr())
 	}
 	if !servesTLS(cfg) && n["tls"] > 0 {
 		fmt.Fprintf(w, "port49d: %d devices have transport tls and port49d serves no tls_listener; their "+
@@ -5056,8 +5793,9 @@ func unservedOf(cfg config.Config, live *policy.Live) int {
 
 ```go
 	if tl != nil {
-		statusDone.Add(1)
+		statusDone.Add(2)
 		go func() { defer statusDone.Done(); tl.watch(ctx) }()
+		go func() { defer statusDone.Done(); said.run(ctx) }()
 		if tlsChecker != nil {
 			statusDone.Add(1)
 			go func() { defer statusDone.Done(); tlsChecker.Run(ctx) }()
@@ -5431,8 +6169,8 @@ var l72Cells = []l72Cell{
 	{"d", "a leaf from another CA: the alert and unknown_ca"},
 	{"e", "an expired leaf: the alert and certificate_expired"},
 	{"f", "a leaf naming another device: the alert and identity_mismatch"},
-	{"g", "a leaf the CRL lists: the alert and certificate_revoked"},
-	{"h", "a CRL source past nextUpdate and unreachable: status_unavailable, then a reset at Accept with no strike"},
+	{"g", "a leaf the CRL lists: the handshake completes, then a reset (no alert), and certificate_revoked"},
+	{"h", "a CRL source past nextUpdate and unreachable: the handshake completes, then a reset and status_unavailable; the next connection reset at Accept with no strike and no second record"},
 	{"i", "a server name not in server_names: the alert and sni_mismatch"},
 	{"j", "tickets on: the second connection resumes; one ticket presented twice resumes once"},
 	{"k", "openssl -early_data with a port49 session: whether early data is sent"},
@@ -5634,6 +6372,10 @@ tls_listener:
 }
 ```
 
+`newL72Env` builds with `cmd.Dir = root`, and `TestL72ReferenceClients` sets `root` first
+(below): without it the build runs in `tests/lab/`, where `./cmd/port49d` does not exist, and
+every run is INVALID.
+
 Before writing `newL72Env`, check the shapes this code assumes against the real code. Then
 match them:
 - `labcreds.SeedToken` and `SecretsOf` (`tests/lab/labcreds/labcreds.go:89, :182`);
@@ -5712,6 +6454,16 @@ runs:
 func TestL72ReferenceClients(t *testing.T) {
 	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
 		t.Fatal(err)
+	}
+	// L72 brings up no platform, so initGlobal never sets root: newL72Env
+	// builds from it and l72Note writes under it (as L69 does, l69_test.go:1264).
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+		t.Cleanup(func() { root = "" })
 	}
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Fatal("INVALID: no openssl on PATH")
@@ -5827,7 +6579,10 @@ func TestL72ReferenceClients(t *testing.T) {
 	h := newL72Env(t, "unreachable")
 	rs := h.client(h.tlsPort, "good", "-count", "2") // the second at once, inside the 2s decline window
 	rec = func() []string { time.Sleep(time.Second); return h.records(`"tls_outcome":"status_unavailable"`) }()
-	cell("h", len(rs) == 2 && rs[0].Status == "none" && rs[1].Handshake == "error" &&
+	// The first completes its handshake (the status is asked only after it)
+	// and is then reset with no reply; the second is reset at Accept, before
+	// any TLS byte, and makes no second record (decision 50 ruling 8).
+	cell("h", len(rs) == 2 && rs[0].Handshake == "ok" && rs[0].Status == "none" && rs[1].Handshake == "error" &&
 		len(rec) == 1 && !strings.Contains(h.log.String(), `"tls_outcome":"handshake_failed"`),
 		"first: %+v; second (inside the decline window): %+v; records: %s", rs[0], rs[1], strings.Join(rec, " "))
 
@@ -5993,9 +6748,11 @@ import "strings"
 
 // l71Probe is how one platform's CLI is asked whether it has an RFC 9887
 // client: lines typed to reach the right mode, the help request typed
-// without a newline (so nothing is configured), and the words that mean
-// "yes" in the help it prints. cleanup leaves the mode with nothing
-// committed.
+// without a newline (so nothing is configured by it), and the words that
+// mean "yes" in the help it prints. cleanup leaves nothing configured, and
+// runs on every path: IOS-XE's `tacacs server l71probe` creates its server
+// object as it is entered (IOS has no commit), and cleanup's
+// `no tacacs server l71probe` removes it.
 type l71Probe struct {
 	enter   []string
 	ask     []string // each typed, then "?" with no newline, then Ctrl-U
@@ -6085,7 +6842,8 @@ import (
 )
 
 const l71Claim = "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS) client, read from the CLI's own " +
-	"help with nothing configured or committed (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
+	"help with nothing left configured (on IOS-XE the probe creates a `tacacs server l71probe` object and removes " +
+	"it) (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
 	"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and an " +
 	"unnamed Junos release; every lab image predates them."
 
@@ -6106,7 +6864,17 @@ func TestL71TLSClientSupport(t *testing.T) {
 			"juniper_vsrx":          func(l *lab) (*cliConn, error) { return l.junosCLI(breakglassUser, breakglassPassword) },
 		}[l.p.name]
 		var obs strings.Builder
-		l.withAdminCLI(t, open, func(c *cliConn) error {
+		l.withAdminCLI(t, open, func(c *cliConn) (err error) {
+			// The cleanup runs on every path, an error's included: an entered
+			// line may already have configured something (IOS-XE's server
+			// object), and a probe that returns early must not leave it.
+			defer func() {
+				for _, line := range probe.cleanup {
+					if _, cerr := c.sendExpect(line, 20*time.Second, c.prompt); cerr != nil && err == nil {
+						err = fmt.Errorf("cleanup %q: %w", line, cerr)
+					}
+				}
+			}()
 			for _, line := range probe.enter {
 				if _, err := c.sendExpect(line, 20*time.Second, c.prompt); err != nil {
 					return fmt.Errorf("%q: %w", line, err)
@@ -6132,11 +6900,6 @@ func TestL71TLSClientSupport(t *testing.T) {
 						"image offers no RFC 9887 client there", ask, probe.yes),
 						Sent: ask + "?", Got: help}.render(t))
 					obs.WriteString("\n")
-				}
-			}
-			for _, line := range probe.cleanup {
-				if _, err := c.sendExpect(line, 20*time.Second, c.prompt); err != nil {
-					return fmt.Errorf("cleanup %q: %w", line, err)
 				}
 			}
 			return nil
@@ -6182,12 +6945,18 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 
 - [ ] **Step 1: Prepare the run**
 
-On beehive, from the branch's head:
+On beehive, pinned at the head of `feature/tls-listener`. `HEAD` in `~/git/port49` is the main
+checkout's `main`, which has no TLS listener, so name the branch's commit explicitly:
 
 ```bash
-git -C ~/git/port49 worktree add --detach /tmp/port49-run-l7x HEAD
+RUN_SHA="$(git -C ~/git/port49/.worktrees/tls-listener rev-parse HEAD)"
+git -C ~/git/port49 worktree add --detach /tmp/port49-run-l7x "$RUN_SHA"
+test "$(git -C /tmp/port49-run-l7x rev-parse HEAD)" = "$RUN_SHA" || { echo "run worktree not at the branch head"; exit 1; }
+echo "run commit: $RUN_SHA"
 test ! -e /tmp/port49-STOP-LAB || { echo "STOP sentinel present: do not run"; exit 1; }
 ```
+
+The note's run line (`runLine()`) must name `$RUN_SHA`; check it does before closing a row.
 
 Start a background stall watchdog before each run, and re-arm it on every wake. It must
 check that the test process's output file grew in the last 10 minutes, and say so if not. An
@@ -6261,7 +7030,8 @@ written as Plan 10's is, with these parts:
 - what was built, by task, with the commit IDs;
 - the rulings as recorded (decision 50), and any that a review or a lab result changed, with
   the reason;
-- Ryan's answers to Q1 and Q2, or "pending";
+- Q2 as ruled (allowed with the start notice, Ryan told, 2026-10-16), and Ryan's answer to Q1 or
+  "pending";
 - L71's and L72's results in a sentence each; L73 open;
 - "Carried forward", the list in Step 2.
 
@@ -6278,9 +7048,16 @@ Add to "## Plan 12 — Deployment":
 - Every deployment shape exposes `tls_listener.listen` (default 300) beside 49, with the source
   address preserved as for 49. Binding 300 needs what binding 49 does.
 - Alarms: `rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])` by outcome;
-  `port49_tls_device_certificate_expiry_seconds < 7 * 86400`;
-  `port49_tls_server_certificate_expiry_seconds < 14 * 86400`;
-  `port49_cert_status_unavailable_total` increasing while TLS devices are admitted.
+  `port49_tls_device_certificate_lifetime_left_ratio < 0.33` and
+  `port49_tls_server_certificate_lifetime_left_ratio < 0.33`, the default
+  `expiry_warning_fraction`: a certificate past two thirds of its own lifetime, where ACME and
+  cert-manager renew, so its renewal is late, whatever the lifetime (a fixed number of days
+  would fire forever on short-lived certificates); `port49_tls_server_certificate_lifetime_left_ratio < 0`
+  pages (expired);
+  `increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) > 0` while TLS
+  devices are admitted; `time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} > -3600`;
+  `increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0`, since a sync
+  flipping a device from `tls` to `tcp` is a downgrade port49 records but does not block.
 - The load test includes full TLS 1.3 handshakes per connection (tickets off, the default) at the
   §5 target rate. Whether tickets should default on is that number's to decide.
 ```
@@ -6309,17 +7086,27 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 - **New listener.** `tls_listener:` in port49d.yaml serves TACACS+ over TLS 1.3 with mutual
   certificates (RFC 9887), on `:300` by default. `listen: none` turns the RFC 8907 listener
   off. One port49d may run both. The start says so in a notice, since RFC 9887 §5.1.1 does not
-  recommend one host for both.
+  recommend one host for both, and names two limits: a device cannot be downgraded by blocking
+  300, but a sync that flips its record from `tls` to `tcp` is recorded (`transport_changed`),
+  not blocked; and one process then holds both the shared keys and the TLS key, so a compromise
+  of the host exposes both. Separate hosts avoid the second.
 - **Device records.** `transport: tls` is now served. Such a device takes no shared key: key
   groups and a `key_ref` pin do not apply to it. Its certificate must chain to
   `tls_listener.client_ca_file` (stored issuing CAs in `intermediates_file`), carry clientAuth
   or no extended key usage, and name the device. It names it by a subjectAltName dNSName equal
   to its inventory name (or the name under `device_identity.dns_suffixes`), or by an iPAddress
-  among its inventory addresses. Nothing per device is configured.
+  among its inventory addresses. Nothing per device is configured. Make `client_ca_file` a CA
+  dedicated to devices: any client certificate it issues that names a device's inventory name or
+  address is that device, from that device's address.
 - **Revocation is required.** `tls_listener.certificate_status` has the broker's shape. Choose
-  `crls`, `ocsp` or `disabled: true` explicitly. By default a status that cannot be established
-  declines the device (it falls to its local method); `on_unavailable: allow` admits it and
-  alarms.
+  `crls`, `ocsp` or `disabled: true` explicitly. The status is checked after the handshake
+  completes, so a refusal for status is a reset, not an alert. By default a status that cannot
+  be established declines the device (it falls to its local method), and its next connections
+  are reset at Accept until the decline window lapses; `on_unavailable: allow` admits it and
+  alarms. An open connection is re-checked at every packet from the cached status only, never
+  waiting on a responder. The listener's kept CRLs go in `<state_dir>/tls_listener/`, and the
+  certificate-status metrics gain a `component` label (`broker`, `tls_listener`); an existing
+  alarm on them still matches.
 - **Each device speaks one transport.** A device on the listener its record does not name is
   declined, `transport_mismatch`, with no strike: a `tls` device cannot be downgraded to 49.
 - **Records.** An exchange over TLS carries `device.transport: "tls"` and `device.cert_sha256`, and
@@ -6331,17 +7118,27 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   new inventory change is `transport_changed`.
 - **Metrics.**
   - `port49_tls_handshakes_total{outcome}`;
-  - `port49_tls_device_certificate_expiry_seconds`;
-  - `port49_tls_server_certificate_expiry_seconds`;
+  - `port49_tls_device_certificate_lifetime_left_ratio` and
+    `port49_tls_server_certificate_lifetime_left_ratio` (the fraction of its own lifetime a
+    certificate has left);
   - `port49_devices_by_transport{transport}`;
   - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch` and
-    `obfuscated_over_tls`.
-- **Lines.** A device certificate within `expiry_warning` (default 14 days) of expiry is named once
-  a day. Each refusal is said at most once per device and outcome every 10 minutes. The
-  listener's files reload every `reload_interval` (1m) and at SIGHUP, and a bad set keeps the old
-  one and says why.
+    `obfuscated_over_tls`;
+  - `port49_cert_status_checks_total`, `port49_crl_loads_total`,
+    `port49_crl_next_update_timestamp_seconds` and `port49_cert_status_unavailable_total` gain the
+    label `component`.
+- **Lines.** A device certificate with less than `expiry_warning_fraction` (default 0.33, its last
+  third) of its own lifetime left is named once a day, so a fleet on short-lived certificates
+  renewing on schedule says nothing, and a device that stopped renewing is named. Each refusal
+  is said at most once per device and outcome every 10 minutes; a `status_unavailable`, which
+  reaches every device at once, is said for the first device and then as one line per 10 minutes
+  with a count and up to five names. The listener's files reload every `reload_interval` (1m)
+  and at SIGHUP, and a bad set keeps the old one and says why. An alert at a refused handshake is
+  best-effort (the reset that follows can drop it); the record is the authority.
 - **Resumption** is off by default (`session_ticket_lifetime: 0s`). When on, a ticket is single-use
-  and bounded by the lifetime, and the certificate is verified again at every resumption.
+  and bounded by the lifetime, and the certificate is verified again at every resumption. The
+  lifetime a ticket advertises to the device is Go's fixed seven days (a departure from RFC 9887
+  §3.6's SHOULD, named in decision 50); port49 enforces its own.
 - **Not built:** PSK and raw-public-key authentication (RFC 9887 MAYs), configurable TLS 1.3 cipher
   suites, and the TLS Cached Information Extension (none in Go's `crypto/tls`).
 - **Devices:** vendor documentation puts clients in Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco
