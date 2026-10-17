@@ -649,7 +649,7 @@ func l4Observation(l *lab, cells []l4Cell, configEvidence, channel, restoreNote 
 func otherPlatformNames(except string) string {
 	var out []string
 	for _, p := range platforms {
-		if p.name != except {
+		if p.name != except && !optInPlatforms[p.sel] {
 			out = append(out, "`"+p.name+"`")
 		}
 	}

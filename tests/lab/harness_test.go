@@ -116,6 +116,54 @@ var platforms = []platform{
 	// times that, which is what a budget is for.
 	{"iosxe", "cisco_iosxe", "topologies/iosxe.clab.yml", "172.100.100.41", "xe1",
 		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 6 * time.Minute},
+	// L73 (RFC 9887 clients) and its L71 help cells. Opt-in: named on
+	// PORT49_LAB_PLATFORMS or never run, because each shares a platform name
+	// (and so a results-note name) with a row measured on an older image, and
+	// a default run would write that row's notes from the new one. One
+	// selector per run: labs are cached by platform name. The full rows sit on
+	// the older rows' node and address, so the inventory, the seeds and the
+	// startup configs are unchanged; only one platform is ever up. The boot
+	// budgets are placeholders: nothing has booted these images on this host.
+	// Measure the first deploy and replace them.
+	{"vjunos26", "juniper_vjunos-router", "topologies/vjunos26.clab.yml", "172.100.100.21", "srx1",
+		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 15 * time.Minute},
+	{"iosxe1718", "cisco_iosxe", "topologies/iosxe1718.clab.yml", "172.100.100.41", "xe1",
+		"vrnetlab/cisco_c8000v:17.18.02", "Catalyst 8000V 17.18.02", 10 * time.Minute},
+	{"nxos106", "cisco_nxos", "topologies/nxos106.clab.yml", "172.100.100.31", "nx1",
+		"vrnetlab/cisco_n9kv:9300v64-10.6.2.F", "Nexus 9300v 10.6(2)F", 15 * time.Minute},
+	// cEOS, not vEOS: the image is a container (`ceos:4.36.3M`, imported, not
+	// built). The device's own `show version` is the version string's
+	// authority; TestL73's cell (a) checks it holds 4.36.3M.
+	{"ceos436", "arista_ceos", "topologies/ceos436.clab.yml", "172.100.100.11", "leaf1",
+		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 5 * time.Minute},
+	// Help-only rows (helpOnlyPlatforms): an L71 help cell and nothing else,
+	// on addresses no inventory names.
+	{"iolxe1718", "cisco_iol-xe", "topologies/iolxe1718.clab.yml", "172.100.100.51", "iol1",
+		"vrnetlab/cisco_iol:17.18.02", "IOL-XE 17.18.02", 5 * time.Minute},
+	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
+		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 10 * time.Minute},
+	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
+		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
+}
+
+// optInPlatforms are the rows a run deploys only when PORT49_LAB_PLATFORMS
+// names them.
+var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true,
+	"iolxe1718": true, "xrd261": true, "vjunosswitch26": true}
+
+// helpOnlyPlatforms come up with a break-glass account and no TACACS+: up()
+// starts no port49d for them, and TestL73 asks their CLI help only.
+var helpOnlyPlatforms = map[string]bool{"iolxe1718": true, "xrd261": true}
+
+// defaultPlatforms is the selection when PORT49_LAB_PLATFORMS is empty.
+func defaultPlatforms(ps []platform) []platform {
+	var out []platform
+	for _, p := range ps {
+		if !optInPlatforms[p.sel] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 const (
@@ -500,7 +548,7 @@ func platformSelection() ([]platform, bool, error) {
 	selOnce.Do(func() {
 		want := strings.TrimSpace(os.Getenv("PORT49_LAB_PLATFORMS"))
 		if want == "" {
-			selPlatforms = platforms
+			selPlatforms = defaultPlatforms(platforms)
 			return
 		}
 		selExplicit = true
@@ -674,6 +722,13 @@ func (l *lab) up() error {
 		fmt.Fprintf(os.Stderr, "lab: %s: WARNING: %v\n", l.p.name, err)
 	}
 
+	// An L71 help cell needs only the break-glass CLI: the image has no
+	// TACACS+ configuration and no inventory entry, so there is no daemon to
+	// start and no TACACS+ traffic to wait for.
+	if helpOnlyPlatforms[l.p.sel] {
+		return nil
+	}
+
 	// A spool left by an earlier run would drain into this run's log and be
 	// read as this run's accounting.
 	os.Remove(spoolPath)
@@ -789,6 +844,7 @@ var platformSessionAttributes = map[string]string{
 	"cisco_iosxe":           `["priv-lvl=15"]`,
 	"juniper_vjunos-router": `[]`,
 	"juniper_vsrx":          `[]`,
+	"juniper_vjunos-switch": `[]`,
 }
 
 // configPath is the daemon config this platform runs against: the checked-in

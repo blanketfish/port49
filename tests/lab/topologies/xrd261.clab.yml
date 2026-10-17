@@ -1,0 +1,14 @@
+# L73 only (selector xrd261, opt-in). Node xrd1 at 172.100.100.61 on purpose: the
+# inventory, the seeds and the startup config are the older row's, and only
+# one platform is up at a time.
+name: port49-xrd261
+topology:
+  nodes:
+    xrd1:
+      kind: cisco_xrd
+      image: port49lab/xrd-control-plane:26.1.1
+      startup-config: ../configs/xrd-startup.cfg
+      mgmt-ipv4: 172.100.100.61
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

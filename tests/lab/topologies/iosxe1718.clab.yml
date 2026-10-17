@@ -1,0 +1,14 @@
+# L73 only (selector iosxe1718, opt-in). Node xe1 at 172.100.100.41 on purpose: the
+# inventory, the seeds and the startup config are the older row's, and only
+# one platform is up at a time.
+name: port49-iosxe1718
+topology:
+  nodes:
+    xe1:
+      kind: cisco_c8000v
+      image: vrnetlab/cisco_c8000v:17.18.02
+      startup-config: ../configs/iosxe-startup.cfg
+      mgmt-ipv4: 172.100.100.41
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

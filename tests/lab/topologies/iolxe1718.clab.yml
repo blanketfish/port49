@@ -1,0 +1,14 @@
+# L73 only (selector iolxe1718, opt-in). Node iol1 at 172.100.100.51 on purpose: the
+# inventory, the seeds and the startup config are the older row's, and only
+# one platform is up at a time.
+name: port49-iolxe1718
+topology:
+  nodes:
+    iol1:
+      kind: cisco_iol
+      image: vrnetlab/cisco_iol:17.18.02
+      startup-config: ../configs/iol-startup.partial.cfg
+      mgmt-ipv4: 172.100.100.51
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

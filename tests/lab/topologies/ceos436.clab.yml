@@ -1,0 +1,14 @@
+# L73 only (selector ceos436, opt-in). Node leaf1 at 172.100.100.11 on purpose: the
+# inventory, the seeds and the startup config are the older row's, and only
+# one platform is up at a time.
+name: port49-ceos436
+topology:
+  nodes:
+    leaf1:
+      kind: arista_ceos
+      image: ceos:4.36.3M
+      startup-config: ../configs/eos-startup.cfg
+      mgmt-ipv4: 172.100.100.11
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24
