@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -109,13 +110,17 @@ func (s *conn) refusedAdmission(h wire.Header) {
 
 // readmitted asks admission in force about this connection's source at the
 // time of this packet, so a reload that refuses, removes, renames, re-keys or
-// re-platforms the device ends its open connections rather than leaving them
+// re-platforms or re-transports the device ends its open connections rather than leaving them
 // on the admission they began with: a busy single-connect connection resets
 // its idle timer on every packet and so has no end (spec §10). A platform or
 // `based_on:` change counts: the connection would be denied
 // blob_platform_mismatch at every command, and its records redacted under a
 // platform no longer in force. It returns the diagnosis naming why, or ""
-// while the connection's admission still holds.
+// while the connection's admission still holds. On the RFC 9887 listener a
+// change to the device's addresses also withdraws it: its certificate may
+// have named it by an address it no longer has, and its next handshake is
+// judged against the record in force (decision 50 ruling 6). On 49 an
+// address change is not a withdrawal.
 func (s *conn) readmitted() keyring.Diagnosis {
 	now, found := s.d.Admission.Lookup(s.src)
 	switch {
@@ -124,7 +129,9 @@ func (s *conn) readmitted() keyring.Diagnosis {
 	case now.Refused != "":
 		return keyring.DiagAdmissionRefused
 	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
-		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform:
+		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform ||
+		now.Device.EffectiveTransport() != s.dev.Device.EffectiveTransport() ||
+		(s.tls != nil && !slices.Equal(now.Device.Addresses, s.dev.Device.Addresses)):
 		return keyring.DiagAdmissionWithdrawn
 	}
 	return ""

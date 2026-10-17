@@ -604,8 +604,15 @@ func TestTLSDeviceOnTheTCPListenerIsDeclined(t *testing.T) {
 	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"transport_mismatch"`) }) {
 		t.Fatalf("log: %s", log.String())
 	}
+	if !log.contains(`the device record says transport tls; this is the RFC 8907 listener`) {
+		t.Fatalf("the record says why: %s", log.String())
+	}
 	if ts.limits.Holding(loopback) || !ts.limits.Declined(loopback) {
 		t.Fatalf("struck %v declined %v", ts.limits.Holding(loopback), ts.limits.Declined(loopback))
+	}
+	// No key was tried: no key_validations series exists, key_ref "" included.
+	if n := testutil.CollectAndCount(ts.metrics.KeyValidations); n != 0 {
+		t.Fatalf("%d key_validations series: a key was tried", n)
 	}
 }
 
@@ -731,6 +738,9 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 			if f.ts.limits.Holding(loopback) {
 				t.Fatal("a refusal at a later packet is struck")
 			}
+			if !log.contains(`"seq_no":1`) {
+				t.Fatalf("the record carries the refused packet's header: %s", log.String())
+			}
 			if got := f.ts.limits.Declined(loopback); got != c.status {
 				t.Fatalf("declined %v, want %v: only a lost status keeps a window", got, c.status)
 			}
@@ -749,6 +759,62 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 
 // The status is asked exactly once per handshake, when it completes. (The
 // impostor test pins that it is never asked before.)
+// openSessionFor dials leaf-01 single-connect and completes one exchange.
+func openSessionFor(t *testing.T, f *tlsFixture) *tlsClient {
+	t.Helper()
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	cl, err := f.dialTLS(t, &cert, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.send(wire.TypeAuthen, aliceLogin, wire.FlagUnencrypted|wire.FlagSingleConnect); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cl.recv(); err != nil {
+		t.Fatal(err)
+	}
+	return cl
+}
+
+// withdrawnAtNextPacket sends one more exchange and wants it unanswered and
+// recorded admission_withdrawn.
+func withdrawnAtNextPacket(t *testing.T, cl *tlsClient, log *syncBuffer) {
+	t.Helper()
+	cl.seq, cl.sid = 1, 0x300
+	if err := cl.send(wire.TypeAuthen, aliceLogin, wire.FlagUnencrypted|wire.FlagSingleConnect); err == nil {
+		if _, _, err := cl.recv(); err == nil {
+			t.Fatal("the packet was answered")
+		}
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_withdrawn"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// A reload that moves the device to the other transport, key_ref unchanged,
+// withdraws its open TLS connection.
+func TestTLSTransportChangeWithdrawsAnOpenConnection(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, nil)
+	cl := openSessionFor(t, f)
+	tcpDev := leaf01TLS
+	tcpDev.Transport = admission.TransportTCP
+	f.admit.swap(t, admission.Resolved{Device: tcpDev}) // KeyRef stays "", as the TLS record's
+	withdrawnAtNextPacket(t, cl, log)
+}
+
+// A reload that changes the device's addresses withdraws its open TLS
+// connection: its certificate may have named it by an address it lost.
+func TestTLSAddressChangeWithdrawsAnOpenConnection(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, nil)
+	cl := openSessionFor(t, f)
+	moved := leaf01TLS
+	moved.Addresses = []netip.Addr{loopback, netip.MustParseAddr("192.0.2.77")}
+	f.admit.swap(t, admission.Resolved{Device: moved})
+	withdrawnAtNextPacket(t, cl, log)
+}
+
 func TestTLSStatusIsAskedExactlyOncePerHandshake(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, nil)
