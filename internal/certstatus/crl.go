@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -430,7 +431,7 @@ func (c *Checker) LoadPersisted() []error {
 	if c.cfg.StateDir == "" {
 		return nil
 	}
-	for _, src := range c.cfg.CRLs {
+	for _, src := range c.sources() {
 		path := filepath.Join(c.cfg.StateDir, stateFile(src.Name))
 		raw, err := fence.ReadNoLink(path, crlMax, "kept CRL")
 		if errors.Is(err, fs.ErrNotExist) {
@@ -452,7 +453,7 @@ func (c *Checker) LoadPersisted() []error {
 // LoadAll fetches every source once, now, and says which did not load.
 func (c *Checker) LoadAll(ctx context.Context) []error {
 	var errs []error
-	for _, src := range c.cfg.CRLs {
+	for _, src := range c.sources() {
 		if err := c.load(ctx, src); err != nil {
 			errs = append(errs, fmt.Errorf("CRL %s: %w", src.Name, err))
 		}
@@ -465,17 +466,21 @@ func (c *Checker) LoadAll(ctx context.Context) []error {
 // RefreshInterval after a failure (pre-flight I8). It returns when ctx ends.
 func (c *Checker) Run(ctx context.Context) {
 	type next struct {
-		at    time.Time
-		delay time.Duration
+		at     time.Time
+		delay  time.Duration
+		issuer []byte // the issuer certificate the schedule is for
 	}
 	due := map[string]*next{}
-	for _, src := range c.cfg.CRLs {
-		due[src.Name] = &next{at: c.now()}
-	}
 	for {
+		srcs := c.sources()
 		soonest := c.now().Add(c.cfg.RefreshInterval)
-		for _, src := range c.cfg.CRLs {
+		for _, src := range srcs {
 			n := due[src.Name]
+			if n == nil || !bytes.Equal(n.issuer, src.Issuer.Raw) {
+				// New, or its issuer was replaced (SetCRLSources): fetch now.
+				n = &next{at: c.now(), issuer: src.Issuer.Raw}
+				due[src.Name] = n
+			}
 			if c.now().Before(n.at) {
 				soonest = minTime(soonest, n.at)
 				continue
@@ -494,8 +499,37 @@ func (c *Checker) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-c.kick:
 		case <-c.after(soonest.Sub(c.now())):
 		}
+	}
+}
+
+// sources are the CRL sources now.
+func (c *Checker) sources() []CRLSource {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.cfg.CRLs)
+}
+
+// SetCRLSources replaces the CRL sources, as the trust set they were
+// verified against changed (a CA rotation, spec §13 decision 50 ruling 15).
+// A list in force whose source is gone, or whose issuer certificate is no
+// longer the source's, is dropped: it was verified against a certificate
+// the source no longer names. Run fetches the changed sources at once.
+func (c *Checker) SetCRLSources(srcs []CRLSource) {
+	c.mu.Lock()
+	c.cfg.CRLs = slices.Clone(srcs)
+	for name, l := range c.crls {
+		i := slices.IndexFunc(srcs, func(s CRLSource) bool { return s.Name == name })
+		if i < 0 || !bytes.Equal(srcs[i].Issuer.Raw, l.issuer.Raw) {
+			delete(c.crls, name)
+		}
+	}
+	c.mu.Unlock()
+	select {
+	case c.kick <- struct{}{}:
+	default:
 	}
 }
 

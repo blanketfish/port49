@@ -108,6 +108,7 @@ type Checker struct {
 	ocsp         map[string]ocspEntry
 	ocspInflight map[string]*ocspCall
 	said         map[string]time.Time
+	kick         chan struct{} // SetCRLSources wakes Run
 }
 
 // New builds a Checker with nothing loaded: LoadPersisted, then Run, put
@@ -135,7 +136,7 @@ func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string,
 			return errors.New("a status source does not redirect")
 		}},
 		crls: map[string]*loadedCRL{}, failing: map[string]bool{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]*ocspCall{},
-		said: map[string]time.Time{}}
+		said: map[string]time.Time{}, kick: make(chan struct{}, 1)}
 }
 
 // prefix begins every line this checker says.
