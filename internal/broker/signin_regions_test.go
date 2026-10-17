@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -104,5 +106,75 @@ func assertErrorCode(t *testing.T, w *httptest.ResponseRecorder, code string) {
 	var e api.Error
 	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || e.Error != code {
 		t.Fatalf("error %q (%v), want %q", e.Error, err, code)
+	}
+}
+
+// The confirm counts under the unlocked key too: after an unlock the
+// per-principal budget is one budget, not one per key.
+func TestTheConfirmCountsUnderTheUnlockedKey(t *testing.T) {
+	ctx := context.Background()
+	f, _ := newSignInFixture(t)
+	f.b.PasswordSignIn.OpenUntil = f.now.Add(time.Hour)
+	if err := f.b.Enrollments.PutUnlock(ctx, alicePrincipal, f.now); err != nil {
+		t.Fatal(err)
+	}
+	key := attemptKey(alicePrincipal, f.now)
+	e, _ := enrollAlice(t, f)
+	if w := f.confirm(t, api.ConfirmRequest{Handle: e.Handle, Code: "000000", CSR: csrOf(t, newECKey(t))}); w.Code == http.StatusOK {
+		t.Fatalf("a wrong code confirmed: %s", shown(w))
+	}
+	if n := f.counted(t, key); n != 2 {
+		t.Fatalf("the begin and the confirm held %d under the unlocked key, want 2", n)
+	}
+	if n := f.counted(t, alicePrincipalKey); n != 0 {
+		t.Fatalf("%d held under the key before the unlock", n)
+	}
+}
+
+// failingPuts is an enrollment store whose unlock write fails as given.
+type failingPuts struct {
+	store.Enrollments
+	err error
+}
+
+func (p failingPuts) PutUnlock(context.Context, string, time.Time) error { return p.err }
+
+// A lost enrollment store at the unlock is told as lost, with its remedy,
+// not as "run it again".
+func TestUnlockOnALostStoreSaysSo(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Enrollments = failingPuts{f.b.Enrollments, store.ErrEnrollmentStoreLost}
+	_, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "admin_socket uid 0")
+	if err == nil || !strings.Contains(err.Error(), "is lost") || !strings.Contains(err.Error(), lostRemedy) ||
+		strings.Contains(err.Error(), "run it again") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// failingClears is a session store whose clear fails.
+type failingClears struct{ store.Store }
+
+func (failingClears) ClearSignInAttempts(context.Context, string) (int, error) {
+	return 0, store.ErrUnavailable
+}
+
+// An unlock whose clear failed is in force and says the count is unknown:
+// the record carries no failures field, never a zero.
+func TestUnlockWithAFailedClearRecordsNoCount(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Store = failingClears{f.b.Store}
+	text, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "admin_socket uid 0")
+	if err != nil || !strings.Contains(text, "unknown") || strings.Contains(text, "cleared 0") {
+		t.Fatalf("%q %v", text, err)
+	}
+	recs := eventsOf(f.records(t), decision.EventSignInUnlock)
+	if len(recs) != 1 {
+		t.Fatalf("%v", recs)
+	}
+	if _, has := recs[0]["sign_in_unlock"].(map[string]any)["failures"]; has {
+		t.Fatalf("a failed clear recorded a count: %v", recs[0])
+	}
+	if at, err := f.b.Enrollments.GetUnlock(context.Background(), alicePrincipal); err != nil || at.IsZero() {
+		t.Fatalf("the unlock is not in force: %v %v", at, err)
 	}
 }

@@ -2325,7 +2325,7 @@ principal and carrying `"created": true` and no `reopen_until`: the enrollment s
 (D7). Alert on it as on `enroll`, and on `created` at any time but an install. A nineteenth,
 `sign_in_unlock`, is a report: an operator cleared a principal's failed-attempt count (`port49
 directory unlock`), `{"principal": ..., "sign_in_unlock": {"failures": N, "origin": ...}}`. `failures` is the
-count the answering broker's session store held; with a session store per region every region's
+count the answering broker's session store held (absent when that store did not answer the clear: the unlock is in force, the count unknown); with a session store per region every region's
 count starts again at the unlock, which is a directory record (decision 51). A
 twentieth, `enrollments_import`, is a report: `port49 directory import` replaced or filled the
 enrollment store (D13), `{"enrollments_import": {"records": N, "exported_at": ..., "replaced":
