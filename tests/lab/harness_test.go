@@ -338,6 +338,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "lab: %v\n", err)
 		code = 1
 	}
+	labRelease()
 	os.Exit(code)
 }
 
