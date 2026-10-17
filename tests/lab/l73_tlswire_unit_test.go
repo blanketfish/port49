@@ -302,15 +302,15 @@ func TestL73ResumptionSummaryHoldsNoSessionBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if hits := l73SummaryLeaks(string(js)); len(hits) > 0 {
-		t.Fatalf("summary holds %v: %s", hits, js)
+		t.Fatalf("connection 0 summary holds %v", hits)
 	}
 	// record header 5, handshake header 4, legacy_version 2, random 32, then
 	// the session id's length byte: none of the id or the random survives.
 	sid := up[5+4+2+32+1 : 5+4+2+32+1+int(up[5+4+2+32])]
 	random := up[5+4+2 : 5+4+2+32]
-	for _, b := range [][]byte{sid, random} {
+	for name, b := range map[string][]byte{"legacy session id": sid, "random": random} {
 		if len(b) > 0 && strings.Contains(strings.ToLower(string(js)), hex.EncodeToString(b)[:16]) {
-			t.Fatalf("summary holds session bytes: %s", js)
+			t.Fatalf("connection 0 summary holds the %s", name)
 		}
 	}
 }
