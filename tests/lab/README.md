@@ -34,6 +34,33 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    - vJunos-router 23.4R2-S2.1: copy the qcow2 into `vrnetlab/juniper/vjunosrouter`. On an
      AMD host, patch the CPU check by hand and use `make docker-image` — see the plan's
      Task 15 prerequisites for the exact guestfish lines. On Intel, `make`.
+   - **L73 images** (opt-in selectors; one per run). Built just before each run, from
+     `/mnt/images/` (the Cisco ones from CML refplat 20260409, signature verified):
+     - vJunos-router 26.2R1.7 (`vjunos26`) and vJunos-switch 26.2R1.7 (`vjunosswitch26`): copy
+       the qcow2 into `vrnetlab/juniper/vjunosrouter` (or `vjunosswitch`), patch
+       `/home/pfe/junos/start-junos.sh` on `/dev/sda2` for AMD exactly as for 23.4 (the
+       `CPU_FLAG` line), `make IMAGE=<qcow2> docker-build`, then delete the copy.
+     - Catalyst 8000V 17.18.02 (`iosxe1718`): as 17.13.01a above, with
+       `c8000v-universalk9_8G_serial.17.18.02.qcow2`.
+     - Nexus 9300v 10.6.2.F (`nxos106`): copy `nexus9300v64.10.6.2.F.qcow2` into
+       `vrnetlab/cisco/n9kv` as `n9kv-9300v64-10.6.2.F.qcow2`, then
+       `make IMAGE=n9kv-9300v64-10.6.2.F.qcow2 docker-build`.
+     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): `make IMAGE=iol-xe-17-18-02.tar.gz
+       docker-build` in `vrnetlab/cisco/iol`.
+     - XRd control plane 26.1.1 (`xrd261`, L71 help cell only): `docker load -i
+       ios-xrd-control-plane-26-1-1.tar.gz`, tagged `port49lab/xrd-control-plane:26.1.1`. XRd
+       needs `fs.inotify.max_user_instances` >= 4000 (`sudo sysctl -w`, not persisted).
+
+     - cEOS-lab 4.36.3M (`ceos436`): imported as `ceos:4.36.3M` (containerlab kind `arista_ceos`);
+       no build.
+
+     The lab's disk floor is 67584M. If a build would cross it, free space in this order:
+     `go clean -cache`, then the `controller-17.13.01a` image, then an earlier L73 image (its
+     results are committed, and this recipe rebuilds it). Built 2026-10-17:
+     - `vrnetlab/juniper_vjunos-router:26.2R1.7`, ID
+       `sha256:64a17c7eb9eb5c4cc36b5398347e6edaf0f82ff5d30a5b740ef08ea07585ff8c`, 3170396026 bytes,
+       source sha256 `500e0a67549f663a3201ab839d40b6be9082263b14cd5e2b669d27b9bc9125be`,
+       Δ of `/` 11000M (81908M to 70908M avail).
    - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
    - Nexus 9300v 10.4(2)F: copy the qcow2 into `vrnetlab/cisco/n9kv` **renamed to
      `n9kv-<version>.qcow2`** — the Makefile derives the image tag from that name with a `sed`,
@@ -59,7 +86,8 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    Check `docker images` for the tag each build produced and match the `image:` lines in
    `topologies/`. Expected: `vrnetlab/arista_veos:4.32.2F`,
    `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`,
-   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`, `vrnetlab/cisco_c8000v:17.13.01a`.
+   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`, `vrnetlab/cisco_c8000v:17.13.01a`, and for L73
+   `vrnetlab/juniper_vjunos-router:26.2R1.7`.
 
    The N9Kv asks the host for more than the others: the launcher gives the VM **10 GB of RAM
    and 4 vCPUs**. Do not deploy it beside another VM platform on a machine that cannot spare
