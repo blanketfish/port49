@@ -20,7 +20,8 @@ func storeRolesFixture(t *testing.T, daemonCN, brokerCN string) string {
 }
 
 // storeRolesFixtureWith is storeRolesFixture with etcd lines added to
-// store.etcd, each indented four spaces.
+// stores.directory.etcd, each indented four spaces (the stores: nesting indents
+// them two more).
 func storeRolesFixtureWith(t *testing.T, daemonCN, brokerCN, etcdLines string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -61,9 +62,15 @@ func writeStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string, etcdLin
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = append(raw, []byte("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://127.0.0.1:2379]\n"+
-		"    ca_file: "+ca+"\n    daemon: {cert_file: "+d[0]+", key_file: "+d[1]+"}\n"+
-		"    broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+etcdLines+
+	var deeper strings.Builder
+	for _, l := range strings.SplitAfter(etcdLines, "\n") {
+		if l != "" {
+			deeper.WriteString("  " + l)
+		}
+	}
+	raw = append(raw, []byte("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://127.0.0.1:2379]\n"+
+		"      ca_file: "+ca+"\n      daemon: {cert_file: "+d[0]+", key_file: "+d[1]+"}\n"+
+		"      broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+deeper.String()+
 		"admin_socket: "+filepath.Join(dir, "admin.sock")+"\n")...) // etcd needs one (Task 10, I16)
 	p := filepath.Join(dir, "port49d.yaml")
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
@@ -96,7 +103,7 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		"etcdctl user grant-role port49-broker port49_broker",
 		// The residual, no wider than the spec's (§12; decision 35).
 		"port49d holds it alone (plan 7e)",
-		"store.etcd.roles: unenforced",
+		"stores.directory.etcd.roles: unenforced",
 		"if a role already exists, check it with etcdctl role get first",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -185,7 +192,7 @@ func TestStoreRolesRefusesMemoryAndUsage(t *testing.T) {
 }
 
 // sevenDFile writes the fleet's daemon config as 7d's etcdRunServer wrote
-// it: the broker: block and store.etcd.broker added back to port49d.yaml.
+// it: the broker: block and stores.directory.etcd.broker added back to port49d.yaml.
 func (f *fleet) sevenDFile(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(f.daemon)
@@ -200,10 +207,10 @@ func (f *fleet) sevenDFile(t *testing.T) string {
 	if i < 0 {
 		t.Fatal("port49-broker.yaml has no broker: block")
 	}
-	block, _, _ := strings.Cut(string(bro)[i+1:], "store:\n")
+	block, _, _ := strings.Cut(string(bro)[i+1:], "stores:\n")
 	bc, bk := f.srv.ClientFiles(t, "port49-broker")
-	body := strings.Replace(string(raw), "\nstore:\n", "\n"+block+"store:\n", 1)
-	body = strings.Replace(body, "    call_timeout:", "    broker: {cert_file: "+bc+", key_file: "+bk+"}\n    call_timeout:", 1)
+	body := strings.Replace(string(raw), "\nstores:\n", "\n"+block+"stores:\n", 1)
+	body = strings.Replace(body, "      call_timeout:", "      broker: {cert_file: "+bc+", key_file: "+bk+"}\n      call_timeout:", 1)
 	p := filepath.Join(t.TempDir(), "port49d.yaml")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -211,63 +218,29 @@ func (f *fleet) sevenDFile(t *testing.T) string {
 	return p
 }
 
-// An enrollment store on an etcd of its own (broker.directory.enrollment_store)
-// needs its own role and user on that cluster, which port49d store-roles
-// prints beside the main ones, for the endpoints, prefix and certificate CN
-// it names; a shell-unsafe name there is refused like the others, and a
-// broker with no such etcd prints no second section.
-func TestStoreRolesNamesAnOwnEnrollmentEtcd(t *testing.T) {
-	f := splitFleet(t)
-	var plain bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.broker}, &plain, &bytes.Buffer{}); code != 0 ||
-		strings.Contains(plain.String(), "enrollment store") {
-		t.Fatalf("without one: exit %d\n%s", code, plain.String())
-	}
-	now := time.Now()
-	ca, err := testpki.NewCA("enroll-ca", now.Add(-time.Hour), now.Add(time.Hour))
+// A file whose stores: names a session store of its own is refused until
+// store-roles prints the roles of two (plan 11a, Task 11).
+func TestStoreRolesRefusesTwoStoresForNow(t *testing.T) {
+	cfg := storeRolesFixture(t, "port49-daemon", "port49-broker")
+	raw, err := os.ReadFile(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	caFile := filepath.Join(dir, "enroll-ca.pem")
-	if err := os.WriteFile(caFile, ca.PEM(), 0o600); err != nil {
+	body := string(raw)
+	i := strings.Index(body, "  directory:\n")
+	j := strings.Index(body, "admin_socket: "+filepath.Dir(cfg))
+	if i < 0 || j < i {
+		t.Fatalf("the fixture's stores: block was not found in:\n%s", body)
+	}
+	block := strings.TrimPrefix(body[i:j], "  directory:\n")
+	block = strings.Replace(block, "    etcd:\n", "    etcd:\n      prefix: /other/\n", 1)
+	if err := os.WriteFile(cfg, []byte(body[:j]+"  session:\n"+block+body[j:]), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	withEnrollment := func(cn, prefix string) string {
-		id := writeIdentity(t, ca, cn, now.Add(-time.Hour), now.Add(time.Hour), 0o600)
-		raw, err := os.ReadFile(f.broker)
-		if err != nil {
-			t.Fatal(err)
-		}
-		block := "\nbroker:\n  directory:\n    enrollment_store:\n      backend: etcd\n      etcd:\n" +
-			"        endpoints: [https://enroll-etcd.example.com:2379]\n        ca_file: " + caFile + "\n" +
-			"        prefix: \"" + prefix + "\"\n        identity: {cert_file: " + id.CertFile + ", key_file: " + id.KeyFile + "}\n"
-		p := filepath.Join(dir, cn+".yaml")
-		if err := os.WriteFile(p, []byte(strings.Replace(string(raw), "\nbroker:\n", block, 1)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
 	var out, errb bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", withEnrollment("port49-enroll", "/e/")},
-		&out, &errb); code != 0 {
-		t.Fatalf("exit %d: %s", code, errb.String())
-	}
-	for _, want := range []string{
-		"enrollment store",
-		"https://enroll-etcd.example.com:2379",
-		"etcdctl role add port49_broker\netcdctl role grant-permission port49_broker readwrite --prefix=true /e/\n",
-		"etcdctl user add port49-enroll --no-password\netcdctl user grant-role port49-enroll port49_broker\n",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("missing %q in:\n%s", want, out.String())
-		}
-	}
-	out.Reset()
-	errb.Reset()
-	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", withEnrollment("port49-enroll", "/e $(x)/")},
-		&out, &errb); code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "outside [A-Za-z0-9._@/-]") {
-		t.Fatalf("an unsafe prefix: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
+		!strings.Contains(errb.String(), "stores.session names a store of its own; this build prints one store's roles") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 	}
 }
 
@@ -318,8 +291,8 @@ func TestStoreRolesRefusesTwoKeyspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "port49-broker.yaml")
-	if err := os.WriteFile(other, []byte(strings.Replace(string(raw), "    call_timeout:",
-		"    prefix: /other/\n    call_timeout:", 1)), 0o600); err != nil {
+	if err := os.WriteFile(other, []byte(strings.Replace(string(raw), "      call_timeout:",
+		"      prefix: /other/\n      call_timeout:", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
@@ -335,17 +308,17 @@ func TestStoreRolesRefusesAFileMissingItsIdentity(t *testing.T) {
 	f := splitFleet(t)
 	var out, errb bytes.Buffer
 	if code := storeRolesCmd([]string{"--config", f.broker, "--broker-config", f.broker}, &out, &errb); code != 1 ||
-		out.Len() != 0 || !strings.Contains(errb.String(), "store.etcd.daemon") {
+		out.Len() != 0 || !strings.Contains(errb.String(), "stores.directory.etcd.daemon") {
 		t.Fatalf("no daemon identity: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 	}
 	errb.Reset()
 	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.daemon}, &out, &errb); code != 1 ||
-		out.Len() != 0 || !strings.Contains(errb.String(), "store.etcd.broker") {
+		out.Len() != 0 || !strings.Contains(errb.String(), "stores.directory.etcd.broker") {
 		t.Fatalf("no broker identity: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 	}
 }
 
-// A 7d --config that still names store.etcd.broker, beside a --broker-config,
+// A 7d --config that still names stores.directory.etcd.broker, beside a --broker-config,
 // is warned about, naming both CNs, and the --broker-config's wins: the
 // stale identity cannot run (config.Load refuses that file at port49d's
 // start), so the operator mid-migration needs a line, not a refusal.
@@ -356,7 +329,7 @@ func TestStoreRolesWarnsOfAStaleBrokerIdentity(t *testing.T) {
 	if code := storeRolesCmd([]string{"--config", old, "--broker-config", f.broker}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	for _, want := range []string{"still names store.etcd.broker", "CN \"port49-broker\"", f.broker, "port49d refuses at start"} {
+	for _, want := range []string{"still names stores.directory.etcd.broker", "CN \"port49-broker\"", f.broker, "port49d refuses at start"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("stderr lacks %q: %s", want, errb.String())
 		}

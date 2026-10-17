@@ -25,14 +25,14 @@ import (
 )
 
 const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port49d answers a command FAIL " +
-	"store_unavailable and a login ERROR store_unavailable within store.packet_deadline (2s), before the " +
+	"store_unavailable and a login ERROR store_unavailable within packet_deadline (2s), before the " +
 	"device's own TACACS+ timeout, and the device acts as on L4's store outage, never as on a silent server; " +
-	"once port49d closes its listeners on losing the store (store.etcd.hold_ttl), the device acts as with " +
+	"once port49d closes its listeners on losing the store (hold_ttl), the device acts as with " +
 	"port49d stopped and break-glass logs in; and once the store returns and port49d listens again, an open " +
 	"session's next command is answered from the context the store kept (plan 7d; spec §13 decision 35)."
 
 // storeLab is the lab's etcd: a TLS member with port49's roles, behind a
-// proxy the test hangs, and the two store: blocks that point the split's
+// proxy the test hangs, and the two stores: blocks that point the split's
 // processes at it: block is port49d.yaml's (the daemon's identity, with the
 // admin_socket etcd requires), brokerBlock port49-broker.yaml's (the
 // broker's identity). keys counts what the keyspace holds, read as etcd's
@@ -49,12 +49,12 @@ func storeLab(t *testing.T) (block, brokerBlock string, proxy *etcdtest.Proxy, k
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
 	// port49d.yaml names the daemon's identity alone; the broker's is
 	// port49-broker.yaml's (plan 7e, Ruling 1).
-	block = fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-		"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
+	block = fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
+		"      daemon: {cert_file: %s, key_file: %s}\n      hold_ttl: 60s\n",
 		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk)
 	bc, bk := srv.ClientFiles(t, "port49-broker")
-	brokerBlock = fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-		"    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
+	brokerBlock = fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
+		"      broker: {cert_file: %s, key_file: %s}\n      hold_ttl: 60s\n",
 		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), bc, bk)
 	root := srv.Client(t, "root")
 	keys = func() (int64, error) {
@@ -769,10 +769,10 @@ func TestStoreSnapshotRestore(t *testing.T) {
 
 		e := newRealEtcd(t, bin)
 		e.start(t, e.data)
-		daemonStore := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-			"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n", e.client, e.ca, e.daemC, e.daemK)
-		brokerStore := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-			"    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n", e.client, e.ca, e.brokC, e.brokK)
+		daemonStore := fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
+			"      daemon: {cert_file: %s, key_file: %s}\n      hold_ttl: 60s\n", e.client, e.ca, e.daemC, e.daemK)
+		brokerStore := fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
+			"      broker: {cert_file: %s, key_file: %s}\n      hold_ttl: 60s\n", e.client, e.ca, e.brokC, e.brokK)
 		// port49-broker and port49d A on the real member (plan 7e): prepared,
 		// not started, because `port49d store-roles` provisions the roles the
 		// two processes start under, from the two configs it reads.
@@ -788,7 +788,7 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		}
 
 		s.start(t)
-		row("0. port49-broker's and port49d's start under those roles", "listening (store.etcd.roles: enforced, the default)")
+		row("0. port49-broker's and port49d's start under those roles", "listening (stores.directory.etcd.roles: enforced, the default)")
 		stop := l.capture(t, "L35-restore")
 		defer stop()
 

@@ -103,7 +103,11 @@ type brokerStores struct {
 // sayer.
 func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	ledger *crypt.Ledger, marks *store.Marks) (brokerStores, error) {
-	e := cfg.Store.Etcd
+	if !cfg.Stores.Shared {
+		return brokerStores{}, &storeFault{errors.New("stores.session names a store of its own, and this build " +
+			"serves one store: omit stores.session")}
+	}
+	e := cfg.Stores.Session.Etcd
 	say := crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now))
 	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
 	b, err := waitForStore(ctx, cfg, m, out, false, "nothing is served yet")
@@ -164,7 +168,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return fail(err)
 	}
 	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from the store\n", marks.Len())
-	gc := guardConfig(procOf(cfg), "broker", e, m, out, func(error) {})
+	gc := guardConfig(procOf(cfg), "broker", cfg.Stores.SessionPath(), e, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	bs.raw = b
 	bs.st = crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc), keys, m.CryptOpenFailures,
@@ -354,7 +358,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// This replica's record of the restore witness (Ruling 18): every
 	// witness it follows, the runner's own too, kept in broker.state_dir
 	// and saved once more as it stops, so it outlives an etcd restore.
-	wit := openWitness(filepath.Join(cfg.Broker.StateDir, stateWitnessFile), cfg.Store.Etcd.Prefix, stderr)
+	wit := openWitness(filepath.Join(cfg.Broker.StateDir, stateWitnessFile), cfg.Stores.Session.Etcd.Prefix, stderr)
 	wg.Add(2)
 	go func() { defer wg.Done(); wit.keep(ctx) }()
 	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
@@ -407,7 +411,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// (rn.tookOver), or one meta/judged names, not in doubt (openAtJudged).
 	gate := newStartGate(m.BrokerMintGateClosed)
 	startBundle := brk.Policy.Load().Bundle
-	if err := recordStart(ctx, bs.raw, who, startBundle, cfg.Store.Etcd.HoldTTL, 4*cfg.Store.Etcd.CallTimeout,
+	if err := recordStart(ctx, bs.raw, who, startBundle, cfg.Stores.Session.Etcd.HoldTTL, 4*cfg.Stores.Session.Etcd.CallTimeout,
 		5*time.Second, stderr); err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while the records could not land: nothing was served
@@ -418,19 +422,19 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.MintGate = gate.allow
 	// Read once here, after the start's mark and before the API serves: a
 	// rolling restart, meta/judged already naming this bundle, mints at once.
-	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Store.Etcd.CallTimeout); named {
+	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Stores.Session.Etcd.CallTimeout); named {
 		gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", startBundle), stderr)
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Store.Etcd.CallTimeout, startGateEvery, stderr)
+		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Stores.Session.Etcd.CallTimeout, startGateEvery, stderr)
 	}()
 	swapped := make(chan struct{}, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		keepBundle(ctx, bs.raw, who, brk.Policy, cfg.Store.Etcd.HoldTTL, swapped, m, stderr)
+		keepBundle(ctx, bs.raw, who, brk.Policy, cfg.Stores.Session.Etcd.HoldTTL, swapped, m, stderr)
 	}()
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
 		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
@@ -461,7 +465,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		}
 	}
 	putAsk := func(ctx context.Context, bundle string) error {
-		actx, cancel := context.WithTimeout(ctx, 4*cfg.Store.Etcd.CallTimeout)
+		actx, cancel := context.WithTimeout(ctx, 4*cfg.Stores.Session.Etcd.CallTimeout)
 		defer cancel()
 		if err := bs.raw.PutRefreshOwed(actx, who, bundle); err != nil {
 			return fmt.Errorf("asking the runner for a full context pass (bundle %s): %w", bundle, err)
@@ -479,7 +483,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			case <-ctx.Done():
 				return
 			case b := <-asks:
-				flagSwap(ctx, bs.raw, gate, who, b, cfg.Store.Etcd.HoldTTL, 4*cfg.Store.Etcd.CallTimeout,
+				flagSwap(ctx, bs.raw, gate, who, b, cfg.Stores.Session.Etcd.HoldTTL, 4*cfg.Stores.Session.Etcd.CallTimeout,
 					5*time.Second, stderr)
 				if rn.running() {
 					continue // the runner's own passes judge its contexts

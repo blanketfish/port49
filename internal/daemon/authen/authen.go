@@ -972,7 +972,7 @@ type delayFrom struct {
 
 // WithDelayContext is ctx carrying delay, the context a failure delay
 // may be ended by, and arrived, when the packet arrived. delay is the
-// server's context, never the packet's: a packet's store.packet_deadline
+// server's context, never the packet's: a packet's packet_deadline
 // bounds its store work and must not cut the brute-force delay (plan 7d;
 // pre-flight I1). The delay counts from arrived, so the store work it
 // waited on is inside it, not added to it (re-check N1).

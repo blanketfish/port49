@@ -48,7 +48,7 @@ func holdKeyspace(t *testing.T, f *fleet) (release func()) {
 	t.Cleanup(cancel)
 	holding, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
 	cfg, _ := loadBroker(t, f.broker)
-	_, release, err := holding.raw.Hold(ctx, cfg.Store.Etcd.HoldTTL,
+	_, release, err := holding.raw.Hold(ctx, cfg.Stores.Session.Etcd.HoldTTL,
 		"port49-broker on replica-z (pid 1, since 2026-10-08T00:00:00Z)", func(string) {})
 	if err != nil {
 		t.Fatal(err)

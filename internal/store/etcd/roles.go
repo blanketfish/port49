@@ -22,7 +22,7 @@ import (
 // record, lower the ledger record a start seeds from, or forge a replay's
 // superseded instant. That holds for the
 // daemon's credential, which port49d holds alone (plan 7e); under
-// store.etcd.roles: unenforced the daemon's is as wide as the broker's. What a stolen daemon
+// etcd.roles: unenforced the daemon's is as wide as the broker's. What a stolen daemon
 // key can still do to a token, a receipt or a context is bounded by the
 // seals, the ledger and the marks, record family by record family
 // (Ruling 17's table).

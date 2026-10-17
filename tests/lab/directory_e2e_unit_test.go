@@ -91,7 +91,8 @@ func TestDirectoryE2EConfigsLoad(t *testing.T) {
 	if dm.Session.StalenessCeiling != e2eCeiling {
 		t.Errorf("port49d's staleness ceiling is %s, want %s", dm.Session.StalenessCeiling, e2eCeiling)
 	}
-	if strings.Contains(files["port49d.yaml"], "directory:") {
+	// broker.directory is told by its base_dn: stores.directory: is a store.
+	if strings.Contains(files["port49d.yaml"], "base_dn:") {
 		t.Errorf("port49d.yaml names a directory; the broker's alone does:\n%s", files["port49d.yaml"])
 	}
 }

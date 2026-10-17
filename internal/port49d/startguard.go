@@ -84,7 +84,7 @@ func passGuardAtStart(ctx context.Context, cfg config.Config, judged judgedReade
 	defer t.Stop()
 	for {
 		if pol != nil {
-			rctx, cancel := context.WithTimeout(ctx, 4*cfg.Store.Etcd.CallTimeout)
+			rctx, cancel := context.WithTimeout(ctx, 4*cfg.Stores.Session.Etcd.CallTimeout)
 			refused, said := guardAtStart(rctx, cfg, judged, pol, time.Now())
 			cancel()
 			var sr *startRefusal

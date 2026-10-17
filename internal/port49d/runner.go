@@ -112,7 +112,7 @@ func (r *runner) whole(ctx context.Context, priors []broker.Prior) (broker.Refre
 
 // run holds and runs until ctx ends.
 func (r *runner) run(ctx context.Context) {
-	e := r.cfg.Store.Etcd
+	e := r.cfg.Stores.Session.Etcd
 	for ctx.Err() == nil {
 		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
 			if r.held != "" && holder == r.held {
@@ -192,7 +192,7 @@ func (r *runner) duties(ctx context.Context) {
 	go func() { defer wg.Done(); r.owed(ctx) }()
 	go func() {
 		defer wg.Done()
-		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Store.Etcd.SweepInterval, stderr)
+		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Stores.Session.Etcd.SweepInterval, stderr)
 	}()
 	go func() {
 		defer wg.Done()
@@ -373,7 +373,7 @@ func (r *runner) reloadHook(ctx context.Context, rescans prometheus.Counter) fun
 	say := keptSayerAs(stderr, "port49-broker", "this replica", "as its marks feed reloads", "")
 	return func() error {
 		rescans.Inc()
-		pctx, cancel := context.WithTimeout(ctx, r.cfg.Store.Etcd.BulkTimeout)
+		pctx, cancel := context.WithTimeout(ctx, r.cfg.Stores.Session.Etcd.BulkTimeout)
 		defer cancel()
 		if !r.running() {
 			stored, err := r.st.ListRevocations(pctx)
@@ -806,7 +806,7 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 // reads the store retries every 5s while it is unavailable, and so does
 // step 5 while a principal's contexts cannot be looked up (Ruling T12-c).
 func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
-	e := r.cfg.Store.Etcd
+	e := r.cfg.Stores.Session.Etcd
 	if err := retryCtx(ctx, func() error {
 		return checkSealKeysAs(ctx, "port49-broker", r.raw, r.keys, r.m, stderr, 4*e.CallTimeout, r.alarm, true)
 	}); err != nil {

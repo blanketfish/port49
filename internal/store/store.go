@@ -41,7 +41,7 @@ var ErrUnavailable = errors.New("store: unavailable")
 // access control: an etcd role that does not grant it, or authentication
 // that failed. It is configuration, not an outage: never ErrUnavailable,
 // so it opens no circuit, and the guard (internal/store/guard) stops
-// port49d's service when every call is refused for store.etcd.hold_ttl
+// port49d's service when every call is refused for etcd.hold_ttl
 // (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
 var ErrRefused = errors.New("store: refused this identity")
 
@@ -1118,7 +1118,7 @@ type EnrollmentMark struct {
 var ErrEnrollmentStoreLost = errors.New("store: the enrollment store is lost")
 
 // Enrollments is the enrollment store (plan 9e, D7, D12): its own handle,
-// opened from broker.directory.enrollment_store. Nothing creates it at a
+// opened from the directory store (stores.directory). Nothing creates it at a
 // start; CreateEnrollmentMark (init-enrollments), PutEnrollmentMark
 // (reset-second-factor --all) and Import are the only writers of the mark.
 type Enrollments interface {

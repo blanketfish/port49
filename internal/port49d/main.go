@@ -795,8 +795,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// the store (openStores' retry), so the alert holds through the whole
 	// outage and resolves only when the listeners open again (passes sets 0).
 	hs.bind(m)
-	if again && cfg.Store.Backend == config.BackendEtcd {
-		hs.atLeast(cfg.Store.Etcd.Health.CloseAfter)
+	if again && cfg.Stores.Session.Backend == config.BackendEtcd {
+		hs.atLeast(cfg.Stores.Session.Etcd.Health.CloseAfter)
 	}
 
 	// A dead metrics listener is not a detail: without it nobody can see the
@@ -939,7 +939,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		restored.begin(m.RedemptionRestoreGuarded, m.StoreOps)
 		gctx, stopGuard := context.WithCancel(ctx)
 		guardDone := make(chan struct{})
-		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Store.Etcd.CallTimeout) }()
+		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Stores.Session.Etcd.CallTimeout) }()
 		defer func() { stopGuard(); <-guardDone }()
 	}
 	// The broker's store: the minter, the session manager, the broker, the
@@ -1200,7 +1200,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// (spec §5.8).
 		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout,
-		PacketDeadline: cfg.Store.PacketDeadline,
+		PacketDeadline: cfg.Stores.Session.PacketDeadline,
 		// A store gone resets the held connections (re-check R-M0).
 		Abort: func() bool { var g *storeGone; return errors.As(context.Cause(parent), &g) }}
 
@@ -1230,7 +1230,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// not gated. A stop meanwhile ends the run at once.
 	if sts.health != nil && again {
 		fmt.Fprintf(stderr, "port49d: store: the store answers; the listeners open again after %d consecutive "+
-			"health checks pass (store.etcd.health.open_after)\n", sts.health.openAfter)
+			"health checks pass (%s.etcd.health.open_after)\n", sts.health.openAfter, cfg.Stores.SessionPath())
 		if err := sts.health.passes(ctx); err != nil {
 			mln.Close()
 			stopSpool()

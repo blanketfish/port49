@@ -124,7 +124,7 @@ type Metrics struct {
 	StoreFenceTimeouts prometheus.Counter
 	// StoreHealthChecks counts port49d's store health checks by outcome
 	// (pass, fail; plan 7f), and StoreHealthFailures is the failed checks
-	// in a row now: at store.etcd.health.close_after the listeners close.
+	// in a row now: at the session store's etcd.health.close_after the listeners close.
 	// The count is the process's (healthState): each run's registry is set
 	// from it, and it reads at least close_after while the listeners are
 	// closed after a store gone.
@@ -621,7 +621,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreHealthChecks: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_health_checks_total",
 			Help: "port49d's store health checks, by outcome (pass, fail)."}, []string{"outcome"}),
 		StoreHealthFailures: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_health_failures",
-			Help: "port49d's failed store health checks in a row; at store.etcd.health.close_after every listener closes."}),
+			Help: "port49d's failed store health checks in a row; at the session store's etcd.health.close_after every listener closes."}),
 		ContextCacheLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_cache_lookups_total",
 			Help: "The context cache's reads by outcome: hit, miss, stale (served past its ttl because the store failed)."},
 			[]string{"outcome"}),

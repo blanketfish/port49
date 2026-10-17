@@ -221,7 +221,7 @@ func TestAHungStoreServesTheCacheUntilTheListenersClose(t *testing.T) {
 	if v := metricAt(t, metrics, `port49_context_cache_lookups_total{outcome="stale"}`); v < 1 {
 		t.Fatalf("stale %v", v)
 	}
-	if n := strings.Count(out.String(), "serving cached login contexts past store.etcd.context_cache.ttl"); n != 1 {
+	if n := strings.Count(out.String(), "serving cached login contexts past stores.directory.etcd.context_cache.ttl"); n != 1 {
 		t.Fatalf("the stale line said %d times", n)
 	}
 	dev.permits("alice", "show", "version")
@@ -260,7 +260,7 @@ func TestNoCacheWithoutATTL(t *testing.T) {
 	stderr = &out
 	daemonCfg, _ := etcdSplit(t)
 	startSplitDaemon(t, daemonCfg, &out, 1)
-	waitFor(t, &out, "the context cache is off (store.etcd.context_cache.ttl is not set)")
+	waitFor(t, &out, "the context cache is off (stores.directory.etcd.context_cache.ttl is not set)")
 }
 
 // The stale line is said once per run of stale serves, and the fresh line

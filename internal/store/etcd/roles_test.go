@@ -304,7 +304,7 @@ func TestCheckIdentityRefusesRoot(t *testing.T) {
 		t.Errorf("a broker holding the root role: %v", err)
 	}
 	// With auth off the broker is not refused: under
-	// store.etcd.roles: unenforced it is the daemon's check that is waived.
+	// stores.directory.etcd.roles: unenforced it is the daemon's check that is waived.
 	open := etcdtest.Start(t, etcdtest.Options{TLS: true})
 	if err := openAs(t, open, "port49-broker", prefix).CheckIdentity(ctx, true); err != nil {
 		t.Errorf("the broker on etcd with auth off: %v", err)

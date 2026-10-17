@@ -30,8 +30,9 @@ func TestAReplicaLeavesTheLostStateWhenTheMarkAppears(t *testing.T) {
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore
 	es.Backend, es.File = config.BackendEtcd, ""
-	cfg.Store.Etcd = &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
-	cfg.Store.Etcd.Breaker.Failures = 5
+	etcd := &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
+	etcd.Breaker.Failures = 5
+	cfg.Stores.Session.Etcd, cfg.Stores.Directory.Etcd, cfg.Stores.Shared = etcd, etcd, true
 	shared := memory.NewEnrollments(time.Now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -93,8 +94,9 @@ func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore
 	es.Backend, es.File = config.BackendEtcd, ""
-	cfg.Store.Etcd = &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
-	cfg.Store.Etcd.Breaker.Failures = 5
+	etcd := &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
+	etcd.Breaker.Failures = 5
+	cfg.Stores.Session.Etcd, cfg.Stores.Directory.Etcd, cfg.Stores.Shared = etcd, etcd, true
 	shared := &downStore{Enrollments: memory.NewEnrollments(time.Now)}
 	shared.down.Store(true)
 	mine := crypt.WrapEnrollments(shared.Enrollments, signInTestKeys, metrics.New(prometheus.NewRegistry()).CryptOpenFailures)

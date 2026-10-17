@@ -257,7 +257,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 		}
 		return offlineRun{}, fmt.Errorf("store: %w", err)
 	}
-	gc := guardConfig(procOf(cfg), "broker", cfg.Store.Etcd, m, out, func(error) {})
+	gc := guardConfig(procOf(cfg), "broker", cfg.Stores.SessionPath(), cfg.Stores.Session.Etcd, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	st := crypt.Wrap(guard.WrapRev(b, gc), keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()),
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))

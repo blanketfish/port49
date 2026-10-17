@@ -17,6 +17,9 @@ type staleSayer struct {
 	on  bool
 	out io.Writer
 	ttl time.Duration
+	// key is the config key of ttl, as the line names it (the session
+	// store's path + ".etcd.context_cache.ttl"); empty names etcd.context_cache.ttl.
+	key string
 }
 
 func (s *staleSayer) serve(err error) {
@@ -26,9 +29,12 @@ func (s *staleSayer) serve(err error) {
 		return
 	}
 	s.on = true
+	if s.key == "" {
+		s.key = "etcd.context_cache.ttl"
+	}
 	fmt.Fprintf(s.out, "port49d: store: the store does not answer context reads (%v); serving cached login contexts "+
-		"past store.etcd.context_cache.ttl (%v) until it does or the listeners close; a revocation made meanwhile "+
-		"does not reach them\n", err, s.ttl)
+		"past %s (%v) until it does or the listeners close; a revocation made meanwhile "+
+		"does not reach them\n", err, s.key, s.ttl)
 }
 
 func (s *staleSayer) fresh() {

@@ -2223,12 +2223,12 @@ type splitCfg struct {
 	// port49d B on it. Without it the deployment is port49-broker and port49d
 	// A, with the one server every other register test was measured with.
 	SecondServer bool
-	// Store, when set, names the store: blocks of a member the test runs (a
+	// Store, when set, names the stores: blocks of a member the test runs (a
 	// real etcd's), in place of storeLab's embedded one.
 	Store *splitStore
 }
 
-// splitStore is a store: block for each process's identity.
+// splitStore is a stores: block for each process's identity.
 type splitStore struct{ Daemon, Broker string }
 
 // splitNode is what differs between two port49d replicas' configs.
@@ -2251,7 +2251,7 @@ func swapLine(s, old, new string) (string, error) {
 // splitDaemonYAML derives one port49d replica's config from port49d-lab.yaml's
 // text (base): its own listener, metrics address, admin socket and spool; no
 // seeds; the policy it admits from under policy:; the inventory behind the
-// fence; and the daemon's store: block, which carries no broker: block.
+// fence; and the daemon's stores: block, which carries no broker: block.
 func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) (string, error) {
 	cut := strings.Index(base, splitSeedComment)
 	if cut < 0 {
@@ -2275,7 +2275,7 @@ func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) 
 // splitBrokerYAML writes port49-broker.yaml: slice/broker.yaml's block with
 // the policy and state_dir this run names and no revocations_file (the store
 // keeps the marks), the key references, the same inventory and encryption
-// key as port49d's, the broker's store: block, and the lab's seeds.
+// key as port49d's, the broker's stores: block, and the lab's seeds.
 func splitBrokerYAML(base, sliceBroker string, o splitBrokerOpts) (string, error) {
 	cut := strings.Index(base, splitSeedComment)
 	if cut < 0 {

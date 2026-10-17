@@ -221,7 +221,7 @@ func TestACallerThatGoesAwayIsNotAFailure(t *testing.T) {
 }
 
 // A caller's deadline that strikes mid-call (a packet's
-// store.packet_deadline, on the daemon) is the store too slow for it: it
+// packet_deadline, on the daemon) is the store too slow for it: it
 // is counted, as outcome deadline, and enough of them open the circuit
 // even though no call reached call_timeout (pre-flight I10).
 func TestACallersDeadlineIsAFailure(t *testing.T) {
@@ -396,7 +396,7 @@ func TestACallersDeadlineWaitingForASlotIsSaturated(t *testing.T) {
 }
 
 // A caller whose deadline has already passed (a packet whose earlier store
-// calls spent store.packet_deadline) is the store too slow for it, on an
+// calls spent packet_deadline) is the store too slow for it, on an
 // idle pool every time: deadline, counted, never saturated, and it never
 // reaches the store (review I1). Enough of them open the circuit.
 func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
@@ -770,6 +770,27 @@ func TestTheCircuitsLinesNameTheirProcess(t *testing.T) {
 			!strings.Contains(l[0], "succeeds; "+tc.impact) || (tc.component == "broker" &&
 			(strings.Contains(l[0], "break-glass") || strings.Contains(l[0], "devices"))) {
 			t.Fatalf("%s: said %q", tc.proc, l)
+		}
+	}
+}
+
+// A directory store of its own is named by its lines (plan 11a): the noun
+// after the process, and, where the guard ends the run, the key it names.
+func TestTheCircuitsLinesNameTheirStore(t *testing.T) {
+	for _, tc := range []struct{ store, key, wantNoun, wantKey string }{
+		{"", "", "port49d: store: the", "etcd.hold_ttl"},
+		{"directory store", "stores.session.etcd.hold_ttl", "port49d: directory store: the", "stores.session.etcd.hold_ttl"},
+	} {
+		var said, gone told
+		c := config(&said, &gone)
+		c.Store, c.HoldTTLKey = tc.store, tc.key
+		g := Wrap(&stuck{err: store.ErrUnavailable}, c)
+		for i := 0; i < 3; i++ {
+			g.GetContext(context.Background(), k)
+		}
+		l := said.all()
+		if len(l) != 1 || !strings.HasPrefix(l[0], tc.wantNoun) || !strings.Contains(l[0], "if the store is gone for "+tc.wantKey) {
+			t.Fatalf("%q: said %q", tc.store, l)
 		}
 	}
 }

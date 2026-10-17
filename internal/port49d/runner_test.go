@@ -299,7 +299,7 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	waitWithin(t, &out, "port49-broker: runner: the takeover stopped: ", 20*time.Second)
 	hctx, hcancel := context.WithTimeout(ctx, 6*time.Second)
 	defer hcancel()
-	_, release, err := other.raw.Hold(hctx, cfg.Store.Etcd.HoldTTL, r.who, func(string) {})
+	_, release, err := other.raw.Hold(hctx, cfg.Stores.Session.Etcd.HoldTTL, r.who, func(string) {})
 	if err != nil {
 		t.Fatalf("another replica could not take the hold after a failed takeover: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestTheRunnersReloadHookRefusesTheReloadOnAFailedPutBack(t *testing.T) {
 		marks := store.NewMarks()
 		marks.Set(alice, true)
 		marks.Set(bob, true)
-		r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+		r := &runner{cfg: config.Config{Stores: config.StoresConfig{Session: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}}},
 			st: st, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
 		if running {
 			ctx := context.Background()
@@ -780,7 +780,7 @@ func TestAnIdleReplicasReloadHookRefusesAFailedReadAndNamesWhatItKeeps(t *testin
 		t.Fatal(err)
 	}
 	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
-	r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+	r := &runner{cfg: config.Config{Stores: config.StoresConfig{Session: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}}},
 		st: refusingRevocations{mem}, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
 	if err := r.reloadHook(ctx, rescans)(); err == nil {
 		t.Fatal("a read that failed did not refuse the reload")

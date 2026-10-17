@@ -75,9 +75,10 @@ broker:
   #   # jwks_max_age: 24h                     # past it with no refresh, every OIDC request is refused 503
   # The provider posts back-channel logouts to https://<broker>:8443/v1/logout:
   # register that URL, with "backchannel logout session required" on.
-store:
-  backend: etcd
-  etcd:
-    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
-    ca_file: /etc/port49/etcd/ca.pem
-    broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
+      ca_file: /etc/port49/etcd/ca.pem
+      broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}

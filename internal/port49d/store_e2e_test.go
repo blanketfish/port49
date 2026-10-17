@@ -83,9 +83,9 @@ func etcdSplitServerOpts(t *testing.T, policyBody string, others []string, o etc
 	}
 	body := string(raw)
 	body = body[:strings.Index(body, "broker:\n")] + fmt.Sprintf("policy: {file: %s, watch_interval: 1s}\n"+
-		"store:\n  backend: etcd\n  packet_deadline: 1s\n  etcd:\n"+
-		"    endpoints: [https://%s]\n    ca_file: %s\n    daemon: {cert_file: %s, key_file: %s}\n"+
-		"    call_timeout: 200ms\n    hold_ttl: 10s\n    breaker: {failures: 3, open_for: 2s}\n"+
+		"stores:\n  directory:\n    backend: etcd\n    packet_deadline: 1s\n    etcd:\n"+
+		"      endpoints: [https://%s]\n      ca_file: %s\n      daemon: {cert_file: %s, key_file: %s}\n"+
+		"      call_timeout: 200ms\n      hold_ttl: 10s\n      breaker: {failures: 3, open_for: 2s}\n"+
 		"admin_socket: %s\nlimits: {idle_timeout: 2m}\n", b.PolicyFile, proxy.Addr(),
 		filepath.Join(srv.Dir, "ca.pem"), dc, dk, filepath.Join(t.TempDir(), "a.sock"))
 	if err := os.WriteFile(daemonCfg, []byte(body), 0o600); err != nil {
@@ -221,18 +221,28 @@ func waitForLedgerSeq(t *testing.T, root *clientv3.Client, key string, above uin
 	return 0
 }
 
-// addUnderEtcd inserts lines (each indented four spaces, newline-ended)
-// under store.etcd in the config at cfgPath.
+// addUnderEtcd inserts lines (each indented four spaces, newline-ended; the
+// stores: nesting indents them two more) under the last etcd: block in the
+// config at cfgPath: in a two-store file, the session store's.
 func addUnderEtcd(t *testing.T, cfgPath, lines string) {
 	t.Helper()
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(string(raw), "  etcd:\n", "  etcd:\n"+lines, 1)
-	if body == string(raw) {
-		t.Fatalf("%s has no store.etcd block", cfgPath)
+	const etcdLine = "    etcd:\n"
+	i := strings.LastIndex(string(raw), etcdLine)
+	if i < 0 {
+		t.Fatalf("%s has no etcd block under stores:", cfgPath)
 	}
+	var deeper strings.Builder
+	for _, l := range strings.SplitAfter(lines, "\n") {
+		if l != "" {
+			deeper.WriteString("  " + l)
+		}
+	}
+	at := i + len(etcdLine)
+	body := string(raw)[:at] + deeper.String() + string(raw)[at:]
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

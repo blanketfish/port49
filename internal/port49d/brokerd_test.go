@@ -88,7 +88,7 @@ func splitFleetOpts(t *testing.T, policyBody string, others []string, o etcdtest
 }
 
 // brokerVia writes a port49-broker.yaml reaching etcd at endpoint as the
-// etcd user cn, with extra appended under store.etcd, and returns its
+// etcd user cn, with extra appended under stores.directory.etcd, and returns its
 // path. Each has its own broker.listen and metrics_listen (both
 // 127.0.0.1:0), its own admin_socket, its own broker.state_dir (mode
 // 0700), and its own broker.policy_file, a copy of f.policy, in a safeDir.
@@ -123,15 +123,16 @@ broker:
   state_dir: %s
   policy_watch_interval: 1s
   certificate_status: {disabled: true}
-store:
-  backend: etcd
-  etcd:
-    endpoints: [https://%s]
-    ca_file: %s
-    broker: {cert_file: %s, key_file: %s}
-    call_timeout: 200ms
-    hold_ttl: 10s
-    breaker: {failures: 3, open_for: 2s}
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      endpoints: [https://%s]
+      ca_file: %s
+      broker: {cert_file: %s, key_file: %s}
+      call_timeout: 200ms
+      hold_ttl: 10s
+      breaker: {failures: 3, open_for: 2s}
 %s`, f.inventory, filepath.Join(dir, "b.sock"), filepath.Join(f.pki, testpki.LabServerCert),
 		filepath.Join(f.pki, testpki.LabServerKey), filepath.Join(f.pki, testpki.LabCA), pol, state, endpoint,
 		filepath.Join(f.srv.Dir, "ca.pem"), bc, bk, extra)), 0o600); err != nil {
@@ -611,7 +612,7 @@ func TestAHoldStillOnThisReplicasLastRunIsSaidAsIts(t *testing.T) {
 	waiting, _ := openBrokerFor(t, ctx, f.copyBroker(t), metrics.New(prometheus.NewRegistry()), io.Discard)
 	cfg, _ := loadBroker(t, f.broker)
 	last := "port49-broker on replica-a (pid 4242, since 2026-10-04T00:00:00Z)"
-	_, release, err := holding.raw.Hold(ctx, cfg.Store.Etcd.HoldTTL, last, func(string) {})
+	_, release, err := holding.raw.Hold(ctx, cfg.Stores.Session.Etcd.HoldTTL, last, func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,22 +645,22 @@ func TestAHoldStillOnThisReplicasLastRunIsSaidAsIts(t *testing.T) {
 	}
 }
 
-// Under store.etcd.roles: unenforced the broker's role check still runs:
+// Under stores.directory.etcd.roles: unenforced the broker's role check still runs:
 // an identity that cannot do the broker's work (the daemon's role, which
-// cannot write meta/) is refused at start, naming store.etcd.broker (Task
+// cannot write meta/) is refused at start, naming stores.directory.etcd.broker (Task
 // 11; plan 7e).
 func TestTheBrokersRolesCheckRunsUnderUnenforced(t *testing.T) {
 	f := splitFleet(t)
-	unenforced := f.brokerVia(t, f.proxy.Addr(), "port49-daemon", "    roles: unenforced\n")
+	unenforced := f.brokerVia(t, f.proxy.Addr(), "port49-daemon", "      roles: unenforced\n")
 	cfg, keys := loadBroker(t, unenforced)
 	var out syncBuffer
 	_, err := openBroker(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
 		crypt.NewLedger(), store.NewMarks())
 	var fault *storeFault
-	if !errors.As(err, &fault) || !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "store.etcd.broker") {
+	if !errors.As(err, &fault) || !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "stores.directory.etcd.broker") {
 		t.Fatalf("unenforced, a broker identity with the daemon's role: %v\n%s", err, out.String())
 	}
-	ok := f.brokerVia(t, f.proxy.Addr(), "port49-broker", "    roles: unenforced\n")
+	ok := f.brokerVia(t, f.proxy.Addr(), "port49-broker", "      roles: unenforced\n")
 	cfg, keys = loadBroker(t, ok)
 	bs, err := openBroker(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
 		crypt.NewLedger(), store.NewMarks())
@@ -667,7 +668,7 @@ func TestTheBrokersRolesCheckRunsUnderUnenforced(t *testing.T) {
 		t.Fatalf("unenforced, the broker's own identity: %v", err)
 	}
 	bs.raw.Close()
-	if !strings.Contains(out.String(), "port49-broker: store.etcd.roles: unenforced") {
+	if !strings.Contains(out.String(), "port49-broker: stores.directory.etcd.roles: unenforced") {
 		t.Fatalf("said %q", out.String())
 	}
 }
@@ -915,7 +916,7 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 }
 
 // A store that hangs in the middle of a login: the device hears ERROR
-// within store.packet_deadline, never silence (Review Focus 1). Then the
+// within packet_deadline, never silence (Review Focus 1). Then the
 // store has been gone long enough, and port49d closes every listener and
 // says why, on its health checks (close_after failures, which come before
 // the guard's hold_ttl) or its guard, without exiting; port49-broker's
