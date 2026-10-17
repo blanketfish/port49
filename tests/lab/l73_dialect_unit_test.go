@@ -260,3 +260,28 @@ func TestL73ListedIsKeyedByLevelAndWord(t *testing.T) {
 		t.Fatalf("a word listed at one level and missed at another: %v", other)
 	}
 }
+
+// After a part-way In/Out failure the CLI may be in the object, the group or
+// the top of configuration. The recovery leaves configuration with the
+// dialect's own last cleanup line, then enters again exactly as the probe did,
+// so the cleanup that follows runs from the mode it assumes.
+func TestL73RecoverLinesReturnToTheProbeMode(t *testing.T) {
+	for _, tc := range []struct {
+		platform string
+		want     []string
+	}{
+		{"cisco_iosxe", []string{"end", "configure terminal", "tacacs server l71probe"}},
+		{"cisco_nxos", []string{"end", "configure terminal"}},
+		{"arista_ceos", []string{"end", "configure"}},
+		{"juniper_vjunos-router", nil}, // no ask leaves the Enter mode
+	} {
+		d := l73Dialects[tc.platform]
+		got := l73RecoverLines(d)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: %q, want %q", tc.platform, got, tc.want)
+		}
+		if got != nil && !slices.Equal(got[1:], d.Enter) {
+			t.Errorf("%s: recovery does not end in the probe's Enter lines", tc.platform)
+		}
+	}
+}

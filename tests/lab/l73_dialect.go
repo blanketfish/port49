@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -136,6 +137,18 @@ const (
 	l73XESource = "GigabitEthernet1"
 	l73CiscoKey = "l73-key"
 )
+
+// l73RecoverLines is what to type when an ask's In or Out failed part way and
+// the CLI's mode is unknown: leave configuration with the dialect's own last
+// cleanup line (the first line is typed expecting the exec prompt), then
+// enter as the probe did, so the cleanup runs from the mode it assumes. Nil
+// when no ask leaves the Enter mode.
+func l73RecoverLines(d l73Dialect) []string {
+	if len(d.Cleanup) == 0 || !slices.ContainsFunc(d.Asks, func(a l73Ask) bool { return len(a.In) > 0 || len(a.Out) > 0 }) {
+		return nil
+	}
+	return append([]string{d.Cleanup[len(d.Cleanup)-1]}, d.Enter...)
+}
 
 // The keys of the Want words the Cisco lines read from has (l73RecordListed).
 var (

@@ -384,7 +384,7 @@ func scpCheckBody(body []byte) error {
 			return errors.New("scp: refusing to send a body that is not only PEM certificates")
 		}
 		blk, after := pem.Decode(rest)
-		if blk == nil || blk.Type != "CERTIFICATE" {
+		if blk == nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
 			return errors.New("scp: refusing to send a body that is not only PEM certificates")
 		}
 		rest = bytes.TrimSpace(after)
