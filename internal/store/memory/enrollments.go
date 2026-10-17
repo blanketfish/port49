@@ -194,6 +194,6 @@ func (e *enrollments) PutUnlock(_ context.Context, principal string, at time.Tim
 	if cur, ok := e.unlocks[principal]; ok && !at.After(cur) {
 		at = cur.Add(time.Nanosecond)
 	}
-	e.unlocks[principal] = at
+	e.unlocks[principal] = at.UTC()
 	return nil
 }

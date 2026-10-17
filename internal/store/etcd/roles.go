@@ -101,7 +101,8 @@ var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 // daemon's refused, each of reading the idempotency records and the
 // superseded record, and writing a mark, the token indexes, an
 // idempotency record, a superseded instant, the ledger record and meta/,
-// one key in each. A write is probed by a transaction whose compare can never hold,
+// one key in each; and both reading and writing each of the broker's own
+// families, ul/ (a person's unlock, plan 11a) among them. A write is probed by a transaction whose compare can never hold,
 // so it writes nothing; etcd checks the permissions of both branches
 // before it evaluates the compare, so a missing grant is still refused
 // (pre-flight M32; measured on v3.6 by

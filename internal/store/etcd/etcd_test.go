@@ -1432,3 +1432,28 @@ func TestAFastClockRefusalKeepsAKeysClaimants(t *testing.T) {
 		t.Fatalf("a refusal older than p's verification, from a fast clock: %q %v, want p", m.Principal, err)
 	}
 }
+
+// Writers racing on one principal's unlock each land: with every put at the
+// same instant, the retry loop makes the record advance once per writer, so
+// none is lost and none ties (plan 11a, R15).
+func TestConcurrentUnlocksEachAdvanceTheRecord(t *testing.T) {
+	t.Parallel()
+	const writers = 8
+	e := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	const p = "user:alice@example.com"
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.PutUnlock(ctx, p, t0); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got, err := e.GetUnlock(ctx, p); err != nil || !got.Equal(t0.Add((writers-1)*time.Nanosecond)) {
+		t.Fatalf("%v %v, want %d nanoseconds past the first", got, err, writers-1)
+	}
+}
