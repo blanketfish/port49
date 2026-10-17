@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/pem"
 	"os"
 	"regexp"
 	"slices"
@@ -247,15 +248,36 @@ func TestScpSinkFrame(t *testing.T) {
 	}
 }
 
-func TestScpBodyRefusesAPrivateKey(t *testing.T) {
-	for _, hdr := range []string{"PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY"} {
-		err := scpCheckBody([]byte("x\n-----BEGIN " + hdr + "-----\nAAAA\n"))
-		if err == nil || strings.Contains(err.Error(), "AAAA") {
-			t.Fatalf("%s: %v", hdr, err)
+func TestScpBodyAllowsOnlyCertificates(t *testing.T) {
+	cert := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("AAAA")}))
+	for name, body := range map[string]string{
+		"one":              cert,
+		"a chain":          cert + "\n" + cert,
+		"trailing newline": cert + "\n\n",
+	} {
+		if err := scpCheckBody([]byte(body)); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if err := scpCheckBody([]byte("-----BEGIN CERTIFICATE-----\nAAAA\n")); err != nil {
-		t.Fatal(err)
+	for name, body := range map[string]string{
+		"private key":     "x\n-----BEGIN PRIVATE KEY-----\nAAAA\n",
+		"rsa key":         "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
+		"ec key":          "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n",
+		"encrypted key":   "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n",
+		"lower-case key":  "-----BEGIN private key-----\nAAAA\n-----END private key-----\n",
+		"crl":             "-----BEGIN X509 CRL-----\nAAAA\n-----END X509 CRL-----\n",
+		"cert then key":   cert + "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+		"non-pem":         "AAAA secretbytes",
+		"garbage first":   "AAAA secretbytes\n" + cert,
+		"garbage after":   cert + "AAAA secretbytes",
+		"empty":           "",
+		"truncated cert":  "-----BEGIN CERTIFICATE-----\nAAAA\n",
+		"cert with a key": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY",
+	} {
+		err := scpCheckBody([]byte(body))
+		if err == nil || strings.Contains(err.Error(), "AAAA") || strings.Contains(err.Error(), "secretbytes") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

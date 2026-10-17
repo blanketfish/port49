@@ -369,12 +369,25 @@ func l73PEMBlock(out, want string) ([]byte, error) {
 	return pem.EncodeToMemory(b), nil
 }
 
-// scpCheckBody refuses a body holding a PEM private key block: scpSinkFrame
-// sends mode 0644, so a key must never go through it. The error names no
-// part of the body.
+// scpCheckBody allows only what L73 sends over scp: PEM CERTIFICATE blocks
+// with whitespace between them. Any other PEM type, a private key above all
+// (scpSinkFrame sends mode 0644), and any other byte is refused. The error
+// names no part of the body.
 func scpCheckBody(body []byte) error {
-	if bytes.Contains(body, []byte("PRIVATE KEY-----")) {
-		return errors.New("scp: refusing to send a body holding a PEM private key")
+	rest := bytes.TrimSpace(body)
+	if len(rest) == 0 {
+		return errors.New("scp: refusing to send an empty body")
+	}
+	for len(rest) > 0 {
+		// pem.Decode skips whatever precedes a block, so the block must start here.
+		if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
+			return errors.New("scp: refusing to send a body that is not only PEM certificates")
+		}
+		blk, after := pem.Decode(rest)
+		if blk == nil || blk.Type != "CERTIFICATE" {
+			return errors.New("scp: refusing to send a body that is not only PEM certificates")
+		}
+		rest = bytes.TrimSpace(after)
 	}
 	return nil
 }
