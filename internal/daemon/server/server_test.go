@@ -1311,7 +1311,7 @@ func TestARefusedEntryIsNeverValidatedUnderItsKey(t *testing.T) {
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		dev := admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
 		trie, err := admission.NewTrie([]admission.Resolved{{Device: dev, KeyRef: "prod_key",
-			Refused: "has transport tls, RFC 9887, which port49d does not serve until plan 11", Refusal: admission.RefusedTransport}})
+			Refused: "has transport \"udp\", which is not tcp or tls", Refusal: admission.RefusedTransport}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1916,6 +1916,32 @@ var (
 	leaf01 = admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
 	leaf02 = admission.Device{Name: "leaf-02", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.2")}}
 )
+
+// A reload that flips an open RFC 8907 connection's device to transport tls,
+// key_ref kept, withdraws it: the transport clause stands on this listener.
+func TestAReloadThatChangesTheTransportResetsItsOpenConnection(t *testing.T) {
+	tlsDev := leaf01
+	tlsDev.Transport = admission.TransportTLS
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: tlsDev, KeyRef: "prod_key"})
+	})
+	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
+}
+
+// A reload that adds an address leaves an open RFC 8907 connection alone: on
+// 49 the key is the identity, not the address.
+func TestAReloadThatAddsAnAddressKeepsItsOpenConnection(t *testing.T) {
+	more := leaf01
+	more.Addresses = append([]netip.Addr{}, leaf01.Addresses...)
+	more.Addresses = append(more.Addresses, netip.MustParseAddr("192.0.2.77"))
+	c, _, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: more, KeyRef: "prod_key"})
+	})
+	c.recv(t)
+	if log.contains(`"diagnosis":"admission_withdrawn"`) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
 
 // reloadBetweenPackets opens a single-connect connection as leaf-01 under
 // prod_key, answers one exchange, lets reload swap the admission index, and

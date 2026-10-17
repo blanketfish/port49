@@ -275,6 +275,17 @@ immediate effect (not built; `port49 revoke --principal` closes the 2h window). 
 (Plan 10 — As built, below). Ryan's Q1 ruling reversed the plan's recommendation: clusters may
 share a namespace, and each k8s verifier is named by a required `cluster:`. Q2 stands: no
 TokenReview. L69 closed on kind (v0.29.0, Kubernetes v1.33.1); L70 (managed clusters) stays open.
+**11 written 2026-10-16** (`2026-10-16-11-tls-listener.md`, fourteen tasks: one spec, nine code, two
+lab harnesses, one lab run, one docs; nineteen rulings recorded as decision 50 by its Task 1; two
+questions for Ryan, each with a recommendation: Q1 the images that carry an RFC 9887 client
+(fetch C8000V 17.18 first), Q2 one host serving both listeners (keep the start notice). It opens
+L71 (which lab images carry a client; every lab image predates the vendors' documented floors), L72
+(port49 against reference clients, closed in the plan) and L73 (device behaviour, open until Q1's
+images).
+**11 executed 2026-10-17** on `feature/tls-listener`, each task reviewed (Plan 11 — As built,
+below). Q2 stands: one host may serve both listeners, with the start notice. Q1 is pending with
+Ryan: TACACS+ over TLS arrives in Junos 26.2R1 on routing and switching platforms, not SRX, and an
+image of it and of C8000V 17.18.1 or later is to be fetched. L71 and L72 closed; L73 open.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -6956,6 +6967,113 @@ was applied before Task 1.
 Separate listener on 300, mutual TLS replacing the shared key, device records expressing
 both. Design §11.
 
+Status: **executed 2026-10-17** (`2026-10-16-11-tls-listener.md`, branch `feature/tls-listener`;
+fourteen tasks; decision 50; L71 and L72 closed, L73 open). See "Plan 11 — As built", below.
+
+### Plan 11 — As built
+
+Executed from `2026-10-16-11-tls-listener.md` on `feature/tls-listener` (rebased onto main
+`8fdebdff`; `1bc6bc75` and `9c5c328a` hold the plan and its pre-flight fixes), each task reviewed,
+most through one to three fix rounds. The ledger is
+`.superpowers/sdd/2026-10-16-11-tls-listener/progress.md`, with each task's brief, report and
+review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was applied before Task 1.
+
+- **Built, with the task commits** (fixes follow the task's own commit):
+  - Task 1, spec: decision 50, L71 to L73 opened (`64c7e062`, fix `1aff17ba`).
+  - Task 2, wire header checks for TLS and the RFC 9887 ERROR reply (`592178b2`).
+  - Task 3, admission of a `transport: tls` device with no shared key (`d022dbb0`, fix `80005018`).
+  - Task 4, `internal/devicecert`, the verdict on a device's client certificate (`7489744e`, fixes
+    `d26c4fcc`, `053e1860`, `62992bb9`; the Junos note on L73 `cfc88ad4`).
+  - Task 5, `tls_listener:` and `listen: none` in port49d.yaml; certificate status by component and
+    a cached check; two `tls` devices equal under ASCII fold refused admission at load (`79e9a5cb`,
+    `ee4fd771`, `0d43aef0`, fixes `ae944f36`, `adb08981`).
+  - Task 6, TLS record fields, diagnoses and metrics (`f710ae77`).
+  - Task 7, the listener: decided at Accept, then TLS 1.3 with mutual certificates (`550d6901`,
+    fixes `11973200`, `37ba645c`, `1212ddab`).
+  - Task 8, a transport or address change withdraws open connections; the 49 mismatch record
+    (`24c7dc84`, fix `5e053d6b`).
+  - Task 9, single-use, age-bounded session tickets (`050ffa4d`, fixes `cca746f7`, `c55d31ef`,
+    `7adbc1e0`).
+  - Task 10, port49d loads, reloads and serves the listener (`83085748`, `63114549`, fixes
+    `6cc95b47`, `88feaabd`, `b647c744`, `09595630`, `d6d4db8d`; a test flake, `a51323f9`).
+  - Task 11, the L72 harness (`35092d55`, fix `a3ff4c10`).
+  - Task 12, the L71 probe (`f3cbe387`, fixes `73100c39`, `09a68f75`).
+  - Task 13, the lab runs and their closes (`e26c6c9e`, `a9bee774`, `7631fe16`, `10be6456`).
+  - After Task 13: L29's refused phase uses `transport: udp`, since `tls` is now served
+    (`d70176c0`).
+  - Task 14, this entry.
+- **Rulings as recorded** (decision 50 and the ledger), and what a review or a lab result changed:
+  - **Q2 (ruled 2026-10-16, Ryan told):** one host may serve both listeners, with the start notice
+    and its two caveats; a per-device transport blocks a downgrade by port. Cost: a departure from
+    RFC 9887 §5.1.1's SHOULD NOT, named in decision 50.
+  - **Pre-flight:** the certificate's status is checked after the handshake completes (so a refusal
+    for status is a reset, not an alert); the certificate-status metrics gain a `component` label;
+    `expiry_warning_fraction` is 0.33; an open connection is re-checked from the cached status
+    only.
+  - **Changed by review:**
+    - Names (Task 4): ASCII-only fold; two `tls` devices equal under it are both refused
+      admission, not the whole load, as their own refusal `tls_name_clash` (not `key_group_tie`,
+      which names a key group a `tls` device lacks).
+    - Unidentifiable devices (Tasks 5 and 7): a `dns_suffixes` clash, or a non-ASCII name with no
+      `ip_address` match, is judged by the TLS listener alone (`devicecert.Rule.Unidentifiable`),
+      not by admission, so every replica means one thing. It is decided at Accept from the source
+      address, with no handshake and no strike (the first draft struck in `VerifyConnection`, which
+      runs before `CertificateVerify`, so the peer had proved nothing), and named once at start or
+      reload.
+    - Tickets (Task 9): a resumption chain is bounded by its original full handshake plus the
+      lifetime, with stamps taken as monotonic time since the guard began, so a wall-clock step
+      replays nothing. Cost: a device re-handshakes at most hourly, when tickets are enabled
+      (`session_ticket_lifetime` defaults to `0s`, off).
+    - Reload (Task 10): a CA rotation needs no restart: the checker's issuer set follows the
+      swapped anchors, and the unidentifiable set is computed before the swap, closing a
+      fail-open window. Edits to `tls_listener:` keys do need a restart, said once at SIGHUP.
+  - **Changed by lab (Task 13):** L72 cell h proves a CRL past a real `nextUpdate` served over
+    HTTP, not a list never loaded; the openssl transcripts are filtered of every hex dump line,
+    because the first run's leak check found session material in one. L71 sends no TACACS+, so its
+    capture is the masked CLI probe transcript, not a pcap.
+  - **No new register cells** for port49-internal behaviour unit tests pin against `crypto/tls`
+    (Unidentifiable, the name clash, sequence 255, the ticket chain, CA rotation). Cost: no
+    process-level measurement of the ticket chain across SIGHUP.
+- **Q1 (the images that carry an RFC 9887 client): pending with Ryan.** Ryan read the Juniper
+  Feature Explorer on 2026-10-16: TACACS+ over TLS arrives in Junos 26.2R1 on routing and
+  switching platforms, not SRX. Fetching a vJunos-router 26.2R1 or later and a C8000V 17.18.1 or
+  later is pending, so L73 stays open.
+- **Lab.**
+  - **L72 closed 2026-10-17** (`tests/lab/results/L72-reference.md`, run at `e26c6c9e`): all 15
+    cells agree with decision 50.
+  - **L71 closed 2026-10-17** (`tests/lab/results/L71-*.md`, five notes): none of vEOS-lab 4.31.2F,
+    C8000V 17.13.01a, N9300v 10.4(2)F, vJunos-router 23.4R2-S2.1 or vSRX3 21.4R3.15 offers a
+    client. vJunosEvolved 23.4R2-S2.1 and vSRX 23.4R1.9 were not probed: they are not in the
+    harness platform list.
+  - **L73 open:** every claim about a device's RFC 9887 behaviour is unmeasured.
+- **Parked minors, carried:** Task 2, gofmt churn and the ERROR reply's default type; Task 6, a
+  double read of `DevicesByTransport`, a metric registered outside the main list, a hard-coded 14;
+  Task 9, three minors on the ticket guard; Task 10, an accept under `c.mu` on an issuer change.
+- **Before the final review.** The controller's full suite found L29's refused phase still
+  setting `transport: tls`, which is now served; it sets `udp` (`d70176c0`).
+- **Final review** (0 Critical, 1 Important, 5 Minor; one fix wave and a scoped re-review):
+  - **Important, fixed:** port49d judged the certificate-name clash over admitted devices only,
+    so Task 5's refused-device rule never took effect and `leaf1.example.net` beside a refused
+    `leaf1` was served. It now judges every inventory device, on start and reload (`361df03c`,
+    `75b9fc18`).
+  - **Fixed:** a seq_no 255 packet with the unencrypted flag clear is closed without a reply
+    (`9db8c9b8`); an OCSP answer in use is refreshed at its refresh point with no packet needed,
+    as ruling 9 says (`5caded46`); the L72 evidence carries no credential or token hash value
+    (`b26f020d`, `1cba72b9`); ruling 19 and the design cite Junos 26.2R1 as unmeasured until
+    L73 closes (`e8cdda43`, `32d990c9`).
+  - **Accepted:** a ticket is marked used before crypto/tls checks its binder, so an on-path
+    observer at an admitted device's address can burn one. Ruling 11 names it, crypto/tls gives
+    no later hook, and it costs the device one full handshake.
+
+**Carried forward.**
+
+- **Plan 12:** the reference device configurations, the listener's exposure, the alarms and the
+  load test, as listed under "Plan 12", below.
+- **Plan 13:** the RFC 9887 page and the operator notes, as listed under "Plan 13", below.
+- **L73:** device images that carry a client (Q1).
+- **Final-review note** (not operator-facing): a session ticket is marked used before the PSK
+  binder check, so an on-path observer can burn a ticket. It costs the device one full handshake.
+
 ## Plan 11a — Global and regional stores (design §13; Ryan, 2026-10-14)
 
 Not yet written. Built in, not left to the operator: a deployment in several regions (Ryan's
@@ -7011,6 +7129,35 @@ the inventory-only refresh's cost at fleet size.
 **Carried from plan 6b** (final review Minor 7): port49d's config loader
 (internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
+
+**Carried from plan 11** (decision 50):
+- The reference device AAA configuration for `transport: tls`, per platform, written from L73 once
+  an image carries a client (plan 11 Q1): port (300; Cisco's documents default 6049), SNI, the
+  client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth), and no
+  non-TLS fallback server for the same host (RFC 9887 §5.1.1). **Junos** (per Juniper
+  documentation, unmeasured until L73 closes): mutual TLS is optional there and port49 requires the
+  client certificate, so the configuration must set `tls mutual-authentication certificate-id <id>`;
+  a client that sends no certificate is refused `no_client_certificate` (measured, L72 cell c).
+- Every deployment shape exposes `tls_listener.listen` (default 300) beside 49, with the source
+  address preserved as for 49. Binding 300 needs what binding 49 does.
+- Alarms: `rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])` by outcome;
+  `port49_tls_device_certificate_lifetime_left_ratio < 0.33` and
+  `port49_tls_server_certificate_lifetime_left_ratio < 0.33`, the default
+  `expiry_warning_fraction`: a certificate past two thirds of its own lifetime, where ACME and
+  cert-manager renew, so its renewal is late, whatever the lifetime (a fixed number of days
+  would fire forever on short-lived certificates); `port49_tls_server_certificate_lifetime_left_ratio < 0`
+  pages (expired);
+  `increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) > 0` while TLS
+  devices are admitted; `time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} > -3600`;
+  `increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0`, since a sync
+  flipping a device from `tls` to `tcp` is a downgrade port49 records but does not block.
+  **The `component` label:** `port49_cert_status_checks_total`, `port49_crl_loads_total`,
+  `port49_crl_next_update_timestamp_seconds` and `port49_cert_status_unavailable_total` carry
+  `component` (`broker`, `tls_listener`). A rule that divides or compares two such series
+  one-to-one now fails to match across components; aggregate with `sum by (...)` or match with
+  `ignoring(component)`.
+- The load test includes full TLS 1.3 handshakes per connection (tickets off, the default) at the
+  §5 target rate. Whether tickets should default on is that number's to decide.
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
 required. Supporting every shape well matters for adoption. So "supported" means each shape has:
@@ -7090,7 +7237,29 @@ GitHub Action — written when the repository goes public. Six sections:
 **Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
 this file). From plan 9a's final review: the install must be 0755 with no setgid or file
 capabilities (plan 12 states it; this guide repeats it), and a table of `port49 ssh`, `trust` and
-`login` exit codes.
+`login` exit codes. From plan 11: an RFC
+9887 page (the two listeners, `listen: none`, `tls_listener`'s keys, device identity by
+inventory name or address, revocation, the 3am table, migrating a device from `tcp` to `tls`
+with the window where a device lists both servers kept short (RFC 9887 §6.1), and the server
+certificate's names: the DNS-ID or IP-ID devices are configured with, and any wildcard confined to
+a subdomain only TACACS+ servers use (RFC 9887 §5.1.6)), and the `tls_outcome` vocabulary in the
+reference. The page also carries, each as what an operator sees and the fix:
+- **`tls_name_clash`.** Two `tls` devices whose names are equal under ASCII case fold are both
+  refused admission, and the start names them. Rename one.
+- **Unidentifiable devices.** A `dns_suffixes` clash, or a non-ASCII name with no `ip_address`
+  match, cannot be told from a certificate. Such a device is declined at Accept as
+  `identity_mismatch`, with no handshake and no strike, and named once at start or reload. Rename
+  it, or give it an `ip_address`.
+- **Junos** (per Juniper documentation, unmeasured until L73 closes). port49 requires the client
+  certificate and Junos makes mutual TLS optional, so set `tls mutual-authentication
+  certificate-id <id>` (Junos 26.2R1 and later, routing and switching platforms, not SRX).
+  Without a client certificate a login is refused `no_client_certificate` (that refusal is
+  measured, L72 cell c).
+- **The `component` label** on the four certificate-status metrics, and `sum by` or
+  `ignoring(component)` where a rule matched them one-to-one.
+- **Config changes.** An edit to a `tls_listener:` key needs a restart (said once at SIGHUP).
+  The certificate, key, CA and CRL files reload live every `reload_interval` and at SIGHUP, and a
+  CA rotation needs no restart.
 
 **Leaves for later:** nothing. **Lab:** none.
 

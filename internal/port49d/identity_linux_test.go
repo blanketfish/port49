@@ -295,6 +295,17 @@ func TestOpenOIDCBuildsAClusterKeySet(t *testing.T) {
 	if err := set.Verifiers[0].Keys.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// The fetched keys are saved after Fetch returns; wait for the file so the
+	// save never races the temporary directory's removal.
+	kept := filepath.Join(dir, oidc.KeyFileName(cfg.Broker.Identity.K8s[0].Issuer))
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(kept); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("the fetched keys were never saved: %v", err)
+		}
+	}
+	set.Verifiers[0].Keys.WaitNotes()
 }
 
 // A cluster whose ca_file does not load is refused naming the k8s verifier.

@@ -63,7 +63,10 @@ func l29Edit(src, node, phase string) (string, error) {
 		}
 		edited = regexp.MustCompile(`platform:\s+`+platform+`,`).ReplaceAllString(line, "platform: "+other+",")
 	case "refused":
-		edited = strings.Replace(line, "]}", "], transport: tls}", 1)
+		// A transport port49d does not serve. This was tls until plan 11
+		// made tls a served transport; the refusal, admission_refused, is
+		// the same either way.
+		edited = strings.Replace(line, "]}", "], transport: udp}", 1)
 	default:
 		return "", fmt.Errorf("no source edit for phase %s", phase)
 	}

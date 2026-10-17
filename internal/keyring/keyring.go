@@ -40,6 +40,9 @@ const (
 	DiagDeviceQuarantined        Diagnosis = "device_quarantined"         // admitted, but quarantined by policy (spec §10)
 	DiagAdmissionRefused         Diagnosis = "admission_refused"          // in inventory, and admission refused it (spec §10)
 	DiagAdmissionWithdrawn       Diagnosis = "admission_withdrawn"        // an open connection's device renamed, re-keyed or re-platformed by a reload (spec §10)
+	DiagTransportMismatch        Diagnosis = "transport_mismatch"         // an admitted device on the listener it does not speak (spec §10)
+	DiagTLSRefused               Diagnosis = "tls_refused"                // the RFC 9887 listener refused or ended it; tls_outcome says why
+	DiagObfuscatedOverTLS        Diagnosis = "obfuscated_over_tls"        // a packet over TLS with the unencrypted flag clear (RFC 9887 §4)
 )
 
 type Result struct {

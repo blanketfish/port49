@@ -258,3 +258,27 @@ func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
 		t.Error("an event is not spelled as §5.7 spells it")
 	}
 }
+
+func TestATCPRecordIsUnchangedAndATLSOneSaysSo(t *testing.T) {
+	var b bytes.Buffer
+	em := NewJSONLines(&b)
+	em.Emit(Record{TS: time.Unix(0, 0).UTC(), Event: EventRedeem,
+		Device: &Device{NAS: "10.0.0.1", Name: "leaf-01", Platform: "arista_eos", KeyRef: "k", KeyVersion: 1}})
+	if strings.Contains(b.String(), "transport") || strings.Contains(b.String(), "cert_sha256") {
+		t.Fatalf("a TCP record gained a field: %s", b.String())
+	}
+	b.Reset()
+	em.Emit(Record{TS: time.Unix(0, 0).UTC(), Event: EventUnvalidated,
+		Device: &Device{NAS: "10.0.0.9", Name: "tls-1", Platform: "arista_eos", Transport: "tls", CertSHA256: "ab"},
+		Unvalidated: &Unvalidated{Source: "10.0.0.9", Diagnosis: "tls_refused", Transport: "tls",
+			TLSOutcome: "certificate_expired", Detail: "x509: certificate has expired", CertSHA256: "ab"}})
+	for _, want := range []string{`"transport":"tls"`, `"cert_sha256":"ab"`, `"tls_outcome":"certificate_expired"`,
+		`"detail":"x509: certificate has expired"`} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("%s lacks %s", b.String(), want)
+		}
+	}
+	if strings.Contains(b.String(), "key_ref") {
+		t.Errorf("a TLS record named a key: %s", b.String())
+	}
+}

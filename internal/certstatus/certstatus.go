@@ -76,6 +76,10 @@ type Config struct {
 	OCSP            *OCSPConfig
 	RefreshInterval time.Duration
 	StateDir        string // where each verified list is kept, crl-<name>.der
+	// Component begins each line, "<component>: certificate status: ":
+	// "broker" when empty, "tls_listener" for the RFC 9887 listener's
+	// device checker (spec §13 decision 50 ruling 8).
+	Component string
 }
 
 // The configuration's defaults, for a Config built without them.
@@ -104,11 +108,12 @@ type Checker struct {
 	ocsp         map[string]ocspEntry
 	ocspInflight map[string]*ocspCall
 	said         map[string]time.Time
+	kick         chan struct{} // SetCRLSources wakes Run
 }
 
 // New builds a Checker with nothing loaded: LoadPersisted, then Run, put
-// lists in force. logf says its lines, each begun "broker: certificate
-// status: ", for the caller to begin with its process's name.
+// lists in force. logf says its lines, each begun with Config.Component's
+// prefix, for the caller to begin with its process's name.
 func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string, ...any)) *Checker {
 	if cfg.RefreshInterval <= 0 {
 		cfg.RefreshInterval = defaultRefresh
@@ -131,7 +136,24 @@ func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string,
 			return errors.New("a status source does not redirect")
 		}},
 		crls: map[string]*loadedCRL{}, failing: map[string]bool{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]*ocspCall{},
-		said: map[string]time.Time{}}
+		said: map[string]time.Time{}, kick: make(chan struct{}, 1)}
+}
+
+// prefix begins every line this checker says.
+func (c *Checker) prefix() string {
+	if c.cfg.Component == "" {
+		return "broker: certificate status: "
+	}
+	return c.cfg.Component + ": certificate status: "
+}
+
+// component is the metrics' component label: "broker" or "tls_listener", a
+// closed set, never a device (decision 50 ruling 8).
+func (c *Checker) component() string {
+	if c.cfg.Component == "" {
+		return "broker"
+	}
+	return c.cfg.Component
 }
 
 // OnNewEntry sets f to be told of each serial a verified list newly names
@@ -151,10 +173,23 @@ func (c *Checker) OnNewEntry(f func(issuer, serial, source string, bulk bool)) {
 // checked against the one above it: the first Revoked decides, with its
 // depth; otherwise the first Unknown decides; otherwise Good.
 func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
+	return c.check(ctx, chain, true)
+}
+
+// CheckCached is Check from what the checker holds now, never a network
+// wait: a CRL in force is in memory, and an OCSP answer is the cached one
+// (decision 50 ruling 9). It is the RFC 9887 listener's check at each packet
+// of an open connection; refreshes happen in the background.
+func (c *Checker) CheckCached(chain []*x509.Certificate) Result {
+	return c.check(context.Background(), chain, false)
+}
+
+// check is Check, waiting on the responder only when wait.
+func (c *Checker) check(ctx context.Context, chain []*x509.Certificate, wait bool) Result {
 	if len(chain) == 0 {
 		res := Result{Verdict: Unknown, Source: "none", Detail: "no certificate to check"}
-		c.m.CertStatusChecks.WithLabelValues(res.Source, res.Verdict.String()).Inc()
-		c.m.CertStatusUnavailable.Inc()
+		c.m.CertStatusChecks.WithLabelValues(c.component(), res.Source, res.Verdict.String()).Inc()
+		c.m.CertStatusUnavailable.WithLabelValues(c.component()).Inc()
 		return res
 	}
 	var res Result
@@ -166,7 +201,7 @@ func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
 	}
 	for i := 0; i < last; i++ {
 		cert, issuer := chain[i], chain[min(i+1, len(chain)-1)]
-		r := c.checkOne(ctx, cert, issuer, i)
+		r := c.checkOne(ctx, cert, issuer, i, wait)
 		r.Depth = i
 		if i > 0 {
 			r.Subject = printsafe.Line(cert.Subject.String(), 200)
@@ -185,9 +220,9 @@ func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
 	if res.Verdict != Revoked && unknown >= 0 {
 		res = unknownRes
 	}
-	c.m.CertStatusChecks.WithLabelValues(res.Source, res.Verdict.String()).Inc()
+	c.m.CertStatusChecks.WithLabelValues(c.component(), res.Source, res.Verdict.String()).Inc()
 	if res.Verdict == Unknown {
-		c.m.CertStatusUnavailable.Inc()
+		c.m.CertStatusUnavailable.WithLabelValues(c.component()).Inc()
 	}
 	return res
 }
@@ -198,10 +233,10 @@ func (c *Checker) Check(ctx context.Context, chain []*x509.Certificate) Result {
 // never in the API's uncovered words, so the broker says try again and port49
 // workload retries; one that does not apply leaves an uncovered issuer
 // uncovered (decision 40, ruling 7).
-func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, depth int) Result {
+func (c *Checker) checkOne(ctx context.Context, cert, issuer *x509.Certificate, depth int, wait bool) Result {
 	res := c.checkCRLs(cert, issuer, depth)
 	if res.Verdict == Unknown && c.cfg.OCSP != nil {
-		o := c.checkOCSP(ctx, cert, issuer)
+		o := c.checkOCSP(ctx, cert, issuer, wait)
 		if o.Verdict != Unknown {
 			return o
 		}

@@ -1,0 +1,11 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+  key                Encryption key for this TACACS+ server (overrides default)^M
+  port               TCP port of TACACS+ server ( default is 49 )^M
+  single-connection  Use one TCP connection for multiple sessions^M
+  timeout            Time to wait for this TACACS+ server to respond ( overrides default)^M
+  vrf                VRF for this TACACS+ server^M
+  <cr>               ^M
+^M
+leaf1(config)#tacacs-server host 192.0.2.71 ^M^[[14C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+

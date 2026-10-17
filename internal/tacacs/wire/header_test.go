@@ -61,3 +61,74 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTLSRequiresTheUnencryptedFlag(t *testing.T) {
+	ok := Header{MajorVersion: MajorVersion, Type: TypeAuthen, SeqNo: 1, Flags: FlagUnencrypted, Length: 10}
+	if err := ok.ValidateTLS(); err != nil {
+		t.Fatalf("a flagged packet over TLS: %v", err)
+	}
+	single := ok
+	single.Flags |= FlagSingleConnect
+	if err := single.ValidateTLS(); err != nil {
+		t.Fatalf("single-connect beside the flag: %v", err)
+	}
+	for name, c := range map[string]struct {
+		h    Header
+		want error
+	}{
+		"flag clear":  {Header{MajorVersion: MajorVersion, Type: TypeAuthor, SeqNo: 1, Length: 10}, ErrObfuscatedOverTLS},
+		"bad version": {Header{MajorVersion: 0xb, Type: TypeAuthen, SeqNo: 1, Flags: FlagUnencrypted}, ErrBadVersion},
+		"bad type":    {Header{MajorVersion: MajorVersion, Type: 4, SeqNo: 1, Flags: FlagUnencrypted}, ErrBadType},
+		"even seq_no": {Header{MajorVersion: MajorVersion, Type: TypeAcct, SeqNo: 2, Flags: FlagUnencrypted}, ErrSeqNotOdd},
+		// Length before the flag: a packet that is too long is noise, not a
+		// misconfigured device, whatever its flag says.
+		"too long, flag clear": {Header{MajorVersion: MajorVersion, Type: TypeAuthen, SeqNo: 1, Length: MaxBodyLen + 1}, ErrTooLong},
+	} {
+		if err := c.h.ValidateTLS(); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", name, err, c.want)
+		}
+	}
+}
+
+func TestValidateStillRefusesTheFlagOnTCP(t *testing.T) {
+	h := Header{MajorVersion: MajorVersion, Type: TypeAuthen, SeqNo: 1, Flags: FlagUnencrypted, Length: 10}
+	if err := h.Validate(); !errors.Is(err, ErrUnencrypted) {
+		t.Fatalf("RFC 8907 listener: %v, want ErrUnencrypted", err)
+	}
+}
+
+func TestErrorReplyIsTheTypesErrorWithTheFlagSet(t *testing.T) {
+	for typ, want := range map[Type]uint8{TypeAuthen: AuthenStatusError, TypeAuthor: AuthorStatusError, TypeAcct: AcctStatusError} {
+		h := Header{MajorVersion: MajorVersion, MinorVersion: MinorVersionOne, Type: typ, SeqNo: 3,
+			Flags: FlagSingleConnect, SessionID: 7, Length: 99}
+		rh, body := ErrorReply(h)
+		if rh.MajorVersion != MajorVersion || rh.MinorVersion != MinorVersionOne || rh.Type != typ || rh.SeqNo != 4 ||
+			rh.Flags != FlagUnencrypted || rh.SessionID != 7 || rh.Length != uint32(len(body)) {
+			t.Fatalf("type %d: header %+v", typ, rh)
+		}
+		var got uint8
+		switch typ {
+		case TypeAuthen:
+			r, err := DecodeAuthenReply(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = r.Status
+		case TypeAuthor:
+			r, err := DecodeAuthorResponse(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = r.Status
+		case TypeAcct:
+			r, err := DecodeAcctReply(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = r.Status
+		}
+		if got != want {
+			t.Errorf("type %d: status %#x, want %#x", typ, got, want)
+		}
+	}
+}

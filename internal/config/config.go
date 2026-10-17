@@ -513,6 +513,7 @@ type sessionYAML struct {
 
 type fileConfig struct {
 	Listen        string            `yaml:"listen"`
+	TLSListener   *tlsListenerYAML  `yaml:"tls_listener"`
 	MetricsListen string            `yaml:"metrics_listen"`
 	InventoryFile string            `yaml:"inventory_file"`
 	Keys          map[string]KeySet `yaml:"keys"`
@@ -582,7 +583,10 @@ type Config struct {
 	// block, policy: with none, and nil with neither.
 	Policy *PolicyConfig
 
-	Listen        string
+	Listen string
+	// TLSListener is tls_listener:, nil without it (spec §13 decision 50).
+	// Listen is "" under listen: none.
+	TLSListener   *TLSListenerConfig
 	MetricsListen string
 	InventoryFile string
 	// InventoryService is nil without an inventory.service block; with one,
@@ -823,6 +827,20 @@ func load(path string, role Role) (Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
+	}
+	// `tls_listener:` with nothing under it decodes to nil, the same as no
+	// block: an operator who wrote the key meant a listener, so it is said.
+	var tlsKey struct {
+		TLSListener yaml.Node `yaml:"tls_listener"`
+	}
+	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
+		tlsKey.TLSListener.Tag == "!!null" {
+		if role == RoleBroker {
+			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
+		} else {
+			return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
+				"certificate_status, or remove the key")
+		}
 	}
 	switch role {
 	case RoleBroker:
@@ -1115,6 +1133,9 @@ func load(path string, role Role) (Config, error) {
 		}
 	}
 	for _, d := range inv.Devices {
+		if d.EffectiveTransport() == admission.TransportTLS {
+			continue // its pin is ignored, as with a broker (decision 50 rulings 3, 18)
+		}
 		if d.KeyRef != "" && !admission.KeyRefShape.MatchString(d.KeyRef) {
 			// Not printed: a pin that is not a name may be a secret.
 			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s)",
@@ -1130,16 +1151,31 @@ func load(path string, role Role) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// A device that matches no key group builds without error (admission.Build
+	// A tcp device that matches no key group builds without error (admission.Build
 	// simply omits it from the table) and then fails every packet at runtime as
 	// an unresolved key. That is a configuration mistake, not a device it's fine
 	// to leave unreachable, so it is refused here rather than discovered later.
+	// Two tls devices equal under ASCII case folding are refused alone: the
+	// start says so, and the load goes on (decision 50 ruling 6).
+	nameRefused := map[string]bool{}
+	clashes := admission.TLSNameClashes(inv.Devices)
 	for _, d := range inv.Devices {
+		if why, ok := clashes[d.Name]; ok {
+			nameRefused[d.Name] = true
+			c.Notices = append(c.Notices, fmt.Sprintf("inventory: device %q is refused (%s): %s", d.Name,
+				admission.RefusedTLSNameClash, why))
+		}
+	}
+	for _, d := range inv.Devices {
+		if nameRefused[d.Name] {
+			continue
+		}
 		resolved := false
 		for _, a := range d.Addresses {
 			// Admitted is Refused == "", never an index hit or a key_ref
 			// alone (Task 3 review M3).
-			if r, ok := trie.Lookup(a); ok && r.Refused == "" && r.KeyRef != "" {
+			if r, ok := trie.Lookup(a); ok && r.Refused == "" &&
+				(r.KeyRef != "" || r.Device.EffectiveTransport() == admission.TransportTLS) {
 				resolved = true
 				break
 			}
@@ -1164,6 +1200,19 @@ func daemonDefaults(c *Config, f fileConfig) error {
 		return err
 	}
 	c.Listen = or(f.Listen, ":49")
+	if f.Listen == ListenNone {
+		c.Listen = ""
+	}
+	if f.TLSListener != nil {
+		tl, err := checkTLSListener(f.TLSListener, c.Listen)
+		if err != nil {
+			return err
+		}
+		c.TLSListener = tl
+	}
+	if c.Listen == "" && c.TLSListener == nil {
+		return errNoListener
+	}
 	c.ReceiptIdleTTL = orD(f.ReceiptIdleTTL, 15*time.Minute)
 	c.ReceiptMaxAge = orD(f.ReceiptMaxAge, 2*time.Hour)
 	c.Accounting = f.Accounting
@@ -1326,6 +1375,15 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 			return nil, err
 		}
 		b.CertificateStatus = &cs
+		if tl := c.TLSListener; tl != nil && len(cs.CRLs) > 0 && len(tl.CertificateStatus.CRLs) > 0 {
+			// Two checkers keep crl-<name>.der in their directory: it is one
+			// directory for both only by an accident of the paths.
+			if dir, err := brokerKeptDir(b); err == nil && filepath.Clean(TLSListenerStateDir(tl)) == dir {
+				return nil, fmt.Errorf("config: tls_listener.state_dir's lists directory %s is also where "+
+					"broker.certificate_status keeps its lists; two checkers would write one crl-<name>.der: move "+
+					"tls_listener.state_dir or broker.state_dir", dir)
+			}
+		}
 	}
 	if b.DirectorySet != nil {
 		d, err := checkDirectory(*b.DirectorySet, os.Getenv, b.ClientCAFile != "")
@@ -1416,6 +1474,7 @@ func brokerRefusals(f fileConfig) error {
 		why string
 	}{
 		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
+		{"tls_listener", f.TLSListener != nil, "port49-broker never speaks TACACS+; that is port49d's"},
 		{"keys:", len(f.Keys) > 0, "device keys are port49d's alone; name the key references under key_refs"},
 		{"accounting", f.Accounting != (AccountingConfig{}), "accounting is port49d's"},
 		{"limits", f.Limits != (limitsYAML{}), "TACACS+ limits are port49d's"},
@@ -1772,11 +1831,52 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 // crl_next_update metric's label.
 var crlName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// brokerKeptDir is where the broker's checker keeps its lists: in
+// broker.state_dir under the broker's role, and beside
+// broker.revocations_file under the daemon's (plan 7e, Ruling 12).
+func brokerKeptDir(b BrokerConfig) (string, error) {
+	if b.StateDir != "" {
+		return b.StateDir, nil
+	}
+	revAbs, err := filepath.Abs(b.RevocationsFile)
+	if err != nil {
+		return "", fmt.Errorf("config: broker.revocations_file: %w", err)
+	}
+	return filepath.Dir(revAbs), nil
+}
+
 // checkCertificateStatus checks broker.certificate_status and applies its
 // defaults in place. A refusal names the key, and never repeats a URL,
 // which may carry a credential.
 func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
-	const key = "broker.certificate_status"
+	stateDir, err := brokerKeptDir(b)
+	if err != nil {
+		return err
+	}
+	marker := ""
+	if b.RevocationsFile != "" {
+		marker = b.RevocationsFile + ".created"
+	}
+	others := []namedPath{
+		{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
+		{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
+		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+		{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
+	}
+	for _, iss := range identityIssuers(&b) {
+		others = append(others, namedPath{"broker.identity's kept keys for " + iss,
+			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
+	}
+	others = append(others, namedPath{"broker.directory.enrollment_store's file",
+		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
+	return checkStatusBlock(cs, "broker.certificate_status", stateDir, others)
+}
+
+// checkStatusBlock checks a certificate_status block under key and applies
+// its defaults in place: the broker's, and the RFC 9887 listener's. stateDir
+// is where its kept lists sit ("" keeps none), and others the files none of
+// them may be.
+func checkStatusBlock(cs *CertificateStatusConfig, key, stateDir string, others []namedPath) error {
 	if cs.Disabled {
 		// Every other key does nothing beside it, and one an operator reads
 		// as meaningful (on_unavailable: allow, say) is refused, not ignored.
@@ -1799,16 +1899,6 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 	if len(cs.CRLs) == 0 && cs.OCSP == nil {
 		return fmt.Errorf("config: %s: name at least one crls entry or an ocsp block, or set disabled: true", key)
 	}
-	// The kept lists sit in broker.state_dir under the broker's role, and
-	// beside broker.revocations_file under the daemon's (plan 7e, Ruling 12).
-	stateDir := b.StateDir
-	if stateDir == "" {
-		revAbs, err := filepath.Abs(b.RevocationsFile)
-		if err != nil {
-			return fmt.Errorf("config: broker.revocations_file: %w", err)
-		}
-		stateDir = filepath.Dir(revAbs)
-	}
 	seen := map[string]bool{}
 	for i, src := range cs.CRLs {
 		at := fmt.Sprintf("%s.crls[%d]", key, i)
@@ -1828,25 +1918,12 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 		seen[src.Name] = true
 		// The kept list is port49d's own state, written beside the
 		// revocations file: it may be no file an operator gave it.
+		if stateDir == "" {
+			continue
+		}
 		kept := filepath.Join(stateDir, "crl-"+src.Name+".der")
-		marker := ""
-		if b.RevocationsFile != "" {
-			marker = b.RevocationsFile + ".created"
-		}
-		others := []struct{ key, path string }{
-			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
-			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
-			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
-			{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
-			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
-		}
-		for _, iss := range identityIssuers(&b) {
-			others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
-				filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
-		}
-		others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
-			filepath.Join(BrokerStateDir(&b), "enrollments.json")})
-		for _, o := range others {
+		for _, o := range append(slices.Clone(others), namedPath{at + ".file", src.File},
+			namedPath{at + ".issuer_file", src.IssuerFile}) {
 			if o.path == "" {
 				continue
 			}

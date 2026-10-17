@@ -1378,3 +1378,22 @@ func TestTheBrokersLoadSkipsTheOneProcessChecks(t *testing.T) {
 		t.Fatalf("port49-broker.yaml with grace 8h: %v", err)
 	}
 }
+
+// A TLS device takes no key, so no key group, no pin and no held key can
+// refuse the start for it (decision 50 rulings 3, 18).
+func TestNoBrokerModeAdmitsATLSDeviceWithNoKeyGroup(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", strings.Replace(inv, "key_groups:",
+		"  - {name: tls-1, platform: arista_eos, addresses: [10.0.0.9], transport: tls, key_ref: absent_key}\n"+
+			"  - {name: tls-2, platform: arista_eos, addresses: [10.0.0.10], transport: tls, key_ref: \"not a name!\"}\n"+
+			"key_groups:", 1))
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatalf("a TLS device with no key group refused the start: %v", err)
+	}
+	for _, a := range []string{"10.0.0.9", "10.0.0.10"} {
+		if r, ok := c.Admission.Lookup(netip.MustParseAddr(a)); !ok || r.Refused != "" || r.KeyRef != "" {
+			t.Fatalf("%s: %+v %v", a, r, ok)
+		}
+	}
+}

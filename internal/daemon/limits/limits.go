@@ -21,8 +21,9 @@ type Config struct {
 }
 
 type failure struct {
-	count int
-	last  time.Time
+	count  int
+	last   time.Time
+	status bool // the last decline was DeclineStatus's
 }
 
 type Limiter struct {
@@ -91,6 +92,33 @@ func (l *Limiter) Decline(src netip.Addr) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.countLocked(l.declined, src)
+	f := l.declined[src]
+	f.status = false
+	l.declined[src] = f
+}
+
+// DeclineStatus is Decline for a device whose certificate status could not
+// be established (spec §13 decision 50 ruling 8): the same window on the same
+// schedule, marked, so the RFC 9887 listener keeps it in force at the next
+// Accept, before any TLS byte, rather than dropping it because the device
+// is still admitted. Nothing at Accept can tell the status is back without
+// the handshake the window exists to spare, so an outage costs each device
+// at most one full handshake per window.
+func (l *Limiter) DeclineStatus(src netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.countLocked(l.declined, src)
+	f := l.declined[src]
+	f.status = true
+	l.declined[src] = f
+}
+
+// DeclinedForStatus reports whether src is inside a window DeclineStatus
+// opened last.
+func (l *Limiter) DeclinedForStatus(src netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inWindowLocked(l.declined, src) && l.declined[src].status
 }
 
 // Declined reports whether src is inside the window its last decline opened.

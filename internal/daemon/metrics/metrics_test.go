@@ -7,6 +7,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/rhwendt/port49/internal/devicecert"
 )
 
 func TestNewRegistersEveryMetric(t *testing.T) {
@@ -49,10 +51,10 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.Revocations.WithLabelValues("principal", "applied").Inc()
 	m.RevocationsInForce.WithLabelValues("cert").Set(1)
 	m.RevocationsFileFailed.Set(0)
-	m.CertStatusChecks.WithLabelValues("crl", "good").Inc()
-	m.CRLLoads.WithLabelValues("corp_issuing", "loaded").Inc()
-	m.CRLNextUpdate.WithLabelValues("corp_issuing").Set(1)
-	m.CertStatusUnavailable.Inc()
+	m.CertStatusChecks.WithLabelValues("broker", "crl", "good").Inc()
+	m.CRLLoads.WithLabelValues("broker", "corp_issuing", "loaded").Inc()
+	m.CRLNextUpdate.WithLabelValues("broker", "corp_issuing").Set(1)
+	m.CertStatusUnavailable.WithLabelValues("broker").Inc()
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
 	m.PolicyRefreshPending.Set(0)
@@ -288,5 +290,57 @@ func TestTheEnrollmentStoreGaugeIsNotSetAtConstruction(t *testing.T) {
 	m.DirectoryEnrollmentStoreOK.WithLabelValues().Set(1)
 	if v := testutil.ToFloat64(m.DirectoryEnrollmentStoreOK); v != 1 {
 		t.Fatalf("%v", v)
+	}
+}
+
+func TestTLSMetrics(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
+		m.TLSHandshakes.WithLabelValues(string(o)).Inc()
+	}
+	m.WatchTLSLifetime(func() (float64, bool) { return 0.25, true }, func() float64 { return 0.5 })
+	m.CountDevicesByTransport(func() map[string]int { return map[string]int{"tcp": 3, "tls": 2} })
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		for _, mm := range mf.GetMetric() {
+			key := mf.GetName()
+			for _, l := range mm.GetLabel() {
+				key += "{" + l.GetName() + "=" + l.GetValue() + "}"
+			}
+			if g := mm.GetGauge(); g != nil {
+				got[key] = g.GetValue()
+			}
+		}
+	}
+	if got["port49_tls_device_certificate_lifetime_left_ratio"] != 0.25 || got["port49_tls_server_certificate_lifetime_left_ratio"] != 0.5 ||
+		got["port49_devices_by_transport{transport=tcp}"] != 3 || got["port49_devices_by_transport{transport=tls}"] != 2 {
+		t.Fatalf("gauges: %v", got)
+	}
+	if n := testutil.CollectAndCount(m.TLSHandshakes); n != 14 {
+		t.Fatalf("%d outcome series, want 14", n)
+	}
+}
+
+func TestTLSLifetimeWithNoneSeenIsWhole(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	m.WatchTLSLifetime(func() (float64, bool) { return 0, false }, nil)
+	if v := testutil.ToFloat64(m.TLSDeviceCertLifetime); v != 1 {
+		t.Fatalf("none seen: %v, want 1 so a lifetime alarm never fires on nothing", v)
+	}
+	if v := testutil.ToFloat64(m.TLSServerCertLifetime); v != 1 {
+		t.Fatalf("no listener: %v, want 1", v)
+	}
+}
+
+func TestTLSHandshakeSeriesExistFromTheStart(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	if n := testutil.CollectAndCount(m.TLSHandshakes); n != 14 {
+		t.Fatalf("%d outcome series before any handshake, want 14", n)
 	}
 }

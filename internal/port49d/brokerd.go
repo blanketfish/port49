@@ -503,7 +503,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 		brokerSay("broker: certificate status checking is disabled (broker.certificate_status.disabled): a " +
 			"certificate revoked at its CA keeps minting until `port49 revoke --cert`")
 	} else {
-		ccfg, err := certStatusConfig(*cs, certsOf(anchors), cfg.Broker.StateDir)
+		ccfg, err := certStatusConfig(*cs, certsOf(anchors), cfg.Broker.StateDir,
+			"broker.client_ca_file, or a broker.identity x509 trust_anchor_file", "the broker")
 		if err != nil {
 			return fmt.Errorf("broker.certificate_status.%w", err)
 		}

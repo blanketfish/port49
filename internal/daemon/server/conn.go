@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -39,8 +40,13 @@ const maxLiveSessions = 64
 const unadmittedHeaderDeadline = 5 * time.Second
 
 type conn struct {
-	d        Deps
-	c        net.Conn
+	d Deps
+	c net.Conn
+	// raw is the TCP connection: c itself on the RFC 8907 listener, and
+	// beneath the TLS connection on the RFC 9887 one. A reset is made on it.
+	raw      net.Conn
+	mismatch bool        // admitted, on the listener its transport is not (spec §10)
+	tls      *tlsSession // set once a TLS handshake ends
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
@@ -64,9 +70,14 @@ func (s *conn) unvalidated(h wire.Header, body []byte, diag keyring.Diagnosis, v
 		digest := sha256.Sum256(body)
 		sum = hex.EncodeToString(digest[:])
 	}
-	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Unvalidated: &decision.Unvalidated{
+	rec := decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Unvalidated: &decision.Unvalidated{
 		Source: s.src.String(), Diagnosis: string(diag), KeyRef: s.dev.KeyRef, Version: version,
-		Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length, BodySHA256: sum}})
+		Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length, BodySHA256: sum,
+		Transport: s.transportName()}}
+	if s.d.TLS != nil {
+		rec.Device = s.deviceBlock()
+	}
+	s.d.Log.Emit(rec)
 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
 }
 
@@ -75,9 +86,10 @@ func (s *conn) unvalidated(h wire.Header, body []byte, diag keyring.Diagnosis, v
 // device_quarantined (spec §5.7, §10). No body was read, so none is hashed.
 func (s *conn) quarantine(h wire.Header) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceQuarantined,
-		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagDeviceQuarantined),
-			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length,
+			Transport: s.transportName()}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagDeviceQuarantined)).Inc()
 }
 
@@ -89,21 +101,26 @@ func (s *conn) quarantine(h wire.Header) {
 // once, as for a quarantine; the start line and `port49 policy test` say why.
 func (s *conn) refusedAdmission(h wire.Header) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated,
-		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagAdmissionRefused),
-			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length,
+			Transport: s.transportName()}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagAdmissionRefused)).Inc()
 }
 
 // readmitted asks admission in force about this connection's source at the
-// time of this packet, so a reload that refuses, removes, renames, re-keys or
-// re-platforms the device ends its open connections rather than leaving them
-// on the admission they began with: a busy single-connect connection resets
+// time of this packet, so a reload that refuses, removes, renames, re-keys,
+// re-platforms or re-transports the device ends its open connections rather
+// than leaving them on the admission they began with: a busy single-connect connection resets
 // its idle timer on every packet and so has no end (spec §10). A platform or
 // `based_on:` change counts: the connection would be denied
 // blob_platform_mismatch at every command, and its records redacted under a
 // platform no longer in force. It returns the diagnosis naming why, or ""
-// while the connection's admission still holds.
+// while the connection's admission still holds. On the RFC 9887 listener a
+// change to the device's addresses also withdraws it: its certificate may
+// have named it by an address it no longer has, and its next handshake is
+// judged against the record in force (decision 50 ruling 6). On 49 an
+// address change is not a withdrawal.
 func (s *conn) readmitted() keyring.Diagnosis {
 	now, found := s.d.Admission.Lookup(s.src)
 	switch {
@@ -112,10 +129,28 @@ func (s *conn) readmitted() keyring.Diagnosis {
 	case now.Refused != "":
 		return keyring.DiagAdmissionRefused
 	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
-		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform:
+		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform ||
+		now.Device.EffectiveTransport() != s.dev.Device.EffectiveTransport() ||
+		(s.tls != nil && !sameAddresses(now.Device.Addresses, s.dev.Device.Addresses)):
 		return keyring.DiagAdmissionWithdrawn
 	}
 	return ""
+}
+
+// sameAddresses compares two address lists as sets: a reload that only
+// reorders a device's addresses changes nothing (inventory diff says none).
+func sameAddresses(a, b []netip.Addr) bool {
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	for _, x := range b {
+		if !slices.Contains(a, x) {
+			return false
+		}
+	}
+	return true
 }
 
 // admissionWithdrawn records a packet on a connection whose admission a
@@ -128,15 +163,16 @@ func (s *conn) readmitted() keyring.Diagnosis {
 // unmeasured (L29).
 func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceUnknown,
-		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(diag), KeyRef: s.dev.KeyRef,
-			Version: s.version, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+			Version: s.version, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length,
+			Transport: s.transportName()}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("admission_closed").Inc()
 	if diag == keyring.DiagAdmissionWithdrawn {
 		// Renamed, re-keyed or re-platformed: still admitted, so its next
 		// connection is served and there is nothing to decline.
-		reset(s.c)
+		s.reset()
 		return
 	}
 	s.decline()
@@ -180,6 +216,14 @@ func reset(c net.Conn) {
 	}
 }
 
+// reset ends the connection with a TCP reset. A TLS connection is
+// abandoned, not closed: no close_notify goes out before the reset (L73 has
+// not measured what a device does with one).
+func (s *conn) reset() {
+	s.c = s.raw
+	reset(s.raw)
+}
+
 // keyMiss closes a connection whose packet no accepted key validates — a
 // first packet, or one past its version's retire_after — as L28 branch H
 // does: the record, a strike, and a reset at once, never a silent hold. The
@@ -187,7 +231,7 @@ func reset(c net.Conn) {
 func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, version int) {
 	s.unvalidated(h, obf, diag, version)
 	s.d.Limits.Malformed(s.src)
-	reset(s.c)
+	s.reset()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 }
 
@@ -201,7 +245,7 @@ func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, versio
 func (s *conn) unadmitted(h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 	s.d.Limits.Malformed(s.src)
-	reset(s.c)
+	s.reset()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("unadmitted_source").Inc()
 }
 
@@ -215,7 +259,7 @@ func (s *conn) unadmitted(h wire.Header) {
 // reset.
 func (s *conn) decline() {
 	s.d.Limits.Decline(s.src)
-	reset(s.c)
+	s.reset()
 }
 
 // protocolError closes a connection whose key validated but whose packet
@@ -232,15 +276,21 @@ func (s *conn) decline() {
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
+	s.c = s.raw // a TLS connection is dropped without close_notify, as a reset's is
 }
 
 func (s *conn) serve(ctx context.Context) {
-	defer s.c.Close()
+	// s.c becomes the TLS connection after a handshake: Close it as it is
+	// then, so a TLS peer gets close_notify.
+	defer func() { s.c.Close() }()
+	if s.d.TLS != nil && !s.startTLS(ctx) {
+		return
+	}
 	for {
 		// The deadline is wall-clock I/O, so it uses the real clock even when a
 		// test injects Deps.Now for record timestamps.
 		deadline := s.d.IdleTimeout
-		if !s.admitted && deadline > unadmittedHeaderDeadline {
+		if (!s.admitted || s.mismatch) && deadline > unadmittedHeaderDeadline {
 			deadline = unadmittedHeaderDeadline
 		}
 		if err := s.c.SetReadDeadline(time.Now().Add(deadline)); err != nil {
@@ -277,6 +327,16 @@ func (s *conn) serve(ctx context.Context) {
 			return
 		}
 
+		// An admitted device on the RFC 8907 listener whose transport is tls:
+		// startTLS ended the converse case before any byte (spec §13 decision
+		// 50 ruling 4). Nothing past the header is read, and the fault is
+		// configuration, not the device's, so it is declined, not struck.
+		if s.mismatch {
+			s.transportMismatch(h)
+			s.decline()
+			return
+		}
+
 		// A quarantined device gets silence, not FAIL (spec §10; §13 decision
 		// 20): one header read, nothing decrypted, no reply, so the device
 		// declares the server dead and falls to its local method exactly as in
@@ -297,9 +357,27 @@ func (s *conn) serve(ctx context.Context) {
 			return
 		}
 
-		// Header checks come before anything that would touch the body, so an
-		// unencrypted packet is refused without its cleartext ever being read.
-		if err := h.Validate(); err != nil {
+		// On the RFC 9887 listener every packet is judged again against the
+		// material in force now (ruling 9), before its body is read.
+		if s.tls != nil && !s.recheckTLS(h) {
+			return
+		}
+
+		// Header checks come before anything that would touch the body. On
+		// the RFC 8907 listener an unencrypted packet is refused without its
+		// cleartext ever being read; on the RFC 9887 listener the flag is
+		// required, and one without it is answered ERROR (RFC 9887 §4).
+		if s.tls != nil {
+			if err := h.ValidateTLS(); err != nil {
+				if errors.Is(err, wire.ErrObfuscatedOverTLS) {
+					s.obfuscatedOverTLS(h)
+					return
+				}
+				s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
+				s.backoff(ctx, "malformed_backoff")
+				return
+			}
+		} else if err := h.Validate(); err != nil {
 			diag := keyring.DiagNotTACACS
 			if errors.Is(err, wire.ErrUnencrypted) {
 				diag = keyring.DiagUnencrypted
@@ -309,17 +387,27 @@ func (s *conn) serve(ctx context.Context) {
 			return
 		}
 
-		obf := make([]byte, h.Length) // Validate has already bounded Length at wire.MaxBodyLen
-		if _, err := io.ReadFull(s.c, obf); err != nil {
+		raw := make([]byte, h.Length) // a Validate has already bounded Length at wire.MaxBodyLen
+		if _, err := io.ReadFull(s.c, raw); err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				s.d.Metrics.ConnectionEvents.WithLabelValues("idle_closed").Inc()
 			}
 			return
 		}
 
-		body, ok := s.deobfuscate(ctx, h, obf)
-		if !ok {
-			return
+		body := raw
+		if s.tls != nil {
+			// No key over TLS (RFC 9887 §4): the first packet's
+			// single-connect flag decides, as the first validated one does on 49.
+			if !s.tls.started {
+				s.tls.started = true
+				s.single = h.Flags&wire.FlagSingleConnect != 0
+			}
+		} else {
+			var ok bool
+			if body, ok = s.deobfuscate(ctx, h, raw); !ok {
+				return
+			}
 		}
 
 		if h.SeqNo == 255 {
@@ -414,12 +502,19 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 	if s.single {
 		flags = wire.FlagSingleConnect
 	}
+	out := body
+	if s.tls != nil {
+		flags |= wire.FlagUnencrypted // every reply over TLS (RFC 9887 §4)
+	}
 	rh := wire.Header{MajorVersion: h.MajorVersion, MinorVersion: h.MinorVersion, Type: h.Type, SeqNo: h.SeqNo + 1,
 		Flags: flags, SessionID: h.SessionID, Length: uint32(len(body))}
 	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
 		return false
 	}
-	_, err := s.c.Write(append(rh.Encode(), wire.Obfuscate(rh, s.keys.Secret(s.version), body)...))
+	if s.tls == nil {
+		out = wire.Obfuscate(rh, s.keys.Secret(s.version), body)
+	}
+	_, err := s.c.Write(append(rh.Encode(), out...))
 	return err == nil
 }
 
@@ -440,6 +535,9 @@ func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply 
 	ctx = authen.WithDelayContext(ctx, delay, arrived)
 	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform,
 		KeyRef: s.dev.KeyRef, KeyVersion: s.version, WirePlatform: s.dev.WirePlatform}
+	if s.tls != nil {
+		peer.Transport, peer.CertSHA256 = admission.TransportTLS, s.tls.certSHA
+	}
 	start := s.d.Now()
 	defer func() { s.d.Metrics.Latency.WithLabelValues(exchange(h.Type)).Observe(s.d.Now().Sub(start).Seconds()) }()
 

@@ -356,3 +356,57 @@ func TestANameGroupIsOneTermAndOneGroupPerName(t *testing.T) {
 		}
 	}
 }
+
+func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
+	e := env()
+	e.KeyRefs = []string{"prod_key"}
+	e.Devices = append(e.Devices, admission.Device{Name: "tls-1", Platform: "arista_eos",
+		Transport: admission.TransportTLS, Attributes: map[string]string{"site": "campus"},
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}})
+	p, err := Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// campus_key is not held, and the campus group would pick it for tls-1:
+	// a TLS device takes no key, so it is admitted anyway.
+	r, ok := p.Admitted("tls-1")
+	if !ok || r.Refused != "" || r.KeyRef != "" {
+		t.Fatalf("tls-1: %+v %v", r, ok)
+	}
+	if _, has := p.KeyAssignment("tls-1"); has {
+		t.Fatal("a TLS device has no key assignment for keys show to print")
+	}
+	for _, ref := range p.AdmissionRefusals() {
+		if ref.Device.Name == "tls-1" {
+			t.Fatalf("tls-1 refused: %+v", ref)
+		}
+	}
+}
+
+func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
+	e := env()
+	e.KeyRefs = []string{"prod_key"}
+	for i, n := range []string{"Leaf-01", "leaf-01", "tcp-A", "tcp-a"} {
+		tr := admission.TransportTLS
+		if i >= 2 {
+			tr = admission.TransportTCP
+		}
+		e.Devices = append(e.Devices, admission.Device{Name: n, Platform: "arista_eos", Transport: tr,
+			Addresses: []netip.Addr{netip.MustParseAddr("10.0.7." + string(rune('1'+i)))}})
+	}
+	p, err := Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatalf("the load must not fail: %v", err)
+	}
+	for _, n := range []string{"Leaf-01", "leaf-01"} {
+		r, _ := p.Admitted(n)
+		if r.Refusal != admission.RefusedTLSNameClash || r.Refused == "" || r.KeyRef != "" {
+			t.Errorf("%s: %+v", n, r)
+		}
+	}
+	for _, n := range []string{"tcp-A", "tcp-a"} {
+		if r, _ := p.Admitted(n); r.Refused != "" || r.KeyRef != "prod_key" {
+			t.Errorf("tcp device %s is not admitted on prod_key: %+v", n, r)
+		}
+	}
+}

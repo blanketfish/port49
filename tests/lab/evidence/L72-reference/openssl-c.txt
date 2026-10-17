@@ -1,0 +1,11 @@
+Connecting to 127.0.0.1
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_128_GCM_SHA256
+Requested Signature Algorithms: RSA-PSS+SHA256:ECDSA+SHA256:ed25519:RSA-PSS+SHA384:RSA-PSS+SHA512:ECDSA+SHA384:ECDSA+SHA512
+Peer certificate: 
+Hash used: SHA256
+Signature type: ecdsa_secp256r1_sha256
+Verification: OK
+Negotiated TLS1.3 group: X25519MLKEM768
+40E712AB20700000:error:0A00045C:SSL routines:ssl3_read_bytes:tlsv13 alert certificate required:../ssl/record/rec_layer_s3.c:918:SSL alert number 116

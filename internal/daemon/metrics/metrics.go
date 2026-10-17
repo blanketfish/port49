@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
+	"github.com/rhwendt/port49/internal/devicecert"
 	"github.com/rhwendt/port49/internal/store/guard"
 )
 
@@ -38,11 +39,32 @@ type Metrics struct {
 	// "admission_closed" (an open connection whose device a reload refused,
 	// removed, renamed, re-keyed or re-platformed: reset at its next packet,
 	// no strike),
-	// "panic" (a connection recovered from a panic), and "accept_error"
-	// (Accept failed and the listener is being retried).
+	// "panic" (a connection recovered from a panic), "accept_error"
+	// (Accept failed and the listener is being retried), "tls_refused" (the
+	// RFC 9887 listener refused a connection: a handshake refusal struck the
+	// source; an unidentifiable device, or no loaded material, is declined at
+	// Accept with no handshake and no strike),
+	// "transport_mismatch" (an admitted device on the listener it does not
+	// speak: declined, no strike), and "obfuscated_over_tls" (a packet over
+	// TLS with the unencrypted flag clear: an ERROR, then closed).
 	ConnectionEvents *prometheus.CounterVec
-	AuthFailures     prometheus.Counter // port49_authentication_failures_total
-	SpoolDepth       prometheus.Gauge   // port49_accounting_spool_depth
+	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's
+	// handshakes by devicecert.Outcome, ok and resumed included (spec §13
+	// decision 50 ruling 16). No device label.
+	TLSHandshakes *prometheus.CounterVec
+	// port49_tls_device_certificate_lifetime_left_ratio: the least fraction
+	// of its own lifetime a device certificate verified in the last 24h has
+	// left, 1 with none; port49_tls_server_certificate_lifetime_left_ratio:
+	// the listener's own, below 0 once expired, 1 with no listener. A
+	// fraction, so one alarm threshold fits a 24h certificate and a 1-year
+	// one alike (decision 50 ruling 16).
+	TLSDeviceCertLifetime prometheus.GaugeFunc
+	TLSServerCertLifetime prometheus.GaugeFunc
+	// port49_devices_by_transport{transport}: admitted devices, one gauge
+	// each for tcp and tls.
+	DevicesByTransport []prometheus.GaugeFunc
+	AuthFailures       prometheus.Counter // port49_authentication_failures_total
+	SpoolDepth         prometheus.Gauge   // port49_accounting_spool_depth
 	// port49_accounting_spool_drops_total{stage}. The stages are not the
 	// same event and must not be alerted on together: "offer_refused" means
 	// the record never became durable, so its device was answered ERROR and
@@ -188,6 +210,9 @@ type Metrics struct {
 	// is named at start and at every reload; the gauge names none.
 	DevicesAdmissionRefused prometheus.GaugeFunc
 	admissionRefused        atomic.Pointer[func() int]
+	tlsDeviceLife           atomic.Pointer[func() (float64, bool)]
+	tlsServerLife           atomic.Pointer[func() float64]
+	devicesTransport        atomic.Pointer[func() map[string]int]
 	// port49_context_refreshes_total{outcome}: live login contexts a policy
 	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 	// policy in force written into it), "unchanged", "revoked" (no grant left
@@ -243,22 +268,24 @@ type Metrics struct {
 	// port49_revocations_file_failed: 1 while the last write of
 	// broker.revocations_file failed, so a restart would forget a mark.
 	RevocationsFileFailed prometheus.Gauge
-	// port49_cert_status_checks_total{source, result}: broker certificate
-	// status checks of a chain, by the source that decided ("crl", "ocsp" or
+	// port49_cert_status_checks_total{component, source, result}: certificate
+	// status checks of a chain, by component (`broker`, or `tls_listener` for
+	// the RFC 9887 listener's device checker, spec §13 decision 50 ruling 8),
+	// by the source that decided ("crl", "ocsp" or
 	// "none") and the verdict ("good", "revoked" or "unknown") (spec §5.1.4).
 	CertStatusChecks *prometheus.CounterVec
-	// port49_crl_loads_total{crl, outcome}: loads of a configured CRL source
+	// port49_crl_loads_total{component, crl, outcome}: loads of a configured CRL source
 	// by its name: "loaded", "unchanged", "failed" (it could not be fetched)
 	// or "refused" (it did not verify, is out of scope, or is older than the
 	// list in force).
 	CRLLoads *prometheus.CounterVec
-	// port49_crl_next_update_timestamp_seconds{crl}: the Unix time the list
+	// port49_crl_next_update_timestamp_seconds{component, crl}: the Unix time the list
 	// in force passes its next update, set after every load; alert on
 	// time() - port49_crl_next_update_timestamp_seconds > 0.
 	CRLNextUpdate *prometheus.GaugeVec
-	// port49_cert_status_unavailable_total: checks whose status could not be
-	// established. No labels.
-	CertStatusUnavailable prometheus.Counter
+	// port49_cert_status_unavailable_total{component}: checks whose status
+	// could not be established. Its one label is the component.
+	CertStatusUnavailable *prometheus.CounterVec
 	// WorkloadRenewalLate is port49_workload_certificates_renewal_late_total:
 	// each workload certificate seen with under a quarter of its validity
 	// left, once per 24h per certificate on each broker replica (plan 8;
@@ -418,7 +445,8 @@ type Metrics struct {
 	// swap made (spec §10) — "address_added" (an address on a device already
 	// in inventory, which a mint hands to an SSH client), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
-	// device moved onto another key), "admission_changed" (a device already
+	// device moved onto another key), "transport_changed" (a device moved
+	// between tcp and tls), "admission_changed" (a device already
 	// in inventory newly admitted) and "device_added" (a device added and
 	// admitted). Each is an inventory_change record naming the device; the
 	// label is the kind only.
@@ -522,6 +550,17 @@ func (m *Metrics) SetDirectoryGroupNamesAmbiguous(count func() float64) {
 // CountAdmissionRefused sets what port49_devices_admission_refused reports.
 func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
+// WatchTLSLifetime sets what the two certificate lifetime gauges report.
+func (m *Metrics) WatchTLSLifetime(device func() (float64, bool), server func() float64) {
+	m.tlsDeviceLife.Store(&device)
+	m.tlsServerLife.Store(&server)
+}
+
+// CountDevicesByTransport sets what port49_devices_by_transport reports.
+func (m *Metrics) CountDevicesByTransport(count func() map[string]int) {
+	m.devicesTransport.Store(&count)
+}
+
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		Requests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_requests_total",
@@ -538,6 +577,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Connections by state."}, []string{"state"}),
 		ConnectionEvents: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_connection_events_total",
 			Help: "Connection lifecycle events by kind."}, []string{"event"}),
+		TLSHandshakes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_tls_handshakes_total",
+			Help: "RFC 9887 listener handshakes by outcome."}, []string{"outcome"}),
 		AuthFailures: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_authentication_failures_total",
 			Help: "Authentication failures from admitted devices."}),
 		SpoolDepth: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_accounting_spool_depth",
@@ -630,13 +671,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		RevocationsFileFailed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_revocations_file_failed",
 			Help: "1 while broker.revocations_file could not be written; a restart would forget a revocation."}),
 		CertStatusChecks: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_cert_status_checks_total",
-			Help: "Broker certificate status checks, by the source that decided and the result."}, []string{"source", "result"}),
+			Help: "Certificate status checks, by component, the source that decided and the result."}, []string{"component", "source", "result"}),
 		CRLLoads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crl_loads_total",
-			Help: "Loads of a CRL source, by outcome: loaded, unchanged, failed or refused."}, []string{"crl", "outcome"}),
+			Help: "Loads of a CRL source, by component and outcome: loaded, unchanged, failed or refused."}, []string{"component", "crl", "outcome"}),
 		CRLNextUpdate: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_crl_next_update_timestamp_seconds",
-			Help: "The Unix time the CRL in force passes its next update."}, []string{"crl"}),
-		CertStatusUnavailable: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
-			Help: "Certificate status checks whose status could not be established."}),
+			Help: "The Unix time the CRL in force passes its next update."}, []string{"component", "crl"}),
+		CertStatusUnavailable: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
+			Help: "Certificate status checks whose status could not be established."}, []string{"component"}),
 		WorkloadRenewalLate: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_workload_certificates_renewal_late_total",
 			Help: "Workload certificates presented with under a quarter of their validity left, once per certificate " +
 				"per 24h on this replica; alert on its increase."}),
@@ -770,8 +811,44 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.TLSDeviceCertLifetime = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_device_certificate_lifetime_left_ratio",
+		Help: "The least fraction of its own lifetime a device certificate verified in the last 24h has left; 1 with none."},
+		func() float64 {
+			if f := m.tlsDeviceLife.Load(); f != nil && *f != nil {
+				if v, ok := (*f)(); ok {
+					return v
+				}
+			}
+			return 1
+		})
+	m.TLSServerCertLifetime = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_tls_server_certificate_lifetime_left_ratio",
+		Help: "The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener."},
+		func() float64 {
+			if f := m.tlsServerLife.Load(); f != nil && *f != nil {
+				return (*f)()
+			}
+			return 1
+		})
+	for _, tr := range []string{"tcp", "tls"} {
+		m.DevicesByTransport = append(m.DevicesByTransport, prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "port49_devices_by_transport", Help: "Admitted devices by transport.",
+			ConstLabels: prometheus.Labels{"transport": tr}}, func() float64 {
+			if f := m.devicesTransport.Load(); f != nil && *f != nil {
+				return float64((*f)()[tr])
+			}
+			return 0
+		}))
+	}
+	for _, g := range m.DevicesByTransport {
+		reg.MustRegister(g)
+	}
+	// Every outcome has a series from the start, so a rate alarm has a zero
+	// to measure from.
+	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
+		m.TLSHandshakes.WithLabelValues(string(o))
+	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
-		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
+		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
@@ -808,6 +885,9 @@ func New(reg prometheus.Registerer) *Metrics {
 	m.StoreHealthChecks.WithLabelValues("fail")
 	for _, o := range []string{"hit", "miss", "stale"} {
 		m.ContextCacheLookups.WithLabelValues(o)
+	}
+	for _, c := range []string{"broker", "tls_listener"} {
+		m.CertStatusUnavailable.WithLabelValues(c) // an alarm on it has a zero to start from
 	}
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts

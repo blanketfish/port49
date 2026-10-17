@@ -21,7 +21,7 @@ import (
 // be able to express both).
 const (
 	TransportTCP = "tcp" // RFC 8907, obfuscated under a shared key; the default
-	TransportTLS = "tls" // RFC 9887; its device refused until plan 11 serves it
+	TransportTLS = "tls" // RFC 9887, mutual TLS; no shared key (spec §13 decision 50)
 )
 
 type Device struct {
@@ -31,6 +31,15 @@ type Device struct {
 	Attributes map[string]string
 	KeyRef     string // tier 1 pin; empty when not pinned
 	Transport  string // "" is TransportTCP
+}
+
+// EffectiveTransport is the device's transport with the default applied:
+// "" is TransportTCP (spec §10).
+func (d Device) EffectiveTransport() string {
+	if d.Transport == "" {
+		return TransportTCP
+	}
+	return d.Transport
 }
 
 type KeyGroup struct {
@@ -56,12 +65,12 @@ type Resolved struct {
 	// Empty is Device.Platform.
 	WirePlatform string
 	// Refused says why a device in the inventory is not admitted — its
-	// transport is one port49d does not serve, no key group matches it, two
-	// tie on it, or its key_ref is one port49d holds no key for (spec §10). Empty is admitted. A refused device is in the index
-	// all the same, so its packets are told apart from an unknown source's.
+	// transport is neither tcp nor tls, no key group matches it, two
+	// tie on it, or its key_ref is one port49d holds no key for (spec §10).
+	// Empty is admitted. A refused device is in the index all the same, so its packets are told apart from an unknown source's.
 	Refused string
-	// Refusal is which of the four it is (RefusedTransport, RefusedNoGroup,
-	// RefusedTie, RefusedUnknownKey), for a reader that decides by it. `port49 policy
+	// Refusal is which of the five it is (RefusedTransport, RefusedNoGroup,
+	// RefusedTie, RefusedUnknownKey, RefusedTLSNameClash), for a reader that decides by it. `port49 policy
 	// test` fails on every one (plan 6a, N1).
 	Refusal string
 }
@@ -72,6 +81,10 @@ const (
 	RefusedNoGroup    = "no_key_group"
 	RefusedTie        = "key_group_tie"
 	RefusedUnknownKey = "key_ref_undefined"
+	// RefusedTLSNameClash is two tls devices whose names are equal under ASCII
+	// case folding (decision 50 ruling 6). A tls device has no key group, so
+	// it is not RefusedTie.
+	RefusedTLSNameClash = "tls_name_clash"
 )
 
 // KeyRefShape is what a key_ref looks like wherever one is named: port49d.yaml's
@@ -235,15 +248,15 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
 	return Assignment{KeyRef: winners[0].KeyRef, Tier: TierCIDR, Group: winners[0].String()}, nil
 }
 
-// transportRefusal is why port49d cannot serve d's transport, or "" when it
-// can. It refuses the device, never the file: a sync can write one, and
-// refusing the file would stop every inventory change fleet-wide (spec §10).
+// transportRefusal is why a device's transport is no transport at all, or ""
+// for tcp and tls. Which listener serves a device is decided per connection,
+// never here (spec §13 decision 50 ruling 4). It refuses the device, never
+// the file: a sync can write one, and refusing the file would stop every
+// inventory change fleet-wide (spec §10).
 func transportRefusal(d Device) string {
 	switch d.Transport {
-	case "", TransportTCP:
+	case "", TransportTCP, TransportTLS:
 		return ""
-	case TransportTLS:
-		return "has transport tls, RFC 9887, which port49d does not serve until plan 11; remove the key or set it to tcp"
 	default:
 		return fmt.Sprintf("has transport %q, which is not tcp or tls", d.Transport)
 	}
@@ -261,7 +274,7 @@ func pinRefusal(d Device) string {
 }
 
 // Resolve is one device's admission from its record and the key groups: its
-// key_ref, or why it is refused — a transport port49d does not serve, two
+// key_ref, or why it is refused — a transport that is neither tcp nor tls, two
 // groups tying on it, or no group matching it (spec §10). It fails closed: a
 // refused entry carries no key_ref. Whether port49d holds a key for the
 // key_ref is the caller's to check (RefusedUnknownKey).
@@ -269,6 +282,11 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 	r := Resolved{Device: d}
 	if why := transportRefusal(d); why != "" {
 		r.Refused, r.Refusal = why, RefusedTransport
+		return r
+	}
+	if d.EffectiveTransport() == TransportTLS {
+		// Mutual TLS replaces the shared key: no group, tie or pin applies,
+		// and the record's key_ref, if any, is ignored (decision 50 ruling 3).
 		return r
 	}
 	if why := pinRefusal(d); why != "" {
@@ -285,6 +303,53 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 		r.KeyRef = as.KeyRef
 	}
 	return r
+}
+
+// TLSNameClashes are the tls devices whose names are equal under ASCII case
+// folding, by name, each with the refusal text. A certificate names a device by
+// its name compared that way (decision 50 ruling 6), so such a pair would admit
+// each other's certificates: both are refused, and nothing else in the load
+// fails. A tcp device is unaffected. Callers set Refusal to
+// RefusedTLSNameClash.
+func TLSNameClashes(devices []Device) map[string]string {
+	byFold := map[string][]string{}
+	for _, d := range devices {
+		if d.EffectiveTransport() != TransportTLS || transportRefusal(d) != "" {
+			continue
+		}
+		f, ascii := FoldASCII(d.Name)
+		if !ascii {
+			continue // never matches a certificate, so nothing to tell apart
+		}
+		byFold[f] = append(byFold[f], d.Name)
+	}
+	out := map[string]string{}
+	for _, names := range byFold {
+		if len(names) < 2 {
+			continue
+		}
+		for _, n := range names {
+			out[n] = fmt.Sprintf("is one of tls devices %q whose names are equal under ASCII case folding, so a "+
+				"certificate could not tell them apart and all are refused (decision 50 ruling 6)", names)
+		}
+	}
+	return out
+}
+
+// FoldASCII lower-cases A-Z and nothing else. ok is false when s holds a
+// non-ASCII byte: such a name never matches, since Unicode folding would
+// let a Kelvin sign stand for a k (decision 50 ruling 6).
+func FoldASCII(s string) (folded string, ok bool) {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 0x80:
+			return "", false
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b), true
 }
 
 // NewTrie indexes entries by every address each carries, a refused entry's
@@ -305,18 +370,29 @@ func NewTrie(entries []Resolved) (*Trie, error) {
 
 // Build is the admission index port49d with no broker reads (plan 1): the
 // inventory file's own key groups, a tie refused whole, and a device no
-// group admits, or whose transport port49d does not serve, left out of the
-// index, as it always was. With a broker, the
-// policy file assigns keys and refuses a device on its own
+// group admits, or whose transport is neither tcp nor tls, left out of the
+// index, as it always was. A tls device is indexed with no key_ref. With a
+// broker, the policy file assigns keys and refuses a device on its own
 // (policy.Policy.Admission).
 func Build(inv Inventory) (*Trie, error) {
 	if err := Validate(inv.Devices); err != nil {
 		return nil, err
 	}
 	entries := make([]Resolved, 0, len(inv.Devices))
+	clashes := TLSNameClashes(inv.Devices)
 	for _, d := range inv.Devices {
-		if transportRefusal(d) != "" || pinRefusal(d) != "" {
+		if transportRefusal(d) != "" {
 			continue // refused alone (spec §10)
+		}
+		if _, clash := clashes[d.Name]; clash {
+			continue // both refused, nothing else (decision 50 ruling 6)
+		}
+		if d.EffectiveTransport() == TransportTLS {
+			entries = append(entries, Resolved{Device: d}) // admitted, no key (decision 50 ruling 18)
+			continue
+		}
+		if pinRefusal(d) != "" {
+			continue
 		}
 		as, err := Assign(d, inv.KeyGroups)
 		if err != nil {

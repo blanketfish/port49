@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -313,13 +314,26 @@ func namesOne(have, want [][]byte) bool {
 	return false
 }
 
+// errSourceReplaced is install's refusal of a list fetched for a source that
+// SetCRLSources has since replaced; load does not count it a failure.
+var errSourceReplaced = errors.New("its source was replaced while it was fetched")
+
 // install puts a verified list in force for its source when it is not
 // older than the last good one, persists it, and reports its new entries.
 // It is the one place a list is put in force.
 func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 	c.mu.Lock()
+	// A load that began before SetCRLSources replaced its source finishes
+	// against the issuer it started with; its list must not come back.
+	if i := slices.IndexFunc(c.cfg.CRLs, func(s CRLSource) bool { return s.Name == src.Name }); i >= 0 &&
+		!bytes.Equal(c.cfg.CRLs[i].Issuer.Raw, src.Issuer.Raw) {
+		c.mu.Unlock()
+		return errSourceReplaced
+	}
 	prev := c.crls[src.Name]
-	if prev != nil {
+	// A rollback is a list older than another of the same issuer; a new
+	// CA's numbers and dates start where they like.
+	if prev != nil && bytes.Equal(prev.issuer.Raw, l.issuer.Raw) {
 		older := l.list.ThisUpdate.Before(prev.list.ThisUpdate)
 		if prev.list.Number != nil && l.list.Number != nil {
 			older = l.list.Number.Cmp(prev.list.Number) < 0 ||
@@ -337,7 +351,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 	c.gaugeOne(l)
 	if persist && c.cfg.StateDir != "" {
 		if err := inventory.WriteAtomic(c.cfg.StateDir, stateFile(src.Name), l.list.Raw, 0o600); err != nil {
-			c.say("persist "+src.Name, "broker: certificate status: CRL %s could not be kept in %s (%v); "+
+			c.say("persist "+src.Name, c.prefix()+"CRL %s could not be kept in %s (%v); "+
 				"a restart will fetch it again", src.Name, c.cfg.StateDir, err)
 		}
 	}
@@ -362,7 +376,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 func (c *Checker) load(ctx context.Context, src CRLSource) error {
 	raw, err := c.fetch(ctx, src)
 	if err != nil {
-		c.m.CRLLoads.WithLabelValues(src.Name, "failed").Inc()
+		c.m.CRLLoads.WithLabelValues(c.component(), src.Name, "failed").Inc()
 		c.setFailing(src.Name)
 		return err
 	}
@@ -373,7 +387,7 @@ func (c *Checker) load(ctx context.Context, src CRLSource) error {
 		c.mu.Unlock()
 		if prev != nil && bytes.Equal(prev.list.Raw, l.list.Raw) {
 			c.gaugeOne(prev)
-			c.m.CRLLoads.WithLabelValues(src.Name, "unchanged").Inc()
+			c.m.CRLLoads.WithLabelValues(c.component(), src.Name, "unchanged").Inc()
 			c.loaded(src, prev, false)
 			return nil
 		}
@@ -381,12 +395,15 @@ func (c *Checker) load(ctx context.Context, src CRLSource) error {
 			c.loaded(src, l, prev == nil || !c.now().Before(c.nextUpdate(prev)))
 		}
 	}
+	if errors.Is(err, errSourceReplaced) {
+		return nil // the replacement source is fetched on its own
+	}
 	if err != nil {
-		c.m.CRLLoads.WithLabelValues(src.Name, "refused").Inc()
+		c.m.CRLLoads.WithLabelValues(c.component(), src.Name, "refused").Inc()
 		c.setFailing(src.Name)
 		return err
 	}
-	c.m.CRLLoads.WithLabelValues(src.Name, "loaded").Inc()
+	c.m.CRLLoads.WithLabelValues(c.component(), src.Name, "loaded").Inc()
 	return nil
 }
 
@@ -414,11 +431,11 @@ func (c *Checker) loaded(src CRLSource, l *loadedCRL, fresh bool) {
 	}
 	next := c.nextUpdate(l)
 	if !c.now().Before(next) {
-		c.logf("broker: certificate status: CRL %s loaded, but its next update, %s, has passed: "+
+		c.logf(c.prefix()+"CRL %s loaded, but its next update, %s, has passed: "+
 			"it establishes nothing until the CA publishes a newer list", src.Name, next.UTC().Format(time.RFC3339))
 		return
 	}
-	c.logf("broker: certificate status: CRL %s loaded (next update %s)", src.Name,
+	c.logf(c.prefix()+"CRL %s loaded (next update %s)", src.Name,
 		next.UTC().Format(time.RFC3339))
 }
 
@@ -430,7 +447,7 @@ func (c *Checker) LoadPersisted() []error {
 	if c.cfg.StateDir == "" {
 		return nil
 	}
-	for _, src := range c.cfg.CRLs {
+	for _, src := range c.sources() {
 		path := filepath.Join(c.cfg.StateDir, stateFile(src.Name))
 		raw, err := fence.ReadNoLink(path, crlMax, "kept CRL")
 		if errors.Is(err, fs.ErrNotExist) {
@@ -452,7 +469,7 @@ func (c *Checker) LoadPersisted() []error {
 // LoadAll fetches every source once, now, and says which did not load.
 func (c *Checker) LoadAll(ctx context.Context) []error {
 	var errs []error
-	for _, src := range c.cfg.CRLs {
+	for _, src := range c.sources() {
 		if err := c.load(ctx, src); err != nil {
 			errs = append(errs, fmt.Errorf("CRL %s: %w", src.Name, err))
 		}
@@ -462,26 +479,32 @@ func (c *Checker) LoadAll(ctx context.Context) []error {
 
 // Run fetches every source now, then each on its own schedule: every
 // RefreshInterval after a success, and from 30s doubling to
-// RefreshInterval after a failure (pre-flight I8). It returns when ctx ends.
+// RefreshInterval after a failure (pre-flight I8). It also asks the OCSP
+// responder again about answers in use as they reach their refresh point
+// (refreshOCSP). It returns when ctx ends.
 func (c *Checker) Run(ctx context.Context) {
 	type next struct {
-		at    time.Time
-		delay time.Duration
+		at     time.Time
+		delay  time.Duration
+		issuer []byte // the issuer certificate the schedule is for
 	}
 	due := map[string]*next{}
-	for _, src := range c.cfg.CRLs {
-		due[src.Name] = &next{at: c.now()}
-	}
 	for {
+		srcs := c.sources()
 		soonest := c.now().Add(c.cfg.RefreshInterval)
-		for _, src := range c.cfg.CRLs {
+		for _, src := range srcs {
 			n := due[src.Name]
+			if n == nil || !bytes.Equal(n.issuer, src.Issuer.Raw) {
+				// New, or its issuer was replaced (SetCRLSources): fetch now.
+				n = &next{at: c.now(), issuer: src.Issuer.Raw}
+				due[src.Name] = n
+			}
 			if c.now().Before(n.at) {
 				soonest = minTime(soonest, n.at)
 				continue
 			}
 			if err := c.load(ctx, src); err != nil {
-				c.say("load "+src.Name, "broker: certificate status: CRL %s: %s; the list in force stays "+
+				c.say("load "+src.Name, c.prefix()+"CRL %s: %s; the list in force stays "+
 					"until its next update", src.Name, printsafe.Line(err.Error(), 300))
 				n.delay = min(max(2*n.delay, retryFirst), c.cfg.RefreshInterval)
 				n.at = c.now().Add(n.delay)
@@ -491,11 +514,54 @@ func (c *Checker) Run(ctx context.Context) {
 			}
 			soonest = minTime(soonest, n.at)
 		}
+		if c.cfg.OCSP != nil {
+			if at := c.refreshOCSP(ctx); !at.IsZero() {
+				soonest = minTime(soonest, at)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-c.kick:
 		case <-c.after(soonest.Sub(c.now())):
 		}
+	}
+}
+
+// sources are the CRL sources now.
+func (c *Checker) sources() []CRLSource {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.cfg.CRLs)
+}
+
+// SetCRLSources replaces the CRL sources, as the trust set they were
+// verified against changed (a CA rotation, spec §13 decision 50 ruling 15).
+// A list in force whose source is gone is dropped, and so is one that does
+// not verify against the source's issuer certificate now (a renewed CA
+// certificate with the same key still verifies it, and keeps it). Run fetches the changed sources at once.
+func (c *Checker) SetCRLSources(srcs []CRLSource) {
+	c.mu.Lock()
+	c.cfg.CRLs = slices.Clone(srcs)
+	for name, l := range c.crls {
+		i := slices.IndexFunc(srcs, func(s CRLSource) bool { return s.Name == name })
+		switch {
+		case i < 0:
+			delete(c.crls, name)
+		case !bytes.Equal(srcs[i].Issuer.Raw, l.issuer.Raw):
+			// A CA renewed with its key and name still signs the list in
+			// force: keep it if it verifies against the new certificate.
+			if nl, err := c.accept(srcs[i], l.list.Raw); err == nil {
+				c.crls[name] = nl
+			} else {
+				delete(c.crls, name)
+			}
+		}
+	}
+	c.mu.Unlock()
+	select {
+	case c.kick <- struct{}{}:
+	default:
 	}
 }
 
@@ -562,7 +628,7 @@ func readMax(r io.Reader) ([]byte, error) {
 
 // gaugeOne sets the time the list stops applying (pre-flight M7).
 func (c *Checker) gaugeOne(l *loadedCRL) {
-	c.m.CRLNextUpdate.WithLabelValues(l.name).Set(float64(c.nextUpdate(l).Unix()))
+	c.m.CRLNextUpdate.WithLabelValues(c.component(), l.name).Set(float64(c.nextUpdate(l).Unix()))
 }
 
 // nextUpdate is when l stops applying: its NextUpdate, or when it names

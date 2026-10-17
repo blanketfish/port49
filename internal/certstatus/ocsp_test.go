@@ -610,3 +610,184 @@ func TestAnOCSPOutageIsNotUncovered(t *testing.T) {
 		})
 	}
 }
+
+// CheckCached never waits: a miss is Unknown at once and asks in the
+// background; a cached answer past half its life is served and refreshed in
+// the background; a refresh that fails never replaces a fresh answer
+// (decision 50 ruling 9).
+func TestCheckCachedNeverWaits(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	user := leaf(t, ca, 100)
+	chain := []*x509.Certificate{user, ca.Cert}
+	resp := newResponder(t, ca)
+	c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+
+	until := func(what string, ok func() bool) {
+		t.Helper()
+		for i := 0; i < 400 && !ok(); i++ {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !ok() {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+	idle := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.ocspInflight) == 0
+	}
+
+	// An empty cache: Unknown at once, with the responder still holding its answer.
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	resp.set(func(r *responder) { r.gate = gate })
+	r := c.CheckCached(chain)
+	if r.Verdict != Unknown || !strings.Contains(r.Detail, "no fresh OCSP answer cached") {
+		t.Fatalf("empty cache: %+v, want unknown naming no fresh OCSP answer cached", r)
+	}
+	until("the background question", func() bool { return resp.count() == 1 })
+	release()
+	until("the answer cached", func() bool { return c.CheckCached(chain).Verdict == Good })
+	if n := resp.count(); n != 1 {
+		t.Fatalf("responder asked %d times, want 1: a cached answer asks nothing", n)
+	}
+
+	// Past half its life: served, and refreshed in the background.
+	clk.advance(16 * time.Minute)
+	resp.set(func(r *responder) {
+		r.gate = nil
+		r.ans = answer{status: ocsp.Good, this: clk.now(), next: clk.now().Add(30 * time.Minute)}
+	})
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("past half life: %+v, want the cached good", r)
+	}
+	until("the refresh", func() bool { return resp.count() == 2 && idle() })
+
+	// A refresh that fails never replaces a fresh answer.
+	clk.advance(16 * time.Minute)
+	resp.set(func(r *responder) { r.status = http.StatusInternalServerError })
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("past half life again, responder down: %+v, want the cached good", r)
+	}
+	until("the failed refresh", func() bool { return resp.count() == 3 && idle() })
+	// The failure is not asked again at once: a down responder is asked once per 30s.
+	for i := 0; i < 3; i++ {
+		if r := c.CheckCached(chain); r.Verdict != Good {
+			t.Fatalf("within 30s of the failed refresh: %+v", r)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := resp.count(); n != 3 {
+		t.Fatalf("responder asked %d times within 30s of a failed refresh, want 3", n)
+	}
+	clk.advance(31 * time.Second)
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("31s on: %+v", r)
+	}
+	until("one more question", func() bool { return resp.count() == 4 && idle() })
+	clk.advance(time.Minute) // past the 30s a stored failure would last
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("after a failed refresh: %+v, want the answer still in force", r)
+	}
+	until("the second failed refresh", func() bool { return resp.count() == 5 && idle() })
+
+	// Past the answer's own expiry: Unknown.
+	clk.advance(14 * time.Minute)
+	if r := c.CheckCached(chain); r.Verdict != Unknown || !strings.Contains(r.Detail, "no fresh OCSP answer cached") {
+		t.Fatalf("past expiry: %+v, want unknown", r)
+	}
+}
+
+// ocspRun runs c.Run with its waits under the test's control: wake fires the
+// one it is in.
+func ocspRun(t *testing.T, c *Checker) (wake func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	fire := make(chan time.Time)
+	c.after = func(time.Duration) <-chan time.Time { return fire }
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return func() {
+		t.Helper()
+		select {
+		case fire <- time.Time{}:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run is not waiting")
+		}
+	}
+}
+
+func ocspUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 400 && !ok(); i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !ok() {
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func ocspIdle(c *Checker) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.ocspInflight) == 0
+}
+
+// Decision 50 ruling 9: a working responder never lets the answer an open
+// connection relies on expire. The refresh does not wait for a packet to land
+// in the second half of the answer's life: Run asks again at the refresh
+// point of an answer that was read.
+func TestOCSPRefreshesAnAnswerInUseWithNoPacket(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	chain := []*x509.Certificate{leaf(t, ca, 100), ca.Cert}
+	resp := newResponder(t, ca)
+	resp.set(func(r *responder) { r.ans = answer{status: ocsp.Good, this: t0, next: t0.Add(2 * time.Minute)} })
+	c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+	wake := ocspRun(t, c)
+
+	c.CheckCached(chain) // a miss: asked in the background
+	ocspUntil(t, "the answer cached", func() bool { return c.CheckCached(chain).Verdict == Good })
+
+	// 70s on, past the refresh point at 60s, and no packet in between.
+	clk.advance(70 * time.Second)
+	resp.set(func(r *responder) {
+		r.ans = answer{status: ocsp.Good, this: clk.now(), next: clk.now().Add(2 * time.Minute)}
+	})
+	wake()
+	ocspUntil(t, "the refresh", func() bool { return resp.count() == 2 && ocspIdle(c) })
+
+	// 125s in: the first answer expired at 120s.
+	clk.advance(55 * time.Second)
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("the answer in use expired with no packet in the refresh window: %+v", r)
+	}
+}
+
+// An answer nobody reads again is not refreshed on and on: it is asked about
+// once more after its last read, then dropped as it expires.
+func TestOCSPDoesNotRefreshAnAnswerNobodyReads(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	chain := []*x509.Certificate{leaf(t, ca, 100), ca.Cert}
+	resp := newResponder(t, ca)
+	resp.set(func(r *responder) { r.ans = answer{status: ocsp.Good, this: t0, next: t0.Add(2 * time.Minute)} })
+	c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+	wake := ocspRun(t, c)
+
+	c.CheckCached(chain)
+	ocspUntil(t, "the answer cached", func() bool { return c.CheckCached(chain).Verdict == Good })
+	for _, step := range []int{70, 70} { // the refresh at 70s; then 140s, a whole ttl after the read
+		clk.advance(time.Duration(step) * time.Second)
+		resp.set(func(r *responder) {
+			r.ans = answer{status: ocsp.Good, this: clk.now(), next: clk.now().Add(2 * time.Minute)}
+		})
+		wake()
+		time.Sleep(100 * time.Millisecond)
+	}
+	ocspUntil(t, "the idle checker", func() bool { return ocspIdle(c) })
+	if n := resp.count(); n != 2 {
+		t.Fatalf("%d questions, want 2: the unread answer was refreshed again", n)
+	}
+}
