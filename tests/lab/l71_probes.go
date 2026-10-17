@@ -130,7 +130,7 @@ func l71CleanupFor(p l71Probe, entered int) []string {
 // l71LineEmpty reports whether the last line of out, as a terminal would
 // show it, is a bare prompt: it ends in `#` or `>` once trailing spaces are
 // dropped, and nothing typed follows. Backspaces, carriage returns and the
-// erase and cursor-left escapes are applied, so a line a device erased
+// erase (K and J), cursor-left and cursor-right escapes are applied, so a line a device erased
 // with Ctrl-U reads as empty and one it kept reads as not.
 func l71LineEmpty(out string) bool {
 	if i := strings.LastIndex(out, "\n"); i >= 0 {
@@ -155,7 +155,7 @@ func l71LineEmpty(out string) bool {
 				n := 0
 				fmt.Sscanf(out[i+2:j], "%d", &n)
 				switch out[j] {
-				case 'K':
+				case 'K', 'J':
 					if cur < len(line) {
 						line = line[:cur]
 					}
@@ -164,6 +164,11 @@ func l71LineEmpty(out string) bool {
 						n = 1
 					}
 					cur = max(cur-n, 0)
+				case 'C':
+					if n == 0 {
+						n = 1
+					}
+					cur = min(cur+n, len(line))
 				}
 			}
 			i = j

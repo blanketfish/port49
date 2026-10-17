@@ -96,9 +96,15 @@ func TestL71LineEmptyReadsTheTerminalNotTheBytes(t *testing.T) {
 		"erased by backspace": {"nx1(config)#" + typed + strings.Repeat("\b \b", len(typed)), true},
 		"erased by cr and K":  {"user@h# set system \r\x1b[Kuser@h# ", true},
 		"erased by cursor":    {"nx1(config)#" + typed + "\x1b[" + "14D\x1b[K", true},
-		"typed text kept":     {"nx1(config)#" + typed, false},
-		"ctrl-u ignored":      {"help\r\nnx1(config)#" + typed + "\a", false},
-		"half erased":         {"nx1(config)#" + typed + strings.Repeat("\b \b", 3), false},
+		// EOS redraws the line, returns, moves right past the prompt and erases (NULs pad the write).
+		"eos redraw":          {"help\r\nleaf1(config)#" + typed + "\r\x1b[14C\x1b[K\x00\x00\x00", true},
+		"eos redraw no erase": {"help\r\nleaf1(config)#" + typed + "\r\x1b[14C\x00\x00", false},
+		// NX-OS erases the screen above, redraws the prompt and the line, then moves left over it and erases to the end.
+		"nxos redraw":            {"help\r\n\x1b[43D\x1b[J\rnx1(config)# " + typed + "\x1b[14D\x1b[J", true},
+		"nxos redraw short move": {"help\r\n\rnx1(config)# " + typed + "\x1b[3D\x1b[J", false},
+		"typed text kept":        {"nx1(config)#" + typed, false},
+		"ctrl-u ignored":         {"help\r\nnx1(config)#" + typed + "\a", false},
+		"half erased":            {"nx1(config)#" + typed + strings.Repeat("\b \b", 3), false},
 	} {
 		if got := l71LineEmpty(c.out); got != c.want {
 			t.Errorf("%s: %v, want %v", name, got, c.want)
