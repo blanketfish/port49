@@ -228,6 +228,11 @@ func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	// Whatever Material holds, RFC 9887 is TLS 1.3 with a client certificate.
 	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS13
 	cfg.ClientAuth = tls.RequireAnyClientCert
+	// A ticket is single-use and age-bounded or it is not issued: tickets stay
+	// off unless the TicketGuard's hooks are on this Config.
+	if !guarded(cfg) {
+		cfg.SessionTicketsDisabled = true
+	}
 	cfg.GetConfigForClient = func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
 		if !slices.Contains(hi.SupportedVersions, tls.VersionTLS13) {
 			// crypto/tls refuses it next with protocol_version; this only
