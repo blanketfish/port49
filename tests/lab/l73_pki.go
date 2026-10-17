@@ -25,7 +25,6 @@ import (
 // 0600 and registers them for the leak check. The device's key is made on
 // the device and never leaves it.
 
-
 type l73Cert struct {
 	Cert *x509.Certificate
 	Key  crypto.Signer
