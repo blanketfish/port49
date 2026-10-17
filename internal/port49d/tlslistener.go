@@ -193,7 +193,13 @@ func (l *tlsListener) followTrust(why string) {
 		return // apply said it
 	}
 	err = l.follow(anchors, inters)
-	switch msg := fmt.Sprint(err); {
+	msg := fmt.Sprint(err)
+	var fe *followError
+	rotated := errors.As(err, &fe) && fe.rotated
+	if rotated {
+		msg += " (rotated)" // a rotation while the file already fails is a new thing to say
+	}
+	switch {
 	case err == nil:
 		if l.followFailed != "" {
 			l.say("tls_listener: %s: the certificate status issuers load again", why)
@@ -201,13 +207,12 @@ func (l *tlsListener) followTrust(why string) {
 		l.followFailed = ""
 	case msg != l.followFailed:
 		l.followFailed = msg
-		var fe *followError
-		if errors.As(err, &fe) && fe.rotated {
+		if rotated {
 			l.say("tls_listener: %s: the certificate status sources keep the issuers they had, and devices under a "+
-				"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(msg, 400))
+				"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(err.Error(), 400))
 		} else {
 			l.say("tls_listener: %s: the certificate status sources keep the issuers they had: %s", why,
-				printsafe.Line(msg, 400))
+				printsafe.Line(err.Error(), 400))
 		}
 	}
 }

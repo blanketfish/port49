@@ -120,3 +120,24 @@ func TestSetCRLSourcesKeepsAListTheRenewedCAVerifies(t *testing.T) {
 		t.Fatalf("status for a device under the renewed CA: %+v", r)
 	}
 }
+
+// A CA renewed with the same name and a NEW key cannot have signed the list
+// in force: it is dropped, whatever the subject says.
+func TestSetCRLSourcesDropsAListWhenTheSameNamedCAHasANewKey(t *testing.T) {
+	ca, rekeyed := newCA(t, "CA"), newCA(t, "CA")
+	if string(ca.Cert.RawSubject) != string(rekeyed.Cert.RawSubject) {
+		t.Fatal("the fixture needs one subject")
+	}
+	c, _, _ := newChecker(t, Config{CRLs: []CRLSource{fileSource("dev", ca)}, RefreshInterval: time.Hour}, newClock())
+	l, err := c.accept(fileSource("dev", ca), signCRL(t, ca, crlSpec{number: 5}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.install(fileSource("dev", ca), l, false); err != nil {
+		t.Fatal(err)
+	}
+	c.SetCRLSources([]CRLSource{fileSource("dev", rekeyed)})
+	if len(c.crls) != 0 {
+		t.Fatalf("a list the new key never signed was kept: %d", len(c.crls))
+	}
+}

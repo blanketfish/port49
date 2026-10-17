@@ -1151,3 +1151,20 @@ func TestTLSIssuerFileErrorWithoutARotationSaysOnlyThat(t *testing.T) {
 		t.Fatalf("a clear is said once: %s", r.sink.all())
 	}
 }
+
+// A rotation while the issuer file already fails still says the new-CA clause.
+func TestTLSRotationWhileTheIssuerFileAlreadyFailsSaysTheNewCAClause(t *testing.T) {
+	r := newRotation(t)
+	os.WriteFile(r.issuer, []byte("junk"), 0o600)
+	r.l.reload("reload_interval")
+	if r.sink.count("the certificate status sources keep the issuers they had") != 1 ||
+		r.sink.count("devices under a new CA are declined") != 0 {
+		t.Fatalf("first, without the clause: %s", r.sink.all())
+	}
+	os.WriteFile(r.p.caFile, r.newCA.PEM(), 0o600)
+	r.l.reload("reload_interval")
+	r.l.reload("reload_interval")
+	if r.sink.count("devices under a new CA are declined") != 1 {
+		t.Fatalf("the rotation is said once with the clause: %s", r.sink.all())
+	}
+}
