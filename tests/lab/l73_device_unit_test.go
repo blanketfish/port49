@@ -218,6 +218,11 @@ func TestL73CellsAreTheRegistersCells(t *testing.T) {
 	if len(want) == 0 || !slices.Equal(got, want) {
 		t.Fatalf("cells %v, the register's %v", got, want)
 	}
+	for _, c := range l73Cells {
+		if !strings.Contains(row, "("+c.ID+") "+c.Claim) {
+			t.Errorf("cell %s's claim is not the register's wording", c.ID)
+		}
+	}
 }
 
 func TestL73RenderTableNeedsEveryCellOnce(t *testing.T) {

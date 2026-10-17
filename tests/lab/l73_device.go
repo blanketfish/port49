@@ -281,7 +281,7 @@ var l73Cells = []l73Cell{
 	{"f", "TLS 1.3 negotiated, and the suite"},
 	{"g", "whether it resumes with a port49 ticket"},
 	{"h", "single-connection over TLS"},
-	{"i", "what it does on each port49 refusal (an alert at the handshake, a reset at Accept, a decline window, an ERROR for an obfuscated packet), and how fast it falls to its next server or local method"},
+	{"i", "what it does on each port49 refusal (an alert at the handshake, a reset at Accept, a decline window, an ERROR for an obfuscated packet), and how fast it falls to its next server or local method, as L28 and L31 measured on 49"},
 	{"j", "whether it ever falls back to a non-TLS server for the same host (RFC 9887 §5.1.1 forbids it)"},
 }
 
