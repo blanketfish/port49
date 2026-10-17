@@ -286,6 +286,17 @@ images).
 below). Q2 stands: one host may serve both listeners, with the start notice. Q1 is pending with
 Ryan: TACACS+ over TLS arrives in Junos 26.2R1 on routing and switching platforms, not SRX, and an
 image of it and of C8000V 17.18.1 or later is to be fetched. L71 and L72 closed; L73 open.
+**11a written 2026-10-17** (`2026-10-17-11a-directory-and-session-stores.md`, twenty-two tasks;
+decision 51; Ryan's rulings of 2026-10-17 as R1–R10 and R13; Q1, a back-channel logout's reach across
+regions, ruled by the team lead as R26: logout records in the directory store). **11a pre-flight
+2026-10-17** (2 Critical, 9 Important, 20 Minor), applied on the team lead's rulings: directory pins
+with no lease, one set of encryption keys checked at start (R27), a sealed directory snapshot a
+process restarted during a cut serves from to the staleness ceiling (R19), a runner that takes over
+during a cut (R29), one cluster named twice refused (R28), no migration (R25), L75 as code; one
+minor not taken, ledgered as R30. **Re-review 2026-10-17** (1 Important, 4 Minor), applied: port49d
+serves the union of every marks snapshot and writes only its own, a broker's pins and logouts in a
+record it cannot read, a heal-time key fault exits 1, only the heal's load lifts the ceiling, and a
+forget re-run after a directory restore. It opens L74 and L75.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7074,22 +7085,37 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
 - **Final-review note** (not operator-facing): a session ticket is marked used before the PSK
   binder check, so an on-path observer can burn a ticket. It costs the device one full handshake.
 
-## Plan 11a — Global and regional stores (design §13; Ryan, 2026-10-14)
+## Plan 11a — Directory and session stores (design §13; Ryan, 2026-10-14 and 2026-10-17)
 
-Not yet written. Built in, not left to the operator: a deployment in several regions (Ryan's
-shape at work is three regions, three Kubernetes clusters) runs one **global** etcd, one member
-per region, and one **regional** etcd per cluster. Global holds what is written rarely and must
-agree everywhere: enrollments (9e's `directory.enrollment_store`), revocations, unlocks,
-second-factor resets, the TOTP used-step record, and policy. Each port49d watches it and serves
-reads from a local cache. Regional holds the hot path: tokens, login contexts, receipts, and
-attempt counts (a spray across three regions gets 3×5 guesses, accepted unless the lab says
-otherwise). A region cut off from global keeps verifying from its cache and refuses new
-enrollments and revocations (fail closed). Replaces design §13's single-store default with this
-split for multi-region. Lab: three simulated regions with netem latency and a cut region,
-measuring the cache, the fail-closed edges, and the cross-region replay of a TOTP code.
-Backups stay the operator's tools (cron, Velero, etcd snapshots); the notes show one of each,
-alongside 9e's `port49 directory export` and `import`. Lands before plan 12, whose failure matrix
-includes the cut region.
+Status: **written 2026-10-17** (`2026-10-17-11a-directory-and-session-stores.md`, branch
+`feature/directory-and-session-stores`; twenty-two tasks: one spec, sixteen code, one docs sweep,
+two lab harnesses, one lab run, one docs; thirty rulings recorded as decision 51 by its Task 1, R1–R10
+and R13 (membership split by write rate, 2026-10-17) Ryan's; Q1, a back-channel logout's reach across
+regions, ruled by the team lead as R26: logout records in the directory store, followed into each
+broker's copy; the pre-flight's fixes on the team lead's rulings as R27–R29 and amendments to R13,
+R19 and R25, and the one item not taken as R30). It opens L74 (three regions: the cache, the cut, a
+restart during it, the fail-closed edges) and L75 (the TOTP used step, the unlock, membership's pin
+and back-channel logouts across brokers). Not executed.
+
+Roles and data placement are built in; topology is the operator's. port49 has two stores named by
+function. The **directory** store (`stores.directory`) holds what is written rarely and must agree
+everywhere: enrollments (9e's `directory.enrollment_store` folds into it), revocations, unlocks,
+second-factor resets, the TOTP used-step record, back-channel logout records, and a directory
+membership's pin (so one
+`port49 directory forget` reaches every region; its per-mint freshness stays regional). The policy is a file every host loads; the
+store keeps only a runner's judgement of it, beside its own sessions (R12). Each port49d and
+port49-broker watches the directory and serves reads from a local cache. The **session** store
+(`stores.session`) holds the hot path: tokens, login contexts, receipts, and attempt counts (a spray
+across three regions gets 3×5 guesses, accepted unless the lab says otherwise). A single site omits
+`stores.session` or points it at the same store. Ryan's shape at work (three regions, three
+Kubernetes clusters) stretches the directory etcd one member per region and runs one session etcd
+per cluster. A region cut off from the directory keeps verifying from its cache and refuses
+directory writes (fail closed), password sign-in included, since its TOTP step is a directory write.
+The old top-level `store:` key is removed outright. `port49 store status` shows each store as a
+process sees it. Lab: three simulated regions with netem latency and a cut region, measuring the
+cache, the fail-closed edges, and the cross-region replay of a TOTP code. Backups stay the operator's
+tools (cron, Velero, etcd snapshots); the notes show one of each, alongside 9e's `port49 directory
+export` and `import`. Lands before plan 12, whose failure matrix includes the cut region.
 
 ## Plan 12 — Deployment (§19 step 12)
 
