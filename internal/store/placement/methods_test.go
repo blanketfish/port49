@@ -23,7 +23,7 @@ var sessionMethods = set(`
 	ReindexSid ActivePrincipals IndexToken TokensByPrincipal TokensByCert
 	ReserveIdempotency CompleteIdempotency ReleaseIdempotency
 	SupersedeTokens SupersedeAll SupersededAt
-	PutOnce PutOnce TakeOnce PutOIDCOwner OIDCOwner PutMFAProof GetMFAProof
+	PutOnce TakeOnce PutOIDCOwner OIDCOwner PutMFAProof GetMFAProof
 	NoteSignInAttempt UndoSignInAttempt ClearSignInAttempts
 `)
 
