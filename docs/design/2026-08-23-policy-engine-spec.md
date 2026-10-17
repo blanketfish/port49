@@ -2324,7 +2324,9 @@ unreadable file kept beside it. `port49 directory init-enrollments` writes one t
 principal and carrying `"created": true` and no `reopen_until`: the enrollment store was created
 (D7). Alert on it as on `enroll`, and on `created` at any time but an install. A nineteenth,
 `sign_in_unlock`, is a report: an operator cleared a principal's failed-attempt count (`port49
-directory unlock`), `{"principal": ..., "sign_in_unlock": {"failures": N, "origin": ...}}`. A
+directory unlock`), `{"principal": ..., "sign_in_unlock": {"failures": N, "origin": ...}}`. `failures` is the
+count the answering broker's session store held; with a session store per region every region's
+count starts again at the unlock, which is a directory record (decision 51). A
 twentieth, `enrollments_import`, is a report: `port49 directory import` replaced or filled the
 enrollment store (D13), `{"enrollments_import": {"records": N, "exported_at": ..., "replaced":
 true|absent, "origin": ...}}`.
@@ -2458,7 +2460,7 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `stores.session.etcd.hold_ttl` (or `stores.directory.…` when `stores.session` is omitted), and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -6403,11 +6405,13 @@ against the caller's directory, not port49d's), or when the file appeared while 
 init-revocations is running or has just run; nothing written); 2 on usage.
 
 **`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`** prints the
-`etcdctl` commands that create port49's two etcd roles and grant them, for the keyspace
-`store.etcd.prefix` names (plan 7d; §13, decision 35).
-Each flag defaults to its file under `/etc/port49/`. A 7d port49d.yaml naming both identities
-is still read from `--config` alone, with a line saying to move the broker's; two files naming
-different `store.etcd.prefix` are refused.
+`etcdctl` commands that create port49's two etcd roles and grant them, for each store's keyspace
+(plan 7d; §13, decisions 35 and 51). Each flag defaults to its file under `/etc/port49/`. With one
+store (`stores.session` omitted, or naming the directory's keyspace) it prints one section, the
+grants below. With a directory of its own it prints two sections, each to run as that cluster's
+root: the directory's, where `port49_daemon` reads `rv/` and `meta/ping` alone and `port49_broker`
+holds the keyspace; and the session's, the grants below without `rv/`. Two files naming a store
+at different keyspaces are refused.
 - **`port49_daemon`.** Read-write on the token, receipt, receipt-index, context, index-record,
   lookup and blob families (`t/`, `r/`, `rp/`, `c/`, `x/`, `ip/`, `is/`, `ic/`, `b/`), and
   read-only on the revocation marks (`rv/`), the ledger record (`lw/`, plan 7e) and five single
@@ -6418,8 +6422,26 @@ different `store.etcd.prefix` are refused.
   or `meta/refresh_owed`. Nothing on the token indexes (`tp/`, `tc/`), the idempotency records
   (`id/`) or the superseded record (`sp/`). `CheckIdentity` probes a refused read of `meta/judged`.
 - **`port49_broker`.** Read-write on the whole keyspace.
-- **The users.** A user per component, named by the CN of the certificate `store.etcd.daemon`
-  (in `--config`) and `store.etcd.broker` (in `--broker-config`) name, granted its role.
+
+**`port49 store status [--socket PATH]`** asks a process's admin socket (port49d's by default,
+`/run/port49/port49d.sock`; port49-broker answers on its own) what each store is, as that process
+sees it (decision 51):
+
+    directory  etcd    3/3 members  reachable  cache 0.4s
+    session    etcd    1/1 members  reachable
+
+A session store that is the directory store prints `session    shares the directory store`; the
+memory store prints `directory  memory  in process`. Members are `<answering>/<listed>`: etcd's
+member list, and each member's status read at its first client URL within `etcd.call_timeout`. The
+cache is the time since the process last confirmed its copy of the directory (a directory read
+answered while its marks feed ran); `cache none` before the first, and `(snapshot)` after it while
+the process serves from a snapshot it started from (R19). A store that does not answer
+prints `unreachable`, the reason on the next line, and the command exits 3; 0 when both answer, 1
+when the socket does not.
+- **The users.** A user per component, named by the CN of the certificate `stores.session.etcd.daemon`
+  (in `--config`; or `stores.directory.etcd.…` when `stores.session` is omitted) and
+  `stores.session.etcd.broker` (in `--broker-config`) name, granted its role. A directory of its own
+  has its users from `stores.directory.etcd.daemon` and `.broker` likewise.
 - **What a stolen daemon key yields under these roles:** decision 35's residual, replay of
   records it cannot forge. While port49d runs that is a deleted token for a holder of its
   secret, or a receipt's sliding bound; across a restart, a context put back while port49d was
@@ -6429,7 +6451,7 @@ different `store.etcd.prefix` are refused.
   certificate: this role is what makes that true, since a credential holding the whole
   keyspace could delete the marks. That holds for the daemon's credential, which since plan 7e
   is all a port49d host holds (decision 36): the broker's, whose role is the whole keyspace, is
-  port49-broker's, and under `store.etcd.roles: unenforced` the daemon's is too.
+  port49-broker's, and under `stores.session.etcd.roles: unenforced` the daemon's is too.
 - **The command itself.** It reads the config and those certificates, holds no etcd
   credential, and changes nothing. It refuses a CN or prefix holding a character outside
   `[A-Za-z0-9._@/-]`, one CN for both components, and a CN of `root` for either (etcd's
@@ -9825,6 +9847,8 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   record lives with the enrollments, so one code cannot be replayed in another region; attempt
   counts stay in `store:` (regional). Plan 11a builds the rest of the split (revocations, policy,
   the regional cache).
+  *(Superseded by decision 51, R5: `broker.directory.enrollment_store` is removed; the enrollment
+  store is the directory store, `stores.directory`.)*
 - **D13. Export and import.** `port49 directory export` writes the enrollments, still sealed, to
   stdout, so a cron job can pipe it to any backup target. `import` checks the seal and the creation
   mark, refuses to overwrite a newer store unless given `--replace`, and writes one record
@@ -10385,6 +10409,115 @@ each where this document and RFC 9887 were silent; Ryan may override any.
 
   Two SHOULDs are not built, and are deferred with reasons: §3.4.1's TLS Cached Information
   Extension (RFC 7924) and §3.4.3's configurable cipher suites (ruling 2).
+
+**51. Two stores named by function: the directory and the session; placement built in, topology
+the operator's.** *Plan 11a, 2026-10-17.* Rulings R1–R10 and R13 are Ryan's (2026-10-17), R26
+the team lead's under standing autonomy, and the pre-flight's amendments (R13's unleased pin, R19's
+snapshot, R25, R27–R29) the team lead's rulings; the rest are the planner's, made security-first
+where this document was silent. The plan
+(`docs/superpowers/plans/2026-10-17-11a-directory-and-session-stores.md`) gives each ruling's
+reason and cost.
+
+- **The two stores (R1, R2, R11).** `stores.directory` and `stores.session`, each today's store
+  shape (`backend: memory | etcd`, `packet_deadline`, `etcd:`). The directory holds exactly `rv/`
+  (the revocation marks), `sf/` (second factors, which carry the TOTP used step),
+  `meta/enrollments` (the enrollment mark), `ul/` (unlocks), `mb/` and `mk/` (directory
+  membership's pin record and map-key index), `lo/` (back-channel logout records), and its own
+  `meta/seal_keys` and `meta/ping`. The session store holds every other family, the directory
+  snapshots (`ds/`) among them. port49 fixes the placement; no key moves a family.
+- **No policy in any store (R12).** The policy is a file every host loads. A runner's judgement of
+  it (`meta/judged`, `meta/judged_bundle`, `meta/bundles/`, `meta/refresh_owed`) is about its own
+  session store's contexts and stays with them. Cross-region agreement is the deployment's.
+- **Directory membership is split by write rate (R13).** The directory store holds its pin record
+  (`mb/` there: entry id, map keys, refusal, the forget's tombstone) and the `mk/` index, with no
+  lease: a pin lives until a forget or a re-pin replaces it, and a tombstone until a re-pin. The
+  session store holds the per-mint freshness record (`verified_at`, groups) with a copy of the pin.
+  A verification writes the directory only when the directory's pin differs (a first bind, a
+  re-pin, a refusal); a read takes the pin from the process's watched copy of the directory, so one
+  `port49 directory forget` reaches every region. A forgotten pin frees the principal; an absent
+  one that this region's copy holds is put back from the copy, never read as unpinned; a pin to
+  another entry than this region's record answers no groups, so grace serves nothing. With the
+  directory cut a first bind, a refusal's record and a forget fail closed (`store_unavailable`),
+  and a pinned member's refresh is served from the cached pin, said.
+- **Back-channel logouts are directory records (R26).** A logout received in any region refuses,
+  everywhere, every mint and refresh it names: each port49-broker loads the logout records before it
+  serves, follows them, and checks a mint against its copy; each region's runner reaches a logout it
+  follows in its own sessions. With the directory cut, a logout is accepted (200), applied in-region
+  at once, and kept pending in the session store. The runner forwards it to the directory on the
+  heal, so nothing is lost; the count is `port49_store_logouts_pending` and `port49 store status`'s
+  `N logouts pending`.
+- **Session-side, by the same principle (R14).** OIDC owner records, once-only records (a logout's
+  `jti` among them), kept MFA proofs, attempt counts, idempotency, superseded, the indexes, blobs,
+  the ledger and every `meta/` key but `enrollments`.
+- **Topology is the operator's (R3, R22).** Single site: `stores.session` omitted (the session store
+  is the directory store) or naming the same keyspace, whose two blocks must then agree on the
+  directory's keys. Several regions: the directory etcd stretched one member per region, a session
+  etcd per region. A directory of its own takes `endpoints`, `ca_file`, `prefix`, `daemon`,
+  `broker`, `roles`, `call_timeout`, `bulk_timeout` and `start_timeout` alone. Memory and etcd are
+  never mixed; nesting keyspaces on one cluster are refused.
+- **The cache (R4, R17, R19).** Every process loads the marks from the directory before it serves,
+  follows them (decision 36's feed), and answers every read of a mark from that copy: the
+  authorizer as before, and now a login's revocation check and a mint's. A process cut off from the
+  directory serves from its copy with no cut-off, and says how old it is: a line at each change,
+  `port49_store_directory_reachable`, `port49_store_directory_confirmed_timestamp_seconds`, and
+  `port49 store status`. A revocation, lift, reset or unlock made elsewhere during a cut does not
+  reach the cut process until the cut heals.
+- **The snapshot (R19).** In a split every process writes its directory cache to its session store
+  every 60s while the cache is confirmed, sealed: a marks record (`ds/m/<proc>@<host>`) from every
+  process, and a broker record of logouts and pins (`ds/b/…`) that the daemon's role cannot read.
+  The daemon writes its own marks record alone. A process started while the directory does not
+  answer serves the union of the marks of every record younger than `session.staleness_ceiling`
+  (4h by default, and when off), never the newest alone, so no deleted or replayed record lifts a
+  mark. Once the directory answers it loads it afresh, and only that load lifts the ceiling; at
+  the ceiling it fails closed: port49d closes its listeners and port49-broker refuses every mint
+  and sign-in `store_unavailable`. A key or cluster fault found at the heal ends the process,
+  exit 1. A process with no such
+  snapshot does not serve: port49d keeps its listeners closed and port49-broker serves nothing, up
+  to `start_timeout` on a cold start; a port49d run after a session-store outage, which holds its
+  marks, serves from them. Unlocks and second-factor resets are not snapshotted: no process
+  caches them, and a password sign-in fails closed in a cut regardless.
+- **Keys (R27, R28).** Every region holds one `encryption:` key set. The directory keeps its own
+  `meta/seal_keys` (ids only), which every port49-broker start writes; a process whose window lacks
+  its current id refuses to start, naming the directory store and the key id. Rotation is three steps: the new key as `previous` everywhere,
+  then `current` everywhere, then the old retired. Two store blocks reaching one etcd cluster id at
+  one prefix are refused at start.
+- **A runner during a cut (R29).** A takeover in a split lists the marks from the process's copy
+  and reaches every standing logout there; the put-back of `marks.json` and the forwarding of
+  pending logouts each wait for the directory by themselves; every session-store duty runs.
+- **Fail closed (R4, R16, R18).** Directory writes are refused when the directory does not answer:
+  revocations and lifts, enrollments, unlocks, second-factor resets, init-enrollments and imports.
+  A password sign-in reads and writes the directory directly and takes the used step by
+  compare-and-set on the one record, so a cut region refuses it `store_unavailable` and one code
+  never signs in twice across regions. No reason code is added.
+- **A login's mark check across two stores (R4).** Decision 35 made a login's context write one
+  atomic step with the marks it read. With the marks in another etcd that cannot hold: a split
+  login reads the marks from the process's copy, carries a standing one into the context
+  (CarryRevocation), and compares none in the session store's transaction. What closes the gap the
+  atomic check closed: every request is denied by the process's marks whatever the context says
+  (decision 35), and each region's runner applies a mark it follows to its own session store,
+  tokens deleted and contexts marked (R20). A shared store keeps decision 35's atomic check.
+- **Unlocks (R15).** `port49 directory unlock` writes `ul/<principal>`; a password sign-in counts
+  failures under `principal:<p>@<unlock unix nanos>`, so an unlock starts every region's count at
+  once. The `sign_in_unlock` record's `failures` is the answering region's count.
+- **Roles (R23).** On a directory of its own the daemon reads `rv/`, `meta/ping` and
+  `meta/seal_keys` alone and the broker holds the keyspace; on a session store of its own the
+  daemon's grants are a shared store's but `rv/`, with `ds/m/` read and `ds/m/port49d@` written,
+  and nothing of `ds/b/`. `port49d
+  store-roles` prints a section per store; the directory's section is run once, against the
+  directory cluster, not once per region.
+- **`port49 store status` (R6, R21).** Asks the process's admin socket (`store_status`): per role,
+  the backend, `<answering>/<listed> members`, reachability, and the directory's cache age;
+  "shares the directory store" for a shared session store. Exit 3 when a store does not answer.
+- **Kubernetes verifiers (R24).** Each region's broker lists its own region's clusters.
+- **Removed (R5, R25).** The top-level `store:` key and `broker.directory.enrollment_store`, with no
+  alias. Decision 47 D12's separate enrollment handle is superseded: the enrollment store is the
+  directory store. No migration: pre-beta, a split starts on fresh stores.
+- **Lab.** L74 (three regions: the cache, the cut, the fail-closed edges) and L75 (the TOTP used
+  step and the unlock across regions). Until each closes, every claim about multi-region timing
+  cites it as unmeasured.
+
+Decisions before this one name the store keys as they were. `store.…` is now `stores.session.…`,
+or `stores.directory.…` for the marks and the enrollments, by the plan's key table (Task 1, Step 5).
 
 ---
 
@@ -10977,14 +11110,14 @@ Beyond those already listed in the design document's §14:
 - **A mark at start**: a context the store kept, whose principal a mark added with port49d
   stopped names, is revoked before any listener binds, and its next command is denied
   `credential_revoked`.
-- **A store gone**: with the store hung past `store.etcd.hold_ttl`, port49d closes every
+- **A store gone**: with the store hung past `stores.session.etcd.hold_ttl`, port49d closes every
   listener, resets every held connection, and says why; when the store returns, the same
   process listens again. A start after a store gone that fails for any other reason is
   tried again, never an exit.
-- **The failure delay**: a FAIL behind a `store.packet_deadline` shorter than the delay takes
+- **The failure delay**: a FAIL behind a `stores.session.packet_deadline` shorter than the delay takes
   the whole delay, and a FAIL behind a slow store arrives at the delay, its store time
   inside it.
-- **The bulk pool**: its circuit open for `store.etcd.hold_ttl` closes no listener.
+- **The bulk pool**: its circuit open for `stores.session.etcd.hold_ttl` closes no listener.
 
 - **Directory.** A grace mint's context has `refreshed_at` equal to the membership's
   verification time. A scheduled pass with no server answering stamps nothing and revokes
@@ -11166,6 +11299,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L71** | Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with nothing left configured: EOS `tacacs-server host <ip> ?` (an `ssl-profile` or `tls` option), IOS-XE `tacacs server <name>` then `tls ?` (IOS has no commit, so this creates a `tacacs server l71probe` object, which the probe removes on every path), NX-OS `tacacs-server host <ip> ?` and `tacacs-server secure ?`, Junos `set system tacplus-server <ip> ?` (a `tls` option). Vendor documentation puts the floors at EOS 4.36.1F, IOS XE 17.18.1, NX-OS 10.6(1)F and Junos 26.2R1 on routing and switching platforms (not SRX), per row L73, all after every lab image. | §13 decision 50 ruling 19; whether L73 can be measured on an image in hand | vEOS-lab 4.31.2F, C8000V 17.13.01a, N9300v 10.4(2)F, vJunos-router 23.4R2-S2.1, vSRX3 21.4R3.15 | closed — measured 2026-10-17; tests/lab/results/L71-arista_eos.md, L71-cisco_iosxe.md, L71-cisco_nxos.md, L71-juniper_vjunos-router.md, L71-juniper_vsrx.md (transcripts in tests/lab/evidence/L71-<platform>/probe.txt). All five images were probed and none offers a client: vEOS-lab 4.31.2F's `tacacs-server host <ip> ?` lists key, port, single-connection, timeout and vrf; C8000V 17.13.01a's `?` in `tacacs server` sub-mode lists address, key, port, send-nat-address, single-connection and timeout, no `tls`; N9300v 10.4(2)F's `tacacs-server host <ip> ?` lists key, port, single-connection, test and timeout, and `tacacs-server ?` lists deadtime, directed-request, host, key, test and timeout (no `secure`); vJunos-router 23.4R2-S2.1 and vSRX3 21.4R3.15 list no `tls` option under `set system tacplus-server <ip> ?`. Not probed, because they are not in the harness platform list: vJunosEvolved 23.4R2-S2.1 and vSRX 23.4R1.9. L73 stays open: no image in hand carries a client. |
 | **L72** | port49's RFC 9887 listener against reference clients (`openssl s_client` 3.x and `tests/lab/cmd/tacacs-tls-client`, Go `crypto/tls`), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and the record carries `device.transport` and `device.cert_sha256` and no `key_ref`; (b) a TLS 1.2-only client: the alert the client reports and `version_refused`; (c) no client certificate: the alert and `no_client_certificate`; (d) an unknown CA, (e) an expired leaf, (f) a leaf naming another device: each one's alert and outcome; (g) a leaf a CRL file lists: a reset after the completed handshake (the status is checked only then, so no alert) and `certificate_revoked`; (h) a CRL source past its `nextUpdate` and unreachable: the handshake completes and the connection is then reset (no alert), `status_unavailable`, and the next connection, inside the decline window, reset at Accept with no strike and no second record; (i) a server name not in `server_names`: the alert and `sni_mismatch`; (j) with `session_ticket_lifetime: 10m`, a second connection resumes, and one ticket presented twice resumes once; (k) `openssl s_client -early_data` with a port49 session: whether any early data is sent; (l) a packet with the unencrypted flag clear: the reply's status and flags and the close; (m) a `tcp` device's address and an address not in the inventory on the TLS listener: whether any TLS byte comes back before the reset, and the records; (n) a `tls` device's address on the RFC 8907 listener: the reset after its header and `transport_mismatch`; (o) a TCP connection that sends nothing: when it is closed and `handshake_timeout`. | §13 decision 50 rulings 2, 5, 8, 10–14 | reference clients on the lab host | closed — measured 2026-10-17; tests/lab/results/L72-reference.md (evidence tests/lab/evidence/L72-reference/). All 15 cells agree with decision 50. (a) A TLS 1.3 PAP login passes, status pass with the unencrypted flag set, `token_redeemed`, and the record carries `device.transport` and `device.cert_sha256`. (b) A TLS 1.2-only client gets `protocol version not supported` and `version_refused`. (c) No client certificate: `certificate required` and `no_client_certificate`. (d) Unknown CA: `bad certificate` and `unknown_ca`; (e) expired leaf: `bad certificate` and `certificate_expired`; (f) another device's leaf: `bad certificate` and `identity_mismatch`. (g) A CRL-listed leaf completes the handshake and is then reset with no alert, `certificate_revoked`. (h) With the CRL fetched over plain HTTP and the server then stopped, past `nextUpdate` the handshake completes and is reset, `status_unavailable`; the next connection is reset at Accept with no strike and no second record. (i) A server name not in `server_names`: `internal error` alert and `sni_mismatch`. (j) The second connection resumes and the first ticket presented again does not (resumed false, true, false). (k) `openssl s_client -early_data` against a port49 session: `Early data was not sent`, session reused, no `early_data_refused` records. (l) A packet with the unencrypted flag clear gets an ERROR reply carrying the flag, then the close, `obfuscated_over_tls`. (m) A `tcp` device's address and an unknown address on the TLS listener are reset with no TLS byte back, and recorded. (n) A `tls` device's address on the RFC 8907 listener is reset after its header, `transport_mismatch`. (o) A silent TCP connection is closed at `handshake_timeout` (2s in the run), `handshake_timeout`. |
 | **L73** | Each device's RFC 9887 client against port49, per platform, once an image carries one (L71): (a) the port it uses with none configured (RFC 9887 says 300; Cisco's documents use 6049); (b) whether every packet has the unencrypted flag set; (c) whether it sends SNI, and what; (d) whether it checks port49's certificate's dNSName or iPAddress against what it was configured with, and what it does on a mismatch and on an expired server certificate; (e) the client certificate its documented enrolment issues: subjectAltName entries, extended key usage, chain sent; (f) TLS 1.3 negotiated, and the suite; (g) whether it resumes with a port49 ticket; (h) single-connection over TLS; (i) what it does on each port49 refusal (an alert at the handshake, a reset at Accept, a decline window, an ERROR for an obfuscated packet), and how fast it falls to its next server or local method, as L28 and L31 measured on 49; (j) whether it ever falls back to a non-TLS server for the same host (RFC 9887 §5.1.1 forbids it). | §13 decision 50 rulings 1, 6, 7, 10, 11; plan 12's reference device configurations for `transport: tls` | Arista EOS ≥ 4.36.1F, Cisco IOS XE ≥ 17.18.1, Cisco NX-OS ≥ 10.6(1)F, Junos ≥ 26.2R1 on routing and switching platforms, not SRX (Juniper Feature Explorer, read 2026-10-16; client certificate optional, `tls mutual-authentication`) | open — no lab image carries a client (L71); needs device images that support RFC 9887 |
+| **L74** | port49 across three simulated regions on one host: three network namespaces joined by a bridge, `tc netem` adding 20ms each way on each region's link (40ms round trip region to region); a directory etcd of three members, one per region; a session etcd, a port49-broker and a port49d in each region; a TACACS+ client on the host. (a) A login and a command answered in each region, and their reply times beside the directory's round trip. (b) A revocation made in region 1: the time until the next command of a session in region 2 and in region 3 is denied. (c) Region 3 cut from the other regions (iptables in its namespace), and so from the directory's quorum: an open session's command, and a login with a token minted before the cut, each answered; `port49 store status` in region 3, and its exit code; `port49_store_directory_reachable` and `port49_store_directory_confirmed_timestamp_seconds`. (d) During the cut, a revocation in region 1: region 3's session is still permitted. (e) During the cut, `port49 revoke` and `port49 revoke --lift` on region 3's broker: each refused, and how long each took. (f) During the cut, port49d and port49-broker restarted in region 3: each serves from region 3's directory snapshot (a session's command permitted, a token minted and logged in), and `port49 store status` says `(snapshot)`; then, with region 3's `ds/` records deleted, port49d restarted again: its listeners closed until the heal. (g) The heal: the time until region 3's session from (d) is denied, and region 3's runner line naming the revocation. (h) With auth on, the members `port49 store status` prints: whether a non-root identity's member list and per-member status answer. (i) A lift in region 1 during a cut longer than a compaction (forced with `etcdctl compact`), and whether region 3's runner puts the mark back on the heal. | §13 decision 51 (the cache, fail closed, a process with no cache, the runner's reach, `port49 store status`) | port49 on the lab host, three simulated regions | open |
+| **L75** | The TOTP used step and the unlock across three port49-broker processes on the lab host, each with a session etcd of its own and L74's directory etcd shared, and L67's OpenLDAP. (a) One person signs in with a code at broker 1; the same code, within its step, is presented at broker 2: refused. (b) The same code sent to brokers 1 and 2 at once, once per step for twenty steps: how many of each pair pass (expected one). (c) A person locked out by failures at broker 2 is unlocked at broker 1: broker 2's next sign-in is judged. (d) The attempt counts are per broker: how many failures each takes before it refuses, and the total across three (the roadmap's accepted 3×5). (e) Broker 3 cut from the directory (its link held by a proxy that stops forwarding): a password sign-in answers 503 `store_unavailable`; `port49 directory unlock` and `port49 directory reset-second-factor` are refused; how long each took. (f) Directory membership across brokers (decision 51, R13): carol's certificate mint at broker 2 pins her in the directory (the pin record's revision); `port49 directory forget` at broker 1, and broker 2's next mint pins her again (the revision moves); with broker 3 cut, a forget at broker 3 refused, carol's mint at broker 3 served from the cached pin with its line said, and bob's first mint at broker 3 refused. (g) A back-channel logout across brokers (decision 51, R26), with an in-process OIDC provider the harness runs (Keycloak's own sending, and that it does not retry a 503, are L45's): carol's ID token minted at broker 2; its session's logout token posted to broker 1; the time until broker 2 refuses that ID token (`credential_revoked`), and broker 2's runner line; with broker 3 cut, a logout posted to broker 3: answered 200, broker 3 refuses the ID token at once, `port49 store status` at broker 3 says `1 logouts pending` and exits 3, broker 1 still mints for it; after the heal, broker 3's runner forwards it and broker 1 refuses, and the time from the heal to broker 1's first refusal. These cells run on L75's host brokers, since membership needs the directory (LDAP), which the namespaces cannot reach. | §13 decision 51 (unlocks, TOTP fail-closed, membership's pin); decision 47 ruling 5 | port49 on the lab host, three brokers, OpenLDAP 2.6 | open |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
