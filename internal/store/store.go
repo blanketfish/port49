@@ -45,6 +45,12 @@ var ErrUnavailable = errors.New("store: unavailable")
 // (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
 var ErrRefused = errors.New("store: refused this identity")
 
+// ErrPinHeld is a write that would move a principal's pin to another entry:
+// refused, since only a forget frees a principal (Ruling 3). It is no
+// access-control refusal (ErrRefused): the store is fine, and the operator's
+// way out is `port49 directory forget`.
+var ErrPinHeld = errors.New("store: the principal is pinned to another entry")
+
 // UnreadableContextError is a context record the store returned and the
 // sealing layer could not open: sealed under a key that has left the two-key
 // window, or failing authentication. It is not ErrNotFound — the record is

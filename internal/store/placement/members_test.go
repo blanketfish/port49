@@ -3,6 +3,7 @@ package placement
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -399,8 +400,11 @@ func TestAHeldPinIsRefusedToAnotherEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := a.PutMembership(ctx, member("uuid:2", t0.Add(time.Minute)), time.Hour)
-	if !errors.Is(err, store.ErrRefused) {
-		t.Fatalf("%v: want ErrRefused", err)
+	if !errors.Is(err, store.ErrPinHeld) || errors.Is(err, store.ErrRefused) {
+		t.Fatalf("%v: want ErrPinHeld, which is no etcd-role refusal", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "uuid:1") || !strings.Contains(msg, "uuid:2") || !strings.Contains(msg, "forget") {
+		t.Fatalf("%q: want the held and the attempted entry, and the way out", msg)
 	}
 	if pin, _ := dir.GetMembership(ctx, alice); pin.EntryID != "uuid:1" {
 		t.Fatalf("the directory's pin moved to %q", pin.EntryID)
@@ -488,4 +492,38 @@ func TestAForgetOfALostPinRemovesTheForgettingRegionsCopy(t *testing.T) {
 // region's pin would have.
 func (p *placed) fillAbsent(principal string) {
 	p.fillPin(principal, p.genOf(principal), pinEntry{state: pinAbsent})
+}
+
+// conflicting is a directory whose pin writes always lose to another region's.
+type conflicting struct{ Members }
+
+func (conflicting) PutPin(context.Context, store.Membership, store.PinExpect) error {
+	return store.ErrConflict
+}
+
+// Three lost compares in a row say what happened, not "context changed".
+func TestAPinThatKeepsChangingSaysSo(t *testing.T) {
+	sess, dir := memory.New(clock), memory.New(clock)
+	s := Wrap(Config{Session: sess, Directory: dir, Members: conflicting{dir}, Marks: store.NewMarks(),
+		CallTimeout: time.Second, BulkTimeout: time.Second})
+	err := s.PutMembership(context.Background(), member("uuid:1", t0), time.Hour)
+	if !errors.Is(err, store.ErrUnavailable) || errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "kept changing") {
+		t.Fatalf("%v: want an unavailable that says the pin kept changing", err)
+	}
+}
+
+// A forget of a principal held nowhere leaves the tombstone in the
+// directory, the authority, and none in the session store.
+func TestAForgetOfAnAbsentPrincipalLeavesNoSessionTombstone(t *testing.T) {
+	ctx := context.Background()
+	a, _, sa, _, dir := twoRegions(nil)
+	if _, err := a.DeleteMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("the directory: %v", err)
+	}
+	if _, err := sa.GetMembership(ctx, alice); errors.Is(err, store.ErrForgotten) || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the session store: %v, want plain not found", err)
+	}
 }

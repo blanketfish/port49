@@ -34,7 +34,6 @@ type Directory interface {
 // Members is the directory store's membership half (R13): the pin, the map
 // keys, refusals and the forget's tombstone, sealed as the session store's.
 type Members interface {
-	PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error
 	PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error
 	GetMembership(ctx context.Context, principal string) (store.Membership, error)
 	MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error)
@@ -271,8 +270,8 @@ func (p *placed) PutMembership(ctx context.Context, m store.Membership, ttl time
 		case st == pinHeld && samePin(pin, m):
 			return p.Store.PutMembership(ctx, m, ttl)
 		case st == pinHeld && pin.EntryID != "" && pin.EntryID != m.EntryID:
-			return fmt.Errorf("%w: %s is pinned to entry %s, not %s; only a forget moves a pin",
-				store.ErrRefused, printsafe.Line(m.Principal, 300), printsafe.Line(pin.EntryID, 120),
+			return fmt.Errorf("%w: %s is pinned to entry %s, not %s; only `port49 directory forget` moves a pin",
+				store.ErrPinHeld, printsafe.Line(m.Principal, 300), printsafe.Line(pin.EntryID, 120),
 				printsafe.Line(m.EntryID, 120))
 		case st == pinHeld:
 			expect = store.PinExpect{Version: pin.Version}
@@ -289,8 +288,12 @@ func (p *placed) PutMembership(ctx context.Context, m store.Membership, ttl time
 			return p.Store.PutMembership(ctx, m, ttl)
 		}
 		err = p.putPin(ctx, m, expect)
-		if errors.Is(err, store.ErrConflict) && attempt < 2 {
-			continue // another region wrote the pin since the read; decide again on a fresh one
+		if errors.Is(err, store.ErrConflict) {
+			if attempt < 2 {
+				continue // another region wrote the pin since the read; decide again on a fresh one
+			}
+			return fmt.Errorf("%w: the directory pin for %s kept changing; try again", store.ErrUnavailable,
+				printsafe.Line(m.Principal, 300))
 		}
 		if err != nil {
 			return err
@@ -546,8 +549,12 @@ func (p *placed) DeleteMembership(ctx context.Context, principal string) (store.
 		return store.Membership{}, derr
 	}
 	p.dropPin(principal)
-	if local, err := p.Store.DeleteMembership(ctx, principal); err == nil {
-		return local, nil // the region's record names more than the pin
+	// This region's copy goes if it holds one; none is made for a principal
+	// it holds nothing for, since the directory's tombstone is the authority.
+	if _, gerr := p.Store.GetMembership(ctx, principal); gerr == nil {
+		if local, err := p.Store.DeleteMembership(ctx, principal); err == nil {
+			return local, nil // the region's record names more than the pin
+		}
 	}
 	return held, derr
 }
