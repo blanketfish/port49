@@ -63,6 +63,7 @@ var pools = map[string]Pool{
 
 	// store.Enrollments (plan 9e), guarded by WrapEnrollments.
 	"GetSecondFactor": Token, "SwapSecondFactor": Token, "GetEnrollmentMark": Token,
+	"GetUnlock": Token, "PutUnlock": Token,
 	"CreateEnrollmentMark": Token, "PutEnrollmentMark": Token, "SwapEnrollmentMark": Token,
 	"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk,
 }
@@ -795,6 +796,15 @@ func (e *guardedEnrollments) SwapSecondFactor(ctx context.Context, f store.Secon
 func (e *guardedEnrollments) SecondFactorPrincipals(ctx context.Context) (ps []string, err error) {
 	err = e.g.do(ctx, Bulk, func(ctx context.Context) (x error) { ps, x = e.inner.SecondFactorPrincipals(ctx); return })
 	return
+}
+
+func (e *guardedEnrollments) GetUnlock(ctx context.Context, principal string) (at time.Time, err error) {
+	err = e.g.do(ctx, Token, func(ctx context.Context) (x error) { at, x = e.inner.GetUnlock(ctx, principal); return })
+	return
+}
+
+func (e *guardedEnrollments) PutUnlock(ctx context.Context, principal string, at time.Time) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.PutUnlock(ctx, principal, at) })
 }
 
 func (e *guardedEnrollments) GetEnrollmentMark(ctx context.Context) (m store.EnrollmentMark, err error) {

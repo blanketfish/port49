@@ -55,6 +55,7 @@ const (
 	famMFAProof       = "mp/" // mp/<key>: a kept per-login proof (plan 9c), the broker's alone
 	famSecondFactor   = "sf/" // sf/<principal>: a person's second factor (plan 9e), the broker's alone
 	famSignInAttempts = "sa/" // sa/<key>: a sign-in attempt count (plan 9e), the broker's alone
+	famUnlock         = "ul/" // ul/<principal>: a person's latest unlock (plan 11a), the broker's alone
 	famMeta           = "meta/"
 )
 
@@ -108,6 +109,7 @@ func (k keys) mfaProof(key string) string  { return k.root + famMFAProof + esc(k
 
 func (k keys) secondFactor(principal string) string { return k.root + famSecondFactor + esc(principal) }
 func (k keys) signInAttempts(key string) string     { return k.root + famSignInAttempts + esc(key) }
+func (k keys) unlock(principal string) string       { return k.root + famUnlock + esc(principal) }
 
 // enrollmentMark is the enrollment store's creation mark (plan 9e, D7). It
 // is not in daemonMetaReads, so the daemon is never granted it.

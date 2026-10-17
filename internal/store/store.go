@@ -1127,6 +1127,15 @@ type Enrollments interface {
 	// there); ErrConflict otherwise, and nothing is written. No lease.
 	SwapSecondFactor(ctx context.Context, f SecondFactor, rev uint64) error
 	SecondFactorPrincipals(ctx context.Context) ([]string, error)
+	// GetUnlock is when an operator last cleared principal's failed
+	// sign-ins (port49 directory unlock; plan 11a, R15), or ErrNotFound. A
+	// principal and a time: no secret, kept in the clear.
+	GetUnlock(ctx context.Context, principal string) (time.Time, error)
+	// PutUnlock records an unlock of principal at at, or a nanosecond after
+	// the unlock standing when at is not later: every unlock advances the
+	// record, whatever the writer's clock (plan 11a, R15). An empty principal
+	// is ErrNoPrincipal and a zero at ErrBadUnlock.
+	PutUnlock(ctx context.Context, principal string, at time.Time) error
 	GetEnrollmentMark(ctx context.Context) (EnrollmentMark, error) // ErrNotFound when none
 	// CreateEnrollmentMark writes m only where the store has no mark, no
 	// record and (the file) no file, lost or not; ErrConflict otherwise,
@@ -1363,6 +1372,9 @@ var ErrNoKey = errors.New("store: a record with no key")
 
 // ErrNoPrincipal is an owner written with no principal.
 var ErrNoPrincipal = errors.New("store: an owner record with no principal")
+
+// ErrBadUnlock is an unlock written with no time.
+var ErrBadUnlock = errors.New("store: an unlock needs its time")
 
 // ErrBadTTL is a record written with a life of zero or less.
 var ErrBadTTL = errors.New("store: a record with no life")

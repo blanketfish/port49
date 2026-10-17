@@ -383,3 +383,61 @@ func (s *Store) Import(ctx context.Context, raw []byte, replace bool) (int, time
 	}
 	return len(b.SecondFactors), b.ExportedAt, nil
 }
+
+// unlockRec is ul/<principal> (plan 11a, R15): when an operator last
+// cleared the person's failed sign-ins.
+type unlockRec struct {
+	At time.Time `json:"at"`
+}
+
+func (s *Store) GetUnlock(ctx context.Context, principal string) (time.Time, error) {
+	var r unlockRec
+	_, ok, err := getJSONAs(ctx, s.tok, s.k.unlock(principal), "unlock", &r)
+	switch {
+	case err != nil:
+		return time.Time{}, err
+	case !ok:
+		return time.Time{}, store.ErrNotFound
+	}
+	return r.At, nil
+}
+
+// PutUnlock advances the unlock by a compare on the key's revision (its
+// absence for none), reading again when another write came between: at, or
+// a nanosecond after the standing one when at is not later. No lease: an
+// unlock is a few bytes per person ever unlocked.
+func (s *Store) PutUnlock(ctx context.Context, principal string, at time.Time) error {
+	switch {
+	case principal == "":
+		return store.ErrNoPrincipal
+	case at.IsZero():
+		return store.ErrBadUnlock
+	}
+	key := s.k.unlock(principal)
+	for {
+		var r unlockRec
+		mod, ok, err := getJSONAs(ctx, s.tok, key, "unlock", &r)
+		if err != nil {
+			return err
+		}
+		next := at
+		if ok && !at.After(r.At) {
+			next = r.At.Add(time.Nanosecond)
+		}
+		body, err := json.Marshal(unlockRec{At: next.UTC()})
+		if err != nil {
+			return err
+		}
+		cmp := unchanged(key, mod)
+		if !ok {
+			cmp = clientv3.Compare(clientv3.CreateRevision(key), "=", 0)
+		}
+		resp, err := s.tok.Txn(ctx).If(cmp).Then(clientv3.OpPut(key, string(body))).Commit()
+		if err != nil {
+			return unavailable(err)
+		}
+		if resp.Succeeded {
+			return nil
+		}
+	}
+}

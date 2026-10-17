@@ -393,6 +393,22 @@ func (l *lateEnrollments) SecondFactorPrincipals(ctx context.Context) ([]string,
 	return in.SecondFactorPrincipals(ctx)
 }
 
+func (l *lateEnrollments) GetUnlock(ctx context.Context, principal string) (time.Time, error) {
+	in, err := l.get()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return in.GetUnlock(ctx, principal)
+}
+
+func (l *lateEnrollments) PutUnlock(ctx context.Context, principal string, at time.Time) error {
+	in, err := l.getFresh()
+	if err != nil {
+		return err
+	}
+	return in.PutUnlock(ctx, principal, at)
+}
+
 func (l *lateEnrollments) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, error) {
 	in, err := l.get()
 	if err != nil {

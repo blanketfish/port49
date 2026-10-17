@@ -45,7 +45,7 @@ var (
 		famBySid, famByCert, famBlob}
 	daemonReads = []string{famMark, famLedger}
 	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded, famMembership, famMembershipK,
-		famOnce, famOIDCOwner, famLogout, famMFAProof, famSecondFactor, famSignInAttempts}
+		famOnce, famOIDCOwner, famLogout, famMFAProof, famSecondFactor, famSignInAttempts, famUnlock}
 	// daemonMetaReads are the keys of meta/ port49d's code reads, each
 	// granted by itself: seal_keys at a start, witness and purged by the
 	// restore guard, judged_bundle by the skew gauge (the bundle's name
@@ -157,6 +157,8 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		{"writing " + s.k.family(famSecondFactor), func() error { return write(famSecondFactor) }},
 		{"reading " + s.k.family(famSignInAttempts), func() error { return read(famSignInAttempts) }},
 		{"writing " + s.k.family(famSignInAttempts), func() error { return write(famSignInAttempts) }},
+		{"reading " + s.k.family(famUnlock), func() error { return read(famUnlock) }},
+		{"writing " + s.k.family(famUnlock), func() error { return write(famUnlock) }},
 		{"writing " + s.k.family(famLedger), func() error { return write(famLedger) }},
 		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
 		{"reading " + s.k.meta("judged"), func() error {

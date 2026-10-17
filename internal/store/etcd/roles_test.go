@@ -454,3 +454,21 @@ func waitRevision(t *testing.T, ch <-chan uint64, want uint64) uint64 {
 		}
 	}
 }
+
+// An unlock is the broker's: the daemon's role neither reads nor writes
+// ul/ (plan 11a, R23).
+func TestTheDaemonCannotReachAnUnlock(t *testing.T) {
+	const prefix = "/port49/"
+	srv := provisioned(t, prefix)
+	ctx := context.Background()
+	d, b := openAs(t, srv, "port49-daemon", prefix), openAs(t, srv, "port49-broker", prefix)
+	if err := b.PutUnlock(ctx, "user:alice@example.com", t0); err != nil {
+		t.Fatalf("the broker unlocks: %v", err)
+	}
+	if _, err := d.GetUnlock(ctx, "user:alice@example.com"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the daemon read an unlock: %v", err)
+	}
+	if err := d.PutUnlock(ctx, "user:alice@example.com", t0.Add(time.Hour)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the daemon wrote an unlock: %v", err)
+	}
+}
