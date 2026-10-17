@@ -689,8 +689,14 @@ func (e *l73Env) helpProbe() bool {
 					}
 					if _, rerr := c.sendExpect(ln, 30*time.Second, mark); rerr != nil {
 						dirty = true
-						err = l71Wrap("INVALID: could not return to the configuration top level before the cleanup; "+
+						recovery := l71Wrap("INVALID: could not return to the configuration top level before the cleanup; "+
 							"check the device for a `tacacs server l71probe` object", rerr)
+						if err != nil {
+							// The first failure is the finding; the recovery's is what it left behind.
+							err = fmt.Errorf("%s; recovery: %s", l73Err(err), l73Err(recovery))
+						} else {
+							err = recovery
+						}
 						return
 					}
 				}
@@ -917,7 +923,10 @@ func (e *l73Env) requestJunos() ([]byte, string) {
 		}
 		out, err := c.sendExpect("file show "+l73CSRPath, 60*time.Second, junosOpPrompt)
 		screen = out
-		return err
+		if err != nil {
+			return errors.New(l73Err(err))
+		}
+		return nil
 	})
 	csrPEM, err := l73PEMBlock(screen, "CERTIFICATE REQUEST")
 	if err != nil {
@@ -1026,20 +1035,23 @@ func (e *l73Env) loadCisco() {
 // fail every cell for a reason that has nothing to do with TLS.
 func (e *l73Env) confirmNXOSTrust() {
 	e.t.Helper()
-	for _, tp := range []struct {
+	tps := []struct {
 		name string
 		ca   l73Cert
-	}{{l73RootProfile, e.pki.Root}, {l73CertID, e.pki.Inter}} {
-		var screen string
-		var rerr error
-		e.cli(func(c *cliConn) error {
-			screen, rerr = c.sendExpect("show crypto ca certificates "+tp.name, 60*time.Second, c.prompt)
-			return nil
-		})
-		if rerr != nil || !l73ScreenHasCert(screen, tp.ca.Cert) {
-			e.invalidScreen("trust-"+tp.name, screen)
+	}{{l73RootProfile, e.pki.Root}, {l73CertID, e.pki.Inter}}
+	screens := make([]string, len(tps))
+	errs := make([]error, len(tps))
+	e.cli(func(c *cliConn) error {
+		for i, tp := range tps {
+			screens[i], errs[i] = c.sendExpect("show crypto ca certificates "+tp.name, 60*time.Second, c.prompt)
+		}
+		return nil
+	})
+	for i, tp := range tps {
+		if errs[i] != nil || !l73ScreenHasCert(screens[i], tp.ca.Cert) {
+			e.invalidScreen("trust-"+tp.name, screens[i])
 			e.t.Fatalf("INVALID: trustpoint %s does not hold this run's CA (its fingerprint is not on `show crypto ca certificates %s`; %s): "+
-				"an earlier run's CA is probably still imported", tp.name, tp.name, l73Err(rerr))
+				"an earlier run's CA is probably still imported", tp.name, tp.name, l73Err(errs[i]))
 		}
 	}
 }
