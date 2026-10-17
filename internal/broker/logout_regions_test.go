@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -51,4 +52,26 @@ func TestReachLogoutRefusesAKeyItCannotReach(t *testing.T) {
 		t.Fatal("a refused key marked a context")
 	}
 	_ = iss
+}
+
+// ownerDown fails the owner lookup a reach starts from.
+type ownerDown struct{ store.Store }
+
+func (ownerDown) OIDCOwner(context.Context, string) (store.OIDCOwner, error) {
+	return store.OIDCOwner{}, store.ErrUnavailable
+}
+
+// Fail closed: a store error during the reach is returned, not swallowed as
+// "done", and nothing is reported reached.
+func TestReachLogoutReturnsAStoreErrorDuringTheReach(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	f.b.Store = ownerDown{f.st}
+	rep, err := f.b.ReachLogout(context.Background(), store.Logout{
+		Key: store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice"), At: f.now})
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(rep.Err, store.ErrUnavailable) {
+		t.Fatalf("err %v, rep.Err %v", err, rep.Err)
+	}
+	if len(rep.Contexts) != 0 || len(rep.Principals) != 0 {
+		t.Fatalf("a failed reach reported %+v", rep)
+	}
 }
