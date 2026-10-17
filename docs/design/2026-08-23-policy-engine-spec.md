@@ -10354,8 +10354,9 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   as with a broker.
 - **19. The lab.** Vendor documentation (read 2026-10-16) puts RFC 9887 clients in Arista EOS
   4.36.1F (Arista TOI "TACACS+ over TLS", EOS-4.36.1F), Cisco IOS XE 17.18.1 (Cisco document
-  225097), Cisco NX-OS 10.6(1)F on Nexus 9000 (Cisco document 224882) and Junos (Juniper
-  "TACACS+ over TLS overview", release not stated). Every lab image predates these:
+  225097), Cisco NX-OS 10.6(1)F on Nexus 9000 (Cisco document 224882) and Junos 26.2R1 on
+  routing and switching platforms, not SRX (Juniper "TACACS+ over TLS overview" and Feature
+  Explorer; per Juniper documentation, unmeasured until L73 closes). Every lab image predates these:
   - vEOS-lab 4.31.2F (tagged 4.32.2F);
   - Catalyst 8000V 17.13.01a;
   - Nexus 9300v 10.4(2)F;
