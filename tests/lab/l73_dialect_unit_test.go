@@ -1,0 +1,309 @@
+package lab
+
+import (
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
+)
+
+// Each dialect's first ask is L71's own question, entered and left the way
+// L71 enters and leaves it, so the addendum answers L71's question and not
+// a neighbour of it.
+func TestL73DialectsAskL71sQuestionFirst(t *testing.T) {
+	for name, d := range l73Dialects {
+		p, ok := l71Probes[d.Probe]
+		if !ok {
+			t.Errorf("%s: probe %q is not in l71Probes", name, d.Probe)
+			continue
+		}
+		if len(d.Asks) == 0 || !slices.Contains(p.ask, d.Asks[0].Ask) {
+			t.Errorf("%s: first ask %+v is not L71's question", name, d.Asks)
+		}
+		// L71's client words are each looked for by some ask, so the verdict
+		// that the image has a client and the keywords typed agree.
+		for _, y := range p.yes {
+			if !slices.ContainsFunc(d.Asks, func(a l73Ask) bool { return slices.Contains(a.Need, y) || slices.Contains(a.Want, y) }) {
+				t.Errorf("%s: L71's client word %q is asked by no ask", name, y)
+			}
+		}
+		if !slices.Equal(d.Enter, p.enter) || !slices.Equal(d.Cleanup, p.cleanup) || d.CfgMark == "" {
+			t.Errorf("%s: enter %q cleanup %q, L71's %q %q", name, d.Enter, d.Cleanup, p.enter, p.cleanup)
+		}
+		if !d.HelpOnly && (d.VersionCmd == "" || d.VersionHas == "" || d.LogCmd == "" || len(d.ShowCmds) == 0 ||
+			d.Enrol == "" || d.Fallback == "" || d.Revocation == "") {
+			t.Errorf("%s: a measured dialect with an empty field: %+v", name, d)
+		}
+		for _, a := range d.Asks {
+			if a.Only != "" && !slices.ContainsFunc(d.Asks, func(b l73Ask) bool {
+				return slices.Contains(b.Need, a.Only) || slices.Contains(b.Want, a.Only)
+			}) {
+				t.Errorf("%s: %q is asked only after %q, which no ask looks for", name, a.Ask, a.Only)
+			}
+		}
+	}
+}
+
+// Every keyword the Cisco lines type is one some ask needs, or one an ask
+// wants that the lines type only when it was listed.
+func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
+	for _, tc := range []struct {
+		family string
+		words  []string
+	}{
+		{"iosxe", []string{"tls", "port", "trustpoint", "client", "ip", "vrf", "tacacs", "single-connection", "address", "key"}},
+		{"nxos", []string{"tls", "port", "single-connection", "client-trustpoint", "host"}},
+		{"eos", []string{"ssl-profile", "port", "single-connection"}},
+	} {
+		need := map[string]bool{}
+		for _, d := range l73Dialects {
+			if d.Family == tc.family {
+				for _, a := range d.Asks {
+					for _, w := range a.Need {
+						need[w] = true
+					}
+				}
+			}
+		}
+		for _, w := range tc.words {
+			if !need[w] {
+				t.Errorf("%s: %s is typed and never asked about", tc.family, w)
+			}
+		}
+	}
+}
+
+func TestL73IOSXELines(t *testing.T) {
+	got := l73CiscoLines("iosxe", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
+	want := []string{
+		"tacacs server l73-tls", "address ipv4 172.100.100.1", "tls trustpoint client l73-dev",
+		"tls ip vrf forwarding clab-mgmt", "tls ip tacacs source-interface GigabitEthernet1", "exit",
+		"aaa group server tacacs+ port49", "no server name port49-host", "server name l73-tls", "exit",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
+	}
+	prev := l73DeviceTLS{Server: "172.100.100.1"}
+	got = l73CiscoLines("iosxe", &prev, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
+		Second: "172.100.100.2"}, map[string]bool{"server": true})
+	for _, line := range []string{"no tacacs server l73-tls", "tls port 300", "single-connection",
+		"tls trustpoint server l73-root", "tacacs server l73-second", "key 0 " + labcreds.Key, "server name l73-second"} {
+		if !slices.Contains(got, line) {
+			t.Errorf("missing %q", maskKey(line))
+		}
+	}
+	// The undo comes first, whole, before anything of the new cell.
+	if i, j := slices.Index(got, "no tacacs server l73-tls"), slices.Index(got, "tls port 300"); i < 0 || j < i {
+		t.Errorf("undo at %d, new lines at %d", i, j)
+	}
+}
+
+func TestL73NXOSLines(t *testing.T) {
+	got := l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300}, map[string]bool{"secure": true})
+	want := []string{
+		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
+		"tacacs-server secure tls",
+		"tacacs-server host 172.100.100.1 port 300", "tacacs-server host 172.100.100.1 tls client-trustpoint l73-dev",
+		"aaa group server tacacs+ port49", "server 172.100.100.1", "exit",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
+	}
+	got = l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}, nil)
+	if slices.Contains(got, "tacacs-server secure tls") || !slices.Contains(got, "tacacs-server host 172.100.100.2 key 0 "+labcreds.Key) ||
+		slices.Contains(got, "tacacs-server host 172.100.100.2 tls client-trustpoint l73-dev") {
+		t.Fatalf("%q", maskKey(strings.Join(got, "\n")))
+	}
+}
+
+func TestL73EOSLines(t *testing.T) {
+	got := l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
+	want := []string{
+		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
+		"tacacs-server host 172.100.100.1 ssl-profile l73-tls",
+		"aaa group server tacacs+ port49", "server 172.100.100.1", "exit",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
+	}
+	got = l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
+		Second: "172.100.100.2"}, map[string]bool{"secure": true})
+	for _, line := range []string{"tacacs-server host 172.100.100.1 single-connection port 300 ssl-profile l73-tls",
+		"tacacs-server host 172.100.100.2 key 0 " + labcreds.Key, "server 172.100.100.2"} {
+		if !slices.Contains(got, line) {
+			t.Errorf("missing %q", maskKey(line))
+		}
+	}
+	if slices.Contains(got, "tacacs-server secure tls") || slices.Contains(l73CiscoRestoreAll("eos", map[string]bool{"secure": true}), "no tacacs-server secure tls") {
+		t.Fatal("an NX-OS keyword typed on EOS")
+	}
+	_, csr, load, profile := l73EOSEnrol("leaf1")
+	if !strings.Contains(csr, "common-name leaf1") || len(load) != 3 || profile[0] != "management security" ||
+		!slices.Contains(profile, "ssl profile l73-tls") || !slices.Contains(profile, "chain certificate l73-inter.crt") {
+		t.Fatalf("%q %q %q", csr, load, profile) // public names only
+	}
+}
+
+// The undo ends in the startup config's own lines, read from the files, so
+// a renamed server or group in a startup config fails here and not on the
+// device.
+func TestL73CiscoUndoIsTheStartupConfig(t *testing.T) {
+	for _, tc := range []struct{ family, file string }{
+		{"iosxe", "configs/iosxe-startup.cfg"}, {"nxos", "configs/nxos-startup.cfg"}, {"eos", "configs/eos-startup.cfg"},
+	} {
+		b, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		startup := map[string]bool{}
+		for _, ln := range strings.Split(string(b), "\n") {
+			startup[strings.TrimSpace(ln)] = true
+		}
+		has := map[string]bool{"secure": true}
+		undo := l73CiscoRestoreAll(tc.family, has)
+		for _, ln := range undo {
+			if strings.HasPrefix(ln, "no ") || ln == "exit" {
+				continue
+			}
+			if !startup[ln] {
+				t.Errorf("%s: the undo types %q, which %s does not hold", tc.family, maskKey(ln), tc.file)
+			}
+		}
+		apply := l73CiscoLines(tc.family, nil, l73DeviceTLS{Server: l73Server, Second: l73SecondServer, SecondTLS: true}, has)
+		for _, ln := range apply {
+			if strings.HasPrefix(ln, "tacacs server ") && !slices.Contains(undo, "no "+ln) {
+				t.Errorf("%s: %q is never removed", tc.family, maskKey(ln))
+			}
+			if strings.HasPrefix(ln, "tacacs-server host ") && !slices.Contains(undo, "no "+strings.Join(strings.Fields(ln)[:3], " ")) {
+				t.Errorf("%s: %q is never removed", tc.family, maskKey(ln))
+			}
+			if ln == "tacacs-server secure tls" && !slices.Contains(undo, "no tacacs-server secure tls") {
+				t.Errorf("%s: secure tls is never removed", tc.family)
+			}
+		}
+	}
+}
+
+func TestL73NextAnswer(t *testing.T) {
+	steps := []l73Step{{"serial number", "no"}, {"IP address", "no"}}
+	used := []bool{false, false}
+	if _, ok := l73NextAnswer("% Start certificate enrollment ..\r\n", steps, used, "xe1("); ok {
+		t.Fatal("an answer before any question")
+	}
+	tail := "% Include an IP address in the subject name? [no]: and the serial number in the subject name? "
+	if n, ok := l73NextAnswer(tail, steps, used, "xe1("); !ok || n != 1 {
+		t.Fatalf("%d %v: the earliest question is the IP address one", n, ok)
+	}
+	used[1] = true
+	if n, ok := l73NextAnswer(tail, steps, used, "xe1("); !ok || n != 0 {
+		t.Fatalf("%d %v: an answered question chosen again", n, ok)
+	}
+	if n, ok := l73NextAnswer("done\r\nxe1(config)#", steps, used, "xe1("); !ok || n != -1 {
+		t.Fatalf("%d %v: the prompt not read as the end", n, ok)
+	}
+	if n, ok := l73NextAnswer("xe1(config)# serial number", steps, []bool{false, false}, "xe1("); !ok || n != -1 {
+		t.Fatalf("%d %v: a question after the prompt chosen over it", n, ok)
+	}
+}
+
+func TestL73Expand(t *testing.T) {
+	got := l73Expand("{ROOT}{INTER}quit", map[string]string{"ROOT": "R\n", "INTER": "I\n"})
+	if got != "R\nI\nquit" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// No reply names a placeholder l73Expand does not fill, and no reply is a
+// secret: the dialogues type public certificates, names and yes or no.
+func TestL73DialogsUseKnownPlaceholders(t *testing.T) {
+	ph := regexp.MustCompile(`\{[A-Z]+\}`)
+	for _, family := range []string{"iosxe", "nxos"} {
+		prep, enroll, load := l73CiscoEnrol(family, "xe1")
+		for _, d := range append(append(prep, enroll), load) {
+			for _, s := range d.Steps {
+				for _, m := range ph.FindAllString(s.Reply, -1) {
+					if !slices.Contains([]string{"{ROOT}", "{INTER}", "{LEAF}", "{NODE}", "{ADDR}"}, m) {
+						t.Errorf("%s %q: unknown placeholder %s", family, d.Cmd, m)
+					}
+				}
+				if strings.Contains(s.Reply, labcreds.Key) || strings.Contains(s.Reply, "breakglass") {
+					t.Errorf("%s %q: a reply carries a secret", family, d.Cmd)
+				}
+			}
+		}
+		if enroll.Done == "" {
+			t.Errorf("%s: the enrolment has no Done marker", family)
+		}
+	}
+}
+
+func TestL73Refusal(t *testing.T) {
+	if got := l73Refusal("tls port 300\r\n          ^\r\n% Invalid input detected at '^' marker.\r\n"); got != "% Invalid input detected at '^' marker." {
+		t.Fatalf("%q", got)
+	}
+	if got := l73Refusal("xe1(config-server-tacacs)#"); got != "" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// maskKey keeps the lab's shared secret out of a failure message.
+func maskKey(s string) string { return strings.ReplaceAll(s, labcreds.Key, "<key>") }
+
+// Every config word a dialect types is asked about by an ask at the level it
+// is typed, so a renamed keyword is an INVALID run at the probe and not a
+// refused line half way through a cell. Words that are values (names,
+// addresses, numbers) are not keywords. The staleness check keeps the lists
+// below honest: each word is in a line the dialect really types.
+func TestL73AsksCoverEveryTypedWordAtItsLevel(t *testing.T) {
+	has := map[string]bool{"secure": true, "server": true, "server-trustpoint": true}
+	d := l73DeviceTLS{Server: l73Server, Port: l73TLSPort, SingleConnection: true, Secret: true,
+		Second: l73SecondServer, SecondTLS: true, SecondPort: l73TLSPort}
+	plain := l73DeviceTLS{Server: l73Server, Second: l73SecondServer, SecondPort: 49}
+	for _, tc := range []struct {
+		platform, family string
+		typed            map[string][]string
+	}{
+		{"cisco_iosxe", "iosxe", map[string][]string{
+			"":                {"tls", "address", "single-connection", "key", "port"},
+			"address ":        {"ipv4"},
+			"tls ":            {"port", "trustpoint", "ip"},
+			"tls trustpoint ": {"client", "server"},
+			"tls ip ":         {"vrf", "tacacs"},
+			"tls ip vrf ":     {"forwarding"},
+			"tls ip tacacs ":  {"source-interface"},
+		}},
+		{"cisco_nxos", "nxos", map[string][]string{
+			"tacacs-server host 192.0.2.71 ":     {"tls", "port", "single-connection", "key"},
+			"tacacs-server ":                     {"host", "secure"},
+			"tacacs-server secure ":              {"tls"},
+			"tacacs-server host 192.0.2.71 tls ": {"client-trustpoint", "server-trustpoint"},
+		}},
+		{"arista_ceos", "eos", map[string][]string{
+			"tacacs-server host 192.0.2.71 ": {"ssl-profile", "port", "single-connection", "key"},
+		}},
+	} {
+		asked := map[string][]string{}
+		for _, a := range l73Dialects[tc.platform].Asks {
+			asked[a.Ask] = append(append(asked[a.Ask], a.Need...), a.Want...)
+		}
+		var typed []string
+		for _, dev := range []l73DeviceTLS{d, plain} {
+			for _, ln := range l73CiscoLines(tc.family, nil, dev, has) {
+				typed = append(typed, strings.Fields(ln)...)
+			}
+		}
+		for level, words := range tc.typed {
+			for _, w := range words {
+				if !slices.Contains(asked[level], w) {
+					t.Errorf("%s: %s is typed at %q and never asked about there", tc.family, w, level)
+				}
+				if !slices.Contains(typed, w) {
+					t.Errorf("%s: %s is listed at %q but no line types it", tc.family, w, level)
+				}
+			}
+		}
+	}
+}

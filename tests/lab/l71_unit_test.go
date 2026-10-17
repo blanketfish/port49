@@ -7,7 +7,7 @@ import (
 )
 
 func TestL71ProbesEveryPlatform(t *testing.T) {
-	for _, p := range []string{"arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_vjunos-router", "juniper_vsrx"} {
+	for _, p := range []string{"arista_eos", "cisco_iosxe", "cisco_nxos", "arista_ceos", "cisco_iol-xe", "cisco_xrd", "juniper_vjunos-router", "juniper_vsrx"} {
 		pr, ok := l71Probes[p]
 		if !ok || len(pr.ask) == 0 || len(pr.yes) == 0 || len(pr.cleanup) == 0 ||
 			len(pr.control) == 0 || pr.snapshot == "" || pr.cfgMark == "" {
