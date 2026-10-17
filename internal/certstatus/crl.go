@@ -314,13 +314,26 @@ func namesOne(have, want [][]byte) bool {
 	return false
 }
 
+// errSourceReplaced is install's refusal of a list fetched for a source that
+// SetCRLSources has since replaced; load does not count it a failure.
+var errSourceReplaced = errors.New("its source was replaced while it was fetched")
+
 // install puts a verified list in force for its source when it is not
 // older than the last good one, persists it, and reports its new entries.
 // It is the one place a list is put in force.
 func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 	c.mu.Lock()
+	// A load that began before SetCRLSources replaced its source finishes
+	// against the issuer it started with; its list must not come back.
+	if i := slices.IndexFunc(c.cfg.CRLs, func(s CRLSource) bool { return s.Name == src.Name }); i >= 0 &&
+		!bytes.Equal(c.cfg.CRLs[i].Issuer.Raw, src.Issuer.Raw) {
+		c.mu.Unlock()
+		return errSourceReplaced
+	}
 	prev := c.crls[src.Name]
-	if prev != nil {
+	// A rollback is a list older than another of the same issuer; a new
+	// CA's numbers and dates start where they like.
+	if prev != nil && bytes.Equal(prev.issuer.Raw, l.issuer.Raw) {
 		older := l.list.ThisUpdate.Before(prev.list.ThisUpdate)
 		if prev.list.Number != nil && l.list.Number != nil {
 			older = l.list.Number.Cmp(prev.list.Number) < 0 ||
@@ -381,6 +394,9 @@ func (c *Checker) load(ctx context.Context, src CRLSource) error {
 		if err = c.install(src, l, true); err == nil {
 			c.loaded(src, l, prev == nil || !c.now().Before(c.nextUpdate(prev)))
 		}
+	}
+	if errors.Is(err, errSourceReplaced) {
+		return nil // the replacement source is fetched on its own
 	}
 	if err != nil {
 		c.m.CRLLoads.WithLabelValues(c.component(), src.Name, "refused").Inc()
@@ -514,16 +530,25 @@ func (c *Checker) sources() []CRLSource {
 
 // SetCRLSources replaces the CRL sources, as the trust set they were
 // verified against changed (a CA rotation, spec §13 decision 50 ruling 15).
-// A list in force whose source is gone, or whose issuer certificate is no
-// longer the source's, is dropped: it was verified against a certificate
-// the source no longer names. Run fetches the changed sources at once.
+// A list in force whose source is gone is dropped, and so is one that does
+// not verify against the source's issuer certificate now (a renewed CA
+// certificate with the same key still verifies it, and keeps it). Run fetches the changed sources at once.
 func (c *Checker) SetCRLSources(srcs []CRLSource) {
 	c.mu.Lock()
 	c.cfg.CRLs = slices.Clone(srcs)
 	for name, l := range c.crls {
 		i := slices.IndexFunc(srcs, func(s CRLSource) bool { return s.Name == name })
-		if i < 0 || !bytes.Equal(srcs[i].Issuer.Raw, l.issuer.Raw) {
+		switch {
+		case i < 0:
 			delete(c.crls, name)
+		case !bytes.Equal(srcs[i].Issuer.Raw, l.issuer.Raw):
+			// A CA renewed with its key and name still signs the list in
+			// force: keep it if it verifies against the new certificate.
+			if nl, err := c.accept(srcs[i], l.list.Raw); err == nil {
+				c.crls[name] = nl
+			} else {
+				delete(c.crls, name)
+			}
 		}
 	}
 	c.mu.Unlock()
