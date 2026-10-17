@@ -59,16 +59,35 @@ func (s *LogoutSet) Get(key string) (Logout, bool) {
 	return e.Logout, true
 }
 
-// Replace makes the set es: a load. It returns the entries it did not hold
+// Merge is a load: each entry of es is put as Put does, each live entry
+// the load lacks is kept, and each lapsed one is dropped. A load is a snapshot
+// that a concurrent Put (an ingestion, a forward) may have outrun, and
+// a logout must never be erased by one (fail closed); the cost is a logout
+// lingering until its own Until. It returns the entries it did not hold
 // before, by key and At, for the runner to reach (I4).
-func (s *LogoutSet) Replace(es []LogoutEntry) []LogoutEntry {
+func (s *LogoutSet) Merge(es []LogoutEntry) []LogoutEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	m := make(map[string]LogoutEntry, len(s.m)+len(es))
+	for k, e := range s.m {
+		if now.Before(e.Until) {
+			m[k] = e
+		}
+	}
 	var fresh []LogoutEntry
-	m := make(map[string]LogoutEntry, len(es))
 	for _, e := range es {
-		if cur, ok := s.m[e.Key]; !ok || !cur.At.Equal(e.At) {
+		cur, ok := m[e.Key]
+		if !ok || !cur.At.Equal(e.At) {
 			fresh = append(fresh, e)
+		}
+		if ok {
+			if cur.At.After(e.At) {
+				e.At, e.Origin = cur.At, cur.Origin
+			}
+			if cur.Until.After(e.Until) {
+				e.Until = cur.Until
+			}
 		}
 		m[e.Key] = e
 	}
@@ -120,7 +139,7 @@ func FollowLogouts(ctx context.Context, feed LogoutFeed, set *LogoutSet, from ui
 			var rev uint64
 			var es []LogoutEntry
 			if rev, es, err = feed.Logouts(ctx); err == nil {
-				fresh := set.Replace(es)
+				fresh := set.Merge(es)
 				from = max(rev, 1)
 				for _, e := range fresh {
 					if on != nil {

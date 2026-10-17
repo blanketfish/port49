@@ -140,3 +140,25 @@ func TestAForwardedLogoutIsNotForwardedAgain(t *testing.T) {
 		t.Fatalf("this region stopped refusing after the forward: %v", err)
 	}
 }
+
+// Review I1: a compaction reload from a snapshot taken before an ingestion
+// must not erase the logout, or a new cut would let this region accept the
+// session (the session store holds no pending copy once the directory took it).
+func TestAReloadFromAStaleSnapshotStillRefuses(t *testing.T) {
+	ctx := context.Background()
+	reach := true
+	sa, dir := memory.New(clock), memory.New(clock)
+	set := store.NewLogoutSet(clock)
+	a := Wrap(Config{Session: sa, Directory: dir, Marks: store.NewMarks(), Logouts: set, LogoutDir: dir,
+		Reachable: func() bool { return reach }, CallTimeout: time.Second, BulkTimeout: time.Second})
+	stale := set.All() // FollowLogouts' load, taken before the logout
+	l := store.Logout{Key: store.SidKey("https://idp", "s1"), At: t0, Origin: "backchannel_logout https://idp"}
+	if err := a.PutLogout(ctx, l, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	set.Merge(stale) // the stale load lands
+	reach = false    // a new cut, before the watch delivers the logout
+	if _, err := a.GetLogout(ctx, l.Key); err != nil {
+		t.Fatalf("the region that took the logout accepts the session: %v", err)
+	}
+}

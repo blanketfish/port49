@@ -23,11 +23,11 @@ func TestLogoutSetKeepsTheLaterAndExpires(t *testing.T) {
 	if _, ok := s.Get("sid 1:i 1:s"); ok {
 		t.Fatal("an expired logout is still served")
 	}
-	fresh := s.Replace([]LogoutEntry{{Logout: Logout{Key: "sub 1:i 1:u", At: now}, Until: now.Add(time.Hour)}})
+	fresh := s.Merge([]LogoutEntry{{Logout: Logout{Key: "sub 1:i 1:u", At: now}, Until: now.Add(time.Hour)}})
 	if s.Len() != 1 || len(fresh) != 1 || len(s.All()) != 1 {
-		t.Fatalf("Replace left %d, told %d new", s.Len(), len(fresh))
+		t.Fatalf("Merge left %d, told %d new", s.Len(), len(fresh))
 	}
-	if again := s.Replace(s.All()); len(again) != 0 {
+	if again := s.Merge(s.All()); len(again) != 0 {
 		t.Fatalf("a load of what the set holds told %d as new", len(again))
 	}
 	s.Delete("sub 1:i 1:u")
@@ -90,5 +90,24 @@ func TestFollowLogoutsLoadsThenTellsEachPut(t *testing.T) {
 	}
 	if _, ok := set.Get("k2"); !ok {
 		t.Fatal("the delivered logout is not in the set")
+	}
+}
+
+// A load is a snapshot a concurrent Put may have outrun: the logout it lacks
+// stays (fail closed), and one that has lapsed goes.
+func TestLogoutSetMergeNeverErasesALiveLogout(t *testing.T) {
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	s := NewLogoutSet(func() time.Time { return now })
+	stale := s.All() // the snapshot, taken before the logout below
+	s.Put(LogoutEntry{Logout: Logout{Key: "sid 1:i 1:s", At: now}, Until: now.Add(time.Hour)})
+	s.Put(LogoutEntry{Logout: Logout{Key: "sid 1:i 1:old", At: now}, Until: now.Add(time.Minute)})
+	s.Merge(stale)
+	if _, ok := s.Get("sid 1:i 1:s"); !ok {
+		t.Fatal("a load from before a logout erased it")
+	}
+	now = now.Add(2 * time.Minute)
+	s.Merge(stale)
+	if s.Len() != 1 {
+		t.Fatalf("a lapsed logout survived the reload: %d held", s.Len())
 	}
 }
