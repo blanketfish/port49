@@ -259,6 +259,18 @@ func TestL73MetricValue(t *testing.T) {
 	}
 }
 
+// A selector matches its own line only: not a longer name, and not a value
+// glued on with no separator.
+func TestL73MetricValueSelectorIsNotAPrefix(t *testing.T) {
+	exp := "port49_x_total_extra{a=\"b\"} 9\nport49_x_totalfoo 8\nport49_x_total{a=\"b\"}7\nport49_x_total{a=\"b\"} 4\n"
+	if v := l73MetricValue(exp, `port49_x_total{a="b"}`); v != 4 {
+		t.Fatal(v)
+	}
+	if v := l73MetricValue("port49_x_total{a=\"b\"}7\n", `port49_x_total{a="b"}`); v != 0 {
+		t.Fatal(v)
+	}
+}
+
 func TestL73ScrubLog(t *testing.T) {
 	in := "Oct 17 tacplus: TLS handshake failed: bad certificate\n" +
 		"Oct 17 secret \"$9$abc\"\nOct 17 token eyJhbGciOi\n" +
