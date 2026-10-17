@@ -109,9 +109,9 @@ func (s *conn) refusedAdmission(h wire.Header) {
 }
 
 // readmitted asks admission in force about this connection's source at the
-// time of this packet, so a reload that refuses, removes, renames, re-keys or
-// re-platforms or re-transports the device ends its open connections rather than leaving them
-// on the admission they began with: a busy single-connect connection resets
+// time of this packet, so a reload that refuses, removes, renames, re-keys,
+// re-platforms or re-transports the device ends its open connections rather
+// than leaving them on the admission they began with: a busy single-connect connection resets
 // its idle timer on every packet and so has no end (spec §10). A platform or
 // `based_on:` change counts: the connection would be denied
 // blob_platform_mismatch at every command, and its records redacted under a
@@ -131,10 +131,26 @@ func (s *conn) readmitted() keyring.Diagnosis {
 	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
 		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform ||
 		now.Device.EffectiveTransport() != s.dev.Device.EffectiveTransport() ||
-		(s.tls != nil && !slices.Equal(now.Device.Addresses, s.dev.Device.Addresses)):
+		(s.tls != nil && !sameAddresses(now.Device.Addresses, s.dev.Device.Addresses)):
 		return keyring.DiagAdmissionWithdrawn
 	}
 	return ""
+}
+
+// sameAddresses compares two address lists as sets: a reload that only
+// reorders a device's addresses changes nothing (inventory diff says none).
+func sameAddresses(a, b []netip.Addr) bool {
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	for _, x := range b {
+		if !slices.Contains(a, x) {
+			return false
+		}
+	}
+	return true
 }
 
 // admissionWithdrawn records a packet on a connection whose admission a

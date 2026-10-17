@@ -757,8 +757,6 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 	}
 }
 
-// The status is asked exactly once per handshake, when it completes. (The
-// impostor test pins that it is never asked before.)
 // openSessionFor dials leaf-01 single-connect and completes one exchange.
 func openSessionFor(t *testing.T, f *tlsFixture) *tlsClient {
 	t.Helper()
@@ -776,9 +774,9 @@ func openSessionFor(t *testing.T, f *tlsFixture) *tlsClient {
 	return cl
 }
 
-// withdrawnAtNextPacket sends one more exchange and wants it unanswered and
-// recorded admission_withdrawn.
-func withdrawnAtNextPacket(t *testing.T, cl *tlsClient, log *syncBuffer) {
+// withdrawnAtNextPacket sends one more exchange and wants it unanswered,
+// recorded admission_withdrawn, counted admission_closed once, and no strike.
+func withdrawnAtNextPacket(t *testing.T, f *tlsFixture, cl *tlsClient, log *syncBuffer) {
 	t.Helper()
 	cl.seq, cl.sid = 1, 0x300
 	if err := cl.send(wire.TypeAuthen, aliceLogin, wire.FlagUnencrypted|wire.FlagSingleConnect); err == nil {
@@ -788,6 +786,12 @@ func withdrawnAtNextPacket(t *testing.T, cl *tlsClient, log *syncBuffer) {
 	}
 	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_withdrawn"`) }) {
 		t.Fatalf("log: %s", log.String())
+	}
+	if f.ts.limits.Holding(loopback) {
+		t.Fatal("a withdrawal is struck")
+	}
+	if n := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 1 {
+		t.Fatalf("admission_closed = %v", n)
 	}
 }
 
@@ -800,7 +804,7 @@ func TestTLSTransportChangeWithdrawsAnOpenConnection(t *testing.T) {
 	tcpDev := leaf01TLS
 	tcpDev.Transport = admission.TransportTCP
 	f.admit.swap(t, admission.Resolved{Device: tcpDev}) // KeyRef stays "", as the TLS record's
-	withdrawnAtNextPacket(t, cl, log)
+	withdrawnAtNextPacket(t, f, cl, log)
 }
 
 // A reload that changes the device's addresses withdraws its open TLS
@@ -812,9 +816,36 @@ func TestTLSAddressChangeWithdrawsAnOpenConnection(t *testing.T) {
 	moved := leaf01TLS
 	moved.Addresses = []netip.Addr{loopback, netip.MustParseAddr("192.0.2.77")}
 	f.admit.swap(t, admission.Resolved{Device: moved})
-	withdrawnAtNextPacket(t, cl, log)
+	withdrawnAtNextPacket(t, f, cl, log)
 }
 
+// A reload that only reorders the device's addresses changes nothing, and
+// the open connection is still answered.
+func TestTLSReorderedAddressesKeepAnOpenConnection(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, nil)
+	other := netip.MustParseAddr("192.0.2.77")
+	two := leaf01TLS
+	two.Addresses = []netip.Addr{loopback, other}
+	f.admit.swap(t, admission.Resolved{Device: two})
+	cl := openSessionFor(t, f)
+	rev := two
+	rev.Addresses = []netip.Addr{other, loopback}
+	f.admit.swap(t, admission.Resolved{Device: rev})
+	cl.seq, cl.sid = 1, 0x300
+	if err := cl.send(wire.TypeAuthen, aliceLogin, wire.FlagUnencrypted|wire.FlagSingleConnect); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cl.recv(); err != nil {
+		t.Fatalf("a reorder withdrew the connection: %v", err)
+	}
+	if log.contains(`"diagnosis":"admission_withdrawn"`) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// The status is asked exactly once per handshake, when it completes. (The
+// impostor test pins that it is never asked before.)
 func TestTLSStatusIsAskedExactlyOncePerHandshake(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, nil)

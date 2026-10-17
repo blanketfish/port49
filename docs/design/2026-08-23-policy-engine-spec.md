@@ -5163,8 +5163,8 @@ that hash is of the bytes as they arrived on the wire, never of a deobfuscated b
 A sixth, `admission_refused`, is a device the inventory names and admission refuses (above). The
 device is not at fault, so it is kept apart from both the key report and the noise. A seventh,
 `admission_withdrawn`, is a packet on an open connection whose device a reload renamed, moved to
-another `key_ref`, or gave another platform or `based_on:` base ("How a daemon refreshes its
-snapshot"); a reload that refuses or removes the device is recorded under `admission_refused` or
+another `key_ref`, gave another platform or `based_on:` base or another transport, or (on the
+RFC 9887 listener) changed its set of addresses ("How a daemon refreshes its snapshot"); a reload that refuses or removes the device is recorded under `admission_refused` or
 `unadmitted_source`, with no strike either way.
 
 An eighth, `transport_mismatch`, is a connection from an admitted device on the listener it does
