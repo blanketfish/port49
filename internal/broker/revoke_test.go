@@ -1230,3 +1230,25 @@ func TestReachMarkReachesWhatAMarkMadeElsewhereNames(t *testing.T) {
 		t.Fatalf("ReachMark wrote a record: %v", recs)
 	}
 }
+
+// A certificate mark reaches the contexts of its issuer and serial, split at
+// the key's last '|'; a cert mark whose key has no '|' is an error, not a
+// silent no-op (plan 11a, R20: marks arrive from other regions).
+func TestReachMarkByCertSplitsIssuerAndSerial(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now,
+		Origin: "admin_socket uid 0"})
+	if err != nil || n != 0 || len(refs) != 1 || refs[0].NAS != "leaf1" {
+		t.Fatalf("%d %v %v", n, refs, err)
+	}
+	if c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); err != nil ||
+		c.RevokedAt.IsZero() {
+		t.Fatalf("leaf1's context: %+v %v", c, err)
+	}
+	_, refs, err = f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationCert, Key: "no-split", At: f.now})
+	if err == nil || len(refs) != 0 || !strings.Contains(err.Error(), store.RevocationCert) {
+		t.Fatalf("malformed cert mark: %v %v", refs, err)
+	}
+}

@@ -351,7 +351,10 @@ func (b *Broker) ReachMark(ctx context.Context, r store.Revocation) (tokenKeys i
 	if r.Kind == store.RevocationCert {
 		i := strings.LastIndexByte(r.Key, '|')
 		if i < 0 {
-			return tokenKeys, nil, err // CheckRevocation refused such a key; nothing names it
+			// A mark from another region is not vetted here: say so rather
+			// than reach nothing in silence.
+			note(fmt.Errorf("broker: a %s mark whose key has no issuer|serial split reached no context", r.Kind))
+			return tokenKeys, nil, err
 		}
 		issuer, serial = r.Key[:i], r.Key[i+1:]
 	}
