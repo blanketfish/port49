@@ -5,13 +5,26 @@ package lab
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // scpWrite is the source side of scp's protocol to a sink at path: wait for
@@ -63,4 +76,1089 @@ func scpWrite(c *ssh.Client, path string, body []byte) error {
 		return fmt.Errorf("scp: %v %s", err, oneLine(stderr.String()))
 	}
 	return nil
+}
+
+func l73Claim(vendor string) string {
+	return vendor + "'s RFC 9887 (TACACS+ over TLS) client against port49d's tls_listener, cell by cell (policy " +
+		"engine spec §15 L73; §13 decision 50 rulings 1, 2, 6, 7, 8, 10, 11, 13, 15). L73 stays open: this note is one " +
+		"platform's, and spec §15's L73 row lists the rest."
+}
+
+type l73Env struct {
+	t        *testing.T
+	l        *lab
+	d        l73Dialect
+	opener   func(*lab) (*cliConn, error)
+	x        map[string]bool // the Want words the image's help listed
+	applied  *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir      string          // 0700: configs, inventories, keys, state
+	home     string          // a port49 CLI's HOME, issued_key_store: file
+	evDir    string
+	capDir   string // git-ignored, outside writeEvidence's *.pcap glob
+	pki      *l73PKI
+	files    map[string]string
+	invTLS   string
+	invTCP   string
+	evidence map[string][]byte // written only by note(), after the leak gate
+	secrets  []string
+	obs      []l73Obs
+	facts    []string
+	first    []l73Conn // cell a's connections: c and f read them
+	port     int       // 0 when the device's default is 300
+	needSec  bool
+	tokenN   int
+	start    int64 // decision log offset when L73 began
+	csr      l73CSR
+	leaf     *x509.Certificate
+	l71Obs   string
+	touched  bool
+	bridge   bool
+	cfg      string // port49d's config now: the last daemon() call's, "" for the standing one
+}
+
+func TestL73(t *testing.T) {
+	// Held until TestMain's teardown has destroyed the topology (labRelease).
+	if err := labOccupyForRun(labLockPath, "TestL73 pid "+strconv.Itoa(os.Getpid())); err != nil {
+		t.Fatal(err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatal(err)
+	}
+	// Names only: nothing here touches another container.
+	if out, err := exec.Command("docker", "ps", "--filter", "label=containerlab", "--format", "{{.Names}}").Output(); err != nil {
+		t.Fatalf("INVALID: docker ps: %v", err)
+	} else if s := strings.TrimSpace(string(out)); s != "" {
+		t.Fatalf("a containerlab topology is already up (%s): the lab is single-occupant", strings.ReplaceAll(s, "\n", ", "))
+	}
+	eachOptInPlatform(t, func(t *testing.T, l *lab) {
+		d, ok := l73Dialects[l.p.name]
+		if !ok || !optInPlatforms[l.p.sel] {
+			t.Skipf("TestL73 measures the opt-in L73 rows; %s (%s) is not one", l.p.sel, l.p.version)
+		}
+		if d.HelpOnly {
+			e := &l73Env{t: t, l: l, d: d, opener: l73Opener(l.p.name), evidence: map[string][]byte{},
+				evDir: filepath.Join(root, "tests", "lab", "evidence", "L73-"+l.p.name)}
+			if e.helpProbe() {
+				t.Logf("%s lists an RFC 9887 client; a full L73 run on it is a follow-up", l.p.version)
+			}
+			e.writeL71()
+			return
+		}
+		e := newL73Env(t, l, d)
+		if !e.helpProbe() {
+			e.writeL71()
+			t.Fatalf("L73 not measured on %s (%s): its CLI offers no RFC 9887 client; the L71 addendum is written",
+				l.p.name, l.p.version)
+		}
+		e.enrol()
+		e.cellA()
+		e.cellC()
+		e.cellF()
+		// Task 9: cellD, cellE, cellG, cellH. Task 10: cellI, cellJ, cellB, note.
+	})
+}
+
+func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
+	t.Helper()
+	alg := os.Getenv("PORT49_L73_ALG")
+	if alg == "" {
+		alg = "ecdsa"
+	}
+	now := time.Now()
+	pki, err := l73NewPKI(alg, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &l73Env{t: t, l: l, d: d, opener: l73Opener(l.p.name), pki: pki, files: map[string]string{},
+		evidence: map[string][]byte{},
+		dir:      filepath.Join(root, "tests", "lab", "logs", "l73-"+l.p.name),
+		evDir:    filepath.Join(root, "tests", "lab", "evidence", "L73-"+l.p.name),
+		capDir:   filepath.Join(root, "tests", "lab", "captures", "L73-"+l.p.name)}
+	for _, dir := range []string{e.dir, e.capDir} {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(e.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(e.capDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// L73 runs no port49 CLI; any it ever runs gets HOME=e.home, whose
+	// config pins issued_key_store: file (the lab never probes the TPM).
+	e.home = e.mkdir("home")
+	if err := pinFileKeyStore(e.home); err != nil {
+		t.Fatal(err)
+	}
+	e.files["root.pem"] = e.write("root.pem", pki.Root.PEM())
+	e.files["inter.pem"] = e.write("inter.pem", pki.Inter.PEM())
+	e.files["other.pem"] = e.write("other.pem", pki.Other.PEM())
+	e.writeServer("server", pki.Root, l73ServerLeaf{DNSNames: []string{"tacacs.l73.example"},
+		IPs: []net.IP{net.ParseIP(l73Server)}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	inv, err := os.ReadFile(filepath.Join(root, "tests", "lab", "inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsInv, err := l73Inventory(string(inv), l.p.node)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	e.invTLS, e.invTCP = e.write("inventory-tls.yaml", []byte(tlsInv)), e.write("inventory-tcp.yaml", inv)
+	e.start = l.mark()
+	e.facts = append(e.facts, "PKI: "+alg+" (root, a device intermediate, an untrusted CA); port49d's server certificate "+
+		l73CertFacts(mustCert(t, e.files["server.crt"])))
+	t.Cleanup(func() {
+		if !e.touched {
+			return
+		}
+		out, err := e.restore()
+		switch {
+		case err == nil:
+		case e.d.Family == "junos":
+			t.Errorf("restoring the device's plain TACACS+ servers: %s", hideKeys(err.Error()+" "+l73ScrubLog(out)))
+		default:
+			// A lenient undo refuses the lines of servers that were never
+			// there; the restore's own outcome is the startup config's lines.
+			t.Logf("restore (lenient): %s", oneLine(hideKeys(err.Error())))
+		}
+	})
+	return e
+}
+
+func (e *l73Env) mkdir(name string) string {
+	p := filepath.Join(e.dir, name)
+	if err := os.MkdirAll(p, 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+func (e *l73Env) write(name string, b []byte) string {
+	p := filepath.Join(e.dir, name)
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+func mustCert(t *testing.T, path string) *x509.Certificate {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		t.Fatalf("%s holds no PEM", path)
+	}
+	c, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// writeServer issues one port49 server certificate from `from` and writes
+// <name>.crt and <name>.key (0600); the key is registered for the leak check.
+func (e *l73Env) writeServer(name string, from l73Cert, leaf l73ServerLeaf) {
+	c, err := e.pki.Server(from, leaf)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	k, err := c.KeyPEM()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.secrets = append(e.secrets, string(k))
+	e.files[name+".crt"], e.files[name+".key"] = e.write(name+".crt", c.PEM()), e.write(name+".key", k)
+}
+
+// guard is the lab's per-cell check: the STOP sentinel and the disk floor.
+func (e *l73Env) guard() {
+	e.t.Helper()
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// settle waits past a refusal's strike: malformed_backoff_base is 2s here,
+// and the 5s default malformed_backoff_max caps a strike's hold.
+func (e *l73Env) settle() { time.Sleep(6 * time.Second) }
+
+func (e *l73Env) base() l73DeviceTLS { return l73DeviceTLS{Server: l73Server, Port: e.port} }
+
+// cli runs fn on the break-glass CLI. On a measured row port49d is stopped
+// first, so the device takes the local password (withAdminCLI's reason), and
+// started again on the config it ran before, the one daemon() recorded.
+// withAdminCLI is not used: it restarts port49d on the standing plain config,
+// and a cell that configures the device after daemon() would then measure a
+// port49d with no RFC 9887 listener. A help-only row runs no port49d.
+func (e *l73Env) cli(fn func(*cliConn) error) {
+	e.t.Helper()
+	measured := !e.d.HelpOnly
+	if measured {
+		if err := e.l.stopDaemon(); err != nil {
+			e.t.Fatalf("INVALID: stopping port49d for the break-glass CLI: %v", err)
+		}
+	}
+	c, err := e.opener(e.l)
+	if err == nil {
+		err = fn(c)
+		c.Close()
+	} else {
+		err = fmt.Errorf("INVALID: no break-glass CLI on %s: %w", e.l.p.name, err)
+	}
+	if measured {
+		e.startOn()
+	}
+	if err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// opMark is what the operational prompt holds: Junos's "> ", the node's
+// "#" prompt elsewhere.
+func (e *l73Env) opMark(c *cliConn) string {
+	if e.d.Family == "junos" {
+		return junosOpPrompt
+	}
+	return c.prompt
+}
+
+// invalidScreen keeps a scrubbed device screen for an INVALID run's
+// diagnosis in PORT49_L73_INVALID_DIR (never committed).
+func (e *l73Env) invalidScreen(name, out string) {
+	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
+		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
+			[]byte(l71MaskExchange(l73ScrubLog(hideKeys(out)))), 0o600)
+	}
+}
+
+// daemon restarts port49d on the cell's config and waits for its RFC 9887
+// listener's start line.
+func (e *l73Env) daemon(name string, o l73Daemon) {
+	e.t.Helper()
+	if o.Inventory == "" {
+		o.Inventory = e.invTLS
+	}
+	if o.TLSListen == "" {
+		o.TLSListen = net.JoinHostPort(l73Server, strconv.Itoa(l73TLSPort))
+	}
+	if o.Cert == "" {
+		o.Cert, o.Key = e.files["server.crt"], e.files["server.key"]
+	}
+	if o.ClientCA == "" {
+		o.ClientCA = e.files["root.pem"]
+	}
+	if o.StateDir == "" {
+		o.StateDir = e.mkdir("state")
+	}
+	if o.Status == "" {
+		o.Status = "{disabled: true}"
+	}
+	if o.Attrs == "" {
+		o.Attrs = e.d.Attrs
+	}
+	base, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	cfg, err := l73DaemonYAML(string(base), o)
+	if err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+	e.cfg = e.write("port49d-"+name+".yaml", []byte(cfg))
+	if err := e.l.stopDaemon(); err != nil {
+		e.t.Fatalf("INVALID: stopping port49d for %s: %v", name, err)
+	}
+	e.startOn()
+}
+
+// startOn starts port49d on e.cfg, or on the standing config before the
+// first cell, and on a cell's config waits for the RFC 9887 listener's start
+// line. It is the only place TestL73 starts port49d. Nothing here goes
+// through lab.restart: its awaitTACACS gate waits on IOS XE for a record that
+// a cell whose handshake port49 refuses never makes. fileSize is the lab
+// package's (directory_e2e_test.go).
+func (e *l73Env) startOn() {
+	e.t.Helper()
+	path := e.cfg
+	if path == "" {
+		p, err := e.l.configPath()
+		if err != nil {
+			e.t.Fatalf("INVALID: the standing config: %v", err)
+		}
+		path = p
+	}
+	off := fileSize(e.l.errPath)
+	if err := e.l.startDaemonWith(path, true); err != nil {
+		e.t.Fatalf("INVALID: starting port49d on %s: %v", filepath.Base(path), err)
+	}
+	if e.cfg == "" {
+		return
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		b, _ := os.ReadFile(e.l.errPath)
+		if int64(len(b)) > off && strings.Contains(string(b[off:]), "RFC 9887 listener on") {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("INVALID: port49d on %s never announced its RFC 9887 listener", filepath.Base(path))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// ready waits, for up to 3 minutes, until the device opens a connection to
+// port49's address again. Each probe is a break-glass login (port49 holds no
+// token for it) under a capture of its own. Configuring the device means a
+// break-glass CLI with port49d stopped, and after port49 had been
+// unreachable IOS XE 17.13 answered logins locally without sending it a
+// packet (awaitTACACS's comment; L10). A cell measured then would record
+// that memory, not the cell. The test is a connection, not a record: cell
+// a's first login may go to a port nothing answers TLS on.
+// It returns the connections of the probe that reached port49.
+func (e *l73Env) ready(cell string) []l73Conn {
+	e.t.Helper()
+	deadline := time.Now().Add(3 * time.Minute)
+	for n := 1; ; n++ {
+		stop := e.capture(fmt.Sprintf("%s-ready%d", cell, n))
+		_, _, _ = e.breakglassLogin()
+		if conns := stop(); len(l73Window(conns, l73Server, time.Time{}, time.Now())) > 0 {
+			return conns
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("INVALID: %s: the device opened no connection to %s in 3 minutes of break-glass logins. "+
+				"The likely cause is the device's dead-server memory outlasting 3 minutes after a refusal or a "+
+				"stopped port49d (IOS XE: look at its deadtime and server state), not the TLS configuration", cell, l73Server)
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// revive is where every cell whose handshake port49 may refuse starts:
+// port49d on cell a's config, the device seen connecting (ready), and only
+// then the cell's own daemon. Switching daemons opens no CLI, so the device
+// meets the refusal with no memory of an earlier failure.
+func (e *l73Env) revive(cell string) {
+	e.t.Helper()
+	e.daemon(cell+"-revive", l73Daemon{Intermediates: e.files["inter.pem"]})
+	e.ready(cell + "-revive")
+}
+
+// reached is INVALID unless the device opened a connection to port49 during
+// a refusal cell: a refusal it never reached measures nothing.
+func (e *l73Env) reached(cell string, conns []l73Conn) {
+	e.t.Helper()
+	if _, ok := l73FirstPort(conns, l73Server); !ok {
+		e.t.Fatalf("INVALID: %s: the device opened no connection to %s, so the cell measured nothing", cell, l73Server)
+	}
+}
+
+// junosCommit commits lines over the break-glass CLI with port49d stopped,
+// and rolls back what a refused commit left half-entered.
+func (e *l73Env) junosCommit(lines []string) (string, error) {
+	var out string
+	var cerr error
+	e.cli(func(c *cliConn) error {
+		out, cerr = junosConfigure(c, lines...)
+		if cerr != nil {
+			c.sendExpect("rollback 0", 60*time.Second, junosCfgPrompt)
+			c.sendExpect("exit configuration-mode", 60*time.Second, junosOpPrompt)
+		}
+		return nil
+	})
+	return out, cerr
+}
+
+// ciscoType types lines in configuration mode with port49d stopped. What
+// l73CiscoRun returns is already masked (hideKeys), so out is safe to pass on.
+func (e *l73Env) ciscoType(lines []string, lenient bool) (string, error) {
+	var out string
+	var cerr error
+	e.cli(func(c *cliConn) error {
+		out, cerr = l73CiscoRun(c, l73Lines(lines...), nil, lenient)
+		return nil
+	})
+	return out, cerr
+}
+
+// apply points the device's client at port49 as d says: a Junos commit, or
+// on IOS XE, NX-OS and EOS the previous cell's undo and then d's lines.
+func (e *l73Env) apply(d l73DeviceTLS) (string, error) {
+	if e.d.Family == "junos" {
+		return e.junosCommit(l73JunosLines(d))
+	}
+	lines := l73CiscoLines(e.d.Family, e.applied, d, e.x)
+	e.applied = &d // set first: the cleanup must undo whatever got in
+	return e.ciscoType(lines, false)
+}
+
+// restore puts the startup config's servers back: Junos's restore commit,
+// or every server L73 can configure undone leniently.
+func (e *l73Env) restore() (string, error) {
+	if e.d.Family == "junos" {
+		return e.junosCommit(l73JunosRestore())
+	}
+	e.applied = nil
+	return e.ciscoType(l73CiscoRestoreAll(e.d.Family, e.x), true)
+}
+
+// configure is apply, INVALID on a refusal. If a Junos commit refuses a tls
+// server with no secret, that is recorded and every later configuration
+// carries the lab secret too.
+func (e *l73Env) configure(d l73DeviceTLS) {
+	e.t.Helper()
+	e.touched = true
+	d.Secret = d.Secret || e.needSec
+	out, err := e.apply(d)
+	if err != nil && e.d.Family == "junos" && !d.Secret && strings.Contains(out, "secret") {
+		e.needSec, d.Secret = true, true
+		e.facts = append(e.facts, "the image's commit refused a tls server with no secret; every server below "+
+			"carries the lab secret as well")
+		out, err = e.apply(d)
+	}
+	if err != nil {
+		e.invalidScreen("configure", out)
+		e.t.Fatalf("INVALID: configuring the device's TLS client: %s", oneLine(hideKeys(err.Error())))
+	}
+}
+
+// capture starts a capture of everything the device sends or receives
+// except SSH and NETCONF, plus the loopback liveness probe. stop ends it,
+// summarizes it, and keeps the summary for note().
+func (e *l73Env) capture(cell string) (stop func() []l73Conn) {
+	e.t.Helper()
+	abs := filepath.Join(e.capDir, cell+".pcap")
+	filter := fmt.Sprintf("(host %s and tcp and not port 22 and not port 830) or (host 127.0.0.1 and tcp port 49)", e.l.p.addr)
+	end := e.l.captureWith(e.t, abs, filter)
+	e.t.Cleanup(end) // idempotent: a Fatal mid-cell still stops tcpdump
+	return func() []l73Conn {
+		end()
+		raw, err := os.ReadFile(abs)
+		if err != nil {
+			e.t.Fatalf("INVALID: %v", err)
+		}
+		conns, err := l73Conns(raw, e.l.p.addr)
+		if err != nil {
+			e.t.Fatalf("INVALID: reading %s: %v", abs, err)
+		}
+		js, _ := json.MarshalIndent(conns, "", "  ")
+		if hits := l73SummaryLeaks(string(js)); len(hits) > 0 {
+			e.t.Fatalf("INVALID: the %s summary holds %v; nothing written", cell, hits)
+		}
+		e.evidence[cell+".tls.json"] = js
+		return conns
+	}
+}
+
+// tokenLogin logs in with the next l73u seed and runs the dialect's
+// version command.
+func (e *l73Env) tokenLogin() (user string, ok bool, took time.Duration, out string, err error) {
+	e.tokenN++
+	user = fmt.Sprintf("l73u%02d", e.tokenN)
+	secret := e.l.mustLogin(e.t, user)
+	start := time.Now()
+	outs, err := e.l.login(user, secret, e.d.VersionCmd)
+	if len(outs) > 0 {
+		out = strings.TrimSpace(outs[0])
+	}
+	return user, err == nil && len(outs) == 1, time.Since(start), out, err
+}
+
+// breakglassLogin is a login port49 holds no token for: it lands only if
+// the device reaches its local method.
+func (e *l73Env) breakglassLogin() (ok bool, took time.Duration, err error) {
+	start := time.Now()
+	c, err := e.l.dial(breakglassUser, breakglassPassword, 120*time.Second)
+	if err == nil {
+		c.Close()
+	}
+	return err == nil, time.Since(start), err
+}
+
+func l73Err(err error) string {
+	if err == nil {
+		return "no error"
+	}
+	return oneLine(l73ScrubLog(hideKeys(err.Error())))
+}
+
+func (e *l73Env) quote(recs []map[string]any) string {
+	var parts []string
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		parts = append(parts, string(l72RedactCredentialHash(b)))
+	}
+	if len(parts) == 0 {
+		return "(no record)"
+	}
+	return strings.Join(parts, " ")
+}
+
+// l73Where is the records whose unvalidated block has key == val.
+func l73Where(recs []map[string]any, key, val string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if str(sub(r, "unvalidated"), key) == val {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func l73Redeemed(recs []map[string]any) bool {
+	for _, r := range recs {
+		if str(r, "event") == "redeem" && str(r, "verdict") == "permit" && str(sub(r, "device"), "transport") == "tls" {
+			return true
+		}
+	}
+	return false
+}
+
+// metric is one series' value and whether the daemon exports it. port49d
+// creates every port49_tls_handshakes_total outcome series at start
+// (internal/daemon/metrics/metrics.go), so a missing one is a misspelled
+// selector, not a zero.
+func (e *l73Env) metric(selector string) (float64, bool) {
+	resp, err := http.Get("http://" + metricsAddr + "/metrics")
+	if err != nil {
+		e.t.Fatalf("INVALID: metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return l73MetricValue(string(b), selector)
+}
+
+func (e *l73Env) add(id, configured, observed, docs string) {
+	e.obs = append(e.obs, l73Obs{ID: id, Configured: configured, Observed: observed, Docs: docs})
+}
+
+// upload copies public certificates to a Junos or EOS device over
+// break-glass scp, with port49d stopped so the device takes the local password.
+func (e *l73Env) upload(files map[string][]byte) {
+	e.t.Helper()
+	if err := e.l.stopDaemon(); err != nil {
+		e.t.Fatal(err)
+	}
+	c, err := e.l.dial(breakglassUser, breakglassPassword, 60*time.Second)
+	if err != nil {
+		e.t.Fatalf("INVALID: break-glass SSH for the upload: %v", err)
+	}
+	for path, body := range files {
+		if err := scpWrite(c, path, body); err != nil {
+			c.Close()
+			e.startOn()
+			e.t.Fatalf("INVALID: scp to %s: %v", path, err)
+		}
+	}
+	c.Close()
+	e.startOn()
+}
+
+// helpProbe asks L71's question of this image, then each CLI level the
+// harness will type, and reports whether the image has a client (tls listed
+// at L71's question). It keeps the L71 observation for writeL71. On a
+// measured row a missing keyword is INVALID, with the masked exchange in
+// PORT49_L73_INVALID_DIR; on a help-only row it is part of the observation.
+func (e *l73Env) helpProbe() bool {
+	e.guard()
+	var xchg strings.Builder
+	var missing []string
+	var first l71Answer
+	hasClient := false
+	listed := map[string]bool{}
+	probe := l71Probes[e.d.Probe]
+	e.cli(func(c *cliConn) (err error) {
+		entered, dirty, unsure := 0, false, false // unsure: an ask's In was typed and its Out has not finished
+		defer func() {
+			if dirty {
+				return
+			}
+			if unsure {
+				// The CLI's mode is unknown: leave configuration and enter as
+				// the probe did (l73RecoverLines), so the cleanup below runs
+				// from the mode it assumes and cannot leave l71probe behind.
+				// A device that will not confirm the top level is INVALID.
+				for i, ln := range l73RecoverLines(e.d) {
+					mark := e.d.CfgMark
+					if i == 0 {
+						mark = e.opMark(c)
+					}
+					if _, rerr := c.sendExpect(ln, 30*time.Second, mark); rerr != nil {
+						dirty = true
+						err = l71Wrap("INVALID: could not return to the configuration top level before the cleanup; "+
+							"check the device for a `tacacs server l71probe` object", rerr)
+						return
+					}
+				}
+				entered = len(e.d.Enter)
+			}
+			for _, ln := range l71CleanupFor(probe, entered) {
+				c.sendExpect(ln, 30*time.Second, e.d.CfgMark, e.opMark(c))
+			}
+		}()
+		for _, ln := range e.d.Enter {
+			if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
+				return l71Wrap("INVALID: "+ln, err)
+			}
+			entered++
+		}
+		// leave is the Out lines of the ask in flight: typed once the ask has
+		// been answered and on every error path, so the CLI is back in the
+		// dialect's Enter mode for the cleanup that follows. They are not
+		// counted in entered: the cleanup's lines assume the Enter mode.
+		leave := func(a l73Ask) error {
+			for _, ln := range a.Out {
+				if _, err := c.sendExpect(ln, 30*time.Second, e.d.CfgMark); err != nil {
+					return l71Wrap("INVALID: "+ln, err)
+				}
+			}
+			return nil
+		}
+		for i, a := range e.d.Asks {
+			if a.Only != "" && !listed[a.Only] {
+				continue
+			}
+			unsure = len(a.In) > 0
+			for _, ln := range a.In {
+				if _, err := c.sendExpect(ln, 30*time.Second, e.d.CfgMark); err != nil {
+					return l71Wrap("INVALID: "+ln, err)
+				}
+			}
+			ans, err := l71AskHelp(c, a.Ask, a.Control, e.d.CfgMark)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&xchg, "### typed `%s?`, then Ctrl-U\n%s\n\n", a.Ask, ans.Masked)
+			if !ans.Cleared {
+				dirty = true // Out is not typed: nothing more is typed on a line that did not clear
+				return fmt.Errorf("INVALID: after Ctrl-U the line was not empty on `%s?`; the session was closed with nothing more typed", a.Ask)
+			}
+			if ans.WaitErr != nil {
+				leave(a)
+				return l71Wrap(fmt.Sprintf("INVALID: no help for `%s?`", a.Ask), ans.WaitErr)
+			}
+			miss, have, err := l73HelpVerdict(ans.Help, a)
+			if err != nil {
+				leave(a)
+				return err
+			}
+			l73RecordListed(listed, a, miss, have)
+			if err := leave(a); err != nil {
+				return err
+			}
+			unsure = false
+			if i == 0 {
+				// L71's own verdict: a client word (tls; ssl-profile on EOS).
+				first = ans
+				if _, hasClient = l71Says(ans.Help, probe.yes); !hasClient {
+					return nil
+				}
+			}
+			for _, m := range miss {
+				missing = append(missing, fmt.Sprintf("`%s` under `%s`", m, strings.TrimSpace(a.Ask)))
+			}
+		}
+		return nil
+	})
+	e.x = listed
+	e.evidence["l71-probe.txt"] = []byte(xchg.String())
+	line, err := l71Read(first.Help, probe)
+	if err != nil {
+		e.t.Fatalf("%v", err)
+	}
+	ask := e.d.Asks[0].Ask
+	if line != "" {
+		e.l71Obs = fmt.Sprintf("**Has a client.** Typed `%s?`; the help lists:\n\n```\n%s\n```\n\nFull help:\n\n```\n%s\n```\n",
+			ask, line, strings.TrimRight(first.Help, "\n"))
+	} else {
+		e.l71Obs = negativeFinding{Claim: fmt.Sprintf("the help for `%s?` is a real option list (it lists one of the "+
+			"control options %v) and lists none of %v, so this image offers no RFC 9887 client there", ask, probe.control, probe.yes),
+			Sent: ask + "?", Got: first.Help}.render(e.t)
+	}
+	if hasClient && len(missing) > 0 {
+		if e.d.HelpOnly {
+			e.l71Obs += fmt.Sprintf("\nKeywords a full L73 run would type that this image's help does not list: %s.\n",
+				strings.Join(missing, ", "))
+			return hasClient
+		}
+		if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
+			_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+".txt"), []byte(xchg.String()), 0o600)
+		}
+		e.t.Fatalf("INVALID: the image's help lacks %s, which this harness types; correct the dialect "+
+			"(l73_dialect.go, and l73_device.go for Junos) from the exchange, then re-run", strings.Join(missing, ", "))
+	}
+	return hasClient
+}
+
+// writeL71 appends the addendum to this platform's L71 note, or writes the
+// note when there is none (vJunos-switch, IOL-XE and XRd were never
+// probed). Its evidence is the masked help exchange.
+func (e *l73Env) writeL71() {
+	ev := filepath.Join("tests", "lab", "evidence", "L73-"+e.l.p.name, "l71-probe.txt")
+	body := e.evidence["l71-probe.txt"]
+	if hits := l72TranscriptLeaks(string(body)); len(hits) > 0 || len(labcreds.Contains(body, e.allSecrets())) > 0 {
+		e.t.Fatal("INVALID: the probe exchange carries a secret; nothing written")
+	}
+	if err := os.MkdirAll(e.evDir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ev), body, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", "L71-"+e.l.p.name+".md")); err == nil {
+		e.l.appendNote(e.t, "L71", fmt.Sprintf("## Addendum %s: %s (`%s`)\n\nProbed by TestL73 (%s); the exchange is `%s`.\n\n%s",
+			time.Now().UTC().Format("2006-01-02"), e.l.p.version, e.l.p.image, runLine(), ev, e.l71Obs))
+		return
+	}
+	e.l.captureNote = fmt.Sprintf("`%s` — the CLI exchange from the help request to the empty-line check, credentials "+
+		"masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
+	e.l.result(e.t, "L71", l71Claim, e.l71Obs)
+	e.l.captureNote = ""
+}
+
+// allSecrets is every secret the run made or used: port49's key PEMs, every
+// seed token any daemon minted, the published lab key and password.
+func (e *l73Env) allSecrets() []string {
+	runSeedsMu.Lock()
+	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
+	runSeedsMu.Unlock()
+	toks, err := labcreds.SecretsOf(seeds)
+	if err != nil {
+		e.t.Fatalf("INVALID: the run's tokens: %v", err)
+	}
+	return append(append(append([]string{}, e.secrets...), toks...), labcreds.Key, breakglassPassword)
+}
+
+func (e *l73Env) enrol() {
+	e.guard()
+	e.touched = true
+	var csrPEM []byte
+	var how string
+	switch e.d.Family {
+	case "junos":
+		csrPEM, how = e.requestJunos()
+	case "eos":
+		csrPEM, how = e.requestEOS()
+	default:
+		csrPEM, how = e.requestCisco()
+	}
+	e.sign(csrPEM, how)
+	switch e.d.Family {
+	case "junos":
+		e.loadJunos()
+	case "eos":
+		e.loadEOS()
+	default:
+		e.loadCisco()
+	}
+}
+
+// requestEOS makes the key and prints the request, both exec commands.
+func (e *l73Env) requestEOS() ([]byte, string) {
+	keyGen, csrCmd, _, _ := l73EOSEnrol(e.l.p.node)
+	var screen string
+	e.cli(func(c *cliConn) error {
+		for _, cmd := range []string{keyGen, csrCmd} {
+			out, err := c.sendExpect(cmd, 180*time.Second, c.prompt)
+			if r := l73Refusal(out); err != nil || r != "" {
+				e.invalidScreen("enrol", out)
+				return fmt.Errorf("INVALID: %q: %s %s", cmd, l73Err(err), hideKeys(r))
+			}
+			screen = out
+		}
+		return nil
+	})
+	csrPEM, err := l73PEMBlock(screen, "CERTIFICATE REQUEST")
+	if err != nil {
+		e.invalidScreen("enrol", screen)
+		e.t.Fatalf("INVALID: the device's certificate request: %v", err)
+	}
+	return csrPEM, csrCmd
+}
+
+// loadEOS copies the public certificates to flash: by scp, moves them into
+// certificate:, and configures the SSL profile that names them.
+func (e *l73Env) loadEOS() {
+	_, _, load, profile := l73EOSEnrol(e.l.p.node)
+	e.upload(map[string][]byte{"/mnt/flash/l73-root.crt": e.pki.Root.PEM(), "/mnt/flash/l73-inter.crt": e.pki.Inter.PEM(),
+		"/mnt/flash/" + l73CertID + ".crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
+	e.cli(func(c *cliConn) error {
+		for _, cmd := range load {
+			out, err := c.sendExpect(cmd, 60*time.Second, c.prompt)
+			if r := l73Refusal(out); err != nil || r != "" {
+				e.invalidScreen("load", out)
+				return fmt.Errorf("INVALID: %q: %s %s", cmd, l73Err(err), hideKeys(r))
+			}
+		}
+		if out, err := l73CiscoRun(c, l73Lines(profile...), nil, false); err != nil {
+			e.invalidScreen("profile", out)
+			return fmt.Errorf("INVALID: the SSL profile: %s", oneLine(err.Error()))
+		}
+		return nil
+	})
+}
+
+func (e *l73Env) requestJunos() ([]byte, string) {
+	keyPair, csrCmd := l73EnrolCommands(e.l.p.node, e.l.p.addr)
+	var screen string
+	e.cli(func(c *cliConn) error {
+		if out, err := junosConfigure(c, l73PKILines()...); err != nil {
+			return errors.New(hideKeys(err.Error() + " " + l73ScrubLog(out)))
+		}
+		for _, cmd := range []string{keyPair, csrCmd} {
+			out, err := c.sendExpect(cmd, 180*time.Second, junosOpPrompt)
+			if err != nil || strings.Contains(out, "error:") {
+				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
+			}
+		}
+		out, err := c.sendExpect("file show "+l73CSRPath, 60*time.Second, junosOpPrompt)
+		screen = out
+		return err
+	})
+	csrPEM, err := l73PEMBlock(screen, "CERTIFICATE REQUEST")
+	if err != nil {
+		e.t.Fatalf("INVALID: the device's certificate request: %v", err)
+	}
+	return csrPEM, strings.TrimSpace(csrCmd)
+}
+
+// vals are the enrolment replies' placeholders: public certificates and
+// the device's own names.
+func (e *l73Env) vals() map[string]string {
+	v := map[string]string{"ROOT": string(e.pki.Root.PEM()), "INTER": string(e.pki.Inter.PEM()),
+		"NODE": e.l.p.node, "ADDR": e.l.p.addr}
+	if e.leaf != nil {
+		v["LEAF"] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw}))
+	}
+	return v
+}
+
+func (e *l73Env) requestCisco() ([]byte, string) {
+	prep, enroll, _ := l73CiscoEnrol(e.d.Family, e.l.p.node)
+	vals := e.vals()
+	var screen string
+	e.cli(func(c *cliConn) error {
+		if out, err := l73CiscoRun(c, prep, vals, false); err != nil {
+			e.invalidScreen("enrol-prep", out)
+			return fmt.Errorf("INVALID: preparing the device's key and trustpoints: %s", oneLine(err.Error()))
+		}
+		out, err := l73CiscoRun(c, []l73Dialog{enroll}, vals, false)
+		screen = out
+		if err != nil {
+			e.invalidScreen("enrol", out)
+			return fmt.Errorf("INVALID: %q: %s", enroll.Cmd, oneLine(err.Error()))
+		}
+		return nil
+	})
+	csrPEM, err := l73PEMBlock(screen, "CERTIFICATE REQUEST")
+	if err != nil {
+		e.invalidScreen("enrol", screen)
+		e.t.Fatalf("INVALID: the device's certificate request: %v", err)
+	}
+	return csrPEM, enroll.Cmd
+}
+
+func (e *l73Env) sign(csrPEM []byte, how string) {
+	var err error
+	if e.csr, err = l73CSRFacts(csrPEM); err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+	now := time.Now()
+	leaf, added, err := l73SignCSR(csrPEM, e.pki.Inter, now.Add(-time.Hour), now.Add(24*time.Hour), e.l.p.node, net.ParseIP(e.l.p.addr))
+	if err != nil {
+		e.t.Fatalf("INVALID: signing the device's request: %v", err)
+	}
+	e.leaf = leaf
+	e.facts = append(e.facts, fmt.Sprintf("the device's request (`%s`): subject %q, dNSName %v, iPAddress %v, email %v, key %s, "+
+		"requested extensions %v, requested EKU %v", how, e.csr.Subject, e.csr.DNSNames, e.csr.IPs,
+		e.csr.Emails, e.csr.KeyAlg, e.csr.Requested, e.csr.EKU))
+	issued := "the lab intermediate issued " + l73CertFacts(leaf)
+	if added {
+		issued += " (the request named neither a dNSName nor an iPAddress, so the lab CA added the inventory's)"
+	}
+	e.facts = append(e.facts, issued)
+}
+
+func (e *l73Env) loadJunos() {
+	e.upload(map[string][]byte{"/var/tmp/l73-root.pem": e.pki.Root.PEM(), "/var/tmp/l73-inter.pem": e.pki.Inter.PEM(),
+		"/var/tmp/l73-dev.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
+	e.cli(func(c *cliConn) error {
+		for _, cmd := range l73LoadCommands() {
+			out, err := c.sendExpect(cmd, 120*time.Second, "[yes,no]", junosOpPrompt)
+			if err == nil && strings.Contains(out, "[yes,no]") {
+				// The one question these commands ask; any other is not ours to answer.
+				if !strings.Contains(strings.ToLower(out), "load this ca certificate") {
+					_, _ = c.sendExpect("no", 60*time.Second, junosOpPrompt)
+					return fmt.Errorf("INVALID: %q asked a question this run does not answer:\n%s", cmd, l73ScrubLog(hideKeys(out)))
+				}
+				out, err = c.sendExpect("yes", 120*time.Second, junosOpPrompt)
+			}
+			if err != nil || strings.Contains(out, "error:") {
+				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
+			}
+		}
+		return nil
+	})
+}
+
+func (e *l73Env) loadCisco() {
+	_, _, load := l73CiscoEnrol(e.d.Family, e.l.p.node)
+	vals := e.vals()
+	e.cli(func(c *cliConn) error {
+		if out, err := l73CiscoRun(c, []l73Dialog{load}, vals, false); err != nil {
+			e.invalidScreen("import", out)
+			return fmt.Errorf("INVALID: %q: %s", load.Cmd, oneLine(err.Error()))
+		}
+		return nil
+	})
+	if e.d.Family == "nxos" {
+		e.confirmNXOSTrust()
+	}
+}
+
+// confirmNXOSTrust is INVALID unless the device's trustpoints hold THIS run's
+// CAs. NX-OS's CA import has no Done marker, and a trustpoint keeps its name
+// between runs, so an earlier run's CA would pass every other check and then
+// fail every cell for a reason that has nothing to do with TLS.
+func (e *l73Env) confirmNXOSTrust() {
+	e.t.Helper()
+	for _, tp := range []struct {
+		name string
+		ca   l73Cert
+	}{{l73RootProfile, e.pki.Root}, {l73CertID, e.pki.Inter}} {
+		var screen string
+		var rerr error
+		e.cli(func(c *cliConn) error {
+			screen, rerr = c.sendExpect("show crypto ca certificates "+tp.name, 60*time.Second, c.prompt)
+			return nil
+		})
+		if rerr != nil || !l73ScreenHasCert(screen, tp.ca.Cert) {
+			e.invalidScreen("trust-"+tp.name, screen)
+			e.t.Fatalf("INVALID: trustpoint %s does not hold this run's CA (its fingerprint is not on `show crypto ca certificates %s`; %s): "+
+				"an earlier run's CA is probably still imported", tp.name, tp.name, l73Err(rerr))
+		}
+	}
+}
+
+func (e *l73Env) cellA() {
+	e.guard()
+	e.daemon("a", l73Daemon{Intermediates: e.files["inter.pem"]})
+	e.configure(l73DeviceTLS{Server: l73Server})
+	probe := e.ready("a")
+	stop := e.capture("a")
+	off, start := e.l.mark(), time.Now()
+	user, ok, took, version, err := e.tokenLogin()
+	conns := stop()
+	recs := e.l.recordsSince(off)
+	port, opened := l73FirstPort(conns, l73Server)
+	first := "the device opened no connection to " + l73Server
+	if opened {
+		first = fmt.Sprintf("the device's first connection went to port %d", port)
+	} else if port, opened = l73FirstPort(probe, l73Server); opened {
+		// The readiness probe reached port49 and the login then sent nothing:
+		// the probe's port is the device's default (IOS XE's dead-server memory
+		// can silence the login after a failed handshake on that port).
+		first = fmt.Sprintf("the device's first connection went to port %d (read off the readiness probe's "+
+			"break-glass login; the token login after it sent nothing)", port)
+	}
+	obs := fmt.Sprintf("%s (%s); login as %s: ok %v in %s (%s)", first, l73Describe(conns, start), user, ok,
+		took.Round(time.Millisecond), l73Err(err))
+	configured := "no port configured on the TLS server; port49d's RFC 9887 listener on 172.100.100.1:300"
+	e.first = conns
+	if !opened || port != l73TLSPort {
+		e.port = l73TLSPort
+		e.configure(e.base())
+		e.ready("a-port300")
+		stop := e.capture("a-port300")
+		off, start = e.l.mark(), time.Now()
+		user, ok, took, version, err = e.tokenLogin()
+		conns = stop()
+		recs = e.l.recordsSince(off)
+		obs += fmt.Sprintf("; then with port 300 configured (every later cell): login as %s ok %v in %s (%s), %s", user, ok,
+			took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start))
+		configured += "; then port 300"
+		e.first = conns
+	}
+	if !ok || !l73Redeemed(recs) {
+		hint := ""
+		if e.pki.Alg == "ecdsa" {
+			hint = "; if the record says handshake_failed, re-run with PORT49_L73_ALG=rsa and record why in the commit"
+		}
+		e.t.Fatalf("INVALID: the control login over TLS did not pass (%s)%s; records: %s", l73Err(err), hint, e.quote(recs))
+	}
+	if !strings.Contains(version, e.d.VersionHas) {
+		e.t.Fatalf("INVALID: the device reports %q, not the image under test (%s)", version, e.l.p.version)
+	}
+	e.facts = append(e.facts, "the device reports "+version)
+	e.add("a", configured, obs+"; the control's records: "+e.quote(recs),
+		"n/a: no document claims "+e.d.Vendor+"'s default (Cisco's examples configure 6049; that is a choice, not a default); "+
+			"decision 50 ruling 1 leaves it to L73 (a), and plan 12's reference configuration takes it from here")
+}
+
+func l73FirstHello(conns []l73Conn) (*l73Hello, *l73ServerHello) {
+	for _, c := range conns {
+		if c.Hello != nil {
+			return c.Hello, c.ServerHello
+		}
+	}
+	return nil, nil
+}
+
+func (e *l73Env) cellC() {
+	e.guard()
+	h, _ := l73FirstHello(e.first)
+	sni := "no ClientHello was captured"
+	docs := "yes: decision 50 ruling 10 (a device configured with the server's address sends none)"
+	if h != nil {
+		sni = "the ClientHello carries no server_name extension"
+		if h.HasSNI {
+			sni = fmt.Sprintf("the ClientHello's server_name is %q", h.SNI)
+			docs = "**no**: decision 50 ruling 10 says a device configured with the server's address sends no SNI"
+		}
+	}
+	e.settle()
+	e.revive("c")
+	e.daemon("c", l73Daemon{Intermediates: e.files["inter.pem"], ServerNames: []string{"tacacs.l73.example"}})
+	stop := e.capture("c")
+	off, start := e.l.mark(), time.Now()
+	user, ok, took, _, err := e.tokenLogin()
+	conns := stop()
+	e.reached("c", conns)
+	recs := e.l.recordsSince(off)
+	e.add("c", "the device unchanged (configured by address); port49d first with no server_names (cell a), then with server_names [tacacs.l73.example]",
+		fmt.Sprintf("%s; with server_names set: login as %s ok %v in %s (%s), sni_mismatch records %d, %s; records: %s",
+			sni, user, ok, took.Round(time.Millisecond), l73Err(err), len(l73Where(recs, "tls_outcome", "sni_mismatch")),
+			l73Describe(conns, start), e.quote(recs)), docs)
+}
+
+func (e *l73Env) cellF() {
+	e.guard()
+	h, s := l73FirstHello(e.first)
+	if h == nil || s == nil {
+		e.t.Fatal("INVALID: cell a's control login captured no ClientHello and ServerHello")
+	}
+	var versions, suites, groups, sigs []string
+	for _, v := range h.Versions {
+		versions = append(versions, tls.VersionName(v))
+	}
+	for _, c := range h.Suites {
+		suites = append(suites, tls.CipherSuiteName(c))
+	}
+	for _, g := range h.Groups {
+		groups = append(groups, tls.CurveID(g).String())
+	}
+	for _, a := range h.SigAlgs {
+		sigs = append(sigs, tls.SignatureScheme(a).String())
+	}
+	docs := "yes: decision 50 ruling 2 (TLS 1.3, one of crypto/tls's three suites)"
+	if s.Version != tls.VersionTLS13 {
+		docs = "**no**: decision 50 ruling 2 and RFC 9887 §3.2 assume TLS 1.3"
+	}
+	e.add("f", "cell a's control connection",
+		fmt.Sprintf("offered versions %v, suites %v, groups %v, signature schemes %v, ALPN %v; port49 chose %s %s (HelloRetryRequest %v)",
+			versions, suites, groups, sigs, h.ALPN, tls.VersionName(s.Version), tls.CipherSuiteName(s.Suite), s.HelloRetry), docs)
 }
