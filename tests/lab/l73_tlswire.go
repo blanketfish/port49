@@ -76,8 +76,12 @@ type l73Conn struct {
 	DeviceRecords int             `json:"device_tls_records"`
 	ServerRecords int             `json:"server_tls_records"`
 	Plain         []l73Plain      `json:"plain_tacacs_from_device,omitempty"`
-	End           string          `json:"end"` // device-fin, server-fin, device-rst, server-rst, open
-	EndAt         time.Time       `json:"end_at"`
+	// Incomplete: the capture lacks bytes of this connection (a segment from
+	// its start, or one in a gap), so a missing hello is not evidence the
+	// device sent none.
+	Incomplete bool      `json:"incomplete"`
+	End        string    `json:"end"` // device-fin, server-fin, device-rst, server-rst, open
+	EndAt      time.Time `json:"end_at"`
 }
 
 type l73Seg struct {
@@ -103,6 +107,8 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 		up, down []l73Seg
 		seen     map[[4]uint32]bool
 		isn      uint32
+		srvISN   uint32
+		haveSrv  bool
 	}
 	// conns holds the latest connection on each (device port, server); a SYN
 	// with a new sequence number on a used pair is a new connection, since the
@@ -148,6 +154,9 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 		}
 		st.seen[id] = true
 		const fin, syn, rst, ack = 0x01, 0x02, 0x04, 0x10
+		if !fromDevice && fl.Flags&syn != 0 && fl.Flags&ack != 0 && !st.haveSrv {
+			st.srvISN, st.haveSrv = fl.Seq, true
+		}
 		if !fromDevice && st.c.Answer == "none" {
 			switch {
 			case fl.Flags&syn != 0 && fl.Flags&ack != 0:
@@ -178,7 +187,18 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 	out := make([]l73Conn, 0, len(order))
 	for _, st := range order {
 		c := st.c
-		up, down := l73Stream(st.up), l73Stream(st.down)
+		// Streams start at the SYN's sequence number + 1, so a lost first
+		// segment shows as incomplete, never as a stream that is not TLS.
+		up, upOK := l73StreamFrom(st.up, st.isn+1, true)
+		var down []byte
+		downOK := true
+		if st.haveSrv {
+			down, downOK = l73StreamFrom(st.down, st.srvISN+1, true)
+		} else if len(st.down) > 0 {
+			down, _ = l73StreamFrom(st.down, 0, false)
+			downOK = false // data from a server whose SYN-ACK was not captured
+		}
+		c.Incomplete = !upOK || !downOK
 		switch {
 		case l73IsTLS(up):
 			for _, r := range l73Records(up) {
@@ -218,28 +238,43 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 // l73Stream is one direction's bytes in sequence order, overlaps dropped;
 // it stops at the first gap, since what follows one was not captured.
 func l73Stream(segs []l73Seg) []byte {
+	out, _ := l73StreamFrom(segs, 0, false)
+	return out
+}
+
+// l73StreamFrom is l73Stream anchored at base when anchored (otherwise at the
+// lowest sequence number). complete is false when a gap cut the stream short:
+// with an anchor, that includes a missing first segment.
+func l73StreamFrom(segs []l73Seg, base uint32, anchored bool) (out []byte, complete bool) {
 	if len(segs) == 0 {
-		return nil
+		return nil, true
 	}
-	base := segs[0].seq
-	for _, s := range segs {
-		if int32(s.seq-base) < 0 {
-			base = s.seq
+	if !anchored {
+		base = segs[0].seq
+		for _, s := range segs {
+			if int32(s.seq-base) < 0 {
+				base = s.seq
+			}
 		}
 	}
-	sort.SliceStable(segs, func(i, j int) bool { return segs[i].seq-base < segs[j].seq-base })
-	var out []byte
+	sort.SliceStable(segs, func(i, j int) bool { return int32(segs[i].seq-base) < int32(segs[j].seq-base) })
 	for _, s := range segs {
-		off := int(s.seq - base)
-		if off+len(s.data) <= len(out) {
+		off, data := int(int32(s.seq-base)), s.data
+		if off < 0 {
+			if -off >= len(data) {
+				continue
+			}
+			data, off = data[-off:], 0
+		}
+		if off+len(data) <= len(out) {
 			continue
 		}
 		if off > len(out) {
-			break
+			return out, false
 		}
-		out = append(out, s.data[len(out)-off:]...)
+		out = append(out, data[len(out)-off:]...)
 	}
-	return out
+	return out, true
 }
 
 type l73Rec struct {
@@ -347,10 +382,11 @@ func l73ParseClientHello(b []byte) (*l73Hello, error) {
 			list := &l73Reader{b: data.vec16()}
 			for len(list.b) > 0 && !list.bad {
 				nt, name := list.u8(), list.vec16()
-				if nt == 0 {
+				if nt == 0 && !list.bad {
 					h.HasSNI, h.SNI = true, string(name)
 				}
 			}
+			data.bad = data.bad || list.bad
 		case 10:
 			h.Groups = l73U16s(data.vec16())
 		case 13:
@@ -360,13 +396,17 @@ func l73ParseClientHello(b []byte) (*l73Hello, error) {
 			for len(list.b) > 0 && !list.bad {
 				h.ALPN = append(h.ALPN, string(list.vec8()))
 			}
+			data.bad = data.bad || list.bad
 		case 41: // pre_shared_key: counted, never copied
 			ids := &l73Reader{b: data.vec16()}
 			for len(ids.b) > 0 && !ids.bad {
 				ids.vec16()
 				ids.bytes(4)
-				h.PSKIdentities++
+				if !ids.bad {
+					h.PSKIdentities++
+				}
 			}
+			data.bad = data.bad || ids.bad
 		case 42:
 			h.EarlyData = true
 		case 43:
@@ -375,6 +415,9 @@ func l73ParseClientHello(b []byte) (*l73Hello, error) {
 			for _, m := range data.vec8() {
 				h.PSKModes = append(h.PSKModes, int(m))
 			}
+		}
+		if data.bad {
+			return nil, errors.New("a ClientHello extension cut inside its body")
 		}
 	}
 	if exts.bad {
@@ -409,6 +452,9 @@ func l73ParseServerHello(b []byte) (*l73ServerHello, error) {
 			s.Version = data.u16()
 		case 41:
 			s.PSKSelected = true
+		}
+		if data.bad {
+			return nil, errors.New("a ServerHello extension cut inside its body")
 		}
 	}
 	if exts.bad || r.bad {
@@ -504,6 +550,9 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 		}
 		if len(c.Plain) > 0 {
 			s += fmt.Sprintf(", %d plain TACACS+ header(s)", len(c.Plain))
+		}
+		if c.Incomplete {
+			s += ", capture incomplete"
 		}
 		s += ", ended " + c.End
 		if !c.EndAt.IsZero() {

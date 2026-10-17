@@ -204,6 +204,9 @@ func TestL73ConnsReadsAFullHandshake(t *testing.T) {
 	if c.ServerHello.Version != tls.VersionTLS13 || tls.CipherSuiteName(c.ServerHello.Suite) == "" || c.ServerHello.PSKSelected {
 		t.Errorf("server hello %+v", c.ServerHello)
 	}
+	if c.Incomplete {
+		t.Errorf("a whole connection reported incomplete")
+	}
 	if c.DeviceRecords == 0 || c.ServerRecords == 0 {
 		t.Errorf("records %d %d", c.DeviceRecords, c.ServerRecords)
 	}
@@ -298,7 +301,7 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		"l73Conn.Server": "string", "l73Conn.DevicePort": "uint16", "l73Conn.SYNAt": "time.Time",
 		"l73Conn.Answer": "string", "l73Conn.Hello": "*lab.l73Hello", "l73Conn.ServerHello": "*lab.l73ServerHello",
 		"l73Conn.Alerts": "[]lab.l73Alert", "l73Conn.DeviceRecords": "int", "l73Conn.ServerRecords": "int",
-		"l73Conn.Plain": "[]lab.l73Plain", "l73Conn.End": "string", "l73Conn.EndAt": "time.Time",
+		"l73Conn.Plain": "[]lab.l73Plain", "l73Conn.Incomplete": "bool", "l73Conn.End": "string", "l73Conn.EndAt": "time.Time",
 		"l73Hello.LegacyVersion": "uint16", "l73Hello.Versions": "[]uint16", "l73Hello.Suites": "[]uint16",
 		"l73Hello.HasSNI": "bool", "l73Hello.SNI": "string", "l73Hello.Groups": "[]uint16",
 		"l73Hello.SigAlgs": "[]uint16", "l73Hello.ALPN": "[]string", "l73Hello.PSKIdentities": "int",
@@ -340,7 +343,10 @@ func TestL73ResumptionSummaryHoldsNoSessionBytes(t *testing.T) {
 	sid := up[5+4+2+32+1 : 5+4+2+32+1+int(up[5+4+2+32])]
 	random := up[5+4+2 : 5+4+2+32]
 	for name, b := range map[string][]byte{"legacy session id": sid, "random": random} {
-		if len(b) > 0 && strings.Contains(strings.ToLower(string(js)), hex.EncodeToString(b)[:16]) {
+		if len(b) < 8 {
+			t.Fatalf("the %s is %d bytes; the test cannot look for it", name, len(b))
+		}
+		if strings.Contains(strings.ToLower(string(js)), hex.EncodeToString(b[:8])) {
 			t.Fatalf("connection 0 summary holds the %s", name)
 		}
 	}
@@ -458,5 +464,62 @@ func TestL73SummaryLeaksFlagsLongRuns(t *testing.T) {
 	}
 	if len(l73SummaryLeaks(`{"x":"`+strings.Repeat("QUJD", 10)+`"}`)) == 0 {
 		t.Fatal("40 base64 characters not flagged")
+	}
+}
+
+// A segment lost from the start of the device's stream is an incomplete
+// capture, never a stream that was not TLS.
+func TestL73ConnsLostFirstSegmentIsIncomplete(t *testing.T) {
+	srv, cli := l73TestConfigs(t)
+	up, down := l73RealHandshake(t, srv, cli)
+	if len(up) <= 1000 {
+		t.Skip("this ClientHello fits one segment; there is no later segment to keep")
+	}
+	var kept []l73FakeSeg
+	for _, s := range l73Conversation(up, down, time.Unix(1_800_000_000, 0), false) {
+		if s.fromDevice && s.seq == 1001 && len(s.payload) > 0 {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	conns, err := l73Conns(l73FakePcap(40011, 300, kept), l73TDevice)
+	if err != nil || len(conns) != 1 {
+		t.Fatalf("%+v %v", conns, err)
+	}
+	if !conns[0].Incomplete || conns[0].Hello != nil {
+		t.Fatalf("incomplete %v, hello %v", conns[0].Incomplete, conns[0].Hello)
+	}
+	if !strings.Contains(l73Describe(conns, time.Unix(1_800_000_000, 0)), "capture incomplete") {
+		t.Fatal("the description does not say so")
+	}
+}
+
+// l73HelloWith is a ClientHello body with one extension, by hand.
+func l73HelloWith(typ uint16, data []byte) []byte {
+	b := []byte{3, 3}
+	b = append(b, make([]byte, 32)...)
+	b = append(b, 0, 0, 2, 0x13, 0x01, 1, 0)
+	ext := binary.BigEndian.AppendUint16(nil, typ)
+	ext = binary.BigEndian.AppendUint16(ext, uint16(len(data)))
+	ext = append(ext, data...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(ext)))
+	return append(b, ext...)
+}
+
+// An extension cut inside its body is a parse error, not a hostname that was
+// seen or an identity that was counted.
+func TestL73ClientHelloCutInsideAnExtensionIsAnError(t *testing.T) {
+	cases := map[string][]byte{
+		"server_name cut after its type":  l73HelloWith(0, []byte{0, 4, 0, 0, 5, 'a'}),
+		"pre_shared_key cut mid-identity": l73HelloWith(41, []byte{0, 3, 0, 8, 0xaa}),
+		"alpn cut mid-name":               l73HelloWith(16, []byte{0, 3, 9, 'h', '2'}),
+	}
+	for name, b := range cases {
+		if h, err := l73ParseClientHello(b); err == nil {
+			t.Errorf("%s: parsed without error: has_sni %v, psk %d", name, h.HasSNI, h.PSKIdentities)
+		}
+	}
+	if h, err := l73ParseClientHello(l73HelloWith(0, []byte{0, 6, 0, 0, 3, 'a', 'b', 'c'})); err != nil || h.SNI != "abc" {
+		t.Errorf("a whole server_name: %+v %v", h, err)
 	}
 }
