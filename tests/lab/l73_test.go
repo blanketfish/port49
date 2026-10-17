@@ -18,6 +18,9 @@ import (
 // its ack, send the C line, ack, the bytes and a NUL, ack. L73 sends only
 // public certificates this way.
 func scpWrite(c *ssh.Client, path string, body []byte) error {
+	if err := scpCheckBody(body); err != nil {
+		return err
+	}
 	s, err := c.NewSession()
 	if err != nil {
 		return err

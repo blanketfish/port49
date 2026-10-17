@@ -278,6 +278,18 @@ func TestScpSinkFrame(t *testing.T) {
 	}
 }
 
+func TestScpBodyRefusesAPrivateKey(t *testing.T) {
+	for _, hdr := range []string{"PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY"} {
+		err := scpCheckBody([]byte("x\n-----BEGIN " + hdr + "-----\nAAAA\n"))
+		if err == nil || strings.Contains(err.Error(), "AAAA") {
+			t.Fatalf("%s: %v", hdr, err)
+		}
+	}
+	if err := scpCheckBody([]byte("-----BEGIN CERTIFICATE-----\nAAAA\n")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestL73MetricValue(t *testing.T) {
 	exp := "# HELP x\nport49_tls_handshakes_total{outcome=\"ok\"} 3\nport49_tls_handshakes_total{outcome=\"resumed\"} 2\n"
 	if v, ok := l73MetricValue(exp, `port49_tls_handshakes_total{outcome="resumed"}`); !ok || v != 2 {

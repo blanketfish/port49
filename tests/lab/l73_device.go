@@ -342,6 +342,16 @@ func l73PEMBlock(out, want string) ([]byte, error) {
 	return pem.EncodeToMemory(b), nil
 }
 
+// scpCheckBody refuses a body holding a PEM private key block: scpSinkFrame
+// sends mode 0644, so a key must never go through it. The error names no
+// part of the body.
+func scpCheckBody(body []byte) error {
+	if bytes.Contains(body, []byte("PRIVATE KEY-----")) {
+		return errors.New("scp: refusing to send a body holding a PEM private key")
+	}
+	return nil
+}
+
 // scpSinkFrame is what an scp source sends a sink for one file: the C line,
 // the bytes, the closing NUL.
 func scpSinkFrame(name string, body []byte) []byte {
