@@ -24,6 +24,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/rhwendt/port49/internal/devicecert"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
@@ -154,7 +155,11 @@ func TestL73(t *testing.T) {
 		e.cellA()
 		e.cellC()
 		e.cellF()
-		// Task 9: cellD, cellE, cellG, cellH. Task 10: cellI, cellJ, cellB, note.
+		e.cellD()
+		e.cellE()
+		e.cellG()
+		e.cellH()
+		// Task 10: cellI, cellJ, cellB, note.
 	})
 }
 
@@ -1173,4 +1178,182 @@ func (e *l73Env) cellF() {
 	e.add("f", "cell a's control connection",
 		fmt.Sprintf("offered versions %v, suites %v, groups %v, signature schemes %v, ALPN %v; port49 chose %s %s (HelloRetryRequest %v)",
 			versions, suites, groups, sigs, h.ALPN, tls.VersionName(s.Version), tls.CipherSuiteName(s.Suite), s.HelloRetry), docs)
+}
+
+func (e *l73Env) cellD() {
+	e.guard()
+	now := time.Now()
+	right := []net.IP{net.ParseIP(l73Server)}
+	variants := []struct {
+		id, what string
+		from     l73Cert
+		leaf     l73ServerLeaf
+	}{
+		{"d-dns", "dNSName tacacs.l73.example only, no iPAddress", e.pki.Root,
+			l73ServerLeaf{DNSNames: []string{"tacacs.l73.example"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}},
+		{"d-wrongip", "iPAddress 172.100.100.9 only", e.pki.Root,
+			l73ServerLeaf{IPs: []net.IP{net.ParseIP("172.100.100.9")}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}},
+		{"d-expired", "iPAddress 172.100.100.1, expired an hour ago", e.pki.Root,
+			l73ServerLeaf{IPs: right, NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-time.Hour)}},
+		{"d-untrusted", "iPAddress 172.100.100.1, issued by a CA the device was never given", e.pki.Other,
+			l73ServerLeaf{IPs: right, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}},
+	}
+	var parts []string
+	docs := "n/a"
+	for _, v := range variants {
+		e.guard()
+		e.settle()
+		e.writeServer(v.id, v.from, v.leaf)
+		e.revive(v.id)
+		e.daemon(v.id, l73Daemon{Intermediates: e.files["inter.pem"], Cert: e.files[v.id+".crt"], Key: e.files[v.id+".key"]})
+		stop := e.capture(v.id)
+		off, start := e.l.mark(), time.Now()
+		user, ok, took, _, err := e.tokenLogin()
+		conns := stop()
+		e.reached(v.id, conns)
+		recs := e.l.recordsSince(off)
+		verdict := "refused"
+		if ok && l73Redeemed(recs) {
+			verdict = "**accepted**"
+		}
+		parts = append(parts, fmt.Sprintf("%s: %s (login as %s ok %v in %s, %s; %s; records: %s)", v.what, verdict, user, ok,
+			took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start), e.quote(recs)))
+		switch {
+		case (v.id == "d-dns" || v.id == "d-wrongip") && verdict != "refused" && docs == "n/a":
+			docs = "**no**: RFC 9887 §3.4 requires the client to check the server's identity, and the device was configured by address"
+		case v.id == "d-expired" && verdict != "refused":
+			docs = "**no**: decision 50 ruling 15 treats an expired server certificate as nothing a device can use"
+		case v.id == "d-untrusted" && verdict != "refused" && docs == "n/a":
+			docs = "**no**: RFC 9887 §3.4 requires the client to validate the server's certificate path"
+		}
+	}
+	parts = append(parts, "the device's log: "+e.deviceLog("d-device-log.txt"))
+	e.add("d", "the device configured by address 172.100.100.1; port49d's server certificate varied per row, all else as cell a",
+		strings.Join(parts, "; "), docs)
+}
+
+// deviceLog reads the device's TACACS+ and TLS lines (the dialect's LogCmd),
+// scrubbed, into evidence as name, and returns how many lines it kept.
+func (e *l73Env) deviceLog(name string) string {
+	var out string
+	e.cli(func(c *cliConn) error {
+		o, err := c.sendExpect(e.d.LogCmd, 60*time.Second, e.opMark(c))
+		out = o
+		if err != nil {
+			return errors.New(l73Err(err))
+		}
+		return nil
+	})
+	text := l71MaskExchange(l73ScrubLog(hideKeys(out)))
+	e.evidence[name] = []byte(text)
+	return fmt.Sprintf("%d lines in `evidence/L73-%s/%s`", strings.Count(text, "\n"), e.l.p.name, name)
+}
+
+func (e *l73Env) cellE() {
+	e.guard()
+	e.settle()
+	// port49d anchored at the root alone, no intermediates_file: the device's
+	// leaf verifies only if the device sends the intermediate itself.
+	e.revive("e")
+	e.daemon("e", l73Daemon{})
+	stop := e.capture("e")
+	off, start := e.l.mark(), time.Now()
+	user, ok, took, _, err := e.tokenLogin()
+	conns := stop()
+	e.reached("e", conns)
+	recs := e.l.recordsSince(off)
+	chain := "the device sends its chain (leaf and intermediate): the login verified with no intermediates_file"
+	if !(ok && l73Redeemed(recs)) {
+		chain = "the device sends its leaf alone: with no intermediates_file the handshake was refused (cell a, " +
+			"with intermediates_file, passed)"
+	}
+	e.add("e", e.d.Enrol+"; port49d's client_ca_file the root alone, no intermediates_file",
+		fmt.Sprintf("request: subject %q, dNSName %v, iPAddress %v, key %s, requested EKU %v; issued: %s; %s (login as %s ok %v "+
+			"in %s, %s; %s; records: %s)", e.csr.Subject, e.csr.DNSNames, e.csr.IPs, e.csr.KeyAlg, e.csr.EKU, l73CertFacts(e.leaf),
+			chain, user, ok, took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start), e.quote(recs)),
+		"n/a: decision 50 ruling 7 leaves what enrolments issue to L73 (e); either chain verifies with intermediates_file, as ruling 7 says")
+}
+
+func (e *l73Env) cellG() {
+	e.guard()
+	e.settle()
+	// revive, not ready: a probe on g's own daemon would hold a ticket
+	// before login 1. Tickets do not cross daemons (each process's keys are
+	// its own), so g's logins start with none.
+	e.revive("g")
+	e.daemon("g", l73Daemon{Intermediates: e.files["inter.pem"], Tickets: 10 * time.Minute})
+	sel := `port49_tls_handshakes_total{outcome="` + string(devicecert.Resumed) + `"}`
+	before, ok := e.metric(sel)
+	if !ok {
+		e.t.Fatal("INVALID: the resumed handshake series is not exported at daemon start")
+	}
+	stop := e.capture("g")
+	off, start := e.l.mark(), time.Now()
+	u1, ok1, _, _, err1 := e.tokenLogin()
+	time.Sleep(5 * time.Second)
+	u2, ok2, _, _, err2 := e.tokenLogin()
+	conns := stop()
+	after, ok := e.metric(sel)
+	if !ok {
+		e.t.Fatal("INVALID: the resumed handshake series vanished after the logins")
+	}
+	resumed := after - before
+	var offered, selected int
+	for _, c := range conns {
+		if c.Hello != nil && c.Hello.PSKIdentities > 0 {
+			offered++
+		}
+		if c.ServerHello != nil && c.ServerHello.PSKSelected {
+			selected++
+		}
+	}
+	e.add("g", "port49d with session_ticket_lifetime 10m (decision 50 ruling 11; off by default); two logins 5s apart",
+		fmt.Sprintf("logins %s ok %v (%s) and %s ok %v (%s); ClientHellos offering a ticket: %d, ServerHellos accepting one: %d, "+
+			"port49_tls_handshakes_total{outcome=\"resumed\"} +%v; %s; records: %s", u1, ok1, l73Err(err1), u2, ok2, l73Err(err2),
+			offered, selected, resumed, l73Describe(conns, start), e.quote(e.l.recordsSince(off))),
+		"n/a: decision 50 ruling 11 says how often devices resume is unmeasured until this cell")
+}
+
+func (e *l73Env) cellH() {
+	e.guard()
+	e.settle()
+	e.daemon("h", l73Daemon{Intermediates: e.files["inter.pem"]})
+	d := e.base()
+	d.SingleConnection = true
+	e.configure(d)
+	// Captured from before the readiness probe: with single-connection the
+	// probe's connection may be the one both logins reuse, and a connection
+	// is counted only from its SYN.
+	stop := e.capture("h")
+	e.ready("h")
+	off := e.l.mark()
+	s1 := time.Now()
+	u1, ok1, _, _, err1 := e.tokenLogin()
+	e1 := time.Now()
+	time.Sleep(5 * time.Second)
+	s2 := time.Now()
+	u2, ok2, _, _, err2 := e.tokenLogin()
+	e2 := time.Now()
+	conns := stop()
+	w1, w2 := l73Window(conns, l73Server, s1, e1), l73Window(conns, l73Server, s2, e2)
+	held, probeHeld := 0, 0
+	for _, c := range w1 {
+		if c.End == "open" || c.EndAt.After(s2) {
+			held++
+		}
+	}
+	for _, c := range l73Window(conns, l73Server, time.Time{}, s1) {
+		if c.End == "open" || c.EndAt.After(s1) {
+			probeHeld++ // the readiness probe's, still open at the first login
+		}
+	}
+	base := len(l73Window(e.first, l73Server, time.Time{}, time.Now()))
+	e.configure(e.base())
+	e.add("h", "`single-connection` on the TLS server; two logins 5s apart",
+		fmt.Sprintf("connections the readiness probe opened that were still open at the first login: %d; "+
+			"login %s ok %v (%s): %d new connection(s); login %s ok %v (%s): %d new connection(s); connections from the first "+
+			"still open at the second: %d; without single-connection (cell a's control) one login opened %d; %s; records: %s",
+			probeHeld, u1, ok1, l73Err(err1), len(w1), u2, ok2, l73Err(err2), len(w2), held, base, l73Describe(conns, s1),
+			e.quote(e.l.recordsSince(off))),
+		"n/a: plan 12's reference configuration takes it from here")
 }
