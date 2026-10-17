@@ -239,6 +239,55 @@ func TestL73StreamDropsOverlapsAndStopsAtAGap(t *testing.T) {
 	}
 }
 
+// l73FieldTypes lists "Type.Field -> type" for every struct of rt's package
+// reachable from rt through pointers, slices, arrays and maps (keys and
+// values).
+func l73FieldTypes(root reflect.Type) map[string]string {
+	got := map[string]string{}
+	pkg := root.PkgPath()
+	seen := map[reflect.Type]bool{}
+	var walk func(reflect.Type)
+	walk = func(rt reflect.Type) {
+		switch rt.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(rt.Elem())
+			return
+		case reflect.Map:
+			walk(rt.Key())
+			walk(rt.Elem())
+			return
+		}
+		if rt.Kind() != reflect.Struct || rt.PkgPath() != pkg || seen[rt] {
+			return
+		}
+		seen[rt] = true
+		for i := range rt.NumField() {
+			f := rt.Field(i)
+			got[rt.Name()+"."+f.Name] = f.Type.String()
+			walk(f.Type)
+		}
+	}
+	walk(root)
+	return got
+}
+
+// The walker reaches a byte string behind an array, a map's value or its key.
+func TestL73FieldWalkerSeesThroughArraysAndMaps(t *testing.T) {
+	type inArray struct{ B []byte }
+	type inValue struct{ B []byte }
+	type inKey struct{ K string }
+	type probe struct {
+		A [2]inArray
+		M map[inKey][]*inValue
+	}
+	got := l73FieldTypes(reflect.TypeOf(probe{}))
+	for _, name := range []string{"probe.A", "probe.M", "inArray.B", "inValue.B", "inKey.K"} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("the walker missed %s: %v", name, got)
+		}
+	}
+}
+
 // The summary's types leave no room for session material. Every field is
 // listed here with its type, and none is a byte string: a field that could
 // carry a random, a legacy session id, a key share, a PSK identity, a
@@ -259,25 +308,7 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		"l73Alert.Level": "uint8", "l73Alert.Description": "uint8", "l73Alert.FromDevice": "bool",
 		"l73Plain.Type": "uint8", "l73Plain.SeqNo": "uint8", "l73Plain.Flags": "uint8", "l73Plain.Length": "uint32",
 	}
-	got := map[string]string{}
-	pkg := reflect.TypeOf(l73Conn{}).PkgPath()
-	seen := map[reflect.Type]bool{}
-	var walk func(reflect.Type)
-	walk = func(rt reflect.Type) {
-		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice {
-			rt = rt.Elem()
-		}
-		if rt.Kind() != reflect.Struct || rt.PkgPath() != pkg || seen[rt] {
-			return
-		}
-		seen[rt] = true
-		for i := range rt.NumField() {
-			f := rt.Field(i)
-			got[rt.Name()+"."+f.Name] = f.Type.String()
-			walk(f.Type)
-		}
-	}
-	walk(reflect.TypeOf(l73Conn{}))
+	got := l73FieldTypes(reflect.TypeOf(l73Conn{}))
 	if !maps.Equal(got, want) {
 		t.Fatalf("the summary's fields changed:\n got %v\nwant %v", got, want)
 	}
@@ -312,6 +343,42 @@ func TestL73ResumptionSummaryHoldsNoSessionBytes(t *testing.T) {
 		if len(b) > 0 && strings.Contains(strings.ToLower(string(js)), hex.EncodeToString(b)[:16]) {
 			t.Fatalf("connection 0 summary holds the %s", name)
 		}
+	}
+}
+
+// l73Shift moves a conversation's sequence numbers, as a second connection
+// on the same ports would carry.
+func l73Shift(segs []l73FakeSeg, by uint32) []l73FakeSeg {
+	for i := range segs {
+		segs[i].seq += by
+	}
+	return segs
+}
+
+// A device may reuse a source port: a SYN with a new sequence number on the
+// same (port, server) pair is a second connection, and each hello is credited
+// to its own.
+func TestL73ConnsCountsAReusedSourcePortTwice(t *testing.T) {
+	srv, cli := l73TestConfigs(t)
+	up1, down1 := l73RealHandshake(t, srv, cli)
+	up2, down2 := l73RealHandshake(t, srv, cli) // a resumption
+	at := time.Unix(1_800_000_000, 0)
+	segs := append(l73Conversation(up1, down1, at, false), l73Shift(l73Conversation(up2, down2, at.Add(5*time.Second), false), 100000)...)
+	conns, err := l73Conns(l73FakePcap(40010, 300, segs), l73TDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conns) != 2 {
+		t.Fatalf("%d connections, want 2", len(conns))
+	}
+	if conns[0].Hello == nil || conns[0].Hello.PSKIdentities != 0 || conns[0].ServerHello.PSKSelected {
+		t.Errorf("first connection %+v", conns[0])
+	}
+	if conns[1].Hello == nil || conns[1].Hello.PSKIdentities != 1 || !conns[1].ServerHello.PSKSelected {
+		t.Errorf("second connection %+v", conns[1])
+	}
+	if !conns[1].SYNAt.After(conns[0].SYNAt) {
+		t.Errorf("not in capture order")
 	}
 }
 

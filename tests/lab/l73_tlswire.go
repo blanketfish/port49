@@ -102,9 +102,13 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 		c        *l73Conn
 		up, down []l73Seg
 		seen     map[[4]uint32]bool
+		isn      uint32
 	}
+	// conns holds the latest connection on each (device port, server); a SYN
+	// with a new sequence number on a used pair is a new connection, since the
+	// device may reuse a source port.
 	conns := map[key]*state{}
-	var order []key
+	var order []*state
 	for i, r := range f.Records {
 		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
 		if !ok {
@@ -125,14 +129,14 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 			continue
 		}
 		st := conns[k]
-		if st == nil {
-			if !(fromDevice && fl.SYN()) {
-				continue // a connection is counted from its SYN
-			}
+		if fromDevice && fl.SYN() && (st == nil || st.isn != fl.Seq) {
 			st = &state{c: &l73Conn{Server: k.server, DevicePort: k.port, SYNAt: f.TimeOf(i), Answer: "none", End: "open"},
-				seen: map[[4]uint32]bool{}}
+				seen: map[[4]uint32]bool{}, isn: fl.Seq}
 			conns[k] = st
-			order = append(order, k)
+			order = append(order, st)
+		}
+		if st == nil {
+			continue // a connection is counted from its SYN
 		}
 		dir := uint32(0)
 		if !fromDevice {
@@ -172,8 +176,7 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 		}
 	}
 	out := make([]l73Conn, 0, len(order))
-	for _, k := range order {
-		st := conns[k]
+	for _, st := range order {
 		c := st.c
 		up, down := l73Stream(st.up), l73Stream(st.down)
 		switch {
