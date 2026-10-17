@@ -7049,6 +7049,21 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
 - **Parked minors, carried:** Task 2, gofmt churn and the ERROR reply's default type; Task 6, a
   double read of `DevicesByTransport`, a metric registered outside the main list, a hard-coded 14;
   Task 9, three minors on the ticket guard; Task 10, an accept under `c.mu` on an issuer change.
+- **Before the final review.** The controller's full suite found L29's refused phase still
+  setting `transport: tls`, which is now served; it sets `udp` (`d70176c0`).
+- **Final review** (0 Critical, 1 Important, 5 Minor; one fix wave and a scoped re-review):
+  - **Important, fixed:** port49d judged the certificate-name clash over admitted devices only,
+    so Task 5's refused-device rule never took effect and `leaf1.example.net` beside a refused
+    `leaf1` was served. It now judges every inventory device, on start and reload (`361df03c`,
+    `75b9fc18`).
+  - **Fixed:** a seq_no 255 packet with the unencrypted flag clear is closed without a reply
+    (`9db8c9b8`); an OCSP answer in use is refreshed at its refresh point with no packet needed,
+    as ruling 9 says (`5caded46`); the L72 evidence carries no credential or token hash value
+    (`b26f020d`, `1cba72b9`); ruling 19 and the design cite Junos 26.2R1 as unmeasured until
+    L73 closes (`e8cdda43`, `32d990c9`).
+  - **Accepted:** a ticket is marked used before crypto/tls checks its binder, so an on-path
+    observer at an admitted device's address can burn one. Ruling 11 names it, crypto/tls gives
+    no later hook, and it costs the device one full handshake.
 
 **Carried forward.**
 
