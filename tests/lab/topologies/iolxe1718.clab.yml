@@ -1,6 +1,5 @@
-# L73 only (selector iolxe1718, opt-in). Node iol1 at 172.100.100.51 on purpose: the
-# inventory, the seeds and the startup config are the older row's, and only
-# one platform is up at a time.
+# L71 help cell only (selector iolxe1718, opt-in). Help-only row: break-glass CLI,
+# no TACACS+, no inventory entry.
 name: port49-iolxe1718
 topology:
   nodes:

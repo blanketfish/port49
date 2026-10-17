@@ -147,7 +147,8 @@ var platforms = []platform{
 }
 
 // optInPlatforms are the rows a run deploys only when PORT49_LAB_PLATFORMS
-// names them.
+// names them, and that only TestL73 runs (eachOptInPlatform): the register
+// tests skip them.
 var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true,
 	"iolxe1718": true, "xrd261": true, "vjunosswitch26": true}
 
@@ -546,41 +547,56 @@ func (l *lab) deploy() {
 // success.
 func platformSelection() ([]platform, bool, error) {
 	selOnce.Do(func() {
-		want := strings.TrimSpace(os.Getenv("PORT49_LAB_PLATFORMS"))
-		if want == "" {
-			selPlatforms = defaultPlatforms(platforms)
-			return
-		}
-		selExplicit = true
-		var known []string
-		for _, p := range platforms {
-			known = append(known, p.sel)
-		}
-		for _, s := range strings.Split(want, ",") {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			found := false
-			for _, p := range platforms {
-				if p.sel == s {
-					selPlatforms = append(selPlatforms, p)
-					found = true
-					break
-				}
-			}
-			if !found {
-				selErr = fmt.Errorf("PORT49_LAB_PLATFORMS names %q, which is not a platform; known selectors are %s",
-					s, strings.Join(known, ", "))
-				return
-			}
-		}
-		if len(selPlatforms) == 0 {
-			selErr = fmt.Errorf("PORT49_LAB_PLATFORMS is %q, which selects no platform; known selectors are %s",
-				want, strings.Join(known, ", "))
-		}
+		selPlatforms, selExplicit, selErr = selectPlatforms(os.Getenv("PORT49_LAB_PLATFORMS"))
 	})
 	return selPlatforms, selExplicit, selErr
+}
+
+// selectPlatforms is platformSelection's pure part: the rows a
+// PORT49_LAB_PLATFORMS value selects, whether the value named any, and the
+// refusal when it names a row that does not exist, selects nothing, or selects
+// two rows of one platform name (labs are cached by that name, so the second
+// would silently reuse the first's lab).
+func selectPlatforms(want string) ([]platform, bool, error) {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return defaultPlatforms(platforms), false, nil
+	}
+	var known []string
+	for _, p := range platforms {
+		known = append(known, p.sel)
+	}
+	var sel []platform
+	for _, s := range strings.Split(want, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		found := false
+		for _, p := range platforms {
+			if p.sel == s {
+				for _, q := range sel {
+					if q.name == p.name {
+						return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS names %q and %q, both platform %s; "+
+							"one selector per platform per run, because labs are cached by platform name",
+							q.sel, p.sel, p.name)
+					}
+				}
+				sel = append(sel, p)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS names %q, which is not a platform; known selectors are %s",
+				s, strings.Join(known, ", "))
+		}
+	}
+	if len(sel) == 0 {
+		return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS is %q, which selects no platform; known selectors are %s",
+			want, strings.Join(known, ", "))
+	}
+	return sel, true, nil
 }
 
 // repoRoot resolves the repository root once. Everything the harness runs uses
@@ -1471,16 +1487,49 @@ func labFor(t *testing.T, p platform) *lab {
 	return l
 }
 
-// eachPlatform runs fn as a subtest per selected platform.
+// eachPlatform runs fn as a subtest per selected platform. It skips the
+// opt-in rows: they share platform names, and so results-note names, with rows
+// measured on older images, so a register test run against one would rewrite a
+// closed note from the wrong image. Only a test that is written for them
+// (TestL73) runs them, through eachOptInPlatform.
 func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
+	t.Helper()
+	eachSelected(t, false, fn)
+}
+
+// eachOptInPlatform is eachPlatform for the tests that run the opt-in rows,
+// and only those rows.
+func eachOptInPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
+	t.Helper()
+	eachSelected(t, true, fn)
+}
+
+func eachSelected(t *testing.T, optIn bool, fn func(t *testing.T, l *lab)) {
+	t.Helper()
 	sel, _, err := platformSelection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range sel {
+	run := rowsFor(sel, optIn)
+	if len(run) == 0 {
+		t.Skipf("no selected platform is one this test runs (opt-in rows: %v)", optIn)
+	}
+	for _, p := range run {
 		p := p
 		t.Run(p.name, func(t *testing.T) { fn(t, labFor(t, p)) })
 	}
+}
+
+// rowsFor keeps the selected rows a test runs: the opt-in rows for a test
+// that opts in, every other row for one that does not.
+func rowsFor(sel []platform, optIn bool) []platform {
+	var out []platform
+	for _, p := range sel {
+		if optInPlatforms[p.sel] == optIn {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
