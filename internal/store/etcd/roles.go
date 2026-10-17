@@ -423,7 +423,7 @@ func (k keys) beyondSessionDaemon(key, end string, write bool) string {
 	if last == "" {
 		last = key + "\x00" // the one key
 	}
-	if end == "\x00" || key < clientv3.GetPrefixRangeEnd(ds) && last > ds {
+	if key < clientv3.GetPrefixRangeEnd(ds) && (end == "\x00" || last > ds) {
 		return "reaches into ds/ past the marks records (ds/m/) and its own (ds/m/port49d@): a broker's " +
 			"snapshot records (ds/b/) hold pins and logout keys the daemon must not read"
 	}

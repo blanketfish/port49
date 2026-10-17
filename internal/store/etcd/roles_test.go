@@ -540,7 +540,7 @@ func TestTheSessionRolesLackTheMarks(t *testing.T) {
 		t.Fatalf("the daemon role reads the marks records %v, writes its own %v", reads, writes)
 	}
 	for _, g := range RolesFor("/port49/", ScopeShared) {
-		if g.Key == k.family(famSnapshot) && g.Role == RoleDaemon {
+		if strings.HasPrefix(g.Key, k.family(famSnapshot)) && g.Role == RoleDaemon {
 			t.Fatalf("a shared store's daemon role reaches ds/, which only a split writes: %+v", g)
 		}
 	}
@@ -560,6 +560,9 @@ func TestTheSessionRolesLackTheMarks(t *testing.T) {
 	}
 	if why := k.beyondSessionDaemon(k.family(snapDaemon), clientv3.GetPrefixRangeEnd(k.family(snapDaemon)), true); why != "" {
 		t.Fatalf("the daemon's own write grant was refused: %s", why)
+	}
+	if why := k.beyondSessionDaemon(k.family("zz/"), "\x00", false); strings.Contains(why, "ds/") {
+		t.Fatalf("an unbounded grant starting past ds/ is said to reach it: %s", why)
 	}
 	if len(RolesFor("/port49/", ScopeShared)) != len(Roles("/port49/")) {
 		t.Fatal("Roles is not the shared scope's")
