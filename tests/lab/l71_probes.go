@@ -2,8 +2,11 @@ package lab
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var optionWord = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 
 // l71Probe is how one platform's CLI is asked whether it has an RFC 9887
 // client: lines typed to reach the right mode, the help request typed
@@ -80,8 +83,29 @@ func l71Says(help string, yes []string) (string, bool) {
 func l71Read(help string, p l71Probe) (string, error) {
 	if _, ok := l71Says(help, p.control); !ok {
 		return "", fmt.Errorf("INVALID: the help lists none of the control options %v, so it is not an option list "+
-			"(a timeout, the wrong mode or an error), and its lacking %v proves nothing; it said:\n%s", p.control, p.yes, help)
+			"(a timeout, the wrong mode or an error), and its lacking %v proves nothing; its line-leading words were: %s",
+			p.control, p.yes, l71Words(help))
 	}
 	line, _ := l71Says(help, p.yes)
 	return line, nil
+}
+
+// l71Wrap is an error for a failed CLI step. The error from sendExpect or
+// expectFrom carries what the device said, and on a configuration command
+// that can be a key hash or a secret, so it is replaced by a fixed text and
+// the size of what was withheld; the test log never holds device output.
+func l71Wrap(what string, err error) error {
+	return fmt.Errorf("%s: failed (%d bytes of device output withheld from this message)", what, len(err.Error()))
+}
+
+// l71Words is the first token of each non-empty line of help, at most 30:
+// enough to see what kind of text a CLI printed, never a value.
+func l71Words(help string) string {
+	var w []string
+	for _, line := range strings.Split(help, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && len(w) < 30 && optionWord.MatchString(f[0]) {
+			w = append(w, f[0])
+		}
+	}
+	return strings.Join(w, " ")
 }

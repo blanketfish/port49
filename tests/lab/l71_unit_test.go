@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -45,6 +46,25 @@ func TestL71ReadNeedsAControlBeforeItCallsAnAbsence(t *testing.T) {
 	} {
 		if _, err := l71Read(help, p); err == nil || !strings.Contains(err.Error(), "INVALID") {
 			t.Errorf("%s: read as a verdict, err %v", name, err)
+		}
+	}
+}
+
+func TestL71ErrorsCarryNoDeviceOutput(t *testing.T) {
+	leak := errors.New("none of [\"#\"] appeared; what it said was:\n key 7 0822455D0A16\n secret \"$9$abc\"")
+	got := l71Wrap("cleanup \"end\"", leak).Error()
+	for _, bad := range []string{"0822455D0A16", "$9$abc", "key 7", "secret"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("wrapped error holds %q: %s", bad, got)
+		}
+	}
+	_, err := l71Read("foo 7 0822455D0A16\nbar \"$9$abc\"\n0822455D0A16\n$9$abc\n", l71Probes["juniper_vsrx"])
+	if err == nil {
+		t.Fatal("no control option, yet a verdict")
+	}
+	for _, bad := range []string{"0822455D0A16", "$9$abc"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("INVALID error holds %q: %v", bad, err)
 		}
 	}
 }

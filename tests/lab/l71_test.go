@@ -13,11 +13,8 @@ const l71Claim = "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS)
 	"help with nothing left configured (on IOS-XE the probe creates a `tacacs server l71probe` object and removes " +
 	"it) (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
 	"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and Junos " +
-	"26.2R1 on routing and switching platforms, not SRX; every lab image predates them."
-
-// l71Settle is how long the probe lets a help listing finish printing once
-// its first control word has appeared.
-const l71Settle = 2 * time.Second
+	"26.2R1 on routing and switching platforms, not SRX; every lab image predates them. L71 probes only the images in the harness platform list: vJunosEvolved " +
+	"23.4R2-S2.1 and vSRX 23.4R1.9 are not probed."
 
 func TestL71TLSClientSupport(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
@@ -50,9 +47,11 @@ func TestL71TLSClientSupport(t *testing.T) {
 				out, err := c.sendExpect(probe.snapshot, 30*time.Second, opMark)
 				return strings.ReplaceAll(out, "\r", ""), err
 			}
+			// snap's text stays inside this function; only equality and
+			// line counts leave it.
 			before, err := snap()
 			if err != nil {
-				return fmt.Errorf("INVALID: reading the TACACS+ configuration before the probe: %w", err)
+				return l71Wrap("INVALID: reading the TACACS+ configuration before the probe", err)
 			}
 			// The cleanup runs on every path, an error's included: an entered
 			// line may already have configured something (IOS-XE's server
@@ -64,14 +63,14 @@ func TestL71TLSClientSupport(t *testing.T) {
 						mark = opMark
 					}
 					if _, cerr := c.sendExpect(line, 20*time.Second, mark); cerr != nil && err == nil {
-						err = fmt.Errorf("cleanup %q: %w", line, cerr)
+						err = l71Wrap(fmt.Sprintf("cleanup %q", line), cerr)
 					}
 				}
 				after, aerr := snap()
 				switch {
 				case aerr != nil:
 					if err == nil {
-						err = fmt.Errorf("reading the TACACS+ configuration after the probe: %w", aerr)
+						err = l71Wrap("reading the TACACS+ configuration after the probe", aerr)
 					}
 				case after != before:
 					// Counts only: the text may hold key hashes.
@@ -81,7 +80,7 @@ func TestL71TLSClientSupport(t *testing.T) {
 			}()
 			for _, line := range probe.enter {
 				if _, err := c.sendExpect(line, 20*time.Second, probe.cfgMark); err != nil {
-					return fmt.Errorf("INVALID: %q: %w", line, err)
+					return l71Wrap(fmt.Sprintf("INVALID: %q", line), err)
 				}
 			}
 			for _, ask := range probe.ask {
@@ -91,16 +90,26 @@ func TestL71TLSClientSupport(t *testing.T) {
 				}
 				// The prompt is already on screen when the help is requested,
 				// so a prompt cannot say the help has printed. A control
-				// option can, and a help that never shows one is INVALID.
-				_, werr := c.expectFrom(from, 20*time.Second, probe.control...)
-				time.Sleep(l71Settle)
+				// option says it has started, and the configuration prompt
+				// redisplayed after that option says it has finished; a help
+				// that shows no control option is INVALID.
+				tail, werr := c.expectFrom(from, 20*time.Second, probe.control...)
+				if werr == nil {
+					at := len(tail)
+					for _, w := range probe.control {
+						if i := strings.Index(tail, w); i >= 0 && i < at {
+							at = i
+						}
+					}
+					_, werr = c.expectFrom(from+at, 20*time.Second, probe.cfgMark)
+				}
 				help := strings.ReplaceAll(c.transcript()[from:], "\r", "")
 				if _, uerr := c.in.Write([]byte{0x15}); uerr != nil { // Ctrl-U: the typed line is dropped, never entered
 					return uerr
 				}
 				time.Sleep(500 * time.Millisecond)
 				if werr != nil {
-					return fmt.Errorf("INVALID: no help for `%s?`: %w", ask, werr)
+					return l71Wrap(fmt.Sprintf("INVALID: no help for `%s?`", ask), werr)
 				}
 				line, err := l71Read(help, probe)
 				if err != nil {
