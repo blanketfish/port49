@@ -114,11 +114,12 @@ func l72TranscriptLeaks(s string) []string {
 	return hits
 }
 
-// l72CredentialHash is a decision record's credential_sha256 value, quoted.
-var l72CredentialHash = regexp.MustCompile(`("credential_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
+// l72CredentialHash is a decision record's credential_sha256 value, or the
+// seed record's token_sha256 (the same hash), quoted.
+var l72CredentialHash = regexp.MustCompile(`("(?:credential|token)_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
 
-// l72RedactCredentialHash replaces each credential_sha256 value in b with
-// "<redacted sha256>", keeping the field. The hash is of a single-use seed
+// l72RedactCredentialHash replaces each credential_sha256 and token_sha256
+// value in b with "<redacted sha256>", keeping the field. The hash is of a single-use seed
 // token and is no use to anyone, but evidence names the field and never
 // holds a value (the earlier results notes do the same).
 func l72RedactCredentialHash(b []byte) []byte {

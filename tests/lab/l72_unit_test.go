@@ -92,6 +92,10 @@ func TestL72RedactsTheCredentialHash(t *testing.T) {
 		!strings.Contains(got, `"credential_sha256":"<redacted sha256>"`) {
 		t.Fatalf("the note keeps the field and loses the value: %s", got)
 	}
+	mint := `{"event":"token_minted","token_sha256":"` + fake + `"}`
+	if got := string(l72RedactCredentialHash([]byte(mint))); got != `{"event":"token_minted","token_sha256":"<redacted sha256>"}` {
+		t.Fatalf("the mint record keeps its hash: %s", got)
+	}
 	if again := l72RedactCredentialHash([]byte(got)); string(again) != got {
 		t.Fatal("redaction is idempotent")
 	}
