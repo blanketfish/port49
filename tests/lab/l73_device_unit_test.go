@@ -83,7 +83,8 @@ func TestL73JunosAsksCoverEveryTypedKeyword(t *testing.T) {
 		acct + "tls mutual-authentication ":     {"certificate-id"},
 		"set security pki ":                     {"ca-profile", "trusted-ca-group"},
 		"set security pki ca-profile l73probe ": {"ca-identity", "revocation-check"},
-		"set security pki trusted-ca-group l73probe ": {"ca-profiles"},
+		"set security pki ca-profile l73probe revocation-check ": {"disable"},
+		"set security pki trusted-ca-group l73probe ":            {"ca-profiles"},
 	}
 	for level, words := range typed {
 		for _, w := range words {
@@ -130,7 +131,7 @@ func TestL73DaemonYAMLFromTheLabConfig(t *testing.T) {
 	}
 	out, err := l73DaemonYAML(string(base), l73Daemon{Inventory: "/x/inventory.yaml", Listen: "172.100.100.2:49",
 		TLSListen: "172.100.100.1:300", Cert: "/x/s.crt", Key: "/x/s.key", ClientCA: "/x/root.pem",
-		Intermediates: "/x/inter.pem", ServerNames: []string{"tacacs.l73.example"}, Tickets: 10 * time.Minute,
+		Intermediates: "/x/inter.pem", ServerNames: []string{"tacacs.l73.example", "a: b, c"}, Tickets: 10 * time.Minute,
 		StateDir: "/x/state", Status: "{disabled: true}", FaultFile: "/x/fault", Attrs: "[]"})
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +150,9 @@ func TestL73DaemonYAMLFromTheLabConfig(t *testing.T) {
 		cfg.Lab["fault_file"] != "/x/fault" || cfg.TLS["listen"] != "172.100.100.1:300" ||
 		cfg.TLS["intermediates_file"] != "/x/inter.pem" || cfg.TLS["session_ticket_lifetime"] != "10m0s" {
 		t.Fatalf("%+v", cfg)
+	}
+	if sn, ok := cfg.TLS["server_names"].([]any); !ok || !slices.Equal(sn, []any{"tacacs.l73.example", "a: b, c"}) {
+		t.Fatalf("server_names %v", cfg.TLS["server_names"])
 	}
 	if sa, ok := cfg.Lab["session_attributes"].([]any); !ok || len(sa) != 0 {
 		t.Fatalf("session_attributes %v", cfg.Lab["session_attributes"])
@@ -254,12 +258,15 @@ func TestL73PEMBlockFromACLIScreen(t *testing.T) {
 	screen := "file show /var/tmp/l73-dev.csr\r\n-----BEGIN CERTIFICATE REQUEST-----\r\n" +
 		"MIIBDzCBtgIBADAPMQ0wCwYDVQQDDARzcngxMFkwEwYHKoZIzj0CAQYIKoZIzj0D\r\n" +
 		"-----END CERTIFICATE REQUEST-----\r\n\r\nbreakglass@srx1> "
-	b, err := l73PEMBlock(screen)
+	b, err := l73PEMBlock(screen, "CERTIFICATE REQUEST")
 	if err != nil || !strings.HasPrefix(string(b), "-----BEGIN CERTIFICATE REQUEST-----\n") || strings.Contains(string(b), "\r") ||
 		!strings.HasSuffix(string(b), "-----END CERTIFICATE REQUEST-----\n") {
 		t.Fatalf("%q %v", b, err)
 	}
-	if _, err := l73PEMBlock("error: file not found\r\n> "); err == nil {
+	if _, err := l73PEMBlock(screen, "CERTIFICATE"); err == nil {
+		t.Fatal("a certificate request read as a certificate")
+	}
+	if _, err := l73PEMBlock("error: file not found\r\n> ", "CERTIFICATE REQUEST"); err == nil {
 		t.Fatal("no block read as one")
 	}
 }

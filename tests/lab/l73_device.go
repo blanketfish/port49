@@ -139,6 +139,7 @@ var l73JunosAsks = []l73Ask{
 		Need: []string{"certificate-id"}},
 	{Ask: "set security pki ", Control: []string{"ca-profile"}, Need: []string{"ca-profile", "trusted-ca-group"}},
 	{Ask: "set security pki ca-profile l73probe ", Control: []string{"ca-identity"}, Need: []string{"ca-identity", "revocation-check"}},
+	{Ask: "set security pki ca-profile l73probe revocation-check ", Control: []string{"crl", "disable"}, Need: []string{"disable"}},
 	{Ask: "set security pki trusted-ca-group l73probe ", Control: []string{"ca-profiles"}, Need: []string{"ca-profiles"}},
 }
 
@@ -211,7 +212,11 @@ func l73DaemonYAML(base string, o l73Daemon) (string, error) {
 		fmt.Fprintf(&b, "  intermediates_file: %s\n", o.Intermediates)
 	}
 	if len(o.ServerNames) > 0 {
-		fmt.Fprintf(&b, "  server_names: [%s]\n", strings.Join(o.ServerNames, ", "))
+		quoted := make([]string, len(o.ServerNames))
+		for i, n := range o.ServerNames {
+			quoted[i] = strconv.Quote(n)
+		}
+		fmt.Fprintf(&b, "  server_names: [%s]\n", strings.Join(quoted, ", "))
 	}
 	fmt.Fprintf(&b, "  session_ticket_lifetime: %s\n  state_dir: %s\n  certificate_status: %s\n", o.Tickets, o.StateDir, o.Status)
 	return out + b.String(), nil
@@ -320,8 +325,8 @@ func l73RenderTable(obs []l73Obs) (string, error) {
 }
 
 // l73PEMBlock is the first PEM block on a CLI screen, line endings fixed and
-// decoded once to prove it is one.
-func l73PEMBlock(out string) ([]byte, error) {
+// decoded once to prove it is one, of the wanted type ("CERTIFICATE REQUEST").
+func l73PEMBlock(out, want string) ([]byte, error) {
 	s := strings.ReplaceAll(out, "\r", "")
 	i := strings.Index(s, "-----BEGIN ")
 	if i < 0 {
@@ -330,6 +335,9 @@ func l73PEMBlock(out string) ([]byte, error) {
 	b, _ := pem.Decode([]byte(s[i:]))
 	if b == nil {
 		return nil, errors.New("a PEM header with no block after it")
+	}
+	if b.Type != want {
+		return nil, fmt.Errorf("the PEM block on the screen is a %s, want a %s", b.Type, want)
 	}
 	return pem.EncodeToMemory(b), nil
 }
