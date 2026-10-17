@@ -21,9 +21,10 @@ import (
 // L73's PKI. The device and port49d both anchor at Root. The device's own
 // certificate comes from Inter, so cell (e) can see whether the device
 // sends its chain. Other is a CA neither side trusts. Every key is made
-// here, held in memory, written only 0600 for port49d, and registered for
-// the leak check; the device's key is made on the device and never leaves
-// it.
+// here and held in memory; a later task writes the keys port49d needs
+// 0600 and registers them for the leak check. The device's key is made on
+// the device and never leaves it.
+
 
 type l73Cert struct {
 	Cert *x509.Certificate
