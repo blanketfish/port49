@@ -32,34 +32,42 @@ func esc(parts ...string) string {
 
 // The families. Each comment is the key's shape after the root.
 const (
-	famToken          = "t/"  // t/<nas>/<user>/<id>: a token
-	famReceipt        = "r/"  // r/<nas>/<user>/<kind>/<sha256 hex>: a receipt
-	famReceiptBy      = "rp/" // rp/<principal>/<nas>/<user>/<kind>/<sha256 hex>: its revocation index
-	famContext        = "c/"  // c/<nas>/<user>: a login context
-	famIndexed        = "x/"  // x/<nas>/<user>: the ref's index record, authoritative
-	famByPrincipal    = "ip/" // ip/<principal>/<nas>/<user>: a lookup entry
-	famBySid          = "is/" // is/<sid>/<nas>/<user>
-	famByCert         = "ic/" // ic/<cert key>/<nas>/<user>
-	famBlob           = "b/"  // b/<hash>
-	famTokByPrin      = "tp/" // tp/<principal>/<nas>/<user>: the token index
-	famTokByCert      = "tc/" // tc/<cert key>/<nas>/<user>
-	famIdem           = "id/" // id/<principal>/<key>: an idempotency record
-	famMark           = "rv/" // rv/<kind>/<key>: a revocation mark
-	famSuperseded     = "sp/" // sp/<nas>/<user>: when its tokens were last superseded
-	famLedger         = "lw/" // lw/<nas>/<user>: the ledger record (plan 7e)
-	famMembership     = "mb/" // mb/<principal>: a directory membership (plan 7g), the broker's alone
-	famMembershipK    = "mk/" // mk/<map key>: the principal a mapping value resolved to
-	famOnce           = "on/" // on/<key>: a once-only record (plan 7h), the broker's alone
-	famOIDCOwner      = "oo/" // oo/<OIDCKey>: the principal minting under an OIDC sid or sub
-	famLogout         = "lo/" // lo/<OIDCKey>: a back-channel logout's record
-	famMFAProof       = "mp/" // mp/<key>: a kept per-login proof (plan 9c), the broker's alone
-	famSecondFactor   = "sf/" // sf/<principal>: a person's second factor (plan 9e), the broker's alone
-	famSignInAttempts = "sa/" // sa/<key>: a sign-in attempt count (plan 9e), the broker's alone
-	famUnlock         = "ul/" // ul/<principal>: a person's latest unlock (plan 11a), the broker's alone
+	famToken          = "t/"            // t/<nas>/<user>/<id>: a token
+	famReceipt        = "r/"            // r/<nas>/<user>/<kind>/<sha256 hex>: a receipt
+	famReceiptBy      = "rp/"           // rp/<principal>/<nas>/<user>/<kind>/<sha256 hex>: its revocation index
+	famContext        = "c/"            // c/<nas>/<user>: a login context
+	famIndexed        = "x/"            // x/<nas>/<user>: the ref's index record, authoritative
+	famByPrincipal    = "ip/"           // ip/<principal>/<nas>/<user>: a lookup entry
+	famBySid          = "is/"           // is/<sid>/<nas>/<user>
+	famByCert         = "ic/"           // ic/<cert key>/<nas>/<user>
+	famBlob           = "b/"            // b/<hash>
+	famTokByPrin      = "tp/"           // tp/<principal>/<nas>/<user>: the token index
+	famTokByCert      = "tc/"           // tc/<cert key>/<nas>/<user>
+	famIdem           = "id/"           // id/<principal>/<key>: an idempotency record
+	famMark           = "rv/"           // rv/<kind>/<key>: a revocation mark
+	famSuperseded     = "sp/"           // sp/<nas>/<user>: when its tokens were last superseded
+	famLedger         = "lw/"           // lw/<nas>/<user>: the ledger record (plan 7e)
+	famMembership     = "mb/"           // mb/<principal>: a directory membership (plan 7g), the broker's alone
+	famMembershipK    = "mk/"           // mk/<map key>: the principal a mapping value resolved to
+	famOnce           = "on/"           // on/<key>: a once-only record (plan 7h), the broker's alone
+	famOIDCOwner      = "oo/"           // oo/<OIDCKey>: the principal minting under an OIDC sid or sub
+	famLogout         = "lo/"           // lo/<OIDCKey>: a back-channel logout's record
+	famMFAProof       = "mp/"           // mp/<key>: a kept per-login proof (plan 9c), the broker's alone
+	famSecondFactor   = "sf/"           // sf/<principal>: a person's second factor (plan 9e), the broker's alone
+	famSignInAttempts = "sa/"           // sa/<key>: a sign-in attempt count (plan 9e), the broker's alone
+	famUnlock         = "ul/"           // ul/<principal>: a person's latest unlock (plan 11a), the broker's alone
+	famSnapshot       = "ds/"           // ds/m/<proc>@<host> and ds/b/<proc>@<host>: sealed directory snapshots (plan 11a, R19)
+	snapMarks         = "ds/m/"         // the marks records: every process writes one, port49d reads every one
+	snapBroker        = "ds/b/"         // a broker's logouts and pins: port49-broker's alone
+	snapDaemon        = "ds/m/port49d@" // the marks records port49d may write
 	famMeta           = "meta/"
 )
 
 func (k keys) family(f string) string { return k.root + f }
+
+func (k keys) snapshot(kind, writer string) string {
+	return k.root + famSnapshot + kind + "/" + esc(writer)
+}
 
 func (k keys) tokens(t store.TokenKey) string {
 	return k.root + famToken + esc(t.NAS, t.Username) + "/"

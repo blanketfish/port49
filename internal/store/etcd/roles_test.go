@@ -483,3 +483,141 @@ func TestTheDaemonCannotReachAnUnlock(t *testing.T) {
 		t.Fatalf("the daemon wrote an unlock: %v", err)
 	}
 }
+
+// provisionedFor is provisioned with the roles of a keyspace holding
+// scope's families (R23).
+func provisionedFor(t *testing.T, prefix string, scope Scope) *etcdtest.Server {
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	for _, g := range RolesFor(prefix, scope) {
+		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+	}
+	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {RoleDaemon}, "port49-broker": {RoleBroker}})
+	return srv
+}
+
+// On a directory keyspace the daemon reads the marks, the ping and the key
+// window (R23, R27), and nothing else.
+func TestTheDirectoryRolesAreTheMarksAlone(t *testing.T) {
+	k := newKeys("/port49/")
+	got := RolesFor("/port49/", ScopeDirectory)
+	want := []Grant{
+		{Role: RoleDaemon, Key: k.family(famMark), RangeEnd: clientv3.GetPrefixRangeEnd(k.family(famMark))},
+		{Role: RoleDaemon, Key: k.meta("ping")},
+		{Role: RoleDaemon, Key: k.meta("seal_keys")},
+		{Role: RoleBroker, Key: k.root, RangeEnd: clientv3.GetPrefixRangeEnd(k.root), Write: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("grant %d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// On a session keyspace the daemon does not read the marks; it reads every
+// marks snapshot record, writes its own alone, and has no grant on a
+// broker's records (R19, R23; the re-review's N1 and N4).
+func TestTheSessionRolesLackTheMarks(t *testing.T) {
+	k := newKeys("/port49/")
+	reads, writes := false, false
+	for _, g := range RolesFor("/port49/", ScopeSession) {
+		switch {
+		case g.Role != RoleDaemon:
+		case g.Key == k.family(famMark):
+			t.Fatalf("the session store's daemon role reads the marks: %+v", g)
+		case g.Key == k.family(snapMarks) && !g.Write:
+			reads = true
+		case g.Key == k.family(snapDaemon) && g.Write:
+			writes = true
+		case strings.HasPrefix(g.Key, k.family(famSnapshot)):
+			t.Fatalf("the daemon role reaches a snapshot record past its own and the marks: %+v", g)
+		}
+	}
+	if !reads || !writes {
+		t.Fatalf("the daemon role reads the marks records %v, writes its own %v", reads, writes)
+	}
+	for _, g := range RolesFor("/port49/", ScopeShared) {
+		if g.Key == k.family(famSnapshot) && g.Role == RoleDaemon {
+			t.Fatalf("a shared store's daemon role reaches ds/, which only a split writes: %+v", g)
+		}
+	}
+	if why := k.beyondSessionDaemon(k.family(snapBroker), clientv3.GetPrefixRangeEnd(k.family(snapBroker)), false); why == "" {
+		t.Fatal("a daemon read grant on ds/b/ passed the session check")
+	}
+	if why := k.beyondSessionDaemon(k.family(famSnapshot), clientv3.GetPrefixRangeEnd(k.family(famSnapshot)), false); why == "" {
+		t.Fatal("a daemon read grant on all of ds/ passed the session check")
+	}
+	if why := k.beyondSessionDaemon(k.family(snapMarks), clientv3.GetPrefixRangeEnd(k.family(snapMarks)), false); why != "" {
+		t.Fatalf("the daemon's own ds/m/ read grant was refused: %s", why)
+	}
+	for _, fam := range []string{snapMarks, snapMarks + "port49-broker@"} {
+		if why := k.beyondSessionDaemon(k.family(fam), clientv3.GetPrefixRangeEnd(k.family(fam)), true); why == "" {
+			t.Fatalf("a daemon write grant on %s passed the session check", fam)
+		}
+	}
+	if why := k.beyondSessionDaemon(k.family(snapDaemon), clientv3.GetPrefixRangeEnd(k.family(snapDaemon)), true); why != "" {
+		t.Fatalf("the daemon's own write grant was refused: %s", why)
+	}
+	if len(RolesFor("/port49/", ScopeShared)) != len(Roles("/port49/")) {
+		t.Fatal("Roles is not the shared scope's")
+	}
+}
+
+// On a directory keyspace the daemon reads the marks and nothing else, and
+// the start check holds it there: the shared roles applied to a directory
+// keyspace are refused, as reaching past them.
+func TestCheckIdentityAtTheDirectory(t *testing.T) {
+	const prefix = "/port49/"
+	ctx := context.Background()
+	srv := provisionedFor(t, prefix, ScopeDirectory)
+	d, b := openAs(t, srv, "port49-daemon", prefix), openAs(t, srv, "port49-broker", prefix)
+	if err := d.CheckIdentityAt(ctx, false, ScopeDirectory); err != nil {
+		t.Fatalf("the daemon: %v", err)
+	}
+	if err := b.CheckIdentityAt(ctx, true, ScopeDirectory); err != nil {
+		t.Fatalf("the broker: %v", err)
+	}
+	if _, err := d.ListRevocations(ctx); err != nil {
+		t.Fatalf("the daemon lists the marks: %v", err)
+	}
+	if err := d.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: t0}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the daemon wrote a mark: %v", err)
+	}
+	if _, _, err := d.SealKeys(ctx); err != nil {
+		t.Fatalf("the daemon reads the directory's key window (R27): %v", err)
+	}
+	if _, err := d.GetMembership(ctx, "user:alice@example.com"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the daemon read a pin: %v", err)
+	}
+	if _, err := d.GetLogout(ctx, "sid 1:i 1:s"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the daemon read a logout: %v", err)
+	}
+	wide := provisioned(t, prefix)
+	dw := openAs(t, wide, "port49-daemon", prefix)
+	if err := dw.CheckIdentityAt(ctx, false, ScopeDirectory); !errors.Is(err, ErrNotSeparated) {
+		t.Fatalf("the shared roles on a directory keyspace: %v", err)
+	}
+}
+
+// The re-review's last minor: a session keyspace whose daemon role also
+// reads a broker's snapshot records is refused at the daemon's start check,
+// naming ds/b/; port49d's start turns it into exit 1 (a *storeFault).
+func TestCheckIdentityAtRefusesADaemonReadOfBrokerSnapshots(t *testing.T) {
+	const prefix = "/port49/"
+	k := newKeys(prefix)
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	for _, g := range append(RolesFor(prefix, ScopeSession), Grant{Role: RoleDaemon, Key: k.family(snapBroker),
+		RangeEnd: clientv3.GetPrefixRangeEnd(k.family(snapBroker))}) {
+		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+	}
+	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {RoleDaemon}, "port49-broker": {RoleBroker}})
+	d := openAs(t, srv, "port49-daemon", prefix)
+	err := d.CheckIdentityAt(context.Background(), false, ScopeSession)
+	if !errors.Is(err, ErrNotSeparated) || !strings.Contains(err.Error(), "ds/b/") {
+		t.Fatalf("%v, want ErrNotSeparated naming ds/b/", err)
+	}
+}

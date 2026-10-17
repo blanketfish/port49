@@ -54,23 +54,62 @@ var (
 	daemonMetaReads = []string{"seal_keys", "witness", "purged", "judged_bundle", "ping"}
 )
 
+// Scope is which of port49's stores a keyspace holds (plan 11a; spec §13
+// decision 51, R23).
+type Scope int
+
+const (
+	// ScopeShared is a single site's one store: every family.
+	ScopeShared Scope = iota
+	// ScopeDirectory holds the directory's families alone (R11): rv/, sf/,
+	// ul/, mb/, mk/, lo/, meta/enrollments, meta/seal_keys and meta/ping.
+	ScopeDirectory
+	// ScopeSession holds every other family.
+	ScopeSession
+)
+
 // Roles is every grant the two roles need for prefix's keyspace.
-func Roles(prefix string) []Grant {
+func Roles(prefix string) []Grant { return RolesFor(prefix, ScopeShared) }
+
+// RolesFor is every grant the two roles need for a keyspace holding scope's
+// families.
+func RolesFor(prefix string, scope Scope) []Grant {
 	k := newKeys(prefix)
+	broker := Grant{Role: RoleBroker, Key: k.root, RangeEnd: clientv3.GetPrefixRangeEnd(k.root), Write: true}
+	if scope == ScopeDirectory {
+		p := k.family(famMark)
+		return []Grant{
+			{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p)},
+			{Role: RoleDaemon, Key: k.meta("ping")},
+			{Role: RoleDaemon, Key: k.meta("seal_keys")},
+			broker,
+		}
+	}
+	reads := daemonReads
+	if scope == ScopeSession {
+		reads = []string{famLedger}
+	}
 	var out []Grant
 	for _, fam := range daemonWrites {
 		p := k.family(fam)
 		out = append(out, Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p), Write: true})
 	}
-	for _, fam := range daemonReads {
+	for _, fam := range reads {
 		p := k.family(fam)
 		out = append(out, Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p)})
 	}
 	for _, name := range daemonMetaReads {
 		out = append(out, Grant{Role: RoleDaemon, Key: k.meta(name)}) // the one key: no RangeEnd
 	}
-	out = append(out, Grant{Role: RoleBroker, Key: k.root, RangeEnd: clientv3.GetPrefixRangeEnd(k.root), Write: true})
-	return out
+	if scope == ScopeSession {
+		// A daemon's key holder can neither delete nor replay a broker's
+		// record (N1); it has no grant on ds/b/, which holds pins and logout
+		// keys (N4).
+		out = append(out,
+			Grant{Role: RoleDaemon, Key: k.family(snapMarks), RangeEnd: clientv3.GetPrefixRangeEnd(k.family(snapMarks))},
+			Grant{Role: RoleDaemon, Key: k.family(snapDaemon), RangeEnd: clientv3.GetPrefixRangeEnd(k.family(snapDaemon)), Write: true})
+	}
+	return append(out, broker)
 }
 
 // RootUser is etcd's administrator, user and role alike. A store
@@ -108,6 +147,18 @@ var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 // (pre-flight M32; measured on v3.6 by
 // TestCheckIdentityRefusesADaemonWithTheBrokersReach).
 func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
+	return s.checkIdentityWith(ctx, broker, nil, nil, s.k.beyondDaemon)
+}
+
+// probe is one start-check probe: what it tried, and the try.
+type probe struct {
+	what string
+	do   func() error
+}
+
+// checkUser refuses an identity that is etcd's root, or one whose etcd
+// user cannot be told.
+func (s *Store) checkUser() error {
 	switch {
 	case s.user == RootUser:
 		return fmt.Errorf("%w: its certificate's CN is %q, etcd's administrator", ErrNotSeparated, RootUser)
@@ -118,55 +169,26 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		return fmt.Errorf("%w: cannot tell which etcd user this identity is, so its grants go unread",
 			ErrNotSeparated)
 	}
-	read := func(fam string) error {
-		_, err := s.tok.Get(ctx, s.k.family(fam), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
-		return unavailable(err)
-	}
-	write := func(fam string) error {
-		key := s.k.family(fam) + "_probe"
-		_, err := s.tok.Txn(ctx).If(clientv3.Compare(clientv3.CreateRevision(key), "<", 0)).
-			Then(clientv3.OpPut(key, "")).Commit()
-		return unavailable(err)
-	}
-	if err := read(famContext); err != nil {
-		return fmt.Errorf("reading %s: %w", s.k.family(famContext), err)
-	}
-	probes := []struct {
-		what string
-		do   func() error
-	}{
-		{"reading " + s.k.family(famIdem), func() error { return read(famIdem) }},
-		{"writing " + s.k.family(famIdem), func() error { return write(famIdem) }},
-		{"writing " + s.k.family(famMark), func() error { return write(famMark) }},
-		{"writing " + s.k.family(famTokByPrin), func() error { return write(famTokByPrin) }},
-		{"writing " + s.k.family(famTokByCert), func() error { return write(famTokByCert) }},
-		{"reading " + s.k.family(famSuperseded), func() error { return read(famSuperseded) }},
-		{"writing " + s.k.family(famSuperseded), func() error { return write(famSuperseded) }},
-		{"reading " + s.k.family(famMembership), func() error { return read(famMembership) }},
-		{"writing " + s.k.family(famMembership), func() error { return write(famMembership) }},
-		{"reading " + s.k.family(famMembershipK), func() error { return read(famMembershipK) }},
-		{"writing " + s.k.family(famMembershipK), func() error { return write(famMembershipK) }},
-		{"reading " + s.k.family(famOnce), func() error { return read(famOnce) }},
-		{"writing " + s.k.family(famOnce), func() error { return write(famOnce) }},
-		{"reading " + s.k.family(famOIDCOwner), func() error { return read(famOIDCOwner) }},
-		{"writing " + s.k.family(famOIDCOwner), func() error { return write(famOIDCOwner) }},
-		{"reading " + s.k.family(famLogout), func() error { return read(famLogout) }},
-		{"writing " + s.k.family(famLogout), func() error { return write(famLogout) }},
-		{"reading " + s.k.family(famMFAProof), func() error { return read(famMFAProof) }},
-		{"writing " + s.k.family(famMFAProof), func() error { return write(famMFAProof) }},
-		{"reading " + s.k.family(famSecondFactor), func() error { return read(famSecondFactor) }},
-		{"writing " + s.k.family(famSecondFactor), func() error { return write(famSecondFactor) }},
-		{"reading " + s.k.family(famSignInAttempts), func() error { return read(famSignInAttempts) }},
-		{"writing " + s.k.family(famSignInAttempts), func() error { return write(famSignInAttempts) }},
-		{"reading " + s.k.family(famUnlock), func() error { return read(famUnlock) }},
-		{"writing " + s.k.family(famUnlock), func() error { return write(famUnlock) }},
-		{"writing " + s.k.family(famLedger), func() error { return write(famLedger) }},
-		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
-		{"reading " + s.k.meta("judged"), func() error {
-			_, err := s.tok.Get(ctx, s.k.meta("judged"), clientv3.WithKeysOnly())
-			return unavailable(err)
-		}},
-	}
+	return nil
+}
+
+// probeRead reads one key of fam's prefix, keys only.
+func (s *Store) probeRead(ctx context.Context, fam string) error {
+	_, err := s.tok.Get(ctx, s.k.family(fam), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
+	return unavailable(err)
+}
+
+// probeWrite is a write under fam that writes nothing (see CheckIdentity).
+func (s *Store) probeWrite(ctx context.Context, fam string) error {
+	key := s.k.family(fam) + "_probe"
+	_, err := s.tok.Txn(ctx).If(clientv3.Compare(clientv3.CreateRevision(key), "<", 0)).
+		Then(clientv3.OpPut(key, "")).Commit()
+	return unavailable(err)
+}
+
+// judgeProbes runs probes: the broker's must answer, the daemon's must be
+// refused.
+func judgeProbes(broker bool, probes []probe) error {
 	for _, p := range probes {
 		err := p.do()
 		switch {
@@ -178,16 +200,72 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 			return fmt.Errorf("%s: %w", p.what, err) // an outage: the start waits
 		}
 	}
-	return s.checkGrants(ctx, broker)
+	return nil
 }
 
-// checkGrants reads this identity's roles and, for the daemon, their
+// checkIdentityWith is CheckIdentity's checks for a keyspace whose extra
+// requirements are need (both identities must answer) and judged (the
+// broker's must answer, the daemon's be refused), with beyond judging the
+// daemon's grants.
+func (s *Store) checkIdentityWith(ctx context.Context, broker bool, need, judged []probe,
+	beyond func(key, end string, write bool) string) error {
+	if err := s.checkUser(); err != nil {
+		return err
+	}
+	if err := s.probeRead(ctx, famContext); err != nil {
+		return fmt.Errorf("reading %s: %w", s.k.family(famContext), err)
+	}
+	for _, p := range need {
+		if err := p.do(); err != nil {
+			return fmt.Errorf("%s: %w", p.what, err)
+		}
+	}
+	probes := []probe{
+		{"reading " + s.k.family(famIdem), func() error { return s.probeRead(ctx, famIdem) }},
+		{"writing " + s.k.family(famIdem), func() error { return s.probeWrite(ctx, famIdem) }},
+		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
+		{"writing " + s.k.family(famTokByPrin), func() error { return s.probeWrite(ctx, famTokByPrin) }},
+		{"writing " + s.k.family(famTokByCert), func() error { return s.probeWrite(ctx, famTokByCert) }},
+		{"reading " + s.k.family(famSuperseded), func() error { return s.probeRead(ctx, famSuperseded) }},
+		{"writing " + s.k.family(famSuperseded), func() error { return s.probeWrite(ctx, famSuperseded) }},
+		{"reading " + s.k.family(famMembership), func() error { return s.probeRead(ctx, famMembership) }},
+		{"writing " + s.k.family(famMembership), func() error { return s.probeWrite(ctx, famMembership) }},
+		{"reading " + s.k.family(famMembershipK), func() error { return s.probeRead(ctx, famMembershipK) }},
+		{"writing " + s.k.family(famMembershipK), func() error { return s.probeWrite(ctx, famMembershipK) }},
+		{"reading " + s.k.family(famOnce), func() error { return s.probeRead(ctx, famOnce) }},
+		{"writing " + s.k.family(famOnce), func() error { return s.probeWrite(ctx, famOnce) }},
+		{"reading " + s.k.family(famOIDCOwner), func() error { return s.probeRead(ctx, famOIDCOwner) }},
+		{"writing " + s.k.family(famOIDCOwner), func() error { return s.probeWrite(ctx, famOIDCOwner) }},
+		{"reading " + s.k.family(famLogout), func() error { return s.probeRead(ctx, famLogout) }},
+		{"writing " + s.k.family(famLogout), func() error { return s.probeWrite(ctx, famLogout) }},
+		{"reading " + s.k.family(famMFAProof), func() error { return s.probeRead(ctx, famMFAProof) }},
+		{"writing " + s.k.family(famMFAProof), func() error { return s.probeWrite(ctx, famMFAProof) }},
+		{"reading " + s.k.family(famSecondFactor), func() error { return s.probeRead(ctx, famSecondFactor) }},
+		{"writing " + s.k.family(famSecondFactor), func() error { return s.probeWrite(ctx, famSecondFactor) }},
+		{"reading " + s.k.family(famSignInAttempts), func() error { return s.probeRead(ctx, famSignInAttempts) }},
+		{"writing " + s.k.family(famSignInAttempts), func() error { return s.probeWrite(ctx, famSignInAttempts) }},
+		{"reading " + s.k.family(famUnlock), func() error { return s.probeRead(ctx, famUnlock) }},
+		{"writing " + s.k.family(famUnlock), func() error { return s.probeWrite(ctx, famUnlock) }},
+		{"writing " + s.k.family(famLedger), func() error { return s.probeWrite(ctx, famLedger) }},
+		{"writing " + s.k.family(famMeta), func() error { return s.probeWrite(ctx, famMeta) }},
+		{"reading " + s.k.meta("judged"), func() error {
+			_, err := s.tok.Get(ctx, s.k.meta("judged"), clientv3.WithKeysOnly())
+			return unavailable(err)
+		}},
+	}
+	if err := judgeProbes(broker, append(probes, judged...)); err != nil {
+		return err
+	}
+	return s.checkGrantsWith(ctx, broker, beyond)
+}
+
+// checkGrantsWith reads this identity's roles and, for the daemon, their
 // permissions. AuthStatus is root's alone on v3.6, so auth being off is
 // read from the user being unknown: with auth on, a request as a user
 // etcd does not know is refused before this, at the probes. With auth
 // off the probes have refused the daemon already, and the broker's reach
 // is the keyspace's either way.
-func (s *Store) checkGrants(ctx context.Context, broker bool) error {
+func (s *Store) checkGrantsWith(ctx context.Context, broker bool, beyond func(key, end string, write bool) string) error {
 	if s.user == "" {
 		return nil // in the clear (CheckIdentity refused "" otherwise): auth cannot be on
 	}
@@ -210,7 +288,7 @@ func (s *Store) checkGrants(ctx context.Context, broker bool) error {
 			return fmt.Errorf("reading role %q's grants: %w", role, unavailable(err))
 		}
 		for _, p := range r.Perm {
-			if why := s.k.beyondDaemon(string(p.Key), string(p.RangeEnd), p.PermType != authpb.READ); why != "" {
+			if why := beyond(string(p.Key), string(p.RangeEnd), p.PermType != authpb.READ); why != "" {
 				return fmt.Errorf("%w: role %q grants %s on [%q, %q), which %s", ErrNotSeparated, role,
 					authpb.Permission_Type_name[int32(p.PermType)], p.Key, p.RangeEnd, why)
 			}
@@ -250,4 +328,104 @@ func (k keys) beyondDaemon(key, end string, write bool) string {
 		}
 	}
 	return "writes outside the families the daemon writes"
+}
+
+// CheckIdentityAt is CheckIdentity for a keyspace holding scope's families
+// (R23). A shared keyspace is checked as CheckIdentity checks one; a session
+// keyspace too, where both identities read the marks snapshot records and
+// write port49d's own, and the daemon's is refused writing another's or
+// reading a broker's (R19; N1, N4). On a
+// directory keyspace both identities read the marks and meta/seal_keys; the
+// daemon's is refused writing a mark, meta/, a second factor, an unlock, a
+// pin, a map key or a logout, and reading a second factor, an unlock, a
+// pin, a map key, a logout or meta/enrollments; and its grants reach rv/,
+// meta/ping and meta/seal_keys alone (beyondDirectoryDaemon).
+func (s *Store) CheckIdentityAt(ctx context.Context, broker bool, scope Scope) error {
+	switch scope {
+	case ScopeShared:
+		return s.CheckIdentity(ctx, broker)
+	case ScopeSession:
+		return s.checkIdentityWith(ctx, broker, []probe{
+			{"reading " + s.k.family(snapMarks), func() error { return s.probeRead(ctx, snapMarks) }},
+			{"writing " + s.k.family(snapDaemon), func() error { return s.probeWrite(ctx, snapDaemon) }},
+		}, []probe{
+			{"writing " + s.k.family(snapMarks) + "port49-broker@", func() error {
+				return s.probeWrite(ctx, snapMarks+"port49-broker@")
+			}},
+			{"reading " + s.k.family(snapBroker), func() error { return s.probeRead(ctx, snapBroker) }},
+		}, s.k.beyondSessionDaemon)
+	}
+	if err := s.checkUser(); err != nil {
+		return err
+	}
+	if err := s.probeRead(ctx, famMark); err != nil {
+		return fmt.Errorf("reading %s: %w", s.k.family(famMark), err)
+	}
+	if _, err := s.tok.Get(ctx, s.k.meta("seal_keys"), clientv3.WithKeysOnly()); err != nil {
+		return fmt.Errorf("reading %s: %w", s.k.meta("seal_keys"), unavailable(err))
+	}
+	probes := []probe{
+		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
+		{"reading " + s.k.family(famMembership), func() error { return s.probeRead(ctx, famMembership) }},
+		{"writing " + s.k.family(famMembership), func() error { return s.probeWrite(ctx, famMembership) }},
+		{"reading " + s.k.family(famMembershipK), func() error { return s.probeRead(ctx, famMembershipK) }},
+		{"writing " + s.k.family(famMembershipK), func() error { return s.probeWrite(ctx, famMembershipK) }},
+		{"reading " + s.k.family(famLogout), func() error { return s.probeRead(ctx, famLogout) }},
+		{"writing " + s.k.family(famLogout), func() error { return s.probeWrite(ctx, famLogout) }},
+		{"reading " + s.k.family(famSecondFactor), func() error { return s.probeRead(ctx, famSecondFactor) }},
+		{"writing " + s.k.family(famSecondFactor), func() error { return s.probeWrite(ctx, famSecondFactor) }},
+		{"reading " + s.k.family(famUnlock), func() error { return s.probeRead(ctx, famUnlock) }},
+		{"writing " + s.k.family(famUnlock), func() error { return s.probeWrite(ctx, famUnlock) }},
+		{"writing " + s.k.family(famMeta), func() error { return s.probeWrite(ctx, famMeta) }},
+		{"reading " + s.k.enrollmentMark(), func() error {
+			_, err := s.tok.Get(ctx, s.k.enrollmentMark(), clientv3.WithKeysOnly())
+			return unavailable(err)
+		}},
+	}
+	if err := judgeProbes(broker, probes); err != nil {
+		return err
+	}
+	return s.checkGrantsWith(ctx, broker, s.k.beyondDirectoryDaemon)
+}
+
+// beyondDirectoryDaemon says what a grant on [key, end) reaches that the
+// daemon's role on a directory keyspace may not: any write, or a read past
+// rv/, meta/ping and meta/seal_keys. An empty end is the one key.
+func (k keys) beyondDirectoryDaemon(key, end string, write bool) string {
+	if write {
+		return "writes the directory store, which the broker alone writes"
+	}
+	marks := k.family(famMark)
+	switch {
+	case (key == k.meta("ping") || key == k.meta("seal_keys")) && end == "":
+		return ""
+	case key >= marks && end != "" && end != "\x00" && end <= clientv3.GetPrefixRangeEnd(marks):
+		return ""
+	}
+	return "reads past rv/, meta/ping and meta/seal_keys"
+}
+
+// beyondSessionDaemon is beyondDaemon on a session keyspace: the same, but
+// a read within ds/m/ and a write within ds/m/port49d@ are the daemon's
+// own (R19; N1), and any other grant that reaches into ds/ is refused by
+// name (N4): a read of a broker's record would hand the daemon the pins and
+// logout keys mb/ and lo/ keep from it.
+func (k keys) beyondSessionDaemon(key, end string, write bool) string {
+	within := func(fam string) bool {
+		p := k.family(fam)
+		return key >= p && end != "" && end != "\x00" && end <= clientv3.GetPrefixRangeEnd(p)
+	}
+	if within(snapDaemon) || !write && within(snapMarks) {
+		return ""
+	}
+	ds := k.family(famSnapshot)
+	last := end
+	if last == "" {
+		last = key + "\x00" // the one key
+	}
+	if end == "\x00" || key < clientv3.GetPrefixRangeEnd(ds) && last > ds {
+		return "reaches into ds/ past the marks records (ds/m/) and its own (ds/m/port49d@): a broker's " +
+			"snapshot records (ds/b/) hold pins and logout keys the daemon must not read"
+	}
+	return k.beyondDaemon(key, end, write)
 }
