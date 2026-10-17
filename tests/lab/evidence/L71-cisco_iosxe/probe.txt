@@ -1,0 +1,14 @@
+### typed `?`, then Ctrl-U
+?^M
+TACACS server sub-mode commands:^M
+  address            Specify ip address for tacacs server^M
+  exit               Exit from TACACS server configuration mode^M
+  key                per-server encryption key (overrides default)^M
+  no                 Negate a command or set its defaults^M
+  port               TCP port for TACACS+ server (default is 49)^M
+  send-nat-address   To send client's post NAT address to tacacs+ server^M
+  single-connection  Multiplex all packets over a single tcp connection to server (for CiscoSecure)^M
+  timeout            Time to wait for this TACACS server to reply (overrides default)^M
+^M
+xe1(config-server-tacacs)#
+

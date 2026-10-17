@@ -1,0 +1,22 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+  <CR>               ^M
+  key                TACACS+ shared secret^M
+  port               TACACS+ server port^M
+  single-connection  Use single connection for this Tacacs+ server^M
+  test               Parameters to send test packets^M
+  timeout            TACACS+ server timeout period in seconds^M
+^M
+^[[43D^[[J^Mnx1(config)# tacacs-server host 192.0.2.71 ^[[30D^[[J
+
+### typed `tacacs-server ?`, then Ctrl-U
+tacacs-server ?^M
+  deadtime          Duration for which non-reachable server is skipped^M
+  directed-request  Enable direct authentication requests to server^M
+  host              TACACS+ server's DNS name or its IP address^M
+  key               Global TACACS+ server shared secret^M
+  test              Parameters to send test packets^M
+  timeout           Global TACACS+ server timeout period in seconds^M
+^M
+^[[27D^[[J^Mnx1(config)# tacacs-server ^[[14D^[[J
+

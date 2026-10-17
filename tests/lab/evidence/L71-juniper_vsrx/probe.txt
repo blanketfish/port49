@@ -1,0 +1,16 @@
+### typed `set system tacplus-server 192.0.2.71 ?`, then Ctrl-U
+set system tacplus-server 192.0.2.71 ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  port                 TACACS+ authentication server port number^M
+  routing-instance     Routing instance^M
+  secret               Shared <MASKED> the authentication server^M
+  single-connection    Optimize TCP connection attempts^M
+  source-address       Use specified address as source address^M
+  timeout              Request timeout period (1..90 seconds)^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set system tacplus-server 192.0.2.71    ^H^H^H^Mbreakglass@srx1#                                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
