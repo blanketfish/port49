@@ -55,7 +55,7 @@ var pools = map[string]Pool{
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
-	"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
+	"PutMembership": Token, "PutPin": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
 	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
 	"GetLogout": Token, "PutMFAProof": Token, "GetMFAProof": Token,
@@ -684,6 +684,10 @@ func (g *guarded) SupersededAt(ctx context.Context, k store.TokenKey) (at time.T
 
 func (g *guarded) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
 	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutMembership(ctx, m, ttl) })
+}
+
+func (g *guarded) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutPin(ctx, m, expect) })
 }
 
 func (g *guarded) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {

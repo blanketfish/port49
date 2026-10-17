@@ -1076,6 +1076,8 @@ func Run(t *testing.T, b Backend) {
 		{"MembershipAmbiguityHealsToTheSoleClaimant", MembershipAmbiguityHealsToTheSoleClaimant},
 		{"MembershipTieKeepsTheRefusal", MembershipTieKeepsTheRefusal},
 		{"MembershipWithNoExpiryOutlivesAnyTTL", MembershipWithNoExpiryOutlivesAnyTTL},
+		{"MembershipPinIsCompareAndSet", MembershipPinIsCompareAndSet},
+		{"MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone", MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone},
 		{"MembershipKeyOutlivesNoRecord", MembershipKeyOutlivesNoRecord},
 		{"MembershipRefusedKeyKeepsItsClaimants", MembershipRefusedKeyKeepsItsClaimants},
 		{"MembershipForgetTombstoneOutlivesTheRecord", MembershipForgetTombstoneOutlivesTheRecord},

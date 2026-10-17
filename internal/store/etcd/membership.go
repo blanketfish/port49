@@ -53,12 +53,26 @@ type membershipKeyRec struct {
 // torn between them leaves a claimant with no record, which only denies,
 // never a record that lists a key its index does not know (review R2-b).
 func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
+	return s.putMembership(ctx, m, ttl, nil)
+}
+
+// PutPin is PutMembership with no lease, written only when mb/<principal>
+// stands as expect says: the compare is on the revision GetMembership read
+// (Membership.Version), or on the key's absence, or on a tombstone.
+func (s *Store) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	return s.putMembership(ctx, m, store.NoExpiry, &expect)
+}
+
+func (s *Store) putMembership(ctx context.Context, m store.Membership, ttl time.Duration, expect *store.PinExpect) error {
 	now := s.now()
 	exp := expiry(now, ttl)
 	for _, key := range m.MapKeys {
 		if err := s.registerKey(ctx, key, m.Principal, exp, now); err != nil {
 			return err
 		}
+	}
+	if expect != nil {
+		return s.casPin(ctx, m, exp, *expect, now)
 	}
 	return cas(ctx, s.tok, s.tokLeases, s.k.membership(m.Principal),
 		func(r membershipRec) bool { return alive(r.ExpiresAt, now) },
@@ -75,6 +89,57 @@ func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.
 				Server: m.Server, Site: m.Site, Sealed: m.Sealed, ExpiresAt: exp}
 			return true, exp, false, nil
 		})
+}
+
+// casPin is putMembership's write for a PutPin: one read, the expectation
+// checked against what it saw, and the write compared on that read's
+// revision, so a record another region wrote in between is a conflict.
+func (s *Store) casPin(ctx context.Context, m store.Membership, exp time.Time, expect store.PinExpect, now time.Time) error {
+	key := s.k.membership(m.Principal)
+	resp, err := s.tok.Get(ctx, key)
+	if err != nil {
+		return unavailable(err)
+	}
+	var r membershipRec
+	var mod int64
+	live := false
+	if len(resp.Kvs) == 1 {
+		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
+			return notDecoded(key)
+		}
+		mod, live = resp.Kvs[0].ModRevision, alive(r.ExpiresAt, now)
+	}
+	switch {
+	case expect.Absent:
+		if live {
+			return store.ErrConflict
+		}
+	case expect.Forgotten:
+		if !live || !r.tombstone() {
+			return store.ErrConflict
+		}
+	default:
+		if !live || r.tombstone() || expect.Version == 0 || uint64(mod) != expect.Version {
+			return store.ErrConflict
+		}
+	}
+	if live && r.tombstone() && m.VerifiedAt.Before(r.ForgottenAt) {
+		return nil // verified before the forget: never writes the old pin back
+	}
+	body, err := json.Marshal(membershipRec{Principal: m.Principal, DN: m.DN, EntryID: m.EntryID, Username: m.Username,
+		GroupDNs: m.GroupDNs, GroupNames: m.GroupNames, MapKeys: m.MapKeys, Refused: m.Refused, VerifiedAt: m.VerifiedAt,
+		Server: m.Server, Site: m.Site, Sealed: m.Sealed, ExpiresAt: exp})
+	if err != nil {
+		return err
+	}
+	ok, err := commit(ctx, s.tok, s.tokLeases, []clientv3.Cmp{unchanged(key, mod)}, []put{{key: key, val: body, exp: exp}})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return store.ErrConflict
+	}
+	return nil
 }
 
 // claimsKey is whether principal has a live, unrefused record that lists
@@ -166,7 +231,8 @@ func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Tim
 
 func (s *Store) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
 	var r membershipRec
-	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return alive(r.ExpiresAt, s.now()) }); err != nil {
+	mod, err := s.getLiveRev(ctx, s.k.membership(principal), &r, func() bool { return alive(r.ExpiresAt, s.now()) })
+	if err != nil {
 		return store.Membership{}, err
 	}
 	if r.Principal != principal {
@@ -175,7 +241,9 @@ func (s *Store) GetMembership(ctx context.Context, principal string) (store.Memb
 	if r.tombstone() {
 		return store.Membership{}, store.ErrForgotten
 	}
-	return r.membership(), nil
+	m := r.membership()
+	m.Version = uint64(mod)
+	return m, nil
 }
 
 func (r membershipRec) tombstone() bool { return !r.ForgottenAt.IsZero() }
@@ -203,30 +271,42 @@ func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.M
 		if err != nil {
 			return store.Membership{}, unavailable(err)
 		}
-		if len(resp.Kvs) == 0 {
-			return store.Membership{}, store.ErrNotFound
-		}
+		var mod int64
 		var r membershipRec
 		var held store.Membership
 		exp := now.Add(store.TombstoneFloor)
-		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil || r.Principal != principal {
-			held = store.Membership{Principal: principal}
-		} else {
-			if !alive(r.ExpiresAt, now) || r.tombstone() {
-				return store.Membership{}, store.ErrNotFound
+		absent := len(resp.Kvs) == 0
+		if !absent {
+			mod = resp.Kvs[0].ModRevision
+			if json.Unmarshal(resp.Kvs[0].Value, &r) != nil || r.Principal != principal {
+				held = store.Membership{Principal: principal}
+			} else {
+				if r.tombstone() && alive(r.ExpiresAt, now) {
+					return store.Membership{}, store.ErrNotFound
+				}
+				if !alive(r.ExpiresAt, now) {
+					absent = true
+				} else {
+					held, exp = r.membership(), laterExp(r.ExpiresAt, exp)
+				}
 			}
-			held, exp = r.membership(), laterExp(r.ExpiresAt, exp)
+		}
+		if absent {
+			exp = time.Time{} // nothing held: a tombstone with no lease, so no copy elsewhere can outlive it
 		}
 		body, err := json.Marshal(membershipRec{Principal: principal, ForgottenAt: now, ExpiresAt: exp})
 		if err != nil {
 			return store.Membership{}, err
 		}
-		ok, err := commit(ctx, s.tok, s.tokLeases, []clientv3.Cmp{unchanged(key, resp.Kvs[0].ModRevision)},
+		ok, err := commit(ctx, s.tok, s.tokLeases, []clientv3.Cmp{unchanged(key, mod)},
 			[]put{{key: key, val: body, exp: exp}})
 		if err != nil {
 			return store.Membership{}, err
 		}
 		if ok {
+			if absent {
+				return store.Membership{}, store.ErrNotFound
+			}
 			return held, nil
 		}
 	}
@@ -297,18 +377,24 @@ func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
 // getLive reads key into v on the token pool, ErrNotFound when absent or
 // when live() is false once decoded.
 func (s *Store) getLive(ctx context.Context, key string, v any, live func() bool) error {
+	_, err := s.getLiveRev(ctx, key, v, live)
+	return err
+}
+
+// getLiveRev is getLive, also returning the record's mod_revision.
+func (s *Store) getLiveRev(ctx context.Context, key string, v any, live func() bool) (int64, error) {
 	resp, err := s.tok.Get(ctx, key)
 	if err != nil {
-		return unavailable(err)
+		return 0, unavailable(err)
 	}
 	if len(resp.Kvs) == 0 {
-		return store.ErrNotFound
+		return 0, store.ErrNotFound
 	}
 	if json.Unmarshal(resp.Kvs[0].Value, v) != nil {
-		return notDecoded(key)
+		return 0, notDecoded(key)
 	}
 	if !live() {
-		return store.ErrNotFound
+		return 0, store.ErrNotFound
 	}
-	return nil
+	return resp.Kvs[0].ModRevision, nil
 }

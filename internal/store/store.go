@@ -1012,6 +1012,13 @@ type Store interface {
 	// the forget left a tombstone holding its time (DeleteMembership). A ttl
 	// of NoExpiry writes the record and its keys with no lease.
 	PutMembership(ctx context.Context, m Membership, ttl time.Duration) error
+	// PutPin is PutMembership with no lease (NoExpiry), written only when the
+	// record stands as expect says: the directory store's pin writes, so a
+	// stale cache or a lagging feed can never overwrite a pin another region
+	// wrote since the read that decided the write. ErrConflict, and nothing
+	// written, when it does not. A write verified before the principal's last
+	// forget is dropped with no error, as PutMembership's.
+	PutPin(ctx context.Context, m Membership, expect PinExpect) error
 	// RefuseMapKeys marks each key refused as of at, unless a later
 	// verification holds it: MembershipByKey then answers ErrNotFound.
 	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
@@ -1036,7 +1043,10 @@ type Store interface {
 	// is dropped, so a verification in flight when the operator forgot can
 	// never write the old pin back. A tombstone is no record: no read
 	// returns it. `port49 directory forget` alone calls it (Ruling 3's
-	// escape; Task 13).
+	// escape; Task 13). With no live record it is ErrNotFound all the same,
+	// and still leaves a tombstone with no lease: a forget of a pin the store
+	// lost must still keep every region's copy from writing it back (plan
+	// 11a, I2).
 	DeleteMembership(ctx context.Context, principal string) (Membership, error)
 	// PutOnce writes value under key for ttl when no live record is there,
 	// in one atomic step, and reports whether it wrote (plan 7h): a logout
@@ -1234,6 +1244,18 @@ type Membership struct {
 	Server     string
 	Site       string
 	Sealed     []byte // written by internal/store/crypt; nil in plaintext form
+	// Version is the backend's version of the record GetMembership read: what
+	// a PinExpect names. Zero when written, and in answers that name no
+	// single record.
+	Version uint64
+}
+
+// PinExpect is the state of a principal's record a PutPin was decided on:
+// no record (Absent), a forget's tombstone (Forgotten), or the held record
+// at Version, as GetMembership read it.
+type PinExpect struct {
+	Absent, Forgotten bool
+	Version           uint64
 }
 
 // MapKey is the index key of one certificate-mapping value: a hash, so the

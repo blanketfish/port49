@@ -35,6 +35,7 @@ type Directory interface {
 // keys, refusals and the forget's tombstone, sealed as the session store's.
 type Members interface {
 	PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error
+	PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error
 	GetMembership(ctx context.Context, principal string) (store.Membership, error)
 	MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error)
 	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
@@ -187,10 +188,11 @@ const (
 )
 
 // dirPin is the directory's pin for principal: the cache's, else a bounded
-// read, filled when no change came between (I3). An error is a directory
-// answer other than none or a cut.
-func (p *placed) dirPin(ctx context.Context, principal string) (store.Membership, pinState, error) {
-	if e, ok := p.cached(principal); ok {
+// read, filled when no change came between (I3). fresh skips the cache: a
+// write whose compare failed decides again on the directory's own answer.
+// An error is a directory answer other than none or a cut.
+func (p *placed) dirPin(ctx context.Context, principal string, fresh bool) (store.Membership, pinState, error) {
+	if e, ok := p.cached(principal); ok && !fresh {
 		return e.pin, e.state, nil
 	}
 	if !p.reachable() {
@@ -220,47 +222,81 @@ func (p *placed) dirPin(ctx context.Context, principal string) (store.Membership
 }
 
 // putPin writes m's pin to the directory with no lease, bounded, failing
-// closed, and drops the cached entry: the next read takes the directory's,
-// which the tombstone rule may have kept.
-func (p *placed) putPin(ctx context.Context, m store.Membership) error {
+// closed, only if the directory's record still stands as the read that
+// decided the write saw it (expect); store.ErrConflict when it does not. It
+// drops the cached entry: the next read takes the directory's, which the
+// tombstone rule may have kept.
+func (p *placed) putPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
 	if !p.reachable() {
 		return fmt.Errorf("%w: the directory store does not answer, so %s cannot be pinned", store.ErrUnavailable,
 			printsafe.Line(m.Principal, 300))
 	}
 	err := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) error {
-		return p.c.Members.PutMembership(ctx, pinOf(m), store.NoExpiry)
+		return p.c.Members.PutPin(ctx, pinOf(m), expect)
 	})
 	p.dropPin(m.Principal)
 	return err
 }
 
+// PutPin is the directory's compare-and-set pin write, which only the router
+// itself makes; with no directory it is the session store's.
+func (p *placed) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	if p.c.Members == nil {
+		return p.Store.PutPin(ctx, m, expect)
+	}
+	return p.putPin(ctx, m, expect)
+}
+
 // PutMembership writes the session's record always, and the directory's
 // pin when the directory's own differs: a first bind, a re-pin (the same
-// entry after a forget included), a changed map key or a refusal. With the
-// directory not answering and the pin not cached, the session copy is
-// compared instead: only a pinned member's refresh is taken.
+// entry after a forget included), a changed map key or a refusal. The pin
+// write is a compare-and-set on the directory record the deciding read saw,
+// so a stale cache or a lagging feed never overwrites another region's pin:
+// on a conflict the decision is made again on a read of the directory itself.
+// A pin held for another entry is never moved here, whatever the read said
+// of it: only a forget frees a principal (Ruling 3). With the directory not
+// answering and the pin not cached, the session copy is compared instead:
+// only a pinned member's refresh is taken.
 func (p *placed) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
 	if p.c.Members == nil {
 		return p.Store.PutMembership(ctx, m, ttl)
 	}
-	pin, st, err := p.dirPin(ctx, m.Principal)
-	if err != nil {
-		return err
-	}
-	switch {
-	case st == pinHeld && samePin(pin, m):
-	case st == pinUnknown:
-		held, herr := p.Store.GetMembership(ctx, m.Principal)
-		if herr != nil || !samePin(held, m) {
-			return fmt.Errorf("%w: the directory store does not answer, so %s cannot be pinned", store.ErrUnavailable,
-				printsafe.Line(m.Principal, 300))
-		}
-	default:
-		if err := p.putPin(ctx, m); err != nil {
+	for attempt := 0; ; attempt++ {
+		pin, st, err := p.dirPin(ctx, m.Principal, attempt > 0)
+		if err != nil {
 			return err
 		}
+		var expect store.PinExpect
+		switch {
+		case st == pinHeld && samePin(pin, m):
+			return p.Store.PutMembership(ctx, m, ttl)
+		case st == pinHeld && pin.EntryID != "" && pin.EntryID != m.EntryID:
+			return fmt.Errorf("%w: %s is pinned to entry %s, not %s; only a forget moves a pin",
+				store.ErrRefused, printsafe.Line(m.Principal, 300), printsafe.Line(pin.EntryID, 120),
+				printsafe.Line(m.EntryID, 120))
+		case st == pinHeld:
+			expect = store.PinExpect{Version: pin.Version}
+		case st == pinAbsent:
+			expect = store.PinExpect{Absent: true}
+		case st == pinForgotten:
+			expect = store.PinExpect{Forgotten: true}
+		default: // pinUnknown
+			held, herr := p.Store.GetMembership(ctx, m.Principal)
+			if herr != nil || !samePin(held, m) {
+				return fmt.Errorf("%w: the directory store does not answer, so %s cannot be pinned", store.ErrUnavailable,
+					printsafe.Line(m.Principal, 300))
+			}
+			return p.Store.PutMembership(ctx, m, ttl)
+		}
+		err = p.putPin(ctx, m, expect)
+		if errors.Is(err, store.ErrConflict) && attempt < 2 {
+			continue // another region wrote the pin since the read; decide again on a fresh one
+		}
+		if err != nil {
+			return err
+		}
+		return p.Store.PutMembership(ctx, m, ttl)
 	}
-	return p.Store.PutMembership(ctx, m, ttl)
 }
 
 // GetMembership is the directory's pin with this region's freshness under
@@ -275,14 +311,19 @@ func (p *placed) GetMembership(ctx context.Context, principal string) (store.Mem
 	if p.c.Members == nil {
 		return p.Store.GetMembership(ctx, principal)
 	}
+	return p.getMembership(ctx, principal, false)
+}
+
+func (p *placed) getMembership(ctx context.Context, principal string, again bool) (store.Membership, error) {
 	local, lerr := p.Store.GetMembership(ctx, principal)
 	if lerr != nil && !errors.Is(lerr, store.ErrNotFound) {
 		return store.Membership{}, lerr
 	}
-	pin, st, err := p.dirPin(ctx, principal)
+	pin, st, err := p.dirPin(ctx, principal, again)
 	if err != nil {
 		return store.Membership{}, err
 	}
+	local.Version = 0
 	switch st {
 	case pinForgotten:
 		return store.Membership{}, store.ErrForgotten
@@ -290,7 +331,15 @@ func (p *placed) GetMembership(ctx context.Context, principal string) (store.Mem
 		if lerr != nil {
 			return store.Membership{}, store.ErrNotFound
 		}
-		if perr := p.putPin(ctx, local); perr == nil && p.c.Say != nil {
+		perr := p.putPin(ctx, local, store.PinExpect{Absent: true})
+		if errors.Is(perr, store.ErrConflict) {
+			if !again {
+				return p.getMembership(ctx, principal, true) // the directory changed since the read: decide on its answer
+			}
+			return store.Membership{}, fmt.Errorf("%w: the directory store's pin for %s keeps changing", store.ErrUnavailable,
+				printsafe.Line(principal, 300))
+		}
+		if perr == nil && p.c.Say != nil {
 			p.c.Say("directory store: %s's pin (entry %s) was missing from the directory and is put back from this "+
 				"region's record", printsafe.Line(principal, 300), printsafe.Line(local.EntryID, 120))
 		}
@@ -302,10 +351,15 @@ func (p *placed) GetMembership(ctx context.Context, principal string) (store.Mem
 		}
 		return pinOnly(pin), nil // pinned elsewhere, or re-pinned to another entry (I2)
 	}
-	if lerr == nil {
-		p.sayCached(principal)
+	if lerr != nil {
+		// The directory does not answer and nothing is cached or held here: whether
+		// the principal is pinned is unknown, never "unpinned", which would let
+		// a bind take it (Ruling 3; review of 8a, C1).
+		return store.Membership{}, fmt.Errorf("%w: the directory store does not answer and no pin is held here for %s",
+			store.ErrUnavailable, printsafe.Line(principal, 300))
 	}
-	return local, lerr
+	p.sayCached(principal)
+	return local, nil
 }
 
 // pinEntry is the router's cached answer for one principal: the
@@ -481,17 +535,21 @@ func (p *placed) DeleteMembership(ctx context.Context, principal string) (store.
 			store.ErrUnavailable)
 	}
 	var held store.Membership
-	if err := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
+	derr := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
 		held, x = p.c.Members.DeleteMembership(ctx, principal)
 		return
-	}); err != nil {
-		return store.Membership{}, err
+	})
+	// ErrNotFound is a directory that held nothing and now holds the
+	// tombstone all the same: this region's copy goes too, so it cannot put
+	// the pin back (review of 8a, I2).
+	if derr != nil && !errors.Is(derr, store.ErrNotFound) {
+		return store.Membership{}, derr
 	}
 	p.dropPin(principal)
 	if local, err := p.Store.DeleteMembership(ctx, principal); err == nil {
 		return local, nil // the region's record names more than the pin
 	}
-	return held, nil
+	return held, derr
 }
 
 // sayCached says, once per principal per 10 minutes, that a cut directory's

@@ -58,7 +58,7 @@ func TestForgetRemovesThePinAndIsRecorded(t *testing.T) {
 	if _, has := forgets[0]["groups"]; has || strings.Contains(f.log.String(), "group") {
 		t.Fatalf("a group reached the record: %v", forgets[0])
 	}
-	if text, err := f.b.Forget(ctx, alice, "admin_socket uid 0"); err != nil || !strings.Contains(text, "no membership is held") {
+	if text, err := f.b.Forget(ctx, alice, "admin_socket uid 0"); err != nil || !strings.Contains(text, "forgotten all the same") {
 		t.Fatalf("a second forget: %q %v", text, err)
 	}
 	if n := len(forgetsIn()); n != 1 {

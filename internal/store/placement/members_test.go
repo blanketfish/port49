@@ -27,19 +27,16 @@ func member(entry string, at time.Time) store.Membership {
 		MapKeys: []string{"k1"}, VerifiedAt: at}
 }
 
-// counting is a directory that counts its pin writes, and refuses one with
-// a lease (R13: a directory pin has none).
+// counting is a directory that counts its pin writes (PutPin has no lease
+// to give: R13, a directory pin has none).
 type counting struct {
 	Members
 	puts int
 }
 
-func (c *counting) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
+func (c *counting) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
 	c.puts++
-	if ttl != store.NoExpiry {
-		return errors.New("a directory pin written with a lease")
-	}
-	return c.Members.PutMembership(ctx, m, ttl)
+	return c.Members.PutPin(ctx, m, expect)
 }
 
 // A first bind writes the pin to the directory, with no lease and no groups;
@@ -341,4 +338,154 @@ func TestACutDirectoryServesTheCachedPinAndRefusesNewPins(t *testing.T) {
 	if _, err := a.DeleteMembership(ctx, alice); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a forget during the cut: %v, want ErrUnavailable", err)
 	}
+}
+
+// C1 (review of 8a): a read with the directory cut, the pin not cached and
+// no record here is unavailable. ErrNotFound would read as "unpinned", and a
+// bind that follows could take the principal.
+func TestACutReadOfAnUnheldPrincipalIsUnavailableNotUnpinned(t *testing.T) {
+	reach := false
+	a, _, _, _, _ := twoRegions(&reach)
+	_, err := a.GetMembership(context.Background(), alice)
+	if !errors.Is(err, store.ErrUnavailable) || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("%v: want ErrUnavailable and not ErrNotFound", err)
+	}
+}
+
+// flaky is a directory whose first pin read does not answer.
+type flaky struct {
+	Members
+	failed bool
+}
+
+func (f *flaky) GetMembership(ctx context.Context, p string) (store.Membership, error) {
+	if !f.failed {
+		f.failed = true
+		return store.Membership{}, store.ErrUnavailable
+	}
+	return f.Members.GetMembership(ctx, p)
+}
+
+// C1: plan 7g Ruling 3's moved-entry attack. The victim is pinned; the
+// attacker's bind reaches a region whose first directory read fails and
+// whose second answers. The first read must not read as unpinned, and the
+// write must not move the pin whatever the reads said.
+func TestAMovedEntryCannotTakeAHeldPinAcrossAFlakyRead(t *testing.T) {
+	ctx := context.Background()
+	a, _, _, _, dir := twoRegions(nil)
+	if err := a.PutMembership(ctx, member("uuid:victim", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	sess := memory.New(clock)
+	b := Wrap(Config{Session: sess, Directory: dir, Members: &flaky{Members: dir}, Marks: store.NewMarks(),
+		CallTimeout: time.Second, BulkTimeout: time.Second})
+	if _, err := b.GetMembership(ctx, alice); errors.Is(err, store.ErrNotFound) {
+		t.Errorf("a failed pin read read as unpinned: %v", err)
+	}
+	if err := b.PutMembership(ctx, member("uuid:attacker", t0.Add(time.Minute)), time.Hour); err == nil {
+		t.Fatal("the attacker's entry was pinned over the victim's")
+	}
+	if pin, err := dir.GetMembership(ctx, alice); err != nil || pin.EntryID != "uuid:victim" {
+		t.Fatalf("the directory's pin: %+v %v, want the victim's", pin, err)
+	}
+}
+
+// C1: even when a region believes the pin is held and is wrong about which
+// entry, nothing moves a held pin but a forget.
+func TestAHeldPinIsRefusedToAnotherEntry(t *testing.T) {
+	ctx := context.Background()
+	a, _, _, _, dir := twoRegions(nil)
+	if err := a.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	err := a.PutMembership(ctx, member("uuid:2", t0.Add(time.Minute)), time.Hour)
+	if !errors.Is(err, store.ErrRefused) {
+		t.Fatalf("%v: want ErrRefused", err)
+	}
+	if pin, _ := dir.GetMembership(ctx, alice); pin.EntryID != "uuid:1" {
+		t.Fatalf("the directory's pin moved to %q", pin.EntryID)
+	}
+}
+
+// I1: region b's cache says "absent" (the feed lags or is down) after
+// region a pinned. b's bind of another entry must not overwrite a's pin; b's
+// bind of the same entry succeeds, having read the directory again.
+func TestAStaleAbsentCacheCannotOverwriteAnotherRegionsPin(t *testing.T) {
+	ctx := context.Background()
+	a, b, _, _, dir := twoRegions(nil)
+	if _, err := b.GetMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if !b.(*placed).cachedPin(alice) {
+		t.Fatal("setup: b did not cache the absent pin")
+	}
+	if err := a.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutMembership(ctx, member("uuid:2", t0.Add(time.Minute)), time.Hour); err == nil {
+		t.Fatal("b overwrote a's pin from a stale cache")
+	}
+	if pin, _ := dir.GetMembership(ctx, alice); pin.EntryID != "uuid:1" {
+		t.Fatalf("the directory's pin is %q, want a's uuid:1", pin.EntryID)
+	}
+	b.(*placed).dropPins()
+	b.(*placed).fillAbsent(alice) // the stale state again
+	if err := b.PutMembership(ctx, member("uuid:1", t0.Add(2*time.Minute)), time.Hour); err != nil {
+		t.Fatalf("the same entry's verification after a stale read: %v", err)
+	}
+}
+
+// I2: the directory lost the pin (an older backup restored) and region b's
+// session copy holds it. A forget leaves a tombstone anyway, so b's copy
+// cannot put the pin back, and the router says so (ErrNotFound only when
+// nothing at all was held).
+func TestAForgetOfALostPinStillTombstonesAndBlocksTheWriteBack(t *testing.T) {
+	ctx := context.Background()
+	a, b, _, sb, dir := twoRegions(nil)
+	if err := sb.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("setup: the directory should hold nothing: %v", err)
+	}
+	if _, err := a.DeleteMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a held nothing: %v", err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("the directory after the forget: %v, want a tombstone", err)
+	}
+	if _, err := b.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("b's read: %v, want forgotten", err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("b put the pin back: %v", err)
+	}
+}
+
+// I2, the forgetting region's own copy: the forget removes it though the
+// directory held nothing, and reports what it removed.
+func TestAForgetOfALostPinRemovesTheForgettingRegionsCopy(t *testing.T) {
+	ctx := context.Background()
+	_, b, _, sb, dir := twoRegions(nil)
+	if err := sb.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.DeleteMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
+		t.Fatalf("%+v %v: want the removed copy", got, err)
+	}
+	if _, err := sb.GetMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the region's own copy outlived the forget: %v", err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("the directory: %v, want a tombstone", err)
+	}
+	if _, err := b.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("b's read: %v", err)
+	}
+}
+
+// fillAbsent caches "absent" for principal, as a read before another
+// region's pin would have.
+func (p *placed) fillAbsent(principal string) {
+	p.fillPin(principal, p.genOf(principal), pinEntry{state: pinAbsent})
 }

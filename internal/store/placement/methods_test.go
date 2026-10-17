@@ -13,7 +13,7 @@ import (
 // (decision 51).
 var directoryMethods = set(`
 	PutRevocation GetRevocation DeleteRevocation ListRevocations
-	PutMembership RefuseMapKeys GetMembership MembershipByKey DeleteMembership
+	PutMembership PutPin RefuseMapKeys GetMembership MembershipByKey DeleteMembership
 `)
 
 var sessionMethods = set(`
