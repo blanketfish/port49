@@ -32,7 +32,8 @@ const issuerFileMax = 1 << 20
 //
 // It lives here rather than as a config method, as the plan has it, because
 // certstatus imports inventory, which imports config.
-func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certificate, stateDir string) (certstatus.Config, error) {
+func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certificate, stateDir,
+	trusted, who string) (certstatus.Config, error) {
 	out := certstatus.Config{RefreshInterval: cs.RefreshInterval, StateDir: stateDir}
 	for i, src := range cs.CRLs {
 		key := fmt.Sprintf("crls[%d].issuer_file %s", i, src.IssuerFile)
@@ -45,8 +46,8 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certifi
 		})
 		if !under {
 			return certstatus.Config{}, fmt.Errorf("%s: %s is neither a trust anchor's certificate nor signed by "+
-				"one (broker.client_ca_file, or a broker.identity x509 trust_anchor_file); CRL %s would vouch for "+
-				"certificates the broker does not trust", key, printsafe.Line(issuer.Subject.String(), 200), src.Name)
+				"one (%s); CRL %s would vouch for certificates %s does not trust", key,
+				printsafe.Line(issuer.Subject.String(), 200), trusted, src.Name, who)
 		}
 		if !issuer.BasicConstraintsValid || !issuer.IsCA {
 			return certstatus.Config{}, fmt.Errorf("%s: %s is not a CA certificate, so it signs no CRL", key,

@@ -1088,7 +1088,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				"(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until "+
 				"`port49 revoke --cert`")
 		} else {
-			ccfg, err := certStatusConfig(*cs, certsOf(anchors), filepath.Dir(cfg.Broker.RevocationsFile))
+			ccfg, err := certStatusConfig(*cs, certsOf(anchors), filepath.Dir(cfg.Broker.RevocationsFile),
+				"broker.client_ca_file, or a broker.identity x509 trust_anchor_file", "the broker")
 			if err != nil {
 				stopSpool()
 				<-spoolDone

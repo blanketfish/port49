@@ -183,7 +183,7 @@ func TestCertificateStatusCoversBothAnchors(t *testing.T) {
 	}
 	cs := config.CertificateStatusConfig{CRLs: []config.CertificateStatusCRL{
 		{Name: "users", File: "/x", IssuerFile: write("users.pem", human)}}}
-	ccfg, err := certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir)
+	ccfg, err := certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir, "the test anchors", "the test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,12 +217,12 @@ func TestCertificateStatusCoversBothAnchors(t *testing.T) {
 		t.Fatalf("OCSP alone, allow: %q", line)
 	}
 	cs.CRLs = append(cs.CRLs, config.CertificateStatusCRL{Name: "work", File: "/y", IssuerFile: write("work.pem", work)})
-	if ccfg, err = certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir); err != nil ||
+	if ccfg, err = certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir, "the test anchors", "the test"); err != nil ||
 		uncoveredAnchor(ccfg, work.Cert) || anchorCoverLine(wa, ccfg, "refuse") != "" {
 		t.Fatalf("a CRL under the workload anchor: %v", err)
 	}
 	cs.CRLs = append(cs.CRLs, config.CertificateStatusCRL{Name: "stranger", File: "/z", IssuerFile: write("s.pem", stranger)})
-	if _, err := certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir); err == nil ||
+	if _, err := certStatusConfig(cs, []*x509.Certificate{human.Cert, work.Cert}, dir, "the test anchors", "the test"); err == nil ||
 		!strings.Contains(err.Error(), "is neither a trust anchor's certificate nor signed by one") {
 		t.Fatalf("a CRL under neither anchor: %v", err)
 	}

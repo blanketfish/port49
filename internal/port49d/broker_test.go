@@ -440,17 +440,24 @@ func safeDir(t *testing.T) string {
 
 func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
 	t.Helper()
+	return writeRunConfigWith(t, b, `
+devices:
+  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1]}
+key_groups:
+  - {match: {cidr: 127.0.0.0/8}, key_ref: k}
+`, "")
+}
+
+// writeRunConfigWith is writeRunConfig with the inventory's body and extra
+// top-level YAML appended to port49d.yaml (a tls_listener block, say).
+func writeRunConfigWith(t *testing.T, b *config.BrokerConfig, inventory, extra string) string {
+	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
 	t.Setenv("T_RUN_ENC", "33333333333333333333333333333333")
 	// safeDir: the inventory is read behind the policy file's fence.
 	dir := safeDir(t)
 	inv := filepath.Join(dir, "inventory.yaml")
-	if err := os.WriteFile(inv, []byte(`
-devices:
-  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1]}
-key_groups:
-  - {match: {cidr: 127.0.0.0/8}, key_ref: k}
-`), 0o600); err != nil {
+	if err := os.WriteFile(inv, []byte(inventory), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(dir, "port49d.yaml")
@@ -474,7 +481,7 @@ broker:
   policy_watch_interval: 1s
   certificate_status:
 %s`, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
-		b.PolicyFile, b.RevocationsFile, certStatusYAML(t, b.CertificateStatus))), 0o600); err != nil {
+		b.PolicyFile, b.RevocationsFile, certStatusYAML(t, b.CertificateStatus))+extra), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return cfgPath
