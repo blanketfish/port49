@@ -51,6 +51,9 @@ type Material struct {
 	// from another's. A tls device in it is refused identity_mismatch, with
 	// the reason, whatever its certificate says.
 	Unidentifiable map[string]string
+	// Tickets is the guard Apply keyed on Config; nil is
+	// session_ticket_lifetime 0s, and no ticket is issued or resumed.
+	Tickets *TicketGuard
 }
 
 // Details for a handshake that failed with no verdict of its own. They are
@@ -219,7 +222,11 @@ func (s *conn) acceptRecord(diag keyring.Diagnosis, reason decision.Reason, deta
 // only once HandshakeContext has returned, inside the same deadline (ruling
 // 8). A ticket crypto/tls sends before the client's Finished therefore
 // precedes the status check; a resumption with it runs VerifyConnection and
-// the status check again.
+// the status check again. A resumption is no different: crypto/tls sends
+// its new ticket in the server's first flight, before VerifyConnection and
+// the status check, so a device whose resumption is then refused (revoked
+// since) still received one. Every redemption is judged again, and the new
+// ticket carries the chain's origin time, so it ends with the chain.
 func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	hctx, cancel := context.WithTimeout(ctx, s.d.TLS.HandshakeTimeout)
 	defer cancel()
@@ -228,9 +235,13 @@ func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	// Whatever Material holds, RFC 9887 is TLS 1.3 with a client certificate.
 	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS13
 	cfg.ClientAuth = tls.RequireAnyClientCert
-	// A ticket is single-use and age-bounded or it is not issued: tickets stay
-	// off unless the TicketGuard's hooks are on this Config.
-	if !guarded(cfg) {
+	// A ticket is single-use and age-bounded or it is not issued: whatever
+	// hooks the base carries are dropped, and only Material.Tickets binds
+	// the guard's.
+	cfg.WrapSession, cfg.UnwrapSession = nil, nil
+	if mat.Tickets != nil {
+		mat.Tickets.bind(cfg)
+	} else {
 		cfg.SessionTicketsDisabled = true
 	}
 	cfg.GetConfigForClient = func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
