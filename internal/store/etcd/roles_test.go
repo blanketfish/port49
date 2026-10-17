@@ -192,6 +192,7 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 	once, owner, logout := newKeys(prefix).family(famOnce), newKeys(prefix).family(famOIDCOwner),
 		newKeys(prefix).family(famLogout)
 	secondFactor, attempts := newKeys(prefix).family(famSecondFactor), newKeys(prefix).family(famSignInAttempts)
+	unlock := newKeys(prefix).family(famUnlock)
 	srv := provisioned(t, prefix)
 	if err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false); err != nil {
 		t.Fatalf("the daemon as itself, with its read on lw/: %v", err)
@@ -234,6 +235,10 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 			"it was allowed reading " + attempts},
 		{etcdtest.Grant{Role: RoleDaemon, Key: attempts, RangeEnd: clientv3.GetPrefixRangeEnd(attempts), Write: true},
 			"it was allowed reading " + attempts},
+		{etcdtest.Grant{Role: RoleDaemon, Key: unlock, RangeEnd: clientv3.GetPrefixRangeEnd(unlock)},
+			"it was allowed reading " + unlock},
+		{etcdtest.Grant{Role: RoleDaemon, Key: unlock, RangeEnd: clientv3.GetPrefixRangeEnd(unlock), Write: true},
+			"it was allowed reading " + unlock},
 	} {
 		loose := provisionedWith(t, prefix, []etcdtest.Grant{c.extra}, nil)
 		err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false)
@@ -274,6 +279,12 @@ func TestCheckIdentityReadsTheDaemonsGrants(t *testing.T) {
 		"readwrite on id/user:alice/":  sub(k.family(famIdem)+"user:alice/", true),
 		"read on id/user:alice/":       sub(k.family(famIdem)+"user:alice/", false),
 		"read on tp/user:alice/":       sub(k.family(famTokByPrin)+"user:alice/", false),
+		"read on ul/user:alice/":       sub(k.family(famUnlock)+"user:alice/", false),
+		"readwrite on ul/user:alice/":  sub(k.family(famUnlock)+"user:alice/", true),
+		"read on sf/user:alice/":       sub(k.family(famSecondFactor)+"user:alice/", false),
+		"readwrite on sf/user:alice/":  sub(k.family(famSecondFactor)+"user:alice/", true),
+		"read on sa/user:alice/":       sub(k.family(famSignInAttempts)+"user:alice/", false),
+		"readwrite on sa/user:alice/":  sub(k.family(famSignInAttempts)+"user:alice/", true),
 		"readwrite outside its prefix": sub("/elsewhere/", true),
 		"readwrite from v1/ onward":    {Role: RoleDaemon, Key: k.root, RangeEnd: "\x00", Write: true},
 	} {
