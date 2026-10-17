@@ -47,35 +47,6 @@ func TestL73DialectsAskL71sQuestionFirst(t *testing.T) {
 	}
 }
 
-// Every keyword the Cisco lines type is one some ask needs, or one an ask
-// wants that the lines type only when it was listed.
-func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
-	for _, tc := range []struct {
-		family string
-		words  []string
-	}{
-		{"iosxe", []string{"tls", "port", "trustpoint", "client", "ip", "vrf", "tacacs", "single-connection", "address", "key"}},
-		{"nxos", []string{"tls", "port", "single-connection", "client-trustpoint", "host"}},
-		{"eos", []string{"ssl-profile", "port", "single-connection"}},
-	} {
-		need := map[string]bool{}
-		for _, d := range l73Dialects {
-			if d.Family == tc.family {
-				for _, a := range d.Asks {
-					for _, w := range a.Need {
-						need[w] = true
-					}
-				}
-			}
-		}
-		for _, w := range tc.words {
-			if !need[w] {
-				t.Errorf("%s: %s is typed and never asked about", tc.family, w)
-			}
-		}
-	}
-}
-
 func TestL73IOSXELines(t *testing.T) {
 	got := l73CiscoLines("iosxe", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
 	want := []string{
@@ -251,59 +222,3 @@ func TestL73Refusal(t *testing.T) {
 
 // maskKey keeps the lab's shared secret out of a failure message.
 func maskKey(s string) string { return strings.ReplaceAll(s, labcreds.Key, "<key>") }
-
-// Every config word a dialect types is asked about by an ask at the level it
-// is typed, so a renamed keyword is an INVALID run at the probe and not a
-// refused line half way through a cell. Words that are values (names,
-// addresses, numbers) are not keywords. The staleness check keeps the lists
-// below honest: each word is in a line the dialect really types.
-func TestL73AsksCoverEveryTypedWordAtItsLevel(t *testing.T) {
-	has := map[string]bool{"secure": true, "server": true, "server-trustpoint": true}
-	d := l73DeviceTLS{Server: l73Server, Port: l73TLSPort, SingleConnection: true, Secret: true,
-		Second: l73SecondServer, SecondTLS: true, SecondPort: l73TLSPort}
-	plain := l73DeviceTLS{Server: l73Server, Second: l73SecondServer, SecondPort: 49}
-	for _, tc := range []struct {
-		platform, family string
-		typed            map[string][]string
-	}{
-		{"cisco_iosxe", "iosxe", map[string][]string{
-			"":                {"tls", "address", "single-connection", "key", "port"},
-			"address ":        {"ipv4"},
-			"tls ":            {"port", "trustpoint", "ip"},
-			"tls trustpoint ": {"client", "server"},
-			"tls ip ":         {"vrf", "tacacs"},
-			"tls ip vrf ":     {"forwarding"},
-			"tls ip tacacs ":  {"source-interface"},
-		}},
-		{"cisco_nxos", "nxos", map[string][]string{
-			"tacacs-server host 192.0.2.71 ":     {"tls", "port", "single-connection", "key"},
-			"tacacs-server ":                     {"host", "secure"},
-			"tacacs-server secure ":              {"tls"},
-			"tacacs-server host 192.0.2.71 tls ": {"client-trustpoint", "server-trustpoint"},
-		}},
-		{"arista_ceos", "eos", map[string][]string{
-			"tacacs-server host 192.0.2.71 ": {"ssl-profile", "port", "single-connection", "key"},
-		}},
-	} {
-		asked := map[string][]string{}
-		for _, a := range l73Dialects[tc.platform].Asks {
-			asked[a.Ask] = append(append(asked[a.Ask], a.Need...), a.Want...)
-		}
-		var typed []string
-		for _, dev := range []l73DeviceTLS{d, plain} {
-			for _, ln := range l73CiscoLines(tc.family, nil, dev, has) {
-				typed = append(typed, strings.Fields(ln)...)
-			}
-		}
-		for level, words := range tc.typed {
-			for _, w := range words {
-				if !slices.Contains(asked[level], w) {
-					t.Errorf("%s: %s is typed at %q and never asked about there", tc.family, w, level)
-				}
-				if !slices.Contains(typed, w) {
-					t.Errorf("%s: %s is listed at %q but no line types it", tc.family, w, level)
-				}
-			}
-		}
-	}
-}

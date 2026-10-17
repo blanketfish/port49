@@ -126,13 +126,13 @@ type l73Ask struct {
 // it lists tls.
 var l73JunosAsks = []l73Ask{
 	{Ask: "set system tacplus-server 192.0.2.71 ", Control: []string{"secret", "port", "timeout"},
-		Need: []string{"tls", "port", "single-connection", "routing-instance"}},
+		Need: []string{"tls", "port", "single-connection", "routing-instance", "secret"}},
 	{Ask: "set system tacplus-server 192.0.2.71 tls ", Control: []string{"trusted-ca-group"},
 		Need: []string{"trusted-ca-group", "mutual-authentication"}},
 	{Ask: "set system tacplus-server 192.0.2.71 tls mutual-authentication ", Control: []string{"certificate-id"},
 		Need: []string{"certificate-id"}},
 	{Ask: "set system accounting destination tacplus server 192.0.2.71 ", Control: []string{"secret", "port", "timeout"},
-		Need: []string{"tls", "port", "routing-instance"}},
+		Need: []string{"tls", "port", "routing-instance", "secret"}},
 	{Ask: "set system accounting destination tacplus server 192.0.2.71 tls ", Control: []string{"trusted-ca-group"},
 		Need: []string{"trusted-ca-group", "mutual-authentication"}},
 	{Ask: "set system accounting destination tacplus server 192.0.2.71 tls mutual-authentication ", Control: []string{"certificate-id"},
