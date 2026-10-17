@@ -76,7 +76,7 @@ var l73IOSXEDialect = l73Dialect{
 var l73NXOSAsks = []l73Ask{
 	{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"}, Need: []string{"tls", "port", "single-connection", "key"}},
 	{Ask: "tacacs-server ", Control: []string{"host", "key", "timeout"}, Need: []string{"host"}, Want: []string{"secure"}},
-	{Ask: "tacacs-server secure ", Control: []string{"tls"}, Need: []string{"tls"}, Only: "secure"},
+	{Ask: "tacacs-server secure ", Control: []string{"tls"}, Need: []string{"tls"}, Only: l73HasNXOSSecure},
 	{Ask: "tacacs-server host 192.0.2.71 tls ", Control: []string{"client-trustpoint", "server-trustpoint"},
 		Need: []string{"client-trustpoint"}, Want: []string{"server-trustpoint"}},
 	{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
@@ -137,6 +137,13 @@ const (
 	l73CiscoKey = "l73-key"
 )
 
+// The keys of the Want words the Cisco lines read from has (l73RecordListed).
+var (
+	l73HasTrustpointServer = l73Ask{Ask: "tls trustpoint "}.listed("server")
+	l73HasNXOSSecure       = l73Ask{Ask: "tacacs-server "}.listed("secure")
+	l73HasNXOSServerTrust  = l73Ask{Ask: "tacacs-server host 192.0.2.71 tls "}.listed("server-trustpoint")
+)
+
 // l73CiscoLines is what one Cisco cell types: the previous cell's undo (prev
 // nil: the startup config is in place), then this cell's lines. IOS XE and
 // NX-OS have no commit to roll back, so each cell starts from the startup
@@ -179,7 +186,7 @@ func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 		if d.Second != "" {
 			out = append(out, "no tacacs-server host "+d.Second)
 		}
-		if family == "nxos" && has["secure"] {
+		if family == "nxos" && has[l73HasNXOSSecure] {
 			out = append(out, "no tacacs-server secure tls")
 		}
 		return append(out, "tacacs-server host "+l73Server+" key 0 "+labcreds.Key,
@@ -220,10 +227,10 @@ func l73IOSXEServer(name, addr string, tls bool, port int, single, secret, serve
 }
 
 func l73IOSXEApply(d l73DeviceTLS, has map[string]bool) []string {
-	out := l73IOSXEServer(l73XEServer, d.Server, true, d.Port, d.SingleConnection, d.Secret, has["server"])
+	out := l73IOSXEServer(l73XEServer, d.Server, true, d.Port, d.SingleConnection, d.Secret, has[l73HasTrustpointServer])
 	if d.Second != "" {
 		out = append(out, l73IOSXEServer(l73XESecond, d.Second, d.SecondTLS, d.SecondPort, false,
-			d.Secret || !d.SecondTLS, has["server"])...)
+			d.Secret || !d.SecondTLS, has[l73HasTrustpointServer])...)
 	}
 	out = append(out, "aaa group server tacacs+ "+l73Group, "no server name "+l73XEStart, "server name "+l73XEServer)
 	if d.Second != "" {
@@ -247,7 +254,7 @@ func l73NXOSHost(addr string, tls bool, port int, single, secret bool, has map[s
 	out := []string{first}
 	if tls {
 		out = append(out, h+" tls client-trustpoint "+l73CertID)
-		if has["server-trustpoint"] {
+		if has[l73HasNXOSServerTrust] {
 			out = append(out, h+" tls server-trustpoint "+l73RootProfile)
 		}
 	}
@@ -258,7 +265,7 @@ func l73NXOSHost(addr string, tls bool, port int, single, secret bool, has map[s
 // group and is removed before the TLS host takes its address.
 func l73NXOSApply(d l73DeviceTLS, has map[string]bool) []string {
 	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + l73Server, "exit", "no tacacs-server host " + l73Server}
-	if has["secure"] {
+	if has[l73HasNXOSSecure] {
 		out = append(out, "tacacs-server secure tls")
 	}
 	out = append(out, l73NXOSHost(d.Server, true, d.Port, d.SingleConnection, d.Secret, has)...)

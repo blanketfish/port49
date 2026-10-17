@@ -39,7 +39,7 @@ func TestL73DialectsAskL71sQuestionFirst(t *testing.T) {
 		}
 		for _, a := range d.Asks {
 			if a.Only != "" && !slices.ContainsFunc(d.Asks, func(b l73Ask) bool {
-				return slices.Contains(b.Need, a.Only) || slices.Contains(b.Want, a.Only)
+				return slices.ContainsFunc(append(slices.Clone(b.Need), b.Want...), func(w string) bool { return b.listed(w) == a.Only })
 			}) {
 				t.Errorf("%s: %q is asked only after %q, which no ask looks for", name, a.Ask, a.Only)
 			}
@@ -59,7 +59,7 @@ func TestL73IOSXELines(t *testing.T) {
 	}
 	prev := l73DeviceTLS{Server: "172.100.100.1"}
 	got = l73CiscoLines("iosxe", &prev, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
-		Second: "172.100.100.2"}, map[string]bool{"server": true})
+		Second: "172.100.100.2"}, map[string]bool{l73HasTrustpointServer: true})
 	for _, line := range []string{"no tacacs server l73-tls", "tls port 300", "single-connection",
 		"tls trustpoint server l73-root", "tacacs server l73-second", "key 0 " + labcreds.Key, "server name l73-second"} {
 		if !slices.Contains(got, line) {
@@ -73,7 +73,7 @@ func TestL73IOSXELines(t *testing.T) {
 }
 
 func TestL73NXOSLines(t *testing.T) {
-	got := l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300}, map[string]bool{"secure": true})
+	got := l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300}, map[string]bool{l73HasNXOSSecure: true})
 	want := []string{
 		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
 		"tacacs-server secure tls",
@@ -101,14 +101,14 @@ func TestL73EOSLines(t *testing.T) {
 		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
 	}
 	got = l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
-		Second: "172.100.100.2"}, map[string]bool{"secure": true})
+		Second: "172.100.100.2"}, map[string]bool{l73HasNXOSSecure: true})
 	for _, line := range []string{"tacacs-server host 172.100.100.1 single-connection port 300 ssl-profile l73-tls",
 		"tacacs-server host 172.100.100.2 key 0 " + labcreds.Key, "server 172.100.100.2"} {
 		if !slices.Contains(got, line) {
 			t.Errorf("missing %q", maskKey(line))
 		}
 	}
-	if slices.Contains(got, "tacacs-server secure tls") || slices.Contains(l73CiscoRestoreAll("eos", map[string]bool{"secure": true}), "no tacacs-server secure tls") {
+	if slices.Contains(got, "tacacs-server secure tls") || slices.Contains(l73CiscoRestoreAll("eos", map[string]bool{l73HasNXOSSecure: true}), "no tacacs-server secure tls") {
 		t.Fatal("an NX-OS keyword typed on EOS")
 	}
 	_, csr, load, profile := l73EOSEnrol("leaf1")
@@ -133,7 +133,7 @@ func TestL73CiscoUndoIsTheStartupConfig(t *testing.T) {
 		for _, ln := range strings.Split(string(b), "\n") {
 			startup[strings.TrimSpace(ln)] = true
 		}
-		has := map[string]bool{"secure": true}
+		has := map[string]bool{l73HasNXOSSecure: true}
 		undo := l73CiscoRestoreAll(tc.family, has)
 		for _, ln := range undo {
 			if strings.HasPrefix(ln, "no ") || ln == "exit" {
@@ -222,3 +222,41 @@ func TestL73Refusal(t *testing.T) {
 
 // maskKey keeps the lab's shared secret out of a failure message.
 func maskKey(s string) string { return strings.ReplaceAll(s, labcreds.Key, "<key>") }
+
+// What a help lists is recorded by ask and word. Two asks that both look for
+// "server" (IOS XE's AAA group and its `tls trustpoint` flag) must not answer
+// for each other, or the harness types a flag the image never offered.
+func TestL73ListedIsKeyedByLevelAndWord(t *testing.T) {
+	var group, trust l73Ask
+	for _, a := range l73IOSXEAsks {
+		switch a.Ask {
+		case "":
+			if len(a.In) > 0 {
+				group = a
+			}
+		case "tls trustpoint ":
+			trust = a
+		}
+	}
+	listed := map[string]bool{}
+	l73RecordListed(listed, group, nil, nil) // the group help lists server
+	l73RecordListed(listed, trust, nil, nil) // the trustpoint help does not
+	if !listed[group.listed("server")] || listed[trust.listed("server")] {
+		t.Fatalf("listed: %v", listed)
+	}
+	if listed[l73HasTrustpointServer] {
+		t.Fatal("the group's server answered for the trustpoint flag")
+	}
+	// A Want word is recorded when listed, and a Need word as listed or missed.
+	l73RecordListed(listed, trust, nil, []string{"server"})
+	if !listed[l73HasTrustpointServer] {
+		t.Fatal("a listed trustpoint server was not recorded")
+	}
+	// And the other way: listed at the trustpoint, missed by the group.
+	other := map[string]bool{}
+	l73RecordListed(other, trust, nil, []string{"server"})
+	l73RecordListed(other, group, []string{"server"}, nil)
+	if other[group.listed("server")] || !other[l73HasTrustpointServer] {
+		t.Fatalf("a word listed at one level and missed at another: %v", other)
+	}
+}

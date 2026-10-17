@@ -87,6 +87,9 @@ func l73UncoveredWords(lines []string, asks []l73Ask) []string {
 			}
 			level = append(level, tok)
 		}
+		if !inStanza {
+			bad = append(bad, "line reaches no asked level: "+l73LevelKey(strings.Fields(ln)))
+		}
 	}
 	slices.Sort(bad)
 	return slices.Compact(bad)
@@ -139,7 +142,7 @@ func TestL73JunosAsksCoverEveryTypedKeyword(t *testing.T) {
 
 func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 	groupIn := "aaa group server tacacs+ " + l73Group
-	has := map[string]bool{"secure": true, "server": true, "server-trustpoint": true}
+	has := map[string]bool{l73HasNXOSSecure: true, l73HasTrustpointServer: true, l73HasNXOSServerTrust: true}
 	for _, tc := range []struct{ platform, family string }{
 		{"cisco_iosxe", "iosxe"}, {"cisco_nxos", "nxos"}, {"arista_ceos", "eos"},
 	} {
@@ -191,5 +194,15 @@ func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 		if bad := l73UncoveredWords(typed, objAsks); len(bad) != 0 {
 			t.Errorf("%s: typed and never asked about at that level: %q", tc.family, bad)
 		}
+	}
+}
+
+// A line whose path reaches no asked level is reported, not skipped: nothing
+// about it would be probed.
+func TestL73UncoveredWordsReportsALineThatReachesNoAskedLevel(t *testing.T) {
+	asks := []l73Ask{{Ask: "set system tacplus-server 192.0.2.71 ", Need: []string{"port"}}}
+	bad := l73UncoveredWords([]string{"set system authentication-order tacplus", "set system tacplus-server 10.0.0.1 port 300"}, asks)
+	if len(bad) != 1 || !strings.Contains(bad[0], "authentication-order") {
+		t.Fatalf("%q", bad)
 	}
 }

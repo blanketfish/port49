@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -125,6 +126,27 @@ type l73Ask struct {
 	Control, Need, Want []string
 	Only                string
 	In, Out             []string
+}
+
+// listed is the key under which a help's listing of word at this ask is
+// recorded: by mode and level as well as word, so that two asks that look for
+// the same word (IOS XE's AAA group and its `tls trustpoint` flag both look
+// for `server`) never answer for each other. Only names such a key.
+func (a l73Ask) listed(word string) string {
+	return strings.Join(a.In, ";") + "@" + a.Ask + "|" + word
+}
+
+// l73RecordListed folds one ask's verdict (l73HelpVerdict's miss and have)
+// into listed: a Need word is listed unless this help missed it, a Want word
+// only if this help listed it.
+func l73RecordListed(listed map[string]bool, a l73Ask, miss, have []string) {
+	for _, w := range a.Need {
+		k := a.listed(w)
+		listed[k] = listed[k] || !slices.Contains(miss, w)
+	}
+	for _, w := range have {
+		listed[a.listed(w)] = true
+	}
 }
 
 // l73JunosAsks: the first is L71's own probe; the rest are asked only when
