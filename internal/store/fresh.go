@@ -38,6 +38,8 @@ func NewFreshness(now func() time.Time) *Freshness { return &Freshness{now: now}
 // Tell has onConfirm told each confirmation's time, and onReach each
 // check's reachability when it changes or is first known (nil tells
 // nothing): a run's metrics. Each is told what is known now, at once.
+// The hooks are called under the lock, so their calls are in the checks'
+// order: they must not call back into f.
 func (f *Freshness) Tell(onConfirm func(time.Time), onReach func(bool)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

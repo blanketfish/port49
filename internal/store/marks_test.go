@@ -648,12 +648,15 @@ func TestMarksGetCarriesTheOrigin(t *testing.T) {
 	}
 }
 
-// flakyFeed fails its first loads, then holds marks; its watch waits.
+// flakyFeed fails its first loads, then holds marks at revision 7; its
+// watch honours after, delivering the events above it, then waits.
 type flakyFeed struct {
-	mu    sync.Mutex
-	fails int
-	marks []Revocation
-	loads int
+	mu         sync.Mutex
+	fails      int
+	marks      []Revocation
+	events     map[uint64]Revocation
+	loads      int
+	watchAfter []uint64
 }
 
 func (f *flakyFeed) Revocations(context.Context) (uint64, []Revocation, error) {
@@ -667,8 +670,21 @@ func (f *flakyFeed) Revocations(context.Context) (uint64, []Revocation, error) {
 	return 7, f.marks, nil
 }
 
-func (f *flakyFeed) WatchRevocations(ctx context.Context, _ uint64, _ func(Revocation, bool, uint64),
+func (f *flakyFeed) WatchRevocations(ctx context.Context, after uint64, fn func(Revocation, bool, uint64),
 	_ func(uint64)) error {
+	f.mu.Lock()
+	f.watchAfter = append(f.watchAfter, after)
+	revs := make([]uint64, 0, len(f.events))
+	for rev := range f.events {
+		if rev > after {
+			revs = append(revs, rev)
+		}
+	}
+	sort.Slice(revs, func(i, j int) bool { return revs[i] < revs[j] })
+	for _, rev := range revs {
+		fn(f.events[rev], false, rev)
+	}
+	f.mu.Unlock()
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -681,27 +697,60 @@ func TestFollowMarksFromZeroLoadsFirst(t *testing.T) {
 	held := Revocation{Kind: RevocationPrincipal, Key: "user:held", At: time.Unix(1, 0)}
 	m.Set(held, true)
 	m.Keep(held)
-	f := &flakyFeed{fails: 1, marks: []Revocation{{Kind: RevocationPrincipal, Key: "user:new", At: time.Unix(2, 0)}}}
+	newer := Revocation{Kind: RevocationPrincipal, Key: "user:new", At: time.Unix(2, 0)}
+	late := Revocation{Kind: RevocationPrincipal, Key: "user:late", At: time.Unix(3, 0)}
+	f := &flakyFeed{fails: 1, marks: []Revocation{newer},
+		// 7 is in the load already; 8 came between the load and the watch.
+		events: map[uint64]Revocation{7: newer, 8: late}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	var mu sync.Mutex
+	var logs []string
+	told := map[string]int{}
 	rescans := 0
 	go func() {
-		done <- FollowMarks(ctx, f, m, 0, nil, func(bool) {}, func() error { rescans++; return nil },
-			func(string, ...any) {})
+		done <- FollowMarks(ctx, f, m, 0, func(c MarkChange) {
+			mu.Lock()
+			told[c.Key]++
+			mu.Unlock()
+		}, func(bool) {}, func() error { rescans++; return nil },
+			func(format string, args ...any) {
+				mu.Lock()
+				logs = append(logs, fmt.Sprintf(format, args...))
+				mu.Unlock()
+			})
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for !m.Holds(RevocationPrincipal, "user:new") {
+	for !m.Holds(RevocationPrincipal, "user:late") {
 		if time.Now().After(deadline) {
-			t.Fatal("the marks were never loaded")
+			t.Fatal("the marks were never loaded and watched")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !m.Holds(RevocationPrincipal, "user:held") {
-		t.Fatal("a kept mark was lifted by the first load")
+	if !m.Holds(RevocationPrincipal, "user:new") || !m.Holds(RevocationPrincipal, "user:held") {
+		t.Fatal("a loaded or kept mark is missing")
 	}
 	cancel()
 	<-done
 	if f.loads < 2 || rescans < 1 {
 		t.Fatalf("loads %d, rescans %d: want a retried load after its hook", f.loads, rescans)
+	}
+	// The watch starts at the load's revision: the event at 7 is not
+	// delivered again, the one at 8 is seen once.
+	if len(f.watchAfter) != 1 || f.watchAfter[0] != 7 {
+		t.Fatalf("watch started after %v, want [7]", f.watchAfter)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if told["user:new"] != 1 || told["user:late"] != 1 {
+		t.Fatalf("told %v: want each once", told)
+	}
+	// The failed load is said once with its cause, and the success at once.
+	want := []string{
+		"store: the marks feed cannot load the marks (" + ErrUnavailable.Error() + "); trying again every second",
+		"store: the marks feed loaded the marks; it follows the store again",
+	}
+	if len(logs) != 2 || logs[0] != want[0] || logs[1] != want[1] {
+		t.Fatalf("log %q, want %q", logs, want)
 	}
 }

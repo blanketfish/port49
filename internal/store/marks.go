@@ -379,6 +379,10 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			var rev uint64
 			if rev, err = LoadMarks(ctx, feed, m, on); err == nil {
 				from = max(rev, 1)
+				if failing {
+					logf("store: the marks feed loaded the marks; it follows the store again")
+					failing = false
+				}
 				break
 			}
 		}
