@@ -431,3 +431,17 @@ func TestAStampIsTimeSinceTheGuardBegan(t *testing.T) {
 		t.Fatalf("stamp without a monotonic reading = %v, want 40s", got)
 	}
 }
+
+func TestANegativeTicketAgeFailsClosed(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	g := NewTicketGuard(time.Hour, func() time.Time { return now })
+	at := g.elapsed()
+	now = now.Add(-time.Minute) // a clock with no monotonic reading stepped back
+	if g.fresh(at) {
+		t.Fatal("a ticket stamped after now was judged fresh")
+	}
+	now = now.Add(2 * time.Minute)
+	if !g.fresh(at) {
+		t.Fatal("a ticket a minute old was refused")
+	}
+}

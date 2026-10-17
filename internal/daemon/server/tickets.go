@@ -97,7 +97,10 @@ func stamp(ss *tls.SessionState) (int64, bool) {
 
 // fresh is whether a ticket stamped at (elapsed ns) is within the lifetime.
 func (g *TicketGuard) fresh(at int64) bool {
-	return g.elapsed()-at <= int64(g.lifetime)
+	// A negative age (a clock without a monotonic reading stepped back) fails
+	// closed: a full handshake follows.
+	d := g.elapsed() - at
+	return d >= 0 && d <= int64(g.lifetime)
 }
 
 // firstUse records identity, a ticket stamped at, as used and reports
