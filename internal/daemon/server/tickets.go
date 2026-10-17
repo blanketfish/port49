@@ -16,17 +16,18 @@ import (
 type TicketGuard struct {
 	lifetime time.Duration
 	now      func() time.Time
+	start    time.Time // when the guard began: a stamp is the time since
 
 	base *tls.Config // the Config Apply keyed; its keys encrypt and decrypt
 
 	mu     sync.Mutex
-	used   map[[32]byte]int64 // a resumed ticket's hash, and the stamp it carried
+	used   map[[32]byte]int64 // a resumed ticket's hash, and the stamp it carried (ns since start)
 	pruned time.Time          // when used was last scanned
 }
 
 // NewTicketGuard is a guard for tickets lifetime long.
 func NewTicketGuard(lifetime time.Duration, now func() time.Time) *TicketGuard {
-	return &TicketGuard{lifetime: lifetime, now: now, used: map[[32]byte]int64{}}
+	return &TicketGuard{lifetime: lifetime, now: now, start: now(), used: map[[32]byte]int64{}}
 }
 
 // Apply sets c, the base config every connection's is cloned from, to issue
@@ -69,7 +70,7 @@ func (g *TicketGuard) bind(cfg *tls.Config) {
 		return ss, nil
 	}
 	cfg.WrapSession = func(cs tls.ConnectionState, ss *tls.SessionState) ([]byte, error) {
-		at := g.now().Unix()
+		at := g.elapsed()
 		if cs.DidResume { // crypto/tls sets it before it sends tickets
 			at = origin
 		}
@@ -80,7 +81,13 @@ func (g *TicketGuard) bind(cfg *tls.Config) {
 	}
 }
 
-// stamp is the issue time (Unix seconds) a ticket's state carries.
+// elapsed is the time since the guard began, in nanoseconds. A ticket's key
+// lives only in this process, so no ticket outlives it and a stamp needs no
+// wall clock: Sub uses Go's monotonic reading, which a wall-clock step cannot
+// move.
+func (g *TicketGuard) elapsed() int64 { return int64(g.now().Sub(g.start)) }
+
+// stamp is the elapsed time a ticket's state carries.
 func stamp(ss *tls.SessionState) (int64, bool) {
 	if len(ss.Extra) == 0 || len(ss.Extra[len(ss.Extra)-1]) != 8 {
 		return 0, false
@@ -88,11 +95,9 @@ func stamp(ss *tls.SessionState) (int64, bool) {
 	return int64(binary.BigEndian.Uint64(ss.Extra[len(ss.Extra)-1])), true
 }
 
-// fresh is whether a ticket stamped at (Unix seconds) is within the
-// lifetime, allowing a minute for the clock having been set back.
+// fresh is whether a ticket stamped at (elapsed ns) is within the lifetime.
 func (g *TicketGuard) fresh(at int64) bool {
-	age := g.now().Unix() - at
-	return age >= -60 && age <= int64(g.lifetime/time.Second)
+	return g.elapsed()-at <= int64(g.lifetime)
 }
 
 // firstUse records identity, a ticket stamped at, as used and reports

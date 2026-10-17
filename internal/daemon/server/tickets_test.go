@@ -409,3 +409,25 @@ func TestAResumptionIsBoundToTheDevice(t *testing.T) {
 		t.Fatalf("log: %s", log.String())
 	}
 }
+
+// A stamp is the time since the guard began, read from the clock's own
+// monotonic reading when it has one, so a step of the wall clock cannot move
+// it. The test clock cannot model a wall step (time.Time.Add moves both
+// readings), so this pins the property that makes one harmless: the stamp is
+// an elapsed time, and is the same with the monotonic reading stripped.
+func TestAStampIsTimeSinceTheGuardBegan(t *testing.T) {
+	start := time.Now()
+	var off atomic.Int64
+	g := NewTicketGuard(time.Minute, func() time.Time { return start.Add(time.Duration(off.Load())) })
+	off.Store(int64(40 * time.Second))
+	if got := time.Duration(g.elapsed()); got != 40*time.Second {
+		t.Fatalf("stamp = %v, want 40s", got)
+	}
+	g = NewTicketGuard(time.Minute, func() time.Time { return start.Round(0).Add(time.Duration(off.Load())) })
+	off.Store(0)
+	g.start = start.Round(0)
+	off.Store(int64(40 * time.Second))
+	if got := time.Duration(g.elapsed()); got != 40*time.Second {
+		t.Fatalf("stamp without a monotonic reading = %v, want 40s", got)
+	}
+}
