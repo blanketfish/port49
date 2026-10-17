@@ -217,6 +217,8 @@ var (
 type lab struct {
 	p platform
 
+	captureNote string // set, a note's Capture line is this and no pcap is read (L71 sends no TACACS+)
+
 	once sync.Once
 	skip string // image absent: every test skips this platform
 	err  error  // setup failed: every test fails this platform
@@ -2120,7 +2122,10 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 		t.Fatalf("results directory: %v", err)
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
-	capLine := l.captureLine(t)
+	capLine := l.captureNote
+	if capLine == "" {
+		capLine = l.captureLine(t)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s — %s\n\n", entry, l.p.name)
 	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))

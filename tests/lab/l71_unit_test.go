@@ -105,3 +105,26 @@ func TestL71LineEmptyReadsTheTerminalNotTheBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestL71MaskExchange(t *testing.T) {
+	in := "nx1(config)#tacacs-server host 192.0.2.71 ?\r\n" +
+		"  key 7 fakeKeyHashABC\r\n  key 0 fakeplainkey\r\n  secret fakesecret1\r\n  password fakepass1\r\n" +
+		"  $9$fakeJunosHash12 and $6$fakesalt$fakehash\r\n" +
+		"\x1b[K\b \bnx1(config)#"
+	got := l71MaskExchange(in)
+	for _, leak := range []string{"fakeKeyHashABC", "fakeplainkey", "fakesecret1", "fakepass1", "fakeJunosHash12", "fakehash"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q survived the mask:\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "<MASKED>") || !strings.Contains(got, "host 192.0.2.71 ?") {
+		t.Errorf("mask over- or under-reached:\n%s", got)
+	}
+	// Control bytes are shown, as cat -v shows them, and a newline stays one.
+	if !strings.Contains(got, "^[[K^H ^H") || !strings.Contains(got, "^M\n") {
+		t.Errorf("control bytes not rendered:\n%s", got)
+	}
+	if strings.ContainsAny(got, "\x1b\b\r") {
+		t.Errorf("raw control bytes survived:\n%s", got)
+	}
+}

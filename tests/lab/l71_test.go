@@ -4,6 +4,8 @@ package lab
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +37,7 @@ func TestL71TLSClientSupport(t *testing.T) {
 		if open == nil {
 			t.Fatalf("no CLI opener for %s", l.p.name)
 		}
-		var obs strings.Builder
+		var obs, xchg strings.Builder
 		l.withAdminCLI(t, open, func(c *cliConn) (err error) {
 			opMark := probe.opMark
 			if opMark == "" {
@@ -57,6 +59,19 @@ func TestL71TLSClientSupport(t *testing.T) {
 			// line may already have configured something (IOS-XE's server
 			// object), and a probe that returns early must not leave it.
 			entered, dirty := 0, false
+			// An INVALID probe leaves its masked exchange in the workspace
+			// named by PORT49_L71_INVALID_DIR (never committed), so the
+			// fault can be read.
+			defer func() {
+				dir := os.Getenv("PORT49_L71_INVALID_DIR")
+				if err == nil || dir == "" || xchg.Len() == 0 {
+					return
+				}
+				p := filepath.Join(dir, "l71-invalid-"+l.p.name+".txt")
+				if werr := os.WriteFile(p, []byte(xchg.String()), 0o644); werr != nil {
+					t.Logf("could not write %s: %v", p, werr)
+				}
+			}()
 			defer func() {
 				if dirty {
 					// Ctrl-U did not clear the line, so anything typed now
@@ -120,7 +135,9 @@ func TestL71TLSClientSupport(t *testing.T) {
 				if _, uerr := c.in.Write([]byte{0x15}); uerr != nil { // Ctrl-U: the typed line is dropped, never entered
 					return uerr
 				}
-				if !l71WaitEmptyLine(c, 5*time.Second) {
+				empty := l71WaitEmptyLine(c, 5*time.Second)
+				fmt.Fprintf(&xchg, "### typed `%s?`, then Ctrl-U\n%s\n\n", ask, l71MaskExchange(c.transcript()[from:]))
+				if !empty {
 					dirty = true
 					return fmt.Errorf("INVALID: after Ctrl-U the prompt did not return with an empty line on `%s?`; "+
 						"nothing more was typed and the session was closed; on IOS-XE check for a "+
@@ -146,6 +163,16 @@ func TestL71TLSClientSupport(t *testing.T) {
 			}
 			return nil
 		})
+		// L71 sends no TACACS+ traffic, so its capture is the CLI exchange.
+		ev := filepath.Join("tests", "lab", "evidence", "L71-"+l.p.name)
+		if err := os.MkdirAll(filepath.Join(root, ev), 0o755); err != nil {
+			t.Fatalf("evidence directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ev, "probe.txt"), []byte(xchg.String()), 0o644); err != nil {
+			t.Fatalf("write probe.txt: %v", err)
+		}
+		l.captureNote = fmt.Sprintf("`%s/probe.txt` — the CLI exchange from the help request to the empty-line check, "+
+			"credentials masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
 		l.result(t, "L71", l71Claim, obs.String())
 	})
 }

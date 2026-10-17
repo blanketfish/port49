@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 var optionWord = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
@@ -176,4 +178,31 @@ func l71LineEmpty(out string) bool {
 	}
 	t := strings.TrimRight(string(line), " ")
 	return strings.HasSuffix(t, "#") || strings.HasSuffix(t, ">")
+}
+
+// l71Secret is what l71MaskExchange hides in a probe exchange beyond what
+// labcreds.RedactNote finds: a hashed or plain key, secret or password a
+// device's help or echo might show.
+var l71Secret = regexp.MustCompile(`\$[0-9]\$\S+|key [0-9] \S+|secret \S+|password \S+`)
+
+// l71MaskExchange is a probe exchange fit to commit: credentials masked, and
+// control bytes shown as `cat -v` shows them (a newline stays a newline), so
+// the file reads the way the terminal's redraw can be checked.
+func l71MaskExchange(s string) string {
+	s = labcreds.RedactNote(s)
+	s = l71Secret.ReplaceAllString(s, "<MASKED>")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case r < 0x20:
+			b.WriteString("^" + string(r+0x40))
+		case r == 0x7f:
+			b.WriteString("^?")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
