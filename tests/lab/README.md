@@ -744,3 +744,11 @@ transcripts) is `evidence/L72-reference/`. Besides the decision log, cells h, l 
 port49d's `port49_connection_events_total` (`declined_refused` against `held_refused`) to tell a
 decline, which opens a window and is no strike, from a strike. No device's RFC 9887 behaviour is
 measured here; that is L73, open until an image carries a client (L71).
+
+**Running L72 and L71 (recorded).** Make the run worktree under the repository, not `/tmp`:
+`git worktree add --detach ~/git/port49/.worktrees/run-l7x <sha>`. `/tmp` is a nosuid tmpfs, and
+port49d cannot bind :49 with file capabilities there. Run `make build` in the worktree first. L71
+is `PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx go test -tags lab ./tests/lab/ -run
+TestL71TLSClientSupport -v -timeout 3h`. It sends no TACACS+, so its capture is the masked CLI probe
+transcript (`evidence/L71-<platform>/probe.txt`), not a pcap. vJunosEvolved and vSRX 23.4 are not
+in the harness platform list and are not probed.

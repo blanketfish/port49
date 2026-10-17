@@ -6950,11 +6950,15 @@ checkout's `main`, which has no TLS listener, so name the branch's commit explic
 
 ```bash
 RUN_SHA="$(git -C ~/git/port49/.worktrees/tls-listener rev-parse HEAD)"
-git -C ~/git/port49 worktree add --detach /tmp/port49-run-l7x "$RUN_SHA"
-test "$(git -C /tmp/port49-run-l7x rev-parse HEAD)" = "$RUN_SHA" || { echo "run worktree not at the branch head"; exit 1; }
+git -C ~/git/port49 worktree add --detach ~/git/port49/.worktrees/run-l7x "$RUN_SHA"
+test "$(git -C ~/git/port49/.worktrees/run-l7x rev-parse HEAD)" = "$RUN_SHA" || { echo "run worktree not at the branch head"; exit 1; }
 echo "run commit: $RUN_SHA"
 test ! -e /tmp/port49-STOP-LAB || { echo "STOP sentinel present: do not run"; exit 1; }
 ```
+
+The run worktree is never under `/tmp`: that is a nosuid tmpfs, and port49d cannot bind :49 with
+file capabilities there. Use `.worktrees/run-l7x` as above. Run `make build` in it before the
+first run.
 
 The note's run line (`runLine()`) must name `$RUN_SHA`; check it does before closing a row.
 
@@ -6965,7 +6969,7 @@ idle "waiting" proves nothing (the lab's standing rule).
 - [ ] **Step 2: Run L72**
 
 ```bash
-cd /tmp/port49-run-l7x && go test -tags lab ./tests/lab/ -run TestL72ReferenceClients -v -timeout 20m 2>&1 | tee /tmp/port49-run-l7x/l72.out
+cd ~/git/port49/.worktrees/run-l7x && go test -tags lab ./tests/lab/ -run TestL72ReferenceClients -v -timeout 20m 2>&1 | tee ~/git/port49/.worktrees/run-l7x/l72.out
 ```
 
 Expected: PASS, and `tests/lab/results/L72-reference.md` with every cell `agrees`. If the run is
@@ -6980,8 +6984,8 @@ say so in the commit.
 - [ ] **Step 3: Run L71**
 
 ```bash
-cd /tmp/port49-run-l7x && PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx \
-  go test -tags lab ./tests/lab/ -run TestL71TLSClientSupport -v -timeout 3h 2>&1 | tee /tmp/port49-run-l7x/l71.out
+cd ~/git/port49/.worktrees/run-l7x && PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx \
+  go test -tags lab ./tests/lab/ -run TestL71TLSClientSupport -v -timeout 3h 2>&1 | tee ~/git/port49/.worktrees/run-l7x/l71.out
 ```
 
 Expected: five notes, each a measured negative with its transcript (the vendor floors are
@@ -6998,7 +7002,7 @@ the run worktree into the branch. Then edit spec §15:
   answer. That closes it only if all five images were measured. A row with one image missing
   stays open and says which.
 
-Run `git -C ~/git/port49 worktree remove /tmp/port49-run-l7x` only after copying. (L72 has no
+Run `git -C ~/git/port49 worktree remove ~/git/port49/.worktrees/run-l7x` only after copying. (L72 has no
 raw pcap; its evidence is the copied files.)
 
 - [ ] **Step 5: Commit**
