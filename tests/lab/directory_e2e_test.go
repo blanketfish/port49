@@ -522,7 +522,7 @@ func TestDirectoryEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	ran := false
-	for _, p := range sel {
+	for _, p := range rowsFor(sel, false) {
 		if !e2ePlatform(p.name) {
 			continue // no image is brought up for a platform this does not run on
 		}

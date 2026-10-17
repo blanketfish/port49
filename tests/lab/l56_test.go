@@ -525,7 +525,7 @@ func TestL56IssuedEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range sel {
+	for _, p := range rowsFor(sel, false) {
 		if p.name != "arista_eos" {
 			continue
 		}

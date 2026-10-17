@@ -2,7 +2,13 @@
 
 package lab
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+)
 
 // The L73 rows share node names and platform names with notes other
 // entries closed on older images; a run that names no platform must never
@@ -70,5 +76,30 @@ func TestRowsForSeparatesOptInRows(t *testing.T) {
 	}
 	if got := rowsFor(sel, true); len(got) != 1 || got[0].sel != "vjunos26" {
 		t.Errorf("opting test got %v", got)
+	}
+}
+
+// A test that ranges over the selection itself, not over rowsFor of it, runs
+// the opt-in rows as if they were the older rows that share their platform
+// names, and rewrites those rows' closed notes from the wrong image.
+func TestNoTestRangesOverTheRawSelection(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob: %v (%d files)", err, len(files))
+	}
+	raw := regexp.MustCompile(`\brange (sel|selPlatforms)\b`)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_unit_test.go") || f == "harness_test.go" { // rowsFor and selectPlatforms live there
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if raw.MatchString(line) {
+				t.Errorf("%s:%d ranges over the raw selection; use rowsFor(sel, false) or eachPlatform", f, i+1)
+			}
+		}
 	}
 }
