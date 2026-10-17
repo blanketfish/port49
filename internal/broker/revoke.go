@@ -293,44 +293,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
-	var tokenKeys []store.TokenKey
-	if kind == store.RevocationPrincipal {
-		tokenKeys, err = b.Store.TokensByPrincipal(ctx, key)
-	} else {
-		tokenKeys, err = b.Store.TokensByCert(ctx, key)
-	}
-	note(err)
-	for _, k := range tokenKeys {
-		// Read first only to count, as the refresh does: an index entry
-		// outliving its tokens empties nothing. A read that fails counts.
-		toks, cerr := b.Store.Candidates(ctx, k)
-		if err := b.Store.DeleteTokens(ctx, k); err != nil {
-			note(err)
-			continue
-		}
-		// The delete's own time, not the revocation's start: a mint that
-		// stamped its record in between is superseded too (M3).
-		b.supersede(ctx, k, b.Now())
-		if cerr != nil || len(toks) > 0 {
-			rep.TokenKeys++
-		}
-	}
-	seen := map[store.ContextRef]bool{}
-	for pass := 0; pass < 2; pass++ {
-		var refs []store.ContextRef
-		if kind == store.RevocationPrincipal {
-			refs, err = b.Sessions.RevokeByPrincipal(ctx, key)
-		} else {
-			refs, err = b.Sessions.RevokeByCert(ctx, req.Issuer, req.Serial)
-		}
-		note(err)
-		for _, ref := range refs {
-			if !seen[ref] {
-				seen[ref] = true
-				rep.Contexts = append(rep.Contexts, ref)
-			}
-		}
-	}
+	n, refs, rerr := b.ReachMark(ctx, rep.Mark)
+	rep.TokenKeys, rep.Contexts = n, refs
+	note(rerr)
 	rep.Unreached = b.unreachedOf(rep.Contexts)
 	outcome := "applied"
 	if rep.Err != nil {
@@ -338,6 +303,76 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
 	return rep, nil
+}
+
+// ReachMark deletes the unspent tokens r names in this broker's session
+// store and marks its live contexts revoked there, as Revoke does after its
+// mark (spec §5.1.4): the token keys its index names, each deleted and
+// superseded, then the contexts, in two passes, so one a redemption in
+// flight wrote is marked too. It writes no mark and no record. In a split
+// (plan 11a, R20) the runner applies a mark another region made with it,
+// which that region's broker recorded. It returns how many token keys held
+// a token or could not be read, the contexts it marked, and the first step
+// that did not finish; the steps after it still run.
+func (b *Broker) ReachMark(ctx context.Context, r store.Revocation) (tokenKeys int, contexts []store.ContextRef,
+	err error) {
+	if b.Sessions == nil {
+		return 0, nil, errors.New("broker: revocation is not wired (no session manager); nothing was reached")
+	}
+	note := func(e error) {
+		if e != nil && err == nil {
+			err = e
+		}
+	}
+	var keys []store.TokenKey
+	var kerr error
+	if r.Kind == store.RevocationPrincipal {
+		keys, kerr = b.Store.TokensByPrincipal(ctx, r.Key)
+	} else {
+		keys, kerr = b.Store.TokensByCert(ctx, r.Key)
+	}
+	note(kerr)
+	for _, k := range keys {
+		// Read first only to count, as the refresh does: an index entry
+		// outliving its tokens empties nothing. A read that fails counts.
+		toks, cerr := b.Store.Candidates(ctx, k)
+		if derr := b.Store.DeleteTokens(ctx, k); derr != nil {
+			note(derr)
+			continue
+		}
+		// The delete's own time, not the revocation's start: a mint that
+		// stamped its record in between is superseded too (M3).
+		b.supersede(ctx, k, b.Now())
+		if cerr != nil || len(toks) > 0 {
+			tokenKeys++
+		}
+	}
+	var issuer, serial string
+	if r.Kind == store.RevocationCert {
+		i := strings.LastIndexByte(r.Key, '|')
+		if i < 0 {
+			return tokenKeys, nil, err // CheckRevocation refused such a key; nothing names it
+		}
+		issuer, serial = r.Key[:i], r.Key[i+1:]
+	}
+	seen := map[store.ContextRef]bool{}
+	for pass := 0; pass < 2; pass++ {
+		var refs []store.ContextRef
+		var rerr error
+		if r.Kind == store.RevocationPrincipal {
+			refs, rerr = b.Sessions.RevokeByPrincipal(ctx, r.Key)
+		} else {
+			refs, rerr = b.Sessions.RevokeByCert(ctx, issuer, serial)
+		}
+		note(rerr)
+		for _, ref := range refs {
+			if !seen[ref] {
+				seen[ref] = true
+				contexts = append(contexts, ref)
+			}
+		}
+	}
+	return tokenKeys, contexts, err
 }
 
 // matchMark names the held connections r names: a principal's by its

@@ -1200,3 +1200,33 @@ func TestAnIDOverMaxLenIsRefusedByRevoke(t *testing.T) {
 		t.Fatalf("MaxLen+1: %q %v", got, err)
 	}
 }
+
+// ReachMark reaches what a mark made elsewhere names in this broker's
+// session store, and writes no mark and no record: the region that made it
+// recorded it (plan 11a, R20).
+func TestReachMarkReachesWhatAMarkMadeElsewhereNames(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now,
+		Origin: "admin_socket uid 0"})
+	if err != nil || n != 2 || len(refs) != 1 || refs[0].NAS != "leaf1" {
+		t.Fatalf("%d %v %v", n, refs, err)
+	}
+	if c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); err != nil ||
+		c.RevokedAt.IsZero() {
+		t.Fatalf("leaf1's context: %+v %v", c, err)
+	}
+	for _, dev := range []string{"leaf1", "nx1"} {
+		if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: dev, Username: "alice"}); len(toks) != 0 {
+			t.Fatalf("%d unspent token(s) on %s survived", len(toks), dev)
+		}
+	}
+	if _, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReachMark wrote a mark: %v", err)
+	}
+	if recs := eventsOf(f.records(t), "revoke"); len(recs) != 0 {
+		t.Fatalf("ReachMark wrote a record: %v", recs)
+	}
+}
