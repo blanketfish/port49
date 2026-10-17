@@ -134,3 +134,19 @@ func TestL71MaskExchange(t *testing.T) {
 		t.Errorf("raw control bytes survived:\n%s", got)
 	}
 }
+
+// Junos prefixes an inherited option with "+" and a container with ">";
+// the word after the marker is the option. Before this, a client offered as
+// "> tls" read as no tls at all.
+func TestL71SaysReadsJunosMarkedOptions(t *testing.T) {
+	help := "+ apply-groups         Groups\n  secret               Shared secret\n> tls                  TLS configuration\n"
+	if line, ok := l71Says(help, []string{"tls"}); !ok || line != "> tls                  TLS configuration" {
+		t.Fatalf("%q %v", line, ok)
+	}
+	if _, ok := l71Says(help, []string{"apply-groups"}); !ok {
+		t.Fatal("a + option missed")
+	}
+	if _, ok := l71Says("> \n", []string{"tls"}); ok {
+		t.Fatal("a bare marker read as an option")
+	}
+}

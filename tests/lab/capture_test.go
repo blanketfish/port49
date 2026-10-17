@@ -47,14 +47,21 @@ func (l *lab) capture(t *testing.T, name string) func() {
 		t.Fatalf("captures directory: %v", err)
 	}
 	abs := filepath.Join(dir, fmt.Sprintf("%s-%s.pcap", name, l.p.name))
-	l.capAbs = abs
 	// What a results note points at. tests/lab/captures is git-ignored — it
 	// holds the lab tokens in the clear once the published key is applied — so
 	// a note that cited it would cite a file nobody but this machine has. The
 	// redacted copy written at the end of the run (writeEvidence) is committed,
 	// holds the same packets, and decodes under the same key.
 	l.evidencePath = filepath.Join("tests/lab/evidence", filepath.Base(abs))
+	return l.captureWith(t, abs, "tcp port 49")
+}
 
+// captureWith is capture with its own file and filter. The filter must match
+// the liveness probe (`capProbeAddr`, 127.0.0.1:49), or the capture never
+// proves itself live and the test fails.
+func (l *lab) captureWith(t *testing.T, abs, filter string) func() {
+	t.Helper()
+	l.capAbs = abs
 	// tcpdump runs as root under sudo and drops privileges to its own user, so
 	// it cannot be signalled directly and its pid is not the pid of sudo. The
 	// shell wrapper writes the pid the harness must signal. Matching on the
@@ -63,8 +70,8 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	pidPath := abs + ".pid"
 	os.Remove(pidPath)
 	os.Remove(abs)
-	script := fmt.Sprintf("echo $$ > %s; exec tcpdump --immediate-mode -i any -U -n -s 0 -w %s 'tcp port 49'",
-		shellQuote(pidPath), shellQuote(abs))
+	script := fmt.Sprintf("echo $$ > %s; exec tcpdump --immediate-mode -i any -U -n -s 0 -w %s %s",
+		shellQuote(pidPath), shellQuote(abs), shellQuote(filter))
 	cmd := exec.Command("sudo", "-n", "sh", "-c", script)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf

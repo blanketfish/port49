@@ -76,10 +76,13 @@ var l71Probes = map[string]l71Probe{
 }
 
 // l71Says reports whether help, a CLI's answer to "?", lists one of yes as
-// an option word: the first token of an indented help line, exactly.
+// an option word: the first token of a help line, after a Junos `+` or `>` marker, exactly.
 func l71Says(help string, yes []string) (string, bool) {
 	for _, line := range strings.Split(help, "\n") {
 		f := strings.Fields(line)
+		if len(f) > 1 && (f[0] == "+" || f[0] == ">") {
+			f = f[1:] // Junos marks inherited (+) and container (>) options
+		}
 		if len(f) == 0 {
 			continue
 		}
