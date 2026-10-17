@@ -91,7 +91,8 @@ func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, 
 	return l, nil
 }
 
-// current is the admitted devices now: those of an inventory about to be
+// current is the inventory's devices now, refused ones included (the
+// certificate-name clash is judged over all of them): those of an inventory about to be
 // put in force (swapping) until it is (inventoryChanged), so a reload that
 // lands between the two cannot judge the old inventory alone.
 func (l *tlsListener) current() []admission.Device {
@@ -318,7 +319,7 @@ func (l *tlsListener) fingerprint(fsum [32]byte, unid map[string]string) [32]byt
 	return out
 }
 
-// apply builds a Material from files and devs, the admitted devices, and
+// apply builds a Material from files and devs, every inventory device, and
 // swaps it in when any input differs from the one in force; it reports
 // whether it did. why is "" at the start. The caller holds mu, or is
 // newTLSListener.
@@ -364,7 +365,7 @@ func (l *tlsListener) sayUnidentifiable(unid map[string]string) {
 		if l.flagged[name] == unid[name] {
 			continue
 		}
-		l.say("tls_listener: device %s cannot be identified: %s; its connections are declined identity_mismatch "+
+		l.say("tls_listener: device %s cannot be identified: %s; its connections are declined at Accept "+
 			"until that changes", printsafe.Line(name, 200), unid[name])
 	}
 	l.flagged = unid
