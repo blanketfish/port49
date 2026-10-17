@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1291,6 +1292,37 @@ func OIDCKey(kind, issuer, value string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s %d:%s %d:%s", kind, len(issuer), issuer, len(value), value)
+}
+
+// ParseOIDCKey is OIDCKey's inverse: the kind, issuer and value of a key
+// it made, and false for anything else (plan 11a: a runner reaches a logout
+// it followed by its key alone).
+func ParseOIDCKey(key string) (kind, issuer, value string, ok bool) {
+	kind, rest, found := strings.Cut(key, " ")
+	if !found || (kind != OIDCSid && kind != OIDCSub) {
+		return "", "", "", false
+	}
+	part := func(s string) (string, string, bool) {
+		n, tail, found := strings.Cut(s, ":")
+		l, err := strconv.Atoi(n)
+		if !found || err != nil || l <= 0 || l > len(tail) {
+			return "", "", false
+		}
+		return tail[:l], tail[l:], true
+	}
+	issuer, rest, ok1 := part(rest)
+	if !ok1 || !strings.HasPrefix(rest, " ") {
+		return "", "", "", false
+	}
+	value, rest, ok2 := part(rest[1:])
+	if !ok2 || rest != "" {
+		return "", "", "", false
+	}
+	// Only a key OIDCKey would make: Atoi also takes "+1" and "01".
+	if OIDCKey(kind, issuer, value) != key {
+		return "", "", "", false
+	}
+	return kind, issuer, value, true
 }
 
 // SidKey is the issuer-qualified sid a login context is indexed by

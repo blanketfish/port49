@@ -310,6 +310,23 @@ func (b *Broker) logoutOne(ctx context.Context, lt oidc.LogoutToken, origin stri
 		b.logoutRecordTTL()); err != nil {
 		return RevokeReport{}, err
 	}
+	b.reachLogout(ctx, key, lt.Domains, &rep)
+	rep.Unreached = b.unreachedOf(rep.Contexts)
+	outcome := "applied"
+	if rep.Err != nil {
+		outcome = "partial"
+	}
+	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
+	b.say("%s", rep.logoutText(lt.IssuedAt.Add(t.ClockSkew), b.ownerTTL(), b.revokeHow()))
+	return rep, nil
+}
+
+// reachLogout is a logout's reach in this broker's session store, by key
+// (spec §5.1.4; plan 7h Rulings 22, 24): the owners within domains, their
+// tokens, and the contexts by sid, or by owner for a sub, and a sub's
+// receipts. It fills rep.
+func (b *Broker) reachLogout(ctx context.Context, key string, domains []string, rep *RevokeReport) {
+	now := rep.Mark.At
 	note := func(err error) {
 		if err != nil && rep.Err == nil {
 			rep.Err = err
@@ -323,9 +340,9 @@ func (b *Broker) logoutOne(ctx context.Context, lt oidc.LogoutToken, origin stri
 	// (Ruling 22): an entry outside them, left from before a configuration
 	// change, is said and not reached.
 	for _, p := range owner.Names() {
-		if !slices.Contains(lt.Domains, oidc.DomainOf(p)) {
+		if !slices.Contains(domains, oidc.DomainOf(p)) {
 			b.say("logout: %s: the owner record names %s, outside this verifier's principal_domains (%s); it is not "+
-				"reached", lt.Issuer, p, strings.Join(lt.Domains, ", "))
+				"reached", rep.OIDCIssuer, p, strings.Join(domains, ", "))
 			continue
 		}
 		rep.Principals = append(rep.Principals, p)
@@ -369,14 +386,33 @@ func (b *Broker) logoutOne(ctx context.Context, lt oidc.LogoutToken, origin stri
 			note(err)
 		}
 	}
-	rep.Unreached = b.unreachedOf(rep.Contexts)
-	outcome := "applied"
-	if rep.Err != nil {
-		outcome = "partial"
+}
+
+// ReachLogout reaches, in this broker's session store, a logout another
+// region ingested (plan 11a, R26): the runner calls it for each logout it
+// follows. It writes no logout record and no revoke record; the region that
+// ingested the logout recorded it. A key naming no verifier of this broker
+// reaches nothing, said.
+func (b *Broker) ReachLogout(ctx context.Context, l store.Logout) (RevokeReport, error) {
+	kind, issuer, value, ok := store.ParseOIDCKey(l.Key)
+	if !ok || b.Identity == nil {
+		return RevokeReport{}, fmt.Errorf("broker: a followed logout's key does not name an OIDC session or subject")
 	}
-	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
-	b.say("%s", rep.logoutText(lt.IssuedAt.Add(t.ClockSkew), b.ownerTTL(), b.revokeHow()))
-	return rep, nil
+	domains := b.Identity.HumanDomains(issuer)
+	if len(domains) == 0 {
+		return RevokeReport{}, fmt.Errorf("broker: a followed logout names issuer %s, which no human verifier here "+
+			"trusts; nothing reached", printsafe.Line(issuer, 200))
+	}
+	ctx, cancel := b.detach(ctx)
+	defer cancel()
+	rep := RevokeReport{By: ByLogoutSub, OIDCIssuer: issuer, Sub: value, Request: RevokeRequest{Origin: l.Origin},
+		Mark: store.Revocation{At: b.Now()}}
+	if kind == store.OIDCSid {
+		rep.By, rep.Sid, rep.Sub = ByLogoutSid, value, ""
+	}
+	b.reachLogout(ctx, l.Key, domains, &rep)
+	rep.Unreached = b.unreachedOf(rep.Contexts)
+	return rep, rep.Err
 }
 
 // revokeHow is how an operator ends one person's sessions at once, as every
