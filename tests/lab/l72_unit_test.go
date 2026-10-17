@@ -75,3 +75,24 @@ func TestL72FilterDropsSessionSecrets(t *testing.T) {
 		}
 	}
 }
+
+// A decision record's credential_sha256 value is replaced and its field kept,
+// in a JSON line and in the note's quotation of one; other hashes stay.
+func TestL72RedactsTheCredentialHash(t *testing.T) {
+	fake := strings.Repeat("ab12", 16) // 64 hex, made up
+	other := strings.Repeat("cd34", 16)
+	line := `{"method":"pap","credential_sha256":"` + fake + `","cert_sha256":"` + other + `"}`
+	got := string(l72RedactCredentialHash([]byte(line)))
+	want := `{"method":"pap","credential_sha256":"<redacted sha256>","cert_sha256":"` + other + `"}`
+	if got != want {
+		t.Fatalf("got %s\nwant %s", got, want)
+	}
+	note := "cell a: `" + line + "`"
+	if got := string(l72RedactCredentialHash([]byte(note))); strings.Contains(got, fake) ||
+		!strings.Contains(got, `"credential_sha256":"<redacted sha256>"`) {
+		t.Fatalf("the note keeps the field and loses the value: %s", got)
+	}
+	if again := l72RedactCredentialHash([]byte(got)); string(again) != got {
+		t.Fatal("redaction is idempotent")
+	}
+}

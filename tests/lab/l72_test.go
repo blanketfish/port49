@@ -620,7 +620,8 @@ func l72FirstLine(s, sub, none string) string {
 // holds a secret, then fails the test if any cell disagreed.
 func l72Note(t *testing.T, e, h *l72Env, osslVersion string, got []l72Obs) {
 	t.Helper()
-	files := map[string][]byte{"decisions.jsonl": e.logBytes(), "decisions-h.jsonl": h.logBytes()}
+	files := map[string][]byte{"decisions.jsonl": l72RedactCredentialHash(e.logBytes()),
+		"decisions-h.jsonl": l72RedactCredentialHash(h.logBytes())}
 	matches, _ := filepath.Glob(filepath.Join(e.dir, "openssl-*.txt"))
 	for _, m := range matches {
 		b, err := os.ReadFile(m)
@@ -652,7 +653,7 @@ func l72Note(t *testing.T, e, h *l72Env, osslVersion string, got []l72Obs) {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", o.id, claims[o.id],
 			strings.ReplaceAll(o.observed, "|", "\\|"), mark)
 	}
-	note := labcreds.RedactNote(b.String())
+	note := string(l72RedactCredentialHash([]byte(labcreds.RedactNote(b.String()))))
 	secrets := append(append([]string{}, e.secrets...), h.secrets...)
 	for name, body := range files {
 		if hits := labcreds.Contains(body, secrets); len(hits) > 0 {
