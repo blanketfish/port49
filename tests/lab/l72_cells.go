@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"regexp"
+	"strings"
 )
 
 // l72Result is one line of tacacs-tls-client's output.
@@ -57,4 +59,60 @@ var l72Cells = []l72Cell{
 	{"m", "a tcp device's address and an address not in the inventory on the TLS listener: no TLS byte before the reset; the records"},
 	{"n", "a tls device's address on the RFC 8907 listener: a reset after its header; transport_mismatch"},
 	{"o", "a TCP connection that sends nothing: closed at handshake_timeout; handshake_timeout"},
+}
+
+// l72SecretMarkers are the substrings (matched case-insensitively) of the
+// lines openssl s_client prints that carry TLS session secrets: the
+// resumption PSK, the ticket and its identity, the master key, the session
+// ids. None of them may reach a committed transcript.
+var l72SecretMarkers = []string{"session-id", "psk", "master-key", "tls session ticket"}
+
+// l72HexLine is a line of openssl's hex dump (`0000 - 7f 3a ...`).
+var l72HexLine = regexp.MustCompile(`^\s*[0-9a-f]{4} - [0-9a-f]{2} `)
+
+// l72FilterTranscript drops from an openssl s_client transcript every line
+// that carries a session secret, and the hex dump that follows a ticket.
+// Alert and "Early data" lines are untouched.
+func l72FilterTranscript(s string) string {
+	var out []string
+	inTicket := false
+	for _, line := range strings.Split(s, "\n") {
+		low := strings.ToLower(line)
+		if inTicket && l72HexLine.MatchString(low) {
+			continue
+		}
+		inTicket = false
+		drop := false
+		for _, m := range l72SecretMarkers {
+			if strings.Contains(low, m) {
+				drop = true
+				if m == "tls session ticket" {
+					inTicket = true
+				}
+			}
+		}
+		if !drop {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// l72TranscriptLeaks names what a transcript still carries of the above:
+// the run is INVALID if it names anything.
+func l72TranscriptLeaks(s string) []string {
+	var hits []string
+	low := strings.ToLower(s)
+	for _, m := range l72SecretMarkers {
+		if strings.Contains(low, m) {
+			hits = append(hits, m)
+		}
+	}
+	for _, line := range strings.Split(low, "\n") {
+		if l72HexLine.MatchString(line) {
+			hits = append(hits, "a hex dump line")
+			break
+		}
+	}
+	return hits
 }

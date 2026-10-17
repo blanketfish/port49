@@ -12,12 +12,15 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,8 +47,16 @@ type l72Env struct {
 	caFile      string
 	certs       map[string][2]string // name -> cert file, key file
 	seedFile    string
-	env         []string // port49d's secret_env values
+	env         []string      // port49d's secret_env values
+	exited      chan struct{} // closed when port49d has exited
+	stopped     bool          // the test killed it
+	crl         *httptest.Server
+	crlNext     atomic.Int64 // unix nanoseconds: the nextUpdate of the list last served
 }
+
+// l72CRLLife is how long the "expiring" list is good for after port49d
+// fetches it.
+const l72CRLLife = 12 * time.Second
 
 func freePort(t *testing.T) int {
 	t.Helper()
@@ -68,7 +79,9 @@ func randomHex(t *testing.T, n int) string {
 
 // newL72Env makes the PKI, the files and the config, then starts port49d.
 // crl is "file" (a CRL file listing the revoked leaf) or "unreachable" (a CRL
-// URL nothing listens on, and no kept list).
+// URL nothing listens on, and no kept list), or "expiring" (a CRL served
+// over local HTTP with a nextUpdate seconds after the fetch; the test stops
+// the server once port49d has loaded the list and waits past nextUpdate).
 func newL72Env(t *testing.T, crl string) *l72Env {
 	t.Helper()
 	e := l72Prepare(t, crl)
@@ -135,6 +148,23 @@ func l72Prepare(t *testing.T, crl string) *l72Env {
 	e.secrets = append(e.secrets, keyEnv, encEnv)
 	e.seedFile = filepath.Join(e.dir, "seeds.jsonl")
 	status := "{crls: [{name: l72, file: " + crlFile + ", issuer_file: " + e.caFile + "}]}"
+	if crl == "expiring" {
+		e.crl = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			at := time.Now()
+			der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(2),
+				ThisUpdate: at.Add(-time.Minute), NextUpdate: at.Add(l72CRLLife)}, ca.Cert, ca.Key)
+			if err != nil {
+				http.Error(w, "crl", http.StatusInternalServerError)
+				return
+			}
+			e.crlNext.Store(at.Add(l72CRLLife).UnixNano())
+			w.Header().Set("Content-Type", "application/pkix-crl")
+			w.Write(der)
+		}))
+		t.Cleanup(e.crl.Close)
+		status = fmt.Sprintf("{refresh_interval: 1m, crls: [{name: l72, url: \"%s/l72.crl\", issuer_file: %s}]}",
+			e.crl.URL, e.caFile)
+	}
 	if crl == "unreachable" {
 		status = fmt.Sprintf("{crls: [{name: l72, url: \"http://127.0.0.1:%d/l72.crl\", issuer_file: %s}]}",
 			freePort(t), e.caFile)
@@ -209,6 +239,8 @@ func (e *l72Env) start() {
 	if err := e.daemon.Start(); err != nil {
 		t.Fatalf("INVALID: start port49d: %v", err)
 	}
+	e.exited, e.stopped = make(chan struct{}), false
+	go func(cmd *exec.Cmd, done chan struct{}) { cmd.Wait(); close(done) }(e.daemon, e.exited)
 	t.Cleanup(func() { e.stop(); logf.Close(); errf.Close() })
 	deadline := time.Now().Add(20 * time.Second)
 	for !strings.Contains(e.stderr(), "RFC 9887 listener on") {
@@ -232,10 +264,23 @@ func (e *l72Env) start() {
 
 // stop kills the daemon once; the files it wrote stay readable.
 func (e *l72Env) stop() {
-	if e.daemon != nil && e.daemon.Process != nil {
+	if e.daemon != nil && e.daemon.Process != nil && !e.stopped {
+		e.stopped = true
 		e.daemon.Process.Kill()
-		e.daemon.Wait()
-		e.daemon = nil
+		<-e.exited
+	}
+}
+
+// checkAlive makes the run INVALID when port49d exited without the test
+// stopping it: every cell after a crash would be an observation of nothing.
+func (e *l72Env) checkAlive() {
+	e.t.Helper()
+	select {
+	case <-e.exited:
+		if !e.stopped {
+			e.t.Fatalf("INVALID: port49d exited during the run; nothing written (its log: %s)", e.stderrPath)
+		}
+	default:
 	}
 }
 
@@ -299,8 +344,15 @@ func (e *l72Env) openssl(sleep int, args ...string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("sleep %d | openssl s_client -connect 127.0.0.1:%d %s 2>&1",
 		sleep, e.tlsPort, strings.Join(quoted, " ")))
+	// The pipeline is one process group, killed whole: killing sh alone would
+	// leave openssl holding the output pipe.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	out, _ := cmd.CombinedOutput() // s_client exits non-zero on a refused handshake: the transcript is the result
-	return string(out)
+	// s_client prints the session's secrets (PSK, ticket, master key); none
+	// reaches a cell's observation or a committed file.
+	return l72FilterTranscript(string(out))
 }
 
 // records is the decision log so far, one line each, matching sub.
@@ -404,12 +456,19 @@ func TestL72ReferenceClients(t *testing.T) {
 		}
 		switch c.id {
 		case "b":
-			ossl = e.openssl(1, "-tls1_2", "-cert", e.certs["good"][0], "-key", e.certs["good"][1], "-CAfile", e.caFile)
+			ossl = e.openssl(1, "-brief", "-tls1_2", "-cert", e.certs["good"][0], "-key", e.certs["good"][1], "-CAfile", e.caFile)
 		case "c":
-			ossl = e.openssl(1, "-tls1_3", "-CAfile", e.caFile, "-servername", "tacacs.l72.example")
+			ossl = e.openssl(1, "-brief", "-tls1_3", "-CAfile", e.caFile, "-servername", "tacacs.l72.example")
 		}
 		e.write("openssl-"+c.id+".txt", []byte(ossl))
-		cell(c.id, len(rec) > 0 && len(r) == 1 && r[0].Status == "none",
+		ok := len(rec) > 0 && len(r) == 1 && r[0].Status == "none"
+		if c.id == "g" {
+			// The status is asked only after the handshake: it completes, and the
+			// reset that follows sends no alert. Alerts in b to f are best-effort
+			// (ruling 16) and are recorded, not asserted.
+			ok = ok && r[0].Handshake == "ok" && !strings.Contains(r[0].Error, "remote error")
+		}
+		cell(c.id, ok,
 			"client: %+v; record: %s; openssl (evidence/L72-reference/openssl-%s.txt): %s", r, strings.Join(rec, " "),
 			c.id, l72AlertLine(ossl))
 	}
@@ -490,20 +549,31 @@ func TestL72ReferenceClients(t *testing.T) {
 	settle()
 	r = e.client(e.tlsPort, "", "-silent")
 	rec = waitRec(`"tls_outcome":"handshake_timeout"`)
-	cell("o", len(r) == 1 && r[0].ClosedMS >= 1800 && r[0].ClosedMS <= 4000 && len(rec) > 0,
+	cell("o", len(r) == 1 && r[0].ClosedMS >= 1800 && r[0].ClosedMS <= 4000 && r[0].After != "timeout" && len(rec) > 0,
 		"client: %+v (handshake_timeout 2s); record: %s", r, strings.Join(rec, " "))
 
-	// (h) needs its own port49d: a CRL source that cannot be fetched and no kept list.
+	// (h) needs its own port49d: a CRL served over local HTTP with a short
+	// nextUpdate. port49d loads it, the server stops, and the connection is
+	// made past nextUpdate: "past nextUpdate and unreachable", the register's
+	// condition.
+	e.checkAlive()
 	e.stop()
-	h := newL72Env(t, "unreachable")
+	h := newL72Env(t, "expiring")
+	h.crl.Close()
+	if h.crlNext.Load() == 0 {
+		t.Fatal("INVALID: port49d never fetched the CRL, so no list was loaded to expire")
+	}
+	if wait := time.Until(time.Unix(0, h.crlNext.Load())) + time.Second; wait > 0 {
+		time.Sleep(wait)
+	}
 	rs := h.client(h.tlsPort, "good", "-count", "2") // the second at once, inside the 2s decline window
 	time.Sleep(time.Second)
 	recH := h.records(`"tls_outcome":"status_unavailable"`)
 	// The first completes its handshake (the status is asked only after it)
-	// and is then reset with no reply. The second is reset at Accept, before
-	// any TLS byte, on the window status_unavailable keeps, and makes no
-	// second record (decision 50 ruling 8). That is a decline, not a strike:
-	// declined_refused counts it and held_refused does not.
+	// and is then reset with no reply and no alert. The second is reset at
+	// Accept, before any TLS byte, on the window status_unavailable keeps, and
+	// makes no second record (decision 50 ruling 8). That is a decline, not a
+	// strike: declined_refused counts it and held_refused does not.
 	declined, held := h.metric(connEvent("declined_refused")), h.metric(connEvent("held_refused"))
 	// The window is the base 2s, not a strike's growing hold: a connection
 	// after it reaches the handshake again, and the status fails again.
@@ -514,14 +584,17 @@ func TestL72ReferenceClients(t *testing.T) {
 	if len(rs) != 2 || len(again) != 1 {
 		cell("h", false, "the client reported %d and %d lines: %+v %+v", len(rs), len(again), rs, again)
 	} else {
-		cell("h", rs[0].Handshake == "ok" && rs[0].Status == "none" && rs[1].Handshake == "error" &&
+		cell("h", rs[0].Handshake == "ok" && !strings.Contains(rs[0].Error, "remote error") && rs[0].Status == "none" &&
+			rs[1].Handshake == "error" &&
 			len(recH) == 1 && !strings.Contains(string(h.logBytes()), `"tls_outcome":"handshake_failed"`) &&
 			declined == 1 && held == 0 && again[0].Handshake == "ok" && len(recAgain) == 2,
-			"first: %+v; second (inside the decline window): %+v; records: %s; declined_refused %v, held_refused %v; "+
-				"after the window: %+v, %d records in all", rs[0], rs[1], strings.Join(recH, " "), declined, held, again[0],
-			len(recAgain))
+			"CRL served over HTTP (nextUpdate %s after the fetch), loaded, server stopped, connected past nextUpdate. "+
+				"first: %+v; second (inside the decline window): %+v; records: %s; declined_refused %v, held_refused %v; "+
+				"after the window: %+v, %d records in all", l72CRLLife, rs[0], rs[1], strings.Join(recH, " "), declined,
+			held, again[0], len(recAgain))
 	}
 
+	h.checkAlive()
 	l72Note(t, e, h, string(osslVersion), got)
 }
 
@@ -584,6 +657,11 @@ func l72Note(t *testing.T, e, h *l72Env, osslVersion string, got []l72Obs) {
 	for name, body := range files {
 		if hits := labcreds.Contains(body, secrets); len(hits) > 0 {
 			t.Fatalf("INVALID: evidence %s holds a secret; nothing written", name)
+		}
+		if strings.HasPrefix(name, "openssl-") {
+			if hits := l72TranscriptLeaks(string(body)); len(hits) > 0 {
+				t.Fatalf("INVALID: transcript %s carries TLS session material (%v); nothing written", name, hits)
+			}
 		}
 	}
 	if hits := labcreds.Contains([]byte(note), secrets); len(hits) > 0 {
