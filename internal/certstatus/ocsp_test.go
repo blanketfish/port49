@@ -699,3 +699,95 @@ func TestCheckCachedNeverWaits(t *testing.T) {
 		t.Fatalf("past expiry: %+v, want unknown", r)
 	}
 }
+
+// ocspRun runs c.Run with its waits under the test's control: wake fires the
+// one it is in.
+func ocspRun(t *testing.T, c *Checker) (wake func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	fire := make(chan time.Time)
+	c.after = func(time.Duration) <-chan time.Time { return fire }
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return func() {
+		t.Helper()
+		select {
+		case fire <- time.Time{}:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run is not waiting")
+		}
+	}
+}
+
+func ocspUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 400 && !ok(); i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !ok() {
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func ocspIdle(c *Checker) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.ocspInflight) == 0
+}
+
+// Decision 50 ruling 9: a working responder never lets the answer an open
+// connection relies on expire. The refresh does not wait for a packet to land
+// in the second half of the answer's life: Run asks again at the refresh
+// point of an answer that was read.
+func TestOCSPRefreshesAnAnswerInUseWithNoPacket(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	chain := []*x509.Certificate{leaf(t, ca, 100), ca.Cert}
+	resp := newResponder(t, ca)
+	resp.set(func(r *responder) { r.ans = answer{status: ocsp.Good, this: t0, next: t0.Add(2 * time.Minute)} })
+	c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+	wake := ocspRun(t, c)
+
+	c.CheckCached(chain) // a miss: asked in the background
+	ocspUntil(t, "the answer cached", func() bool { return c.CheckCached(chain).Verdict == Good })
+
+	// 70s on, past the refresh point at 60s, and no packet in between.
+	clk.advance(70 * time.Second)
+	resp.set(func(r *responder) {
+		r.ans = answer{status: ocsp.Good, this: clk.now(), next: clk.now().Add(2 * time.Minute)}
+	})
+	wake()
+	ocspUntil(t, "the refresh", func() bool { return resp.count() == 2 && ocspIdle(c) })
+
+	// 125s in: the first answer expired at 120s.
+	clk.advance(55 * time.Second)
+	if r := c.CheckCached(chain); r.Verdict != Good {
+		t.Fatalf("the answer in use expired with no packet in the refresh window: %+v", r)
+	}
+}
+
+// An answer nobody reads again is not refreshed on and on: it is asked about
+// once more after its last read, then dropped as it expires.
+func TestOCSPDoesNotRefreshAnAnswerNobodyReads(t *testing.T) {
+	ca := newCA(t, "issuing CA")
+	chain := []*x509.Certificate{leaf(t, ca, 100), ca.Cert}
+	resp := newResponder(t, ca)
+	resp.set(func(r *responder) { r.ans = answer{status: ocsp.Good, this: t0, next: t0.Add(2 * time.Minute)} })
+	c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+	wake := ocspRun(t, c)
+
+	c.CheckCached(chain)
+	ocspUntil(t, "the answer cached", func() bool { return c.CheckCached(chain).Verdict == Good })
+	for _, step := range []int{70, 70} { // the refresh at 70s; then 140s, a whole ttl after the read
+		clk.advance(time.Duration(step) * time.Second)
+		resp.set(func(r *responder) {
+			r.ans = answer{status: ocsp.Good, this: clk.now(), next: clk.now().Add(2 * time.Minute)}
+		})
+		wake()
+		time.Sleep(100 * time.Millisecond)
+	}
+	ocspUntil(t, "the idle checker", func() bool { return ocspIdle(c) })
+	if n := resp.count(); n != 2 {
+		t.Fatalf("%d questions, want 2: the unread answer was refreshed again", n)
+	}
+}

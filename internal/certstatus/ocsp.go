@@ -26,7 +26,14 @@ import (
 type ocspEntry struct {
 	res     Result
 	expires time.Time
-	refresh time.Time // past it, a cached read asks again in the background
+	refresh time.Time // past it, a cached read, or Run while the entry is in use, asks again in the background
+
+	// What Run needs to ask again with no packet to prompt it. lastUsed is
+	// the last time a caller wanted this answer: an entry nobody read in the
+	// last ttl is not refreshed and is dropped as it expires.
+	cert, issuer *x509.Certificate
+	lastUsed     time.Time
+	ttl          time.Duration
 }
 
 // ocspCall is one question in flight, shared by every caller asking it.
@@ -79,11 +86,16 @@ const (
 // returned, and refreshed in the background once past half its life; none is
 // Unknown at once, its question asked in the background for the next caller.
 // Either background question is the shared one, bounded by OCSP.Timeout alone.
+// Run asks again at the refresh point of an answer read within the last ttl,
+// so a working responder never lets the answer an open connection relies on
+// expire for want of a packet in the second half of its life (refreshOCSP).
 func (c *Checker) checkOCSP(ctx context.Context, cert, issuer *x509.Certificate, wait bool) Result {
 	key := ocspKey(cert, issuer)
 	now := c.now()
 	c.mu.Lock()
 	if e, ok := c.ocsp[key]; ok && now.Before(e.expires) {
+		e.lastUsed = now
+		c.ocsp[key] = e
 		if !wait && !now.Before(e.refresh) {
 			c.startLocked(ctx, key, cert, issuer)
 		}
@@ -134,16 +146,55 @@ func (c *Checker) ask(ctx context.Context, key string, call *ocspCall, cert, iss
 		// A refresh that fails never shortens an answer in force, and is not
 		// asked again at once: a responder down is asked once per ocspFailCache
 		// (M15), by the cached path too.
-		if e, ok := c.ocsp[key]; res.Verdict == Unknown && ok && now.Before(e.expires) {
-			e.refresh = now.Add(ocspFailCache)
-			c.ocsp[key] = e
+		old, had := c.ocsp[key]
+		if res.Verdict == Unknown && had && now.Before(old.expires) {
+			old.refresh = now.Add(ocspFailCache)
+			c.ocsp[key] = old
 		} else {
-			c.ocsp[key] = ocspEntry{res: res, expires: now.Add(ttl), refresh: now.Add(ttl / 2)}
+			used := now // the question was asked for a caller
+			if had {
+				used = old.lastUsed
+			}
+			c.ocsp[key] = ocspEntry{res: res, expires: now.Add(ttl), refresh: now.Add(ttl / 2),
+				cert: cert, issuer: issuer, lastUsed: used, ttl: ttl}
+		}
+		select { // Run plans its next refresh from this entry
+		case c.kick <- struct{}{}:
+		default:
 		}
 	}
 	call.res = res
 	delete(c.ocspInflight, key)
 	close(call.done)
+}
+
+// refreshOCSP asks again, in the background, about every answer past its
+// refresh point that a caller read within the last ttl, and says when the
+// next in-use answer is due (the zero time with none). One question per
+// entry is in flight at a time, a failed refresh is not asked again for
+// ocspFailCache, and an answer nobody reads is left to expire. It never
+// waits for the responder.
+func (c *Checker) refreshOCSP(ctx context.Context) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	var next time.Time
+	for key, e := range c.ocsp {
+		if !now.Before(e.expires) || e.cert == nil || now.Sub(e.lastUsed) >= e.ttl {
+			continue
+		}
+		if _, busy := c.ocspInflight[key]; busy {
+			continue // its outcome kicks Run
+		}
+		if !now.Before(e.refresh) {
+			c.startLocked(ctx, key, e.cert, e.issuer)
+			continue
+		}
+		if next.IsZero() || e.refresh.Before(next) {
+			next = e.refresh
+		}
+	}
+	return next
 }
 
 // askOCSP is one question, and how long its answer may be reused.

@@ -479,7 +479,9 @@ func (c *Checker) LoadAll(ctx context.Context) []error {
 
 // Run fetches every source now, then each on its own schedule: every
 // RefreshInterval after a success, and from 30s doubling to
-// RefreshInterval after a failure (pre-flight I8). It returns when ctx ends.
+// RefreshInterval after a failure (pre-flight I8). It also asks the OCSP
+// responder again about answers in use as they reach their refresh point
+// (refreshOCSP). It returns when ctx ends.
 func (c *Checker) Run(ctx context.Context) {
 	type next struct {
 		at     time.Time
@@ -511,6 +513,11 @@ func (c *Checker) Run(ctx context.Context) {
 				n.at = c.now().Add(c.cfg.RefreshInterval)
 			}
 			soonest = minTime(soonest, n.at)
+		}
+		if c.cfg.OCSP != nil {
+			if at := c.refreshOCSP(ctx); !at.IsZero() {
+				soonest = minTime(soonest, at)
+			}
 		}
 		select {
 		case <-ctx.Done():
