@@ -6985,7 +6985,7 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
   - Task 4, `internal/devicecert`, the verdict on a device's client certificate (`7489744e`, fixes
     `d26c4fcc`, `053e1860`, `62992bb9`; the Junos note on L73 `cfc88ad4`).
   - Task 5, `tls_listener:` and `listen: none` in port49d.yaml; certificate status by component and
-    a cached check; devices a certificate cannot tell apart refused at load (`79e9a5cb`,
+    a cached check; two `tls` devices equal under ASCII fold refused admission at load (`79e9a5cb`,
     `ee4fd771`, `0d43aef0`, fixes `ae944f36`, `adb08981`).
   - Task 6, TLS record fields, diagnoses and metrics (`f710ae77`).
   - Task 7, the listener: decided at Accept, then TLS 1.3 with mutual certificates (`550d6901`,
@@ -6999,6 +6999,8 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
   - Task 11, the L72 harness (`35092d55`, fix `a3ff4c10`).
   - Task 12, the L71 probe (`f3cbe387`, fixes `73100c39`, `09a68f75`).
   - Task 13, the lab runs and their closes (`e26c6c9e`, `a9bee774`, `7631fe16`, `10be6456`).
+  - After Task 13: L29's refused phase uses `transport: udp`, since `tls` is now served
+    (`d70176c0`).
   - Task 14, this entry.
 - **Rulings as recorded** (decision 50 and the ledger), and what a review or a lab result changed:
   - **Q2 (ruled 2026-10-16, Ryan told):** one host may serve both listeners, with the start notice
@@ -7020,7 +7022,8 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
       reload.
     - Tickets (Task 9): a resumption chain is bounded by its original full handshake plus the
       lifetime, with stamps taken as monotonic time since the guard began, so a wall-clock step
-      replays nothing. Cost: a device re-handshakes hourly under the default lifetime.
+      replays nothing. Cost: a device re-handshakes at most hourly, when tickets are enabled
+      (`session_ticket_lifetime` defaults to `0s`, off).
     - Reload (Task 10): a CA rotation needs no restart: the checker's issuer set follows the
       swapped anchors, and the unidentifiable set is computed before the swap, closing a
       fail-open window. Edits to `tls_listener:` keys do need a restart, said once at SIGHUP.
@@ -7116,10 +7119,10 @@ the inventory-only refresh's cost at fleet size.
 - The reference device AAA configuration for `transport: tls`, per platform, written from L73 once
   an image carries a client (plan 11 Q1): port (300; Cisco's documents default 6049), SNI, the
   client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth), and no
-  non-TLS fallback server for the same host (RFC 9887 §5.1.1). **Junos:** port49 requires the
-  client certificate, and Junos makes mutual TLS optional, so the Junos configuration must set
-  `tls mutual-authentication certificate-id <id>`; without it every login is refused
-  `no_client_certificate`.
+  non-TLS fallback server for the same host (RFC 9887 §5.1.1). **Junos** (per Juniper
+  documentation, unmeasured until L73 closes): mutual TLS is optional there and port49 requires the
+  client certificate, so the configuration must set `tls mutual-authentication certificate-id <id>`;
+  a client that sends no certificate is refused `no_client_certificate` (measured, L72 cell c).
 - Every deployment shape exposes `tls_listener.listen` (default 300) beside 49, with the source
   address preserved as for 49. Binding 300 needs what binding 49 does.
 - Alarms: `rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])` by outcome;
@@ -7232,9 +7235,11 @@ reference. The page also carries, each as what an operator sees and the fix:
   match, cannot be told from a certificate. Such a device is declined at Accept as
   `identity_mismatch`, with no handshake and no strike, and named once at start or reload. Rename
   it, or give it an `ip_address`.
-- **Junos.** port49 requires the client certificate; Junos makes mutual TLS optional, so set
-  `tls mutual-authentication certificate-id <id>` (Junos 26.2R1 and later, routing and switching
-  platforms, not SRX). Without it every login is refused `no_client_certificate`.
+- **Junos** (per Juniper documentation, unmeasured until L73 closes). port49 requires the client
+  certificate and Junos makes mutual TLS optional, so set `tls mutual-authentication
+  certificate-id <id>` (Junos 26.2R1 and later, routing and switching platforms, not SRX).
+  Without a client certificate a login is refused `no_client_certificate` (that refusal is
+  measured, L72 cell c).
 - **The `component` label** on the four certificate-status metrics, and `sum by` or
   `ignoring(component)` where a rule matched them one-to-one.
 - **Config changes.** An edit to a `tls_listener:` key needs a restart (said once at SIGHUP).
