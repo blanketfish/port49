@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -62,7 +63,15 @@ func (l *lab) xrCLI(user, password string) (*cliConn, error) {
 // unless lenient: then it keeps going and returns every refusal together
 // (the cleanup's restore, which undoes lines that may never have been
 // applied). Errors name lines through hideKeys.
-func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient bool) (string, error) {
+func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient bool) (out string, err error) {
+	// What leaves this function is masked at the source: the device echoes
+	// each typed line, and a refusal line may quote a key.
+	defer func() {
+		out = hideKeys(out)
+		if err != nil {
+			err = errors.New(hideKeys(err.Error()))
+		}
+	}()
 	from := len(c.transcript())
 	mark := strings.TrimSuffix(c.prompt, "#") + "("
 	if _, err := c.sendExpect("configure terminal", 45*time.Second, mark); err != nil {
@@ -96,13 +105,13 @@ func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient 
 				}
 			}
 		}
-		out := c.transcript()[at:]
-		if r := l73Refusal(out); r != "" {
+		said := c.transcript()[at:]
+		if r := l73Refusal(said); r != "" {
 			if !lenient {
-				return c.transcript()[from:], fmt.Errorf("%q was refused: %s", hideKeys(it.Cmd), r)
+				return c.transcript()[from:], fmt.Errorf("%q was refused: %s", hideKeys(it.Cmd), hideKeys(r))
 			}
-			refused = append(refused, hideKeys(it.Cmd)+": "+r)
-		} else if it.Done != "" && !strings.Contains(out, it.Done) {
+			refused = append(refused, hideKeys(it.Cmd)+": "+hideKeys(r))
+		} else if it.Done != "" && !strings.Contains(said, it.Done) {
 			return c.transcript()[from:], fmt.Errorf("%q: the device never said %q", hideKeys(it.Cmd), it.Done)
 		}
 	}
