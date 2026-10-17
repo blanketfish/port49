@@ -48,7 +48,7 @@ type tlsListener struct {
 	status       devicecert.StatusFunc
 	cached       devicecert.CachedStatusFunc
 	allowUnknown bool
-	devices      func() []admission.Device // the admitted devices now; nil is none
+	devices      func() []admission.Device // every inventory device now, refused included; nil is none
 	now          func() time.Time
 	say          func(format string, args ...any)
 
@@ -158,7 +158,7 @@ func (l *tlsListener) inventoryChanged(why string) {
 	}
 }
 
-// swapping is told the admitted devices of an inventory about to be put in
+// swapping is told the devices of an inventory about to be put in
 // force, before it is: a clash it creates is flagged before the first
 // connection can be admitted under it. The devices judged are those in force
 // and those coming, so a device whose twin is on its way out stays flagged
@@ -512,9 +512,9 @@ func statusOf(r certstatus.Result) (devicecert.Status, string) {
 }
 
 // tlsListenerOf builds the RFC 9887 listener's material and its status
-// checker from cfg.TLSListener: nil, nil without one. devices is the
-// admitted devices now, for the rule's unidentifiable list. The files are
-// read once: the checker's trust and the material's anchors are the same
+// checker from cfg.TLSListener: nil, nil without one. devices is every
+// inventory device now, refused included, for the rule's unidentifiable
+// list. The files are read once: the checker's trust and the material's anchors are the same
 // bytes.
 func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...any),
 	devices func() []admission.Device) (*tlsListener, *certstatus.Checker, error) {
@@ -790,6 +790,23 @@ func admittedDevices(cfg config.Config, live *policy.Live) []admission.Device {
 	return out
 }
 
+// inventoryDevices are every device of the inventory in force, the refused
+// included: the rule's name-clash judgment counts a refused device's
+// certificate as a claimant of its names (devicecert.Rule.Unidentifiable).
+// They are judged, never served: a refused device is still declined at Accept.
+func inventoryDevices(cfg config.Config, live *policy.Live) []admission.Device {
+	if live != nil {
+		return live.Load().Devices()
+	}
+	return cfg.Inventory.Devices
+}
+
+// tlsDeviceSource is the list the listener judges for devices the rule
+// cannot identify: the whole inventory, so a refused device still counts.
+func tlsDeviceSource(cfg config.Config, live *policy.Live) func() []admission.Device {
+	return func() []admission.Device { return inventoryDevices(cfg, live) }
+}
+
 // policyDevices are the devices pol admits.
 func policyDevices(pol *policy.Policy) []admission.Device {
 	var out []admission.Device
@@ -875,7 +892,7 @@ func hookTLSReload(r *reloader, tl *tlsListener, cfg config.Config, live *policy
 		r.onHUP = func() { tl.reload("SIGHUP") }
 		// Before the swap, so no connection is admitted under a clash the
 		// new inventory creates; after it, the exact flags of the new set.
-		r.beforeSwap = func(pol *policy.Policy) { tl.swapping(policyDevices(pol)) }
+		r.beforeSwap = func(pol *policy.Policy) { tl.swapping(pol.Devices()) }
 	}
 	lastUnserved := unservedOf(cfg, live)
 	r.onSwap = func(*policy.Policy) {

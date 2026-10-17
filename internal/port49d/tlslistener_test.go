@@ -1168,3 +1168,41 @@ func TestTLSRotationWhileTheIssuerFileAlreadyFailsSaysTheNewCAClause(t *testing.
 		t.Fatalf("the rotation is said once with the clause: %s", r.sink.all())
 	}
 }
+
+// Decision 50 ruling 6, through port49d's own wiring: a device refused for
+// the name clash is still a claimant of the names its certificate may carry,
+// so leaf1's certificate (dNSName leaf1.example.net) cannot be taken for the
+// admitted leaf1.example.net. The refused pair is never served.
+func TestTLSRefusedDeviceStillCountsAsAClaimant(t *testing.T) {
+	dev := func(name, addr string) admission.Device {
+		d := tlsDev(name)
+		d.Addresses = []netip.Addr{netip.MustParseAddr(addr)}
+		return d
+	}
+	inv := admission.Inventory{
+		Devices: []admission.Device{dev("Leaf1", "192.0.2.1"), dev("leaf1", "192.0.2.2"),
+			dev("leaf1.example.net", "192.0.2.3")},
+		KeyGroups: []admission.KeyGroup{{CIDR: netip.MustParsePrefix("192.0.2.0/24"), KeyRef: "k"}},
+	}
+	trie, err := admission.Build(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Inventory: inv, Admission: trie}
+	if _, ok := trie.Lookup(netip.MustParseAddr("192.0.2.1")); ok {
+		t.Fatal("the clashing pair is not admitted")
+	}
+	if got := admittedDevices(cfg, nil); len(got) != 1 || got[0].Name != "leaf1.example.net" {
+		t.Fatalf("only leaf1.example.net is served: %v", got)
+	}
+	p := writeDevicePKI(t)
+	tc := p.listenerCfg()
+	tc.DeviceIdentity = config.DeviceIdentityConfig{Match: []string{"dns_name"}, DNSSuffixes: []string{"example.net"}}
+	l, err := newTLSListener(tc, nil, nil, false, tlsDeviceSource(cfg, nil), time.Now, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Material().Unidentifiable["leaf1.example.net"] == "" {
+		t.Fatalf("leaf1.example.net is flagged, to be declined at Accept: %v", l.Material().Unidentifiable)
+	}
+}

@@ -1207,7 +1207,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// The RFC 9887 listener's material is loaded before anything binds: a
 	// file that does not load stops the start, and names the file.
 	sayf := func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) }
-	tl, tlsChecker, err := tlsListenerOf(cfg, m, sayf, func() []admission.Device { return admittedDevices(cfg, live) })
+	tl, tlsChecker, err := tlsListenerOf(cfg, m, sayf, tlsDeviceSource(cfg, live))
 	if err != nil {
 		mln.Close()
 		stopSpool()
