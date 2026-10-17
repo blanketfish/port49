@@ -1220,8 +1220,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		expiry := &devicecert.Expiry{Fraction: cfg.TLSListener.ExpiryWarningFraction, Say: sayf}
 		said = &refusalSayer{now: time.Now, say: sayf}
 		m.WatchTLSLifetime(func() (float64, bool) { return expiry.LeastLeft(time.Now()) }, tl.ServerLifetimeLeft)
-		tlsDeps = &server.TLS{Material: tl.Material, ServerNames: tlsServerNames(*cfg.TLSListener),
-			HandshakeTimeout: cfg.TLSListener.HandshakeTimeout, Seen: expiry.Seen, Said: said.said}
+		tlsDeps = newTLSDeps(*cfg.TLSListener, tl, expiry, said)
 	}
 	m.CountDevicesByTransport(func() map[string]int { n, _ := transportCount(cfg, live); return n })
 

@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -53,12 +54,21 @@ type tlsListener struct {
 	cur        atomic.Pointer[server.Material]
 	serverLeaf atomic.Pointer[x509.Certificate]
 
-	mu      sync.Mutex
-	files   tlsFiles          // the last set that loaded
-	fsum    [32]byte          // its hash
-	state   [32]byte          // the hash of every input cur was built from
-	flagged map[string]string // devices said unidentifiable, and the reason said
-	failed  string
+	// follow, when set, brings the status checker's issuer set to the
+	// anchors and intermediates the files in force name, and says what is
+	// uncovered. It does nothing when the trust and the issuer files are as
+	// it last saw them. A nil follow is no checker.
+	follow func(anchors, inters []*x509.Certificate) error
+
+	mu           sync.Mutex
+	files        tlsFiles // the last set that loaded
+	anchors      string   // describe of the anchors in force
+	followFailed string
+	sighup       bool              // the config note was said
+	fsum         [32]byte          // its hash
+	state        [32]byte          // the hash of every input cur was built from
+	flagged      map[string]string // devices said unidentifiable, and the reason said
+	failed       string
 }
 
 // newTLSListener loads the files, or refuses with an error naming the one
@@ -72,10 +82,18 @@ func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, 
 	if err != nil {
 		return nil, err
 	}
-	if err := l.apply("", files, sum); err != nil {
+	if _, err := l.apply("", files, sum, l.current()); err != nil {
 		return nil, err
 	}
 	return l, nil
+}
+
+// current is the admitted devices now.
+func (l *tlsListener) current() []admission.Device {
+	if l.devices == nil {
+		return nil
+	}
+	return l.devices()
 }
 
 // Material is the set in force, for server.TLS. It is never nil once
@@ -91,24 +109,34 @@ func (l *tlsListener) ServerLifetimeLeft() float64 {
 // reload reads the files again. A set that loads replaces the one in force
 // if anything it carries changed, and is said; one that does not is said
 // once per distinct failure, and the set in force stays. Either way the
-// devices the rule cannot identify follow the inventory now.
+// devices the rule cannot identify follow the inventory now, and the status
+// checker follows the trust set in force.
 func (l *tlsListener) reload(why string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if why == "SIGHUP" && !l.sighup {
+		l.sighup = true
+		l.say("tls_listener: config changes take effect at restart; files reload now")
+	}
 	files, sum, err := l.read()
+	swapped := false
 	if err == nil {
-		err = l.apply(why, files, sum)
+		swapped, err = l.apply(why, files, sum, l.current())
 	}
 	if err != nil {
 		l.refuse(why, err)
 		// The files in force stay, but a changed inventory must still reach
 		// them: a stale flag would admit a device the rule cannot tell apart.
-		if err := l.apply(why, l.files, l.fsum); err != nil {
+		if _, err := l.apply(why, l.files, l.fsum, l.current()); err != nil {
 			l.refuse(why, err)
 		}
-		return
+	} else {
+		if l.failed != "" && !swapped {
+			l.say("tls_listener: %s: the files load again; the set in force is unchanged", why)
+		}
+		l.failed = ""
 	}
-	l.failed = ""
+	l.followTrust(why)
 }
 
 // inventoryChanged recomputes the devices the rule cannot identify after the
@@ -116,16 +144,74 @@ func (l *tlsListener) reload(why string) {
 func (l *tlsListener) inventoryChanged(why string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := l.apply(why, l.files, l.fsum); err != nil {
+	if _, err := l.apply(why, l.files, l.fsum, l.current()); err != nil {
 		l.refuse(why, err)
 	}
+}
+
+// swapping is told the admitted devices of an inventory about to be put in
+// force, before it is: a clash it creates is flagged before the first
+// connection can be admitted under it. The devices judged are those in force
+// and those coming, so a device whose twin is on its way out stays flagged
+// until the swap is done; inventoryChanged then judges the new set alone.
+func (l *tlsListener) swapping(next []admission.Device) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	names := map[string]bool{}
+	for _, d := range next {
+		names[d.Name] = true
+	}
+	union := slices.Clone(next)
+	for _, d := range l.current() {
+		if !names[d.Name] {
+			union = append(union, d)
+		}
+	}
+	if _, err := l.apply("inventory", l.files, l.fsum, union); err != nil {
+		l.refuse("inventory", err)
+	}
+}
+
+// followTrust brings the status checker's issuer set to the trust the files
+// in force name, when that or the issuer files changed. The caller holds mu.
+func (l *tlsListener) followTrust(why string) {
+	if l.follow == nil {
+		return
+	}
+	anchors, inters, err := trustOf(l.cfg, l.files)
+	if err != nil {
+		return // apply said it
+	}
+	err = l.follow(anchors, inters)
+	switch msg := fmt.Sprint(err); {
+	case err == nil:
+		l.followFailed = ""
+	case msg != l.followFailed:
+		l.followFailed = msg
+		l.say("tls_listener: %s: the certificate status sources keep the issuers they had, and devices under a "+
+			"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(msg, 400))
+	}
+}
+
+// trustOf is the anchors and the intermediates the files hold.
+func trustOf(cfg config.TLSListenerConfig, f tlsFiles) (anchors, inters []*x509.Certificate, err error) {
+	if anchors, err = tlsCACerts("client_ca_file", cfg.ClientCAFile, f.ca); err != nil {
+		return nil, nil, err
+	}
+	if cfg.IntermediatesFile != "" {
+		if inters, err = tlsCACerts("intermediates_file", cfg.IntermediatesFile, f.inter); err != nil {
+			return nil, nil, err
+		}
+	}
+	return anchors, inters, nil
 }
 
 // refuse says a load that did not take, once per distinct failure.
 func (l *tlsListener) refuse(why string, err error) {
 	if msg := err.Error(); msg != l.failed {
 		l.failed = msg
-		l.say("tls_listener: %s: not reloaded, the files in force stay: %s", why, msg)
+		l.say("tls_listener: %s: not reloaded, the files in force stay; kept: anchors %s (the new set did not "+
+			"load): %s", why, l.anchors, msg)
 	}
 }
 
@@ -208,36 +294,42 @@ func (l *tlsListener) fingerprint(fsum [32]byte, unid map[string]string) [32]byt
 	return out
 }
 
-// apply builds a Material from files and the inventory now, and swaps it in
-// when any input differs from the one in force. why is "" at the start. The
-// caller holds mu, or is newTLSListener.
-func (l *tlsListener) apply(why string, files tlsFiles, fsum [32]byte) error {
+// apply builds a Material from files and devs, the admitted devices, and
+// swaps it in when any input differs from the one in force; it reports
+// whether it did. why is "" at the start. The caller holds mu, or is
+// newTLSListener.
+func (l *tlsListener) apply(why string, files tlsFiles, fsum [32]byte, devs []admission.Device) (bool, error) {
 	var unid map[string]string
-	if l.devices != nil {
-		unid = l.rule().Unidentifiable(l.devices())
+	if devs != nil {
+		unid = l.rule().Unidentifiable(devs)
 	}
 	if unid == nil {
 		unid = map[string]string{}
 	}
 	fp := l.fingerprint(fsum, unid)
 	if l.cur.Load() != nil && fp == l.state {
-		return nil
+		return false, nil
 	}
 	m, leaf, desc, err := l.build(files, unid)
 	if err != nil {
-		return err
+		return false, err
 	}
+	sameFiles := l.cur.Load() != nil && fsum == l.fsum
 	l.cur.Store(m)
 	l.serverLeaf.Store(leaf)
 	l.files, l.fsum, l.state = files, fsum, fp
-	if why == "" {
-		l.say("tls_listener: %s", desc)
-	} else {
-		l.say("tls_listener: %s: reloaded: %s", why, desc)
+	l.anchors = desc.anchors
+	switch {
+	case why == "":
+		l.say("tls_listener: %s", desc.all)
+	case sameFiles:
+		l.say("tls_listener: %s: files unchanged; devices the rule cannot identify recomputed (%d)", why, len(unid))
+	default:
+		l.say("tls_listener: %s: reloaded: %s", why, desc.all)
 	}
 	l.sayExpired(leaf)
 	l.sayUnidentifiable(unid)
-	return nil
+	return true, nil
 }
 
 // sayUnidentifiable names each device flagged since the last time it was
@@ -254,27 +346,30 @@ func (l *tlsListener) sayUnidentifiable(unid map[string]string) {
 	l.flagged = unid
 }
 
+// buildDesc describes a Material: all of it, and its anchors alone.
+type buildDesc struct{ all, anchors string }
+
 // build makes one Material from the files' bytes and the devices the rule
 // cannot identify, and describes it.
-func (l *tlsListener) build(f tlsFiles, unid map[string]string) (*server.Material, *x509.Certificate, string, error) {
+func (l *tlsListener) build(f tlsFiles, unid map[string]string) (*server.Material, *x509.Certificate, buildDesc, error) {
 	cert, err := tls.X509KeyPair(f.cert, f.key)
 	if err != nil {
 		// crypto/tls's text names the fault, never the key's bytes.
-		return nil, nil, "", fmt.Errorf("tls_listener.cert_file %s and key_file %s do not load as a pair (%s)",
+		return nil, nil, buildDesc{}, fmt.Errorf("tls_listener.cert_file %s and key_file %s do not load as a pair (%s)",
 			l.cfg.CertFile, l.cfg.KeyFile, printsafe.Line(err.Error(), 200))
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("tls_listener.cert_file %s: %w", l.cfg.CertFile, err)
+		return nil, nil, buildDesc{}, fmt.Errorf("tls_listener.cert_file %s: %w", l.cfg.CertFile, err)
 	}
 	anchors, err := tlsCACerts("client_ca_file", l.cfg.ClientCAFile, f.ca)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, buildDesc{}, err
 	}
 	var inters []*x509.Certificate
 	if l.cfg.IntermediatesFile != "" {
 		if inters, err = tlsCACerts("intermediates_file", l.cfg.IntermediatesFile, f.inter); err != nil {
-			return nil, nil, "", err
+			return nil, nil, buildDesc{}, err
 		}
 	}
 	pool := x509.NewCertPool()
@@ -288,7 +383,7 @@ func (l *tlsListener) build(f tlsFiles, unid map[string]string) (*server.Materia
 	if l.cfg.SessionTicketLifetime > 0 {
 		guard = server.NewTicketGuard(l.cfg.SessionTicketLifetime, l.now)
 		if err := guard.Apply(base); err != nil {
-			return nil, nil, "", fmt.Errorf("tls_listener: session ticket keys: %w", err)
+			return nil, nil, buildDesc{}, fmt.Errorf("tls_listener: session ticket keys: %w", err)
 		}
 		tickets = "single-use, " + l.cfg.SessionTicketLifetime.String()
 	}
@@ -298,10 +393,12 @@ func (l *tlsListener) build(f tlsFiles, unid map[string]string) (*server.Materia
 	for _, a := range anchors {
 		names = append(names, describeCert(a))
 	}
+	anchorList := strings.Join(names, ", ")
 	desc := fmt.Sprintf("anchors %s; %d stored intermediates; server certificate %s expires %s; session tickets %s; "+
 		"%d devices the rule cannot identify", strings.Join(names, ", "), len(inters), describeCert(leaf),
 		leaf.NotAfter.UTC().Format(time.RFC3339), tickets, len(unid))
-	return &server.Material{Config: base, Verifier: ver, Unidentifiable: unid, Tickets: guard}, leaf, desc, nil
+	return &server.Material{Config: base, Verifier: ver, Unidentifiable: unid, Tickets: guard}, leaf,
+		buildDesc{all: desc, anchors: anchorList}, nil
 }
 
 func (l *tlsListener) sayExpired(leaf *x509.Certificate) {
@@ -392,33 +489,27 @@ func statusOf(r certstatus.Result) (devicecert.Status, string) {
 
 // tlsListenerOf builds the RFC 9887 listener's material and its status
 // checker from cfg.TLSListener: nil, nil without one. devices is the
-// admitted devices now, for the rule's unidentifiable list.
+// admitted devices now, for the rule's unidentifiable list. The files are
+// read once: the checker's trust and the material's anchors are the same
+// bytes.
 func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...any),
 	devices func() []admission.Device) (*tlsListener, *certstatus.Checker, error) {
 	tc := cfg.TLSListener
 	if tc == nil {
 		return nil, nil, nil
 	}
+	l := &tlsListener{cfg: *tc, devices: devices, now: time.Now, say: say}
+	l.allowUnknown = tc.CertificateStatus != nil && tc.CertificateStatus.OnUnavailable == "allow"
+	files, sum, err := l.read()
+	if err != nil {
+		return nil, nil, err
+	}
+	anchors, inters, err := trustOf(*tc, files) // the error names the file it is about (pre-flight M12)
+	if err != nil {
+		return nil, nil, err
+	}
 	var checker *certstatus.Checker
-	var status devicecert.StatusFunc
-	var cached devicecert.CachedStatusFunc
 	if cs := tc.CertificateStatus; cs != nil && !cs.Disabled {
-		var trusted []*x509.Certificate
-		for _, f := range []struct{ key, path string }{{"client_ca_file", tc.ClientCAFile},
-			{"intermediates_file", tc.IntermediatesFile}} {
-			if f.path == "" {
-				continue
-			}
-			b, err := config.ReadRegular(f.path, tlsFileMax)
-			if err != nil {
-				return nil, nil, fmt.Errorf("tls_listener.%s %s: %w", f.key, f.path, err)
-			}
-			certs, err := tlsCACerts(f.key, f.path, b) // the error names the file it is about (pre-flight M12)
-			if err != nil {
-				return nil, nil, err
-			}
-			trusted = append(trusted, certs...)
-		}
 		// Its own subdirectory of state_dir, so it never writes the file an
 		// in-process broker's checker keeps under the same CRL name (ruling 8).
 		// WriteAtomic does not create it.
@@ -428,24 +519,87 @@ func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...an
 				return nil, nil, fmt.Errorf("tls_listener.state_dir: %w", err)
 			}
 		}
-		ccfg, err := certStatusConfig(*cs, trusted, stateDir, "tls_listener.client_ca_file or intermediates_file",
-			"the TLS listener")
-		if err != nil {
-			return nil, nil, fmt.Errorf("tls_listener.certificate_status.%w", err)
+		statusConfig := func(trusted []*x509.Certificate) (certstatus.Config, error) {
+			ccfg, err := certStatusConfig(*cs, trusted, stateDir, "tls_listener.client_ca_file or "+
+				"intermediates_file", "the TLS listener")
+			if err != nil {
+				return ccfg, fmt.Errorf("tls_listener.certificate_status.%w", err)
+			}
+			ccfg.Component = "tls_listener" // its lines' prefix and its metrics' component label
+			return ccfg, nil
 		}
-		ccfg.Component = "tls_listener" // its lines' prefix and its metrics' component label
+		ccfg, err := statusConfig(append(slices.Clone(anchors), inters...))
+		if err != nil {
+			return nil, nil, err
+		}
 		checker = certstatus.New(ccfg, time.Now, m, say)
 		for _, err := range checker.LoadPersisted() {
 			say("tls_listener: certificate status: %s", printsafe.Line(err.Error(), 300))
 		}
-		status, cached = deviceStatus(checker)
+		l.status, l.cached = deviceStatus(checker)
+		l.follow = followStatus(checker, statusConfig, ccfg, anchors, inters, say)
 	}
-	allow := tc.CertificateStatus != nil && tc.CertificateStatus.OnUnavailable == "allow"
-	l, err := newTLSListener(*tc, status, cached, allow, devices, time.Now, say)
-	if err != nil {
+	if _, err := l.apply("", files, sum, l.current()); err != nil {
 		return nil, nil, err
 	}
 	return l, checker, nil
+}
+
+// followStatus is tlsListener.follow for chk: when the anchors, the
+// intermediates or the issuer certificates the CRL sources name differ from
+// what chk was last given, it makes the sources again from the files in
+// force, which verifies each issuer against the new trust (certStatusConfig),
+// and hands them to chk, so a list is verified against the new set and a
+// rotation needs no restart (ruling 15). A new anchor no source can answer
+// for is said once, with what to add. A set that does not verify leaves the
+// sources in force and is the error.
+func followStatus(chk *certstatus.Checker, statusConfig func([]*x509.Certificate) (certstatus.Config, error),
+	was certstatus.Config, anchors, inters []*x509.Certificate, say func(string, ...any)) func(a, i []*x509.Certificate) error {
+	key := trustKey(anchors, inters, was)
+	known := anchors
+	return func(a, i []*x509.Certificate) error {
+		ccfg, err := statusConfig(append(slices.Clone(a), i...))
+		if err != nil {
+			return err
+		}
+		if k := trustKey(a, i, ccfg); k == key {
+			return nil
+		} else {
+			key = k
+		}
+		chk.SetCRLSources(ccfg.CRLs)
+		say("tls_listener: certificate status: the trust set changed (%d anchors, %d intermediates); the CRL "+
+			"sources follow it and are fetched now", len(a), len(i))
+		for _, anchor := range a {
+			if slices.ContainsFunc(known, func(k *x509.Certificate) bool { return bytes.Equal(k.Raw, anchor.Raw) }) ||
+				ccfg.OCSP != nil || !uncoveredAnchor(ccfg, anchor) {
+				continue
+			}
+			sum := sha256.Sum256(anchor.Raw)
+			say("tls_listener: certificate status: no source can answer for the new anchor %s (sha256 %s): devices "+
+				"under it are declined status_unavailable. Add a crls entry whose issuer_file is that CA, or an "+
+				"ocsp block, to tls_listener.certificate_status; that config edit takes effect at restart",
+				printsafe.Line(anchor.Subject.String(), 200), hex.EncodeToString(sum[:]))
+		}
+		known = a
+		return nil
+	}
+}
+
+// trustKey hashes the trust set and the issuer certificates the sources name.
+func trustKey(anchors, inters []*x509.Certificate, c certstatus.Config) string {
+	h := sha256.New()
+	for _, set := range [][]*x509.Certificate{anchors, inters} {
+		for _, x := range set {
+			h.Write(x.Raw)
+		}
+		h.Write([]byte{0})
+	}
+	for _, src := range c.CRLs {
+		h.Write([]byte(src.Name))
+		h.Write(src.Issuer.Raw)
+	}
+	return string(h.Sum(nil))
 }
 
 // sayEvery is how often a device's refusal, or the gathered
@@ -586,19 +740,24 @@ func servesTLS(cfg config.Config) bool { return cfg.TLSListener != nil }
 func admittedDevices(cfg config.Config, live *policy.Live) []admission.Device {
 	var out []admission.Device
 	if live != nil {
-		pol := live.Load()
-		for _, d := range pol.Devices() {
-			if r, ok := pol.Admitted(d.Name); ok && r.Refused == "" {
-				out = append(out, d)
-			}
-		}
-		return out
+		return policyDevices(live.Load())
 	}
 	for _, d := range cfg.Inventory.Devices {
 		if len(d.Addresses) == 0 || cfg.Admission == nil {
 			continue
 		}
 		if r, ok := cfg.Admission.Lookup(d.Addresses[0]); ok && r.Refused == "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// policyDevices are the devices pol admits.
+func policyDevices(pol *policy.Policy) []admission.Device {
+	var out []admission.Device
+	for _, d := range pol.Devices() {
+		if r, ok := pol.Admitted(d.Name); ok && r.Refused == "" {
 			out = append(out, d)
 		}
 	}
@@ -660,6 +819,14 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, ln net.Liste
 	return first
 }
 
+// newTLSDeps is server.TLS for tl: the SNI names folded as the config
+// allows them, the material read at each Accept and packet, and the expiry
+// and refusal sinks.
+func newTLSDeps(tc config.TLSListenerConfig, tl *tlsListener, expiry *devicecert.Expiry, said *refusalSayer) *server.TLS {
+	return &server.TLS{Material: tl.Material, ServerNames: tlsServerNames(tc), HandshakeTimeout: tc.HandshakeTimeout,
+		Seen: expiry.Seen, Said: said.said}
+}
+
 // hookTLSReload wires the reloader to the TLS listener: its files are
 // re-read at SIGHUP (decision 50 ruling 15), and its list of devices the
 // rule cannot identify follows each swap of the policy or the inventory,
@@ -669,6 +836,9 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, ln net.Liste
 func hookTLSReload(r *reloader, tl *tlsListener, cfg config.Config, live *policy.Live) {
 	if tl != nil {
 		r.onHUP = func() { tl.reload("SIGHUP") }
+		// Before the swap, so no connection is admitted under a clash the
+		// new inventory creates; after it, the exact flags of the new set.
+		r.beforeSwap = func(pol *policy.Policy) { tl.swapping(policyDevices(pol)) }
 	}
 	lastUnserved := unservedOf(cfg, live)
 	r.onSwap = func(*policy.Policy) {

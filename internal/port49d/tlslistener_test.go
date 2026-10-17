@@ -1,8 +1,12 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +27,7 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/devicecert"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -435,6 +440,7 @@ func TestTLSMaterialFollowsTheInventoryWhileAFileIsBad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	certDER := l.Material().Config.Certificates[0].Certificate[0]
 	if err := os.WriteFile(p.certFile, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -448,9 +454,41 @@ func TestTLSMaterialFollowsTheInventoryWhileAFileIsBad(t *testing.T) {
 	if !strings.Contains(sink.all(), "not reloaded, the files in force stay") {
 		t.Fatalf("the bad file is said: %s", sink.all())
 	}
-	// The files in force are still the good ones.
-	if l.Material().Config.Certificates[0].Leaf == nil && len(l.Material().Config.Certificates) != 1 {
-		t.Fatal("the certificate in force was lost")
+	// The files in force are still the good ones, and the line says so
+	// rather than "reloaded".
+	if got := l.Material().Config.Certificates[0].Certificate[0]; !bytes.Equal(got, certDER) {
+		t.Fatal("the certificate in force was replaced by the bad file")
+	}
+	if !strings.Contains(sink.all(), "kept: anchors CN=Device CA") ||
+		!strings.Contains(sink.all(), "reload_interval: files unchanged; devices the rule cannot identify recomputed (2)") ||
+		strings.Contains(sink.all(), "reload_interval: reloaded") {
+		t.Fatalf("m1 wording: %s", sink.all())
+	}
+}
+
+// The files going back to the bytes in force clear a refusal, and say so.
+func TestTLSReloadSaysWhenAFailureClears(t *testing.T) {
+	p := writeDevicePKI(t)
+	var sink lineSink
+	l, err := newTLSListener(p.listenerCfg(), nil, nil, false, nil, time.Now, sink.say)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := l.Material()
+	good, err := os.ReadFile(p.certFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p.certFile, []byte("junk"), 0o600)
+	l.reload("reload_interval")
+	os.WriteFile(p.certFile, good, 0o600)
+	l.reload("reload_interval")
+	if l.Material() != first || sink.count("the files load again; the set in force is unchanged") != 1 {
+		t.Fatalf("a failure that clears is said once: %s", sink.all())
+	}
+	l.reload("reload_interval")
+	if sink.count("the files load again") != 1 {
+		t.Fatalf("and not again: %s", sink.all())
 	}
 }
 
@@ -538,6 +576,9 @@ key_groups:
 	}
 	if st, resumed := login(); st != wire.AuthenStatusPass || !resumed {
 		t.Fatalf("and the new material issues tickets again: %d resumed %v", st, resumed)
+	}
+	if n := strings.Count(out.String(), "tls_listener: config changes take effect at restart; files reload now"); n != 1 {
+		t.Fatalf("the config note is said once, at the first SIGHUP: %d", n)
 	}
 }
 
@@ -792,4 +833,263 @@ func TestReloaderHooksTheTLSListener(t *testing.T) {
 	if tl.Material() == before || !strings.Contains(sink.all(), "SIGHUP: reloaded") {
 		t.Fatalf("a SIGHUP re-reads the files: %s", sink.all())
 	}
+}
+
+// judge is what the material in force makes of cert for leaf1: the path and
+// identity, then the status, as a handshake does.
+func judge(t *testing.T, l *tlsListener, cert tls.Certificate) devicecert.Outcome {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := admission.Device{Name: "leaf1", Platform: "arista_eos", Transport: admission.TransportTLS,
+		Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}
+	mat := l.Material()
+	v := mat.Verifier.Verify([]*x509.Certificate{leaf}, dev)
+	if v.Outcome == devicecert.OK {
+		v = mat.Verifier.CheckStatus(context.Background(), v)
+	}
+	return v.Outcome
+}
+
+// rotation is a listener over device CA p.ca whose status comes from one
+// file CRL, and the files to rotate it with.
+type rotation struct {
+	p                devicePKI
+	l                *tlsListener
+	sink             *lineSink
+	issuer, crlFile  string
+	oldCert, newCert tls.Certificate
+	newCA            *testpki.CA
+}
+
+func newRotation(t *testing.T) *rotation {
+	t.Helper()
+	r := &rotation{p: writeDevicePKI(t), sink: &lineSink{}}
+	dir := safeDir(t)
+	now := time.Now()
+	r.issuer, r.crlFile = filepath.Join(dir, "issuer.pem"), filepath.Join(dir, "dev.crl")
+	os.WriteFile(r.issuer, r.p.ca.PEM(), 0o600)
+	os.WriteFile(r.crlFile, crl(t, r.p.ca, now.Add(-time.Minute), now.Add(time.Hour)), 0o600)
+	var err error
+	if r.newCA, err = testpki.NewCA("Device CA 2", now.Add(-time.Hour), now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if r.newCert, err = r.newCA.Issue(testpki.Leaf{DNSNames: []string{"leaf1"}, Client: true,
+		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	r.oldCert = r.p.client
+	tc := r.p.listenerCfg()
+	tc.StateDir = filepath.Join(dir, "state")
+	tc.CertificateStatus = &config.CertificateStatusConfig{RefreshInterval: time.Minute,
+		CRLs: []config.CertificateStatusCRL{{Name: "dev", File: r.crlFile, IssuerFile: r.issuer}}}
+	l, chk, err := tlsListenerOf(config.Config{TLSListener: &tc}, metrics.New(prometheus.NewRegistry()), r.sink.say, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.l = l
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { chk.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	r.eventually(t, "the first list", func() bool { return judge(t, l, r.oldCert) == devicecert.OK })
+	return r
+}
+
+func (r *rotation) eventually(t *testing.T, what string, f func() bool) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); !f(); {
+		if time.Now().After(end) {
+			t.Fatalf("waited for %s; lines: %s", what, r.sink.all())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Ruling 15: client_ca_file reloads without a restart, and the status
+// checker's issuers follow it: a device under the new CA with a good CRL is
+// admitted, and one under the old CA no longer is.
+func TestTLSCARotationFollowsInTheStatusChecker(t *testing.T) {
+	r := newRotation(t)
+	now := time.Now()
+	os.WriteFile(r.p.caFile, r.newCA.PEM(), 0o600)
+	os.WriteFile(r.issuer, r.newCA.PEM(), 0o600)
+	os.WriteFile(r.crlFile, crl(t, r.newCA, now.Add(-time.Minute), now.Add(time.Hour)), 0o600)
+	r.l.reload("reload_interval")
+	r.eventually(t, "a new-CA device with a good CRL to be admitted", func() bool {
+		return judge(t, r.l, r.newCert) == devicecert.OK
+	})
+	if got := judge(t, r.l, r.oldCert); got != devicecert.UnknownCA {
+		t.Fatalf("the old CA no longer admits: %s", got)
+	}
+	if !strings.Contains(r.sink.all(), "the trust set changed") {
+		t.Fatalf("the follow is said: %s", r.sink.all())
+	}
+}
+
+// A new anchor no source can answer for is said once, with what to add.
+func TestTLSNewAnchorWithoutAStatusSourceIsSaid(t *testing.T) {
+	r := newRotation(t)
+	both := append(r.p.ca.PEM(), r.newCA.PEM()...)
+	os.WriteFile(r.p.caFile, both, 0o600)
+	r.l.reload("reload_interval")
+	r.l.reload("reload_interval")
+	sum := sha256.Sum256(r.newCA.Cert.Raw)
+	want := "no source can answer for the new anchor CN=Device CA 2 (sha256 " + hex.EncodeToString(sum[:]) + ")"
+	if r.sink.count(want) != 1 || !strings.Contains(r.sink.all(), "Add a crls entry whose issuer_file is that CA, or an "+
+		"ocsp block, to tls_listener.certificate_status; that config edit takes effect at restart") {
+		t.Fatalf("the uncovered anchor is said once: %s", r.sink.all())
+	}
+	if got := judge(t, r.l, r.newCert); got != devicecert.StatusUnavailable {
+		t.Fatalf("until a source is added, the new CA's devices are declined: %s", got)
+	}
+}
+
+// A rotation whose issuer file was not rotated with it leaves the sources
+// as they were, and says why, once.
+func TestTLSRotationWithAStaleIssuerFileSaysSo(t *testing.T) {
+	r := newRotation(t)
+	os.WriteFile(r.p.caFile, r.newCA.PEM(), 0o600)
+	r.l.reload("reload_interval")
+	r.l.reload("reload_interval")
+	if r.sink.count("the certificate status sources keep the issuers they had") != 1 ||
+		!strings.Contains(r.sink.all(), "neither a trust anchor") {
+		t.Fatalf("a stale issuer file is said once: %s", r.sink.all())
+	}
+}
+
+// Decision 50 ruling 6, ordering: the flags of an inventory about to be put
+// in force are in the material before it is, so no connection is admitted
+// under the new inventory without them; a device whose twin is leaving
+// stays flagged until the swap is done.
+func TestTLSSwappingFlagsBeforeTheInventoryIsInForce(t *testing.T) {
+	p := writeDevicePKI(t)
+	var mu sync.Mutex
+	devs := []admission.Device{tlsDev("leaf1"), tlsDev("spine1")}
+	cfg := p.listenerCfg()
+	cfg.DeviceIdentity = config.DeviceIdentityConfig{Match: []string{"dns_name"}, DNSSuffixes: []string{"example.net"}}
+	l, err := newTLSListener(cfg, nil, nil, false, func() []admission.Device {
+		mu.Lock()
+		defer mu.Unlock()
+		return devs
+	}, time.Now, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.swapping([]admission.Device{tlsDev("leaf1"), tlsDev("leaf1.example.net"), tlsDev("spine1")})
+	if len(l.Material().Unidentifiable) != 2 {
+		t.Fatalf("the new pair is flagged while the old inventory is still in force: %v", l.Material().Unidentifiable)
+	}
+	mu.Lock()
+	devs = []admission.Device{tlsDev("leaf1"), tlsDev("leaf1.example.net"), tlsDev("spine1")}
+	mu.Unlock()
+	flagged := l.Material()
+	l.inventoryChanged("inventory")
+	if l.Material() != flagged {
+		t.Fatal("the swap that follows finds the flags already right")
+	}
+
+	// The twin leaves: still flagged until it is gone from the inventory in force.
+	l.swapping([]admission.Device{tlsDev("leaf1"), tlsDev("spine1")})
+	if len(l.Material().Unidentifiable) != 2 {
+		t.Fatalf("leaf1 stays flagged while its twin is still admitted: %v", l.Material().Unidentifiable)
+	}
+	mu.Lock()
+	devs = []admission.Device{tlsDev("leaf1"), tlsDev("spine1")}
+	mu.Unlock()
+	l.inventoryChanged("inventory")
+	if len(l.Material().Unidentifiable) != 0 {
+		t.Fatalf("and clear once it is: %v", l.Material().Unidentifiable)
+	}
+}
+
+// The reloader runs beforeSwap before it puts the policy in force.
+func TestReloaderTellsTheListenerBeforeThePolicyIsInForce(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	p := writeDevicePKI(t)
+	tl, err := newTLSListener(p.listenerCfg(), nil, nil, false, nil, time.Now, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookTLSReload(rig.r, tl, rig.cfg, rig.b.Policy)
+	inner := rig.r.beforeSwap
+	told, still := 0, false
+	rig.r.beforeSwap = func(pol *policy.Policy) {
+		told++
+		still = rig.b.Policy.Load() != pol
+		inner(pol)
+	}
+	swapTo(t, rig, showOnly)
+	if told != 1 || !still {
+		t.Fatalf("beforeSwap runs once, with the old policy still in force: %d %v", told, still)
+	}
+}
+
+func TestTLSDepsFoldServerNames(t *testing.T) {
+	p := writeDevicePKI(t)
+	tl, err := newTLSListener(p.listenerCfg(), nil, nil, false, nil, time.Now, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := p.listenerCfg()
+	tc.ServerNames = []string{"TACACS.Example.NET."}
+	d := newTLSDeps(tc, tl, &devicecert.Expiry{}, &refusalSayer{now: time.Now, say: func(string, ...any) {}})
+	if len(d.ServerNames) != 1 || d.ServerNames[0] != "tacacs.example.net" || d.Material() != tl.Material() ||
+		d.Said == nil || d.Seen == nil {
+		t.Fatalf("server.TLS: %+v", d)
+	}
+}
+
+// reload_interval reloads the files with no SIGHUP, in the whole daemon.
+func TestRunWatchesTheFilesEveryReloadInterval(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	b := brokerConfig(t, minimalPolicy).Broker
+	p := writeDevicePKI(t)
+	cfgPath := writeRunConfigWith(t, b, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1], transport: tls}\n"+
+		"key_groups:\n  - {match: {cidr: 127.0.0.0/8}, key_ref: k}\n", p.block("127.0.0.1:0", "  reload_interval: 10s\n"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitFor(t, &out, "port49d: broker listening on ")
+	p.reissueServer(t)
+	for end := time.Now().Add(25 * time.Second); !strings.Contains(out.String(), "tls_listener: reload_interval: reloaded"); {
+		if time.Now().After(end) {
+			t.Fatalf("no reload at reload_interval: %s", out.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// SIGHUP with no broker: block still re-reads the TLS files.
+func TestRunWithNoBrokerReloadsTheTLSFilesAtSIGHUP(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	b := brokerConfig(t, minimalPolicy).Broker
+	p := writeDevicePKI(t)
+	cfgPath := writeRunConfigWith(t, b, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1], transport: tls}\n"+
+		"key_groups:\n  - {match: {cidr: 127.0.0.0/8}, key_ref: k}\n", "")
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(cfgPath, append(raw[:strings.Index(string(raw), "\nbroker:")+1], p.block("127.0.0.1:0")...), 0o600)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitFor(t, &out, "port49d: RFC 9887 listener on ")
+	p.reissueServer(t)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, &out, "tls_listener: SIGHUP: reloaded")
+	waitFor(t, &out, "tls_listener: config changes take effect at restart; files reload now")
 }
