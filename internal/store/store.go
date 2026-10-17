@@ -1009,12 +1009,14 @@ type Store interface {
 	// record of another principal still lists is written ambiguous. A refused
 	// m (Refused, no groups) supersedes an older record the same way. A write
 	// verified before the principal's last forget is dropped, with no error:
-	// the forget left a tombstone holding its time (DeleteMembership).
+	// the forget left a tombstone holding its time (DeleteMembership). A ttl
+	// of NoExpiry writes the record and its keys with no lease.
 	PutMembership(ctx context.Context, m Membership, ttl time.Duration) error
 	// RefuseMapKeys marks each key refused as of at, unless a later
 	// verification holds it: MembershipByKey then answers ErrNotFound.
 	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
-	// GetMembership is the record for principal, or ErrNotFound.
+	// GetMembership is the record for principal, or ErrNotFound. A forget's
+	// tombstone is ErrForgotten.
 	GetMembership(ctx context.Context, principal string) (Membership, error)
 	// MembershipByKey is the record a mapping key indexes, or ErrNotFound when
 	// none does, the key is ambiguous or refused, or the record no longer
@@ -1186,6 +1188,17 @@ type RevStore interface {
 // longest token_ttl (policy.MaxTokenTTL, 15m) and so past the life of any
 // idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
 const SupersededFor = 20 * time.Minute
+
+// NoExpiry is the ttl of a membership record, or of a refusal of map keys,
+// that lives until a forget or a later write replaces it: the directory
+// store's pins (plan 11a, R13). Any other ttl is a lease, as before.
+const NoExpiry time.Duration = -1
+
+// ErrForgotten is GetMembership's answer for a principal a forget left a
+// tombstone for (plan 11a, R13). It is an ErrNotFound, so every caller that
+// reads "no record" still does; the directory router tells it from a record
+// never written.
+var ErrForgotten = fmt.Errorf("%w: forgotten", ErrNotFound)
 
 // TombstoneFloor is the least a forget's tombstone is kept: a verification
 // in flight at the forget must find it however little of the record's ttl

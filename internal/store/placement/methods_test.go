@@ -11,7 +11,10 @@ import (
 // Every store.Store method is placed by decision, not by embedding: a new
 // method fails TestEveryStoreMethodIsPlaced until it is listed in one table
 // (decision 51).
-var directoryMethods = set("PutRevocation GetRevocation DeleteRevocation ListRevocations")
+var directoryMethods = set(`
+	PutRevocation GetRevocation DeleteRevocation ListRevocations
+	PutMembership RefuseMapKeys GetMembership MembershipByKey DeleteMembership
+`)
 
 var sessionMethods = set(`
 	PutToken Candidates RedeemAndReceipt DeleteTokens DeleteToken PurgeTokens
@@ -25,12 +28,12 @@ var sessionMethods = set(`
 	SupersedeTokens SupersedeAll SupersededAt
 	PutOnce TakeOnce PutOIDCOwner OIDCOwner PutMFAProof GetMFAProof
 	NoteSignInAttempt UndoSignInAttempt ClearSignInAttempts
+	MembershipPrincipals
 `)
 
-// Directory data that still passes to the session store: tasks 8a and 8b
-// move these, and delete this table.
+// Directory data that still passes to the session store: task 8b
+// moves these, and delete this table.
 var pendingDirectoryMethods = set(`
-	PutMembership RefuseMapKeys GetMembership MembershipByKey MembershipPrincipals DeleteMembership
 	PutLogout GetLogout
 `)
 

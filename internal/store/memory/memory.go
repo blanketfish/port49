@@ -331,12 +331,12 @@ func (s *Store) sweepLocked() {
 
 	// Sweep the directory's records and keys past their expiry.
 	for p, e := range s.memberships {
-		if !e.exp.After(now) {
+		if !alive(e.exp, now) {
 			delete(s.memberships, p)
 		}
 	}
 	for k, e := range s.memberKeys {
-		if !e.expires.After(now) {
+		if !alive(e.expires, now) {
 			delete(s.memberKeys, k)
 		}
 	}
@@ -1574,7 +1574,7 @@ func (s *Store) liveMembershipLocked(principal string) (membershipEntry, bool) {
 	if !ok {
 		return membershipEntry{}, false
 	}
-	if !e.exp.After(s.now()) {
+	if !alive(e.exp, s.now()) {
 		delete(s.memberships, principal)
 		return membershipEntry{}, false
 	}
@@ -1594,14 +1594,18 @@ func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Du
 		s.memberships = map[string]membershipEntry{}
 		s.memberKeys = map[string]memberKeyEntry{}
 	}
-	exp := s.now().Add(ttl)
+	exp := expiry(s.now(), ttl)
 	for _, key := range m.MapKeys {
-		e := s.liveKeyLocked(key)
+		e, found := s.liveKeyLocked(key)
 		if !slices.Contains(e.claimants, m.Principal) {
 			e.claimants = append(slices.Clone(e.claimants), m.Principal)
 			sort.Strings(e.claimants)
 		}
-		e.expires = laterOf(e.expires, exp)
+		if found {
+			e.expires = laterExp(e.expires, exp)
+		} else {
+			e.expires = exp
+		}
 		s.memberKeys[key] = e
 	}
 	if e, ok := s.liveMembershipLocked(m.Principal); ok {
@@ -1619,14 +1623,14 @@ func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Du
 	return nil
 }
 
-// liveKeyLocked is key's entry, or an empty one when it is absent or past
-// its expiry.
-func (s *Store) liveKeyLocked(key string) memberKeyEntry {
+// liveKeyLocked is key's entry, or an empty one and false when it is absent
+// or past its expiry.
+func (s *Store) liveKeyLocked(key string) (memberKeyEntry, bool) {
 	e, ok := s.memberKeys[key]
-	if !ok || !e.expires.After(s.now()) {
-		return memberKeyEntry{}
+	if !ok || !alive(e.expires, s.now()) {
+		return memberKeyEntry{}, false
 	}
-	return e
+	return e, true
 }
 
 // claimsKeyLocked is whether principal has a live, unrefused record that
@@ -1634,6 +1638,28 @@ func (s *Store) liveKeyLocked(key string) memberKeyEntry {
 func (s *Store) claimsKeyLocked(principal, key string) bool {
 	e, live := s.liveMembershipLocked(principal)
 	return live && e.forgottenAt.IsZero() && !e.m.Refused && slices.Contains(e.m.MapKeys, key)
+}
+
+// expiry is ttl's expiry from now: none, the zero time, for
+// store.NoExpiry (plan 11a, R13).
+func expiry(now time.Time, ttl time.Duration) time.Time {
+	if ttl == store.NoExpiry {
+		return time.Time{}
+	}
+	return now.Add(ttl)
+}
+
+// alive reports whether a record expiring at exp stands at now: one with no
+// expiry always does.
+func alive(exp, now time.Time) bool { return exp.IsZero() || exp.After(now) }
+
+// laterExp is the later of two expiries of records that exist, no expiry
+// being the latest.
+func laterExp(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	return laterOf(a, b)
 }
 
 func laterOf(a, b time.Time) time.Time {
@@ -1652,10 +1678,15 @@ func (s *Store) RefuseMapKeys(_ context.Context, mapKeys []string, at time.Time,
 		s.memberships = map[string]membershipEntry{}
 		s.memberKeys = map[string]memberKeyEntry{}
 	}
-	exp := s.now().Add(ttl)
+	exp := expiry(s.now(), ttl)
 	for _, key := range mapKeys {
-		e := s.liveKeyLocked(key)
-		e.refusedAt, e.expires = laterOf(e.refusedAt, at), laterOf(e.expires, exp)
+		e, found := s.liveKeyLocked(key)
+		e.refusedAt = laterOf(e.refusedAt, at)
+		if found {
+			e.expires = laterExp(e.expires, exp)
+		} else {
+			e.expires = exp
+		}
 		s.memberKeys[key] = e
 	}
 	s.touchLocked()
@@ -1666,7 +1697,10 @@ func (s *Store) GetMembership(_ context.Context, principal string) (store.Member
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.liveMembershipLocked(principal)
-	if !ok || !e.forgottenAt.IsZero() {
+	if ok && !e.forgottenAt.IsZero() {
+		return store.Membership{}, store.ErrForgotten
+	}
+	if !ok {
 		return store.Membership{}, store.ErrNotFound
 	}
 	return cloneMembership(e.m), nil
@@ -1678,7 +1712,7 @@ func (s *Store) GetMembership(_ context.Context, principal string) (store.Member
 func (s *Store) MembershipByKey(_ context.Context, mapKey string) (store.Membership, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := s.liveKeyLocked(mapKey)
+	k, _ := s.liveKeyLocked(mapKey)
 	principal := ""
 	for _, c := range k.claimants {
 		if s.claimsKeyLocked(c, mapKey) {
@@ -1722,7 +1756,7 @@ func (s *Store) DeleteMembership(_ context.Context, principal string) (store.Mem
 		return store.Membership{}, store.ErrNotFound
 	}
 	now := s.now()
-	s.memberships[principal] = membershipEntry{forgottenAt: now, exp: laterOf(e.exp, now.Add(store.TombstoneFloor))}
+	s.memberships[principal] = membershipEntry{forgottenAt: now, exp: laterExp(e.exp, now.Add(store.TombstoneFloor))}
 	s.touchLocked()
 	return cloneMembership(e.m), nil
 }

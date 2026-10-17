@@ -531,3 +531,34 @@ func TestAChangeThatDoesNotDecodeIsStillDelivered(t *testing.T) {
 		t.Fatal("an undecodable change was skipped, so a cache would not evict it")
 	}
 }
+
+// The pins feed tells each change to a membership record by its principal,
+// a forget's tombstone included, after the revision Revision read.
+func TestWatchMembershipsTellsEachChange(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rev, err := s.Revision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 4)
+	go s.WatchMemberships(ctx, rev, func(p string, _ uint64) { got <- p }, func(uint64) {})
+	m := store.Membership{Principal: "user:alice@example.com", EntryID: "uuid:1", VerifiedAt: t0}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteMembership(ctx, m.Principal); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case p := <-got:
+			if p != m.Principal {
+				t.Fatalf("told %q", p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("change %d was not told", i+1)
+		}
+	}
+}

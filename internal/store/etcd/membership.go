@@ -54,14 +54,14 @@ type membershipKeyRec struct {
 // never a record that lists a key its index does not know (review R2-b).
 func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
 	now := s.now()
-	exp := now.Add(ttl)
+	exp := expiry(now, ttl)
 	for _, key := range m.MapKeys {
 		if err := s.registerKey(ctx, key, m.Principal, exp, now); err != nil {
 			return err
 		}
 	}
 	return cas(ctx, s.tok, s.tokLeases, s.k.membership(m.Principal),
-		func(r membershipRec) bool { return r.ExpiresAt.After(now) },
+		func(r membershipRec) bool { return alive(r.ExpiresAt, now) },
 		func(r *membershipRec, found bool) (bool, time.Time, bool, error) {
 			if found && r.tombstone() && m.VerifiedAt.Before(r.ForgottenAt) {
 				return false, time.Time{}, false, nil // verified before the forget: never writes the old pin back
@@ -101,9 +101,36 @@ func (s *Store) registerKey(ctx context.Context, key, principal string, exp, now
 				r.Claimants = append(r.Claimants, principal)
 				sort.Strings(r.Claimants)
 			}
-			r.ExpiresAt = laterOf(r.ExpiresAt, exp)
+			if found {
+				r.ExpiresAt = laterExp(r.ExpiresAt, exp)
+			} else {
+				r.ExpiresAt = exp
+			}
 			return true, r.ExpiresAt, false, nil
 		})
+}
+
+// expiry is ttl's expiry from now: none, the zero time, for
+// store.NoExpiry (plan 11a, R13). commit puts a record with a zero expiry
+// with no lease.
+func expiry(now time.Time, ttl time.Duration) time.Time {
+	if ttl == store.NoExpiry {
+		return time.Time{}
+	}
+	return now.Add(ttl)
+}
+
+// alive reports whether a record expiring at exp stands at now: one with no
+// expiry always does.
+func alive(exp, now time.Time) bool { return exp.IsZero() || exp.After(now) }
+
+// laterExp is the later of two expiries of records that exist, no expiry
+// being the latest.
+func laterExp(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	return laterOf(a, b)
 }
 
 func laterOf(a, b time.Time) time.Time {
@@ -118,12 +145,17 @@ func laterOf(a, b time.Time) time.Time {
 // does not. The claimants are kept.
 func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
 	now := s.now()
-	exp := now.Add(ttl)
+	exp := expiry(now, ttl)
 	for _, key := range mapKeys {
 		if err := cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
 			func(membershipKeyRec) bool { return true }, // a present marker keeps its claimants, whatever this clock says
 			func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
-				r.RefusedAt, r.ExpiresAt = laterOf(r.RefusedAt, at), laterOf(r.ExpiresAt, exp)
+				r.RefusedAt = laterOf(r.RefusedAt, at)
+				if found {
+					r.ExpiresAt = laterExp(r.ExpiresAt, exp)
+				} else {
+					r.ExpiresAt = exp
+				}
 				return true, r.ExpiresAt, false, nil
 			}); err != nil {
 			return err
@@ -134,14 +166,14 @@ func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Tim
 
 func (s *Store) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
 	var r membershipRec
-	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return r.ExpiresAt.After(s.now()) }); err != nil {
+	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return alive(r.ExpiresAt, s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
 	if r.Principal != principal {
 		return store.Membership{}, notDecoded(s.k.membership(principal)) // a record copied under another key
 	}
 	if r.tombstone() {
-		return store.Membership{}, store.ErrNotFound
+		return store.Membership{}, store.ErrForgotten
 	}
 	return r.membership(), nil
 }
@@ -180,10 +212,10 @@ func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.M
 		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil || r.Principal != principal {
 			held = store.Membership{Principal: principal}
 		} else {
-			if !r.ExpiresAt.After(now) || r.tombstone() {
+			if !alive(r.ExpiresAt, now) || r.tombstone() {
 				return store.Membership{}, store.ErrNotFound
 			}
-			held, exp = r.membership(), laterOf(r.ExpiresAt, exp)
+			held, exp = r.membership(), laterExp(r.ExpiresAt, exp)
 		}
 		body, err := json.Marshal(membershipRec{Principal: principal, ForgottenAt: now, ExpiresAt: exp})
 		if err != nil {
@@ -205,7 +237,7 @@ func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.M
 // verification; none, or more than one, is ErrNotFound.
 func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
 	var kr membershipKeyRec
-	if err := s.getLive(ctx, s.k.membershipKey(mapKey), &kr, func() bool { return kr.ExpiresAt.After(s.now()) }); err != nil {
+	if err := s.getLive(ctx, s.k.membershipKey(mapKey), &kr, func() bool { return alive(kr.ExpiresAt, s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
 	var found *store.Membership
@@ -249,7 +281,7 @@ func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
 				s.logf("etcd: membership record %q does not decode; it is left out of the list", kv.Key)
 				continue
 			}
-			if r.ExpiresAt.After(now) && !r.tombstone() {
+			if alive(r.ExpiresAt, now) && !r.tombstone() {
 				out = append(out, r.Principal)
 			}
 		}

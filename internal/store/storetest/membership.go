@@ -549,3 +549,48 @@ func MembershipKeyOutlivesNoRecord(t *testing.T, b Backend) {
 		t.Fatalf("q claimed a key p's live record still lists: answered %q %v, want ErrNotFound", m.Principal, err)
 	}
 }
+
+// MembershipWithNoExpiryOutlivesAnyTTL: a record and its map key written
+// with store.NoExpiry stand however far the clock moves, and so does the
+// tombstone a forget leaves of one, which GetMembership answers as
+// ErrForgotten (an ErrNotFound); a principal never written is ErrNotFound
+// and not ErrForgotten; a verification from before the forget never puts
+// the pin back (plan 11a, R13).
+func MembershipWithNoExpiryOutlivesAnyTTL(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	later := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	k := store.MapKey("san_email", "dave@corp.example.com")
+	m := store.Membership{Principal: "user:dave@corp.example.com", EntryID: "guid:d", MapKeys: []string{k},
+		VerifiedAt: t0}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil {
+		t.Fatal(err)
+	}
+	later(10 * 365 * 24 * time.Hour)
+	if got, err := s.GetMembership(ctx, m.Principal); err != nil || got.EntryID != "guid:d" {
+		t.Fatalf("a pin with no expiry, years on: %+v %v", got, err)
+	}
+	if got, err := s.MembershipByKey(ctx, k); err != nil || got.Principal != m.Principal {
+		t.Fatalf("its key, years on: %+v %v", got, err)
+	}
+	if _, err := s.GetMembership(ctx, "user:erin@corp.example.com"); !errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("never written: %v, want ErrNotFound and not ErrForgotten", err)
+	}
+	if _, err := s.DeleteMembership(ctx, m.Principal); err != nil {
+		t.Fatal(err)
+	}
+	later(10 * 365 * 24 * time.Hour)
+	if _, err := s.GetMembership(ctx, m.Principal); !errors.Is(err, store.ErrForgotten) ||
+		!errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the forget's tombstone, years on: %v, want ErrForgotten", err)
+	}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil { // verified at t0, before the forget
+		t.Fatal(err)
+	}
+	if _, err := s.GetMembership(ctx, m.Principal); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("a verification from before the forget put the pin back: %v", err)
+	}
+}

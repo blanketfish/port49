@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
+	"strings"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -264,4 +266,54 @@ func (s *Store) WatchRevocations(ctx context.Context, after uint64,
 		return ctx.Err()
 	}
 	return fmt.Errorf("%w: the marks watch ended", store.ErrUnavailable)
+}
+
+// Revision is the store's current revision, from a linearizable read's
+// header: where a feed that has read nothing begins (placement.FollowPins).
+func (s *Store) Revision(ctx context.Context) (uint64, error) {
+	resp, err := s.tok.Get(clientv3.WithRequireLeader(ctx), s.k.meta("ping"))
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	return uint64(resp.Header.Revision), nil
+}
+
+// WatchMemberships calls fn with the principal of every put and delete of
+// a membership record after `after` (placement.PinFeed; plan 11a, R13), on
+// the token client, requiring a leader as WatchRevocations does; the record
+// itself is not read, the cache reads it again. A key that does not parse
+// is said and skipped. Progress notifications go to progress. A compacted
+// revision is store.ErrCompacted; any other failure ErrUnavailable or
+// ErrRefused.
+func (s *Store) WatchMemberships(ctx context.Context, after uint64, fn func(principal string, rev uint64),
+	progress func(uint64)) error {
+	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+	defer cancel()
+	prefix := s.k.family(famMembership)
+	ch := s.tok.Watch(wctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
+		clientv3.WithProgressNotify(), clientv3.WithKeysOnly())
+	for resp := range ch {
+		if err := resp.Err(); err != nil {
+			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
+				return store.ErrCompacted
+			}
+			return unavailable(err)
+		}
+		if resp.IsProgressNotify() {
+			progress(uint64(resp.Header.Revision))
+			continue
+		}
+		for _, ev := range resp.Events {
+			p, err := url.PathUnescape(strings.TrimPrefix(string(ev.Kv.Key), prefix))
+			if err != nil {
+				s.logf("etcd: the membership key %q does not parse; the pins feed skipped it", ev.Kv.Key)
+				continue
+			}
+			fn(p, uint64(ev.Kv.ModRevision))
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w: the pins watch ended", store.ErrUnavailable)
 }
