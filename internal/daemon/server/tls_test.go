@@ -520,6 +520,31 @@ func TestTLSObfuscatedPacketGetsAnErrorAndAClose(t *testing.T) {
 	}
 }
 
+// The seq_no 255 rule holds here too: no reply (seq_no + 1 would wrap to 0),
+// the connection closes, and it is still no strike.
+func TestTLSObfuscatedPacketAtSeq255IsClosedWithoutAReply(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	c, err := f.dialTLS(t, &cert, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.seq = 255
+	if err := c.send(wire.TypeAuthor, []byte("anything at all"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if h, _, err := c.recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("a seq_no 255 packet gets no reply, only the close: %+v %v", h, err)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"obfuscated_over_tls"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if f.ts.limits.Holding(loopback) {
+		t.Fatalf("a strike: %s", log.String())
+	}
+}
+
 func TestTLSHandshakeTimeoutIsStruck(t *testing.T) {
 	log := &syncBuffer{}
 	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) {

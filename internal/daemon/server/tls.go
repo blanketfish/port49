@@ -404,12 +404,15 @@ func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
 // close_notify). The body, which ValidateTLS bounded at wire.MaxBodyLen, is
 // read and discarded first, never hashed or logged: a socket closed with
 // unread data sends a reset, which can drop the ERROR still queued
-// (pre-flight M1). The peer's certificate verified, so it is no strike
+// (pre-flight M1). At seq_no 255 it is closed without a reply. The peer's certificate verified, so it is no strike
 // (ruling 13).
 func (s *conn) obfuscatedOverTLS(h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagObfuscatedOverTLS, 0)
 	if _, err := io.CopyN(io.Discard, s.c, int64(h.Length)); err != nil {
 		return // the peer is gone, or the read deadline passed: nothing to answer
+	}
+	if h.SeqNo == 255 {
+		return // no reply: seq_no + 1 would wrap, and the seq 255 rule closes (conn.go)
 	}
 	rh, body := wire.ErrorReply(h)
 	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err == nil {
