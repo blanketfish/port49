@@ -67,6 +67,14 @@ type Config struct {
 	// served, and each pin put back from this region's record; nil says
 	// nothing.
 	Say func(format string, args ...any)
+
+	// Logouts is the process's copy of the directory's logout records, and
+	// LogoutDir where a logout is written (R26). With both nil, logouts stay
+	// the session store's.
+	Logouts   *store.LogoutSet
+	LogoutDir interface {
+		PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error
+	}
 }
 
 type placed struct {
@@ -578,4 +586,93 @@ func (p *placed) sayCached(principal string) {
 	p.c.Say("directory store: not answering: serving %s's cached directory membership (its pin as this region "+
 		"last read it); a forget made elsewhere reaches this region when the directory answers",
 		printsafe.Line(principal, 300))
+}
+
+// PutLogout is a back-channel logout's ingestion: the directory, then this
+// process's set, so its own mints refuse at once. With the directory not
+// answering it is never lost (R26 as amended): it is written to the session
+// store, where every logout record is pending in a split, the line says
+// so, and ForwardPending carries it to the directory on the heal. Only a
+// session store that fails too is an error.
+func (p *placed) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	if p.c.Logouts == nil || p.c.LogoutDir == nil {
+		return p.Store.PutLogout(ctx, l, ttl)
+	}
+	err := errNotAnswering
+	if p.reachable() {
+		err = bounded(ctx, p.c.CallTimeout, func(ctx context.Context) error { return p.c.LogoutDir.PutLogout(ctx, l, ttl) })
+	}
+	switch {
+	case err == nil:
+		p.c.Logouts.Put(store.LogoutEntry{Logout: l, Until: time.Now().Add(ttl)})
+		return nil
+	case !errors.Is(err, store.ErrUnavailable):
+		return err
+	}
+	if err := p.Store.PutLogout(ctx, l, ttl); err != nil {
+		return err
+	}
+	if p.c.Say != nil {
+		p.c.Say("directory store: not answering: a back-channel logout was applied in this region and is pending; " +
+			"it is forwarded to the directory, and so to every region, once the directory answers")
+	}
+	return nil
+}
+
+var errNotAnswering = fmt.Errorf("%w: the directory store is not answering", store.ErrUnavailable)
+
+// GetLogout is the process's set's answer (R4), then this region's pending
+// records: a mint or refresh never waits on the directory.
+func (p *placed) GetLogout(ctx context.Context, key string) (store.Logout, error) {
+	if p.c.Logouts == nil {
+		return p.Store.GetLogout(ctx, key)
+	}
+	if l, ok := p.c.Logouts.Get(key); ok {
+		return l, nil
+	}
+	return p.Store.GetLogout(ctx, key)
+}
+
+// PendingLogouts is the session store's logout records, every one pending
+// in a split (the session's *etcd.Store).
+type PendingLogouts interface {
+	Logouts(ctx context.Context) (uint64, []store.LogoutEntry, error)
+	DeleteLogout(ctx context.Context, key string) error
+}
+
+// ForwardPending writes each pending logout to the directory, with the
+// life it has left, puts it in the set, and deletes it from the session
+// store (R26 as amended): the runner's duty while the directory answers.
+// It returns how many it forwarded and how many are left; it stops at the
+// first the directory does not take. s not a router does nothing.
+func ForwardPending(ctx context.Context, s store.Store, pending PendingLogouts) (forwarded, left int, err error) {
+	p, ok := s.(*placed)
+	if !ok || p.c.Logouts == nil || p.c.LogoutDir == nil {
+		return 0, 0, nil
+	}
+	_, es, err := pending.Logouts(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i, e := range es {
+		ttl := time.Until(e.Until)
+		if ttl <= 0 {
+			_ = pending.DeleteLogout(ctx, e.Key) // lapsed: nothing left to refuse
+			continue
+		}
+		if !p.reachable() {
+			return forwarded, len(es) - i, errNotAnswering
+		}
+		if err := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) error {
+			return p.c.LogoutDir.PutLogout(ctx, e.Logout, ttl)
+		}); err != nil {
+			return forwarded, len(es) - i, err
+		}
+		p.c.Logouts.Put(e)
+		if err := pending.DeleteLogout(ctx, e.Key); err != nil {
+			return forwarded, len(es) - i, err
+		}
+		forwarded++
+	}
+	return forwarded, 0, nil
 }

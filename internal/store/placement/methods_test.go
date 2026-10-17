@@ -14,6 +14,7 @@ import (
 var directoryMethods = set(`
 	PutRevocation GetRevocation DeleteRevocation ListRevocations
 	PutMembership PutPin RefuseMapKeys GetMembership MembershipByKey DeleteMembership
+	PutLogout GetLogout
 `)
 
 var sessionMethods = set(`
@@ -31,12 +32,6 @@ var sessionMethods = set(`
 	MembershipPrincipals
 `)
 
-// Directory data that still passes to the session store: task 8b
-// moves these, and delete this table.
-var pendingDirectoryMethods = set(`
-	PutLogout GetLogout
-`)
-
 func set(names string) map[string]bool {
 	m := map[string]bool{}
 	for _, n := range strings.Fields(names) {
@@ -50,7 +45,7 @@ func TestEveryStoreMethodIsPlaced(t *testing.T) {
 	for i := 0; i < st.NumMethod(); i++ {
 		n := st.Method(i).Name
 		places := 0
-		for _, tbl := range []map[string]bool{directoryMethods, sessionMethods, pendingDirectoryMethods} {
+		for _, tbl := range []map[string]bool{directoryMethods, sessionMethods} {
 			if tbl[n] {
 				places++
 			}
@@ -59,7 +54,7 @@ func TestEveryStoreMethodIsPlaced(t *testing.T) {
 			t.Errorf("store.Store.%s is in %d placement tables, want exactly one; place it", n, places)
 		}
 	}
-	for _, tbl := range []map[string]bool{directoryMethods, sessionMethods, pendingDirectoryMethods} {
+	for _, tbl := range []map[string]bool{directoryMethods, sessionMethods} {
 		for n := range tbl {
 			if _, ok := st.MethodByName(n); !ok {
 				t.Errorf("the table names %s, which store.Store lacks", n)

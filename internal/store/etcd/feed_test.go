@@ -562,3 +562,52 @@ func TestWatchMembershipsTellsEachChange(t *testing.T) {
 		}
 	}
 }
+
+// The logouts feed: a load at one revision, then each put with its expiry.
+func TestLogoutsLoadAndWatch(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.PutLogout(ctx, store.Logout{Key: "sid 1:i 2:s1", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rev, es, err := s.Logouts(ctx)
+	if err != nil || len(es) != 1 || !es[0].Until.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("%v %+v %v", rev, es, err)
+	}
+	got := make(chan store.LogoutEntry, 1)
+	go s.WatchLogouts(ctx, rev, func(e store.LogoutEntry, deleted bool, _ uint64) {
+		if !deleted {
+			got <- e
+		}
+	}, func(uint64) {})
+	if err := s.PutLogout(ctx, store.Logout{Key: "sub 1:i 2:u1", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case e := <-got:
+		if e.Key != "sub 1:i 2:u1" {
+			t.Fatalf("told %+v", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the put was not told")
+	}
+}
+
+// DeleteLogout clears a pending record; deleting none is not an error.
+func TestDeleteLogoutClearsTheRecord(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	if err := s.PutLogout(ctx, store.Logout{Key: "sid 1:i 2:s1", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteLogout(ctx, "sid 1:i 2:s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetLogout(ctx, "sid 1:i 2:s1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the deleted logout is read: %v", err)
+	}
+	if err := s.DeleteLogout(ctx, "sid 1:i 2:s1"); err != nil {
+		t.Fatalf("deleting none: %v", err)
+	}
+}
