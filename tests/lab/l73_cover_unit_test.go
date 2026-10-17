@@ -18,7 +18,11 @@ import (
 // ipv4); an address, number, quoted string, key or lab name is a value and
 // stands as "·" in a level. The tokens before the first level any ask covers
 // are the path into the stanza (L71's own question, in Junos "set system
-// tacplus-server <ip>") and are not checked. A host-line option (key, port,
+// tacplus-server <ip>") and are not checked. Also not checked, on purpose:
+// request and exec lines (enrolment, certificate loads), delete and no lines
+// (they undo what is set), exit, the path into a mode (the "aaa group server
+// tacacs+ <group>" line itself), and Junos delete lines. The words typed
+// inside the AAA server group are checked, against the asks that enter it. A host-line option (key, port,
 // ...) may stand anywhere on its line, so it is checked at the level it
 // stands in and the line goes on from that level.
 var (
@@ -134,15 +138,24 @@ func TestL73JunosAsksCoverEveryTypedKeyword(t *testing.T) {
 }
 
 func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
+	groupIn := "aaa group server tacacs+ " + l73Group
 	has := map[string]bool{"secure": true, "server": true, "server-trustpoint": true}
 	for _, tc := range []struct{ platform, family string }{
 		{"cisco_iosxe", "iosxe"}, {"cisco_nxos", "nxos"}, {"arista_ceos", "eos"},
 	} {
-		var typed []string
+		var typed, group []string
 		for _, d := range l73TypedDevices() {
-			object := false
+			object, inGroup := false, false
 			for _, ln := range l73CiscoLines(tc.family, nil, d, has) {
 				switch {
+				case strings.HasPrefix(ln, groupIn):
+					inGroup = true
+				case ln == "exit" && inGroup:
+					inGroup = false
+				case inGroup:
+					if !strings.HasPrefix(ln, "no ") {
+						group = append(group, ln)
+					}
 				case tc.family == "iosxe":
 					// Only inside a `tacacs server` object, where L71 asked; the
 					// aaa group lines are IOS's own and not RFC 9887.
@@ -158,10 +171,24 @@ func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 				}
 			}
 		}
+		if len(group) == 0 {
+			t.Fatalf("%s: no AAA group lines derived", tc.family)
+		}
+		var objAsks, groupAsks []l73Ask
+		for _, a := range l73Dialects[tc.platform].Asks {
+			if slices.Contains(a.In, groupIn) {
+				groupAsks = append(groupAsks, a)
+			} else {
+				objAsks = append(objAsks, a)
+			}
+		}
+		if bad := l73UncoveredWords(group, groupAsks); len(bad) != 0 {
+			t.Errorf("%s: typed in the AAA group and never asked about at that level: %q", tc.family, bad)
+		}
 		if len(typed) < 3 {
 			t.Fatalf("%s: only %d lines derived", tc.family, len(typed))
 		}
-		if bad := l73UncoveredWords(typed, l73Dialects[tc.platform].Asks); len(bad) != 0 {
+		if bad := l73UncoveredWords(typed, objAsks); len(bad) != 0 {
 			t.Errorf("%s: typed and never asked about at that level: %q", tc.family, bad)
 		}
 	}

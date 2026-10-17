@@ -116,10 +116,15 @@ func l73LoadCommands() []string {
 // keywords the harness will type at that level; Want are keywords it types
 // only when the help lists them. Only, when set, asks this level only if an
 // earlier ask listed that word.
+//
+// In and Out put the CLI in the mode the ask is meaningful in and back: In is
+// typed before the ask and Out after its Ctrl-U, both only when set. They are
+// for words typed outside the dialect's Enter mode (the AAA server group).
 type l73Ask struct {
 	Ask                 string
 	Control, Need, Want []string
 	Only                string
+	In, Out             []string
 }
 
 // l73JunosAsks: the first is L71's own probe; the rest are asked only when

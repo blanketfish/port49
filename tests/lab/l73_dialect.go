@@ -51,6 +51,12 @@ var l73IOSXEAsks = []l73Ask{
 	{Ask: "tls ip ", Control: []string{"vrf", "tacacs"}, Need: []string{"vrf", "tacacs"}},
 	{Ask: "tls ip vrf ", Control: []string{"forwarding"}, Need: []string{"forwarding"}},
 	{Ask: "tls ip tacacs ", Control: []string{"source-interface"}, Need: []string{"source-interface"}},
+	// The AAA server group the cell's servers join: IOS XE leaves the probe
+	// object, enters the startup config's group and comes back.
+	{Ask: "", Control: []string{"server"}, Need: []string{"server"},
+		In: []string{"exit", "aaa group server tacacs+ " + l73Group}, Out: []string{"exit", "tacacs server l71probe"}},
+	{Ask: "server ", Control: []string{"name"}, Need: []string{"name"},
+		In: []string{"exit", "aaa group server tacacs+ " + l73Group}, Out: []string{"exit", "tacacs server l71probe"}},
 }
 
 var l73IOSXEDialect = l73Dialect{
@@ -73,6 +79,7 @@ var l73NXOSAsks = []l73Ask{
 	{Ask: "tacacs-server secure ", Control: []string{"tls"}, Need: []string{"tls"}, Only: "secure"},
 	{Ask: "tacacs-server host 192.0.2.71 tls ", Control: []string{"client-trustpoint", "server-trustpoint"},
 		Need: []string{"client-trustpoint"}, Want: []string{"server-trustpoint"}},
+	{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
 }
 
 // EOS: the client keyword is ssl-profile (L71 looked for it and for tls);
@@ -81,7 +88,8 @@ var l73EOSDialect = l73Dialect{
 	Family: "eos", Vendor: "EOS", Probe: "arista_ceos",
 	Enter: []string{"configure"}, Cleanup: []string{"end"}, CfgMark: "(config",
 	Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"},
-		Need: []string{"ssl-profile", "port", "single-connection", "key"}, Want: []string{"tls"}}},
+		Need: []string{"ssl-profile", "port", "single-connection", "key"}, Want: []string{"tls"}},
+		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
 	VersionCmd: "show version | include Software image version", VersionHas: "4.36.3M",
 	Enrol: "EOS's documented enrolment (`security pki key generate`, `security pki certificate generate signing-request`, " +
 		"the request read off the screen, the lab CA's answer copied to `certificate:`; the SSL profile names the " +
