@@ -103,3 +103,22 @@ func TestNoTestRangesOverTheRawSelection(t *testing.T) {
 		}
 	}
 }
+
+// Every opt-in row is one TestL73 can drive: a dialect for its platform
+// name, a break-glass opener, and help-only exactly where up() skips the
+// daemon.
+func TestL73EveryOptInRowHasADialectAndAnOpener(t *testing.T) {
+	for _, p := range platforms {
+		if !optInPlatforms[p.sel] {
+			continue
+		}
+		d, ok := l73Dialects[p.name]
+		if !ok || l73Opener(p.name) == nil {
+			t.Errorf("%s (%s): dialect %v, opener %v", p.sel, p.name, ok, l73Opener(p.name) != nil)
+			continue
+		}
+		if d.HelpOnly != helpOnlyPlatforms[p.sel] {
+			t.Errorf("%s: dialect help-only %v, row help-only %v", p.sel, d.HelpOnly, helpOnlyPlatforms[p.sel])
+		}
+	}
+}
