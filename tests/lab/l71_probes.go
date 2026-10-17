@@ -109,3 +109,71 @@ func l71Words(help string) string {
 	}
 	return strings.Join(w, " ")
 }
+
+// l71CleanupFor is the cleanup lines to type after entered of probe.enter
+// were sent. Nothing was entered, nothing to undo. A partial enter has put
+// the session in configuration mode only, so only the last cleanup line
+// (the one that leaves it) runs: the earlier ones undo a later enter line,
+// and `exit` typed at privileged exec would end the session.
+func l71CleanupFor(p l71Probe, entered int) []string {
+	switch {
+	case entered <= 0:
+		return nil
+	case entered < len(p.enter):
+		return p.cleanup[len(p.cleanup)-1:]
+	}
+	return p.cleanup
+}
+
+// l71LineEmpty reports whether the last line of out, as a terminal would
+// show it, is a bare prompt: it ends in `#` or `>` once trailing spaces are
+// dropped, and nothing typed follows. Backspaces, carriage returns and the
+// erase and cursor-left escapes are applied, so a line a device erased
+// with Ctrl-U reads as empty and one it kept reads as not.
+func l71LineEmpty(out string) bool {
+	if i := strings.LastIndex(out, "\n"); i >= 0 {
+		out = out[i+1:]
+	}
+	var line []byte
+	cur := 0
+	for i := 0; i < len(out); i++ {
+		switch ch := out[i]; {
+		case ch == '\r':
+			cur = 0
+		case ch == '\b':
+			if cur > 0 {
+				cur--
+			}
+		case ch == 0x1b && i+1 < len(out) && out[i+1] == '[':
+			j := i + 2
+			for j < len(out) && (out[j] >= '0' && out[j] <= '9' || out[j] == ';') {
+				j++
+			}
+			if j < len(out) {
+				n := 0
+				fmt.Sscanf(out[i+2:j], "%d", &n)
+				switch out[j] {
+				case 'K':
+					if cur < len(line) {
+						line = line[:cur]
+					}
+				case 'D':
+					if n == 0 {
+						n = 1
+					}
+					cur = max(cur-n, 0)
+				}
+			}
+			i = j
+		case ch >= 0x20 && ch < 0x7f:
+			if cur < len(line) {
+				line[cur] = ch
+			} else {
+				line = append(line, ch)
+			}
+			cur++
+		}
+	}
+	t := strings.TrimRight(string(line), " ")
+	return strings.HasSuffix(t, "#") || strings.HasSuffix(t, ">")
+}

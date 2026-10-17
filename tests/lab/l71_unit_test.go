@@ -68,3 +68,40 @@ func TestL71ErrorsCarryNoDeviceOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestL71CleanupForRunsOnlyWhatEnterNeeds(t *testing.T) {
+	xe := l71Probes["cisco_iosxe"]
+	if got := l71CleanupFor(xe, 0); len(got) != 0 {
+		t.Errorf("nothing entered: %v", got)
+	}
+	if got := l71CleanupFor(xe, 1); len(got) != 1 || got[0] != "end" {
+		t.Errorf("only configure terminal sent: %v", got)
+	}
+	if got := l71CleanupFor(xe, 2); len(got) != 3 || got[1] != "no tacacs server l71probe" {
+		t.Errorf("fully entered: %v", got)
+	}
+	if got := l71CleanupFor(l71Probes["juniper_vsrx"], 1); len(got) != 2 {
+		t.Errorf("junos fully entered: %v", got)
+	}
+}
+
+func TestL71LineEmptyReadsTheTerminalNotTheBytes(t *testing.T) {
+	typed := "tacacs-server "
+	for name, c := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"bare prompt":         {"help\r\nnx1(config)#", true},
+		"junos prompt":        {"help\r\nuser@h# ", true},
+		"erased by backspace": {"nx1(config)#" + typed + strings.Repeat("\b \b", len(typed)), true},
+		"erased by cr and K":  {"user@h# set system \r\x1b[Kuser@h# ", true},
+		"erased by cursor":    {"nx1(config)#" + typed + "\x1b[" + "14D\x1b[K", true},
+		"typed text kept":     {"nx1(config)#" + typed, false},
+		"ctrl-u ignored":      {"help\r\nnx1(config)#" + typed + "\a", false},
+		"half erased":         {"nx1(config)#" + typed + strings.Repeat("\b \b", 3), false},
+	} {
+		if got := l71LineEmpty(c.out); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}

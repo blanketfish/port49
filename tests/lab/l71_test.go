@@ -56,10 +56,18 @@ func TestL71TLSClientSupport(t *testing.T) {
 			// The cleanup runs on every path, an error's included: an entered
 			// line may already have configured something (IOS-XE's server
 			// object), and a probe that returns early must not leave it.
+			entered, dirty := 0, false
 			defer func() {
-				for i, line := range probe.cleanup {
+				if dirty {
+					// Ctrl-U did not clear the line, so anything typed now
+					// would be appended to it. The session is closed
+					// instead, which discards the line unexecuted.
+					return
+				}
+				lines := l71CleanupFor(probe, entered)
+				for i, line := range lines {
 					mark := probe.cfgMark
-					if i == len(probe.cleanup)-1 {
+					if i == len(lines)-1 {
 						mark = opMark
 					}
 					if _, cerr := c.sendExpect(line, 20*time.Second, mark); cerr != nil && err == nil {
@@ -74,11 +82,16 @@ func TestL71TLSClientSupport(t *testing.T) {
 					}
 				case after != before:
 					// Counts only: the text may hold key hashes.
-					err = fmt.Errorf("the probe changed the TACACS+ configuration (%d lines before, %d after); "+
+					mismatch := fmt.Errorf("the probe changed the TACACS+ configuration (%d lines before, %d after); "+
 						"inspect the device by hand, no note is written", strings.Count(before, "\n"), strings.Count(after, "\n"))
+					if err != nil {
+						mismatch = fmt.Errorf("%w; also: %v", err, mismatch)
+					}
+					err = mismatch
 				}
 			}()
 			for _, line := range probe.enter {
+				entered++ // counted when sent: a line whose reply never came may still have run
 				if _, err := c.sendExpect(line, 20*time.Second, probe.cfgMark); err != nil {
 					return l71Wrap(fmt.Sprintf("INVALID: %q", line), err)
 				}
@@ -107,7 +120,12 @@ func TestL71TLSClientSupport(t *testing.T) {
 				if _, uerr := c.in.Write([]byte{0x15}); uerr != nil { // Ctrl-U: the typed line is dropped, never entered
 					return uerr
 				}
-				time.Sleep(500 * time.Millisecond)
+				if !l71WaitEmptyLine(c, 5*time.Second) {
+					dirty = true
+					return fmt.Errorf("INVALID: after Ctrl-U the prompt did not return with an empty line on `%s?`; "+
+						"nothing more was typed and the session was closed; on IOS-XE check for a "+
+						"`tacacs server l71probe` object and on every platform for an unfinished probe line", ask)
+				}
 				if werr != nil {
 					return l71Wrap(fmt.Sprintf("INVALID: no help for `%s?`", ask), werr)
 				}
@@ -130,4 +148,19 @@ func TestL71TLSClientSupport(t *testing.T) {
 		})
 		l.result(t, "L71", l71Claim, obs.String())
 	})
+}
+
+// l71WaitEmptyLine waits up to within for the CLI's last line to be a bare
+// prompt, as it is once Ctrl-U has cleared what was typed.
+func l71WaitEmptyLine(c *cliConn, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		if l71LineEmpty(c.transcript()) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
