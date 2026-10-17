@@ -178,6 +178,9 @@ type reloader struct {
 	// the runner for a full context pass (plan 7e, Ruling 8 corrected). It
 	// must not wait. Nil tells no one.
 	onSwap func(pol *policy.Policy)
+	// onHUP is told each SIGHUP before the reload: the TLS listener's files
+	// are re-read then too (decision 50 ruling 15). Nil is nothing.
+	onHUP func()
 	// mfaUnavailable is the broker's ruling 18 statement for a policy put in
 	// force (broker.Broker.MFAUnavailable), said after each swap when it is
 	// not empty. Nil with no broker in the process.
@@ -335,6 +338,9 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 		case <-ctx.Done():
 			return
 		case <-hup:
+			if r.onHUP != nil {
+				r.onHUP()
+			}
 			r.reload(ctx, "SIGHUP")
 		case d := <-r.docs:
 			r.receive(ctx, d)

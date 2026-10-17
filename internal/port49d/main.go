@@ -50,6 +50,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/devicecert"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
@@ -1203,6 +1204,27 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// A store gone resets the held connections (re-check R-M0).
 		Abort: func() bool { var g *storeGone; return errors.As(context.Cause(parent), &g) }}
 
+	// The RFC 9887 listener's material is loaded before anything binds: a
+	// file that does not load stops the start, and names the file.
+	sayf := func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) }
+	tl, tlsChecker, err := tlsListenerOf(cfg, m, sayf, func() []admission.Device { return admittedDevices(cfg, live) })
+	if err != nil {
+		mln.Close()
+		stopSpool()
+		<-spoolDone
+		return err
+	}
+	var tlsDeps *server.TLS
+	var said *refusalSayer
+	if tl != nil {
+		expiry := &devicecert.Expiry{Fraction: cfg.TLSListener.ExpiryWarningFraction, Say: sayf}
+		said = &refusalSayer{now: time.Now, say: sayf}
+		m.WatchTLSLifetime(func() (float64, bool) { return expiry.LeastLeft(time.Now()) }, tl.ServerLifetimeLeft)
+		tlsDeps = &server.TLS{Material: tl.Material, ServerNames: tlsServerNames(*cfg.TLSListener),
+			HandshakeTimeout: cfg.TLSListener.HandshakeTimeout, Seen: expiry.Seen, Said: said.said}
+	}
+	m.CountDevicesByTransport(func() map[string]int { n, _ := transportCount(cfg, live); return n })
+
 	// After a store gone, TACACS+ binds only once open_after health checks
 	// pass in a row (plan 7f; decision 37): the start's own reads are not
 	// enough to say a store that just returned will stay. A cold start is
@@ -1218,12 +1240,31 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		fmt.Fprintf(stderr, "port49d: store: %d consecutive health checks passed\n", sts.health.openAfter)
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		mln.Close()
-		stopSpool()
-		<-spoolDone
-		return err
+	var ln, tln net.Listener
+	closeListeners := func() {
+		if ln != nil {
+			ln.Close()
+		}
+		if tln != nil {
+			tln.Close()
+		}
+	}
+	if cfg.Listen != "" {
+		if ln, err = net.Listen("tcp", cfg.Listen); err != nil {
+			mln.Close()
+			stopSpool()
+			<-spoolDone
+			return err
+		}
+	}
+	if tl != nil {
+		if tln, err = net.Listen("tcp", cfg.TLSListener.Listen); err != nil {
+			closeListeners()
+			mln.Close()
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("tls_listener.listen %s: %w", cfg.TLSListener.Listen, err)
+		}
 	}
 	// The broker binds before anything says "listening": a line claiming
 	// TACACS+ is up, followed by an exit, reads at 3am as a daemon that is up —
@@ -1232,7 +1273,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	var bl *broker.Listener
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
-			ln.Close()
+			closeListeners()
 			mln.Close()
 			stopSpool()
 			<-spoolDone
@@ -1268,7 +1309,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			if bln != nil {
 				bln.Close()
 			}
-			ln.Close()
+			closeListeners()
 			mln.Close()
 			stopSpool()
 			<-spoolDone
@@ -1306,8 +1347,14 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if live != nil {
 		admitted -= len(live.Load().AdmissionRefusals())
 	}
-	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		ln.Addr(), mln.Addr(), admitted)
+	if ln != nil {
+		fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
+			ln.Addr(), mln.Addr(), admitted)
+	} else {
+		fmt.Fprintf(stderr, "port49d: RFC 8907 listener off (listen: none), metrics on %s, %d devices admitted\n",
+			mln.Addr(), admitted)
+	}
+	announceTransports(stderr, cfg, live, ln, tln, tlsChecker)
 	rd.serving()
 	if sts.health != nil {
 		// From the bind on, close_after failures in a row end the run as a
@@ -1331,6 +1378,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// The start line is said first, so it names the state the kept lists
 	// left, not a race with the first fetch.
 	var statusDone sync.WaitGroup
+	if tl != nil {
+		statusDone.Add(2)
+		go func() { defer statusDone.Done(); tl.watch(ctx) }()
+		go func() { defer statusDone.Done(); said.run(ctx) }()
+		if tlsChecker != nil {
+			statusDone.Add(1)
+			go func() { defer statusDone.Done(); tlsChecker.Run(ctx) }()
+		}
+	}
 	if checker != nil {
 		unavailable := map[string]string{"refuse": "refused (503, retried)", "allow": "allowed, alarmed"}
 		fmt.Fprintf(stderr, "port49d: broker: certificate status from %s; a status that cannot be established is %s\n",
@@ -1382,6 +1438,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				case <-ctx.Done():
 					return
 				case <-hup:
+					if tl != nil {
+						tl.reload("SIGHUP")
+					}
 					fmt.Fprintln(stderr, "port49d: SIGHUP: no `broker:` block in the config, so there is no policy to reload")
 				}
 			}
@@ -1394,6 +1453,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
+		hookTLSReload(r, tl, cfg, live)
 		r.mfaUnavailable = mfaUnavailable
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
@@ -1413,7 +1473,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}()
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
+	go func() { serveErr <- serveListeners(ctx, cancel, ln, deps, tln, tlsDeps) }()
 
 	var runErr error
 	select {
