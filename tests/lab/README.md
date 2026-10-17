@@ -730,3 +730,17 @@ runs its pure tests (`l69_unit_test.go`) without any of that.
   hard (`go test`'s timeout skips cleanup), delete them by hand: `kind delete cluster --name
   port49-l69-a` and `--name port49-l69-b`. A run refuses to start while either exists. The run never
   touches another kind cluster or any other container.
+
+## L72: the RFC 9887 listener against reference clients
+
+`go test -tags lab ./tests/lab/ -run TestL72 -v -timeout 20m` on the lab host. It needs no
+containerlab and no device: it builds port49d and `tests/lab/cmd/tacacs-tls-client`, makes a PKI in
+a temporary directory, and starts port49d with both listeners on 127.0.0.1 (a `tls` device at
+127.0.0.1, a `tcp` device at 127.0.0.2, nothing at 127.0.0.3). It needs `openssl` 3.x on `PATH`.
+Every key, secret and token is random, held in memory or in a 0600 file under the test's
+temporary directory, and checked out of the note and the evidence before either is written.
+The note is `results/L72-reference.md`, and the evidence (decision log lines and openssl
+transcripts) is `evidence/L72-reference/`. Besides the decision log, cells h, l and n read
+port49d's `port49_connection_events_total` (`declined_refused` against `held_refused`) to tell a
+decline, which opens a window and is no strike, from a strike. No device's RFC 9887 behaviour is
+measured here; that is L73, open until an image carries a client (L71).
