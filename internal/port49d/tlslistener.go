@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -64,6 +65,8 @@ type tlsListener struct {
 	files        tlsFiles // the last set that loaded
 	anchors      string   // describe of the anchors in force
 	followFailed string
+	pending      []admission.Device // swapping's union, until inventoryChanged
+	hasPending   bool
 	sighup       bool              // the config note was said
 	fsum         [32]byte          // its hash
 	state        [32]byte          // the hash of every input cur was built from
@@ -88,8 +91,13 @@ func newTLSListener(cfg config.TLSListenerConfig, status devicecert.StatusFunc, 
 	return l, nil
 }
 
-// current is the admitted devices now.
+// current is the admitted devices now: those of an inventory about to be
+// put in force (swapping) until it is (inventoryChanged), so a reload that
+// lands between the two cannot judge the old inventory alone.
 func (l *tlsListener) current() []admission.Device {
+	if l.hasPending {
+		return l.pending
+	}
 	if l.devices == nil {
 		return nil
 	}
@@ -144,6 +152,7 @@ func (l *tlsListener) reload(why string) {
 func (l *tlsListener) inventoryChanged(why string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.pending, l.hasPending = nil, false
 	if _, err := l.apply(why, l.files, l.fsum, l.current()); err != nil {
 		l.refuse(why, err)
 	}
@@ -167,6 +176,7 @@ func (l *tlsListener) swapping(next []admission.Device) {
 			union = append(union, d)
 		}
 	}
+	l.pending, l.hasPending = union, true
 	if _, err := l.apply("inventory", l.files, l.fsum, union); err != nil {
 		l.refuse("inventory", err)
 	}
@@ -185,11 +195,20 @@ func (l *tlsListener) followTrust(why string) {
 	err = l.follow(anchors, inters)
 	switch msg := fmt.Sprint(err); {
 	case err == nil:
+		if l.followFailed != "" {
+			l.say("tls_listener: %s: the certificate status issuers load again", why)
+		}
 		l.followFailed = ""
 	case msg != l.followFailed:
 		l.followFailed = msg
-		l.say("tls_listener: %s: the certificate status sources keep the issuers they had, and devices under a "+
-			"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(msg, 400))
+		var fe *followError
+		if errors.As(err, &fe) && fe.rotated {
+			l.say("tls_listener: %s: the certificate status sources keep the issuers they had, and devices under a "+
+				"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(msg, 400))
+		} else {
+			l.say("tls_listener: %s: the certificate status sources keep the issuers they had: %s", why,
+				printsafe.Line(msg, 400))
+		}
 	}
 }
 
@@ -556,12 +575,14 @@ func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...an
 func followStatus(chk *certstatus.Checker, statusConfig func([]*x509.Certificate) (certstatus.Config, error),
 	was certstatus.Config, anchors, inters []*x509.Certificate, say func(string, ...any)) func(a, i []*x509.Certificate) error {
 	key := trustKey(anchors, inters, was)
+	trustOnly := trustKey(anchors, inters, certstatus.Config{})
 	known := anchors
 	return func(a, i []*x509.Certificate) error {
 		ccfg, err := statusConfig(append(slices.Clone(a), i...))
 		if err != nil {
-			return err
+			return &followError{err: err, rotated: trustKey(a, i, certstatus.Config{}) != trustOnly}
 		}
+		trustOnly = trustKey(a, i, certstatus.Config{})
 		if k := trustKey(a, i, ccfg); k == key {
 			return nil
 		} else {
@@ -585,6 +606,17 @@ func followStatus(chk *certstatus.Checker, statusConfig func([]*x509.Certificate
 		return nil
 	}
 }
+
+// followError is a status config that did not verify; rotated is whether the
+// trust set changed since the sources were last followed, so that devices
+// under a new CA are the ones declined.
+type followError struct {
+	err     error
+	rotated bool
+}
+
+func (e *followError) Error() string { return e.err.Error() }
+func (e *followError) Unwrap() error { return e.err }
 
 // trustKey hashes the trust set and the issuer certificates the sources name.
 func trustKey(anchors, inters []*x509.Certificate, c certstatus.Config) string {

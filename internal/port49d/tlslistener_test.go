@@ -1093,3 +1093,61 @@ func TestRunWithNoBrokerReloadsTheTLSFilesAtSIGHUP(t *testing.T) {
 	waitFor(t, &out, "tls_listener: SIGHUP: reloaded")
 	waitFor(t, &out, "tls_listener: config changes take effect at restart; files reload now")
 }
+
+// A reload that lands between swapping and live.Swap judges the incoming
+// inventory too, so the pre-swap flags survive it.
+func TestTLSAWatchReloadBetweenSwappingAndTheSwapKeepsTheFlags(t *testing.T) {
+	p := writeDevicePKI(t)
+	var mu sync.Mutex
+	devs := []admission.Device{tlsDev("leaf1"), tlsDev("spine1")}
+	cfg := p.listenerCfg()
+	cfg.DeviceIdentity = config.DeviceIdentityConfig{Match: []string{"dns_name"}, DNSSuffixes: []string{"example.net"}}
+	l, err := newTLSListener(cfg, nil, nil, false, func() []admission.Device {
+		mu.Lock()
+		defer mu.Unlock()
+		return devs
+	}, time.Now, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.swapping([]admission.Device{tlsDev("leaf1"), tlsDev("leaf1.example.net"), tlsDev("spine1")})
+	l.reload("reload_interval") // the tick; devices() still answers the old inventory
+	if len(l.Material().Unidentifiable) != 2 {
+		t.Fatalf("a reload before live.Swap undid the flags: %v", l.Material().Unidentifiable)
+	}
+	// The swap lands; the exact flags of what is in force follow.
+	mu.Lock()
+	devs = []admission.Device{tlsDev("leaf1"), tlsDev("spine1")}
+	mu.Unlock()
+	l.inventoryChanged("inventory")
+	if len(l.Material().Unidentifiable) != 0 {
+		t.Fatalf("after the swap the new inventory alone is judged: %v", l.Material().Unidentifiable)
+	}
+	l.reload("reload_interval")
+	if len(l.Material().Unidentifiable) != 0 {
+		t.Fatalf("and a later reload keeps judging it: %v", l.Material().Unidentifiable)
+	}
+}
+
+// An issuer_file that stops loading with no rotation says only that, and
+// says once when it loads again.
+func TestTLSIssuerFileErrorWithoutARotationSaysOnlyThat(t *testing.T) {
+	r := newRotation(t)
+	good, err := os.ReadFile(r.issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(r.issuer, []byte("junk"), 0o600)
+	r.l.reload("reload_interval")
+	r.l.reload("reload_interval")
+	if r.sink.count("the certificate status sources keep the issuers they had") != 1 ||
+		r.sink.count("devices under a new CA are declined") != 0 {
+		t.Fatalf("no rotation, no new-CA clause: %s", r.sink.all())
+	}
+	os.WriteFile(r.issuer, good, 0o600)
+	r.l.reload("reload_interval")
+	r.l.reload("reload_interval")
+	if r.sink.count("the certificate status issuers load again") != 1 {
+		t.Fatalf("a clear is said once: %s", r.sink.all())
+	}
+}
