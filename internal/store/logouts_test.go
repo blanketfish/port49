@@ -110,4 +110,8 @@ func TestLogoutSetMergeNeverErasesALiveLogout(t *testing.T) {
 	if s.Len() != 1 {
 		t.Fatalf("a lapsed logout survived the reload: %d held", s.Len())
 	}
+	now = now.Add(2 * time.Hour) // the kept logout lapses with no reload
+	if s.Len() != 0 {
+		t.Fatalf("Len counts %d lapsed logouts, want only the live", s.Len())
+	}
 }

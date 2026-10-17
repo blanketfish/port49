@@ -110,10 +110,17 @@ func (s *LogoutSet) All() []LogoutEntry {
 	return out
 }
 
+// Len counts the live entries, as the operator line says them.
 func (s *LogoutSet) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.m)
+	now, n := s.now(), 0
+	for _, e := range s.m {
+		if now.Before(e.Until) {
+			n++
+		}
+	}
+	return n
 }
 
 // LogoutFeed is the directory's logout records as a stream.
