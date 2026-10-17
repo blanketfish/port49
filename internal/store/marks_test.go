@@ -624,3 +624,84 @@ func TestAFailingRescanHookSaysTheCompactionOnce(t *testing.T) {
 	f.compact <- struct{}{}
 	waitFor(t, func() bool { return compacted() == 2 })
 }
+
+// Get answers the mark in force with its origin, as the store holds it:
+// the router's GetRevocation reads it (plan 11a).
+func TestMarksGetCarriesTheOrigin(t *testing.T) {
+	m := NewMarks()
+	at := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	m.Set(Revocation{Kind: RevocationCert, Key: "CN=CA|1f", At: at, Origin: "crl corp"}, true)
+	got, ok := m.Get(RevocationCert, "CN=CA|1f")
+	if !ok || !got.At.Equal(at) || got.Origin != "crl corp" {
+		t.Fatalf("%+v %v", got, ok)
+	}
+	if all := m.All(); len(all) != 1 || all[0].Origin != "crl corp" {
+		t.Fatalf("All: %+v", all)
+	}
+	m.Set(Revocation{Kind: RevocationCert, Key: "CN=CA|1f"}, false)
+	if _, ok := m.Get(RevocationCert, "CN=CA|1f"); ok {
+		t.Fatal("a lifted mark is still got")
+	}
+	var none *Marks
+	if _, ok := none.Get(RevocationPrincipal, "user:a"); ok {
+		t.Fatal("a nil Marks names a mark")
+	}
+}
+
+// flakyFeed fails its first loads, then holds marks; its watch waits.
+type flakyFeed struct {
+	mu    sync.Mutex
+	fails int
+	marks []Revocation
+	loads int
+}
+
+func (f *flakyFeed) Revocations(context.Context) (uint64, []Revocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loads++
+	if f.fails > 0 {
+		f.fails--
+		return 0, nil, ErrUnavailable
+	}
+	return 7, f.marks, nil
+}
+
+func (f *flakyFeed) WatchRevocations(ctx context.Context, _ uint64, _ func(Revocation, bool, uint64),
+	_ func(uint64)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A feed never read (from 0) loads first, trying again each second while
+// the store does not answer, and keeps what the process held meanwhile:
+// a port49d run after a store gone with the directory cut (plan 11a, R19).
+func TestFollowMarksFromZeroLoadsFirst(t *testing.T) {
+	m := NewMarks()
+	held := Revocation{Kind: RevocationPrincipal, Key: "user:held", At: time.Unix(1, 0)}
+	m.Set(held, true)
+	m.Keep(held)
+	f := &flakyFeed{fails: 1, marks: []Revocation{{Kind: RevocationPrincipal, Key: "user:new", At: time.Unix(2, 0)}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	rescans := 0
+	go func() {
+		done <- FollowMarks(ctx, f, m, 0, nil, func(bool) {}, func() error { rescans++; return nil },
+			func(string, ...any) {})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !m.Holds(RevocationPrincipal, "user:new") {
+		if time.Now().After(deadline) {
+			t.Fatal("the marks were never loaded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !m.Holds(RevocationPrincipal, "user:held") {
+		t.Fatal("a kept mark was lifted by the first load")
+	}
+	cancel()
+	<-done
+	if f.loads < 2 || rescans < 1 {
+		t.Fatalf("loads %d, rescans %d: want a retried load after its hook", f.loads, rescans)
+	}
+}
