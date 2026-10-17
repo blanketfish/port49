@@ -71,24 +71,21 @@ var l72SecretMarkers = []string{"session-id", "psk", "master-key", "tls session 
 var l72HexLine = regexp.MustCompile(`^\s*[0-9a-f]{4} - [0-9a-f]{2} `)
 
 // l72FilterTranscript drops from an openssl s_client transcript every line
-// that carries a session secret, and the hex dump that follows a ticket.
+// that carries a session secret, and every hex dump line wherever it
+// stands: s_client dumps only session and handshake bytes, and stderr
+// lines interleaved into a dump would end any "after the ticket" state.
 // Alert and "Early data" lines are untouched.
 func l72FilterTranscript(s string) string {
 	var out []string
-	inTicket := false
 	for _, line := range strings.Split(s, "\n") {
 		low := strings.ToLower(line)
-		if inTicket && l72HexLine.MatchString(low) {
+		if l72HexLine.MatchString(low) || strings.Contains(low, "<spaces/nuls>") {
 			continue
 		}
-		inTicket = false
 		drop := false
 		for _, m := range l72SecretMarkers {
 			if strings.Contains(low, m) {
 				drop = true
-				if m == "tls session ticket" {
-					inTicket = true
-				}
 			}
 		}
 		if !drop {

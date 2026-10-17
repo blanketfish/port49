@@ -45,7 +45,10 @@ SSL-Session:
     TLS session ticket lifetime hint: 600 (seconds)
     TLS session ticket:
     0000 - 01 02 03 04 05 06 07 08-09 0a 0b 0c 0d 0e 0f 10   ................
-    0010 - 11 12 13 14 15 16 17 18-19 1a 1b 1c 1d 1e 1f 20   ............... 
+    0010 - 11 12 13 14 15 16 17 18-19 1a 1b 1c 1d 1e 1f 20   ...............
+read R BLOCK
+    0020 - 21 22 23 24 25 26 27 28-29 2a 2b 2c 2d 2e 2f 30   ...............
+    0030 - <SPACES/NULS>
 
     Start Time: 1700000000
 Reused, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
@@ -61,12 +64,12 @@ func TestL72FilterDropsSessionSecrets(t *testing.T) {
 	if hits := l72TranscriptLeaks(got); len(hits) > 0 {
 		t.Fatalf("still carries %v:\n%s", hits, got)
 	}
-	for _, s := range []string{"00112233445566778899", "aabbccddeeff", "0123456789abcdef", "01 02 03 04"} {
+	for _, s := range []string{"00112233445566778899", "aabbccddeeff", "0123456789abcdef", "01 02 03 04", "21 22 23 24", "SPACES/NULS"} {
 		if strings.Contains(got, s) {
 			t.Errorf("the filtered transcript still holds %q", s)
 		}
 	}
-	for _, keep := range []string{"alert number 116", "Early data was not sent", "Reused, TLSv1.3", "Protocol  : TLSv1.3"} {
+	for _, keep := range []string{"alert number 116", "Early data was not sent", "Reused, TLSv1.3", "Protocol  : TLSv1.3", "read R BLOCK"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("the filter dropped %q", keep)
 		}
