@@ -319,7 +319,7 @@ type CertificateStatusOCSP struct {
 	Hash      string        `yaml:"hash"`    // the CertID hash: sha256 (default) or sha1
 }
 
-// StoreConfig is `store:`, resolved (plan 7d; spec §13, decision 35): the
+// StoreConfig is one block of `stores:` (stores.directory or stores.session), resolved (plan 7d; plan 11a; spec §13, decisions 35 and 51): the
 // backend and every packet's store deadline, and on etcd its client.
 type StoreConfig struct {
 	// Backend is memory (the default) or etcd. etcd requires admin_socket,
@@ -2013,7 +2013,7 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 // line and a fixed category, and no text from the document (yamlfault).
 func decodeFault(err error) error { return yamlfault.Of(err) }
 
-// checkStoreShape resolves `store:` (plan 7d; spec §13, decision 35): the
+// checkStoreShape resolves one block of `stores:`, at its path (plan 7d; spec §13, decision 35): the
 // backend, the packet deadline, and on etcd every key's default and
 // bound. It holds every check that is not a role's, and refuses what
 // would run unsafely in any file:

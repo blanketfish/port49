@@ -95,6 +95,7 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 		"keys:":                        "keys: {prod_key: {current: {version: 3, secret_env: T_PROD_V3}}}\n",
 		"listen":                       "listen: :49\n",
 		"stores.directory.etcd.daemon": "", // added under stores.directory.etcd below
+		"stores.session.etcd.daemon":   "", // a split: a session store beside the directory's, below
 		"accounting":                   "accounting: {spool_capacity: 10}\n",
 		"limits":                       "limits: {per_nas_connections: 4}\n",
 		"receipt_idle_ttl":             "receipt_idle_ttl: 5m\n",
@@ -107,6 +108,9 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 		switch key {
 		case "stores.directory.etcd.daemon":
 			raw = strings.Replace(raw, "      broker: {", "      daemon: {cert_file: /x, key_file: /y}\n      broker: {", 1)
+		case "stores.session.etcd.daemon":
+			raw += "  session:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-1:2379]\n" +
+				"      daemon: {cert_file: /x, key_file: /y}\n"
 		case "broker.revocations_file":
 			raw = strings.Replace(raw, "  state_dir:", "  revocations_file: /var/lib/port49/r.json\n  state_dir:", 1)
 		}
