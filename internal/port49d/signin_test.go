@@ -242,6 +242,10 @@ func (downEnrollments) GetSecondFactor(context.Context, string) (store.SecondFac
 	return store.SecondFactor{}, store.ErrUnavailable
 }
 
+func (downEnrollments) GetUnlock(context.Context, string) (time.Time, error) {
+	return time.Time{}, store.ErrUnavailable
+}
+
 // An etcd that does not answer at start, the directory store's, never stops
 // port49d: the check says so and returns, the gauge stays absent (the store
 // is not known lost), and sign-in is store_unavailable until a pass reaches it.
