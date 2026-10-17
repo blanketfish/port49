@@ -10,6 +10,7 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -113,5 +114,28 @@ func TestL73ServerCertificateNamesWhatItIsGiven(t *testing.T) {
 	}
 	if k, err := c.KeyPEM(); err != nil || !strings.Contains(string(k), "PRIVATE KEY") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestL73SignCSRIgnoresWhatTheRequestAsksBeyondItsNames(t *testing.T) {
+	now := time.Now()
+	pki, _ := l73NewPKI("ecdsa", now)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	eku, _ := asn1.Marshal([]asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 1}})
+	bc, _ := asn1.Marshal(struct{ IsCA bool }{true})
+	uri, _ := url.Parse("spiffe://evil.example/admin")
+	csr := l73TestCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "srx1"},
+		DNSNames: []string{"srx1"}, URIs: []*url.URL{uri},
+		ExtraExtensions: []pkix.Extension{
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 37}, Value: eku},
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 19}, Critical: true, Value: bc},
+		}})
+	cert, _, err := l73SignCSR(csr, pki.Inter, now.Add(-time.Minute), now.Add(time.Hour), "srx1", net.ParseIP("172.100.100.21"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cert.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}) || cert.IsCA || len(cert.URIs) != 0 ||
+		!slices.Equal(cert.DNSNames, []string{"srx1"}) {
+		t.Fatalf("eku=%v ca=%v uris=%v dns=%v", cert.ExtKeyUsage, cert.IsCA, cert.URIs, cert.DNSNames)
 	}
 }
