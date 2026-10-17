@@ -135,6 +135,8 @@ var l73JunosAsks = []l73Ask{
 		Need: []string{"tls", "port", "routing-instance"}},
 	{Ask: "set system accounting destination tacplus server 192.0.2.71 tls ", Control: []string{"trusted-ca-group"},
 		Need: []string{"trusted-ca-group", "mutual-authentication"}},
+	{Ask: "set system accounting destination tacplus server 192.0.2.71 tls mutual-authentication ", Control: []string{"certificate-id"},
+		Need: []string{"certificate-id"}},
 	{Ask: "set security pki ", Control: []string{"ca-profile"}, Need: []string{"ca-profile", "trusted-ca-group"}},
 	{Ask: "set security pki ca-profile l73probe ", Control: []string{"ca-identity"}, Need: []string{"ca-identity", "revocation-check"}},
 	{Ask: "set security pki trusted-ca-group l73probe ", Control: []string{"ca-profiles"}, Need: []string{"ca-profiles"}},
@@ -306,6 +308,9 @@ func l73RenderTable(obs []l73Obs) (string, error) {
 			return "", fmt.Errorf("cell %s has no observation", c.ID)
 		}
 		delete(byID, c.ID)
+		if strings.TrimSpace(o.Observed) == "" {
+			return "", fmt.Errorf("cell %s has an empty observation: a blank row reads as measured", c.ID)
+		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.ID, esc(c.Claim), esc(o.Configured), esc(o.Observed), esc(o.Docs))
 	}
 	for id := range byID {
@@ -339,33 +344,36 @@ func scpSinkFrame(name string, body []byte) []byte {
 	return b.Bytes()
 }
 
-// l73MetricValue is the value of one exposition line, selector included; 0
-// when the series does not exist yet.
-func l73MetricValue(exposition, selector string) float64 {
+// l73MetricValue is the value of one exposition line, selector included, and
+// whether the series exists: a misspelled selector is absent, not zero.
+func l73MetricValue(exposition, selector string) (float64, bool) {
 	for _, l := range strings.Split(exposition, "\n") {
 		if strings.HasPrefix(l, selector+" ") {
 			v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(l, selector)), 64)
 			if err == nil {
-				return v
+				return v, true
 			}
 		}
 	}
-	return 0
+	return 0, false
 }
 
 var (
 	l73LogDrop = regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+	l73LogHash = regexp.MustCompile(`\$[0-9][a-z]?\$[^[:space:]"]*`)
 	l73LogLong = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
 )
 
 // l73ScrubLog is the lab's log-reading rule as code: drop every line naming
-// a password, token, secret or JWT, and shorten every long run.
+// a password, token, secret or JWT, mask every crypt or $9$ hash whatever its
+// length, and shorten every long run.
 func l73ScrubLog(s string) string {
 	var out []string
 	for _, ln := range strings.Split(s, "\n") {
 		if l73LogDrop.MatchString(ln) {
 			continue
 		}
+		ln = l73LogHash.ReplaceAllString(ln, "<HASH>")
 		out = append(out, l73LogLong.ReplaceAllString(ln, "<LONG>"))
 	}
 	return strings.Join(out, "\n")
