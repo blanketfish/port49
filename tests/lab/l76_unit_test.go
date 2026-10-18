@@ -505,3 +505,316 @@ func TestL76MaskConfigMasksAnUnterminatedQuote(t *testing.T) {
 		}
 	}
 }
+
+// The session table in the 26.7.2 report plugin's columns: ID, User name,
+// Service name, Authentication method, Priv-lvl, TTY, Remote host, Network
+// instance, Login time, Role. The first eight cells of rows 31 and 32 are
+// SA#display-user-session-information's own; the network-instance and role
+// cells (which the guide's older table lacks), the borders, the header and
+// row 30 are rebuilt in that layout, with a login-time cell that wraps.
+const l76SessionTable = `+----+----------+---------+--------------+-------+-----+------------+------+----------+-------+
+| ID | User     | Service | Authenticati | Priv- | TTY | Remote     | Netw | Login    | Role  |
+|    | name     | name    | on method    | lvl   |     | host       | ork  | time     |       |
++====+==========+=========+==============+=======+=====+============+======+==========+=======+
+| 30 | admin    | sshd    | LOCAL-GROUP  |       | ssh | 172.18.0.1 | mgmt | 2023-11- |       |
+|    |          |         |              |       |     |            |      | 13T10:5  |       |
+| 31 | bob      | sshd    | TACACS-GROUP |  15   | ssh | 172.18.0.1 | mgmt | 2023-11- |       |
+| 32 | user151* | sshd    | RADIUS-GROUP |       | ssh | 172.18.0.1 | mgmt | 2023-11- |       |
++----+----------+---------+--------------+-------+-----+------------+------+----------+-------+
+`
+
+func TestL76SessionsReadTheGuidesTable(t *testing.T) {
+	got := l76Sessions(l76SessionTable)
+	want := []l76Session{
+		{ID: "30", User: "admin", Service: "sshd", Method: "LOCAL-GROUP", PrivLvl: "", TTY: "ssh"},
+		{ID: "31", User: "bob", Service: "sshd", Method: "TACACS-GROUP", PrivLvl: "15", TTY: "ssh"},
+		{ID: "32", User: "user151", Service: "sshd", Method: "RADIUS-GROUP", PrivLvl: "", TTY: "ssh", Current: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d rows: %+v", len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if l76Sessions("Error: unknown command\n") != nil {
+		t.Error("an error message parsed as sessions")
+	}
+}
+
+func TestL76LeafListReadsBothLayouts(t *testing.T) {
+	for _, in := range []string{
+		"authentication-method [ port49 local ]\n",
+		"authentication-method [\n    port49\n    local\n]\n",
+		"x {\n  authentication-method [\n port49\n local\n ]\n idle-timeout 600\n}\n",
+	} {
+		if got := l76LeafList(in, "authentication-method"); strings.Join(got, ",") != "port49,local" {
+			t.Errorf("%q: %v", in, got)
+		}
+	}
+	if l76LeafList("accounting-method [ port49 ]", "authentication-method") != nil {
+		t.Error("read another leaf-list")
+	}
+	if l76LeafList("authentication-method [ port49", "authentication-method") != nil {
+		t.Error("read an unterminated list")
+	}
+}
+
+func TestL76RolesIn(t *testing.T) {
+	in := "session 31 {\n    username alice01\n    role [\n        p49-read\n        p49-admin\n    ]\n}\n"
+	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-admin,p49-read" {
+		t.Errorf("got %v", got)
+	}
+	if l76RolesIn("session 32 {\n    username carol\n    role [ network-admin ]\n}\n", "carol") != nil {
+		t.Error("a role that is not the lab's was read")
+	}
+}
+
+// The state read lists every session the device holds. Cell (d)'s
+// break-glass session (p49-admin) can still be there when (h) logs in at
+// priv-lvl 1; reading it would report a false privilege grant (pre-flight I2).
+func TestL76RolesInReadsOnlyTheUsersSession(t *testing.T) {
+	in := "system {\n    aaa {\n        authentication {\n" +
+		"            session 30 {\n                username breakglass\n                role [\n                    p49-admin\n                ]\n            }\n" +
+		"            session 31 {\n                username alice01\n                role [\n                    p49-read\n                ]\n            }\n" +
+		"        }\n    }\n}\n"
+	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-read" {
+		t.Errorf("alice01: %v, want [p49-read]", got)
+	}
+	if got := l76RolesIn(in, "breakglass"); strings.Join(got, ",") != "p49-admin" {
+		t.Errorf("breakglass: %v, want [p49-admin]", got)
+	}
+	own := l76UserSessions(in, "alice01")
+	if !strings.Contains(own, "session 31 {") || strings.Contains(own, "breakglass") || strings.Contains(own, "p49-admin") {
+		t.Errorf("alice01's blocks hold another session:\n%s", own)
+	}
+	if l76RolesIn(in, "bob") != nil || l76UserSessions(in, "bob") != "" {
+		t.Error("a user with no session read as one")
+	}
+	if got := l76RolesOf(in, "bob"); got != "(no session block for `bob` in the state read)" {
+		t.Errorf("l76RolesOf bob: %q", got)
+	}
+	if got := l76RolesOf(in, "alice01"); got != "[p49-read]" {
+		t.Errorf("l76RolesOf alice01: %q", got)
+	}
+	if l76RolesIn("session 41 {\n    username dave\n    role [ p49-read ]\n", "dave") != nil {
+		t.Error("an unterminated block was read")
+	}
+	if l76RolesIn("session 42 {\n    username alice011\n    role [ p49-read ]\n}\n", "alice01") != nil {
+		t.Error("another user whose name starts with the user's was read")
+	}
+}
+
+// Every command, set line and sr_cli form the run sends has a cite, and the
+// note prints each with its page (pre-flight I3: "cite the doc page in your
+// notes").
+func TestL76SourcesCiteEveryCommand(t *testing.T) {
+	cited := map[string]bool{}
+	for _, s := range l76Sources {
+		if s.what == "" || !l76CiteKnown(s.cite) {
+			t.Errorf("source %q has cite %q: each part must be SA#, CM#, CLAB#, YANG or HELP", s.what, s.cite)
+		}
+		cited[s.what] = true
+	}
+	var used []string
+	used = append(used, l76Commands...)
+	used = append(used, l76SetLines...)
+	used = append(used, l76RootForms...)
+	used = append(used, l76ReadRunning, l76ReadGroup)
+	for _, c := range used {
+		if !cited[c] {
+			t.Errorf("%q has no row in l76Sources", c)
+		}
+	}
+	sec := l76SourcesSection()
+	for _, s := range l76Sources {
+		if !strings.Contains(sec, "`"+s.what+"`") {
+			t.Errorf("the Sources section lacks %q", s.what)
+		}
+	}
+	for _, url := range []string{l76SAURL + "#configuring-tacacsx-authorization", l76CMURL + "#configuration-datastores",
+		l76CLABURL + "#cli"} {
+		if !strings.Contains(sec, url) {
+			t.Errorf("the Sources section lacks %s", url)
+		}
+	}
+	if l76CiteKnown("") || l76CiteKnown("the guide") || l76CiteKnown("SA#configuring-role; somewhere") {
+		t.Error("an unknown cite was accepted")
+	}
+	// The live test sends set lines only through l76SetLines: a literal in
+	// l76_test.go would bypass this test. Before Task 5 the file does not exist.
+	src, err := os.ReadFile("l76_test.go")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "\"set /") {
+		t.Error("l76_test.go holds a set / literal; use an l76SetLines constant")
+	}
+}
+
+// l76TypesFixture is copied from ghcr.io/nokia/srlinux:26.7.2-519,
+// /opt/srlinux/models/srl_nokia/models/system/srl_nokia-aaa-types.yang
+// lines 77-81 and 109-113.
+const l76TypesFixture = `
+  identity command {
+    base aaa_accounting_event_type;
+    description
+      "Specifies interactive command events for AAA accounting";
+  }
+  identity commands {
+    base aaa_authorization_event_type;
+    description
+      "Specifies interactive command events for authorization";
+  }
+`
+
+// l76AAAFixture is copied from the same image's
+// /opt/srlinux/models/srl_nokia/models/system/srl_nokia-aaa.yang lines
+// 134-135, 254-257, 1096, 1123 and 1148 (no line of that file uses the
+// first two groupings).
+const l76AAAFixture = `
+      must '(. = "local") = (../type = "srl-aaa-types:local")' {
+        error-message "Server group name must be 'local' if and only if local server type is 'local'";
+      description
+        "Use TACACS+ priv-lvl based authorization
+
+         If false, then authorization is skipped for TACACS+ users granting full admin access for those users.";
+  grouping aaa-authorization-methods-config {
+  grouping aaa-authorization-events-top {
+      uses aaa-authorization-role-top;
+`
+
+func TestL76IdentityBase(t *testing.T) {
+	if got := l76IdentityBase(l76TypesFixture, "command"); got != "aaa_accounting_event_type" {
+		t.Errorf("command: %q", got)
+	}
+	if got := l76IdentityBase(l76TypesFixture, "commands"); got != "aaa_authorization_event_type" {
+		t.Errorf("commands: %q", got)
+	}
+	if got := l76IdentityBase(l76TypesFixture, "config"); got != "" {
+		t.Errorf("absent identity: %q", got)
+	}
+}
+
+func TestL76SchemaFindingsNameEachOverrule(t *testing.T) {
+	got := strings.Join(l76SchemaFindings(l76AAAFixture, l76TypesFixture), "\n")
+	for _, want := range []string{"`event command`", "named `local`", "no TACACS+ authorization method", "full admin"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("findings lack %q:\n%s", want, got)
+		}
+	}
+	if f := l76SchemaFindings("", ""); len(f) != 0 {
+		t.Errorf("empty models produced findings: %v", f)
+	}
+	used := l76AAAFixture + "    uses aaa-authorization-methods-config;\n"
+	if strings.Contains(strings.Join(l76SchemaFindings(used, ""), "\n"), "no TACACS+ authorization method") {
+		t.Error("a used grouping read as unused")
+	}
+}
+
+func TestL76SchemaExcerptKeepsIdentifiers(t *testing.T) {
+	got := l76SchemaExcerpt(l76TypesFixture, []string{"base aaa_"})
+	if got != "base aaa_accounting_event_type;\nbase aaa_authorization_event_type;" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestL76SchemaExcerptKeepsKeyLinesMasked(t *testing.T) {
+	got := l76SchemaExcerpt(l76AAAFixture, []string{"Server group name", "authorization is skipped"})
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "must be 'local'") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestL76RecordHelpers(t *testing.T) {
+	recs := []map[string]any{
+		{"event": "redeem", "verdict": "permit", "auth": map[string]any{"method": "pap"},
+			"session": map[string]any{"username": "alice01"}},
+		{"event": "authorize_session", "verdict": "permit", "session": map[string]any{"username": "alice01"},
+			"request": map[string]any{"service": "shell", "raw": []any{"service=shell", "cmd="}},
+			"reply":   map[string]any{"attributes": []any{"priv-lvl=15"}}},
+		{"event": "account", "flags": "start", "session": map[string]any{"username": "alice01"},
+			"record": map[string]any{"raw": []any{"task_id=1", "cmd=show version"}}},
+		{"event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "no_known_key_matches"}},
+		{"event": "redeem", "verdict": "deny", "session": map[string]any{"username": "bob"}},
+	}
+	if n := len(l76Of(recs, "alice01")); n != 3 {
+		t.Errorf("l76Of: %d", n)
+	}
+	if l76Count(recs, "redeem") != 2 || l76Count(recs, "account") != 1 {
+		t.Error("l76Count")
+	}
+	if d := l76Diagnoses(recs); d["no_known_key_matches"] != 1 || len(d) != 1 {
+		t.Errorf("l76Diagnoses: %v", d)
+	}
+	if s := l76Services(recs); s["shell"] != 1 || len(s) != 1 {
+		t.Errorf("l76Services: %v", s)
+	}
+	if l76Str(recs[0], "auth", "method") != "pap" || l76Str(recs[0], "nope", "x") != "" {
+		t.Error("l76Str")
+	}
+	if got := l76Strs(recs[1], "reply", "attributes"); len(got) != 1 || got[0] != "priv-lvl=15" {
+		t.Errorf("l76Strs: %v", got)
+	}
+	r := l76Render(recs)
+	for _, want := range []string{"redeem permit/ method=pap user=alice01",
+		"authorize_session permit/ user=alice01 service=shell request=[service=shell cmd=] reply=[priv-lvl=15]",
+		"account flags=start user=alice01 record=[task_id=1 cmd=show version]",
+		"unvalidated diagnosis=no_known_key_matches"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("render lacks %q:\n%s", want, r)
+		}
+	}
+}
+
+func TestL76WrongKeyConfigSwapsTheOneBlock(t *testing.T) {
+	cfg := "keys:\n" + l76KeyAnchor + "other: 1\n"
+	got, err := l76WrongKeyConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "PORT49_LAB_KEY") || !strings.Contains(got, "secret_env: "+l76WrongKeyEnv) ||
+		!strings.Contains(got, "other: 1") {
+		t.Errorf("got:\n%s", got)
+	}
+	if _, err := l76WrongKeyConfig("keys: {}\n"); err == nil {
+		t.Error("no anchor: no error")
+	}
+	if _, err := l76WrongKeyConfig(cfg + l76KeyAnchor); err == nil {
+		t.Error("two anchors: no error")
+	}
+}
+
+func TestL76LabConfigHoldsTheKeyAnchorOnce(t *testing.T) {
+	raw, err := os.ReadFile("port49d-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l76WrongKeyConfig(string(raw)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestL76ObservationHasEveryCellInOrder(t *testing.T) {
+	out := map[string]string{}
+	for _, c := range l76Cells {
+		out[c.id] = "seen " + c.id
+	}
+	got := l76Observation(out, "schema text")
+	last := strings.Index(got, "schema text")
+	if last < 0 {
+		t.Fatal("no schema section")
+	}
+	for _, c := range l76Cells {
+		at := strings.Index(got, "### ("+c.id+") ")
+		if at <= last || !strings.Contains(got[at:], "seen "+c.id) {
+			t.Errorf("cell %s missing or out of order", c.id)
+		}
+		last = at
+	}
+	src := strings.Index(got, "### Sources\n\n")
+	if src <= last || !strings.Contains(got[src:], l76SourcesSection()) {
+		t.Error("the Sources section is missing or not after the cells")
+	}
+}

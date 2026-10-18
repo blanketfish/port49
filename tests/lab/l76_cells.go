@@ -225,3 +225,401 @@ func l76Leaks(text string, secrets []string) []string {
 func l76Squeeze(s string) string {
 	return l76LineWrap.ReplaceAllString(s, "")
 }
+
+// l76Session is one row of `show system aaa authentication session`
+// (SA#display-user-session-information). Current is the row's trailing
+// `*` on the user name.
+type l76Session struct {
+	ID, User, Service, Method, PrivLvl, TTY string
+	Current                                 bool
+}
+
+// l76Sessions reads the rows of the session table whose first cell is a
+// number. Header rows, borders and a wrapped login-time line are skipped.
+func l76Sessions(out string) []l76Session {
+	var rows []l76Session
+	for _, ln := range strings.Split(out, "\n") {
+		cells := strings.Split(strings.TrimSpace(ln), "|")
+		if len(cells) < 8 {
+			continue
+		}
+		c := make([]string, len(cells))
+		for i := range cells {
+			c[i] = strings.TrimSpace(cells[i])
+		}
+		id := c[1]
+		if id == "" || strings.Trim(id, "0123456789") != "" {
+			continue
+		}
+		user, cur := strings.CutSuffix(c[2], "*")
+		rows = append(rows, l76Session{ID: id, User: user, Service: c[3], Method: c[4], PrivLvl: c[5], TTY: c[6], Current: cur})
+	}
+	return rows
+}
+
+// l76SessionHead opens one entry of YANG `list session` (srl_nokia-aaa.yang
+// 487) as `info from state system aaa authentication session` prints it.
+var l76SessionHead = regexp.MustCompile(`^\s*session\s+\S+\s*\{\s*$`)
+
+// l76UserSessions is the `session <id> { ... }` blocks of a session-state
+// read whose `username` leaf is exactly user, joined, or "". A block that
+// never closes is not read.
+func l76UserSessions(text, user string) string {
+	var blocks []string
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		if !l76SessionHead.MatchString(lines[i]) {
+			continue
+		}
+		depth, j := 0, i
+		for ; j < len(lines); j++ {
+			depth += strings.Count(lines[j], "{") - strings.Count(lines[j], "}")
+			if depth == 0 {
+				break
+			}
+		}
+		if j == len(lines) {
+			break
+		}
+		block := lines[i : j+1]
+		for _, ln := range block {
+			if f := strings.Fields(ln); len(f) == 2 && f[0] == "username" && f[1] == user {
+				blocks = append(blocks, strings.Join(block, "\n"))
+				break
+			}
+		}
+		i = j
+	}
+	return strings.Join(blocks, "\n")
+}
+
+// l76RolesIn is the lab's roles (p49-read, p49-admin) that user's sessions
+// hold (YANG `leaf-list role`, srl_nokia-aaa.yang 550), sorted. Other
+// users' sessions are never read: a break-glass session the device still
+// holds must not read as roles this user got (pre-flight I2).
+func l76RolesIn(text, user string) []string {
+	own := l76UserSessions(text, user)
+	var out []string
+	for _, r := range []string{"p49-admin", "p49-read"} {
+		if regexp.MustCompile(`\b` + r + `\b`).MatchString(own) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// l76RolesOf is what a note says of user's roles: the list, or that the
+// state read held no session block for user.
+func l76RolesOf(text, user string) string {
+	if l76UserSessions(text, user) == "" {
+		return "(no session block for `" + user + "` in the state read)"
+	}
+	return fmt.Sprintf("%v", l76RolesIn(text, user))
+}
+
+// The device reads (CM#configuration-datastores; the YANG rows of the cite
+// table for the state paths). Each is run as the container's root with
+// sr_cli -d, or in a token login.
+const (
+	l76ReadRunning      = "info from running system aaa"
+	l76ReadGroup        = "info from state system aaa server-group port49"
+	l76ReadSessions     = "show system aaa authentication session"
+	l76ReadSessionState = "info from state system aaa authentication session"
+	l76ReadVersion      = "info from state system information version"
+)
+
+// l76Commands are what every token login runs: the session table
+// (SA#display-user-session-information), the session state with its roles,
+// and the version.
+var l76Commands = []string{l76ReadSessions, l76ReadSessionState, l76ReadVersion}
+
+// The mid-run changes of cells (i) and (j), one flat `set /` line each
+// (CLAB#cli's flat form). The live test uses only these constants.
+const (
+	l76PrivLvlAuthzOff = "set / system aaa server-group port49 tacacs priv-lvl-authorization false"
+	l76PrivLvlAuthzOn  = "set / system aaa server-group port49 tacacs priv-lvl-authorization true"
+	l76RoleServiceOn   = "set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role true"
+	l76RoleServiceOff  = "set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role false"
+)
+
+var l76SetLines = []string{l76PrivLvlAuthzOff, l76PrivLvlAuthzOn, l76RoleServiceOn, l76RoleServiceOff}
+
+// l76RootForms are the sr_cli forms and file reads the harness runs as the
+// container's root.
+var l76RootForms = []string{
+	"sr_cli -d <command>",
+	"sr_cli --help",
+	"sr_cli -d --candidate-mode --commit-at-end -- <line>",
+	"enter candidate",
+	"commit now",
+	"tail -n 400 " + l76AAALog,
+}
+
+// The pages every SR Linux statement is checked against (the plan's cite
+// table): Nokia's 26.7 guide chapters, and containerlab's srl kind page.
+const (
+	l76SAURL   = "https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html"
+	l76CMURL   = "https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html"
+	l76CLABURL = "https://containerlab.dev/manual/kinds/srl/"
+)
+
+type l76Source struct{ what, cite string }
+
+// l76Sources is one row per command, statement or default the run relies
+// on, with its cite. A cite is one or more parts joined by "; ", each one
+// SA#<anchor>, CM#<anchor>, CLAB#<anchor>, YANG <file>[:<line>] or HELP,
+// with an optional note in parentheses that holds no "; ".
+var l76Sources = []l76Source{
+	{l76ReadSessions, "SA#display-user-session-information"},
+	{l76ReadSessionState, "CM#configuration-datastores; YANG srl_nokia-aaa.yang:487 (list session); " +
+		"YANG srl_nokia-aaa.yang:550 (leaf-list role)"},
+	{l76ReadVersion, "CM#configuration-datastores; YANG srl_nokia-system-info.yang:108 (leaf version)"},
+	{l76ReadRunning, "CM#configuration-datastores"},
+	{l76ReadGroup, "CM#configuration-datastores; SA#configuring-aaa-server-group"},
+	{l76PrivLvlAuthzOff, "CLAB#cli (flat form); SA#configuring-tacacsx-authorization"},
+	{l76PrivLvlAuthzOn, "CLAB#cli (flat form); SA#configuring-tacacsx-authorization"},
+	{l76RoleServiceOn, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
+	{l76RoleServiceOff, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
+	{"sr_cli -d <command>", "HELP (-d/--dumb-terminal, with a positional command run as one line)"},
+	{"sr_cli --help", "HELP"},
+	{"sr_cli -d --candidate-mode --commit-at-end -- <line>", "HELP (example: sr_cli --candidate-mode --commit-at-end -- <command>)"},
+	{"enter candidate", "CM#configuration-modes"},
+	{"commit now", "CM#commit-configuration-in-candidate-mode"},
+	{"tail -n 400 " + l76AAALog, "SA#configuring-local-accounting"},
+	{"authentication-method [ port49 local ]", "SA#configuring-authentication-local-users"},
+	{"user breakglass { password ...; role [ p49-admin ] }", "SA#configuring-authentication-local-users; SA#assign-roles-to-users"},
+	{"authorization { role <n> { tacacs { priv-lvl <n> } } }", "SA#configuring-tacacsx-authorization"},
+	{"accounting { accounting-method [ port49 ]; event command { record start-stop } }",
+		"SA#configuring-account; YANG srl_nokia-aaa-types.yang:77 (identity command, base aaa_accounting_event_type)"},
+	{"server-group local { type local }", "SA#configuring-authentication-local-users; YANG srl_nokia-aaa.yang:134 (the name must be local)"},
+	{"server-group port49 { type tacacs; tacacs { priv-lvl-authorization true } }",
+		"SA#configuring-aaa-server-group; SA#configuring-tacacsx-authorization"},
+	{"server 172.100.100.1 { network-instance mgmt; tacacs { port 49; secret-key ... } }",
+		"SA#configuring-aaa-server-group; YANG srl_nokia-aaa-tacacs.yang (port, default 49)"},
+	{"configuration { role <n> { rule / { action read|write } } }", "SA#configuring-role"},
+	{"exit-on-reject: default false", "YANG srl_nokia-aaa.yang:1165"},
+	{"priv-lvl-authorization false: authorization skipped, full admin", "YANG srl_nokia-aaa.yang:254"},
+	{"the TACACS+ health check: a TCP open and close every 30 s", "SA#aaa-server-group-configuration"},
+	{"ssh-server rate-limit: default 20 unauthenticated sessions", "YANG srl_nokia-ssh.yang:479"},
+}
+
+// l76CiteKnown says whether every part of cite is one of the cite kinds.
+func l76CiteKnown(cite string) bool {
+	if cite == "" {
+		return false
+	}
+	for _, part := range strings.Split(cite, "; ") {
+		if !(strings.HasPrefix(part, "SA#") || strings.HasPrefix(part, "CM#") || strings.HasPrefix(part, "CLAB#") ||
+			strings.HasPrefix(part, "YANG ") || part == "HELP" || strings.HasPrefix(part, "HELP (")) {
+			return false
+		}
+	}
+	return true
+}
+
+// l76CiteURL is where one cite part is read: its page and anchor, the
+// image's models, or the image's sr_cli --help.
+func l76CiteURL(part string) string {
+	anchor := func(p string) string {
+		a, _, _ := strings.Cut(p, " ")
+		return a
+	}
+	switch {
+	case strings.HasPrefix(part, "SA#"):
+		return l76SAURL + "#" + anchor(strings.TrimPrefix(part, "SA#"))
+	case strings.HasPrefix(part, "CM#"):
+		return l76CMURL + "#" + anchor(strings.TrimPrefix(part, "CM#"))
+	case strings.HasPrefix(part, "CLAB#"):
+		return l76CLABURL + "#" + anchor(strings.TrimPrefix(part, "CLAB#"))
+	case strings.HasPrefix(part, "YANG "):
+		return "/opt/srlinux/models in " + l76Image
+	default:
+		return "sr_cli --help in " + l76Image
+	}
+}
+
+// l76SourcesSection is the note's Sources: one line per l76Sources row,
+// each cite part followed by where it is read.
+func l76SourcesSection() string {
+	var b strings.Builder
+	for _, s := range l76Sources {
+		var parts []string
+		for _, p := range strings.Split(s.cite, "; ") {
+			parts = append(parts, p+" <"+l76CiteURL(p)+">")
+		}
+		fmt.Fprintf(&b, "- `%s`: %s\n", s.what, strings.Join(parts, "; "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// l76IdentityBase is the base of YANG identity name, without its prefix.
+func l76IdentityBase(yang, name string) string {
+	re := regexp.MustCompile(`identity\s+` + regexp.QuoteMeta(name) + `\s*\{[^}]*?\bbase\s+(?:[\w-]+:)?([\w-]+)\s*;`)
+	m := re.FindStringSubmatch(yang)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// l76SchemaFindings is what the image's AAA models say where Nokia's guide
+// says otherwise or nothing. aaa is srl_nokia-aaa.yang, types is
+// srl_nokia-aaa-types.yang.
+func l76SchemaFindings(aaa, types string) []string {
+	var out []string
+	if l76IdentityBase(types, "command") == "aaa_accounting_event_type" &&
+		l76IdentityBase(types, "commands") == "aaa_authorization_event_type" {
+		out = append(out, "The accounting event is `event command` (base aaa_accounting_event_type); "+
+			"the guide's `event commands` is an authorization event type.")
+	}
+	if strings.Contains(aaa, l76LocalNameRule) {
+		out = append(out, "A local server group must be named `local`; the guide's `LOCAL-GROUP` is refused.")
+	}
+	if strings.Contains(aaa, "grouping aaa-authorization-methods-config") &&
+		!strings.Contains(aaa, "uses aaa-authorization-methods-config") &&
+		!strings.Contains(aaa, "uses aaa-authorization-events-top") {
+		out = append(out, "The SR Linux native schema has no TACACS+ authorization method: "+
+			"`aaa-authorization-methods-config` and `aaa-authorization-events-top` are defined in "+
+			"srl_nokia-aaa.yang and never used, so there is no per-command authorization "+
+			"(OpenConfig's openconfig-aaa.yang does use them; OpenConfig mode is not measured).")
+	}
+	if strings.Contains(aaa, "authorization is skipped for TACACS+ users granting full admin access") {
+		out = append(out, "`priv-lvl-authorization` false (the default) skips authorization and grants full admin.")
+	}
+	return out
+}
+
+// l76SchemaExcerpt is the lines of yang holding any key, trimmed and masked.
+func l76SchemaExcerpt(yang string, keys []string) string {
+	var keep []string
+	for _, ln := range strings.Split(yang, "\n") {
+		for _, k := range keys {
+			if strings.Contains(ln, k) {
+				keep = append(keep, strings.TrimSpace(ln))
+				break
+			}
+		}
+	}
+	return l76MaskConfig(strings.Join(keep, "\n"))
+}
+
+// l76At walks a decoded decision record. The harness's str/sub/strs are
+// lab-tagged; these are their untagged twins for code `make test` covers.
+func l76At(m map[string]any, path ...string) any {
+	var v any = m
+	for _, k := range path {
+		mm, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = mm[k]
+	}
+	return v
+}
+
+func l76Str(m map[string]any, path ...string) string {
+	s, _ := l76At(m, path...).(string)
+	return s
+}
+
+func l76Strs(m map[string]any, path ...string) []string {
+	a, _ := l76At(m, path...).([]any)
+	var out []string
+	for _, v := range a {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// l76Of is the records whose session names user.
+func l76Of(recs []map[string]any, user string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if l76Str(r, "session", "username") == user {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func l76Count(recs []map[string]any, event string) int {
+	n := 0
+	for _, r := range recs {
+		if l76Str(r, "event") == event {
+			n++
+		}
+	}
+	return n
+}
+
+// l76Diagnoses counts the unvalidated records' diagnoses.
+func l76Diagnoses(recs []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, r := range recs {
+		if d := l76Str(r, "unvalidated", "diagnosis"); d != "" {
+			out[d]++
+		}
+	}
+	return out
+}
+
+// l76Services counts the authorization requests' service values.
+func l76Services(recs []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, r := range recs {
+		if e := l76Str(r, "event"); e == "authorize_session" || e == "authorize_command" {
+			out[l76Str(r, "request", "service")]++
+		}
+	}
+	return out
+}
+
+// l76Render is one line per record: what a note shows of the decision log.
+// It holds no credential: records carry only credential_sha256, and this
+// does not print it.
+func l76Render(recs []map[string]any) string {
+	var b strings.Builder
+	for _, r := range recs {
+		ev := l76Str(r, "event")
+		switch {
+		case ev == "account":
+			fmt.Fprintf(&b, "account flags=%s user=%s record=%v\n", l76Str(r, "flags"),
+				l76Str(r, "session", "username"), l76Strs(r, "record", "raw"))
+		case l76At(r, "unvalidated") != nil:
+			fmt.Fprintf(&b, "%s diagnosis=%s\n", ev, l76Str(r, "unvalidated", "diagnosis"))
+		case ev == "authorize_session" || ev == "authorize_command":
+			fmt.Fprintf(&b, "%s %s/%s user=%s service=%s request=%v reply=%v\n", ev, l76Str(r, "verdict"),
+				l76Str(r, "reason"), l76Str(r, "session", "username"), l76Str(r, "request", "service"),
+				l76Strs(r, "request", "raw"), l76Strs(r, "reply", "attributes"))
+		default:
+			fmt.Fprintf(&b, "%s %s/%s method=%s user=%s\n", ev, l76Str(r, "verdict"), l76Str(r, "reason"),
+				l76Str(r, "auth", "method"), l76Str(r, "session", "username"))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// l76WrongKeyConfig is cfg with its one standing key block pointed at
+// l76WrongKeyEnv: port49d then validates no packet the device sends.
+func l76WrongKeyConfig(cfg string) (string, error) {
+	if n := strings.Count(cfg, l76KeyAnchor); n != 1 {
+		return "", fmt.Errorf("the lab config holds the standing lab_key block %d times, want once", n)
+	}
+	return strings.Replace(cfg, l76KeyAnchor,
+		"  lab_key:\n    current: {version: 1, secret_env: "+l76WrongKeyEnv+"}\n", 1), nil
+}
+
+// l76Observation is the note's Observation: the schema check, then each
+// cell under its claim, in register order, then the Sources every command
+// and statement cites (pre-flight I3).
+func l76Observation(out map[string]string, schema string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Schema and configuration\n\n%s\n", schema)
+	for _, c := range l76Cells {
+		fmt.Fprintf(&b, "\n### (%s) %s\n\n%s\n", c.id, c.claim, out[c.id])
+	}
+	fmt.Fprintf(&b, "\n### Sources\n\n%s\n", l76SourcesSection())
+	return b.String()
+}
