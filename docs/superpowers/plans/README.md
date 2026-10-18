@@ -297,6 +297,10 @@ minor not taken, ledgered as R30. **Re-review 2026-10-17** (1 Important, 4 Minor
 serves the union of every marks snapshot and writes only its own, a broker's pins and logouts in a
 record it cannot read, a heal-time key fault exits 1, only the heal's load lifts the ceiling, and a
 forget re-run after a directory restore. It opens L74 and L75.
+**L73 measured 2026-10-18** (`2026-10-17-l73-device-tls.md`; branch `test/l73-junos`): vJunos-router
+26.2R1.7, C8000V 17.18.02, N9Kv 10.6(2)F and cEOS-lab 4.36.3M, all ten cells each; L71 addenda for
+those four, IOL-XE 17.18.02 (no client) and XRd 26.1.1 (lists `tls`); L73 closed (vJunos-switch
+skipped; SRX unmeasured; a full L73 row on XRd 26.1.1 goes to the qualification-suite plan).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7157,13 +7161,37 @@ the inventory-only refresh's cost at fleet size.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
 
 **Carried from plan 11** (decision 50):
-- The reference device AAA configuration for `transport: tls`, per platform, written from L73 once
-  an image carries a client (plan 11 Q1): port (300; Cisco's documents default 6049), SNI, the
-  client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth), and no
-  non-TLS fallback server for the same host (RFC 9887 §5.1.1). **Junos** (per Juniper
-  documentation, unmeasured until L73 closes): mutual TLS is optional there and port49 requires the
-  client certificate, so the configuration must set `tls mutual-authentication certificate-id <id>`;
-  a client that sends no certificate is refused `no_client_certificate` (measured, L72 cell c).
+- The reference device AAA configuration for `transport: tls`, per platform, written from L73
+  (closed 2026-10-18; every reading below is from `tests/lab/results/L73-<platform>.md`): port,
+  SNI, the client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth),
+  single-connection, the fallback timings, and no non-TLS fallback server for the same host
+  (RFC 9887 §5.1.1). **Junos** (vJunos-router 26.2R1.7): mutual TLS is optional there and port49
+  requires the client certificate, so the configuration must set `tls mutual-authentication
+  certificate-id <id>`; a client that sends no certificate is refused `no_client_certificate`
+  (measured, L72 cell c). The L73 inputs, per platform:
+  - **Port (a).** Junos (`L73-juniper_vjunos-router.md`) and NX-OS (`L73-cisco_nxos.md`) dial 49
+    when no port is set, so the reference configuration sets the port on the device; IOS XE dials
+    6049 (`L73-cisco_iosxe.md`); EOS defaults to 300 (`L73-arista_ceos.md`).
+  - **SNI (c).** Junos sends the literal address as server name, so `server_names` must list it or
+    stay unset (`L73-juniper_vjunos-router.md`); IOS XE, NX-OS and EOS send none.
+  - **Enrolment (e).** Every platform's leaf is clientAuth only. Junos, IOS XE and NX-OS send leaf
+    and intermediate; EOS sends its leaf alone, so set `intermediates_file`
+    (`L73-arista_ceos.md`). Junos needs on-box root steps to trust the server CA and place the
+    client certificate (`L73-juniper_vjunos-router.md`): operator toil at fleet scale, to raise
+    with the vendor.
+  - **Single-connection (h).** Without it a login opened 1 (Junos), 6 (IOS XE), 5 (NX-OS) and 6
+    (EOS) connections; with it the second login reused the first's connection on every platform
+    (the per-platform counts are cell h of each note).
+  - **Fallback timings (i).** The break-glass login landed in about 45 ms on Junos, 2 s on EOS, 5 s
+    on IOS XE and 5.2 s on NX-OS. NX-OS waits 5.00 s per handshake, so `handshake_timeout` must
+    exceed 5s and a login takes about 25 s (`L73-cisco_nxos.md`). IOS XE: two `tacacs server`
+    objects cannot share an address, so a TLS server replaces the plain one, and after declines the
+    server stays Dead for 57 to 67 s (`L73-cisco_iosxe.md`).
+  - **Never list a non-TLS server after a TLS one** on Junos or EOS: in the mixed list (j2) Junos
+    opened one connection and EOS three to the plain server, each reset at once, so what they
+    would have sent is unmeasured. IOS XE and NX-OS opened none. No platform sent a TACACS+ header.
+  - **XRd 26.1.1.** Its sshd rate-limits at 60 sessions a minute by default
+    (`L71-cisco_xrd.md`), which a login test must stay under.
 - Every deployment shape exposes `tls_listener.listen` (default 300) beside 49, with the source
   address preserved as for 49. Binding 300 needs what binding 49 does.
 - Alarms: `rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])` by outcome;
@@ -7276,7 +7304,8 @@ reference. The page also carries, each as what an operator sees and the fix:
   match, cannot be told from a certificate. Such a device is declined at Accept as
   `identity_mismatch`, with no handshake and no strike, and named once at start or reload. Rename
   it, or give it an `ip_address`.
-- **Junos** (per Juniper documentation, unmeasured until L73 closes). port49 requires the client
+- **Junos** (measured on vJunos-router 26.2R1.7, `tests/lab/results/L73-juniper_vjunos-router.md`).
+  port49 requires the client
   certificate and Junos makes mutual TLS optional, so set `tls mutual-authentication
   certificate-id <id>` (Junos 26.2R1 and later, routing and switching platforms, not SRX).
   Without a client certificate a login is refused `no_client_certificate` (that refusal is

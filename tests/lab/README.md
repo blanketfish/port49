@@ -794,3 +794,27 @@ is `PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx go test -tags lab ./tests/la
 TestL71TLSClientSupport -v -timeout 3h`. It sends no TACACS+, so its capture is the masked CLI probe
 transcript (`evidence/L71-<platform>/probe.txt`), not a pcap. vJunosEvolved and vSRX 23.4 are not
 in the harness platform list and are not probed.
+
+## L73: device RFC 9887 clients against port49
+
+`PORT49_LAB_PLATFORMS=<selector> go test -tags lab ./tests/lab/ -run '^TestL73$' -count=1 -v -timeout 3h`,
+one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`; help cells `iolxe1718`, `xrd261`;
+`vjunosswitch26`), from a pinned worktree under `.worktrees/`, after `make build`.
+
+- **Opt-in selectors.** A run that names no platform never deploys them.
+- **Occupancy.** The test takes the lab's single-occupant lock (`/tmp/port49-lab.lock`,
+  `labOccupyForRun`), holds it until `TestMain` has torn the topology down, and refuses to start
+  beside another containerlab topology.
+- **Order of a run.** It first asks the image's help about every statement it types (an addendum
+  to L71). It then enrols the device: the key pair stays on the device, a Junos request is read
+  from a file, and an IOS XE, NX-OS or EOS request is read off the terminal. Last, it runs cells
+  (a)-(j) against port49d, restarted per cell with a `tls_listener:`.
+- **Dialects.** Per-platform lines, asks and enrolment prompts live in `l73_dialect.go`
+  (`l73Dialects`). An unknown prompt is INVALID, with the scrubbed screen in
+  `PORT49_L73_INVALID_DIR`.
+- **Evidence.** Raw captures stay git-ignored in `captures/L73-<platform>/`, outside
+  `make evidence`'s glob: TLS is not `labpcap`'s. The committed evidence is
+  `evidence/L73-<platform>/<cell>.tls.json`, a per-connection summary whose types hold no session
+  bytes. Beside it are the redacted decision log, the device's masked configuration and TLS log
+  lines, and the help exchange.
+- **PKI.** `PORT49_L73_ALG=rsa` switches the lab PKI from ECDSA P-256 to RSA 2048.
