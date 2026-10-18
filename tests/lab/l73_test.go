@@ -1342,36 +1342,40 @@ func (e *l73Env) loadJunos() {
 			}
 		}
 		// The image reads a trusted-ca-group from a folder of CA certificates named
-		// by their subject hash (l73TrustDir); make it and copy the two public
-		// certificates, already on the device, into it.
-		//
-		// PROVISIONAL: this step rests on the RADSEC page by analogy (the TACACS+
-		// page is silent), and attempt 14 measured it refused for the break-glass
-		// user ("Permission denied": the directory needs root or `start shell`).
-		// It fails closed, so every Junos enrol is INVALID here until Ryan rules
-		// on the vJunos root shell (progress.md, "Task 11 attempt 14", HOLD). Do
-		// not re-run it blind, and do not change it to get past the refusal.
+		// by their subject hash (l73TrustDir), and only root can make it
+		// (attempt 14: the break-glass user is refused). Ryan ruled the vJunos
+		// root shell fine for this lab (2026-10-18), so a throwaway root password
+		// is made in this process, set as its crypt hash, and typed only at the
+		// shell's own Password: prompt (l73JunosRoot).
 		e.aaaListing(c, "aaa-before-group")
-		var hashed [][2]string
+		var cas []l73HostCA
 		for _, tc := range trust {
-			h, err := l73SubjectHash(tc.pem)
+			cur, err := l73SubjectHash(tc.pem)
 			if err != nil {
 				return fmt.Errorf("INVALID: %v", err)
 			}
-			hashed = append(hashed, [2]string{tc.path, h})
+			old, err := l73SubjectHashOld(tc.pem)
+			if err != nil {
+				return fmt.Errorf("INVALID: %v", err)
+			}
+			cas = append(cas, l73HostCA{tc.path, cur, old})
 		}
-		folder, err := l73TrustFolderCmds(l73TrustGroup, hashed)
+		pw, err := l73NewRootPassword()
 		if err != nil {
 			return fmt.Errorf("INVALID: %v", err)
 		}
-		for _, cmd := range folder {
-			out, err := junosShow(c, cmd)
-			low := strings.ToLower(out)
-			if err != nil || strings.Contains(low, "error") || strings.Contains(low, "denied") || strings.Contains(low, "cannot") || strings.Contains(low, "no such") {
-				e.invalidScreen("trust-folder", "$ "+cmd+"\n"+out)
-				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
-			}
+		e.secrets = append(e.secrets, pw)
+		hash, err := l73RootHash(pw)
+		if err != nil {
+			return fmt.Errorf("INVALID: %v", err)
 		}
+		e.secrets = append(e.secrets, hash)
+		root, screen, err := l73JunosRoot(c, l73TrustGroup, cas, pw, hash)
+		if err != nil {
+			e.invalidScreen("trust-folder", screen)
+			return fmt.Errorf("INVALID: %s", oneLine(l73MaskAll(l73ScrubLog(hideKeys(err.Error())), pw, hash)))
+		}
+		e.facts = append(e.facts, root.Facts()...)
 		e.aaaListing(c, "aaa-after-folder")
 		// The trust group goes in only now that the CA certificates are loaded.
 		if out, err := junosConfigure(c, l73TrustGroupLines()...); err != nil {

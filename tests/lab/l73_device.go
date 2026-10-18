@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -633,24 +634,107 @@ const (
 	l73InterOnDevice = "/var/tmp/l73-inter.pem"
 )
 
-// l73TrustFolderCmds makes the group's folder on the device and copies each
-// public CA certificate (source path on the device, openssl subject hash) into
-// it as <hash>.0. Only l73RootOnDevice and l73InterOnDevice are accepted as a
-// source (an allowlist: no key, no device certificate, no other path).
-func l73TrustFolderCmds(group string, certs [][2]string) ([]string, error) {
-	dir := l73TrustDir + "/" + group
-	cmds := []string{"file make-directory " + dir}
-	for _, c := range certs {
-		src, hash := c[0], c[1]
-		if !l73HashName.MatchString(hash) {
-			return nil, fmt.Errorf("subject hash %q is not eight lowercase hex digits", hash)
-		}
-		if src != l73RootOnDevice && src != l73InterOnDevice {
-			return nil, fmt.Errorf("%q is not one of the two uploaded CA certificates: nothing else goes into the trust folder", src)
-		}
-		cmds = append(cmds, "file copy "+src+" "+dir+"/"+hash+".0")
+// l73RootCert is one public CA certificate for the trust folder: its path on
+// the device and the file names (openssl subject hashes) it takes there.
+type l73RootCert struct {
+	Src    string
+	Hashes []string
+}
+
+// l73RootTrustCmds are the shell lines typed in the lab-only root shell: the
+// group's folder, each public CA certificate copied into it as <hash>.0, and a
+// listing. Only l73RootOnDevice and l73InterOnDevice are accepted as a source
+// (an allowlist: no key, no device certificate, no other path).
+func l73RootTrustCmds(group string, certs []l73RootCert) ([]string, error) {
+	if !l73GroupName.MatchString(group) {
+		return nil, fmt.Errorf("trust group %q is not a plain lowercase name", group)
 	}
-	return cmds, nil
+	dir := l73TrustDir + "/" + group
+	cmds := []string{"mkdir -p " + dir}
+	for _, c := range certs {
+		if c.Src != l73RootOnDevice && c.Src != l73InterOnDevice {
+			return nil, fmt.Errorf("%q is not one of the two uploaded CA certificates", c.Src)
+		}
+		if len(c.Hashes) == 0 {
+			return nil, fmt.Errorf("%s has no file name", c.Src)
+		}
+		for _, h := range c.Hashes {
+			if !l73HashName.MatchString(h) {
+				return nil, fmt.Errorf("%q is not an eight-digit lowercase hex subject hash", h)
+			}
+			cmds = append(cmds, "cp "+c.Src+" "+dir+"/"+h+".0")
+		}
+	}
+	return append(cmds, "ls -l "+dir), nil
+}
+
+var l73GroupName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// l73HashNames is the folder file names for one CA: openssl's subject hash
+// when the device's own openssl vouched for it, both the current and the
+// pre-1.0 hash when the device has no openssl to ask.
+func l73HashNames(deviceHasOpenSSL bool, current, old string) []string {
+	if deviceHasOpenSSL || old == current {
+		return []string{current}
+	}
+	return []string{current, old}
+}
+
+// l73ParseWhich reads `which openssl` from a root shell: true only when it
+// printed a path.
+func l73ParseWhich(out string) bool {
+	for _, ln := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "/") && !strings.Contains(ln, " ") {
+			return true
+		}
+	}
+	return false
+}
+
+// l73ParseHash is the eight-hex subject hash a shell command printed, or "".
+func l73ParseHash(out string) string {
+	for _, ln := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
+		if ln = strings.TrimSpace(ln); l73HashName.MatchString(ln) {
+			return ln
+		}
+	}
+	return ""
+}
+
+// l73NewRootPassword is a random per-run password for the root shell.
+func l73NewRootPassword() (string, error) {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i, v := range b {
+		b[i] = alphabet[int(v)%len(alphabet)]
+	}
+	return string(b), nil
+}
+
+// l73RootHash is the sha512-crypt hash of pw, made by `openssl passwd -6
+// -stdin` so the password is never an argument.
+func l73RootHash(pw string) (string, error) {
+	cmd := exec.Command("openssl", "passwd", "-6", "-stdin")
+	cmd.Stdin = strings.NewReader(pw)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", errors.New("openssl passwd -6 failed")
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// l73MaskAll replaces each non-empty secret in s.
+func l73MaskAll(s string, secrets ...string) string {
+	for _, sec := range secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "<secret>")
+		}
+	}
+	return s
 }
 
 // l73SubjectHash is openssl's `x509 -noout -subject_hash` of a public
@@ -841,3 +925,31 @@ func l73LogScreen(text string) string {
 	text = strings.ReplaceAll(text, labcreds.BreakglassPassword, "<password>")
 	return l71MaskExchange(l73ScrubLog(l73DropPEM(text)))
 }
+
+// l73SubjectHashOld is openssl's pre-1.0 subject hash, the other name a
+// device's openssl may look for.
+func l73SubjectHashOld(certPEM []byte) (string, error) {
+	cmd := exec.Command("openssl", "x509", "-noout", "-subject_hash_old")
+	cmd.Stdin = bytes.NewReader(certPEM)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", errors.New("openssl x509 -subject_hash_old failed")
+	}
+	h := strings.TrimSpace(string(out))
+	if !l73HashName.MatchString(h) {
+		return "", fmt.Errorf("openssl printed %q, not a subject hash", h)
+	}
+	return h, nil
+}
+
+// l73RootCmdAllowed is the guard in front of every line typed in the root
+// shell: the lab-only root shell runs these forms and nothing else.
+func l73RootCmdAllowed(cmd string) bool {
+	return l73RootCmdForms.MatchString(cmd)
+}
+
+var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit` +
+	`|openssl x509 -noout -subject_hash(_old)? -in (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `)` +
+	`|mkdir -p ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
+	`|ls -l ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
+	`|cp (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `) ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*/[0-9a-f]{8}\.0)$`)

@@ -503,31 +503,102 @@ func TestL73JunosDiagAsksEndAtTheirPosition(t *testing.T) {
 	}
 }
 
-func TestL73TrustFolderCmds(t *testing.T) {
-	got, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/l73-root.pem", "0a1b2c3d"}, {"/var/tmp/l73-inter.pem", "ffeeddcc"}})
+func TestL73RootTrustCmds(t *testing.T) {
+	got, err := l73RootTrustCmds("l73-trust", []l73RootCert{{"/var/tmp/l73-root.pem", []string{"0a1b2c3d"}},
+		{"/var/tmp/l73-inter.pem", []string{"ffeeddcc", "11223344"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"file make-directory /var/db/aaa_certs/tacplus_tls/l73-trust",
-		"file copy /var/tmp/l73-root.pem /var/db/aaa_certs/tacplus_tls/l73-trust/0a1b2c3d.0",
-		"file copy /var/tmp/l73-inter.pem /var/db/aaa_certs/tacplus_tls/l73-trust/ffeeddcc.0",
+		"mkdir -p /var/db/aaa_certs/tacplus_tls/l73-trust",
+		"cp /var/tmp/l73-root.pem /var/db/aaa_certs/tacplus_tls/l73-trust/0a1b2c3d.0",
+		"cp /var/tmp/l73-inter.pem /var/db/aaa_certs/tacplus_tls/l73-trust/ffeeddcc.0",
+		"cp /var/tmp/l73-inter.pem /var/db/aaa_certs/tacplus_tls/l73-trust/11223344.0",
+		"ls -l /var/db/aaa_certs/tacplus_tls/l73-trust",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q want %q", got, want)
 	}
-	for _, bad := range []string{"", "0A1B2C3D", "0a1b2c3", "0a1b2c3d4", "../../etc", "0a1b2c3z"} {
-		if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/x.pem", bad}}); err == nil {
+	for _, bad := range []string{"", "0A1B2C3D", "0a1b2c3", "0a1b2c3d4", "../../etc", "0a1b2c3z", "0a1b2c3d;id"} {
+		if _, err := l73RootTrustCmds("l73-trust", []l73RootCert{{"/var/tmp/l73-root.pem", []string{bad}}}); err == nil {
 			t.Errorf("hash %q accepted", bad)
 		}
+	}
+	if _, err := l73RootTrustCmds("l73-trust", []l73RootCert{{"/var/tmp/l73-root.pem", nil}}); err == nil {
+		t.Error("a certificate with no file name was accepted")
 	}
 	// Only the two uploaded public CA certificates can be a source: not a
 	// key, not the device certificate, not any other path.
 	for _, src := range []string{"/var/tmp/l73-dev.key", "/var/tmp/l73-dev.crt", "/var/tmp/other.pem", "/var/tmp/l73-root.pem.key",
-		"/var/tmp/../tmp/l73-root.pem", "l73-root.pem", ""} {
-		if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{src, "0a1b2c3d"}}); err == nil {
+		"/var/tmp/../tmp/l73-root.pem", "l73-root.pem", "", "/var/tmp/l73-root.pem; cat /var/db/certd/key-pair/x"} {
+		if _, err := l73RootTrustCmds("l73-trust", []l73RootCert{{src, []string{"0a1b2c3d"}}}); err == nil {
 			t.Errorf("source %q accepted", src)
 		}
+	}
+	for _, group := range []string{"", "../x", "a b", "a;b", "A"} {
+		if _, err := l73RootTrustCmds(group, []l73RootCert{{"/var/tmp/l73-root.pem", []string{"0a1b2c3d"}}}); err == nil {
+			t.Errorf("group %q accepted", group)
+		}
+	}
+}
+
+func TestL73HashNamesAndShellParsing(t *testing.T) {
+	if got := l73HashNames(true, "aaaaaaaa", "bbbbbbbb"); !slices.Equal(got, []string{"aaaaaaaa"}) {
+		t.Errorf("with a device openssl: %q", got)
+	}
+	if got := l73HashNames(false, "aaaaaaaa", "bbbbbbbb"); !slices.Equal(got, []string{"aaaaaaaa", "bbbbbbbb"}) {
+		t.Errorf("without one: %q", got)
+	}
+	if got := l73HashNames(false, "aaaaaaaa", "aaaaaaaa"); !slices.Equal(got, []string{"aaaaaaaa"}) {
+		t.Errorf("equal hashes are placed once: %q", got)
+	}
+	if !l73ParseWhich("which openssl\r\n/usr/bin/openssl\r\nroot@srx1:~ # ") || l73ParseWhich("which openssl\r\nopenssl: Command not found.\r\n# ") {
+		t.Error("which openssl misread")
+	}
+	if got := l73ParseHash("openssl x509 -noout -subject_hash -in /var/tmp/l73-root.pem\r\n0a1b2c3d\r\n# "); got != "0a1b2c3d" {
+		t.Errorf("hash %q", got)
+	}
+	if got := l73ParseHash("openssl: error\r\n"); got != "" {
+		t.Errorf("hash %q from an error", got)
+	}
+}
+
+func TestL73RootPasswordAndHash(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("no openssl on this host")
+	}
+	a, err := l73NewRootPassword()
+	b, _ := l73NewRootPassword()
+	if err != nil || len(a) < 20 || a == b || !regexp.MustCompile(`^[0-9A-Za-z]+$`).MatchString(a) {
+		t.Fatalf("passwords: %d bytes, equal %v, err %v", len(a), a == b, err)
+	}
+	h, err := l73RootHash(a)
+	if err != nil || !regexp.MustCompile(`^\$6\$[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}$`).MatchString(h) {
+		t.Fatalf("hash shape wrong (err %v)", err)
+	}
+	if strings.Contains(h, a) {
+		t.Fatal("the hash holds the password")
+	}
+}
+
+func TestL73MaskAll(t *testing.T) {
+	got := l73MaskAll("a SECRET b SECRET2 c", "SECRET", "", "SECRET2")
+	if strings.Contains(got, "SECRET") || !strings.HasPrefix(got, "a ") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestL73SubjectHashOldIsOpenSSLs(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("no openssl on this host")
+	}
+	pki, err := l73NewPKI("ecdsa", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := l73SubjectHashOld(pki.Root.PEM())
+	if err != nil || !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(o) {
+		t.Fatalf("%q %v", o, err)
 	}
 }
 
@@ -637,5 +708,28 @@ func TestL73TrustGroupComesAfterTheCALoads(t *testing.T) {
 	enrol, cellA := first(test, "enrol"), first(test, "cellA")
 	if enrol == 0 || cellA == 0 || enrol > cellA {
 		t.Fatalf("TestL73: enrol (which loads the CAs and commits the group) must precede cellA (the first tacplus tls line)")
+	}
+}
+
+func TestL73RootCmdAllowed(t *testing.T) {
+	d := "/var/db/aaa_certs/tacplus_tls/l73-trust"
+	for _, ok := range []string{"which openssl", "exit",
+		"openssl x509 -noout -subject_hash -in /var/tmp/l73-root.pem",
+		"openssl x509 -noout -subject_hash_old -in /var/tmp/l73-inter.pem",
+		"mkdir -p " + d, "ls -l " + d,
+		"cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0", "cp /var/tmp/l73-inter.pem " + d + "/ffeeddcc.0"} {
+		if !l73RootCmdAllowed(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", "id", "cat /var/db/certd/key-pair/x", "sh", "ls -l /var/db", "ls -l " + d + "; id",
+		"cp /var/tmp/l73-dev.key " + d + "/0a1b2c3d.0", "cp /var/tmp/l73-root.pem " + d + "/0A1B2C3D.0",
+		"cp /var/tmp/l73-root.pem /etc/master.passwd", "cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0 /tmp",
+		"mkdir -p /var/db/aaa_certs/tacplus_tls/../x", "mkdir -p /var/tmp/x", "rm -rf " + d, "cp /var/db/certd/x " + d + "/0a1b2c3d.0",
+		"openssl x509 -noout -subject_hash -in /var/db/certd/key-pair/x", "openssl rsa -in /var/tmp/l73-root.pem", "exit; id",
+		"which openssl\nid"} {
+		if l73RootCmdAllowed(bad) {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }
