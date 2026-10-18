@@ -117,6 +117,7 @@ type l73Env struct {
 	touched   bool
 	bridge    bool
 	cfg       string // port49d's config now: the last daemon() call's, "" for the standing one
+	listen    string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
 }
 
 func TestL73(t *testing.T) {
@@ -500,6 +501,7 @@ func (e *l73Env) daemon(name string, o l73Daemon) {
 		e.t.Fatalf("INVALID: %v", err)
 	}
 	e.cfg = e.write("port49d-"+name+".yaml", []byte(cfg))
+	e.listen = o.Listen
 	if err := e.l.stopDaemon(); err != nil {
 		e.t.Fatalf("INVALID: stopping port49d for %s: %v", name, err)
 	}
@@ -523,6 +525,8 @@ func (e *l73Env) startOn() {
 		path = p
 	}
 	off := fileSize(e.l.errPath)
+	healthListen = e.listen
+	defer func() { healthListen = "" }()
 	if err := e.l.startDaemonWith(path, true); err != nil {
 		e.t.Fatalf("INVALID: starting port49d on %s: %v", filepath.Base(path), err)
 	}

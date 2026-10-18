@@ -568,3 +568,14 @@ func TestL73DescribeSignsAndTagsEarlyConnections(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Cell j2 moves the plain listener to 172.100.100.2:49; the start gate dials
+// that address, not the standing .1:49 nothing listens on then.
+func TestL73HealthAddrFollowsTheMovedListener(t *testing.T) {
+	if got := l73HealthAddr("172.100.100.1:49", ""); got != "172.100.100.1:49" {
+		t.Fatal(got)
+	}
+	if got := l73HealthAddr("172.100.100.1:49", "172.100.100.2:49"); got != "172.100.100.2:49" {
+		t.Fatal(got)
+	}
+}

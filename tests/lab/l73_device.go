@@ -697,3 +697,14 @@ func l73DeviceAlert(conns []l73Conn) (l73Alert, bool) {
 	}
 	return l73Alert{}, false
 }
+
+// l73HealthAddr is where the start gate dials for port49d's RFC 8907
+// listener: the cell's own Listen address when it moved the listener, else
+// the standing one. Cell j2 binds 172.100.100.2:49 and nothing on .1:49, so
+// the standing address never answers.
+func l73HealthAddr(standing, listen string) string {
+	if listen != "" {
+		return listen
+	}
+	return standing
+}

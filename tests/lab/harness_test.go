@@ -1283,13 +1283,17 @@ func daemonHealthy() bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second)
+	c, err := net.DialTimeout("tcp", l73HealthAddr(tacacsAddr, healthListen), 2*time.Second)
 	if err != nil {
 		return false
 	}
 	c.Close()
 	return true
 }
+
+// healthListen is the RFC 8907 address a TestL73 cell moved port49d's plain
+// listener to (cell j2's .2:49); "" keeps tacacsAddr. Set around the start only.
+var healthListen string
 
 // waitSSH waits for the device's SSH to answer with a banner. It deliberately
 // does not attempt authentication: an auth attempt against a device whose AAA
