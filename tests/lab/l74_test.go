@@ -312,9 +312,13 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 	for i := 1; i <= 3; i++ {
 		dcfg := write(fmt.Sprintf("r%d-port49d.yaml", i), w.daemonYAML(i))
 		bcfg := write(fmt.Sprintf("r%d-port49-broker.yaml", i), w.brokerYAML(i))
-		out, err := exec.Command(w.port49d, "store-roles", "--config", dcfg, "--broker-config", bcfg).CombinedOutput()
+		// The configs resolve their secret_env at load: the keys are in the
+		// command's environment, never on its argv.
+		sr := exec.Command(w.port49d, "store-roles", "--config", dcfg, "--broker-config", bcfg)
+		sr.Env = append(os.Environ(), "L74_ENC_KEY="+w.encKey, "L74_TACACS_KEY="+w.tacacsKey)
+		out, err := sr.CombinedOutput()
 		if err != nil {
-			t.Fatalf("INVALID: port49d store-roles for region %d: %v\n%s", i, err, out)
+			t.Fatalf("INVALID: port49d store-roles for region %d: %v\n%s", i, err, w.leakless(string(out)))
 		}
 		s := w.sess[i]
 		ctl := map[string]func(args ...string) (string, error){
@@ -445,12 +449,22 @@ func TestRegions(t *testing.T) {
 	l74CellH(w, row)
 	guard()
 	l74CellI(w, row)
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	sortRows(rows)
 	writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
+	// L74's disagreements do not stop L75: both notes are written, then the test fails.
 	disagree := disagreeingCells(rows)
+	guard()
+	if d75 := l75(t, w); len(d75) > 0 {
+		disagree = append(disagree, "L75:"+strings.Join(d75, ",L75:"))
+	}
 	if len(disagree) > 0 {
 		t.Fatalf("cells %v disagree with decision 51: the note records what was observed", disagree)
 	}
+}
+
+// sortRows orders rows by cell id.
+func sortRows(rows []regionRow) {
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 }
 
 func l74CellA(w *regionWorld, row func(id, claim, observed string, agrees bool)) {

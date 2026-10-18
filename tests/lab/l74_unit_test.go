@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -370,5 +372,114 @@ func TestRegionPathsResolveUnderTheRepoRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r, "go.mod")); err != nil {
 		t.Errorf("repoRoot %q holds no go.mod", r)
+	}
+}
+
+// L75's broker config loads as port49-broker's, in both identities: the
+// password one for (a) to (f), the provider one for (g).
+func TestL75BrokerConfigLoads(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("L74_ENC_KEY", labEncKeyDefault)
+	t.Setenv("LAB_DIRECTORY_BIND_PASSWORD", "unit-test-bind-password")
+	x := l67TestDir(t, platOpenLDAP)
+	p := newRegionPKI(t)
+	for _, files := range []string{"ca.pem", "users-ca.pem", "issuer-ca.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, files),
+			[]byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, provider := range []bool{false, true} {
+		o := l75Opts{i: 2, dir: dir, x: x, pki: p, session: "127.0.0.1:2579", usersCA: filepath.Join(dir, "users-ca.pem"),
+			issuer: "https://127.0.0.1:9", issuerCA: filepath.Join(dir, "issuer-ca.pem"), provider: provider}
+		path := filepath.Join(dir, fmt.Sprintf("b2-%v.yaml", provider))
+		if err := os.WriteFile(path, []byte(l75BrokerYAML(o)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadBroker(path)
+		if err != nil {
+			t.Fatalf("provider %v: %v\n%s", provider, err, l75BrokerYAML(o))
+		}
+		if cfg.Stores.Shared || cfg.Broker.Directory == nil {
+			t.Fatalf("provider %v: a split with a directory, got shared %v", provider, cfg.Stores.Shared)
+		}
+		if got := cfg.Broker.Identity.PasswordSignIn != nil; got == provider {
+			t.Fatalf("provider %v: password sign-in %v", provider, got)
+		}
+	}
+}
+
+// A logout token names the provider, the client, the session and the
+// back-channel event, as Keycloak's does (L45).
+func TestL75LogoutTokenClaims(t *testing.T) {
+	c := l75LogoutClaims("https://idp.example", "port49-cli", "s-1", "jti-1", time.Unix(1000, 0))
+	if c["iss"] != "https://idp.example" || c["aud"] != "port49-cli" || c["sid"] != "s-1" || c["jti"] != "jti-1" {
+		t.Fatalf("%v", c)
+	}
+	if _, ok := c["events"].(map[string]any)[oidc.BackchannelLogoutEvent]; !ok {
+		t.Fatalf("no back-channel event: %v", c)
+	}
+}
+
+// The config names the bind password and the keys by environment variable and
+// holds none of them; through the proxies the directory endpoints are b3's own.
+func TestL75BrokerYAMLHoldsNoSecret(t *testing.T) {
+	x := l67TestDir(t, platOpenLDAP)
+	o := l75Opts{i: 3, dir: t.TempDir(), x: x, pki: newRegionPKI(t), session: "127.0.0.1:2579", usersCA: "/u.pem",
+		directory: []string{"127.0.0.1:7001", "127.0.0.1:7002", "127.0.0.1:7003"}}
+	y := l75BrokerYAML(o)
+	if strings.Contains(y, x.d.password) {
+		t.Error("the config holds the directory bind password")
+	}
+	if !strings.Contains(y, "password_env: LAB_DIRECTORY_BIND_PASSWORD") || !strings.Contains(y, "secret_env: L74_ENC_KEY") {
+		t.Error("the config does not name the secrets by environment variable")
+	}
+	if !strings.Contains(y, "https://127.0.0.1:7002") || strings.Contains(y, regionIP(1)+":2379") {
+		t.Error("b3's directory endpoints are not the proxies'")
+	}
+}
+
+// The env file takes any pairs, quoted, in a 0600 file; the L75 file holds the
+// bind password the config names.
+func TestWriteEnvFileQuotesAndRestricts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.env")
+	if err := writeEnvFile(path, [2]string{"A", "it's $x"}, [2]string{"B", "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("not a 0600 file: %v", err)
+	}
+	raw, _ := os.ReadFile(path)
+	if string(raw) != "A='it'\\''s $x'\nB='plain'\n" {
+		t.Fatal("the env file is not the quoted pairs")
+	}
+}
+
+// No cell passes for want of its positive control: each judge refuses a
+// control that failed, whatever the negative reads.
+func TestL75JudgesRequireTheirControls(t *testing.T) {
+	ok, bad := 200, 500
+	// (a) the replay at b2 is refused, and b2 accepts a fresh code.
+	if !l75JudgeA(ok, 401, ok) || l75JudgeA(bad, 401, ok) || l75JudgeA(ok, 401, bad) || l75JudgeA(ok, ok, ok) {
+		t.Error("judge a")
+	}
+	// (c) locked for real (a valid code refused with 429 before the unlock), unlocked, judged afresh.
+	if !l75JudgeC(3, 429, 0, ok) || l75JudgeC(-1, 429, 0, ok) || l75JudgeC(3, ok, 0, ok) || l75JudgeC(3, 429, 1, ok) || l75JudgeC(3, 429, 0, 429) {
+		t.Error("judge c")
+	}
+	// (d) every broker locked.
+	if !l75JudgeD([]int{5, 5, 5}) || l75JudgeD([]int{5, -1, 5}) || l75JudgeD(nil) {
+		t.Error("judge d")
+	}
+	// (e) the cut took (status exit 3), sign-in 503 store_unavailable, unlock and reset refused, healed.
+	if !l75JudgeE(3, 503, "store_unavailable", 1, 1, true) || l75JudgeE(0, 503, "store_unavailable", 1, 1, true) ||
+		l75JudgeE(3, 503, "other", 1, 1, true) || l75JudgeE(3, 503, "store_unavailable", 0, 1, true) ||
+		l75JudgeE(3, 503, "store_unavailable", 1, 1, false) {
+		t.Error("judge e")
+	}
+	// (g) mint before, logout accepted, then credential_revoked.
+	if !l75JudgeG(ok, ok, "credential_revoked") || l75JudgeG(bad, ok, "credential_revoked") || l75JudgeG(ok, ok, "not refused") {
+		t.Error("judge g")
 	}
 }

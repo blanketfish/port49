@@ -245,7 +245,16 @@ func pidWrap(pidfile, envFile string, argv []string) []string {
 // single-quoted, so the shell that sources the file takes it as data.
 func writeRegionEnv(dir, encKey, tacacsKey string) (string, error) {
 	path := filepath.Join(dir, "run.env")
-	return path, os.WriteFile(path, []byte("L74_ENC_KEY="+shellQuote(encKey)+"\nL74_TACACS_KEY="+shellQuote(tacacsKey)+"\n"), 0o600)
+	return path, writeEnvFile(path, [2]string{"L74_ENC_KEY", encKey}, [2]string{"L74_TACACS_KEY", tacacsKey})
+}
+
+// writeEnvFile writes NAME='value' lines to a 0600 file, each value single-quoted.
+func writeEnvFile(path string, kv ...[2]string) error {
+	var b strings.Builder
+	for _, p := range kv {
+		b.WriteString(p[0] + "=" + shellQuote(p[1]) + "\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
 // cmdlineHasArgs is whether a /proc cmdline (NUL-separated) holds want as
