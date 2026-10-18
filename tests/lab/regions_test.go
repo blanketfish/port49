@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -71,11 +72,16 @@ func regionNetUp() [][]string {
 }
 
 // regionNetDown removes the network; each is run and its error ignored, so
-// what an interrupted run left is removed too. A namespace's veth goes with it.
+// what an interrupted run left is removed too.
 func regionNetDown() [][]string {
 	var cmds [][]string
 	for i := 1; i <= 3; i++ {
 		cmds = append(cmds, []string{"ip", "netns", "del", regionNS(i)})
+	}
+	// A namespace that still held a process when it was deleted leaves the
+	// host side of its veth behind; the next run's `ip link add` would fail.
+	for i := 1; i <= 3; i++ {
+		cmds = append(cmds, []string{"ip", "link", "del", regionNS(i) + "h"})
 	}
 	return append(cmds, []string{"ip", "link", "del", regionBridge})
 }
@@ -186,7 +192,7 @@ func (e *regionEtcd) argv() []string {
 		"--listen-peer-urls", "http://" + e.peer, "--initial-advertise-peer-urls", "http://" + e.peer,
 		"--initial-cluster", e.cluster, "--initial-cluster-state", "new",
 		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth"}
-	a = pidWrap(e.pidfile(), a)
+	a = pidWrap(e.pidfile(), "", a)
 	if e.ns != "" {
 		return inNS(e.ns, nil, a...)
 	}
@@ -214,28 +220,32 @@ func (e *regionEtcd) start(t *testing.T) {
 	t.Cleanup(e.stop)
 }
 
-// stop ends the member: the signal goes to sudo, which passes it on; past
-// 15s the recorded PID is killed, if /proc/<pid>/cmdline still names this
-// member's data directory. Nothing is ever ended by a pattern.
+// stop ends the member by its recorded PID (stopRecorded): SIGTERM, then
+// SIGKILL past the grace period, each only while /proc/<pid>/cmdline still
+// names this member's data directory. Nothing is ever ended by a pattern.
 func (e *regionEtcd) stop() {
 	if e.cmd == nil || e.cmd.Process == nil {
 		return
 	}
-	e.cmd.Process.Signal(os.Interrupt)
-	select {
-	case <-e.done:
-	case <-time.After(15 * time.Second):
-		forceStop(e.name, e.pidfile(), "--data-dir", e.data)
-		<-e.done
-	}
+	stopRecorded(e.name, e.done, e.pidfile(), "--data-dir", e.data)
 	e.cmd = nil
 }
 
 // pidWrap is argv run so its real PID is recorded: sh writes its own PID to
-// pidfile and execs argv, so the PID is the program's, not sudo's. It runs
-// as this user, in the run's 0700 directory.
-func pidWrap(pidfile string, argv []string) []string {
-	return append([]string{"sh", "-c", `echo $$ > "$0"; exec "$@"`, pidfile}, argv...)
+// pidfile, sources envFile when there is one (so the run's keys never travel
+// on argv, which sudo logs and /proc shows) and execs argv, so the PID is the
+// program's, not sudo's. It runs as this user.
+func pidWrap(pidfile, envFile string, argv []string) []string {
+	const script = `echo $$ > "$0"; if [ -n "$1" ]; then set -a; . "$1"; set +a; fi; shift; exec "$@"`
+	return append([]string{"sh", "-c", script, pidfile, envFile}, argv...)
+}
+
+// writeRegionEnv writes the run's two keys to a 0600 file in dir (the run's
+// 0700 directory) for pidWrap to source, and answers its path. The values are
+// hex, so the file needs no quoting.
+func writeRegionEnv(dir, encKey, tacacsKey string) (string, error) {
+	path := filepath.Join(dir, "run.env")
+	return path, os.WriteFile(path, []byte("L74_ENC_KEY="+encKey+"\nL74_TACACS_KEY="+tacacsKey+"\n"), 0o600)
 }
 
 // cmdlineHasArgs is whether a /proc cmdline (NUL-separated) holds want as
@@ -274,14 +284,46 @@ func killRecorded(procRoot, pidfile string, want []string, kill func(pid int) er
 	return ""
 }
 
-// forceStop is the stop past the grace period: SIGKILL to the recorded PID
-// when its cmdline still names the process, a logged skip otherwise.
-func forceStop(name, pidfile string, want ...string) {
-	why := killRecorded("/proc", pidfile, want, func(pid int) error {
-		return exec.Command("sudo", "-n", "kill", "-KILL", strconv.Itoa(pid)).Run()
-	})
-	if why != "" {
-		fmt.Fprintf(os.Stderr, "lab: %s did not stop in 15s; not killed: %s\n", name, why)
+// The stop's two waits: how long a SIGTERMed process has before SIGKILL, and
+// how long the run waits on a process it could not end, before it reports and
+// goes on. Variables so a unit test shortens them.
+var (
+	stopGrace = 15 * time.Second
+	stopBound = 10 * time.Second
+)
+
+// stopRecorded ends a process this harness started, by the PID its wrapper
+// recorded: SIGTERM, then SIGKILL after stopGrace, each only when
+// /proc/<pid>/cmdline still holds want. The program runs as this user, so no
+// sudo is needed. A refusal is logged and the wait is bounded by stopBound:
+// a declined stop never hangs the run.
+func stopRecorded(name string, done <-chan struct{}, pidfile string, want ...string) {
+	signal := func(sig syscall.Signal) string {
+		return killRecorded("/proc", pidfile, want, func(pid int) error { return syscall.Kill(pid, sig) })
+	}
+	wait := func(d time.Duration) bool {
+		select {
+		case <-done:
+			return true
+		case <-time.After(d):
+			return false
+		}
+	}
+	if why := signal(syscall.SIGTERM); why != "" {
+		fmt.Fprintf(os.Stderr, "lab: %s: not signalled: %s\n", name, why)
+		if !wait(stopBound) {
+			fmt.Fprintf(os.Stderr, "lab: %s: still running after %v; going on\n", name, stopBound)
+		}
+		return
+	}
+	if wait(stopGrace) {
+		return
+	}
+	if why := signal(syscall.SIGKILL); why != "" {
+		fmt.Fprintf(os.Stderr, "lab: %s: not killed after %v: %s\n", name, stopGrace, why)
+	}
+	if !wait(stopBound) {
+		fmt.Fprintf(os.Stderr, "lab: %s: still running after SIGKILL and %v; going on\n", name, stopBound)
 	}
 }
 
@@ -301,7 +343,7 @@ func (e *regionEtcd) ctl(endpoints string, args ...string) (string, error) {
 // regionProc is port49d or port49-broker, in namespace ns ("" for the host).
 type regionProc struct {
 	name, ns, bin, cfg, log string
-	env                     []string
+	envFile                 string // sourced by the wrapper; "" for none
 	cmd                     *exec.Cmd
 	done                    chan struct{}
 	from                    int64 // the log's size at the last start
@@ -316,14 +358,8 @@ func (p *regionProc) start(t *testing.T) {
 	if fi, err := lf.Stat(); err == nil {
 		p.from = fi.Size()
 	}
-	a := pidWrap(p.pidfile(), []string{p.bin, "--config", p.cfg})
-	if p.ns != "" {
-		a = inNS(p.ns, p.env, a...)
-	}
+	a := p.argv()
 	p.cmd = exec.Command(a[0], a[1:]...)
-	if p.ns == "" {
-		p.cmd.Env = append(os.Environ(), p.env...)
-	}
 	p.cmd.Stdout, p.cmd.Stderr = lf, lf
 	if err := p.cmd.Start(); err != nil {
 		lf.Close()
@@ -334,26 +370,37 @@ func (p *regionProc) start(t *testing.T) {
 	go func(cmd *exec.Cmd) { cmd.Wait(); lf.Close(); close(done) }(p.cmd)
 }
 
+// argv is the command that runs the process: the keys are in envFile, which
+// the wrapper sources, so argv names the file and holds no key.
+func (p *regionProc) argv() []string {
+	a := pidWrap(p.pidfile(), p.envFile, []string{p.bin, "--config", p.cfg})
+	if p.ns != "" {
+		a = inNS(p.ns, nil, a...)
+	}
+	return a
+}
+
 // pidfile holds the process's real PID, written by the command that execs it.
 func (p *regionProc) pidfile() string { return p.cfg + ".pid" }
 
-// stop ends the process as etcd's member is ended: past 15s, by its recorded
-// PID, if /proc/<pid>/cmdline still names its config.
+// stop ends the process as etcd's member is ended (stopRecorded), by its
+// recorded PID, while /proc/<pid>/cmdline still names its config.
 func (p *regionProc) stop() {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return
 	}
-	p.cmd.Process.Signal(os.Interrupt)
-	select {
-	case <-p.done:
-	case <-time.After(15 * time.Second):
-		forceStop(p.name, p.pidfile(), "--config", p.cfg)
-		<-p.done
-	}
+	stopRecorded(p.name, p.done, p.pidfile(), "--config", p.cfg)
 	p.cmd = nil
 }
 
-// said is what the process wrote since its last start.
+// mark moves the point `said` and `wait` read from to the log's end now.
+func (p *regionProc) mark() {
+	if fi, err := os.Stat(p.log); err == nil {
+		p.from = fi.Size()
+	}
+}
+
+// said is what the process wrote since its last start (or mark).
 func (p *regionProc) said() string {
 	raw, _ := os.ReadFile(p.log)
 	if int64(len(raw)) < p.from {

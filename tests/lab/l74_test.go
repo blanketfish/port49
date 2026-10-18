@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +69,9 @@ type regionWorld struct {
 	// before every cell.
 	home  string
 	guard func()
+	// envFile holds the two keys (0600, in the run directory); the wrapper
+	// sources it, so no key is on any argv.
+	envFile string
 	// leaks are further checks a note and each evidence line must pass:
 	// L75 adds the TOTP secrets' and codes' (l67Secrets.leaksIn).
 	leaks []func(string) bool
@@ -79,8 +83,31 @@ func (w *regionWorld) hold(secret string) {
 	w.secrets = append(w.secrets, secret)
 }
 
-func (w *regionWorld) env() []string {
-	return []string{"L74_ENC_KEY=" + w.encKey, "L74_TACACS_KEY=" + w.tacacsKey}
+// leaky is whether a line holds a held secret or fails a further leak check.
+func (w *regionWorld) leaky(l string) bool {
+	w.mu.Lock()
+	secrets := append([]string(nil), w.secrets...)
+	w.mu.Unlock()
+	if len(labcreds.Contains([]byte(l), secrets)) > 0 {
+		return true
+	}
+	for _, leak := range w.leaks {
+		if leak(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// leakless is s without every line that is leaky: what may go to the test log.
+func (w *regionWorld) leakless(s string) string {
+	var kept []string
+	for _, l := range strings.Split(s, "\n") {
+		if !w.leaky(l) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func (w *regionWorld) client(i int) regionClient {
@@ -127,6 +154,11 @@ func (w *regionWorld) session(i int) error {
 	}
 	if st, _, err := w.client(i).command("alice"); err != nil || st != "permit" {
 		return fmt.Errorf("region %d session authorization: %s %v", i, st, err)
+	}
+	// The session's command is permitted now: a later denial is the
+	// revocation's, not the policy's.
+	if st, _, err := w.client(i).command("alice", "show", "version"); err != nil || st != "permit" {
+		return fmt.Errorf("region %d command before the revocation: %s %v", i, st, err)
 	}
 	return nil
 }
@@ -175,6 +207,22 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 	w.encKey, w.tacacsKey = randomHex(t, 16), randomHex(t, 12)
 	w.hold(w.encKey)
 	w.hold(w.tacacsKey)
+	if w.envFile, err = writeRegionEnv(dir, w.encKey, w.tacacsKey); err != nil {
+		t.Fatalf("INVALID: writing the run's key file: %v", err)
+	}
+
+	// One run at a time: the pre-clean below deletes the namespaces, which
+	// would tear down another run's network. The kernel drops the lock if this
+	// process dies.
+	home, herr := os.UserHomeDir()
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	release, lerr := winLock(filepath.Join(home, ".cache", "port49-lab", "regions.lock"))
+	if lerr != nil {
+		t.Fatalf("another L74 run holds the lab (regions.lock): %v", lerr)
+	}
+	t.Cleanup(release)
 
 	_ = sudoRun(regionNetDown(), true)
 	if err := sudoRun(regionNetUp(), false); err != nil {
@@ -240,9 +288,9 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 		}
 		applyRoles(t, string(out), ctl)
 		w.brokers[i] = &regionProc{name: fmt.Sprintf("port49-broker r%d", i), ns: regionNS(i), bin: w.broker,
-			cfg: bcfg, log: filepath.Join(dir, fmt.Sprintf("r%d-broker.log", i)), env: w.env()}
+			cfg: bcfg, log: filepath.Join(dir, fmt.Sprintf("r%d-broker.log", i)), envFile: w.envFile}
 		w.daemons[i] = &regionProc{name: fmt.Sprintf("port49d r%d", i), ns: regionNS(i), bin: w.port49d,
-			cfg: dcfg, log: filepath.Join(dir, fmt.Sprintf("r%d-port49d.log", i)), env: w.env()}
+			cfg: dcfg, log: filepath.Join(dir, fmt.Sprintf("r%d-port49d.log", i)), envFile: w.envFile}
 	}
 	for _, procs := range [][4]*regionProc{w.brokers, w.daemons} {
 		for i := 1; i <= 3; i++ {
@@ -250,7 +298,7 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 			p.start(t)
 			t.Cleanup(p.stop)
 			if _, err := p.wait("listening on", 60*time.Second); err != nil {
-				t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
+				t.Fatalf("INVALID: %v\n%s", err, w.leakless(tailOf(p.said(), 2000)))
 			}
 		}
 	}
@@ -350,7 +398,11 @@ func TestRegions(t *testing.T) {
 	l74CellH(w, row)
 	guard()
 	l74CellI(w, row)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 	writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
+	if len(rows) == 0 {
+		t.Fatal("INVALID: the run produced no rows")
+	}
 }
 
 func l74CellA(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
@@ -359,9 +411,10 @@ func l74CellA(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	for i := 1; i <= 3; i++ {
 		st, took, err := w.client(i).login("alice", w.mint(i))
 		cst, ctook, cerr := w.client(i).command("alice")
-		parts = append(parts, fmt.Sprintf("region %d: login %s in %v, session authorization %s in %v",
-			i, st, took.Round(time.Millisecond), cst, ctook.Round(time.Millisecond)))
-		ok = ok && err == nil && cerr == nil && st == "pass" && cst == "permit"
+		vst, vtook, verr := w.client(i).command("alice", "show", "version")
+		parts = append(parts, fmt.Sprintf("region %d: login %s in %v, session authorization %s in %v, command %s in %v",
+			i, st, took.Round(time.Millisecond), cst, ctook.Round(time.Millisecond), vst, vtook.Round(time.Millisecond)))
+		ok = ok && err == nil && cerr == nil && verr == nil && st == "pass" && cst == "permit" && vst == "permit"
 	}
 	out, _ := exec.Command("sudo", "-n", "ip", "netns", "exec", regionNS(1), "ping", "-c", "5", "-q", regionIP(2)).CombinedOutput()
 	parts = append(parts, "region 1 to region 2: "+lastLine(string(out)))
@@ -420,6 +473,9 @@ func firstLineWith(s, sub string) string {
 	return ""
 }
 
+// (c) to (g) and (f)'s dark half: one cut of region 3 (c, d, e, f's first
+// half), the heal and the catch-up of the port49d served from its snapshot
+// (g), then a second cut for the restart with no snapshot (f's second half).
 func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
 	for _, i := range []int{2, 3} {
 		if err := w.session(i); err != nil {
@@ -445,16 +501,9 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 			w.t.Fatal("INVALID: region 3 wrote no directory snapshots within 150s")
 		}
 	}
-	w.guard()
-	if err := sudoRun(regionCut(3, true), false); err != nil {
-		w.t.Fatalf("INVALID: the cut: %v", err)
-	}
-	healed := false
-	defer func() {
-		if !healed {
-			_ = sudoRun(regionCut(3, false), true)
-		}
-	}()
+	cut := w.cutRegion3()
+	defer cut.heal()
+
 	if _, err := w.daemons[3].wait("directory store: not answering", 15*time.Second); err != nil {
 		w.t.Fatalf("INVALID: %v", err)
 	}
@@ -488,8 +537,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 			firstLine(out1), c2, t2.Round(time.Millisecond), firstLine(out2)),
 		c1 != 0 && c2 != 0 && t1 < 5*time.Second && t2 < 5*time.Second)
 
-	// (f) restarts during the cut serve from region 3's snapshot (R19); with
-	// its snapshots deleted, a restarted port49d stays dark until the heal.
+	// (f), first half: restarts during the cut serve from region 3's snapshot (R19).
 	w.guard()
 	w.daemons[3].stop()
 	w.brokers[3].stop()
@@ -502,7 +550,39 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		w.hold(tok)
 		fst, _, _ = w.client(3).login("alice", tok)
 	}
+	// The session open before the restart: its command is served from the
+	// snapshot too (alice's revocation was not in it).
+	fcmd, _, _ := w.client(3).command("alice", "show", "version")
 	fstatus, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	snapOK := lerr == nil && berr == nil && fst == "pass" && fcmd == "permit" && strings.Contains(fstatus, "(snapshot)")
+	snapSaid := fmt.Sprintf("from the snapshot: port49d listened %v, the broker listened %v, a mint and login: %s, "+
+		"the open session's command: %s, status: %s", lerr == nil, berr == nil, fst, fcmd, strings.ReplaceAll(fstatus, "\n", " / "))
+
+	// (g) the heal, measured on the port49d that was served from its snapshot
+	// and held the session of (d): how long until it catches up and denies.
+	w.guard()
+	if err := cut.healNow(); err != nil {
+		w.t.Fatalf("INVALID: the heal: %v", err)
+	}
+	healedAt := time.Now()
+	denied, ok := w.until(3, "deny", 60*time.Second)
+	took, rerr := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second)
+	row("g", "the heal: the time until region 3's session from (d), held by the port49d served from its snapshot, is "+
+		"denied, and region 3's runner line naming the revocation",
+		fmt.Sprintf("denied %v after the heal (%v; heal at %s); runner line after %v: %s",
+			denied.Round(10*time.Millisecond), ok, healedAt.UTC().Format("15:04:05"), took.Round(10*time.Millisecond),
+			firstLineWith(w.brokers[3].said(), "user:alice@example.com made elsewhere reached")),
+		ok && rerr == nil)
+	for _, p := range []string{"user:alice@example.com", "user:carol@example.com"} {
+		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", p, "--lift")
+	}
+
+	// (f), second half: a second cut; with its snapshots deleted, a restarted
+	// port49d stays dark until the heal.
+	w.guard()
+	if err := cut.cutNow(); err != nil {
+		w.t.Fatalf("INVALID: the second cut: %v", err)
+	}
 	w.daemons[3].stop()
 	if _, err := w.sess[3].ctl("https://"+w.sess[3].client, "del", "--prefix", "/port49/v1/ds/"); err != nil {
 		w.t.Fatalf("INVALID: deleting region 3's snapshots: %v", err)
@@ -510,33 +590,67 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	w.daemons[3].start(w.t)
 	time.Sleep(20 * time.Second)
 	said := w.daemons[3].said()
+	running := true
+	select {
+	case <-w.daemons[3].done:
+		running = false
+	default:
+	}
+	darkLine := firstLineWith(said, "no snapshot")
 	_, derr := net.DialTimeout("tcp", regionIP(3)+":4949", 2*time.Second)
-	row("f", "during the cut, port49d and port49-broker restarted in region 3 serve from its snapshot; with its "+
-		"snapshots deleted, a restarted port49d's listeners stay closed until the heal",
-		fmt.Sprintf("from the snapshot: port49d listened %v, the broker listened %v, a mint and login: %s, status: %s; "+
-			"without: 20s after the restart said it listens %v, a dial to 4949: %v; its line: %s",
-			lerr == nil, berr == nil, fst, strings.ReplaceAll(fstatus, "\n", " / "),
-			strings.Contains(said, "port49d: listening on"), derr, firstLineWith(said, "no snapshot")),
-		lerr == nil && berr == nil && fst == "pass" && strings.Contains(fstatus, "(snapshot)") &&
-			!strings.Contains(said, "port49d: listening on") && derr != nil)
+	listened := strings.Contains(said, "port49d: listening on")
+	row("f", "during the cut, port49d and port49-broker restarted in region 3 serve from its snapshot (a mint, a login, "+
+		"a session's command permitted); with its snapshots deleted, a restarted port49d's listeners stay closed until the heal",
+		fmt.Sprintf("%s; without: the process still running %v, 20s after the restart said it listens %v, a dial to 4949: %v; its line: %s",
+			snapSaid, running, listened, derr, darkLine),
+		snapOK && running && !listened && derr != nil && darkLine != "")
 
 	w.guard()
-	if err := sudoRun(regionCut(3, false), false); err != nil {
+	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
-	healed = true
 	if _, err := w.daemons[3].wait("port49d: listening on", 60*time.Second); err != nil {
 		w.t.Fatalf("INVALID: %v", err)
 	}
-	denied, ok := w.until(3, "deny", 60*time.Second)
-	took, lerr := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second)
-	row("g", "the heal: the time until region 3's session from (d) is denied, and region 3's runner line naming the revocation",
-		fmt.Sprintf("denied %v after port49d listened again (%v); runner line after %v: %s",
-			denied.Round(10*time.Millisecond), ok, took.Round(10*time.Millisecond),
-			firstLineWith(w.brokers[3].said(), "user:alice@example.com made elsewhere reached")),
-		ok && lerr == nil)
-	for _, p := range []string{"user:alice@example.com", "user:carol@example.com"} {
-		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", p, "--lift")
+}
+
+// regionCutState is region 3's cut, healed however the cell ends: the
+// deferred heal runs on a failed cell too.
+type regionCutState struct {
+	w   *regionWorld
+	cut bool
+}
+
+func (w *regionWorld) cutRegion3() *regionCutState {
+	c := &regionCutState{w: w}
+	w.guard()
+	if err := c.cutNow(); err != nil {
+		w.t.Fatalf("INVALID: the cut: %v", err)
+	}
+	return c
+}
+
+func (c *regionCutState) cutNow() error {
+	if err := sudoRun(regionCut(3, true), false); err != nil {
+		return err
+	}
+	c.cut = true
+	return nil
+}
+
+func (c *regionCutState) healNow() error {
+	if err := sudoRun(regionCut(3, false), false); err != nil {
+		return err
+	}
+	c.cut = false
+	return nil
+}
+
+// heal removes the cut if it is still in; errors are ignored (a deferred call).
+func (c *regionCutState) heal() {
+	if c.cut {
+		_ = sudoRun(regionCut(3, false), true)
+		c.cut = false
 	}
 }
 
@@ -582,26 +696,46 @@ func etcdCount(js string) int64 {
 func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
 	d := w.dirMembers[1]
 	near := "https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379" // the side that keeps its quorum
-	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
+	// A session in region 3 that is permitted now, so its denial below is the
+	// revocation's, and broker 3's own copy of the mark (its marks file) holds
+	// the mark before the cut.
+	if err := w.session(3); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
+	}
+	w.brokers[3].mark()
+	if _, code, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com"); code != 0 {
+		w.t.Fatalf("INVALID: alice's revocation before the cut: exit %d", code)
+	}
 	if _, ok := w.until(3, "deny", 30*time.Second); !ok {
-		w.t.Fatal("INVALID: region 3 never denied before the cut")
+		w.t.Fatal("INVALID: region 3 never denied after the revocation")
 	}
-	if err := sudoRun(regionCut(3, true), false); err != nil {
-		w.t.Fatalf("INVALID: the cut: %v", err)
+	if _, err := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second); err != nil {
+		w.t.Fatalf("INVALID: broker 3 never learned the mark before the cut: %v", err)
 	}
-	_, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+	w.brokers[3].mark() // the put-back line is looked for from here
+	cut := w.cutRegion3()
+	defer cut.heal()
+	if _, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
+		w.t.Fatalf("INVALID: the lift in region 1: exit %d", lcode)
+	}
 	st, _ := d.ctl(near, "endpoint", "status", "-w", "json")
 	rev := revisionOf(st)
-	_, cerr := d.ctl(near, "compact", strconv.FormatInt(rev, 10), "--physical")
-	if err := sudoRun(regionCut(3, false), false); err != nil {
+	if rev == 0 {
+		w.t.Fatal("INVALID: the directory's revision could not be read")
+	}
+	if _, cerr := d.ctl(near, "compact", strconv.FormatInt(rev, 10), "--physical"); cerr != nil {
+		w.t.Fatalf("INVALID: the compaction at revision %d: %v", rev, cerr)
+	}
+	w.guard()
+	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
 	took, perr := w.brokers[3].wait("are put back", 60*time.Second)
-	cnt, _ := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--count-only", "-w", "json")
-	n := etcdCount(cnt)
+	keys, _ := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--keys-only")
+	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
 	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
-		fmt.Sprintf("lift exit %d; compacted at revision %d (%v); put-back line after %v: %s; marks in the directory after: %d",
-			lcode, rev, cerr, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
+		fmt.Sprintf("lift exit 0; compacted at revision %d; put-back line after %v: %s; alice's marks in the directory after: %d",
+			rev, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
 		perr == nil && n == 1)
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
 }
@@ -625,17 +759,6 @@ func writeRegionNote(t *testing.T, w *regionWorld, row, claim string, rows []reg
 			t.Fatalf("the %s note holds a TOTP secret or code; nothing written", row)
 		}
 	}
-	leaky := func(l string) bool {
-		if len(labcreds.Contains([]byte(l), w.secrets)) > 0 {
-			return true
-		}
-		for _, leak := range w.leaks {
-			if leak(l) {
-				return true
-			}
-		}
-		return false
-	}
 	path := filepath.Join(root, "tests", "lab", "results", row+"-regions.md")
 	if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
 		t.Fatal(err)
@@ -648,7 +771,7 @@ func writeRegionNote(t *testing.T, w *regionWorld, row, claim string, rows []reg
 		raw, _ := os.ReadFile(p.log)
 		var kept []string
 		for _, l := range strings.Split(string(raw), "\n") {
-			if !leaky(l) {
+			if !w.leaky(l) {
 				kept = append(kept, l)
 			}
 		}

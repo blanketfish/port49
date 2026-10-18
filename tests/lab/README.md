@@ -764,18 +764,24 @@ so the harness keeps driving it. The directory etcd has one member per namespace
 runs a one-member session etcd on its own loopback, a port49-broker and a port49d. The TACACS+
 client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
 
-- **Needs:** `sudo -n` for `ip`, `tc`, `iptables` and `kill`; `PORT49_LAB_ETCD_BIN` naming a directory
-  with etcd and etcdctl v3.6.15; and L67's directory images. The run takes no lab lock.
+- **Needs:** `sudo -n` for `ip`, `tc` and `iptables` (and `sudo -n -u <you>` inside the namespace);
+  `PORT49_LAB_ETCD_BIN` naming a directory with etcd and etcdctl v3.6.15; and L67's directory
+  images. Stopping a process needs no sudo. One run at a time: the run takes a non-blocking flock on
+  `~/.cache/port49-lab/regions.lock` before its pre-clean (which deletes `p49r1..3` and `p49rbr0`),
+  and refuses to start while another run holds it.
 - **L75's brokers run on the host**, not in a namespace: directory membership needs the directory
   (OpenLDAP, L67's containers), which the namespaces cannot reach.
 - **10.149.0.0/24 must be free** (`ip -4 route`).
-- **Stopping is by recorded PID.** Each member and process is started as
-  `sh -c 'echo $$ > <name>.pid; exec <argv>'` with its pidfile in the run's 0700 temporary
-  directory (`p49l74*`), so the PID is the program's. A stop signals the `sudo` parent; past 15s it
-  reads the pidfile, checks that `/proc/<pid>/cmdline` still holds the member's `--data-dir` or the
-  process's `--config` argument, and only then runs `sudo -n kill -KILL <pid>`. A mismatch is
-  logged and skipped. Nothing is ever ended by a `pkill` or `pgrep -f` pattern.
+- **Stopping is by recorded PID, and the keys are not on argv.** Each member and process is
+  started as `sh -c 'echo $$ > <name>.pid; . <run.env>; exec <argv>'` with its pidfile and `run.env`
+  (the TACACS+ and encryption keys, 0600) in the run's 0700 temporary directory, so the PID is the
+  program's and sudo's log holds no key. A stop reads the pidfile, checks that `/proc/<pid>/cmdline`
+  still holds the member's `--data-dir` or the process's `--config` argument, and sends SIGTERM; past
+  15s it checks again and sends SIGKILL; a wait on a process that will not end is bounded at 10s and
+  reported. A mismatch is logged and skipped. Nothing is ever ended by a `pkill` or `pgrep -f`
+  pattern.
 - **Removing a left-over network** (a run killed hard skips its cleanup): `sudo ip netns del p49r1`
-  (and `p49r2`, `p49r3`), then `sudo ip link del p49rbr0`. A left-over etcd member or port49
-  process is ended by the PID in its `*.pid` file under `/tmp/p49l74*/`, after checking
-  `/proc/<pid>/cmdline` by hand: `sudo kill -KILL <pid>`.
+  (and `p49r2`, `p49r3`), then `sudo ip link del p49r1h` (and `p49r2h`, `p49r3h`, which a namespace
+  that still held a process leaves behind) and `sudo ip link del p49rbr0`. A left-over etcd member or
+  port49 process is ended by the PID in its `*.pid` file under `/tmp/p49l74*/`, after checking
+  `/proc/<pid>/cmdline` by hand: `kill <pid>`.
