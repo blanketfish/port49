@@ -379,9 +379,9 @@ func (e *l76Env) checkSchema() {
 	}
 	aaa, types := model("srl_nokia-aaa.yang"), model("srl_nokia-aaa-types.yang")
 	findings := l76SchemaFindings(aaa, types)
-	if len(findings) != 4 {
-		e.invalid("the image's AAA models say %d of the four things this plan read from them:\n%s",
-			len(findings), strings.Join(findings, "\n"))
+	if len(findings) != l76SchemaFindingCount {
+		e.invalid("the image's AAA models say %d of the %d things this plan read from them:\n%s",
+			len(findings), l76SchemaFindingCount, strings.Join(findings, "\n"))
 	}
 	groups, _, _ := e.sr(30*time.Second, l76ReadGroup)
 	e.evidence["schema-running.txt"] = l76MaskConfig(run)

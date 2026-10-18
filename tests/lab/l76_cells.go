@@ -507,6 +507,10 @@ func l76IdentityBase(yang, name string) string {
 	return m[1]
 }
 
+// l76SchemaFindingCount is how many findings l76SchemaFindings makes from the
+// image's models; checkSchema refuses a run that sees another number.
+const l76SchemaFindingCount = 5
+
 // l76SchemaFindings is what the image's AAA models say where Nokia's guide
 // says otherwise or nothing. aaa is srl_nokia-aaa.yang, types is
 // srl_nokia-aaa-types.yang.

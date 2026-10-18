@@ -729,6 +729,12 @@ func TestL76StartupRolesGrantTheCLIService(t *testing.T) {
 	}
 }
 
+func TestL76SchemaFindingCountIsWhatTheFixtureYields(t *testing.T) {
+	if n := len(l76SchemaFindings(l76AAAFixture, l76TypesFixture)); n != l76SchemaFindingCount {
+		t.Errorf("the fixture yields %d findings, checkSchema requires %d", n, l76SchemaFindingCount)
+	}
+}
+
 func TestL76SchemaExcerptKeepsIdentifiers(t *testing.T) {
 	got := l76SchemaExcerpt(l76TypesFixture, []string{"base aaa_"})
 	if got != "base aaa_accounting_event_type;\nbase aaa_authorization_event_type;" {
