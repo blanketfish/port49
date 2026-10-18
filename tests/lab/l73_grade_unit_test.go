@@ -3,6 +3,11 @@
 package lab
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,5 +59,69 @@ func TestL73LoginWindowsGiveEveryLoginTheSameTail(t *testing.T) {
 	// keeps its own late connection; 7s and 13.1s fall outside the other tail.
 	if len(w[0]) != 2 || len(w[1]) != 2 || w[0][1].SYNAt != t0.Add(6900*time.Millisecond) || w[1][1].SYNAt != t0.Add(12900*time.Millisecond) {
 		t.Fatalf("login1 %+v login2 %+v", w[0], w[1])
+	}
+}
+
+func TestL73RefusalVerdict(t *testing.T) {
+	for _, c := range []struct {
+		id          string
+		n           int
+		ok, ok2, ag bool
+		contra      bool
+		proven      bool
+	}{
+		{"i-alert", 1, true, true, false, false, true},
+		{"i-alert", 1, false, true, false, true, true},
+		{"i-alert", 0, false, true, false, false, false}, // unproven contradicts nothing
+		{"i-window", 1, true, false, true, true, true},   // the login inside the window did not land
+		{"i-window", 1, true, true, true, false, true},
+		{"i-error", 1, false, true, false, false, true}, // §5.7 / L4: an ERROR is final; never **no**
+	} {
+		contra, proven := l73RefusalVerdict(c.id, c.n, c.ok, c.ok2, c.ag)
+		if (contra != "") != c.contra || proven != c.proven {
+			t.Errorf("%+v: %q %v", c, contra, proven)
+		}
+	}
+}
+
+// Every cell method is called from TestL73, and note ends it: a live run can
+// never pass while skipping cells or the evidence.
+func TestL73CallsEveryCellAndEndsWithTheNote(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "l73_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defined []string
+	var called []string
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if fn.Recv != nil && strings.HasPrefix(fn.Name.Name, "cell") {
+			defined = append(defined, fn.Name.Name)
+		}
+		if fn.Name.Name != "TestL73" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+					called = append(called, sel.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+	for _, d := range defined {
+		if !slices.Contains(called, d) {
+			t.Errorf("TestL73 never calls %s", d)
+		}
+	}
+	if len(defined) == 0 || len(called) == 0 || !slices.Contains(called, "note") {
+		t.Fatalf("defined %v called %v", defined, called)
+	}
+	if i := slices.Index(called, "note"); slices.Index(called, "cellB") > i || slices.Index(called, "cellH") > i {
+		t.Error("note must come after every cell")
 	}
 }

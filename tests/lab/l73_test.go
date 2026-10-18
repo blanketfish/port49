@@ -160,7 +160,10 @@ func TestL73(t *testing.T) {
 		e.cellE()
 		e.cellG()
 		e.cellH()
-		// Task 10: cellI, cellJ, cellB, note.
+		e.cellI()
+		e.cellJ()
+		e.cellB()
+		e.note()
 	})
 }
 
@@ -1462,8 +1465,11 @@ func (e *l73Env) cellI() {
 		off, start := e.l.mark(), time.Now()
 		ok, took, err := e.breakglassLogin()
 		s := fmt.Sprintf("%s: break-glass login ok %v in %s (%s)", r.what, ok, took.Round(time.Millisecond), l73Err(err))
+		ok2 := true
 		if r.again {
-			ok2, took2, err2 := e.breakglassLogin()
+			var took2 time.Duration
+			var err2 error
+			ok2, took2, err2 = e.breakglassLogin()
 			s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
 		}
 		conns := stop()
@@ -1476,12 +1482,13 @@ func (e *l73Env) cellI() {
 			}
 		}
 		proof := fmt.Sprintf("%d record(s) of %s", n, r.outcome)
-		if n == 0 {
+		switch contra, proven := l73RefusalVerdict(r.id, n, ok, ok2, r.again); {
+		case !proven:
 			proof = "no record of " + r.outcome + ", so the refusal itself is unproven"
 			unproven = append(unproven, r.id)
-		} else if !ok {
+		case contra != "":
 			contradicted = true
-			docs = "**no**: decision 50 ruling 8 says a refusal declines the device to its local method; on " + r.id + " the local login did not land"
+			docs = contra
 		}
 		parts = append(parts, fmt.Sprintf("%s; %s; %s: %s", s, l73Describe(conns, start), proof, e.quote(recs)))
 	}
@@ -1494,6 +1501,29 @@ func (e *l73Env) cellI() {
 		e.d.Fallback, strings.TrimSpace(string(load))),
 		strings.Join(parts, "; ")+". An ERROR for an obfuscated packet (decision 50 ruling 13) cannot be provoked from port49's "+
 			"side: only a device that clears the flag earns it, and cell b counts whether this one ever did.", docs)
+}
+
+// l73RefusalVerdict grades one cell (i) row. proven needs a port49 record of
+// the row's own reason (n of them). contra is the docs text of a proven row
+// whose device did not reach its local method, "" otherwise. i-error is an
+// observation only: spec §5.7 store_unavailable records from L4 that an
+// authentication ERROR is final on Junos with tacplus alone, so a failed
+// local login there is the expected behaviour and contradicts no ruling.
+// i-window's second login, inside the window, must land too (ruling 8).
+func l73RefusalVerdict(id string, n int, ok, ok2, again bool) (contra string, proven bool) {
+	if n == 0 {
+		return "", false
+	}
+	if id == "i-error" {
+		return "", true
+	}
+	switch {
+	case !ok:
+		return "**no**: decision 50 ruling 8 says a refusal declines the device to its local method; on " + id + " the local login did not land", true
+	case again && !ok2:
+		return "**no**: decision 50 ruling 8 says a decline window sends the next login to the local method; on " + id + " the login inside the window did not land", true
+	}
+	return "", true
 }
 
 func (e *l73Env) cellJ() {
