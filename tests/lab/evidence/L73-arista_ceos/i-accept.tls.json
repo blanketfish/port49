@@ -1,0 +1,80 @@
+[
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 49600,
+    "syn_at": "2026-10-18T03:43:52.982374Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:52.982642Z"
+  },
+  {
+    "server": "172.100.100.2:300",
+    "device_port": 40732,
+    "syn_at": "2026-10-18T03:43:52.983013Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:52.98305Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 49614,
+    "syn_at": "2026-10-18T03:43:54.970586Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:54.970867Z"
+  },
+  {
+    "server": "172.100.100.2:300",
+    "device_port": 40742,
+    "syn_at": "2026-10-18T03:43:54.971378Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:54.971394Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 49616,
+    "syn_at": "2026-10-18T03:43:54.97374Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:54.973861Z"
+  },
+  {
+    "server": "172.100.100.2:300",
+    "device_port": 40748,
+    "syn_at": "2026-10-18T03:43:54.974242Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T03:43:54.974261Z"
+  }
+]
