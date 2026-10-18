@@ -441,11 +441,11 @@ func l73ScrubLog(s string) string {
 // that the handshake failed (a handshake_failed record); a login that failed
 // with no such record is a failure of unproven cause, never the cell's
 // verdict.
-func l73Grade(loginOK, redeemed, handshakeFailed bool) string {
+func l73Grade(loginOK, redeemed, reasonProven bool) string {
 	switch {
 	case loginOK && redeemed:
 		return "accepted"
-	case handshakeFailed:
+	case reasonProven:
 		return "refused"
 	default:
 		return "login failed, cause unproven"

@@ -616,9 +616,24 @@ func l73Where(recs []map[string]any, key, val string) []map[string]any {
 	return out
 }
 
-// l73HandshakeFailed is whether port49 recorded a failed TLS handshake.
-func l73HandshakeFailed(recs []map[string]any) bool {
-	return len(l73Where(recs, "tls_outcome", "handshake_failed")) > 0
+// Details port49d logs (internal/daemon/server/tls.go:64 and
+// internal/devicecert/verify.go:99, chainOutcome's x509 text): a handshake the
+// device aborted by alert, and a chain with no path to the anchors.
+const (
+	l73DeviceAborted    = "the device aborted the handshake"
+	l73UnknownAuthority = "x509: certificate signed by unknown authority"
+)
+
+// l73RefusedFor is whether port49 recorded a tls_refused for exactly this
+// reason: the outcome, and a detail starting with prefix. A refusal for
+// another reason does not prove the cell's.
+func l73RefusedFor(recs []map[string]any, outcome, prefix string) bool {
+	for _, r := range l73Where(recs, "tls_outcome", outcome) {
+		if strings.HasPrefix(str(sub(r, "unvalidated"), "detail"), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func l73Redeemed(recs []map[string]any) bool {
@@ -1223,7 +1238,7 @@ func (e *l73Env) cellD() {
 		conns := stop()
 		e.reached(v.id, conns)
 		recs := e.l.recordsSince(off)
-		verdict := l73Grade(ok, l73Redeemed(recs), l73HandshakeFailed(recs))
+		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", l73DeviceAborted))
 		if verdict == "accepted" {
 			verdict = "**accepted**"
 		}
@@ -1279,12 +1294,12 @@ func (e *l73Env) cellE() {
 	e.reached("e", conns)
 	recs := e.l.recordsSince(off)
 	chain := "the device sends its chain (leaf and intermediate): the login verified with no intermediates_file"
-	switch l73Grade(ok, l73Redeemed(recs), l73HandshakeFailed(recs)) {
+	switch l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "unknown_ca", l73UnknownAuthority)) {
 	case "refused":
-		chain = "the device sends its leaf alone: with no intermediates_file port49 recorded handshake_failed (cell a, " +
+		chain = "the device sends its leaf alone: with no intermediates_file port49 recorded unknown_ca (cell a, " +
 			"with intermediates_file, passed)"
 	case "login failed, cause unproven":
-		chain = "the login failed and port49 recorded no handshake_failed, so what the device sends is unproven"
+		chain = "the login failed and port49 recorded no unknown_ca refusal, so what the device sends is unproven"
 	}
 	e.add("e", e.d.Enrol+"; port49d's client_ca_file the root alone, no intermediates_file",
 		fmt.Sprintf("request: subject %q, dNSName %v, iPAddress %v, key %s, requested EKU %v; issued: %s; %s (login as %s ok %v "+

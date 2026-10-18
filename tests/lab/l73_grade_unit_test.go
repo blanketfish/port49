@@ -23,11 +23,21 @@ func TestL73Grade(t *testing.T) {
 	}
 }
 
-func TestL73HandshakeFailedNeedsTheRecord(t *testing.T) {
-	failed := map[string]any{"unvalidated": map[string]any{"tls_outcome": "handshake_failed"}}
-	other := map[string]any{"unvalidated": map[string]any{"tls_outcome": "sni_mismatch"}}
-	if !l73HandshakeFailed([]map[string]any{other, failed}) || l73HandshakeFailed([]map[string]any{other}) || l73HandshakeFailed(nil) {
-		t.Fatal("handshake_failed must be read from tls_outcome alone")
+func TestL73RefusedForNeedsTheCellsReason(t *testing.T) {
+	rec := func(outcome, detail string) map[string]any {
+		return map[string]any{"unvalidated": map[string]any{"tls_outcome": outcome, "detail": detail}}
+	}
+	aborted := rec("handshake_failed", "the device aborted the handshake (it may refuse port49's certificate; see x)")
+	timedOut := rec("handshake_failed", "the TLS handshake did not complete")
+	unknown := rec("unknown_ca", "x509: certificate signed by unknown authority (possibly because of ...)")
+	if !l73RefusedFor([]map[string]any{aborted}, "handshake_failed", l73DeviceAborted) ||
+		!l73RefusedFor([]map[string]any{unknown}, "unknown_ca", l73UnknownAuthority) {
+		t.Fatal("the cell's own reason must be proven")
+	}
+	// A handshake_failed port49 ended itself, or another outcome, proves nothing.
+	if l73RefusedFor([]map[string]any{timedOut, unknown}, "handshake_failed", l73DeviceAborted) ||
+		l73RefusedFor([]map[string]any{aborted}, "unknown_ca", l73UnknownAuthority) || l73RefusedFor(nil, "unknown_ca", "") {
+		t.Fatal("another reason was taken for the cell's")
 	}
 }
 
