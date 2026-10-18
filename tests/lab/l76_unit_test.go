@@ -1120,3 +1120,57 @@ func TestL76RestoreClearsTheFlagWhenItReturns(t *testing.T) {
 		t.Error("restoring is still set after f panicked")
 	}
 }
+
+func TestL76MaskLongKeepsDecisionReasons(t *testing.T) {
+	// A closed-vocabulary reason code is long but is not a secret: it must
+	// survive, whatever its length. Any other long run is still masked.
+	for _, r := range []string{"no_permit_dominates_deny", "trust_domain_unresolved", "per_login_mfa_unavailable"} {
+		if got := l76MaskLong("reason=" + r); got != "reason="+r {
+			t.Errorf("%s was masked: %q", r, got)
+		}
+	}
+	unknown := "Zq9Xk2Lm7Wp4Rt8Vb3Nc6Hy1Jd5Fs0A"
+	if got := l76MaskLong("reason=" + unknown); strings.Contains(got, unknown) {
+		t.Errorf("an unknown long value survived: %q", got)
+	}
+}
+
+func TestL76SummarizeNamesReasonAndRequest(t *testing.T) {
+	recs := []map[string]any{{
+		"event": "authorize_session", "verdict": "deny", "reason": "no_permit_dominates_deny",
+		"session": map[string]any{"username": "alice01", "port": "ssh"},
+		"request": map[string]any{"service": "shell", "raw": []any{"service=shell", "cmd=", "priv-lvl=15"}},
+	}}
+	got := l76InvalidText(l76Summarize(recs, nil), nil)
+	for _, want := range []string{"reason=no_permit_dominates_deny", "service=shell", "attribute names: service, cmd, priv-lvl"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	// Attribute values are never printed.
+	if strings.Contains(got, "priv-lvl=15") {
+		t.Errorf("a value was printed: %q", got)
+	}
+	// A line that leaks is withheld, alone.
+	recs = append(recs, map[string]any{"event": "authorize_command", "verdict": "deny", "reason": "no_rule_matched",
+		"request": map[string]any{"service": "labsecret-svc", "raw": []any{"service=x"}}})
+	got = l76Summarize(recs, []string{"labsecret-svc"})
+	if strings.Contains(got, "labsecret-svc") || !strings.Contains(got, "withheld") || !strings.Contains(got, "reason=no_permit_dominates_deny") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestL76DecisionDumpRedactsAndFilters(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	recs := []map[string]any{
+		{"event": "redeem", "verdict": "permit", "credential_sha256": hash},
+		{"event": "authorize_session", "verdict": "deny", "reason": "no_permit_dominates_deny"},
+	}
+	got := l76DecisionDump(recs)
+	if strings.Contains(got, hash) {
+		t.Errorf("the credential hash survived: %q", got)
+	}
+	if !strings.Contains(got, `"reason":"no_permit_dominates_deny"`) {
+		t.Errorf("the reason was lost: %q", got)
+	}
+}

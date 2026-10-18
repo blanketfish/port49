@@ -1,9 +1,12 @@
 package lab
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 // L76 measures Nokia SR Linux against port49 over plain TACACS+ (spec §15).
@@ -154,7 +157,9 @@ func l76IsKeyword(m string) bool {
 // l76MaskLong masks every long base64-ish run that is not a keyword.
 func l76MaskLong(s string) string {
 	return l76Long.ReplaceAllStringFunc(s, func(m string) string {
-		if l76IsKeyword(m) {
+		// A decision reason is the closed vocabulary of spec section 5.7,
+		// not a secret; the run may carry its "reason=" prefix.
+		if decision.Known(decision.Reason(strings.TrimPrefix(m, "reason="))) || l76IsKeyword(m) {
 			return m
 		}
 		return "<LONG>"
@@ -716,4 +721,52 @@ func (r *l76Restoring) restore(f func()) {
 	r.restoring = true
 	defer func() { r.restoring = false }()
 	f()
+}
+
+// l76Summarize is the harness's summarize for an INVALID message, plus what the request
+// asked: the service and the names (never the values) of its attributes, one
+// line per authorization record. Each added line passes l76Leaks, and a hit
+// withholds that one line. The reason is printed verbatim; l76MaskLong keeps
+// it when it is in spec section 5.7's closed vocabulary.
+func l76Summarize(recs []map[string]any, secrets []string) string {
+	if len(recs) == 0 {
+		return "(no records at all reached the decision log)"
+	}
+	var b strings.Builder
+	for _, r := range recs {
+		fmt.Fprintf(&b, "\n  event=%s verdict=%s reason=%s flags=%s user=%s port=%s", l76Str(r, "event"), l76Str(r, "verdict"),
+			l76Str(r, "reason"), l76Str(r, "flags"), l76Str(r, "session", "username"), l76Str(r, "session", "port"))
+		if d := l76Str(r, "unvalidated", "diagnosis"); d != "" {
+			fmt.Fprintf(&b, " unvalidated_diagnosis=%s", d)
+		}
+		if l76At(r, "request") == nil {
+			continue
+		}
+		var names []string
+		for _, a := range l76Strs(r, "request", "raw") {
+			names = append(names, strings.SplitN(a, "=", 2)[0])
+		}
+		line := fmt.Sprintf("\n    service=%s attribute names: %s", l76Str(r, "request", "service"), strings.Join(names, ", "))
+		if leaks := l76Leaks(line, secrets); len(leaks) > 0 {
+			line = "\n    (request line withheld: it held " + strings.Join(leaks, ", ") + ")"
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// l76DecisionDump is the run's decision records as the INVALID dump keeps
+// them: credential hashes redacted, then l76FilterLog. The caller still gates
+// it with l76Leaks. A record that cannot be encoded is noted, not skipped.
+func l76DecisionDump(recs []map[string]any) string {
+	var lines []string
+	for _, r := range recs {
+		b, err := json.Marshal(r)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("(record not encoded: %v)", err))
+			continue
+		}
+		lines = append(lines, string(l72RedactCredentialHash(b)))
+	}
+	return l76FilterLog(strings.Join(lines, "\n"))
 }

@@ -123,7 +123,7 @@ func (e *l76Env) invalid(format string, args ...any) {
 // dumpDevice keeps the device's own view of an INVALID run, best-effort, in
 // the git-ignored tests/lab/logs/L76-invalid-<stamp>/, so the next attempt
 // does not re-boot blind (pre-flight I6): the masked running config, the AAA
-// log's last 400 lines and the session table. Each passes through
+// log's last 400 lines, the session table and port49's decision log. Each passes through
 // l76FilterLog and then l76Leaks; a file with a hit is withheld. It never
 // writes to results/ or evidence/, and it never raises: it calls sr and
 // aaaTail, not running or invalid, and logs its own failures, so the INVALID
@@ -153,6 +153,9 @@ func (e *l76Env) dumpDevice() {
 		"running.txt":  {l76MaskConfig(run), runErr},
 		"aaa-log.txt":  {aaa, aaaErr},
 		"sessions.txt": {sess, sessErr},
+		// The port49 side: why the server answered as it did. Credentials
+		// appear only as redacted hashes (l72RedactCredentialHash).
+		"decisions.jsonl": {l76DecisionDump(e.l.recordsSince(e.start)), nil},
 	} {
 		text := r.text
 		if r.err != nil {
@@ -423,7 +426,8 @@ func (e *l76Env) cellA() {
 	// Any error is INVALID here, a *notObserved (a command that did not
 	// finish in 60 s) included: (a) is the control (pre-flight I1).
 	if err != nil {
-		e.invalid("cell a: the control login as %s failed after %v: %v\n%s", user, took, err, summarize(recs))
+		secrets, _ := e.secrets() // on a seed error, the fixed secrets still gate
+		e.invalid("cell a: the control login as %s failed after %v: %v\n%s", user, took, err, l76Summarize(recs, secrets))
 	}
 	if len(outs) != len(l76Commands) {
 		e.invalid("cell a: %d outputs for %d commands", len(outs), len(l76Commands))
