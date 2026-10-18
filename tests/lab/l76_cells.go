@@ -81,9 +81,12 @@ var (
 	l76Hashed = regexp.MustCompile(`\$(?:aes1|ar2|y|argon2(?:id|i|d)|scrypt|2[aby]|[156789])\$[^\s"'}\]]*`)
 	// l76Keyed is a secret-key, password or authentication-key statement and
 	// its value, after a space, "=" or ":". The value is a quoted string
-	// (spaces and escaped quotes allowed) or a bare run that stops at a quote,
-	// so a JSON string's closing quote survives.
-	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password|authentication-key)(?:[ \t]*[=:][ \t]*|[ \t]+))("(?:[^"\\]|\\.)*"|[^\s"]+)`)
+	// (spaces and escaped quotes allowed, never across a line), a quote that
+	// never closes (taken to the end of the line), or a bare run that stops
+	// at a quote, so a JSON string's closing quote survives.
+	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password|authentication-key)(?:[ \t]*[=:][ \t]*|[ \t]+))("(?:[^"\\\n]|\\[^\n])*"|"[^\n]*|[^\s"]+)`)
+	// l76QuotedValue is a quoted value that closes on its own line.
+	l76QuotedValue = regexp.MustCompile(`^"(?:[^"\\\n]|\\[^\n])*"$`)
 	// l76LineWrap is a device's line wrap inside one value: a line break with
 	// the indentation around it. A space inside a line is not one.
 	l76LineWrap = regexp.MustCompile(`\s*\n\s*`)
@@ -124,7 +127,7 @@ func l76MaskKeyed(s string) string {
 		case "{", "<masked>", `"<masked>"`:
 			return m
 		}
-		if strings.HasPrefix(sm[2], `"`) {
+		if l76QuotedValue.MatchString(sm[2]) {
 			return sm[1] + `"<masked>"`
 		}
 		return sm[1] + "<masked>"

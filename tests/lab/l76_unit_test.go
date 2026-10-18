@@ -478,3 +478,30 @@ func TestL76FilterLogMasksAuthenticationKey(t *testing.T) {
 		}
 	}
 }
+
+// A quoted value ends on its own line: a string that closes right after the
+// keyword must not swallow the statements below it.
+func TestL76MaskConfigQuotedValueStaysOnItsLine(t *testing.T) {
+	in := "desc \"close after password \"\nsecret-key abc\npassword def\nother \"x\"\n"
+	want := "desc \"close after password <masked>\nsecret-key <masked>\npassword <masked>\nother \"x\"\n"
+	if got := l76MaskConfig(in); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+// A quote that never closes still hides its value, to the end of the line.
+func TestL76MaskConfigMasksAnUnterminatedQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"password \"abc def\nnext line\n":    "password <masked>\nnext line\n",
+		"secret-key=\"abc\\\" tail":          "secret-key=<masked>",
+		"authentication-key: \"k 1 and more": "authentication-key: <masked>",
+	} {
+		got := l76MaskConfig(in)
+		if got != want {
+			t.Errorf("%q:\n got %q\nwant %q", in, got, want)
+		}
+		if l76MaskConfig(got) != got {
+			t.Errorf("%q: not idempotent", in)
+		}
+	}
+}
