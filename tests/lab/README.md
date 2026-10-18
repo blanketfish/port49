@@ -785,7 +785,7 @@ The note is `results/L72-reference.md`, and the evidence (decision log lines and
 transcripts) is `evidence/L72-reference/`. Besides the decision log, cells h, l and n read
 port49d's `port49_connection_events_total` (`declined_refused` against `held_refused`) to tell a
 decline, which opens a window and is no strike, from a strike. No device's RFC 9887 behaviour is
-measured here; that is L73, open until an image carries a client (L71).
+measured here; that is L73 (closed 2026-10-18; see the L73 section below).
 
 **Running L72 and L71 (recorded).** Make the run worktree under the repository, not `/tmp`:
 `git worktree add --detach ~/git/port49/.worktrees/run-l7x <sha>`. `/tmp` is a nosuid tmpfs, and
