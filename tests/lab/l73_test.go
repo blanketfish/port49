@@ -91,6 +91,7 @@ type l73Env struct {
 	l          *lab
 	d          l73Dialect
 	opener     func(*lab) (*cliConn, error)
+	cfgScreens string          // the configure sessions' screens, for an INVALID's diagnosis
 	versionWhy string          // why the last token login's version was not read; "" when it was
 	x          map[string]bool // the Want words the image's help listed
 	applied    *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
@@ -475,6 +476,7 @@ func (e *l73Env) diagDeeper(c *cliConn, name, line, word string, i, deep int, ma
 // invalidDeviceLogs keeps the dialect's INVALID commands' output (the device's
 // own account of a refused handshake) in PORT49_L73_INVALID_DIR, scrubbed.
 func (e *l73Env) invalidDeviceLogs() {
+	e.keepConfigure()
 	if os.Getenv("PORT49_L73_INVALID_DIR") == "" || len(e.d.InvalidCmds) == 0 {
 		return
 	}
@@ -770,10 +772,27 @@ func (e *l73Env) configure(d l73DeviceTLS) {
 			"carries the lab secret as well")
 		out, err = e.apply(d)
 	}
+	e.noteConfigure(out)
 	if err != nil {
 		e.invalidScreen("configure", out)
 		e.refusalDiag(out)
 		e.t.Fatalf("INVALID: configuring the device's TLS client: %s", oneLine(l73ScrubLog(hideKeys(err.Error()))))
+	}
+}
+
+// noteConfigure remembers the screens of the cell's configure sessions, in
+// order, so a later INVALID can show what the image said to each typed line
+// (an IOS XE line it drops prints no refusal mark). Capped; scrubbed on write.
+func (e *l73Env) noteConfigure(out string) {
+	if len(e.cfgScreens) < 40000 {
+		e.cfgScreens += "\n### configure session\n" + out
+	}
+}
+
+// keepConfigure writes those screens, scrubbed, to the INVALID directory.
+func (e *l73Env) keepConfigure() {
+	if e.cfgScreens != "" {
+		e.invalidScreen("configure-typed", e.cfgScreens)
 	}
 }
 

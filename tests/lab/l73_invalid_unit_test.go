@@ -129,3 +129,25 @@ func TestL73InvalidScreenMasksIOSXEServerKeys(t *testing.T) {
 		t.Errorf("the configuration around the keys was lost:\n%s", got)
 	}
 }
+
+func TestL73KeepConfigureWritesWhatTheImageSaidToEachTypedLine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PORT49_L73_INVALID_DIR", dir)
+	e := &l73Env{l: &lab{p: platform{name: "x"}}}
+	e.keepConfigure() // nothing configured yet: no file
+	if _, err := os.Stat(filepath.Join(dir, "l73-invalid-x-configure-typed.txt")); err == nil {
+		t.Fatal("a file for a cell that configured nothing")
+	}
+	e.noteConfigure("xe1(config)#tacacs server l73-tls\r\nxe1(config-server-tacacs)#address ipv4 172.100.100.1\r\n key 0 TYPEDKEY\r\n")
+	e.noteConfigure("xe1(config-server-tacacs)#tls port 300\r\n")
+	e.keepConfigure()
+	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-configure-typed.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, "TYPEDKEY") || !strings.Contains(got, "address ipv4 172.100.100.1") || !strings.Contains(got, "tls port 300") ||
+		strings.Index(got, "address ipv4") > strings.Index(got, "tls port 300") {
+		t.Fatalf("%s", got)
+	}
+}
