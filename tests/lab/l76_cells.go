@@ -1069,17 +1069,20 @@ func l76WriteText(first, second l76Write) string {
 		"(CM#configuration-checkpoints). Whether it happened is read from the device's own state, root's clear afterwards; "+
 		"the make's output is evidence only. As the first exec of a priv-lvl 1 login it %s; as the second exec it %s.", did(first), did(second))
 	switch {
-	case wrote(second):
-		b.WriteString("\n\n**Security finding:** a write by a priv-lvl 1 user on the second exec channel of one SSH login " +
-			"was not refused (see the state above).")
-		if wrote(first) {
-			b.WriteString(" The first exec was not refused either, so the `p49-read` rule `/ read` does not gate `tools` commands on either channel.")
-		} else {
-			b.WriteString(" The first exec channel of the same login, with the same roles, was refused.")
+	case wrote(first) || wrote(second):
+		b.WriteString("\n\n**Security finding:** a priv-lvl 1 user, whose roles are `p49-read` only, ")
+		switch {
+		case first.State == l76WriteExists && second.State == l76WriteExists:
+			b.WriteString("wrote on both exec channels of one SSH login: the `p49-read` rule `/ read` does not gate `tools` commands.")
+		case first.State == l76WriteExists:
+			b.WriteString("wrote on the first exec channel of one SSH login; the second exec channel refused the same write.")
+		case second.State == l76WriteExists:
+			b.WriteString("wrote on the second exec channel of one SSH login; the first exec channel of the same login, with the same roles, refused the same write.")
+		default:
+			b.WriteString("may have written: the device's state after the attempt could not be determined for at least one channel, " +
+				"so a write is not ruled out. Treat it as a write until a run reads the state.")
 		}
 		b.WriteString(" This is not INVALID; it is a measurement the `nokia_srlinux` adapter and plan 12 must carry.")
-	case wrote(first):
-		b.WriteString("\n\nThe first exec wrote and the second did not: the channels differ the other way round from the accounting.")
 	default:
 		b.WriteString("\n\nThe write was refused on both channels, so the second exec's priv-lvl 15 accounting is not shown to " +
 			"add authority for a write.")

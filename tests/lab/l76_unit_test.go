@@ -1476,3 +1476,25 @@ func TestL76FallThroughHazardStatesTheCostMeasuredInCellL(t *testing.T) {
 		}
 	}
 }
+
+// Only (absent, absent) is clean: a p49-read user's write on either channel,
+// or an undetermined state, is a security finding (R2-I1). The nine pairs.
+func TestL76WriteTextEveryPairButAbsentAbsentIsASecurityFinding(t *testing.T) {
+	states := []string{l76WriteAbsent, l76WriteExists, l76WriteUnknown}
+	for _, f := range states {
+		for _, sec := range states {
+			text := l76WriteText(l76Write{Name: "first", State: f}, l76Write{Name: "second", State: sec})
+			finding := strings.Contains(text, "Security finding")
+			clean := f == l76WriteAbsent && sec == l76WriteAbsent
+			if finding == clean {
+				t.Errorf("first %s, second %s: security finding = %v, want %v\n%s", f, sec, finding, !clean, text)
+			}
+			if !clean && !strings.HasPrefix(strings.SplitN(text, "\n\n", 3)[1], "**Security finding:**") {
+				t.Errorf("first %s, second %s: the finding is not the lead of the verdict paragraph:\n%s", f, sec, text)
+			}
+			if clean && !strings.Contains(text, "refused on both") {
+				t.Errorf("the clean case lacks its sentence:\n%s", text)
+			}
+		}
+	}
+}
