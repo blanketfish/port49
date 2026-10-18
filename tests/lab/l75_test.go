@@ -262,7 +262,10 @@ func (b *l75Broker) start(w *regionWorld) {
 
 // l75Client is an HTTP client trusting the lab API's CA, with cert when given.
 func l75Client(pki *regionPKI, cert *tls.Certificate) *http.Client {
-	caPEM, _ := os.ReadFile(filepath.Join(pki.lab, testpki.LabCA))
+	caPEM, err := os.ReadFile(filepath.Join(pki.lab, testpki.LabCA))
+	if err != nil {
+		panic(fmt.Sprintf("INVALID: the lab API's CA: %v", err)) // every mint would read as "unreachable"
+	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(caPEM)
 	tc := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}

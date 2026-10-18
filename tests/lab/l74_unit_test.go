@@ -518,3 +518,32 @@ func TestL75SameStep(t *testing.T) {
 		t.Error("same step")
 	}
 }
+
+// etcdctl v3.6.15 refuses --count-only with -w json, and the harness read
+// that refusal as a count of 0 (the first run of L74, INVALID at the snapshot
+// wait). The fixture is `get --prefix --keys-only -w json`'s shape, with fake
+// keys and no values.
+func TestEtcdCountReadsKeysOnlyJSON(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "etcd-get-keys-only.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := etcdCount(string(raw)); n != 2 {
+		t.Fatalf("etcdCount = %d, want 2", n)
+	}
+	if n := etcdCount("Error: --count-only is only for `--write-out=fields`"); n != 0 {
+		t.Fatalf("etcdCount of an error text = %d, want 0", n)
+	}
+}
+
+func TestSnapshotCountArgsAreAcceptedWithJSON(t *testing.T) {
+	args := strings.Join(snapshotCountArgs(), " ")
+	if strings.Contains(args, "--count-only") {
+		t.Fatalf("%q: etcdctl refuses --count-only with -w json", args)
+	}
+	for _, want := range []string{"--keys-only", "-w json", "--prefix /port49/v1/ds/m/"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("%q lacks %q", args, want)
+		}
+	}
+}

@@ -209,11 +209,25 @@ func (w *regionWorld) sessionWith(i int, token string) error {
 	return nil
 }
 
+// answered is a client call's answer, INVALID with what when the call
+// itself failed: an error is not an answer of "deny" or "no".
+func (w *regionWorld) answered(what string) func(string, time.Duration, error) string {
+	return func(st string, _ time.Duration, err error) string {
+		if err != nil {
+			w.t.Helper()
+			w.t.Fatalf("INVALID: %s: %v", what, err)
+		}
+		return st
+	}
+}
+
 // until is how long until region i's command answers want, polling every
 // 100ms, or false past d.
 func (w *regionWorld) until(i int, want string, d time.Duration) (time.Duration, bool) {
 	start := time.Now()
 	for time.Since(start) < d {
+		// A command that errors is not the answer waited for; the wait goes on
+		// and its timeout is the measurement.
 		if st, _, _ := w.client(i).command("alice", "show", "version"); st == want {
 			return time.Since(start), true
 		}
@@ -560,7 +574,10 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	// R19: region 3's port49d and broker have each written a snapshot (every
 	// 60s) before the cut, for (f).
 	for deadline := time.Now().Add(150 * time.Second); ; time.Sleep(2 * time.Second) {
-		js, _ := w.sess[3].ctl("https://"+w.sess[3].client, "get", "--prefix", "/port49/v1/ds/m/", "--count-only", "-w", "json")
+		js, cerr := w.sess[3].ctl("https://"+w.sess[3].client, snapshotCountArgs()...)
+		if cerr != nil {
+			w.t.Fatalf("INVALID: counting region 3's marks records: %v: %s", cerr, js)
+		}
 		if etcdCount(js) >= 2 {
 			break
 		}
@@ -575,8 +592,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		w.t.Fatalf("INVALID: %v", err)
 	}
 
-	cst, _, _ := w.client(3).command("alice", "show", "version")
-	lst, _, _ := w.client(3).login("alice", pre)
+	cst := w.answered("(c) region 3's open session's command")(w.client(3).command("alice", "show", "version"))
+	lst := w.answered("(c) region 3's login with the token minted before the cut")(w.client(3).login("alice", pre))
 	status, code, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
 	m := w.metrics(3)
 	reach := metricOf(m, "port49_store_directory_reachable")
@@ -590,8 +607,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	w.guard()
 	_, rcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
 	time.Sleep(5 * time.Second)
-	d3, _, _ := w.client(3).command("alice", "show", "version")
-	d2, _, _ := w.client(2).command("alice", "show", "version")
+	d3 := w.answered("(d) region 3's command")(w.client(3).command("alice", "show", "version"))
+	d2 := w.answered("(d) region 2's command")(w.client(2).command("alice", "show", "version"))
 	row("d", "during the cut, a revocation in region 1: region 3's session still permitted (region 2's denied, the control)",
 		fmt.Sprintf("revoke exit %d; 5s later region 3 %s, region 2 %s", rcode, d3, d2),
 		rcode == 0 && d3 == "permit" && d2 == "deny")
@@ -615,6 +632,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	fst := "no token"
 	if tok, merr := regionMint(w.pki, regionIP(3)+":8443"); merr == nil {
 		w.hold(tok)
+		// A port49d that did not listen answers with an error: the row says
+		// so through lerr, and the empty answer is not "pass".
 		fst, _, _ = w.client(3).login("alice", tok)
 	}
 	// The session open before the restart: its command is served from the
@@ -641,6 +660,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 			firstLineWith(w.brokers[3].said(), "user:alice@example.com made elsewhere reached")),
 		ok && rerr == nil)
 	for _, p := range []string{"user:alice@example.com", "user:carol@example.com"} {
+		// Cleanup between cells: a lift that fails shows as a mint still refused
+		// just below, where the retry ends in INVALID.
 		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", p, "--lift")
 	}
 
@@ -762,7 +783,14 @@ func revisionOf(js string) int64 {
 	return rev
 }
 
-// etcdCount is `etcdctl get --count-only -w json`'s count.
+// snapshotCountArgs is the etcdctl read that counts the marks records.
+// --count-only is refused with -w json (v3.6.15: "only for --write-out=fields"),
+// so the keys are listed, without values, and the JSON's top-level count read.
+func snapshotCountArgs() []string {
+	return []string{"get", "--prefix", "/port49/v1/ds/m/", "--keys-only", "-w", "json"}
+}
+
+// etcdCount is the count of `etcdctl get --keys-only -w json`.
 func etcdCount(js string) int64 {
 	var r struct {
 		Count int64 `json:"count"`
@@ -799,7 +827,10 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if _, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
 		w.t.Fatalf("INVALID: the lift in region 1: exit %d", lcode)
 	}
-	st, _ := d.ctl(near, "endpoint", "status", "-w", "json")
+	st, serr := d.ctl(near, "endpoint", "status", "-w", "json")
+	if serr != nil {
+		w.t.Fatalf("INVALID: the directory's endpoint status: %v: %s", serr, st)
+	}
 	rev := revisionOf(st)
 	if rev == 0 {
 		w.t.Fatal("INVALID: the directory's revision could not be read")
@@ -821,6 +852,7 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		fmt.Sprintf("lift exit 0; compacted at revision %d; put-back line after %v: %s; alice's marks in the directory after: %d",
 			rev, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
 		perr == nil && n == 1)
+	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
 }
 
