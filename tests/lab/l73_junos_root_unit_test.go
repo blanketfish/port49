@@ -21,6 +21,7 @@ type rootDevice struct {
 	rootHasAuth bool
 	shellRan    []string
 	tailPW      string
+	shown       string
 }
 
 func (d *rootDevice) say(s string) { d.out.Write([]byte(s)) }
@@ -69,7 +70,7 @@ func (d *rootDevice) line(ln string) {
 		case strings.HasPrefix(ln, "openssl x509 -noout -subject_hash"):
 			d.say(map[bool]string{true: "aaaaaaaa", false: "cccccccc"}[strings.HasSuffix(ln, "root.pem")] + "\n")
 		case strings.HasPrefix(ln, "ls -l"):
-			d.say("-rw-r--r-- 1 root wheel 700 Oct 18 aaaaaaaa.0\n-- listing as root " + d.pw + "\n")
+			d.say("-rw-r--r-- 1 root wheel 700 Oct 18 aaaaaaaa.0 client.crt\n-- listing as root " + d.pw + "\n")
 		}
 		d.say("root@vj:~ # ")
 		return
@@ -81,6 +82,9 @@ func (d *rootDevice) line(ln string) {
 			d.say("set system root-authentication encrypted-password \"$6$abc$def\"\n")
 		}
 		d.say("breakglass@vj> ")
+	case strings.HasPrefix(ln, "file show "):
+		d.shown = strings.TrimPrefix(ln, "file show ")
+		d.say("-----BEGIN CERTIFICATE REQUEST-----\nMIIBfake\n-----END CERTIFICATE REQUEST-----\nbreakglass@vj> ")
 	case ln == "configure":
 		d.mode = "cfg"
 		d.say("[edit]\nbreakglass@vj# ")
@@ -130,7 +134,7 @@ func leakFree(t *testing.T, what string, strs ...string) {
 func TestL73JunosRootPlacesTheCAsAndLeaksNothing(t *testing.T) {
 	c, d := newRootDevice()
 	d.pw = testPW
-	out, screen, err := l73JunosRoot(c, l73TrustGroup, rootCAs, testPW, "$6$salt$HASHBODY")
+	out, screen, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: rootCAs}, testPW, "$6$salt$HASHBODY")
 	if err != nil {
 		t.Fatal(oneLine(err.Error()))
 	}
@@ -167,7 +171,7 @@ func TestL73JunosRootPlacesTheCAsAndLeaksNothing(t *testing.T) {
 func TestL73JunosRootWithoutDeviceOpenSSLPlacesBothNames(t *testing.T) {
 	c, d := newRootDevice()
 	d.pw, d.noOpenSSL = testPW, true
-	out, screen, err := l73JunosRoot(c, l73TrustGroup, rootCAs, testPW, "$6$salt$HASHBODY")
+	out, screen, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: rootCAs}, testPW, "$6$salt$HASHBODY")
 	if err != nil {
 		t.Fatal(oneLine(err.Error()))
 	}
@@ -191,7 +195,7 @@ func TestL73JunosRootRefusesWhatItCannotTrust(t *testing.T) {
 		c, d := newRootDevice()
 		d.pw = testPW
 		tweak(d)
-		out, screen, err := l73JunosRoot(c, l73TrustGroup, rootCAs, testPW, "$6$salt$HASHBODY")
+		out, screen, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: rootCAs}, testPW, "$6$salt$HASHBODY")
 		if err == nil {
 			t.Errorf("%s: no error", name)
 			continue
@@ -207,7 +211,7 @@ func TestL73JunosRootHashDisagreementIsInvalid(t *testing.T) {
 	c, d := newRootDevice()
 	d.pw = testPW
 	cas := []l73HostCA{{l73RootOnDevice, "99999999", "bbbbbbbb"}} // the device says aaaaaaaa
-	_, _, err := l73JunosRoot(c, l73TrustGroup, cas, testPW, "$6$salt$HASHBODY")
+	_, _, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: cas}, testPW, "$6$salt$HASHBODY")
 	if err == nil || !strings.Contains(err.Error(), "99999999") {
 		t.Fatalf("err %v", err)
 	}
@@ -221,7 +225,7 @@ func TestL73JunosRootHashDisagreementIsInvalid(t *testing.T) {
 func TestL73JunosRootRecordsAPresentRootAuthentication(t *testing.T) {
 	c, d := newRootDevice()
 	d.pw, d.rootHasAuth = testPW, true
-	out, screen, err := l73JunosRoot(c, l73TrustGroup, rootCAs, testPW, "$6$salt$HASHBODY")
+	out, screen, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: rootCAs}, testPW, "$6$salt$HASHBODY")
 	if err != nil {
 		t.Fatal(oneLine(err.Error()))
 	}
@@ -230,5 +234,69 @@ func TestL73JunosRootRecordsAPresentRootAuthentication(t *testing.T) {
 	}
 	if strings.Contains(screen, "$6$abc") || strings.Contains(fmt.Sprintf("%+v", out), "$6$abc") {
 		t.Error("the device's own hash was kept")
+	}
+}
+
+func TestL73JunosRootMakesTheClientKeyInPlaceAndKeepsOnlyTheRequest(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw = testPW
+	out, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+	if err != nil {
+		t.Fatal(oneLine(err.Error()))
+	}
+	leakFree(t, "outcome", fmt.Sprintf("%+v|%s", out, screen))
+	if d.hash != "" {
+		t.Error("a later session set the root hash again")
+	}
+	if !out.ClientMade || !strings.Contains(out.ClientCSR, "CERTIFICATE REQUEST") {
+		t.Errorf("outcome %+v", out)
+	}
+	j := strings.Join(d.shellRan, "\n")
+	for _, want := range []string{"openssl genpkey -algorithm EC", "chmod 600 " + l73ClientDir + "/client.key", "openssl req -new -key"} {
+		if !strings.Contains(j, want) {
+			t.Errorf("shell never ran %q", want)
+		}
+	}
+	for _, ran := range d.shellRan {
+		if !l73RootCmdAllowed(ran) {
+			t.Errorf("the shell ran %q", ran)
+		}
+		if strings.Contains(ran, "cat ") || (strings.Contains(ran, "client.key") && strings.HasPrefix(ran, "cp ")) {
+			t.Errorf("the shell read or copied the key: %q", ran)
+		}
+	}
+	// the key file's bytes are never asked for: the CSR comes from `file show` of the request alone
+	if d.shown != l73ClientCSR {
+		t.Errorf("file show %q", d.shown)
+	}
+}
+
+func TestL73JunosRootClientNeedsTheDevicesOpenSSL(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw, d.noOpenSSL = testPW, true
+	_, _, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+	if err == nil || !strings.Contains(err.Error(), "openssl") {
+		t.Fatalf("err %v", err)
+	}
+	for _, ran := range d.shellRan {
+		if strings.Contains(ran, "genpkey") {
+			t.Errorf("made a key anyway: %q", ran)
+		}
+	}
+}
+
+func TestL73JunosRootPlacesTheSignedClientCertificate(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw = testPW
+	out, _, err := l73JunosRoot(c, l73RootJob{PlaceClient: true}, testPW, "$6$salt$HASHBODY")
+	if err != nil {
+		t.Fatal(oneLine(err.Error()))
+	}
+	if d.hash != "" || out.ClientMade {
+		t.Errorf("hash %q outcome %+v", d.hash, out)
+	}
+	j := strings.Join(d.shellRan, "\n")
+	if !strings.Contains(j, "cp "+l73ClientCRT+" "+l73ClientDir+"/client.crt") || !strings.Contains(out.ClientListing, "client") {
+		t.Errorf("ran %q listing %q", j, out.ClientListing)
 	}
 }

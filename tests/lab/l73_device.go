@@ -952,4 +952,41 @@ var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit` +
 	`|openssl x509 -noout -subject_hash(_old)? -in (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `)` +
 	`|mkdir -p ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
 	`|ls -l ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
+	`|openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key` +
+	`|chmod 600 ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key` +
+	`|openssl req -new -key ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key -subj "/CN=[A-Za-z0-9][A-Za-z0-9.-]*" -out ` + regexp.QuoteMeta(l73ClientCSR) +
+	`|cp ` + regexp.QuoteMeta(l73ClientCRT) + ` ` + regexp.QuoteMeta(l73ClientDir) + `/client\.crt` +
 	`|cp (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `) ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*/[0-9a-f]{8}\.0)$`)
+
+// The client identity the image's tacplus certificate-id names: a folder
+// under l73TrustDir holding client.key and client.crt (inferred from Juniper's
+// RADSEC page; measured only if the handshake shows the device's certificate).
+// The key is made in place by the device's own openssl and nothing reads it
+// back or copies it.
+const (
+	l73ClientDir = l73TrustDir + "/" + l73CertID
+	l73ClientCSR = "/var/tmp/l73-client.csr"
+	l73ClientCRT = "/var/tmp/l73-client.crt"
+)
+
+var l73ClientNode = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
+
+// l73RootClientCmds are the root-shell lines that make the client key in its
+// folder and a request for it, named by node.
+func l73RootClientCmds(node string) ([]string, error) {
+	if !l73ClientNode.MatchString(node) {
+		return nil, fmt.Errorf("device name %q cannot go in a certificate subject", node)
+	}
+	k := l73ClientDir + "/client.key"
+	return []string{
+		"mkdir -p " + l73ClientDir,
+		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + k,
+		"chmod 600 " + k,
+		`openssl req -new -key ` + k + ` -subj "/CN=` + node + `" -out ` + l73ClientCSR,
+	}, nil
+}
+
+// l73RootPlaceCmds put the signed client certificate beside its key.
+func l73RootPlaceCmds() []string {
+	return []string{"cp " + l73ClientCRT + " " + l73ClientDir + "/client.crt", "ls -l " + l73ClientDir}
+}

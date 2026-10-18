@@ -16,6 +16,19 @@ type l73HostCA struct {
 	Cur, OldHsh string
 }
 
+// l73RootJob is what one root-shell session does. SetHash sets the root
+// password's hash first (the first session only). Group and CAs fill the trust
+// folder. ClientNode makes the client key and request in the certificate-id
+// folder (the key never leaves it) and fetches the request; PlaceClient puts
+// the signed certificate beside the key.
+type l73RootJob struct {
+	SetHash     bool
+	Group       string
+	CAs         []l73HostCA
+	ClientNode  string
+	PlaceClient bool
+}
+
 // l73RootOutcome is what the lab-only root step learned. Every string in it
 // is safe to keep: the password and its hash are masked, and the root shell's
 // transcript is not kept (only the listing).
@@ -26,6 +39,9 @@ type l73RootOutcome struct {
 	Placed         []string
 	Listing        string
 	Withheld       int
+	ClientMade     bool
+	ClientCSR      string // the request, public, as the CLI showed it
+	ClientListing  string
 }
 
 // l73JunosRoot is the lab-only root step on an open break-glass CLI, for the
@@ -38,7 +54,7 @@ type l73RootOutcome struct {
 // l73RootCmdAllowed lines, and leaves. The second result is the scrubbed
 // screen for the INVALID directory on failure. Neither it nor any error holds
 // pw or the hash; the root shell's transcript is kept only as the listing.
-func l73JunosRoot(c *cliConn, group string, cas []l73HostCA, pw, hash string) (l73RootOutcome, string, error) {
+func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, string, error) {
 	var o l73RootOutcome
 	var screen strings.Builder
 	mask := func(s string) string { return l73MaskAll(l73ScrubLog(hideKeys(s)), pw, hash) }
@@ -69,9 +85,11 @@ func l73JunosRoot(c *cliConn, group string, cas []l73HostCA, pw, hash string) (l
 	}
 
 	// Only the hash goes to the device; a refusal ends the run here.
-	if out, err := junosConfigure(c, `set system root-authentication encrypted-password "`+hash+`"`); err != nil {
-		keep(out)
-		return fail("the image did not take an encrypted-password for root: %v", err)
+	if job.SetHash {
+		if out, err := junosConfigure(c, `set system root-authentication encrypted-password "`+hash+`"`); err != nil {
+			keep(out)
+			return fail("the image did not take an encrypted-password for root: %v", err)
+		}
 	}
 
 	from = len(c.transcript())
@@ -122,8 +140,12 @@ func l73JunosRoot(c *cliConn, group string, cas []l73HostCA, pw, hash string) (l
 		return fail("%v", err)
 	}
 	o.DeviceOpenSSL = l73ParseWhich(which)
+	if job.ClientNode != "" && !o.DeviceOpenSSL {
+		leave()
+		return fail("the root shell has no openssl, so the client key cannot be made in place")
+	}
 	var certs []l73RootCert
-	for _, ca := range cas {
+	for _, ca := range job.CAs {
 		if o.DeviceOpenSSL {
 			cmd := "openssl x509 -noout -subject_hash -in " + ca.Src
 			got, err := shell(cmd)
@@ -138,10 +160,24 @@ func l73JunosRoot(c *cliConn, group string, cas []l73HostCA, pw, hash string) (l
 		}
 		certs = append(certs, l73RootCert{ca.Src, l73HashNames(o.DeviceOpenSSL, ca.Cur, ca.OldHsh)})
 	}
-	cmds, err := l73RootTrustCmds(group, certs)
-	if err != nil {
-		leave()
-		return fail("%v", err)
+	var cmds []string
+	if len(certs) > 0 {
+		var err error
+		if cmds, err = l73RootTrustCmds(job.Group, certs); err != nil {
+			leave()
+			return fail("%v", err)
+		}
+	}
+	if job.ClientNode != "" {
+		more, err := l73RootClientCmds(job.ClientNode)
+		if err != nil {
+			leave()
+			return fail("%v", err)
+		}
+		cmds = append(cmds, more...)
+	}
+	if job.PlaceClient {
+		cmds = append(cmds, l73RootPlaceCmds()...)
 	}
 	for _, cmd := range cmds {
 		got, err := shell(cmd)
@@ -150,33 +186,53 @@ func l73JunosRoot(c *cliConn, group string, cas []l73HostCA, pw, hash string) (l
 			leave()
 			return fail("%v", err)
 		}
-		if strings.HasPrefix(cmd, "ls -l") {
+		switch {
+		case strings.HasPrefix(cmd, "ls -l "+l73ClientDir):
+			o.ClientListing = strings.TrimSpace(mask(strings.ReplaceAll(got, "\r", "")))
+		case strings.HasPrefix(cmd, "ls -l"):
 			o.Listing = strings.TrimSpace(mask(strings.ReplaceAll(got, "\r", "")))
-		}
-		if strings.HasPrefix(cmd, "cp ") {
+		case strings.HasPrefix(cmd, "cp ") && !strings.Contains(cmd, l73ClientCRT):
 			o.Placed = append(o.Placed, cmd[strings.LastIndex(cmd, "/")+1:])
+		case strings.HasPrefix(cmd, "openssl req "):
+			o.ClientMade = true
 		}
 	}
 	if _, err := c.sendExpect("exit", 60*time.Second, junosOpPrompt); err != nil {
 		return fail("leaving the root shell: %v", err)
+	}
+	if o.ClientMade {
+		out, err := c.sendExpect("file show "+l73ClientCSR, 60*time.Second, junosOpPrompt)
+		if err != nil {
+			return fail("reading the client request: %v", err)
+		}
+		o.ClientCSR = out
 	}
 	return o, screen.String(), nil
 }
 
 // Facts are the lines the results note carries about the root step.
 func (o l73RootOutcome) Facts() []string {
-	set := "absent"
-	if o.RootAuthWasSet {
-		set = "present"
+	var facts []string
+	if len(o.Placed) > 0 {
+		set := "absent"
+		if o.RootAuthWasSet {
+			set = "present"
+		}
+		names := "both the current and the pre-1.0 subject hash (the device shell has no openssl to say which it wants)"
+		if o.DeviceOpenSSL {
+			names = "the subject hash, which the device's own openssl confirmed"
+		}
+		facts = append(facts,
+			"the trust folder was filled through the root shell, lab only: root-authentication was "+set+" on the image; this run set only a hash of a random password made in the harness process and typed the password only at `start shell user root`'s Password: prompt",
+			"`start shell user ?` answered: "+oneLine(o.StartShellHelp),
+			"CA file names: "+names+"; placed "+strings.Join(o.Placed, ", "),
+			"the folder as listed by root: "+oneLine(o.Listing))
 	}
-	names := "both the current and the pre-1.0 subject hash (the device shell has no openssl to say which it wants)"
-	if o.DeviceOpenSSL {
-		names = "the subject hash, which the device's own openssl confirmed"
+	if o.ClientMade {
+		facts = append(facts, "the client key and certificate were placed in a root-owned folder through the root shell: the device's own openssl made an EC P-256 key in place (`"+l73ClientDir+"/client.key`, mode 600), nothing read it back or copied it, only its request left the device and the lab intermediate's signed certificate was copied beside it as `client.crt`. The names client.key and client.crt are inferred from Juniper's RADSEC page, and are measured only if the handshake shows the device's certificate")
 	}
-	return []string{
-		"the trust folder was filled through the root shell, lab only: root-authentication was " + set + " on the image; this run set only a hash of a random password made in the harness process and typed the password only at `start shell user root`'s Password: prompt",
-		"`start shell user ?` answered: " + oneLine(o.StartShellHelp),
-		"CA file names: " + names + "; placed " + strings.Join(o.Placed, ", "),
-		"the folder as listed by root: " + oneLine(o.Listing),
+	if o.ClientListing != "" {
+		facts = append(facts, "the client folder as listed by root: "+oneLine(o.ClientListing))
 	}
+	return facts
 }

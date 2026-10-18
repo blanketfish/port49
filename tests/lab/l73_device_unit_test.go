@@ -717,6 +717,11 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"openssl x509 -noout -subject_hash -in /var/tmp/l73-root.pem",
 		"openssl x509 -noout -subject_hash_old -in /var/tmp/l73-inter.pem",
 		"mkdir -p " + d, "ls -l " + d,
+		"mkdir -p " + l73TrustDir + "/l73-dev", "ls -l " + l73TrustDir + "/l73-dev",
+		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + l73TrustDir + "/l73-dev/client.key",
+		"chmod 600 " + l73TrustDir + "/l73-dev/client.key",
+		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.crt",
 		"cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0", "cp /var/tmp/l73-inter.pem " + d + "/ffeeddcc.0"} {
 		if !l73RootCmdAllowed(ok) {
 			t.Errorf("%q refused", ok)
@@ -727,9 +732,54 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"cp /var/tmp/l73-root.pem /etc/master.passwd", "cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0 /tmp",
 		"mkdir -p /var/db/aaa_certs/tacplus_tls/../x", "mkdir -p /var/tmp/x", "rm -rf " + d, "cp /var/db/certd/x " + d + "/0a1b2c3d.0",
 		"openssl x509 -noout -subject_hash -in /var/db/certd/key-pair/x", "openssl rsa -in /var/tmp/l73-root.pem", "exit; id",
-		"which openssl\nid"} {
+		"which openssl\nid",
+		// nothing reads or moves the client key
+		"cat " + l73TrustDir + "/l73-dev/client.key", "cp " + l73TrustDir + "/l73-dev/client.key /var/tmp/k.pem",
+		"openssl pkey -in " + l73TrustDir + "/l73-dev/client.key", "openssl ec -in " + l73TrustDir + "/l73-dev/client.key -text",
+		"openssl rsa -in " + l73TrustDir + "/l73-dev/client.key", "scp " + l73TrustDir + "/l73-dev/client.key x:",
+		"chmod 644 " + l73TrustDir + "/l73-dev/client.key", "chmod 600 /var/tmp/l73-root.pem",
+		"chmod 600 " + l73TrustDir + "/l73-dev/client.key; cat " + l73TrustDir + "/l73-dev/client.key",
+		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out /var/tmp/k.pem",
+		"openssl genpkey -algorithm RSA -out " + l73TrustDir + "/l73-dev/client.key",
+		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/other.csr`,
+		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1;id" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr -text`,
+		`openssl req -new -key /var/db/certd/key-pair/x -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.key", "cp /var/tmp/l73-client.csr " + l73TrustDir + "/l73-dev/client.crt",
+		"cp /var/tmp/l73-client.crt /etc/x"} {
 		if l73RootCmdAllowed(bad) {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestL73RootClientCmds(t *testing.T) {
+	got, err := l73RootClientCmds("srx1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := l73TrustDir + "/l73-dev/client.key"
+	want := []string{
+		"mkdir -p " + l73TrustDir + "/l73-dev",
+		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + k,
+		"chmod 600 " + k,
+		`openssl req -new -key ` + k + ` -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q", got)
+	}
+	for _, bad := range []string{"", "a b", "x;id", `x"y`, "$(id)", "-x"} {
+		if _, err := l73RootClientCmds(bad); err == nil {
+			t.Errorf("node %q accepted", bad)
+		}
+	}
+	place := l73RootPlaceCmds()
+	if !slices.Equal(place, []string{"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.crt", "ls -l " + l73TrustDir + "/l73-dev"}) {
+		t.Fatalf("place %q", place)
+	}
+	for _, c := range append(got, place...) {
+		if !l73RootCmdAllowed(c) {
+			t.Errorf("%q is not allowed", c)
 		}
 	}
 }

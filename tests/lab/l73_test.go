@@ -1326,6 +1326,8 @@ func (e *l73Env) loadJunos() {
 	}{{l73RootOnDevice, e.pki.Root.PEM()}, {l73InterOnDevice, e.pki.Inter.PEM()}}
 	e.upload(map[string][]byte{trust[0].path: trust[0].pem, trust[1].path: trust[1].pem,
 		"/var/tmp/l73-dev.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
+	var pw, hash string
+	var clientCSR []byte
 	e.cli(func(c *cliConn) error {
 		for _, cmd := range l73LoadCommands() {
 			out, err := c.sendExpect(cmd, 120*time.Second, "[yes,no]", junosOpPrompt)
@@ -1360,19 +1362,36 @@ func (e *l73Env) loadJunos() {
 			}
 			cas = append(cas, l73HostCA{tc.path, cur, old})
 		}
-		pw, err := l73NewRootPassword()
+		var err error
+		pw, err = l73NewRootPassword()
 		if err != nil {
 			return fmt.Errorf("INVALID: %v", err)
 		}
 		e.secrets = append(e.secrets, pw)
-		hash, err := l73RootHash(pw)
-		if err != nil {
+		if hash, err = l73RootHash(pw); err != nil {
 			return fmt.Errorf("INVALID: %v", err)
 		}
 		e.secrets = append(e.secrets, hash)
-		root, screen, err := l73JunosRoot(c, l73TrustGroup, cas, pw, hash)
+		root, screen, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: cas, ClientNode: e.l.p.node}, pw, hash)
 		if err != nil {
 			e.invalidScreen("trust-folder", screen)
+			return fmt.Errorf("INVALID: %s", oneLine(l73MaskAll(l73ScrubLog(hideKeys(err.Error())), pw, hash)))
+		}
+		e.facts = append(e.facts, root.Facts()...)
+		var perr error
+		if clientCSR, perr = l73PEMBlock(root.ClientCSR, "CERTIFICATE REQUEST"); perr != nil {
+			return fmt.Errorf("INVALID: the client request the device made: %v", perr)
+		}
+		return nil
+	})
+	// The device's own request for the client key it made in place is signed as
+	// the first one was; that certificate is the one the device presents.
+	e.sign(clientCSR, "openssl req, in the root shell")
+	e.upload(map[string][]byte{l73ClientCRT: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
+	e.cli(func(c *cliConn) error {
+		root, screen, err := l73JunosRoot(c, l73RootJob{PlaceClient: true}, pw, hash)
+		if err != nil {
+			e.invalidScreen("client-cert", screen)
 			return fmt.Errorf("INVALID: %s", oneLine(l73MaskAll(l73ScrubLog(hideKeys(err.Error())), pw, hash)))
 		}
 		e.facts = append(e.facts, root.Facts()...)
