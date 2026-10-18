@@ -121,7 +121,10 @@ func TestL73CallsEveryCellAndEndsWithTheNote(t *testing.T) {
 	if len(defined) == 0 || len(called) == 0 || !slices.Contains(called, "note") {
 		t.Fatalf("defined %v called %v", defined, called)
 	}
-	if i := slices.Index(called, "note"); slices.Index(called, "cellB") > i || slices.Index(called, "cellH") > i {
-		t.Error("note must come after every cell")
+	i := slices.Index(called, "note")
+	for _, d := range defined {
+		if slices.Index(called, d) > i {
+			t.Errorf("note must come after every cell, but %s comes after it", d)
+		}
 	}
 }

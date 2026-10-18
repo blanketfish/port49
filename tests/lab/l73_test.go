@@ -1454,7 +1454,8 @@ func (e *l73Env) cellI() {
 			l73Daemon{Intermediates: e.files["inter.pem"], FaultFile: fault}, false},
 	}
 	var parts, unproven []string
-	docs := "yes: decision 50 rulings 5 and 8 (each refusal sends the device on to its next server or local method)"
+	docs := "yes: decision 50 rulings 5, 7 and 8 for the rows whose break-glass login landed (i-alert, i-accept, i-window); " +
+		"i-error is an observation only: spec §5.7 store_unavailable records from L4 that an authentication ERROR is final on Junos with tacplus alone"
 	contradicted := false
 	for _, r := range refusals {
 		e.guard()
