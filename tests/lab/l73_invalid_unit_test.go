@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,5 +85,24 @@ func TestL73InvalidScreenKeepsAPlainFilePath(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-configure.txt"))
 	if err != nil || !strings.Contains(string(b), "'/var/db/certs/common/local/l73-trust'") {
 		t.Fatal(err, string(b))
+	}
+}
+
+func TestL73InvalidScreenDropsEveryPrivateKeyBlock(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PORT49_L73_INVALID_DIR", dir)
+	e := &l73Env{l: &lab{p: platform{name: "x"}}}
+	var in strings.Builder
+	in.WriteString("$ show crypto key mypubkey rsa\nkey label: l73-key\n")
+	for i, kind := range []string{"RSA PRIVATE KEY", "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY"} {
+		fmt.Fprintf(&in, "-----BEGIN %s-----\nPRIVBODY%d\n-----END %s-----\n", kind, i, kind)
+	}
+	e.invalidScreen("device-3", in.String())
+	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-device-3.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "PRIVBODY") || strings.Contains(string(b), "PRIVATE KEY") || !strings.Contains(string(b), "key label: l73-key") {
+		t.Fatal(string(b))
 	}
 }

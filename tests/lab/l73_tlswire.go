@@ -77,11 +77,16 @@ type l73Conn struct {
 	ServerRecords int             `json:"server_tls_records"`
 	// Byte counts and the device's first FIN and RST: a count, never the
 	// bytes. End keeps only the last event; these say who closed first.
-	DevicePayloadBytes int        `json:"device_payload_bytes"`
-	ServerPayloadBytes int        `json:"server_payload_bytes"`
-	DeviceFINAt        time.Time  `json:"device_fin_at,omitzero"`
-	DeviceRSTAt        time.Time  `json:"device_rst_at,omitzero"`
-	Plain              []l73Plain `json:"plain_tacacs_from_device,omitempty"`
+	DevicePayloadBytes int       `json:"device_payload_bytes"`
+	ServerPayloadBytes int       `json:"server_payload_bytes"`
+	DeviceFINAt        time.Time `json:"device_fin_at,omitzero"`
+	DeviceRSTAt        time.Time `json:"device_rst_at,omitzero"`
+	// ServerFlightAt is the server's first data segment; DeviceReplyAt the
+	// device's first data segment after it. Their difference is the device's
+	// own delay before answering the server's flight.
+	ServerFlightAt time.Time  `json:"server_flight_at,omitzero"`
+	DeviceReplyAt  time.Time  `json:"device_reply_at,omitzero"`
+	Plain          []l73Plain `json:"plain_tacacs_from_device,omitempty"`
 	// Incomplete: the capture lacks bytes of this connection (a segment from
 	// its start, or one in a gap), so a missing hello is not evidence the
 	// device sent none.
@@ -169,6 +174,13 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 				st.c.Answer = "syn-ack"
 			case fl.Flags&rst != 0:
 				st.c.Answer = "rst"
+			}
+		}
+		if fl.PayloadLen > 0 {
+			if !fromDevice && st.c.ServerFlightAt.IsZero() {
+				st.c.ServerFlightAt = f.TimeOf(i)
+			} else if fromDevice && !st.c.ServerFlightAt.IsZero() && st.c.DeviceReplyAt.IsZero() {
+				st.c.DeviceReplyAt = f.TimeOf(i)
 			}
 		}
 		if fromDevice {
@@ -573,6 +585,13 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 		}
 		if c.ServerPayloadBytes > 0 {
 			s += fmt.Sprintf(", server sent %d bytes", c.ServerPayloadBytes)
+		}
+		switch {
+		case c.ServerFlightAt.IsZero():
+		case c.DeviceReplyAt.IsZero():
+			s += ", device sent no data after the server's first data"
+		default:
+			s += fmt.Sprintf(", device's next data %.2fs after the server's first data", c.DeviceReplyAt.Sub(c.ServerFlightAt).Seconds())
 		}
 		if !c.DeviceFINAt.IsZero() {
 			s += fmt.Sprintf(", device fin at %+.2fs", c.DeviceFINAt.Sub(from).Seconds())

@@ -303,6 +303,7 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		"l73Conn.Alerts": "[]lab.l73Alert", "l73Conn.DeviceRecords": "int", "l73Conn.ServerRecords": "int",
 		"l73Conn.Plain": "[]lab.l73Plain", "l73Conn.Incomplete": "bool", "l73Conn.End": "string", "l73Conn.EndAt": "time.Time",
 		"l73Conn.DevicePayloadBytes": "int", "l73Conn.ServerPayloadBytes": "int", "l73Conn.DeviceFINAt": "time.Time", "l73Conn.DeviceRSTAt": "time.Time",
+		"l73Conn.ServerFlightAt": "time.Time", "l73Conn.DeviceReplyAt": "time.Time",
 		"l73Hello.LegacyVersion": "uint16", "l73Hello.Versions": "[]uint16", "l73Hello.Suites": "[]uint16",
 		"l73Hello.HasSNI": "bool", "l73Hello.SNI": "string", "l73Hello.Groups": "[]uint16",
 		"l73Hello.SigAlgs": "[]uint16", "l73Hello.ALPN": "[]string", "l73Hello.PSKIdentities": "int",
@@ -596,5 +597,58 @@ func TestL73DescribeShowsPlainHeaderFieldsOnly(t *testing.T) {
 	got := l73Describe(conns, t0)
 	if !strings.Contains(got, "1 plain TACACS+ header(s) (type 1 seq_no 1 flags 0x04)") {
 		t.Fatal(got)
+	}
+}
+
+// The gap between the server's first data and the device's next data is the
+// device's own delay (a handshake that needs a longer timeout than the
+// server's shows here); a connection whose device never answered says so.
+func TestL73ConnsMeasuresTheDevicesDelayAfterTheServersFlight(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0)
+	segs := []l73FakeSeg{
+		{true, tcpSYN, 1000, nil, at},
+		{false, tcpSYN | tcpACK, 5000, nil, at},
+		{true, tcpACK | tcpPSH, 1001, []byte("0123456789"), at.Add(time.Millisecond)},
+		{false, tcpACK | tcpPSH, 5001, []byte("abc"), at.Add(2 * time.Millisecond)},
+		{true, tcpACK, 1011, nil, at.Add(3 * time.Millisecond)}, // an ACK is not data
+		{true, tcpACK | tcpPSH, 1011, []byte("0123"), at.Add(5002 * time.Millisecond)},
+		{false, tcpFIN | tcpACK, 5004, nil, at.Add(5003 * time.Millisecond)},
+	}
+	var twice []l73FakeSeg
+	for _, s := range segs {
+		twice = append(twice, s, s)
+	}
+	conns, err := l73Conns(l73FakePcap(40011, 300, twice), l73TDevice)
+	if err != nil || len(conns) != 1 {
+		t.Fatal(conns, err)
+	}
+	c := conns[0]
+	if !c.ServerFlightAt.Equal(at.Add(2*time.Millisecond)) || !c.DeviceReplyAt.Equal(at.Add(5002*time.Millisecond)) {
+		t.Fatalf("%+v", c)
+	}
+	if got := l73Describe(conns, at); !strings.Contains(got, "device's next data 5.00s after the server's first data") {
+		t.Errorf("missing the gap in %s", got)
+	}
+
+	silent := []l73FakeSeg{
+		{true, tcpSYN, 1000, nil, at},
+		{false, tcpSYN | tcpACK, 5000, nil, at},
+		{true, tcpACK | tcpPSH, 1001, []byte("0123456789"), at.Add(time.Millisecond)},
+		{false, tcpACK | tcpPSH, 5001, []byte("abc"), at.Add(2 * time.Millisecond)},
+		{false, tcpFIN | tcpACK, 5004, nil, at.Add(5 * time.Second)},
+	}
+	conns, err = l73Conns(l73FakePcap(40012, 300, silent), l73TDevice)
+	if err != nil || len(conns) != 1 || !conns[0].DeviceReplyAt.IsZero() {
+		t.Fatal(conns, err)
+	}
+	if got := l73Describe(conns, at); !strings.Contains(got, "device sent no data after the server's first data") {
+		t.Errorf("missing the silence in %s", got)
+	}
+
+	// A connection the server never sent data on has no gap to state.
+	none := []l73FakeSeg{{true, tcpSYN, 1000, nil, at}, {false, tcpRST | tcpACK, 0, nil, at}}
+	conns, _ = l73Conns(l73FakePcap(40013, 300, none), l73TDevice)
+	if got := l73Describe(conns, at); strings.Contains(got, "server's first data") {
+		t.Errorf("a gap stated with no server data: %s", got)
 	}
 }

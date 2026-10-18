@@ -230,6 +230,8 @@ type l73Daemon struct {
 	Status        string // certificate_status, a YAML flow mapping
 	FaultFile     string
 	Attrs         string // session_attributes, a YAML flow list; "" keeps the lab file's
+	// HandshakeTimeout is tls_listener.handshake_timeout; 0 keeps the default (5s).
+	HandshakeTimeout time.Duration
 }
 
 func l73DaemonYAML(base string, o l73Daemon) (string, error) {
@@ -267,6 +269,9 @@ func l73DaemonYAML(base string, o l73Daemon) (string, error) {
 			quoted[i] = strconv.Quote(n)
 		}
 		fmt.Fprintf(&b, "  server_names: [%s]\n", strings.Join(quoted, ", "))
+	}
+	if o.HandshakeTimeout > 0 {
+		fmt.Fprintf(&b, "  handshake_timeout: %s\n", o.HandshakeTimeout)
 	}
 	fmt.Fprintf(&b, "  session_ticket_lifetime: %s\n  state_dir: %s\n  certificate_status: %s\n", o.Tickets, o.StateDir, o.Status)
 	return out + b.String(), nil

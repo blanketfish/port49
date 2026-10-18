@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
@@ -13,32 +14,35 @@ import (
 // l73Dialect is how TestL73 asks one platform's CLI about its RFC 9887
 // client, points the client at port49 and puts it back, and reads it.
 type l73Dialect struct {
-	Family         string // junos, iosxe, nxos, eos, xr: which line builders apply
-	Vendor         string // the note's name for the OS
-	Probe          string // the l71Probes entry whose question the first ask is
-	Enter          []string
-	Cleanup        []string
-	CfgMark        string // what every configuration prompt contains
-	Asks           []l73Ask
-	HelpOnly       bool
-	VersionCmd     string // run after each token login
-	VersionHas     string // what its output holds on the image under test
-	Attrs          string // port49d's session_attributes here; "" keeps the lab file's
-	Enrol          string // cell e's "configured" wording
-	Fallback       string // the startup config's login method list (cell i)
-	Revocation     string // the run facts' sentence on device-side revocation
-	LogCmd         string
-	ShowCmds       []string
-	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
-	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
-	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
-	DiagAsks       []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
-	DiagDeep       int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
-	DiagFilter     []string // DiagFilterAsks are followed only into the keywords that hold one of these
-	DiagFilterAsks []string // DiagAsks' counterpart whose deeper levels DiagFilter narrows
-	DiagSubIn      []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
-	DiagSubAsks    []string // asks made inside that submode ("" is the submode's own help)
-	DiagSubOut     []string // lines that leave it and undo what DiagSubIn made
+	Family     string // junos, iosxe, nxos, eos, xr: which line builders apply
+	Vendor     string // the note's name for the OS
+	Probe      string // the l71Probes entry whose question the first ask is
+	Enter      []string
+	Cleanup    []string
+	CfgMark    string // what every configuration prompt contains
+	Asks       []l73Ask
+	HelpOnly   bool
+	VersionCmd string // run after each token login
+	VersionHas string // what its output holds on the image under test
+	Attrs      string // port49d's session_attributes here; "" keeps the lab file's
+	Enrol      string // cell e's "configured" wording
+	Fallback   string // the startup config's login method list (cell i)
+	Revocation string // the run facts' sentence on device-side revocation
+	LogCmd     string
+	ShowCmds   []string
+	// HandshakeTimeout is the daemon's tls_listener.handshake_timeout on this
+	// platform; 0 keeps the default.
+	HandshakeTimeout time.Duration
+	InvalidCmds      []string // read into PORT49_L73_INVALID_DIR when the control login fails
+	RefusalCmds      []string // read into the INVALID dir when configuring the TLS client is refused
+	DiagOpAsks       []string // DiagAsks' operational-mode counterpart
+	DiagAsks         []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
+	DiagDeep         int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
+	DiagFilter       []string // DiagFilterAsks are followed only into the keywords that hold one of these
+	DiagFilterAsks   []string // DiagAsks' counterpart whose deeper levels DiagFilter narrows
+	DiagSubIn        []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
+	DiagSubAsks      []string // asks made inside that submode ("" is the submode's own help)
+	DiagSubOut       []string // lines that leave it and undo what DiagSubIn made
 }
 
 var l73JunosDialect = l73Dialect{
@@ -176,6 +180,11 @@ var l73Dialects = map[string]l73Dialect{
 		Fallback:   "`aaa authentication login default group port49 local` (configs/nxos-startup.cfg)",
 		Revocation: "`revocation-check none` on both trustpoints",
 		LogCmd:     `show logging logfile | egrep "TACACS|tacacs|TLS|tls|PKI|pki" | last 40`,
+		// The first run saw the device send its client flight 5.00 s after the
+		// server's flight, the instant the default 5s handshake_timeout fired.
+		HandshakeTimeout: 30 * time.Second,
+		InvalidCmds: []string{"show logging last 50", "show crypto ca certificates " + l73CertID, "show crypto key mypubkey rsa",
+			"show running-config tacacs+"},
 		ShowCmds: []string{"show running-config tacacs+", "show crypto ca trustpoints",
 			"show crypto ca certificates " + l73CertID, "show tacacs-server"},
 	},

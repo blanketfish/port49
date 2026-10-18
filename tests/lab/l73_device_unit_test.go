@@ -840,3 +840,28 @@ func TestL73NXOSImportOKReadsTheCertificateBack(t *testing.T) {
 		}
 	}
 }
+
+func TestL73DaemonYAMLHandshakeTimeoutIsSetOnlyWhenAsked(t *testing.T) {
+	base, err := os.ReadFile("port49d-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := l73Daemon{Inventory: "/x/i.yaml", TLSListen: "172.100.100.1:300", Cert: "/x/s.crt", Key: "/x/s.key", ClientCA: "/x/r.pem",
+		StateDir: "/x/state", Status: "{disabled: true}", Attrs: "[]"}
+	for want, d := range map[any]time.Duration{nil: 0, "30s": 30 * time.Second} {
+		o.HandshakeTimeout = d
+		out, err := l73DaemonYAML(string(base), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			TLS map[string]any `yaml:"tls_listener"`
+		}
+		if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := cfg.TLS["handshake_timeout"]; got != want {
+			t.Errorf("handshake_timeout %v for %s, want %v", got, d, want)
+		}
+	}
+}
