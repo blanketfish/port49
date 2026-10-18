@@ -54,6 +54,8 @@ var l76Cells = []l76Cell{
 	{"h", "priv-lvl=1 in the reply: the roles the session gets (p49-read only) and the session table's priv-lvl"},
 	{"i", "priv-lvl-authorization false (the default): whether any authorization request is sent, and the roles the session gets"},
 	{"j", "service-request nokia-srl-authorization-role true: the services the device asks for, port49's answers, and whether the login survives them"},
+	{"k", "a priv-lvl 1 user's second exec channel on one SSH login: the session table's Role cell on the first and the second exec, and whether a documented harmless write that p49-read must not be allowed succeeds on either"},
+	{"l", "exit-on-reject true: whether the break-glass account still logs in through local, and how fast, when port49 denies it, with a wrong shared secret and with port49 stopped"},
 }
 
 // l76Claim is the note's Claim: the row's lead and every cell.
@@ -414,7 +416,38 @@ const (
 	l76RoleServiceOff  = "set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role false"
 )
 
-var l76SetLines = []string{l76PrivLvlAuthzOff, l76PrivLvlAuthzOn, l76RoleServiceOn, l76RoleServiceOff}
+// Cell (l)'s change: exit-on-reject is a leaf of system aaa authentication
+// (srl_nokia-aaa.yang:1165, default false).
+const (
+	l76ExitOnRejectOn  = "set / system aaa authentication exit-on-reject true"
+	l76ExitOnRejectOff = "set / system aaa authentication exit-on-reject false"
+)
+
+var l76SetLines = []string{l76PrivLvlAuthzOff, l76PrivLvlAuthzOn, l76RoleServiceOn, l76RoleServiceOff,
+	l76ExitOnRejectOn, l76ExitOnRejectOff}
+
+// Cell (k)'s write: a checkpoint of the running configuration, which a
+// read-only role must not be allowed to make, and its removal. The first is
+// sent over SSH as the user's exec, the second as the container's root.
+// <name> is a checkpoint name, which may not start with a digit
+// (srl_nokia-common.yang typedef checkpoint-name).
+const (
+	l76CheckpointMakeForm  = "tools system configuration generate-checkpoint name <name>"
+	l76CheckpointClearForm = "tools system configuration checkpoint <name> clear"
+	// The names of the first-exec and second-exec attempts.
+	l76CheckpointNameFirst  = "l76-k-first"
+	l76CheckpointNameSecond = "l76-k-second"
+)
+
+var l76WriteForms = []string{l76CheckpointMakeForm, l76CheckpointClearForm}
+
+func l76CheckpointMake(name string) string {
+	return strings.ReplaceAll(l76CheckpointMakeForm, "<name>", name)
+}
+
+func l76CheckpointClear(name string) string {
+	return strings.ReplaceAll(l76CheckpointClearForm, "<name>", name)
+}
 
 // l76ModelRead is how the schema check reads a YANG model from the image: a
 // container file read, not SR Linux CLI syntax.
@@ -424,6 +457,7 @@ const l76ModelRead = `cat "$(find /opt/srlinux/models -name <model> | head -1)"`
 // container's root.
 var l76RootForms = []string{
 	"sr_cli -d <command>",
+	l76CheckpointClearForm,
 	"sr_cli --help",
 	"sr_cli -d --candidate-mode --commit-at-end -- <line>",
 	"enter candidate",
@@ -455,6 +489,12 @@ var l76Sources = []l76Source{
 	{l76PrivLvlAuthzOn, "CLAB#cli (flat form); SA#configuring-tacacsx-authorization"},
 	{l76RoleServiceOn, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
 	{l76RoleServiceOff, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
+	{l76ExitOnRejectOn, "CLAB#cli (flat form); YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication)"},
+	{l76ExitOnRejectOff, "CLAB#cli (flat form); YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication)"},
+	{l76CheckpointMakeForm, "CM#configuration-checkpoints (Generating a checkpoint); " +
+		"YANG srl_nokia-tools-configuration.yang:150 (container generate-checkpoint, leaf name)"},
+	{l76CheckpointClearForm, "CM#configuration-checkpoints (Clearing a checkpoint); " +
+		"YANG srl_nokia-tools-configuration.yang:120 (list checkpoint, key id, leaf clear)"},
 	{"sr_cli -d <command>", "HELP (-d/--dumb-terminal, with a positional command run as one line)"},
 	{"sr_cli --help", "HELP"},
 	{l76ModelRead, "YANG srl_nokia-aaa.yang; YANG srl_nokia-aaa-types.yang (the image's own models)"},
@@ -900,4 +940,161 @@ func l76VersionText(s string) string {
 		out = strings.Replace(out, fmt.Sprintf("\x00%d\x00", i), m, 1)
 	}
 	return out
+}
+
+// l76Channel is one accounted command of a login, from its start record.
+type l76Channel struct {
+	Cmd      string
+	Port     string
+	Priv     int
+	Redacted bool
+}
+
+// l76ChannelFacts is user's accounting start records in log order: one per
+// command, so the n-th is the n-th exec channel of a login that runs commands
+// one after another.
+func l76ChannelFacts(recs []map[string]any, user string) []l76Channel {
+	var out []l76Channel
+	for _, r := range recs {
+		if l76Str(r, "event") != "account" || l76Str(r, "flags") != "start" || l76Str(r, "session", "username") != user {
+			continue
+		}
+		c := l76Channel{Port: l76Str(r, "session", "port")}
+		if v, ok := l76At(r, "record", "priv_lvl").(float64); ok {
+			c.Priv = int(v)
+		}
+		if b, ok := l76At(r, "record", "redacted").(bool); ok {
+			c.Redacted = b
+		}
+		for _, a := range l76Strs(r, "record", "raw") {
+			if rest, ok := strings.CutPrefix(a, "cmd="); ok {
+				c.Cmd = rest
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// l76ChannelText states, from port49's accounting records, the port and
+// priv-lvl each command of one login was accounted at, whether they differ
+// (the second exec channel), and that port49 redacted a word of a command.
+// granted is the priv-lvl the reply gave.
+func l76ChannelText(ch []l76Channel, granted int) string {
+	if len(ch) == 0 {
+		return "No accounting start record was kept for this login, so the accounted port and priv-lvl are not known."
+	}
+	var b strings.Builder
+	b.WriteString("Accounted commands of this login, in order, from `evidence/L76-nokia_srlinux/decisions.jsonl`:\n\n")
+	for i, c := range ch {
+		fmt.Fprintf(&b, "%d. `%s`: port `%s`, priv-lvl %d\n", i+1, l76FilterLog(c.Cmd), c.Port, c.Priv)
+	}
+	differs := false
+	for _, c := range ch[1:] {
+		if c.Port != ch[0].Port || c.Priv != ch[0].Priv {
+			differs = true
+		}
+	}
+	if differs {
+		fmt.Fprintf(&b, "\nThe commands after the first are accounted on a different port or at a different priv-lvl "+
+			"than the first, while the reply granted priv-lvl %d. Whether that channel also runs with more authority "+
+			"is measured in cell (k); this line is only what the device sent port49.\n", granted)
+	}
+	for _, c := range ch {
+		if c.Redacted {
+			b.WriteString("\nport49 redacts the word after `authentication` in the accounted `show system aaa authentication` " +
+				"command (the records carry `redacted: true` and the word is shown as `\u00abredacted\u00bb`): its accounting " +
+				"redaction treats that word as a credential, so an operator reading SR Linux accounting sees the command " +
+				"without it. Input for the `nokia_srlinux` adapter: whether that rule should be platform-aware.\n")
+			break
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// l76Write is one write attempt of cell (k).
+type l76Write struct {
+	Name     string
+	Done     bool   // the make was not refused and the clear found something
+	MakeOut  string // filtered
+	ClearOut string // filtered
+}
+
+var l76RefusalWords = []string{"denied", "not authorized", "unauthorized", "not permitted", "permission", "error",
+	"unknown", "invalid", "failed", "not allowed", "not found", "no such"}
+
+func l76Refused(out string) bool {
+	low := strings.ToLower(out)
+	for _, w := range l76RefusalWords {
+		if strings.Contains(low, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// l76WriteDone says whether a write happened: the device did not refuse the
+// make, and the root clear (which removes it again) found the checkpoint and
+// removed it. The outputs are printed beside the verdict for a reader to judge.
+func l76WriteDone(makeOut, clearOut string, clearErr error) bool {
+	return !l76Refused(makeOut) && clearErr == nil && !l76Refused(clearOut)
+}
+
+// l76WriteText is cell (k)'s verdict: first is the attempt as the first exec
+// of its login, second as the second exec.
+func l76WriteText(first, second l76Write) string {
+	var b strings.Builder
+	did := func(w l76Write) string {
+		if w.Done {
+			return "**succeeded**"
+		}
+		return "was refused or made nothing"
+	}
+	fmt.Fprintf(&b, "A checkpoint is a harmless write that the `p49-read` role (`rule / { action read }`) must not be allowed "+
+		"(CM#configuration-checkpoints). As the first exec of a priv-lvl 1 login it %s; as the second exec it %s.", did(first), did(second))
+	switch {
+	case second.Done && !first.Done:
+		b.WriteString("\n\n**Security finding:** the second exec channel of one SSH login wrote what the first exec channel " +
+			"of the same login, with the same roles, was refused. A priv-lvl 1 user can write through the second exec. " +
+			"This is not INVALID; it is a measurement the `nokia_srlinux` adapter and plan 12 must carry.")
+	case second.Done && first.Done:
+		b.WriteString("\n\nThe write works on the first exec too, so the `p49-read` rule `/ read` does not gate `tools` commands: " +
+			"it does not gate a checkpoint on either channel, and this cell shows no difference between the channels. " +
+			"The second exec's priv-lvl 15 accounting is then not shown to add authority.")
+	case !second.Done && !first.Done:
+		b.WriteString("\n\nThe write was refused on both channels, so the second exec's priv-lvl 15 accounting is not shown to " +
+			"add authority for a write.")
+	default:
+		b.WriteString("\n\nThe first exec wrote and the second did not: the channels differ the other way round from the accounting.")
+	}
+	for _, w := range []l76Write{first, second} {
+		fmt.Fprintf(&b, "\n\n`%s`: make said %q; root's clear said %q.", w.Name, w.MakeOut, w.ClearOut)
+	}
+	return b.String()
+}
+
+// l76ExitDefaultNote is on the break-glass cells that ran at the default.
+const l76ExitDefaultNote = "These break-glass results hold for `exit-on-reject` false, the default; cell (l) repeats them at true."
+
+// l76DeviceMismatchNote explains cell (d)'s reason.
+const l76DeviceMismatchNote = "The wrong password is a random string shaped like a token, so port49's device-tag check " +
+	"refuses it as `device_mismatch` (a token cut for another device, internal/daemon/authen/authen.go). A mistyped human " +
+	"password is not token-shaped and would reach `token_not_found`, as the break-glass line shows."
+
+// l76PrivLvlAuthzHazard is cell (i)'s operator hazard.
+const l76PrivLvlAuthzHazard = "**Operator hazard:** with `priv-lvl-authorization` at its default (false) no authorization " +
+	"request reaches port49, so port49's privilege and role answer is never asked for: every user port49 authenticates gets " +
+	"whatever the device grants without it. The YANG says that is full admin access (srl_nokia-aaa.yang:254); this run " +
+	"measured only reads as that user, so the full-admin claim is YANG-stated and not measured. Plan 12's reference config " +
+	"sets `priv-lvl-authorization true`."
+
+// l76ExitHazard is cell (l)'s operator line: refused names the scenarios in
+// which break-glass was refused with exit-on-reject true.
+func l76ExitHazard(refused []string) string {
+	if len(refused) == 0 {
+		return "In every scenario the break-glass account still logged in through `local` with `exit-on-reject` true."
+	}
+	return "**Operator hazard:** with `exit-on-reject` true the break-glass account was locked out when: " +
+		strings.Join(refused, "; ") + ". That is the configuration plan 12 would ship, so these are what an operator " +
+		"meets at 3am."
 }

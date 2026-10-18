@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestL76CellsAreTheRegistersCells(t *testing.T) {
 	if row == "" {
 		t.Fatal("spec §15 has no L76 row")
 	}
-	want := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	want := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"}
 	if len(l76Cells) != len(want) {
 		t.Fatalf("%d cells, want %d", len(l76Cells), len(want))
 	}
@@ -48,7 +49,7 @@ func TestL76CellsAreTheRegistersCells(t *testing.T) {
 		}
 		last = at
 	}
-	if !strings.HasPrefix(l76Claim(), "Nokia SR Linux") || !strings.Contains(l76Claim(), "(j) "+l76Cells[9].claim) {
+	if !strings.HasPrefix(l76Claim(), "Nokia SR Linux") || !strings.Contains(l76Claim(), "(l) "+l76Cells[11].claim) {
 		t.Errorf("l76Claim does not carry the cells: %q", l76Claim())
 	}
 }
@@ -579,6 +580,7 @@ func TestL76SourcesCiteEveryCommand(t *testing.T) {
 	used = append(used, l76SetLines...)
 	used = append(used, l76RootForms...)
 	used = append(used, l76ReadRunning, l76ReadGroup)
+	used = append(used, l76WriteForms...)
 	for _, c := range used {
 		if !cited[c] {
 			t.Errorf("%q has no row in l76Sources", c)
@@ -1262,5 +1264,152 @@ func TestL76VersionTextKeepsOnlyTheVersionValue(t *testing.T) {
 	full := "version v26.7.2-519-g" + strings.Repeat("ab", 20)
 	if got := l76VersionText(full); strings.Contains(got, strings.Repeat("ab", 20)) {
 		t.Errorf("a full hash survived: %q", got)
+	}
+}
+
+func TestL76ExitOnRejectLinesAreFlatAndCited(t *testing.T) {
+	for _, l := range []string{l76ExitOnRejectOn, l76ExitOnRejectOff} {
+		if !strings.HasPrefix(l, "set / system aaa authentication exit-on-reject ") {
+			t.Errorf("%q is not the flat form of srl_nokia-aaa.yang:1165's leaf", l)
+		}
+		if !slices.Contains(l76SetLines, l) {
+			t.Errorf("%q is not in l76SetLines, so no Sources row is required for it", l)
+		}
+	}
+}
+
+func TestL76CheckpointFormsAreTheDocumentedCommands(t *testing.T) {
+	if got := l76CheckpointMake("l76-k2"); got != "tools system configuration generate-checkpoint name l76-k2" {
+		t.Errorf("make = %q", got)
+	}
+	if got := l76CheckpointClear("l76-k2"); got != "tools system configuration checkpoint l76-k2 clear" {
+		t.Errorf("clear = %q", got)
+	}
+	for _, f := range l76WriteForms {
+		if !strings.Contains(f, "<name>") {
+			t.Errorf("form %q has no <name> placeholder", f)
+		}
+	}
+	// srl_nokia-common.yang checkpoint-name: not a name that starts with a digit.
+	for _, n := range []string{l76CheckpointNameFirst, l76CheckpointNameSecond} {
+		if n == "" || (n[0] >= '0' && n[0] <= '9') {
+			t.Errorf("checkpoint name %q starts with a digit", n)
+		}
+	}
+}
+
+// l76AcctFixture is two accounting start records of one login, shaped as
+// decisions.jsonl shows alice05 in the run of 2026-10-18.
+func l76AcctFixture() []map[string]any {
+	mk := func(flags, port string, priv int, cmd string, redacted bool) map[string]any {
+		rec := map[string]any{"priv_lvl": float64(priv), "raw": []any{"task_id=2", "service=shell", "cmd=" + cmd}}
+		if redacted {
+			rec["redacted"] = true
+		}
+		return map[string]any{"event": "account", "flags": flags,
+			"session": map[string]any{"username": "alice05", "port": port, "privilege": float64(priv)}, "record": rec}
+	}
+	return []map[string]any{
+		mk("start", "ssh", 1, "show system aaa authentication \u00abredacted\u00bb", true),
+		mk("stop", "ssh", 1, "show system aaa authentication \u00abredacted\u00bb", true),
+		mk("start", "unknown", 15, "info from state system information version", false),
+		mk("stop", "unknown", 15, "info from state system information version", false),
+	}
+}
+
+func TestL76ChannelFactsAreTheStartRecordsInOrder(t *testing.T) {
+	ch := l76ChannelFacts(l76AcctFixture(), "alice05")
+	if len(ch) != 2 {
+		t.Fatalf("%d channels, want 2 (one per start record): %+v", len(ch), ch)
+	}
+	if ch[0].Port != "ssh" || ch[0].Priv != 1 || !ch[0].Redacted || ch[1].Port != "unknown" || ch[1].Priv != 15 || ch[1].Redacted {
+		t.Errorf("%+v", ch)
+	}
+	if !strings.Contains(ch[1].Cmd, "info from state system information version") {
+		t.Errorf("cmd = %q", ch[1].Cmd)
+	}
+	if got := l76ChannelFacts(l76AcctFixture(), "bob"); len(got) != 0 {
+		t.Errorf("another user's records were read: %+v", got)
+	}
+}
+
+func TestL76ChannelTextStatesTheSecondExecAndTheRedaction(t *testing.T) {
+	ch := l76ChannelFacts(l76AcctFixture(), "alice05")
+	text := l76ChannelText(ch, 1)
+	for _, want := range []string{"`ssh`", "priv-lvl 1", "`unknown`", "priv-lvl 15", "decisions.jsonl",
+		"the reply granted priv-lvl 1", "redact"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("channel text lacks %q:\n%s", want, text)
+		}
+	}
+	// Two channels at one level and port: no finding is claimed.
+	same := []l76Channel{{Cmd: "a", Port: "ssh", Priv: 1}, {Cmd: "b", Port: "ssh", Priv: 1}}
+	if got := l76ChannelText(same, 1); strings.Contains(got, "differs") || strings.Contains(got, "redact") {
+		t.Errorf("a finding without a difference: %s", got)
+	}
+	if got := l76ChannelText(nil, 1); !strings.Contains(got, "No accounting") {
+		t.Errorf("no records: %q", got)
+	}
+}
+
+func TestL76WriteVerdict(t *testing.T) {
+	if !l76WriteDone("", "", nil) {
+		t.Error("a silent make and a clean clear is a write that happened")
+	}
+	for _, out := range []string{"Error: access denied", "Parsing error", "Permission denied", "not authorized", "unknown command"} {
+		if l76WriteDone(out, "", nil) {
+			t.Errorf("make output %q was read as a success", out)
+		}
+		if l76WriteDone("", out, nil) {
+			t.Errorf("clear output %q was read as a success", out)
+		}
+	}
+	if l76WriteDone("", "", errors.New("exit status 1")) {
+		t.Error("a clear that failed means there was nothing to clear")
+	}
+}
+
+func TestL76WriteTextFlagsASecurityFindingOnlyWhenTheSecondExecWrote(t *testing.T) {
+	secondOnly := l76WriteText(l76Write{Name: "l76-k-first", Done: false}, l76Write{Name: "l76-k-second", Done: true})
+	if !strings.Contains(secondOnly, "Security finding") || !strings.Contains(secondOnly, "second") {
+		t.Errorf("the second exec wrote and the first did not: %s", secondOnly)
+	}
+	both := l76WriteText(l76Write{Done: true}, l76Write{Done: true})
+	if strings.Contains(both, "Security finding") || !strings.Contains(both, "does not gate") {
+		t.Errorf("a write that works on the first exec too is no escalation: %s", both)
+	}
+	none := l76WriteText(l76Write{Done: false}, l76Write{Done: false})
+	if strings.Contains(none, "Security finding") || !strings.Contains(none, "refused") {
+		t.Errorf("neither wrote: %s", none)
+	}
+}
+
+func TestL76ExitOnRejectHazardNamesWhatLockedBreakglassOut(t *testing.T) {
+	if got := l76ExitHazard(nil); !strings.Contains(got, "still logged in") {
+		t.Errorf("nothing refused: %q", got)
+	}
+	got := l76ExitHazard([]string{"a port49 deny", "port49 stopped"})
+	for _, want := range []string{"Operator hazard", "a port49 deny", "port49 stopped", "locked out"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hazard lacks %q: %s", want, got)
+		}
+	}
+}
+
+func TestL76NotesStateTheirExitOnRejectValueAndExplainTheMismatch(t *testing.T) {
+	if !strings.Contains(l76ExitDefaultNote, "exit-on-reject") || !strings.Contains(l76ExitDefaultNote, "false") ||
+		!strings.Contains(l76ExitDefaultNote, "(l)") {
+		t.Errorf("the default-value note: %q", l76ExitDefaultNote)
+	}
+	for _, want := range []string{"device_mismatch", "token_not_found", "token"} {
+		if !strings.Contains(l76DeviceMismatchNote, want) {
+			t.Errorf("the device_mismatch note lacks %q: %s", want, l76DeviceMismatchNote)
+		}
+	}
+	h := l76PrivLvlAuthzHazard
+	for _, want := range []string{"Operator hazard", "priv-lvl-authorization", "never asked", "YANG", "not measured"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("the (i) hazard lacks %q: %s", want, h)
+		}
 	}
 }

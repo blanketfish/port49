@@ -59,6 +59,8 @@ func TestL76(t *testing.T) {
 		e.cellH()
 		e.cellI()
 		e.cellJ()
+		e.cellK()
+		e.cellL()
 		e.cellE()
 		e.cellF()
 		e.cellG()
@@ -316,14 +318,21 @@ func (e *l76Env) restartStanding() {
 // accounting records, or 30 s.
 func (e *l76Env) tokenLogin(label string) (string, []string, []map[string]any, error) {
 	e.t.Helper()
+	return e.tokenLoginCmds(label, l76Commands)
+}
+
+// tokenLoginCmds is tokenLogin for the given commands, each its own exec
+// channel on the one SSH connection (loginWithin).
+func (e *l76Env) tokenLoginCmds(label string, cmds []string) (string, []string, []map[string]any, error) {
+	e.t.Helper()
 	off := e.l.mark()
 	user, secret := e.l.nextLogin(e.t)
-	outs, err := e.l.loginWithin(user, secret, 60*time.Second, l76Commands...)
+	outs, err := e.l.loginWithin(user, secret, 60*time.Second, cmds...)
 	recs := e.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 		return redeemFor(rs, user) != nil && l76Count(l76Of(rs, user), "account") >= 2
 	})
 	for i, o := range outs {
-		e.evidence[fmt.Sprintf("%s-%d.txt", label, i+1)] = "$ " + l76Commands[i] + "\n" + l76FilterLog(o)
+		e.evidence[fmt.Sprintf("%s-%d.txt", label, i+1)] = "$ " + cmds[i] + "\n" + l76FilterLog(o)
 	}
 	return user, outs, l76Of(recs, user), err
 }
@@ -548,7 +557,8 @@ func (e *l76Env) cellC() {
 	}
 	e.out["c"] = fmt.Sprintf("%d accounting record(s) for `%s`'s %d commands, by flags %v. Records with no `cmd` "+
 		"(a session start or stop): %d.\n\n```\n%s\n```",
-		len(acct), e.aUser, len(l76Commands), flags, noCmd, l76Render(acct))
+		len(acct), e.aUser, len(l76Commands), flags, noCmd, l76Render(acct)) +
+		"\n\n" + l76ChannelText(l76ChannelFacts(e.aRecs, e.aUser), 15)
 }
 
 // (d) a wrong password for a port49 user, then the break-glass account with
@@ -581,11 +591,12 @@ func (e *l76Env) cellD() {
 			"still gets in if the device has a local account for them. port49's deny is not final on this " +
 			"platform. Plan 12's reference config sets `exit-on-reject` (Ruling 1)."
 	}
-	e.out["d"] = fmt.Sprintf("A wrong password for `%s` was refused in %v. port49's records:\n\n```\n%s\n```\n\n"+
+	e.out["d"] = l76ExitDefaultNote + "\n\n" + fmt.Sprintf("A wrong password for `%s` was refused in %v. port49's records:\n\n```\n%s\n```\n\n"+
 		"With port49 up, `%s` (local only; port49 denies it, having no token for it) %s in %v. So a port49 deny "+
 		"%s through to `local` with `exit-on-reject` at its default.%s\n\nThe AAA log's lines for both users:\n\n```\n%s\n```",
 		user, took.Round(time.Millisecond), l76Render(recs), breakglassUser, bg, bgTook.Round(time.Millisecond),
-		map[bool]string{true: "**falls**", false: "does **not** fall"}[bgErr == nil], hazard, e.evidence["d-aaa-log.txt"])
+		map[bool]string{true: "**falls**", false: "does **not** fall"}[bgErr == nil], hazard, e.evidence["d-aaa-log.txt"]) +
+		"\n\n" + l76DeviceMismatchNote
 }
 
 // (h) priv-lvl=1 in the reply.
@@ -617,7 +628,8 @@ func (e *l76Env) cellH() {
 	// (p49-admin) may still be listed (pre-flight I2).
 	e.out["h"] = fmt.Sprintf("With port49 replying `priv-lvl=1`, `%s` logged in with roles %s and priv-lvl `%s` "+
 		"in the session table.\n\n```\n%s\n```\n\nThis user's rows in the session table, as the device printed them:\n\n```\n%s\n```",
-		user, l76SessionRoles(outs[0], user), priv, l76Render(recs), l76FilterLog(l76UserRows(outs[0], user)))
+		user, l76SessionRoles(outs[0], user), priv, l76Render(recs), l76FilterLog(l76UserRows(outs[0], user))) +
+		"\n\n" + l76ChannelText(l76ChannelFacts(recs, user), 1)
 }
 
 // (i) priv-lvl-authorization false: the YANG default.
@@ -643,7 +655,8 @@ func (e *l76Env) cellI() {
 	e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false`, `%s` logged in. Authorization requests: %d. "+
 		"Roles in the Role column of this user's rows: %s.\n\n```\n%s\n```\n\n"+
 		"This user's rows in the session table, as the device printed them:\n\n```\n%s\n```", user, len(authzRequests(recs)),
-		l76SessionRoles(outs[0], user), l76Render(recs), l76FilterLog(l76UserRows(outs[0], user)))
+		l76SessionRoles(outs[0], user), l76Render(recs), l76FilterLog(l76UserRows(outs[0], user))) +
+		"\n\n" + l76PrivLvlAuthzHazard
 }
 
 // (j) the Nokia role service request on top of priv-lvl authorization.
@@ -672,27 +685,105 @@ func (e *l76Env) cellJ() {
 		user, survived, len(reqs), l76Services(reqs), roles, l76Render(recs), rows)
 }
 
+// (k) the second exec channel of a priv-lvl 1 login: the roles the session
+// table shows on each channel, and one write that p49-read must not be
+// allowed, as the first and as the second exec. A write that succeeds is a
+// measurement, not INVALID.
+func (e *l76Env) cellK() {
+	e.guard()
+	cfg, err := e.l.derivedConfig("l76-k", `["priv-lvl=1"]`, "")
+	if err != nil {
+		e.invalid("cell k: %v", err)
+	}
+	defer e.restore(e.restartStanding)
+	e.restart(cfg)
+
+	user1, outs1, recs1, err1 := e.tokenLoginCmds("k1", []string{l76ReadSessions, l76ReadSessions})
+	roles := "(not read)"
+	rows := ""
+	if len(outs1) == 2 {
+		roles = fmt.Sprintf("first exec %s, second exec %s", l76SessionRoles(outs1[0], user1), l76SessionRoles(outs1[1], user1))
+		rows = fmt.Sprintf("\n\nThe first exec's rows for this user:\n\n```\n%s\n```\n\nThe second exec's rows for this user:\n\n```\n%s\n```",
+			l76FilterLog(l76UserRows(outs1[0], user1)), l76FilterLog(l76UserRows(outs1[1], user1)))
+	}
+	e.out["k"] = fmt.Sprintf("With port49 replying `priv-lvl=1`, `%s` ran the session-table read as its first and as its second exec "+
+		"(error: %v). The Role cell: %s.%s\n\n%s", user1, err1, roles, rows, l76ChannelText(l76ChannelFacts(recs1, user1), 1))
+
+	// The write as the second exec (a read first), then as the first exec of a
+	// login of its own. The container's root removes what it made.
+	attempt := func(label, name string, cmds []string, at int) l76Write {
+		_, outs, _, _ := e.tokenLoginCmds(label, cmds)
+		w := l76Write{Name: name}
+		if len(outs) > at {
+			w.MakeOut = oneLine(l76FilterLog(outs[at]))
+		}
+		clearOut, _, clearErr := e.sr(60*time.Second, l76CheckpointClear(name))
+		w.ClearOut = oneLine(l76FilterLog(clearOut))
+		w.Done = l76WriteDone(w.MakeOut, w.ClearOut, clearErr)
+		return w
+	}
+	second := attempt("k2", l76CheckpointNameSecond, []string{l76ReadSessions, l76CheckpointMake(l76CheckpointNameSecond)}, 1)
+	first := attempt("k3", l76CheckpointNameFirst, []string{l76CheckpointMake(l76CheckpointNameFirst)}, 0)
+	e.out["k"] += "\n\n" + l76WriteText(first, second)
+}
+
+// (l) exit-on-reject true: cell (d), (e) and (f)'s break-glass question again.
+func (e *l76Env) cellL() {
+	e.guard()
+	defer e.restore(func() {
+		e.set(l76ExitOnRejectOff, func(run string) bool { return !strings.Contains(run, "exit-on-reject true") })
+	})
+	e.set(l76ExitOnRejectOn, func(run string) bool { return strings.Contains(run, "exit-on-reject true") })
+	var b strings.Builder
+	var refused []string
+	scenario := func(name string, took time.Duration, err error, recs []map[string]any) {
+		fmt.Fprintf(&b, "\n\n**%s.** `%s` (local): %s in %v.", name, breakglassUser, l76Outcome(err), took.Round(time.Millisecond))
+		if len(recs) > 0 {
+			fmt.Fprintf(&b, "\n\n```\n%s\n```", l76Render(recs))
+		}
+		if err != nil {
+			refused = append(refused, name)
+		}
+	}
+
+	// port49 up: a port49 user still logs in, and port49 denies the break-glass account.
+	_, _, _, ctlErr := e.tokenLogin("l0")
+	off := e.l.mark()
+	took, err := e.try(breakglassUser, breakglassPassword)
+	recs := e.l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, breakglassUser) != nil })
+	scenario("A port49 deny of the break-glass account (port49 up)", took, err, recs)
+	e.evidence["l1-aaa-log.txt"] = e.aaaLog(breakglassUser)
+
+	// A wrong shared secret.
+	path := e.wrongKeyConfig("l")
+	defer e.restore(e.restartStanding)
+	if err := e.l.restart(path); err != nil {
+		e.invalid("cell l: restarting port49d on the wrong key: %v", err)
+	}
+	off = e.l.mark()
+	took, err = e.try(breakglassUser, breakglassPassword)
+	recs = e.l.drainRecords(off, 10*time.Second)
+	scenario("A wrong shared secret", took, err, recs)
+	e.evidence["l2-aaa-log.txt"] = e.aaaLog(breakglassUser, "tacacs")
+
+	// port49 stopped.
+	if err := e.l.stopDaemon(); err != nil {
+		e.invalid("cell l: stopping port49d: %v", err)
+	}
+	took, err = e.try(breakglassUser, breakglassPassword)
+	scenario("port49 stopped", took, err, nil)
+	e.evidence["l3-aaa-log.txt"] = e.aaaLog(breakglassUser, "tacacs")
+
+	e.out["l"] = fmt.Sprintf("With `exit-on-reject` true (srl_nokia-aaa.yang:1165), a port49 user's token login: %s.%s\n\n%s\n\n"+
+		"The AAA log, per scenario, is in `l1-aaa-log.txt`, `l2-aaa-log.txt` and `l3-aaa-log.txt` under the evidence directory.",
+		l76Outcome(ctlErr), b.String(), l76ExitHazard(refused))
+}
+
 // (e) a wrong shared secret: port49d is restarted with a random key; the
 // device keeps the published one.
 func (e *l76Env) cellE() {
 	e.guard()
-	base, err := e.l.configPath()
-	if err != nil {
-		e.invalid("cell e: %v", err)
-	}
-	raw, err := os.ReadFile(base)
-	if err != nil {
-		e.invalid("cell e: %v", err)
-	}
-	wrong, err := l76WrongKeyConfig(string(raw))
-	if err != nil {
-		e.invalid("cell e: %v", err)
-	}
-	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+e.l.p.name+"-l76-wrongkey.yaml")
-	if err := os.WriteFile(path, []byte(wrong), 0o600); err != nil {
-		e.invalid("cell e: %v", err)
-	}
-	e.t.Setenv(l76WrongKeyEnv, e.wrongKey)
+	path := e.wrongKeyConfig("e")
 	defer e.restore(e.restartStanding)
 	if err := e.l.restart(path); err != nil {
 		e.invalid("cell e: restarting port49d on the wrong key: %v", err)
@@ -703,12 +794,36 @@ func (e *l76Env) cellE() {
 	bgTook, bgErr := e.try(breakglassUser, breakglassPassword)
 	recs := e.l.drainRecords(off, 10*time.Second)
 	e.evidence["e-aaa-log.txt"] = e.aaaLog(user, breakglassUser, "tacacs")
-	e.out["e"] = fmt.Sprintf("port49d on a key the device does not have. `%s` (port49 user): %s in %v. "+
+	e.out["e"] = l76ExitDefaultNote + "\n\n" + fmt.Sprintf("port49d on a key the device does not have. `%s` (port49 user): %s in %v. "+
 		"`%s` (local): %s in %v. port49's diagnoses: %v (%d unvalidated record(s), %d redeem(s)).\n\n"+
 		"```\n%s\n```\n\nThe AAA log:\n\n```\n%s\n```",
 		user, l76Outcome(userErr), userTook.Round(time.Millisecond), breakglassUser, l76Outcome(bgErr),
 		bgTook.Round(time.Millisecond), l76Diagnoses(recs), l76Count(recs, "unvalidated"), l76Count(recs, "redeem"),
 		l76Render(recs), e.evidence["e-aaa-log.txt"])
+}
+
+// wrongKeyConfig writes the standing config with the wrong shared key and
+// points l76WrongKeyEnv at it; cell is the calling cell, for INVALID text.
+func (e *l76Env) wrongKeyConfig(cell string) string {
+	e.t.Helper()
+	base, err := e.l.configPath()
+	if err != nil {
+		e.invalid("cell %s: %v", cell, err)
+	}
+	raw, err := os.ReadFile(base)
+	if err != nil {
+		e.invalid("cell %s: %v", cell, err)
+	}
+	wrong, err := l76WrongKeyConfig(string(raw))
+	if err != nil {
+		e.invalid("cell %s: %v", cell, err)
+	}
+	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+e.l.p.name+"-l76-wrongkey.yaml")
+	if err := os.WriteFile(path, []byte(wrong), 0o600); err != nil {
+		e.invalid("cell %s: %v", cell, err)
+	}
+	e.t.Setenv(l76WrongKeyEnv, e.wrongKey)
+	return path
 }
 
 func l76Outcome(err error) string {
@@ -745,7 +860,7 @@ func (e *l76Env) cellF() {
 	}
 	_, rootTook, rootErr := e.sr(120*time.Second, l76ReadVersion)
 	e.evidence["f-aaa-log.txt"] = e.aaaLog(breakglassUser, user, "tacacs")
-	e.out["f"] = fmt.Sprintf("port49d stopped. `%s`: %s in %v. `%s` (port49 user): %s in %v. A CLI command in a "+
+	e.out["f"] = l76ExitDefaultNote + "\n\n" + fmt.Sprintf("port49d stopped. `%s`: %s in %v. `%s` (port49 user): %s in %v. A CLI command in a "+
 		"break-glass session with accounting unreachable %s; login and command took %v. The same command as the "+
 		"container's root (`sr_cli`) took %v (err %v).\n\nThe AAA log:\n\n```\n%s\n```",
 		breakglassUser, l76Outcome(bgErr), bgTook.Round(time.Millisecond), user, l76Outcome(userErr),
