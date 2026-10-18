@@ -1,0 +1,3 @@
+$ info from state system information version
+Could not chdir to home directory /home/alice06: No such file or directory
+    version <LONG>

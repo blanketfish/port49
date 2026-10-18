@@ -1,0 +1,13 @@
+error-message "Server group name must be 'local' if and only if local server type is 'local'";
+If false, then authorization is skipped for TACACS+ users granting full admin access for those users.";
+uses aaa-authorization-role-config;
+grouping aaa-authorization-methods-config {
+grouping aaa-authorization-events-top {
+uses aaa-authorization-events-config;
+uses aaa-authorization-role-top;
+uses aaa-authorization-top;
+identity command {
+base aaa_accounting_event_type;
+identity commands {
+base aaa_authorization_event_type;
+base aaa_authorization_event_type;

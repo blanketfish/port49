@@ -150,10 +150,10 @@ var platforms = []platform{
 	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
 	// SR Linux is a container, not a VM: containerlab starts sr_linux directly
-	// (CLAB#container-configuration). Five minutes is a placeholder, not a
-	// measurement; L76's first run replaces it with about 3x what it measured.
+	// (CLAB#container-configuration). Ready after 15 to 16s in the 2026-10-18
+	// L76 runs; the budget is 3x.
 	{"srlinux", "nokia_srlinux", "topologies/srlinux.clab.yml", "172.100.100.71", "srl1",
-		"ghcr.io/nokia/srlinux:26.7.2-519", "SR Linux 26.7.2-519", 5 * time.Minute},
+		"ghcr.io/nokia/srlinux:26.7.2-519", "SR Linux 26.7.2-519", 48 * time.Second},
 }
 
 // optInPlatforms are the rows a run deploys only when PORT49_LAB_PLATFORMS
@@ -857,13 +857,17 @@ func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49
 // it does not recognise", not "IOS-XE dislikes NX-OS's roles attribute".
 // Measured 2026-09-20; tests/lab/results/L10-cisco_iosxe.md.
 //
-// **nokia_srlinux — `priv-lvl=15` alone.** L76 run 3, 2026-10-18, at a56c9b41
-// (archive /mnt/images/port49-l76/L76-invalid-20261018T170436Z/): port49
-// permitted the session authorization `context_matched` with the reply
-// `priv-lvl=15` and `shell:roles*network-admin`, and SR Linux 26.7.2 refused
-// the login 1 ms later (`User alice01 authentication failed`). That contradicts
-// SA#authorization-use-tacacsx-server ("Unknown optional VSAs are discarded");
-// L76's cell (b) re-measures it with two probes.
+// **nokia_srlinux — `priv-lvl=15` alone, and not because the device needs it.**
+// L76 run 3 (2026-10-18, a56c9b41) saw SR Linux 26.7.2 refuse the login 1 ms
+// after port49 permitted a reply of `priv-lvl=15` and `shell:roles*network-admin`,
+// and the roles attribute was blamed. It was not the cause: the lab roles
+// listed no service, and a role grants none by default
+// (SA#service-authorization-local-users). With `services [ cli ]` added,
+// cell (b)'s probes b1 (`shell:roles*network-admin`) and b2 (an invented
+// optional attribute) both logged in, as SA#authorization-use-tacacsx-server
+// says ("Unknown optional VSAs are discarded"); tests/lab/results/L76-nokia_srlinux.md.
+// The entry is kept so the standing cells run on the reply the roles mapping
+// reads; the checked-in list would work too.
 //
 // **The Junos platforms — no attributes at all.** port49 answered every Junos
 // session authorization `service_unsupported` until 2026-09-21, so no

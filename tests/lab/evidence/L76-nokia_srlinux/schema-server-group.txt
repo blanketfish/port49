@@ -1,0 +1,40 @@
+    type tacacs
+    timeout 10
+    health-check 30
+    oper-state down
+    tacacs {
+        priv-lvl-authorization true
+        service-request {
+            nokia-srl-authorization-role false
+            nokia-srl-authorization-role-cli false
+            nokia-srl-authorization-role-netconf false
+            nokia-srl-configuration-role false
+        }
+    }
+    server 172.100.100.1 {
+        network-instance mgmt
+        oper-state up
+        tacacs {
+            port 49
+        }
+        radius {
+            auth-port 1812
+            acct-port 1813
+            retransmit-attempts 3
+        }
+        statistics {
+            login-success 0
+            login-connection-failures 1
+            login-rejects 1
+            accounting-success 4
+            accounting-rejects 0
+            accounting-connection-failures 1
+            authorization-success 0
+            authorization-rejects 0
+            authorization-connection-failures 0
+            invalid-vsas 0
+            malformed-vsas 0
+            unknown-vsas 0
+            valid-vsas 0
+        }
+    }
