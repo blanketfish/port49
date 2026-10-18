@@ -108,7 +108,6 @@ func TestL73EOSLines(t *testing.T) {
 	want := []string{
 		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
 		"tacacs-server tls ssl-profile l73-tls", "tacacs-server host 172.100.100.1 tls",
-		"aaa group server tacacs+ port49", "server 172.100.100.1", "exit",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
@@ -116,7 +115,7 @@ func TestL73EOSLines(t *testing.T) {
 	got = l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
 		Second: "172.100.100.2"}, map[string]bool{l73HasNXOSSecure: true})
 	for _, line := range []string{"tacacs-server host 172.100.100.1 tls single-connection port 300",
-		"tacacs-server host 172.100.100.2 key 0 " + labcreds.Key, "server 172.100.100.2"} {
+		"tacacs-server host 172.100.100.2 key 0 " + labcreds.Key} {
 		if !slices.Contains(got, line) {
 			t.Errorf("missing %q", maskKey(line))
 		}
@@ -405,11 +404,71 @@ func TestL73EOSInvalidEvidenceAndMemberAsk(t *testing.T) {
 		t.Fatal("no group-member ask")
 	}
 	a := d.Asks[i]
-	if len(a.Need) != 0 || !slices.Contains(a.Want, "port") || !slices.Equal(a.In, []string{"aaa group server tacacs+ " + l73Group}) ||
+	if !slices.Equal(a.Need, []string{"port"}) || !slices.Equal(a.In, []string{"aaa group server tacacs+ " + l73Group}) ||
 		!slices.Equal(a.Out, []string{"exit"}) {
 		t.Fatalf("%+v", a)
 	}
 	if got := l71MaskExchange("tacacs-server host 172.100.100.1 key 7 0123456789abcdef tls"); strings.Contains(got, "0123456789abcdef") {
 		t.Fatal(got)
+	}
+}
+
+const l73ShowTacacsA = "show tacacs\r\nTACACS+ server            : 172.100.100.1/300 TLS\r\nSSL profile               : l73-tls\r\n" +
+	"          Connection opens:          0\r\n\r\nTACACS+ server-group: port49\r\n     0: 172.100.100.1/49\r\n\r\nleaf1#"
+
+func TestL73EOSHostPortIsReadFromShowTacacs(t *testing.T) {
+	if got := l73EOSHostPort(l73ShowTacacsA, "172.100.100.1"); got != 300 {
+		t.Fatalf("got %d", got)
+	}
+	if got := l73EOSHostPort(l73ShowTacacsA, "172.100.100.2"); got != 0 {
+		t.Fatalf("got %d", got)
+	}
+	d := l73DeviceTLS{Server: "172.100.100.1"}
+	if p, _, err := l73EOSMemberPorts(l73ShowTacacsA, d); err != nil || p != 300 {
+		t.Fatal(p, err)
+	}
+	// A configured port wins; a host `show tacacs` does not list is an error, never a guess.
+	if p, _, err := l73EOSMemberPorts("", l73DeviceTLS{Server: "172.100.100.1", Port: 6049}); err != nil || p != 6049 {
+		t.Fatal(p, err)
+	}
+	if _, _, err := l73EOSMemberPorts("", d); err == nil {
+		t.Fatal("no error for an unlisted host")
+	}
+	if _, _, err := l73EOSMemberPorts(l73ShowTacacsA, l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}); err == nil {
+		t.Fatal("no error for an unlisted second host")
+	}
+}
+
+func TestL73EOSMembersNameThePort(t *testing.T) {
+	d := l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}
+	want := []string{"aaa group server tacacs+ port49", "server 172.100.100.1 port 300", "server 172.100.100.2 port 49", "exit"}
+	if got := l73EOSMembers(d, 300, 49); !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
+	}
+	// The undo names the port the member was typed with.
+	d.MemberPort, d.SecondMemberPort = 300, 49
+	got := l73CiscoUndo("eos", d, nil)
+	if !slices.Contains(got, "no server 172.100.100.1 port 300") || !slices.Contains(got, "no server 172.100.100.2 port 49") {
+		t.Fatalf("%q", got)
+	}
+	if got := l73CiscoUndo("eos", l73DeviceTLS{Server: "172.100.100.1"}, nil); !slices.Contains(got, "no server 172.100.100.1") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The attempt 4 and 5 state: a TLS host on 300 and a member on 49 is caught.
+func TestL73EOSGroupMissingCatchesThePortMismatch(t *testing.T) {
+	d := l73DeviceTLS{Server: "172.100.100.1"}
+	got := l73EOSGroupMissing(l73ShowTacacsA, d, 300, 0)
+	if len(got) != 1 || !strings.Contains(got[0], "member 172.100.100.1/300") {
+		t.Fatalf("%q", got)
+	}
+	fixed := strings.Replace(l73ShowTacacsA, "0: 172.100.100.1/49", "0: 172.100.100.1/300", 1)
+	if got := l73EOSGroupMissing(fixed, d, 300, 0); len(got) != 0 {
+		t.Fatalf("%q", got)
+	}
+	// The host itself must be listed on the port typed for it.
+	if got := l73EOSGroupMissing(fixed, d, 6049, 0); len(got) != 2 {
+		t.Fatalf("%q", got)
 	}
 }

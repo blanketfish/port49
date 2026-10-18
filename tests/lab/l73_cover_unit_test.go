@@ -150,7 +150,11 @@ func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 		var typed, group []string
 		for _, d := range l73TypedDevices() {
 			object, inGroup := false, false
-			for _, ln := range l73CiscoLines(tc.family, nil, d, has) {
+			lines := l73CiscoLines(tc.family, nil, d, has)
+			if tc.family == "eos" { // the members come after the hosts' ports are known
+				lines = append(lines, l73EOSMembers(d, 300, 49)...)
+			}
+			for _, ln := range lines {
 				switch {
 				case strings.HasPrefix(ln, groupIn):
 					inGroup = true

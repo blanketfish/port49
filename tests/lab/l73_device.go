@@ -43,6 +43,9 @@ type l73DeviceTLS struct {
 	Second           string
 	SecondTLS        bool
 	SecondPort       int
+	// EOS only: the ports the AAA group's members were typed with (the
+	// configured port, or the one `show tacacs` listed), so the undo can name them.
+	MemberPort, SecondMemberPort int
 }
 
 func l73JunosLines(d l73DeviceTLS) []string {

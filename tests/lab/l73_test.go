@@ -647,7 +647,8 @@ func (e *l73Env) ciscoType(lines []string, lenient bool) (string, error) {
 }
 
 // apply points the device's client at port49 as d says: a Junos commit, or
-// on IOS XE, NX-OS and EOS the previous cell's undo and then d's lines.
+// on IOS XE, NX-OS and EOS the previous cell's undo and then d's lines. On
+// EOS the group members come second, naming the ports `show tacacs` lists.
 func (e *l73Env) apply(d l73DeviceTLS) (string, error) {
 	if e.d.Family == "junos" {
 		return e.junosCommit(l73JunosLines(d))
@@ -655,29 +656,55 @@ func (e *l73Env) apply(d l73DeviceTLS) (string, error) {
 	lines := l73CiscoLines(e.d.Family, e.applied, d, e.x)
 	e.applied = &d // set first: the cleanup must undo whatever got in
 	out, err := e.ciscoType(lines, false)
-	if err == nil && e.d.Family == "eos" {
-		err = e.eosVerifyApplied(d)
+	if err != nil || e.d.Family != "eos" {
+		return out, err
 	}
-	return out, err
+	return e.eosMembers(&d, out)
 }
 
-// eosVerifyApplied reads the running configuration back, as Junos's
-// junosVerifyApplied does: EOS has no commit, and a line it took without a
-// word may still not be there. The lines it names carry no key.
-func (e *l73Env) eosVerifyApplied(d l73DeviceTLS) error {
-	var shown string
-	var rerr error
-	e.cli(func(c *cliConn) error {
-		shown, rerr = c.sendExpect("show running-config section tacacs", 30*time.Second, c.prompt)
-		return nil
-	})
-	if rerr != nil {
-		return fmt.Errorf("reading back the TACACS+ configuration: %s", l73Err(rerr))
+// eosMembers reads the hosts' ports, types the group members with them, and
+// reads the configuration back as Junos's junosVerifyApplied does: EOS has
+// no commit, and a line it took without a word may still not be there. The
+// lines it names carry no key.
+func (e *l73Env) eosMembers(d *l73DeviceTLS, out string) (string, error) {
+	show := func(cmd string) (shown string, err error) {
+		e.cli(func(c *cliConn) error {
+			shown, err = c.sendExpect(cmd, 30*time.Second, c.prompt)
+			return nil
+		})
+		if err != nil {
+			err = fmt.Errorf("reading %q: %s", cmd, l73Err(err))
+		}
+		return shown, err
 	}
-	if missing := l73EOSMissing(shown, d); len(missing) > 0 {
-		return fmt.Errorf("the running configuration lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+	hosts, err := show("show tacacs")
+	if err != nil {
+		return out, err
 	}
-	return nil
+	port, second, err := l73EOSMemberPorts(hosts, *d)
+	if err != nil {
+		e.invalidScreen("members", hosts)
+		return out, err
+	}
+	d.MemberPort, d.SecondMemberPort = port, second
+	if out, err = e.ciscoType(l73EOSMembers(*d, port, second), false); err != nil {
+		return out, err
+	}
+	cfg, err := show("show running-config section tacacs")
+	if err != nil {
+		return out, err
+	}
+	grp, err := show("show tacacs")
+	if err != nil {
+		return out, err
+	}
+	missing := l73EOSMissing(cfg, *d)
+	missing = append(missing, l73EOSGroupMissing(grp, *d, port, second)...)
+	if len(missing) > 0 {
+		e.invalidScreen("readback", cfg+"\n"+grp)
+		return out, fmt.Errorf("the device lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+	}
+	return out, nil
 }
 
 // restore puts the startup config's servers back: Junos's restore commit,
@@ -686,8 +713,16 @@ func (e *l73Env) restore() (string, error) {
 	if e.d.Family == "junos" {
 		return e.junosCommit(l73JunosRestore())
 	}
+	var undo []string
+	if e.applied != nil && e.d.Family == "eos" {
+		// The members were typed with ports the undo must name.
+		undo = l73CiscoUndo("eos", l73DeviceTLS{Server: l73Server, Second: l73SecondServer,
+			MemberPort: e.applied.MemberPort, SecondMemberPort: e.applied.SecondMemberPort}, e.x)
+	} else {
+		undo = l73CiscoRestoreAll(e.d.Family, e.x)
+	}
 	e.applied = nil
-	return e.ciscoType(l73CiscoRestoreAll(e.d.Family, e.x), true)
+	return e.ciscoType(undo, true)
 }
 
 // configure is apply, INVALID on a refusal. If a Junos commit refuses a tls
@@ -969,6 +1004,7 @@ func (e *l73Env) helpProbe() bool {
 				return err
 			}
 			fmt.Fprintf(&xchg, "### typed `%s?`, then Ctrl-U\n%s\n\n", a.Ask, ans.Masked)
+			e.invalidScreen(fmt.Sprintf("probe-%d", i+1), fmt.Sprintf("### typed `%s?`, then Ctrl-U\n%s", a.Ask, ans.Masked))
 			if !ans.Cleared {
 				dirty = true // Out is not typed: nothing more is typed on a line that did not clear
 				return fmt.Errorf("INVALID: after Ctrl-U the line was not empty on `%s?`; the session was closed with nothing more typed", a.Ask)
