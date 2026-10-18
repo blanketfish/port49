@@ -1,0 +1,80 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+  <CR>               ^M
+  key                TACACS+ shared secret^M
+  port               TACACS+ server port^M
+  single-connection  Use single connection for this Tacacs+ server^M
+  test               Parameters to send test packets^M
+  timeout            TACACS+ server timeout period in seconds^M
+  tls                TLS secure connection parameters^M
+^M
+^[[43D^[[J^Mnx1(config)# tacacs-server host 192.0.2.71 ^[[30D^[[J
+
+### typed `tacacs-server ?`, then Ctrl-U
+tacacs-server ?^M
+  deadtime          Duration for which non-reachable server is skipped^M
+  directed-request  Enable direct authentication requests to server^M
+  host              TACACS+ server's DNS name or its IP address^M
+  key               Global TACACS+ server shared secret^M
+  secure            Secure connection mode to TACACS servers^M
+  test              Parameters to send test packets^M
+  timeout           Global TACACS+ server timeout period in seconds^M
+^M
+^[[27D^[[J^Mnx1(config)# tacacs-server ^[[14D^[[J
+
+### typed `tacacs-server secure ?`, then Ctrl-U
+tacacs-server secure ?^M
+  tls  TLS mode^M
+^M
+^[[34D^[[J^Mnx1(config)# tacacs-server secure ^[[21D^[[J
+
+### typed `tacacs-server host 192.0.2.71 tls ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 tls ?^M
+  client-trustpoint  Switch credentials to use for TLS handshake with server^M
+^M
+^[[47D^[[J^Mnx1(config)# tacacs-server host 192.0.2.71 tls ^[[34D^[[J
+
+### typed `?`, then Ctrl-U
+?^M
+  deadtime          Duration for which non-reachable server is skipped^M
+  no                Negate a command or set its defaults^M
+  server            TACACS+ server name or IP address^M
+  show              Show running system information^M
+  source-interface  Source interface to be used to reach tacacs server^M
+  use-vrf           Vrf to be used to contact servers in this group^M
+  end               Go to exec mode^M
+  exit              Exit from command interpreter^M
+  pop               Pop mode from stack or restore from name^M
+  push              Push current mode to stack or save it under name^M
+  where             Shows the cli context you are in^M
+^M
+^[[21D^[[J^Mnx1(config-tacacs+)# 
+
+### typed `crypto key generate rsa ?`, then Ctrl-U
+crypto key generate rsa ?^M
+  <CR>        ^M
+  exportable  Key-pair is exportable^M
+  label       Key-pair label^M
+  modulus     Key-pair size^M
+^M
+^[[37D^[[J^Mnx1(config)# crypto key generate rsa ^[[24D^[[J
+
+### typed `?`, then Ctrl-U
+?^M
+  cabundle          Configure cabundle ^M
+  delete            Delete the certificates^M
+  ecckeypair        Configure trustpoint rsa key-pair details^M
+  enrollment        Configure trustpoint enrollment^M
+  no                Negate a command or set its defaults^M
+  ocsp              Configure trustpoint ocsp details^M
+  revocation-check  Configure trustpoint revocation check methods^M
+  rsakeypair        Configure trustpoint rsa key-pair details^M
+  show              Show running system information^M
+  end               Go to exec mode^M
+  exit              Exit from command interpreter^M
+  pop               Pop mode from stack or restore from name^M
+  push              Push current mode to stack or save it under name^M
+  where             Shows the cli context you are in^M
+^M
+^[[24D^[[J^Mnx1(config-trustpoint)# 
+

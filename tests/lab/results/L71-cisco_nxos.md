@@ -59,3 +59,29 @@ tacacs-server ?
 ```
 
 
+
+## Addendum 2026-10-18: Nexus 9300v 10.6(2)F (`vrnetlab/cisco_n9kv:9300v64-10.6.2.F`)
+
+Probed by TestL73 (commit `7ff5249f69423fddcccfc5122264c8c1ba9a6082`, `PORT49_LAB_PLATFORMS=nxos106`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_nxos/l71-probe.txt`.
+
+**Has a client.** Typed `tacacs-server host 192.0.2.71 ?`; the help lists:
+
+```
+tls                TLS secure connection parameters
+```
+
+Full help:
+
+```
+tacacs-server host 192.0.2.71 ?
+  <CR>               
+  key                TACACS+ shared secret
+  port               TACACS+ server port
+  single-connection  Use single connection for this Tacacs+ server
+  test               Parameters to send test packets
+  timeout            TACACS+ server timeout period in seconds
+  tls                TLS secure connection parameters
+
+[43D[Jnx1(config)# tacacs-server host 192.0.2.71 
+```
+
