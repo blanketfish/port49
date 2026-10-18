@@ -1209,3 +1209,37 @@ func TestL76ChdirNoteOnlyWhenTheLineIsThere(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestL76RedactHashesCoversBodyHashInBothPaths(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	cert := strings.Repeat("cd", 32)
+	recs := []map[string]any{
+		{"event": "redeem", "credential_sha256": hash, "cert_sha256": cert},
+		{"event": "unvalidated", "unvalidated": map[string]any{"body_sha256": hash, "diagnosis": "no_known_key_matches"}},
+	}
+	// The INVALID dump.
+	dump := l76DecisionDump(recs)
+	// The evidence log.
+	ev, err := l76DecisionEvidence(recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]string{"dump": dump, "evidence": ev} {
+		if strings.Contains(got, hash) {
+			t.Errorf("%s: a hash value survived:\n%s", name, got)
+		}
+		if !strings.Contains(got, `"body_sha256":"<redacted sha256>"`) || !strings.Contains(got, `"credential_sha256":"<redacted sha256>"`) {
+			t.Errorf("%s: the keys were not kept with a redacted value:\n%s", name, got)
+		}
+		if strings.Contains(got, `"cert_sha256":"<redacted sha256>"`) {
+			t.Errorf("%s: cert_sha256 (a public fingerprint) was redacted:\n%s", name, got)
+		}
+	}
+	if !strings.Contains(ev, cert) {
+		t.Errorf("evidence lost cert_sha256:\n%s", ev)
+	}
+	// What the evidence gate checks.
+	if leaks := l72HashValueLeaks(ev); len(leaks) != 0 {
+		t.Errorf("the evidence log still leaks %v", leaks)
+	}
+}

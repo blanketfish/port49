@@ -4,7 +4,6 @@ package lab
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -154,7 +153,7 @@ func (e *l76Env) dumpDevice() {
 		"aaa-log.txt":  {aaa, aaaErr},
 		"sessions.txt": {sess, sessErr},
 		// The port49 side: why the server answered as it did. Credentials
-		// appear only as redacted hashes (l72RedactCredentialHash).
+		// appear only as redacted hashes (l76RedactHashes).
 		"decisions.jsonl": {l76DecisionDump(e.l.recordsSince(e.start)), nil},
 	} {
 		text := r.text
@@ -446,7 +445,7 @@ func (e *l76Env) cellA() {
 		if len(lines) > 20 {
 			lines = lines[len(lines)-20:]
 		}
-		daemonLog = l76FilterLog(string(l72RedactCredentialHash([]byte(strings.Join(lines, "\n")))))
+		daemonLog = l76FilterLog(string(l76RedactHashes([]byte(strings.Join(lines, "\n")))))
 	}
 	e.evidence["a-port49d-log.txt"] = daemonLog
 	alarm := "port49 raised no unknown-platform signal: no record has reason `platform_unknown`, and its log " +
@@ -830,17 +829,12 @@ func (e *l76Env) note() {
 		return
 	}
 
-	var log strings.Builder
-	for _, r := range e.l.recordsSince(e.start) {
-		b, err := json.Marshal(r)
-		if err != nil {
-			e.invalid("re-encoding a record: %v", err)
-			return
-		}
-		log.Write(l72RedactCredentialHash(b))
-		log.WriteByte('\n')
+	decisions, err := l76DecisionEvidence(e.l.recordsSince(e.start))
+	if err != nil {
+		e.invalid("%v", err)
+		return
 	}
-	e.evidence["decisions.jsonl"] = log.String()
+	e.evidence["decisions.jsonl"] = decisions
 	obs := l76Observation(e.out, e.schema, l76RunSection(e.retries, "L76-"+e.l.p.name))
 
 	// The leak gates, every one before anything is written. Beside l76Leaks

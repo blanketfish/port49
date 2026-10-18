@@ -811,7 +811,7 @@ func l76DecisionDump(recs []map[string]any) string {
 			lines = append(lines, fmt.Sprintf("(record not encoded: %v)", err))
 			continue
 		}
-		lines = append(lines, string(l72RedactCredentialHash(b)))
+		lines = append(lines, string(l76RedactHashes(b)))
 	}
 	return l76FilterLog(strings.Join(lines, "\n"))
 }
@@ -850,4 +850,32 @@ func l76ChdirNote(outs []string) string {
 		}
 	}
 	return ""
+}
+
+// l76BodyHash is an unvalidated record's body_sha256 value: a digest of a
+// packet body port49 could not validate (the wrong-key cell). It is no
+// credential, but evidence names the field and holds no 64-hex value under
+// a *_sha256 key, so L76 redacts it as the credential hashes are.
+var l76BodyHash = regexp.MustCompile(`("body_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
+
+// l76RedactHashes is l72RedactCredentialHash plus body_sha256, keeping every
+// key. cert_sha256, a public certificate fingerprint, is left alone. L76 uses
+// it for every decision-log text it keeps; the shared redactor is L72's and L73's.
+func l76RedactHashes(b []byte) []byte {
+	return l76BodyHash.ReplaceAll(l72RedactCredentialHash(b), []byte("${1}<redacted sha256>${2}"))
+}
+
+// l76DecisionEvidence is the run's decision records as the committed evidence
+// keeps them: one JSON line each, hashes redacted.
+func l76DecisionEvidence(recs []map[string]any) (string, error) {
+	var log strings.Builder
+	for _, r := range recs {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return "", fmt.Errorf("re-encoding a record: %w", err)
+		}
+		log.Write(l76RedactHashes(b))
+		log.WriteByte('\n')
+	}
+	return log.String(), nil
 }
