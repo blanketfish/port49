@@ -230,6 +230,9 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 // A lift's copy that a stalled connection delivers late, once the member is
 // back, lifts nothing made after it: a principal revoked again while one
 // member was dark stays revoked, and every lift and revocation said so.
+// This is evidence, not the gate: whether a lift's delete lands on the dark
+// connection is round-robin's luck, so a regression may pass a run.
+// TestALiftLeavesAMarkMadeAfterItsRead is the deterministic gate.
 func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
 	s, _, ps := threeBehindProxies(t)
 	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: time.Now()}
@@ -245,9 +248,19 @@ func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps[2].Hang(true)
-	// Ten rounds, well inside keepalive's 10s + 2s, so the stalled
-	// connection still holds what was sent on it when the member is back.
-	for i := 0; i < 10; i++ {
+	// Twenty rounds, inside keepalive's 10s + 2s, so the stalled connection
+	// still holds what was sent on it when the member is back.
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		// i%3 extra reads rotate which connection round-robin gives the
+		// lift's delete, so rounds put it on the dark one in turn.
+		for j := 0; j < i%3; j++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			if _, err := s.GetRevocation(ctx, bob.Kind, bob.Key); err != nil {
+				t.Fatalf("read %d.%d: %v", i, j, err)
+			}
+			cancel()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
 			t.Fatalf("lift %d: %v", i, err)
@@ -258,7 +271,10 @@ func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
 			t.Fatalf("revocation %d: %v", i, err)
 		}
 		cancel()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if took := time.Since(start); took > 9*time.Second {
+		t.Fatalf("the rounds took %v, so keepalive may have closed the dark connection: evidence of nothing", took)
 	}
 	ps[2].Hang(false)
 	time.Sleep(3 * time.Second)

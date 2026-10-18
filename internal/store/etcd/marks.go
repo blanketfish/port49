@@ -44,7 +44,8 @@ func (s *Store) GetRevocation(ctx context.Context, kind, key string) (store.Revo
 }
 
 // afterLiftRead runs between DeleteRevocation's read and its delete, for a
-// test that makes the mark change there.
+// test that makes the mark change there. A package variable: not safe for a
+// test under t.Parallel.
 var afterLiftRead func()
 
 // DeleteRevocation lifts the mark it reads, and only that one: the delete is
