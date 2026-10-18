@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -228,4 +229,18 @@ func l71MaskExchange(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// l71ClaimFor is the claim of platform's L71 note. Only a probe that creates
+// the `tacacs server l71probe` object says so.
+func l71ClaimFor(platform string) string {
+	made := ""
+	if slices.Contains(l71Probes[platform].enter, "tacacs server l71probe") {
+		made = " (on IOS-XE the probe creates a `tacacs server l71probe` object and removes it)"
+	}
+	return "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS) client, read from the CLI's own " +
+		"help with nothing left configured" + made + " (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
+		"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and Junos " +
+		"26.2R1 on routing and switching platforms, not SRX; every lab image predates them. L71 probes only the images in the harness platform list: vJunosEvolved " +
+		"23.4R2-S2.1 and vSRX 23.4R1.9 are not probed."
 }

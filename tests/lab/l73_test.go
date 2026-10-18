@@ -1149,7 +1149,7 @@ func (e *l73Env) writeL71() {
 	}
 	e.l.captureNote = fmt.Sprintf("`%s` — the CLI exchange from the help request to the empty-line check, credentials "+
 		"masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
-	e.l.result(e.t, "L71", l71Claim, e.l71Obs)
+	e.l.result(e.t, "L71", l71ClaimFor(e.l.p.name), e.l71Obs)
 	e.l.captureNote = ""
 }
 

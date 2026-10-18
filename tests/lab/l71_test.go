@@ -11,13 +11,6 @@ import (
 	"time"
 )
 
-const l71Claim = "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS) client, read from the CLI's own " +
-	"help with nothing left configured (on IOS-XE the probe creates a `tacacs server l71probe` object and removes " +
-	"it) (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
-	"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and Junos " +
-	"26.2R1 on routing and switching platforms, not SRX; every lab image predates them. L71 probes only the images in the harness platform list: vJunosEvolved " +
-	"23.4R2-S2.1 and vSRX 23.4R1.9 are not probed."
-
 func TestL71TLSClientSupport(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
@@ -154,7 +147,7 @@ func TestL71TLSClientSupport(t *testing.T) {
 		}
 		l.captureNote = fmt.Sprintf("`%s/probe.txt` — the CLI exchange from the help request to the empty-line check, "+
 			"credentials masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
-		l.result(t, "L71", l71Claim, obs.String())
+		l.result(t, "L71", l71ClaimFor(l.p.name), obs.String())
 	})
 }
 

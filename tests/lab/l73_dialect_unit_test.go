@@ -741,3 +741,22 @@ func TestL73LogScreenScrubsAContainerLog(t *testing.T) {
 		t.Errorf("the log screen lost the log: %q", got)
 	}
 }
+
+// The L71 claim mentions the `tacacs server l71probe` object only for a probe
+// that creates it; IOL-XE 17.18.02 has no such object and its probe enters
+// none.
+func TestL71ClaimNamesTheProbeObjectOnlyWhereItIsCreated(t *testing.T) {
+	const obj = "tacacs server l71probe"
+	for name, pr := range l71Probes {
+		creates := slices.Contains(pr.enter, obj)
+		if got := strings.Contains(l71ClaimFor(name), obj); got != creates {
+			t.Errorf("%s: claim names the object %v, probe creates it %v", name, got, creates)
+		}
+		if !strings.Contains(l71ClaimFor(name), "policy engine spec §15 L71") {
+			t.Errorf("%s: the claim lost its citation", name)
+		}
+	}
+	if !slices.Contains(l71Probes["cisco_iosxe"].enter, obj) {
+		t.Fatal("the IOS XE probe no longer creates the object: the test checks nothing")
+	}
+}
