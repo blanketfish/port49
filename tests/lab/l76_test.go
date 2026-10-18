@@ -332,7 +332,10 @@ func l76SessionOf(out, user string) *l76Session {
 func (e *l76Env) checkSchema() {
 	e.guard()
 	// Exactly the cited form, `sr_cli --help`: not through sr, which adds -d.
-	helpOut, err := exec.Command("docker", "exec", l76Container, "sr_cli", "--help").CombinedOutput()
+	// It keeps sr's 30 s bound.
+	helpCtx, cancelHelp := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelHelp()
+	helpOut, err := exec.CommandContext(helpCtx, "docker", "exec", l76Container, "sr_cli", "--help").CombinedOutput()
 	help := string(helpOut)
 	for _, flag := range []string{"--dumb-terminal", "--candidate-mode", "--commit-at-end"} {
 		if !strings.Contains(help, flag) {
