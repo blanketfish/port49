@@ -128,6 +128,9 @@ var l73EOSDialect = l73Dialect{
 		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
 		// The group member names the host's port (Task 14 attempt 5: a member with no port is :49).
 		{Ask: "server " + l73Server + " ", Control: []string{"<cr>", "port", "tls", "vrf"}, Need: []string{"port"}, Want: []string{"tls", "vrf"},
+			In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
+		// The member's own tls flag (Task 14 attempt 6: a plain member under a TLS host never connects).
+		{Ask: "server " + l73Server + " tls ", Control: []string{"<cr>", "port", "vrf"}, Need: []string{"port"}, Want: []string{"vrf"},
 			In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
 	VersionCmd: "show version | include Software image version", VersionHas: "4.36.3M",
 	Enrol: "EOS's documented enrolment (`security pki key generate`, `security pki certificate generate signing-request`, " +
@@ -239,9 +242,9 @@ func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 		}
 		return out
 	case "nxos", "eos":
-		out := []string{"aaa group server tacacs+ " + l73Group, l73NoMember(family, d.Server, d.MemberPort)}
+		out := []string{"aaa group server tacacs+ " + l73Group, l73NoMember(family, d.Server, d.MemberPort, true)}
 		if d.Second != "" {
-			out = append(out, l73NoMember(family, d.Second, d.SecondMemberPort))
+			out = append(out, l73NoMember(family, d.Second, d.SecondMemberPort, d.SecondTLS))
 		}
 		out = append(out, "exit", "no tacacs-server host "+d.Server)
 		if d.Second != "" {
@@ -260,8 +263,11 @@ func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 }
 
 // l73NoMember removes a group member; on EOS one typed with a port is named by it.
-func l73NoMember(family, addr string, port int) string {
+func l73NoMember(family, addr string, port int, tls bool) string {
 	if family == "eos" && port != 0 {
+		if tls {
+			addr += " tls"
+		}
 		return "no server " + addr + " port " + strconv.Itoa(port)
 	}
 	return "no server " + addr
@@ -389,18 +395,29 @@ func l73EOSApply(d l73DeviceTLS) []string {
 	return out
 }
 
-// l73EOSMembers is the AAA group's members, each naming its host's port: a
-// member with none is port 49, which matches a TLS host on 300 to nothing.
+// l73EOSMember is one group member: `server <addr> [tls] port <P>`, the tls
+// flag matching the host's, the order the image's help gives (port follows tls).
+func l73EOSMember(addr string, tls bool, port int) string {
+	line := "server " + addr
+	if tls {
+		line += " tls"
+	}
+	return line + " port " + strconv.Itoa(port)
+}
+
+// l73EOSMembers is the AAA group's members, each naming its host's port and
+// transport: a bare member is port 49, plain TCP, and matches a TLS host on
+// 300 to nothing.
 func l73EOSMembers(d l73DeviceTLS, port, second int) []string {
-	out := []string{"aaa group server tacacs+ " + l73Group, "server " + d.Server + " port " + strconv.Itoa(port)}
+	out := []string{"aaa group server tacacs+ " + l73Group, l73EOSMember(d.Server, true, port)}
 	if d.Second != "" {
-		out = append(out, "server "+d.Second+" port "+strconv.Itoa(second))
+		out = append(out, l73EOSMember(d.Second, d.SecondTLS, second))
 	}
 	return append(out, "exit")
 }
 
-var l73ShowTacacsHost = regexp.MustCompile(`(?m)^TACACS\+ server\s*:\s*(\S+?)/(\d+)`)
-var l73ShowTacacsMember = regexp.MustCompile(`(?m)^\s+\d+:\s*(\S+?)/(\d+)`)
+var l73ShowTacacsHost = regexp.MustCompile(`(?m)^TACACS\+ server\s*:\s*(\S+?)/(\d+)( TLS)?`)
+var l73ShowTacacsMember = regexp.MustCompile(`(?m)^\s+\d+:\s*(\S+?)/(\d+)( TLS)?`)
 
 // l73EOSHostPort is the port `show tacacs` lists for addr's host, 0 when it
 // lists none.
@@ -434,30 +451,43 @@ func l73EOSMemberPorts(shown string, d l73DeviceTLS) (port, second int, err erro
 }
 
 // l73EOSGroupMissing is what `show tacacs` lacks of d's servers: each host
-// listed on its port, and the server-group holding addr/port for it.
+// listed on its port with its transport tag (TLS or none), and the
+// server-group holding a member with the same port and the same tag.
 func l73EOSGroupMissing(shown string, d l73DeviceTLS, port, second int) []string {
 	shown = strings.ReplaceAll(shown, "\r", "")
 	var missing []string
 	members := map[string]bool{}
 	if i := strings.Index(shown, "server-group: "+l73Group); i >= 0 {
 		for _, m := range l73ShowTacacsMember.FindAllStringSubmatch(shown[i:], -1) {
-			members[m[1]+"/"+m[2]] = true
+			members[m[1]+"/"+m[2]+m[3]] = true
 		}
 	}
-	want := map[string]int{d.Server: port}
+	type srv struct {
+		addr string
+		port int
+		tls  bool
+	}
+	want := []srv{{d.Server, port, true}}
 	if d.Second != "" {
-		want[d.Second] = second
+		want = append(want, srv{d.Second, second, d.SecondTLS})
 	}
-	for _, addr := range []string{d.Server, d.Second} {
-		if addr == "" {
-			continue
+	for _, w := range want {
+		tag := ""
+		if w.tls {
+			tag = " TLS"
 		}
-		p := strconv.Itoa(want[addr])
-		if l73EOSHostPort(shown, addr) != want[addr] {
-			missing = append(missing, "host "+addr+"/"+p)
+		name := w.addr + "/" + strconv.Itoa(w.port) + tag
+		hostOK := false
+		for _, m := range l73ShowTacacsHost.FindAllStringSubmatch(shown, -1) {
+			if m[1] == w.addr && m[2] == strconv.Itoa(w.port) && m[3] == tag {
+				hostOK = true
+			}
 		}
-		if !members[addr+"/"+p] {
-			missing = append(missing, "server-group "+l73Group+" member "+addr+"/"+p)
+		if !hostOK {
+			missing = append(missing, "host "+name)
+		}
+		if !members[name] {
+			missing = append(missing, "server-group "+l73Group+" member "+name)
 		}
 	}
 	return missing

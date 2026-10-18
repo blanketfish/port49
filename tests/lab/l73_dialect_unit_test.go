@@ -441,14 +441,14 @@ func TestL73EOSHostPortIsReadFromShowTacacs(t *testing.T) {
 
 func TestL73EOSMembersNameThePort(t *testing.T) {
 	d := l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}
-	want := []string{"aaa group server tacacs+ port49", "server 172.100.100.1 port 300", "server 172.100.100.2 port 49", "exit"}
+	want := []string{"aaa group server tacacs+ port49", "server 172.100.100.1 tls port 300", "server 172.100.100.2 port 49", "exit"}
 	if got := l73EOSMembers(d, 300, 49); !slices.Equal(got, want) {
 		t.Fatalf("%q", got)
 	}
 	// The undo names the port the member was typed with.
 	d.MemberPort, d.SecondMemberPort = 300, 49
 	got := l73CiscoUndo("eos", d, nil)
-	if !slices.Contains(got, "no server 172.100.100.1 port 300") || !slices.Contains(got, "no server 172.100.100.2 port 49") {
+	if !slices.Contains(got, "no server 172.100.100.1 tls port 300") || !slices.Contains(got, "no server 172.100.100.2 port 49") {
 		t.Fatalf("%q", got)
 	}
 	if got := l73CiscoUndo("eos", l73DeviceTLS{Server: "172.100.100.1"}, nil); !slices.Contains(got, "no server 172.100.100.1") {
@@ -460,15 +460,49 @@ func TestL73EOSMembersNameThePort(t *testing.T) {
 func TestL73EOSGroupMissingCatchesThePortMismatch(t *testing.T) {
 	d := l73DeviceTLS{Server: "172.100.100.1"}
 	got := l73EOSGroupMissing(l73ShowTacacsA, d, 300, 0)
-	if len(got) != 1 || !strings.Contains(got[0], "member 172.100.100.1/300") {
+	if len(got) != 1 || !strings.Contains(got[0], "member 172.100.100.1/300 TLS") {
 		t.Fatalf("%q", got)
 	}
-	fixed := strings.Replace(l73ShowTacacsA, "0: 172.100.100.1/49", "0: 172.100.100.1/300", 1)
+	fixed := strings.Replace(l73ShowTacacsA, "0: 172.100.100.1/49", "0: 172.100.100.1/300 TLS", 1)
 	if got := l73EOSGroupMissing(fixed, d, 300, 0); len(got) != 0 {
 		t.Fatalf("%q", got)
 	}
 	// The host itself must be listed on the port typed for it.
 	if got := l73EOSGroupMissing(fixed, d, 6049, 0); len(got) != 2 {
 		t.Fatalf("%q", got)
+	}
+}
+
+// A plain member under a TLS host is the attempt 6 state: the port agrees,
+// the transport does not.
+func TestL73EOSGroupMissingCatchesAPlainMemberUnderATLSHost(t *testing.T) {
+	d := l73DeviceTLS{Server: "172.100.100.1"}
+	plain := strings.Replace(l73ShowTacacsA, "0: 172.100.100.1/49", "0: 172.100.100.1/300", 1)
+	got := l73EOSGroupMissing(plain, d, 300, 0)
+	if len(got) != 1 || !strings.Contains(got[0], "member 172.100.100.1/300 TLS") {
+		t.Fatalf("%q", got)
+	}
+	// A plain second host is listed, and matched, without a tag.
+	two := plain + "\r\nTACACS+ server            : 172.100.100.2/49\r\nTACACS+ server-group: port49\r\n     0: 172.100.100.1/300 TLS\r\n     1: 172.100.100.2/49\r\n"
+	if got := l73EOSGroupMissing(two, l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}, 300, 49); len(got) != 0 {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestL73EOSMemberTakesTLSBeforePort(t *testing.T) {
+	if got := l73EOSMember("172.100.100.1", true, 300); got != "server 172.100.100.1 tls port 300" {
+		t.Fatal(got)
+	}
+	if got := l73EOSMember("172.100.100.2", false, 49); got != "server 172.100.100.2 port 49" {
+		t.Fatal(got)
+	}
+	var tlsAsk bool
+	for _, a := range l73EOSDialect.Asks {
+		if a.Ask == "server "+l73Server+" tls " && slices.Contains(a.Need, "port") {
+			tlsAsk = true
+		}
+	}
+	if !tlsAsk {
+		t.Fatal("no ask confirms port after the member's tls")
 	}
 }
