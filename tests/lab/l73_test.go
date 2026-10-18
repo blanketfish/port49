@@ -528,7 +528,8 @@ func (e *l73Env) startOn() {
 	healthListen = e.listen
 	defer func() { healthListen = "" }()
 	if err := e.l.startDaemonWith(path, true); err != nil {
-		e.t.Fatalf("INVALID: starting port49d on %s: %v", filepath.Base(path), err)
+		e.t.Fatalf("INVALID: starting port49d on %s: %v\nbridge addresses now: %s", filepath.Base(path), err,
+			strings.Join(strings.Fields(e.bridgeAddrs()), " "))
 	}
 	if e.cfg == "" {
 		return
@@ -1932,7 +1933,9 @@ func (e *l73Env) cellJ() {
 			l73JDocs(plain1))
 		return
 	}
+	e.logBridge("cell j before j2 (after j1 and the mixed list applied)")
 	e.revive("j2")
+	e.logBridge("cell j, j2's device ready")
 	e.daemon("j2", l73Daemon{ClientCA: e.files["other.pem"], Listen: net.JoinHostPort(l73SecondServer, "49")})
 	stop = e.capture("j2")
 	off, start2 := e.l.mark(), time.Now()
