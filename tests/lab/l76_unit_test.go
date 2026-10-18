@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -816,5 +817,147 @@ func TestL76ObservationHasEveryCellInOrder(t *testing.T) {
 	src := strings.Index(got, "### Sources\n\n")
 	if src <= last || !strings.Contains(got[src:], l76SourcesSection()) {
 		t.Error("the Sources section is missing or not after the cells")
+	}
+}
+
+// Only the exact tokens of the `role [ ... ]` leaf-list count: a role that
+// merely contains a lab role's name, or sits outside the leaf-list, is not it.
+func TestL76RolesInReadsWholeTokensOfTheRoleLeafList(t *testing.T) {
+	for _, in := range []string{
+		"session 1 {\n    username u\n    role [ p49-read-only ]\n}\n",
+		"session 1 {\n    username u\n    role [ x-p49-admin ]\n}\n",
+		"session 1 {\n    username u\n    description p49-admin\n    role [ network-admin ]\n}\n",
+	} {
+		if got := l76RolesIn(in, "u"); got != nil {
+			t.Errorf("%q read as %v", in, got)
+		}
+	}
+	two := "session 1 {\n    username u\n    role [ p49-read ]\n}\nsession 2 {\n    username u\n    role [\n p49-admin\n ]\n}\n"
+	if got := l76RolesIn(two, "u"); strings.Join(got, ",") != "p49-admin,p49-read" {
+		t.Errorf("two sessions of one user: %v", got)
+	}
+}
+
+// A brace inside a quoted value is not block structure. Counting it would
+// let alice01's block swallow carol's session and report p49-admin.
+func TestL76UserSessionsSkipsBracesInQuotedValues(t *testing.T) {
+	in := "session 31 {\n    username alice01\n    note \"a { b\"\n    role [ p49-read ]\n}\n" +
+		"session 32 {\n    username carol\n    note \"c } d\"\n    role [ p49-admin ]\n}\n" +
+		"session 33 {\n    username erin\n    note \"say \\\"{\\\" now\"\n    role [ p49-read ]\n}\n"
+	own := l76UserSessions(in, "alice01")
+	if strings.Contains(own, "carol") || strings.Contains(own, "p49-admin") || !strings.Contains(own, "session 31 {") {
+		t.Errorf("alice01's blocks:\n%s", own)
+	}
+	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-read" {
+		t.Errorf("alice01: %v", got)
+	}
+	if got := l76RolesIn(in, "carol"); strings.Join(got, ",") != "p49-admin" {
+		t.Errorf("carol: %v", got)
+	}
+	if got := l76RolesIn(in, "erin"); strings.Join(got, ",") != "p49-read" {
+		t.Errorf("erin (an escaped quote and a brace): %v", got)
+	}
+}
+
+// l76StartupRules maps each statement of configs/srlinux-startup.cli to the
+// l76Sources row that cites it. The key is the statement under the AAA
+// section that holds it ("authentication", "server-group port49", ...).
+var l76StartupRules = []struct{ re, what string }{
+	{`^authentication/authentication-method \[$`, "authentication-method [ port49 local ]"},
+	{`^authentication/(user \S+ \{|password \S+|role \[)$`, "user breakglass { password ...; role [ p49-admin ] }"},
+	{`^authorization/(role \S+ \{|priv-lvl \d+)$`, "authorization { role <n> { tacacs { priv-lvl <n> } } }"},
+	{`^accounting/(accounting-method \[|event command \{|record start-stop)$`,
+		"accounting { accounting-method [ port49 ]; event command { record start-stop } }"},
+	{`^server-group local/(server-group local \{|type local)$`, "server-group local { type local }"},
+	{`^server-group port49/(server-group port49 \{|type tacacs|priv-lvl-authorization true)$`,
+		"server-group port49 { type tacacs; tacacs { priv-lvl-authorization true } }"},
+	{`^server-group port49/(server \S+ \{|network-instance mgmt|port 49|secret-key \S+)$`,
+		"server 172.100.100.1 { network-instance mgmt; tacacs { port 49; secret-key ... } }"},
+	{`^configuration/(role \S+ \{|rule / \{|action (read|write))$`,
+		"configuration { role <n> { rule / { action read|write } } }"},
+}
+
+// l76StartupStatements is the statements of a startup config: every line
+// that is not a comment, a closer, a list member or a bare container head,
+// as "<section>/<line>".
+func l76StartupStatements(cli string) []string {
+	var out, stack []string
+	inList := false
+	for _, raw := range strings.Split(cli, "\n") {
+		ln := strings.TrimSpace(raw)
+		switch {
+		case ln == "" || strings.HasPrefix(ln, "#"):
+			continue
+		case ln == "}":
+			stack = stack[:len(stack)-1]
+			continue
+		case ln == "]":
+			inList = false
+			continue
+		case inList:
+			continue
+		}
+		head := strings.HasSuffix(ln, "{")
+		if head {
+			stack = append(stack, strings.TrimSpace(strings.TrimSuffix(ln, "{")))
+		}
+		if strings.HasSuffix(ln, "[") {
+			inList = true
+		}
+		if head && len(strings.Fields(ln)) == 2 {
+			continue // a bare container: `aaa {`
+		}
+		section := ""
+		switch {
+		case len(stack) > 1 && stack[1] == "configuration":
+			section = "configuration"
+		case len(stack) > 2:
+			section = stack[2]
+		}
+		out = append(out, section+"/"+ln)
+	}
+	return out
+}
+
+func TestL76StartupStatementsAreCited(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("configs", "srlinux-startup.cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cited := map[string]bool{}
+	for _, s := range l76Sources {
+		cited[s.what] = true
+	}
+	stmts := l76StartupStatements(string(raw))
+	if len(stmts) < 20 {
+		t.Fatalf("only %d statements read: %v", len(stmts), stmts)
+	}
+	for _, st := range stmts {
+		ok := false
+		for _, r := range l76StartupRules {
+			if regexp.MustCompile(r.re).MatchString(st) {
+				if !cited[r.what] {
+					t.Errorf("%q maps to %q, which has no row in l76Sources", st, r.what)
+				}
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			t.Errorf("startup statement %q has no cite row", st)
+		}
+	}
+	if extra := l76StartupStatements(string(raw) + "\nsystem {\n    aaa {\n        accounting {\n            idle-timeout 5\n        }\n    }\n}\n"); len(extra) != len(stmts)+1 {
+		t.Errorf("a new statement was not counted: %d vs %d", len(extra), len(stmts))
+	}
+}
+
+func TestL76LiveTestSendsNoInfoLiteral(t *testing.T) {
+	src, err := os.ReadFile("l76_test.go")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "\"info ") {
+		t.Error("l76_test.go holds an info literal; use an l76Read constant")
 	}
 }

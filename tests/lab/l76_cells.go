@@ -261,10 +261,31 @@ func l76Sessions(out string) []l76Session {
 // 487) as `info from state system aaa authentication session` prints it.
 var l76SessionHead = regexp.MustCompile(`^\s*session\s+\S+\s*\{\s*$`)
 
-// l76UserSessions is the `session <id> { ... }` blocks of a session-state
-// read whose `username` leaf is exactly user, joined, or "". A block that
-// never closes is not read.
-func l76UserSessions(text, user string) string {
+// l76BraceDelta is a line's opening braces less its closing ones, outside
+// double-quoted values: a brace in a quoted value is not block structure.
+// A quote does not span lines.
+func l76BraceDelta(ln string) int {
+	d, inQuote := 0, false
+	for i := 0; i < len(ln); i++ {
+		switch c := ln[i]; {
+		case inQuote && c == '\\':
+			i++
+		case c == '"':
+			inQuote = !inQuote
+		case inQuote:
+		case c == '{':
+			d++
+		case c == '}':
+			d--
+		}
+	}
+	return d
+}
+
+// l76UserBlocks is the `session <id> { ... }` blocks of a session-state
+// read whose `username` leaf is exactly user. A block that never closes is
+// not read.
+func l76UserBlocks(text, user string) []string {
 	var blocks []string
 	lines := strings.Split(text, "\n")
 	for i := 0; i < len(lines); i++ {
@@ -273,7 +294,7 @@ func l76UserSessions(text, user string) string {
 		}
 		depth, j := 0, i
 		for ; j < len(lines); j++ {
-			depth += strings.Count(lines[j], "{") - strings.Count(lines[j], "}")
+			depth += l76BraceDelta(lines[j])
 			if depth == 0 {
 				break
 			}
@@ -290,18 +311,29 @@ func l76UserSessions(text, user string) string {
 		}
 		i = j
 	}
-	return strings.Join(blocks, "\n")
+	return blocks
+}
+
+// l76UserSessions is l76UserBlocks joined, or "".
+func l76UserSessions(text, user string) string {
+	return strings.Join(l76UserBlocks(text, user), "\n")
 }
 
 // l76RolesIn is the lab's roles (p49-read, p49-admin) that user's sessions
-// hold (YANG `leaf-list role`, srl_nokia-aaa.yang 550), sorted. Other
-// users' sessions are never read: a break-glass session the device still
-// holds must not read as roles this user got (pre-flight I2).
+// hold (YANG `leaf-list role`, srl_nokia-aaa.yang 550), sorted. Only whole
+// tokens of the `role [ ... ]` leaf-list in the user's own blocks count:
+// another user's session, a longer role name or another leaf never does
+// (pre-flight I2).
 func l76RolesIn(text, user string) []string {
-	own := l76UserSessions(text, user)
+	held := map[string]bool{}
+	for _, b := range l76UserBlocks(text, user) {
+		for _, r := range l76LeafList(b, "role") {
+			held[r] = true
+		}
+	}
 	var out []string
 	for _, r := range []string{"p49-admin", "p49-read"} {
-		if regexp.MustCompile(`\b` + r + `\b`).MatchString(own) {
+		if held[r] {
 			out = append(out, r)
 		}
 	}
