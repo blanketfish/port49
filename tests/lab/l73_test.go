@@ -1518,11 +1518,16 @@ func l73RefusalVerdict(id string, n int, ok, ok2, again bool) (contra string, pr
 	if id == "i-error" {
 		return "", true
 	}
+	ruling := map[string]string{
+		"i-alert":  "7 (a chain with no path to the anchors is refused)",
+		"i-accept": "5 (what needs no TLS byte is decided at Accept)",
+		"i-window": "8 (an unavailable status declines the device)",
+	}[id]
 	switch {
 	case !ok:
-		return "**no**: decision 50 ruling 8 says a refusal declines the device to its local method; on " + id + " the local login did not land", true
+		return "**no**: decision 50 ruling " + ruling + " leaves the device to its local method; on " + id + " the local login did not land", true
 	case again && !ok2:
-		return "**no**: decision 50 ruling 8 says a decline window sends the next login to the local method; on " + id + " the login inside the window did not land", true
+		return "**no**: decision 50 ruling " + ruling + " sends the next login, inside the window, to the local method; on " + id + " the login inside the window did not land", true
 	}
 	return "", true
 }

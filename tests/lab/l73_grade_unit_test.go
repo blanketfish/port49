@@ -62,6 +62,14 @@ func TestL73LoginWindowsGiveEveryLoginTheSameTail(t *testing.T) {
 	}
 }
 
+func TestL73RefusalVerdictCitesTheRowsOwnRuling(t *testing.T) {
+	for id, want := range map[string]string{"i-alert": "ruling 7 ", "i-accept": "ruling 5 ", "i-window": "ruling 8 "} {
+		if contra, _ := l73RefusalVerdict(id, 1, false, true, false); !strings.Contains(contra, want) {
+			t.Errorf("%s cites %q, want %q", id, contra, want)
+		}
+	}
+}
+
 func TestL73RefusalVerdict(t *testing.T) {
 	for _, c := range []struct {
 		id          string
