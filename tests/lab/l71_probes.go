@@ -65,9 +65,9 @@ var l71Probes = map[string]l71Probe{
 		snapshot: "show running-config | include tacacs", cfgMark: "(config"},
 	// IOL-XE runs IOS XE's parser: the C8000V question, asked of the L71
 	// help cell's IOL row (TestL73, iolxe1718).
-	"cisco_iol-xe": {enter: []string{"configure terminal", "tacacs server l71probe"}, ask: []string{""},
-		yes: []string{"tls"}, control: []string{"address", "key", "port", "timeout"},
-		cleanup:  []string{"exit", "no tacacs server l71probe", "end"},
+	"cisco_iol-xe": {enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 192.0.2.71 "},
+		yes: []string{"tls"}, control: []string{"key", "port", "timeout"},
+		cleanup:  []string{"end"},
 		snapshot: "show running-config | include tacacs", cfgMark: "(config"},
 	// XR: `abort` leaves configuration mode with nothing committed.
 	"cisco_xrd": {enter: []string{"configure"}, ask: []string{"tacacs-server host 192.0.2.71 "},

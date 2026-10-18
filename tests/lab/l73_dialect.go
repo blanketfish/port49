@@ -170,12 +170,26 @@ var l73Dialects = map[string]l73Dialect{
 		ShowCmds: []string{"show running-config tacacs+", "show crypto ca trustpoints",
 			"show crypto ca certificates " + l73CertID, "show tacacs-server"},
 	},
+	// IOL-XE 17.18.02 has no `tacacs server <name>` object (its config-mode help
+	// lists `tacacs-server` and no `tacacs`), so its help is asked in the legacy
+	// form, as XRd's is. The host ask comes first: it is L71's own verdict. The
+	// `tls` level is asked only if that help listed `tls`; the keyword list's
+	// words are a control, and whatever it lists is recorded.
 	"cisco_iol-xe": {Family: "iosxe", Vendor: "IOS XE (IOL)", Probe: "cisco_iol-xe", HelpOnly: true,
-		Enter: l73IOSXEDialect.Enter, Cleanup: l73IOSXEDialect.Cleanup, CfgMark: "(config", Asks: l73IOSXEAsks},
+		Enter: []string{"configure terminal"}, Cleanup: []string{"end"}, CfgMark: "(config", Asks: []l73Ask{
+			{Ask: l73IOLHost, Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}},
+			{Ask: "tacacs-server ", Control: []string{"host", "key", "timeout"}, Want: []string{"host", "key", "timeout"}},
+			{Ask: l73IOLHost + "tls ", Control: []string{"port", "vrf", "single-connection", "timeout", "key"}, Need: []string{"port"},
+				Only: l73Ask{Ask: l73IOLHost}.listed("tls")},
+		}},
 	"cisco_xrd": {Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", HelpOnly: true,
 		Enter: []string{"configure"}, Cleanup: []string{"abort"}, CfgMark: "(config",
 		Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}}}},
 }
+
+// l73IOLHost is the IOL-XE host ask: the legacy `tacacs-server host`, with an
+// address from the documentation range (nothing is configured by asking).
+const l73IOLHost = "tacacs-server host 192.0.2.71 "
 
 // The names the Cisco lines use. l73XEStart and l73Group are the startup
 // configs' (TestL73CiscoUndoIsTheStartupConfig reads them from the files).

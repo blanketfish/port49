@@ -605,3 +605,37 @@ func TestL73IRowGateDegradesToNotMeasured(t *testing.T) {
 		t.Fatalf("%q %q", o, d)
 	}
 }
+
+// The IOL-XE image has no `tacacs server <name>` object (the 2026-10-18 probe
+// listed `tacacs-server` and no `tacacs`), so its help is asked in the legacy
+// form, as XRd's is: the host ask first (L71's own verdict), the keyword list,
+// and the `tls` level only when the host help listed `tls`.
+func TestL73IOLAsksTheLegacyFormAndGatesTheTLSLevel(t *testing.T) {
+	d := l73Dialects["cisco_iol-xe"]
+	pr := l71Probes["cisco_iol-xe"]
+	host := "tacacs-server host 192.0.2.71 "
+	if len(d.Asks) != 3 || d.Asks[0].Ask != host || d.Asks[1].Ask != "tacacs-server " || d.Asks[2].Ask != host+"tls " {
+		t.Fatalf("asks: %+v", d.Asks)
+	}
+	if !slices.Equal(d.Enter, []string{"configure terminal"}) || !slices.Equal(d.Enter, pr.enter) || !slices.Equal(pr.ask, []string{host}) ||
+		slices.Contains(d.Enter, "tacacs server l71probe") || slices.Contains(pr.enter, "tacacs server l71probe") {
+		t.Fatalf("enter %v, probe %v %v", d.Enter, pr.enter, pr.ask)
+	}
+	// Ask 1's Want words are a control: other words in the help are no failure.
+	if _, _, err := l73HelpVerdict("  timeout  t\n  zzz  z\n", d.Asks[1]); err != nil {
+		t.Fatalf("a help with other words failed: %v", err)
+	}
+	third := d.Asks[2]
+	listed := map[string]bool{}
+	_, _, _ = l73HelpVerdict("  key  k\n  port  p\n", d.Asks[0])
+	miss, have, _ := l73HelpVerdict("  key  k\n  port  p\n  timeout  t\n", d.Asks[0])
+	l73RecordListed(listed, d.Asks[0], miss, have)
+	if third.Only == "" || listed[third.Only] {
+		t.Fatalf("the tls level would be asked with no tls listed: only %q listed %v", third.Only, listed)
+	}
+	miss, have, _ = l73HelpVerdict("  key  k\n  port  p\n  tls  Use TLS\n", d.Asks[0])
+	l73RecordListed(listed, d.Asks[0], miss, have)
+	if !listed[third.Only] {
+		t.Fatalf("the tls level is skipped though tls was listed: %q %v", third.Only, listed)
+	}
+}
