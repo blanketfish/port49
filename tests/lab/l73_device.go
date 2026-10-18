@@ -482,13 +482,13 @@ func l73BarePath(ln string) bool {
 // l73PrintablePath is true for the one path shape Junos's "File path '<p>'
 // doesn't exist" answer may show unmasked: under a directory the image keeps
 // its files in, at most 200 characters, no segment over 64 (a base64 blob
-// that happens to start with a slash is not one).
+// that happens to start with a slash is not one), and no "." or ".." segment.
 func l73PrintablePath(p string) bool {
 	if !l73FilePathShape.MatchString(p) {
 		return false
 	}
 	for _, seg := range strings.Split(p, "/") {
-		if len(seg) > 64 {
+		if len(seg) > 64 || seg == "." || seg == ".." {
 			return false
 		}
 	}
@@ -559,6 +559,11 @@ func l73Hierarchy(ln string) string {
 // output of the hierarchies they live under) does not hold. A secret line is
 // compared by presence alone, since the device shows it encrypted: it is
 // found by the words before the secret, and named without its value.
+//
+// It checks presence only. It does not consult a `deactivate` line in shown
+// (an inactive committed statement counts as present), and it cannot tell that
+// a `delete` failed silently and left a stale statement. Neither applies to
+// the lines typed today; extend it before the line set grows to need either.
 func l73MissingLines(typed []string, shown string) []string {
 	have := map[string]bool{}
 	var secretPrefixes []string
@@ -611,9 +616,17 @@ const l73TrustDir = "/var/db/aaa_certs/tacplus_tls"
 
 var l73HashName = regexp.MustCompile(`^[0-9a-f]{8}$`)
 
+// The two public CA certificates loadJunos uploads, and the only files the
+// trust folder may be filled from.
+const (
+	l73RootOnDevice  = "/var/tmp/l73-root.pem"
+	l73InterOnDevice = "/var/tmp/l73-inter.pem"
+)
+
 // l73TrustFolderCmds makes the group's folder on the device and copies each
 // public CA certificate (source path on the device, openssl subject hash) into
-// it as <hash>.0. A source that is a key is refused: only certificates go.
+// it as <hash>.0. Only l73RootOnDevice and l73InterOnDevice are accepted as a
+// source (an allowlist: no key, no device certificate, no other path).
 func l73TrustFolderCmds(group string, certs [][2]string) ([]string, error) {
 	dir := l73TrustDir + "/" + group
 	cmds := []string{"file make-directory " + dir}
@@ -622,8 +635,8 @@ func l73TrustFolderCmds(group string, certs [][2]string) ([]string, error) {
 		if !l73HashName.MatchString(hash) {
 			return nil, fmt.Errorf("subject hash %q is not eight lowercase hex digits", hash)
 		}
-		if strings.HasSuffix(src, ".key") || strings.Contains(src, "key.pem") {
-			return nil, fmt.Errorf("%s is a key: only public certificates go into the trust folder", src)
+		if src != l73RootOnDevice && src != l73InterOnDevice {
+			return nil, fmt.Errorf("%q is not one of the two uploaded CA certificates: nothing else goes into the trust folder", src)
 		}
 		cmds = append(cmds, "file copy "+src+" "+dir+"/"+hash+".0")
 	}

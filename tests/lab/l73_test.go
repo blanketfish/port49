@@ -1142,7 +1142,11 @@ func (e *l73Env) sign(csrPEM []byte, how string) {
 }
 
 func (e *l73Env) loadJunos() {
-	e.upload(map[string][]byte{"/var/tmp/l73-root.pem": e.pki.Root.PEM(), "/var/tmp/l73-inter.pem": e.pki.Inter.PEM(),
+	trust := []struct {
+		path string
+		pem  []byte
+	}{{l73RootOnDevice, e.pki.Root.PEM()}, {l73InterOnDevice, e.pki.Inter.PEM()}}
+	e.upload(map[string][]byte{trust[0].path: trust[0].pem, trust[1].path: trust[1].pem,
 		"/var/tmp/l73-dev.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
 	e.cli(func(c *cliConn) error {
 		for _, cmd := range l73LoadCommands() {
@@ -1162,16 +1166,22 @@ func (e *l73Env) loadJunos() {
 		// The image reads a trusted-ca-group from a folder of CA certificates named
 		// by their subject hash (l73TrustDir); make it and copy the two public
 		// certificates, already on the device, into it.
+		//
+		// PROVISIONAL: this step rests on the RADSEC page by analogy (the TACACS+
+		// page is silent), and attempt 14 measured it refused for the break-glass
+		// user ("Permission denied": the directory needs root or `start shell`).
+		// It fails closed, so every Junos enrol is INVALID here until Ryan rules
+		// on the vJunos root shell (progress.md, "Task 11 attempt 14", HOLD). Do
+		// not re-run it blind, and do not change it to get past the refusal.
 		e.aaaListing(c, "aaa-before-group")
 		var hashed [][2]string
-		for src, pemBytes := range map[string][]byte{"/var/tmp/l73-inter.pem": e.pki.Inter.PEM(), "/var/tmp/l73-root.pem": e.pki.Root.PEM()} {
-			h, err := l73SubjectHash(pemBytes)
+		for _, tc := range trust {
+			h, err := l73SubjectHash(tc.pem)
 			if err != nil {
 				return fmt.Errorf("INVALID: %v", err)
 			}
-			hashed = append(hashed, [2]string{src, h})
+			hashed = append(hashed, [2]string{tc.path, h})
 		}
-		slices.SortFunc(hashed, func(a, b [2]string) int { return strings.Compare(a[0], b[0]) })
 		folder, err := l73TrustFolderCmds(l73TrustGroup, hashed)
 		if err != nil {
 			return fmt.Errorf("INVALID: %v", err)
@@ -1200,6 +1210,9 @@ func (e *l73Env) loadJunos() {
 // aaaListing keeps the image's AAA certificate directory tree, scrubbed, in
 // the INVALID dir under name (a diagnostic; nothing depends on it).
 func (e *l73Env) aaaListing(c *cliConn, name string) {
+	if os.Getenv("PORT49_L73_INVALID_DIR") == "" {
+		return
+	}
 	out, err := c.sendExpect("file list /var/db/aaa_certs/ recursive", 60*time.Second, junosOpPrompt)
 	if err != nil {
 		out = "(read failed: " + l73Err(err) + ")"

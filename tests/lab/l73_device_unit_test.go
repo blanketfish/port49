@@ -474,6 +474,12 @@ func TestL73ScrubLogShowsOnlyAPlainFilePath(t *testing.T) {
 			t.Errorf("%q left unmasked: %s", p, got)
 		}
 	}
+	// A path that climbs out of its directory is not shown.
+	for _, p := range []string{"/var/../etc/x", "/var/db/../../etc/x", "/var/./db/x"} {
+		if l73PrintablePath(p) || l73RefusedDir(ans(p)) != "" || l73BarePath(p) {
+			t.Errorf("%q is taken for a printable path", p)
+		}
+	}
 	// The rest of the line is still masked.
 	if got := l73ScrubLog(ans(ok) + " " + blob); strings.Contains(got, blob) || !strings.Contains(got, ok) {
 		t.Fatal(got)
@@ -515,9 +521,13 @@ func TestL73TrustFolderCmds(t *testing.T) {
 			t.Errorf("hash %q accepted", bad)
 		}
 	}
-	// A private key can never be a source.
-	if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/l73-dev.key", "0a1b2c3d"}}); err == nil {
-		t.Error("a .key source accepted")
+	// Only the two uploaded public CA certificates can be a source: not a
+	// key, not the device certificate, not any other path.
+	for _, src := range []string{"/var/tmp/l73-dev.key", "/var/tmp/l73-dev.crt", "/var/tmp/other.pem", "/var/tmp/l73-root.pem.key",
+		"/var/tmp/../tmp/l73-root.pem", "l73-root.pem", ""} {
+		if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{src, "0a1b2c3d"}}); err == nil {
+			t.Errorf("source %q accepted", src)
+		}
 	}
 }
 
