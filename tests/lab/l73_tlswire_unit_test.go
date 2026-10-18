@@ -302,6 +302,7 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		"l73Conn.Answer": "string", "l73Conn.Hello": "*lab.l73Hello", "l73Conn.ServerHello": "*lab.l73ServerHello",
 		"l73Conn.Alerts": "[]lab.l73Alert", "l73Conn.DeviceRecords": "int", "l73Conn.ServerRecords": "int",
 		"l73Conn.Plain": "[]lab.l73Plain", "l73Conn.Incomplete": "bool", "l73Conn.End": "string", "l73Conn.EndAt": "time.Time",
+		"l73Conn.DevicePayloadBytes": "int", "l73Conn.ServerPayloadBytes": "int", "l73Conn.DeviceFINAt": "time.Time", "l73Conn.DeviceRSTAt": "time.Time",
 		"l73Hello.LegacyVersion": "uint16", "l73Hello.Versions": "[]uint16", "l73Hello.Suites": "[]uint16",
 		"l73Hello.HasSNI": "bool", "l73Hello.SNI": "string", "l73Hello.Groups": "[]uint16",
 		"l73Hello.SigAlgs": "[]uint16", "l73Hello.ALPN": "[]string", "l73Hello.PSKIdentities": "int",
@@ -553,5 +554,37 @@ func TestL73DescribeNamesTheClientHelloAndAlerts(t *testing.T) {
 	}
 	if hits := l73SummaryLeaks(got); len(hits) > 0 {
 		t.Fatalf("%v: %s", hits, got)
+	}
+}
+
+// A device that sends a few bytes and then closes first shows as such even
+// when the server's RST is the connection's last event; only counts are kept.
+func TestL73ConnsRecordsWhoClosedFirstAndHowMuchWasSent(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0)
+	segs := []l73FakeSeg{
+		{true, tcpSYN, 1000, nil, at},
+		{false, tcpSYN | tcpACK, 5000, nil, at},
+		{true, tcpACK | tcpPSH, 1001, []byte("0123456789"), at.Add(10 * time.Millisecond)},
+		{true, tcpFIN | tcpACK, 1011, nil, at.Add(20 * time.Millisecond)},
+		{false, tcpACK | tcpPSH, 5001, []byte("abc"), at.Add(25 * time.Millisecond)},
+		{false, tcpRST | tcpACK, 5004, nil, at.Add(30 * time.Millisecond)},
+	}
+	conns, err := l73Conns(l73FakePcap(40010, 300, segs), l73TDevice)
+	if err != nil || len(conns) != 1 {
+		t.Fatal(conns, err)
+	}
+	c := conns[0]
+	if c.DevicePayloadBytes != 10 || c.ServerPayloadBytes != 3 || !c.DeviceFINAt.Equal(at.Add(20*time.Millisecond)) ||
+		!c.DeviceRSTAt.IsZero() || c.End != "device-fin" {
+		t.Fatalf("%+v", c)
+	}
+	got := l73Describe(conns, at)
+	for _, want := range []string{"device sent 10 bytes", "server sent 3 bytes", "device fin at +0.02s"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "device rst") || strings.Contains(got, "0123456789") {
+		t.Fatal(got)
 	}
 }

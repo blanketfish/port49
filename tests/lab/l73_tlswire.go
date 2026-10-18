@@ -75,7 +75,13 @@ type l73Conn struct {
 	Alerts        []l73Alert      `json:"plaintext_alerts,omitempty"`
 	DeviceRecords int             `json:"device_tls_records"`
 	ServerRecords int             `json:"server_tls_records"`
-	Plain         []l73Plain      `json:"plain_tacacs_from_device,omitempty"`
+	// Byte counts and the device's first FIN and RST: a count, never the
+	// bytes. End keeps only the last event; these say who closed first.
+	DevicePayloadBytes int        `json:"device_payload_bytes"`
+	ServerPayloadBytes int        `json:"server_payload_bytes"`
+	DeviceFINAt        time.Time  `json:"device_fin_at,omitzero"`
+	DeviceRSTAt        time.Time  `json:"device_rst_at,omitzero"`
+	Plain              []l73Plain `json:"plain_tacacs_from_device,omitempty"`
 	// Incomplete: the capture lacks bytes of this connection (a segment from
 	// its start, or one in a gap), so a missing hello is not evidence the
 	// device sent none.
@@ -164,6 +170,17 @@ func l73Conns(raw []byte, device string) ([]l73Conn, error) {
 			case fl.Flags&rst != 0:
 				st.c.Answer = "rst"
 			}
+		}
+		if fromDevice {
+			st.c.DevicePayloadBytes += fl.PayloadLen
+			if fl.Flags&fin != 0 && st.c.DeviceFINAt.IsZero() {
+				st.c.DeviceFINAt = f.TimeOf(i)
+			}
+			if fl.Flags&rst != 0 && st.c.DeviceRSTAt.IsZero() {
+				st.c.DeviceRSTAt = f.TimeOf(i)
+			}
+		} else {
+			st.c.ServerPayloadBytes += fl.PayloadLen
 		}
 		if fl.Flags&(rst|fin) != 0 && st.c.End == "open" {
 			who, kind := "device", "fin"
@@ -547,6 +564,18 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 			if c.ServerHello.PSKSelected {
 				s += " resumed"
 			}
+		}
+		if c.DevicePayloadBytes > 0 {
+			s += fmt.Sprintf(", device sent %d bytes", c.DevicePayloadBytes)
+		}
+		if c.ServerPayloadBytes > 0 {
+			s += fmt.Sprintf(", server sent %d bytes", c.ServerPayloadBytes)
+		}
+		if !c.DeviceFINAt.IsZero() {
+			s += fmt.Sprintf(", device fin at +%.2fs", c.DeviceFINAt.Sub(from).Seconds())
+		}
+		if !c.DeviceRSTAt.IsZero() {
+			s += fmt.Sprintf(", device rst at +%.2fs", c.DeviceRSTAt.Sub(from).Seconds())
 		}
 		if c.DeviceRecords > 0 || c.ServerRecords > 0 {
 			s += fmt.Sprintf(", %d device TLS records, %d server TLS records", c.DeviceRecords, c.ServerRecords)
