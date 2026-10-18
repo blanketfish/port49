@@ -49,6 +49,9 @@ func TestJunosLineRefusal(t *testing.T) {
 	}{
 		"clean set":                         {ln, ln + "\r\nbreakglass@srx1# ", false},
 		"clean set as the image answers it": {ln, ln + " \r\n\r\n[edit]\r\nbreakglass@srx1#  " + ln + " \r\n\r\n[edit]\r\nbreakglass@srx1# ", false},
+		"error then edit":                   {ln, ln + "\r\nerror: bad\r\n\r\n[edit]\r\nbreakglass@srx1# ", true},
+		"syntax error then edit":            {ln, ln + "\r\n  ^\r\nsyntax error.\r\n\r\n[edit]\r\nbreakglass@srx1# ", true},
+		"other words then edit":             {ln, ln + "\r\nwarning: odd\r\n\r\n[edit]\r\nbreakglass@srx1# ", true},
 		"clean set at a level":              {ln, ln + "\r\n\r\n[edit system]\r\nbreakglass@srx1# ", false},
 		"syntax error":                      {ln, ln + "\r\n                  ^\r\nsyntax error.\r\nbreakglass@srx1# ", true},
 		"unknown command":                   {ln, ln + "\r\nunknown command.\r\nbreakglass@srx1# ", true},
