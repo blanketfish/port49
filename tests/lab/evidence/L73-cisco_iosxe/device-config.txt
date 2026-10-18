@@ -1,0 +1,102 @@
+show running-config | section tacacs^M
+aaa group server tacacs+ port49^M
+ server name l73-tls^M
+ ip vrf forwarding clab-mgmt^M
+ ip tacacs source-interface GigabitEthernet1^M
+tacacs server l73-tls^M
+ address ipv4 172.100.100.1^M
+ tls port 300^M
+ tls trustpoint client l73-dev^M
+ tls trustpoint server l73-root^M
+ tls ip vrf forwarding clab-mgmt^M
+ tls ip tacacs source-interface GigabitEthernet1^M
+xe1#
+show running-config | section crypto pki trustpoint^M
+crypto pki trustpoint <LONG>^M
+ enrollment selfsigned^M
+ subject-name <LONG>^M
+ revocation-check none^M
+ rsakeypair <LONG>^M
+ hash sha512^M
+crypto pki trustpoint l73-root^M
+ enrollment terminal^M
+ revocation-check none^M
+ hash sha512^M
+crypto pki trustpoint l73-dev^M
+ enrollment terminal pem^M
+ serial-number none^M
+ ip-address none^M
+ subject-name CN=xe1^M
+ chain-validation continue l73-root^M
+ revocation-check none^M
+ eckeypair l73-key^M
+ hash sha512^M
+crypto pki trustpoint SLA-TrustPoint^M
+ enrollment pkcs12^M
+ revocation-check crl^M
+ hash sha512^M
+xe1#
+show crypto pki certificates l73-dev^M
+Certificate^M
+  Status: Available^M
+  Certificate Serial Number (hex): <LONG>^M
+  Certificate Usage: Signature^M
+  Issuer: ^M
+    cn=L73 Lab Device Intermediate^M
+  Subject:^M
+    Name: xe1^M
+    IP Address: 172.100.100.41^M
+    cn=xe1^M
+  Validity Date: ^M
+    start date: 06:46:17 UTC Oct 18 2026^M
+    end   date: 07:46:17 UTC Oct 19 2026^M
+  Associated Trustpoints: l73-dev ^M
+^M
+CA Certificate^M
+  Status: Available^M
+  Certificate Serial Number (hex): <LONG>^M
+  Certificate Usage: Signature^M
+  Issuer: ^M
+    cn=L73 Lab Root^M
+  Subject: ^M
+    cn=L73 Lab Device Intermediate^M
+  Validity Date: ^M
+    start date: 06:46:02 UTC Oct 18 2026^M
+    end   date: 07:46:02 UTC Oct 20 2026^M
+  Associated Trustpoints: l73-dev ^M
+^M
+^M
+xe1#
+show tacacs^M
+^M
+Tacacs+ Server -  public  :^M
+               Server name: l73-tls^M
+            Server address: 172.100.100.1^M
+               Server port: 300^M
+              Socket opens:          9^M
+             Socket closes:          9^M
+             Socket aborts:          0^M
+             Socket errors:          0^M
+           Socket Timeouts:          0^M
+   Failed Connect Attempts:          0^M
+        Total Packets Sent:          0^M
+        Total Packets Recv:          0^M
+             Server Status: Alive^M
+Continous Authc fail count:          1^M
+Continous Authz fail count:          1^M
+TACACS+ Secure Server Statistics:^M
+     Packet count since last idletimeout: 0^M
+                    Send handshake count: 0^M
+                       Handshake Success: 0^M
+               Total Packets Transmitted: 0^M
+                  Total Packets Received: 0^M
+                 Total Connection Resets: 14^M
+    Connection Reset due to idle timeout: 0^M
+     Connection Reset due to No Response: 14^M
+Connection Reset due to Malformed packet: 0^M
+                Connection Reset by Peer: 0^M
+    Connection Reset due to other Errors: 0^M
+Test Packet Count since watchdog timeout: 0^M
+Test Packet Count since connection reset: 0^M
+^M
+xe1#

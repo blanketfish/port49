@@ -128,8 +128,9 @@ var platforms = []platform{
 	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
 	{"vjunos26", "juniper_vjunos-router", "topologies/vjunos26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 7 * time.Minute},
+	// iosxe1718 was ready 2m12s after deploy on this host (2026-10-18, TestL73); the budget is that x3, rounded to 7 minutes.
 	{"iosxe1718", "cisco_iosxe", "topologies/iosxe1718.clab.yml", "172.100.100.41", "xe1",
-		"vrnetlab/cisco_c8000v:17.18.02", "Catalyst 8000V 17.18.02", 10 * time.Minute},
+		"vrnetlab/cisco_c8000v:17.18.02", "Catalyst 8000V 17.18.02", 7 * time.Minute},
 	// nxos106 was ready 3m42s after deploy on this host (2026-10-18, TestL73); the budget is that x3, rounded to 11 minutes.
 	{"nxos106", "cisco_nxos", "topologies/nxos106.clab.yml", "172.100.100.31", "nx1",
 		"vrnetlab/cisco_n9kv:9300v64-10.6.2.F", "Nexus 9300v 10.6(2)F", 11 * time.Minute},
