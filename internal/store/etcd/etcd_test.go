@@ -1457,3 +1457,50 @@ func TestConcurrentUnlocksEachAdvanceTheRecord(t *testing.T) {
 		t.Fatalf("%v %v, want %d nanoseconds past the first", got, err, writers-1)
 	}
 }
+
+// A lift whose mark is revoked again between its read and its delete lifts
+// nothing and says so (fail closed); one whose mark is only lifted there has
+// nothing left to lift, which is no error (store.Store's DeleteRevocation).
+func TestALiftLeavesAMarkMadeAfterItsRead(t *testing.T) {
+	ctx := context.Background()
+	cli := etcdtest.Client(t)
+	s := newStore(cli, cli, Config{Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 }})
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: t0}
+	for _, c := range []struct {
+		name    string
+		between func() error
+		want    error
+		stands  bool
+	}{
+		{"revoked again", func() error {
+			if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
+				return err
+			}
+			return s.PutRevocation(ctx, bob)
+		}, store.ErrConflict, true},
+		{"lifted", func() error { return s.DeleteRevocation(ctx, bob.Kind, bob.Key) }, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := s.PutRevocation(ctx, bob); err != nil {
+				t.Fatal(err)
+			}
+			var inner error
+			afterLiftRead = func() {
+				afterLiftRead = nil // the inner lift reads and deletes unhindered
+				inner = c.between()
+			}
+			t.Cleanup(func() { afterLiftRead = nil })
+			err := s.DeleteRevocation(ctx, bob.Kind, bob.Key)
+			if inner != nil {
+				t.Fatal(inner)
+			}
+			if !errors.Is(err, c.want) {
+				t.Fatalf("DeleteRevocation = %v, want %v", err, c.want)
+			}
+			_, err = s.GetRevocation(ctx, bob.Kind, bob.Key)
+			if stands := err == nil; stands != c.stands {
+				t.Fatalf("mark stands = %v (%v), want %v", stands, err, c.stands)
+			}
+		})
+	}
+}

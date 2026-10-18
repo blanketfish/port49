@@ -43,9 +43,39 @@ func (s *Store) GetRevocation(ctx context.Context, kind, key string) (store.Revo
 	return r.revocation(), nil
 }
 
+// afterLiftRead runs between DeleteRevocation's read and its delete, for a
+// test that makes the mark change there.
+var afterLiftRead func()
+
+// DeleteRevocation lifts the mark it reads, and only that one: the delete is
+// conditional on the mark's revision. A copy of a lift that a stalled
+// connection delivers late (the hedge's, or a lift's that timed out) finds a
+// mark made since under a new revision, and leaves it standing. A copy sent
+// twice is harmless for the same reason.
 func (s *Store) DeleteRevocation(ctx context.Context, kind, key string) error {
-	_, err := s.tok.Delete(idempotent(ctx), s.k.mark(kind, key))
-	return unavailable(err)
+	k := s.k.mark(kind, key)
+	resp, err := s.tok.Get(ctx, k)
+	if err != nil {
+		return unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return nil
+	}
+	if afterLiftRead != nil {
+		afterLiftRead()
+	}
+	tr, err := s.tok.Txn(idempotent(ctx)).
+		If(clientv3.Compare(clientv3.ModRevision(k), "=", resp.Kvs[0].ModRevision)).
+		Then(clientv3.OpDelete(k)).
+		Else(clientv3.OpGet(k, clientv3.WithCountOnly())).
+		Commit()
+	if err != nil {
+		return unavailable(err)
+	}
+	if !tr.Succeeded && tr.Responses[0].GetResponseRange().Count != 0 {
+		return fmt.Errorf("%w: the principal or certificate was revoked again while the lift ran", store.ErrConflict)
+	}
+	return nil
 }
 
 // ListRevocations is every mark, sorted by (Kind, Key) as stored, not as

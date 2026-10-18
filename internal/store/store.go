@@ -20,7 +20,8 @@ var ErrNotFound = errors.New("store: not found")
 // the one the caller read: SwapContext's context, written by another writer
 // since, expired, or appeared where none was; or CompleteIdempotency's
 // record, no longer held by the caller (plan 7a); or a RefreshContext with
-// an ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b).
+// an ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b); or a
+// DeleteRevocation whose mark was made again since it read it.
 // Nothing was written. The caller reads again and decides again;
 // JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
@@ -994,6 +995,8 @@ type Store interface {
 	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
 	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
+	// It lifts only the mark it read: one made again while it ran stands,
+	// and the lift returns ErrConflict.
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)

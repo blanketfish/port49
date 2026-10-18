@@ -193,11 +193,16 @@ func TestARevocationIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	}
 }
 
-// A lift is a delete of one key: accepted while a member is dark as well.
+// A lift is a delete conditional on the mark it read: accepted while a member
+// is dark as well. Each lift has a mark to lift, so each sends its delete.
 func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	s, _, ps := threeBehindProxies(t)
-	for i := 0; i < 60; i++ {
-		if err := s.DeleteRevocation(context.Background(), store.RevocationPrincipal, "user:warm"); err != nil {
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: time.Now()}
+	for i := 0; i < 60; i++ { // round-robin: every connection has carried a lift
+		if err := s.PutRevocation(context.Background(), bob); err != nil {
+			t.Fatalf("warming revocation %d: %v", i, err)
+		}
+		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key); err != nil {
 			t.Fatalf("warming lift %d: %v", i, err)
 		}
 	}
@@ -205,7 +210,13 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	failed, total := 0, 0
 	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(100 * time.Millisecond) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		if err := s.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob"); err != nil {
+		err := s.PutRevocation(ctx, bob)
+		cancel()
+		if err != nil {
+			t.Fatalf("the revocation before lift %d: %v", total, err)
+		}
+		ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
 			failed++
 		}
 		total++
@@ -213,6 +224,48 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	}
 	if failed != 0 {
 		t.Fatalf("%d of %d lifts failed with one of three members dark", failed, total)
+	}
+}
+
+// A lift's copy that a stalled connection delivers late, once the member is
+// back, lifts nothing made after it: a principal revoked again while one
+// member was dark stays revoked, and every lift and revocation said so.
+func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: time.Now()}
+	for i := 0; i < 60; i++ { // round-robin: every connection has carried a lift
+		if err := s.PutRevocation(context.Background(), bob); err != nil {
+			t.Fatalf("warming revocation %d: %v", i, err)
+		}
+		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key); err != nil {
+			t.Fatalf("warming lift %d: %v", i, err)
+		}
+	}
+	if err := s.PutRevocation(context.Background(), bob); err != nil {
+		t.Fatal(err)
+	}
+	ps[2].Hang(true)
+	// Ten rounds, well inside keepalive's 10s + 2s, so the stalled
+	// connection still holds what was sent on it when the member is back.
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
+			t.Fatalf("lift %d: %v", i, err)
+		}
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := s.PutRevocation(ctx, bob); err != nil {
+			t.Fatalf("revocation %d: %v", i, err)
+		}
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	}
+	ps[2].Hang(false)
+	time.Sleep(3 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.GetRevocation(ctx, bob.Kind, bob.Key); err != nil {
+		t.Fatalf("the last revocation, reported made, is gone once the member is back: %v", err)
 	}
 }
 
