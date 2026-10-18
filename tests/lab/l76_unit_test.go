@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,7 +328,6 @@ func TestL76LeaksFindsASecretSplitAcrossLines(t *testing.T) {
 	for name, text := range map[string]string{
 		"newline":     "bad key 9f3a7c1e5b2d4086\na1c3e5f70b2d4f68\n",
 		"crlf indent": "bad key 9f3a7c1e5b2d4086\r\n        a1c3e5f70b2d4f68",
-		"tab":         "9f3a7c1e5b\t2d4086a1c3e5f70b2d4f68",
 	} {
 		if got := l76Leaks(text, secrets); len(got) != 1 || got[0] != "secret #1" {
 			t.Errorf("%s: %v, want [secret #1]", name, got)
@@ -415,6 +415,66 @@ func TestL76LeaksIgnoresCaseOfASecret(t *testing.T) {
 	} {
 		if got := l76Leaks(text, secrets); len(got) != 1 || got[0] != want {
 			t.Errorf("%q: %v, want [%s]", text, got, want)
+		}
+	}
+}
+
+// Only a line break joins the halves of a wrapped value: the published key's
+// two words in prose, on one line, are not a leak.
+func TestL76LeaksSqueezesLineBreaksNotSpaces(t *testing.T) {
+	secrets := []string{"labsecret", "NokiaSrl1!"}
+	for _, text := range []string{"a lab secret story", "Lab\tSecret", "LAB  SECRET", "Nokia Srl1!", "the lab\tsecret"} {
+		if got := l76Leaks(text, secrets); len(got) != 0 {
+			t.Errorf("%q: prose flagged %v", text, got)
+		}
+	}
+	for text, want := range map[string]string{
+		"lab\nsecret":      "secret #0",
+		"LAB\r\n   SECRET": "secret #0",
+		"Nokia\n\tSrl1!":   "secret #1",
+		"x labsecret y":    "secret #0",
+	} {
+		if got := l76Leaks(text, secrets); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: %v, want [%s]", text, got, want)
+		}
+	}
+}
+
+func TestL76MaskConfigTextFormValueClasses(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"d":"change password now","n":1}`:            `{"d":"change password <masked>","n":1}`,
+		`{"d":"set secret-key abc"}`:                   `{"d":"set secret-key <masked>"}`,
+		`password "two words" tail`:                    `password "<masked>" tail`,
+		`password=plainvalue`:                          `password=<masked>`,
+		`password: plainvalue`:                         `password: <masked>`,
+		"password : plainvalue":                        "password : <masked>",
+		`secret-key="a b"`:                             `secret-key="<masked>"`,
+		"password:\nnext line":                         "password:\nnext line",
+		"leaf password {":                              "leaf password {",
+		"authentication-key=k1 authentication-key: k2": "authentication-key=<masked> authentication-key: <masked>",
+	} {
+		got := l76MaskConfig(in)
+		if got != want {
+			t.Errorf("%q:\n got %q\nwant %q", in, got, want)
+		}
+		if l76MaskConfig(got) != got {
+			t.Errorf("%q: not idempotent", in)
+		}
+	}
+	if !json.Valid([]byte(l76MaskConfig(`{"d":"change password now","e":"x secret-key y"}`))) {
+		t.Errorf("JSON prose mangled")
+	}
+}
+
+func TestL76FilterLogMasksAuthenticationKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"authentication-key abc123\n":   "authentication-key <masked>\n",
+		"authentication-key=abc123":     "authentication-key=<masked>",
+		"authentication-key: abc123 ok": "authentication-key: <masked> ok",
+		"authentication-key \"a b\"":    "authentication-key \"<masked>\"",
+	} {
+		if got := l76FilterLog(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
 		}
 	}
 }
