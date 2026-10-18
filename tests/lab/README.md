@@ -808,9 +808,9 @@ client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
 
 - **Needs:** `sudo -n` for `ip`, `tc` and `iptables` (and `sudo -n -u <you>` inside the namespace);
   `PORT49_LAB_ETCD_BIN` naming a directory with etcd and etcdctl v3.6.15; and L67's directory
-  images. Stopping a process needs no sudo. One run at a time: the run takes a non-blocking flock on
-  `~/.cache/port49-lab/regions.lock` before its pre-clean (which deletes `p49r1..3` and `p49rbr0`),
-  and refuses to start while another run holds it.
+  images. Stopping a process needs no sudo. The lab is single-occupant: the run takes the
+  shared lock `/tmp/port49-lab.lock` (as L73 and L76 do) before its pre-clean, which deletes
+  `p49r1..3` and `p49rbr0`, and refuses to start while another run holds it.
 - **L75's brokers run on the host**, not in a namespace: directory membership needs the directory
   (OpenLDAP, L67's containers), which the namespaces cannot reach.
 - **10.149.0.0/24 must be free** (`ip -4 route`).

@@ -236,18 +236,12 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 		t.Fatalf("INVALID: writing the run's key file: %v", err)
 	}
 
-	// One run at a time: the pre-clean below deletes the namespaces, which
-	// would tear down another run's network. The kernel drops the lock if this
-	// process dies.
-	home, herr := os.UserHomeDir()
-	if herr != nil {
-		t.Fatal(herr)
+	// The lab is single-occupant: the shared lock, before the pre-clean below
+	// deletes the namespaces (it would tear down another run's network). Held
+	// until TestMain's teardown (labRelease), as L73's and L76's are.
+	if err := labOccupyForRun(labLockPath, "TestRegions pid "+strconv.Itoa(os.Getpid())); err != nil {
+		t.Fatal(err)
 	}
-	release, lerr := winLock(filepath.Join(home, ".cache", "port49-lab", "regions.lock"))
-	if lerr != nil {
-		t.Fatalf("another L74 run holds the lab (regions.lock): %v", lerr)
-	}
-	t.Cleanup(release)
 
 	_ = sudoRun(regionNetDown(), true)
 	if err := sudoRun(regionNetUp(), false); err != nil {
