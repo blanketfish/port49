@@ -678,3 +678,13 @@ func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
 		t.Fatalf("the read: %+v %v (witness %d, purged %d)", r, err, w, p)
 	}
 }
+
+// ClusterID is the cluster's id from a read's header: the same through any
+// client of one cluster (plan 11a, R28).
+func TestClusterIDIsTheClusters(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	id, err := s.ClusterID(context.Background())
+	if err != nil || id == 0 {
+		t.Fatalf("%x %v", id, err)
+	}
+}

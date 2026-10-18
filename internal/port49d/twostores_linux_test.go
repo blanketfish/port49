@@ -273,7 +273,7 @@ func notServedBeforeTheFirstLoad(t *testing.T, cutAt, stillAt, loadedAt string) 
 // load of the marks, so until then nothing is served: no request can find a
 // mark "absent" in a copy that has not loaded.
 func TestNothingIsServedBeforeTheDirectorysMarksLoad(t *testing.T) {
-	notServedBeforeTheFirstLoad(t, "directory store: the broker's etcd certificate",
+	notServedBeforeTheFirstLoad(t, "port49-broker: ledger: ",
 		"reading the revocations in force", "revocation(s) in force from the directory store")
 }
 
@@ -353,8 +353,8 @@ func TestTheDirectoryOutageLineIsTrueForTheDeployment(t *testing.T) {
 		down, up   string
 		mustNotSay string
 	}{
-		{"shared", true, "port49-broker: store: not answering: the one store is not answering and this broker refuses " +
-			"requests until it returns\n", "port49-broker: store: answering again\n", "serving from the cache"},
+		{"shared", true, "port49-broker: store: not answering (not opened yet): this broker refuses requests until it " +
+			"returns\n", "port49-broker: store: answering again\n", "the one store is not answering"},
 		{"split", false, "port49-broker: directory store: not answering (", "port49-broker: directory store: answering again; the cache was ",
 			"refuses requests until it returns"},
 	} {
@@ -479,5 +479,90 @@ func TestAMarkAlreadyInTheDirectoryIsInForceOnTheFirstRequest(t *testing.T) {
 	}
 	if status, login, body := mintOnce(t, api, f.pki, "leaf1"); status == http.StatusOK || login != "" {
 		t.Fatalf("a mint on the first request was served although the directory holds a mark: %d %s", status, body)
+	}
+}
+
+// R27: a directory last written under a key this configuration does not
+// hold refuses port49-broker's start, naming the directory store and the
+// key id, never key material.
+func TestADirectoryUnderAKeyThisRegionLacksRefusesTheStart(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- runBroker(context.Background(), f.broker) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "the directory store (etcd ") ||
+			!strings.Contains(err.Error(), "key-from-elsewhere") ||
+			!strings.Contains(err.Error(), "which this configuration does not hold") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49-broker started against a directory under a key it lacks")
+	}
+}
+
+// R27: port49-broker records its window in the directory store at start.
+func TestABrokerRecordsItsKeyWindowInTheDirectory(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	if n := keysUnder(t, f.dsrv, "/port49/v1/meta/seal_keys"); n != 1 {
+		t.Fatalf("%d key window record(s) in the directory store, want 1", n)
+	}
+}
+
+// R27: a running runner says, at its recheck, a directory now under a key
+// it lacks (a region that rotated out of order).
+func TestARunnerSaysADirectoryKeyItLacks(t *testing.T) {
+	var out syncBuffer
+	e, every := stderr, directoryKeysRecheckEvery
+	t.Cleanup(func() { stderr, directoryKeysRecheckEvery = e, every })
+	stderr, directoryKeysRecheckEvery = &out, time.Second
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	waitWithin(t, &out, "port49-broker: runner: took keyspace", 30*time.Second)
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	waitWithin(t, &out, "which this configuration does not hold", 10*time.Second)
+}
+
+// R28: stores.directory naming the session store's own cluster and prefix
+// through another address is one keyspace, and port49-broker refuses it.
+func TestOneClusterNamedTwiceIsRefused(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.judged(t)             // before the split, which this start refuses
+	f.twoStoresOn(t, f.srv) // the session store's own member, through a proxy of its own
+	errc := make(chan error, 1)
+	go func() { errc <- runBroker(context.Background(), f.broker) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "reach one etcd cluster") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49-broker started with one keyspace named twice")
 	}
 }

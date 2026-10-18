@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -37,7 +38,7 @@ func keepFresh(ctx context.Context, h *dirHandle, fresh *store.Freshness, timeou
 		switch fresh.Checked(err) {
 		case store.Stopped:
 			if shared {
-				fmt.Fprintln(out, sharedDownLine(proc))
+				fmt.Fprintln(out, sharedDownLine(proc, err))
 				break
 			}
 			fmt.Fprintf(out, "%s: directory store: not answering (%s): serving from the cache %s; revocations, "+
@@ -61,8 +62,21 @@ func keepFresh(ctx context.Context, h *dirHandle, fresh *store.Freshness, timeou
 // sharedDownLine and sharedUpLine are the outage lines of a one-store
 // deployment: there is no cache to serve from, so the broker refuses what
 // needs the store (the API answers 503 store_unavailable) until it answers.
-func sharedDownLine(proc string) string {
-	return proc + ": store: not answering: the one store is not answering and this broker refuses requests until it returns"
+func sharedDownLine(proc string, err error) string {
+	return proc + ": store: not answering (" + outageCause(err) + "): this broker refuses requests until it returns"
+}
+
+// outageCause is the closed-set cause of a failed read, never the error's
+// text, which can echo what a peer sent.
+func outageCause(err error) string {
+	switch {
+	case errors.Is(err, errNoDirectory):
+		return "not opened yet"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed out"
+	default:
+		return "unreachable"
+	}
 }
 
 func sharedUpLine(proc string) string { return proc + ": store: answering again" }

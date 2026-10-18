@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/rhwendt/port49/internal/config"
@@ -51,6 +52,11 @@ func (r storeRef) what() string {
 		return "directory store"
 	}
 	return "store"
+}
+
+// where names the store's etcd in a line: its endpoints and its prefix.
+func (r storeRef) where() string {
+	return "etcd " + strings.Join(r.cfg.Etcd.Endpoints, ", ") + ", prefix " + r.cfg.Etcd.Prefix
 }
 
 // dirHandle is the directory store's raw handle as a process holds it: the

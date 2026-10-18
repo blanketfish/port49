@@ -74,6 +74,9 @@ type runner struct {
 	// followedLogouts is told each logout the logouts feed brings, in a
 	// split (R26): the duties reach it in this region's session store.
 	followedLogouts chan store.LogoutEntry
+	// dir is the directory store's handle in a split (plan 11a): the
+	// hourly key-window recheck reads it (R27). Nil in a shared store.
+	dir *dirHandle
 	// pending is how many back-channel logouts the last forwarding pass left
 	// pending in this region's session store (forwardingPending).
 	pending atomic.Int64
@@ -203,6 +206,10 @@ func (r *runner) duties(ctx context.Context) {
 		wg.Add(2)
 		go func() { defer wg.Done(); r.reachFollowed(ctx) }()
 		go func() { defer wg.Done(); r.forwardingPending(ctx) }()
+	}
+	if r.dir != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.recheckDirectoryKeys(ctx) }()
 	}
 	go func() { defer wg.Done(); r.judging(ctx) }()
 	go func() { defer wg.Done(); r.keepWitness(ctx) }()

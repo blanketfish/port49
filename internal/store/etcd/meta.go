@@ -290,6 +290,16 @@ func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
 	return unavailable(err)
 }
 
+// ClusterID is the etcd cluster's id, from a read's header (plan 11a, R28):
+// two clients of one cluster read one id, whatever address each names.
+func (s *Store) ClusterID(ctx context.Context) (uint64, error) {
+	resp, err := s.tok.Get(ctx, s.k.meta("ping"), clientv3.WithKeysOnly())
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	return resp.Header.ClusterId, nil
+}
+
 // maxJudgedPolicy is the most of a policy file meta/judged carries: under
 // etcd's request limit (1.5 MiB by default) with room for the record.
 const maxJudgedPolicy = 1 << 20

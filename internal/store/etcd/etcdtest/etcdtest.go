@@ -90,6 +90,9 @@ func sweepStale() {
 	}
 }
 
+// soloSeq numbers the solo members of this process.
+var soloSeq atomic.Int64
+
 // Main starts the package's shared member, runs its tests, and stops it.
 // A package whose tests need etcd calls it from TestMain.
 func Main(m *testing.M) int {
@@ -223,7 +226,10 @@ type Server struct {
 func Start(t testing.TB, o Options) *Server {
 	t.Helper()
 	s := &Server{Dir: t.TempDir()}
-	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify}
+	// A token of its own, so each member is a cluster of its own with its own
+	// id (plan 11a, R28): by default every solo member would share one.
+	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify,
+		token: fmt.Sprintf("port49-etcdtest-solo-%d-%d", os.Getpid(), soloSeq.Add(1))}
 	if o.TLS {
 		now := time.Now()
 		ca, err := testpki.NewCA("etcdtest CA", now.Add(-time.Hour), now.Add(24*time.Hour))

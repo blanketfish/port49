@@ -156,6 +156,17 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		return brokerStores{}, err
 	}
+	if !cfg.Stores.Shared {
+		de := cfg.Stores.Directory.Etcd
+		if err := retry(func() error { return checkTwoStores(ctx, cfg, b, dirRaw, 4*de.CallTimeout) }); err != nil {
+			return fail(err)
+		}
+		if err := retry(func() error {
+			return checkDirectoryKeys(ctx, "port49-broker", dirRaw, directoryRef(cfg), keys, out, 4*de.CallTimeout, true)
+		}); err != nil {
+			return fail(err)
+		}
+	}
 	// The marks are the directory's: its bound in a split.
 	markBound := e.BulkTimeout
 	if !cfg.Stores.Shared {
@@ -503,6 +514,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			gate.open(fmt.Sprintf("this replica's takeover is done (bundle %s)", carried.Bundle), stderr)
 		}}
 	if !cfg.Stores.Shared {
+		rn.dir = bs.dir
 		rn.followed = make(chan store.Revocation, 1024)
 		rn.followedLogouts = make(chan store.LogoutEntry, 1024)
 	}
