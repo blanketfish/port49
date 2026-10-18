@@ -494,10 +494,39 @@ func (e *l73Env) junosCommit(lines []string) (string, error) {
 		if cerr != nil {
 			c.sendExpect("rollback 0", 60*time.Second, junosCfgPrompt)
 			c.sendExpect("exit configuration-mode", 60*time.Second, junosOpPrompt)
+			return nil
 		}
+		cerr = junosVerifyApplied(c, lines)
 		return nil
 	})
 	return out, cerr
+}
+
+// junosVerifyApplied reads the committed configuration back and is an error
+// naming every `set` line typed that is not in it. A line the CLI took
+// without a word and the commit then dropped would otherwise leave every
+// cell measuring a device with no TLS. The secret line is compared by
+// presence and never printed.
+func junosVerifyApplied(c *cliConn, lines []string) error {
+	var shown strings.Builder
+	seen := map[string]bool{}
+	for _, ln := range lines {
+		h := l73Hierarchy(ln)
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		out, err := junosShow(c, "show configuration "+h+" | display set")
+		if err != nil {
+			return fmt.Errorf("reading back %q: %s", h, l73Err(err))
+		}
+		shown.WriteString(out)
+		shown.WriteString("\n")
+	}
+	if missing := l73MissingLines(lines, shown.String()); len(missing) > 0 {
+		return fmt.Errorf("the committed configuration lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+	}
+	return nil
 }
 
 // ciscoType types lines in configuration mode with port49d stopped. What
@@ -549,7 +578,7 @@ func (e *l73Env) configure(d l73DeviceTLS) {
 	}
 	if err != nil {
 		e.invalidScreen("configure", out)
-		e.t.Fatalf("INVALID: configuring the device's TLS client: %s", oneLine(hideKeys(err.Error())))
+		e.t.Fatalf("INVALID: configuring the device's TLS client: %s", oneLine(l73ScrubLog(hideKeys(err.Error()))))
 	}
 }
 

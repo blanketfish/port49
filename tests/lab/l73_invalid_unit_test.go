@@ -40,3 +40,33 @@ func TestL73InvalidScreenMasksTheTacplusSecret(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestJunosLineRefusal(t *testing.T) {
+	ln := "set system tacplus-server 1.2.3.4 tls trusted-ca-group g"
+	for name, c := range map[string]struct {
+		ln, out string
+		want    bool
+	}{
+		"clean set":         {ln, ln + "\r\nbreakglass@srx1# ", false},
+		"syntax error":      {ln, ln + "\r\n                  ^\r\nsyntax error.\r\nbreakglass@srx1# ", true},
+		"unknown command":   {ln, ln + "\r\nunknown command.\r\nbreakglass@srx1# ", true},
+		"error colon":       {ln, ln + "\r\nerror: bad\r\nbreakglass@srx1# ", true},
+		"missing argument":  {ln, ln + "\r\nmissing argument.\r\nbreakglass@srx1# ", true},
+		"set warning":       {ln, ln + "\r\nwarning: something odd\r\nbreakglass@srx1# ", true},
+		"delete not found":  {"delete system tacplus-server", "delete system tacplus-server\r\nwarning: statement not found\r\nbreakglass@srx1# ", false},
+		"delete real error": {"delete system tacplus-server", "delete system tacplus-server\r\nerror: bad\r\nbreakglass@srx1# ", true},
+	} {
+		if got := junosLineRefusal(c.ln, c.out) != ""; got != c.want {
+			t.Errorf("%s: refusal %v want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestL73ScrubLogMasksTheTacplusSecret(t *testing.T) {
+	got := l73ScrubLog("set system tacplus-server 172.100.100.1 port 300\n" +
+		"set system tacplus-server 172.100.100.1 secret \"$9$abcdefgh1234\"\n" +
+		"set system tacplus-server 172.100.100.1 authentication-key \"$9$zzzzyyyy5678\"\n")
+	if strings.Contains(got, "$9$") || strings.Contains(got, "secret") || strings.Contains(got, "abcdefgh") || strings.Contains(got, "zzzzyyyy") || !strings.Contains(got, "port 300") {
+		t.Fatal(got)
+	}
+}

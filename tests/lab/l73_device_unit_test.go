@@ -409,3 +409,47 @@ func TestL73UntaggedFilesUseNothingLabTagged(t *testing.T) {
 		})
 	}
 }
+
+func TestL73MissingLines(t *testing.T) {
+	typed := []string{
+		"delete system tacplus-server",
+		"set system tacplus-server 172.100.100.1 routing-instance mgmt_junos",
+		"set system tacplus-server 172.100.100.1 tls trusted-ca-group l73-trust",
+		`set system tacplus-server 172.100.100.1 secret "labvalue"`,
+		"set system tacplus-server 172.100.100.1   port 300",
+	}
+	shown := "show configuration system tacplus-server | display set \r\n" +
+		"set system tacplus-server 172.100.100.1 routing-instance mgmt_junos\r\n" +
+		"set system tacplus-server 172.100.100.1 tls trusted-ca-group \"l73-trust\"\r\n" +
+		"set system tacplus-server 172.100.100.1 port 300\r\n" +
+		"set system tacplus-server 172.100.100.1 secret \"$9$abcdef\"\r\n"
+	if got := l73MissingLines(typed, shown); len(got) != 0 {
+		t.Fatal(got)
+	}
+	// The tls line and the secret are gone: both are named, the secret without its value.
+	shown = "set system tacplus-server 172.100.100.1 routing-instance mgmt_junos\nset system tacplus-server 172.100.100.1 port 300\n"
+	got := l73MissingLines(typed, shown)
+	want := []string{"set system tacplus-server 172.100.100.1 tls trusted-ca-group l73-trust",
+		"set system tacplus-server 172.100.100.1 secret <masked>"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	for _, g := range got {
+		if strings.Contains(g, "labvalue") {
+			t.Fatal(g)
+		}
+	}
+}
+
+func TestL73Hierarchy(t *testing.T) {
+	for in, want := range map[string]string{
+		"set system tacplus-server 1.2.3.4 port 300":               "system tacplus-server",
+		"set system accounting destination tacplus server 1.2.3.4": "system accounting",
+		"set security pki ca-profile x ca-identity x":              "security pki",
+		"delete system tacplus-server":                             "",
+	} {
+		if got := l73Hierarchy(in); got != want {
+			t.Errorf("%q: %q want %q", in, got, want)
+		}
+	}
+}

@@ -401,8 +401,8 @@ func junosConfigure(c *cliConn, lines ...string) (string, error) {
 		if err != nil {
 			return out, fmt.Errorf("%q: %w", ln, err)
 		}
-		if strings.Contains(out, "syntax error") || strings.Contains(out, "unknown command") {
-			return out, fmt.Errorf("%q was refused by the device:\n%s", ln, out)
+		if why := junosLineRefusal(ln, out); why != "" {
+			return out, fmt.Errorf("%q was refused by the device (%s):\n%s", ln, why, out)
 		}
 	}
 	out, err := c.sendExpect("commit", 180*time.Second, "commit complete", "error:", "failed")
@@ -416,6 +416,27 @@ func junosConfigure(c *cliConn, lines ...string) (string, error) {
 		return out, fmt.Errorf("leaving configuration mode: %w", err)
 	}
 	return out, nil
+}
+
+// junosLineRefusal says why the device's answer to a configuration line is a
+// refusal, or "". A `set` line is silent when it takes, so anything the
+// device says beyond the echo and the prompt refuses it; a `delete` of
+// something absent warns "statement not found", which is not one.
+func junosLineRefusal(ln, out string) string {
+	if strings.Contains(out, "syntax error") || strings.Contains(out, "unknown command") || strings.Contains(out, "error:") {
+		return "the device named an error"
+	}
+	if !strings.HasPrefix(strings.TrimSpace(ln), "set ") {
+		return ""
+	}
+	rest := strings.ReplaceAll(out, ln, "")
+	for _, l := range strings.Split(strings.ReplaceAll(rest, "\r", ""), "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasSuffix(l, "# ") && !strings.HasSuffix(l, "#") {
+			return "the device answered a set line: " + l
+		}
+	}
+	return ""
 }
 
 // junosShow runs one operational-mode command and returns just its output.

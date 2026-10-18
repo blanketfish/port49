@@ -478,3 +478,54 @@ var l73PEMDropRe = regexp.MustCompile(`(?s)-----BEGIN [A-Za-z0-9 .-]+-----.*?(?:
 func l73DropPEM(s string) string {
 	return l73PEMDropRe.ReplaceAllString(s, "<PEM block dropped>")
 }
+
+var l73Space = regexp.MustCompile(`\s+`)
+
+// l73NormSet is a `set` line as `display set` would spell it: quotes gone,
+// whitespace single.
+func l73NormSet(ln string) string {
+	return l73Space.ReplaceAllString(strings.TrimSpace(strings.ReplaceAll(ln, `"`, "")), " ")
+}
+
+// l73Hierarchy is the configuration path a `set` line lives under, as
+// `show configuration <path> | display set` takes it: its first two words.
+func l73Hierarchy(ln string) string {
+	f := strings.Fields(ln)
+	if len(f) < 3 || f[0] != "set" {
+		return ""
+	}
+	return f[1] + " " + f[2]
+}
+
+// l73MissingLines names every typed `set` line that shown (the `display set`
+// output of the hierarchies they live under) does not hold. A secret line is
+// compared by presence alone, since the device shows it encrypted: it is
+// found by the words before the secret, and named without its value.
+func l73MissingLines(typed []string, shown string) []string {
+	have := map[string]bool{}
+	var secretPrefixes []string
+	for _, ln := range strings.Split(shown, "\n") {
+		n := l73NormSet(ln)
+		have[n] = true
+		if i := strings.Index(n, " secret "); i >= 0 {
+			secretPrefixes = append(secretPrefixes, n[:i])
+		}
+	}
+	var missing []string
+	for _, ln := range typed {
+		if !strings.HasPrefix(strings.TrimSpace(ln), "set ") {
+			continue
+		}
+		n := l73NormSet(ln)
+		if i := strings.Index(n, " secret "); i >= 0 {
+			if !slices.Contains(secretPrefixes, n[:i]) {
+				missing = append(missing, n[:i]+" secret <masked>")
+			}
+			continue
+		}
+		if !have[n] {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
