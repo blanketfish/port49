@@ -1399,3 +1399,298 @@ func (e *l73Env) cellH() {
 			e.quote(e.l.recordsSince(off))),
 		"n/a: plan 12's reference configuration takes it from here")
 }
+
+// addSecondAddress puts 172.100.100.2 on the clab bridge beside .1, as
+// prepareSplit does, and takes it off when the test ends.
+func (e *l73Env) addSecondAddress() {
+	if e.bridge {
+		return
+	}
+	dev, err := bridgeDevice()
+	if err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+	del := func() { _ = exec.Command("sudo", "-n", "ip", "addr", "del", l73SecondServer+"/24", "dev", dev).Run() }
+	del()
+	// Registered before the add: every exit path, a Fatal, an INVALID or the
+	// STOP guard included, takes the address off again.
+	e.t.Cleanup(del)
+	if out, err := exec.Command("sudo", "-n", "ip", "addr", "add", l73SecondServer+"/24", "dev", dev).CombinedOutput(); err != nil {
+		e.t.Fatalf("INVALID: adding %s to %s: %v\n%s", l73SecondServer, dev, err, out)
+	}
+	e.bridge = true
+}
+
+// cellI: the device lists a second TLS server, 172.100.100.2:300, where
+// nothing listens (an RST). Each refusal is met with a break-glass login:
+// port49 holds no token for breakglass, so the login lands only if the device
+// reaches its local method. The timeline comes from the capture. A row's
+// verdict needs a port49 record of the row's own reason; without one the row
+// says the cause is unproven and contradicts nothing.
+func (e *l73Env) cellI() {
+	e.guard()
+	e.addSecondAddress()
+	d := e.base()
+	d.Second, d.SecondTLS, d.SecondPort = l73SecondServer, true, e.port
+	e.configure(d)
+	fault := e.write("fault", []byte("store_unavailable\n"))
+	unreachable := fmt.Sprintf("{crls: [{name: l73, url: \"http://127.0.0.1:%d/l73.crl\", issuer_file: %s}]}", freePort(e.t), e.files["inter.pem"])
+	load, _ := os.ReadFile("/proc/loadavg")
+	refusals := []struct {
+		id, what, outcome string
+		o                 l73Daemon
+		again             bool
+	}{
+		{"i-alert", "an alert at the handshake (client_ca_file a CA that did not issue the device's chain: unknown_ca)", "unknown_ca",
+			l73Daemon{ClientCA: e.files["other.pem"]}, false},
+		{"i-accept", "a reset at Accept (the device's record says transport tcp: transport_mismatch)", "transport_mismatch",
+			l73Daemon{Inventory: e.invTCP, Intermediates: e.files["inter.pem"]}, false},
+		{"i-window", "a decline window (certificate status unavailable, an unreachable CRL: status_unavailable), then a second login at once, inside the window",
+			"status_unavailable", l73Daemon{Intermediates: e.files["inter.pem"], Status: unreachable}, true},
+		{"i-error", "an ERROR reply (the lab fault switch, store_unavailable: authentication answers ERROR)", "store_unavailable",
+			l73Daemon{Intermediates: e.files["inter.pem"], FaultFile: fault}, false},
+	}
+	var parts, unproven []string
+	docs := "yes: decision 50 rulings 5 and 8 (each refusal sends the device on to its next server or local method)"
+	contradicted := false
+	for _, r := range refusals {
+		e.guard()
+		e.settle()
+		e.revive(r.id)
+		e.daemon(r.id, r.o)
+		stop := e.capture(r.id)
+		off, start := e.l.mark(), time.Now()
+		ok, took, err := e.breakglassLogin()
+		s := fmt.Sprintf("%s: break-glass login ok %v in %s (%s)", r.what, ok, took.Round(time.Millisecond), l73Err(err))
+		if r.again {
+			ok2, took2, err2 := e.breakglassLogin()
+			s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
+		}
+		conns := stop()
+		e.reached(r.id, conns)
+		recs := e.l.recordsSince(off)
+		n := len(l73Where(recs, "tls_outcome", r.outcome)) + len(l73Where(recs, "diagnosis", r.outcome))
+		for _, rec := range recs {
+			if str(rec, "reason") == r.outcome {
+				n++
+			}
+		}
+		proof := fmt.Sprintf("%d record(s) of %s", n, r.outcome)
+		if n == 0 {
+			proof = "no record of " + r.outcome + ", so the refusal itself is unproven"
+			unproven = append(unproven, r.id)
+		} else if !ok {
+			contradicted = true
+			docs = "**no**: decision 50 ruling 8 says a refusal declines the device to its local method; on " + r.id + " the local login did not land"
+		}
+		parts = append(parts, fmt.Sprintf("%s; %s; %s: %s", s, l73Describe(conns, start), proof, e.quote(recs)))
+	}
+	e.configure(e.base())
+	if len(unproven) > 0 && !contradicted {
+		docs = fmt.Sprintf("n/a: no port49 record proves the refusal on %v, so those rows say nothing about ruling 8", unproven)
+	}
+	e.add("i", fmt.Sprintf("servers 172.100.100.1:%d (TLS, port49d refusing as each row says) then 172.100.100.2:%d (TLS, "+
+		"nothing listening: an RST); login method list %s; load average at the start %s", l73TLSPort, l73TLSPort,
+		e.d.Fallback, strings.TrimSpace(string(load))),
+		strings.Join(parts, "; ")+". An ERROR for an obfuscated packet (decision 50 ruling 13) cannot be provoked from port49's "+
+			"side: only a device that clears the flag earns it, and cell b counts whether this one ever did.", docs)
+}
+
+func (e *l73Env) cellJ() {
+	e.guard()
+	e.addSecondAddress()
+	// j1: TLS only, port49 refusing, its RFC 8907 listener on .1:49 open.
+	e.settle()
+	e.revive("j1")
+	e.daemon("j1", l73Daemon{ClientCA: e.files["other.pem"]})
+	stop := e.capture("j1")
+	start := time.Now()
+	ok1, took1, err1 := e.breakglassLogin()
+	c1 := stop()
+	e.reached("j1", c1)
+	plain1 := 0
+	for _, c := range c1 {
+		if l73PortOf(c.Server) == 49 {
+			plain1++
+		}
+	}
+	// j2: a mixed list, TLS .1 then plain .2, a second server address (j's
+	// same-host question is j1's; Juniper documents a mixed list, and on IOS
+	// XE and NX-OS it is the same group with a plain server after the TLS
+	// one), port49's RFC 8907 listener moved to .2:49.
+	// A device that refuses the list is an observation, not an INVALID run:
+	// NX-OS's `tacacs-server secure tls` may apply to every host.
+	e.settle()
+	d := e.base()
+	d.Second, d.SecondTLS = l73SecondServer, false
+	e.touched = true
+	if out, err := e.apply(d); err != nil {
+		if _, rerr := e.restore(); rerr != nil && e.d.Family == "junos" {
+			e.t.Fatalf("INVALID: restoring after the refused mixed list: %s", oneLine(hideKeys(rerr.Error())))
+		}
+		e.configure(e.base())
+		refusal := l73Refusal(out)
+		if refusal == "" {
+			refusal = oneLine(hideKeys(err.Error()))
+		}
+		e.add("j", "j1: the TLS server alone, port49d refusing its handshake, port49d's RFC 8907 listener open on 172.100.100.1:49; "+
+			"j2: TLS 172.100.100.1 then plain 172.100.100.2",
+			fmt.Sprintf("j1: break-glass ok %v in %s (%s), connections to port 49: %d; %s. j2: the device refused the mixed "+
+				"list: %s", ok1, took1.Round(time.Millisecond), l73Err(err1), plain1, l73Describe(c1, start), refusal),
+			l73JDocs(plain1))
+		return
+	}
+	e.revive("j2")
+	e.daemon("j2", l73Daemon{ClientCA: e.files["other.pem"], Listen: net.JoinHostPort(l73SecondServer, "49")})
+	stop = e.capture("j2")
+	off, start2 := e.l.mark(), time.Now()
+	ok2, took2, err2 := e.breakglassLogin()
+	c2 := stop()
+	e.reached("j2", c2)
+	recs := e.l.recordsSince(off)
+	var headers int
+	for _, c := range c2 {
+		if l73Host(c.Server) == l73SecondServer && l73PortOf(c.Server) == 49 {
+			headers += len(c.Plain)
+		}
+	}
+	mismatch := 0
+	for _, r := range l73Where(recs, "diagnosis", "transport_mismatch") {
+		if str(sub(r, "unvalidated"), "transport") == "" { // the RFC 8907 listener's record carries no transport
+			mismatch++
+		}
+	}
+	e.configure(e.base())
+	docs := l73JDocs(plain1)
+	e.add("j", "j1: the TLS server alone, port49d refusing its handshake, port49d's RFC 8907 listener open on 172.100.100.1:49; "+
+		"j2: a mixed list, TLS 172.100.100.1 then plain 172.100.100.2 (a second server address; port49d's RFC 8907 listener moved there), the TLS handshake refused",
+		fmt.Sprintf("j1: break-glass ok %v in %s (%s), connections to port 49: %d; %s. j2: break-glass ok %v in %s (%s); %s; plain "+
+			"TACACS+ headers the device sent to 172.100.100.2:49: %d; port49 declined it transport_mismatch %d time(s) (decision 50 "+
+			"ruling 4); records: %s",
+			ok1, took1.Round(time.Millisecond), l73Err(err1), plain1, l73Describe(c1, start), ok2, took2.Round(time.Millisecond),
+			l73Err(err2), l73Describe(c2, start2), headers, mismatch, e.quote(recs)), docs)
+}
+
+// l73JDocs reads j1: a TLS-only list must never reach port 49.
+func l73JDocs(plain1 int) string {
+	if plain1 > 0 {
+		return "**no**: RFC 9887 §5.1.1 forbids falling back to non-TLS for the same server; with a TLS-only list the device opened port 49"
+	}
+	return "yes: RFC 9887 §5.1.1"
+}
+
+// cellB: port49d answers any packet whose unencrypted flag is clear with an
+// ERROR and records obfuscated_over_tls (decision 50 ruling 13), so no such
+// record across every login of the run means every packet had the flag
+// set. The capture cannot show it: the header is inside TLS. With no TLS
+// record at all the run proves nothing either way.
+func (e *l73Env) cellB() {
+	e.guard()
+	recs := e.l.recordsSince(e.start)
+	obf := len(l73Where(recs, "diagnosis", "obfuscated_over_tls"))
+	byEvent := map[string]int{}
+	total := 0
+	for _, r := range recs {
+		if str(sub(r, "device"), "transport") == "tls" && str(r, "event") != "unvalidated" {
+			byEvent[str(r, "event")]++
+			total++
+		}
+	}
+	docs := "yes: RFC 9887 §4, decision 50 ruling 13"
+	switch {
+	case obf > 0:
+		docs = "**no**: RFC 9887 §4 requires the flag on every packet over TLS"
+	case total == 0:
+		docs = "n/a: port49 recorded no validated TLS packet, so the flag is unproven"
+	}
+	e.add("b", "every TLS login of this run (cells a, c, d, e, g, h); port49d checks each packet's flag",
+		fmt.Sprintf("obfuscated_over_tls records: %d; records over TLS by event: %v", obf, byEvent), docs)
+}
+
+// note reads the device's configuration, gates every evidence file, writes
+// the evidence, the L71 addendum and the L73 note. Nothing reaches
+// results/ or evidence/ before this, so an INVALID run writes nothing.
+func (e *l73Env) note() {
+	e.guard()
+	var conf string
+	e.cli(func(c *cliConn) error {
+		for _, cmd := range e.d.ShowCmds {
+			o, err := c.sendExpect(cmd, 60*time.Second, e.opMark(c))
+			if err != nil {
+				return err
+			}
+			conf += o + "\n"
+		}
+		return nil
+	})
+	e.evidence["device-config.txt"] = []byte(l71MaskExchange(l73ScrubLog(hideKeys(conf))))
+	all := e.l.recordsSince(e.start)
+	var lines []string
+	for _, r := range all {
+		b, _ := json.Marshal(r)
+		lines = append(lines, string(l72RedactCredentialHash(b)))
+	}
+	e.evidence["decisions.jsonl"] = []byte(strings.Join(lines, "\n") + "\n")
+	secrets := e.allSecrets()
+	for name, body := range e.evidence {
+		if len(labcreds.Contains(body, secrets)) > 0 {
+			e.t.Fatalf("INVALID: evidence %s holds a secret; nothing written", name)
+		}
+		if strings.HasSuffix(name, ".txt") && len(l72TranscriptLeaks(string(body))) > 0 {
+			e.t.Fatalf("INVALID: evidence %s carries TLS session material; nothing written", name)
+		}
+		if strings.HasSuffix(name, ".tls.json") && len(l73SummaryLeaks(string(body))) > 0 {
+			e.t.Fatalf("INVALID: evidence %s holds a long hex or base64 run; nothing written", name)
+		}
+	}
+	table, err := l73RenderTable(e.obs)
+	if err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+	var b strings.Builder
+	b.WriteString("### Run\n\n")
+	for _, f := range e.facts {
+		fmt.Fprintf(&b, "- %s\n", f)
+	}
+	attrs := e.d.Attrs
+	if attrs == "" {
+		attrs = "the lab file's"
+	}
+	fmt.Fprintf(&b, "- port49d: `certificate_status: {disabled: true}` in every cell but (i)'s decline window (the status path is "+
+		"L72's), `malformed_backoff_base: 2s`, `session_attributes: %s`; the device: %s\n", attrs, e.d.Revocation)
+	fmt.Fprintf(&b, "- not measured here: SCEP, CMPv2, EST and ACME enrolment; whether %s checks port49's revocation status\n\n", e.d.Vendor)
+	b.WriteString("### Cells\n\n" + table)
+	note := string(l72RedactCredentialHash([]byte(b.String())))
+	if len(labcreds.Contains([]byte(note), secrets)) > 0 {
+		e.t.Fatal("INVALID: the note holds a secret; nothing written")
+	}
+	if err := os.RemoveAll(e.evDir); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.MkdirAll(e.evDir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	for name, body := range e.evidence {
+		if err := os.WriteFile(filepath.Join(e.evDir, name), body, 0o644); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	e.writeL71()
+	ev := "tests/lab/evidence/L73-" + e.l.p.name + "/"
+	e.l.captureNote = fmt.Sprintf("`%s` — per-cell TLS summaries (`<cell>.tls.json`: each connection's ClientHello and "+
+		"ServerHello fields, plaintext alerts, record counts and timings, with no session byte by construction; the raw "+
+		"captures stay git-ignored in `tests/lab/captures/L73-%s/`), the decision log (`decisions.jsonl`, credential hashes "+
+		"redacted), the device's TACACS+/TLS log lines and configuration (masked), and the CLI help exchange (`l71-probe.txt`).",
+		ev, e.l.p.name)
+	e.l.result(e.t, "L73", l73Claim(e.d.Vendor), note)
+	e.l.captureNote = ""
+	var contra []string
+	for _, o := range e.obs {
+		if strings.HasPrefix(o.Docs, "**no**") {
+			contra = append(contra, o.ID)
+		}
+	}
+	if len(contra) > 0 {
+		e.t.Logf("cells %v contradict a document: CLAUDE.md rule 4, the doc is wrong (Task 17 fixes it)", contra)
+	}
+}

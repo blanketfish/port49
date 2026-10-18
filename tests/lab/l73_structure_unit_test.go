@@ -57,3 +57,46 @@ func TestL73DaemonRunsOnlyTheCellsConfig(t *testing.T) {
 		}
 	}
 }
+
+// Cells i and j put 172.100.100.2 on the bridge. The `del` that takes it off
+// is registered with t.Cleanup before the `add` runs, so a Fatal, an INVALID
+// or the STOP guard between the two cannot leave the address behind.
+func TestL73SecondAddressCleanupPrecedesTheAdd(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "l73_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanup, add token.Pos
+	users := map[string]bool{}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := c.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch {
+			case fn.Name.Name == "addSecondAddress" && sel.Sel.Name == "Cleanup":
+				cleanup = c.Pos()
+			case fn.Name.Name == "addSecondAddress" && sel.Sel.Name == "CombinedOutput":
+				add = c.Pos()
+			case sel.Sel.Name == "addSecondAddress":
+				users[fn.Name.Name] = true
+			}
+			return true
+		})
+	}
+	if !cleanup.IsValid() || !add.IsValid() || cleanup > add {
+		t.Fatalf("addSecondAddress: Cleanup at %v, add at %v: the del must be registered first", cleanup, add)
+	}
+	if !users["cellI"] || !users["cellJ"] {
+		t.Fatalf("cells that call addSecondAddress: %v; want cellI and cellJ", users)
+	}
+}
