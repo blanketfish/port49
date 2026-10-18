@@ -558,7 +558,10 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 	}
 	var parts []string
 	for _, c := range conns {
-		s := fmt.Sprintf("+%.2fs to %s: %s", c.SYNAt.Sub(from).Seconds(), c.Server, c.Answer)
+		s := fmt.Sprintf("%+.2fs to %s: %s", c.SYNAt.Sub(from).Seconds(), c.Server, c.Answer)
+		if c.SYNAt.Before(from) {
+			s += " (opened before the login: the readiness probe's connection)"
+		}
 		if c.ServerHello != nil {
 			s += fmt.Sprintf(", %s %s", tls.VersionName(c.ServerHello.Version), tls.CipherSuiteName(c.ServerHello.Suite))
 			if c.ServerHello.PSKSelected {
@@ -572,10 +575,10 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 			s += fmt.Sprintf(", server sent %d bytes", c.ServerPayloadBytes)
 		}
 		if !c.DeviceFINAt.IsZero() {
-			s += fmt.Sprintf(", device fin at +%.2fs", c.DeviceFINAt.Sub(from).Seconds())
+			s += fmt.Sprintf(", device fin at %+.2fs", c.DeviceFINAt.Sub(from).Seconds())
 		}
 		if !c.DeviceRSTAt.IsZero() {
-			s += fmt.Sprintf(", device rst at +%.2fs", c.DeviceRSTAt.Sub(from).Seconds())
+			s += fmt.Sprintf(", device rst at %+.2fs", c.DeviceRSTAt.Sub(from).Seconds())
 		}
 		if c.DeviceRecords > 0 || c.ServerRecords > 0 {
 			s += fmt.Sprintf(", %d device TLS records, %d server TLS records", c.DeviceRecords, c.ServerRecords)
@@ -602,7 +605,7 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 		}
 		s += ", ended " + c.End
 		if !c.EndAt.IsZero() {
-			s += fmt.Sprintf(" at +%.2fs", c.EndAt.Sub(from).Seconds())
+			s += fmt.Sprintf(" at %+.2fs", c.EndAt.Sub(from).Seconds())
 		}
 		parts = append(parts, s)
 	}

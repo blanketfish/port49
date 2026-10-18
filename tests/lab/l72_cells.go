@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -115,13 +116,40 @@ func l72TranscriptLeaks(s string) []string {
 }
 
 // l72CredentialHash is a decision record's credential_sha256 value, or the
-// seed record's token_sha256 (the same hash), quoted.
-var l72CredentialHash = regexp.MustCompile(`("(?:credential|token)_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
+// seed record's token_sha256 (the same hash), quoted. l72CredentialHashes is
+// the array form a mint record writes (`"token_sha256":["<hex>"]`): its
+// whole bracket is the value.
+var (
+	l72CredentialHash   = regexp.MustCompile(`("(?:credential|token)_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
+	l72CredentialHashes = regexp.MustCompile(`("(?:credential|token)_sha256"\s*:\s*\[)([^\]]*)(\])`)
+	l72Hex64            = regexp.MustCompile(`[0-9A-Fa-f]{64}`)
+)
 
 // l72RedactCredentialHash replaces each credential_sha256 and token_sha256
-// value in b with "<redacted sha256>", keeping the field. The hash is of a single-use seed
-// token and is no use to anyone, but evidence names the field and never
-// holds a value (the earlier results notes do the same).
+// value in b, a string or an array of them, with "<redacted sha256>",
+// keeping the field. The hash is of a single-use seed token and is no use to
+// anyone, but evidence names the field and never holds a value (the earlier
+// results notes do the same).
 func l72RedactCredentialHash(b []byte) []byte {
-	return l72CredentialHash.ReplaceAll(b, []byte("${1}<redacted sha256>${2}"))
+	b = l72CredentialHash.ReplaceAll(b, []byte("${1}<redacted sha256>${2}"))
+	return l72CredentialHashes.ReplaceAllFunc(b, func(m []byte) []byte {
+		g := l72CredentialHashes.FindSubmatch(m)
+		return append(append(append([]byte{}, g[1]...), l72Hex64.ReplaceAll(g[2], []byte("<redacted sha256>"))...), g[3]...)
+	})
 }
+
+// l72HashValueLeaks names each *_sha256 key in s that still holds a 64-hex
+// value (a string, or inside an array), except cert_sha256, a public
+// certificate fingerprint. It is the gate behind the redaction: a shape the
+// redaction misses is found here.
+func l72HashValueLeaks(s string) []string {
+	var out []string
+	for _, m := range l72AnyHashValue.FindAllStringSubmatch(s, -1) {
+		if m[1] != "cert" && !strings.HasSuffix(m[1], "_cert") && !slices.Contains(out, m[1]+"_sha256") {
+			out = append(out, m[1]+"_sha256")
+		}
+	}
+	return out
+}
+
+var l72AnyHashValue = regexp.MustCompile(`"([A-Za-z0-9_]+)_sha256"\s*:\s*(?:\[\s*)?(?:"[^"\]]*"\s*,\s*)*"[0-9A-Fa-f]{64}"`)

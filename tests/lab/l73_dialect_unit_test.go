@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
@@ -106,7 +107,9 @@ func TestL73NXOSLines(t *testing.T) {
 func TestL73EOSLines(t *testing.T) {
 	got := l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
 	want := []string{
-		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
+		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit",
+		"no tacacs-server host 172.100.100.1 tls", "no tacacs-server host 172.100.100.1",
+		"no tacacs-server host 172.100.100.2 tls", "no tacacs-server host 172.100.100.2",
 		"tacacs-server tls ssl-profile l73-tls", "tacacs-server host 172.100.100.1 tls",
 	}
 	if !slices.Equal(got, want) {
@@ -504,5 +507,64 @@ func TestL73EOSMemberTakesTLSBeforePort(t *testing.T) {
 	}
 	if !tlsAsk {
 		t.Fatal("no ask confirms port after the member's tls")
+	}
+}
+
+// Cell i's TLS second host must not outlive its cell: the apply and the undo
+// name both addresses, in both forms, and the read-back refuses a host the
+// cell did not type.
+func TestL73EOSRemovesBothHostsAndRefusesAStaleOne(t *testing.T) {
+	for _, want := range []string{"no tacacs-server host 172.100.100.2 tls", "no tacacs-server host 172.100.100.2"} {
+		if !slices.Contains(l73EOSApply(l73DeviceTLS{Server: "172.100.100.1"}), want) {
+			t.Errorf("a one-server apply leaves %q", want)
+		}
+		if !slices.Contains(l73CiscoUndo("eos", l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2", SecondTLS: true}, nil), want) {
+			t.Errorf("the undo leaves %q", want)
+		}
+	}
+	shown := l73ShowTacacsA + "\r\nTACACS+ server            : 172.100.100.2/300 TLS\r\n"
+	fixed := strings.Replace(shown, "0: 172.100.100.1/49", "0: 172.100.100.1/300 TLS", 1)
+	got := l73EOSGroupMissing(fixed, l73DeviceTLS{Server: "172.100.100.1"}, 300, 0)
+	if len(got) != 1 || !strings.Contains(got[0], "stale host 172.100.100.2") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestL73DropSeedMintsKeepsEveryOtherRecord(t *testing.T) {
+	recs := []map[string]any{
+		{"event": "mint", "auth": map[string]any{"method": "lab"}, "token_sha256": []any{"x"}},
+		{"event": "mint", "auth": map[string]any{"method": "oidc"}},
+		{"event": "redeem", "auth": map[string]any{"method": "lab"}},
+		{"event": "mint"},
+		{"event": "mint", "auth": map[string]any{"method": "lab"}},
+	}
+	got, n := l73DropSeedMints(recs)
+	if n != 2 || len(got) != 3 || got[0]["event"] != "mint" || got[1]["event"] != "redeem" {
+		t.Fatalf("%d dropped, %v", n, got)
+	}
+}
+
+// Cell d reads the device's refusal off the capture: a fatal alert the device
+// sent (EOS sends it in the clear after a TLS 1.3 ServerHello).
+func TestL73DeviceAlertIsTheDevicesFatalAlert(t *testing.T) {
+	conns := []l73Conn{{Alerts: []l73Alert{{Level: 2, Description: 40, FromDevice: false}, {Level: 1, Description: 90, FromDevice: true}}},
+		{Alerts: []l73Alert{{Level: 2, Description: 42, FromDevice: true}}}}
+	if a, ok := l73DeviceAlert(conns); !ok || a.Description != 42 {
+		t.Fatalf("%v %v", a, ok)
+	}
+	if _, ok := l73DeviceAlert(conns[:1]); ok {
+		t.Fatal("a server alert or a warning counted")
+	}
+}
+
+// A connection opened before the window (the readiness probe's) reads
+// "-1.06s", not "+-1.06s", and says why.
+func TestL73DescribeSignsAndTagsEarlyConnections(t *testing.T) {
+	from := time.Unix(1000, 0)
+	got := l73Describe([]l73Conn{{Server: "172.100.100.1:300", SYNAt: from.Add(-1060 * time.Millisecond), Answer: "syn-ack"},
+		{Server: "172.100.100.1:300", SYNAt: from.Add(30 * time.Millisecond), Answer: "syn-ack"}}, from)
+	if strings.Contains(got, "+-") || !strings.Contains(got, "-1.06s to") || !strings.Contains(got, "+0.03s to") ||
+		!strings.Contains(got, "readiness probe") {
+		t.Fatal(got)
 	}
 }

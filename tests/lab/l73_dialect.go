@@ -246,9 +246,14 @@ func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 		if d.Second != "" {
 			out = append(out, l73NoMember(family, d.Second, d.SecondMemberPort, d.SecondTLS))
 		}
-		out = append(out, "exit", "no tacacs-server host "+d.Server)
-		if d.Second != "" {
-			out = append(out, "no tacacs-server host "+d.Second)
+		if family == "eos" {
+			out = append(out, "exit")
+			out = append(out, l73EOSNoHosts(d.Server, d.Second)...)
+		} else {
+			out = append(out, "exit", "no tacacs-server host "+d.Server)
+			if d.Second != "" {
+				out = append(out, "no tacacs-server host "+d.Second)
+			}
 		}
 		if family == "nxos" && has[l73HasNXOSSecure] {
 			out = append(out, "no tacacs-server secure tls")
@@ -383,12 +388,27 @@ func l73EOSHost(addr string, tls bool, port int, single, secret bool) string {
 // l73EOSGlobalTLS is the global line that names the SSL profile.
 const l73EOSGlobalTLS = "tacacs-server tls ssl-profile " + l73EOSProfile
 
+// l73EOSNoHosts removes the hosts at the addresses, each as the TLS host it
+// may be and as the plain host it may be: the negation of the typed form
+// (`no tacacs-server host <addr> tls`), because a cell's TLS host left behind
+// (172.100.100.2 after cell i) made cell j2 measure a stale entry.
+func l73EOSNoHosts(addrs ...string) []string {
+	var out []string
+	for _, a := range addrs {
+		if a != "" {
+			out = append(out, "no tacacs-server host "+a+" tls", "no tacacs-server host "+a)
+		}
+	}
+	return out
+}
+
 // l73EOSApply is the host lines: the startup config's member and host go,
 // the global profile and d's hosts come. The group members come after,
 // once the hosts' ports are known (l73EOSMembers).
 func l73EOSApply(d l73DeviceTLS) []string {
-	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + l73Server, "exit", "no tacacs-server host " + l73Server,
-		l73EOSGlobalTLS, l73EOSHost(d.Server, true, d.Port, d.SingleConnection, d.Secret)}
+	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + l73Server, "exit"}
+	out = append(out, l73EOSNoHosts(l73Server, l73SecondServer)...)
+	out = append(out, l73EOSGlobalTLS, l73EOSHost(d.Server, true, d.Port, d.SingleConnection, d.Secret))
 	if d.Second != "" {
 		out = append(out, l73EOSHost(d.Second, d.SecondTLS, d.SecondPort, false, d.Secret || !d.SecondTLS))
 	}
@@ -470,6 +490,15 @@ func l73EOSGroupMissing(shown string, d l73DeviceTLS, port, second int) []string
 	want := []srv{{d.Server, port, true}}
 	if d.Second != "" {
 		want = append(want, srv{d.Second, second, d.SecondTLS})
+	}
+	listed := map[string]bool{}
+	for _, m := range l73ShowTacacsHost.FindAllStringSubmatch(shown, -1) {
+		listed[m[1]] = true
+	}
+	for addr := range listed {
+		if addr != d.Server && addr != d.Second {
+			missing = append(missing, "no stale host "+addr+" (left from an earlier cell)")
+		}
 	}
 	for _, w := range want {
 		tag := ""

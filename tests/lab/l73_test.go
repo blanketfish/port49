@@ -832,10 +832,14 @@ func l73Err(err error) string {
 }
 
 func (e *l73Env) quote(recs []map[string]any) string {
+	recs, seeds := l73DropSeedMints(recs)
 	var parts []string
 	for _, r := range recs {
 		b, _ := json.Marshal(r)
 		parts = append(parts, string(l72RedactCredentialHash(b)))
+	}
+	if seeds > 0 {
+		parts = append(parts, fmt.Sprintf("(%d lab seed mints omitted)", seeds))
 	}
 	if len(parts) == 0 {
 		return "(no record)"
@@ -1529,6 +1533,7 @@ func (e *l73Env) cellD() {
 	}
 	var parts []string
 	docs := "n/a"
+	refusedRows := 0
 	for _, v := range variants {
 		e.guard()
 		e.settle()
@@ -1541,9 +1546,20 @@ func (e *l73Env) cellD() {
 		conns := stop()
 		e.reached(v.id, conns)
 		recs := e.l.recordsSince(off)
-		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", l73DeviceAborted))
+		alert, alerted := l73DeviceAlert(conns)
+		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", l73DeviceAborted) || alerted)
 		if verdict == "accepted" {
 			verdict = "**accepted**"
+		}
+		if verdict == "refused" && alerted {
+			// The device's own words, read off the capture: some images send the
+			// alert in the clear after the ServerHello, which port49d's log
+			// cannot tell from a handshake that merely did not complete.
+			verdict += fmt.Sprintf(" (the device sent alert %d, %s, in the clear)", alert.Description, l73AlertName(alert.Description))
+		}
+		refusedRows++
+		if !strings.HasPrefix(verdict, "refused") {
+			refusedRows = -len(variants)
 		}
 		parts = append(parts, fmt.Sprintf("%s: %s (login as %s ok %v in %s, %s; %s; records: %s)", v.what, verdict, user, ok,
 			took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start), e.quote(recs)))
@@ -1555,6 +1571,10 @@ func (e *l73Env) cellD() {
 		case v.id == "d-untrusted" && verdict == "**accepted**" && docs == "n/a":
 			docs = "**no**: RFC 9887 §3.4 requires the client to validate the server's certificate path"
 		}
+	}
+	if refusedRows == len(variants) && docs == "n/a" {
+		docs = "yes: RFC 9887 §3.4 (the client checks the server's identity and path) and decision 50 ruling 15 (an expired server certificate): " +
+			"the device refused each variant, by the alert named in its row"
 	}
 	parts = append(parts, "the device's log: "+e.deviceLog("d-device-log.txt"))
 	e.add("d", "the device configured by address 172.100.100.1; port49d's server certificate varied per row, all else as cell a",
@@ -1865,14 +1885,18 @@ func (e *l73Env) cellJ() {
 			e.t.Fatalf("INVALID: restoring after the refused mixed list: %s", oneLine(hideKeys(rerr.Error())))
 		}
 		e.configure(e.base())
+		what := "the device refused the mixed list"
 		refusal := l73Refusal(out)
 		if refusal == "" {
+			// No refusal screen: the configuration did not read back as typed, which
+			// says nothing about what the device accepts.
+			what = "j2 was not measured, the configuration did not read back as typed"
 			refusal = oneLine(hideKeys(err.Error()))
 		}
 		e.add("j", "j1: the TLS server alone, port49d refusing its handshake, port49d's RFC 8907 listener open on 172.100.100.1:49; "+
 			"j2: TLS 172.100.100.1 then plain 172.100.100.2",
-			fmt.Sprintf("j1: break-glass ok %v in %s (%s), connections to port 49: %d; %s. j2: the device refused the mixed "+
-				"list: %s", ok1, took1.Round(time.Millisecond), l73Err(err1), plain1, l73Describe(c1, start), refusal),
+			fmt.Sprintf("j1: break-glass ok %v in %s (%s), connections to port 49: %d; %s. j2: %s: %s",
+				ok1, took1.Round(time.Millisecond), l73Err(err1), plain1, l73Describe(c1, start), what, refusal),
 			l73JDocs(plain1))
 		return
 	}
@@ -1960,7 +1984,8 @@ func (e *l73Env) note() {
 		return nil
 	})
 	e.evidence["device-config.txt"] = []byte(l71MaskExchange(l73ScrubLog(hideKeys(conf))))
-	all := e.l.recordsSince(e.start)
+	all, seeds := l73DropSeedMints(e.l.recordsSince(e.start))
+	e.facts = append(e.facts, fmt.Sprintf("the decision log in the evidence omits the %d lab seed mint records (the lab method reseeds every lab principal every few seconds; each is a `mint` event with `auth.method` lab)", seeds))
 	var lines []string
 	for _, r := range all {
 		b, _ := json.Marshal(r)
@@ -1974,6 +1999,9 @@ func (e *l73Env) note() {
 		}
 		if strings.HasSuffix(name, ".txt") && len(l72TranscriptLeaks(string(body))) > 0 {
 			e.t.Fatalf("INVALID: evidence %s carries TLS session material; nothing written", name)
+		}
+		if leaks := l72HashValueLeaks(string(body)); len(leaks) > 0 {
+			e.t.Fatalf("INVALID: evidence %s holds a hash value under %v; nothing written", name, leaks)
 		}
 		if strings.HasSuffix(name, ".tls.json") && len(l73SummaryLeaks(string(body))) > 0 {
 			e.t.Fatalf("INVALID: evidence %s holds a long hex or base64 run; nothing written", name)
@@ -1997,6 +2025,9 @@ func (e *l73Env) note() {
 	fmt.Fprintf(&b, "- not measured here: SCEP, CMPv2, EST and ACME enrolment; whether %s checks port49's revocation status\n\n", e.d.Vendor)
 	b.WriteString("### Cells\n\n" + table)
 	note := string(l72RedactCredentialHash([]byte(b.String())))
+	if leaks := l72HashValueLeaks(note); len(leaks) > 0 {
+		e.t.Fatalf("INVALID: the note holds a hash value under %v; nothing written", leaks)
+	}
 	if len(labcreds.Contains([]byte(note), secrets)) > 0 {
 		e.t.Fatal("INVALID: the note holds a secret; nothing written")
 	}

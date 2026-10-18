@@ -661,3 +661,39 @@ func l73SubjectHash(certPEM []byte) (string, error) {
 	}
 	return h, nil
 }
+
+// l73DropSeedMints is recs without the lab method's seed mints (a `mint`
+// event whose auth method is lab), and how many it dropped. The lab reseeds
+// every principal every few seconds, so they are most of the log and say
+// nothing about the device; the redeem records that use them stay.
+func l73DropSeedMints(recs []map[string]any) ([]map[string]any, int) {
+	var out []map[string]any
+	n := 0
+	for _, r := range recs {
+		if ev, _ := r["event"].(string); ev == "mint" {
+			if auth, _ := r["auth"].(map[string]any); auth != nil {
+				if m, _ := auth["method"].(string); m == "lab" {
+					n++
+					continue
+				}
+			}
+		}
+		out = append(out, r)
+	}
+	return out, n
+}
+
+// l73DeviceAlert is the first fatal alert the device itself sent in the
+// capture (plaintext_alerts, from_device), the refusal it named when port49d
+// could not read it as a remote alert (a TLS 1.3 device sends it in the
+// clear after the ServerHello).
+func l73DeviceAlert(conns []l73Conn) (l73Alert, bool) {
+	for _, c := range conns {
+		for _, a := range c.Alerts {
+			if a.FromDevice && a.Level == 2 {
+				return a, true
+			}
+		}
+	}
+	return l73Alert{}, false
+}
