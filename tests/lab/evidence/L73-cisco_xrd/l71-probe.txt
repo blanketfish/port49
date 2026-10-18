@@ -1,0 +1,52 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key (overrides default)^M
+  port                            TCP port for TACACS+ server (default is 49)^M
+  single-connection               Reuse connection to this server for all requests^M
+  single-connection-idle-timeout  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 192.0.2.71 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `ssh server ?`, then Ctrl-U
+ssh server ?^M
+^M  algorithms                 server algorithms^M
+  backup                     Cisco sshd backup server^M
+  capability                 Turn on Capability^M
+  certificate                certificate related parameters^M
+  disable                    Disable sshd algorithms^M
+  dscp                       Cisco ssh server DSCP^M
+  enable                     Enable AES-CBC and 3DES-CBC algorithms^M
+  ipv4                       IPv4 access list for ssh server^M
+  ipv6                       IPv6 access list for ssh server^M
+  logging                    Enable ssh server logging^M
+  max-auth-limit             User Configurable max authentication attempts^M
+  netconf                    start ssh service for netconf subsystem^M
+  openssh                    OpenSSH certificates^M
+  packet-flow-netio          Configure to make packets go via NetIO. Applicable only to Mgmt Traffic^M
+  port                       User Configurable ssh port (Default 22)^M
+  port-forwarding            Enable port forwarding for ssh server^M
+  rate-limit                 Cisco sshd rate-limit of service requests^M
+  rekey-time                 Configures time-based rekey (default 60 minutes)^M
+  rekey-volume               Configures volume-based rekey (default 1024MB)^M
+  session-limit              Cisco sshd session-limit of service requests^M
+  set-dscp-connection-phase  Mark packets with dscp value from ssh connection phase^M
+  tcp-window-scale           Set tcp window-scale factor for High Latency links^M
+  timeout                    Server timeouts for incoming ssh sessions^M
+  trustpoint                 trustpoints for server certificates^M
+  username                   ssh user^M
+  v1                         Cisco sshd protocol version 1. This is deprecated in 25.3.1.^M
+  v2                         Cisco sshd force protocol version 2 only^M
+  vrf                        Cisco sshd VRF name^M
+  <cr>                       ^M
+RP/0/RP0/CPU0:xrd1(config)#ssh server ^H^H^H^H^H^H^H^H^H^H^H           ^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `ssh server rate-limit ?`, then Ctrl-U
+ssh server rate-limit ?^M
+^M  <1-6000>  Limit in term of number of request per minute (default 60)^M
+RP/0/RP0/CPU0:xrd1(config)#ssh server rate-limit ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                      ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+

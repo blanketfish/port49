@@ -1,0 +1,89 @@
+### typed `?`, then Ctrl-U
+?^M
+TACACS server sub-mode commands:^M
+  address            Specify ip address for tacacs server^M
+  exit               Exit from TACACS server configuration mode^M
+  key                per-server encryption key (overrides default)^M
+  no                 Negate a command or set its defaults^M
+  port               TCP port for TACACS+ server (default is 49)^M
+  send-nat-address   To send client's post NAT address to tacacs+ server^M
+  single-connection  Multiplex all packets over a single tcp connection to server (for CiscoSecure)^M
+  timeout            Time to wait for this TACACS server to reply (overrides default)^M
+  tls                Configure tls for tacacs server^M
+^M
+xe1(config-server-tacacs)#
+
+### typed `address ?`, then Ctrl-U
+address ?^M
+  fqdn  fqdn, for address resolution from dns^M
+  ipv4  Configure ipv4 address for tacacs server^M
+  ipv6  Configure ipv6 address for tacacs server^M
+^M
+xe1(config-server-tacacs)#address ^H^H^H^H^H^H^H^H        ^H^H^H^H^H^H^H^H
+
+### typed `tls ?`, then Ctrl-U
+tls ?^M
+  connection-timeout     Connection timeout^M
+  idle-timeout           Idle Timeout^M
+  ip                     IP Source Parameters^M
+  ipv6                   IPv6 Source Parameters^M
+  match-server-identity  Configure TLS Certification Validation Parameters^M
+  port                   Configure tls port for tacacs server^M
+  retries                connection retries^M
+  trustpoint             Trustpoint^M
+  <cr>                   <cr>^M
+^M
+xe1(config-server-tacacs)#tls ^H^H^H^H    ^H^H^H^H
+
+### typed `tls trustpoint ?`, then Ctrl-U
+tls trustpoint ?^M
+  client  trustpoint name for client^M
+  server  trustpoint name for server^M
+^M
+xe1(config-server-tacacs)#tls trustpoint ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H               ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `tls ip ?`, then Ctrl-U
+tls ip ?^M
+  tacacs  TACACS configuration commands^M
+  vrf     Set VRF to use with the servers^M
+^M
+xe1(config-server-tacacs)#tls ip ^H^H^H^H^H^H^H       ^H^H^H^H^H^H^H
+
+### typed `tls ip vrf ?`, then Ctrl-U
+tls ip vrf ?^M
+  forwarding  Configure forwarding table^M
+^M
+xe1(config-server-tacacs)#tls ip vrf ^H^H^H^H^H^H^H^H^H^H^H           ^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `tls ip tacacs ?`, then Ctrl-U
+tls ip tacacs ?^M
+  source-interface  Specify interface for source address in Radius RADSEC packets^M
+^M
+xe1(config-server-tacacs)#tls ip tacacs ^H^H^H^H^H^H^H^H^H^H^H^H^H^H              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `?`, then Ctrl-U
+?^M
+TACACS+ Server-group commands:^M
+  accounting        Accounting specific command^M
+  cache             cached DB profile configuration^M
+  default           Set a command to its defaults^M
+  dns-alias-lookup  Enable IP Domain Name System Alias lookup for TACACS servers^M
+  exit              Exit from TACACS+ server-group confguration mode^M
+  host              Specify a TACACS server^M
+  ip                Internet Protocol config commands^M
+  ipv6              IPv6 config commands^M
+  no                Negate a command or set its defaults^M
+  pick-method       Method by which the next host will be picked^M
+  server            Specify a TACACS server^M
+  server-private    Define a private TACACS server (per group)^M
+  timeout           Time to wait for a TACACS server to reply^M
+^M
+xe1(config-sg-tacacs+)#
+
+### typed `server ?`, then Ctrl-U
+server ?^M
+  Hostname or A.B.C.D  IP address of TACACS server^M
+  name                 Name of tacacs server^M
+^M
+xe1(config-sg-tacacs+)#server ^H^H^H^H^H^H^H       ^H^H^H^H^H^H^H
+

@@ -1,0 +1,366 @@
+[
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 42776,
+    "syn_at": "2026-10-18T06:16:20.874293Z",
+    "answer": "syn-ack",
+    "client_hello": {
+      "legacy_version": 771,
+      "supported_versions": [
+        772
+      ],
+      "cipher_suites": [
+        4866,
+        4867,
+        4865,
+        255
+      ],
+      "has_sni": false,
+      "supported_groups": [
+        29,
+        23,
+        30,
+        25,
+        24
+      ],
+      "signature_algorithms": [
+        1027,
+        1283,
+        1539,
+        2055,
+        2056,
+        2057,
+        2058,
+        2059,
+        2052,
+        2053,
+        2054,
+        1025,
+        1281,
+        1537
+      ],
+      "psk_identities": 0,
+      "psk_key_exchange_modes": [
+        1
+      ],
+      "early_data": false,
+      "extensions": [
+        11,
+        10,
+        35,
+        22,
+        23,
+        13,
+        43,
+        45,
+        51
+      ]
+    },
+    "server_hello": {
+      "selected_version": 772,
+      "cipher_suite": 4865,
+      "psk_selected": false,
+      "hello_retry_request": false
+    },
+    "device_tls_records": 7,
+    "server_tls_records": 9,
+    "device_payload_bytes": 2119,
+    "server_payload_bytes": 915,
+    "server_flight_at": "2026-10-18T06:16:20.87588Z",
+    "device_reply_at": "2026-10-18T06:16:25.879702Z",
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-18T06:16:25.88549Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 42782,
+    "syn_at": "2026-10-18T06:16:25.9102Z",
+    "answer": "syn-ack",
+    "client_hello": {
+      "legacy_version": 771,
+      "supported_versions": [
+        772
+      ],
+      "cipher_suites": [
+        4866,
+        4867,
+        4865,
+        255
+      ],
+      "has_sni": false,
+      "supported_groups": [
+        29,
+        23,
+        30,
+        25,
+        24
+      ],
+      "signature_algorithms": [
+        1027,
+        1283,
+        1539,
+        2055,
+        2056,
+        2057,
+        2058,
+        2059,
+        2052,
+        2053,
+        2054,
+        1025,
+        1281,
+        1537
+      ],
+      "psk_identities": 0,
+      "psk_key_exchange_modes": [
+        1
+      ],
+      "early_data": false,
+      "extensions": [
+        11,
+        10,
+        35,
+        22,
+        23,
+        13,
+        43,
+        45,
+        51
+      ]
+    },
+    "server_hello": {
+      "selected_version": 772,
+      "cipher_suite": 4865,
+      "psk_selected": false,
+      "hello_retry_request": false
+    },
+    "device_tls_records": 7,
+    "server_tls_records": 9,
+    "device_payload_bytes": 2136,
+    "server_payload_bytes": 954,
+    "server_flight_at": "2026-10-18T06:16:25.911498Z",
+    "device_reply_at": "2026-10-18T06:16:30.914524Z",
+    "incomplete": false,
+    "end": "server-fin",
+    "end_at": "2026-10-18T06:16:30.918805Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 55310,
+    "syn_at": "2026-10-18T06:16:31.114807Z",
+    "answer": "syn-ack",
+    "client_hello": {
+      "legacy_version": 771,
+      "supported_versions": [
+        772
+      ],
+      "cipher_suites": [
+        4866,
+        4867,
+        4865,
+        255
+      ],
+      "has_sni": false,
+      "supported_groups": [
+        29,
+        23,
+        30,
+        25,
+        24
+      ],
+      "signature_algorithms": [
+        1027,
+        1283,
+        1539,
+        2055,
+        2056,
+        2057,
+        2058,
+        2059,
+        2052,
+        2053,
+        2054,
+        1025,
+        1281,
+        1537
+      ],
+      "psk_identities": 0,
+      "psk_key_exchange_modes": [
+        1
+      ],
+      "early_data": false,
+      "extensions": [
+        11,
+        10,
+        35,
+        22,
+        23,
+        13,
+        43,
+        45,
+        51
+      ]
+    },
+    "server_hello": {
+      "selected_version": 772,
+      "cipher_suite": 4865,
+      "psk_selected": false,
+      "hello_retry_request": false
+    },
+    "device_tls_records": 7,
+    "server_tls_records": 9,
+    "device_payload_bytes": 2246,
+    "server_payload_bytes": 915,
+    "server_flight_at": "2026-10-18T06:16:31.115989Z",
+    "device_reply_at": "2026-10-18T06:16:36.119272Z",
+    "incomplete": false,
+    "end": "server-fin",
+    "end_at": "2026-10-18T06:16:36.124375Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 50538,
+    "syn_at": "2026-10-18T06:16:36.908709Z",
+    "answer": "syn-ack",
+    "client_hello": {
+      "legacy_version": 771,
+      "supported_versions": [
+        772
+      ],
+      "cipher_suites": [
+        4866,
+        4867,
+        4865,
+        255
+      ],
+      "has_sni": false,
+      "supported_groups": [
+        29,
+        23,
+        30,
+        25,
+        24
+      ],
+      "signature_algorithms": [
+        1027,
+        1283,
+        1539,
+        2055,
+        2056,
+        2057,
+        2058,
+        2059,
+        2052,
+        2053,
+        2054,
+        1025,
+        1281,
+        1537
+      ],
+      "psk_identities": 0,
+      "psk_key_exchange_modes": [
+        1
+      ],
+      "early_data": false,
+      "extensions": [
+        11,
+        10,
+        35,
+        22,
+        23,
+        13,
+        43,
+        45,
+        51
+      ]
+    },
+    "server_hello": {
+      "selected_version": 772,
+      "cipher_suite": 4865,
+      "psk_selected": false,
+      "hello_retry_request": false
+    },
+    "device_tls_records": 7,
+    "server_tls_records": 9,
+    "device_payload_bytes": 2110,
+    "server_payload_bytes": 916,
+    "server_flight_at": "2026-10-18T06:16:36.910523Z",
+    "device_reply_at": "2026-10-18T06:16:41.914578Z",
+    "incomplete": false,
+    "end": "server-fin",
+    "end_at": "2026-10-18T06:16:41.919045Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 50546,
+    "syn_at": "2026-10-18T06:16:41.939649Z",
+    "answer": "syn-ack",
+    "client_hello": {
+      "legacy_version": 771,
+      "supported_versions": [
+        772
+      ],
+      "cipher_suites": [
+        4866,
+        4867,
+        4865,
+        255
+      ],
+      "has_sni": false,
+      "supported_groups": [
+        29,
+        23,
+        30,
+        25,
+        24
+      ],
+      "signature_algorithms": [
+        1027,
+        1283,
+        1539,
+        2055,
+        2056,
+        2057,
+        2058,
+        2059,
+        2052,
+        2053,
+        2054,
+        1025,
+        1281,
+        1537
+      ],
+      "psk_identities": 0,
+      "psk_key_exchange_modes": [
+        1
+      ],
+      "early_data": false,
+      "extensions": [
+        11,
+        10,
+        35,
+        22,
+        23,
+        13,
+        43,
+        45,
+        51
+      ]
+    },
+    "server_hello": {
+      "selected_version": 772,
+      "cipher_suite": 4865,
+      "psk_selected": false,
+      "hello_retry_request": false
+    },
+    "device_tls_records": 1,
+    "server_tls_records": 7,
+    "device_payload_bytes": 215,
+    "server_payload_bytes": 853,
+    "server_flight_at": "2026-10-18T06:16:41.94068Z",
+    "incomplete": false,
+    "end": "open",
+    "end_at": "0001-01-01T00:00:00Z"
+  }
+]

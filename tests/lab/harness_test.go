@@ -116,6 +116,60 @@ var platforms = []platform{
 	// times that, which is what a budget is for.
 	{"iosxe", "cisco_iosxe", "topologies/iosxe.clab.yml", "172.100.100.41", "xe1",
 		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 6 * time.Minute},
+	// L73 (RFC 9887 clients) and its L71 help cells. Opt-in: named on
+	// PORT49_LAB_PLATFORMS or never run, because each shares a platform name
+	// (and so a results-note name) with a row measured on an older image, and
+	// a default run would write that row's notes from the new one. One
+	// selector per run: labs are cached by platform name. The full rows sit on
+	// the older rows' node and address, so the inventory, the seeds and the
+	// startup configs are unchanged; only one platform is ever up. The boot
+	// budgets of vjunosswitch26, iolxe1718 and xrd261 are placeholders: no run
+	// has booted them on this host. Every other row carries its measured boot
+	// time in its own comment.
+	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
+	{"vjunos26", "juniper_vjunos-router", "topologies/vjunos26.clab.yml", "172.100.100.21", "srx1",
+		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 7 * time.Minute},
+	// iosxe1718 was ready 2m12s after deploy on this host (2026-10-18, TestL73); the budget is that x3, rounded to 7 minutes.
+	{"iosxe1718", "cisco_iosxe", "topologies/iosxe1718.clab.yml", "172.100.100.41", "xe1",
+		"vrnetlab/cisco_c8000v:17.18.02", "Catalyst 8000V 17.18.02", 7 * time.Minute},
+	// nxos106 was ready 3m42s after deploy on this host (2026-10-18, TestL73); the budget is that x3, rounded to 11 minutes.
+	{"nxos106", "cisco_nxos", "topologies/nxos106.clab.yml", "172.100.100.31", "nx1",
+		"vrnetlab/cisco_n9kv:9300v64-10.6.2.F", "Nexus 9300v 10.6(2)F", 11 * time.Minute},
+	// cEOS, not vEOS: the image is a container (`ceos:4.36.3M`, imported, not
+	// built). The device's own `show version` is the version string's
+	// authority; TestL73's cell (a) checks it holds 4.36.3M.
+	// Ready after 23 to 28s in the 2026-10-18 L73 runs; the budget is 3x.
+	{"ceos436", "arista_ceos", "topologies/ceos436.clab.yml", "172.100.100.11", "leaf1",
+		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 90 * time.Second},
+	// Help-only rows (helpOnlyPlatforms): an L71 help cell and nothing else,
+	// on addresses no inventory names.
+	{"iolxe1718", "cisco_iol-xe", "topologies/iolxe1718.clab.yml", "172.100.100.51", "iol1",
+		"vrnetlab/cisco_iol:17.18.02", "IOL-XE 17.18.02", 5 * time.Minute},
+	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
+		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 10 * time.Minute},
+	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
+		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
+}
+
+// optInPlatforms are the rows a run deploys only when PORT49_LAB_PLATFORMS
+// names them, and that only TestL73 runs (eachOptInPlatform): the register
+// tests skip them.
+var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true,
+	"iolxe1718": true, "xrd261": true, "vjunosswitch26": true}
+
+// helpOnlyPlatforms come up with a break-glass account and no TACACS+: up()
+// starts no port49d for them, and TestL73 asks their CLI help only.
+var helpOnlyPlatforms = map[string]bool{"iolxe1718": true, "xrd261": true}
+
+// defaultPlatforms is the selection when PORT49_LAB_PLATFORMS is empty.
+func defaultPlatforms(ps []platform) []platform {
+	var out []platform
+	for _, p := range ps {
+		if !optInPlatforms[p.sel] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 const (
@@ -289,6 +343,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "lab: %v\n", err)
 		code = 1
 	}
+	labRelease()
 	os.Exit(code)
 }
 
@@ -498,41 +553,56 @@ func (l *lab) deploy() {
 // success.
 func platformSelection() ([]platform, bool, error) {
 	selOnce.Do(func() {
-		want := strings.TrimSpace(os.Getenv("PORT49_LAB_PLATFORMS"))
-		if want == "" {
-			selPlatforms = platforms
-			return
-		}
-		selExplicit = true
-		var known []string
-		for _, p := range platforms {
-			known = append(known, p.sel)
-		}
-		for _, s := range strings.Split(want, ",") {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			found := false
-			for _, p := range platforms {
-				if p.sel == s {
-					selPlatforms = append(selPlatforms, p)
-					found = true
-					break
-				}
-			}
-			if !found {
-				selErr = fmt.Errorf("PORT49_LAB_PLATFORMS names %q, which is not a platform; known selectors are %s",
-					s, strings.Join(known, ", "))
-				return
-			}
-		}
-		if len(selPlatforms) == 0 {
-			selErr = fmt.Errorf("PORT49_LAB_PLATFORMS is %q, which selects no platform; known selectors are %s",
-				want, strings.Join(known, ", "))
-		}
+		selPlatforms, selExplicit, selErr = selectPlatforms(os.Getenv("PORT49_LAB_PLATFORMS"))
 	})
 	return selPlatforms, selExplicit, selErr
+}
+
+// selectPlatforms is platformSelection's pure part: the rows a
+// PORT49_LAB_PLATFORMS value selects, whether the value named any, and the
+// refusal when it names a row that does not exist, selects nothing, or selects
+// two rows of one platform name (labs are cached by that name, so the second
+// would silently reuse the first's lab).
+func selectPlatforms(want string) ([]platform, bool, error) {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return defaultPlatforms(platforms), false, nil
+	}
+	var known []string
+	for _, p := range platforms {
+		known = append(known, p.sel)
+	}
+	var sel []platform
+	for _, s := range strings.Split(want, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		found := false
+		for _, p := range platforms {
+			if p.sel == s {
+				for _, q := range sel {
+					if q.name == p.name {
+						return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS names %q and %q, both platform %s; "+
+							"one selector per platform per run, because labs are cached by platform name",
+							q.sel, p.sel, p.name)
+					}
+				}
+				sel = append(sel, p)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS names %q, which is not a platform; known selectors are %s",
+				s, strings.Join(known, ", "))
+		}
+	}
+	if len(sel) == 0 {
+		return nil, true, fmt.Errorf("PORT49_LAB_PLATFORMS is %q, which selects no platform; known selectors are %s",
+			want, strings.Join(known, ", "))
+	}
+	return sel, true, nil
 }
 
 // repoRoot resolves the repository root once. Everything the harness runs uses
@@ -674,6 +744,13 @@ func (l *lab) up() error {
 		fmt.Fprintf(os.Stderr, "lab: %s: WARNING: %v\n", l.p.name, err)
 	}
 
+	// An L71 help cell needs only the break-glass CLI: the image has no
+	// TACACS+ configuration and no inventory entry, so there is no daemon to
+	// start and no TACACS+ traffic to wait for.
+	if helpOnlyPlatforms[l.p.sel] {
+		return nil
+	}
+
 	// A spool left by an earlier run would drain into this run's log and be
 	// read as this run's accounting.
 	os.Remove(spoolPath)
@@ -789,6 +866,7 @@ var platformSessionAttributes = map[string]string{
 	"cisco_iosxe":           `["priv-lvl=15"]`,
 	"juniper_vjunos-router": `[]`,
 	"juniper_vsrx":          `[]`,
+	"juniper_vjunos-switch": `[]`,
 }
 
 // configPath is the daemon config this platform runs against: the checked-in
@@ -1210,13 +1288,17 @@ func daemonHealthy() bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second)
+	c, err := net.DialTimeout("tcp", l73HealthAddr(tacacsAddr, healthListen), 2*time.Second)
 	if err != nil {
 		return false
 	}
 	c.Close()
 	return true
 }
+
+// healthListen is the RFC 8907 address a TestL73 cell moved port49d's plain
+// listener to (cell j2's .2:49); "" keeps tacacsAddr. Set around the start only.
+var healthListen string
 
 // waitSSH waits for the device's SSH to answer with a banner. It deliberately
 // does not attempt authentication: an auth attempt against a device whose AAA
@@ -1415,16 +1497,49 @@ func labFor(t *testing.T, p platform) *lab {
 	return l
 }
 
-// eachPlatform runs fn as a subtest per selected platform.
+// eachPlatform runs fn as a subtest per selected platform. It skips the
+// opt-in rows: they share platform names, and so results-note names, with rows
+// measured on older images, so a register test run against one would rewrite a
+// closed note from the wrong image. Only a test that is written for them
+// (TestL73) runs them, through eachOptInPlatform.
 func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
+	t.Helper()
+	eachSelected(t, false, fn)
+}
+
+// eachOptInPlatform is eachPlatform for the tests that run the opt-in rows,
+// and only those rows.
+func eachOptInPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
+	t.Helper()
+	eachSelected(t, true, fn)
+}
+
+func eachSelected(t *testing.T, optIn bool, fn func(t *testing.T, l *lab)) {
+	t.Helper()
 	sel, _, err := platformSelection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range sel {
+	run := rowsFor(sel, optIn)
+	if len(run) == 0 {
+		t.Skipf("no selected platform is one this test runs (opt-in rows: %v)", optIn)
+	}
+	for _, p := range run {
 		p := p
 		t.Run(p.name, func(t *testing.T) { fn(t, labFor(t, p)) })
 	}
+}
+
+// rowsFor keeps the selected rows a test runs: the opt-in rows for a test
+// that opts in, every other row for one that does not.
+func rowsFor(sel []platform, optIn bool) []platform {
+	var out []platform
+	for _, p := range sel {
+		if optInPlatforms[p.sel] == optIn {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1656,7 +1771,14 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 	if l.p.name == "cisco_iosxe" {
 		return l.ptyCommands(user, password, per, commands...)
 	}
-	c, err := l.dial(user, password, 45*time.Second)
+	return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)
+}
+
+// loginWithinDial is loginWithin against an explicit host:port with its own
+// dial deadline: an image that waits before every TACACS+ step (NX-OS 10.6.2.F
+// waits 5.00 s on each RFC 9887 connection) needs more than 45 s to log in.
+func (l *lab) loginWithinDial(hostport, user, password string, dial, per time.Duration, commands ...string) ([]string, error) {
+	c, err := l.dialHostPort(user, password, hostport, dial)
 	if err != nil {
 		return nil, err
 	}

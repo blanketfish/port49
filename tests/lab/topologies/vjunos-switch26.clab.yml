@@ -1,0 +1,14 @@
+# L73 only (selector vjunosswitch26, opt-in). Node srx1 at 172.100.100.21 on purpose: the
+# inventory, the seeds and the startup config are the older row's, and only
+# one platform is up at a time.
+name: port49-vjunos-switch26
+topology:
+  nodes:
+    srx1:
+      kind: juniper_vjunosswitch
+      image: vrnetlab/juniper_vjunos-switch:26.2R1.7
+      startup-config: ../configs/vjunos-startup.conf
+      mgmt-ipv4: 172.100.100.21
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

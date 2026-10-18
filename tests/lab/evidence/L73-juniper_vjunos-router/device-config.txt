@@ -1,0 +1,70 @@
+show configuration system tacplus-server | display set ^M
+set system tacplus-server 172.100.100.1 routing-instance mgmt_junos^M
+set system tacplus-server 172.100.100.1 port 300^M
+set system tacplus-server 172.100.100.1 tls trusted-ca-group l73-trust^M
+set system tacplus-server 172.100.100.1 tls mutual-authentication certificate-id l73-dev^M
+^M
+breakglass@srx1> 
+show configuration system accounting | display set ^M
+set system accounting events login^M
+set system accounting events change-log^M
+set system accounting events interactive-commands^M
+set system accounting destination tacplus server 172.100.100.1 routing-instance mgmt_junos^M
+set system accounting destination tacplus server 172.100.100.1 port 300^M
+set system accounting destination tacplus server 172.100.100.1 tls trusted-ca-group l73-trust^M
+set system accounting destination tacplus server 172.100.100.1 tls mutual-authentication certificate-id l73-dev^M
+^M
+breakglass@srx1> 
+show configuration security pki | display set ^M
+set security pki ca-profile l73-root ca-identity l73-root^M
+set security pki ca-profile l73-root revocation-check disable^M
+set security pki ca-profile l73-inter ca-identity l73-inter^M
+set security pki ca-profile l73-inter revocation-check disable^M
+set security pki trusted-ca-group l73-trust ca-profiles l73-root^M
+^M
+breakglass@srx1> 
+show security pki local-certificate certificate-id l73-dev detail ^M
+LSYS: root-logical-system^M
+Certificate identifier: l73-dev^M
+  Certificate version: 3^M
+^M
+  Serial number:^M
+    hexadecimal: <LONG>^M
+    decimal: <LONG>^M
+  Issuer:^M
+    Common name: L73 Lab Device Intermediate^M
+  Subject:^M
+    Common name: srx1^M
+  Subject string: ^M
+    CN=srx1^M
+  Alternate subject: srx1, 172.100.100.21, ipv6 empty, email empty^M
+  Cert-Chain: L73 Lab Root, L73 Lab Device Intermediate^M
+  Validity:^M
+    Not before: 10-18-2026 03:54 UTC^M
+    Not after: 10-19-2026 04:54 UTC^M
+  Public key algorithm: rsaEncryption(2048 bits)^M
+    30:82:01:0a:02:82:01:01:00:bc:c4:55:26:fa:1e:6d:9b:81:d2:40^M
+    74:95:4f:83:4b:04:a3:8a:7a:3b:00:70:ff:74:0f:39:35:c3:10:55^M
+    a6:d9:8f:cb:fb:b0:2c:9f:b6:ba:dd:8f:7a:51:5e:86:7f:74:f7:0b^M
+    b5:03:c5:24:ef:40:e2:0b:f9:95:e9:b0:83:35:aa:e0:ae:8f:38:a7^M
+    1d:8b:cb:42:be:35:09:58:f8:ca:ea:de:9c:b8:c3:e3:f5:f5:0c:88^M
+    a3:83:23:15:98:94:f4:8f:54:9b:45:1c:fb:96:d6:6d:9e:c4:73:8f^M
+    b6:e3:40:3b:59:11:30:29:90:ed:3f:18:63:7e:43:bf:63:4f:fd:02^M
+    bb:d2:1d:9f:9f:03:06:ac:96:8b:44:bb:62:04:6d:bd:c7:a7:a8:76^M
+    f1:82:3c:88:bc:87:22:01:84:ec:ba:ce:d8:01:0f:ad:4a:47:58:74^M
+    cb:d5:a0:5f:5c:00:dd:28:f7:2e:fc:de:1b:44:f9:24:43:54:54:d3^M
+    59:5a:73:45:28:a9:34:2f:6b:78:e6:94:04:5a:fa:09:33:89:29:b2^M
+    ae:06:28:fe:d6:eb:21:11:fd:79:a9:ef:67:65:8d:40:cb:82:32:34^M
+    bb:c9:68:53:2d:71:a9:8e:8b:89:42:f3:b9:af:2f:c2:1b:ef:c2:44^M
+    11:25:23:17:07:02:03:01:00:01^M
+  Signature algorithm: ecdsa-with-SHA256^M
+  Use for key: Key encipherment, Digital signature, TLS Web Client Authentication, 1.3.6.1.5.5.7.3.2^M
+  Fingerprint:^M
+    d9:f8:2c:fc:0c:98:c7:29:b5:f1:58:db:c4:ca:2e:4a:0e:02:1a:b6 (sha1)^M
+    92:db:24:6e:26:f5:29:01:a8:65:b3:3e:39:c1:04:ac (md5)^M
+    34:01:16:a9:21:e3:b8:89:0d:66:64:5b:97:55:23:55:55:4e:78:00:16:4a:fd:aa:f5:95:34:3a:ae:4c:ee:ee (sha256)^M
+  Auto-re-enrollment:^M
+    Status: Disabled^M
+    Next trigger time: Timer not started^M
+^M
+breakglass@srx1> 

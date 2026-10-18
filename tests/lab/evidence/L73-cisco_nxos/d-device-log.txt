@@ -1,0 +1,41 @@
+show logging logfile | egrep "TACACS|tacacs|TLS|tls|PKI|pki" | last 40^M^M
+2026 Oct 18 06:14:01 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:06 nx1 %<LONG>: All servers failed to respond (message repeated 11 times)^M
+2026 Oct 18 06:14:06 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:11 nx1 %<LONG>: All servers failed to respond (message repeated 29 times)^M
+2026 Oct 18 06:14:11 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:13 nx1 %<LONG>: All servers failed to respond (message repeated 4 times)^M
+2026 Oct 18 06:14:13 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:15 nx1 %<LONG>: All servers failed to respond (message repeated 9 times)^M
+2026 Oct 18 06:14:15 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:21 nx1 %<LONG>: All servers failed to respond (message repeated 19 times)^M
+2026 Oct 18 06:14:21 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:14:45 nx1 %<LONG>: All servers failed to respond (message repeated 2 times)^M
+2026 Oct 18 06:14:50 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:15:07 nx1 %<LONG>: All servers failed to respond (message repeated 1 time)^M
+2026 Oct 18 06:15:12 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:15:18 nx1 %<LONG>: All servers failed to respond (message repeated 16 times)^M
+2026 Oct 18 06:15:19 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:17:04 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:17:21 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:17:38 nx1 %<LONG>: All servers failed to respond (message repeated 1 time)^M
+2026 Oct 18 06:17:43 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:18:03 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:18:21 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:18:38 nx1 %<LONG>: All servers failed to respond (message repeated 1 time)^M
+2026 Oct 18 06:18:43 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:19:04 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: certificate has expired for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:19:03 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:19:21 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: certificate has expired for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:19:20 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:19:38 nx1 %<LONG>: All servers failed to respond (message repeated 1 time)^M
+2026 Oct 18 06:19:44 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: certificate has expired for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:19:43 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:20:03 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: unable to get local issuer certificate for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:20:03 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:20:21 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: unable to get local issuer certificate for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:20:20 nx1 %<LONG>: All servers failed to respond^M
+2026 Oct 18 06:20:37 nx1 %<LONG>: All servers failed to respond (message repeated 1 time)^M
+2026 Oct 18 06:20:43 nx1  %AUTHPRIV-3-SYSTEM_MSG: Certificate verification error: unable to get local issuer certificate for /CN=port49 L73  - tacacsd^M
+2026 Oct 18 06:20:42 nx1 %<LONG>: All servers failed to respond^M
+^Mnx1# 
