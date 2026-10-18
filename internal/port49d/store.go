@@ -53,6 +53,9 @@ func lineHolder(holder string) string {
 type directoryCache struct {
 	loaded atomic.Bool
 	fresh  *store.Freshness
+	// fatal carries a fault found when the directory opened after a
+	// snapshot start (N2): runOnce returns it, so port49d exits 1 saying it.
+	fatal chan error
 }
 
 // stores is what port49d's components read and write through (plan 7d):
@@ -160,7 +163,6 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer, again bool,
 	closed string) (*etcdstore.Store, error) {
 	e := ref.cfg.Etcd
-	at := ref.at + ".etcd"
 	proc := procOf(cfg)
 	// Both feeds read down from here until each first runs, so an alert on
 	// port49_store_feed_up == 0 fires through a wait for the store or a
@@ -187,10 +189,7 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 	for {
 		s, err := attempt(ctx, cfg, ref, m, out)
 		if err == nil {
-			if e.Roles == config.RolesUnenforced {
-				fmt.Fprintf(out, "%s: %s.roles: unenforced: the daemon and the broker are not separated "+
-					"on etcd; a stolen daemon key can lift revocations\n", proc, at)
-			}
+			sayUnenforced(out, cfg, ref)
 			return s, nil
 		}
 		if ctx.Err() != nil {
@@ -218,6 +217,14 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 			return nil, ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
+	}
+}
+
+// sayUnenforced is the line a store opened with unenforced roles says.
+func sayUnenforced(out io.Writer, cfg config.Config, ref storeRef) {
+	if ref.cfg.Etcd.Roles == config.RolesUnenforced {
+		fmt.Fprintf(out, "%s: %s.etcd.roles: unenforced: the daemon and the broker are not separated "+
+			"on etcd; a stolen daemon key can lift revocations\n", procOf(cfg), ref.at)
 	}
 }
 
@@ -342,30 +349,55 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
 	case !dc.loaded.Load():
-		// No marks yet: the listeners stay closed until the directory
-		// answers, up to its start_timeout on a cold start (R19). Its role
-		// check ran in waitForStore (attempt): the daemon's read is confined
-		// to the marks and the key window.
-		dd, err := waitForStore(ctx, cfg, directoryRef(cfg), m, out, again, "the listeners stay closed")
-		if err != nil {
-			return fail(err)
-		}
-		dir.set(dd)
-		// A held run (a run after a store gone) runs the same checks when it
-		// opens the directory late (openDirectoryLater).
+		// No marks yet. The directory is tried once; when it does not answer,
+		// the region's snapshots serve (R19), else the listeners stay closed
+		// until it answers, up to its start_timeout on a cold start. Its role
+		// check ran in attempt: the daemon's read is confined to the marks and
+		// the key window.
 		de := cfg.Stores.Directory.Etcd
-		if err := retry(func() error { return checkTwoStores(ctx, cfg, d, dd, 4*de.CallTimeout) }); err != nil {
+		dd, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		switch {
+		case err == nil:
+			sayUnenforced(out, cfg, directoryRef(cfg))
+		case errors.Is(err, store.ErrUnavailable):
+			ceiling := snapshotCeiling(cfg)
+			snap, ok, serr := loadSnapshots(ctx, d, keys, false, ceiling, 4*e.CallTimeout, out, "port49d")
+			if serr == nil && ok {
+				if err := loadFrom(snapFeed{snap}, e.BulkTimeout); err != nil {
+					return fail(err)
+				}
+				markRev = 0 // the follow loads the directory afresh once it opens (N5)
+				dc.fresh.Seed(snap.confirmed)
+				fmt.Fprintln(out, snapshotLine("port49d", snap, ceiling, "the listeners close"))
+				break
+			}
+			fmt.Fprintf(out, "port49d: directory store at %s: not answering (%v); no snapshot in the session "+
+				"store is younger than session.staleness_ceiling (%s)\n", directoryRef(cfg).where(), err, ceiling)
+			if dd, err = waitForStore(ctx, cfg, directoryRef(cfg), m, out, again, "the listeners stay closed"); err != nil {
+				return fail(err)
+			}
+		default:
 			return fail(err)
 		}
-		if err := retry(func() error {
-			return checkDirectoryKeys(ctx, "port49d", dd, directoryRef(cfg), keys, out, 4*de.CallTimeout, false)
-		}); err != nil {
-			return fail(err)
+		if dd != nil {
+			// A held run (a run after a store gone) runs the same checks when it
+			// opens the directory late (openDirectoryLater).
+			if err := retry(func() error { return checkTwoStores(ctx, cfg, d, dd, 4*de.CallTimeout) }); err != nil {
+				dd.Close()
+				return fail(err)
+			}
+			if err := retry(func() error {
+				return checkDirectoryKeys(ctx, "port49d", dd, directoryRef(cfg), keys, out, 4*de.CallTimeout, false)
+			}); err != nil {
+				dd.Close()
+				return fail(err)
+			}
+			dir.set(dd)
+			if err := loadFrom(dd, de.BulkTimeout); err != nil {
+				return fail(err)
+			}
+			fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the directory store\n", authMarks.Len())
 		}
-		if err := loadFrom(dd, de.BulkTimeout); err != nil {
-			return fail(err)
-		}
-		fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the directory store\n", authMarks.Len())
 	default:
 		// A run after a store gone holds its marks: it serves from them, and
 		// the follow below opens the directory and loads when it answers (R19).
@@ -393,10 +425,45 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			crypt.FollowContexts(ctx, d, d, keys, ledger, rev, upOf("contexts"),
 				func() { m.StoreFeedRescans.WithLabelValues("contexts").Inc() }, logf)
 		}()
+		snapStart := dc.fresh.Snapshot()
+		if snapStart {
+			wg.Add(1)
+			go func() { defer wg.Done(); watchCeiling(ctx, dc, snapshotCeiling(cfg), gone, out) }()
+		}
+		if !cfg.Stores.Shared {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				keepSnapshot(ctx, d, dir, dc.fresh, keys, writerName("port49d"), snapshotCeiling(cfg),
+					authMarks.All, nil, out, "port49d") // a marks record alone: no broker record (N4)
+			}()
+		}
 		go func() {
 			defer wg.Done()
-			if dir.get() == nil && !openDirectoryLater(ctx, cfg, keys, m, out, d, dir) {
-				return
+			if dir.get() == nil {
+				bound := 4 * cfg.Stores.Directory.Etcd.CallTimeout
+				// A fault the checks find after a snapshot start ends the process
+				// (N2): a store gone would open the listeners on the held marks and
+				// fail again. A held run keeps serving and retries, as it said.
+				check := func(s *etcdstore.Store) error {
+					err := checkTwoStores(ctx, cfg, d, s, bound)
+					if err == nil {
+						err = checkDirectoryKeys(ctx, "port49d", s, directoryRef(cfg), keys, out, bound, false)
+					}
+					if err != nil && !snapStart && !errors.Is(err, store.ErrUnavailable) {
+						return &keepServing{err}
+					}
+					return err
+				}
+				if err := openDirectoryLater(ctx, cfg, m, out, dir, "port49d", check); err != nil {
+					if ctx.Err() == nil {
+						select {
+						case dc.fatal <- err:
+						default:
+						}
+					}
+					return
+				}
 			}
 			feed := dir.get()
 			store.FollowMarks(ctx, feed, authMarks, markRev, nil,
@@ -457,39 +524,50 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	}, nil
 }
 
+// keepServing is a check's fault that a run keeping its marks does not end
+// on: said once, and the directory tried again (openDirectoryLater).
+type keepServing struct{ error }
+
+func (k *keepServing) Unwrap() error { return k.error }
+
 // openDirectoryLater opens the directory store once it answers, trying
-// every 5s, on a run that serves from the marks it holds (R19). The start
-// checks the cold path runs run here too, before the handle is set (R27,
-// R28): the configuration may have changed since the start that loaded the
-// marks. A directory that fails them is closed, not followed, and the run
-// keeps serving from its marks; each new reason is said once. It reports
-// false when ctx ended first. sess is the session store's handle.
-func openDirectoryLater(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics,
-	out io.Writer, sess *etcdstore.Store, dir *dirHandle) bool {
+// every 5s, on a run that serves from the marks or the snapshot it holds
+// (R19). check (nil skips it) is the start checks the cold path runs
+// (R27, R28), run before the handle is set: the configuration may have
+// changed since the start that loaded the marks. A directory that does not
+// answer, or whose check meets an outage or is a *keepServing, is closed,
+// said once per reason, and tried again; any other fault of a check is
+// returned (N2), the store closed: the caller ends the process on it. It
+// returns nil with the handle set, or ctx.Err() when ctx ended first.
+func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, dir *dirHandle,
+	proc string, check func(*etcdstore.Store) error) error {
 	said := ""
 	for {
 		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
 		if err == nil {
-			bound := 4 * cfg.Stores.Directory.Etcd.CallTimeout
-			if err = checkTwoStores(ctx, cfg, sess, s, bound); err == nil {
-				err = checkDirectoryKeys(ctx, "port49d", s, directoryRef(cfg), keys, out, bound, false)
+			if check != nil {
+				err = check(s)
 			}
 			if err == nil {
 				dir.set(s)
-				return true
+				return nil
 			}
 			s.Close()
+			var keep *keepServing
+			if ctx.Err() == nil && !errors.Is(err, store.ErrUnavailable) && !errors.As(err, &keep) {
+				return err
+			}
 		}
 		if ctx.Err() != nil {
-			return false
+			return ctx.Err()
 		}
 		if why := err.Error(); why != said {
-			fmt.Fprintf(out, "port49d: directory store: not followed yet (%v); serving from the marks this "+
-				"process holds; trying again every 5s\n", err)
+			fmt.Fprintf(out, "%s: directory store: not followed yet (%v); serving from the marks this "+
+				"process holds; trying again every 5s\n", proc, err)
 			said = why
 		}
 		if !sleepCtx(ctx, 5*time.Second) {
-			return false
+			return ctx.Err()
 		}
 	}
 }

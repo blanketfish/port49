@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/store"
@@ -112,4 +114,76 @@ func (h *dirHandle) ListRevocations(ctx context.Context) ([]store.Revocation, er
 		return s.ListRevocations(ctx)
 	}
 	return nil, errNoDirectory
+}
+
+// PutLogout writes a logout to the directory (placement.Config.LogoutDir).
+func (h *dirHandle) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	if s := h.get(); s != nil {
+		return s.PutLogout(ctx, l, ttl)
+	}
+	return errNoDirectory
+}
+
+// lazyMembers is the directory's membership half over a handle that may
+// open after the start (R19), sealed as the session store's: the sealing
+// layer is made at the first call that finds the handle open.
+type lazyMembers struct {
+	h    *dirHandle
+	wrap func(*etcdstore.Store) store.Store
+	mu   sync.Mutex
+	of   *etcdstore.Store
+	m    store.Store
+}
+
+func (l *lazyMembers) get() (store.Store, error) {
+	s := l.h.get()
+	if s == nil {
+		return nil, errNoDirectory
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.of != s {
+		l.of, l.m = s, l.wrap(s)
+	}
+	return l.m, nil
+}
+
+func (l *lazyMembers) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	s, err := l.get()
+	if err != nil {
+		return err
+	}
+	return s.PutPin(ctx, m, expect)
+}
+
+func (l *lazyMembers) GetMembership(ctx context.Context, p string) (store.Membership, error) {
+	s, err := l.get()
+	if err != nil {
+		return store.Membership{}, err
+	}
+	return s.GetMembership(ctx, p)
+}
+
+func (l *lazyMembers) MembershipByKey(ctx context.Context, k string) (store.Membership, error) {
+	s, err := l.get()
+	if err != nil {
+		return store.Membership{}, err
+	}
+	return s.MembershipByKey(ctx, k)
+}
+
+func (l *lazyMembers) RefuseMapKeys(ctx context.Context, ks []string, at time.Time, ttl time.Duration) error {
+	s, err := l.get()
+	if err != nil {
+		return err
+	}
+	return s.RefuseMapKeys(ctx, ks, at, ttl)
+}
+
+func (l *lazyMembers) DeleteMembership(ctx context.Context, p string) (store.Membership, error) {
+	s, err := l.get()
+	if err != nil {
+		return store.Membership{}, err
+	}
+	return s.DeleteMembership(ctx, p)
 }

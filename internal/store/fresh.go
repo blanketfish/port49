@@ -15,6 +15,7 @@ type Freshness struct {
 	now       func() time.Time
 	feedUp    bool
 	confirmed time.Time
+	snapshot  bool // the copy is a snapshot's, not yet reloaded from the directory
 	checked   bool
 	reachable bool
 	why       string
@@ -57,6 +58,9 @@ func (f *Freshness) FeedUp(up bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.feedUp = up
+	if up {
+		f.snapshot = false
+	}
 }
 
 // Checked is a directory read's answer: nil confirms the copy while the
@@ -107,4 +111,33 @@ func (f *Freshness) Reachable() (bool, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reachable, f.why
+}
+
+// Seed is a copy loaded from a snapshot confirmed at at (plan 11a, R19):
+// Age counts from at, and Snapshot reports true until the marks feed's
+// load from the directory succeeds (FeedUp). It tells onConfirm, as a
+// confirmation does.
+func (f *Freshness) Seed(at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.confirmed, f.snapshot = at, true
+	if f.onConfirm != nil {
+		f.onConfirm(at)
+	}
+}
+
+// Snapshot reports whether the copy is a snapshot's, not yet reloaded from
+// the directory.
+func (f *Freshness) Snapshot() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapshot
+}
+
+// Confirmed is when the copy was last confirmed (a snapshot's time while it
+// is one), and false before the first.
+func (f *Freshness) Confirmed() (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.confirmed, !f.confirmed.IsZero()
 }

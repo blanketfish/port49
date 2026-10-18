@@ -139,32 +139,63 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			}
 		}
 	}
-	dirRaw := b
-	if !cfg.Stores.Shared {
-		if dirRaw, err = waitForStore(ctx, cfg, directoryRef(cfg), m, out, false, "nothing is served yet"); err != nil {
-			b.Close()
-			return brokerStores{}, err
-		}
-	}
+	var bs brokerStores
+	bs.dir = &dirHandle{}
 	fail := func(err error) (brokerStores, error) {
 		b.Close()
-		if dirRaw != b {
-			dirRaw.Close()
+		if !cfg.Stores.Shared {
+			bs.dir.close()
 		}
 		if ctx.Err() != nil {
 			return brokerStores{}, ctx.Err()
 		}
 		return brokerStores{}, err
 	}
-	if !cfg.Stores.Shared {
+	bs.fresh = store.NewFreshness(time.Now)
+	tellFresh(bs.fresh, m)
+	// startChecks is what a directory store of its own passes before it is
+	// used (R27, R28), and the broker writes its key window there.
+	startChecks := func(dirRaw *etcdstore.Store) error {
 		de := cfg.Stores.Directory.Etcd
 		if err := retry(func() error { return checkTwoStores(ctx, cfg, b, dirRaw, 4*de.CallTimeout) }); err != nil {
-			return fail(err)
+			return err
 		}
-		if err := retry(func() error {
+		return retry(func() error {
 			return checkDirectoryKeys(ctx, "port49-broker", dirRaw, directoryRef(cfg), keys, out, 4*de.CallTimeout, true)
-		}); err != nil {
-			return fail(err)
+		})
+	}
+	// snap is the region's snapshot this start serves from when the
+	// directory does not answer (R19); nil when it opened.
+	var snap *snapshotView
+	if cfg.Stores.Shared {
+		bs.dir.set(b)
+	} else {
+		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		switch {
+		case derr == nil:
+			sayUnenforced(out, cfg, directoryRef(cfg))
+		case errors.Is(derr, store.ErrUnavailable):
+			ceiling := snapshotCeiling(cfg)
+			v, ok, serr := loadSnapshots(ctx, b, keys, true, ceiling, 4*e.CallTimeout, out, "port49-broker")
+			if serr == nil && ok {
+				snap = &v
+				fmt.Fprintln(out, snapshotLine("port49-broker", v, ceiling, "mints and sign-ins are refused"))
+				break
+			}
+			fmt.Fprintf(out, "port49-broker: directory store at %s: not answering (%v); no snapshot in the session "+
+				"store is younger than session.staleness_ceiling (%s)\n", directoryRef(cfg).where(), derr, ceiling)
+			if dirRaw, derr = waitForStore(ctx, cfg, directoryRef(cfg), m, out, false, "nothing is served yet"); derr != nil {
+				return fail(derr)
+			}
+		default:
+			return fail(derr)
+		}
+		if dirRaw != nil {
+			if err := startChecks(dirRaw); err != nil {
+				dirRaw.Close()
+				return fail(err)
+			}
+			bs.dir.set(dirRaw)
 		}
 	}
 	// The marks are the directory's: its bound in a split.
@@ -172,7 +203,6 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if !cfg.Stores.Shared {
 		markBound = cfg.Stores.Directory.Etcd.BulkTimeout
 	}
-	var bs brokerStores
 	if err := retry(func() error {
 		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
 		defer cancel()
@@ -191,8 +221,12 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if err := retry(func() error {
 		lctx, cancel := context.WithTimeout(ctx, markBound)
 		defer cancel()
+		var feed store.MarkFeed = bs.dir.get()
+		if snap != nil {
+			feed = snapFeed{*snap}
+		}
 		var err error
-		if bs.markRev, err = store.LoadMarks(lctx, dirRaw, marks, nil); err != nil {
+		if bs.markRev, err = store.LoadMarks(lctx, feed, marks, nil); err != nil {
 			return fmt.Errorf("store: reading the revocations in force: %w", err)
 		}
 		return nil
@@ -200,7 +234,11 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return fail(err)
 	}
 	from := "the store"
-	if !cfg.Stores.Shared {
+	switch {
+	case snap != nil:
+		bs.markRev = 0 // the follow loads the directory afresh once it opens (N5)
+		from = "the region's snapshots"
+	case !cfg.Stores.Shared:
 		from = "the directory store"
 	}
 	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from %s\n", marks.Len(), from)
@@ -209,23 +247,21 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	bs.raw = b
 	bs.st = crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc), keys, m.CryptOpenFailures,
 		crypt.WithLedger(ledger), say)
-	bs.dir = &dirHandle{}
-	bs.dir.set(dirRaw)
-	bs.fresh = store.NewFreshness(time.Now)
-	tellFresh(bs.fresh, m)
 	bs.logouts = store.NewLogoutSet(time.Now)
 	if !cfg.Stores.Shared {
 		de := cfg.Stores.Directory.Etcd
-		// The directory's membership half, sealed as the session's is (R13;
-		// Task 8a): the pin, the map keys, refusals, the forget's tombstone.
-		members := crypt.Wrap(dirRaw, keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()), say)
 		// The logouts, loaded before anything is served, as the marks are (R26):
 		// the router is handed neither the marks nor the logouts until each has
 		// loaded, so a read before then cannot find a mark "absent".
-		if err := retry(func() error {
+		if snap != nil {
+			for _, l := range snap.logouts {
+				bs.logouts.Put(l) // the union keeps the later of a key's
+			}
+			bs.fresh.Seed(snap.confirmed)
+		} else if err := retry(func() error {
 			lctx, cancel := context.WithTimeout(ctx, de.BulkTimeout)
 			defer cancel()
-			rev, es, err := dirRaw.Logouts(lctx)
+			rev, es, err := bs.dir.get().Logouts(lctx)
 			if err == nil {
 				bs.logouts.Merge(es) // a merge, not a replace: a load never erases a live logout (8b review I1); Len counts the live (M2)
 				bs.logoutRev = rev
@@ -234,12 +270,23 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}); err != nil {
 			return fail(err)
 		}
-		bs.st = placement.Wrap(placement.Config{Session: bs.st, Directory: dirRaw, Members: members, Marks: marks,
-			Logouts: bs.logouts, LogoutDir: dirRaw,
+		// The router is built over the handle, so it serves before the
+		// directory opens. The directory's membership half is sealed as the
+		// session's is (R13; Task 8a): the pin, the map keys, refusals, the
+		// forget's tombstone.
+		bs.st = placement.Wrap(placement.Config{Session: bs.st, Directory: bs.dir,
+			Members: &lazyMembers{h: bs.dir, wrap: func(s *etcdstore.Store) store.Store {
+				return crypt.Wrap(s, keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()), say)
+			}},
+			Marks: marks, Logouts: bs.logouts, LogoutDir: bs.dir,
 			CallTimeout: de.CallTimeout, BulkTimeout: de.BulkTimeout,
 			// Before the first check the directory is tried; after it, its answer rules.
 			Reachable: func() bool { ok, why := bs.fresh.Reachable(); return ok || why == "" },
+			Expired:   func() error { return ceilingErr(bs.fresh, snapshotCeiling(cfg)) },
 			Say:       func(format string, args ...any) { fmt.Fprintf(out, "port49-broker: "+format+"\n", args...) }})
+		if snap != nil {
+			placement.SeedPins(bs.st, snap.pins)
+		}
 	}
 	bs.followContexts = func(ctx context.Context) {
 		crypt.FollowContexts(ctx, b, b, keys, ledger, bs.ctxRev,
@@ -517,6 +564,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		rn.dir = bs.dir
 		rn.followed = make(chan store.Revocation, 1024)
 		rn.followedLogouts = make(chan store.LogoutEntry, 1024)
+		rn.logouts = bs.logouts
 	}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
@@ -634,9 +682,40 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// what its copy holds and the store lacks, refusing the reload when the
 	// marks cannot be read (final review 7e-1 C-1; re-review 1 C-2;
 	// pre-flight 7e-2 P-3).
+	// In a split the directory may not have answered at the start (R19): one
+	// goroutine opens it, and each follow below waits for it.
+	ready, dirErr := make(chan struct{}), make(chan error, 1)
+	if cfg.Stores.Shared {
+		close(ready)
+	} else {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if bs.dir.get() == nil {
+				de := cfg.Stores.Directory.Etcd
+				if err := openDirectoryLater(ctx, cfg, m, stderr, bs.dir, "port49-broker", func(s *etcdstore.Store) error {
+					if err := checkTwoStores(ctx, cfg, bs.raw, s, 4*de.CallTimeout); err != nil {
+						return err
+					}
+					return checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true)
+				}); err != nil {
+					if ctx.Err() == nil {
+						dirErr <- err // ends the run: the process exits 1 saying it
+					}
+					return
+				}
+			}
+			close(ready)
+		}()
+	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ready:
+		}
 		onMark := brk.MarkChanged
 		if !cfg.Stores.Shared {
 			onMark = func(c store.MarkChange) { brk.MarkChanged(c); rn.follow(c) }
@@ -651,6 +730,11 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ready:
+		}
 		placement.FollowPins(ctx, bs.st, bs.dir.get(),
 			func(up bool) { m.StoreFeedUp.WithLabelValues("pins").Set(b2f(up)) },
 			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
@@ -661,9 +745,25 @@ func runBroker(parent context.Context, cfgPath string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ready:
+			}
 			store.FollowLogouts(ctx, bs.dir.get(), bs.logouts, bs.logoutRev, rn.followLogout,
 				func(up bool) { m.StoreFeedUp.WithLabelValues("logouts").Set(b2f(up)) },
 				func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
+		}()
+	}
+	// In a split, this replica's snapshot records, written while its copy is
+	// confirmed live (R19).
+	if !cfg.Stores.Shared {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			keepSnapshot(ctx, bs.raw, bs.dir, bs.fresh, keys, writerName("port49-broker"), snapshotCeiling(cfg),
+				marks.All, func(b *brokerSnapshot) { b.Logouts, b.Pins = bs.logouts.All(), placement.CachedPins(bs.st) },
+				stderr, "port49-broker")
 		}()
 	}
 	// The copy's freshness: the directory read every second (R17).
@@ -769,6 +869,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 	case err := <-brokerErr:
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
+	case err := <-dirErr:
+		runErr = err
 	case <-ctx.Done():
 		fmt.Fprintln(stderr, "port49-broker: signal received, draining")
 	}

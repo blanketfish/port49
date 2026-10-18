@@ -46,6 +46,10 @@ type Config struct {
 	// Session is the session store, sealed and guarded: every method but
 	// the revocations'.
 	Session store.Store
+	// Expired, when it returns an error, fails every read of the process's
+	// copy (a mark, a logout, a cached pin) with ErrUnavailable: a copy
+	// loaded from a snapshot past its ceiling (R19). Nil never expires.
+	Expired func() error
 	// Directory is where the marks are written and listed.
 	Directory Directory
 	// Marks is the process's copy of the directory's marks, which
@@ -122,6 +126,9 @@ func (p *placed) ListRevocations(ctx context.Context) (rs []store.Revocation, er
 // check never waits on the directory (R4). With no copy it reads the
 // directory.
 func (p *placed) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	if err := p.expired(); err != nil {
+		return store.Revocation{}, err
+	}
 	if p.c.Marks == nil {
 		var r store.Revocation
 		err := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
@@ -193,6 +200,17 @@ func pinOnly(pin store.Membership) store.Membership {
 // samePin reports whether a and b hold one pin.
 func samePin(a, b store.Membership) bool {
 	return a.EntryID == b.EntryID && a.Refused == b.Refused && slices.Equal(a.MapKeys, b.MapKeys)
+}
+
+// expired is the copy's ceiling, as an ErrUnavailable; nil while it serves.
+func (p *placed) expired() error {
+	if p.c.Expired == nil {
+		return nil
+	}
+	if err := p.c.Expired(); err != nil {
+		return fmt.Errorf("%w: %v", store.ErrUnavailable, err)
+	}
+	return nil
 }
 
 func (p *placed) reachable() bool { return p.c.Reachable == nil || p.c.Reachable() }
@@ -332,6 +350,9 @@ func (p *placed) PutMembership(ctx context.Context, m store.Membership, ttl time
 // With the directory not answering on a miss, the session's copy is served,
 // and said.
 func (p *placed) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
+	if err := p.expired(); err != nil {
+		return store.Membership{}, err
+	}
 	if p.c.Members == nil {
 		return p.Store.GetMembership(ctx, principal)
 	}
@@ -637,6 +658,9 @@ var errNotAnswering = fmt.Errorf("%w: the directory store is not answering", sto
 // GetLogout is the process's set's answer (R4), then this region's pending
 // records: a mint or refresh never waits on the directory.
 func (p *placed) GetLogout(ctx context.Context, key string) (store.Logout, error) {
+	if err := p.expired(); err != nil {
+		return store.Logout{}, err
+	}
 	if p.c.Logouts == nil {
 		return p.Store.GetLogout(ctx, key)
 	}
@@ -688,4 +712,39 @@ func ForwardPending(ctx context.Context, s store.Store, pending PendingLogouts) 
 		forwarded++
 	}
 	return forwarded, 0, nil
+}
+
+// SeedPins fills s's pin cache with a snapshot's pins (R19): each as the
+// directory held it when the snapshot was written. FollowPins drops them all
+// once its watch begins. s not a router does nothing.
+func SeedPins(s store.Store, pins []store.Membership) {
+	p, ok := s.(*placed)
+	if !ok || p.c.Members == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pin := range pins {
+		if len(p.pins) >= maxPins {
+			return
+		}
+		p.pins[pin.Principal] = pinEntry{pin: pin, state: pinHeld}
+	}
+}
+
+// CachedPins is every pin s's cache holds as pinned, for a snapshot (R19).
+func CachedPins(s store.Store) []store.Membership {
+	p, ok := s.(*placed)
+	if !ok {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]store.Membership, 0, len(p.pins))
+	for _, e := range p.pins {
+		if e.state == pinHeld {
+			out = append(out, e.pin)
+		}
+	}
+	return out
 }

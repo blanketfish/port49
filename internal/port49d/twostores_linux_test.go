@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1033,5 +1034,143 @@ func TestAHeldRunRefusesADirectoryThatFailsTheStartChecks(t *testing.T) {
 	// is the mark count: a followed directory would put the mark in the copy.
 	if v := metricAt(t, daemonMetrics(t, &out), `port49_revocations_in_force{by="principal"}`); v != 0 {
 		t.Fatalf("the run followed a directory that failed the start checks: %v mark(s) in force", v)
+	}
+}
+
+// waitSnapshots waits until srv's session keyspace holds the region's
+// first snapshot records: marks records from n processes, and a broker
+// record.
+func waitSnapshots(t *testing.T, srv *etcdtest.Server, n int64) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); keysUnder(t, srv, "/port49/v1/ds/m/") < n ||
+		keysUnder(t, srv, "/port49/v1/ds/b/") < 1; time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("fewer than %d marks record(s), or no broker record, were written", n)
+		}
+	}
+}
+
+// Review Focus, R19: port49-broker and port49d restarted during a cut each
+// serve from the region's snapshot: a mint answers, and a session's command
+// is permitted.
+func TestARestartDuringACutServesFromTheSnapshot(t *testing.T) {
+	var out, log syncBuffer
+	e, o, every := stderr, stdout, snapshotEvery
+	t.Cleanup(func() { stderr, stdout, snapshotEvery = e, o, every })
+	stderr, stdout, snapshotEvery = &out, &log, time.Second
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	_, stopB := startBroker(t, f.broker, &out, 1)
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	waitSnapshots(t, f.srv, 2)
+	f.dproxy.Hang(true)
+	f.ddproxy.Hang(true)
+	if err := stopD(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	if err := stopB(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	api, _ := startBroker(t, f.broker, &out, 2)
+	dev := tacacsClient{t: t, addr: startSplitDaemon(t, f.daemon, &out, 2), key: []byte("run-test-secret")}
+	for _, want := range []string{"port49-broker: directory store: not answering; serving from 2 snapshot(s)",
+		"port49d: directory store: not answering; serving from 2 snapshot(s)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("no %q:\n%s", want, out.String())
+		}
+	}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	if !dev.permits("alice", "show", "version") {
+		t.Fatalf("a restart during the cut refused a command; log %s", log.String())
+	}
+}
+
+// R19: a process serving a snapshot fails closed at the ceiling: port49d
+// says so and closes its listeners.
+func TestASnapshotPastTheCeilingFailsClosed(t *testing.T) {
+	var out syncBuffer
+	e, every, ceiling := stderr, snapshotEvery, snapshotCeiling
+	t.Cleanup(func() { stderr, snapshotEvery, snapshotCeiling = e, every, ceiling })
+	stderr, snapshotEvery = &out, time.Second
+	snapshotCeiling = func(config.Config) time.Duration { return 20 * time.Second }
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	waitSnapshots(t, f.srv, 2)
+	f.ddproxy.Hang(true)
+	if err := stopD(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	startSplitDaemon(t, f.daemon, &out, 2)
+	waitWithin(t, &out, "port49d: directory store: the snapshot this run serves from is", 60*time.Second)
+	waitWithin(t, &out, "past session.staleness_ceiling (20s)", time.Second)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 10*time.Second)
+}
+
+// R29: a runner taking over during a cut runs its session duties: the
+// takeover finishes (a mint answers), the put-back waits for the directory
+// and says so, and lands on the heal.
+func TestATakeoverDuringACutRunsTheSessionDuties(t *testing.T) {
+	var out syncBuffer
+	e, every := stderr, snapshotEvery
+	t.Cleanup(func() { stderr, snapshotEvery = e, every })
+	stderr, snapshotEvery = &out, time.Second
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	_, stop := startBroker(t, f.broker, &out, 1)
+	waitWithin(t, &out, "port49-broker: runner: took keyspace", 30*time.Second)
+	waitSnapshots(t, f.srv, 1)
+	f.dproxy.Hang(true)
+	if err := stop(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	api, _ := startBroker(t, f.broker, &out, 2)
+	waitCountWithin(t, &out, "port49-broker: runner: took keyspace", 2, 60*time.Second)
+	waitWithin(t, &out, "the put-back of broker.state_dir/marks.json waits for the directory store", 30*time.Second)
+	_ = mintOn(t, api, f.pki, "leaf1") // the start's mint gate opened: the takeover finished in the cut
+	f.dproxy.Hang(false)
+	waitWithin(t, &out, "every revocation in broker.state_dir/marks.json is in the store", 60*time.Second)
+}
+
+// N2: a key fault found when the directory opens after a snapshot start
+// ends port49d, exit 1, with the check's message; the listeners never open
+// again.
+func TestADeferredKeyFaultEndsPort49d(t *testing.T) {
+	var out syncBuffer
+	e, every := stderr, snapshotEvery
+	t.Cleanup(func() { stderr, snapshotEvery = e, every })
+	stderr, snapshotEvery = &out, time.Second
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	waitSnapshots(t, f.srv, 2)
+	f.ddproxy.Hang(true)
+	if err := stopD(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 60*time.Second) // served from the snapshots
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.ddproxy.Hang(false)
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "which this configuration does not hold") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49d kept running with a directory under a key it lacks")
+	}
+	if n := strings.Count(out.String(), "port49d: listening on "); n != 2 {
+		t.Fatalf("the listeners opened %d times; want 2 (the first run, the snapshot run), no flapping", n)
 	}
 }

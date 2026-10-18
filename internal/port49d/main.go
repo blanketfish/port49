@@ -695,7 +695,7 @@ func run(parent context.Context, cfgPath string) error {
 	authMarks := store.NewMarks()
 	// And the directory store's marks are held across a store gone too, and
 	// how fresh they are (plan 11a, R19).
-	dc := &directoryCache{fresh: store.NewFreshness(time.Now)}
+	dc := &directoryCache{fresh: store.NewFreshness(time.Now), fatal: make(chan error, 1)}
 	// The restore guard is the process's too: a restore that outlasts
 	// hold_ttl ends a run, and the next must still know what was followed
 	// (plan 7e, Task 15d).
@@ -1496,6 +1496,17 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
+		cancel()
+		<-serveErr
+	case err := <-dc.fatal:
+		// The directory opened after a snapshot start and failed a start
+		// check (N2): a fault of the configuration, returned as a cold
+		// start's are, never a store gone.
+		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
+		}
+		runErr = err
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
