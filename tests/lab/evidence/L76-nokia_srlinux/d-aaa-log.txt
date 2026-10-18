@@ -1,13 +1,13 @@
-2026-10-18T18:18:08.241255+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:08.241285+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:09.058515+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:09.058536+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:13.767673+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:13.767690+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:15.903237+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:15.903256+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:18.025825+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00002|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:18.025844+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00003|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:18.610105+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3190|00000|EV|<LONG>|W: User alice04 authentication failed from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:20.144579+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00002|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T18:18:20.144595+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00003|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:50.663809+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3174|00000|EV|sessionOpened|N: Opened session 11 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:50.663837+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3174|00001|EV|<LONG>|N: User breakglass on session 11 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:51.495324+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3169|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:51.495345+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3169|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:56.511361+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3172|00000|EV|sessionOpened|N: Opened session 19 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:56.511380+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3172|00001|EV|<LONG>|N: User breakglass on session 19 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:58.943194+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3164|00000|EV|sessionOpened|N: Opened session 22 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:38:58.943214+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3164|00001|EV|<LONG>|N: User breakglass on session 22 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:39:01.377380+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3169|00002|EV|sessionOpened|N: Opened session 25 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:39:01.377399+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3169|00003|EV|<LONG>|N: User breakglass on session 25 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:39:02.254991+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2564|3168|00002|EV|<LONG>|W: User alice04 authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:39:03.744531+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3164|00002|EV|sessionOpened|N: Opened session 27 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:39:03.744549+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2564|3164|00003|EV|<LONG>|N: User breakglass on session 27 successfully authenticated from host 172.100.100.1 in network-instance mgmt
