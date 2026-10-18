@@ -1491,3 +1491,90 @@ func TestAStandingMarkDeniesAnUnrevokedContext(t *testing.T) {
 		t.Fatalf("a lifted mark still denied: %v", lastRecord(t, log))
 	}
 }
+
+// A session authorization above the context's level is permitted (spec §5.2).
+// SR Linux 26.7.2 sends its session authorization at a priv_lvl above its login
+// START's 1 (L76 run 2026-10-18); the reply's level is policy's, so the request
+// is not compared. The context afterwards holds the reply's level, clamped to
+// the ceiling, and never the 15 the device asked at.
+func TestSessionAuthorizationAboveTheContextLevelIsPermitted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ceiling uint8
+		want    uint8
+	}{
+		{"reply level", 15, 15},
+		{"clamped to ceiling", 7, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := memory.New(time.Now)
+			key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+			st.PutContext(context.Background(), key,
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: tc.ceiling, RefreshedAt: time.Now()}, time.Hour)
+			log := &bytes.Buffer{}
+			h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(log),
+				metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+			sess := req("alice", "vty0", "service=shell", "cmd=")
+			sess.PrivLvl = 15
+			resp := h.Handle(context.Background(), peer, sess)
+			if resp.Status != wire.AuthorStatusPassAdd || lastRecord(t, log)["verdict"] != "permit" {
+				t.Fatalf("%+v %v", resp, lastRecord(t, log))
+			}
+			c, err := st.GetContext(context.Background(), key)
+			if err != nil || c.PrivLvl != tc.want {
+				t.Fatalf("the context holds the reply's level (clamped), not the request's 15: want %d, got %+v %v", tc.want, c, err)
+			}
+		})
+	}
+}
+
+// The other checks still run on a session authorization, above the context's
+// level or not (spec §5.2): a revoked context is denied on it.
+func TestSessionAuthorizationAboveTheContextLevelStillMeetsTheOtherChecks(t *testing.T) {
+	h, st, log := setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, RevokedAt: time.Now(), RefreshedAt: time.Now()}, time.Hour)
+	sess := req("alice", "vty0", "service=shell", "cmd=")
+	sess.PrivLvl = 15
+	resp := h.Handle(context.Background(), peer, sess)
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "credential_revoked" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+// request.priv_lvl is the request header's level on every authorize_session and
+// authorize_command record, permits and denials, and is present at 0.
+func TestRequestPrivLvlIsRecordedOnEveryAuthorizationRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		lvl    uint8
+		args   []string
+		ctxLvl uint8
+		event  string
+		reason string
+	}{
+		{"session permit", 15, []string{"service=shell", "cmd="}, 1, "authorize_session", "context_matched"},
+		{"session permit at 0", 0, []string{"service=shell", "cmd="}, 1, "authorize_session", "context_matched"},
+		{"session deny", 15, []string{"service=bogus", "cmd="}, 1, "authorize_session", "service_unsupported"},
+		{"command permit", 1, []string{"service=shell", "cmd=show"}, 15, "authorize_command", "permit_dominates"},
+		{"command permit at 0", 0, []string{"service=shell", "cmd=show"}, 15, "authorize_command", "permit_dominates"},
+		{"command deny", 15, []string{"service=shell", "cmd=show"}, 1, "authorize_command", "privilege_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, log := setup(t)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: tc.ctxLvl, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+			r := req("alice", "vty0", tc.args...)
+			r.PrivLvl = tc.lvl
+			h.Handle(context.Background(), peer, r)
+			rec := lastRecord(t, log)
+			if rec["event"] != tc.event || rec["reason"] != tc.reason {
+				t.Fatalf("the case does not exercise what it names: %v", rec)
+			}
+			got, ok := rec["request"].(map[string]any)["priv_lvl"]
+			if !ok || got != float64(tc.lvl) {
+				t.Fatalf("request.priv_lvl: want %d present, got %v (present=%v) in %v", tc.lvl, got, ok, rec["request"])
+			}
+		})
+	}
+}

@@ -279,17 +279,14 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 		t.Fatalf("%+v %v seq=%d", reply, err, h.SeqNo)
 	}
 
-	// priv_lvl=1 on the session authorization, matching the login START above
-	// and what every device in the lab was measured sending: EOS asks
-	// `priv_lvl=1 args=[service=shell cmd*]` and only raises to 15 once this
-	// reply has granted `priv-lvl=15` (tests/lab/results/L1-arista_eos.md,
-	// L3-arista_eos.md). It used to say 15 here, which the §5.3 privilege check
-	// denies: the context holds the login START's 1 until this reply grants 15
-	// and the handler records it. See TestTheDevicePrivLvlRaisedByOurOwnSessionReply
-	// in internal/daemon/author for the whole sequence.
+	// The session authorization at priv_lvl=15, above the login START's 1: SR
+	// Linux 26.7.2 sends it there (L76 run 2026-10-18), and session
+	// authorization does not compare the request's level with the context's
+	// (spec §5.2). The reply grants 15 either way. See
+	// TestTheDevicePrivLvlRaisedByOurOwnSessionReply in internal/daemon/author.
 	ts.slotFree(t)
 	c = dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	_, body = c.recv(t)
 	ar, _ := wire.DecodeAuthorResponse(body)

@@ -218,7 +218,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
 		Device:  peer.Device(),
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
-		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
+		Request: &decision.Request{Service: kv["service"], PrivLvl: req.PrivLvl, Raw: raw, Vector: vector}}
 	if cmd == "" {
 		rec.Event = decision.EventAuthorizeSession
 	}
@@ -297,7 +297,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	if h.stalenessCeiling > 0 && !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
 		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable or cannot verify your directory membership")
 	}
-	if req.PrivLvl > c.PrivLvl {
+	// Command authorization only (spec §5.2, §5.3). The level a session reply
+	// grants is policy's answer, and a device may ask for its session above
+	// the level its login START carried: SR Linux 26.7.2 does, and denying it
+	// here failed the whole login (L76 run 2026-10-18). The session permit
+	// raises ctx.privilege from policy's reply below, never from this field.
+	if cmd != "" && req.PrivLvl > c.PrivLvl {
 		return h.deny(rec, decision.PrivilegeExceeded, "port49: request is above the session's privilege level")
 	}
 

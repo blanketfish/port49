@@ -291,7 +291,16 @@ type Request struct {
 	// SRX fleet, and the one a service_unsupported denial has to answer. It is
 	// checked against the platform's session_services list and consulted for
 	// nothing else: the service never selects policy (spec §5.2, §5.7).
-	Service string   `json:"service,omitempty"`
+	Service string `json:"service,omitempty"`
+	// PrivLvl is the priv_lvl of the authorization request's header, on every
+	// authorize_session and authorize_command record including the denials.
+	// It is recorded so a reader can compare what level the device asked at
+	// with session.privilege, and so a new platform's behavior is read off the
+	// log. Only command authorization compares it with the context; it is
+	// consulted for nothing else (spec §5.2, §5.3, §5.7). No omitempty:
+	// 0 is a valid level and a record that dropped it would read as "not
+	// recorded".
+	PrivLvl uint8    `json:"priv_lvl"`
 	Raw     []string `json:"raw"`
 	Vector  []string `json:"vector"`
 	// Redacted says words were replaced with «redacted» before the record
