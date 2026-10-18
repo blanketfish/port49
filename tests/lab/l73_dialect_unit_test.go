@@ -614,7 +614,8 @@ func TestL73IOLAsksTheLegacyFormAndGatesTheTLSLevel(t *testing.T) {
 	d := l73Dialects["cisco_iol-xe"]
 	pr := l71Probes["cisco_iol-xe"]
 	host := "tacacs-server host 192.0.2.71 "
-	if len(d.Asks) != 3 || d.Asks[0].Ask != host || d.Asks[1].Ask != "tacacs-server " || d.Asks[2].Ask != host+"tls " {
+	if len(d.Asks) != 4 || d.Asks[0].Ask != host || d.Asks[1].Ask != "tacacs-server " || !d.Asks[1].Evidence ||
+		d.Asks[2].Ask != "" || !d.Asks[2].Evidence || !slices.Equal(d.Asks[2].Keep, []string{"aaa", "tacacs"}) || d.Asks[3].Ask != host+"tls " {
 		t.Fatalf("asks: %+v", d.Asks)
 	}
 	if !slices.Equal(d.Enter, []string{"configure terminal"}) || !slices.Equal(d.Enter, pr.enter) || !slices.Equal(pr.ask, []string{host}) ||
@@ -625,7 +626,7 @@ func TestL73IOLAsksTheLegacyFormAndGatesTheTLSLevel(t *testing.T) {
 	if _, _, err := l73HelpVerdict("  timeout  t\n  zzz  z\n", d.Asks[1]); err != nil {
 		t.Fatalf("a help with other words failed: %v", err)
 	}
-	third := d.Asks[2]
+	third := d.Asks[3]
 	listed := map[string]bool{}
 	_, _, _ = l73HelpVerdict("  key  k\n  port  p\n", d.Asks[0])
 	miss, have, _ := l73HelpVerdict("  key  k\n  port  p\n  timeout  t\n", d.Asks[0])
@@ -637,5 +638,69 @@ func TestL73IOLAsksTheLegacyFormAndGatesTheTLSLevel(t *testing.T) {
 	l73RecordListed(listed, d.Asks[0], miss, have)
 	if !listed[third.Only] {
 		t.Fatalf("the tls level is skipped though tls was listed: %q %v", third.Only, listed)
+	}
+}
+
+const l73IOLHostHelp = "tacacs-server host 192.0.2.71 ?\n  <cr>  <cr>\n\niol1(config)#tacacs-server host 192.0.2.71 \b\b\b                  \b\b\b"
+
+// IOL-XE 17.18.02's `tacacs-server host <addr> ?` printed `<cr>` and nothing
+// else (the 2026-10-18 probe). That is an answer, not a screen to refuse.
+func TestL73CROnlyHelpIsAValidNegative(t *testing.T) {
+	if !l73CROnly(l73IOLHostHelp) {
+		t.Fatal("the IOL host help was not read as <cr> only")
+	}
+	for name, help := range map[string]string{
+		"a list":    "tacacs-server host 192.0.2.71 ?\n  key  k\n  <cr>  <cr>\n\niol1(config)#",
+		"an error":  "tacacs-server host 192.0.2.71 ?\n% Invalid input detected at '^' marker.\n\niol1(config)#",
+		"nothing":   "tacacs-server host 192.0.2.71 ?\n\niol1(config)#",
+		"tls in cr": "tacacs-server host 192.0.2.71 ?\n  <cr>  <cr>\n  tls  Use TLS\n\niol1(config)#",
+	} {
+		if l73CROnly(help) {
+			t.Errorf("%s was read as <cr> only", name)
+		}
+	}
+	pr := l71Probes["cisco_iol-xe"]
+	if line, err := l71Read(l73IOLHostHelp, pr); err != nil || line != "" {
+		t.Fatalf("L71's reading of the <cr>-only help: %q %v", line, err)
+	}
+	a := l73Dialects["cisco_iol-xe"].Asks[0]
+	if miss, _, err := l73HelpVerdict(l73IOLHostHelp, a); err != nil || !slices.Contains(miss, "tls") {
+		t.Fatalf("the verdict on the <cr>-only help: miss %v err %v", miss, err)
+	}
+}
+
+func TestL73KeepLinesKeepsOnlyTheNamedWords(t *testing.T) {
+	help := "?\n  aaa  Authentication, Authorization and Accounting.\n  access-list  Add an access list entry\n  tacacs-server  Modify TACACS query parameters\n  tftp-server  x\n\niol1(config)#"
+	got := l73KeepLines(help, []string{"tacacs", "aaa"})
+	if len(got) != 2 || !strings.HasPrefix(got[0], "aaa ") || !strings.HasPrefix(got[1], "tacacs-server ") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The finding says what was seen: no "does not support TLS", and the
+// `tacacs` object is named absent only when the listing shows no such word.
+func TestL73CRFindingStatesExactlyWhatWasSeen(t *testing.T) {
+	got := l73CRFinding("17.18.02", "tacacs-server host <addr>", []string{"aaa  Authentication", "tacacs-server  Modify TACACS query parameters"})
+	for _, want := range []string{"IOL-XE 17.18.02 offers no RFC 9887 client in its configuration help", "`tacacs-server`", "no `tacacs` object", "lists `<cr>` only"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "support") {
+		t.Errorf("claims more than was seen: %q", got)
+	}
+	with := l73CRFinding("17.18.02", "tacacs-server host <addr>", []string{"tacacs  Configure TACACS+ server"})
+	if strings.Contains(with, "no `tacacs` object") {
+		t.Errorf("a listed tacacs object was called absent: %q", with)
+	}
+	if none := l73CRFinding("17.18.02", "tacacs-server host <addr>", nil); strings.Contains(none, "no `tacacs` object") {
+		t.Errorf("an unasked listing was read as absence: %q", none)
+	}
+}
+
+func TestL73HelpBodyIsTheListWithoutEchoOrPrompt(t *testing.T) {
+	got := l73HelpBody(l73IOLHostHelp)
+	if len(got) != 1 || strings.TrimSpace(got[0]) != "<cr>  <cr>" {
+		t.Fatalf("%q", got)
 	}
 }

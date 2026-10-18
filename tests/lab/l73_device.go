@@ -141,6 +141,13 @@ type l73Ask struct {
 	Control, Need, Want []string
 	Only                string
 	In, Out             []string
+	// Evidence marks an ask that is recorded and graded on nothing: its Control
+	// words only say when the help has started, a help that never shows one is
+	// kept as it came, and Keep (if set) limits the note to the lines whose
+	// first word begins with one of them. Evidence asks run even after the
+	// L71 ask found no client.
+	Evidence bool
+	Keep     []string
 }
 
 // listed is the key under which a help's listing of word at this ask is
@@ -730,4 +737,83 @@ func l73IRowGate(shown, obs, docs string) (string, string) {
 	return fmt.Sprintf("not measured: %s left the bridge during the cell (bridge addresses at its end: %s); rows as recorded, not graded: %s",
 			l73SecondServer, strings.Join(strings.Fields(shown), " "), obs),
 		"n/a: not measured, " + l73SecondServer + " left the bridge during the cell, so the second server timed out instead of resetting"
+}
+
+// l73CROnly reports whether help is an answer that lists `<cr>` and nothing
+// else: after the typed line's echo, every line up to the redisplayed prompt
+// begins with `<cr>`. IOS XE prints that for a line that takes no further
+// keyword.
+func l73CROnly(help string) bool {
+	cr := 0
+	lines := strings.Split(strings.ReplaceAll(help, "\r", ""), "\n")
+	for _, ln := range lines[1:] { // the first line is the echo of what was typed
+		t := strings.TrimSpace(strings.Trim(ln, "\b "))
+		switch {
+		case t == "":
+		case strings.HasPrefix(t, "<cr>"):
+			cr++
+		case strings.Contains(t, "(config") || strings.HasSuffix(t, "#"):
+			return cr > 0 // the prompt redisplayed: the list is over
+		default:
+			return false
+		}
+	}
+	return cr > 0
+}
+
+// l73KeepLines is the lines of help whose first word begins with one of
+// prefixes, trimmed (the echo and the prompt lines never begin with one).
+func l73KeepLines(help string, prefixes []string) []string {
+	var out []string
+	for _, ln := range strings.Split(strings.ReplaceAll(help, "\r", ""), "\n") {
+		f := strings.Fields(ln)
+		if len(f) == 0 || strings.Contains(ln, "(config") {
+			continue
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(f[0], p) {
+				out = append(out, strings.TrimSpace(ln))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// l73CRFinding is the negative finding for a host help that lists `<cr>`
+// only: what was seen, and no more. cfgKept is the kept lines of the
+// config-mode listing (nil if it was not asked).
+func l73CRFinding(version, hostAsk string, cfgKept []string) string {
+	s := "IOL-XE " + version + " offers no RFC 9887 client in its configuration help: "
+	if cfgKept != nil {
+		var words []string
+		hasObject := false
+		for _, ln := range cfgKept {
+			w := strings.Fields(ln)[0]
+			words = append(words, "`"+w+"`")
+			hasObject = hasObject || w == "tacacs"
+		}
+		s += "config mode lists " + strings.Join(words, ", ") + " among the words beginning aaa or tacacs"
+		if !hasObject {
+			s += " and no `tacacs` object"
+		}
+		s += "; "
+	}
+	return s + "`" + hostAsk + "` lists `<cr>` only."
+}
+
+// l73HelpBody is the lines a help printed: without the echo of what was typed
+// (its first line), and up to the prompt redisplayed after the list.
+func l73HelpBody(help string) []string {
+	var out []string
+	lines := strings.Split(strings.ReplaceAll(help, "\r", ""), "\n")
+	for _, ln := range lines[1:] {
+		if strings.Contains(ln, "(config") {
+			break
+		}
+		if t := strings.TrimRight(ln, " \b"); strings.TrimSpace(t) != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

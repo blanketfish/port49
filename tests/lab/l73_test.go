@@ -948,6 +948,7 @@ func (e *l73Env) helpProbe() bool {
 	var first l71Answer
 	hasClient := false
 	listed := map[string]bool{}
+	var evidence, evidenceKept []string
 	probe := l71Probes[e.d.Probe]
 	e.cli(func(c *cliConn) (err error) {
 		entered, dirty, unsure := 0, false, false // unsure: an ask's In was typed and its Out has not finished
@@ -1002,8 +1003,9 @@ func (e *l73Env) helpProbe() bool {
 			}
 			return nil
 		}
+		evidenceOnly := false // the L71 ask found no client: only the evidence asks still run
 		for i, a := range e.d.Asks {
-			if a.Only != "" && !listed[a.Only] {
+			if a.Only != "" && !listed[a.Only] || evidenceOnly && !a.Evidence {
 				continue
 			}
 			unsure = len(a.In) > 0
@@ -1021,6 +1023,23 @@ func (e *l73Env) helpProbe() bool {
 			if !ans.Cleared {
 				dirty = true // Out is not typed: nothing more is typed on a line that did not clear
 				return fmt.Errorf("INVALID: after Ctrl-U the line was not empty on `%s?`; the session was closed with nothing more typed", a.Ask)
+			}
+			if a.Evidence {
+				// Recorded as it came; no verdict, and a help that showed none of its
+				// control words is kept too (the screen is in the exchange file).
+				kept := l73HelpBody(ans.Help)
+				if len(a.Keep) > 0 {
+					kept = l73KeepLines(ans.Help, a.Keep)
+					evidenceKept = kept
+				}
+				evidence = append(evidence, fmt.Sprintf("%d. typed `%s?`, kept %s:\n\n```\n%s\n```\n", i+1, a.Ask,
+					map[bool]string{true: "the lines beginning " + strings.Join(a.Keep, " or "), false: "the whole help"}[len(a.Keep) > 0],
+					strings.Join(kept, "\n")))
+				if err := leave(a); err != nil {
+					return err
+				}
+				unsure = false
+				continue
 			}
 			if ans.WaitErr != nil {
 				leave(a)
@@ -1040,7 +1059,10 @@ func (e *l73Env) helpProbe() bool {
 				// L71's own verdict: a client word (tls; ssl-profile on EOS).
 				first = ans
 				if _, hasClient = l71Says(ans.Help, probe.yes); !hasClient {
-					return nil
+					evidenceOnly = true
+					if !slices.ContainsFunc(e.d.Asks, func(x l73Ask) bool { return x.Evidence }) {
+						return nil
+					}
 				}
 			}
 			for _, m := range miss {
@@ -1059,10 +1081,18 @@ func (e *l73Env) helpProbe() bool {
 	if line != "" {
 		e.l71Obs = fmt.Sprintf("**Has a client.** Typed `%s?`; the help lists:\n\n```\n%s\n```\n\nFull help:\n\n```\n%s\n```\n",
 			ask, line, strings.TrimRight(first.Help, "\n"))
+	} else if l73CROnly(first.Help) {
+		e.l71Obs = negativeFinding{Claim: l73CRFinding(e.l.p.version, strings.ReplaceAll(strings.TrimSpace(ask), "192.0.2.71", "<addr>"),
+			evidenceKept), Sent: ask + "?", Got: first.Help}.render(e.t)
 	} else {
 		e.l71Obs = negativeFinding{Claim: fmt.Sprintf("the help for `%s?` is a real option list (it lists one of the "+
 			"control options %v) and lists none of %v, so this image offers no RFC 9887 client there", ask, probe.control, probe.yes),
 			Sent: ask + "?", Got: first.Help}.render(e.t)
+	}
+	if len(evidence) > 0 {
+		e.l71Obs += "\nThe asks, in the order the dialect lists them (the L71 ask first; the evidence-only asks next, " +
+			"recorded and graded on nothing; the `tls` level only if the first ask listed `tls`). The first ask is above.\n\n" +
+			strings.Join(evidence, "\n")
 	}
 	if hasClient && len(missing) > 0 {
 		if e.d.HelpOnly {

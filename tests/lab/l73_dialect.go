@@ -177,8 +177,9 @@ var l73Dialects = map[string]l73Dialect{
 	// words are a control, and whatever it lists is recorded.
 	"cisco_iol-xe": {Family: "iosxe", Vendor: "IOS XE (IOL)", Probe: "cisco_iol-xe", HelpOnly: true,
 		Enter: []string{"configure terminal"}, Cleanup: []string{"end"}, CfgMark: "(config", Asks: []l73Ask{
-			{Ask: l73IOLHost, Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}},
-			{Ask: "tacacs-server ", Control: []string{"host", "key", "timeout"}, Want: []string{"host", "key", "timeout"}},
+			{Ask: l73IOLHost, Control: []string{"key", "port", "timeout", "<cr>"}, Need: []string{"tls"}},
+			{Ask: "tacacs-server ", Control: []string{"host", "key", "timeout", "<cr>"}, Evidence: true},
+			{Ask: "", Control: []string{"aaa"}, Evidence: true, Keep: []string{"aaa", "tacacs"}},
 			{Ask: l73IOLHost + "tls ", Control: []string{"port", "vrf", "single-connection", "timeout", "key"}, Need: []string{"port"},
 				Only: l73Ask{Ask: l73IOLHost}.listed("tls")},
 		}},
