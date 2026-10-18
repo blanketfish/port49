@@ -33,16 +33,18 @@ type l73Dialect struct {
 	// HandshakeTimeout is the daemon's tls_listener.handshake_timeout on this
 	// platform; 0 keeps the default.
 	HandshakeTimeout time.Duration
-	InvalidCmds      []string // read into PORT49_L73_INVALID_DIR when the control login fails
-	RefusalCmds      []string // read into the INVALID dir when configuring the TLS client is refused
-	DiagOpAsks       []string // DiagAsks' operational-mode counterpart
-	DiagAsks         []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
-	DiagDeep         int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
-	DiagFilter       []string // DiagFilterAsks are followed only into the keywords that hold one of these
-	DiagFilterAsks   []string // DiagAsks' counterpart whose deeper levels DiagFilter narrows
-	DiagSubIn        []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
-	DiagSubAsks      []string // asks made inside that submode ("" is the submode's own help)
-	DiagSubOut       []string // lines that leave it and undo what DiagSubIn made
+	// LoginDial is the SSH dial deadline of a token login here; 0 is 45s.
+	LoginDial      time.Duration
+	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
+	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
+	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
+	DiagAsks       []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
+	DiagDeep       int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
+	DiagFilter     []string // DiagFilterAsks are followed only into the keywords that hold one of these
+	DiagFilterAsks []string // DiagAsks' counterpart whose deeper levels DiagFilter narrows
+	DiagSubIn      []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
+	DiagSubAsks    []string // asks made inside that submode ("" is the submode's own help)
+	DiagSubOut     []string // lines that leave it and undo what DiagSubIn made
 }
 
 var l73JunosDialect = l73Dialect{
@@ -183,6 +185,10 @@ var l73Dialects = map[string]l73Dialect{
 		// The first run saw the device send its client flight 5.00 s after the
 		// server's flight, the instant the default 5s handshake_timeout fired.
 		HandshakeTimeout: 30 * time.Second,
+		// A token login is five TACACS+ steps (redeem, authorize session, account,
+		// authorize command, account), each on its own connection that this image
+		// delays 5.00 s: about 25 s, so 45 s is too little margin.
+		LoginDial: 90 * time.Second,
 		InvalidCmds: []string{"show logging last 50", "show crypto ca certificates " + l73CertID, "show crypto key mypubkey rsa",
 			"show running-config tacacs+"},
 		ShowCmds: []string{"show running-config tacacs+", "show crypto ca trustpoints",

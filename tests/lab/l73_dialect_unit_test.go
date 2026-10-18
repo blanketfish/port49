@@ -836,3 +836,16 @@ func TestL73NXOSWidensTheHandshakeAndReadsTheDevice(t *testing.T) {
 		}
 	}
 }
+
+// NX-OS 10.6.2.F delays every RFC 9887 connection 5.00 s, and a token login is
+// five connections, so its SSH dial gets 90s; no other platform changes.
+func TestL73NXOSLoginDialIsWidened(t *testing.T) {
+	if got := l73Dialects["cisco_nxos"].LoginDial; got != 90*time.Second {
+		t.Errorf("nxos login dial %s", got)
+	}
+	for name, d := range l73Dialects {
+		if name != "cisco_nxos" && d.LoginDial != 0 {
+			t.Errorf("%s widens the login dial to %s", name, d.LoginDial)
+		}
+	}
+}

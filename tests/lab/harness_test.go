@@ -1768,7 +1768,14 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 	if l.p.name == "cisco_iosxe" {
 		return l.ptyCommands(user, password, per, commands...)
 	}
-	c, err := l.dial(user, password, 45*time.Second)
+	return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)
+}
+
+// loginWithinDial is loginWithin against an explicit host:port with its own
+// dial deadline: an image that waits before every TACACS+ step (NX-OS 10.6.2.F
+// waits 5.00 s on each RFC 9887 connection) needs more than 45 s to log in.
+func (l *lab) loginWithinDial(hostport, user, password string, dial, per time.Duration, commands ...string) ([]string, error) {
+	c, err := l.dialHostPort(user, password, hostport, dial)
 	if err != nil {
 		return nil, err
 	}

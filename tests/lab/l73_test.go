@@ -87,37 +87,38 @@ func l73Claim(vendor string) string {
 }
 
 type l73Env struct {
-	t         *testing.T
-	l         *lab
-	d         l73Dialect
-	opener    func(*lab) (*cliConn, error)
-	x         map[string]bool // the Want words the image's help listed
-	applied   *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
-	dir       string          // 0700: configs, inventories, keys, state
-	home      string          // a port49 CLI's HOME, issued_key_store: file
-	evDir     string
-	capDir    string // git-ignored, outside writeEvidence's *.pcap glob
-	pki       *l73PKI
-	files     map[string]string
-	invTLS    string
-	invTCP    string
-	evidence  map[string][]byte // written only by note(), after the leak gate
-	secrets   []string
-	obs       []l73Obs
-	facts     []string
-	first     []l73Conn // cell a's connections: c and f read them
-	firstSpan l73Span   // the control login in e.first, for h's comparison
-	port      int       // 0 when the device's default is 300
-	needSec   bool
-	tokenN    int
-	start     int64 // decision log offset when L73 began
-	csr       l73CSR
-	leaf      *x509.Certificate
-	l71Obs    string
-	touched   bool
-	bridge    bool
-	cfg       string // port49d's config now: the last daemon() call's, "" for the standing one
-	listen    string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
+	t          *testing.T
+	l          *lab
+	d          l73Dialect
+	opener     func(*lab) (*cliConn, error)
+	versionWhy string          // why the last token login's version was not read; "" when it was
+	x          map[string]bool // the Want words the image's help listed
+	applied    *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir        string          // 0700: configs, inventories, keys, state
+	home       string          // a port49 CLI's HOME, issued_key_store: file
+	evDir      string
+	capDir     string // git-ignored, outside writeEvidence's *.pcap glob
+	pki        *l73PKI
+	files      map[string]string
+	invTLS     string
+	invTCP     string
+	evidence   map[string][]byte // written only by note(), after the leak gate
+	secrets    []string
+	obs        []l73Obs
+	facts      []string
+	first      []l73Conn // cell a's connections: c and f read them
+	firstSpan  l73Span   // the control login in e.first, for h's comparison
+	port       int       // 0 when the device's default is 300
+	needSec    bool
+	tokenN     int
+	start      int64 // decision log offset when L73 began
+	csr        l73CSR
+	leaf       *x509.Certificate
+	l71Obs     string
+	touched    bool
+	bridge     bool
+	cfg        string // port49d's config now: the last daemon() call's, "" for the standing one
+	listen     string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
 }
 
 func TestL73(t *testing.T) {
@@ -831,16 +832,49 @@ func (e *l73Env) capture(cell string) (stop func() []l73Conn) {
 
 // tokenLogin logs in with the next l73u seed and runs the dialect's
 // version command.
+// tokenLogin logs in with the next l73u seed and runs the dialect's
+// version command, bounded: a device that accepts the exec channel and never
+// answers (NX-OS does) ends the command at 150s, not the run. ok means the
+// token authenticated; e.versionWhy says why the version was not read.
 func (e *l73Env) tokenLogin() (user string, ok bool, took time.Duration, out string, err error) {
 	e.tokenN++
 	user = fmt.Sprintf("l73u%02d", e.tokenN)
 	secret := e.l.mustLogin(e.t, user)
-	start := time.Now()
-	outs, err := e.l.login(user, secret, e.d.VersionCmd)
-	if len(outs) > 0 {
-		out = strings.TrimSpace(outs[0])
+	dial := e.d.LoginDial
+	if dial == 0 {
+		dial = 45 * time.Second
 	}
-	return user, err == nil && len(outs) == 1, time.Since(start), out, err
+	start := time.Now()
+	outs, lerr := e.l.loginWithinDial(e.l.p.addr+":22", user, secret, dial, 150*time.Second, e.d.VersionCmd)
+	ok, out, e.versionWhy = l73TokenResult(outs, lerr)
+	if !ok {
+		err = lerr
+		if err == nil {
+			err = errors.New("no output from the token session")
+		}
+	}
+	return user, ok, time.Since(start), out, err
+}
+
+// l73TokenResult reads a bounded token login: the token authenticated when
+// the command ran or when only its output was not observed (a *notObserved);
+// any other error is a login that did not happen. unseen is why the version
+// was not read, "" when it was.
+func l73TokenResult(outs []string, err error) (ok bool, out, unseen string) {
+	var no *notObserved
+	switch {
+	case err != nil && !errors.As(err, &no):
+		return false, "", ""
+	case err != nil:
+		return true, "", err.Error()
+	case len(outs) != 1:
+		return false, "", ""
+	}
+	out = strings.TrimSpace(outs[0])
+	if out == "" {
+		return true, "", "the exec returned no output"
+	}
+	return true, out, ""
 }
 
 // breakglassLogin is a login port49 holds no token for: it lands only if
@@ -1536,10 +1570,14 @@ func (e *l73Env) cellA() {
 		e.invalidDeviceLogs()
 		e.t.FailNow()
 	}
-	if !strings.Contains(version, e.d.VersionHas) {
-		e.t.Fatalf("INVALID: the device reports %q, not the image under test (%s)", version, e.l.p.version)
+	if version == "" && e.versionWhy != "" {
+		e.facts = append(e.facts, "version not observed over the token session ("+e.versionWhy+"); the login itself authenticated and port49d redeemed its token")
+	} else {
+		if !strings.Contains(version, e.d.VersionHas) {
+			e.t.Fatalf("INVALID: the device reports %q, not the image under test (%s)", version, e.l.p.version)
+		}
+		e.facts = append(e.facts, "the device reports "+version)
 	}
-	e.facts = append(e.facts, "the device reports "+version)
 	if e.d.HandshakeTimeout > 0 {
 		e.facts = append(e.facts, fmt.Sprintf("port49d ran with tls_listener.handshake_timeout %s (the default is 5s) for this platform, because the image's first "+
 			"run sent its client flight 5.00 s after the server's flight, as the 5s timeout fired; each connection line records \"device's next data N s after the "+
