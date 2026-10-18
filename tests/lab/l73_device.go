@@ -451,3 +451,24 @@ func l73Grade(loginOK, redeemed, reasonProven bool) string {
 		return "login failed, cause unproven"
 	}
 }
+
+// l73ControlInvalid is the INVALID message for a control login that did not
+// pass: the cause, the hint, the daemon's records and the TLS summary the
+// cell would have printed. The summary goes through the note's leak gate; if
+// it names a leak, only the leak's name is printed.
+func l73ControlInvalid(errText, hint, records, obs string) string {
+	summary := "summary: " + hideKeys(obs)
+	if leaks := l73SummaryLeaks(obs); len(leaks) > 0 {
+		summary = "summary withheld: " + strings.Join(leaks, ", ")
+	}
+	return fmt.Sprintf("INVALID: the control login over TLS did not pass (%s)%s; records: %s; %s", errText, hint, records, summary)
+}
+
+var l73PEMDropRe = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`)
+
+// l73DropPEM removes every PEM block, certificate or key, whole: a public
+// certificate's fields are readable above the block, and a key must never
+// reach a file.
+func l73DropPEM(s string) string {
+	return l73PEMDropRe.ReplaceAllString(s, "<PEM block dropped>")
+}

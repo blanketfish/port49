@@ -340,8 +340,26 @@ func (e *l73Env) opMark(c *cliConn) string {
 func (e *l73Env) invalidScreen(name, out string) {
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
-			[]byte(l71MaskExchange(l73ScrubLog(hideKeys(out)))), 0o600)
+			[]byte(l71MaskExchange(l73ScrubLog(hideKeys(l73DropPEM(out))))), 0o600)
 	}
+}
+
+// invalidDeviceLogs keeps the dialect's INVALID commands' output (the device's
+// own account of a refused handshake) in PORT49_L73_INVALID_DIR, scrubbed.
+func (e *l73Env) invalidDeviceLogs() {
+	if os.Getenv("PORT49_L73_INVALID_DIR") == "" || len(e.d.InvalidCmds) == 0 {
+		return
+	}
+	e.cli(func(c *cliConn) error {
+		for i, cmd := range e.d.InvalidCmds {
+			out, err := c.sendExpect(cmd, 60*time.Second, e.opMark(c))
+			if err != nil {
+				out += "\n(read failed: " + l73Err(err) + ")"
+			}
+			e.invalidScreen(fmt.Sprintf("device-%d", i+1), "$ "+cmd+"\n"+out)
+		}
+		return nil
+	})
 }
 
 // daemon restarts port49d on the cell's config and waits for its RFC 9887
@@ -1134,7 +1152,11 @@ func (e *l73Env) cellA() {
 		if e.pki.Alg == "ecdsa" {
 			hint = "; if the record says handshake_failed, re-run with PORT49_L73_ALG=rsa and record why in the commit"
 		}
-		e.t.Fatalf("INVALID: the control login over TLS did not pass (%s)%s; records: %s", l73Err(err), hint, e.quote(recs))
+		// Errorf first: the CLI read below Fatals if the break-glass login fails,
+		// and the INVALID's cause must be in the output either way.
+		e.t.Error(l73ControlInvalid(l73Err(err), hint, e.quote(recs), obs))
+		e.invalidDeviceLogs()
+		e.t.FailNow()
 	}
 	if !strings.Contains(version, e.d.VersionHas) {
 		e.t.Fatalf("INVALID: the device reports %q, not the image under test (%s)", version, e.l.p.version)

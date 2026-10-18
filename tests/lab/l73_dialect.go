@@ -11,22 +11,23 @@ import (
 // l73Dialect is how TestL73 asks one platform's CLI about its RFC 9887
 // client, points the client at port49 and puts it back, and reads it.
 type l73Dialect struct {
-	Family     string // junos, iosxe, nxos, eos, xr: which line builders apply
-	Vendor     string // the note's name for the OS
-	Probe      string // the l71Probes entry whose question the first ask is
-	Enter      []string
-	Cleanup    []string
-	CfgMark    string // what every configuration prompt contains
-	Asks       []l73Ask
-	HelpOnly   bool
-	VersionCmd string // run after each token login
-	VersionHas string // what its output holds on the image under test
-	Attrs      string // port49d's session_attributes here; "" keeps the lab file's
-	Enrol      string // cell e's "configured" wording
-	Fallback   string // the startup config's login method list (cell i)
-	Revocation string // the run facts' sentence on device-side revocation
-	LogCmd     string
-	ShowCmds   []string
+	Family      string // junos, iosxe, nxos, eos, xr: which line builders apply
+	Vendor      string // the note's name for the OS
+	Probe       string // the l71Probes entry whose question the first ask is
+	Enter       []string
+	Cleanup     []string
+	CfgMark     string // what every configuration prompt contains
+	Asks        []l73Ask
+	HelpOnly    bool
+	VersionCmd  string // run after each token login
+	VersionHas  string // what its output holds on the image under test
+	Attrs       string // port49d's session_attributes here; "" keeps the lab file's
+	Enrol       string // cell e's "configured" wording
+	Fallback    string // the startup config's login method list (cell i)
+	Revocation  string // the run facts' sentence on device-side revocation
+	LogCmd      string
+	ShowCmds    []string
+	InvalidCmds []string // read into PORT49_L73_INVALID_DIR when the control login fails
 }
 
 var l73JunosDialect = l73Dialect{
@@ -38,6 +39,8 @@ var l73JunosDialect = l73Dialect{
 	Fallback:   "`authentication-order [ tacplus password ]` (configs/vjunos-startup.conf)",
 	Revocation: "`revocation-check disable` on its CA profiles",
 	LogCmd:     `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,
+	InvalidCmds: []string{`show log messages | match "tacplus|tls|ssl|pki" | last 60`,
+		"show security pki local-certificate detail"},
 	ShowCmds: []string{"show configuration system tacplus-server | display set",
 		"show configuration system accounting | display set", "show configuration security pki | display set",
 		"show security pki local-certificate certificate-id " + l73CertID + " detail"},

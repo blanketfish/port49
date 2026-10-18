@@ -322,3 +322,31 @@ func TestL73ScrubLog(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestL73ControlInvalidKeepsSummary(t *testing.T) {
+	got := l73ControlInvalid("exit status 1", "; hint", "(no record)", "the device's first connection went to port 300 (1 connection)")
+	for _, want := range []string{"INVALID: the control login over TLS did not pass (exit status 1); hint", "records: (no record)",
+		"the device's first connection went to port 300"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	leaky := l73ControlInvalid("e", "", "(no record)", `x {"session_id":"`+strings.Repeat("ab", 16)+`"}`)
+	if strings.Contains(leaky, strings.Repeat("ab", 16)) || !strings.Contains(leaky, "summary withheld: a long hex run") {
+		t.Fatal(leaky)
+	}
+}
+
+func TestL73DropPEM(t *testing.T) {
+	in := "Issuer: CN=L73 Lab\n-----BEGIN CERTIFICATE-----\nMIIBabc\n-----END CERTIFICATE-----\n" +
+		"-----BEGIN EC PRIVATE KEY-----\nMHcCAQ\n-----END EC PRIVATE KEY-----\nafter\n"
+	got := l73DropPEM(in)
+	if strings.Contains(got, "MIIB") || strings.Contains(got, "MHcC") || strings.Contains(got, "-----") ||
+		!strings.Contains(got, "Issuer: CN=L73 Lab") || !strings.Contains(got, "after") || !strings.Contains(got, "<PEM block dropped>") {
+		t.Fatal(got)
+	}
+	// An unterminated block drops through the end: nothing after BEGIN survives.
+	if got := l73DropPEM("a\n-----BEGIN CERTIFICATE-----\nMIIB\n"); strings.Contains(got, "MIIB") {
+		t.Fatal(got)
+	}
+}
