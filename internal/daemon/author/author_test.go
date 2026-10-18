@@ -1491,3 +1491,193 @@ func TestAStandingMarkDeniesAnUnrevokedContext(t *testing.T) {
 		t.Fatalf("a lifted mark still denied: %v", lastRecord(t, log))
 	}
 }
+
+// authWith is a handler whose lab answers a session authorization with attrs.
+func authWith(t *testing.T, ceiling uint8, attrs ...string) (*Handler, *memory.Store, store.ContextKey, *bytes.Buffer) {
+	t.Helper()
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: ceiling, RefreshedAt: time.Now()}, time.Hour)
+	log := &bytes.Buffer{}
+	h := New(st, &Lab{SessionAttributes: attrs}, decision.NewJSONLines(log),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+	return h, st, key, log
+}
+
+// A session authorization above the context's level is permitted (spec §5.2).
+// SR Linux 26.7.2 was observed sending its session authorization at a priv_lvl
+// above its login START's (L76 run 2026-10-18); the reply's level is policy's,
+// so the request is not compared. The context afterwards holds the reply's
+// level, clamped to the ceiling, and never the request's: each case asks at 15
+// from a context at 1, and a later command at 15 is permitted only where the
+// reply granted it.
+func TestSessionAuthorizationAboveTheContextLevelIsPermitted(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ceiling     uint8
+		attrs       []string
+		sess        string
+		want        uint8
+		commandPass bool
+	}{
+		{"reply 15", 15, []string{"priv-lvl=15"}, "cmd=", 15, true},
+		{"reply 15 as cmd*", 15, []string{"priv-lvl=15"}, "cmd*", 15, true},
+		{"clamped to ceiling", 7, []string{"priv-lvl=15"}, "cmd=", 7, false},
+		{"reply 5", 15, []string{"priv-lvl=5"}, "cmd=", 5, false},
+		{"reply without priv-lvl", 15, []string{"idletime=30"}, "cmd=", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, key, log := authWith(t, tc.ceiling, tc.attrs...)
+			sess := req("alice", "vty0", "service=shell", tc.sess)
+			sess.PrivLvl = 15
+			resp := h.Handle(context.Background(), peer, sess)
+			rec := lastRecord(t, log)
+			if resp.Status != wire.AuthorStatusPassAdd || rec["verdict"] != "permit" || rec["event"] != "authorize_session" {
+				t.Fatalf("%+v %v", resp, rec)
+			}
+			c, err := st.GetContext(context.Background(), key)
+			if err != nil || c.PrivLvl != tc.want {
+				t.Fatalf("the context holds the reply's level (clamped), not the request's 15: want %d, got %+v %v", tc.want, c, err)
+			}
+			cmd := req("alice", "vty0", "service=shell", "cmd=show")
+			cmd.PrivLvl = 15
+			resp = h.Handle(context.Background(), peer, cmd)
+			if tc.commandPass {
+				if resp.Status != wire.AuthorStatusPassAdd {
+					t.Fatalf("a command at the granted 15 must be permitted: %+v", resp)
+				}
+			} else if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "privilege_exceeded" {
+				t.Fatalf("a command at 15 above the granted %d must be privilege_exceeded: %+v %v", tc.want, resp, lastRecord(t, log))
+			}
+		})
+	}
+}
+
+// The other checks still run on a session authorization above the context's
+// level (spec §5.2): the ones before the moved line and the one after it.
+func TestSessionAuthorizationAboveTheContextLevelStillMeetsTheOtherChecks(t *testing.T) {
+	h, st, log := setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, RevokedAt: time.Now(), RefreshedAt: time.Now()}, time.Hour)
+	sess := req("alice", "vty0", "service=shell", "cmd=")
+	sess.PrivLvl = 15
+	resp := h.Handle(context.Background(), peer, sess)
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "credential_revoked" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+
+	h, st, log = setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, RefreshedAt: time.Now()}, time.Hour)
+	sess = req("alice", "vty0", "service=bogus", "cmd=")
+	sess.PrivLvl = 15
+	resp = h.Handle(context.Background(), peer, sess)
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "service_unsupported" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+// session.held_privilege is the context's level when the request arrived, on
+// every authorization record whose context was read, permits and denials, and
+// present when it is 0. session.privilege stays the request header's level.
+// No context was read on context_missing, so the field is absent there.
+func TestHeldPrivilegeIsRecordedOnEveryAuthorizationRecordWithAContext(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		held   uint8
+		lvl    uint8
+		args   []string
+		event  string
+		reason string
+	}{
+		{"session permit", 1, 15, []string{"service=shell", "cmd="}, "authorize_session", "context_matched"},
+		{"session permit held 0", 0, 15, []string{"service=shell", "cmd="}, "authorize_session", "context_matched"},
+		{"session deny", 1, 15, []string{"service=bogus", "cmd="}, "authorize_session", "service_unsupported"},
+		{"command permit", 15, 1, []string{"service=shell", "cmd=show"}, "authorize_command", "permit_dominates"},
+		{"command permit held 0", 0, 0, []string{"service=shell", "cmd=show"}, "authorize_command", "permit_dominates"},
+		{"command deny", 1, 15, []string{"service=shell", "cmd=show"}, "authorize_command", "privilege_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, log := setup(t)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: tc.held, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+			r := req("alice", "vty0", tc.args...)
+			r.PrivLvl = tc.lvl
+			h.Handle(context.Background(), peer, r)
+			rec := lastRecord(t, log)
+			if rec["event"] != tc.event || rec["reason"] != tc.reason {
+				t.Fatalf("the case does not exercise what it names: %v", rec)
+			}
+			sess := rec["session"].(map[string]any)
+			got, ok := sess["held_privilege"]
+			if !ok || got != float64(tc.held) {
+				t.Fatalf("session.held_privilege: want %d present, got %v (present=%v) in %v", tc.held, got, ok, sess)
+			}
+			if sess["privilege"] != float64(tc.lvl) {
+				t.Fatalf("session.privilege must stay the request header's level %d: %v", tc.lvl, sess)
+			}
+			if _, ok := rec["request"].(map[string]any)["priv_lvl"]; ok {
+				t.Fatalf("request.priv_lvl duplicated session.privilege and is not recorded: %v", rec["request"])
+			}
+		})
+	}
+
+	t.Run("no context", func(t *testing.T) {
+		h, _, log := setup(t)
+		h.Handle(context.Background(), peer, req("nobody", "vty0", "service=shell", "cmd="))
+		rec := lastRecord(t, log)
+		if rec["reason"] != "context_missing" {
+			t.Fatalf("%v", rec)
+		}
+		if _, ok := rec["session"].(map[string]any)["held_privilege"]; ok {
+			t.Fatalf("no context was read, so held_privilege is absent: %v", rec["session"])
+		}
+	})
+}
+
+// A request is a session only when its final cmd is empty, it carries no
+// cmd-arg and at most one cmd attribute (spec §5.2). `cmd*`, `cmd=` and a bare
+// `cmd` alone are sessions; a command hidden behind an empty final cmd is
+// command authorization, where the privilege check applies and an empty command
+// matches nothing.
+func TestSessionShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		session bool
+	}{
+		{"cmd=", []string{"service=shell", "cmd="}, true},
+		{"cmd*", []string{"service=shell", "cmd*"}, true},
+		{"bare cmd", []string{"service=shell", "cmd"}, true},
+		{"cmd= with cmd-arg", []string{"service=shell", "cmd=", "cmd-arg=reload"}, false},
+		{"cmd=reload then cmd=", []string{"service=shell", "cmd=reload", "cmd="}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, key, log := authWith(t, 15, "priv-lvl=15")
+			r := req("alice", "vty0", tc.args...)
+			r.PrivLvl = 15
+			resp := h.Handle(context.Background(), peer, r)
+			rec := lastRecord(t, log)
+			c, _ := st.GetContext(context.Background(), key)
+			if tc.session {
+				if rec["event"] != "authorize_session" || resp.Status != wire.AuthorStatusPassAdd || c.PrivLvl != 15 {
+					t.Fatalf("%+v %v %+v", resp, rec, c)
+				}
+				return
+			}
+			if rec["event"] != "authorize_command" || rec["reason"] != "privilege_exceeded" || resp.Status != wire.AuthorStatusFail || c.PrivLvl != 1 {
+				t.Fatalf("a command shape above the context is privilege_exceeded and raises nothing: %+v %v %+v", resp, rec, c)
+			}
+			// At a level the context holds it still gets no session reply:
+			// an empty command matches nothing.
+			r.PrivLvl = 1
+			resp = h.Handle(context.Background(), peer, r)
+			rec = lastRecord(t, log)
+			c, _ = st.GetContext(context.Background(), key)
+			if rec["event"] != "authorize_command" || rec["reason"] != "no_rule_matched" || resp.Status != wire.AuthorStatusFail || len(resp.Args) != 0 || c.PrivLvl != 1 {
+				t.Fatalf("%+v %v %+v", resp, rec, c)
+			}
+		})
+	}
+}

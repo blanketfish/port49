@@ -202,8 +202,34 @@ func ParseArgs(args [][]byte) (kv map[string]string, cmd string, cmdArgs []strin
 	return kv, cmd, cmdArgs, raw
 }
 
+// isSession reports whether a request is a session authorization (spec §5.2):
+// its final cmd is empty, it carries no cmd-arg, and it carries at most one cmd
+// attribute. `cmd*`, `cmd=` and a bare `cmd` alone each qualify. Anything else
+// with an empty final cmd (`cmd=` with a `cmd-arg`, `cmd=reload` then `cmd=`)
+// carries a command the empty cmd would hide, and is command authorization.
+func isSession(cmd string, raw []string) bool {
+	if cmd != "" {
+		return false
+	}
+	cmds := 0
+	for _, a := range raw {
+		k := a
+		if i := strings.IndexAny(a, "=*"); i >= 0 {
+			k = a[:i]
+		}
+		switch k {
+		case "cmd-arg":
+			return false
+		case "cmd":
+			cmds++
+		}
+	}
+	return cmds <= 1
+}
+
 // Vector is the command vector authorization and accounting agree on: the
-// command followed by its arguments, or nil for a session request (cmd == "").
+// command followed by its arguments, or nil when cmd is empty: a session request,
+// or a command-shaped request whose final cmd is empty (spec §5.2).
 func Vector(cmd string, cmdArgs []string) []string {
 	if cmd == "" {
 		return nil
@@ -219,7 +245,8 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		Device:  peer.Device(),
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
-	if cmd == "" {
+	session := isSession(cmd, raw)
+	if session {
 		rec.Event = decision.EventAuthorizeSession
 	}
 
@@ -260,6 +287,10 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")
 	}
 	rec.Session.CtxID = c.CtxID
+	// The level held when this request arrived, before the session permit
+	// below can raise it (spec §5.7).
+	held := c.PrivLvl
+	rec.Session.HeldPrivilege = &held
 	rec.Principal = c.Principal
 
 	// Spec §5.3, in order. Each denial says what to do next rather than what
@@ -297,7 +328,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	if h.stalenessCeiling > 0 && !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
 		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable or cannot verify your directory membership")
 	}
-	if req.PrivLvl > c.PrivLvl {
+	// Command authorization only (spec §5.2, §5.3). The level a session reply
+	// grants is policy's answer, and a device may ask for its session above
+	// the level its login START carried: SR Linux 26.7.2 was observed to (L76 run 2026-10-18, results note pending), and denying it
+	// here failed the whole login (L76 run 2026-10-18). The session permit
+	// raises ctx.privilege from policy's reply below, never from this field.
+	if !session && req.PrivLvl > c.PrivLvl {
 		return h.deny(rec, decision.PrivilegeExceeded, "port49: request is above the session's privilege level")
 	}
 
@@ -315,7 +351,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 
 	var d Decision
 	ar := Request{Context: c, Device: peer, Raw: raw, Vector: vector}
-	if cmd == "" {
+	if session {
 		d = h.authz.Session(ctx, ar)
 	} else {
 		d = h.authz.Command(ctx, ar)
@@ -373,7 +409,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	//
 	// SetPrivilege, never PutContext, and for the reason the extension below
 	// gives: `c` was read at the top of this request.
-	if cmd == "" {
+	if session {
 		if level, _, ok := engine.GrantedPrivLvl(d.Attributes); ok {
 			// Clamped to the ceiling the token was minted with, the same bound
 			// the enable path refuses above (`ceiling_exceeded`, spec §7).

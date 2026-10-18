@@ -62,6 +62,11 @@ func (l *Lab) Command(_ context.Context, r Request) Decision {
 	case l.Fault.Is(FaultCommandFail):
 		return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: denied by lab fault command_fail"}
 	}
+	// An empty command is not a command authorization, and the lab must not
+	// permit it: the engine denies it no_rule_matched (spec §5.2).
+	if len(r.Vector) == 0 || strings.TrimSpace(r.Vector[0]) == "" {
+		return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: no command in the request"}
+	}
 	line := strings.Join(r.Vector, " ")
 	for _, p := range l.DenyPrefixes {
 		// A denial carries no attributes on purpose: its payload is the
