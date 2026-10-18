@@ -264,14 +264,22 @@ func Start(t testing.TB, o Options) *Server {
 	}
 	// A port picked first, not bound as port 0: the member lists its client
 	// URL as advertised, and Members dials that (plan 11a, R21).
+	// Another process can take the port before the member binds it; as
+	// StartCluster does, try again on a new one.
+	scheme := "http://"
 	if o.TLS {
-		spec.client = "https://" + freePort(t)
-	} else {
-		spec.client = "http://" + freePort(t)
+		scheme = "https://"
 	}
-	e, err := member(spec)
-	if err != nil {
-		t.Fatal(err)
+	var e *embed.Etcd
+	for deadline := time.Now().Add(clusterRetryFor); ; {
+		spec.client = scheme + freePort(t)
+		var err error
+		if e, err = member(spec); err == nil {
+			break
+		} else if !strings.Contains(err.Error(), "address already in use") || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	s.e = e
 	t.Cleanup(func() { // a restore replaces s.e; a failed one leaves it nil
@@ -279,10 +287,6 @@ func Start(t testing.TB, o Options) *Server {
 			s.e.Close()
 		}
 	})
-	scheme := "http://"
-	if o.TLS {
-		scheme = "https://"
-	}
 	s.Endpoint = scheme + e.Clients[0].Addr().String()
 	s.spec = spec
 	s.spec.client = s.Endpoint

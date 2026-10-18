@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/admin"
 )
@@ -33,7 +32,7 @@ func storeStatusCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	resp, err := askAdmin(*socket, admin.Request{Op: "store_status"}, 10*time.Second)
+	resp, err := askAdmin(*socket, admin.Request{Op: "store_status"}, admin.StatusWait)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 store status:", err)
 		return 1

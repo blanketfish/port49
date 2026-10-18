@@ -84,6 +84,15 @@ const RevokeWait = 2*OpTimeout + PersistTimeout + answerMargin
 // ListWait is RevokeWait for a list, which takes no turn.
 const ListWait = OpTimeout + answerMargin
 
+// StatusOpTimeout bounds a store_status: its reads run at once, each store's
+// Ping beside its member count, which is a member list and then a status
+// read, so it takes about two call_timeouts, and call_timeout is at most 5s.
+const StatusOpTimeout = 10 * time.Second
+
+// StatusWait is how long a store_status's connection is held open, and how
+// long `port49 store status` waits: the op's bound and the answer.
+const StatusWait = StatusOpTimeout + answerMargin
+
 // Response is the one line port49d answers.
 type Response struct {
 	Error   string           `json:"error,omitempty"`
@@ -262,7 +271,7 @@ func (s *Server) handle(c net.Conn) {
 		req.body = io.MultiReader(dec.Buffered(), c)
 	}
 	if req.Op == "revoke" || req.Op == "revocations" || req.Op == "directory_forget" ||
-		slices.Contains(signInOps, req.Op) && !isImport {
+		req.Op == "store_status" || slices.Contains(signInOps, req.Op) && !isImport {
 		_ = c.SetDeadline(time.Now().Add(s.connTimeout(req.Op)))
 		go func() {
 			defer cancel()
@@ -281,6 +290,9 @@ func (s *Server) handle(c net.Conn) {
 // connection is held open: RevokeWait for a revoke, ListWait otherwise, at
 // the Server's OpTimeout.
 func (s *Server) connTimeout(op string) time.Duration {
+	if op == "store_status" {
+		return StatusWait
+	}
 	if op != "revoke" {
 		return s.opTimeout() + answerMargin
 	}
@@ -367,7 +379,7 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 		if s.StoreStatus == nil {
 			return Response{Error: "this process reports no stores"}
 		}
-		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())
+		ctx, cancel := context.WithTimeout(ctx, StatusOpTimeout)
 		defer cancel()
 		text, degraded, err := s.StoreStatus(ctx)
 		if err != nil {

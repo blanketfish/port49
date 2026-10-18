@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
@@ -56,7 +57,7 @@ func (s roleStatus) line() string {
 	if s.pending > 0 {
 		l += fmt.Sprintf("  %d logouts pending", s.pending)
 	}
-	if !s.reachable && s.why != "" {
+	if s.why != "" && (!s.reachable || s.membersErr) {
 		l += "\n           " + printsafe.Line(s.why, 300)
 	}
 	return l
@@ -96,7 +97,16 @@ func (s *storeStatus) answer(ctx context.Context) (string, bool, error) {
 		return roleStatus{role: "directory", backend: config.BackendMemory}.line() + "\n" +
 			roleStatus{role: "session", shares: true}.line(), false, nil
 	}
+	// Both stores at once, so a partition that takes out both costs the
+	// larger call_timeout's reads, not the sum.
+	var ss roleStatus
+	var wg sync.WaitGroup
+	if !s.shared {
+		wg.Add(1)
+		go func() { defer wg.Done(); ss = s.read(ctx, "session", s.session, s.sessTimeout) }()
+	}
 	d := s.read(ctx, "directory", s.dir.get(), s.dirTimeout)
+	wg.Wait()
 	d.cache = true
 	d.age, d.aged = s.fresh.Age()
 	d.snapshot = s.fresh.Snapshot()
@@ -107,13 +117,12 @@ func (s *storeStatus) answer(ctx context.Context) (string, bool, error) {
 	if s.shared {
 		lines = append(lines, roleStatus{role: "session", shares: true}.line())
 	} else {
-		ss := s.read(ctx, "session", s.session, s.sessTimeout)
 		lines, degraded = append(lines, ss.line()), degraded || !ss.reachable
 	}
 	return strings.Join(lines, "\n"), degraded, nil
 }
 
-// read is role's line from h: a linearizable read for reachability, then
+// read is role's line from h: a linearizable read for reachability beside
 // the members.
 func (s *storeStatus) read(ctx context.Context, role string, h *etcdstore.Store, timeout time.Duration) roleStatus {
 	r := roleStatus{role: role, backend: config.BackendEtcd}
@@ -121,15 +130,28 @@ func (s *storeStatus) read(ctx context.Context, role string, h *etcdstore.Store,
 		r.membersErr, r.why = true, errNoDirectory.Error()
 		return r
 	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	err := h.Ping(cctx)
-	cancel()
-	if r.reachable = err == nil; err != nil {
-		r.why = err.Error()
-	}
-	mctx, mcancel := context.WithTimeout(ctx, 4*timeout)
-	a, l, merr := h.Members(mctx, timeout)
+	// The ping and the member count at once: the count is a member list and
+	// then a status read, each within timeout.
+	var perr, merr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		perr = h.Ping(cctx)
+	}()
+	mctx, mcancel := context.WithTimeout(ctx, 2*timeout)
+	r.answering, r.listed, merr = h.Members(mctx, timeout)
 	mcancel()
-	r.answering, r.listed, r.membersErr = a, l, merr != nil
+	wg.Wait()
+	r.membersErr = merr != nil
+	r.reachable = perr == nil
+	switch {
+	case perr != nil:
+		r.why = perr.Error()
+	case merr != nil:
+		r.why = merr.Error()
+	}
 	return r
 }

@@ -29,6 +29,23 @@ func serveStatus(t *testing.T, text string, degraded bool) string {
 	return p
 }
 
+// A process that reports no stores answers an error: exit 1 and the reason.
+func TestStoreStatusExitsOneOnAnErrorAnswer(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.sock")
+	ln, err := admin.Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go (&admin.Server{Now: time.Now}).Serve(ctx, ln)
+	var out, errb bytes.Buffer
+	if code := run([]string{"store", "status", "--socket", p}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "this process reports no stores") || out.Len() != 0 {
+		t.Fatalf("exit %d, out %q, err %q", code, out.String(), errb.String())
+	}
+}
+
 func TestStoreStatusExitsByWhatItFound(t *testing.T) {
 	ok := "directory  etcd    3/3 members  reachable  cache 0.4s\nsession    shares the directory store"
 	var out, errb bytes.Buffer

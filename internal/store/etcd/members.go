@@ -17,7 +17,9 @@ import (
 func (s *Store) Members(ctx context.Context, per time.Duration) (answering, listed int, err error) {
 	// Serializable: the list needs no quorum, so with the quorum lost the
 	// count still reads 1/3, not an error (R21).
-	resp, err := s.ctx.MemberList(ctx, clientv3.WithSerializable())
+	lctx, lcancel := context.WithTimeout(ctx, per)
+	resp, err := s.ctx.MemberList(lctx, clientv3.WithSerializable())
+	lcancel()
 	if err != nil {
 		return 0, 0, unavailable(err)
 	}
