@@ -680,7 +680,7 @@ func TestL73KeepLinesKeepsOnlyTheNamedWords(t *testing.T) {
 // The finding says what was seen: no "does not support TLS", and the
 // `tacacs` object is named absent only when the listing shows no such word.
 func TestL73CRFindingStatesExactlyWhatWasSeen(t *testing.T) {
-	got := l73CRFinding("17.18.02", "tacacs-server host <addr>", []string{"aaa  Authentication", "tacacs-server  Modify TACACS query parameters"})
+	got := l73CRFinding("IOL-XE 17.18.02", "tacacs-server host <addr>", []string{"aaa  Authentication", "tacacs-server  Modify TACACS query parameters"})
 	for _, want := range []string{"IOL-XE 17.18.02 offers no RFC 9887 client in its configuration help", "`tacacs-server`", "no `tacacs` object", "lists `<cr>` only"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
@@ -689,11 +689,11 @@ func TestL73CRFindingStatesExactlyWhatWasSeen(t *testing.T) {
 	if strings.Contains(got, "support") {
 		t.Errorf("claims more than was seen: %q", got)
 	}
-	with := l73CRFinding("17.18.02", "tacacs-server host <addr>", []string{"tacacs  Configure TACACS+ server"})
+	with := l73CRFinding("IOL-XE 17.18.02", "tacacs-server host <addr>", []string{"tacacs  Configure TACACS+ server"})
 	if strings.Contains(with, "no `tacacs` object") {
 		t.Errorf("a listed tacacs object was called absent: %q", with)
 	}
-	if none := l73CRFinding("17.18.02", "tacacs-server host <addr>", nil); strings.Contains(none, "no `tacacs` object") {
+	if none := l73CRFinding("IOL-XE 17.18.02", "tacacs-server host <addr>", nil); strings.Contains(none, "no `tacacs` object") {
 		t.Errorf("an unasked listing was read as absence: %q", none)
 	}
 }

@@ -781,10 +781,10 @@ func l73KeepLines(help string, prefixes []string) []string {
 }
 
 // l73CRFinding is the negative finding for a host help that lists `<cr>`
-// only: what was seen, and no more. cfgKept is the kept lines of the
+// only, for the image named by version ("IOL-XE 17.18.02"): what was seen, and no more. cfgKept is the kept lines of the
 // config-mode listing (nil if it was not asked).
 func l73CRFinding(version, hostAsk string, cfgKept []string) string {
-	s := "IOL-XE " + version + " offers no RFC 9887 client in its configuration help: "
+	s := version + " offers no RFC 9887 client in its configuration help: "
 	if cfgKept != nil {
 		var words []string
 		hasObject := false
