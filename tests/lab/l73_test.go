@@ -1238,13 +1238,9 @@ func (e *l73Env) cellD() {
 		conns := stop()
 		e.reached(v.id, conns)
 		recs := e.l.recordsSince(off)
-		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", ""))
-		switch verdict {
-		case "accepted":
+		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", l73DeviceAborted))
+		if verdict == "accepted" {
 			verdict = "**accepted**"
-		case "refused":
-			// Classify's catch-all; port49 logs no finer cause, and under TLS 1.3 the device's alert is encrypted.
-			verdict = "login failed and port49 recorded handshake_failed (it logs no finer cause)"
 		}
 		parts = append(parts, fmt.Sprintf("%s: %s (login as %s ok %v in %s, %s; %s; records: %s)", v.what, verdict, user, ok,
 			took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start), e.quote(recs)))
