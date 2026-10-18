@@ -101,22 +101,37 @@ var l73NXOSAsks = []l73Ask{
 	{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
 }
 
-// EOS: the client keyword is ssl-profile (L71 looked for it and for tls);
-// the profile itself is a submode the help cannot be asked about.
+// The scratch SSL profile the EOS asks enter, and how they leave it.
+var (
+	l73EOSProbeIn  = []string{"management security", "ssl profile l73x"}
+	l73EOSProbeOut = []string{"exit", "no ssl profile l73x", "exit"}
+)
+
+// EOS 4.36.3M (Task 14 attempts 1 to 3, the image's own help): the host line
+// takes a bare `tls`, after which only port, single-connection, timeout and
+// vrf are offered (no key); the SSL profile is global, `tacacs-server tls
+// ssl-profile <name>`. The profile is a submode, so its asks enter a scratch
+// profile and leave by deleting it. The asks run before anything is typed:
+// a word the image does not list makes the run INVALID.
 var l73EOSDialect = l73Dialect{
 	Family: "eos", Vendor: "EOS", Probe: "arista_ceos",
 	Enter: []string{"configure"}, Cleanup: []string{"end"}, CfgMark: "(config",
 	Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"},
-		Need: []string{"tls", "port", "single-connection", "key"}, Want: []string{"ssl-profile"}},
+		Need: []string{"tls", "port", "single-connection", "key"}},
+		{Ask: "tacacs-server host 192.0.2.71 tls ", Control: []string{"port", "timeout", "vrf"}, Need: []string{"port", "single-connection"}},
+		{Ask: "tacacs-server ", Control: []string{"host", "key", "timeout"}, Need: []string{"host", "tls"}},
+		{Ask: "tacacs-server tls ", Control: []string{"ssl-profile"}, Need: []string{"ssl-profile"}},
+		{Ask: "certificate " + l73CertID + ".crt ", Control: []string{"key"}, Need: []string{"key"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
+		{Ask: "chain certificate ", Control: []string{"WORD"}, Need: []string{"WORD"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
+		{Ask: "trust certificate ", Control: []string{"WORD"}, Need: []string{"WORD"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
 		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
 	VersionCmd: "show version | include Software image version", VersionHas: "4.36.3M",
 	Enrol: "EOS's documented enrolment (`security pki key generate`, `security pki certificate generate signing-request`, " +
 		"the request read off the screen, the lab CA's answer copied to `certificate:`; the SSL profile names the " +
 		"intermediate as its `chain certificate`)",
-	Fallback:   "`aaa authentication login default group port49 local` (configs/eos-startup.cfg)",
-	Revocation: "no CRL in its SSL profile",
-	LogCmd:     "show logging | include TACACS|TLS|SSL|AAA",
-	// 4.36.3M's help lists `tls` (not ssl-profile) after a host address (Task 14 attempt 1).
+	Fallback:       "`aaa authentication login default group port49 local` (configs/eos-startup.cfg)",
+	Revocation:     "no CRL in its SSL profile",
+	LogCmd:         "show logging | include TACACS|TLS|SSL|AAA",
 	DiagOpAsks:     []string{"show management security ssl profile ", "show management security ssl certificate ", "copy "},
 	DiagFilterAsks: []string{"tacacs-server "},
 	DiagFilter:     []string{"ssl", "profile", "tls"},
@@ -229,6 +244,9 @@ func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 		if family == "nxos" && has[l73HasNXOSSecure] {
 			out = append(out, "no tacacs-server secure tls")
 		}
+		if family == "eos" {
+			out = append(out, "no tacacs-server tls ssl-profile")
+		}
 		return append(out, "tacacs-server host "+l73Server+" key 0 "+labcreds.Key,
 			"aaa group server tacacs+ "+l73Group, "server "+l73Server, "exit")
 	}
@@ -322,27 +340,33 @@ func l73NXOSApply(d l73DeviceTLS, has map[string]bool) []string {
 // l73EOSProfile is the SSL profile the EOS host line names.
 const l73EOSProfile = "l73-tls"
 
+// l73EOSHost is one host line. A TLS host takes `tls` right after the
+// address and then only the options the image lists after it (no key, so a
+// TLS host carries none); a plain host keeps the order the first help lists.
 func l73EOSHost(addr string, tls bool, port int, single, secret bool) string {
 	line := "tacacs-server host " + addr
+	if tls {
+		line += " tls"
+	}
 	if single {
 		line += " single-connection"
 	}
 	if port != 0 {
 		line += " port " + strconv.Itoa(port)
 	}
-	if tls {
-		line += " ssl-profile " + l73EOSProfile
-	}
-	if secret {
+	if secret && !tls {
 		line += " key 0 " + labcreds.Key
 	}
 	return line
 }
 
+// l73EOSGlobalTLS is the global line that names the SSL profile.
+const l73EOSGlobalTLS = "tacacs-server tls ssl-profile " + l73EOSProfile
+
 // l73EOSApply starts from the startup config, as l73NXOSApply does.
 func l73EOSApply(d l73DeviceTLS) []string {
 	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + l73Server, "exit", "no tacacs-server host " + l73Server,
-		l73EOSHost(d.Server, true, d.Port, d.SingleConnection, d.Secret)}
+		l73EOSGlobalTLS, l73EOSHost(d.Server, true, d.Port, d.SingleConnection, d.Secret)}
 	if d.Second != "" {
 		out = append(out, l73EOSHost(d.Second, d.SecondTLS, d.SecondPort, false, d.Secret || !d.SecondTLS))
 	}
@@ -513,4 +537,55 @@ func l73HoldsAny(w string, subs []string) bool {
 		}
 	}
 	return len(subs) == 0
+}
+
+// l73EOSMissing is the typed lines of d's TACACS+ configuration that
+// `show running-config section tacacs` does not show: the global
+// ssl-profile line, and for each server a host line holding the words typed
+// for it (the running config may order them differently). Key words are
+// never compared and never named.
+func l73EOSMissing(shown string, d l73DeviceTLS) []string {
+	var missing []string
+	have := map[string]bool{}
+	var hosts [][]string
+	for _, ln := range strings.Split(strings.ReplaceAll(shown, "\r", ""), "\n") {
+		ln = strings.TrimSpace(ln)
+		have[ln] = true
+		if f := strings.Fields(ln); len(f) > 2 && f[0] == "tacacs-server" && f[1] == "host" {
+			hosts = append(hosts, f)
+		}
+	}
+	if !have[l73EOSGlobalTLS] {
+		missing = append(missing, l73EOSGlobalTLS)
+	}
+	type host struct {
+		addr string
+		line string
+	}
+	var typed []host
+	typed = append(typed, host{d.Server, l73EOSHost(d.Server, true, d.Port, d.SingleConnection, false)})
+	if d.Second != "" {
+		typed = append(typed, host{d.Second, l73EOSHost(d.Second, d.SecondTLS, d.SecondPort, false, false)})
+	}
+	for _, h := range typed {
+		ok := false
+		for _, f := range hosts {
+			if f[2] == h.addr && l73HasWords(f, strings.Fields(h.line)[3:]) {
+				ok = true
+			}
+		}
+		if !ok {
+			missing = append(missing, h.line)
+		}
+	}
+	return missing
+}
+
+func l73HasWords(have, want []string) bool {
+	for _, w := range want {
+		if !slices.Contains(have, w) {
+			return false
+		}
+	}
+	return true
 }

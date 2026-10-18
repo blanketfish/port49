@@ -85,6 +85,18 @@ func TestL73NXOSLines(t *testing.T) {
 		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
 	}
 	got = l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}, nil)
+	for _, ln := range got {
+		if strings.Contains(ln, "ssl-profile") && ln != "tacacs-server tls ssl-profile l73-tls" {
+			t.Errorf("ssl-profile typed on %q: the image's host line takes none", ln)
+		}
+	}
+	if !slices.Contains(l73CiscoRestoreAll("eos", nil), "no tacacs-server tls ssl-profile") {
+		t.Error("the undo leaves the global ssl-profile")
+	}
+	// A TLS host carries no key: the image lists none after `tls`.
+	if ln := l73EOSHost("172.100.100.1", true, 0, false, true); strings.Contains(ln, "key") {
+		t.Errorf("%q", ln)
+	}
 	if slices.Contains(got, "tacacs-server secure tls") || !slices.Contains(got, "tacacs-server host 172.100.100.2 key 0 "+labcreds.Key) ||
 		slices.Contains(got, "tacacs-server host 172.100.100.2 tls client-trustpoint l73-dev") {
 		t.Fatalf("%q", maskKey(strings.Join(got, "\n")))
@@ -95,7 +107,7 @@ func TestL73EOSLines(t *testing.T) {
 	got := l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
 	want := []string{
 		"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1",
-		"tacacs-server host 172.100.100.1 ssl-profile l73-tls",
+		"tacacs-server tls ssl-profile l73-tls", "tacacs-server host 172.100.100.1 tls",
 		"aaa group server tacacs+ port49", "server 172.100.100.1", "exit",
 	}
 	if !slices.Equal(got, want) {
@@ -103,7 +115,7 @@ func TestL73EOSLines(t *testing.T) {
 	}
 	got = l73CiscoLines("eos", nil, l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true,
 		Second: "172.100.100.2"}, map[string]bool{l73HasNXOSSecure: true})
-	for _, line := range []string{"tacacs-server host 172.100.100.1 single-connection port 300 ssl-profile l73-tls",
+	for _, line := range []string{"tacacs-server host 172.100.100.1 tls single-connection port 300",
 		"tacacs-server host 172.100.100.2 key 0 " + labcreds.Key, "server 172.100.100.2"} {
 		if !slices.Contains(got, line) {
 			t.Errorf("missing %q", maskKey(line))
@@ -334,5 +346,49 @@ func TestL73HelpWordsHoldingNarrowsToTheFilter(t *testing.T) {
 	}
 	if got := l73HelpWordsHolding(help, nil); len(got) != 5 {
 		t.Fatalf("%q", got)
+	}
+}
+
+// The EOS asks confirm every word the run types before it types anything:
+// the host line's tls, the global ssl-profile, and the profile submode's
+// key, chain and trust arguments.
+func TestL73EOSAsksConfirmWhatIsTyped(t *testing.T) {
+	need := map[string][]string{}
+	for _, a := range l73EOSDialect.Asks {
+		need[a.Ask] = a.Need
+		if a.Ask != "" && strings.HasPrefix(a.Ask, "tacacs-server") == false && !slices.Equal(a.In, l73EOSProbeIn) {
+			t.Errorf("%q is asked outside the scratch profile", a.Ask)
+		}
+	}
+	for ask, w := range map[string]string{
+		"tacacs-server host 192.0.2.71 ": "tls", "tacacs-server tls ": "ssl-profile", "tacacs-server ": "tls",
+		"certificate " + l73CertID + ".crt ": "key", "chain certificate ": "WORD", "trust certificate ": "WORD",
+	} {
+		if !slices.Contains(need[ask], w) {
+			t.Errorf("no ask at %q needs %q", ask, w)
+		}
+	}
+	if !slices.Contains(l73EOSProbeOut, "no ssl profile l73x") {
+		t.Error("the scratch profile is left behind")
+	}
+}
+
+func TestL73EOSMissing(t *testing.T) {
+	d := l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true, Second: "172.100.100.2"}
+	shown := "tacacs-server host 172.100.100.1 port 300 single-connection tls\r\n" +
+		"tacacs-server host 172.100.100.2 key 7 0123456789abcdef\r\n" +
+		"tacacs-server tls ssl-profile l73-tls\r\n"
+	if got := l73EOSMissing(shown, d); len(got) != 0 {
+		t.Fatalf("%q", got)
+	}
+	got := l73EOSMissing("tacacs-server host 172.100.100.1 port 300 single-connection\r\n", d)
+	want := []string{l73EOSGlobalTLS, "tacacs-server host 172.100.100.1 tls single-connection port 300", "tacacs-server host 172.100.100.2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	for _, g := range got {
+		if strings.Contains(g, labcreds.Key) || strings.Contains(g, " key ") {
+			t.Errorf("a key reached the message: %q", g)
+		}
 	}
 }

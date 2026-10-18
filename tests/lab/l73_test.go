@@ -653,7 +653,30 @@ func (e *l73Env) apply(d l73DeviceTLS) (string, error) {
 	}
 	lines := l73CiscoLines(e.d.Family, e.applied, d, e.x)
 	e.applied = &d // set first: the cleanup must undo whatever got in
-	return e.ciscoType(lines, false)
+	out, err := e.ciscoType(lines, false)
+	if err == nil && e.d.Family == "eos" {
+		err = e.eosVerifyApplied(d)
+	}
+	return out, err
+}
+
+// eosVerifyApplied reads the running configuration back, as Junos's
+// junosVerifyApplied does: EOS has no commit, and a line it took without a
+// word may still not be there. The lines it names carry no key.
+func (e *l73Env) eosVerifyApplied(d l73DeviceTLS) error {
+	var shown string
+	var rerr error
+	e.cli(func(c *cliConn) error {
+		shown, rerr = c.sendExpect("show running-config section tacacs", 30*time.Second, c.prompt)
+		return nil
+	})
+	if rerr != nil {
+		return fmt.Errorf("reading back the TACACS+ configuration: %s", l73Err(rerr))
+	}
+	if missing := l73EOSMissing(shown, d); len(missing) > 0 {
+		return fmt.Errorf("the running configuration lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+	}
+	return nil
 }
 
 // restore puts the startup config's servers back: Junos's restore commit,
