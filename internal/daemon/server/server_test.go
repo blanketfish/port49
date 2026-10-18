@@ -270,9 +270,9 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 
 // TestPAPSessionAuthorizationAboveTheLoginLevel is the same round trip with the
 // shape SR Linux 26.7.2 sends: the login START at priv_lvl 0 and the session
-// authorization at 1, above the 0 port49 holds (tests/lab/results/
-// L76-nokia_srlinux.md, cell (b)). Session authorization does not compare the
-// request's level with the context's (spec §5.2).
+// authorization at 1, above the 0 port49 holds (tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl).
+// Session authorization does not compare the request's level with the
+// context's (spec §5.2).
 func TestPAPSessionAuthorizationAboveTheLoginLevel(t *testing.T) {
 	papLoginAuthorizeAccount(t, 0, 1)
 }

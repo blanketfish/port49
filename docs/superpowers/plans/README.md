@@ -302,14 +302,23 @@ forget re-run after a directory restore. It opens L74 and L75.
 those four, IOL-XE 17.18.02 (no client) and XRd 26.1.1 (lists `tls`); L73 closed (vJunos-switch
 skipped; SRX unmeasured; a full L73 row on XRd 26.1.1 goes to the qualification-suite plan).
 **L76 measured 2026-10-18** (`2026-10-17-l76-srlinux.md`; branch `test/l76-srlinux`): Nokia SR Linux
-26.7.2-519 over TACACS+, cells (a)-(j); L76 closed. Inputs to a `nokia_srlinux` adapter and plan 12's
-SR Linux reference config: priv-lvl maps to the local roles at or below it, and priv-lvl 1 gets
-`p49-read` only (h); `priv-lvl-authorization false` sends no authorization and shows an empty Role
-cell (i), so the reference config sets it true, and each local role must list `services [ cli ]` or
-the login is refused; a port49 deny falls through to local with `exit-on-reject` at its default, so
-the reference config sets it (d); accounting is per CLI command, start and stop, with no exec session
-records (c); after a port49 restart the device asked again within 1 s, and health checks open
-connections that carry no payload and write no records (g).
+26.7.2-519 over TACACS+, cells (a)-(l); L76 closed. Inputs to a `nokia_srlinux` adapter and plan 12's
+SR Linux reference config:
+- priv-lvl maps to the local roles at or below it, and priv-lvl 1 gets `p49-read` only (h); each local
+  role must list `services [ cli ]` or the login is refused.
+- `priv-lvl-authorization false` (the default) sends port49 no authorization request, so port49's
+  privilege and role answer is never asked for (i). The YANG says that is full admin; the run measured
+  only reads. The reference config sets it true.
+- A port49 deny falls through to local with `exit-on-reject` at its default (d). With it true (l),
+  break-glass is **refused while port49 is up and denies it**, and still logs in through local with a
+  wrong shared secret or with port49 stopped; the reference config sets it knowing that cost.
+- The second exec channel of one login is accounted at priv-lvl 15 on port `unknown`, even for a
+  priv-lvl 1 user (c, h); the session table shows `p49-read` on both channels and a checkpoint write is
+  refused on both (k), so the accounting is not an escalation.
+- Accounting is per CLI command, start and stop, with no exec session records (c); port49 redacts the
+  word after `authentication` in `show system aaa authentication` (c).
+- After a port49 restart the device asked again within 1 s, and health checks open connections that carry
+  no payload and write no records (g).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7168,6 +7177,13 @@ the inventory-only refresh's cost at fleet size.
 **Carried from plan 6b** (final review Minor 7): port49d's config loader
 (internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
+
+**Carried from L76** (closed 2026-10-18; `tests/lab/results/L76-nokia_srlinux.md`): the SR Linux reference
+configuration sets:
+- `system aaa authentication exit-on-reject true` (cell l: break-glass is refused while port49 is up
+  and denies it, and logs in with port49 stopped or a wrong shared secret);
+- `priv-lvl-authorization true` on the port49 server group (cell i);
+- `services [ cli ]` on every local role that a TACACS+ priv-lvl maps to (schema findings).
 
 **Carried from plan 11** (decision 50):
 - The reference device AAA configuration for `transport: tls`, per platform, written from L73

@@ -332,7 +332,8 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// grants is policy's answer, and a device may ask for its session above
 	// the level port49 holds: SR Linux 26.7.2 sends its login START at
 	// priv_lvl 0 and its session authorization at 1, with port49 holding 0
-	// (tests/lab/results/L76-nokia_srlinux.md, cell (b)), and denying it
+	// (tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl: every redeem from the device has session.privilege 0, every
+	// authorize_session has session.privilege 1 and held_privilege 0), and denying it
 	// here failed the whole login. The session permit
 	// raises ctx.privilege from policy's reply below, never from this field.
 	if !session && req.PrivLvl > c.PrivLvl {

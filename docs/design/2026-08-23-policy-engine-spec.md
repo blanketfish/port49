@@ -1318,7 +1318,9 @@ bounded by: a device may ask for its session above the level port49 held for it.
 26.7.2 sends its session authorization (`service=shell`, `cmd*` empty) at `priv_lvl` 1 while
 port49 held 0 (`session.privilege` 1, `session.held_privilege` 0 on every such record), and a
 comparison here denied `privilege_exceeded` and failed the whole login (L76 run 2026-10-18;
-`tests/lab/results/L76-nokia_srlinux.md`, cell (b), which shows the corrected behavior). Every other check in §5.3's order —
+`tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl` holds the values: every redeem from the device has
+`session.privilege` 0, and every `authorize_session` has `session.privilege` 1 and `held_privilege` 0;
+`tests/lab/results/L76-nokia_srlinux.md`, cell (b), shows the corrected behavior). Every other check in §5.3's order —
 `context_missing`, `username_mismatch`, `credential_revoked`, `session_expired`,
 `context_stale` — and the `service_unsupported` check above still run on a session
 authorization. A permit raises `ctx.privilege` only from the level its reply grants, clamped to
