@@ -270,8 +270,8 @@ func writeTwoStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string) stri
 }
 
 // R23: with a directory store of its own, a section per store, each run
-// against its own cluster; on the directory the daemon reads rv/ and
-// meta/ping alone, and on the session store it is granted no rv/.
+// against its own cluster; on the directory the daemon reads rv/, meta/ping
+// and meta/seal_keys alone, and on the session store it is granted no rv/.
 func TestStoreRolesPrintsASectionPerStore(t *testing.T) {
 	single := storeRolesFixture(t, "port49-daemon", "port49-broker")
 	dir := filepath.Dir(single)
@@ -293,6 +293,8 @@ func TestStoreRolesPrintsASectionPerStore(t *testing.T) {
 		"ETCDCTL_ENDPOINTS=https://dir-0:2379",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/rv/",
 		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/ping",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/seal_keys",
+		"the second section's role add lines fail",
 		"etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/",
 	} {
 		if !strings.Contains(dirPart, want) {
@@ -305,5 +307,92 @@ func TestStoreRolesPrintsASectionPerStore(t *testing.T) {
 	if !strings.Contains(sessPart, "ETCDCTL_ENDPOINTS=https://sess-0:2379") ||
 		strings.Contains(sessPart, "port49_daemon read --prefix=true /port49/v1/rv/") {
 		t.Fatalf("the session section:\n%s", sessPart)
+	}
+}
+
+// twoStoreRolesFixture is a config with a store of its own for each of the
+// directory and the session.
+func twoStoreRolesFixture(t *testing.T) string {
+	t.Helper()
+	single := storeRolesFixture(t, "port49-daemon", "port49-broker")
+	dir := filepath.Dir(single)
+	return writeTwoStoreRolesConfig(t, dir, filepath.Join(dir, "ca.pem"),
+		[2]string{filepath.Join(dir, "daemon.pem"), filepath.Join(dir, "daemon-key.pem")},
+		[2]string{filepath.Join(dir, "broker.pem"), filepath.Join(dir, "broker-key.pem")})
+}
+
+// rewriteConfig replaces old with repl once in the file at path.
+func rewriteConfig(t *testing.T, path, old, repl string, n int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), old) {
+		t.Fatalf("%q is not in %s", old, path)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), old, repl, n)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An endpoint is printed into a comment of the script etcd's root runs; one
+// that holds anything a shell reads is refused by store-roles itself (config
+// refuses a newline or a path first, but passes a ";" in a host). It is
+// refused, and nothing is printed even though the directory section is
+// sound.
+func TestStoreRolesRefusesAnUnsafeEndpoint(t *testing.T) {
+	cfg := twoStoreRolesFixture(t)
+	rewriteConfig(t, cfg, "[https://sess-0:2379]", `["https://x;etcdctl-auth-disable:2379"]`, 1)
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
+		!strings.Contains(errb.String(), "stores.session.etcd.endpoints \"https://x;etcdctl-auth-disable:2379\" holds a character") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// One file with a session store of its own and the other without are not
+// one fleet: refused, nothing printed.
+func TestStoreRolesRefusesFilesThatDisagreeOnTheSplit(t *testing.T) {
+	one := storeRolesFixture(t, "port49-daemon", "port49-broker")
+	two := twoStoreRolesFixture(t)
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", one, "--broker-config", two}, &out, &errb); code != 1 ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "disagree on whether stores.session is a store of its own") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// --broker-config wins over a broker identity port49d.yaml also names.
+func TestStoreRolesBrokerConfigWinsOverTheDaemonFilesBroker(t *testing.T) {
+	stale := storeRolesFixture(t, "port49-daemon", "stale-broker")
+	given := storeRolesFixture(t, "port49-daemon", "port49-broker")
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", stale, "--broker-config", given}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") ||
+		strings.Contains(out.String(), "stale-broker") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+// A session section lacking its broker identity is refused, naming the
+// session store's key.
+func TestStoreRolesRefusesASessionSectionMissingItsIdentity(t *testing.T) {
+	cfg := twoStoreRolesFixture(t)
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := strings.LastIndex(string(raw), "      broker: {")
+	j := i + strings.Index(string(raw)[i:], "\n") + 1
+	if err := os.WriteFile(cfg, append(raw[:i:i], raw[j:]...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
+		!strings.Contains(errb.String(), "stores.session.etcd.broker") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 	}
 }

@@ -156,6 +156,7 @@ func (s rolesSection) print(w io.Writer) {
 		fmt.Fprintf(w, "# port49 roles for the %s store (%s): keyspace %s. Run these as THAT cluster's root user,\n"+
 			"# once (point etcdctl at it: ETCDCTL_ENDPOINTS=%s).\n", s.name, s.what, s.d.Prefix,
 			strings.Join(s.d.Endpoints, ","))
+		fmt.Fprintln(w, "# on one cluster the second section's role add lines fail with \"role already exists\"; that is expected.")
 		if s.scope == etcdstore.ScopeDirectory {
 			fmt.Fprintln(w, "# port49_daemon reads the revocation marks (rv/), meta/ping and meta/seal_keys alone and writes")
 			fmt.Fprintln(w, "# nothing; port49_broker holds the keyspace.")

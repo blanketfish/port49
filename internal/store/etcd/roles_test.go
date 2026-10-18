@@ -639,4 +639,17 @@ func TestTheDirectoryCheckJudgesItsOwnKeyspace(t *testing.T) {
 	if why := k.beyondDirectoryDaemon("", "\x00", false); why == "" {
 		t.Fatal("a read of every key passed")
 	}
+	mark := k.family(famMark) + "x"
+	if why := k.beyondDirectoryDaemon(mark, "", true); why == "" {
+		t.Fatal("a write of one mark passed: a stolen daemon key could lift a revocation")
+	}
+	if why := k.beyondDirectoryDaemon("/port49/v1/rv/x", "", false); why != "" {
+		t.Fatalf("a read of one key on another keyspace: %s", why)
+	}
+	if why := k.beyondDirectoryDaemon("/port49-a", k.family(famMark)+"zz", true); why == "" {
+		t.Fatal("a range from before the keyspace to inside it passed")
+	}
+	if why := k.beyondDirectoryDaemon("/port49-e", "\x00", false); why != "" {
+		t.Fatalf("an open-ended read from past the keyspace: %s", why)
+	}
 }
