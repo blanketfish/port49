@@ -333,11 +333,42 @@ func TestRegionEnvValuesAreShellInert(t *testing.T) {
 }
 
 func TestDisagreeingCellsNamesTheRowsThatDisagree(t *testing.T) {
-	rows := []regionRow{{ID: "a", Agrees: true}, {ID: "c"}, {ID: "g", Agrees: true}, {ID: "i"}}
-	if got := strings.Join(disagreeingCells(rows), ","); got != "c,i" {
+	rows := []regionRow{{ID: "a"}, {ID: "b", Agrees: true}, {ID: "c"}, {ID: "g", Agrees: true}, {ID: "i"}}
+	if got := strings.Join(disagreeingCells(rows), ","); got != "a,c,i" {
 		t.Fatalf("got %q", got)
 	}
-	if len(disagreeingCells(nil)) != 0 || len(disagreeingCells(rows[:1])) != 0 {
+	if len(disagreeingCells(nil)) != 0 || len(disagreeingCells(rows[1:2])) != 0 {
 		t.Fatal("agreeing rows were named")
+	}
+}
+
+// The build runs in the repository root and the note and evidence are written
+// under it, whatever directory the test binary runs in (go test runs it in
+// tests/lab).
+func TestRegionPathsResolveUnderTheRepoRoot(t *testing.T) {
+	repo := t.TempDir()
+	cmd := regionBuildCmd(repo, "/run/bin")
+	if cmd.Dir != repo {
+		t.Errorf("the build runs in %q, want the repo root", cmd.Dir)
+	}
+	args := strings.Join(cmd.Args, " ")
+	for _, want := range []string{"go build", "-o /run/bin/", "./cmd/port49d", "./cmd/port49-broker", "./cmd/port49"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("the build lacks %q: %s", want, args)
+		}
+	}
+	if got := regionNotePath(repo, "L74"); got != filepath.Join(repo, "tests", "lab", "results", "L74-regions.md") {
+		t.Errorf("note path %q", got)
+	}
+	if got := regionEvidenceDir(repo, "L74"); got != filepath.Join(repo, "tests", "lab", "evidence", "L74-regions") {
+		t.Errorf("evidence dir %q", got)
+	}
+	// Under the repo root's own checkout, repoRoot answers a directory with go.mod.
+	r, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(r, "go.mod")); err != nil {
+		t.Errorf("repoRoot %q holds no go.mod", r)
 	}
 }

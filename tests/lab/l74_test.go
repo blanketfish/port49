@@ -30,6 +30,22 @@ type regionRow struct {
 	Agrees              bool
 }
 
+// regionBuildCmd builds the three binaries into bins, from the repository root.
+func regionBuildCmd(repo, bins string) *exec.Cmd {
+	build := exec.Command("go", "build", "-o", bins+"/", "./cmd/port49d", "./cmd/port49-broker", "./cmd/port49")
+	build.Dir = repo
+	return build
+}
+
+// regionNotePath and regionEvidenceDir are where a row's note and evidence go.
+func regionNotePath(repo, row string) string {
+	return filepath.Join(repo, "tests", "lab", "results", row+"-regions.md")
+}
+
+func regionEvidenceDir(repo, row string) string {
+	return filepath.Join(repo, "tests", "lab", "evidence", row+"-regions")
+}
+
 // disagreeingCells is the ids of the rows that disagree with the claim.
 func disagreeingCells(rows []regionRow) []string {
 	var ids []string
@@ -220,8 +236,10 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 		t.Fatalf("INVALID: the CLI's home: %v", err)
 	}
 	bins := filepath.Join(dir, "bin")
-	build := exec.Command("go", "build", "-o", bins+"/", "./cmd/port49d", "./cmd/port49-broker", "./cmd/port49")
-	build.Dir = root
+	if root == "" {
+		t.Fatal("INVALID: the repository root is not set")
+	}
+	build := regionBuildCmd(root, bins)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("INVALID: building the binaries: %v\n%s", err, out)
 	}
@@ -399,6 +417,16 @@ func TestRegions(t *testing.T) {
 	bin := os.Getenv("PORT49_LAB_ETCD_BIN")
 	if bin == "" {
 		t.Skip("PORT49_LAB_ETCD_BIN names no directory holding etcd and etcdctl v3.6.15")
+	}
+	// The run brings up no platform, so initGlobal never sets root: the build
+	// runs from it and the note is written under it (as L72 does).
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+		t.Cleanup(func() { root = "" })
 	}
 	w := startRegions(t, bin)
 	w.guard = guard
@@ -796,11 +824,11 @@ func writeRegionNote(t *testing.T, w *regionWorld, row, claim string, rows []reg
 			t.Fatalf("the %s note holds a TOTP secret or code; nothing written", row)
 		}
 	}
-	path := filepath.Join(root, "tests", "lab", "results", row+"-regions.md")
+	path := regionNotePath(root, row)
 	if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ev := filepath.Join(root, "tests", "lab", "evidence", row+"-regions")
+	ev := regionEvidenceDir(root, row)
 	if err := os.MkdirAll(ev, 0o755); err != nil {
 		t.Fatal(err)
 	}
