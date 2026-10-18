@@ -1044,3 +1044,59 @@ func TestL76ReturnsFromInvalidOnlyForADeferredRestoreAfterAFailure(t *testing.T)
 		}
 	}
 }
+
+// The live test's retries line and Evidence pointer sit under their own
+// heading, so they do not read as part of cell (j).
+func TestL76RunSectionHasItsOwnHeading(t *testing.T) {
+	got := l76RunSection(nil, "L76-srlinux")
+	if !strings.HasPrefix(got, "\n### Run\n\n") || !strings.HasSuffix(got, "\n") {
+		t.Errorf("the run section does not start with its heading and end with a newline: %q", got)
+	}
+	if !strings.Contains(got, ": none") || !strings.Contains(got, "`tests/lab/evidence/L76-srlinux/`") {
+		t.Errorf("no 'none' retries line or no evidence pointer: %q", got)
+	}
+	got = l76RunSection([]string{"first", "second"}, "L76-srlinux")
+	if !strings.Contains(got, "\n- first\n- second\n") {
+		t.Errorf("retries are not listed one per line: %q", got)
+	}
+	full := l76Observation(map[string]string{}, "schema", got)
+	if strings.Index(full, "### Run") < strings.Index(full, "### ("+l76Cells[len(l76Cells)-1].id+")") {
+		t.Error("the Run section is before the last cell")
+	}
+}
+
+// invalid returns, instead of stopping, only while a deferred restore runs, so
+// every defer in a cell must set the flag first. A bare `defer e.set(...)` or
+// `defer e.restartStanding()` would make a failed restore stop the unwinding
+// or, worse, leave the flag off.
+func TestL76EveryDeferInACellSetsRestoring(t *testing.T) {
+	src, err := os.ReadFile("l76_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defers := 0
+	inCell := false
+	lines := strings.Split(string(src), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "func ") {
+			inCell = strings.HasPrefix(line, "func (e *l76Env) cell")
+		}
+		trim := strings.TrimSpace(line)
+		if !inCell || !strings.HasPrefix(trim, "defer ") {
+			continue
+		}
+		defers++
+		// gofmt may break the closure over lines: join the defer with the
+		// next one, which must be the flag.
+		two := trim
+		if i+1 < len(lines) {
+			two += " " + strings.TrimSpace(lines[i+1])
+		}
+		if !strings.HasPrefix(two, "defer func() { e.restoring = true") {
+			t.Errorf("a cell's defer does not set e.restoring first: %s", two)
+		}
+	}
+	if defers < 4 {
+		t.Errorf("found %d defers in cells, want at least 4 (h, i, j, e)", defers)
+	}
+}

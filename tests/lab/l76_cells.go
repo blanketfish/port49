@@ -690,3 +690,17 @@ func l76InvalidText(msg string, secrets []string) string {
 func l76ReturnsFromInvalid(restoring, failed bool) bool {
 	return restoring && failed
 }
+
+// l76RunSection is the note's "Run" section, which l76Observation puts
+// between the cells and the Sources: the dials retried after a failure before
+// authentication, and the Evidence pointer. dir is the evidence directory's
+// name under tests/lab/evidence/.
+func l76RunSection(retries []string, dir string) string {
+	list := " none"
+	if len(retries) > 0 {
+		list = "\n\n- " + strings.Join(retries, "\n- ")
+	}
+	return "\n### Run\n\nDials retried after a failure before authentication (one retry each, 5 s later):" + list +
+		"\n\nEvidence: `tests/lab/evidence/" + dir + "/` (device outputs, masked config, AAA log " +
+		"lines, the redacted decision log).\n"
+}

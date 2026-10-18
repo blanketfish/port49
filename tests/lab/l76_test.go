@@ -4,10 +4,13 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -573,4 +576,304 @@ func (e *l76Env) cellD() {
 		"%s through to `local` with `exit-on-reject` at its default.%s\n\nThe AAA log's lines for both users:\n\n```\n%s\n```",
 		user, took.Round(time.Millisecond), l76Render(recs), breakglassUser, bg, bgTook.Round(time.Millisecond),
 		map[bool]string{true: "**falls**", false: "does **not** fall"}[bgErr == nil], hazard, e.evidence["d-aaa-log.txt"])
+}
+
+// (h) priv-lvl=1 in the reply.
+func (e *l76Env) cellH() {
+	e.guard()
+	cfg, err := e.l.derivedConfig("l76-priv1", `["priv-lvl=1"]`, "")
+	if err != nil {
+		e.invalid("cell h: %v", err)
+	}
+	defer func() { e.restoring = true; e.restartStanding() }()
+	e.restart(cfg)
+	user, outs, recs, err := e.tokenLogin("h")
+	if err != nil {
+		e.out["h"] = fmt.Sprintf("With `priv-lvl=1` the login as `%s` **failed**: %s\n\n```\n%s\n```",
+			user, oneLine(err.Error()), l76Render(recs))
+		return
+	}
+	if len(outs) < 2 {
+		e.out["h"] = fmt.Sprintf("With `priv-lvl=1` the login as `%s` returned %d output(s) for %d commands; "+
+			"the session state was not read.\n\n```\n%s\n```", user, len(outs), len(l76Commands), l76Render(recs))
+		return
+	}
+	s := l76SessionOf(outs[0], user)
+	priv := "(no row)"
+	if s != nil {
+		priv = s.PrivLvl
+	}
+	// Only this user's session blocks: cell (d)'s break-glass session
+	// (p49-admin) may still be listed (pre-flight I2).
+	e.out["h"] = fmt.Sprintf("With port49 replying `priv-lvl=1`, `%s` logged in with roles %s and priv-lvl `%s` "+
+		"in the session table.\n\n```\n%s\n```\n\nThis user's session state:\n\n```\n%s\n```",
+		user, l76RolesOf(outs[1], user), priv, l76Render(recs), l76FilterLog(l76UserSessions(outs[1], user)))
+}
+
+// (i) priv-lvl-authorization false: the YANG default.
+func (e *l76Env) cellI() {
+	e.guard()
+	const on = "priv-lvl-authorization true"
+	defer func() {
+		e.restoring = true
+		e.set(l76PrivLvlAuthzOn, func(run string) bool { return strings.Contains(run, on) })
+	}()
+	e.set(l76PrivLvlAuthzOff, func(run string) bool { return !strings.Contains(run, on) })
+	user, outs, recs, err := e.tokenLogin("i")
+	if err != nil {
+		e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false` the login as `%s` **failed**: %s\n\n```\n%s\n```",
+			user, oneLine(err.Error()), l76Render(recs))
+		return
+	}
+	if len(outs) < 2 {
+		e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false`, `%s` logged in and returned %d output(s) for "+
+			"%d commands; the session state was not read. Authorization requests: %d.\n\n```\n%s\n```",
+			user, len(outs), len(l76Commands), len(authzRequests(recs)), l76Render(recs))
+		return
+	}
+	e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false`, `%s` logged in. Authorization requests: %d. "+
+		"Roles in this user's session state: %s (the lab's roles; anything else is in the state below).\n\n```\n%s\n```\n\n"+
+		"This user's session state:\n\n```\n%s\n```", user, len(authzRequests(recs)), l76RolesOf(outs[1], user),
+		l76Render(recs), l76FilterLog(l76UserSessions(outs[1], user)))
+}
+
+// (j) the Nokia role service request on top of priv-lvl authorization.
+func (e *l76Env) cellJ() {
+	e.guard()
+	const on = "nokia-srl-authorization-role true"
+	defer func() {
+		e.restoring = true
+		e.set(l76RoleServiceOff, func(run string) bool { return !strings.Contains(run, on) })
+	}()
+	e.set(l76RoleServiceOn, func(run string) bool { return strings.Contains(run, on) })
+	user, outs, recs, err := e.tokenLogin("j")
+	survived := "survived"
+	if err != nil {
+		survived = "**failed** (" + oneLine(err.Error()) + ")"
+	}
+	reqs := authzRequests(recs)
+	roles := "(the session state was not read)"
+	if len(outs) > 1 {
+		roles = l76RolesOf(outs[1], user)
+	}
+	e.out["j"] = fmt.Sprintf("With `service-request nokia-srl-authorization-role true`, the login as `%s` %s. "+
+		"Authorization requests: %d, services %v. Roles: %s.\n\n```\n%s\n```",
+		user, survived, len(reqs), l76Services(reqs), roles, l76Render(recs))
+}
+
+// (e) a wrong shared secret: port49d is restarted with a random key; the
+// device keeps the published one.
+func (e *l76Env) cellE() {
+	e.guard()
+	base, err := e.l.configPath()
+	if err != nil {
+		e.invalid("cell e: %v", err)
+	}
+	raw, err := os.ReadFile(base)
+	if err != nil {
+		e.invalid("cell e: %v", err)
+	}
+	wrong, err := l76WrongKeyConfig(string(raw))
+	if err != nil {
+		e.invalid("cell e: %v", err)
+	}
+	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+e.l.p.name+"-l76-wrongkey.yaml")
+	if err := os.WriteFile(path, []byte(wrong), 0o600); err != nil {
+		e.invalid("cell e: %v", err)
+	}
+	e.t.Setenv(l76WrongKeyEnv, e.wrongKey)
+	defer func() { e.restoring = true; e.restartStanding() }()
+	if err := e.l.restart(path); err != nil {
+		e.invalid("cell e: restarting port49d on the wrong key: %v", err)
+	}
+	off := e.l.mark()
+	user, secret := e.l.nextLogin(e.t)
+	userTook, userErr := e.try(user, secret)
+	bgTook, bgErr := e.try(breakglassUser, breakglassPassword)
+	recs := e.l.drainRecords(off, 10*time.Second)
+	e.evidence["e-aaa-log.txt"] = e.aaaLog(user, breakglassUser, "tacacs")
+	e.out["e"] = fmt.Sprintf("port49d on a key the device does not have. `%s` (port49 user): %s in %v. "+
+		"`%s` (local): %s in %v. port49's diagnoses: %v (%d unvalidated record(s), %d redeem(s)).\n\n"+
+		"```\n%s\n```\n\nThe AAA log:\n\n```\n%s\n```",
+		user, l76Outcome(userErr), userTook.Round(time.Millisecond), breakglassUser, l76Outcome(bgErr),
+		bgTook.Round(time.Millisecond), l76Diagnoses(recs), l76Count(recs, "unvalidated"), l76Count(recs, "redeem"),
+		l76Render(recs), e.evidence["e-aaa-log.txt"])
+}
+
+func l76Outcome(err error) string {
+	if err == nil {
+		return "logged in"
+	}
+	return "refused (" + oneLine(err.Error()) + ")"
+}
+
+// (f) port49d stopped. It stays stopped into (g).
+func (e *l76Env) cellF() {
+	e.guard()
+	if err := e.l.stopDaemon(); err != nil {
+		e.invalid("cell f: stopping port49d: %v", err)
+	}
+	bgTook, bgErr := e.try(breakglassUser, breakglassPassword)
+	user, secret := e.l.nextLogin(e.t)
+	userTook, userErr := e.try(user, secret)
+	// The question is whether a command runs while accounting is unreachable,
+	// so a hang is a plausible answer: 60 s per command (loginWithin), and a
+	// *notObserved is the measurement, not INVALID (pre-flight I1).
+	start := time.Now()
+	outs, cmdErr := e.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, l76ReadVersion)
+	cmdTook := time.Since(start)
+	var missed *notObserved
+	ran := "did not run"
+	switch {
+	case cmdErr == nil && len(outs) == 1 && strings.Contains(outs[0], "26.7"):
+		ran = "ran"
+	case errors.As(cmdErr, &missed):
+		ran = "did not finish within 60 s (" + oneLine(missed.Error()) + ")"
+	case cmdErr != nil:
+		ran = "did not run (" + oneLine(cmdErr.Error()) + ")"
+	}
+	_, rootTook, rootErr := e.sr(120*time.Second, l76ReadVersion)
+	e.evidence["f-aaa-log.txt"] = e.aaaLog(breakglassUser, user, "tacacs")
+	e.out["f"] = fmt.Sprintf("port49d stopped. `%s`: %s in %v. `%s` (port49 user): %s in %v. A CLI command in a "+
+		"break-glass session with accounting unreachable %s; login and command took %v. The same command as the "+
+		"container's root (`sr_cli`) took %v (err %v).\n\nThe AAA log:\n\n```\n%s\n```",
+		breakglassUser, l76Outcome(bgErr), bgTook.Round(time.Millisecond), user, l76Outcome(userErr),
+		userTook.Round(time.Millisecond), ran, cmdTook.Round(time.Millisecond), rootTook.Round(time.Millisecond),
+		rootErr, e.evidence["f-aaa-log.txt"])
+	if bgErr != nil {
+		e.t.Logf("cell f: break-glass was refused with port49 stopped; that is the measurement, not a failure")
+	}
+}
+
+// (g) port49d restarted: how long until the device asks it again, then a
+// quiet 70 s window for the health checks.
+func (e *l76Env) cellG() {
+	e.guard()
+	cfg, err := e.l.configPath()
+	if err != nil {
+		e.invalid("cell g: %v", err)
+	}
+	if err := e.l.startDaemonWith(cfg, true); err != nil {
+		e.invalid("cell g: starting port49d: %v", err)
+	}
+	t0 := time.Now()
+	var back time.Duration
+	probes := 0
+	for time.Since(t0) < 5*time.Minute {
+		probes++
+		off := e.l.mark()
+		e.try(breakglassUser, breakglassPassword)
+		if redeemFor(e.l.waitForRecords(off, 5*time.Second, func(rs []map[string]any) bool {
+			return redeemFor(rs, breakglassUser) != nil
+		}), breakglassUser) != nil {
+			back = time.Since(t0)
+			break
+		}
+		// 5 s between probes keeps the logins well under SR Linux's SSH
+		// rate-limit, default 20 unauthenticated sessions (srl_nokia-ssh.yang
+		// 479; pre-flight M3).
+		time.Sleep(5 * time.Second)
+	}
+	if back == 0 {
+		e.invalid("cell g: the device never asked the restarted port49d in 5 minutes (%d probes)", probes)
+	}
+	user, _, recs, err := e.tokenLogin("g")
+	login := "logged in"
+	if err != nil {
+		login = "**failed** (" + oneLine(err.Error()) + ")"
+	}
+	e.l.flushCapture(e.t)
+	off := e.l.mark()
+	from := time.Now()
+	time.Sleep(70 * time.Second)
+	e.l.flushCapture(e.t)
+	to := time.Now()
+	quiet := e.l.recordsSince(off)
+	syns, data, err := splitSent(e.l.capAbs, e.l.p.addr, from, to)
+	if err != nil {
+		e.invalid("cell g: reading the capture: %v", err)
+	}
+	e.out["g"] = fmt.Sprintf("After a restart, the device asked port49 again %v later (%d break-glass probe(s), "+
+		"each a login followed by up to 5 s waiting for its record, then 5 s apart, under the SSH rate-limit default "+
+		"of 20 unauthenticated sessions, srl_nokia-ssh.yang 479). The next port49 login as `%s` %s.\n\n```\n%s\n```\n\nIn a quiet %v with nobody logging in, the "+
+		"device opened %d connection(s) to port49 and sent %d packet(s) with a payload; port49 wrote %d record(s).",
+		back.Round(time.Second), probes, user, login, l76Render(recs), to.Sub(from).Round(time.Second),
+		syns, data, len(quiet))
+}
+
+// note writes the evidence and the results note, and only after every cell
+// was measured and nothing the run knew as secret is in any of it.
+func (e *l76Env) note() {
+	e.guard()
+	for _, c := range l76Cells {
+		if e.out[c.id] == "" {
+			e.invalid("cell %s was not measured", c.id)
+		}
+	}
+	secrets, err := e.secrets()
+	if err != nil {
+		e.invalid("the run's seed tokens: %v", err)
+	}
+
+	var log strings.Builder
+	for _, r := range e.l.recordsSince(e.start) {
+		b, err := json.Marshal(r)
+		if err != nil {
+			e.invalid("re-encoding a record: %v", err)
+		}
+		log.Write(l72RedactCredentialHash(b))
+		log.WriteByte('\n')
+	}
+	e.evidence["decisions.jsonl"] = log.String()
+	obs := l76Observation(e.out, e.schema, l76RunSection(e.retries, "L76-"+e.l.p.name))
+
+	// The leak gates, every one before anything is written. Beside l76Leaks
+	// they are L73's (pre-flight I5): l72HashValueLeaks on every evidence
+	// file and on the note (the backstop for the token_sha256 array form),
+	// l72TranscriptLeaks on every .txt file, and TokenShaped on the note too
+	// (the L71 lesson: the note gets every check its evidence gets).
+	names := make([]string, 0, len(e.evidence))
+	for n := range e.evidence {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		body := e.evidence[n]
+		if leaks := l76Leaks(body, secrets); len(leaks) > 0 {
+			e.invalid("evidence %s holds %v", n, leaks)
+		}
+		if leaks := l72HashValueLeaks(body); len(leaks) > 0 {
+			e.invalid("evidence %s holds a hash value under %v", n, leaks)
+		}
+		if strings.HasSuffix(n, ".txt") {
+			if leaks := l72TranscriptLeaks(body); len(leaks) > 0 {
+				e.invalid("evidence %s carries %v", n, leaks)
+			}
+		}
+		if n != "decisions.jsonl" {
+			if w := labcreds.TokenShaped([]byte(body)); w != "" {
+				e.invalid("evidence %s holds a token-shaped string", n)
+			}
+		}
+	}
+	note := obs + l76Claim()
+	if leaks := l76Leaks(note, secrets); len(leaks) > 0 {
+		e.invalid("the note holds %v", leaks)
+	}
+	if leaks := l72HashValueLeaks(note); len(leaks) > 0 {
+		e.invalid("the note holds a hash value under %v", leaks)
+	}
+	if w := labcreds.TokenShaped([]byte(note)); w != "" {
+		e.invalid("the note holds a token-shaped string")
+	}
+	dir := filepath.Join(root, "tests", "lab", "evidence", "L76-"+e.l.p.name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.invalid("%v", err)
+	}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(e.evidence[n]), 0o644); err != nil {
+			e.invalid("%v", err)
+		}
+	}
+	e.l.result(e.t, "L76", l76Claim(), obs)
 }
