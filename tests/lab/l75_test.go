@@ -26,6 +26,7 @@ import (
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/totp"
 )
 
 const l75Claim = "spec §15 L75, cell by cell (decision 51: unlocks, TOTP fail-closed, membership's pin, " +
@@ -155,13 +156,15 @@ func l75JudgeC(lockedAt, whileLocked, unlockExit, after int) bool {
 	return lockedAt > 0 && whileLocked == http.StatusTooManyRequests && unlockExit == 0 && after == http.StatusOK
 }
 
-// (d) every broker refused after some number of wrong codes.
-func l75JudgeD(counts []int) bool {
+// (d) with no unlock between, each broker took its own count: threshold
+// failures, then the refusal on the next try (n = threshold+1). A count shared
+// across brokers would refuse the second and third at once (n = 1).
+func l75JudgeD(counts []int, threshold int) bool {
 	if len(counts) == 0 {
 		return false
 	}
 	for _, n := range counts {
-		if n <= 0 {
+		if n != threshold+1 {
 			return false
 		}
 	}
@@ -169,16 +172,31 @@ func l75JudgeD(counts []int) bool {
 }
 
 // (e) the cut took (store status exit 3), the sign-in answered 503
-// store_unavailable, unlock and reset were refused, and the heal took.
-func l75JudgeE(statusExit, signIn int, signInErr string, unlockExit, resetExit int, healed bool) bool {
+// store_unavailable, unlock and reset were refused with the store's own words
+// ("did not answer"), and the heal took.
+func l75JudgeE(statusExit, signIn int, signInErr string, unlockExit int, unlockOut string, resetExit int, resetOut string,
+	healed bool) bool {
+	const said = "did not answer"
 	return statusExit == 3 && signIn == http.StatusServiceUnavailable && signInErr == "store_unavailable" &&
-		unlockExit != 0 && resetExit != 0 && healed
+		unlockExit != 0 && strings.Contains(unlockOut, said) && resetExit != 0 && strings.Contains(resetOut, said) && healed
 }
 
-// (g) the mint before the logout passed, the logout was accepted, and the
-// mint was then refused as credential_revoked.
-func l75JudgeG(before, logout int, why string) bool {
-	return before == http.StatusOK && logout == http.StatusOK && why == "credential_revoked"
+// (g) the mint before the logout passed, the logout was accepted, the runner
+// line naming it was said, and the mint was then refused as credential_revoked.
+func l75JudgeG(before, logout int, why string, runnerLine bool) bool {
+	return before == http.StatusOK && logout == http.StatusOK && why == "credential_revoked" && runnerLine
+}
+
+// l75RacedPair is whether two sign-ins with one code really raced: one won and
+// the other was refused for the code. A 429 is a locked-out broker, not a race.
+func l75RacedPair(a, b int) bool {
+	return (a == http.StatusOK && b == http.StatusUnauthorized) || (a == http.StatusUnauthorized && b == http.StatusOK)
+}
+
+// l75SameStep is whether two instants fall in one TOTP step.
+func l75SameStep(a, b time.Time) bool {
+	step := int64(totp.Period / time.Second)
+	return a.Unix()/step == b.Unix()/step
 }
 
 // l75Broker is one host broker: its session member, its process, and for
@@ -481,26 +499,31 @@ func l75(t *testing.T, w *regionWorld) []string {
 		fmt.Sprintf("broker 1: %d; broker 2, the same code: %d %s; broker 2, a fresh code: %d", r1.Status, r2.Status, r2.Error,
 			rc.Status), l75JudgeA(r1.Status, r2.Status, rc.Status))
 
-	// (b) twenty steps: one code to b1 and b2 at once.
+	// (b) twenty steps: one code to b1 and b2 at once. The loser of a race is
+	// a failed attempt, so b1 is unlocked after every pair: each pair then runs
+	// the race on a broker that is not locked out. A pair counts only as a race
+	// when both requests left in one step and exactly one won.
 	w.guard()
-	one := 0
+	ap1, ap2 := apiOf(bs[1]), apiOf(bs[2])
+	raced := 0
 	var pairs []string
 	for n := 0; n < 20; n++ {
 		code := carol.code()
 		var s1, s2 l67Answer
+		var t1, t2 time.Time
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go func() { defer wg.Done(); s1 = apiOf(bs[1]).signIn("carol", pw, code) }()
-		go func() { defer wg.Done(); s2 = apiOf(bs[2]).signIn("carol", pw, code) }()
+		go func() { defer wg.Done(); t1 = time.Now(); s1 = ap1.signIn("carol", pw, code) }()
+		go func() { defer wg.Done(); t2 = time.Now(); s2 = ap2.signIn("carol", pw, code) }()
 		wg.Wait()
-		if (s1.Status == http.StatusOK) != (s2.Status == http.StatusOK) && (s1.Status == http.StatusOK || s2.Status == http.StatusOK) {
-			one++
+		if l75RacedPair(s1.Status, s2.Status) && l75SameStep(t1, t2) {
+			raced++
 		}
 		pairs = append(pairs, fmt.Sprintf("%d/%d", s1.Status, s2.Status))
+		mustUnlock(bs[1])
 	}
-	row("b", "one code sent to brokers 1 and 2 at once, twenty steps: pairs with exactly one 200",
-		fmt.Sprintf("%d of 20: %s", one, strings.Join(pairs, " ")), one == 20)
-	mustUnlock(bs[1])
+	row("b", "one code sent to brokers 1 and 2 at once, twenty steps: pairs with exactly one 200 (the other refused for the code)",
+		fmt.Sprintf("%d of 20: %s", raced, strings.Join(pairs, " ")), raced == 20)
 
 	// (c) locked out at b2 by wrong codes, a valid code refused while locked,
 	// unlocked at b1, judged afresh at b2.
@@ -527,21 +550,23 @@ func l75(t *testing.T, w *regionWorld) []string {
 			"broker 2's next sign-in %d", lockedAt, whileLocked.Status, ucode, c3.Status),
 		l75JudgeC(lockedAt, whileLocked.Status, ucode, c3.Status))
 
-	// (d) the counts are per broker: each is locked out alone, and unlocked
-	// before the next, so one lockout is not the next one's.
+	// (d) the counts are per broker: unlocked once, then b1, b2 and b3 are each
+	// locked out in turn with no unlock between. Each takes its own threshold of
+	// failures; a count shared across brokers would refuse b2 and b3 at once.
 	w.guard()
+	mustUnlock(bs[1])
 	var counts []string
 	var ns []int
 	sum := 0
 	for i := 1; i <= 3; i++ {
-		mustUnlock(bs[1])
 		n := wrongs(bs[i])
 		ns = append(ns, n)
-		counts = append(counts, fmt.Sprintf("broker %d: %d", i, n))
+		counts = append(counts, fmt.Sprintf("broker %d: refused at try %d", i, n))
 		sum += max(n-1, 0)
 	}
 	row("d", "the attempt counts are per broker: failures each takes before it refuses, and the total across three",
-		fmt.Sprintf("%s; %d failures in all", strings.Join(counts, ", "), sum), l75JudgeD(ns))
+		fmt.Sprintf("%s; %d failures in all (threshold %d each)", strings.Join(counts, ", "), sum,
+			oidc.DefaultFailuresPerPrincipal), l75JudgeD(ns, oidc.DefaultFailuresPerPrincipal))
 	mustUnlock(bs[1])
 
 	// (e) b3 cut from the directory: a password sign-in, an unlock and a
@@ -552,15 +577,23 @@ func l75(t *testing.T, w *regionWorld) []string {
 		t.Fatalf("INVALID: b3's sign-in before its cut: %d %s", pc.Status, pc.Error)
 	}
 	mustUnlock(bs[3])
-	cutOK := bs[3].hang(w, true)
-	if !cutOK {
+	// Bob signs in by certificate alone and has no second factor, so resetting
+	// his is harmless (it only opens an enrollment window): the control that
+	// reset-second-factor works at b3 before the cut.
+	if out, code, _ := w.port49("directory", "reset-second-factor", "--socket", bs[3].sock(),
+		"user:bob@corp.example.com"); code != 0 {
+		t.Fatalf("INVALID: reset-second-factor of bob at b3 before its cut: exit %d: %s", code, w.leakless(oneLineMax(out, 300)))
+	}
+	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
 	}
+	// The clock starts with the code in hand: the wait for the step is not b3's.
+	code3 := carol.code()
 	start := time.Now()
-	e1 := apiOf(bs[3]).signIn("carol", pw, carol.code())
+	e1 := apiOf(bs[3]).signIn("carol", pw, code3)
 	t1 := time.Since(start)
 	o2, c2, t2 := unlock(bs[3])
-	o3, c3e, t3 := w.port49("directory", "reset-second-factor", "--socket", bs[3].sock(), "user:carol@corp.example.com")
+	o3, c3e, t3 := w.port49("directory", "reset-second-factor", "--socket", bs[3].sock(), "user:bob@corp.example.com")
 	healed := bs[3].hang(w, false)
 	if !healed {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
@@ -570,14 +603,17 @@ func l75(t *testing.T, w *regionWorld) []string {
 		fmt.Sprintf("store status exit 3 under the cut; sign-in %d %s in %v; unlock exit %d in %v: %s; reset exit %d in %v: %s; healed %v",
 			e1.Status, e1.Error, t1.Round(time.Millisecond), c2, t2.Round(time.Millisecond), firstLine(o2), c3e,
 			t3.Round(time.Millisecond), firstLine(o3), healed),
-		l75JudgeE(3, e1.Status, e1.Error, c2, c3e, healed))
+		l75JudgeE(3, e1.Status, e1.Error, c2, o2, c3e, o3, healed))
 
 	// (f) membership's pin across brokers (R13).
 	w.guard()
 	d1 := w.dirMembers[1]
 	pinKey := "/port49/v1/mb/user:carol@corp.example.com" // esc() is url.PathEscape, which keeps : and @
 	pinRev := func() int64 {
-		js, _ := d1.ctl(w.dirEndpoints(), "get", pinKey, "-w", "json")
+		js, err := d1.ctl(w.dirEndpoints(), "get", pinKey, "-w", "json")
+		if err != nil {
+			w.t.Fatalf("INVALID: reading carol's pin from the directory: %v", err)
+		}
 		var r struct {
 			Kvs []struct {
 				ModRevision int64 `json:"mod_revision"`
@@ -591,10 +627,25 @@ func l75(t *testing.T, w *regionWorld) []string {
 	carolC, bobC := l75Client(w.pki, carolCert), l75Client(w.pki, bobCert)
 	m1, _ := l75Mint(w, carolC, bs[2].addr(), "")
 	rev1 := pinRev()
+	// b3 mints for carol while the directory answers: its session store holds
+	// her membership with the pin as it stands (the cached pin the cut serves).
+	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: carol's mint at b3 before the forget: %d %s", st, e)
+	}
 	_, fcode, _ := w.port49("directory", "forget", "--socket", bs[1].sock(), "user:carol@corp.example.com")
-	time.Sleep(2 * time.Second) // b2's pins feed delivers the forget
-	m2, _ := l75Mint(w, carolC, bs[2].addr(), "")
-	rev2 := pinRev()
+	// b2's next mint pins her again once its pins feed has delivered the forget:
+	// mint until the pin's revision moves, or give up after 30s.
+	m2, rev2 := 0, rev1
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		m2, _ = l75Mint(w, carolC, bs[2].addr(), "")
+		if rev2 = pinRev(); rev2 > rev1 {
+			break
+		}
+	}
+	// And b3 reads the new pin the same way, before the cut.
+	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: carol's mint at b3 after the re-pin: %d %s", st, e)
+	}
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
 	}
@@ -658,7 +709,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		fmt.Sprintf("mint at b2 %d; logout at b1 %d; b2 refused after %v (%s); b2's runner line after %v (%v): %s",
 			g1, lo1, took.Round(10*time.Millisecond), why, line.Round(10*time.Millisecond), lerr == nil,
 			firstLineWith(bs[2].proc.said(), "a logout made elsewhere")),
-		l75JudgeG(g1, lo1, why))
+		l75JudgeG(g1, lo1, why, lerr == nil))
 
 	w.guard()
 	s2 := "l75-g-" + l75Random(t)

@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -148,7 +149,11 @@ func (w *regionWorld) adminSock(i int, proc string) string {
 // port49 runs the CLI and answers its output, exit code and duration.
 func (w *regionWorld) port49(args ...string) (string, int, time.Duration) {
 	start := time.Now()
-	cmd := exec.Command(w.cli, args...)
+	// Bounded: a CLI waiting on a hung proxy would rest on the server's own
+	// timeouts alone.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, w.cli, args...)
 	cmd.Env = append(os.Environ(), "HOME="+w.home)
 	out, err := cmd.CombinedOutput()
 	code := 0

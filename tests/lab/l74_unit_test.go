@@ -468,18 +468,53 @@ func TestL75JudgesRequireTheirControls(t *testing.T) {
 	if !l75JudgeC(3, 429, 0, ok) || l75JudgeC(-1, 429, 0, ok) || l75JudgeC(3, ok, 0, ok) || l75JudgeC(3, 429, 1, ok) || l75JudgeC(3, 429, 0, 429) {
 		t.Error("judge c")
 	}
-	// (d) every broker locked.
-	if !l75JudgeD([]int{5, 5, 5}) || l75JudgeD([]int{5, -1, 5}) || l75JudgeD(nil) {
+	// (d) with no unlock between, each broker takes its own count: the
+	// threshold's failures, then the refusal. A shared count (n = 1 at the
+	// second and third), a broker that never locked (-1 or 0), and counts
+	// that differ are each a no.
+	if !l75JudgeD([]int{6, 6, 6}, 5) || l75JudgeD([]int{6, 1, 1}, 5) || l75JudgeD([]int{6, -1, 6}, 5) ||
+		l75JudgeD([]int{6, 0, 6}, 5) || l75JudgeD([]int{6, 5, 6}, 5) || l75JudgeD([]int{3, 3, 3}, 5) || l75JudgeD(nil, 5) {
 		t.Error("judge d")
 	}
-	// (e) the cut took (status exit 3), sign-in 503 store_unavailable, unlock and reset refused, healed.
-	if !l75JudgeE(3, 503, "store_unavailable", 1, 1, true) || l75JudgeE(0, 503, "store_unavailable", 1, 1, true) ||
-		l75JudgeE(3, 503, "other", 1, 1, true) || l75JudgeE(3, 503, "store_unavailable", 0, 1, true) ||
-		l75JudgeE(3, 503, "store_unavailable", 1, 1, false) {
+	// (e) the cut took (store status exit 3), the sign-in answered 503
+	// store_unavailable, unlock and reset were refused with the store's own
+	// words, and the heal took.
+	did := "broker: resetting x failed: the store did not answer, so nothing changed: run it again"
+	if !l75JudgeE(3, 503, "store_unavailable", 1, did, 1, did, true) ||
+		l75JudgeE(0, 503, "store_unavailable", 1, did, 1, did, true) ||
+		l75JudgeE(3, 503, "other", 1, did, 1, did, true) ||
+		l75JudgeE(3, 503, "store_unavailable", 0, did, 1, did, true) ||
+		l75JudgeE(3, 503, "store_unavailable", 1, did, 0, did, true) ||
+		l75JudgeE(3, 503, "store_unavailable", 1, "no such socket", 1, did, true) ||
+		l75JudgeE(3, 503, "store_unavailable", 1, did, 1, "bad flag", true) ||
+		l75JudgeE(3, 503, "store_unavailable", 1, did, 1, did, false) {
 		t.Error("judge e")
 	}
-	// (g) mint before, logout accepted, then credential_revoked.
-	if !l75JudgeG(ok, ok, "credential_revoked") || l75JudgeG(bad, ok, "credential_revoked") || l75JudgeG(ok, ok, "not refused") {
+	// (g) mint before, logout accepted, the runner line seen, then credential_revoked.
+	if !l75JudgeG(ok, ok, "credential_revoked", true) || l75JudgeG(bad, ok, "credential_revoked", true) ||
+		l75JudgeG(ok, ok, "not refused", true) || l75JudgeG(ok, ok, "credential_revoked", false) {
 		t.Error("judge g")
+	}
+}
+
+// (b) counts a pair only when the two sign-ins really raced one code: one won
+// and the other was refused for the code. A locked-out broker's 429 is no race.
+func TestL75RacedPair(t *testing.T) {
+	for _, tc := range []struct {
+		a, b int
+		want bool
+	}{{200, 401, true}, {401, 200, true}, {200, 429, false}, {429, 200, false}, {401, 401, false}, {200, 200, false}, {429, 429, false}} {
+		if l75RacedPair(tc.a, tc.b) != tc.want {
+			t.Errorf("pair %d/%d", tc.a, tc.b)
+		}
+	}
+}
+
+// Two requests are one race only when both leave inside one TOTP step.
+func TestL75SameStep(t *testing.T) {
+	base := time.Unix(30*1000, 0)
+	if !l75SameStep(base, base.Add(29*time.Second)) || l75SameStep(base, base.Add(30*time.Second)) ||
+		l75SameStep(base.Add(-time.Second), base) {
+		t.Error("same step")
 	}
 }
