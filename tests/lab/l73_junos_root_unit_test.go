@@ -22,6 +22,9 @@ type rootDevice struct {
 	shellRan    []string
 	tailPW      string
 	shown       string
+	genpkey     string // "" works; "quiet" fails with rc 1 and no words; "missing" says unknown command
+	rc          int
+	version     string
 }
 
 func (d *rootDevice) say(s string) { d.out.Write([]byte(s)) }
@@ -55,13 +58,29 @@ func (d *rootDevice) line(ln string) {
 		return
 	case "shell":
 		d.say(ln + "\n")
+		if ln == "echo rc=$?" {
+			d.say(fmt.Sprintf("rc=%d\nroot@vj:~ # ", d.rc))
+			return
+		}
 		d.shellRan = append(d.shellRan, ln)
+		d.rc = 0
 		switch {
+		case strings.HasPrefix(ln, "openssl genpkey") && d.genpkey == "quiet":
+			d.rc = 1
+			d.say("root@vj:~ # ")
+			return
+		case strings.HasPrefix(ln, "openssl genpkey") && d.genpkey == "missing":
+			d.rc = 1
+			d.say("genpkey: unknown command\nroot@vj:~ # ")
+			return
+		case ln == "openssl version":
+			d.say("OpenSSL 1.0.2u  20 Dec 2019\n")
 		case ln == "exit":
 			d.mode = "op"
 			d.say("breakglass@vj> ")
 			return
 		case ln == "which openssl" && d.noOpenSSL:
+			d.rc = 1
 			d.say("openssl: Command not found.\n")
 		case ln == "which openssl":
 			d.say("/usr/bin/openssl\n")
@@ -298,5 +317,52 @@ func TestL73JunosRootPlacesTheSignedClientCertificate(t *testing.T) {
 	j := strings.Join(d.shellRan, "\n")
 	if !strings.Contains(j, "cp "+l73ClientCRT+" "+l73ClientDir+"/client.crt") || !strings.Contains(out.ClientListing, "client") {
 		t.Errorf("ran %q listing %q", j, out.ClientListing)
+	}
+}
+
+func TestL73JunosRootSilentFailureIsCaughtByTheExitStatus(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw, d.genpkey = testPW, "quiet"
+	_, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+	if err == nil || !strings.Contains(err.Error(), "rc=1") || !strings.Contains(err.Error(), "genpkey") {
+		t.Fatalf("a genpkey that exits 1 with no words went undetected: %v", err)
+	}
+	leakFree(t, "screen", screen, err.Error())
+	for _, ran := range d.shellRan {
+		if strings.HasPrefix(ran, "chmod ") {
+			t.Errorf("went on to %q after a failed genpkey", ran)
+		}
+	}
+}
+
+func TestL73JunosRootFailureKeepsTheCommandsOutputInTheScreen(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw, d.genpkey = testPW, "missing"
+	_, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if !strings.Contains(screen, "genpkey: unknown command") {
+		t.Errorf("the screen lacks the device's words: %q", screen)
+	}
+	leakFree(t, "screen", screen, err.Error())
+}
+
+func TestL73JunosRootRecordsTheDevicesOpenSSLVersion(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw = testPW
+	out, _, err := l73JunosRoot(c, l73RootJob{SetHash: true, Group: l73TrustGroup, CAs: rootCAs}, testPW, "$6$salt$HASHBODY")
+	if err != nil {
+		t.Fatal(oneLine(err.Error()))
+	}
+	if out.OpenSSLVersion != "OpenSSL 1.0.2u 20 Dec 2019" {
+		t.Errorf("version %q", out.OpenSSLVersion)
+	}
+	found := false
+	for _, f := range out.Facts() {
+		found = found || strings.Contains(f, "OpenSSL 1.0.2u")
+	}
+	if !found {
+		t.Error("the note's facts omit the version")
 	}
 }

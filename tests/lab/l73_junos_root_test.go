@@ -5,6 +5,8 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +44,7 @@ type l73RootOutcome struct {
 	ClientMade     bool
 	ClientCSR      string // the request, public, as the CLI showed it
 	ClientListing  string
+	OpenSSLVersion string
 }
 
 // l73JunosRoot is the lab-only root step on an open break-glass CLI, for the
@@ -116,24 +119,63 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 		return fail("`start shell user root` was refused")
 	}
 
+	// Each root command is followed on the next line by `echo rc=$?`, and the
+	// prompt is awaited only after that answer, so a slow command cannot race
+	// the next and a command that fails without a word still fails. The
+	// output is what came before the rc line.
+	rcLine := regexp.MustCompile(`(?m)^rc=(\d+)\s*$`)
 	shell := func(cmd string) (string, error) {
 		if !l73RootCmdAllowed(cmd) {
 			return "", fmt.Errorf("%q is not a line the root shell may run", cmd)
 		}
-		out, err := c.sendExpect(cmd, 60*time.Second, "# ", "% ")
-		if err != nil {
-			return out, err
+		from := len(c.transcript())
+		if err := c.send(cmd); err != nil {
+			return "", err
+		}
+		if err := c.send("echo rc=$?"); err != nil {
+			return "", err
+		}
+		var tail string
+		deadline := time.Now().Add(120 * time.Second)
+		for {
+			tail = c.transcript()[from:]
+			if rcLine.MatchString(tail) || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		m := rcLine.FindStringSubmatchIndex(tail)
+		if m == nil {
+			screen.WriteString("$ " + cmd + "\n")
+			keep(tail)
+			return tail, fmt.Errorf("%q: no exit status came back", cmd)
+		}
+		out := l73ShellBody(strings.ReplaceAll(tail[:m[0]], "\r", ""), cmd)
+		rc := tail[m[2]:m[3]]
+		if _, err := c.expectFrom(from+m[1], 60*time.Second, "# ", "% "); err != nil {
+			return out, fmt.Errorf("%q: the prompt did not return: %v", cmd, err)
+		}
+		fail := func(why string) (string, error) {
+			screen.WriteString("$ " + cmd + "\n")
+			keep(out)
+			return out, fmt.Errorf("%q: %s", cmd, why)
+		}
+		if rc != "0" && cmd != "which openssl" {
+			return fail("exit status rc=" + rc)
 		}
 		low := strings.ToLower(out)
 		for _, bad := range []string{"permission denied", "no such file", "cannot", "not found", "usage:", "error"} {
 			if cmd != "which openssl" && strings.Contains(low, bad) {
-				return out, fmt.Errorf("%q: the shell said %q", cmd, bad)
+				return fail("the shell said " + strconv.Quote(bad))
 			}
 		}
 		return out, nil
 	}
 	leave := func() { _, _ = c.sendExpect("exit", 60*time.Second, junosOpPrompt) }
 
+	if v, err := shell("openssl version"); err == nil {
+		o.OpenSSLVersion = oneLine(v)
+	}
 	which, err := shell("which openssl")
 	if err != nil {
 		leave()
@@ -210,9 +252,26 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 	return o, screen.String(), nil
 }
 
+// l73ShellBody is what a root command printed: the screen between the command
+// and the rc line, without the echoed command lines and the prompt.
+func l73ShellBody(s, cmd string) string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.Contains(t, "echo rc=$?") || strings.Contains(t, cmd) || strings.HasSuffix(t, " #") || strings.HasSuffix(t, " %") || t == "#" || t == "%" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return strings.Join(out, "\n")
+}
+
 // Facts are the lines the results note carries about the root step.
 func (o l73RootOutcome) Facts() []string {
 	var facts []string
+	if o.OpenSSLVersion != "" {
+		facts = append(facts, "the root shell's `openssl version`: "+o.OpenSSLVersion)
+	}
 	if len(o.Placed) > 0 {
 		set := "absent"
 		if o.RootAuthWasSet {

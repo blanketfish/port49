@@ -948,7 +948,7 @@ func l73RootCmdAllowed(cmd string) bool {
 	return l73RootCmdForms.MatchString(cmd)
 }
 
-var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit` +
+var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit|echo rc=\$\?|openssl version` +
 	`|openssl x509 -noout -subject_hash(_old)? -in (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `)` +
 	`|mkdir -p ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
 	`|ls -l ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +

@@ -713,7 +713,7 @@ func TestL73TrustGroupComesAfterTheCALoads(t *testing.T) {
 
 func TestL73RootCmdAllowed(t *testing.T) {
 	d := "/var/db/aaa_certs/tacplus_tls/l73-trust"
-	for _, ok := range []string{"which openssl", "exit",
+	for _, ok := range []string{"which openssl", "exit", "echo rc=$?", "openssl version",
 		"openssl x509 -noout -subject_hash -in /var/tmp/l73-root.pem",
 		"openssl x509 -noout -subject_hash_old -in /var/tmp/l73-inter.pem",
 		"mkdir -p " + d, "ls -l " + d,
@@ -732,7 +732,7 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"cp /var/tmp/l73-root.pem /etc/master.passwd", "cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0 /tmp",
 		"mkdir -p /var/db/aaa_certs/tacplus_tls/../x", "mkdir -p /var/tmp/x", "rm -rf " + d, "cp /var/db/certd/x " + d + "/0a1b2c3d.0",
 		"openssl x509 -noout -subject_hash -in /var/db/certd/key-pair/x", "openssl rsa -in /var/tmp/l73-root.pem", "exit; id",
-		"which openssl\nid",
+		"which openssl\nid", "echo rc=$?; id", "echo $?", "echo rc=$? > /tmp/x", "openssl version -a", "openssl version; id",
 		// nothing reads or moves the client key
 		"cat " + l73TrustDir + "/l73-dev/client.key", "cp " + l73TrustDir + "/l73-dev/client.key /var/tmp/k.pem",
 		"openssl pkey -in " + l73TrustDir + "/l73-dev/client.key", "openssl ec -in " + l73TrustDir + "/l73-dev/client.key -text",
