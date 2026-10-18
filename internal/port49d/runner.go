@@ -14,9 +14,11 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // runner is one port49-broker's part in the keyspace's one runner (plan
@@ -64,6 +66,17 @@ type runner struct {
 	// tookOver is told the policy each takeover carried, once it is done:
 	// it opens the start's mint gate (decision 36). nil tells nothing.
 	tookOver func(carried *policy.Policy)
+	// followed is told each mark the marks feed brings that stands, in a
+	// split (plan 11a, R20): the duties reach it in this region's session
+	// store (reachFollowed). Nil in a shared store, where the broker that
+	// made a mark reached it there.
+	followed chan store.Revocation
+	// followedLogouts is told each logout the logouts feed brings, in a
+	// split (R26): the duties reach it in this region's session store.
+	followedLogouts chan store.LogoutEntry
+	// pending is how many back-channel logouts the last forwarding pass left
+	// pending in this region's session store (forwardingPending).
+	pending atomic.Int64
 }
 
 // judgedStore is meta/ as the runner reads and writes it (etcd.Store):
@@ -186,6 +199,11 @@ func (r *runner) duties(ctx context.Context) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(8)
+	if r.followed != nil {
+		wg.Add(2)
+		go func() { defer wg.Done(); r.reachFollowed(ctx) }()
+		go func() { defer wg.Done(); r.forwardingPending(ctx) }()
+	}
 	go func() { defer wg.Done(); r.judging(ctx) }()
 	go func() { defer wg.Done(); r.keepWitness(ctx) }()
 	go func() { defer wg.Done(); r.reapplying(ctx) }()
@@ -959,4 +977,92 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		return nil, ctx.Err()
 	}
 	return carried, nil
+}
+
+// follow is the marks feed's tell in a split, after MarkChanged: a mark
+// that stands is queued for the running duties to reach here. A replica
+// that does not run queues nothing, and a full queue drops the mark,
+// said: the marks deny it on every request, and the next takeover
+// applies every mark to the live contexts.
+func (r *runner) follow(c store.MarkChange) {
+	if r.followed == nil || !c.Standing || !r.running() {
+		return
+	}
+	select {
+	case r.followed <- c.Revocation:
+	default:
+		fmt.Fprintf(stderr, "port49-broker: runner: a revocation of %s made elsewhere was not queued to reach this "+
+			"region's tokens (the queue is full); the marks deny it on every request, and the next takeover "+
+			"applies it\n", printsafe.Line(c.Key, 160))
+	}
+}
+
+// followLogout queues a logout the feed brought for the running duties,
+// as follow queues a mark; a full queue drops it, said: the logout set
+// refuses its mints and refreshes regardless.
+func (r *runner) followLogout(e store.LogoutEntry) {
+	if r.followedLogouts == nil || !r.running() {
+		return
+	}
+	select {
+	case r.followedLogouts <- e:
+	default:
+		fmt.Fprintln(stderr, "port49-broker: runner: a logout made elsewhere was not queued to reach this region's "+
+			"sessions (the queue is full); its mints and refreshes are refused regardless")
+	}
+}
+
+// reachFollowed reaches each queued mark and logout in this region's session
+// store (Broker.ReachMark, Broker.ReachLogout), one line each, until ctx
+// ends.
+func (r *runner) reachFollowed(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case mark := <-r.followed:
+			n, refs, err := r.brk.ReachMark(ctx, mark)
+			line := fmt.Sprintf("port49-broker: runner: a revocation of %s made elsewhere reached %d token "+
+				"key(s) and %d context(s) here", printsafe.Line(mark.Key, 160), n, len(refs))
+			if err != nil {
+				line += fmt.Sprintf("; not every step finished (%s): the marks deny it on every request, and the "+
+					"next takeover applies it again", printsafe.Line(err.Error(), 300))
+			}
+			fmt.Fprintln(stderr, line)
+		case l := <-r.followedLogouts:
+			rep, err := r.brk.ReachLogout(ctx, l.Logout)
+			line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
+				"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
+			if err != nil {
+				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
+			}
+			fmt.Fprintln(stderr, line)
+		}
+	}
+}
+
+// forwardingPending forwards this region's pending logouts to the
+// directory every 5s while it answers (placement.ForwardPending), sets
+// port49_store_logouts_pending, and says each pass that forwarded any, and
+// once per run of passes that could not.
+func (r *runner) forwardingPending(ctx context.Context) {
+	said := false
+	for {
+		n, left, err := placement.ForwardPending(ctx, r.st, r.raw)
+		r.m.StoreLogoutsPending.Set(float64(left))
+		r.pending.Store(int64(left))
+		switch {
+		case n > 0:
+			fmt.Fprintf(stderr, "port49-broker: runner: %d pending back-channel logout(s) forwarded to the "+
+				"directory store, and so to every region\n", n)
+			said = false
+		case err != nil && left > 0 && !said:
+			fmt.Fprintf(stderr, "port49-broker: runner: %d back-channel logout(s) pending until the directory store "+
+				"answers (%s); they are applied in this region already\n", left, printsafe.Line(err.Error(), 300))
+			said = true
+		}
+		if !sleepCtx(ctx, 5*time.Second) {
+			return
+		}
+	}
 }

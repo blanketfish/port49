@@ -21,7 +21,6 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/enrollfile"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 )
 
@@ -44,17 +43,22 @@ const (
 // found. Nothing here stops port49d: a store that cannot be opened or reached
 // refuses password sign-in alone, and every other path serves.
 //
-// shared is the *etcd.Store the broker runs on, for the directory store on etcd;
-// nil on the memory store. It does nothing for a
-// broker with no directory_password verifier.
+// dir is the directory store's handle, the broker's identity on it (the
+// session store's own in a shared store); nil on the memory store. It does
+// nothing for a broker with no directory_password verifier.
 //
 // The channel it returns closes once ctx is cancelled and the goroutines the
 // wiring started have returned; a caller that closes the store joins it first.
 func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared *etcdstore.Store, out io.Writer) <-chan struct{} {
-	var sh store.Enrollments // a nil *Store is not a nil interface
-	if shared != nil {
-		sh = shared
+	m *metrics.Metrics, dir *dirHandle, out io.Writer) <-chan struct{} {
+	var sh func() store.Enrollments // nil: no shared store
+	if dir != nil {
+		sh = func() store.Enrollments {
+			if s := dir.get(); s != nil {
+				return s
+			}
+			return nil // a nil *Store is not a nil interface
+		}
 	}
 	return wireSignIn(ctx, cfg, b, keys, m, sh, out)
 }
@@ -75,9 +79,10 @@ func setPasswordSignIn(cfg config.Config, b *broker.Broker) {
 }
 
 // wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,
-// which a test can fake. Its channel is wirePasswordSignIn's.
+// read at each open so a directory that answers late is used when it does;
+// a test can fake it. Its channel is wirePasswordSignIn's.
 func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared store.Enrollments, out io.Writer) <-chan struct{} {
+	m *metrics.Metrics, shared func() store.Enrollments, out io.Writer) <-chan struct{} {
 	done := make(chan struct{})
 	if b == nil || cfg.Broker == nil || cfg.Broker.Identity == nil || cfg.Broker.Identity.PasswordSignIn == nil {
 		close(done)
@@ -108,7 +113,11 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 		}
 		gc.StopAfter, gc.Unhealthy = 0, nil
 		open = func() (store.Enrollments, error) {
-			return crypt.WrapEnrollments(guard.WrapEnrollments(shared, gc), keys, m.CryptOpenFailures), nil
+			sh := shared()
+			if sh == nil {
+				return nil, errNoDirectory // lateEnrollments opens again at its next interval
+			}
+			return crypt.WrapEnrollments(guard.WrapEnrollments(sh, gc), keys, m.CryptOpenFailures), nil
 		}
 	default:
 		// The config cannot make this: an etcd backend shares the directory

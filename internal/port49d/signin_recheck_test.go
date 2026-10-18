@@ -43,7 +43,7 @@ func TestAReplicaLeavesTheLostStateWhenTheMarkAppears(t *testing.T) {
 		m := metrics.New(prometheus.NewRegistry())
 		b := builtSignInBroker(t, cfg, m)
 		b.Say = func(string, ...any) {}
-		wireSignIn(ctx, cfg, b, signInTestKeys, m, shared, io.Discard)
+		wireSignIn(ctx, cfg, b, signInTestKeys, m, func() store.Enrollments { return shared }, io.Discard)
 		if b.EnrollmentStoreLost() == "" {
 			t.Fatalf("replica %d is not lost before the mark", i)
 		}
@@ -110,7 +110,7 @@ func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.
 	b := builtSignInBroker(t, cfg, m)
 	b.Say = func(string, ...any) {}
 	var out strings.Builder
-	wireSignIn(ctx, cfg, b, signInTestKeys, m, shared, &out)
+	wireSignIn(ctx, cfg, b, signInTestKeys, m, func() store.Enrollments { return shared }, &out)
 	if n := testutil.CollectAndCount(m.DirectoryEnrollmentStoreOK); n != 0 {
 		t.Fatalf("the gauge has %d series before the store answered", n)
 	}

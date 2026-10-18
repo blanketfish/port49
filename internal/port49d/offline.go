@@ -27,6 +27,7 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/guard"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // offlineSay begins each line of port49-broker revoke --offline.
@@ -250,7 +251,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 	}
 	run.noPolicy = noPolicy
 	m := metrics.New(prometheus.NewRegistry())
-	b, err := attempt(ctx, cfg, m, out)
+	b, err := attempt(ctx, cfg, sessionRef(cfg), m, out)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return offlineRun{}, errors.New("stopped")
@@ -261,6 +262,23 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	st := crypt.Wrap(guard.WrapRev(b, gc), keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()),
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))
+	closeAll := func() { b.Close() }
+	if !cfg.Stores.Shared {
+		d, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		if err != nil {
+			b.Close()
+			if errors.Is(err, context.Canceled) {
+				return offlineRun{}, errors.New("stopped")
+			}
+			return offlineRun{}, fmt.Errorf("directory store: %w", err)
+		}
+		de := cfg.Stores.Directory.Etcd
+		// No copy: the offline revocation follows no feed, so a mark is read
+		// from the directory.
+		st = placement.Wrap(placement.Config{Session: st, Directory: d, CallTimeout: de.CallTimeout,
+			BulkTimeout: de.BulkTimeout})
+		closeAll = func() { b.Close(); d.Close() }
+	}
 	brk := &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
 		Log:            decision.NewJSONLinesWithFailureHook(log, m.DecisionLogWriteFailures.Inc),
 		ContextIdleTTL: cfg.ContextIdleTTL, GraceWindow: cfg.Session.GraceWindow, RevokeTimeout: admin.OpTimeout,
@@ -268,7 +286,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 	brk.Redact = redactorFor(brk.Policy)
 	brk.Sessions = session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(out, "port49-broker: "+format+"\n", args...) }
-	run.brk, run.stateDir, run.close = brk, cfg.Broker.StateDir, func() { b.Close() }
+	run.brk, run.stateDir, run.close = brk, cfg.Broker.StateDir, closeAll
 	return run, nil
 }
 

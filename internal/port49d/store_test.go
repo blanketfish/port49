@@ -156,28 +156,29 @@ func TestTheRolesCheckRunsTheBrokersUnderUnenforced(t *testing.T) {
 	b2, b2l := open("port49-broker2")
 	ctx := context.Background()
 	e := &config.EtcdConfig{CallTimeout: 2 * time.Second, Roles: config.RolesEnforced}
+	sharedRef := storeRef{at: "stores.directory", scope: etcdstore.ScopeShared}
 
-	err := checkRoles(ctx, "stores.directory.etcd", d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l})
+	err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}, sharedRef)
 	if !errors.Is(err, etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "a store identity reaches past its role") ||
 		!strings.Contains(err.Error(), "stores.directory.etcd.roles: unenforced") || !strings.Contains(err.Error(), "stores.directory.etcd.daemon") {
 		t.Fatalf("enforced, a daemon with the broker's role: %v", err)
 	}
 	e.Roles = config.RolesUnenforced
-	if err := checkRoles(ctx, "stores.directory.etcd", d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}); err != nil {
+	if err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}, sharedRef); err != nil {
 		t.Fatalf("unenforced, the daemon's check is skipped: %v", err)
 	}
-	err = checkRoles(ctx, "stores.directory.etcd", d, b, e, map[string]*x509.Certificate{"daemon": dl, "broker": bl})
+	err = checkRoles(ctx, d, b, e, map[string]*x509.Certificate{"daemon": dl, "broker": bl}, sharedRef)
 	if !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "stores.directory.etcd.broker") {
 		t.Fatalf("unenforced, a broker that cannot write meta/: %v", err)
 	}
 	// The daemon's identity alone (plan 7e): unenforced, its check is
 	// skipped and there is no broker's to run; enforced, it is refused as
 	// above.
-	if err := checkRoles(ctx, "stores.directory.etcd", d, nil, e, map[string]*x509.Certificate{"daemon": dl}); err != nil {
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}, sharedRef); err != nil {
 		t.Fatalf("unenforced, the daemon alone: %v", err)
 	}
 	e.Roles = config.RolesEnforced
-	if err := checkRoles(ctx, "stores.directory.etcd", d, nil, e, map[string]*x509.Certificate{"daemon": dl}); !errors.Is(err,
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}, sharedRef); !errors.Is(err,
 		etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "stores.directory.etcd.daemon") {
 		t.Fatalf("enforced, the daemon alone with the broker's role: %v", err)
 	}
@@ -836,9 +837,9 @@ func TestLineHolderEchoesOnlyTheShapePort49dWrites(t *testing.T) {
 	}
 }
 
-// A split (stores.session of its own) is refused by both processes until the
-// directory store is opened (plan 11a, Tasks 9 and 10), named, never served
-// as one store.
+// A split (stores.session of its own) is refused by port49d until it opens
+// the directory store (plan 11a, Task 10), named, never served as one store.
+// port49-broker opens both (Task 9).
 func TestASplitIsRefusedUntilTheDirectoryStoreOpens(t *testing.T) {
 	cfg := config.Config{Stores: config.StoresConfig{
 		Directory: config.StoreConfig{Backend: config.BackendEtcd},
@@ -848,10 +849,6 @@ func TestASplitIsRefusedUntilTheDirectoryStoreOpens(t *testing.T) {
 	if _, err := openStores(context.Background(), cfg, crypt.Keys{}, nil, io.Discard, nil, false, nil, nil, nil, nil); !errors.As(err, &fault) ||
 		!strings.Contains(err.Error(), "stores.session names a store of its own") {
 		t.Errorf("port49d: %v", err)
-	}
-	if _, err := openBroker(context.Background(), cfg, crypt.Keys{}, nil, io.Discard, nil, nil); !errors.As(err, &fault) ||
-		!strings.Contains(err.Error(), "stores.session names a store of its own") {
-		t.Errorf("port49-broker: %v", err)
 	}
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
+	"github.com/rhwendt/port49/internal/store/placement"
 	"github.com/rhwendt/port49/internal/token"
 )
 
@@ -87,6 +88,15 @@ type brokerStores struct {
 	// followContexts keeps the ledger following the store's contexts until
 	// its ctx ends (crypt.FollowContexts), from ctxRev.
 	followContexts func(ctx context.Context)
+	// dir is the directory store's raw handle, the broker's identity on it:
+	// the session store's own in a shared store. fresh is how current the
+	// marks this replica follows from it are (plan 11a, R17). logouts is
+	// this replica's copy of the directory's logout records, loaded at
+	// logoutRev (R26).
+	dir       *dirHandle
+	fresh     *store.Freshness
+	logouts   *store.LogoutSet
+	logoutRev uint64
 }
 
 // openBroker waits for etcd on the broker's identity alone, as port49d's
@@ -103,14 +113,10 @@ type brokerStores struct {
 // sayer.
 func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	ledger *crypt.Ledger, marks *store.Marks) (brokerStores, error) {
-	if !cfg.Stores.Shared {
-		return brokerStores{}, &storeFault{errors.New("stores.session names a store of its own, and this build " +
-			"serves one store: omit stores.session")}
-	}
 	e := cfg.Stores.Session.Etcd
 	say := crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now))
 	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
-	b, err := waitForStore(ctx, cfg, m, out, false, "nothing is served yet")
+	b, err := waitForStore(ctx, cfg, sessionRef(cfg), m, out, false, "nothing is served yet")
 	if err != nil {
 		return brokerStores{}, err
 	}
@@ -133,12 +139,27 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			}
 		}
 	}
+	dirRaw := b
+	if !cfg.Stores.Shared {
+		if dirRaw, err = waitForStore(ctx, cfg, directoryRef(cfg), m, out, false, "nothing is served yet"); err != nil {
+			b.Close()
+			return brokerStores{}, err
+		}
+	}
 	fail := func(err error) (brokerStores, error) {
 		b.Close()
+		if dirRaw != b {
+			dirRaw.Close()
+		}
 		if ctx.Err() != nil {
 			return brokerStores{}, ctx.Err()
 		}
 		return brokerStores{}, err
+	}
+	// The marks are the directory's: its bound in a split.
+	markBound := e.BulkTimeout
+	if !cfg.Stores.Shared {
+		markBound = cfg.Stores.Directory.Etcd.BulkTimeout
 	}
 	var bs brokerStores
 	if err := retry(func() error {
@@ -157,22 +178,58 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return fail(err)
 	}
 	if err := retry(func() error {
-		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
+		lctx, cancel := context.WithTimeout(ctx, markBound)
 		defer cancel()
 		var err error
-		if bs.markRev, err = store.LoadMarks(lctx, b, marks, nil); err != nil {
+		if bs.markRev, err = store.LoadMarks(lctx, dirRaw, marks, nil); err != nil {
 			return fmt.Errorf("store: reading the revocations in force: %w", err)
 		}
 		return nil
 	}); err != nil {
 		return fail(err)
 	}
-	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from the store\n", marks.Len())
+	from := "the store"
+	if !cfg.Stores.Shared {
+		from = "the directory store"
+	}
+	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from %s\n", marks.Len(), from)
 	gc := guardConfig(procOf(cfg), "broker", cfg.Stores.SessionPath(), e, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	bs.raw = b
 	bs.st = crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc), keys, m.CryptOpenFailures,
 		crypt.WithLedger(ledger), say)
+	bs.dir = &dirHandle{}
+	bs.dir.set(dirRaw)
+	bs.fresh = store.NewFreshness(time.Now)
+	tellFresh(bs.fresh, m)
+	bs.logouts = store.NewLogoutSet(time.Now)
+	if !cfg.Stores.Shared {
+		de := cfg.Stores.Directory.Etcd
+		// The directory's membership half, sealed as the session's is (R13;
+		// Task 8a): the pin, the map keys, refusals, the forget's tombstone.
+		members := crypt.Wrap(dirRaw, keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()), say)
+		// The logouts, loaded before anything is served, as the marks are (R26):
+		// the router is handed neither the marks nor the logouts until each has
+		// loaded, so a read before then cannot find a mark "absent".
+		if err := retry(func() error {
+			lctx, cancel := context.WithTimeout(ctx, de.BulkTimeout)
+			defer cancel()
+			rev, es, err := dirRaw.Logouts(lctx)
+			if err == nil {
+				bs.logouts.Merge(es) // a merge, not a replace: a load never erases a live logout (8b review I1); Len counts the live (M2)
+				bs.logoutRev = rev
+			}
+			return err
+		}); err != nil {
+			return fail(err)
+		}
+		bs.st = placement.Wrap(placement.Config{Session: bs.st, Directory: dirRaw, Members: members, Marks: marks,
+			Logouts: bs.logouts, LogoutDir: dirRaw,
+			CallTimeout: de.CallTimeout, BulkTimeout: de.BulkTimeout,
+			// Before the first check the directory is tried; after it, its answer rules.
+			Reachable: func() bool { ok, why := bs.fresh.Reachable(); return ok || why == "" },
+			Say:       func(format string, args ...any) { fmt.Fprintf(out, "port49-broker: "+format+"\n", args...) }})
+	}
 	bs.followContexts = func(ctx context.Context) {
 		crypt.FollowContexts(ctx, b, b, keys, ledger, bs.ctxRev,
 			func(up bool) { m.StoreFeedUp.WithLabelValues("contexts").Set(b2f(up)) },
@@ -349,6 +406,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// Every goroutine below is joined (wg) before the store closes.
 	var wg sync.WaitGroup
 	defer bs.raw.Close()
+	if !cfg.Stores.Shared {
+		defer bs.dir.close()
+	}
 	defer wg.Wait()
 	defer cancel()
 	// The ledger follows the store from the start's scan at once, before
@@ -368,7 +428,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	signInDone := wirePasswordSignIn(ctx, cfg, brk, keys, m, bs.raw, stderr)
+	signInDone := wirePasswordSignIn(ctx, cfg, brk, keys, m, bs.dir, stderr)
 	wg.Add(1)
 	go func() { defer wg.Done(); <-signInDone }()
 	if startDoc != nil {
@@ -442,6 +502,10 @@ func runBroker(parent context.Context, cfgPath string) error {
 		tookOver: func(carried *policy.Policy) {
 			gate.open(fmt.Sprintf("this replica's takeover is done (bundle %s)", carried.Bundle), stderr)
 		}}
+	if !cfg.Stores.Shared {
+		rn.followed = make(chan store.Revocation, 1024)
+		rn.followedLogouts = make(chan store.LogoutEntry, 1024)
+	}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
 	// token under another bundle is then judged. Every swap, the runner's
@@ -561,11 +625,39 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		store.FollowMarks(ctx, copyingFeed{MarkFeed: bs.raw, copy: marksCopy}, marks, bs.markRev, brk.MarkChanged,
-			func(up bool) { m.StoreFeedUp.WithLabelValues("marks").Set(b2f(up)) },
+		onMark := brk.MarkChanged
+		if !cfg.Stores.Shared {
+			onMark = func(c store.MarkChange) { brk.MarkChanged(c); rn.follow(c) }
+		}
+		store.FollowMarks(ctx, copyingFeed{MarkFeed: bs.dir.get(), copy: marksCopy}, marks, bs.markRev, onMark,
+			func(up bool) { m.StoreFeedUp.WithLabelValues("marks").Set(b2f(up)); bs.fresh.FeedUp(up) },
 			rn.reloadHook(ctx, m.StoreFeedRescans.WithLabelValues("marks")),
 			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
 	}()
+	// In a split, follow the pins into the router's cache (Task 8a); FollowPins
+	// returns at once on a shared store.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		placement.FollowPins(ctx, bs.st, bs.dir.get(),
+			func(up bool) { m.StoreFeedUp.WithLabelValues("pins").Set(b2f(up)) },
+			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
+	}()
+	// In a split, follow the logouts into this replica's copy. Each one the
+	// watch delivers goes to the runner, which reaches it here (Task 8c).
+	if !cfg.Stores.Shared {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			store.FollowLogouts(ctx, bs.dir.get(), bs.logouts, bs.logoutRev, rn.followLogout,
+				func(up bool) { m.StoreFeedUp.WithLabelValues("logouts").Set(b2f(up)) },
+				func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
+		}()
+	}
+	// The copy's freshness: the directory read every second (R17).
+	dirTimeout := cfg.Stores.Directory.Etcd.CallTimeout
+	wg.Add(1)
+	go func() { defer wg.Done(); keepFresh(ctx, bs.dir, bs.fresh, dirTimeout, stderr, "port49-broker") }()
 
 	aln, err := admin.Listen(cfg.AdminSocket)
 	if err != nil {

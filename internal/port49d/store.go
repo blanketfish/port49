@@ -131,7 +131,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		m.CryptStoreKeyUnknown.Set(1)
 	}
 	rd.set(readyStore)
-	d, err := waitForStore(ctx, cfg, m, out, again, "the listeners stay closed")
+	d, err := waitForStore(ctx, cfg, sessionRef(cfg), m, out, again, "the listeners stay closed")
 	if err != nil {
 		return stores{}, err
 	}
@@ -144,19 +144,21 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 // meanwhile (closed), up to start_timeout on a cold start and with no
 // deadline when again. A configuration fault ends a cold start, named;
 // after a store gone it is said and tried again, re-reading the files.
-func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, again bool,
+func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer, again bool,
 	closed string) (*etcdstore.Store, error) {
-	e := cfg.Stores.Session.Etcd
-	at := cfg.Stores.SessionPath() + ".etcd"
+	e := ref.cfg.Etcd
+	at := ref.at + ".etcd"
 	proc := procOf(cfg)
 	// Both feeds read down from here until each first runs, so an alert on
 	// port49_store_feed_up == 0 fires through a wait for the store or a
 	// marks load still retrying, not on an absent series; and each rescan
 	// counter is there at 0, so the first rescan is an increase (final
 	// review 7e-1 M-3).
-	for _, feed := range []string{"contexts", "marks"} {
-		m.StoreFeedUp.WithLabelValues(feed).Set(0)
-		m.StoreFeedRescans.WithLabelValues(feed)
+	if !ref.dir {
+		for _, feed := range []string{"contexts", "marks"} {
+			m.StoreFeedUp.WithLabelValues(feed).Set(0)
+			m.StoreFeedRescans.WithLabelValues(feed)
+		}
 	}
 	eps := strings.Join(e.Endpoints, ", ")
 	var deadline time.Time
@@ -164,7 +166,7 @@ func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 		deadline = time.Now().Add(e.StartTimeout)
 	}
 	for {
-		s, err := attempt(ctx, cfg, m, out)
+		s, err := attempt(ctx, cfg, ref, m, out)
 		if err == nil {
 			if e.Roles == config.RolesUnenforced {
 				fmt.Fprintf(out, "%s: %s.roles: unenforced: the daemon and the broker are not separated "+
@@ -182,14 +184,14 @@ func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 		case errors.As(err, &fault):
 			fmt.Fprintf(out, "%s: %v; %s; trying again in 5s\n", proc, err, closed)
 		case !deadline.IsZero() && time.Now().After(deadline):
-			return nil, fmt.Errorf("store: etcd at %s did not answer within %s.start_timeout (%v); not "+
-				"starting", eps, at, e.StartTimeout)
+			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
+				"starting", ref.what(), eps, ref.at+".etcd", e.StartTimeout)
 		default:
 			wait := "until it answers"
 			if !deadline.IsZero() {
 				wait = fmt.Sprintf("up to %v", e.StartTimeout)
 			}
-			fmt.Fprintf(out, "%s: store: etcd at %s not answering (%v); %s; waiting %s\n", proc, eps, err, closed,
+			fmt.Fprintf(out, "%s: %s: etcd at %s not answering (%v); %s; waiting %s\n", proc, ref.what(), eps, err, closed,
 				wait)
 		}
 		select {
@@ -594,9 +596,9 @@ func checkSealKeysAs(ctx context.Context, proc string, s *etcdstore.Store, keys 
 // An outage is store.ErrUnavailable; a configuration fault is a
 // *storeFault naming what is wrong. Each start says the certificate's
 // expiry, once it succeeds.
-func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer) (*etcdstore.Store, error) {
-	e := cfg.Stores.Session.Etcd
-	at := cfg.Stores.SessionPath() + ".etcd"
+func attempt(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer) (*etcdstore.Store, error) {
+	e := ref.cfg.Etcd
+	at := ref.at + ".etcd"
 	now := time.Now()
 	pool, cas, err := caCerts(e.CAFile)
 	if err != nil {
@@ -612,7 +614,7 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 	if cfg.Role == config.RoleBroker {
 		name, id = "broker", *e.Broker
 	}
-	s, leaf, err := openIdentity(ctx, cfg, m, out, pool, now, name, id)
+	s, leaf, err := openIdentity(ctx, cfg, ref, m, out, pool, now, name, id)
 	if err != nil {
 		return nil, err
 	}
@@ -622,9 +624,9 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 	if err == nil {
 		leaves := map[string]*x509.Certificate{name: leaf}
 		if name == "broker" {
-			err = checkRoles(ctx, at, nil, s, e, leaves)
+			err = checkRoles(ctx, nil, s, e, leaves, ref)
 		} else {
-			err = checkRoles(ctx, at, s, nil, e, leaves)
+			err = checkRoles(ctx, s, nil, e, leaves, ref)
 		}
 	}
 	if err != nil {
@@ -634,8 +636,8 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 		}
 		return nil, &storeFault{err}
 	}
-	m.StoreCertExpiry.WithLabelValues(name).Set(float64(leaf.NotAfter.Unix()))
-	fmt.Fprintf(out, "%s: store: the %s's etcd certificate (CN=%s) is valid until %s (%d days)\n", procOf(cfg), name,
+	m.StoreCertExpiry.WithLabelValues(ref.certLabel(name)).Set(float64(leaf.NotAfter.Unix()))
+	fmt.Fprintf(out, "%s: %s: the %s's etcd certificate (CN=%s) is valid until %s (%d days)\n", procOf(cfg), ref.what(), name,
 		leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339), int(leaf.NotAfter.Sub(now).Hours()/24))
 	return s, nil
 }
@@ -645,10 +647,10 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 // at now, and its TLS handshake probed (probeTLS). What the etcd store
 // skips, it says by key alone on out and counts (Task 7 review m-5): the
 // process's lines, and port49_store_index_records_undecodable_total.
-func openIdentity(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, pool *x509.CertPool,
-	now time.Time, name string, id config.EtcdIdentity) (*etcdstore.Store, *x509.Certificate, error) {
-	e := cfg.Stores.Session.Etcd
-	at := cfg.Stores.SessionPath() + ".etcd"
+func openIdentity(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer,
+	pool *x509.CertPool, now time.Time, name string, id config.EtcdIdentity) (*etcdstore.Store, *x509.Certificate, error) {
+	e := ref.cfg.Etcd
+	at := ref.at + ".etcd"
 	tc, leaf, err := identityAt(at+"."+name, id, pool, now)
 	if err != nil {
 		return nil, nil, err
@@ -657,7 +659,7 @@ func openIdentity(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 		return nil, nil, err
 	}
 	proc := procOf(cfg)
-	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": store: "+format+"\n", args...) }
+	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+ref.what()+": "+format+"\n", args...) }
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
 		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
 	if err != nil {
@@ -754,11 +756,13 @@ func tlsFault(err error) bool {
 // still is, so neither identity is etcd's root and the broker's reach is
 // whole (Task 11). Each process holds one identity (plan 7e): d is nil on
 // port49-broker, and b on port49d.
-func checkRoles(ctx context.Context, at string, d, b *etcdstore.Store, e *config.EtcdConfig, leaves map[string]*x509.Certificate) error {
+func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig, leaves map[string]*x509.Certificate,
+	ref storeRef) error {
+	at := ref.at + ".etcd"
 	cctx, cancel := context.WithTimeout(ctx, 4*e.CallTimeout)
 	defer cancel()
 	if d != nil && e.Roles != config.RolesUnenforced {
-		if err := d.CheckIdentity(cctx, false); err != nil {
+		if err := d.CheckIdentityAt(cctx, false, ref.scope); err != nil {
 			if errors.Is(err, etcdstore.ErrNotSeparated) {
 				return fmt.Errorf("%s.daemon: its identity (CN=%s): %w: etcd's roles for port49 are not in force "+
 					"(auth disabled, or that user holds the broker's or root's role); run 'port49d store-roles --config …' "+
@@ -771,7 +775,7 @@ func checkRoles(ctx context.Context, at string, d, b *etcdstore.Store, e *config
 	if b == nil {
 		return nil
 	}
-	if err := b.CheckIdentity(cctx, true); err != nil {
+	if err := b.CheckIdentityAt(cctx, true, ref.scope); err != nil {
 		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
 			"apply 'port49d store-roles' output", at, leaves["broker"].Subject.CommonName, err)
 	}

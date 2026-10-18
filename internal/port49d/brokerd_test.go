@@ -48,6 +48,11 @@ type fleet struct {
 	// policy is the policy file a broker copied from f.broker's at its
 	// write starts with; editPolicy rewrites f.broker's own.
 	policy string
+	// dsrv is the directory store's member when the fleet has one of its own
+	// (twoStores); dproxy is the broker's way to it and ddproxy the daemon's,
+	// so a test cuts either alone.
+	dsrv            *etcdtest.Server
+	dproxy, ddproxy *etcdtest.Proxy
 }
 
 // splitFleet is the fleet on minimalPolicy.
