@@ -130,8 +130,8 @@ func l75Policy() string {
 roles:
   - {name: admin, privilege: admin, permit: ["**"]}
 subjects:
-  - {name: carol, identity: ["user:carol@corp.example.com"], username: carol, token_ttl: 900s}
-  - {name: bob, identity: ["user:bob@corp.example.com"], username: bob, token_ttl: 900s}
+  - {name: carol, identity: ["user:carol@corp.example.com"], token_ttl: 900s}
+  - {name: bob, identity: ["user:bob@corp.example.com"], token_ttl: 900s}
 grants:
   - {subject: carol, scope: all, roles: [admin]}
   - {subject: bob, scope: all, roles: [admin]}

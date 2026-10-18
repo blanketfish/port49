@@ -14,6 +14,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -545,5 +546,13 @@ func TestSnapshotCountArgsAreAcceptedWithJSON(t *testing.T) {
 		if !strings.Contains(args, want) {
 			t.Errorf("%q lacks %q", args, want)
 		}
+	}
+}
+
+// The broker loads l75's policy with the directory on, which refuses a human
+// subject's username (decision 38); the first full run found that in the lab.
+func TestL75PolicyLoadsWithTheDirectoryOn(t *testing.T) {
+	if _, err := policy.Parse([]byte(l75Policy()), policy.Env{Directory: policy.DirectoryOn}); err != nil {
+		t.Fatal(err)
 	}
 }
