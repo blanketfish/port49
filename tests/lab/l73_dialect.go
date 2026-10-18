@@ -97,6 +97,10 @@ var l73IOSXEDialect = l73Dialect{
 	LogCmd:     "show logging | include TACACS|TLS|PKI|SSL|CRYPTO",
 	ShowCmds: []string{"show running-config | section tacacs", "show running-config | section crypto pki trustpoint",
 		"show crypto pki certificates " + l73CertID, "show tacacs"},
+	// A failed control login reads the device's own view: the TACACS+ configuration (keys masked
+	// by the screen scrub), the server state, and the route configs/iosxe-startup.cfg says to check.
+	InvalidCmds: []string{"show running-config | section tacacs", "show tacacs", "show aaa servers",
+		"show ip route vrf clab-mgmt 172.100.100.1", "show logging | include TACACS|TLS|PKI|SSL|CRYPTO"},
 }
 
 var l73NXOSAsks = []l73Ask{

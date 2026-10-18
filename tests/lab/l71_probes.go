@@ -207,7 +207,7 @@ func l71LineEmpty(out string) bool {
 // l71Secret is what l71MaskExchange hides in a probe exchange beyond what
 // labcreds.RedactNote finds: a hashed or plain key, secret or password a
 // device's help or echo might show.
-var l71Secret = regexp.MustCompile(`\$[0-9]\$\S+|key [0-9] \S+|secret \S+|password \S+`)
+var l71Secret = regexp.MustCompile(`\$[0-9]\$\S+|key [0-9] \S+|[Kk]ey: \S+|secret \S+|password \S+`)
 
 // l71MaskExchange is a probe exchange fit to commit: credentials masked, and
 // control bytes shown as `cat -v` shows them (a newline stays a newline), so

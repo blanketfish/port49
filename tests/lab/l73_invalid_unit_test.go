@@ -106,3 +106,25 @@ func TestL73InvalidScreenDropsEveryPrivateKeyBlock(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestL73InvalidScreenMasksIOSXEServerKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PORT49_L73_INVALID_DIR", dir)
+	e := &l73Env{l: &lab{p: platform{name: "x"}}}
+	e.invalidScreen("device-1", "tacacs server port49-host\r\n address ipv4 172.100.100.1\r\n key 0 PLAINKEY123\r\n"+
+		"tacacs server l73\r\n tls port 300\r\n key 7 ENCRYPTED0822455D0A16\r\n key 6 TYPESIX\r\n"+
+		"Server Address: 172.100.100.1 Key: SHOWNKEY999\r\n")
+	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-device-1.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, leak := range []string{"PLAINKEY123", "ENCRYPTED0822", "TYPESIX", "SHOWNKEY999"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%s leaked:\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "tls port 300") || !strings.Contains(got, "address ipv4 172.100.100.1") {
+		t.Errorf("the configuration around the keys was lost:\n%s", got)
+	}
+}

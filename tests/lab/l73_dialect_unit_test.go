@@ -849,3 +849,18 @@ func TestL73NXOSLoginDialIsWidened(t *testing.T) {
 		}
 	}
 }
+
+// A failed IOS XE control login reads the TACACS+ configuration and server
+// state; every command is a show, and none can print a key.
+func TestL73IOSXEReadsTheDeviceOnAFailedLogin(t *testing.T) {
+	want := []string{"show running-config | section tacacs", "show tacacs", "show aaa servers",
+		"show ip route vrf clab-mgmt 172.100.100.1", "show logging | include TACACS|TLS|PKI|SSL|CRYPTO"}
+	if got := l73Dialects["cisco_iosxe"].InvalidCmds; !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
+	}
+	for _, c := range want {
+		if !strings.HasPrefix(c, "show ") {
+			t.Errorf("%q is not a show command", c)
+		}
+	}
+}
