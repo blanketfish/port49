@@ -8,13 +8,14 @@ import (
 	"testing"
 )
 
-// platformSessionAttributes is lab-tagged, so this test is too.
-func TestL76StandingReplyIsPrivLvlAlone(t *testing.T) {
-	if got := platformSessionAttributes[l76PlatformName]; got != `["priv-lvl=15"]` {
-		t.Fatalf("platformSessionAttributes[%s] = %q", l76PlatformName, got)
+// platformSessionAttributes is lab-tagged, so this test is too. SR Linux runs
+// the checked-in reply: cell (b)'s probe b1 logged in with it.
+func TestL76RunsTheSharedReply(t *testing.T) {
+	if got, ok := platformSessionAttributes[l76PlatformName]; ok {
+		t.Fatalf("platformSessionAttributes has an entry for %s: %q", l76PlatformName, got)
 	}
-	// derivedConfig swaps this one line, so it must exist exactly once in the
-	// shared lab policy, or the run would measure the wrong reply.
+	// derivedConfig swaps one line for cell (b)'s probes, so it must exist
+	// exactly once in the shared lab policy.
 	b, err := os.ReadFile("port49d-lab.yaml")
 	if err != nil {
 		t.Fatal(err)

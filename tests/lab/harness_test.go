@@ -857,18 +857,6 @@ func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49
 // it does not recognise", not "IOS-XE dislikes NX-OS's roles attribute".
 // Measured 2026-09-20; tests/lab/results/L10-cisco_iosxe.md.
 //
-// **nokia_srlinux — `priv-lvl=15` alone, and not because the device needs it.**
-// L76 run 3 (2026-10-18, a56c9b41) saw SR Linux 26.7.2 refuse the login 1 ms
-// after port49 permitted a reply of `priv-lvl=15` and `shell:roles*network-admin`,
-// and the roles attribute was blamed. It was not the cause: the lab roles
-// listed no service, and a role grants none by default
-// (SA#service-authorization-local-users). With `services [ cli ]` added,
-// cell (b)'s probes b1 (`shell:roles*network-admin`) and b2 (an invented
-// optional attribute) both logged in, as SA#authorization-use-tacacsx-server
-// says ("Unknown optional VSAs are discarded"); tests/lab/results/L76-nokia_srlinux.md.
-// The entry is kept so the standing cells run on the reply the roles mapping
-// reads; the checked-in list would work too.
-//
 // **The Junos platforms — no attributes at all.** port49 answered every Junos
 // session authorization `service_unsupported` until 2026-09-21, so no
 // attribute it sent has ever reached a Junos device and none of them is
@@ -881,7 +869,6 @@ func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49
 // this session is measuring: does a Junos login now get a permit.
 var platformSessionAttributes = map[string]string{
 	"cisco_iosxe":           `["priv-lvl=15"]`,
-	"nokia_srlinux":         `["priv-lvl=15"]`,
 	"juniper_vjunos-router": `[]`,
 	"juniper_vsrx":          `[]`,
 	"juniper_vjunos-switch": `[]`,

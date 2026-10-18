@@ -1243,3 +1243,24 @@ func TestL76RedactHashesCoversBodyHashInBothPaths(t *testing.T) {
 		t.Errorf("the evidence log still leaks %v", leaks)
 	}
 }
+
+func TestL76VersionTextKeepsOnlyTheVersionValue(t *testing.T) {
+	const ver = "version v26.7.2-519-g0a1b2c3d4e5f\n"
+	if got := l76VersionText(ver); got != "version v26.7.2-519-g0a1b2c3d4e5f\n" {
+		t.Errorf("the version value was masked: %q", got)
+	}
+	// Only the version shape is exempt: a long run beside it is masked, and the
+	// general mask still masks the version (the exemption is not widened).
+	other := "version v26.7.2-519-g0a1b2c3d4e5f " + strings.Repeat("Zq9X", 8)
+	if got := l76VersionText(other); strings.Contains(got, "Zq9X") || !strings.Contains(got, "v26.7.2-519-g0a1b2c3d4e5f") {
+		t.Errorf("got %q", got)
+	}
+	if got := l76MaskLong(ver); strings.Contains(got, "519-g0a1b2c3d4e5f") {
+		t.Errorf("l76MaskLong now exempts the version: %q", got)
+	}
+	// A 40-hex commit id is not the version shape.
+	full := "version v26.7.2-519-g" + strings.Repeat("ab", 20)
+	if got := l76VersionText(full); strings.Contains(got, strings.Repeat("ab", 20)) {
+		t.Errorf("a full hash survived: %q", got)
+	}
+}

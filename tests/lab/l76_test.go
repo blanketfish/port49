@@ -393,7 +393,7 @@ func (e *l76Env) checkSchema() {
 		"(`info from running system aaa`, values masked):\n\n```\n%s\n```\n\nWhat the image's own YANG says "+
 		"where Nokia's guide says otherwise or nothing:\n\n- %s\n\nThe server group's state "+
 		"(`info from state system aaa server-group port49`):\n\n```\n%s\n```\n",
-		oneLine(l76FilterLog(ver)), l76MaskConfig(run), strings.Join(findings, "\n- "),
+		oneLine(l76VersionText(ver)), l76MaskConfig(run), strings.Join(findings, "\n- "),
 		e.evidence["schema-server-group.txt"])
 }
 
@@ -496,8 +496,8 @@ func (e *l76Env) cellB() {
 
 	// What the device does with the optional attributes: two probes, each on
 	// its own seeded user, so a refused login cannot touch the control. The
-	// standing reply is priv-lvl=15 alone, so the optional shell:roles is
-	// measured here rather than inherited (L76 run 3 saw a refusal with it).
+	// optional shell:roles and an invented attribute are measured here rather
+	// than inherited.
 	cfg1, err := e.l.derivedConfig("l76-b1", l76ProbeRoles, "")
 	if err != nil {
 		e.invalid("cell b: %v", err)

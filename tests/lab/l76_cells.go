@@ -879,3 +879,25 @@ func l76DecisionEvidence(recs []map[string]any) (string, error) {
 	}
 	return log.String(), nil
 }
+
+// l76VersionValue is the device's version value as `info from state system
+// information version` prints it: v<major>.<minor>.<patch>-<build>, then
+// -g and a short (7 to 12 hex) commit id. At 24 characters or more it would be
+// masked as a long run; it is public and names the image under test.
+var l76VersionValue = regexp.MustCompile(`\bv?\d+\.\d+\.\d+(?:-\d+)?(?:-g[0-9a-f]{7,12})?\b`)
+
+// l76VersionText is l76FilterLog for the version read alone: the version
+// value is kept, everything else is filtered and masked as usual. It is the
+// one place the exemption applies; l76MaskLong is unchanged.
+func l76VersionText(s string) string {
+	var kept []string
+	masked := l76VersionValue.ReplaceAllStringFunc(s, func(m string) string {
+		kept = append(kept, m)
+		return fmt.Sprintf("\x00%d\x00", len(kept)-1)
+	})
+	out := l76FilterLog(masked)
+	for i, m := range kept {
+		out = strings.Replace(out, fmt.Sprintf("\x00%d\x00", i), m, 1)
+	}
+	return out
+}
