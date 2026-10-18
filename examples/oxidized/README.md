@@ -163,7 +163,7 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
     was not reloaded.
   - **Just after a broker start**: a port49-broker's first start, or a start after a policy
     edit, refuses every mint with a retryable `503 store_unavailable` until its runner's
-    takeover is done: up to `stores.session.etcd.hold_ttl`/3 (5s at the default 15s, 20s at 60s) plus the
+    takeover is done: up to the session store's `etcd.hold_ttl`/3 (`stores.session.etcd.hold_ttl`, or `stores.directory.etcd.hold_ttl` when `stores.session` is omitted) (5s at the default 15s, 20s at 60s) plus the
     takeover itself, plus up to `hold_ttl` more when the last run's lease must expire first
     (a crash or a SIGKILL of the only broker: 80s or more at 60s). The takeover purges every
     unspent token, so the broker holds the mint rather than hand out a token that is about to

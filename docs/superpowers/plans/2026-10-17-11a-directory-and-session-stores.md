@@ -881,6 +881,8 @@ for path in ["docs/design/2026-08-21-port49-design.md", "docs/design/2026-08-23-
                 record = int(d.group(1)) < 51
             elif line.startswith("## "):
                 record = False
+            if line.startswith("- **Removed (R5, R25).**"):
+                continue
             if line.startswith("| **L") and "| closed" in line:
                 continue
         if not record and pat.search(line):
@@ -8909,7 +8911,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 Run:
 ```bash
 git grep -nE "$OLDKEYS" -- ':!docs/superpowers/plans/20*' ':!docs/superpowers/plans/README.md' \
-  ':!docs/design/*' ':!tests/lab/results'
+  ':!docs/design/*' ':!tests/lab/results' ':!internal/config/stores_test.go'
 ```
 
 (`OLDKEYS` as Task 1 Step 5 exports it. The two design files are checked by Task 1 Step 5's
