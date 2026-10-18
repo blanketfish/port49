@@ -159,6 +159,12 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 			m.StoreFeedUp.WithLabelValues(feed).Set(0)
 			m.StoreFeedRescans.WithLabelValues(feed)
 		}
+		if !cfg.Stores.Shared && cfg.Role == config.RoleBroker {
+			// A split broker also follows the pins and the logouts: down from
+			// here, so an alert sees one stuck before its feed first runs.
+			m.StoreFeedUp.WithLabelValues("pins").Set(0)
+			m.StoreFeedUp.WithLabelValues("logouts").Set(0)
+		}
 	}
 	eps := strings.Join(e.Endpoints, ", ")
 	var deadline time.Time

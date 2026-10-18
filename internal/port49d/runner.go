@@ -1045,10 +1045,20 @@ func (r *runner) reachFollowed(ctx context.Context) {
 // directory every 5s while it answers (placement.ForwardPending), sets
 // port49_store_logouts_pending, and says each pass that forwarded any, and
 // once per run of passes that could not.
-func (r *runner) forwardingPending(ctx context.Context) {
+func (r *runner) forwardingPending(ctx context.Context) { r.forwardPendingFrom(ctx, r.raw) }
+
+// forwardPendingFrom is forwardingPending over the session store's pending
+// records. When the duties end (the hold moved) the gauge and the count are
+// zeroed: another replica now reports the pending logouts, and a sum() across
+// replicas must not count them twice.
+func (r *runner) forwardPendingFrom(ctx context.Context, pending placement.PendingLogouts) {
+	defer func() {
+		r.m.StoreLogoutsPending.Set(0)
+		r.pending.Store(0)
+	}()
 	said := false
 	for {
-		n, left, err := placement.ForwardPending(ctx, r.st, r.raw)
+		n, left, err := placement.ForwardPending(ctx, r.st, pending)
 		r.m.StoreLogoutsPending.Set(float64(left))
 		r.pending.Store(int64(left))
 		switch {

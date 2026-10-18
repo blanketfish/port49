@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rhwendt/port49/internal/config"
@@ -22,6 +24,8 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // rolesMemberScoped is a TLS etcd member with the roles of a keyspace
@@ -373,5 +377,107 @@ func TestTheDirectoryOutageLineIsTrueForTheDeployment(t *testing.T) {
 				t.Fatalf("%s: the line says %q:\n%s", c.name, c.mustNotSay, out.String())
 			}
 		})
+	}
+}
+
+// pendingFake is a region's session store holding pending logouts.
+type pendingFake struct{ es []store.LogoutEntry }
+
+func (p pendingFake) Logouts(context.Context) (uint64, []store.LogoutEntry, error) {
+	return 1, p.es, nil
+}
+func (p pendingFake) DeleteLogout(context.Context, string) error { return nil }
+
+// cutDirectory takes no logout.
+type cutDirectory struct{}
+
+func (cutDirectory) PutLogout(context.Context, store.Logout, time.Duration) error {
+	return fmt.Errorf("%w: cut", store.ErrUnavailable)
+}
+
+// M1: port49_store_logouts_pending is this replica's while it runs the
+// duties; when they end (the hold moved) it is 0, so a sum() across replicas
+// does not count the same pending logouts twice.
+func TestThePendingLogoutsGaugeIsZeroedWhenTheDutiesEnd(t *testing.T) {
+	m := metrics.New(prometheus.NewRegistry())
+	st := placement.Wrap(placement.Config{Session: memory.New(time.Now), Directory: cutDirectory2{},
+		Logouts: store.NewLogoutSet(time.Now), LogoutDir: cutDirectory{}, CallTimeout: 100 * time.Millisecond})
+	rn := &runner{m: m, st: st}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rn.forwardPendingFrom(ctx, pendingFake{es: []store.LogoutEntry{
+			{Logout: store.Logout{Key: "k1"}, Until: time.Now().Add(time.Hour)},
+			{Logout: store.Logout{Key: "k2"}, Until: time.Now().Add(time.Hour)}}})
+	}()
+	for deadline := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.StoreLogoutsPending) != 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the gauge never read 2: %v", testutil.ToFloat64(m.StoreLogoutsPending))
+		}
+	}
+	cancel()
+	<-done
+	if got := testutil.ToFloat64(m.StoreLogoutsPending); got != 0 || rn.pending.Load() != 0 {
+		t.Fatalf("after the duties ended: gauge %v, count %d", got, rn.pending.Load())
+	}
+}
+
+// cutDirectory2 is the revocation half of a directory that never answers.
+type cutDirectory2 struct{ placement.Directory }
+
+// M2: a split broker's pins and logouts feeds read down from the first
+// moment, before their feeds first run, so an alert on feed_up == 0 sees a
+// broker stuck before them.
+func TestASplitBrokerSaysItsPinsAndLogoutsFeedsAreDownFromTheStart(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	f.dproxy.Hang(true) // the broker waits for the directory store, its feeds not yet run
+	metricsAt, _ := startBrokerNoWait(t, f.broker, &out, 1)
+	waitWithin(t, &out, "directory store: etcd at", 30*time.Second)
+	resp, err := http.Get("http://" + metricsAt + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	for _, feed := range []string{"pins", "logouts", "marks", "contexts"} {
+		if !strings.Contains(string(raw), `port49_store_feed_up{feed="`+feed+`"} 0`) {
+			t.Errorf("no port49_store_feed_up{feed=%q} 0 series", feed)
+		}
+	}
+}
+
+// M3: a mark already in the directory store at start is in force on the very
+// first request, and it is the directory's marks that load: a session store
+// holding none must not be what the broker reads them from.
+func TestAMarkAlreadyInTheDirectoryIsInForceOnTheFirstRequest(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	raw, err := etcd.Open(etcd.Config{Endpoints: []string{f.dsrv.Endpoint}, TLS: f.dsrv.TLS(t, "port49-broker"), Prefix: "/port49/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	if err := raw.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: time.Now(), Origin: "admin_socket uid 0"}); err != nil {
+		t.Fatal(err)
+	}
+	api, _ := startBroker(t, f.broker, &out, 1)
+	if !strings.Contains(out.String(), "port49-broker: store: 1 revocation(s) in force from the directory store") {
+		t.Fatalf("the directory's mark was not loaded:\n%s", out.String())
+	}
+	if status, login, body := mintOnce(t, api, f.pki, "leaf1"); status == http.StatusOK || login != "" {
+		t.Fatalf("a mint on the first request was served although the directory holds a mark: %d %s", status, body)
 	}
 }
