@@ -711,14 +711,12 @@ func (e *l76Env) cellK() {
 	// login of its own. The container's root removes what it made.
 	attempt := func(label, name string, cmds []string, at int) l76Write {
 		_, outs, _, _ := e.tokenLoginCmds(label, cmds)
-		w := l76Write{Name: name}
+		makeOut := ""
 		if len(outs) > at {
-			w.MakeOut = oneLine(l76FilterLog(outs[at]))
+			makeOut = oneLine(l76FilterLog(outs[at]))
 		}
 		clearOut, _, clearErr := e.sr(60*time.Second, l76CheckpointClear(name))
-		w.ClearOut = oneLine(l76FilterLog(clearOut))
-		w.Done = l76WriteDone(w.MakeOut, w.ClearOut, clearErr)
-		return w
+		return l76NewWrite(name, makeOut, oneLine(l76FilterLog(clearOut)), clearErr)
 	}
 	second := attempt("k2", l76CheckpointNameSecond, []string{l76ReadSessions, l76CheckpointMake(l76CheckpointNameSecond)}, 1)
 	first := attempt("k3", l76CheckpointNameFirst, []string{l76CheckpointMake(l76CheckpointNameFirst)}, 0)

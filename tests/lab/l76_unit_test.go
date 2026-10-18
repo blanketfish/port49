@@ -1352,35 +1352,89 @@ func TestL76ChannelTextStatesTheSecondExecAndTheRedaction(t *testing.T) {
 	}
 }
 
-func TestL76WriteVerdict(t *testing.T) {
-	if !l76WriteDone("", "", nil) {
-		t.Error("a silent make and a clean clear is a write that happened")
-	}
-	for _, out := range []string{"Error: access denied", "Parsing error", "Permission denied", "not authorized", "unknown command"} {
-		if l76WriteDone(out, "", nil) {
-			t.Errorf("make output %q was read as a success", out)
+// The device's own state decides whether the write happened: root's clear
+// removed a checkpoint, or said it does not exist (R-I1). The make's output
+// is evidence only.
+func TestL76WriteStateComesFromRootsClear(t *testing.T) {
+	const gone = "Error in /tools/system/configuration/checkpoint[id=x]: Checkpoint 'x' does not exist Error: Tools command failed"
+	for _, tc := range []struct {
+		name     string
+		clearOut string
+		clearErr error
+		want     string
+	}{
+		{"removed", "", nil, l76WriteExists},
+		{"removed, with a line of output", "Checkpoint 'x' cleared", nil, l76WriteExists},
+		{"absent", gone, errors.New("exit status 1"), l76WriteAbsent},
+		{"absent, exit status 0", gone, nil, l76WriteAbsent},
+		{"failed some other way", "Error: Tools command failed", errors.New("exit status 1"), l76WriteUnknown},
+	} {
+		if got := l76WriteState(tc.clearOut, tc.clearErr); got != tc.want {
+			t.Errorf("%s: state = %q, want %q", tc.name, got, tc.want)
 		}
-		if l76WriteDone("", out, nil) {
-			t.Errorf("clear output %q was read as a success", out)
+	}
+}
+
+// SR Linux prints a chdir line on the second exec channel, and it carries
+// "No such file or directory". A second-exec output of that line and a
+// success line, with root finding the checkpoint, is a write.
+func TestL76SecondExecOutputWithTheChdirLineIsAWriteWhenRootFindsTheCheckpoint(t *testing.T) {
+	const chdir = "Could not chdir to home directory /home/alice09: No such file or directory\n"
+	w := l76NewWrite("l76-k-second", chdir+"Checkpoint 'l76-k-second' generated", "", nil)
+	if w.State != l76WriteExists {
+		t.Fatalf("state = %q: the chdir line made the write look refused", w.State)
+	}
+	if l76Refusal(chdir + "Checkpoint generated") {
+		t.Error("the chdir line alone was read as a refusal")
+	}
+	text := l76WriteText(l76NewWrite("l76-k-first", "No authorization to execute command: 'tools'", "Checkpoint 'x' does not exist", errors.New("x")), w)
+	if !strings.Contains(text, "Security finding") {
+		t.Errorf("a second-exec write went unflagged:\n%s", text)
+	}
+}
+
+func TestL76RefusalIsTheDevicesAuthorizationMessageAfterTheChdirLine(t *testing.T) {
+	const chdir = "Could not chdir to home directory /home/alice09: No such file or directory\n"
+	if !l76Refusal(chdir + "Error: No authorization to execute command: 'tools / system configuration generate-checkpoint name x'") {
+		t.Error("the device's refusal was not read")
+	}
+	for _, out := range []string{"", chdir, "Error: unknown thing", "invalid", "Permission denied"} {
+		if l76Refusal(out) {
+			t.Errorf("%q was read as the device's authorization refusal", out)
 		}
 	}
-	if l76WriteDone("", "", errors.New("exit status 1")) {
-		t.Error("a clear that failed means there was nothing to clear")
+}
+
+func TestL76WriteTextStatesADisagreementBetweenTheOutputAndTheState(t *testing.T) {
+	// Refusal message, but root found a checkpoint.
+	a := l76NewWrite("n", "No authorization to execute command: 'x'", "", nil)
+	// No refusal message, but root says it does not exist.
+	b := l76NewWrite("m", "something else", "Checkpoint 'm' does not exist", errors.New("x"))
+	text := l76WriteText(a, b)
+	if strings.Count(text, "disagree") != 2 {
+		t.Errorf("both disagreements should be stated:\n%s", text)
 	}
 }
 
 func TestL76WriteTextFlagsASecurityFindingOnlyWhenTheSecondExecWrote(t *testing.T) {
-	secondOnly := l76WriteText(l76Write{Name: "l76-k-first", Done: false}, l76Write{Name: "l76-k-second", Done: true})
+	wrote := func(n string) l76Write { return l76Write{Name: n, State: l76WriteExists} }
+	none := func(n string) l76Write { return l76Write{Name: n, State: l76WriteAbsent} }
+	secondOnly := l76WriteText(none("a"), wrote("b"))
 	if !strings.Contains(secondOnly, "Security finding") || !strings.Contains(secondOnly, "second") {
 		t.Errorf("the second exec wrote and the first did not: %s", secondOnly)
 	}
-	both := l76WriteText(l76Write{Done: true}, l76Write{Done: true})
-	if strings.Contains(both, "Security finding") || !strings.Contains(both, "does not gate") {
-		t.Errorf("a write that works on the first exec too is no escalation: %s", both)
+	both := l76WriteText(wrote("a"), wrote("b"))
+	if !strings.Contains(both, "Security finding") || !strings.Contains(both, "does not gate") {
+		t.Errorf("a write on the second exec is a finding even when the first wrote too: %s", both)
 	}
-	none := l76WriteText(l76Write{Done: false}, l76Write{Done: false})
-	if strings.Contains(none, "Security finding") || !strings.Contains(none, "refused") {
-		t.Errorf("neither wrote: %s", none)
+	neither := l76WriteText(none("a"), none("b"))
+	if strings.Contains(neither, "Security finding") || !strings.Contains(neither, "refused") {
+		t.Errorf("neither wrote: %s", neither)
+	}
+	// An undetermined state is not read as "refused".
+	unk := l76WriteText(none("a"), l76Write{Name: "b", State: l76WriteUnknown})
+	if !strings.Contains(unk, "Security finding") || !strings.Contains(unk, "could not be determined") {
+		t.Errorf("an unknown state must be flagged, not passed: %s", unk)
 	}
 }
 

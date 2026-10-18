@@ -997,8 +997,8 @@ func l76ChannelText(ch []l76Channel, granted int) string {
 	}
 	if differs {
 		fmt.Fprintf(&b, "\nThe commands after the first are accounted on a different port or at a different priv-lvl "+
-			"than the first, while the reply granted priv-lvl %d. Whether that channel also runs with more authority "+
-			"is measured in cell (k); this line is only what the device sent port49.\n", granted)
+			"than the first, while the reply granted priv-lvl %d. This line is only what the device sent port49; "+
+			"whether that channel runs with more authority is cell (k)'s question.\n", granted)
 	}
 	for _, c := range ch {
 		if c.Redacted {
@@ -1012,32 +1012,43 @@ func l76ChannelText(ch []l76Channel, granted int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// What root's clear found: the device's own state, and the verdict of cell
+// (k)'s write. The make's output is evidence only (the second exec channel
+// prints a chdir line that says "No such file or directory", so no word list
+// can read it).
+const (
+	l76WriteExists  = "exists"  // the clear removed a checkpoint: the write happened
+	l76WriteAbsent  = "absent"  // the clear said it does not exist: the write was refused
+	l76WriteUnknown = "unknown" // the clear failed some other way
+)
+
 // l76Write is one write attempt of cell (k).
 type l76Write struct {
 	Name     string
-	Done     bool   // the make was not refused and the clear found something
+	State    string // l76WriteExists, l76WriteAbsent or l76WriteUnknown
 	MakeOut  string // filtered
 	ClearOut string // filtered
 }
 
-var l76RefusalWords = []string{"denied", "not authorized", "unauthorized", "not permitted", "permission", "error",
-	"unknown", "invalid", "failed", "not allowed", "not found", "no such"}
-
-func l76Refused(out string) bool {
-	low := strings.ToLower(out)
-	for _, w := range l76RefusalWords {
-		if strings.Contains(low, w) {
-			return true
-		}
+// l76WriteState reads root's clear: a checkpoint it removed existed.
+func l76WriteState(clearOut string, clearErr error) string {
+	switch {
+	case strings.Contains(clearOut, "does not exist"):
+		return l76WriteAbsent
+	case clearErr == nil && !strings.Contains(strings.ToLower(clearOut), "error"):
+		return l76WriteExists
 	}
-	return false
+	return l76WriteUnknown
 }
 
-// l76WriteDone says whether a write happened: the device did not refuse the
-// make, and the root clear (which removes it again) found the checkpoint and
-// removed it. The outputs are printed beside the verdict for a reader to judge.
-func l76WriteDone(makeOut, clearOut string, clearErr error) bool {
-	return !l76Refused(makeOut) && clearErr == nil && !l76Refused(clearOut)
+// l76Refusal says whether the make's output is SR Linux's authorization
+// refusal. A line other than the message (the chdir line, say) does not count.
+func l76Refusal(out string) bool {
+	return strings.Contains(out, "No authorization to execute command")
+}
+
+func l76NewWrite(name, makeOut, clearOut string, clearErr error) l76Write {
+	return l76Write{Name: name, State: l76WriteState(clearOut, clearErr), MakeOut: makeOut, ClearOut: clearOut}
 }
 
 // l76WriteText is cell (k)'s verdict: first is the attempt as the first exec
@@ -1045,30 +1056,39 @@ func l76WriteDone(makeOut, clearOut string, clearErr error) bool {
 func l76WriteText(first, second l76Write) string {
 	var b strings.Builder
 	did := func(w l76Write) string {
-		if w.Done {
-			return "**succeeded**"
+		switch w.State {
+		case l76WriteExists:
+			return "**succeeded** (root found and removed the checkpoint)"
+		case l76WriteAbsent:
+			return "was refused (root found no checkpoint)"
 		}
-		return "was refused or made nothing"
+		return "**could not be determined** (root's clear failed some other way)"
 	}
+	wrote := func(w l76Write) bool { return w.State != l76WriteAbsent }
 	fmt.Fprintf(&b, "A checkpoint is a harmless write that the `p49-read` role (`rule / { action read }`) must not be allowed "+
-		"(CM#configuration-checkpoints). As the first exec of a priv-lvl 1 login it %s; as the second exec it %s.", did(first), did(second))
+		"(CM#configuration-checkpoints). Whether it happened is read from the device's own state, root's clear afterwards; "+
+		"the make's output is evidence only. As the first exec of a priv-lvl 1 login it %s; as the second exec it %s.", did(first), did(second))
 	switch {
-	case second.Done && !first.Done:
-		b.WriteString("\n\n**Security finding:** the second exec channel of one SSH login wrote what the first exec channel " +
-			"of the same login, with the same roles, was refused. A priv-lvl 1 user can write through the second exec. " +
-			"This is not INVALID; it is a measurement the `nokia_srlinux` adapter and plan 12 must carry.")
-	case second.Done && first.Done:
-		b.WriteString("\n\nThe write works on the first exec too, so the `p49-read` rule `/ read` does not gate `tools` commands: " +
-			"it does not gate a checkpoint on either channel, and this cell shows no difference between the channels. " +
-			"The second exec's priv-lvl 15 accounting is then not shown to add authority.")
-	case !second.Done && !first.Done:
+	case wrote(second):
+		b.WriteString("\n\n**Security finding:** a write by a priv-lvl 1 user on the second exec channel of one SSH login " +
+			"was not refused (see the state above).")
+		if wrote(first) {
+			b.WriteString(" The first exec was not refused either, so the `p49-read` rule `/ read` does not gate `tools` commands on either channel.")
+		} else {
+			b.WriteString(" The first exec channel of the same login, with the same roles, was refused.")
+		}
+		b.WriteString(" This is not INVALID; it is a measurement the `nokia_srlinux` adapter and plan 12 must carry.")
+	case wrote(first):
+		b.WriteString("\n\nThe first exec wrote and the second did not: the channels differ the other way round from the accounting.")
+	default:
 		b.WriteString("\n\nThe write was refused on both channels, so the second exec's priv-lvl 15 accounting is not shown to " +
 			"add authority for a write.")
-	default:
-		b.WriteString("\n\nThe first exec wrote and the second did not: the channels differ the other way round from the accounting.")
 	}
 	for _, w := range []l76Write{first, second} {
 		fmt.Fprintf(&b, "\n\n`%s`: make said %q; root's clear said %q.", w.Name, w.MakeOut, w.ClearOut)
+		if l76Refusal(w.MakeOut) == (w.State == l76WriteExists) && w.State != l76WriteUnknown {
+			fmt.Fprintf(&b, " The device's output and root's clear disagree about `%s`; the clear is the device's state and decides.", w.Name)
+		}
 	}
 	return b.String()
 }

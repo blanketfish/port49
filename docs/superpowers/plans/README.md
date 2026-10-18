@@ -314,7 +314,7 @@ SR Linux reference config:
   wrong shared secret or with port49 stopped; the reference config sets it knowing that cost.
 - The second exec channel of one login is accounted at priv-lvl 15 on port `unknown`, even for a
   priv-lvl 1 user (c, h); the session table shows `p49-read` on both channels and a checkpoint write is
-  refused on both (k), so the accounting is not an escalation.
+  refused on both (k), so the accounting is not shown to add authority for a write.
 - Accounting is per CLI command, start and stop, with no exec session records (c); port49 redacts the
   word after `authentication` in `show system aaa authentication` (c).
 - After a port49 restart the device asked again within 1 s, and health checks open connections that carry
