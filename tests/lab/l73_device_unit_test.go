@@ -713,15 +713,14 @@ func TestL73TrustGroupComesAfterTheCALoads(t *testing.T) {
 
 func TestL73RootCmdAllowed(t *testing.T) {
 	d := "/var/db/aaa_certs/tacplus_tls/l73-trust"
-	for _, ok := range []string{"which openssl", "exit", "echo rc=$?", "openssl version",
+	for _, ok := range []string{"which openssl", "exit", "echo rc=$?", "openssl version", "openssl help",
 		"openssl x509 -noout -subject_hash -in /var/tmp/l73-root.pem",
 		"openssl x509 -noout -subject_hash_old -in /var/tmp/l73-inter.pem",
 		"mkdir -p " + d, "ls -l " + d,
 		"mkdir -p " + l73TrustDir + "/l73-dev", "ls -l " + l73TrustDir + "/l73-dev",
-		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key",
-		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 2048",
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
 		"chmod 600 " + l73TrustDir + "/l73-dev/client.key",
-		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
 		"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.crt",
 		"cp /var/tmp/l73-root.pem " + d + "/0a1b2c3d.0", "cp /var/tmp/l73-inter.pem " + d + "/ffeeddcc.0"} {
 		if !l73RootCmdAllowed(ok) {
@@ -741,14 +740,23 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"chmod 644 " + l73TrustDir + "/l73-dev/client.key", "chmod 600 /var/tmp/l73-root.pem",
 		"chmod 600 " + l73TrustDir + "/l73-dev/client.key; cat " + l73TrustDir + "/l73-dev/client.key",
 		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + l73TrustDir + "/l73-dev/client.key",
-		"openssl ecparam -name prime256v1 -genkey -noout", "openssl ecparam -name prime256v1 -genkey -noout -out /var/tmp/k.pem",
-		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key -text",
-		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key -param_out",
-		"openssl ecparam -name secp384r1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key",
-		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key; id",
-		"openssl genrsa", "openssl genrsa 2048", "openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 4096",
-		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 1024", "openssl genrsa -out /var/tmp/k.pem 2048",
-		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 2048 -text", "openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 2048",
+		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		"openssl help -a", "openssl help; id", "openssl list -commands", "openssl help > /tmp/x",
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout /var/tmp/k.pem -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -x509 -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr -text`,
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr -pubkey`,
+		`openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey rsa:4096 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey rsa:1024 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1;id" -out /var/tmp/l73-client.csr`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/other.csr`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1"`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr; cat ` + l73TrustDir + `/l73-dev/client.key`,
+		`openssl req -new -newkey rsa:2048 -nodes -keyout ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr | cat`,
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/other.csr`,
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1;id" -out /var/tmp/l73-client.csr`,
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr -text`,
@@ -762,23 +770,20 @@ func TestL73RootCmdAllowed(t *testing.T) {
 }
 
 func TestL73RootClientCmds(t *testing.T) {
-	prep, finish, err := l73RootClientCmds("srx1")
+	prep, ec, rsa, finish, err := l73RootClientCmds("srx1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	k := l73TrustDir + "/l73-dev/client.key"
-	if !slices.Equal(prep, []string{"mkdir -p " + l73TrustDir + "/l73-dev"}) {
-		t.Fatalf("prep %q", prep)
+	if !slices.Equal(prep, []string{"mkdir -p " + l73TrustDir + "/l73-dev"}) || !slices.Equal(finish, []string{"chmod 600 " + k}) {
+		t.Fatalf("prep %q finish %q", prep, finish)
 	}
-	if !slices.Equal(finish, []string{"chmod 600 " + k, `openssl req -new -key ` + k + ` -subj "/CN=srx1" -out /var/tmp/l73-client.csr`}) {
-		t.Fatalf("finish %q", finish)
-	}
-	ec, rsa := l73RootKeyCmds()
-	if ec != "openssl ecparam -name prime256v1 -genkey -noout -out "+k || rsa != "openssl genrsa -out "+k+" 2048" {
+	if ec != `openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout `+k+` -subj "/CN=srx1" -out /var/tmp/l73-client.csr` ||
+		rsa != `openssl req -new -newkey rsa:2048 -nodes -keyout `+k+` -subj "/CN=srx1" -out /var/tmp/l73-client.csr` {
 		t.Fatalf("keys %q %q", ec, rsa)
 	}
 	for _, bad := range []string{"", "a b", "x;id", `x"y`, "$(id)", "-x"} {
-		if _, _, err := l73RootClientCmds(bad); err == nil {
+		if _, _, _, _, err := l73RootClientCmds(bad); err == nil {
 			t.Errorf("node %q accepted", bad)
 		}
 	}
@@ -790,5 +795,8 @@ func TestL73RootClientCmds(t *testing.T) {
 		if !l73RootCmdAllowed(c) {
 			t.Errorf("%q is not allowed", c)
 		}
+	}
+	if l73ListsCommand("Standard commands\nasn1parse ca\nreq rsa\n", "req") != true || l73ListsCommand("Standard commands\nasn1parse x509 reqx\n", "req") {
+		t.Error("l73ListsCommand reads a command list wrongly")
 	}
 }

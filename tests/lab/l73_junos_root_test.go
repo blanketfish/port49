@@ -46,6 +46,7 @@ type l73RootOutcome struct {
 	ClientListing  string
 	OpenSSLVersion string
 	ClientKey      string // which command made the key
+	OpenSSLHelp    string
 }
 
 // l73JunosRoot is the lab-only root step on an open break-glass CLI, for the
@@ -161,12 +162,12 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 			keep(out)
 			return out, fmt.Errorf("%q: %s", cmd, why)
 		}
-		if rc != "0" && cmd != "which openssl" {
+		if rc != "0" && cmd != "which openssl" && cmd != "openssl help" {
 			return fail("exit status rc=" + rc)
 		}
 		low := strings.ToLower(out)
 		for _, bad := range []string{"permission denied", "no such file", "cannot", "not found", "usage:", "error"} {
-			if cmd != "which openssl" && strings.Contains(low, bad) {
+			if cmd != "which openssl" && cmd != "openssl help" && strings.Contains(low, bad) {
 				return fail("the shell said " + strconv.Quote(bad))
 			}
 		}
@@ -185,6 +186,14 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 		return fail("%v", err)
 	}
 	o.DeviceOpenSSL = l73ParseWhich(which)
+	if job.ClientNode != "" && o.DeviceOpenSSL {
+		// `openssl help` prints a command list (to stderr on some builds); its rc is
+		// not the point, so it is neither rc- nor word-checked.
+		if h, err := shell("openssl help"); err == nil || h != "" {
+			o.OpenSSLHelp = h
+			screen.WriteString("$ openssl help\n" + mask(h) + "\n")
+		}
+	}
 	if job.ClientNode != "" && !o.DeviceOpenSSL {
 		leave()
 		return fail("the root shell has no openssl, so the client key cannot be made in place")
@@ -233,12 +242,11 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 		}
 	}
 	if job.ClientNode != "" {
-		prep, finish, err := l73RootClientCmds(job.ClientNode)
+		prep, reqEC, reqRSA, finish, err := l73RootClientCmds(job.ClientNode)
 		if err != nil {
 			leave()
 			return fail("%v", err)
 		}
-		ec, rsa := l73RootKeyCmds()
 		run := func(cmds ...string) error {
 			for _, cmd := range cmds {
 				if got, err := shell(cmd); err != nil {
@@ -248,14 +256,18 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 			}
 			return nil
 		}
+		if !l73ListsCommand(o.OpenSSLHelp, "req") {
+			leave()
+			return fail("the root shell's `openssl help` does not list req, the one command left that can make a key")
+		}
 		if err := run(prep...); err != nil {
 			leave()
 			return fail("%v", err)
 		}
-		o.ClientKey = "EC P-256 (openssl ecparam)"
-		if ecErr := run(ec); ecErr != nil {
-			o.ClientKey = "RSA 2048 (openssl genrsa)"
-			if rsaErr := run(rsa); rsaErr != nil {
+		o.ClientKey = "EC P-256 (openssl req -newkey ec)"
+		if ecErr := run(reqEC); ecErr != nil {
+			o.ClientKey = "RSA 2048 (openssl req -newkey rsa:2048)"
+			if rsaErr := run(reqRSA); rsaErr != nil {
 				leave()
 				return fail("the client key could not be made: %v; and then %v", ecErr, rsaErr)
 			}
@@ -316,6 +328,9 @@ func (o l73RootOutcome) Facts() []string {
 	}
 	if o.ClientMade {
 		facts = append(facts, "the client key and certificate were placed in a root-owned folder through the root shell: the device's own openssl made the key in place, "+o.ClientKey+" (`"+l73ClientDir+"/client.key`, mode 600), nothing read it back or copied it, only its request left the device and the lab intermediate's signed certificate was copied beside it as `client.crt`. The names client.key and client.crt are inferred from Juniper's RADSEC page, and are measured only if the handshake shows the device's certificate")
+	}
+	if o.OpenSSLHelp != "" {
+		facts = append(facts, "the root shell's `openssl help` lists: "+oneLine(o.OpenSSLHelp))
 	}
 	if o.ClientListing != "" {
 		facts = append(facts, "the client folder as listed by root: "+oneLine(o.ClientListing))

@@ -22,7 +22,7 @@ type rootDevice struct {
 	shellRan    []string
 	tailPW      string
 	shown       string
-	keygen      string // "" both work; "noec": ecparam is missing; "quiet": ecparam exits 1 with no words; "none": neither works
+	keygen      string // "" the ec req works; "noec": the ec req fails; "quiet": it exits 1 with no words; "none": both fail; "noreq": help does not list req
 	rc          int
 	version     string
 }
@@ -65,18 +65,22 @@ func (d *rootDevice) line(ln string) {
 		d.shellRan = append(d.shellRan, ln)
 		d.rc = 0
 		switch {
-		case strings.HasPrefix(ln, "openssl ecparam") && d.keygen == "quiet":
+		case strings.HasPrefix(ln, "openssl req") && strings.Contains(ln, "-newkey ec") && d.keygen == "quiet":
 			d.rc = 1
 			d.say("root@vj:~ # ")
 			return
-		case strings.HasPrefix(ln, "openssl ecparam") && (d.keygen == "noec" || d.keygen == "none"):
+		case strings.HasPrefix(ln, "openssl req") && strings.Contains(ln, "-newkey ec") && (d.keygen == "noec" || d.keygen == "none"):
 			d.rc = 1
-			d.say("Invalid command 'ecparam'; type \"help\" for a list.\nroot@vj:~ # ")
+			d.say("Invalid curve for req\nroot@vj:~ # ")
 			return
-		case strings.HasPrefix(ln, "openssl genrsa") && d.keygen == "none":
+		case strings.HasPrefix(ln, "openssl req") && strings.Contains(ln, "-newkey rsa") && d.keygen == "none":
 			d.rc = 1
-			d.say("Invalid command 'genrsa'; type \"help\" for a list.\nroot@vj:~ # ")
+			d.say("Invalid rsa for req\nroot@vj:~ # ")
 			return
+		case ln == "openssl help" && d.keygen == "noreq":
+			d.say("Standard commands\nasn1parse ca dgst x509\n")
+		case ln == "openssl help":
+			d.say("Standard commands\nasn1parse ca dgst req x509\n")
 		case ln == "openssl version":
 			d.say("OpenSSL 1.0.2u  20 Dec 2019\n")
 		case ln == "exit":
@@ -271,17 +275,17 @@ func TestL73JunosRootMakesTheClientKeyInPlaceAndKeepsOnlyTheRequest(t *testing.T
 	if d.hash != "" {
 		t.Error("a later session set the root hash again")
 	}
-	if !out.ClientMade || !strings.Contains(out.ClientCSR, "CERTIFICATE REQUEST") || out.ClientKey != "EC P-256 (openssl ecparam)" {
+	if !out.ClientMade || !strings.Contains(out.ClientCSR, "CERTIFICATE REQUEST") || out.ClientKey != "EC P-256 (openssl req -newkey ec)" {
 		t.Errorf("outcome %+v", out)
 	}
 	j := strings.Join(d.shellRan, "\n")
-	for _, want := range []string{"openssl ecparam -name prime256v1 -genkey -noout -out", "chmod 600 " + l73ClientDir + "/client.key", "openssl req -new -key"} {
+	for _, want := range []string{"openssl help", "openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout", "chmod 600 " + l73ClientDir + "/client.key"} {
 		if !strings.Contains(j, want) {
 			t.Errorf("shell never ran %q", want)
 		}
 	}
-	if strings.Contains(j, "genrsa") {
-		t.Error("the RSA fallback ran although ecparam worked")
+	if strings.Contains(j, "rsa:2048") {
+		t.Error("the RSA fallback ran although the ec request worked")
 	}
 	for _, ran := range d.shellRan {
 		if !l73RootCmdAllowed(ran) {
@@ -305,7 +309,7 @@ func TestL73JunosRootClientNeedsTheDevicesOpenSSL(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	for _, ran := range d.shellRan {
-		if strings.Contains(ran, "ecparam") || strings.Contains(ran, "genrsa") {
+		if strings.Contains(ran, "-newkey") {
 			t.Errorf("made a key anyway: %q", ran)
 		}
 	}
@@ -335,11 +339,11 @@ func TestL73JunosRootFallsBackToRSAWhenEcparamIsMissingOrSilentlyFails(t *testin
 		if err != nil {
 			t.Fatalf("%s: %v", mode, oneLine(err.Error()))
 		}
-		if out.ClientKey != "RSA 2048 (openssl genrsa)" {
+		if out.ClientKey != "RSA 2048 (openssl req -newkey rsa:2048)" {
 			t.Errorf("%s: key %q", mode, out.ClientKey)
 		}
 		j := strings.Join(d.shellRan, "\n")
-		if !strings.Contains(j, "openssl genrsa -out "+l73ClientDir+"/client.key 2048") || !strings.Contains(j, "chmod 600") {
+		if !strings.Contains(j, "openssl req -new -newkey rsa:2048 -nodes -keyout "+l73ClientDir+"/client.key") || !strings.Contains(j, "chmod 600") {
 			t.Errorf("%s: ran %q", mode, j)
 		}
 		leakFree(t, mode, screen, fmt.Sprintf("%+v", out))
@@ -350,16 +354,16 @@ func TestL73JunosRootBothKeyCommandsFailingIsInvalidWithBothScreens(t *testing.T
 	c, d := newRootDevice()
 	d.pw, d.keygen = testPW, "none"
 	_, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
-	if err == nil || !strings.Contains(err.Error(), "ecparam") || !strings.Contains(err.Error(), "genrsa") {
+	if err == nil || !strings.Contains(err.Error(), "newkey ec") || !strings.Contains(err.Error(), "rsa:2048") {
 		t.Fatalf("err %v", err)
 	}
-	for _, want := range []string{"Invalid command 'ecparam'", "Invalid command 'genrsa'", "OpenSSL 1.0.2u"} {
+	for _, want := range []string{"Invalid curve for req", "Invalid rsa for req", "OpenSSL 1.0.2u", "asn1parse"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("the screen lacks %q: %q", want, screen)
 		}
 	}
 	for _, ran := range d.shellRan {
-		if strings.HasPrefix(ran, "chmod ") || strings.HasPrefix(ran, "openssl req") {
+		if strings.HasPrefix(ran, "chmod ") {
 			t.Errorf("went on after both failed: %q", ran)
 		}
 	}
@@ -383,4 +387,22 @@ func TestL73JunosRootRecordsTheDevicesOpenSSLVersion(t *testing.T) {
 	if !found {
 		t.Error("the note's facts omit the version")
 	}
+}
+
+func TestL73JunosRootStopsWhenOpenSSLHelpDoesNotListReq(t *testing.T) {
+	c, d := newRootDevice()
+	d.pw, d.keygen = testPW, "noreq"
+	out, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+	if err == nil || !strings.Contains(err.Error(), "req") {
+		t.Fatalf("err %v", err)
+	}
+	if !strings.Contains(screen, "asn1parse") || !strings.Contains(out.OpenSSLHelp, "asn1parse") {
+		t.Errorf("the help was not kept: %q", screen)
+	}
+	for _, ran := range d.shellRan {
+		if strings.Contains(ran, "-newkey") || strings.HasPrefix(ran, "chmod ") {
+			t.Errorf("tried a key anyway: %q", ran)
+		}
+	}
+	leakFree(t, "screen", screen, err.Error())
 }

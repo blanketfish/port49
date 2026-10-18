@@ -948,14 +948,12 @@ func l73RootCmdAllowed(cmd string) bool {
 	return l73RootCmdForms.MatchString(cmd)
 }
 
-var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit|echo rc=\$\?|openssl version` +
+var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit|echo rc=\$\?|openssl version|openssl help` +
 	`|openssl x509 -noout -subject_hash(_old)? -in (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `)` +
 	`|mkdir -p ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
 	`|ls -l ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*` +
-	`|openssl ecparam -name prime256v1 -genkey -noout -out ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key` +
-	`|openssl genrsa -out ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key 2048` +
+	`|openssl req -new -newkey (ec -pkeyopt ec_paramgen_curve:prime256v1|rsa:2048) -nodes -keyout ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key -subj "/CN=[A-Za-z0-9][A-Za-z0-9.-]*" -out ` + regexp.QuoteMeta(l73ClientCSR) +
 	`|chmod 600 ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key` +
-	`|openssl req -new -key ` + regexp.QuoteMeta(l73ClientDir) + `/client\.key -subj "/CN=[A-Za-z0-9][A-Za-z0-9.-]*" -out ` + regexp.QuoteMeta(l73ClientCSR) +
 	`|cp ` + regexp.QuoteMeta(l73ClientCRT) + ` ` + regexp.QuoteMeta(l73ClientDir) + `/client\.crt` +
 	`|cp (` + regexp.QuoteMeta(l73RootOnDevice) + `|` + regexp.QuoteMeta(l73InterOnDevice) + `) ` + regexp.QuoteMeta(l73TrustDir) + `/[a-z][a-z0-9-]*/[0-9a-f]{8}\.0)$`)
 
@@ -972,25 +970,32 @@ const (
 
 var l73ClientNode = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
 
-// l73RootKeyCmds are the two ways the client key is made in its folder, the
-// second only when the first fails: the image's openssl is old (no genpkey,
-// attempt 17), so an EC key by ecparam, else RSA 2048.
-func l73RootKeyCmds() (ec, rsa string) {
-	k := l73ClientDir + "/client.key"
-	return "openssl ecparam -name prime256v1 -genkey -noout -out " + k, "openssl genrsa -out " + k + " 2048"
-}
-
-// l73RootClientCmds are the root-shell lines around the key: the folder
-// before it, and its mode and a request for it (named by node) after.
-func l73RootClientCmds(node string) (prep, finish []string, err error) {
+// l73RootClientCmds are the root-shell lines that make the client key in its
+// folder: the folder, then one `openssl req -newkey` that makes the key and
+// the request (named by node) together, EC P-256 first and only if that fails
+// RSA 2048, then the key's mode. The image's openssl has no genpkey, ecparam
+// or genrsa (attempts 17 and 18), so req is the one command left that can.
+func l73RootClientCmds(node string) (prep []string, reqEC, reqRSA string, finish []string, err error) {
 	if !l73ClientNode.MatchString(node) {
-		return nil, nil, fmt.Errorf("device name %q cannot go in a certificate subject", node)
+		return nil, "", "", nil, fmt.Errorf("device name %q cannot go in a certificate subject", node)
 	}
 	k := l73ClientDir + "/client.key"
-	return []string{"mkdir -p " + l73ClientDir}, []string{
-		"chmod 600 " + k,
-		`openssl req -new -key ` + k + ` -subj "/CN=` + node + `" -out ` + l73ClientCSR,
-	}, nil
+	tail := ` -nodes -keyout ` + k + ` -subj "/CN=` + node + `" -out ` + l73ClientCSR
+	return []string{"mkdir -p " + l73ClientDir},
+		"openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1" + tail,
+		"openssl req -new -newkey rsa:2048" + tail,
+		[]string{"chmod 600 " + k}, nil
+}
+
+// l73ListsCommand reports whether an `openssl help` listing names the command
+// as a word of its own.
+func l73ListsCommand(help, name string) bool {
+	for _, w := range strings.Fields(help) {
+		if w == name {
+			return true
+		}
+	}
+	return false
 }
 
 // l73RootPlaceCmds put the signed client certificate beside its key.
