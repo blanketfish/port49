@@ -390,8 +390,23 @@ func (s *Store) CheckIdentityAt(ctx context.Context, broker bool, scope Scope) e
 
 // beyondDirectoryDaemon says what a grant on [key, end) reaches that the
 // daemon's role on a directory keyspace may not: any write, or a read past
-// rv/, meta/ping and meta/seal_keys. An empty end is the one key.
+// rv/, meta/ping and meta/seal_keys. An empty end is the one key. A grant
+// that does not reach the keyspace is not judged: two keyspaces on one
+// cluster share role names (R23).
 func (k keys) beyondDirectoryDaemon(key, end string, write bool) string {
+	rootEnd := clientv3.GetPrefixRangeEnd(k.root)
+	var reaches bool
+	switch end {
+	case "": // the one key
+		reaches = key >= k.root && key < rootEnd
+	case "\x00": // every key from key on
+		reaches = key < rootEnd
+	default:
+		reaches = key < rootEnd && end > k.root
+	}
+	if !reaches {
+		return "" // another keyspace's grant, on a cluster both share
+	}
 	if write {
 		return "writes the directory store, which the broker alone writes"
 	}

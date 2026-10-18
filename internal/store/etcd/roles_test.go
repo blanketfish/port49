@@ -624,3 +624,19 @@ func TestCheckIdentityAtRefusesADaemonReadOfBrokerSnapshots(t *testing.T) {
 		t.Fatalf("%v, want ErrNotSeparated naming ds/b/", err)
 	}
 }
+
+// Two keyspaces on one cluster share role names: the daemon's role then
+// holds the session store's grants too, and the directory's check judges
+// only the grants that reach its own keyspace (R23).
+func TestTheDirectoryCheckJudgesItsOwnKeyspace(t *testing.T) {
+	k := newKeys("/port49-directory/")
+	if why := k.beyondDirectoryDaemon("/port49/v1/t/", "/port49/v1/t0", true); why != "" {
+		t.Fatalf("a write on another keyspace: %s", why)
+	}
+	if why := k.beyondDirectoryDaemon("/port49-directory/v1/t/", "/port49-directory/v1/t0", true); why == "" {
+		t.Fatal("a write on the directory keyspace passed")
+	}
+	if why := k.beyondDirectoryDaemon("", "\x00", false); why == "" {
+		t.Fatal("a read of every key passed")
+	}
+}

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -191,59 +190,6 @@ func TestStoreRolesRefusesMemoryAndUsage(t *testing.T) {
 	}
 }
 
-// sevenDFile writes the fleet's daemon config as 7d's etcdRunServer wrote
-// it: the broker: block and stores.directory.etcd.broker added back to port49d.yaml.
-func (f *fleet) sevenDFile(t *testing.T) string {
-	t.Helper()
-	raw, err := os.ReadFile(f.daemon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bro, err := os.ReadFile(f.broker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	i := strings.Index(string(bro), "\nbroker:\n")
-	if i < 0 {
-		t.Fatal("port49-broker.yaml has no broker: block")
-	}
-	block, _, _ := strings.Cut(string(bro)[i+1:], "stores:\n")
-	bc, bk := f.srv.ClientFiles(t, "port49-broker")
-	body := strings.Replace(string(raw), "\nstores:\n", "\n"+block+"stores:\n", 1)
-	body = strings.Replace(body, "      call_timeout:", "      broker: {cert_file: "+bc+", key_file: "+bk+"}\n      call_timeout:", 1)
-	p := filepath.Join(t.TempDir(), "port49d.yaml")
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-// A file whose stores: names a session store of its own is refused until
-// store-roles prints the roles of two (plan 11a, Task 11).
-func TestStoreRolesRefusesTwoStoresForNow(t *testing.T) {
-	cfg := storeRolesFixture(t, "port49-daemon", "port49-broker")
-	raw, err := os.ReadFile(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(raw)
-	i := strings.Index(body, "  directory:\n")
-	j := strings.Index(body, "admin_socket: "+filepath.Dir(cfg))
-	if i < 0 || j < i {
-		t.Fatalf("the fixture's stores: block was not found in:\n%s", body)
-	}
-	block := strings.TrimPrefix(body[i:j], "  directory:\n")
-	block = strings.Replace(block, "    etcd:\n", "    etcd:\n      prefix: /other/\n", 1)
-	if err := os.WriteFile(cfg, []byte(body[:j]+"  session:\n"+block+body[j:]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, errb bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
-		!strings.Contains(errb.String(), "stores.session names a store of its own; this build prints one store's roles") {
-		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
-	}
-}
-
 // store-roles reads the daemon's CN from port49d.yaml and the broker's from
 // port49-broker.yaml (Ruling 14); either alone is refused, naming the other.
 func TestStoreRolesReadsBothFiles(t *testing.T) {
@@ -260,25 +206,6 @@ func TestStoreRolesReadsBothFiles(t *testing.T) {
 	if code := storeRolesCmd([]string{"--config", f.daemon}, &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "--broker-config") {
 		t.Fatalf("one file: exit %d, %s", code, errb.String())
-	}
-}
-
-// A 7d port49d.yaml naming both identities still yields both roles with
-// no --broker-config, and says to move the broker's identity (pre-flight
-// I8: StoreBlocks reads it with no role; Load would refuse it).
-func TestStoreRolesStillReadsA7dFile(t *testing.T) {
-	f := splitFleet(t)
-	old := f.sevenDFile(t) // port49d.yaml as 7d wrote it: a broker: block and both identities
-	var out, errb bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", old}, &out, &errb); code != 0 {
-		t.Fatalf("exit %d: %s", code, errb.String())
-	}
-	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") ||
-		!strings.Contains(errb.String(), "port49-broker.yaml") {
-		t.Fatalf("out %s; err %s", out.String(), errb.String())
-	}
-	if _, err := config.Load(old); err == nil {
-		t.Fatal("control: Load under the daemon's role must refuse the 7d file on etcd")
 	}
 }
 
@@ -318,23 +245,65 @@ func TestStoreRolesRefusesAFileMissingItsIdentity(t *testing.T) {
 	}
 }
 
-// A 7d --config that still names stores.directory.etcd.broker, beside a --broker-config,
-// is warned about, naming both CNs, and the --broker-config's wins: the
-// stale identity cannot run (config.Load refuses that file at port49d's
-// start), so the operator mid-migration needs a line, not a refusal.
-func TestStoreRolesWarnsOfAStaleBrokerIdentity(t *testing.T) {
-	f := splitFleet(t)
-	old := f.sevenDFile(t)
+// writeTwoStoreRolesConfig is writeStoreRolesConfig with a directory store
+// of its own at dir-0 and the session store at sess-0, each naming both
+// identities.
+func writeTwoStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string) string {
+	t.Helper()
+	base := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	raw, err := os.ReadFile(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := func(name, ep string) string {
+		return "  " + name + ":\n    backend: etcd\n    etcd:\n      endpoints: [https://" + ep + ":2379]\n" +
+			"      ca_file: " + ca + "\n      daemon: {cert_file: " + d[0] + ", key_file: " + d[1] + "}\n" +
+			"      broker: {cert_file: " + b[0] + ", key_file: " + b[1] + "}\n"
+	}
+	raw = append(raw, []byte("\nstores:\n"+block("directory", "dir-0")+block("session", "sess-0")+
+		"admin_socket: "+filepath.Join(dir, "admin.sock")+"\n")...)
+	p := filepath.Join(dir, "port49d.yaml")
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// R23: with a directory store of its own, a section per store, each run
+// against its own cluster; on the directory the daemon reads rv/ and
+// meta/ping alone, and on the session store it is granted no rv/.
+func TestStoreRolesPrintsASectionPerStore(t *testing.T) {
+	single := storeRolesFixture(t, "port49-daemon", "port49-broker")
+	dir := filepath.Dir(single)
+	cfg := writeTwoStoreRolesConfig(t, dir, filepath.Join(dir, "ca.pem"),
+		[2]string{filepath.Join(dir, "daemon.pem"), filepath.Join(dir, "daemon-key.pem")},
+		[2]string{filepath.Join(dir, "broker.pem"), filepath.Join(dir, "broker-key.pem")})
 	var out, errb bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", old, "--broker-config", f.broker}, &out, &errb); code != 0 {
+	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	for _, want := range []string{"still names stores.directory.etcd.broker", "CN \"port49-broker\"", f.broker, "port49d refuses at start"} {
-		if !strings.Contains(errb.String(), want) {
-			t.Errorf("stderr lacks %q: %s", want, errb.String())
+	text := out.String()
+	d := strings.Index(text, "# port49 roles for the directory store")
+	s := strings.Index(text, "# port49 roles for the session store")
+	if d < 0 || s < d {
+		t.Fatalf("the sections:\n%s", text)
+	}
+	dirPart, sessPart := text[d:s], text[s:]
+	for _, want := range []string{
+		"ETCDCTL_ENDPOINTS=https://dir-0:2379",
+		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/rv/",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/ping",
+		"etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/",
+	} {
+		if !strings.Contains(dirPart, want) {
+			t.Fatalf("the directory section lacks %q:\n%s", want, dirPart)
 		}
 	}
-	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") {
-		t.Fatalf("%s", out.String())
+	if strings.Contains(dirPart, "/port49/v1/c/") {
+		t.Fatalf("the directory section grants the contexts:\n%s", dirPart)
+	}
+	if !strings.Contains(sessPart, "ETCDCTL_ENDPOINTS=https://sess-0:2379") ||
+		strings.Contains(sessPart, "port49_daemon read --prefix=true /port49/v1/rv/") {
+		t.Fatalf("the session section:\n%s", sessPart)
 	}
 }
