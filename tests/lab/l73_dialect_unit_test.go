@@ -4,6 +4,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -283,5 +284,43 @@ func TestL73RecoverLinesReturnToTheProbeMode(t *testing.T) {
 		if got != nil && !slices.Equal(got[1:], d.Enter) {
 			t.Errorf("%s: recovery does not end in the probe's Enter lines", tc.platform)
 		}
+	}
+}
+
+func TestL73HelpWordsAreTheListedKeywords(t *testing.T) {
+	help := "tacacs-server host 192.0.2.71 tls ?\r\n  ssl-profile  Name of the SSL profile\r\n  vrf          VRF\r\n  <cr>\r\n" +
+		"    continued description line\r\n  ssl-profile  again\r\nleaf1(config)#"
+	if got := l73HelpWords(help); !slices.Equal(got, []string{"ssl-profile", "vrf"}) {
+		t.Fatalf("%q", got)
+	}
+	var many strings.Builder
+	for i := 0; i < 20; i++ {
+		many.WriteString("  w" + strconv.Itoa(i) + "  x\r\n")
+	}
+	if got := l73HelpWords(many.String()); len(got) != l73DiagWords {
+		t.Fatalf("%d words, want %d", len(got), l73DiagWords)
+	}
+}
+
+// The EOS help diagnostic asks at the image's own `tls` keyword, one level
+// of keywords below it, and the SSL profile submode, which it leaves by
+// undoing what it entered. It types no TLS client line.
+func TestL73EOSDiagAsks(t *testing.T) {
+	d := l73EOSDialect
+	if d.DiagDeep != 2 || len(d.DiagAsks) != 1 || d.DiagAsks[0] != "tacacs-server host 192.0.2.71 tls " ||
+		len(d.DiagOpAsks) != 1 || d.DiagOpAsks[0] != "show management security ssl profile " {
+		t.Fatal(d.DiagAsks, d.DiagOpAsks, d.DiagDeep)
+	}
+	if !slices.Equal(d.DiagSubIn, []string{"management security", "ssl profile l73x"}) ||
+		!slices.Contains(d.DiagSubOut, "no ssl profile l73x") {
+		t.Fatal(d.DiagSubIn, d.DiagSubOut)
+	}
+	for _, a := range append(slices.Clone(d.DiagAsks), d.DiagOpAsks...) {
+		if !strings.HasSuffix(a, " ") || strings.Contains(a, "?") {
+			t.Errorf("%q", a)
+		}
+	}
+	if slices.Contains(d.Asks[0].Need, "ssl-profile") || !slices.Contains(d.Asks[0].Need, "tls") {
+		t.Errorf("the host ask requires %v", d.Asks[0].Need)
 	}
 }

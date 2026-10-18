@@ -354,16 +354,36 @@ func (e *l73Env) diagHelp() {
 		return
 	}
 	e.cli(func(c *cliConn) error {
-		opMark := "@" + e.l.p.node + e.opMark(c) // the prompt as the CLI redisplays it; "> " alone also opens help lines
-		for i, ask := range e.d.DiagOpAsks {
-			words := strings.Fields(ask)
-			ans, err := l71AskHelp(c, ask, words[len(words)-1:], opMark)
+		opMark := e.opMark(c)
+		if e.d.Family == "junos" {
+			opMark = "@" + e.l.p.node + opMark // the prompt as the CLI redisplays it; "> " alone also opens help lines
+		}
+		ask := func(name, line, mark string, deep int) error {
+			words := strings.Fields(line)
+			last := []string(nil)
+			if len(words) > 0 {
+				last = words[len(words)-1:]
+			}
+			ans, err := l71AskHelp(c, line, last, mark)
 			if err != nil {
 				return err
 			}
-			e.invalidScreen(fmt.Sprintf("help-op-%d", i+1), fmt.Sprintf("### typed `%s?`, cleared %v, finished %v\n%s", ask, ans.Cleared, ans.WaitErr == nil, ans.Masked))
+			e.invalidScreen(name, fmt.Sprintf("### typed `%s?`, cleared %v, finished %v\n%s", line, ans.Cleared, ans.WaitErr == nil, ans.Masked))
 			if !ans.Cleared {
 				return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
+			}
+			if deep > 0 {
+				for i, w := range l73HelpWords(ans.Masked) {
+					if err := e.diagDeeper(c, name, line, w, i, deep, mark); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+		for i, a := range e.d.DiagOpAsks {
+			if err := ask(fmt.Sprintf("help-op-%d", i+1), a, opMark, 0); err != nil {
+				return err
 			}
 		}
 		for _, ln := range e.d.Enter {
@@ -371,16 +391,24 @@ func (e *l73Env) diagHelp() {
 				return l71Wrap("INVALID: "+ln, err)
 			}
 		}
-		for i, ask := range e.d.DiagAsks {
-			// The typed line is echoed at once; its last word says the help has begun.
-			words := strings.Fields(ask)
-			ans, err := l71AskHelp(c, ask, words[len(words)-1:], e.d.CfgMark)
-			if err != nil {
+		for i, a := range e.d.DiagAsks {
+			if err := ask(fmt.Sprintf("help-%d", i+1), a, e.d.CfgMark, e.d.DiagDeep); err != nil {
 				return err
 			}
-			e.invalidScreen(fmt.Sprintf("help-%d", i+1), fmt.Sprintf("### typed `%s?`, cleared %v\n%s", ask, ans.Cleared, ans.Masked))
-			if !ans.Cleared {
-				return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
+		}
+		if len(e.d.DiagSubAsks) > 0 {
+			for _, ln := range e.d.DiagSubIn {
+				if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
+					return l71Wrap("INVALID: "+ln, err)
+				}
+			}
+			for i, a := range e.d.DiagSubAsks {
+				if err := ask(fmt.Sprintf("help-sub-%d", i+1), a, e.d.CfgMark, 0); err != nil {
+					return err
+				}
+			}
+			for _, ln := range e.d.DiagSubOut {
+				c.sendExpect(ln, 30*time.Second, e.d.CfgMark)
 			}
 		}
 		for _, ln := range e.d.Cleanup {
@@ -389,6 +417,30 @@ func (e *l73Env) diagHelp() {
 		return nil
 	})
 	e.t.Fatalf("INVALID: PORT49_L73_DIAG=help: the help texts are in PORT49_L73_INVALID_DIR; no TLS line was typed")
+}
+
+// diagDeeper asks the help one keyword further, then (while deep allows) at
+// the keywords that answer lists. Only a keyword the device itself listed
+// is typed, and nothing is entered.
+func (e *l73Env) diagDeeper(c *cliConn, name, line, word string, i, deep int, mark string) error {
+	next := line + word + " "
+	ans, err := l71AskHelp(c, next, []string{word}, mark)
+	if err != nil {
+		return err
+	}
+	nm := fmt.Sprintf("%s-%d", name, i+1)
+	e.invalidScreen(nm, fmt.Sprintf("### typed `%s?`, cleared %v, finished %v\n%s", next, ans.Cleared, ans.WaitErr == nil, ans.Masked))
+	if !ans.Cleared {
+		return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
+	}
+	if deep > 1 {
+		for j, w := range l73HelpWords(ans.Masked) {
+			if err := e.diagDeeper(c, nm, next, w, j, deep-1, mark); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // invalidDeviceLogs keeps the dialect's INVALID commands' output (the device's

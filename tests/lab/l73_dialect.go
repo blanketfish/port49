@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,10 @@ type l73Dialect struct {
 	RefusalCmds []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagOpAsks  []string // DiagAsks' operational-mode counterpart
 	DiagAsks    []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
+	DiagDeep    int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
+	DiagSubIn   []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
+	DiagSubAsks []string // asks made inside that submode ("" is the submode's own help)
+	DiagSubOut  []string // lines that leave it and undo what DiagSubIn made
 }
 
 var l73JunosDialect = l73Dialect{
@@ -100,7 +105,7 @@ var l73EOSDialect = l73Dialect{
 	Family: "eos", Vendor: "EOS", Probe: "arista_ceos",
 	Enter: []string{"configure"}, Cleanup: []string{"end"}, CfgMark: "(config",
 	Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"},
-		Need: []string{"ssl-profile", "port", "single-connection", "key"}, Want: []string{"tls"}},
+		Need: []string{"tls", "port", "single-connection", "key"}, Want: []string{"ssl-profile"}},
 		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
 	VersionCmd: "show version | include Software image version", VersionHas: "4.36.3M",
 	Enrol: "EOS's documented enrolment (`security pki key generate`, `security pki certificate generate signing-request`, " +
@@ -109,6 +114,13 @@ var l73EOSDialect = l73Dialect{
 	Fallback:   "`aaa authentication login default group port49 local` (configs/eos-startup.cfg)",
 	Revocation: "no CRL in its SSL profile",
 	LogCmd:     "show logging | include TACACS|TLS|SSL|AAA",
+	// 4.36.3M's help lists `tls` (not ssl-profile) after a host address (Task 14 attempt 1).
+	DiagOpAsks:  []string{"show management security ssl profile "},
+	DiagAsks:    []string{"tacacs-server host 192.0.2.71 tls "},
+	DiagDeep:    2,
+	DiagSubIn:   []string{"management security", "ssl profile l73x"},
+	DiagSubAsks: []string{""},
+	DiagSubOut:  []string{"exit", "no ssl profile l73x", "exit"},
 	ShowCmds: []string{"show running-config section tacacs", "show running-config section management security",
 		"show management security ssl profile " + l73EOSProfile, "show tacacs"},
 }
@@ -458,4 +470,30 @@ func l73Refusal(out string) string {
 		}
 	}
 	return ""
+}
+
+// l73DiagWords bounds how many keywords one help answer is followed into.
+const l73DiagWords = 8
+
+var l73HelpKeyword = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// l73HelpWords are the keywords a help answer lists: the first word of each
+// line indented by two spaces, as EOS prints them. "<cr>", rules and
+// repeats are left out, and only plain keyword characters are kept, so what
+// is typed next is never something the device did not offer as a word.
+func l73HelpWords(help string) []string {
+	var out []string
+	for _, ln := range strings.Split(strings.ReplaceAll(help, "\r", ""), "\n") {
+		if !strings.HasPrefix(ln, "  ") || strings.HasPrefix(ln, "   ") {
+			continue
+		}
+		f := strings.Fields(ln)
+		if len(f) == 0 || !l73HelpKeyword.MatchString(f[0]) || slices.Contains(out, f[0]) {
+			continue
+		}
+		if out = append(out, f[0]); len(out) == l73DiagWords {
+			break
+		}
+	}
+	return out
 }
