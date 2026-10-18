@@ -1,0 +1,565 @@
+//go:build lab
+
+package lab
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
+)
+
+// TestL76 measures Nokia SR Linux against port49 (spec §15 L76). It runs only
+// when PORT49_LAB_PLATFORMS is exactly "srlinux", and only as
+// -run '^TestL76$' (TestL73 also runs the opt-in rows).
+func TestL76(t *testing.T) {
+	sel, _, err := platformSelection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sel) != 1 || sel[0].sel != l76Sel {
+		t.Skipf("L76 runs alone: PORT49_LAB_PLATFORMS=%s", l76Sel)
+	}
+	// Held until TestMain's teardown has destroyed the topology (labRelease).
+	if err := labOccupyForRun(labLockPath, fmt.Sprintf("TestL76 pid %d", os.Getpid())); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	// Names only, as TestL73 does: nothing here touches another container
+	// (pre-flight M6).
+	if out, err := exec.Command("docker", "ps", "--filter", "label=containerlab", "--format", "{{.Names}}").Output(); err != nil {
+		t.Fatalf("INVALID: docker ps: %v", err)
+	} else if s := strings.TrimSpace(string(out)); s != "" {
+		t.Fatalf("INVALID: a containerlab topology is already up (%s): the lab is single-occupant",
+			strings.ReplaceAll(s, "\n", ", "))
+	}
+	// eachOptInPlatform, not eachPlatform: the srlinux row is opt-in, and
+	// eachPlatform runs only the rows that are not (pre-flight C1).
+	eachOptInPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L76")
+		defer stop()
+		e := &l76Env{t: t, l: l, start: l.mark(), evidence: map[string]string{}, out: map[string]string{}}
+		e.wrongPassword = randomHex(t, 15)
+		e.wrongKey = randomHex(t, 16)
+		e.checkSchema()
+		e.cellA()
+		e.cellB()
+		e.cellC()
+		e.cellD()
+		e.cellH()
+		e.cellI()
+		e.cellJ()
+		e.cellE()
+		e.cellF()
+		e.cellG()
+		stop()
+		e.note()
+	})
+}
+
+type l76Env struct {
+	t        *testing.T
+	l        *lab
+	start    int64             // the decision log's size when the test began
+	evidence map[string]string // file name under evidence/L76-<platform>/ -> content
+	out      map[string]string // cell id -> observation
+	schema   string            // the note's schema section
+
+	wrongPassword, wrongKey string
+
+	aUser string           // cell (a)'s port49 user
+	aOuts []string         // cell (a)'s command outputs, unfiltered
+	aRecs []map[string]any // cell (a)'s records
+
+	retries []string // try's retried dials, both attempts each (pre-flight M3)
+	dumped  bool     // dumpDevice has run
+}
+
+// guard is the STOP sentinel and the disk floor, before every cell.
+func (e *l76Env) guard() {
+	e.t.Helper()
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+}
+
+// invalid ends the run with no note. Its message passes the log filter and
+// then l76Leaks against the run's secrets.
+// A restore that fails inside a deferred call after an earlier INVALID
+// (the test is already failing and unwinding) is logged, not raised again,
+// so the first INVALID's reason stays the run's reason.
+func (e *l76Env) invalid(format string, args ...any) {
+	e.t.Helper()
+	msg := l76FilterLog(fmt.Sprintf(format, args...))
+	// Whatever else it holds, a message that names a secret is not printed.
+	secrets, _ := e.secrets() // on a seed error, the fixed secrets still gate
+	msg = l76SafeInvalid(msg, secrets)
+	if e.t.Failed() {
+		e.t.Logf("also INVALID, while restoring after the first: %s", msg)
+		return
+	}
+	e.dumpDevice()
+	e.t.Fatalf("INVALID: %s", msg)
+}
+
+// dumpDevice keeps the device's own view of an INVALID run, best-effort, in
+// the git-ignored tests/lab/logs/L76-invalid-<stamp>/, so the next attempt
+// does not re-boot blind (pre-flight I6): the masked running config, the AAA
+// log's last 400 lines and the session table. Each passes through
+// l76FilterLog and then l76Leaks; a file with a hit is withheld. It never
+// writes to results/ or evidence/, and it never raises: it calls sr and
+// aaaTail, not running or invalid, and logs its own failures, so the INVALID
+// that called it stays the run's reason.
+func (e *l76Env) dumpDevice() {
+	if e.dumped {
+		return
+	}
+	e.dumped = true
+	dir := filepath.Join(root, "tests", "lab", "logs", "L76-invalid-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		e.t.Logf("INVALID dump: %v", err)
+		return
+	}
+	secrets, err := e.secrets()
+	if err != nil {
+		e.t.Logf("INVALID dump: the run's seed tokens: %v; checking the other secrets only", err)
+	}
+	run, _, runErr := e.sr(60*time.Second, l76ReadRunning)
+	aaa, aaaErr := e.aaaTail()
+	sess, _, sessErr := e.sr(60*time.Second, l76ReadSessions)
+	type read struct {
+		text string
+		err  error
+	}
+	for name, r := range map[string]read{
+		"running.txt":  {l76MaskConfig(run), runErr},
+		"aaa-log.txt":  {aaa, aaaErr},
+		"sessions.txt": {sess, sessErr},
+	} {
+		text := r.text
+		if r.err != nil {
+			text = fmt.Sprintf("(not read cleanly: %v)\n%s", r.err, text)
+		}
+		text = l76FilterLog(text)
+		if leaks := l76Leaks(text, secrets); len(leaks) > 0 {
+			e.t.Logf("INVALID dump: %s withheld: it holds %v", name, leaks)
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text+"\n"), 0o600); err != nil {
+			e.t.Logf("INVALID dump: %s: %v", name, err)
+		}
+	}
+	e.t.Logf("INVALID dump: the device's view is in %s", dir)
+}
+
+// secrets is every secret the run knows, for the leak gates: the lab key,
+// the break-glass password, SR Linux's default admin password, the wrong key
+// and password, and every seed token. If the seeds cannot be read it returns
+// the others, and the error.
+func (e *l76Env) secrets() ([]string, error) {
+	fixed := []string{labKeyDefault, breakglassPassword, l76AdminDefault, e.wrongKey, e.wrongPassword}
+	runSeedsMu.Lock()
+	seeds, err := labcreds.SecretsOf(runSeeds)
+	runSeedsMu.Unlock()
+	if err != nil {
+		return fixed, err
+	}
+	return append(fixed, seeds...), nil
+}
+
+// sr runs sr_cli -d in the node as the container's root, outside TACACS+,
+// and returns its output unfiltered: callers filter before keeping it.
+// docker exec runs as root because containerlab starts SR Linux nodes with
+// user 0:0 (its nodes/srl/srl.go; the image's own default is user:user).
+func (e *l76Env) sr(within time.Duration, args ...string) (string, time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	argv := append([]string{"exec", l76Container, "sr_cli", "-d"}, args...)
+	start := time.Now()
+	out, err := exec.CommandContext(ctx, "docker", argv...).CombinedOutput()
+	return string(out), time.Since(start), err
+}
+
+// running is `info from running system aaa` (CM#configuration-datastores),
+// unmasked: callers mask it.
+func (e *l76Env) running() string {
+	out, _, err := e.sr(60*time.Second, l76ReadRunning)
+	if err != nil {
+		e.invalid("%s: %v\n%s", l76ReadRunning, err, l76MaskConfig(out))
+	}
+	return out
+}
+
+// set applies one flat `set /` line (CLAB#cli's flat form) and reads it back.
+// It tries `sr_cli -d --candidate-mode --commit-at-end -- <line>`, the form
+// sr_cli's own help example shows (HELP; pre-flight M8). If the read-back
+// says that did not apply, it sends `enter candidate`, the line and `commit
+// now` on stdin (CM#configuration-modes,
+// CM#commit-configuration-in-candidate-mode). If neither applies, the run is
+// INVALID.
+func (e *l76Env) set(line string, applied func(running string) bool) {
+	e.t.Helper()
+	out, _, err := e.sr(90*time.Second, "--candidate-mode", "--commit-at-end", "--", line)
+	if err == nil && applied(e.running()) {
+		return
+	}
+	first := l76MaskConfig(out)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", l76Container, "sr_cli", "-d")
+	cmd.Stdin = strings.NewReader("enter candidate\n" + line + "\ncommit now\n")
+	out2, err2 := cmd.CombinedOutput()
+	if !applied(e.running()) {
+		e.invalid("%q did not apply: sr_cli --candidate-mode --commit-at-end said (%v) %s; stdin said (%v) %s",
+			line, err, first, err2, l76MaskConfig(string(out2)))
+	}
+}
+
+// aaaTail is the AAA manager log's last 400 lines through the log filter
+// (SA#configuring-local-accounting). It never raises: dumpDevice uses it.
+func (e *l76Env) aaaTail() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "tail", "-n", "400", l76AAALog).CombinedOutput()
+	return l76FilterLog(string(out)), err
+}
+
+// aaaLog is aaaTail's lines that name any key.
+func (e *l76Env) aaaLog(keys ...string) string {
+	out, err := e.aaaTail()
+	if err != nil {
+		return fmt.Sprintf("(the AAA log could not be read: %v)", err)
+	}
+	return l76Grep(out, keys)
+}
+
+// try is one SSH login and how long the device took to answer it. A dial
+// that fails before authentication (a TCP reset or an EOF, not
+// isAuthRejection) is retried once after 5 s; both attempts are recorded in
+// e.retries for the note, and the second is the one returned (pre-flight
+// M3: L73's XRd reset, d03ca159).
+func (e *l76Env) try(user, pw string) (time.Duration, error) {
+	once := func() (time.Duration, error) {
+		start := time.Now()
+		c, err := e.l.dial(user, pw, 60*time.Second)
+		took := time.Since(start)
+		if err == nil {
+			c.Close()
+		}
+		return took, err
+	}
+	took, err := once()
+	if err == nil || isAuthRejection(err) {
+		return took, err
+	}
+	time.Sleep(5 * time.Second)
+	took2, err2 := once()
+	again := "logged in"
+	if err2 != nil {
+		again = oneLine(err2.Error())
+	}
+	e.retries = append(e.retries, fmt.Sprintf("`%s`: the first dial failed before authentication after %v (%s); "+
+		"retried after 5 s: %s after %v", user, took.Round(time.Millisecond), oneLine(err.Error()), again,
+		took2.Round(time.Millisecond)))
+	return took2, err2
+}
+
+// restart puts port49d on cfg and waits until the device asks it again.
+func (e *l76Env) restart(cfg string) {
+	e.t.Helper()
+	if err := e.l.restart(cfg); err != nil {
+		e.invalid("restarting port49d on %s: %v", cfg, err)
+	}
+	if err := e.l.waitTACACSReady(3 * time.Minute); err != nil {
+		e.invalid("after restarting port49d: %v", err)
+	}
+}
+
+// restartStanding puts port49d back on the platform's standing config.
+func (e *l76Env) restartStanding() {
+	e.t.Helper()
+	cfg, err := e.l.configPath()
+	if err != nil {
+		e.invalid("the standing config: %v", err)
+	}
+	e.restart(cfg)
+}
+
+// tokenLogin spends one seed token on a login that runs l76Commands (Task
+// 4), and returns the user, the outputs and the user's records. Each command
+// has 60 s (loginWithin; pre-flight I1): a command the device never answers
+// is closed, and err is a *notObserved naming it, rather than a run that
+// waits until -test.timeout. outs holds one entry per command that was sent,
+// so callers check len(outs). The records wait for the redeem and for two
+// accounting records, or 30 s.
+func (e *l76Env) tokenLogin(label string) (string, []string, []map[string]any, error) {
+	e.t.Helper()
+	off := e.l.mark()
+	user, secret := e.l.nextLogin(e.t)
+	outs, err := e.l.loginWithin(user, secret, 60*time.Second, l76Commands...)
+	recs := e.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+		return redeemFor(rs, user) != nil && l76Count(l76Of(rs, user), "account") >= 2
+	})
+	for i, o := range outs {
+		e.evidence[fmt.Sprintf("%s-%d.txt", label, i+1)] = "$ " + l76Commands[i] + "\n" + l76FilterLog(o)
+	}
+	return user, outs, l76Of(recs, user), err
+}
+
+// l76SessionOf is user's row in the session table, or nil.
+func l76SessionOf(out, user string) *l76Session {
+	for _, s := range l76Sessions(out) {
+		if s.User == user {
+			return &s
+		}
+	}
+	return nil
+}
+func (e *l76Env) checkSchema() {
+	e.guard()
+	help, _, err := e.sr(30*time.Second, "--help")
+	for _, flag := range []string{"--dumb-terminal", "--candidate-mode", "--commit-at-end"} {
+		if !strings.Contains(help, flag) {
+			e.invalid("sr_cli --help lacks %s (err %v), so the harness's device commands are not this image's", flag, err)
+		}
+	}
+	ver, _, err := e.sr(30*time.Second, l76ReadVersion)
+	if err != nil || !strings.Contains(ver, "26.7.2") {
+		e.invalid("the node is not SR Linux 26.7.2 (err %v):\n%s", err, l76FilterLog(ver))
+	}
+	run := e.running()
+	for _, s := range []string{"server-group port49", "server-group local", "priv-lvl-authorization true",
+		"network-instance mgmt", "event command", "record start-stop", "p49-admin", "p49-read"} {
+		if !strings.Contains(run, s) {
+			e.invalid("the running config lacks %q, so the startup config did not apply as written:\n%s",
+				s, l76MaskConfig(run))
+		}
+	}
+	if got := l76LeafList(run, "authentication-method"); strings.Join(got, " ") != "port49 local" {
+		e.invalid("authentication-method is %v, want [port49 local]", got)
+	}
+	if got := l76LeafList(run, "accounting-method"); strings.Join(got, " ") != "port49" {
+		e.invalid("accounting-method is %v, want [port49]", got)
+	}
+	model := func(name string) string {
+		out, err := exec.Command("docker", "exec", l76Container, "sh", "-c",
+			"cat \"$(find /opt/srlinux/models -name "+name+" | head -1)\"").CombinedOutput()
+		if err != nil || len(out) == 0 {
+			e.invalid("reading %s from the image: %v", name, err)
+		}
+		return string(out)
+	}
+	aaa, types := model("srl_nokia-aaa.yang"), model("srl_nokia-aaa-types.yang")
+	findings := l76SchemaFindings(aaa, types)
+	if len(findings) != 4 {
+		e.invalid("the image's AAA models say %d of the four things this plan read from them:\n%s",
+			len(findings), strings.Join(findings, "\n"))
+	}
+	groups, _, _ := e.sr(30*time.Second, l76ReadGroup)
+	e.evidence["schema-running.txt"] = l76MaskConfig(run)
+	e.evidence["schema-models.txt"] = l76SchemaExcerpt(aaa, []string{l76LocalNameRule, "grouping aaa-authorization-methods-config",
+		"grouping aaa-authorization-events-top", "uses aaa-authorization", "authorization is skipped for TACACS+"}) + "\n" +
+		l76SchemaExcerpt(types, []string{"identity command ", "identity commands ", "base aaa_accounting_event_type",
+			"base aaa_authorization_event_type"})
+	e.evidence["schema-server-group.txt"] = l76MaskConfig(l76FilterLog(groups))
+	e.schema = fmt.Sprintf("Version: `%s`.\n\nThe configuration under test, as the device reports it "+
+		"(`info from running system aaa`, values masked):\n\n```\n%s\n```\n\nWhat the image's own YANG says "+
+		"where Nokia's guide says otherwise or nothing:\n\n- %s\n\nThe server group's state "+
+		"(`info from state system aaa server-group port49`):\n\n```\n%s\n```\n",
+		oneLine(l76FilterLog(ver)), l76MaskConfig(run), strings.Join(findings, "\n- "),
+		e.evidence["schema-server-group.txt"])
+}
+
+// checkSessionState is the schema check's arm for the session-state path
+// (pre-flight M2). It needs a logged-in user, so cell (a) calls it with its
+// own state read: the read must hold a `session` block whose `username` is
+// user (YANG `list session`, srl_nokia-aaa.yang 487). Otherwise a wrong path
+// or leaf name would read as "no roles" in cells (b), (h), (i) and (j), and
+// the run is INVALID.
+func (e *l76Env) checkSessionState(state, user string) {
+	e.t.Helper()
+	if !strings.Contains(state, "session ") {
+		e.invalid("`%s` returned no session block, so its path is not this image's:\n%s",
+			l76ReadSessionState, l76FilterLog(state))
+	}
+	if l76UserSessions(state, user) == "" {
+		e.invalid("`%s` has no session block with `username %s`, so the leaf is not this image's:\n%s",
+			l76ReadSessionState, user, l76FilterLog(state))
+	}
+}
+
+// (a) the control login. A port49 user that fails here makes the run
+// INVALID: nothing after it would be about TACACS+.
+func (e *l76Env) cellA() {
+	e.guard()
+	start := time.Now()
+	user, outs, recs, err := e.tokenLogin("a")
+	took := time.Since(start)
+	// Any error is INVALID here, a *notObserved (a command that did not
+	// finish in 60 s) included: (a) is the control (pre-flight I1).
+	if err != nil {
+		e.invalid("cell a: the control login as %s failed after %v: %v\n%s", user, took, err, summarize(recs))
+	}
+	if len(outs) != len(l76Commands) {
+		e.invalid("cell a: %d outputs for %d commands", len(outs), len(l76Commands))
+	}
+	red := redeemFor(recs, user)
+	if red == nil || l76Str(red, "verdict") != "permit" {
+		e.invalid("cell a: no permitted redeem for %s, so the device did not ask port49:\n%s", user, l76Render(recs))
+	}
+	s := l76SessionOf(outs[0], user)
+	if s == nil {
+		// Not l.ptyCommands: it drives l.shell, which expects a Cisco/EOS
+		// prompt and sends `terminal length 0`, syntax no SR Linux document
+		// cites (pre-flight I7).
+		e.invalid("cell a: the session table has no row for %s. If the outputs are empty, SR Linux's sshd did "+
+			"not run the exec command in sr_cli. The fix is a cited SR Linux pty opener, in a follow-up commit, "+
+			"with its prompt and paging command cited to the 26.7 CLI guide.\n%s", user, l76FilterLog(outs[0]))
+	}
+	e.checkSessionState(outs[1], user)
+	e.aUser, e.aOuts, e.aRecs = user, outs, recs
+
+	// Spec §8 says an unknown platform gets an alarm. This cell measures and
+	// records what port49 did; it changes no port49 code and adds no reason
+	// code (pre-flight M7). platform_unknown is defined in
+	// internal/decision/reasons.go and, at plan time, emitted nowhere.
+	unknownRecs := 0
+	for _, r := range e.l.recordsSince(e.start) {
+		if l76Str(r, "reason") == "platform_unknown" {
+			unknownRecs++
+		}
+	}
+	daemonLog := "(port49d's log could not be read)"
+	if raw, err := os.ReadFile(e.l.errPath); err == nil {
+		lines := strings.Split(l76Grep(string(raw), []string{"platform_unknown", "unknown platform",
+			"unknown_platform", l76PlatformName}), "\n")
+		if len(lines) > 20 {
+			lines = lines[len(lines)-20:]
+		}
+		daemonLog = l76FilterLog(string(l72RedactCredentialHash([]byte(strings.Join(lines, "\n")))))
+	}
+	e.evidence["a-port49d-log.txt"] = daemonLog
+	alarm := "port49 raised no unknown-platform signal: no record has reason `platform_unknown`, and its log " +
+		"names no unknown platform. Spec §8's alarm was not observed; this is a question for Ryan, not a code change."
+	if unknownRecs > 0 || strings.Contains(strings.ToLower(daemonLog), "unknown") {
+		alarm = fmt.Sprintf("port49's unknown-platform signal: %d record(s) with reason `platform_unknown`; its log's "+
+			"lines are below.", unknownRecs)
+	}
+
+	e.out["a"] = fmt.Sprintf("`%s` (a user with no local account) logged in over SSH in %v. port49's redeem: "+
+		"%s/%s, auth.method `%s`. The session table's row: id %s, service `%s`, method `%s`, priv-lvl `%s`, "+
+		"tty `%s`.\n\n```\n%s\n```\n\nRecords:\n\n```\n%s\n```\n\n**Unknown platform (spec §8).** The redeem's "+
+		"reason is `%s`. %s\n\nport49d's log, the lines naming `platform_unknown`, an unknown platform or `%s` "+
+		"(last 20):\n\n```\n%s\n```",
+		user, took.Round(time.Millisecond), l76Str(red, "verdict"), l76Str(red, "reason"), l76Str(red, "auth", "method"),
+		s.ID, s.Service, s.Method, s.PrivLvl, s.TTY, l76FilterLog(outs[0]), l76Render(recs),
+		l76Str(red, "reason"), alarm, l76PlatformName, daemonLog)
+}
+
+// (b) the authorization (a)'s login sent, read from (a)'s records.
+func (e *l76Env) cellB() {
+	e.guard()
+	if len(e.aOuts) != len(l76Commands) {
+		e.invalid("cell b: cell (a) kept %d outputs for %d commands", len(e.aOuts), len(l76Commands))
+	}
+	reqs := authzRequests(e.aRecs)
+	// Only the user's own session blocks (pre-flight I2).
+	own := l76UserSessions(e.aOuts[1], e.aUser)
+	roles := l76RolesOf(e.aOuts[1], e.aUser)
+	s := l76SessionOf(e.aOuts[0], e.aUser)
+	// What port49 sent is read from its records, never assumed from the config.
+	var reply []string
+	for _, r := range reqs {
+		if l76Str(r, "event") == "authorize_session" {
+			reply = l76Strs(r, "reply", "attributes")
+		}
+	}
+	e.out["b"] = fmt.Sprintf("%d authorization request(s) for `%s`: %d `authorize_session`, %d `authorize_command` "+
+		"(per-command). Services: %v. port49's reply attributes (from its record): %v. The session's roles "+
+		"(`info from state`, this user's session blocks only): %s; priv-lvl in the table: `%s`. `network-admin` %s "+
+		"in this user's session state.\n\n```\n%s\n```\n\nThis user's session state:\n\n```\n%s\n```",
+		len(reqs), e.aUser, l76Count(reqs, "authorize_session"), l76Count(reqs, "authorize_command"),
+		l76Services(reqs), reply, roles, s.PrivLvl, l76Appears(own, "network-admin"), l76Render(reqs),
+		l76FilterLog(own))
+}
+
+// l76Appears says whether text names word.
+func l76Appears(text, word string) string {
+	if strings.Contains(text, word) {
+		return "**appears**"
+	}
+	return "does not appear"
+}
+
+// (c) the accounting (a)'s three commands sent.
+func (e *l76Env) cellC() {
+	e.guard()
+	var acct []map[string]any
+	for _, r := range e.aRecs {
+		if l76Str(r, "event") == "account" {
+			acct = append(acct, r)
+		}
+	}
+	flags := map[string]int{}
+	noCmd := 0
+	for _, r := range acct {
+		flags[l76Str(r, "flags")]++
+		has := false
+		for _, a := range l76Strs(r, "record", "raw") {
+			if strings.HasPrefix(a, "cmd=") || strings.HasPrefix(a, "cmd*") {
+				has = true
+			}
+		}
+		if !has {
+			noCmd++
+		}
+	}
+	e.out["c"] = fmt.Sprintf("%d accounting record(s) for `%s`'s %d commands, by flags %v. Records with no `cmd` "+
+		"(a session start or stop): %d.\n\n```\n%s\n```",
+		len(acct), e.aUser, len(l76Commands), flags, noCmd, l76Render(acct))
+}
+
+// (d) a wrong password for a port49 user, then the break-glass account with
+// port49 up: whether a port49 deny falls through to local (exit-on-reject is
+// its default, false).
+func (e *l76Env) cellD() {
+	e.guard()
+	off := e.l.mark()
+	user, _ := e.l.nextLogin(e.t)
+	took, err := e.try(user, e.wrongPassword)
+	if err == nil {
+		e.invalid("cell d: %s logged in with a wrong password", user)
+	}
+	if !isAuthRejection(err) {
+		e.invalid("cell d: the wrong-password login failed before authentication: %v", err)
+	}
+	bgTook, bgErr := e.try(breakglassUser, breakglassPassword)
+	recs := e.l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
+		return redeemFor(rs, user) != nil && redeemFor(rs, breakglassUser) != nil
+	})
+	bg := "logged in"
+	if bgErr != nil {
+		bg = "was **refused** (" + oneLine(bgErr.Error()) + ")"
+	}
+	e.evidence["d-aaa-log.txt"] = e.aaaLog(user, breakglassUser)
+	// Ruling 1: a fall-through is stated as the operator hazard it is.
+	hazard := ""
+	if bgErr == nil {
+		hazard = "\n\n**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies " +
+			"still gets in if the device has a local account for them. port49's deny is not final on this " +
+			"platform. Plan 12's reference config sets `exit-on-reject` (Ruling 1)."
+	}
+	e.out["d"] = fmt.Sprintf("A wrong password for `%s` was refused in %v. port49's records:\n\n```\n%s\n```\n\n"+
+		"With port49 up, `%s` (local only; port49 denies it, having no token for it) %s in %v. So a port49 deny "+
+		"%s through to `local` with `exit-on-reject` at its default.%s\n\nThe AAA log's lines for both users:\n\n```\n%s\n```",
+		user, took.Round(time.Millisecond), l76Render(recs), breakglassUser, bg, bgTook.Round(time.Millisecond),
+		map[bool]string{true: "**falls**", false: "does **not** fall"}[bgErr == nil], hazard, e.evidence["d-aaa-log.txt"])
+}

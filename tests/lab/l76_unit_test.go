@@ -802,7 +802,7 @@ func TestL76ObservationHasEveryCellInOrder(t *testing.T) {
 	for _, c := range l76Cells {
 		out[c.id] = "seen " + c.id
 	}
-	got := l76Observation(out, "schema text")
+	got := l76Observation(out, "schema text", "EXTRA LINE")
 	last := strings.Index(got, "schema text")
 	if last < 0 {
 		t.Fatal("no schema section")
@@ -959,5 +959,53 @@ func TestL76LiveTestSendsNoInfoLiteral(t *testing.T) {
 	}
 	if strings.Contains(string(src), "\"info ") {
 		t.Error("l76_test.go holds an info literal; use an l76Read constant")
+	}
+}
+
+// The note ends with its Sources: whatever the live test adds after the cells
+// (the retries line, the Evidence pointer) goes before them.
+func TestL76ObservationEndsWithSources(t *testing.T) {
+	out := map[string]string{}
+	got := l76Observation(out, "schema text", "RETRIES AND EVIDENCE\n")
+	tail := "\n### Sources\n\n" + l76SourcesSection() + "\n"
+	if !strings.HasSuffix(got, tail) {
+		t.Errorf("the note does not end with its Sources block; ends %q", got[max(0, len(got)-120):])
+	}
+	extra := strings.Index(got, "RETRIES AND EVIDENCE")
+	if extra < 0 || extra > strings.Index(got, "### Sources") {
+		t.Error("the extra text is missing or after the Sources")
+	}
+}
+
+// An INVALID message that holds a secret is replaced by a fixed one that
+// names the secret by index only.
+func TestL76InvalidMessageIsGatedByLeaks(t *testing.T) {
+	secrets := []string{"alpha-secret-one", "bravo-secret-two"}
+	if got := l76SafeInvalid("login failed: no secret here", secrets); got != "login failed: no secret here" {
+		t.Errorf("a clean message was changed: %q", got)
+	}
+	got := l76SafeInvalid("the device echoed bravo-secret-two back", secrets)
+	if strings.Contains(got, "bravo") || !strings.Contains(got, "secret #1") {
+		t.Errorf("a leaking message was printed or not named by index: %q", got)
+	}
+	if got := l76SafeInvalid("echo "+"ALPHA-SECRET-ONE", secrets); strings.Contains(strings.ToLower(got), "alpha") {
+		t.Errorf("a folded-case leak was printed: %q", got)
+	}
+}
+
+// invalid is the one place the live test fails a run: it must pass its
+// message through l76SafeInvalid, or the gate above guards nothing.
+func TestL76InvalidUsesTheLeakGate(t *testing.T) {
+	src, err := os.ReadFile("l76_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(string(src), "func (e *l76Env) invalid(")
+	if !ok {
+		t.Fatal("no invalid method")
+	}
+	body, _, _ = strings.Cut(body, "\n}\n")
+	if !strings.Contains(body, "l76SafeInvalid(") || !strings.Contains(body, "e.secrets()") {
+		t.Error("invalid does not gate its message with l76SafeInvalid over e.secrets()")
 	}
 }

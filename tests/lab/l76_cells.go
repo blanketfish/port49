@@ -644,14 +644,26 @@ func l76WrongKeyConfig(cfg string) (string, error) {
 }
 
 // l76Observation is the note's Observation: the schema check, then each
-// cell under its claim, in register order, then the Sources every command
+// cell under its claim, in register order, then extra (the live test's
+// retries line and Evidence pointer), then the Sources every command
 // and statement cites (pre-flight I3).
-func l76Observation(out map[string]string, schema string) string {
+func l76Observation(out map[string]string, schema, extra string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "### Schema and configuration\n\n%s\n", schema)
 	for _, c := range l76Cells {
 		fmt.Fprintf(&b, "\n### (%s) %s\n\n%s\n", c.id, c.claim, out[c.id])
 	}
+	b.WriteString(extra)
 	fmt.Fprintf(&b, "\n### Sources\n\n%s\n", l76SourcesSection())
 	return b.String()
+}
+
+// l76SafeInvalid is an INVALID message as it may be printed: msg itself when
+// l76Leaks finds nothing in it, else a fixed message that names what leaked
+// by index or shape, never by value.
+func l76SafeInvalid(msg string, secrets []string) string {
+	if leaks := l76Leaks(msg, secrets); len(leaks) > 0 {
+		return fmt.Sprintf("(message withheld: it held %s)", strings.Join(leaks, ", "))
+	}
+	return msg
 }
