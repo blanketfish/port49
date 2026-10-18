@@ -75,9 +75,15 @@ func l76LeafList(text, name string) []string {
 var (
 	// l76Hashed is a crypt-style hash or SR Linux's reversible key form
 	// ($aes1$ for secret-key; $y$, $ar2$, $6$ for passwords).
-	l76Hashed = regexp.MustCompile(`\$(?:aes1|ar2|y|[15689])\$\S*`)
+	// The run ends at whitespace, a quote or a closing bracket, so a quoted
+	// value keeps its delimiters. bcrypt ($2a$ $2b$ $2y$), scrypt ($7$) and
+	// argon2 are included.
+	l76Hashed = regexp.MustCompile(`\$(?:aes1|ar2|y|argon2(?:id|i|d)|scrypt|2[aby]|[156789])\$[^\s"'}\]]*`)
 	// l76Keyed is a secret-key or password statement and its value.
-	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password)[ \t]+)(\S+)`)
+	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password|authentication-key)[ \t]+)(\S+)`)
+	// l76JSONKeyed is the same statements in JSON output: the key, then a
+	// string value that may hold spaces and escaped quotes.
+	l76JSONKeyed = regexp.MustCompile(`("(?:secret-key|password|authentication-key)"[ \t]*:[ \t]*")(?:[^"\\]|\\.)*(")`)
 	// l76Long is the lab rule's sed mask: 24 or more base64-ish characters.
 	l76Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
 	// l76Word is a long run the mask leaves alone: a lowercase keyword joined
@@ -87,7 +93,8 @@ var (
 	// l76SSHKey is an OpenSSH public key with its comment. containerlab
 	// writes the runner's own public keys into admin-user and linuxadmin-user
 	// `ssh-key` (its srl template), and the comment is user@host or an email.
-	l76SSHKey = regexp.MustCompile(`(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp\d+|sk-[a-z0-9-]+@openssh\.com)[ \t]+[A-Za-z0-9+/=]+[^"\]\n]*`)
+	// Certificate types (-cert-v01@openssh.com) carry the same comment.
+	l76SSHKey = regexp.MustCompile(`(?:(?:sk-)?(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp\d+)(?:-cert-v01@openssh\.com)?|sk-[a-z0-9-]+@openssh\.com)[ \t]+[A-Za-z0-9+/=]+[^"\]\n]*`)
 	// l76DropLine is the lab rule's grep -v -i.
 	l76DropLine = regexp.MustCompile(`(?i)password|token|secret|eyJ`)
 )
@@ -98,6 +105,7 @@ var (
 func l76MaskConfig(s string) string {
 	s = l76SSHKey.ReplaceAllString(s, "<ssh public key masked>")
 	s = l76Hashed.ReplaceAllString(s, "<masked>")
+	s = l76JSONKeyed.ReplaceAllString(s, "${1}<masked>${2}")
 	s = l76Keyed.ReplaceAllStringFunc(s, func(m string) string {
 		sm := l76Keyed.FindStringSubmatch(m)
 		if sm[2] == "{" || sm[2] == "<masked>" {
@@ -108,10 +116,27 @@ func l76MaskConfig(s string) string {
 	return l76MaskLong(s)
 }
 
+// l76IsKeyword is a hyphen- or underscore-joined run of lowercase words, each
+// at most 16 letters and the whole at most 64 characters. A lowercase secret
+// longer than that, or one without separators, is masked; a passphrase of
+// short words is indistinguishable from a keyword, so l76Leaks covers the
+// known ones by value.
+func l76IsKeyword(m string) bool {
+	if len(m) > 64 || !l76Word.MatchString(m) {
+		return false
+	}
+	for _, w := range strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '_' }) {
+		if len(w) > 16 {
+			return false
+		}
+	}
+	return true
+}
+
 // l76MaskLong masks every long base64-ish run that is not a keyword.
 func l76MaskLong(s string) string {
 	return l76Long.ReplaceAllStringFunc(s, func(m string) string {
-		if l76Word.MatchString(m) {
+		if l76IsKeyword(m) {
 			return m
 		}
 		return "<LONG>"
@@ -129,7 +154,8 @@ func l76FilterLog(s string) string {
 		}
 	}
 	s = l76SSHKey.ReplaceAllString(strings.Join(keep, "\n"), "<ssh public key masked>")
-	return l76MaskLong(l76Hashed.ReplaceAllString(s, "<masked>"))
+	s = l76JSONKeyed.ReplaceAllString(l76Hashed.ReplaceAllString(s, "<masked>"), "${1}<masked>${2}")
+	return l76MaskLong(s)
 }
 
 // l76Grep keeps the lines of text that contain any key, ignoring case.
@@ -151,8 +177,17 @@ func l76Grep(text string, keys []string) string {
 // value), any hash, any JWT.
 func l76Leaks(text string, secrets []string) []string {
 	var out []string
+	folded := strings.ToLower(text)
+	squeezed := l76Squeeze(folded)
 	for i, s := range secrets {
-		if s != "" && strings.Contains(text, s) {
+		if s == "" {
+			continue
+		}
+		// A device may wrap a value across lines; compare with all
+		// whitespace removed too.
+		// Exact, then folded to lower case: a device may upper-case a value.
+		q := l76Squeeze(strings.ToLower(s))
+		if strings.Contains(text, s) || strings.Contains(folded, strings.ToLower(s)) || (q != "" && strings.Contains(squeezed, q)) {
 			out = append(out, fmt.Sprintf("secret #%d", i))
 		}
 	}
@@ -166,4 +201,9 @@ func l76Leaks(text string, secrets []string) []string {
 		out = append(out, "an SSH public key")
 	}
 	return out
+}
+
+// l76Squeeze removes every run of whitespace: line breaks and indentation.
+func l76Squeeze(s string) string {
+	return strings.Join(strings.Fields(s), "")
 }

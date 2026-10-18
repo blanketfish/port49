@@ -297,3 +297,124 @@ func TestL76LeaksFindsEachHashScheme(t *testing.T) {
 		t.Errorf("a non-hash leaks %v", got)
 	}
 }
+
+// OpenSSH certificate key types carry the same user@host comment.
+func TestL76SSHKeyMaskCoversCertificateTypes(t *testing.T) {
+	in := "ssh-key [\n \"ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5 cert@host\"\n" +
+		" \"ecdsa-sha2-nistp256-cert-v01@openssh.com AAAAKGVjZHNh c2@host\"\n" +
+		" \"ssh-rsa-cert-v01@openssh.com AAAAHHNzaC1yc2E c3@host\"\n" +
+		" \"sk-ssh-ed25519-cert-v01@openssh.com AAAAIHNr c4@host\"\n" +
+		" \"sk-ssh-ed25519@openssh.com AAAAGnNr c5@host\" ]\n"
+	for name, got := range map[string]string{"config": l76MaskConfig(in), "log": l76FilterLog(in)} {
+		for _, gone := range []string{"AAAA", "@host", "cert-v01", "openssh.com"} {
+			if strings.Contains(got, gone) {
+				t.Errorf("%s: %q survived:\n%s", name, gone, got)
+			}
+		}
+		if n := strings.Count(got, "<ssh public key masked>"); n != 5 {
+			t.Errorf("%s: %d keys masked, want 5:\n%s", name, n, got)
+		}
+	}
+	if leaks := l76Leaks(in, nil); len(leaks) != 1 || leaks[0] != "an SSH public key" {
+		t.Errorf("unmasked certificate keys: %v", leaks)
+	}
+}
+
+// A device that wraps a value across lines must not hide it from the gate:
+// each half is under the 24-character mask floor.
+func TestL76LeaksFindsASecretSplitAcrossLines(t *testing.T) {
+	secrets := []string{"labsecret", "9f3a7c1e5b2d4086a1c3e5f70b2d4f68"}
+	for name, text := range map[string]string{
+		"newline":     "bad key 9f3a7c1e5b2d4086\na1c3e5f70b2d4f68\n",
+		"crlf indent": "bad key 9f3a7c1e5b2d4086\r\n        a1c3e5f70b2d4f68",
+		"tab":         "9f3a7c1e5b\t2d4086a1c3e5f70b2d4f68",
+	} {
+		if got := l76Leaks(text, secrets); len(got) != 1 || got[0] != "secret #1" {
+			t.Errorf("%s: %v, want [secret #1]", name, got)
+		}
+		if strings.Contains(l76MaskLong(text), "<LONG>") {
+			t.Errorf("%s: the halves are no longer below the mask floor", name)
+		}
+	}
+	if got := l76Leaks("lab\n  secret", secrets); len(got) != 1 || got[0] != "secret #0" {
+		t.Errorf("short secret split: %v", got)
+	}
+	if got := l76Leaks("9f3a7c1e5b2d4086\nunrelated\na1c3e5f70b2d4f68", secrets); len(got) != 0 {
+		t.Errorf("unrelated lines leaked %v", got)
+	}
+	if got := l76Leaks("labsecret\nlab secret", secrets); len(got) != 1 {
+		t.Errorf("a secret found twice is named %d times", len(got))
+	}
+}
+
+func TestL76MaskConfigMasksJSONValuesWithoutMangling(t *testing.T) {
+	in := `{"server":[{"name":"s1","secret-key":"plain-one","authentication-key":"p two","password": "x\"y","priv":"$aes1$AWBu+Zz0$Jx0Ab"}],"keep":"ok"}`
+	got := l76MaskConfig(in)
+	for _, gone := range []string{"plain-one", "p two", `x\"y`, "AWBu", "$aes1$"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("%q survived:\n%s", gone, got)
+		}
+	}
+	want := `{"server":[{"name":"s1","secret-key":"<masked>","authentication-key":"<masked>","password": "<masked>","priv":"<masked>"}],"keep":"ok"}`
+	if got != want {
+		t.Errorf("mangled:\n%s\nwant:\n%s", got, want)
+	}
+	if l76MaskConfig(got) != got {
+		t.Errorf("not idempotent")
+	}
+	if g := l76FilterLog(`{"authentication-key":"abc def","n":1}`); g != `{"authentication-key":"<masked>","n":1}` {
+		t.Errorf("log form: %s", g)
+	}
+	if g := l76MaskConfig("authentication-key secretvalue\n"); g != "authentication-key <masked>\n" {
+		t.Errorf("text form: %q", g)
+	}
+	if g := l76MaskConfig(`{"hash":"$y$j9T$abc$def","n":1}`); g != `{"hash":"<masked>","n":1}` {
+		t.Errorf("a quoted hash lost its closing: %s", g)
+	}
+}
+
+func TestL76HashSchemesIncludeBcryptScryptArgon2(t *testing.T) {
+	for _, h := range []string{"$2a$12$abcdefghijklmnopqrstuv", "$2b$12$abc", "$2y$10$abc", "$7$CU..../....abc",
+		"$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", "$argon2i$v=19$abc", "$argon2d$v=19$abc", "$scrypt$ln=16,r=8,p=1$c2FsdA$aGFzaA"} {
+		if got := l76Leaks("x "+h, nil); len(got) != 1 || got[0] != "a hash" {
+			t.Errorf("gate missed a scheme (%.8s): %v", h, got)
+		}
+		if got := l76FilterLog("x " + h + " y"); got != "x <masked> y" {
+			t.Errorf("log kept a scheme (%.8s): %q", h, got)
+		}
+	}
+	if got := l76Leaks("$2c$ $argon2x$ $3$", nil); len(got) != 0 {
+		t.Errorf("non-hashes leak %v", got)
+	}
+}
+
+// The keyword exemption is for YANG-style names, not for any lowercase run.
+func TestL76MaskLongExemptsKeywordsNotLowercaseSecrets(t *testing.T) {
+	for _, kept := range []string{"nokia-srl-authorization-role-netconf", "aaa_accounting_event_type"} {
+		if got := l76MaskLong("x " + kept + " y"); got != "x "+kept+" y" {
+			t.Errorf("keyword masked: %s", got)
+		}
+	}
+	for name, in := range map[string]string{
+		"lowercase run":  "x abcdefghijklmnopqrstuvwxyzabcdef y",
+		"long segment":   "x ab-abcdefghijklmnopqrstuvwxyzab y",
+		"very long path": "x " + strings.Repeat("abc-", 17) + "abc y",
+	} {
+		if got := l76MaskLong(in); !strings.Contains(got, "<LONG>") {
+			t.Errorf("%s was exempted: %s", name, got)
+		}
+	}
+}
+
+func TestL76LeaksIgnoresCaseOfASecret(t *testing.T) {
+	secrets := []string{"labsecret", "9f3a7c1e5b2d4086a1c3e5f70b2d4f68"}
+	for text, want := range map[string]string{
+		"KEY LABSECRET":                             "secret #0",
+		"x 9F3A7C1E5B2D4086A1C3E5F70B2D4F68 y":      "secret #1",
+		"x 9F3A7C1E5B2D4086\n   A1C3E5F70B2D4F68 y": "secret #1",
+	} {
+		if got := l76Leaks(text, secrets); len(got) != 1 || got[0] != want {
+			t.Errorf("%q: %v, want [%s]", text, got, want)
+		}
+	}
+}
