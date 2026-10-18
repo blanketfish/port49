@@ -4,6 +4,8 @@ package lab
 
 import (
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,4 +47,24 @@ func TestL73OpenRetriesOnlyAResetOrEOFHandshake(t *testing.T) {
 	if err == nil || calls != 6 || len(slept) != 5 || strings.Count(err.Error(), "try ") != 6 || !strings.Contains(err.Error(), "(sixth)") {
 		t.Fatalf("%v calls %d slept %d", err, calls, len(slept))
 	}
+}
+
+// xrCLI waits for "<node>#", so the XRd node's hostname must be its node name:
+// without it the prompt is RP/0/RP0/CPU0:ios# and the open times out (L73's
+// second XRd run).
+func TestL73XRdStartupSetsTheNodeNameAsHostname(t *testing.T) {
+	b, err := os.ReadFile("configs/xrd-startup.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range platforms {
+		if p.sel != "xrd261" {
+			continue
+		}
+		if !slices.Contains(strings.Split(string(b), "\n"), "hostname "+p.node) {
+			t.Errorf("configs/xrd-startup.cfg has no line %q", "hostname "+p.node)
+		}
+		return
+	}
+	t.Fatal("no xrd261 platform")
 }
