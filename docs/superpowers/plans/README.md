@@ -7182,9 +7182,11 @@ the inventory-only refresh's cost at fleet size.
     (`L73-arista_ceos.md`). NX-OS needs an RSA key: the ECC key Cisco document 224882 makes was
     refused at `crypto ca enroll` ("no rsa key-pair is associated with the trustpoint
     configuration"), so a reference configuration written from the document fails on 10.6(2)F
-    (`L73-cisco_nxos.md`). Junos needs on-box root steps to trust the server CA and place the
-    client certificate (`L73-juniper_vjunos-router.md`): operator toil at fleet scale, to raise
-    with the vendor.
+    (`L73-cisco_nxos.md`). On Junos the lab filled the TLS trust folder and placed the client certificate through a
+    lab-only root shell (`L73-juniper_vjunos-router.md`). The refusals that led there (the image
+    naming a root-owned folder, a super-user's `file make-directory` refused) were seen in earlier
+    runs and are not in the note, so "Junos needs root" is not yet a measured claim. If it holds,
+    it is operator toil at fleet scale, to raise with the vendor.
   - **Single-connection (h).** Without it one login opened 1 (Junos), 6 (IOS XE), 5 (NX-OS) and 6
     (EOS) connections. With it the logins opened 2 then 1 new connections on Junos
     (`L73-juniper_vjunos-router.md`), 1 then 0 on IOS XE and 1 then 0 on EOS, and 0 then 0 on NX-OS,
