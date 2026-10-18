@@ -49,7 +49,8 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 	invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	dl, ok := ctx.Deadline()
 	rv := reflect.ValueOf(reply)
-	if !(hedged[method] || (hedgeWrites && idempotentWrites[method] && ctx.Value(idempotentKey{}) != nil)) || !ok || rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
+	write := hedgeWrites && idempotentWrites[method] && ctx.Value(idempotentKey{}) != nil
+	if !(hedged[method] || write) || !ok || rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 	total := time.Until(dl)
@@ -79,9 +80,12 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 			}
 			last = a.err
 			if inflight == 0 {
-				// A connection that failed outright (Unavailable) is no answer
-				// either: try the next at once rather than waiting for a timer.
-				if c := status.Code(last); hedges < 2 && ctx.Err() == nil && (c == codes.Unavailable || c == codes.DeadlineExceeded) {
+				// A write's connection that failed outright (Unavailable, as
+				// when keepalive closes the dark one) is no answer either: try
+				// the next at once rather than waiting for a timer. clientv3
+				// does not retry a write; it already retries a read on another
+				// connection, so a read's failure goes back to it.
+				if write && hedges < 2 && ctx.Err() == nil && status.Code(last) == codes.Unavailable {
 					hedges++
 					inflight++
 					send()
