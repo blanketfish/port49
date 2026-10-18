@@ -718,3 +718,16 @@ func l73HasAddress(shown, addr string) bool {
 	}
 	return false
 }
+
+// l73IRowGate is cell i's observation and docs verdict, unless 172.100.100.2
+// left the bridge during the cell (shown is `ip -o -4 addr show` at its end):
+// the device's second server then timed out instead of answering with an RST,
+// so the rows were measured against another fault and are not graded.
+func l73IRowGate(shown, obs, docs string) (string, string) {
+	if l73HasAddress(shown, l73SecondServer) {
+		return obs, docs
+	}
+	return fmt.Sprintf("not measured: %s left the bridge during the cell (bridge addresses at its end: %s); rows as recorded, not graded: %s",
+			l73SecondServer, strings.Join(strings.Fields(shown), " "), obs),
+		"n/a: not measured, " + l73SecondServer + " left the bridge during the cell, so the second server timed out instead of resetting"
+}

@@ -1734,7 +1734,7 @@ func (e *l73Env) addSecondAddress() {
 	if err != nil {
 		e.t.Fatalf("INVALID: %v", err)
 	}
-	shown, _ := exec.Command("ip", "-o", "-4", "addr", "show", "dev", dev).CombinedOutput()
+	shown := []byte(e.bridgeAddrs())
 	if e.bridge && l73HasAddress(string(shown), l73SecondServer) {
 		return
 	}
@@ -1757,6 +1757,22 @@ func (e *l73Env) addSecondAddress() {
 	e.bridge = true
 }
 
+// bridgeAddrs is `ip -o -4 addr show` for the clab bridge ("" if unreadable).
+func (e *l73Env) bridgeAddrs() string {
+	dev, err := bridgeDevice()
+	if err != nil {
+		return ""
+	}
+	out, _ := exec.Command("ip", "-o", "-4", "addr", "show", "dev", dev).CombinedOutput()
+	return string(out)
+}
+
+// logBridge puts the bridge's address list in the run's output, so a run
+// shows when 172.100.100.2 goes.
+func (e *l73Env) logBridge(when string) {
+	e.t.Logf("lab: bridge addresses at %s: %s", when, strings.Join(strings.Fields(e.bridgeAddrs()), " "))
+}
+
 // cellI: the device lists a second TLS server, 172.100.100.2:300, where
 // nothing listens (an RST). Each refusal is met with a break-glass login:
 // port49 holds no token for breakglass, so the login lands only if the device
@@ -1766,6 +1782,7 @@ func (e *l73Env) addSecondAddress() {
 func (e *l73Env) cellI() {
 	e.guard()
 	e.addSecondAddress()
+	e.logBridge("cell i start")
 	d := e.base()
 	d.Second, d.SecondTLS, d.SecondPort = l73SecondServer, true, e.port
 	e.configure(d)
@@ -1830,11 +1847,12 @@ func (e *l73Env) cellI() {
 	if len(unproven) > 0 && !contradicted {
 		docs = fmt.Sprintf("n/a: no port49 record proves the refusal on %v, so those rows say nothing about ruling 8", unproven)
 	}
+	obsI, docs := l73IRowGate(e.bridgeAddrs(), strings.Join(parts, "; ")+". An ERROR for an obfuscated packet (decision 50 ruling 13) cannot be provoked from port49's "+
+		"side: only a device that clears the flag earns it, and cell b counts whether this one ever did.", docs)
 	e.add("i", fmt.Sprintf("servers 172.100.100.1:%d (TLS, port49d refusing as each row says) then 172.100.100.2:%d (TLS, "+
 		"nothing listening: an RST); login method list %s; load average at the start %s", l73TLSPort, l73TLSPort,
 		e.d.Fallback, strings.TrimSpace(string(load))),
-		strings.Join(parts, "; ")+". An ERROR for an obfuscated packet (decision 50 ruling 13) cannot be provoked from port49's "+
-			"side: only a device that clears the flag earns it, and cell b counts whether this one ever did.", docs)
+		obsI, docs)
 }
 
 // l73RefusalVerdict grades one cell (i) row. proven needs a port49 record of
@@ -1868,6 +1886,7 @@ func l73RefusalVerdict(id string, n int, ok, ok2, again bool) (contra string, pr
 func (e *l73Env) cellJ() {
 	e.guard()
 	e.addSecondAddress()
+	e.logBridge("cell j start")
 	// j1: TLS only, port49 refusing, its RFC 8907 listener on .1:49 open.
 	e.settle()
 	e.revive("j1")

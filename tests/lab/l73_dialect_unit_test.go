@@ -589,3 +589,19 @@ func TestL73HasAddressMatchesWholeAddresses(t *testing.T) {
 		t.Fatal("missed the second address")
 	}
 }
+
+// Cell i's rows assume 172.100.100.2 stayed on the bridge (an RST from it);
+// with it gone the device's second server times out, and the row says so.
+func TestL73IRowGateDegradesToNotMeasured(t *testing.T) {
+	obs, docs := "rows", "yes: ruling 7"
+	gone := "7: br-x    inet 172.100.100.1/24 scope global br-x\n"
+	here := gone + "7: br-x    inet 172.100.100.2/24 scope global secondary br-x\n"
+	if o, d := l73IRowGate(here, obs, docs); o != obs || d != docs {
+		t.Fatalf("a present address changed the row: %q %q", o, d)
+	}
+	o, d := l73IRowGate(gone, obs, docs)
+	if !strings.HasPrefix(o, "not measured: 172.100.100.2 left the bridge during the cell") || !strings.Contains(o, "172.100.100.1/24") ||
+		!strings.HasPrefix(d, "n/a: not measured") || strings.Contains(d, "yes") || strings.Contains(o, "**no**") {
+		t.Fatalf("%q %q", o, d)
+	}
+}
