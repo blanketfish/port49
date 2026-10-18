@@ -126,6 +126,7 @@ func TestL73JunosAsksCoverEveryTypedKeyword(t *testing.T) {
 	}
 	lines = append(lines, l73JunosRestore()...)
 	lines = append(lines, l73PKILines()...)
+	lines = append(lines, l73TrustGroupLines()...)
 	var set []string
 	for _, ln := range lines {
 		if strings.HasPrefix(ln, "set ") { // delete lines undo what these set

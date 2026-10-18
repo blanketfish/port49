@@ -81,8 +81,8 @@ func l73JunosRestore() []string {
 	return append(lines, l73ServerLines("set system accounting destination tacplus server "+l73Server, false, 0, true)...)
 }
 
-// l73PKILines are the CA profiles and the trust group the device checks
-// port49's certificate against. Revocation checking is off on the device:
+// l73PKILines are the CA profiles the device checks port49's certificate
+// against; the trust group that names them is l73TrustGroupLines. Revocation checking is off on the device:
 // the lab's CAs publish no CRL, and whether Junos checks one is not an L73
 // cell. The note says so.
 func l73PKILines() []string {
@@ -91,6 +91,17 @@ func l73PKILines() []string {
 		"set security pki ca-profile " + l73RootProfile + " revocation-check disable",
 		"set security pki ca-profile " + l73InterProfile + " ca-identity " + l73InterProfile,
 		"set security pki ca-profile " + l73InterProfile + " revocation-check disable",
+	}
+}
+
+// l73TrustGroupLines is the trust group the device checks port49's
+// certificate against. It is committed after the CA certificates are loaded
+// (loadJunos) and before any tacplus TLS line: committed earlier, the image
+// had written no group file under /var/db/aaa_certs/tacplus_tls and refused
+// the tacplus tls trusted-ca-group line (attempts 9 and 11).
+func l73TrustGroupLines() []string {
+	return []string{
+		"delete security pki trusted-ca-group " + l73TrustGroup,
 		"set security pki trusted-ca-group " + l73TrustGroup + " ca-profiles " + l73RootProfile,
 	}
 }
@@ -431,6 +442,10 @@ func l73ScrubLog(s string) string {
 		if l73LogDrop.MatchString(ln) {
 			continue
 		}
+		if l73BarePath(ln) {
+			out = append(out, ln)
+			continue
+		}
 		if m := l73FilePathAnswer.FindStringSubmatchIndex(ln); m != nil && l73PrintablePath(ln[m[4]:m[5]]) {
 			out = append(out, l73MaskLine(ln[:m[4]])+ln[m[4]:m[5]]+l73MaskLine(ln[m[5]:]))
 			continue
@@ -449,6 +464,19 @@ var (
 	l73FilePathAnswer = regexp.MustCompile(`(File path ')([^']*)(' doesn't exists?)`)
 	l73FilePathShape  = regexp.MustCompile(`^/(var|config|etc|tmp|opt)/[A-Za-z0-9_./-]{1,200}$`)
 )
+
+// l73BarePath is true for a line that is only a printable path, as `file
+// list` heads its listing ("<path>:") or the CLI echoes it ("file list
+// <path> [recursive]").
+func l73BarePath(ln string) bool {
+	t := strings.TrimSpace(ln)
+	if !strings.HasPrefix(t, "/") && !strings.HasPrefix(t, "file list /") {
+		return false
+	}
+	t = strings.TrimPrefix(t, "file list ")
+	t = strings.TrimSuffix(strings.TrimSpace(strings.TrimSuffix(t, "recursive")), ":")
+	return l73PrintablePath(t)
+}
 
 // l73PrintablePath is true for the one path shape Junos's "File path '<p>'
 // doesn't exist" answer may show unmasked: under a directory the image keeps

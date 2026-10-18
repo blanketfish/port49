@@ -1147,8 +1147,27 @@ func (e *l73Env) loadJunos() {
 				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
 			}
 		}
+		// The trust group goes in only now that the CA certificates are loaded.
+		e.aaaListing(c, "aaa-before-group")
+		if out, err := junosConfigure(c, l73TrustGroupLines()...); err != nil {
+			return errors.New(hideKeys(err.Error() + " " + l73ScrubLog(out)))
+		}
+		if err := junosVerifyApplied(c, l73TrustGroupLines()); err != nil {
+			return err
+		}
+		e.aaaListing(c, "aaa-after-group")
 		return nil
 	})
+}
+
+// aaaListing keeps the image's AAA certificate directory tree, scrubbed, in
+// the INVALID dir under name (a diagnostic; nothing depends on it).
+func (e *l73Env) aaaListing(c *cliConn, name string) {
+	out, err := c.sendExpect("file list /var/db/aaa_certs/ recursive", 60*time.Second, junosOpPrompt)
+	if err != nil {
+		out = "(read failed: " + l73Err(err) + ")"
+	}
+	e.invalidScreen(name, out)
 }
 
 func (e *l73Env) loadCisco() {
