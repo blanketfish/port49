@@ -185,3 +185,115 @@ func l76Own(body []string) []string {
 }
 
 func l76TwoDigits(n int) string { return string([]byte{byte('0' + n/10), byte('0' + n%10)}) }
+
+func TestL76MaskConfigKeepsShapeAndDropsValues(t *testing.T) {
+	in := "server 172.100.100.1 {\n    tacacs {\n        secret-key $aes1$AWBu+Zz0aHVr1m8=$Jx0Ab\n" +
+		"user breakglass {\n    password $y$j9T$abcdefghijkl$mnopqrstuvwx\n" +
+		"user other {\n    password plaintext-here\n" +
+		"leaf password {\n" +
+		"authentication-method [\n    port49\n    local\n]\n" +
+		"nokia-srl-authorization-role-netconf false\n"
+	got := l76MaskConfig(in)
+	for _, gone := range []string{"$aes1$", "AWBu", "$y$", "j9T", "plaintext-here"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("%q survived:\n%s", gone, got)
+		}
+	}
+	for _, kept := range []string{"secret-key <masked>", "password <masked>", "leaf password {",
+		"server 172.100.100.1 {", "port49", "nokia-srl-authorization-role-netconf false"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("%q was lost:\n%s", kept, got)
+		}
+	}
+	if l76MaskConfig(got) != got {
+		t.Errorf("masking is not idempotent")
+	}
+}
+
+// containerlab injects the runner's public keys into the admin users; neither
+// the key nor its comment may reach committed evidence.
+func TestL76MaskConfigDropsSSHPublicKeys(t *testing.T) {
+	in := "admin-user {\n    ssh-key [\n        \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOab3 someone@somehost\"\n" +
+		"        \"ssh-rsa AAAAB3NzaC1yc2EAAAADAQAB other@example.com\"\n    ]\n}\n" +
+		"linuxadmin-user {\n    ssh-key [ \"ecdsa-sha2-nistp256 AAAAE2VjZHNh x@y\" ]\n}\n"
+	for name, got := range map[string]string{"config": l76MaskConfig(in), "log": l76FilterLog(in)} {
+		for _, gone := range []string{"AAAA", "someone@somehost", "other@example.com", "x@y", "ssh-ed25519", "ssh-rsa", "ecdsa-sha2"} {
+			if strings.Contains(got, gone) {
+				t.Errorf("%s: %q survived:\n%s", name, gone, got)
+			}
+		}
+		if strings.Count(got, "<ssh public key masked>") != 3 || !strings.Contains(got, "ssh-key [") {
+			t.Errorf("%s: the statements were not kept:\n%s", name, got)
+		}
+		if leaks := l76Leaks(got, nil); len(leaks) != 0 {
+			t.Errorf("%s: masked text still leaks %v", name, leaks)
+		}
+	}
+	if leaks := l76Leaks(in, nil); len(leaks) == 0 || leaks[0] != "an SSH public key" {
+		t.Errorf("unmasked keys: %v", leaks)
+	}
+}
+
+func TestL76FilterLogFollowsTheShellRule(t *testing.T) {
+	in := "Oct 17 alice01 authenticated via port49\n" +
+		"tacacs+ reply: password incorrect\n" +
+		"got token abc\n" +
+		"shared secret mismatch\n" +
+		"bearer eyJhbGciOi\n" +
+		"hash $6$saltsalt$deadbeef\n" +
+		"blob QUJDREVGR0hJSktMTU5PUFFSU1RVVldY end\n"
+	got := l76FilterLog(in)
+	for _, gone := range []string{"incorrect", "token", "secret", "eyJ", "$6$", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY"} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(gone)) {
+			t.Errorf("%q survived:\n%s", gone, got)
+		}
+	}
+	for _, kept := range []string{"alice01 authenticated via port49", "blob <LONG> end", "hash <masked>"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("%q was lost:\n%s", kept, got)
+		}
+	}
+}
+
+func TestL76GrepKeepsMatchingLinesOnly(t *testing.T) {
+	got := l76Grep("a alice01 x\nb TACACS y\nc other\n", []string{"alice01", "tacacs"})
+	if got != "a alice01 x\nb TACACS y" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestL76LeaksFindsEverySecretAndShape(t *testing.T) {
+	secrets := []string{"labsecret", "breakglass-only", "0123456789abcdef0123456789abcdef"}
+	if got := l76Leaks("clean text, secret-key <masked>", secrets); len(got) != 0 {
+		t.Errorf("clean text leaks %v", got)
+	}
+	for text, want := range map[string]string{
+		"key labsecret":                        "secret #0",
+		"pw breakglass-only":                   "secret #1",
+		"x 0123456789abcdef0123456789abcdef y": "secret #2",
+		"secret-key $aes1$AAAA":                "a hash",
+		"password $ar2$BBBB":                   "a hash",
+		"Authorization: Bearer eyJhbGciOiJ":    "a JWT",
+	} {
+		got := l76Leaks(text, secrets)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("%q: %v, want [%s]", text, got, want)
+		}
+	}
+	if got := l76Leaks("labsecret", []string{""}); len(got) != 0 {
+		t.Errorf("an empty secret matched: %v", got)
+	}
+}
+
+// Every hash scheme the gate names is caught on its own, outside a
+// secret-key or password statement that would mask it anyway.
+func TestL76LeaksFindsEachHashScheme(t *testing.T) {
+	for _, text := range []string{"x $aes1$AAAA", "x $ar2$AAAA", "x $y$j9T$AAAA", "x $1$AAAA", "x $5$AAAA", "x $6$AAAA", "x $8$AAAA", "x $9$AAAA"} {
+		if got := l76Leaks(text, nil); len(got) != 1 || got[0] != "a hash" {
+			t.Errorf("%q: %v, want [a hash]", text, got)
+		}
+	}
+	if got := l76Leaks("price $7 and $x$ ok", nil); len(got) != 0 {
+		t.Errorf("a non-hash leaks %v", got)
+	}
+}

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -69,4 +70,100 @@ func l76LeafList(text, name string) []string {
 		return nil
 	}
 	return strings.Fields(m[1])
+}
+
+var (
+	// l76Hashed is a crypt-style hash or SR Linux's reversible key form
+	// ($aes1$ for secret-key; $y$, $ar2$, $6$ for passwords).
+	l76Hashed = regexp.MustCompile(`\$(?:aes1|ar2|y|[15689])\$\S*`)
+	// l76Keyed is a secret-key or password statement and its value.
+	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password)[ \t]+)(\S+)`)
+	// l76Long is the lab rule's sed mask: 24 or more base64-ish characters.
+	l76Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+	// l76Word is a long run the mask leaves alone: a lowercase keyword joined
+	// by hyphens or underscores, such as nokia-srl-authorization-role-netconf
+	// or aaa_accounting_event_type.
+	l76Word = regexp.MustCompile(`^[a-z]+(?:[-_][a-z]+)*$`)
+	// l76SSHKey is an OpenSSH public key with its comment. containerlab
+	// writes the runner's own public keys into admin-user and linuxadmin-user
+	// `ssh-key` (its srl template), and the comment is user@host or an email.
+	l76SSHKey = regexp.MustCompile(`(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp\d+|sk-[a-z0-9-]+@openssh\.com)[ \t]+[A-Za-z0-9+/=]+[^"\]\n]*`)
+	// l76DropLine is the lab rule's grep -v -i.
+	l76DropLine = regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+)
+
+// l76MaskConfig is device configuration made fit for a note: every SSH
+// public key (with its user@host comment) and every hash masked, every
+// secret-key and password value masked, the statements kept.
+func l76MaskConfig(s string) string {
+	s = l76SSHKey.ReplaceAllString(s, "<ssh public key masked>")
+	s = l76Hashed.ReplaceAllString(s, "<masked>")
+	s = l76Keyed.ReplaceAllStringFunc(s, func(m string) string {
+		sm := l76Keyed.FindStringSubmatch(m)
+		if sm[2] == "{" || sm[2] == "<masked>" {
+			return m
+		}
+		return sm[1] + "<masked>"
+	})
+	return l76MaskLong(s)
+}
+
+// l76MaskLong masks every long base64-ish run that is not a keyword.
+func l76MaskLong(s string) string {
+	return l76Long.ReplaceAllStringFunc(s, func(m string) string {
+		if l76Word.MatchString(m) {
+			return m
+		}
+		return "<LONG>"
+	})
+}
+
+// l76FilterLog is the lab rule's shell filter as code, for any device text
+// that is not configuration: lines naming a password, token, secret or JWT
+// are dropped, then hashes and long runs are masked.
+func l76FilterLog(s string) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		if !l76DropLine.MatchString(ln) {
+			keep = append(keep, ln)
+		}
+	}
+	s = l76SSHKey.ReplaceAllString(strings.Join(keep, "\n"), "<ssh public key masked>")
+	return l76MaskLong(l76Hashed.ReplaceAllString(s, "<masked>"))
+}
+
+// l76Grep keeps the lines of text that contain any key, ignoring case.
+func l76Grep(text string, keys []string) string {
+	var keep []string
+	for _, ln := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		low := strings.ToLower(ln)
+		for _, k := range keys {
+			if strings.Contains(low, strings.ToLower(k)) {
+				keep = append(keep, ln)
+				break
+			}
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// l76Leaks names what text must not hold: any of secrets (by index, never by
+// value), any hash, any JWT.
+func l76Leaks(text string, secrets []string) []string {
+	var out []string
+	for i, s := range secrets {
+		if s != "" && strings.Contains(text, s) {
+			out = append(out, fmt.Sprintf("secret #%d", i))
+		}
+	}
+	if l76Hashed.MatchString(text) {
+		out = append(out, "a hash")
+	}
+	if strings.Contains(text, "eyJ") {
+		out = append(out, "a JWT")
+	}
+	if l76SSHKey.MatchString(text) {
+		out = append(out, "an SSH public key")
+	}
+	return out
 }
