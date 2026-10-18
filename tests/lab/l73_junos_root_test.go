@@ -150,7 +150,7 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 		if m == nil {
 			screen.WriteString("$ " + cmd + "\n")
 			keep(tail)
-			return tail, fmt.Errorf("%q: no exit status came back", cmd)
+			return mask(tail), fmt.Errorf("%q: no exit status came back", cmd)
 		}
 		out := l73ShellBody(strings.ReplaceAll(tail[:m[0]], "\r", ""), cmd)
 		rc := tail[m[2]:m[3]]
@@ -177,7 +177,7 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 
 	// The version is kept on a failure too: the screen shows what the device has.
 	if v, err := shell("openssl version"); err == nil {
-		o.OpenSSLVersion = oneLine(v)
+		o.OpenSSLVersion = oneLine(mask(v))
 		screen.WriteString("$ openssl version\n" + mask(v) + "\n")
 	}
 	which, err := shell("which openssl")
@@ -190,7 +190,7 @@ func l73JunosRoot(c *cliConn, job l73RootJob, pw, hash string) (l73RootOutcome, 
 		// `openssl help` prints a command list (to stderr on some builds); its rc is
 		// not the point, so it is neither rc- nor word-checked.
 		if h, err := shell("openssl help"); err == nil || h != "" {
-			o.OpenSSLHelp = h
+			o.OpenSSLHelp = mask(h)
 			screen.WriteString("$ openssl help\n" + mask(h) + "\n")
 		}
 	}
@@ -327,7 +327,7 @@ func (o l73RootOutcome) Facts() []string {
 			"the folder as listed by root: "+oneLine(o.Listing))
 	}
 	if o.ClientMade {
-		facts = append(facts, "the client key and certificate were placed in a root-owned folder through the root shell: the device's own openssl made the key in place, "+o.ClientKey+" (`"+l73ClientDir+"/client.key`, mode 600), nothing read it back or copied it, only its request left the device and the lab intermediate's signed certificate was copied beside it as `client.crt`. The names client.key and client.crt are inferred from Juniper's RADSEC page, and are measured only if the handshake shows the device's certificate")
+		facts = append(facts, "the client key and certificate were placed in a root-owned folder through the root shell: the device's own openssl made the key in place, "+o.ClientKey+" (`"+l73ClientDir+"/client.key`, mode 600), nothing read it back or copied it, only its request left the device and the lab intermediate's signed certificate was copied beside it as `client.crt`. The names client.key and client.crt are inferred from Juniper's RADSEC page. No committed record shows which issued leaf the device sent (the PKI-store leaf or this one): the decision log carries one cert_sha256 per record and the issued leaves' fingerprints are not recorded, so the names are unmeasured")
 	}
 	if o.OpenSSLHelp != "" {
 		facts = append(facts, "the root shell's `openssl help` lists: "+oneLine(o.OpenSSLHelp))

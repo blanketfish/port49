@@ -964,7 +964,7 @@ var l73RootCmdForms = regexp.MustCompile(`^(which openssl|exit|echo rc=\$\?|open
 
 // The client identity the image's tacplus certificate-id names: a folder
 // under l73TrustDir holding client.key and client.crt (inferred from Juniper's
-// RADSEC page; measured only if the handshake shows the device's certificate).
+// RADSEC page; unmeasured: no committed record shows which issued leaf the device sent).
 // The key is made in place by the device's own openssl and nothing reads it
 // back or copies it.
 const (

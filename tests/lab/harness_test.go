@@ -123,8 +123,9 @@ var platforms = []platform{
 	// selector per run: labs are cached by platform name. The full rows sit on
 	// the older rows' node and address, so the inventory, the seeds and the
 	// startup configs are unchanged; only one platform is ever up. The boot
-	// budgets are placeholders: nothing has booted these images on this host.
-	// Measure the first deploy and replace them.
+	// budgets of vjunosswitch26, iolxe1718 and xrd261 are placeholders: no run
+	// has booted them on this host. Every other row carries its measured boot
+	// time in its own comment.
 	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
 	{"vjunos26", "juniper_vjunos-router", "topologies/vjunos26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 7 * time.Minute},

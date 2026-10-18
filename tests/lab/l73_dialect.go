@@ -57,7 +57,7 @@ var l73JunosDialect = l73Dialect{
 	Enter: []string{"configure"}, Cleanup: []string{"rollback 0", "exit configuration-mode"}, CfgMark: "# ",
 	Asks: l73JunosAsks, VersionCmd: "show version | match Junos:", VersionHas: "26.2R1", Attrs: "[]",
 	Enrol: "the documented offline enrolment (`request security pki generate-key-pair`, " +
-		"`generate-certificate-request`, the lab CA's answer loaded back from a file)",
+		"`generate-certificate-request`, the lab CA's answer loaded back from a file), beside which this row's request and issued leaf are the root-shell path's: `openssl req` on the device, client.key and client.crt in its client folder",
 	Fallback:    "`authentication-order [ tacplus password ]` (configs/vjunos-startup.conf)",
 	Revocation:  "`revocation-check disable` on its CA profiles",
 	LogCmd:      `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,

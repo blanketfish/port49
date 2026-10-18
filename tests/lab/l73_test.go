@@ -364,8 +364,19 @@ func (e *l73Env) opMark(c *cliConn) string {
 func (e *l73Env) invalidScreen(name, out string) {
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
-			[]byte(l73MaskKeyWords(l73LogScreen(hideKeys(out)))), 0o600)
+			[]byte(l73MaskAll(l73MaskKeyWords(l73LogScreen(hideKeys(out))), e.invalidSecrets()...)), 0o600)
 	}
+}
+
+// invalidSecrets is allSecrets for a diagnostic: a failure to list them
+// masks fewer values and never ends the run.
+func (e *l73Env) invalidSecrets() []string {
+	runSeedsMu.Lock()
+	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
+	runSeedsMu.Unlock()
+	helpOnly := e.d.HelpOnly
+	all, _ := l73SecretsFor(helpOnly, e.secrets, seeds)
+	return all
 }
 
 // containerLogs keeps the node's container log (the last 300 lines) in the
@@ -1592,7 +1603,7 @@ func (e *l73Env) loadJunos() {
 		e.aaaListing(c, "aaa-after-folder")
 		// The trust group goes in only now that the CA certificates are loaded.
 		if out, err := junosConfigure(c, l73TrustGroupLines()...); err != nil {
-			return errors.New(hideKeys(err.Error() + " " + l73ScrubLog(out)))
+			return errors.New(hideKeys(l73ScrubLog(err.Error() + " " + out)))
 		}
 		if err := junosVerifyApplied(c, l73TrustGroupLines()); err != nil {
 			return err
