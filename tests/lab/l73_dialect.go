@@ -29,6 +29,7 @@ type l73Dialect struct {
 	ShowCmds    []string
 	InvalidCmds []string // read into PORT49_L73_INVALID_DIR when the control login fails
 	RefusalCmds []string // read into the INVALID dir when configuring the TLS client is refused
+	DiagOpAsks  []string // DiagAsks' operational-mode counterpart
 	DiagAsks    []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
 }
 
@@ -42,9 +43,8 @@ var l73JunosDialect = l73Dialect{
 	Revocation:  "`revocation-check disable` on its CA profiles",
 	LogCmd:      `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,
 	RefusalCmds: []string{"show security pki ca-certificate", "show configuration security pki | display set"},
-	DiagAsks: []string{"set system tacplus-server " + l73Server + " tls trusted-ca-group ",
-		"set system tacplus-server " + l73Server + " tls mutual-authentication certificate-id ",
-		"set system tacplus-server " + l73Server + " tls "},
+	DiagOpAsks:  []string{"request security pki ", "request system ", "show security pki ", "request security pki ca-certificate "},
+	DiagAsks:    []string{"set security pki trusted-ca-group " + l73TrustGroup + " "},
 	InvalidCmds: []string{`show log messages | match "tacplus|tls|ssl|pki" | last 60`,
 		"show security pki local-certificate detail",
 		"show configuration system tacplus-server | display set",

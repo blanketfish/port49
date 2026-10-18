@@ -354,6 +354,18 @@ func (e *l73Env) diagHelp() {
 		return
 	}
 	e.cli(func(c *cliConn) error {
+		opMark := "@" + e.l.p.node + e.opMark(c) // the prompt as the CLI redisplays it; "> " alone also opens help lines
+		for i, ask := range e.d.DiagOpAsks {
+			words := strings.Fields(ask)
+			ans, err := l71AskHelp(c, ask, words[len(words)-1:], opMark)
+			if err != nil {
+				return err
+			}
+			e.invalidScreen(fmt.Sprintf("help-op-%d", i+1), fmt.Sprintf("### typed `%s?`, cleared %v, finished %v\n%s", ask, ans.Cleared, ans.WaitErr == nil, ans.Masked))
+			if !ans.Cleared {
+				return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
+			}
+		}
 		for _, ln := range e.d.Enter {
 			if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
 				return l71Wrap("INVALID: "+ln, err)
