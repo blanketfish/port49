@@ -522,7 +522,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		pairs = append(pairs, fmt.Sprintf("%d/%d", s1.Status, s2.Status))
 		mustUnlock(bs[1])
 	}
-	row("b", "one code sent to brokers 1 and 2 at once, twenty steps: pairs with exactly one 200 (the other refused for the code)",
+	row("b", "one code sent to brokers 1 and 2 at once, twenty steps: pairs with exactly one 200 (the other refused for the code); broker 1 is unlocked after each pair, so no pair runs on a locked-out broker",
 		fmt.Sprintf("%d of 20: %s", raced, strings.Join(pairs, " ")), raced == 20)
 
 	// (c) locked out at b2 by wrong codes, a valid code refused while locked,
