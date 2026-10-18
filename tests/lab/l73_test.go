@@ -541,6 +541,7 @@ func (e *l73Env) capture(cell string) (stop func() []l73Conn) {
 	end := e.l.captureWith(e.t, abs, filter)
 	e.t.Cleanup(end) // idempotent: a Fatal mid-cell still stops tcpdump
 	return func() []l73Conn {
+		e.l.capAbs = abs // flush this capture, not the last one started (ready's, in cell h)
 		end()
 		raw, err := os.ReadFile(abs)
 		if err != nil {
@@ -612,6 +613,11 @@ func l73Where(recs []map[string]any, key, val string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// l73HandshakeFailed is whether port49 recorded a failed TLS handshake.
+func l73HandshakeFailed(recs []map[string]any) bool {
+	return len(l73Where(recs, "tls_outcome", "handshake_failed")) > 0
 }
 
 func l73Redeemed(recs []map[string]any) bool {
@@ -1212,18 +1218,18 @@ func (e *l73Env) cellD() {
 		conns := stop()
 		e.reached(v.id, conns)
 		recs := e.l.recordsSince(off)
-		verdict := "refused"
-		if ok && l73Redeemed(recs) {
+		verdict := l73Grade(ok, l73Redeemed(recs), l73HandshakeFailed(recs))
+		if verdict == "accepted" {
 			verdict = "**accepted**"
 		}
 		parts = append(parts, fmt.Sprintf("%s: %s (login as %s ok %v in %s, %s; %s; records: %s)", v.what, verdict, user, ok,
 			took.Round(time.Millisecond), l73Err(err), l73Describe(conns, start), e.quote(recs)))
 		switch {
-		case (v.id == "d-dns" || v.id == "d-wrongip") && verdict != "refused" && docs == "n/a":
+		case (v.id == "d-dns" || v.id == "d-wrongip") && verdict == "**accepted**" && docs == "n/a":
 			docs = "**no**: RFC 9887 §3.4 requires the client to check the server's identity, and the device was configured by address"
-		case v.id == "d-expired" && verdict != "refused":
+		case v.id == "d-expired" && verdict == "**accepted**" && docs == "n/a":
 			docs = "**no**: decision 50 ruling 15 treats an expired server certificate as nothing a device can use"
-		case v.id == "d-untrusted" && verdict != "refused" && docs == "n/a":
+		case v.id == "d-untrusted" && verdict == "**accepted**" && docs == "n/a":
 			docs = "**no**: RFC 9887 §3.4 requires the client to validate the server's certificate path"
 		}
 	}
@@ -1235,15 +1241,20 @@ func (e *l73Env) cellD() {
 // deviceLog reads the device's TACACS+ and TLS lines (the dialect's LogCmd),
 // scrubbed, into evidence as name, and returns how many lines it kept.
 func (e *l73Env) deviceLog(name string) string {
-	var out string
+	var out, unread string
 	e.cli(func(c *cliConn) error {
 		o, err := c.sendExpect(e.d.LogCmd, 60*time.Second, e.opMark(c))
 		out = o
 		if err != nil {
-			return errors.New(l73Err(err))
+			// A failed read is a gap in the evidence, not a lost cell: the
+			// rows measured so far still reach e.add.
+			unread = l71MaskExchange(l73Err(err))
 		}
 		return nil
 	})
+	if unread != "" {
+		return "the device's log could not be read: " + unread
+	}
 	text := l71MaskExchange(l73ScrubLog(hideKeys(out)))
 	e.evidence[name] = []byte(text)
 	return fmt.Sprintf("%d lines in `evidence/L73-%s/%s`", strings.Count(text, "\n"), e.l.p.name, name)
@@ -1263,9 +1274,12 @@ func (e *l73Env) cellE() {
 	e.reached("e", conns)
 	recs := e.l.recordsSince(off)
 	chain := "the device sends its chain (leaf and intermediate): the login verified with no intermediates_file"
-	if !(ok && l73Redeemed(recs)) {
-		chain = "the device sends its leaf alone: with no intermediates_file the handshake was refused (cell a, " +
+	switch l73Grade(ok, l73Redeemed(recs), l73HandshakeFailed(recs)) {
+	case "refused":
+		chain = "the device sends its leaf alone: with no intermediates_file port49 recorded handshake_failed (cell a, " +
 			"with intermediates_file, passed)"
+	case "login failed, cause unproven":
+		chain = "the login failed and port49 recorded no handshake_failed, so what the device sends is unproven"
 	}
 	e.add("e", e.d.Enrol+"; port49d's client_ca_file the root alone, no intermediates_file",
 		fmt.Sprintf("request: subject %q, dNSName %v, iPAddress %v, key %s, requested EKU %v; issued: %s; %s (login as %s ok %v "+
@@ -1307,8 +1321,12 @@ func (e *l73Env) cellG() {
 			selected++
 		}
 	}
+	caveat := "counts are per connection: a login's own later connections may resume from its first ticket"
+	if !ok1 || !ok2 {
+		caveat += "; a login failed, so the counts show no steady-state resumption"
+	}
 	e.add("g", "port49d with session_ticket_lifetime 10m (decision 50 ruling 11; off by default); two logins 5s apart",
-		fmt.Sprintf("logins %s ok %v (%s) and %s ok %v (%s); ClientHellos offering a ticket: %d, ServerHellos accepting one: %d, "+
+		fmt.Sprintf(caveat+"; logins %s ok %v (%s) and %s ok %v (%s); ClientHellos offering a ticket: %d, ServerHellos accepting one: %d, "+
 			"port49_tls_handshakes_total{outcome=\"resumed\"} +%v; %s; records: %s", u1, ok1, l73Err(err1), u2, ok2, l73Err(err2),
 			offered, selected, resumed, l73Describe(conns, start), e.quote(e.l.recordsSince(off))),
 		"n/a: decision 50 ruling 11 says how often devices resume is unmeasured until this cell")
@@ -1329,25 +1347,28 @@ func (e *l73Env) cellH() {
 	off := e.l.mark()
 	s1 := time.Now()
 	u1, ok1, _, _, err1 := e.tokenLogin()
-	e1 := time.Now()
 	time.Sleep(5 * time.Second)
 	s2 := time.Now()
 	u2, ok2, _, _, err2 := e.tokenLogin()
-	e2 := time.Now()
 	conns := stop()
-	w1, w2 := l73Window(conns, l73Server, s1, e1), l73Window(conns, l73Server, s2, e2)
+	// One window helper for h's logins and cell a's control: each login owns
+	// every connection from its start to the next login's (the last to the
+	// capture's stop), accounting connections included.
+	stopped := time.Now()
+	win := l73LoginWindows(conns, l73Server, []time.Time{{}, s1, s2}, stopped)
+	probeW, w1, w2 := win[0], win[1], win[2]
 	held, probeHeld := 0, 0
 	for _, c := range w1 {
 		if c.End == "open" || c.EndAt.After(s2) {
 			held++
 		}
 	}
-	for _, c := range l73Window(conns, l73Server, time.Time{}, s1) {
+	for _, c := range probeW {
 		if c.End == "open" || c.EndAt.After(s1) {
 			probeHeld++ // the readiness probe's, still open at the first login
 		}
 	}
-	base := len(l73Window(e.first, l73Server, time.Time{}, time.Now()))
+	base := len(l73LoginWindows(e.first, l73Server, []time.Time{{}}, stopped)[0])
 	e.configure(e.base())
 	e.add("h", "`single-connection` on the TLS server; two logins 5s apart",
 		fmt.Sprintf("connections the readiness probe opened that were still open at the first login: %d; "+

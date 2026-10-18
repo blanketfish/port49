@@ -562,3 +562,28 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// l73LoginWindows splits conns to host by login: window i holds the
+// connections whose SYN falls in [starts[i], starts[i+1]), the last one up to
+// end. A login's later accounting connections count with it, and cell a's
+// control and cell h's logins are read through this one function, so their
+// counts are comparable.
+func l73LoginWindows(conns []l73Conn, host string, starts []time.Time, end time.Time) [][]l73Conn {
+	out := make([][]l73Conn, len(starts))
+	for _, c := range conns {
+		if l73Host(c.Server) != host {
+			continue
+		}
+		for i := range starts {
+			to := end
+			if i+1 < len(starts) {
+				to = starts[i+1]
+			}
+			if !c.SYNAt.Before(starts[i]) && c.SYNAt.Before(to) {
+				out[i] = append(out[i], c)
+				break
+			}
+		}
+	}
+	return out
+}

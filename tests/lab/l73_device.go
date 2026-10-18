@@ -436,3 +436,18 @@ func l73ScrubLog(s string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// l73Grade is a refusal cell's verdict. "refused" needs positive evidence
+// that the handshake failed (a handshake_failed record); a login that failed
+// with no such record is a failure of unproven cause, never the cell's
+// verdict.
+func l73Grade(loginOK, redeemed, handshakeFailed bool) string {
+	switch {
+	case loginOK && redeemed:
+		return "accepted"
+	case handshakeFailed:
+		return "refused"
+	default:
+		return "login failed, cause unproven"
+	}
+}
