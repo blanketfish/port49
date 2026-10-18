@@ -1002,3 +1002,43 @@ func l73ListsCommand(help, name string) bool {
 func l73RootPlaceCmds() []string {
 	return []string{"cp " + l73ClientCRT + " " + l73ClientDir + "/client.crt", "ls -l " + l73ClientDir}
 }
+
+// l73NXOSImportOK is the read-back of an NX-OS certificate import: neither
+// the import's screen nor the `show crypto ca certificates` screen after it
+// may hold "% Invalid" or "Error", and the show screen must carry a
+// certificate whose subject has the leaf's CN (a certificate the device
+// issued for itself, not a CA's).
+func l73NXOSImportOK(importScreen, show, node string) error {
+	for name, s := range map[string]string{"the import": importScreen, "the read-back": show} {
+		for _, bad := range []string{"% Invalid", "Error"} {
+			if strings.Contains(s, bad) {
+				return fmt.Errorf("%s shows %q", name, bad)
+			}
+		}
+	}
+	if !l73SubjectCN(show, node) {
+		return fmt.Errorf("`show crypto ca certificates` shows no certificate whose subject carries CN=%s", node)
+	}
+	return nil
+}
+
+// l73SubjectCN reports whether a screen has a "CN=<node>" whose value ends at
+// the end of the name (a comma, slash, space or the line's end): CN=nx1 is not
+// CN=nx10.
+func l73SubjectCN(screen, node string) bool {
+	want := "CN=" + node
+	for _, ln := range strings.Split(screen, "\n") {
+		for i := 0; ; {
+			j := strings.Index(ln[i:], want)
+			if j < 0 {
+				break
+			}
+			end := i + j + len(want)
+			if end == len(ln) || strings.ContainsAny(ln[end:end+1], ",/ \t\r") {
+				return true
+			}
+			i = end
+		}
+	}
+	return false
+}

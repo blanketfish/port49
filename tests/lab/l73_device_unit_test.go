@@ -800,3 +800,26 @@ func TestL73RootClientCmds(t *testing.T) {
 		t.Error("l73ListsCommand reads a command list wrongly")
 	}
 }
+
+func TestL73NXOSImportOKReadsTheCertificateBack(t *testing.T) {
+	leaf := "trustpoint: l73-dev; key-pair: l73-key\r\ncertificate:\r\nsubject=/CN=nx1\r\nissuer=/CN=L73 Lab Device Intermediate\r\n"
+	if err := l73NXOSImportOK("input (cut & paste) certificate in PEM format:\r\nnx1(config)# ", leaf, "nx1"); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ imp, show string }{
+		"invalid command in the import": {"nx1(config)# END OF INPUT\r\n% Invalid command at '^' marker.\r\n", leaf},
+		"error in the import":           {"Error: could not parse\r\n", leaf},
+		"error in the read-back":        {"ok", leaf + "Error: x\r\n"},
+		"no certificate":                {"ok", "trustpoint: l73-dev; key-pair: l73-key\r\n"},
+		"a CA's subject only":           {"ok", "CA certificate 0:\r\nsubject=/CN=L73 Lab Device Intermediate\r\n"},
+		"a longer CN":                   {"ok", "subject=/CN=nx10\r\n"},
+		"a CN of the wrong device":      {"ok", "subject=/CN=other\r\n"},
+	} {
+		if err := l73NXOSImportOK(c.imp, c.show, "nx1"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := l73NXOSImportOK("ok", "subject=CN=nx1,O=lab\r\n", "nx1"); err != nil {
+		t.Errorf("a comma-ended CN: %v", err)
+	}
+}

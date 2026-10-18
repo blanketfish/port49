@@ -1425,9 +1425,22 @@ func (e *l73Env) loadCisco() {
 	_, _, load := l73CiscoEnrol(e.d.Family, e.l.p.node)
 	vals := e.vals()
 	e.cli(func(c *cliConn) error {
-		if out, err := l73CiscoRun(c, []l73Dialog{load}, vals, false); err != nil {
+		out, err := l73CiscoRun(c, []l73Dialog{load}, vals, false)
+		if err != nil {
 			e.invalidScreen("import", out)
 			return fmt.Errorf("INVALID: %q: %s", load.Cmd, oneLine(err.Error()))
+		}
+		if e.d.Family == "nxos" {
+			// Read the import back rather than infer it: the device's own certificate,
+			// with the leaf's CN, must be on the trustpoint.
+			show, serr := c.sendExpect("show crypto ca certificates "+l73CertID, 60*time.Second, c.prompt)
+			if serr == nil {
+				serr = l73NXOSImportOK(out, show, e.l.p.node)
+			}
+			if serr != nil {
+				e.invalidScreen("import-readback", out+"\n"+show)
+				return fmt.Errorf("INVALID: after %q: %s", load.Cmd, oneLine(l73Err(serr)))
+			}
 		}
 		return nil
 	})
