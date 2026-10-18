@@ -176,3 +176,35 @@ func TestAWrongCAIsAStoreFaultNotAnOutage(t *testing.T) {
 		t.Fatalf("a server this CA does not verify: %v", err)
 	}
 }
+
+// probeTLS does not depend on endpoint order: a member whose certificate
+// this CA does not verify is a fault of that member, so the start proceeds on
+// the one that completes a handshake, whichever is listed first. Only when
+// none does is it a storeFault (decision 35 and 51).
+func TestProbeTLSIsIndependentOfEndpointOrder(t *testing.T) {
+	good := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	bad := etcdtest.Start(t, etcdtest.Options{TLS: true}) // a CA of its own
+	bad2 := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	tc := good.TLS(t, "port49-daemon")
+	probe := func(eps ...string) error {
+		return probeTLS(context.Background(), "stores.directory.etcd", eps, tc, time.Second)
+	}
+	for name, eps := range map[string][]string{
+		"good first": {good.Endpoint, bad.Endpoint},
+		"bad first":  {bad.Endpoint, good.Endpoint},
+	} {
+		if err := probe(eps...); err != nil {
+			t.Errorf("%s: %v, want the start to proceed on the member that completes", name, err)
+		}
+	}
+	var fault *storeFault
+	for name, eps := range map[string][]string{
+		"one bad":  {bad.Endpoint},
+		"all bad":  {bad.Endpoint, bad2.Endpoint},
+		"bad, bad": {bad2.Endpoint, bad.Endpoint},
+	} {
+		if err := probe(eps...); !errors.As(err, &fault) || errors.Is(err, store.ErrUnavailable) {
+			t.Errorf("%s: %v, want a storeFault", name, err)
+		}
+	}
+}

@@ -911,12 +911,16 @@ func identityAt(at string, id config.EtcdIdentity, pool *x509.CertPool, now time
 // component, then reads once, briefly (pre-flight I9). Under TLS 1.3 etcd
 // refuses a client certificate after the handshake, with an alert on the
 // first read, and clientv3 would report that only as a deadline. So:
-//   - a certificate the server refuses, or a server certificate this CA
-//     does not verify, is a storeFault naming it;
-//   - an endpoint that does not answer is store.ErrUnavailable;
-//   - one endpoint that completes is enough.
+//   - one endpoint that completes is enough, whichever it is in the list: a
+//     fault confined to another member is that member's, and the client
+//     uses the ones that verify;
+//   - when none completes, a certificate the server refuses, or a server
+//     certificate this CA does not verify, is a storeFault naming the first
+//     endpoint that showed it;
+//   - otherwise an endpoint that does not answer is store.ErrUnavailable.
 func probeTLS(ctx context.Context, at string, endpoints []string, tc *tls.Config, timeout time.Duration) error {
 	var last error
+	var fault *storeFault
 	for _, ep := range endpoints {
 		u, err := url.Parse(ep)
 		if err != nil {
@@ -927,7 +931,10 @@ func probeTLS(ctx context.Context, at string, endpoints []string, tc *tls.Config
 		cancel()
 		if err != nil {
 			if tlsFault(err) {
-				return &storeFault{fmt.Errorf("etcd at %s: the TLS handshake failed: %w", ep, err)}
+				if fault == nil {
+					fault = &storeFault{fmt.Errorf("etcd at %s: the TLS handshake failed: %w", ep, err)}
+				}
+				continue
 			}
 			last = err
 			continue
@@ -936,9 +943,15 @@ func probeTLS(ctx context.Context, at string, endpoints []string, tc *tls.Config
 		_, rerr := conn.Read(make([]byte, 1))
 		conn.Close()
 		if rerr != nil && tlsFault(rerr) {
-			return &storeFault{fmt.Errorf("etcd at %s refused this certificate: %w", ep, rerr)}
+			if fault == nil {
+				fault = &storeFault{fmt.Errorf("etcd at %s refused this certificate: %w", ep, rerr)}
+			}
+			continue
 		}
 		return nil
+	}
+	if fault != nil {
+		return fault
 	}
 	return fmt.Errorf("%w: %v", store.ErrUnavailable, last)
 }
