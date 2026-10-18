@@ -1034,3 +1034,11 @@ func l73NXOSImportOK(importScreen, show, node string) error {
 func l73SubjectCN(screen, node string) bool {
 	return regexp.MustCompile(`(?m)CN[ \t]*=[ \t]*` + regexp.QuoteMeta(node) + `(?:[\r,/]|$)`).MatchString(screen)
 }
+
+// l73KeyWord is a "key" followed by its value, typed or not (`key 0 X`, `key 7 X`,
+// IOS XE also takes a bare `key X`): an INVALID screen is a diagnosis, so it
+// masks the word after every "key" and may mask harmlessly (`crypto key
+// generate` loses "generate"). The committed L71 help text is not masked this way.
+var l73KeyWord = regexp.MustCompile(`\bkey (?:[0-9] )?\S+`)
+
+func l73MaskKeyWords(s string) string { return l73KeyWord.ReplaceAllString(s, "key <MASKED>") }

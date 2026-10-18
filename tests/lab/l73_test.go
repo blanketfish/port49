@@ -348,7 +348,7 @@ func (e *l73Env) opMark(c *cliConn) string {
 func (e *l73Env) invalidScreen(name, out string) {
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
-			[]byte(l73LogScreen(hideKeys(out))), 0o600)
+			[]byte(l73MaskKeyWords(l73LogScreen(hideKeys(out)))), 0o600)
 	}
 }
 

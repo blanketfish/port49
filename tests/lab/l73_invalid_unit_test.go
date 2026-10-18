@@ -102,7 +102,7 @@ func TestL73InvalidScreenDropsEveryPrivateKeyBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "PRIVBODY") || strings.Contains(string(b), "PRIVATE KEY") || !strings.Contains(string(b), "key label: l73-key") {
+	if strings.Contains(string(b), "PRIVBODY") || strings.Contains(string(b), "PRIVATE KEY") || !strings.Contains(string(b), "l73-key") {
 		t.Fatal(string(b))
 	}
 }
@@ -113,18 +113,19 @@ func TestL73InvalidScreenMasksIOSXEServerKeys(t *testing.T) {
 	e := &l73Env{l: &lab{p: platform{name: "x"}}}
 	e.invalidScreen("device-1", "tacacs server port49-host\r\n address ipv4 172.100.100.1\r\n key 0 PLAINKEY123\r\n"+
 		"tacacs server l73\r\n tls port 300\r\n key 7 ENCRYPTED0822455D0A16\r\n key 6 TYPESIX\r\n"+
-		"Server Address: 172.100.100.1 Key: SHOWNKEY999\r\n")
+		"Server Address: 172.100.100.1 Key: SHOWNKEY999\r\n key BARELYTYPEDKEY\r\n tacacs-server host 1.2.3.4 key 0 ZEROKEY\r\n"+
+		"crypto key generate rsa label l73-key\r\n")
 	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-device-1.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(b)
-	for _, leak := range []string{"PLAINKEY123", "ENCRYPTED0822", "TYPESIX", "SHOWNKEY999"} {
+	for _, leak := range []string{"PLAINKEY123", "ENCRYPTED0822", "TYPESIX", "SHOWNKEY999", "BARELYTYPEDKEY", "ZEROKEY"} {
 		if strings.Contains(got, leak) {
 			t.Errorf("%s leaked:\n%s", leak, got)
 		}
 	}
-	if !strings.Contains(got, "tls port 300") || !strings.Contains(got, "address ipv4 172.100.100.1") {
+	if !strings.Contains(got, "tls port 300") || !strings.Contains(got, "address ipv4 172.100.100.1") || !strings.Contains(got, "crypto key") {
 		t.Errorf("the configuration around the keys was lost:\n%s", got)
 	}
 }
