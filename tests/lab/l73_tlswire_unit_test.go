@@ -523,3 +523,35 @@ func TestL73ClientHelloCutInsideAnExtensionIsAnError(t *testing.T) {
 		t.Errorf("a whole server_name: %+v %v", h, err)
 	}
 }
+
+func TestL73DescribeNamesTheClientHelloAndAlerts(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	sni := "secret-name.example"
+	conns := []l73Conn{{
+		Server: "172.100.100.1:300", SYNAt: t0, Answer: "syn-ack", End: "server-rst", EndAt: t0.Add(time.Second),
+		DeviceRecords: 2, ServerRecords: 1,
+		Hello: &l73Hello{
+			Versions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
+			Suites:   []uint16{tls.TLS_AES_128_GCM_SHA256, 0x00ff},
+			HasSNI:   true, SNI: sni,
+			Groups:  []uint16{uint16(tls.X25519), 0x9999},
+			SigAlgs: []uint16{uint16(tls.ECDSAWithP256AndSHA256), 0x0805, 0x9998},
+			ALPN:    []string{"a"}, PSKIdentities: 1, EarlyData: true,
+		},
+		Alerts: []l73Alert{{Level: 2, Description: 40, FromDevice: true}, {Level: 2, Description: 48}},
+	}}
+	got := l73Describe(conns, t0)
+	for _, want := range []string{"2 device TLS records", "1 server TLS records", "TLS 1.3", "TLS 1.2", "TLS_AES_128_GCM_SHA256",
+		"0x00ff", "X25519", "0x9999", "ECDSAWithP256AndSHA256", "0x9998", "has_sni true", "alpn 1", "psk_identities 1", "early_data true",
+		"alert from device level 2 description 40 (handshake_failure)", "alert from server level 2 description 48 (unknown_ca)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, sni) {
+		t.Fatalf("the SNI value is printed: %s", got)
+	}
+	if hits := l73SummaryLeaks(got); len(hits) > 0 {
+		t.Fatalf("%v: %s", hits, got)
+	}
+}
