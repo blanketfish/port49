@@ -668,15 +668,16 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	// Broker 3 has the lifts before the next cut: a session opens at region 3
 	// again (a mint refused for a mark not yet lifted is tried again), so (i)
 	// starts from a state it did not have to wait for.
+	var lastTry error
 	opened := false
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
-		if w.sessionTry(3) == nil {
+		if lastTry = w.sessionTry(3); lastTry == nil {
 			opened = true
 			break
 		}
 	}
 	if !opened {
-		w.t.Fatal("INVALID: region 3 would not open a session after the lifts")
+		w.t.Fatalf("INVALID: region 3 would not open a session after the lifts: %v", lastTry)
 	}
 
 	// (f), second half: a second cut; with its snapshots deleted, a restarted

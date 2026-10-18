@@ -98,10 +98,10 @@ var ErrRefused = store.ErrRefused
 // store.ErrUnavailable, so it trips no circuit (pre-flight M19).
 var ErrTooLarge = errors.New("etcd: request too large")
 
-// Open builds the store's clients. It never waits for etcd: clientv3.New
-// returns at once whether or not an endpoint answers, and an expired
-// certificate or a wrong CA fails only the first call, as a deadline
-// (pre-flight I9). A caller that must know etcd answers calls Ping; one
+// Open builds the store's clients. It waits for etcd no longer than
+// DialTimeout: clientv3.New blocks on the dial, and when no endpoint answers
+// Open returns store.ErrUnavailable. An expired certificate or a wrong CA
+// fails only the first call, as a deadline (pre-flight I9). A caller that must know etcd answers calls Ping; one
 // that must know why it does not checks the certificates and the TLS
 // handshake first (port49d does, Task 12). It fails only on a
 // configuration clientv3 refuses outright.
@@ -154,9 +154,14 @@ func dial(c Config) (*clientv3.Client, error) {
 		RejectOldCluster:     true,
 	})
 	if err != nil {
-		// Not ErrUnavailable: New does not dial, so this is a configuration
-		// it will not take (an endpoint it cannot parse, a TLS config it
-		// refuses), and waiting would not change it.
+		// With DialTimeout set, New blocks on the dial and fails with a
+		// deadline when no endpoint answers: an outage, so ErrUnavailable,
+		// and a start that meets it serves from its snapshot (R19). Any other
+		// error is a configuration it will not take (an endpoint it cannot
+		// parse, a TLS config it refuses), and waiting would not change it.
+		if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.Unavailable {
+			return nil, fmt.Errorf("%w: etcd at %v: %v", store.ErrUnavailable, c.Endpoints, err)
+		}
 		return nil, fmt.Errorf("etcd at %v: %w", c.Endpoints, err)
 	}
 	return cli, nil
