@@ -798,3 +798,14 @@ func TestL73NXOSEnrolMakesAnRSAKeyAndAsksItsHelp(t *testing.T) {
 		}
 	}
 }
+
+// NX-OS's `crypto ca import ... certificate` asks "input (cut & paste)
+// certificate in PEM format:" and no "END OF INPUT" appears in that prompt
+// (attempt 20), so the dialogue waits for the words the image printed and
+// ends the paste with the terminator line.
+func TestL73NXOSImportWaitsForTheImagesOwnPrompt(t *testing.T) {
+	_, _, load := l73CiscoEnrol("nxos", "nx1")
+	if len(load.Steps) != 1 || load.Steps[0].Prompt != "certificate in PEM format:" || load.Steps[0].Reply != "{LEAF}END OF INPUT" {
+		t.Fatalf("%+v", load.Steps)
+	}
+}
