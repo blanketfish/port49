@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -15,20 +16,40 @@ var hedged = map[string]bool{
 	"/etcdserverpb.Cluster/MemberList": true,
 }
 
+// idempotentWrites are the write calls hedged only when the store method that
+// makes them says a second copy is harmless (idempotent).
+var idempotentWrites = map[string]bool{
+	"/etcdserverpb.KV/Txn":         true,
+	"/etcdserverpb.KV/DeleteRange": true,
+}
+
+// hedgeWrites switches the opt-in off, for a test that shows what it prevents.
+var hedgeWrites = true
+
+type idempotentKey struct{}
+
+// idempotent marks ctx's writes as ones a store method has checked are
+// harmless sent twice: a create-if-absent put (a second copy finds the key
+// and changes nothing) or a delete of one key. Txn carries writes that are
+// not, so the call's own method name never decides it.
+func idempotent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, idempotentKey{}, true)
+}
+
 // hedgeReads is the client's interceptor for a member that goes dark with
 // quorum intact. The client spreads calls round-robin over its connections;
 // a connection whose link was dropped (not refused) stalls until keepalive
-// fails it, about 7s, and every third call sent to it ran into its own
+// fails it, 10s + 2s (grpc raises a keepalive Time below 10s to 10s), and every third call sent to it ran into its own
 // deadline: a directory that still answers read as not answering (L74). A
 // read still unanswered at a quarter and at half of its deadline is sent
 // again, on the next connection round-robin picks, and the first answer wins.
-// A call with no deadline, or any call that writes, goes through alone: a
-// write sent twice could land twice.
+// A call with no deadline goes through alone, and so does a write, unless its
+// store method marked it idempotent.
 func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn,
 	invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	dl, ok := ctx.Deadline()
 	rv := reflect.ValueOf(reply)
-	if !hedged[method] || !ok || rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
+	if !(hedged[method] || (hedgeWrites && idempotentWrites[method] && ctx.Value(idempotentKey{}) != nil)) || !ok || rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 	total := time.Until(dl)
@@ -58,6 +79,14 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 			}
 			last = a.err
 			if inflight == 0 {
+				// A connection that failed outright (Unavailable) is no answer
+				// either: try the next at once rather than waiting for a timer.
+				if c := status.Code(last); hedges < 2 && ctx.Err() == nil && (c == codes.Unavailable || c == codes.DeadlineExceeded) {
+					hedges++
+					inflight++
+					send()
+					continue
+				}
 				return last
 			}
 		case <-timer.C:

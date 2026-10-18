@@ -150,7 +150,7 @@ func dial(c Config) (*clientv3.Client, error) {
 		// The client's own JSON lines would land in port49d's stderr, which
 		// is the operator's; port49d says what matters itself.
 		Logger:               zap.NewNop(),
-		DialKeepAliveTime:    5 * time.Second,
+		DialKeepAliveTime:    10 * time.Second,
 		DialKeepAliveTimeout: 2 * time.Second,
 		DialOptions:          []grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads)},
 		// Not RejectOldCluster: its version check asks every endpoint under

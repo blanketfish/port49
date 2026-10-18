@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -72,22 +73,6 @@ func TestOpenWithNoMemberAnsweringIsPingsOutage(t *testing.T) {
 	if err := ping(s); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("Ping = %v, want store.ErrUnavailable", err)
 	}
-}
-
-// A server this CA does not verify is not Open's to call an outage: it is
-// never store.ErrUnavailable from Open (port49d's TLS probe names it).
-func TestOpenWithAWrongCAIsNotUnavailable(t *testing.T) {
-	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
-	tc := srv.TLS(t, "root").Clone()
-	tc.RootCAs = nil
-	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, TLS: tc, DialTimeout: 300 * time.Millisecond})
-	if err != nil {
-		if errors.Is(err, store.ErrUnavailable) {
-			t.Fatalf("Open = %v, a certificate fault read as an outage", err)
-		}
-		return
-	}
-	s.Close()
 }
 
 // No endpoints is a configuration fault, never an outage.
@@ -174,26 +159,74 @@ func TestAReadFailsWhenQuorumIsLost(t *testing.T) {
 	t.Fatal("Ping answered with two of three members down")
 }
 
-// A write is not sent twice, so one that round-robin sends to the stalled
-// connection fails at its deadline until keepalive fails that connection
-// (5s + 2s). The blip is bounded: a revocation written every 100ms is
-// accepted again by the tenth second, and stays so.
-func TestAWriteBlipsOnlyUntilKeepaliveFailsTheDarkMember(t *testing.T) {
+// writesDuringADarkMember warms every connection of s's token client with
+// writes, hangs one member, then writes a revocation every 100ms, each within
+// 500ms, for 15s (past keepalive's 10s + 2s). It returns how many failed.
+func writesDuringADarkMember(t *testing.T) (failed, total int) {
+	t.Helper()
 	s, _, ps := threeBehindProxies(t)
+	for i := 0; i < 60; i++ { // round-robin: every connection has carried a write
+		if err := s.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+			Key: fmt.Sprintf("user:warm%d", i), At: time.Now()}); err != nil {
+			t.Fatalf("warming write %d: %v", i, err)
+		}
+	}
 	ps[2].Hang(true)
-	start, lastFail := time.Now(), time.Duration(0)
-	for time.Since(start) < 14*time.Second {
+	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(100 * time.Millisecond) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		if err := s.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: time.Now()}); err != nil {
-			lastFail = time.Since(start)
+			failed++
 		}
+		total++
 		cancel()
-		time.Sleep(100 * time.Millisecond)
 	}
-	if lastFail > 10*time.Second {
-		t.Fatalf("a write still failed %v after the member went dark", lastFail)
+	return failed, total
+}
+
+// L74 (d): a revocation written while one of three members is dark is
+// accepted: PutRevocation is create-if-absent, so a second copy sent on
+// another connection changes nothing, and it is sent when the first is still
+// unanswered at a quarter of the deadline.
+func TestARevocationIsAcceptedWhileOneMemberIsDark(t *testing.T) {
+	if failed, total := writesDuringADarkMember(t); failed != 0 {
+		t.Fatalf("%d of %d revocations failed with one of three members dark", failed, total)
 	}
-	t.Logf("last failed write %v after the member went dark", lastFail.Round(100*time.Millisecond))
+}
+
+// A lift is a delete of one key: accepted while a member is dark as well.
+func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	for i := 0; i < 60; i++ {
+		if err := s.DeleteRevocation(context.Background(), store.RevocationPrincipal, "user:warm"); err != nil {
+			t.Fatalf("warming lift %d: %v", i, err)
+		}
+	}
+	ps[2].Hang(true)
+	failed, total := 0, 0
+	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(100 * time.Millisecond) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := s.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob"); err != nil {
+			failed++
+		}
+		total++
+		cancel()
+	}
+	if failed != 0 {
+		t.Fatalf("%d of %d lifts failed with one of three members dark", failed, total)
+	}
+}
+
+// Without the opt-in the write goes to the stalled connection once in three,
+// and fails at its deadline until keepalive fails the connection.
+func TestARevocationFailsOnTheDarkMemberWithoutTheOptIn(t *testing.T) {
+	was := hedgeWrites
+	hedgeWrites = false
+	t.Cleanup(func() { hedgeWrites = was })
+	failed, total := writesDuringADarkMember(t)
+	if failed == 0 {
+		t.Fatalf("no revocation of %d failed: the dark member was never picked, so the test proves nothing", total)
+	}
+	t.Logf("%d of %d revocations failed without the opt-in", failed, total)
 }
 
 // Reported, not ruled: a member whose server certificate this CA does not

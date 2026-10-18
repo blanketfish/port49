@@ -26,7 +26,7 @@ func (s *Store) PutRevocation(ctx context.Context, r store.Revocation) error {
 		return err
 	}
 	key := s.k.mark(r.Kind, r.Key)
-	_, err = commit(ctx, s.tok, s.tokLeases,
+	_, err = commit(idempotent(ctx), s.tok, s.tokLeases,
 		[]clientv3.Cmp{clientv3.Compare(clientv3.CreateRevision(key), "=", 0)}, []put{{key: key, val: body}})
 	return err
 }
@@ -44,7 +44,7 @@ func (s *Store) GetRevocation(ctx context.Context, kind, key string) (store.Revo
 }
 
 func (s *Store) DeleteRevocation(ctx context.Context, kind, key string) error {
-	_, err := s.tok.Delete(ctx, s.k.mark(kind, key))
+	_, err := s.tok.Delete(idempotent(ctx), s.k.mark(kind, key))
 	return unavailable(err)
 }
 
