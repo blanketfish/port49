@@ -28,6 +28,7 @@ type l73Dialect struct {
 	LogCmd      string
 	ShowCmds    []string
 	InvalidCmds []string // read into PORT49_L73_INVALID_DIR when the control login fails
+	DiagAsks    []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
 }
 
 var l73JunosDialect = l73Dialect{
@@ -39,6 +40,9 @@ var l73JunosDialect = l73Dialect{
 	Fallback:   "`authentication-order [ tacplus password ]` (configs/vjunos-startup.conf)",
 	Revocation: "`revocation-check disable` on its CA profiles",
 	LogCmd:     `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,
+	DiagAsks: []string{"set system tacplus-server " + l73Server + " tls trusted-ca-group ",
+		"set system tacplus-server " + l73Server + " tls mutual-authentication certificate-id ",
+		"set system tacplus-server " + l73Server + " tls "},
 	InvalidCmds: []string{`show log messages | match "tacplus|tls|ssl|pki" | last 60`,
 		"show security pki local-certificate detail",
 		"show configuration system tacplus-server | display set",

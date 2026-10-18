@@ -344,6 +344,40 @@ func (e *l73Env) invalidScreen(name, out string) {
 	}
 }
 
+// diagHelp is the diagnostic PORT49_L73_DIAG=help asks for: the help at each
+// DiagAsks value position (typed with "?", then Ctrl-U; never entered), its
+// masked text kept in PORT49_L73_INVALID_DIR, and then INVALID on purpose,
+// before any TLS line is typed. Nothing is configured.
+func (e *l73Env) diagHelp() {
+	if os.Getenv("PORT49_L73_DIAG") != "help" || len(e.d.DiagAsks) == 0 {
+		return
+	}
+	e.cli(func(c *cliConn) error {
+		for _, ln := range e.d.Enter {
+			if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
+				return l71Wrap("INVALID: "+ln, err)
+			}
+		}
+		for i, ask := range e.d.DiagAsks {
+			// The typed line is echoed at once; its last word says the help has begun.
+			words := strings.Fields(ask)
+			ans, err := l71AskHelp(c, ask, words[len(words)-1:], e.d.CfgMark)
+			if err != nil {
+				return err
+			}
+			e.invalidScreen(fmt.Sprintf("help-%d", i+1), fmt.Sprintf("### typed `%s?`, cleared %v\n%s", ask, ans.Cleared, ans.Masked))
+			if !ans.Cleared {
+				return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
+			}
+		}
+		for _, ln := range e.d.Cleanup {
+			c.sendExpect(ln, 30*time.Second, e.d.CfgMark, e.opMark(c))
+		}
+		return nil
+	})
+	e.t.Fatalf("INVALID: PORT49_L73_DIAG=help: the help texts are in PORT49_L73_INVALID_DIR; no TLS line was typed")
+}
+
 // invalidDeviceLogs keeps the dialect's INVALID commands' output (the device's
 // own account of a refused handshake) in PORT49_L73_INVALID_DIR, scrubbed.
 func (e *l73Env) invalidDeviceLogs() {
@@ -1135,6 +1169,7 @@ func (e *l73Env) confirmNXOSTrust() {
 
 func (e *l73Env) cellA() {
 	e.guard()
+	e.diagHelp()
 	e.daemon("a", l73Daemon{Intermediates: e.files["inter.pem"]})
 	e.configure(l73DeviceTLS{Server: l73Server})
 	probe := e.ready("a")

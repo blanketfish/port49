@@ -453,3 +453,40 @@ func TestL73Hierarchy(t *testing.T) {
 		}
 	}
 }
+
+func TestL73ScrubLogShowsOnlyAPlainFilePath(t *testing.T) {
+	ans := func(p string) string { return "File path '" + p + "' doesn't exists." }
+	ok := "/var/db/certs/common/local/l73-dev.pem"
+	if got := l73ScrubLog(ans(ok)); got != ans(ok) {
+		t.Fatalf("a plain path is masked: %s", got)
+	}
+	blob := strings.Repeat("QUJDREVG", 6) // 48 base64 characters
+	for _, p := range []string{
+		"/" + blob,                            // a base64 blob starting with a slash
+		"//var/db/certs/" + "x",               // two slashes
+		"/var/db/" + strings.Repeat("a", 65),  // a segment over 64
+		"/home/x/" + strings.Repeat("ab", 14), // outside the directories
+		"/var/db/" + blob + "+/==",            // characters a path does not hold
+	} {
+		got := l73ScrubLog(ans(p))
+		if strings.Contains(got, blob) || strings.Contains(got, strings.Repeat("a", 65)) || strings.Contains(got, strings.Repeat("ab", 14)) {
+			t.Errorf("%q left unmasked: %s", p, got)
+		}
+	}
+	// The rest of the line is still masked.
+	if got := l73ScrubLog(ans(ok) + " " + blob); strings.Contains(got, blob) || !strings.Contains(got, ok) {
+		t.Fatal(got)
+	}
+}
+
+func TestL73JunosDiagAsksStopAtTheValuePosition(t *testing.T) {
+	asks := l73JunosDialect.DiagAsks
+	if len(asks) != 3 {
+		t.Fatal(asks)
+	}
+	for _, a := range asks {
+		if !strings.HasPrefix(a, "set system tacplus-server "+l73Server+" tls ") || !strings.HasSuffix(a, " ") || strings.Contains(a, "?") {
+			t.Errorf("%q", a)
+		}
+	}
+}

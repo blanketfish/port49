@@ -75,3 +75,14 @@ func TestL73ScrubLogMasksTheTacplusSecret(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestL73InvalidScreenKeepsAPlainFilePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PORT49_L73_INVALID_DIR", dir)
+	e := &l73Env{l: &lab{p: platform{name: "x"}}}
+	e.invalidScreen("configure", "File path '/var/db/certs/common/local/l73-trust' doesn't exists.\r\n")
+	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-configure.txt"))
+	if err != nil || !strings.Contains(string(b), "'/var/db/certs/common/local/l73-trust'") {
+		t.Fatal(err, string(b))
+	}
+}

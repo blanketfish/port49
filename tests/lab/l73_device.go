@@ -431,10 +431,39 @@ func l73ScrubLog(s string) string {
 		if l73LogDrop.MatchString(ln) {
 			continue
 		}
-		ln = l73LogHash.ReplaceAllString(ln, "<HASH>")
-		out = append(out, l73LogLong.ReplaceAllString(ln, "<LONG>"))
+		if m := l73FilePathAnswer.FindStringSubmatchIndex(ln); m != nil && l73PrintablePath(ln[m[4]:m[5]]) {
+			out = append(out, l73MaskLine(ln[:m[4]])+ln[m[4]:m[5]]+l73MaskLine(ln[m[5]:]))
+			continue
+		}
+		out = append(out, l73MaskLine(ln))
 	}
 	return strings.Join(out, "\n")
+}
+
+func l73MaskLine(ln string) string {
+	ln = l73LogHash.ReplaceAllString(ln, "<HASH>")
+	return l73LogLong.ReplaceAllString(ln, "<LONG>")
+}
+
+var (
+	l73FilePathAnswer = regexp.MustCompile(`(File path ')([^']*)(' doesn't exists?)`)
+	l73FilePathShape  = regexp.MustCompile(`^/(var|config|etc|tmp|opt)/[A-Za-z0-9_./-]{1,200}$`)
+)
+
+// l73PrintablePath is true for the one path shape Junos's "File path '<p>'
+// doesn't exist" answer may show unmasked: under a directory the image keeps
+// its files in, at most 200 characters, no segment over 64 (a base64 blob
+// that happens to start with a slash is not one).
+func l73PrintablePath(p string) bool {
+	if !l73FilePathShape.MatchString(p) {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if len(seg) > 64 {
+			return false
+		}
+	}
+	return true
 }
 
 // l73Grade is a refusal cell's verdict. "refused" needs positive evidence
