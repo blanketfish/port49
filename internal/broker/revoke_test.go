@@ -1310,3 +1310,47 @@ func TestALiftWhoseCopyMissesLiftsTheDirectorysMark(t *testing.T) {
 		t.Fatalf("the directory's mark was not deleted: %v", err)
 	}
 }
+
+// deleteRevocationFails is a store whose lifts fail with err.
+type deleteRevocationFails struct {
+	store.Store
+	err error
+}
+
+func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string) error { return s.err }
+
+// A lift whose mark was revoked again while it ran lifts nothing, and says
+// so in the operator's words, never the store's "context changed" (dial fix
+// round 4 review, I1); any other failure keeps "could not be lifted, and
+// stands". Neither is recorded, and the listener keeps the mark.
+func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	conns := &fakeConns{}
+	f.b.Conns = conns
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	st := f.b.Store
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: the principal or certificate was revoked again while the lift ran", store.ErrConflict),
+			"broker: nothing was lifted: principal " + alice + " was revoked again while this lift ran, and that " +
+				"revocation stands; lift again only if it should go too"},
+		{fmt.Errorf("%w: no quorum", store.ErrUnavailable),
+			"broker: the revocation could not be lifted, and stands: store: unavailable: no quorum"},
+	} {
+		f.b.Store = deleteRevocationFails{st, c.err}
+		if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err == nil || err.Error() != c.want {
+			t.Fatalf("Lift = %v\nwant %s", err, c.want)
+		}
+	}
+	if on, told := conns.marked[[2]string{store.RevocationPrincipal, alice}]; !told || !on {
+		t.Fatalf("the listener lost the mark: %v", conns.marked)
+	}
+	if recs := eventsOf(f.records(t), "revoke"); len(recs) != 1 {
+		t.Fatalf("a failed lift was recorded: %v", recs)
+	}
+}

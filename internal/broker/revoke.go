@@ -439,6 +439,12 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)
 	}
 	if err := b.Store.DeleteRevocation(ctx, kind, key); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			// The store's "context changed" would send an operator to the
+			// sessions; this names the mark and what to do.
+			return RevokeReport{}, fmt.Errorf("broker: nothing was lifted: %s was revoked again while this lift "+
+				"ran, and that revocation stands; lift again only if it should go too", markWhat(cur))
+		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
 	}
 	b.Marks.Set(cur, false)
@@ -740,11 +746,15 @@ func RevocationsText(rs []store.Revocation) string {
 	}
 	var lines []string
 	for _, r := range rs {
-		what := "principal " + r.Key
-		if i := strings.LastIndex(r.Key, "|"); r.Kind == store.RevocationCert && i >= 0 {
-			what = fmt.Sprintf("certificate issuer=%q serial=%s", r.Key[:i], r.Key[i+1:])
-		}
-		lines = append(lines, fmt.Sprintf("%s since %s (%s)", what, r.At.UTC().Format(time.RFC3339), r.Origin))
+		lines = append(lines, fmt.Sprintf("%s since %s (%s)", markWhat(r), r.At.UTC().Format(time.RFC3339), r.Origin))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// markWhat names what r revokes, as an operator reads it.
+func markWhat(r store.Revocation) string {
+	if i := strings.LastIndex(r.Key, "|"); r.Kind == store.RevocationCert && i >= 0 {
+		return fmt.Sprintf("certificate issuer=%q serial=%s", r.Key[:i], r.Key[i+1:])
+	}
+	return "principal " + r.Key
 }
