@@ -125,8 +125,9 @@ var platforms = []platform{
 	// startup configs are unchanged; only one platform is ever up. The boot
 	// budgets are placeholders: nothing has booted these images on this host.
 	// Measure the first deploy and replace them.
+	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
 	{"vjunos26", "juniper_vjunos-router", "topologies/vjunos26.clab.yml", "172.100.100.21", "srx1",
-		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 15 * time.Minute},
+		"vrnetlab/juniper_vjunos-router:26.2R1.7", "vJunos-router 26.2R1.7", 7 * time.Minute},
 	{"iosxe1718", "cisco_iosxe", "topologies/iosxe1718.clab.yml", "172.100.100.41", "xe1",
 		"vrnetlab/cisco_c8000v:17.18.02", "Catalyst 8000V 17.18.02", 10 * time.Minute},
 	{"nxos106", "cisco_nxos", "topologies/nxos106.clab.yml", "172.100.100.31", "nx1",
