@@ -257,7 +257,7 @@ redeem deny/token_not_found method=ascii user=breakglass
 
 With port49 up, `breakglass` (local only; port49 denies it, having no token for it) logged in in 1.168s. So a port49 deny **falls** through to `local` with `exit-on-reject` at its default.
 
-**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies still gets in if the device has a local account for them. port49's deny is not final on this platform. Plan 12's reference config sets `exit-on-reject` (Ruling 1).
+**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies still gets in if the device has a local account for them. port49's deny is not final on this platform. Setting `exit-on-reject` true makes it final, at a cost cell (l) measures: with it true the break-glass account is refused while port49 is up and denies it. Plan 12's reference config sets `exit-on-reject` (Ruling 1) knowing that.
 
 The AAA log's lines for both users:
 

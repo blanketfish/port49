@@ -1413,3 +1413,12 @@ func TestL76NotesStateTheirExitOnRejectValueAndExplainTheMismatch(t *testing.T) 
 		}
 	}
 }
+
+func TestL76FallThroughHazardStatesTheCostMeasuredInCellL(t *testing.T) {
+	h := l76FallThroughHazard
+	for _, want := range []string{"Operator hazard", "not final", "(l)", "refused while port49 is up", "Plan 12"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("the fall-through hazard lacks %q: %s", want, h)
+		}
+	}
+}

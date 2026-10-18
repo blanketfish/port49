@@ -838,7 +838,7 @@ from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only wit
   accounting event is `command`, and each local role must list `services [ cli ]` or no login on it succeeds. The file has no comments because containerlab's `.cli` comment syntax is
   not documented. Its secret and break-glass password are `labcreds`' published values.
 - **Device commands.** The test reads and changes the device with `docker exec clab-port49-srlinux-srl1
-  sr_cli -d`, which runs as the container's root, outside TACACS+. Cells (i) and (j) restore what they change.
+  sr_cli -d`, which runs as the container's root, outside TACACS+. Cells (i), (j) and (l) restore what they change, and cell (k) clears the checkpoint it tries to make. A run of the closed entry needs `PORT49_LAB_REMEASURE=L76`.
 - **Occupancy.** The test takes `/tmp/port49-lab.lock` (`labOccupyForRun`) and holds it through `TestMain`'s teardown.
 - **Evidence.** `evidence/L76-nokia_srlinux/` holds the masked running config, the model excerpts, each
   login's outputs, the AAA log lines (filtered), and the redacted decision log. `evidence/L76-nokia_srlinux.pcap`

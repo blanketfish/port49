@@ -587,9 +587,7 @@ func (e *l76Env) cellD() {
 	// Ruling 1: a fall-through is stated as the operator hazard it is.
 	hazard := ""
 	if bgErr == nil {
-		hazard = "\n\n**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies " +
-			"still gets in if the device has a local account for them. port49's deny is not final on this " +
-			"platform. Plan 12's reference config sets `exit-on-reject` (Ruling 1)."
+		hazard = "\n\n" + l76FallThroughHazard
 	}
 	e.out["d"] = l76ExitDefaultNote + "\n\n" + fmt.Sprintf("A wrong password for `%s` was refused in %v. port49's records:\n\n```\n%s\n```\n\n"+
 		"With port49 up, `%s` (local only; port49 denies it, having no token for it) %s in %v. So a port49 deny "+

@@ -1098,3 +1098,11 @@ func l76ExitHazard(refused []string) string {
 		strings.Join(refused, "; ") + ". That is the configuration plan 12 would ship, so these are what an operator " +
 		"meets at 3am."
 }
+
+// l76FallThroughHazard is cell (d)'s operator hazard, with the cost cell (l)
+// measured for the fix.
+const l76FallThroughHazard = "**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies " +
+	"still gets in if the device has a local account for them. port49's deny is not final on this platform. " +
+	"Setting `exit-on-reject` true makes it final, at a cost cell (l) measures: with it true the break-glass " +
+	"account is refused while port49 is up and denies it. Plan 12's reference config sets `exit-on-reject` " +
+	"(Ruling 1) knowing that."
