@@ -510,6 +510,26 @@ func (e *l76Env) cellB() {
 		len(reqs), e.aUser, l76Count(reqs, "authorize_session"), l76Count(reqs, "authorize_command"),
 		l76Services(reqs), reply, roles, s.PrivLvl, l76Appears(own, "network-admin"), l76Render(reqs),
 		l76FilterLog(own))
+
+	// What the device does with the optional attributes: two probes, each on
+	// its own seeded user, so a refused login cannot touch the control. The
+	// standing reply is priv-lvl=15 alone, so the optional shell:roles is
+	// measured here rather than inherited (L76 run 3 saw a refusal with it).
+	cfg1, err := e.l.derivedConfig("l76-b1", l76ProbeRoles, "")
+	if err != nil {
+		e.invalid("cell b: %v", err)
+	}
+	cfg2, err := e.l.derivedConfig("l76-b2", l76ProbeInvented, "")
+	if err != nil {
+		e.invalid("cell b: %v", err)
+	}
+	defer e.restore(e.restartStanding)
+	e.restart(cfg1)
+	user1, _, recs1, err1 := e.tokenLogin("b1")
+	e.restart(cfg2)
+	user2, _, recs2, err2 := e.tokenLogin("b2")
+	e.out["b"] += "\n\n" + l76AttrProbeText("b1", l76ProbeRoles, user1, err1, recs1) +
+		"\n\n" + l76AttrProbeText("b2", l76ProbeInvented, user2, err2, recs2)
 }
 
 // l76Appears says whether text names word.

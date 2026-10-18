@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1172,5 +1173,25 @@ func TestL76DecisionDumpRedactsAndFilters(t *testing.T) {
 	}
 	if !strings.Contains(got, `"reason":"no_permit_dominates_deny"`) {
 		t.Errorf("the reason was lost: %q", got)
+	}
+}
+
+func TestL76AttrProbeTextStatesTheOutcome(t *testing.T) {
+	recs := []map[string]any{{
+		"event": "authorize_session", "verdict": "permit", "reason": "context_matched",
+		"session": map[string]any{"username": "alice03"},
+		"request": map[string]any{"service": "shell", "raw": []any{"service=shell", "cmd*"}},
+		"reply":   map[string]any{"attributes": []any{"priv-lvl=15", "p49-probe*x"}},
+	}}
+	refused := l76AttrProbeText("b2", `["priv-lvl=15","p49-probe*x"]`, "alice03", errors.New("ssh: unable to authenticate"), recs)
+	for _, want := range []string{"b2", `["priv-lvl=15","p49-probe*x"]`, "alice03", "**refused**", "unable to authenticate",
+		"context_matched", "SA#authorization-use-tacacsx-server", "Unknown optional VSAs are discarded"} {
+		if !strings.Contains(refused, want) {
+			t.Errorf("refused text lacks %q:\n%s", want, refused)
+		}
+	}
+	ok := l76AttrProbeText("b1", `["priv-lvl=15","shell:roles*network-admin"]`, "alice02", nil, recs)
+	if !strings.Contains(ok, "**logged in**") || strings.Contains(ok, "**refused**") {
+		t.Errorf("accepted text: %s", ok)
 	}
 }

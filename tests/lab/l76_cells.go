@@ -770,3 +770,25 @@ func l76DecisionDump(recs []map[string]any) string {
 	}
 	return l76FilterLog(strings.Join(lines, "\n"))
 }
+
+// Cell (b)'s probe replies: the optional role attribute the shared lab policy
+// sends, and an invented optional attribute that separates "refuses any
+// unknown optional attribute" (IOS XE, L10) from "refuses this role name".
+const (
+	l76ProbeRoles    = `["priv-lvl=15","shell:roles*network-admin"]`
+	l76ProbeInvented = `["priv-lvl=15","p49-probe*x"]`
+)
+
+// l76AttrProbeText is one of cell (b)'s probes as the note states it: the
+// reply attributes port49 was set to send, whether SR Linux let the user in,
+// and port49's records. A refused login is an observation, not INVALID. It
+// names the Nokia page whose statement the outcome confirms or contradicts.
+func l76AttrProbeText(label, attrs, user string, loginErr error, recs []map[string]any) string {
+	outcome := "**logged in**"
+	if loginErr != nil {
+		outcome = "**refused**: " + strings.Join(strings.Fields(loginErr.Error()), " ")
+	}
+	return fmt.Sprintf("Probe (%s): port49 replied `%s`; `%s` %s. Nokia's SA#authorization-use-tacacsx-server "+
+		"says \"Unknown optional VSAs are discarded\": a login that is refused here contradicts it, one that "+
+		"succeeds confirms it.\n\n```\n%s\n```", label, attrs, user, outcome, l76Render(recs))
+}
