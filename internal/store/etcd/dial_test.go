@@ -1,17 +1,18 @@
 package etcd
 
 import (
+	"context"
 	"errors"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
 
-// blackhole is an endpoint that accepts TCP and never speaks: the shape of a
-// region cut off from its directory.
+// blackhole is an endpoint that accepts TCP and never speaks: a member cut
+// off from this process.
 func blackhole(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -32,21 +33,60 @@ func blackhole(t *testing.T) string {
 	return l.Addr().String()
 }
 
-// An endpoint set that does not answer within DialTimeout is an outage, not
-// a configuration fault: a start that meets it serves from its snapshot (R19).
-func TestOpenNoEndpointAnswersIsUnavailable(t *testing.T) {
-	ep := blackhole(t)
-	s, err := Open(Config{Endpoints: []string{ep}, DialTimeout: 300 * time.Millisecond})
-	if err == nil {
-		s.Close()
-		t.Fatal("Open returned no error against an endpoint that never answers")
+func ping(s *Store) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return s.Ping(ctx)
+}
+
+// One member that does not answer is not an outage while another does: Open
+// does not wait for it, and the store works (L74 cell (f) shape). clientv3's
+// RejectOldCluster asks every endpoint and fails New when any one is down.
+func TestOpenWithADeadMemberListedSecondIsLive(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	start := time.Now()
+	s, err := Open(Config{Endpoints: []string{srv.Endpoint, blackhole(t)}, DialTimeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Open with one live and one silent member: %v", err)
 	}
-	if !errors.Is(err, store.ErrUnavailable) {
-		t.Fatalf("err = %v, want it to wrap store.ErrUnavailable", err)
+	defer s.Close()
+	if d := time.Since(start); d > 250*time.Millisecond {
+		t.Fatalf("Open waited %v", d)
 	}
-	if !strings.Contains(err.Error(), ep) {
-		t.Fatalf("err = %q, want it to name the endpoints", err)
+	for i := 0; i < 3; i++ {
+		if err := ping(s); err != nil {
+			t.Fatalf("Ping %d: %v", i, err)
+		}
 	}
+}
+
+// When no member answers Open still returns at once, and the outage is
+// Ping's to say.
+func TestOpenWithNoMemberAnsweringIsPingsOutage(t *testing.T) {
+	s, err := Open(Config{Endpoints: []string{blackhole(t)}, DialTimeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if err := ping(s); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("Ping = %v, want store.ErrUnavailable", err)
+	}
+}
+
+// A server this CA does not verify is not Open's to call an outage: it is
+// never store.ErrUnavailable from Open (port49d's TLS probe names it).
+func TestOpenWithAWrongCAIsNotUnavailable(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	tc := srv.TLS(t, "root").Clone()
+	tc.RootCAs = nil
+	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, TLS: tc, DialTimeout: 300 * time.Millisecond})
+	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			t.Fatalf("Open = %v, a certificate fault read as an outage", err)
+		}
+		return
+	}
+	s.Close()
 }
 
 // No endpoints is a configuration fault, never an outage.

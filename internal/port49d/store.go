@@ -868,9 +868,6 @@ func openIdentity(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
 		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
 	if err != nil {
-		if errors.Is(err, store.ErrUnavailable) {
-			return nil, nil, err // an outage, as attempt keeps it: not the operator's to fix
-		}
 		return nil, nil, &storeFault{fmt.Errorf("%s.%s: %w", at, name, err)}
 	}
 	return s, leaf, nil
