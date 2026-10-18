@@ -104,12 +104,16 @@ func TestNoTestRangesOverTheRawSelection(t *testing.T) {
 	}
 }
 
-// Every opt-in row is one TestL73 can drive: a dialect for its platform
-// name, a break-glass opener, and help-only exactly where up() skips the
-// daemon.
+// Every opt-in row but L76's is one TestL73 can drive: a dialect for its
+// platform name, a break-glass opener, and help-only exactly where up()
+// skips the daemon.
 func TestL73EveryOptInRowHasADialectAndAnOpener(t *testing.T) {
 	for _, p := range platforms {
 		if !optInPlatforms[p.sel] {
+			continue
+		}
+		// L76's row is opt-in for TestL76, not an L73 row.
+		if p.sel == l76Sel {
 			continue
 		}
 		d, ok := l73Dialects[p.name]

@@ -387,3 +387,19 @@ lab:
     - {nas: leaf1, username: l73u22}
     - {nas: leaf1, username: l73u23}
     - {nas: leaf1, username: l73u24}
+    - {nas: srl1, username: alice01}
+    - {nas: srl1, username: alice02}
+    - {nas: srl1, username: alice03}
+    - {nas: srl1, username: alice04}
+    - {nas: srl1, username: alice05}
+    - {nas: srl1, username: alice06}
+    - {nas: srl1, username: alice07}
+    - {nas: srl1, username: alice08}
+    - {nas: srl1, username: alice09}
+    - {nas: srl1, username: alice10}
+    - {nas: srl1, username: alice11}
+    - {nas: srl1, username: alice12}
+    - {nas: srl1, username: alice13}
+    - {nas: srl1, username: alice14}
+    - {nas: srl1, username: alice15}
+    - {nas: srl1, username: alice16}

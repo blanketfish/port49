@@ -149,13 +149,18 @@ var platforms = []platform{
 		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 10 * time.Minute},
 	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
+	// SR Linux is a container, not a VM: containerlab starts sr_linux directly
+	// (CLAB#container-configuration). Five minutes is a placeholder, not a
+	// measurement; L76's first run replaces it with about 3x what it measured.
+	{"srlinux", "nokia_srlinux", "topologies/srlinux.clab.yml", "172.100.100.71", "srl1",
+		"ghcr.io/nokia/srlinux:26.7.2-519", "SR Linux 26.7.2-519", 5 * time.Minute},
 }
 
 // optInPlatforms are the rows a run deploys only when PORT49_LAB_PLATFORMS
-// names them, and that only TestL73 runs (eachOptInPlatform): the register
-// tests skip them.
+// names them, and that only TestL73 and TestL76 run (eachOptInPlatform): the
+// register tests skip them.
 var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true,
-	"iolxe1718": true, "xrd261": true, "vjunosswitch26": true}
+	"iolxe1718": true, "xrd261": true, "vjunosswitch26": true, "srlinux": true}
 
 // helpOnlyPlatforms come up with a break-glass account and no TACACS+: up()
 // starts no port49d for them, and TestL73 asks their CLI help only.

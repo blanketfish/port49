@@ -1,0 +1,64 @@
+system {
+    aaa {
+        authentication {
+            authentication-method [
+                port49
+                local
+            ]
+            user breakglass {
+                password breakglass-only
+                role [
+                    p49-admin
+                ]
+            }
+        }
+        authorization {
+            role p49-read {
+                tacacs {
+                    priv-lvl 1
+                }
+            }
+            role p49-admin {
+                tacacs {
+                    priv-lvl 15
+                }
+            }
+        }
+        accounting {
+            accounting-method [
+                port49
+            ]
+            event command {
+                record start-stop
+            }
+        }
+        server-group local {
+            type local
+        }
+        server-group port49 {
+            type tacacs
+            tacacs {
+                priv-lvl-authorization true
+            }
+            server 172.100.100.1 {
+                network-instance mgmt
+                tacacs {
+                    port 49
+                    secret-key labsecret
+                }
+            }
+        }
+    }
+    configuration {
+        role p49-read {
+            rule / {
+                action read
+            }
+        }
+        role p49-admin {
+            rule / {
+                action write
+            }
+        }
+    }
+}
