@@ -100,6 +100,9 @@ const usage = `usage:
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
+  port49 store status [--socket PATH]
+                (each store as port49d or port49-broker sees it: backend, members, reachable, the
+                directory cache's age; exits 3 when a store does not answer)
   port49 revoke [--socket PATH] (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX) [--lift]
   port49 revoke [--socket PATH] --list
                 (exits 3 when the revocation is in force but incomplete or not saved)
@@ -197,6 +200,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	case "keys":
 		return keysCmd(args[1:], stdout, stderr)
+	case "store":
+		return storeCmd(args[1:], stdout, stderr)
 	case "revoke":
 		return revokeCmd(args[1:], stdout, stderr)
 	case "directory":

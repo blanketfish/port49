@@ -92,6 +92,9 @@ type Response struct {
 	// Partial is a revocation or lift in force that did not finish or was
 	// not saved; `port49 revoke` exits 3 on it (plan 7a).
 	Partial bool `json:"partial,omitempty"`
+	// Degraded is a store_status in which a store did not answer; `port49
+	// store status` exits 3 on it (plan 11a, R21).
+	Degraded bool `json:"degraded,omitempty"`
 	// Sealed is enrollments_export's body, sealed whole under the broker's
 	// key (plan 9e, D13); base64 in JSON. At most maxImport bytes.
 	Sealed []byte `json:"sealed,omitempty"`
@@ -99,10 +102,14 @@ type Response struct {
 
 // Server answers the socket.
 type Server struct {
-	Held     *keyring.Held
-	Keys     map[string]keyring.Set
-	Assigned func(device string) string
-	Now      func() time.Time
+	// StoreStatus answers `port49 store status` (plan 11a, R21): each
+	// store's line as this process sees it, and whether one did not answer.
+	// Nil when the process reports no stores.
+	StoreStatus func(ctx context.Context) (text string, degraded bool, err error)
+	Held        *keyring.Held
+	Keys        map[string]keyring.Set
+	Assigned    func(device string) string
+	Now         func() time.Time
 	// Revoke and Revocations answer `port49 revoke` (plan 7a). Nil when
 	// port49d runs no broker; the ops are then refused, saying so.
 	Revoke      func(ctx context.Context, op RevokeOp) (text string, partial bool, err error)
@@ -356,11 +363,22 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 			return Response{Error: err.Error()}
 		}
 		return Response{Text: text}
+	case "store_status":
+		if s.StoreStatus == nil {
+			return Response{Error: "this process reports no stores"}
+		}
+		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())
+		defer cancel()
+		text, degraded, err := s.StoreStatus(ctx)
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{Text: text, Degraded: degraded}
 	case "second_factor_reset", "sign_in_unlock", "enrollments_init", "enrollments_export", "enrollments_import":
 		return s.signInOp(ctx, req, uid)
 	}
 	return Response{Error: "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, " +
-		"second_factor_reset, sign_in_unlock, enrollments_init, enrollments_export and enrollments_import"}
+		"store_status, second_factor_reset, sign_in_unlock, enrollments_init, enrollments_export and enrollments_import"}
 }
 
 // signInCommand is the `port49 directory` subcommand that sends op.

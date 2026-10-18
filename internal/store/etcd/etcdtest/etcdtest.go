@@ -262,6 +262,13 @@ func Start(t testing.TB, o Options) *Server {
 			KeyFile: filepath.Join(s.Dir, "server-key.pem"), TrustedCAFile: filepath.Join(s.Dir, "ca.pem"),
 			ClientCertAuth: true}
 	}
+	// A port picked first, not bound as port 0: the member lists its client
+	// URL as advertised, and Members dials that (plan 11a, R21).
+	if o.TLS {
+		spec.client = "https://" + freePort(t)
+	} else {
+		spec.client = "http://" + freePort(t)
+	}
 	e, err := member(spec)
 	if err != nil {
 		t.Fatal(err)

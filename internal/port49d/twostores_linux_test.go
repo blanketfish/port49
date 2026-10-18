@@ -1243,3 +1243,29 @@ func TestACeilingWithNoYoungerSnapshotKeepsTheListenersClosed(t *testing.T) {
 		t.Fatalf("the listeners opened %d times; want 2 (the first run, the snapshot run)", n)
 	}
 }
+
+// R21 end to end: port49d answers each store's line, and a cut directory
+// is degraded.
+func TestStoreStatusOnTwoStores(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	startSplitDaemon(t, f.daemon, &out, 1)
+	sock := adminSocketOf(t, f.daemon)
+	r, err := ask(sock, admin.Request{Op: "store_status"})
+	if err != nil || r.Degraded || !strings.Contains(r.Text, "directory  etcd    1/1 members  reachable  cache ") ||
+		!strings.Contains(r.Text, "session    etcd    1/1 members  reachable") {
+		t.Fatalf("%+v %v", r, err)
+	}
+	f.ddproxy.Hang(true)
+	waitWithin(t, &out, "port49d: directory store: not answering", 10*time.Second)
+	r, err = ask(sock, admin.Request{Op: "store_status"})
+	if err != nil || !r.Degraded || !strings.Contains(r.Text, "unreachable") {
+		t.Fatalf("with the directory cut: %+v %v", r, err)
+	}
+}

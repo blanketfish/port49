@@ -784,8 +784,10 @@ func runBroker(parent context.Context, cfgPath string) error {
 		bln.Close()
 		return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 	}
+	st := newStoreStatus(cfg, bs.dir, bs.raw, bs.fresh)
+	st.pending = func() int { return int(rn.pending.Load()) }
 	asrv := &admin.Server{Revoke: adminRevoke(brk, marksCopy), Revocations: adminRevocations(bs.st),
-		Forget: adminForget(brk), Now: time.Now,
+		Forget: adminForget(brk), Now: time.Now, StoreStatus: st.answer,
 		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
 	serveSignInOps(asrv, brk)
 	wg.Add(1)

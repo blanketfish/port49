@@ -1330,7 +1330,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 		}
-		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
+		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
+			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
 		if brk != nil {
 			// The socket's deadline covers the wait and the run; one bound
 			// for both, so they cannot drift apart.
