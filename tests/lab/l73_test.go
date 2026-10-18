@@ -92,6 +92,7 @@ type l73Env struct {
 	d          l73Dialect
 	opener     func(*lab) (*cliConn, error)
 	cfgScreens string          // the configure sessions' screens, for an INVALID's diagnosis
+	xeChecked  bool            // IOS XE: the address read-back and the break-glass login are in the facts
 	versionWhy string          // why the last token login's version was not read; "" when it was
 	x          map[string]bool // the Want words the image's help listed
 	applied    *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
@@ -238,6 +239,12 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 			// A lenient undo refuses the lines of servers that were never
 			// there; the restore's own outcome is the startup config's lines.
 			t.Logf("restore (lenient): %s", oneLine(hideKeys(err.Error())))
+		}
+		if t.Failed() {
+			e.invalidScreen("restore", out)
+		}
+		if e.d.Family == "iosxe" && !e.d.HelpOnly {
+			e.checkRestored()
 		}
 	})
 	return e
@@ -673,7 +680,7 @@ func (e *l73Env) ciscoType(lines []string, lenient bool) (string, error) {
 	var out string
 	var cerr error
 	e.cli(func(c *cliConn) error {
-		out, cerr = l73CiscoRun(c, l73Lines(lines...), nil, lenient)
+		out, cerr = l73CiscoRun(c, l73Lines(lines...), nil, lenient, l73ExtraMarks(e.d.Family)...)
 		return nil
 	})
 	return out, cerr
@@ -773,6 +780,9 @@ func (e *l73Env) configure(d l73DeviceTLS) {
 		out, err = e.apply(d)
 	}
 	e.noteConfigure(out)
+	if err == nil && e.d.Family == "iosxe" {
+		e.noteIOSXEServer(out)
+	}
 	if err != nil {
 		e.invalidScreen("configure", out)
 		e.refusalDiag(out)
@@ -786,6 +796,43 @@ func (e *l73Env) configure(d l73DeviceTLS) {
 func (e *l73Env) noteConfigure(out string) {
 	if len(e.cfgScreens) < 40000 {
 		e.cfgScreens += "\n### configure session\n" + out
+	}
+}
+
+// noteIOSXEServer records, once, what the image kept of the TLS server's
+// address (the `do show` typed right after the address line, with port49-host
+// already gone) and that a break-glass login still lands with port49-host
+// removed. 17.18.02 drops the address when a second object shares it, so the
+// first screen is the proof that the address sticks once the other is gone.
+func (e *l73Env) noteIOSXEServer(out string) {
+	if e.xeChecked {
+		return
+	}
+	e.xeChecked = true
+	for i, scr := range l73DoShowScreens(out) {
+		scr = l73MaskKeyWords(l73LogScreen(hideKeys(scr)))
+		e.facts = append(e.facts, fmt.Sprintf("IOS XE `show running-config | section tacacs`, typed right after the `address ipv4` line "+
+			"of server object %d, with port49-host already removed: `%s`", i+1, strings.ReplaceAll(strings.TrimSpace(scr), "\n", " / ")))
+	}
+	ok, took, err := e.breakglassLogin()
+	e.facts = append(e.facts, fmt.Sprintf("with port49-host removed from the device, a break-glass login ok %v in %s (%s)",
+		ok, took.Round(time.Millisecond), l73Err(err)))
+}
+
+// checkRestored reads the IOS XE restore back: port49-host must be on the
+// device again with its address, as the startup config holds it. The screen
+// goes to the INVALID directory, masked.
+func (e *l73Env) checkRestored() {
+	var shown string
+	var serr error
+	e.cli(func(c *cliConn) error {
+		shown, serr = c.sendExpect("show running-config | section tacacs", 30*time.Second, c.prompt)
+		return nil
+	})
+	e.invalidScreen("restored", shown)
+	e.t.Logf("restored: %s", oneLine(l73MaskKeyWords(l73LogScreen(hideKeys(shown)))))
+	if serr != nil || !l73IOSXERestored(shown) {
+		e.t.Errorf("the restore did not put port49-host back with its address (%s)", l73Err(serr))
 	}
 }
 

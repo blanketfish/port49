@@ -68,8 +68,9 @@ func (l *lab) xrCLI(user, password string) (*cliConn, error) {
 // would hang in a submode. A refused line ends the run with an error,
 // unless lenient: then it keeps going and returns every refusal together
 // (the cleanup's restore, which undoes lines that may never have been
-// applied). Errors name lines through hideKeys.
-func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient bool) (out string, err error) {
+// applied). extra is the dialect's own refusal marks (l73ExtraMarks). Errors
+// name lines through hideKeys.
+func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient bool, extra ...string) (out string, err error) {
 	// What leaves this function is masked at the source: the device echoes
 	// each typed line, and a refusal line may quote a key.
 	defer func() {
@@ -112,7 +113,7 @@ func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient 
 			}
 		}
 		said := c.transcript()[at:]
-		if r := l73Refusal(said); r != "" {
+		if r := l73Refusal(said, extra...); r != "" {
 			if !lenient {
 				return c.transcript()[from:], fmt.Errorf("%q was refused: %s", hideKeys(it.Cmd), hideKeys(r))
 			}

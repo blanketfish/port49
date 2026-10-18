@@ -3,6 +3,9 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,5 +47,29 @@ func TestL73CiscoRunMasksAnEchoedKey(t *testing.T) {
 		if strings.Contains(screen, labcreds.Key) || !strings.Contains(screen, "<key>") {
 			t.Errorf("lenient=%v: the returned screen is not masked", lenient)
 		}
+	}
+}
+
+// The undo types the lab key back; the screen kept in the INVALID directory
+// must not hold it, however the device echoed it.
+func TestL73UndoScreenInTheInvalidDirHoldsNoLabKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PORT49_L73_INVALID_DIR", dir)
+	out := &syncBuf{}
+	c := &cliConn{name: "fake", prompt: "xe1#", in: echoDevice{out}, out: out}
+	screen, _ := l73CiscoRun(c, l73Lines(l73CiscoRestoreAll("iosxe", nil)...), nil, true)
+	e := &l73Env{l: &lab{p: platform{name: "x"}}}
+	e.invalidScreen("restore", screen)
+	b, err := os.ReadFile(filepath.Join(dir, "l73-invalid-x-restore.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), labcreds.Key) || !strings.Contains(string(b), "address ipv4 172.100.100.1") {
+		t.Fatalf("restore screen:\n%s", b)
+	}
+	// And the key is among the secrets the leak gate compares against.
+	all, err := l73SecretsFor(true, nil, nil)
+	if err != nil || !slices.Contains(all, labcreds.Key) {
+		t.Errorf("the lab key is not a gated secret: %v", err)
 	}
 }

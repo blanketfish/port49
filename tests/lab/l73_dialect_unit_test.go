@@ -51,10 +51,13 @@ func TestL73DialectsAskL71sQuestionFirst(t *testing.T) {
 
 func TestL73IOSXELines(t *testing.T) {
 	got := l73CiscoLines("iosxe", nil, l73DeviceTLS{Server: "172.100.100.1"}, nil)
+	// 17.18.02 drops `address ipv4` on a second server object that would share
+	// port49-host's address, so port49-host goes, object and all, first.
 	want := []string{
-		"tacacs server l73-tls", "address ipv4 172.100.100.1", "tls trustpoint client l73-dev",
-		"tls ip vrf forwarding clab-mgmt", "tls ip tacacs source-interface GigabitEthernet1", "exit",
-		"aaa group server tacacs+ port49", "no server name port49-host", "server name l73-tls", "exit",
+		"aaa group server tacacs+ port49", "no server name port49-host", "exit", "no tacacs server port49-host",
+		"tacacs server l73-tls", "address ipv4 172.100.100.1", "do show running-config | section tacacs",
+		"tls trustpoint client l73-dev", "tls ip vrf forwarding clab-mgmt", "tls ip tacacs source-interface GigabitEthernet1", "exit",
+		"aaa group server tacacs+ port49", "server name l73-tls", "exit",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got\n%s", maskKey(strings.Join(got, "\n")))
@@ -71,6 +74,89 @@ func TestL73IOSXELines(t *testing.T) {
 	// The undo comes first, whole, before anything of the new cell.
 	if i, j := slices.Index(got, "no tacacs server l73-tls"), slices.Index(got, "tls port 300"); i < 0 || j < i {
 		t.Errorf("undo at %d, new lines at %d", i, j)
+	}
+	// It frees the address before port49-host takes it back.
+	if i, j := slices.Index(got, "no tacacs server l73-tls"), slices.Index(got, "address ipv4 172.100.100.1"); i < 0 || j < i {
+		t.Errorf("the address is taken back at %d, before l73-tls is removed at %d", j, i)
+	}
+}
+
+// The undo gives port49-host back exactly as the startup config holds it
+// (lines 61-65 of configs/iosxe-startup.cfg), and the group its member.
+func TestL73IOSXEUndoRestoresPort49HostAsTheStartupConfigHoldsIt(t *testing.T) {
+	b, err := os.ReadFile("configs/iosxe-startup.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		switch {
+		case ln == "tacacs server port49-host":
+			want = []string{ln}
+		case want != nil && strings.HasPrefix(ln, " "):
+			want = append(want, strings.TrimSpace(ln))
+		case want != nil:
+			goto done
+		}
+	}
+done:
+	undo := l73CiscoRestoreAll("iosxe", nil)
+	i := slices.Index(undo, "tacacs server port49-host")
+	if i < 0 || len(want) < 4 || !slices.Equal(undo[i:i+len(want)], want) {
+		t.Fatalf("undo %v\nwants the startup config's block %v", maskKey(strings.Join(undo, " | ")), maskKey(strings.Join(want, " | ")))
+	}
+	if undo[i+len(want)] != "exit" || !slices.Contains(undo[i:], "server name port49-host") {
+		t.Errorf("the block is not closed and re-added to the group: %v", undo[i:])
+	}
+}
+
+// What the image printed for the TLS server object when it dropped the
+// address (attempt 3, 17.18.02): no `% ` with a space, a Warning on exit.
+const l73IOSXEDroppedAddress = `xe1(config)#tacacs server l73-tls
+xe1(config-server-tacacs)#address ipv4 172.100.100.1
+xe1(config-server-tacacs)#tls trustpoint client l73-dev
+xe1(config-server-tacacs)#tls ip vrf forwarding clab-mgmt
+%Invalid IP version 0 for the server address
+xe1(config-server-tacacs)#exit
+Warning: Address not yet configured.
+xe1(config)#`
+
+func TestL73RefusalSeesTheUnspacedMarksAndIOSXEsAddressWarning(t *testing.T) {
+	if got := l73Refusal(l73IOSXEDroppedAddress); got != "%Invalid IP version 0 for the server address" {
+		t.Errorf("%q", got)
+	}
+	for _, m := range []string{"%Invalid input", "%Incomplete command", "%Unrecognized command", "%Ambiguous command", "%Error opening x"} {
+		if got := l73Refusal("xe1(config)#x\r\n" + m + "\r\n"); got != m {
+			t.Errorf("%q: got %q", m, got)
+		}
+	}
+	// The Warning is IOS XE's alone: with the marks of any other dialect, or none,
+	// it refuses nothing.
+	warn := "xe1(config-server-tacacs)#exit\nWarning: Address not yet configured.\nxe1(config)#"
+	for _, fam := range []string{"", "nxos", "eos", "xr", "junos"} {
+		if got := l73Refusal(warn, l73ExtraMarks(fam)...); got != "" {
+			t.Errorf("%s: the Warning refused: %q", fam, got)
+		}
+	}
+	if got := l73Refusal(warn, l73ExtraMarks("iosxe")...); got != "Warning: Address not yet configured." {
+		t.Errorf("iosxe: %q", got)
+	}
+	// Other Warnings stay what they were.
+	if got := l73Refusal("Warning: a thing\n", l73ExtraMarks("iosxe")...); got != "" {
+		t.Errorf("%q", got)
+	}
+}
+
+func TestL73IOSXERestoredReadsPort49HostBackWithItsAddress(t *testing.T) {
+	ok := "tacacs server port49-host\n address ipv4 172.100.100.1\n key 0 <key>\n timeout 5\n"
+	if !l73IOSXERestored(ok) {
+		t.Error("the startup block was refused")
+	}
+	for _, bad := range []string{"", "tacacs server port49-host\n key 0 <key>\n", "tacacs server l73-tls\n address ipv4 172.100.100.1\n",
+		"tacacs server port49-host\n address ipv4 172.100.100.2\n"} {
+		if l73IOSXERestored(bad) {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }
 
@@ -886,5 +972,23 @@ func TestL73XRdAsksTheSSHRateLimitHelpAndConfiguresNothing(t *testing.T) {
 	}
 	if !d.HelpOnly {
 		t.Error("the XRd row is help only")
+	}
+}
+
+// The `do show` typed right after the address line is kept, as the image
+// printed it, for the note; the rest of the configure screen is not.
+func TestL73DoShowScreensKeepsWhatTheImagePrintedAfterEachDoShow(t *testing.T) {
+	screen := "xe1(config)#tacacs server l73-tls\r\n" +
+		"xe1(config-server-tacacs)#address ipv4 172.100.100.1\r\n" +
+		"xe1(config-server-tacacs)#do show running-config | section tacacs\r\n" +
+		"tacacs server l73-tls\r\n address ipv4 172.100.100.1\r\n key 0 <key>\r\n" +
+		"xe1(config-server-tacacs)#tls port 300\r\n"
+	got := l73DoShowScreens(screen)
+	want := []string{"tacacs server l73-tls\n address ipv4 172.100.100.1\n key 0 <key>"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
+	}
+	if got := l73DoShowScreens("xe1(config)#exit\r\n"); len(got) != 0 {
+		t.Fatalf("%q", got)
 	}
 }

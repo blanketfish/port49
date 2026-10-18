@@ -281,15 +281,19 @@ func l73CiscoLines(family string, prev *l73DeviceTLS, d l73DeviceTLS, has map[st
 func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 	switch family {
 	case "iosxe":
+		// The L73 objects go first: 17.18.02 keeps one server object per address,
+		// so port49-host cannot take 172.100.100.1 back while l73-tls holds it.
 		out := []string{"aaa group server tacacs+ " + l73Group, "no server name " + l73XEServer}
 		if d.Second != "" {
 			out = append(out, "no server name "+l73XESecond)
 		}
-		out = append(out, "server name "+l73XEStart, "exit", "no tacacs server "+l73XEServer)
+		out = append(out, "exit", "no tacacs server "+l73XEServer)
 		if d.Second != "" {
 			out = append(out, "no tacacs server "+l73XESecond)
 		}
-		return out
+		// configs/iosxe-startup.cfg's port49-host block, as it holds it.
+		return append(out, "tacacs server "+l73XEStart, "address ipv4 "+l73Server, "key 0 "+labcreds.Key, "timeout 5", "exit",
+			"aaa group server tacacs+ "+l73Group, "server name "+l73XEStart, "exit")
 	case "nxos", "eos":
 		out := []string{"aaa group server tacacs+ " + l73Group, l73NoMember(family, d.Server, d.MemberPort, true)}
 		if d.Second != "" {
@@ -335,7 +339,9 @@ func l73CiscoRestoreAll(family string, has map[string]bool) []string {
 }
 
 func l73IOSXEServer(name, addr string, tls bool, port int, single, secret, serverTrust bool) []string {
-	out := []string{"tacacs server " + name, "address ipv4 " + addr}
+	// The `do show` reads back what the image kept of the address line, before
+	// the lines that fail when it dropped it.
+	out := []string{"tacacs server " + name, "address ipv4 " + addr, "do show running-config | section tacacs"}
 	switch {
 	case tls:
 		if port != 0 {
@@ -359,12 +365,16 @@ func l73IOSXEServer(name, addr string, tls bool, port int, single, secret, serve
 }
 
 func l73IOSXEApply(d l73DeviceTLS, has map[string]bool) []string {
-	out := l73IOSXEServer(l73XEServer, d.Server, true, d.Port, d.SingleConnection, d.Secret, has[l73HasTrustpointServer])
+	// port49-host leaves the group and goes, object and all, before the TLS server
+	// takes its address: 17.18.02 drops `address ipv4` on a second object that
+	// would share one (attempt 3: the tls lines then print %Invalid IP version 0).
+	out := []string{"aaa group server tacacs+ " + l73Group, "no server name " + l73XEStart, "exit", "no tacacs server " + l73XEStart}
+	out = append(out, l73IOSXEServer(l73XEServer, d.Server, true, d.Port, d.SingleConnection, d.Secret, has[l73HasTrustpointServer])...)
 	if d.Second != "" {
 		out = append(out, l73IOSXEServer(l73XESecond, d.Second, d.SecondTLS, d.SecondPort, false,
 			d.Secret || !d.SecondTLS, has[l73HasTrustpointServer])...)
 	}
-	out = append(out, "aaa group server tacacs+ "+l73Group, "no server name "+l73XEStart, "server name "+l73XEServer)
+	out = append(out, "aaa group server tacacs+ "+l73Group, "server name "+l73XEServer)
 	if d.Second != "" {
 		out = append(out, "server name "+l73XESecond)
 	}
@@ -678,14 +688,69 @@ func l73Expand(reply string, vals map[string]string) string {
 // l73RefusalMarks are how IOS XE's and NX-OS's parsers, and command
 // authorization, refuse a line (iosxeConfigure and nxosConfigure check the
 // same).
+// IOS XE 17.18.02 prints some refusals with no space after the %
+// ("%Invalid IP version 0 for the server address").
 var l73RefusalMarks = []string{"% Invalid", "% Incomplete", "% Unrecognized", "% Ambiguous", "% Error",
+	"%Invalid", "%Incomplete", "%Unrecognized", "%Ambiguous", "%Error",
 	"authorization failed", "Invalid command", "ERROR:"}
 
-// l73Refusal is the first line of out that refuses what was typed; "" when
-// none does.
-func l73Refusal(out string) string {
+// l73ExtraMarks are the refusals of one dialect alone. IOS XE 17.18.02 says
+// "Warning: Address not yet configured." on leaving a server object whose
+// `address ipv4` it silently dropped; a Warning is no refusal anywhere else.
+func l73ExtraMarks(family string) []string {
+	if family == "iosxe" {
+		return []string{"Warning: Address not yet configured"}
+	}
+	return nil
+}
+
+// l73DoShowScreens are the answers, in order, to each `do show running-config
+// | section tacacs` in a configure screen: the lines after the echo, up to
+// the next configuration prompt.
+func l73DoShowScreens(screen string) []string {
+	var out []string
+	var cur []string
+	in := false
+	for _, ln := range strings.Split(strings.ReplaceAll(screen, "\r", ""), "\n") {
+		if strings.Contains(ln, "(config") && strings.Contains(ln, ")#") {
+			if in {
+				out = append(out, strings.Join(cur, "\n"))
+			}
+			cur, in = nil, strings.Contains(ln, "#do show running-config | section tacacs")
+			continue
+		}
+		if in {
+			cur = append(cur, ln)
+		}
+	}
+	if in {
+		out = append(out, strings.Join(cur, "\n"))
+	}
+	return out
+}
+
+// l73IOSXERestored is whether show (`show running-config | section tacacs`)
+// holds port49-host again with its address, as the startup config does.
+func l73IOSXERestored(show string) bool {
+	in := false
+	for _, ln := range strings.Split(strings.ReplaceAll(show, "\r", ""), "\n") {
+		switch {
+		case strings.TrimSpace(ln) == "tacacs server "+l73XEStart && !strings.HasPrefix(ln, " "):
+			in = true
+		case !strings.HasPrefix(ln, " "):
+			in = false
+		case in && strings.TrimSpace(ln) == "address ipv4 "+l73Server:
+			return true
+		}
+	}
+	return false
+}
+
+// l73Refusal is the first line of out that refuses what was typed (by the
+// common marks or by extra, a dialect's); "" when none does.
+func l73Refusal(out string, extra ...string) string {
 	for _, ln := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
-		for _, m := range l73RefusalMarks {
+		for _, m := range append(extra[:len(extra):len(extra)], l73RefusalMarks...) {
 			if strings.Contains(ln, m) {
 				return strings.TrimSpace(ln)
 			}

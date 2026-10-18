@@ -171,6 +171,8 @@ func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 						object = true
 					} else if ln == "exit" {
 						object = false
+					} else if strings.HasPrefix(ln, "do ") {
+						// An exec read-back typed inside the object, not configuration.
 					} else if object {
 						typed = append(typed, ln)
 					}
