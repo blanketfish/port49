@@ -752,3 +752,30 @@ is `PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx go test -tags lab ./tests/la
 TestL71TLSClientSupport -v -timeout 3h`. It sends no TACACS+, so its capture is the masked CLI probe
 transcript (`evidence/L71-<platform>/probe.txt`), not a pcap. vJunosEvolved and vSRX 23.4 are not
 in the harness platform list and are not probed.
+
+## L74 and L75: three regions
+
+`make lab-regions` (`go test -tags lab ./tests/lab/ -run '^TestRegions$' -timeout 120m`) on the lab
+host. It builds three network namespaces, `p49r1..3`, each joined by a veth to the host bridge
+`p49rbr0` (10.149.0.1/24). Region i is 10.149.0.(10+i). `tc netem delay 20ms` sits on each
+region's side, so region to region is 40ms round trip and host to region 20ms. The cut is iptables
+in region 3's namespace dropping its traffic with the other two regions; the host still reaches it,
+so the harness keeps driving it. The directory etcd has one member per namespace; each region also
+runs a one-member session etcd on its own loopback, a port49-broker and a port49d. The TACACS+
+client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
+
+- **Needs:** `sudo -n` for `ip`, `tc`, `iptables` and `kill`; `PORT49_LAB_ETCD_BIN` naming a directory
+  with etcd and etcdctl v3.6.15; and L67's directory images. The run takes no lab lock.
+- **L75's brokers run on the host**, not in a namespace: directory membership needs the directory
+  (OpenLDAP, L67's containers), which the namespaces cannot reach.
+- **10.149.0.0/24 must be free** (`ip -4 route`).
+- **Stopping is by recorded PID.** Each member and process is started as
+  `sh -c 'echo $$ > <name>.pid; exec <argv>'` with its pidfile in the run's 0700 temporary
+  directory (`p49l74*`), so the PID is the program's. A stop signals the `sudo` parent; past 15s it
+  reads the pidfile, checks that `/proc/<pid>/cmdline` still holds the member's `--data-dir` or the
+  process's `--config` argument, and only then runs `sudo -n kill -KILL <pid>`. A mismatch is
+  logged and skipped. Nothing is ever ended by a `pkill` or `pgrep -f` pattern.
+- **Removing a left-over network** (a run killed hard skips its cleanup): `sudo ip netns del p49r1`
+  (and `p49r2`, `p49r3`), then `sudo ip link del p49rbr0`. A left-over etcd member or port49
+  process is ended by the PID in its `*.pid` file under `/tmp/p49l74*/`, after checking
+  `/proc/<pid>/cmdline` by hand: `sudo kill -KILL <pid>`.

@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -145,6 +145,11 @@ evidence:
 # Compose v2.24.4+; see tests/lab/README.md, "Directories".
 lab-directory:
 	go test -tags lab ./tests/lab/ -run 'TestL42|TestL43' -count=1 -v -timeout 30m
+
+# L74 and L75 (plan 11a): three simulated regions on this host; needs sudo -n,
+# PORT49_LAB_ETCD_BIN (etcd v3.6.15) and the L67 directory containers' images.
+lab-regions:
+	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
 
 # L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
 # the Windows Server DC. Needs Docker with Compose v2.24.4+, KVM, the cached
