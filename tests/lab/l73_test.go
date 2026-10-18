@@ -1730,19 +1730,28 @@ func (e *l73Env) cellH() {
 // addSecondAddress puts 172.100.100.2 on the clab bridge beside .1, as
 // prepareSplit does, and takes it off when the test ends.
 func (e *l73Env) addSecondAddress() {
-	if e.bridge {
-		return
-	}
 	dev, err := bridgeDevice()
 	if err != nil {
 		e.t.Fatalf("INVALID: %v", err)
 	}
-	del := func() { _ = exec.Command("sudo", "-n", "ip", "addr", "del", l73SecondServer+"/24", "dev", dev).Run() }
-	del()
-	// Registered before the add: every exit path, a Fatal, an INVALID or the
-	// STOP guard included, takes the address off again.
-	e.t.Cleanup(del)
-	if out, err := exec.Command("sudo", "-n", "ip", "addr", "add", l73SecondServer+"/24", "dev", dev).CombinedOutput(); err != nil {
+	shown, _ := exec.Command("ip", "-o", "-4", "addr", "show", "dev", dev).CombinedOutput()
+	if e.bridge && l73HasAddress(string(shown), l73SecondServer) {
+		return
+	}
+	if e.bridge {
+		// Cell i put it there and it is gone: cell j's daemon would fail to bind
+		// it. The cause is unmeasured; the run says so and puts it back.
+		e.t.Logf("lab: %s was missing from %s when the next cell needed it (addresses: %s); adding it again",
+			l73SecondServer, dev, strings.TrimSpace(string(shown)))
+	} else {
+		del := func() { _ = exec.Command("sudo", "-n", "ip", "addr", "del", l73SecondServer+"/24", "dev", dev).Run() }
+		del()
+		// Registered before the add: every exit path, a Fatal, an INVALID or the
+		// STOP guard included, takes the address off again.
+		e.t.Cleanup(del)
+	}
+	if out, err := exec.Command("sudo", "-n", "ip", "addr", "add", l73SecondServer+"/24", "dev", dev).CombinedOutput(); err != nil &&
+		!strings.Contains(string(out), "File exists") {
 		e.t.Fatalf("INVALID: adding %s to %s: %v\n%s", l73SecondServer, dev, err, out)
 	}
 	e.bridge = true

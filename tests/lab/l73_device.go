@@ -708,3 +708,13 @@ func l73HealthAddr(standing, listen string) string {
 	}
 	return standing
 }
+
+// l73HasAddress reports whether `ip -o -4 addr show` output lists addr.
+func l73HasAddress(shown, addr string) bool {
+	for _, f := range strings.Fields(shown) {
+		if strings.HasPrefix(f, addr+"/") {
+			return true
+		}
+	}
+	return false
+}

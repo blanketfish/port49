@@ -579,3 +579,13 @@ func TestL73HealthAddrFollowsTheMovedListener(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestL73HasAddressMatchesWholeAddresses(t *testing.T) {
+	shown := "7: br-x    inet 172.100.100.1/24 brd 172.100.100.255 scope global br-x\n"
+	if l73HasAddress(shown, "172.100.100.2") || !l73HasAddress(shown, "172.100.100.1") || l73HasAddress(shown, "172.100.100.") {
+		t.Fatal("matched a prefix or missed the address")
+	}
+	if !l73HasAddress(shown+"7: br-x    inet 172.100.100.2/24 scope global secondary br-x\n", "172.100.100.2") {
+		t.Fatal("missed the second address")
+	}
+}
