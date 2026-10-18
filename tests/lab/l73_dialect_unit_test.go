@@ -88,7 +88,7 @@ func TestL73NXOSLines(t *testing.T) {
 	got = l73CiscoLines("nxos", nil, l73DeviceTLS{Server: "172.100.100.1", Second: "172.100.100.2"}, nil)
 	for _, ln := range got {
 		if strings.Contains(ln, "ssl-profile") && ln != "tacacs-server tls ssl-profile l73-tls" {
-			t.Errorf("ssl-profile typed on %q: the image's host line takes none", ln)
+			t.Errorf("ssl-profile typed on %q: the image's host line takes none", maskKey(ln))
 		}
 	}
 	if !slices.Contains(l73CiscoRestoreAll("eos", nil), "no tacacs-server tls ssl-profile") {
@@ -710,8 +710,15 @@ func TestL73HelpBodyIsTheListWithoutEchoOrPrompt(t *testing.T) {
 // measured row with no token is still refused.
 func TestL73SecretsForAHelpOnlyRowNeedNoSeedToken(t *testing.T) {
 	got, err := l73SecretsFor(true, []string{"pem-body"}, nil)
-	if err != nil || !slices.Contains(got, labcreds.Key) || !slices.Contains(got, labcreds.BreakglassPassword) || !slices.Contains(got, "pem-body") {
-		t.Fatalf("help-only: %q %v", got, err)
+	// Names only: the list holds the lab key and the break-glass password.
+	var missing []string
+	for name, v := range map[string]string{"pem": "pem-body", "lab key": labcreds.Key, "break-glass password": labcreds.BreakglassPassword} {
+		if !slices.Contains(got, v) {
+			missing = append(missing, name)
+		}
+	}
+	if err != nil || len(missing) > 0 {
+		t.Fatalf("help-only: missing %v, %d entries, err %v", missing, len(got), err)
 	}
 	if _, err := l73SecretsFor(false, nil, nil); err == nil {
 		t.Fatal("a measured row with no minted token was accepted")

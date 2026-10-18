@@ -43,7 +43,7 @@ func TestL73JunosLinesTypeTheDocumentedStatements(t *testing.T) {
 		`set system tacplus-server 172.100.100.2 secret "labsecret"`,
 	} {
 		if !slices.Contains(got, line) {
-			t.Errorf("missing %q", line)
+			t.Errorf("missing %q", maskKey(line))
 		}
 	}
 	for _, line := range got {
@@ -51,7 +51,7 @@ func TestL73JunosLinesTypeTheDocumentedStatements(t *testing.T) {
 			t.Errorf("a plain second server carries tls: %q", line)
 		}
 		if strings.Contains(line, "172.100.100.1") && strings.Contains(line, "secret") {
-			t.Errorf("a tls server carries a secret it was not asked for: %q", line)
+			t.Errorf("a tls server carries a secret it was not asked for: %q", maskKey(line))
 		}
 	}
 }
@@ -67,7 +67,7 @@ func TestL73RestoreIsTheStartupConfigsServers(t *testing.T) {
 		`set system accounting destination tacplus server 172.100.100.1 secret "labsecret"`,
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("%q", got)
+		t.Fatalf("%q", maskKey(strings.Join(got, "\n")))
 	}
 }
 
