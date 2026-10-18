@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -599,4 +600,48 @@ func l73RefusedDir(out string) string {
 		return ""
 	}
 	return m[2][:strings.LastIndex(m[2], "/")]
+}
+
+// l73TrustDir is where the image looks for a TACACS+ tls trusted-ca-group
+// (attempt 9's refusal names /var/db/aaa_certs/tacplus_tls/<group>). By
+// analogy with Juniper's RADSEC page ("Configure RADIUS over TLS (RADSEC) for
+// System Authentication"), which says a trusted-ca-group is a folder of CA
+// certificates each named <openssl subject hash>.0; the TACACS+ page is silent.
+const l73TrustDir = "/var/db/aaa_certs/tacplus_tls"
+
+var l73HashName = regexp.MustCompile(`^[0-9a-f]{8}$`)
+
+// l73TrustFolderCmds makes the group's folder on the device and copies each
+// public CA certificate (source path on the device, openssl subject hash) into
+// it as <hash>.0. A source that is a key is refused: only certificates go.
+func l73TrustFolderCmds(group string, certs [][2]string) ([]string, error) {
+	dir := l73TrustDir + "/" + group
+	cmds := []string{"file make-directory " + dir}
+	for _, c := range certs {
+		src, hash := c[0], c[1]
+		if !l73HashName.MatchString(hash) {
+			return nil, fmt.Errorf("subject hash %q is not eight lowercase hex digits", hash)
+		}
+		if strings.HasSuffix(src, ".key") || strings.Contains(src, "key.pem") {
+			return nil, fmt.Errorf("%s is a key: only public certificates go into the trust folder", src)
+		}
+		cmds = append(cmds, "file copy "+src+" "+dir+"/"+hash+".0")
+	}
+	return cmds, nil
+}
+
+// l73SubjectHash is openssl's `x509 -noout -subject_hash` of a public
+// certificate: the name the trust folder's file takes.
+func l73SubjectHash(certPEM []byte) (string, error) {
+	cmd := exec.Command("openssl", "x509", "-noout", "-subject_hash")
+	cmd.Stdin = bytes.NewReader(certPEM)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", errors.New("openssl x509 -subject_hash failed")
+	}
+	h := strings.TrimSpace(string(out))
+	if !l73HashName.MatchString(h) {
+		return "", fmt.Errorf("openssl printed %q, not a subject hash", h)
+	}
+	return h, nil
 }

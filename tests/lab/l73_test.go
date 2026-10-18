@@ -1159,8 +1159,33 @@ func (e *l73Env) loadJunos() {
 				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
 			}
 		}
-		// The trust group goes in only now that the CA certificates are loaded.
+		// The image reads a trusted-ca-group from a folder of CA certificates named
+		// by their subject hash (l73TrustDir); make it and copy the two public
+		// certificates, already on the device, into it.
 		e.aaaListing(c, "aaa-before-group")
+		var hashed [][2]string
+		for src, pemBytes := range map[string][]byte{"/var/tmp/l73-inter.pem": e.pki.Inter.PEM(), "/var/tmp/l73-root.pem": e.pki.Root.PEM()} {
+			h, err := l73SubjectHash(pemBytes)
+			if err != nil {
+				return fmt.Errorf("INVALID: %v", err)
+			}
+			hashed = append(hashed, [2]string{src, h})
+		}
+		slices.SortFunc(hashed, func(a, b [2]string) int { return strings.Compare(a[0], b[0]) })
+		folder, err := l73TrustFolderCmds(l73TrustGroup, hashed)
+		if err != nil {
+			return fmt.Errorf("INVALID: %v", err)
+		}
+		for _, cmd := range folder {
+			out, err := junosShow(c, cmd)
+			low := strings.ToLower(out)
+			if err != nil || strings.Contains(low, "error") || strings.Contains(low, "denied") || strings.Contains(low, "cannot") || strings.Contains(low, "no such") {
+				e.invalidScreen("trust-folder", "$ "+cmd+"\n"+out)
+				return fmt.Errorf("INVALID: %q: %s\n%s", cmd, l73Err(err), l73ScrubLog(hideKeys(out)))
+			}
+		}
+		e.aaaListing(c, "aaa-after-folder")
+		// The trust group goes in only now that the CA certificates are loaded.
 		if out, err := junosConfigure(c, l73TrustGroupLines()...); err != nil {
 			return errors.New(hideKeys(err.Error() + " " + l73ScrubLog(out)))
 		}

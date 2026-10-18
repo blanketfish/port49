@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -493,5 +494,138 @@ func TestL73JunosDiagAsksEndAtTheirPosition(t *testing.T) {
 		if strings.HasPrefix(a, "set ") {
 			t.Errorf("%q is not operational", a)
 		}
+	}
+}
+
+func TestL73TrustFolderCmds(t *testing.T) {
+	got, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/l73-root.pem", "0a1b2c3d"}, {"/var/tmp/l73-inter.pem", "ffeeddcc"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"file make-directory /var/db/aaa_certs/tacplus_tls/l73-trust",
+		"file copy /var/tmp/l73-root.pem /var/db/aaa_certs/tacplus_tls/l73-trust/0a1b2c3d.0",
+		"file copy /var/tmp/l73-inter.pem /var/db/aaa_certs/tacplus_tls/l73-trust/ffeeddcc.0",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	for _, bad := range []string{"", "0A1B2C3D", "0a1b2c3", "0a1b2c3d4", "../../etc", "0a1b2c3z"} {
+		if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/x.pem", bad}}); err == nil {
+			t.Errorf("hash %q accepted", bad)
+		}
+	}
+	// A private key can never be a source.
+	if _, err := l73TrustFolderCmds("l73-trust", [][2]string{{"/var/tmp/l73-dev.key", "0a1b2c3d"}}); err == nil {
+		t.Error("a .key source accepted")
+	}
+}
+
+// The folder's file names are openssl's subject hash, which only the openssl
+// binary on the host can vouch for; the test runs where it is installed.
+func TestL73SubjectHashIsOpenSSLs(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("no openssl on this host")
+	}
+	pki, err := l73NewPKI("ecdsa", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := l73SubjectHash(pki.Root.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := l73SubjectHash(pki.Inter.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(a) || a == b {
+		t.Fatal(a, b)
+	}
+	if _, err := l73SubjectHash([]byte("not a certificate")); err == nil {
+		t.Fatal("garbage accepted")
+	}
+}
+
+func TestL73RefusedDir(t *testing.T) {
+	for in, want := range map[string]string{
+		"File path '/var/db/certs/common/trusted-ca-groups/l73-trust' doesn't exists.": "/var/db/certs/common/trusted-ca-groups",
+		"File path '/config/x/y' doesn't exist.":                                       "/config/x",
+		"File path '/tmp/x/y' doesn't exists.":                                         "",
+		"File path '/" + strings.Repeat("QUJDREVG", 6) + "' doesn't exists.":           "",
+		"nothing here": "",
+	} {
+		if got := l73RefusedDir(in); got != want {
+			t.Errorf("%q: %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestL73ScrubLogKeepsABareDirectoryPath(t *testing.T) {
+	in := "file list /var/db/aaa_certs/ recursive\n/var/db/aaa_certs/tacplus_tls:\nl73-trust\n/" + strings.Repeat("QUJDREVG", 6) + ":\n"
+	got := l73ScrubLog(in)
+	for _, want := range []string{"file list /var/db/aaa_certs/ recursive", "/var/db/aaa_certs/tacplus_tls:", "l73-trust"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, strings.Repeat("QUJDREVG", 6)) {
+		t.Fatal(got)
+	}
+}
+
+// The Junos trust group is committed after the CA certificates are loaded
+// and before any tacplus TLS line; earlier, the image wrote no group file and
+// refused the tls trusted-ca-group line.
+func TestL73TrustGroupComesAfterTheCALoads(t *testing.T) {
+	for _, ln := range l73PKILines() {
+		if strings.Contains(ln, "trusted-ca-group") {
+			t.Errorf("l73PKILines commits the trust group before the CA loads: %s", ln)
+		}
+	}
+	if g := strings.Join(l73TrustGroupLines(), "\n"); !strings.Contains(g, "set security pki trusted-ca-group "+l73TrustGroup+" ca-profiles "+l73RootProfile) {
+		t.Fatal(g)
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "l73_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loadJunos, test *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok {
+			switch fn.Name.Name {
+			case "loadJunos":
+				loadJunos = fn
+			case "TestL73":
+				test = fn
+			}
+		}
+	}
+	first := func(fn *ast.FuncDecl, name string) token.Pos {
+		var at token.Pos
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok && at == 0 {
+				switch f := c.Fun.(type) {
+				case *ast.Ident:
+					if f.Name == name {
+						at = c.Pos()
+					}
+				case *ast.SelectorExpr:
+					if f.Sel.Name == name {
+						at = c.Pos()
+					}
+				}
+			}
+			return true
+		})
+		return at
+	}
+	load, group := first(loadJunos, "l73LoadCommands"), first(loadJunos, "l73TrustGroupLines")
+	if load == 0 || group == 0 || load > group {
+		t.Fatalf("loadJunos: CA loads at %v, trust group at %v", load, group)
+	}
+	enrol, cellA := first(test, "enrol"), first(test, "cellA")
+	if enrol == 0 || cellA == 0 || enrol > cellA {
+		t.Fatalf("TestL73: enrol (which loads the CAs and commits the group) must precede cellA (the first tacplus tls line)")
 	}
 }
