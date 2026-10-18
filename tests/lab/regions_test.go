@@ -241,11 +241,11 @@ func pidWrap(pidfile, envFile string, argv []string) []string {
 }
 
 // writeRegionEnv writes the run's two keys to a 0600 file in dir (the run's
-// 0700 directory) for pidWrap to source, and answers its path. The values are
-// hex, so the file needs no quoting.
+// 0700 directory) for pidWrap to source, and answers its path. Each value is
+// single-quoted, so the shell that sources the file takes it as data.
 func writeRegionEnv(dir, encKey, tacacsKey string) (string, error) {
 	path := filepath.Join(dir, "run.env")
-	return path, os.WriteFile(path, []byte("L74_ENC_KEY="+encKey+"\nL74_TACACS_KEY="+tacacsKey+"\n"), 0o600)
+	return path, os.WriteFile(path, []byte("L74_ENC_KEY="+shellQuote(encKey)+"\nL74_TACACS_KEY="+shellQuote(tacacsKey)+"\n"), 0o600)
 }
 
 // cmdlineHasArgs is whether a /proc cmdline (NUL-separated) holds want as

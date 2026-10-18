@@ -172,7 +172,7 @@ func TestRegionProcArgvHoldsNoKeyValue(t *testing.T) {
 		t.Fatalf("the env file is not a 0600 file: %v", err)
 	}
 	body, _ := os.ReadFile(envfile)
-	if !strings.Contains(string(body), "L74_ENC_KEY="+enc) || !strings.Contains(string(body), "L74_TACACS_KEY="+tac) {
+	if !strings.Contains(string(body), "L74_ENC_KEY="+shellQuote(enc)) || !strings.Contains(string(body), "L74_TACACS_KEY="+shellQuote(tac)) {
 		t.Fatal("the env file lacks a key")
 	}
 	for _, ns := range []string{"p49r1", ""} {
@@ -306,5 +306,28 @@ func TestKillRecordedChecksTheCmdline(t *testing.T) {
 		if why := killRecorded(proc, p, []string{"--data-dir", "/tmp/x/d1.etcd"}, kill); why == "" || len(killed) != 0 {
 			t.Fatalf("%s: why %q, killed %v", name, why, killed)
 		}
+	}
+}
+
+// A value the env file holds is data to the shell that sources it: a dollar
+// sign, a backtick, a quote or a semicolon is neither expanded nor run.
+func TestRegionEnvValuesAreShellInert(t *testing.T) {
+	dir := t.TempDir()
+	enc, tac := "a$HOME`id`'b", "x;touch "+filepath.Join(dir, "ran")+";y"
+	envfile, err := writeRegionEnv(dir, enc, tac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	a := pidWrap(filepath.Join(dir, "p.pid"), envfile, []string{"sh", "-c", `printf '%s|%s' "$L74_ENC_KEY" "$L74_TACACS_KEY" > "$0"`, out})
+	if err := exec.Command(a[0], a[1:]...).Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(out)
+	if string(got) != enc+"|"+tac {
+		t.Error("a key value did not reach the program as written")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ran")); err == nil {
+		t.Error("a key value was run as a command")
 	}
 }

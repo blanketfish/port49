@@ -148,7 +148,21 @@ func (w *regionWorld) mint(i int) string {
 // session logs alice in at region i with a fresh token and authorizes her
 // session, as a device does before her first command.
 func (w *regionWorld) session(i int) error {
-	st, _, err := w.client(i).login("alice", w.mint(i))
+	return w.sessionWith(i, w.mint(i))
+}
+
+// sessionTry is session, but a mint that fails is an error, not a Fatal.
+func (w *regionWorld) sessionTry(i int) error {
+	tok, err := regionMint(w.pki, regionIP(i)+":8443")
+	if err != nil {
+		return err
+	}
+	w.hold(tok)
+	return w.sessionWith(i, tok)
+}
+
+func (w *regionWorld) sessionWith(i int, token string) error {
+	st, _, err := w.client(i).login("alice", token)
 	if err != nil || st != "pass" {
 		return fmt.Errorf("region %d login: %s %v", i, st, err)
 	}
@@ -400,8 +414,14 @@ func TestRegions(t *testing.T) {
 	l74CellI(w, row)
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 	writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
-	if len(rows) == 0 {
-		t.Fatal("INVALID: the run produced no rows")
+	var disagree []string
+	for _, r := range rows {
+		if !r.Agrees {
+			disagree = append(disagree, r.ID)
+		}
+	}
+	if len(disagree) > 0 {
+		t.Fatalf("cells %v disagree with decision 51: the note records what was observed", disagree)
 	}
 }
 
@@ -577,6 +597,20 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", p, "--lift")
 	}
 
+	// Broker 3 has the lifts before the next cut: a session opens at region 3
+	// again (a mint refused for a mark not yet lifted is tried again), so (i)
+	// starts from a state it did not have to wait for.
+	opened := false
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		if w.sessionTry(3) == nil {
+			opened = true
+			break
+		}
+	}
+	if !opened {
+		w.t.Fatal("INVALID: region 3 would not open a session after the lifts")
+	}
+
 	// (f), second half: a second cut; with its snapshots deleted, a restarted
 	// port49d stays dark until the heal.
 	w.guard()
@@ -731,7 +765,10 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
 	took, perr := w.brokers[3].wait("are put back", 60*time.Second)
-	keys, _ := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--keys-only")
+	keys, kerr := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--keys-only")
+	if kerr != nil {
+		w.t.Fatalf("INVALID: reading the directory's marks after the heal: %v", kerr)
+	}
 	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
 	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
 		fmt.Sprintf("lift exit 0; compacted at revision %d; put-back line after %v: %s; alice's marks in the directory after: %d",
