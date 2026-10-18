@@ -992,3 +992,47 @@ func TestL73DoShowScreensKeepsWhatTheImagePrintedAfterEachDoShow(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func TestL73RetryReachesOnTheFirstThirdAndTimesOut(t *testing.T) {
+	var now time.Time
+	clock := func() time.Time { return now }
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d); now = now.Add(d) }
+	// The first attempt reaches: no wait.
+	n, err := l73Retry(func(int) (bool, int) { return true, 0 }, sleep, clock, 10*time.Second, 5*time.Minute)
+	if err != nil || n != 1 || len(slept) != 0 {
+		t.Fatalf("first: %d %v %v", n, err, slept)
+	}
+	// The third reaches, after two waits of 10s.
+	n, err = l73Retry(func(n int) (bool, int) { return n == 3, 0 }, sleep, clock, 10*time.Second, 5*time.Minute)
+	if err != nil || n != 3 || len(slept) != 2 || slept[0] != 10*time.Second {
+		t.Fatalf("third: %d %v %v", n, err, slept)
+	}
+	// Never: INVALID at the bound.
+	slept = nil
+	n, err = l73Retry(func(int) (bool, int) { return false, 0 }, sleep, clock, 10*time.Second, 5*time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "opened no connection") || n < 30 || n > 32 {
+		t.Fatalf("timeout: %d %v", n, err)
+	}
+	// With no bound (a dialect that does not retry) one unreached attempt ends it.
+	n, err = l73Retry(func(int) (bool, int) { return false, 0 }, sleep, clock, 10*time.Second, 0)
+	if err == nil || n != 1 {
+		t.Fatalf("no retry: %d %v", n, err)
+	}
+	// An unreached attempt that port49d recorded is a leak, not a retry.
+	n, err = l73Retry(func(int) (bool, int) { return false, 2 }, sleep, clock, 10*time.Second, 5*time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "leaked") || n != 1 {
+		t.Fatalf("leak: %d %v", n, err)
+	}
+}
+
+func TestL73IOSXERetriesUnreachedLogins(t *testing.T) {
+	if !l73Dialects["cisco_iosxe"].RetryUnreached {
+		t.Error("IOS XE does not retry an unreached login")
+	}
+	for name, d := range l73Dialects {
+		if d.Family != "iosxe" && d.RetryUnreached {
+			t.Errorf("%s retries", name)
+		}
+	}
+}

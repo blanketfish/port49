@@ -132,3 +132,32 @@ func TestL73XEFactIsKeptAtOnce(t *testing.T) {
 		t.Fatalf("%s", b)
 	}
 }
+
+// An unreached attempt is kept, retried 10s later on the same daemon, and the
+// attempt that reached is the one returned; the facts say how many it took.
+func TestL73UntilReachedKeepsEveryAttemptAndReturnsTheOneThatReached(t *testing.T) {
+	e := &l73Env{t: t, l: &lab{p: platform{name: "x"}}, d: l73Dialect{Family: "iosxe", RetryUnreached: true}}
+	var slept []time.Duration
+	e.sleep = func(d time.Duration) { slept = append(slept, d) }
+	e.lastDecline = time.Now().Add(-30 * time.Second)
+	var cells []string
+	got := e.untilReached("d-dns", func(cell string) l73Try {
+		cells = append(cells, cell)
+		if len(cells) < 3 {
+			return l73Try{}
+		}
+		return l73Try{Conns: []l73Conn{{Server: l73Server + ":300"}}, Start: time.Now()}
+	})
+	if len(got.Conns) != 1 || !slices.Equal(cells, []string{"d-dns", "d-dns-try2", "d-dns-try3"}) || len(slept) != 2 {
+		t.Fatalf("cells %v slept %v got %v", cells, slept, got)
+	}
+	if len(e.facts) != 1 || !strings.Contains(e.facts[0], "attempt 3") || !strings.Contains(e.facts[0], "no port49d record") {
+		t.Fatalf("%q", e.facts)
+	}
+	// A cell that reaches at once adds nothing.
+	e.facts = nil
+	e.untilReached("c", func(string) l73Try { return l73Try{Conns: []l73Conn{{Server: l73Server + ":300"}}} })
+	if len(e.facts) != 0 {
+		t.Errorf("%q", e.facts)
+	}
+}

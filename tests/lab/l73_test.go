@@ -87,43 +87,45 @@ func l73Claim(vendor string) string {
 }
 
 type l73Env struct {
-	t          *testing.T
-	l          *lab
-	d          l73Dialect
-	opener     func(*lab) (*cliConn, error)
-	cfgScreens string               // the configure sessions' screens, for an INVALID's diagnosis
-	xeChecked  bool                 // IOS XE: the address read-back and the break-glass login are in the facts
-	xeLog      string               // those facts, kept in the INVALID directory as they are made
-	gaps       []string             // cell i: seconds from a row's last decline to the next row's first probe
-	probeAt    map[string]time.Time // when each ready() started its first probe
-	versionWhy string               // why the last token login's version was not read; "" when it was
-	x          map[string]bool      // the Want words the image's help listed
-	applied    *l73DeviceTLS        // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
-	dir        string               // 0700: configs, inventories, keys, state
-	home       string               // a port49 CLI's HOME, issued_key_store: file
-	evDir      string
-	capDir     string // git-ignored, outside writeEvidence's *.pcap glob
-	pki        *l73PKI
-	files      map[string]string
-	invTLS     string
-	invTCP     string
-	evidence   map[string][]byte // written only by note(), after the leak gate
-	secrets    []string
-	obs        []l73Obs
-	facts      []string
-	first      []l73Conn // cell a's connections: c and f read them
-	firstSpan  l73Span   // the control login in e.first, for h's comparison
-	port       int       // 0 when the device's default is 300
-	needSec    bool
-	tokenN     int
-	start      int64 // decision log offset when L73 began
-	csr        l73CSR
-	leaf       *x509.Certificate
-	l71Obs     string
-	touched    bool
-	bridge     bool
-	cfg        string // port49d's config now: the last daemon() call's, "" for the standing one
-	listen     string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
+	t           *testing.T
+	l           *lab
+	d           l73Dialect
+	opener      func(*lab) (*cliConn, error)
+	cfgScreens  string               // the configure sessions' screens, for an INVALID's diagnosis
+	xeChecked   bool                 // IOS XE: the address read-back and the break-glass login are in the facts
+	xeLog       string               // those facts, kept in the INVALID directory as they are made
+	lastDecline time.Time            // when the previous measured login group ended
+	sleep       func(time.Duration)  // time.Sleep unless a test sets it
+	gaps        []string             // cell i: seconds from a row's last decline to the next row's first probe
+	probeAt     map[string]time.Time // when each ready() started its first probe
+	versionWhy  string               // why the last token login's version was not read; "" when it was
+	x           map[string]bool      // the Want words the image's help listed
+	applied     *l73DeviceTLS        // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir         string               // 0700: configs, inventories, keys, state
+	home        string               // a port49 CLI's HOME, issued_key_store: file
+	evDir       string
+	capDir      string // git-ignored, outside writeEvidence's *.pcap glob
+	pki         *l73PKI
+	files       map[string]string
+	invTLS      string
+	invTCP      string
+	evidence    map[string][]byte // written only by note(), after the leak gate
+	secrets     []string
+	obs         []l73Obs
+	facts       []string
+	first       []l73Conn // cell a's connections: c and f read them
+	firstSpan   l73Span   // the control login in e.first, for h's comparison
+	port        int       // 0 when the device's default is 300
+	needSec     bool
+	tokenN      int
+	start       int64 // decision log offset when L73 began
+	csr         l73CSR
+	leaf        *x509.Certificate
+	l71Obs      string
+	touched     bool
+	bridge      bool
+	cfg         string // port49d's config now: the last daemon() call's, "" for the standing one
+	listen      string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
 }
 
 func TestL73(t *testing.T) {
@@ -632,14 +634,62 @@ func (e *l73Env) revive(cell string) {
 	e.ready(cell + "-revive")
 }
 
-// reached is INVALID unless the device opened a connection to port49 during
-// a refusal cell: a refusal it never reached measures nothing.
-func (e *l73Env) reached(cell string, conns []l73Conn) {
+// l73Try is one attempt at a cell's measured login(s): its capture's
+// connections, the decision log's offset before it and its start.
+type l73Try struct {
+	Conns []l73Conn
+	Off   int64
+	Start time.Time
+}
+
+// untilReached runs a cell's measured login(s) (run: one capture and the
+// logins in it, under the cell it is given) and, where the dialect retries,
+// again every 10s for at most 5 minutes while the capture holds no connection
+// to port49d. Nothing is changed between attempts: no daemon restart, no CLI,
+// no config. Every attempt's capture is kept (`<id>-try<N>`). An unreached
+// attempt that port49d recorded is INVALID: the measurement leaked. The
+// attempt that reached is returned; the facts say how many it took.
+func (e *l73Env) untilReached(id string, run func(cell string) l73Try) l73Try {
 	e.t.Helper()
-	if _, ok := l73FirstPort(conns, l73Server); !ok {
-		e.noConnectionLogs()
-		e.t.Fatalf("INVALID: %s: the device opened no connection to %s, so the cell measured nothing", cell, l73Server)
+	var got l73Try
+	var reached time.Time
+	max := time.Duration(0)
+	if e.d.RetryUnreached {
+		max = 5 * time.Minute
 	}
+	sleep := e.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	prev := e.lastDecline
+	attempts, err := l73Retry(func(n int) (bool, int) {
+		cell := id
+		if n > 1 {
+			cell = fmt.Sprintf("%s-try%d", id, n)
+		}
+		at := time.Now()
+		got = run(cell)
+		if _, ok := l73FirstPort(got.Conns, l73Server); ok {
+			reached = at
+			return true, 0
+		}
+		return false, len(e.l.recordsSince(got.Off))
+	}, sleep, time.Now, 10*time.Second, max)
+	if err != nil {
+		e.noConnectionLogs()
+		e.t.Fatalf("INVALID: %s: %v, so the cell measured nothing", id, err)
+	}
+	if attempts > 1 {
+		since := "n/a (no earlier login in this run)"
+		if !prev.IsZero() {
+			since = reached.Sub(prev).Round(time.Second).String()
+		}
+		e.xeFact(fmt.Sprintf("%s: the device opened no connection to port49d until attempt %d, %s after the previous measured login "+
+			"(the unreached attempts, 10s apart on the same port49d with nothing changed between them, produced no port49d record; "+
+			"IOS XE answered those logins locally while its servers were marked Dead)", id, attempts, since))
+	}
+	e.lastDecline = time.Now()
+	return got
 }
 
 // noConnectionLogs keeps what the device itself says (the dialect's INVALID
@@ -1719,11 +1769,17 @@ func (e *l73Env) cellC() {
 	e.settle()
 	e.revive("c")
 	e.daemon("c", l73Daemon{Intermediates: e.files["inter.pem"], ServerNames: []string{"tacacs.l73.example"}})
-	stop := e.capture("c")
-	off, start := e.l.mark(), time.Now()
-	user, ok, took, _, err := e.tokenLogin()
-	conns := stop()
-	e.reached("c", conns)
+	var user string
+	var ok bool
+	var took time.Duration
+	var err error
+	t := e.untilReached("c", func(cell string) l73Try {
+		stop := e.capture(cell)
+		off, start := e.l.mark(), time.Now()
+		user, ok, took, _, err = e.tokenLogin()
+		return l73Try{stop(), off, start}
+	})
+	conns, off, start := t.Conns, t.Off, t.Start
 	recs := e.l.recordsSince(off)
 	e.add("c", "the device unchanged (configured by address); port49d first with no server_names (cell a), then with server_names [tacacs.l73.example]",
 		fmt.Sprintf("%s; with server_names set: login as %s ok %v in %s (%s), sni_mismatch records %d, %s; records: %s",
@@ -1786,11 +1842,17 @@ func (e *l73Env) cellD() {
 		e.writeServer(v.id, v.from, v.leaf)
 		e.revive(v.id)
 		e.daemon(v.id, l73Daemon{Intermediates: e.files["inter.pem"], Cert: e.files[v.id+".crt"], Key: e.files[v.id+".key"]})
-		stop := e.capture(v.id)
-		off, start := e.l.mark(), time.Now()
-		user, ok, took, _, err := e.tokenLogin()
-		conns := stop()
-		e.reached(v.id, conns)
+		var user string
+		var ok bool
+		var took time.Duration
+		var err error
+		t := e.untilReached(v.id, func(cell string) l73Try {
+			stop := e.capture(cell)
+			off, start := e.l.mark(), time.Now()
+			user, ok, took, _, err = e.tokenLogin()
+			return l73Try{stop(), off, start}
+		})
+		conns, off, start := t.Conns, t.Off, t.Start
 		recs := e.l.recordsSince(off)
 		alert, alerted := l73DeviceAlert(conns)
 		verdict := l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "handshake_failed", l73DeviceAborted) || alerted)
@@ -1856,11 +1918,17 @@ func (e *l73Env) cellE() {
 	// leaf verifies only if the device sends the intermediate itself.
 	e.revive("e")
 	e.daemon("e", l73Daemon{})
-	stop := e.capture("e")
-	off, start := e.l.mark(), time.Now()
-	user, ok, took, _, err := e.tokenLogin()
-	conns := stop()
-	e.reached("e", conns)
+	var user string
+	var ok bool
+	var took time.Duration
+	var err error
+	t := e.untilReached("e", func(cell string) l73Try {
+		stop := e.capture(cell)
+		off, start := e.l.mark(), time.Now()
+		user, ok, took, _, err = e.tokenLogin()
+		return l73Try{stop(), off, start}
+	})
+	conns, off, start := t.Conns, t.Off, t.Start
 	recs := e.l.recordsSince(off)
 	chain := "the device sends its chain (leaf and intermediate): the login verified with no intermediates_file"
 	switch l73Grade(ok, l73Redeemed(recs), l73RefusedFor(recs, "unknown_ca", l73UnknownAuthority)) {
@@ -1890,12 +1958,18 @@ func (e *l73Env) cellG() {
 	if !ok {
 		e.t.Fatal("INVALID: the resumed handshake series is not exported at daemon start")
 	}
-	stop := e.capture("g")
-	off, start := e.l.mark(), time.Now()
-	u1, ok1, _, _, err1 := e.tokenLogin()
-	time.Sleep(5 * time.Second)
-	u2, ok2, _, _, err2 := e.tokenLogin()
-	conns := stop()
+	var u1, u2 string
+	var ok1, ok2 bool
+	var err1, err2 error
+	t := e.untilReached("g", func(cell string) l73Try {
+		stop := e.capture(cell)
+		off, start := e.l.mark(), time.Now()
+		u1, ok1, _, _, err1 = e.tokenLogin()
+		time.Sleep(5 * time.Second)
+		u2, ok2, _, _, err2 = e.tokenLogin()
+		return l73Try{stop(), off, start}
+	})
+	conns, off, start := t.Conns, t.Off, t.Start
 	after, ok := e.metric(sel)
 	if !ok {
 		e.t.Fatal("INVALID: the resumed handshake series vanished after the logins")
@@ -2022,6 +2096,9 @@ func (e *l73Env) logBridge(when string) {
 // verdict needs a port49 record of the row's own reason; without one the row
 // says the cause is unproven and contradicts nothing.
 func (e *l73Env) cellI() {
+	e.facts = append(e.facts, "cells i and j configure l73-second beside l73-tls: in i it is TLS at 172.100.100.2:300, in j it is plain "+
+		"TACACS+ at 172.100.100.2:49. Nothing listens at 172.100.100.2:300, and in j only j2's port49d listens at .2:49, so the device's "+
+		"refusals of it and its Dead mark on it are expected, not port49 behaviour")
 	e.guard()
 	e.addSecondAddress()
 	e.logBridge("cell i start")
@@ -2049,29 +2126,33 @@ func (e *l73Env) cellI() {
 	docs := "yes: decision 50 rulings 5, 7 and 8 for the rows whose break-glass login landed (i-alert, i-accept, i-window); " +
 		"i-error is an observation only: spec §5.7 store_unavailable records from L4 that an authentication ERROR is final on Junos with tacplus alone"
 	contradicted := false
-	var lastDecline time.Time
 	for _, r := range refusals {
 		e.guard()
 		e.settle()
 		e.revive(r.id)
-		if !lastDecline.IsZero() {
-			e.gapFact(r.id, lastDecline, e.probeAt[r.id+"-revive"])
+		if !e.lastDecline.IsZero() {
+			e.gapFact(r.id, e.lastDecline, e.probeAt[r.id+"-revive"])
 		}
 		e.daemon(r.id, r.o)
-		stop := e.capture(r.id)
-		off, start := e.l.mark(), time.Now()
-		ok, took, err := e.breakglassLogin()
-		s := fmt.Sprintf("%s: break-glass login ok %v in %s (%s)", r.what, ok, took.Round(time.Millisecond), l73Err(err))
-		ok2 := true
-		if r.again {
-			var took2 time.Duration
-			var err2 error
-			ok2, took2, err2 = e.breakglassLogin()
-			s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
-		}
-		lastDecline = time.Now()
-		conns := stop()
-		e.reached(r.id, conns)
+		var s string
+		var ok, ok2 bool
+		t := e.untilReached(r.id, func(cell string) l73Try {
+			stop := e.capture(cell)
+			off, start := e.l.mark(), time.Now()
+			var took time.Duration
+			var err error
+			ok, took, err = e.breakglassLogin()
+			s = fmt.Sprintf("%s: break-glass login ok %v in %s (%s)", r.what, ok, took.Round(time.Millisecond), l73Err(err))
+			ok2 = true
+			if r.again {
+				var took2 time.Duration
+				var err2 error
+				ok2, took2, err2 = e.breakglassLogin()
+				s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
+			}
+			return l73Try{stop(), off, start}
+		})
+		conns, off, start := t.Conns, t.Off, t.Start
 		recs := e.l.recordsSince(off)
 		n := len(l73Where(recs, "tls_outcome", r.outcome)) + len(l73Where(recs, "diagnosis", r.outcome))
 		for _, rec := range recs {
@@ -2138,11 +2219,16 @@ func (e *l73Env) cellJ() {
 	e.settle()
 	e.revive("j1")
 	e.daemon("j1", l73Daemon{ClientCA: e.files["other.pem"]})
-	stop := e.capture("j1")
-	start := time.Now()
-	ok1, took1, err1 := e.breakglassLogin()
-	c1 := stop()
-	e.reached("j1", c1)
+	var ok1 bool
+	var took1 time.Duration
+	var err1 error
+	t1 := e.untilReached("j1", func(cell string) l73Try {
+		stop := e.capture(cell)
+		off, start := e.l.mark(), time.Now()
+		ok1, took1, err1 = e.breakglassLogin()
+		return l73Try{stop(), off, start}
+	})
+	c1, start := t1.Conns, t1.Start
 	plain1 := 0
 	for _, c := range c1 {
 		if l73PortOf(c.Server) == 49 {
@@ -2183,11 +2269,16 @@ func (e *l73Env) cellJ() {
 	e.revive("j2")
 	e.logBridge("cell j, j2's device ready")
 	e.daemon("j2", l73Daemon{ClientCA: e.files["other.pem"], Listen: net.JoinHostPort(l73SecondServer, "49")})
-	stop = e.capture("j2")
-	off, start2 := e.l.mark(), time.Now()
-	ok2, took2, err2 := e.breakglassLogin()
-	c2 := stop()
-	e.reached("j2", c2)
+	var ok2 bool
+	var took2 time.Duration
+	var err2 error
+	t2 := e.untilReached("j2", func(cell string) l73Try {
+		stop := e.capture(cell)
+		off, start2 := e.l.mark(), time.Now()
+		ok2, took2, err2 = e.breakglassLogin()
+		return l73Try{stop(), off, start2}
+	})
+	c2, off, start2 := t2.Conns, t2.Off, t2.Start
 	recs := e.l.recordsSince(off)
 	var headers int
 	for _, c := range c2 {

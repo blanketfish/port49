@@ -34,7 +34,12 @@ type l73Dialect struct {
 	// platform; 0 keeps the default.
 	HandshakeTimeout time.Duration
 	// LoginDial is the SSH dial deadline of a token login here; 0 is 45s.
-	LoginDial      time.Duration
+	LoginDial time.Duration
+	// RetryUnreached repeats a measured login whose capture holds no connection
+	// to port49d, every 10s for at most 5 minutes, on the cell's own daemon:
+	// IOS XE marks a server Dead after a reset or a decline and answers logins
+	// locally, without a packet, until its dead time runs out.
+	RetryUnreached bool
 	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
 	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
@@ -86,7 +91,7 @@ var l73IOSXEAsks = []l73Ask{
 }
 
 var l73IOSXEDialect = l73Dialect{
-	Family: "iosxe", Vendor: "IOS XE", Probe: "cisco_iosxe",
+	Family: "iosxe", Vendor: "IOS XE", Probe: "cisco_iosxe", RetryUnreached: true,
 	Enter: []string{"configure terminal", "tacacs server l71probe"}, Cleanup: []string{"exit", "no tacacs server l71probe", "end"},
 	CfgMark: "(config", Asks: l73IOSXEAsks,
 	VersionCmd: "show version | include Cisco IOS XE Software", VersionHas: "17.18", Attrs: `["priv-lvl=15"]`,
@@ -702,6 +707,29 @@ func l73ExtraMarks(family string) []string {
 		return []string{"Warning: Address not yet configured"}
 	}
 	return nil
+}
+
+// l73Retry runs attempt until it reaches a server, waiting `every` between
+// attempts for at most max by now's clock. An unreached attempt that port49d
+// recorded (stray records) is a leaked measurement, not a retry. max 0 is one
+// attempt.
+func l73Retry(attempt func(n int) (reached bool, stray int), sleep func(time.Duration), now func() time.Time,
+	every, max time.Duration) (attempts int, err error) {
+	start := now()
+	for {
+		attempts++
+		reached, stray := attempt(attempts)
+		switch {
+		case reached:
+			return attempts, nil
+		case stray > 0:
+			return attempts, fmt.Errorf("attempt %d reached no server yet port49d recorded %d record(s): the measurement leaked", attempts, stray)
+		case now().Sub(start) >= max:
+			return attempts, fmt.Errorf("the device opened no connection to %s in %d attempt(s) over %s", l73Server, attempts,
+				now().Sub(start).Round(time.Second))
+		}
+		sleep(every)
+	}
 }
 
 // l73DoShowScreens are the answers, in order, to each `do show running-config
