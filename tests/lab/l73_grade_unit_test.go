@@ -31,16 +31,18 @@ func TestL73HandshakeFailedNeedsTheRecord(t *testing.T) {
 	}
 }
 
-func TestL73LoginWindowsKeepLateConnectionsWithTheirLogin(t *testing.T) {
+func TestL73LoginWindowsGiveEveryLoginTheSameTail(t *testing.T) {
 	t0 := time.Unix(1_800_000_000, 0)
 	at := func(s float64, host string) l73Conn {
 		return l73Conn{Server: host + ":300", SYNAt: t0.Add(time.Duration(s * float64(time.Second)))}
 	}
-	conns := []l73Conn{at(-1, "h"), at(1, "h"), at(2.5, "h"), at(5, "h"), at(6, "h"), at(9, "h"), at(3, "x"), at(20, "h")}
-	w := l73LoginWindows(conns, "h", []time.Time{{}, t0, t0.Add(5 * time.Second)}, t0.Add(10*time.Second))
-	if len(w[0]) != 1 || len(w[1]) != 2 || len(w[2]) != 3 {
-		t.Fatalf("probe %d login1 %d login2 %d", len(w[0]), len(w[1]), len(w[2]))
+	// login 1 spans 1s-2s, login 2 spans 7s-8s; the tail is 5s.
+	spans := []l73Span{{t0.Add(time.Second), t0.Add(2 * time.Second)}, {t0.Add(7 * time.Second), t0.Add(8 * time.Second)}}
+	conns := []l73Conn{at(0.5, "h"), at(1, "h"), at(6.9, "h"), at(7, "h"), at(12.9, "h"), at(13.1, "h"), at(3, "x")}
+	w := l73LoginWindows(conns, "h", spans)
+	// 6.9s is 4.9s after login 1 returned and 12.9s is 4.9s after login 2: each
+	// keeps its own late connection; 7s and 13.1s fall outside the other tail.
+	if len(w[0]) != 2 || len(w[1]) != 2 || w[0][1].SYNAt != t0.Add(6900*time.Millisecond) || w[1][1].SYNAt != t0.Add(12900*time.Millisecond) {
+		t.Fatalf("login1 %+v login2 %+v", w[0], w[1])
 	}
-	// A login's accounting connection opening after tokenLogin returned is
-	// its own: the 2.5s one is login 1's, as a [start,end] window would lose.
 }

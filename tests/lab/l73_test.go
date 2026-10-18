@@ -86,35 +86,36 @@ func l73Claim(vendor string) string {
 }
 
 type l73Env struct {
-	t        *testing.T
-	l        *lab
-	d        l73Dialect
-	opener   func(*lab) (*cliConn, error)
-	x        map[string]bool // the Want words the image's help listed
-	applied  *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
-	dir      string          // 0700: configs, inventories, keys, state
-	home     string          // a port49 CLI's HOME, issued_key_store: file
-	evDir    string
-	capDir   string // git-ignored, outside writeEvidence's *.pcap glob
-	pki      *l73PKI
-	files    map[string]string
-	invTLS   string
-	invTCP   string
-	evidence map[string][]byte // written only by note(), after the leak gate
-	secrets  []string
-	obs      []l73Obs
-	facts    []string
-	first    []l73Conn // cell a's connections: c and f read them
-	port     int       // 0 when the device's default is 300
-	needSec  bool
-	tokenN   int
-	start    int64 // decision log offset when L73 began
-	csr      l73CSR
-	leaf     *x509.Certificate
-	l71Obs   string
-	touched  bool
-	bridge   bool
-	cfg      string // port49d's config now: the last daemon() call's, "" for the standing one
+	t         *testing.T
+	l         *lab
+	d         l73Dialect
+	opener    func(*lab) (*cliConn, error)
+	x         map[string]bool // the Want words the image's help listed
+	applied   *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir       string          // 0700: configs, inventories, keys, state
+	home      string          // a port49 CLI's HOME, issued_key_store: file
+	evDir     string
+	capDir    string // git-ignored, outside writeEvidence's *.pcap glob
+	pki       *l73PKI
+	files     map[string]string
+	invTLS    string
+	invTCP    string
+	evidence  map[string][]byte // written only by note(), after the leak gate
+	secrets   []string
+	obs       []l73Obs
+	facts     []string
+	first     []l73Conn // cell a's connections: c and f read them
+	firstSpan l73Span   // the control login in e.first, for h's comparison
+	port      int       // 0 when the device's default is 300
+	needSec   bool
+	tokenN    int
+	start     int64 // decision log offset when L73 began
+	csr       l73CSR
+	leaf      *x509.Certificate
+	l71Obs    string
+	touched   bool
+	bridge    bool
+	cfg       string // port49d's config now: the last daemon() call's, "" for the standing one
 }
 
 func TestL73(t *testing.T) {
@@ -1075,6 +1076,8 @@ func (e *l73Env) cellA() {
 	stop := e.capture("a")
 	off, start := e.l.mark(), time.Now()
 	user, ok, took, version, err := e.tokenLogin()
+	e.firstSpan = l73Span{start, time.Now()}
+	time.Sleep(l73SettleTail) // the same tail cell h gives each login
 	conns := stop()
 	recs := e.l.recordsSince(off)
 	port, opened := l73FirstPort(conns, l73Server)
@@ -1099,6 +1102,8 @@ func (e *l73Env) cellA() {
 		stop := e.capture("a-port300")
 		off, start = e.l.mark(), time.Now()
 		user, ok, took, version, err = e.tokenLogin()
+		e.firstSpan = l73Span{start, time.Now()}
+		time.Sleep(l73SettleTail)
 		conns = stop()
 		recs = e.l.recordsSince(off)
 		obs += fmt.Sprintf("; then with port 300 configured (every later cell): login as %s ok %v in %s (%s), %s", user, ok,
@@ -1326,8 +1331,8 @@ func (e *l73Env) cellG() {
 		caveat += "; a login failed, so the counts show no steady-state resumption"
 	}
 	e.add("g", "port49d with session_ticket_lifetime 10m (decision 50 ruling 11; off by default); two logins 5s apart",
-		fmt.Sprintf(caveat+"; logins %s ok %v (%s) and %s ok %v (%s); ClientHellos offering a ticket: %d, ServerHellos accepting one: %d, "+
-			"port49_tls_handshakes_total{outcome=\"resumed\"} +%v; %s; records: %s", u1, ok1, l73Err(err1), u2, ok2, l73Err(err2),
+		fmt.Sprintf("%s; logins %s ok %v (%s) and %s ok %v (%s); ClientHellos offering a ticket: %d, ServerHellos accepting one: %d, "+
+			"port49_tls_handshakes_total{outcome=\"resumed\"} +%v; %s; records: %s", caveat, u1, ok1, l73Err(err1), u2, ok2, l73Err(err2),
 			offered, selected, resumed, l73Describe(conns, start), e.quote(e.l.recordsSince(off))),
 		"n/a: decision 50 ruling 11 says how often devices resume is unmeasured until this cell")
 }
@@ -1347,28 +1352,29 @@ func (e *l73Env) cellH() {
 	off := e.l.mark()
 	s1 := time.Now()
 	u1, ok1, _, _, err1 := e.tokenLogin()
-	time.Sleep(5 * time.Second)
+	e1 := time.Now()
+	time.Sleep(l73SettleTail)
 	s2 := time.Now()
 	u2, ok2, _, _, err2 := e.tokenLogin()
+	e2 := time.Now()
+	time.Sleep(l73SettleTail) // login 2 gets the tail login 1 had
 	conns := stop()
-	// One window helper for h's logins and cell a's control: each login owns
-	// every connection from its start to the next login's (the last to the
-	// capture's stop), accounting connections included.
-	stopped := time.Now()
-	win := l73LoginWindows(conns, l73Server, []time.Time{{}, s1, s2}, stopped)
-	probeW, w1, w2 := win[0], win[1], win[2]
+	// One window helper for h's logins and cell a's control, one tail each:
+	// accounting connections opened after a login returned count with it.
+	win := l73LoginWindows(conns, l73Server, []l73Span{{s1, e1}, {s2, e2}})
+	w1, w2 := win[0], win[1]
 	held, probeHeld := 0, 0
 	for _, c := range w1 {
 		if c.End == "open" || c.EndAt.After(s2) {
 			held++
 		}
 	}
-	for _, c := range probeW {
+	for _, c := range l73Window(conns, l73Server, time.Time{}, s1.Add(-time.Nanosecond)) {
 		if c.End == "open" || c.EndAt.After(s1) {
 			probeHeld++ // the readiness probe's, still open at the first login
 		}
 	}
-	base := len(l73LoginWindows(e.first, l73Server, []time.Time{{}}, stopped)[0])
+	base := len(l73LoginWindows(e.first, l73Server, []l73Span{e.firstSpan})[0])
 	e.configure(e.base())
 	e.add("h", "`single-connection` on the TLS server; two logins 5s apart",
 		fmt.Sprintf("connections the readiness probe opened that were still open at the first login: %d; "+

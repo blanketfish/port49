@@ -563,25 +563,27 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 	return strings.Join(parts, "; ")
 }
 
-// l73LoginWindows splits conns to host by login: window i holds the
-// connections whose SYN falls in [starts[i], starts[i+1]), the last one up to
-// end. A login's later accounting connections count with it, and cell a's
-// control and cell h's logins are read through this one function, so their
-// counts are comparable.
-func l73LoginWindows(conns []l73Conn, host string, starts []time.Time, end time.Time) [][]l73Conn {
-	out := make([][]l73Conn, len(starts))
+// l73SettleTail is how long after a login returns its connections still
+// count with it (an accounting stop may open late), and how long cells a and h
+// let a capture run past their last login.
+const l73SettleTail = 5 * time.Second
+
+// l73Span is one login: when it began and when it returned.
+type l73Span struct{ Start, End time.Time }
+
+// l73LoginWindows gives each login the connections to host whose SYN falls in
+// [Start, End+l73SettleTail). Every window has the same tail, so cell a's
+// control and cell h's logins are counted alike. Logins must be at least
+// l73SettleTail apart or their windows overlap.
+func l73LoginWindows(conns []l73Conn, host string, spans []l73Span) [][]l73Conn {
+	out := make([][]l73Conn, len(spans))
 	for _, c := range conns {
 		if l73Host(c.Server) != host {
 			continue
 		}
-		for i := range starts {
-			to := end
-			if i+1 < len(starts) {
-				to = starts[i+1]
-			}
-			if !c.SYNAt.Before(starts[i]) && c.SYNAt.Before(to) {
+		for i, sp := range spans {
+			if !c.SYNAt.Before(sp.Start) && c.SYNAt.Before(sp.End.Add(l73SettleTail)) {
 				out[i] = append(out[i], c)
-				break
 			}
 		}
 	}
