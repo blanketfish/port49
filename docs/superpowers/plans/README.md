@@ -7185,6 +7185,12 @@ configuration sets:
 - `priv-lvl-authorization true` on the port49 server group (cell i);
 - `services [ cli ]` on every local role that a TACACS+ priv-lvl maps to (schema findings).
 
+Before plan 12 ships `exit-on-reject true`, measure one case L76 could not reach: port49 up but
+answering ERROR (its store unreachable, `store_unavailable`). L76's store is in memory, so cell (l)
+covered a deny, a wrong key and port49 stopped, but not this one. If SR Linux treats an ERROR as a
+reject, break-glass is locked out exactly when the store is down. That is the 3am case, so the
+reference config waits on the measurement.
+
 **Carried from plan 11** (decision 50):
 - The reference device AAA configuration for `transport: tls`, per platform, written from L73
   (closed 2026-10-18; every reading below is from `tests/lab/results/L73-<platform>.md`): port,
