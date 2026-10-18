@@ -209,6 +209,10 @@ func or(s, d string) string {
 type Options struct {
 	TLS            bool
 	ProgressNotify time.Duration
+	// ClusterToken, when set, is the member's initial cluster token: two
+	// members started with one are two clusters with one cluster id, as two
+	// default single-node etcds are.
+	ClusterToken string
 }
 
 // Server is one member of a test's own.
@@ -230,6 +234,9 @@ func Start(t testing.TB, o Options) *Server {
 	// id (plan 11a, R28): by default every solo member would share one.
 	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify,
 		token: fmt.Sprintf("port49-etcdtest-solo-%d-%d", os.Getpid(), soloSeq.Add(1))}
+	if o.ClusterToken != "" {
+		spec.token = o.ClusterToken
+	}
 	if o.TLS {
 		now := time.Now()
 		ca, err := testpki.NewCA("etcdtest CA", now.Add(-time.Hour), now.Add(24*time.Hour))

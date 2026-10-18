@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -503,7 +504,9 @@ func TestADirectoryUnderAKeyThisRegionLacksRefusesTheStart(t *testing.T) {
 	case err := <-errc:
 		if err == nil || !strings.Contains(err.Error(), "the directory store (etcd ") ||
 			!strings.Contains(err.Error(), "key-from-elsewhere") ||
-			!strings.Contains(err.Error(), "which this configuration does not hold") {
+			!strings.Contains(err.Error(), "which this configuration does not hold") ||
+			!strings.Contains(err.Error(), "set encryption.previous to \"key-from-elsewhere\"") ||
+			strings.HasPrefix(err.Error(), "port49-broker:") { // main adds it
 			t.Fatalf("%v", err)
 		}
 	case <-time.After(60 * time.Second):
@@ -524,6 +527,13 @@ func TestABrokerRecordsItsKeyWindowInTheDirectory(t *testing.T) {
 	if n := keysUnder(t, f.dsrv, "/port49/v1/meta/seal_keys"); n != 1 {
 		t.Fatalf("%d key window record(s) in the directory store, want 1", n)
 	}
+	resp, err := f.dsrv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/seal_keys")
+	var rec struct {
+		Current string `json:"current"`
+	}
+	if err != nil || len(resp.Kvs) != 1 || json.Unmarshal(resp.Kvs[0].Value, &rec) != nil || rec.Current == "" {
+		t.Fatalf("the record does not name this window's current key id: %v", err)
+	}
 }
 
 // R27: a running runner says, at its recheck, a directory now under a key
@@ -542,7 +552,10 @@ func TestARunnerSaysADirectoryKeyItLacks(t *testing.T) {
 		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
 		t.Fatal(err)
 	}
-	waitWithin(t, &out, "which this configuration does not hold", 10*time.Second)
+	waitWithin(t, &out, "this process keeps running", 10*time.Second)
+	if strings.Contains(out.String(), "port49-broker: port49-broker") {
+		t.Fatalf("a doubled prefix:\n%s", out.String())
+	}
 }
 
 // R28: stores.directory naming the session store's own cluster and prefix
@@ -564,5 +577,34 @@ func TestOneClusterNamedTwiceIsRefused(t *testing.T) {
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatal("port49-broker started with one keyspace named twice")
+	}
+}
+
+// A key window record that decodes with no key id is corrupt; the refusal
+// names the record and how to clear it (no port49 command does), and does
+// not tell the operator to add an empty key.
+func TestAKeyWindowRecordWithNoIdRefusesTheStartAndNamesItsRepair(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- runBroker(context.Background(), f.broker) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "key window record (/port49/v1/meta/seal_keys)") ||
+			!strings.Contains(err.Error(), "etcdctl del /port49/v1/meta/seal_keys") ||
+			strings.Contains(err.Error(), `add ""`) {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49-broker started against a corrupt key window record")
 	}
 }

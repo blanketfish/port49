@@ -2,6 +2,8 @@ package port49d
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -35,13 +37,19 @@ func checkDirectoryKeys(ctx context.Context, proc string, d *etcdstore.Store, re
 	if err != nil && !undecodable {
 		return fmt.Errorf("directory store: reading its key window: %w", err)
 	}
+	if ok && (last.Current == "" || crypt.LineKeyID(last.Current) == "?") {
+		return &storeFault{fmt.Errorf("crypt: the directory store's key window record (%s) names no key id this "+
+			"process can print: the record is corrupt; no port49 command repairs it: delete it as etcd's root "+
+			"(etcdctl del %s) and start port49-broker, which writes it again",
+			ref.recordKey(), ref.recordKey())}
+	}
 	held := keys.Current.ID == last.Current || keys.Previous != nil && keys.Previous.ID == last.Current
 	if ok && !held {
 		id := crypt.LineKeyID(last.Current)
-		return &storeFault{fmt.Errorf("%s: crypt: the directory store (%s) was last written by a process whose "+
+		return &storeFault{fmt.Errorf("crypt: the directory store (%s) was last written by a process whose "+
 			"current key is %q, which this configuration does not hold (%s); every region holds the same "+
-			"encryption keys (decision 51): add %q to encryption, then start again", proc, ref.where(), id,
-			keyWindow(keys), id)}
+			"encryption keys (decision 51): set encryption.previous to %q and start %s again",
+			ref.where(), id, keyWindow(keys), id, proc)}
 	}
 	if undecodable {
 		fmt.Fprintf(out, "%s: crypt: the directory store's key window is unreadable (meta/seal_keys does not "+
@@ -59,10 +67,16 @@ func checkDirectoryKeys(ctx context.Context, proc string, d *etcdstore.Store, re
 	return d.PutSealKeys(pctx, cur)
 }
 
-// checkTwoStores refuses a split whose two blocks reach one etcd cluster
-// with the same prefix, or one prefix holding the other (plan 11a, R28):
-// one keyspace named two ways (an IP and a DNS name), which the config's
-// text compare (R22) cannot see. It reads each cluster's id within bound.
+// checkTwoStores refuses a split whose two blocks are one keyspace named two
+// ways (an IP and a DNS name), which the config's text compare (R22) cannot
+// see (plan 11a, R28). It reads each cluster's id; ids that differ, or
+// prefixes that are neither equal nor one holding the other, end it. An id
+// is not proof of one cluster (etcd derives it from the peer URLs and the
+// token, so two default single-node clusters share one), so a match is
+// probed: the directory handle writes a random nonce on a short lease and
+// the session handle reads it; the split is refused only when it does. A
+// probe that cannot complete refuses the start, naming the handle and a
+// closed-set cause. The nonce is never logged.
 func checkTwoStores(ctx context.Context, cfg config.Config, sess, dir *etcdstore.Store, bound time.Duration) error {
 	cctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
@@ -78,6 +92,31 @@ func checkTwoStores(ctx context.Context, cfg config.Config, sess, dir *etcdstore
 	dp := strings.TrimSuffix(cfg.Stores.Directory.Etcd.Prefix, "/") + "/"
 	if a != b || !strings.HasPrefix(sp, dp) && !strings.HasPrefix(dp, sp) {
 		return nil
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return &storeFault{fmt.Errorf("stores: cannot make the keyspace probe: %w", err)}
+	}
+	nonce := hex.EncodeToString(raw)
+	key, err := dir.ProbePut(cctx, nonce)
+	if err != nil {
+		return &storeFault{fmt.Errorf("stores.directory and stores.session reach etcd clusters with one id (%x) "+
+			"and related prefixes, and the check that they are two keyspaces could not write its probe through "+
+			"the directory store (%s); not starting", a, outageCause(err))}
+	}
+	defer func() {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+		defer cancel()
+		dir.ProbeDelete(dctx, key)
+	}()
+	seen, err := sess.ProbeSees(cctx, key, nonce)
+	if err != nil {
+		return &storeFault{fmt.Errorf("stores.directory and stores.session reach etcd clusters with one id (%x) "+
+			"and related prefixes, and the check that they are two keyspaces could not read its probe through "+
+			"the session store (%s); not starting", a, outageCause(err))}
+	}
+	if !seen {
+		return nil // two clusters that share an id: two keyspaces
 	}
 	return &storeFault{fmt.Errorf("stores.directory (prefix %s) and stores.session (prefix %s) reach one etcd "+
 		"cluster (id %x), and one prefix holds the other: they are one keyspace named two ways; omit "+
@@ -108,7 +147,7 @@ func (r *runner) recheckDirectoryKeys(ctx context.Context) {
 		var f *storeFault
 		switch {
 		case errors.As(err, &f) && f.Error() != said:
-			fmt.Fprintf(stderr, "%v; this process keeps running, and password sign-in and pins sealed under that "+
+			fmt.Fprintf(stderr, "port49-broker: %v; this process keeps running, and password sign-in and pins sealed under that "+
 				"key fail here until it holds it\n", f)
 			said = f.Error()
 		case err == nil:

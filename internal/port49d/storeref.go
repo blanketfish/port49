@@ -59,6 +59,11 @@ func (r storeRef) where() string {
 	return "etcd " + strings.Join(r.cfg.Etcd.Endpoints, ", ") + ", prefix " + r.cfg.Etcd.Prefix
 }
 
+// recordKey is the absolute name of the store's meta/seal_keys record.
+func (r storeRef) recordKey() string {
+	return strings.TrimSuffix(r.cfg.Etcd.Prefix, "/") + "/v1/meta/seal_keys"
+}
+
 // dirHandle is the directory store's raw handle as a process holds it: the
 // session store's in a shared store, and absent until it first answers on a
 // port49d run that serves from the marks it holds (R19). As a

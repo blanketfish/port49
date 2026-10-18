@@ -300,6 +300,40 @@ func (s *Store) ClusterID(ctx context.Context) (uint64, error) {
 	return resp.Header.ClusterId, nil
 }
 
+// keyspaceProbeTTL is how long a probe key lives if its writer dies before
+// it deletes it, so nothing is left behind.
+const keyspaceProbeTTL = 60
+
+// ProbePut writes nonce under a reserved meta key of this store's prefix, on
+// a short lease, and returns the key's absolute name (plan 11a, R28). A
+// different store handle, on the same cluster, reads it with ProbeSees.
+func (s *Store) ProbePut(ctx context.Context, nonce string) (string, error) {
+	lease, err := s.ctx.Grant(ctx, keyspaceProbeTTL)
+	if err != nil {
+		return "", unavailable(err)
+	}
+	key := s.k.meta("keyspace_probe_" + nonce)
+	if _, err := s.ctxKV.Put(ctx, key, nonce, clientv3.WithLease(lease.ID)); err != nil {
+		return "", unavailable(err)
+	}
+	return key, nil
+}
+
+// ProbeSees reports whether key, an absolute name ProbePut returned,
+// holds nonce, read through this store's connection.
+func (s *Store) ProbeSees(ctx context.Context, key, nonce string) (bool, error) {
+	resp, err := s.ctxKV.Get(ctx, key)
+	if err != nil {
+		return false, unavailable(err)
+	}
+	return len(resp.Kvs) == 1 && string(resp.Kvs[0].Value) == nonce, nil
+}
+
+// ProbeDelete removes a probe key; best effort, its lease expires anyway.
+func (s *Store) ProbeDelete(ctx context.Context, key string) {
+	s.ctxKV.Delete(ctx, key)
+}
+
 // maxJudgedPolicy is the most of a policy file meta/judged carries: under
 // etcd's request limit (1.5 MiB by default) with room for the record.
 const maxJudgedPolicy = 1 << 20

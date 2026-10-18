@@ -72,6 +72,8 @@ func outageCause(err error) string {
 	switch {
 	case errors.Is(err, errNoDirectory):
 		return "not opened yet"
+	case errors.Is(err, store.ErrRefused):
+		return "refused"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	default:

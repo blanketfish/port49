@@ -683,8 +683,12 @@ func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
 // client of one cluster (plan 11a, R28).
 func TestClusterIDIsTheClusters(t *testing.T) {
 	s := onShared(t, func() time.Time { return t0 })
+	other := onShared(t, func() time.Time { return t0 })
 	id, err := s.ClusterID(context.Background())
 	if err != nil || id == 0 {
 		t.Fatalf("%x %v", id, err)
+	}
+	if again, err := other.ClusterID(context.Background()); err != nil || again != id {
+		t.Fatalf("a second client of the same cluster read %x %v, want %x", again, err, id)
 	}
 }
