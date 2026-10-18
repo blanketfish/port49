@@ -1022,23 +1022,10 @@ func l73NXOSImportOK(importScreen, show, node string) error {
 	return nil
 }
 
-// l73SubjectCN reports whether a screen has a "CN=<node>" whose value ends at
-// the end of the name (a comma, slash, space or the line's end): CN=nx1 is not
-// CN=nx10.
+// l73SubjectCN reports whether a screen has a "CN = <node>" (the image
+// prints spaces around the "="; other devices print none) whose value ends at
+// a carriage return, the end of the line, a comma or a slash (another RDN):
+// CN = nx1 is not CN = nx10.
 func l73SubjectCN(screen, node string) bool {
-	want := "CN=" + node
-	for _, ln := range strings.Split(screen, "\n") {
-		for i := 0; ; {
-			j := strings.Index(ln[i:], want)
-			if j < 0 {
-				break
-			}
-			end := i + j + len(want)
-			if end == len(ln) || strings.ContainsAny(ln[end:end+1], ",/ \t\r") {
-				return true
-			}
-			i = end
-		}
-	}
-	return false
+	return regexp.MustCompile(`(?m)CN[ \t]*=[ \t]*` + regexp.QuoteMeta(node) + `(?:[\r,/]|$)`).MatchString(screen)
 }

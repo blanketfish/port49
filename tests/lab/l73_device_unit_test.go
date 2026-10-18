@@ -819,7 +819,24 @@ func TestL73NXOSImportOKReadsTheCertificateBack(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if err := l73NXOSImportOK("ok", "subject=CN=nx1,O=lab\r\n", "nx1"); err != nil {
-		t.Errorf("a comma-ended CN: %v", err)
+	for name, show := range map[string]string{
+		"the image's own line":  "Trustpoint: l73-dev\r\ncertificate:\r\nsubject=CN = nx1\r\nissuer=CN = L73 Lab Device Intermediate\r\n",
+		"no spaces":             "subject=CN=nx1",
+		"a comma-ended CN":      "subject=CN=nx1,O=lab\r\n",
+		"another RDN before it": "subject=O = x, CN = nx1\r\n",
+		"a slash-ended CN":      "subject=/CN = nx1/O=x\n",
+	} {
+		if err := l73NXOSImportOK("ok", show, "nx1"); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, show := range map[string]string{
+		"a spaced longer CN": "subject=CN = nx10\r\n",
+		"a CN with a suffix": "subject=CN = nx1x\r\n",
+		"the CA-only screen": "CA certificate 0:\r\nsubject=CN = L73 Lab Device Intermediate\r\nissuer=CN = L73 Lab Root\r\n",
+	} {
+		if err := l73NXOSImportOK("ok", show, "nx1"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
