@@ -1,7 +1,7 @@
     type tacacs
     timeout 10
     health-check 30
-    oper-state down
+    oper-state up
     tacacs {
         priv-lvl-authorization true
         service-request {

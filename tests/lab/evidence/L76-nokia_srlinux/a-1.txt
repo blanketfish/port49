@@ -2,7 +2,7 @@ $ show system aaa authentication session
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |        Role         |
   <LONG>
-  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:50.648Z | p49-admin           |
-  | 12 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:50.971Z | p49-admin           |
-  | 17 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:38:54.463Z | p49-admin, p49-read |
+  | 10 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.033Z | p49-admin           |
+  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.346Z | p49-admin           |
+  | 16 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:55:01.568Z | p49-admin, p49-read |
   <LONG>

@@ -2,12 +2,12 @@ $ show system aaa authentication session
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |   Role    |
   <LONG>
-  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:50.648Z | p49-admin |
-  | 12 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:50.971Z | p49-admin |
-  | 19 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:55.992Z | p49-admin |
-  | 22 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:38:58.420Z | p49-admin |
-  | 25 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:39:00.854Z | p49-admin |
-  | 27 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:39:02.722Z | p49-admin |
-  | 28 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:39:04.766Z | p49-admin |
-  | 29 | alice05*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T18:39:05.664Z | p49-read  |
+  | 10 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.033Z | p49-admin |
+  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.346Z | p49-admin |
+  | 18 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:03.087Z | p49-admin |
+  | 21 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:05.235Z | p49-admin |
+  | 24 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:07.374Z | p49-admin |
+  | 26 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:08.984Z | p49-admin |
+  | 27 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:10.471Z | p49-admin |
+  | 28 | alice05*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T18:55:11.093Z | p49-read  |
   <LONG>
