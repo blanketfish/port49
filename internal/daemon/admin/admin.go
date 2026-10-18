@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rhwendt/port49/internal/config"
+
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
@@ -86,8 +88,9 @@ const ListWait = OpTimeout + answerMargin
 
 // StatusOpTimeout bounds a store_status: its reads run at once, each store's
 // Ping beside its member count, which is a member list and then a status
-// read, so it takes about two call_timeouts, and call_timeout is at most 5s.
-const StatusOpTimeout = 10 * time.Second
+// read, so it takes about two call_timeouts, and call_timeout is at most
+// config.MaxCallTimeout.
+const StatusOpTimeout = 2 * config.MaxCallTimeout
 
 // StatusWait is how long a store_status's connection is held open, and how
 // long `port49 store status` waits: the op's bound and the answer.

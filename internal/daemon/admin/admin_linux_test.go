@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/keyring"
 )
 
@@ -482,7 +483,7 @@ func TestStoreStatusStopsWhenTheCallerHangsUp(t *testing.T) {
 
 // The wait covers two sequential call_timeouts at their 5s maximum.
 func TestStatusWaitCoversTheLargestCallTimeout(t *testing.T) {
-	if StatusOpTimeout < 10*time.Second || StatusWait <= StatusOpTimeout {
+	if StatusOpTimeout != 2*config.MaxCallTimeout || StatusWait <= StatusOpTimeout {
 		t.Fatalf("StatusOpTimeout %v, StatusWait %v", StatusOpTimeout, StatusWait)
 	}
 }

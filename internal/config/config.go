@@ -333,6 +333,9 @@ type StoreConfig struct {
 	Etcd *EtcdConfig
 }
 
+// MaxCallTimeout is etcd.call_timeout's largest value.
+const MaxCallTimeout = 5 * time.Second
+
 // storeYAML mirrors the store block; checkStore resolves it.
 type storeYAML struct {
 	Backend        string        `yaml:"backend"`
@@ -2109,7 +2112,7 @@ func checkStoreShape(at string, s storeYAML, session bool) (StoreConfig, error) 
 		def      time.Duration
 		min, max time.Duration
 	}{
-		{at + ".etcd.call_timeout", &e.CallTimeout, 500 * time.Millisecond, 10 * time.Millisecond, 5 * time.Second},
+		{at + ".etcd.call_timeout", &e.CallTimeout, 500 * time.Millisecond, 10 * time.Millisecond, MaxCallTimeout},
 		{at + ".etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
 		{at + ".etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
 		{at + ".etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},

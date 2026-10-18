@@ -1,12 +1,17 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 
 	"github.com/rhwendt/port49/internal/daemon/admin"
 )
+
+// storeStatusWait is how long the command waits for the answer.
+var storeStatusWait = admin.StatusWait
 
 // storeCmd is `port49 store` (plan 11a): status asks a process's admin
 // socket what each of its stores is.
@@ -32,7 +37,13 @@ func storeStatusCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	resp, err := askAdmin(*socket, admin.Request{Op: "store_status"}, admin.StatusWait)
+	resp, err := askAdmin(*socket, admin.Request{Op: "store_status"}, storeStatusWait)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		fmt.Fprintf(stderr, "port49 store status: %s did not answer within %v (is the process wedged?)\n",
+			*socket, storeStatusWait)
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 store status:", err)
 		return 1

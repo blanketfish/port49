@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,5 +61,34 @@ func TestStoreStatusExitsByWhatItFound(t *testing.T) {
 	}
 	if code := run([]string{"store", "status", "--socket", filepath.Join(t.TempDir(), "none.sock")}, &out, &errb); code != 1 {
 		t.Fatalf("no socket exits %d, want 1", code)
+	}
+}
+
+// A process that accepts and never answers is named, with the wait, and the
+// command exits 1.
+func TestStoreStatusNamesAProcessThatDoesNotAnswer(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.sock")
+	ln, err := net.Listen("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+	e := storeStatusWait
+	t.Cleanup(func() { storeStatusWait = e })
+	storeStatusWait = 200 * time.Millisecond
+	var out, errb bytes.Buffer
+	code := run([]string{"store", "status", "--socket", p}, &out, &errb)
+	want := "port49 store status: " + p + " did not answer within 200ms (is the process wedged?)\n"
+	if code != 1 || errb.String() != want || out.Len() != 0 {
+		t.Fatalf("exit %d, out %q, err %q, want %q", code, out.String(), errb.String(), want)
 	}
 }
