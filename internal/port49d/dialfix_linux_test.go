@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -206,5 +207,39 @@ func TestProbeTLSIsIndependentOfEndpointOrder(t *testing.T) {
 		if err := probe(eps...); !errors.As(err, &fault) || errors.Is(err, store.ErrUnavailable) {
 			t.Errorf("%s: %v, want a storeFault", name, err)
 		}
+	}
+}
+
+// A member that completes the handshake and then refuses this certificate
+// (a TLS 1.3 server reads the client's certificate after the handshake, so
+// the refusal arrives on the first read) is a fault of that member too: the
+// start proceeds on a member that accepts it, and is a storeFault only
+// when none does (dial fix round 3 review, M2).
+func TestProbeTLSProceedsPastAMemberThatRefusesTheCertificate(t *testing.T) {
+	good := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	refuser := etcdtest.Start(t, etcdtest.Options{TLS: true}) // a CA of its own
+	tc := good.TLS(t, "port49-daemon")
+	// Trust both servers, so the refuser's handshake completes and only its
+	// refusal of good's client certificate is left to fail.
+	tc.RootCAs = x509.NewCertPool()
+	for _, s := range []*etcdtest.Server{good, refuser} {
+		pem, err := os.ReadFile(filepath.Join(s.Dir, "ca.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !tc.RootCAs.AppendCertsFromPEM(pem) {
+			t.Fatalf("no certificate in %s/ca.pem", s.Dir)
+		}
+	}
+	probe := func(eps ...string) error {
+		return probeTLS(context.Background(), "stores.directory.etcd", eps, tc, time.Second)
+	}
+	var fault *storeFault
+	err := probe(refuser.Endpoint)
+	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "refused this certificate") {
+		t.Fatalf("the refuser alone: %v, want its post-handshake refusal as a storeFault", err)
+	}
+	if err := probe(refuser.Endpoint, good.Endpoint); err != nil {
+		t.Fatalf("the refuser first: %v, want the start to proceed on the member that accepts", err)
 	}
 }
