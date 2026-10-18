@@ -161,3 +161,16 @@ func TestL73UntilReachedKeepsEveryAttemptAndReturnsTheOneThatReached(t *testing.
 		t.Errorf("%q", e.facts)
 	}
 }
+
+// A help screen echoes the typed line, so the note text built from it is gated
+// by the same secret check as l71-probe.txt (final review M5).
+func TestL73L71NoteTextIsGatedBySecrets(t *testing.T) {
+	secret := "seed-" + strings.Repeat("q7", 6)
+	obs := "**Has a client.** Typed `tacacs-server host 192.0.2.71 key " + secret + " ?`; the help lists:\n\n```\n tls\n```\n"
+	if !l73ObsLeaks(obs, []string{secret}) {
+		t.Fatal("a note text holding a run secret passed the leak check")
+	}
+	if l73ObsLeaks("**Has a client.** Typed `tacacs-server host 192.0.2.71 ?`; the help lists:\n\n tls\n", []string{secret}) {
+		t.Fatal("a clean note text was flagged")
+	}
+}

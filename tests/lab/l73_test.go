@@ -1341,6 +1341,9 @@ func (e *l73Env) writeL71() {
 	if hits := l72TranscriptLeaks(string(body)); len(hits) > 0 || len(labcreds.Contains(body, e.allSecrets())) > 0 {
 		e.t.Fatal("INVALID: the probe exchange carries a secret; nothing written")
 	}
+	if l73ObsLeaks(e.l71Obs, e.allSecrets()) {
+		e.t.Fatal("INVALID: the L71 note text carries a secret; nothing written")
+	}
 	if err := os.MkdirAll(e.evDir, 0o755); err != nil {
 		e.t.Fatal(err)
 	}
@@ -1356,6 +1359,12 @@ func (e *l73Env) writeL71() {
 		"masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
 	e.l.result(e.t, "L71", l71ClaimFor(e.l.p.name), e.l71Obs)
 	e.l.captureNote = ""
+}
+
+// l73ObsLeaks reports whether the L71 addendum or note text holds a run secret
+// or transcript material: a help screen echoes the typed line.
+func l73ObsLeaks(obs string, secrets []string) bool {
+	return len(l72TranscriptLeaks(obs)) > 0 || len(labcreds.Contains([]byte(obs), secrets)) > 0
 }
 
 // allSecrets is every secret the run made or used: port49's key PEMs, every
