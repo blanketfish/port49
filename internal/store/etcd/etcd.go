@@ -24,6 +24,7 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -151,6 +152,7 @@ func dial(c Config) (*clientv3.Client, error) {
 		Logger:               zap.NewNop(),
 		DialKeepAliveTime:    5 * time.Second,
 		DialKeepAliveTimeout: 2 * time.Second,
+		DialOptions:          []grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads)},
 		// Not RejectOldCluster: its version check asks every endpoint under
 		// DialTimeout and fails New when any one is down, quorum or not. New
 		// then never waits, and Ping's WithRequireLeader says an outage.

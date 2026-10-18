@@ -1,12 +1,24 @@
 package port49d
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/store"
+	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // silentEndpoint is a host:port that accepts TCP and never speaks: a member
@@ -96,5 +108,71 @@ func TestABrokerWhoseOnlyDirectoryEndpointIsSilentServesTheSnapshot(t *testing.T
 	startBroker(t, f.broker, &out, 2)
 	if want := "port49-broker: directory store: not answering; serving from"; !strings.Contains(out.String(), want) {
 		t.Fatalf("no %q:\n%s", want, out.String())
+	}
+}
+
+// L74 (d), (g), (i): a directory member going dark with quorum intact does
+// not stop the directory answering. The running process's check, a read each
+// directoryCheckEvery within call_timeout, never fails, so the process never
+// says it is serving from the cache and refuses nothing.
+func TestAFreshnessCheckSurvivesOneDarkDirectoryMember(t *testing.T) {
+	c := etcdtest.StartCluster(t)
+	var proxies []*etcdtest.Proxy
+	var eps []string
+	for _, e := range c.Endpoints {
+		p := etcdtest.NewProxy(t, strings.TrimPrefix(e, "http://"))
+		proxies, eps = append(proxies, p), append(eps, "http://"+p.Addr())
+	}
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: eps, Prefix: etcdtest.Prefix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var h dirHandle
+	h.set(s)
+	every := directoryCheckEvery
+	t.Cleanup(func() { directoryCheckEvery = every })
+	directoryCheckEvery = 100 * time.Millisecond
+	var out syncBuffer
+	fresh := store.NewFreshness(time.Now)
+	fresh.FeedUp(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { keepFresh(ctx, &h, fresh, 500*time.Millisecond, &out, "port49-broker", false); close(done) }()
+	time.Sleep(time.Second)
+	proxies[2].Hang(true)
+	time.Sleep(12 * time.Second)
+	cancel()
+	<-done
+	if strings.Contains(out.String(), "not answering") {
+		t.Fatalf("one dark member of three stopped the directory answering:\n%s", out.String())
+	}
+	if ok, why := fresh.Reachable(); !ok {
+		t.Fatalf("the last check failed: %s", why)
+	}
+}
+
+// A directory whose server this process's CA does not verify is a fault the
+// operator fixes, never an outage: attempt's TLS probe names it, because
+// Open no longer reports anything of the kind.
+func TestAWrongCAIsAStoreFaultNotAnOutage(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	now := time.Now()
+	other, err := testpki.NewCA("other", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := writeIdentity(t, other, "port49-broker", now.Add(-time.Hour), now.Add(time.Hour), 0o600)
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, other.PEM(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Role: config.RoleBroker}
+	ref := storeRef{at: "stores.directory", dir: true, cfg: config.StoreConfig{Backend: "etcd", Etcd: &config.EtcdConfig{
+		Endpoints: []string{srv.Endpoint}, CAFile: caFile, Prefix: "/port49/", Broker: &id, CallTimeout: 200 * time.Millisecond}}}
+	_, err = attempt(context.Background(), cfg, ref, metrics.New(prometheus.NewRegistry()), io.Discard)
+	var fault *storeFault
+	if !errors.As(err, &fault) || errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a server this CA does not verify: %v", err)
 	}
 }
