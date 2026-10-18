@@ -223,6 +223,10 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 		if !e.touched {
 			return
 		}
+		// The restore restarts port49d after its CLI. Cell j's cleanup has taken
+		// 172.100.100.2 off the bridge by now, so the last cell's config would not
+		// bind: the standing one is what the lab leaves behind anyway.
+		e.cfg, e.listen = "", ""
 		out, err := e.restore()
 		switch {
 		case err == nil:

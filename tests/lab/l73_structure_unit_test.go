@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -98,5 +99,27 @@ func TestL73SecondAddressCleanupPrecedesTheAdd(t *testing.T) {
 	}
 	if !users["cellI"] || !users["cellJ"] {
 		t.Fatalf("cells that call addSecondAddress: %v; want cellI and cellJ", users)
+	}
+}
+
+// The end-of-test restore opens the break-glass CLI and restarts port49d
+// afterwards. By then cell j's t.Cleanup has taken 172.100.100.2 off the
+// bridge (cleanups run last in, first out), so the restart must not use j2's
+// config, which binds it: the cEOS runs of 2026-10-18 passed every cell and
+// then failed the test on that restart.
+func TestL73RestoreForgetsTheCellsDaemonConfig(t *testing.T) {
+	src, err := os.ReadFile("l73_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, "t.Cleanup(func() {\n\t\tif !e.touched {")
+	if i < 0 {
+		t.Fatal("the restore cleanup moved")
+	}
+	body := s[i:]
+	reset, restore := strings.Index(body, `e.cfg, e.listen = "", ""`), strings.Index(body, "e.restore()")
+	if reset < 0 || restore < 0 || reset > restore {
+		t.Fatalf("the cleanup must clear e.cfg and e.listen (at %d) before e.restore() (at %d)", reset, restore)
 	}
 }
