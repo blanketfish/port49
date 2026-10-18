@@ -273,16 +273,20 @@ type Session struct {
 	// decision 15).
 	Port    string `json:"port"`
 	RemAddr string `json:"rem_addr"`
-	// Privilege is the priv_lvl of the authorization request's header: the
-	// level the device asked at.
+	// Privilege is, on an authorize_session or authorize_command record, the
+	// priv_lvl of the request's header: the level the device asked at. On
+	// other events it is what they say (a refresh's is the context's level, a
+	// redeem's the login START's).
 	Privilege uint8 `json:"privilege"`
 	// HeldPrivilege is the context's level when the request arrived, before
 	// any raise this request makes, on every authorize_session and
-	// authorize_command record whose context was read, denials included. It
+	// authorize_command record whose context was read and is this user's,
+	// denials included. It
 	// is the number privilege_exceeded turns on, so comparing it with
 	// Privilege shows what the device asked for against what port49 held.
 	// Recorded only. A pointer so 0 (a valid level) is present when held and
-	// the field is absent where there was no context, as on context_missing.
+	// the field is absent where no context was read or the one read is not this
+	// user's (context_missing, store_unavailable, username_mismatch).
 	HeldPrivilege *uint8 `json:"held_privilege,omitempty"`
 }
 

@@ -228,7 +228,8 @@ func isSession(cmd string, raw []string) bool {
 }
 
 // Vector is the command vector authorization and accounting agree on: the
-// command followed by its arguments, or nil for a session request (cmd == "").
+// command followed by its arguments, or nil when cmd is empty: a session request,
+// or a command-shaped request whose final cmd is empty (spec §5.2).
 func Vector(cmd string, cmdArgs []string) []string {
 	if cmd == "" {
 		return nil
@@ -329,7 +330,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	// Command authorization only (spec §5.2, §5.3). The level a session reply
 	// grants is policy's answer, and a device may ask for its session above
-	// the level its login START carried: SR Linux 26.7.2 does, and denying it
+	// the level its login START carried: SR Linux 26.7.2 was observed to (L76 run 2026-10-18, results note pending), and denying it
 	// here failed the whole login (L76 run 2026-10-18). The session permit
 	// raises ctx.privilege from policy's reply below, never from this field.
 	if !session && req.PrivLvl > c.PrivLvl {
@@ -346,13 +347,6 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		// value the NAS sent is already recorded in request.service and
 		// request.raw on this record.
 		return h.deny(rec, decision.ServiceUnsupported, "port49: service not authorized by port49")
-	}
-
-	// A request that is not a session shape (spec §5.2) and names no command
-	// has nothing for command policy to match; fail closed rather than
-	// evaluate an empty command against `**`.
-	if !session && cmd == "" {
-		return h.deny(rec, decision.NoRuleMatched, "port49: malformed authorization request")
 	}
 
 	var d Decision

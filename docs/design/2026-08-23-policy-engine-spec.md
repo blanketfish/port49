@@ -1330,7 +1330,8 @@ record, beside the level port49 held when the request arrived, `session.held_pri
 `cmd=` and a bare `cmd`, each alone, qualify. Anything else is command authorization, so a
 command hidden behind an empty final `cmd` — `cmd=` with a `cmd-arg=reload`, or `cmd=reload`
 followed by `cmd=` — meets the privilege check of §5.3, and, naming no command, matches no rule
-and is denied `no_rule_matched`. The record's event is `authorize_command`.
+and is denied `no_rule_matched` by the same evaluation as any command, with its policy block, so
+`port49 replay` agrees. The record's event is `authorize_command`.
 
 ### 5.3 Command authorization (daemon)
 
@@ -2259,8 +2260,9 @@ never consulted for policy (§5.2).
 `session.privilege` on an `authorize_session` or `authorize_command` record is the `priv_lvl` of
 the request's header: the level the device asked at. `session.held_privilege` is the context's
 level when the request arrived, before any raise the request makes — the number `privilege_exceeded`
-turns on. It is on every such record whose context was read, denials included, and present when it
-is 0 (0 is a valid level); it is absent where no context was read, as on `context_missing`. Compare
+turns on. It is on every such record whose context was read and is the user's, denials included, and present when it
+is 0 (0 is a valid level); it is absent where no context was read or the one read is not this user's
+(`context_missing`, `store_unavailable`, `username_mismatch`). Compare
 the two to see what the device asked for against what port49 held, and so read a new platform's
 behavior off the log: which level it sends its session authorization at, and whether its commands
 follow the level a session reply granted. Both are recorded, never consulted: only a command

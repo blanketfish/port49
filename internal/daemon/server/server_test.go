@@ -269,7 +269,7 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 
 // TestPAPSessionAuthorizationAboveTheLoginLevel is the same round trip with the
 // session authorization at priv_lvl 15, above the login START's 1: SR Linux
-// 26.7.2 sends it there (L76 run 2026-10-18), and session authorization does
+// 26.7.2 was observed sending it there (L76 run 2026-10-18, results note pending), and session authorization does
 // not compare the request's level with the context's (spec §5.2).
 func TestPAPSessionAuthorizationAboveTheLoginLevel(t *testing.T) {
 	papLoginAuthorizeAccount(t, 15)
