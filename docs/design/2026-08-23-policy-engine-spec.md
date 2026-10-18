@@ -1314,10 +1314,11 @@ never share a log line.
 **Session authorization does not compare the request's level with `ctx.privilege`.** The
 privilege comparison is command authorization's (§5.3). The level a session authorization
 replies is policy's answer, and the request's level says nothing a session reply should be
-bounded by: a device may ask for its session above the level its login START carried. SR Linux
-26.7.2 was observed sending its session authorization (`service=shell`, `cmd*` empty) above
-its login START's 1, and a comparison here denied `privilege_exceeded` and failed the whole login (L76 run
-2026-10-18 (archived evidence; results note pending)). Every other check in §5.3's order —
+bounded by: a device may ask for its session above the level port49 held for it. SR Linux
+26.7.2 sends its session authorization (`service=shell`, `cmd*` empty) at `priv_lvl` 1 while
+port49 held 0 (`session.privilege` 1, `session.held_privilege` 0 on every such record), and a
+comparison here denied `privilege_exceeded` and failed the whole login (L76 run 2026-10-18;
+`tests/lab/results/L76-nokia_srlinux.md`, cell (b), which shows the corrected behavior). Every other check in §5.3's order —
 `context_missing`, `username_mismatch`, `credential_revoked`, `session_expired`,
 `context_stale` — and the `service_unsupported` check above still run on a session
 authorization. A permit raises `ctx.privilege` only from the level its reply grants, clamped to

@@ -301,6 +301,15 @@ forget re-run after a directory restore. It opens L74 and L75.
 26.2R1.7, C8000V 17.18.02, N9Kv 10.6(2)F and cEOS-lab 4.36.3M, all ten cells each; L71 addenda for
 those four, IOL-XE 17.18.02 (no client) and XRd 26.1.1 (lists `tls`); L73 closed (vJunos-switch
 skipped; SRX unmeasured; a full L73 row on XRd 26.1.1 goes to the qualification-suite plan).
+**L76 measured 2026-10-18** (`2026-10-17-l76-srlinux.md`; branch `test/l76-srlinux`): Nokia SR Linux
+26.7.2-519 over TACACS+, cells (a)-(j); L76 closed. Inputs to a `nokia_srlinux` adapter and plan 12's
+SR Linux reference config: priv-lvl maps to the local roles at or below it, and priv-lvl 1 gets
+`p49-read` only (h); `priv-lvl-authorization false` sends no authorization and shows an empty Role
+cell (i), so the reference config sets it true, and each local role must list `services [ cli ]` or
+the login is refused; a port49 deny falls through to local with `exit-on-reject` at its default, so
+the reference config sets it (d); accounting is per CLI command, start and stop, with no exec session
+records (c); after a port49 restart the device asked again within 1 s, and health checks open
+connections that carry no payload and write no records (g).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
