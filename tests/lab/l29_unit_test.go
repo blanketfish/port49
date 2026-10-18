@@ -64,8 +64,8 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 	if refused := base.AdmissionRefusals(); len(refused) != 0 {
 		t.Fatalf("the lab source under l29/policy.yaml refuses %d device(s): %+v", len(refused), refused)
 	}
-	if got := len(labLine.FindAllString(src, -1)); got != 15 {
-		t.Fatalf("labLine finds %d devices in the lab source, want the 5 lab devices and 10 dummies", got)
+	if got := len(labLine.FindAllString(src, -1)); got != 16 {
+		t.Fatalf("labLine finds %d devices in the lab source, want the 5 lab devices, L76's srl1 and 10 dummies", got)
 	}
 	for node, platform := range l29Nodes {
 		if got := labPlatformOf(src, node); got != platform {
@@ -83,7 +83,7 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 				t.Fatalf("%s: %v", what, err)
 			}
 			next := load(what, body, pol)
-			if n := strings.Count(body, "\n  - {name: "); phase == "removed" && n != 14 || phase != "removed" && n != 15 {
+			if n, all := strings.Count(body, "\n  - {name: "), strings.Count(src, "\n  - {name: "); phase == "removed" && n != all-1 || phase != "removed" && n != all {
 				t.Fatalf("%s: %d devices", what, n)
 			}
 			if err := bundle.Check(base, next, 10); err != nil {

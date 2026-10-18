@@ -1,0 +1,2 @@
+$ tools system configuration generate-checkpoint name l76-k-first
+Error: No authorization to execute command: 'tools / system configuration generate-checkpoint name l76-k-first'

@@ -1,0 +1,11 @@
+name: port49-srlinux
+topology:
+  nodes:
+    srl1:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux:26.7.2-519
+      startup-config: ../configs/srlinux-startup.cli
+      mgmt-ipv4: 172.100.100.71
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

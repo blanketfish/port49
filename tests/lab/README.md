@@ -818,3 +818,30 @@ one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`; help cells 
   bytes. Beside it are the redacted decision log, the device's masked configuration and TLS log
   lines, and the help exchange.
 - **PKI.** `PORT49_L73_ALG=rsa` switches the lab PKI from ECDSA P-256 to RSA 2048.
+
+## L76: Nokia SR Linux over TACACS+
+
+`PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 90m`,
+from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only with `-run '^TestL76$'`: the
+`srlinux` row is opt-in, and with no `-run`, `TestL73` would deploy the node too.
+
+- **The image's terms.** The public SR Linux image is for learning, demo, test and CI use only. It is pulled
+  anonymously from ghcr.io: no `docker login`, no token, no employer account.
+- **The node.** `srl1` (172.100.100.71), `kind: nokia_srlinux`, image `ghcr.io/nokia/srlinux:26.7.2-519`
+  (digest `sha256:0096fe3e...b48be8`). It is a container, not a vrnetlab VM. The row is opt-in.
+- **Sources.** Every SR Linux command and statement the test uses is checked against Nokia's 26.7
+  documentation, containerlab's srl kind page, or the image's own YANG and `sr_cli --help`. The results
+  note's "Sources" section lists each one with its page (`l76Sources`).
+- **The config.** `configs/srlinux-startup.cli`, in containerlab's hierarchical `.cli` form, is applied
+  after SR Linux's default config. It follows Nokia's *Configuration Basics Guide 26.7*, "Securing access",
+  except where the image's YANG overrules it: the local server group must be named `local`, the
+  accounting event is `command`, and each local role must list `services [ cli ]` or no login on it succeeds. The file has no comments because containerlab's `.cli` comment syntax is
+  not documented. Its secret and break-glass password are `labcreds`' published values.
+- **Device commands.** The test reads and changes the device with `docker exec clab-port49-srlinux-srl1
+  sr_cli -d`, which runs as the container's root, outside TACACS+. Cells (i), (j) and (l) restore what they change, and cell (k) clears the checkpoint it tries to make. A run of the closed entry needs `PORT49_LAB_REMEASURE=L76`.
+- **Occupancy.** The test takes `/tmp/port49-lab.lock` (`labOccupyForRun`) and holds it through `TestMain`'s teardown.
+- **Evidence.** `evidence/L76-nokia_srlinux/` holds the masked running config, the model excerpts, each
+  login's outputs, the AAA log lines (filtered), and the redacted decision log. `evidence/L76-nokia_srlinux.pcap`
+  is the redacted capture (`make evidence`).
+- **An INVALID run** writes no note. It keeps the device's own view, filtered and leak-checked, in the
+  git-ignored `logs/L76-invalid-<stamp>/` (masked running config, AAA log tail, session table).

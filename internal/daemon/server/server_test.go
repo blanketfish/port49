@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -264,18 +265,19 @@ func dial(t *testing.T, addr string, key []byte) *client {
 // authorization arrives at the login START's priv_lvl 1 (tests/lab/results/
 // L1-arista_eos.md, L3-arista_eos.md).
 func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
-	papLoginAuthorizeAccount(t, 1)
+	papLoginAuthorizeAccount(t, 1, 1)
 }
 
 // TestPAPSessionAuthorizationAboveTheLoginLevel is the same round trip with the
-// session authorization at priv_lvl 15, above the login START's 1: SR Linux
-// 26.7.2 was observed sending it there (L76 run 2026-10-18, results note pending), and session authorization does
-// not compare the request's level with the context's (spec §5.2).
+// shape SR Linux 26.7.2 sends: the login START at priv_lvl 0 and the session
+// authorization at 1, above the 0 port49 holds (tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl).
+// Session authorization does not compare the request's level with the
+// context's (spec §5.2).
 func TestPAPSessionAuthorizationAboveTheLoginLevel(t *testing.T) {
-	papLoginAuthorizeAccount(t, 15)
+	papLoginAuthorizeAccount(t, 0, 1)
 }
 
-func papLoginAuthorizeAccount(t *testing.T, sessionLvl uint8) {
+func papLoginAuthorizeAccount(t *testing.T, startLvl, sessionLvl uint8) {
 	t.Helper()
 	log := &syncBuffer{}
 	st := memory.New(time.Now)
@@ -287,7 +289,7 @@ func papLoginAuthorizeAccount(t *testing.T, sessionLvl uint8) {
 	addr := ts.addr
 
 	c := dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: startLvl, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte("p49_e2e")}.Encode(), 0)
 	h, body := c.recv(t)
 	reply, err := wire.DecodeAuthenReply(body)
@@ -317,10 +319,11 @@ func papLoginAuthorizeAccount(t *testing.T, sessionLvl uint8) {
 		t.Fatalf("a command at the level port49 granted must be permitted: %+v", cr)
 	}
 	// session.held_privilege is the context's level on arrival: the login
-	// START's 1 on the session record whatever level it asked at, and the
+	// START's level on the session record whatever level it asked at, and the
 	// reply's 15 on the command record.
-	if !log.contains(`"held_privilege":1,`) && !log.contains(`"held_privilege":1}`) || !log.contains(`"held_privilege":15`) {
-		t.Fatalf("held_privilege 1 then 15 expected on the authorization records: %s", log.String())
+	held := fmt.Sprintf(`"held_privilege":%d`, startLvl)
+	if !log.contains(held+",") && !log.contains(held+"}") || !log.contains(`"held_privilege":15`) {
+		t.Fatalf("held_privilege %d then 15 expected on the authorization records: %s", startLvl, log.String())
 	}
 
 	ts.slotFree(t)
