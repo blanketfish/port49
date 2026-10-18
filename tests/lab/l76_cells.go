@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -233,142 +235,175 @@ func l76Squeeze(s string) string {
 
 // l76Session is one row of `show system aaa authentication session`
 // (SA#display-user-session-information). Current is the row's trailing
-// `*` on the user name.
+// `*` on the user name. Roles is the row's Role cell, plus the Role cells of
+// the continuation rows that follow it (an empty ID), comma-joined; Odd holds,
+// verbatim, any Role cell that is not a plain role name or a comma list of them.
 type l76Session struct {
 	ID, User, Service, Method, PrivLvl, TTY string
 	Current                                 bool
+	Roles, Odd                              string
+}
+
+// l76RoleName is one role in a Role cell.
+var l76RoleName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// l76TableCells splits a table row into its trimmed cells, without the empty
+// cells outside the outer bars. ok is false for a line with fewer than 8.
+func l76TableCells(ln string) (cells []string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(ln), "|")
+	if len(parts) < 8 {
+		return nil, false
+	}
+	for _, p := range parts[1 : len(parts)-1] {
+		cells = append(cells, strings.TrimSpace(p))
+	}
+	return cells, true
 }
 
 // l76Sessions reads the rows of the session table whose first cell is a
-// number. Header rows, borders and a wrapped login-time line are skipped.
+// number. Header rows, borders and a wrapped login-time line are skipped. A
+// row with an empty first cell that follows a session row adds its last
+// cell, the Role cell, to that session.
 func l76Sessions(out string) []l76Session {
 	var rows []l76Session
+	open := false // a session row has been read since the last header row
 	for _, ln := range strings.Split(out, "\n") {
-		cells := strings.Split(strings.TrimSpace(ln), "|")
-		if len(cells) < 8 {
+		cells, ok := l76TableCells(ln)
+		if !ok {
 			continue
 		}
-		c := make([]string, len(cells))
-		for i := range cells {
-			c[i] = strings.TrimSpace(cells[i])
-		}
+		c := append([]string{""}, cells...) // c[1] is the ID cell
 		id := c[1]
-		if id == "" || strings.Trim(id, "0123456789") != "" {
+		switch {
+		case id == "":
+			if open {
+				rows[len(rows)-1].addRole(c[len(c)-1])
+			}
+			continue
+		case strings.Trim(id, "0123456789") != "":
+			open = false // a header row: its continuation rows belong to no session
 			continue
 		}
+		open = true
 		user, cur := strings.CutSuffix(c[2], "*")
-		rows = append(rows, l76Session{ID: id, User: user, Service: c[3], Method: c[4], PrivLvl: c[5], TTY: c[6], Current: cur})
+		r := l76Session{ID: id, User: user, Service: c[3], Method: c[4], PrivLvl: c[5], TTY: c[6], Current: cur}
+		r.addRole(c[len(c)-1])
+		rows = append(rows, r)
 	}
 	return rows
 }
 
-// l76SessionHead opens one entry of YANG `list session` (srl_nokia-aaa.yang
-// 487) as `info from state system aaa authentication session` prints it.
-var l76SessionHead = regexp.MustCompile(`^\s*session\s+\S+\s*\{\s*$`)
-
-// l76BraceDelta is a line's opening braces less its closing ones, outside
-// double-quoted values: a brace in a quoted value is not block structure.
-// A quote does not span lines.
-func l76BraceDelta(ln string) int {
-	d, inQuote := 0, false
-	for i := 0; i < len(ln); i++ {
-		switch c := ln[i]; {
-		case inQuote && c == '\\':
-			i++
-		case c == '"':
-			inQuote = !inQuote
-		case inQuote:
-		case c == '{':
-			d++
-		case c == '}':
-			d--
-		}
+// addRole adds one Role cell to s.
+func (s *l76Session) addRole(cell string) {
+	if cell == "" {
+		return
 	}
-	return d
+	var names []string
+	for _, n := range strings.Split(cell, ",") {
+		n = strings.TrimSpace(n)
+		if !l76RoleName.MatchString(n) {
+			if s.Odd != "" {
+				s.Odd += " | "
+			}
+			s.Odd += cell
+			return
+		}
+		names = append(names, n)
+	}
+	if s.Roles != "" {
+		s.Roles += ","
+	}
+	s.Roles += strings.Join(names, ",")
 }
 
-// l76UserBlocks is the `session <id> { ... }` blocks of a session-state
-// read whose `username` leaf is exactly user. A block that never closes is
-// not read.
-func l76UserBlocks(text, user string) []string {
-	var blocks []string
-	lines := strings.Split(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		if !l76SessionHead.MatchString(lines[i]) {
+// l76SessionRoles is what a note says of user's roles: the Role cells of the
+// user's rows in the session table, or that the table has no row for them. A
+// cell that is not a plain role name or a comma list is quoted verbatim, never
+// guessed at.
+func l76SessionRoles(out, user string) string {
+	var roles []string
+	var odd []string
+	found := false
+	for _, s := range l76Sessions(out) {
+		if s.User != user {
 			continue
 		}
-		depth, j := 0, i
-		for ; j < len(lines); j++ {
-			depth += l76BraceDelta(lines[j])
-			if depth == 0 {
-				break
+		found = true
+		if s.Roles != "" {
+			roles = append(roles, strings.Split(s.Roles, ",")...)
+		}
+		if s.Odd != "" {
+			odd = append(odd, s.Odd)
+		}
+	}
+	if !found {
+		return "(no row for `" + user + "` in the session table)"
+	}
+	sort.Strings(roles)
+	roles = slices.Compact(roles)
+	text := fmt.Sprintf("%v", roles)
+	for _, o := range odd {
+		text += fmt.Sprintf(" and an unrecognised Role cell, verbatim: `%s`", o)
+	}
+	return text
+}
+
+// l76UserRows is the raw table text for user: the header rows, then each of
+// the user's rows with the continuation rows under it, exactly as the device
+// printed them. It is "" when the table has no row for user.
+func l76UserRows(out, user string) string {
+	var header, keep []string
+	seen, mine := false, false
+	for _, ln := range strings.Split(out, "\n") {
+		cells, ok := l76TableCells(ln)
+		if !ok {
+			if !seen && strings.HasPrefix(strings.TrimSpace(ln), "+") {
+				header = append(header, ln)
+			}
+			mine = false
+			continue
+		}
+		switch id := cells[0]; {
+		case id == "":
+			if mine {
+				keep = append(keep, ln)
+			} else if !seen {
+				header = append(header, ln)
+			}
+		case strings.Trim(id, "0123456789") != "":
+			if !seen {
+				header = append(header, ln)
+			}
+			mine = false
+		default:
+			seen = true
+			u, _ := strings.CutSuffix(cells[1], "*")
+			mine = u == user
+			if mine {
+				keep = append(keep, ln)
 			}
 		}
-		if j == len(lines) {
-			break
-		}
-		block := lines[i : j+1]
-		for _, ln := range block {
-			if f := strings.Fields(ln); len(f) == 2 && f[0] == "username" && f[1] == user {
-				blocks = append(blocks, strings.Join(block, "\n"))
-				break
-			}
-		}
-		i = j
 	}
-	return blocks
-}
-
-// l76UserSessions is l76UserBlocks joined, or "".
-func l76UserSessions(text, user string) string {
-	return strings.Join(l76UserBlocks(text, user), "\n")
-}
-
-// l76RolesIn is the lab's roles (p49-read, p49-admin) that user's sessions
-// hold (YANG `leaf-list role`, srl_nokia-aaa.yang 550), sorted. Only whole
-// tokens of the `role [ ... ]` leaf-list in the user's own blocks count:
-// another user's session, a longer role name or another leaf never does
-// (pre-flight I2).
-func l76RolesIn(text, user string) []string {
-	held := map[string]bool{}
-	for _, b := range l76UserBlocks(text, user) {
-		for _, r := range l76LeafList(b, "role") {
-			held[r] = true
-		}
+	if len(keep) == 0 {
+		return ""
 	}
-	var out []string
-	for _, r := range []string{"p49-admin", "p49-read"} {
-		if held[r] {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// l76RolesOf is what a note says of user's roles: the list, or that the
-// state read held no session block for user.
-func l76RolesOf(text, user string) string {
-	if l76UserSessions(text, user) == "" {
-		return "(no session block for `" + user + "` in the state read)"
-	}
-	return fmt.Sprintf("%v", l76RolesIn(text, user))
+	return strings.Join(append(header, keep...), "\n")
 }
 
 // The device reads (CM#configuration-datastores; the YANG rows of the cite
 // table for the state paths). Each is run as the container's root with
 // sr_cli -d, or in a token login.
 const (
-	l76ReadRunning      = "info from running system aaa"
-	l76ReadGroup        = "info from state system aaa server-group port49"
-	l76ReadSessions     = "show system aaa authentication session"
-	l76ReadSessionState = "info from state system aaa authentication session"
-	l76ReadVersion      = "info from state system information version"
+	l76ReadRunning  = "info from running system aaa"
+	l76ReadGroup    = "info from state system aaa server-group port49"
+	l76ReadSessions = "show system aaa authentication session"
+	l76ReadVersion  = "info from state system information version"
 )
 
-// l76Commands are what every token login runs: the session table
-// (SA#display-user-session-information), the session state with its roles,
+// l76Commands are what every token login runs: the session table with its
+// Role column (SA#display-user-session-information),
 // and the version.
-var l76Commands = []string{l76ReadSessions, l76ReadSessionState, l76ReadVersion}
+var l76Commands = []string{l76ReadSessions, l76ReadVersion}
 
 // The mid-run changes of cells (i) and (j), one flat `set /` line each
 // (CLAB#cli's flat form). The live test uses only these constants.
@@ -413,8 +448,6 @@ type l76Source struct{ what, cite string }
 // with an optional note in parentheses that holds no "; ".
 var l76Sources = []l76Source{
 	{l76ReadSessions, "SA#display-user-session-information"},
-	{l76ReadSessionState, "CM#configuration-datastores; YANG srl_nokia-aaa.yang:487 (list session); " +
-		"YANG srl_nokia-aaa.yang:550 (leaf-list role)"},
 	{l76ReadVersion, "CM#configuration-datastores; YANG srl_nokia-system-info.yang:108 (leaf version)"},
 	{l76ReadRunning, "CM#configuration-datastores"},
 	{l76ReadGroup, "CM#configuration-datastores; SA#configuring-aaa-server-group"},
@@ -803,4 +836,18 @@ func l76AttrProbeText(label, attrs, user string, loginErr error, recs []map[stri
 	return fmt.Sprintf("Probe (%s): port49 replied `%s`; `%s` %s. Nokia's SA#authorization-use-tacacsx-server "+
 		"says \"Unknown optional VSAs are discarded\": a login that is refused here contradicts it, one that "+
 		"succeeds confirms it.\n\n```\n%s\n```", label, attrs, user, outcome, l76Render(recs))
+}
+
+// l76ChdirNote is the note's observation of the home-directory line a token
+// login prints: SR Linux's sshd names a home directory the user does not
+// have. It is cosmetic. It is "" when no output carries the line.
+func l76ChdirNote(outs []string) string {
+	for _, o := range outs {
+		if strings.Contains(o, "Could not chdir to home directory") {
+			return "Observation: each token login prints `Could not chdir to home directory /home/<user>: No such " +
+				"file or directory` before its command output. The user has no home directory on the device; the " +
+				"line is cosmetic and the commands ran."
+		}
+	}
+	return ""
 }

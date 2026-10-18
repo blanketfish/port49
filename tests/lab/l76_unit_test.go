@@ -563,51 +563,6 @@ func TestL76LeafListReadsBothLayouts(t *testing.T) {
 	}
 }
 
-func TestL76RolesIn(t *testing.T) {
-	in := "session 31 {\n    username alice01\n    role [\n        p49-read\n        p49-admin\n    ]\n}\n"
-	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-admin,p49-read" {
-		t.Errorf("got %v", got)
-	}
-	if l76RolesIn("session 32 {\n    username carol\n    role [ network-admin ]\n}\n", "carol") != nil {
-		t.Error("a role that is not the lab's was read")
-	}
-}
-
-// The state read lists every session the device holds. Cell (d)'s
-// break-glass session (p49-admin) can still be there when (h) logs in at
-// priv-lvl 1; reading it would report a false privilege grant (pre-flight I2).
-func TestL76RolesInReadsOnlyTheUsersSession(t *testing.T) {
-	in := "system {\n    aaa {\n        authentication {\n" +
-		"            session 30 {\n                username breakglass\n                role [\n                    p49-admin\n                ]\n            }\n" +
-		"            session 31 {\n                username alice01\n                role [\n                    p49-read\n                ]\n            }\n" +
-		"        }\n    }\n}\n"
-	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-read" {
-		t.Errorf("alice01: %v, want [p49-read]", got)
-	}
-	if got := l76RolesIn(in, "breakglass"); strings.Join(got, ",") != "p49-admin" {
-		t.Errorf("breakglass: %v, want [p49-admin]", got)
-	}
-	own := l76UserSessions(in, "alice01")
-	if !strings.Contains(own, "session 31 {") || strings.Contains(own, "breakglass") || strings.Contains(own, "p49-admin") {
-		t.Errorf("alice01's blocks hold another session:\n%s", own)
-	}
-	if l76RolesIn(in, "bob") != nil || l76UserSessions(in, "bob") != "" {
-		t.Error("a user with no session read as one")
-	}
-	if got := l76RolesOf(in, "bob"); got != "(no session block for `bob` in the state read)" {
-		t.Errorf("l76RolesOf bob: %q", got)
-	}
-	if got := l76RolesOf(in, "alice01"); got != "[p49-read]" {
-		t.Errorf("l76RolesOf alice01: %q", got)
-	}
-	if l76RolesIn("session 41 {\n    username dave\n    role [ p49-read ]\n", "dave") != nil {
-		t.Error("an unterminated block was read")
-	}
-	if l76RolesIn("session 42 {\n    username alice011\n    role [ p49-read ]\n}\n", "alice01") != nil {
-		t.Error("another user whose name starts with the user's was read")
-	}
-}
-
 // Every command, set line and sr_cli form the run sends has a cite, and the
 // note prints each with its page (pre-flight I3: "cite the doc page in your
 // notes").
@@ -838,45 +793,6 @@ func TestL76ObservationHasEveryCellInOrder(t *testing.T) {
 	src := strings.Index(got, "### Sources\n\n")
 	if src <= last || !strings.Contains(got[src:], l76SourcesSection()) {
 		t.Error("the Sources section is missing or not after the cells")
-	}
-}
-
-// Only the exact tokens of the `role [ ... ]` leaf-list count: a role that
-// merely contains a lab role's name, or sits outside the leaf-list, is not it.
-func TestL76RolesInReadsWholeTokensOfTheRoleLeafList(t *testing.T) {
-	for _, in := range []string{
-		"session 1 {\n    username u\n    role [ p49-read-only ]\n}\n",
-		"session 1 {\n    username u\n    role [ x-p49-admin ]\n}\n",
-		"session 1 {\n    username u\n    description p49-admin\n    role [ network-admin ]\n}\n",
-	} {
-		if got := l76RolesIn(in, "u"); got != nil {
-			t.Errorf("%q read as %v", in, got)
-		}
-	}
-	two := "session 1 {\n    username u\n    role [ p49-read ]\n}\nsession 2 {\n    username u\n    role [\n p49-admin\n ]\n}\n"
-	if got := l76RolesIn(two, "u"); strings.Join(got, ",") != "p49-admin,p49-read" {
-		t.Errorf("two sessions of one user: %v", got)
-	}
-}
-
-// A brace inside a quoted value is not block structure. Counting it would
-// let alice01's block swallow carol's session and report p49-admin.
-func TestL76UserSessionsSkipsBracesInQuotedValues(t *testing.T) {
-	in := "session 31 {\n    username alice01\n    note \"a { b\"\n    role [ p49-read ]\n}\n" +
-		"session 32 {\n    username carol\n    note \"c } d\"\n    role [ p49-admin ]\n}\n" +
-		"session 33 {\n    username erin\n    note \"say \\\"{\\\" now\"\n    role [ p49-read ]\n}\n"
-	own := l76UserSessions(in, "alice01")
-	if strings.Contains(own, "carol") || strings.Contains(own, "p49-admin") || !strings.Contains(own, "session 31 {") {
-		t.Errorf("alice01's blocks:\n%s", own)
-	}
-	if got := l76RolesIn(in, "alice01"); strings.Join(got, ",") != "p49-read" {
-		t.Errorf("alice01: %v", got)
-	}
-	if got := l76RolesIn(in, "carol"); strings.Join(got, ",") != "p49-admin" {
-		t.Errorf("carol: %v", got)
-	}
-	if got := l76RolesIn(in, "erin"); strings.Join(got, ",") != "p49-read" {
-		t.Errorf("erin (an escaped quote and a brace): %v", got)
 	}
 }
 
@@ -1213,5 +1129,83 @@ func TestL76AttrProbeTextStatesTheOutcome(t *testing.T) {
 	ok := l76AttrProbeText("b1", `["priv-lvl=15","shell:roles*network-admin"]`, "alice02", nil, recs)
 	if !strings.Contains(ok, "**logged in**") || strings.Contains(ok, "**refused**") {
 		t.Errorf("accepted text: %s", ok)
+	}
+}
+
+// The role cell, three layouts. The first rows of each fixture are the
+// header, as the 26.7.2 report plugin prints it.
+const l76RoleHead = `+----+----------+---------+------+-----+-------+------+----------+---------------+
+| ID | User     | Service | Meth | TTY | Remote| Netw | Login    | Role          |
++====+==========+=========+======+=====+=======+======+==========+---------------+
+`
+
+func TestL76SessionRolesCommaSeparatedInOneCell(t *testing.T) {
+	out := l76RoleHead +
+		"| 31 | alice01  | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-admin, p49-read |\n" +
+		"| 32 | bob      | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-read      |\n"
+	if got := l76SessionRoles(out, "alice01"); got != "[p49-admin p49-read]" {
+		t.Errorf("alice01: %q", got)
+	}
+	if got := l76SessionRoles(out, "bob"); got != "[p49-read]" {
+		t.Errorf("bob: %q", got)
+	}
+	if got := l76SessionRoles(out, "carol"); got != "(no row for `carol` in the session table)" {
+		t.Errorf("carol: %q", got)
+	}
+}
+
+func TestL76SessionRolesContinuationRows(t *testing.T) {
+	out := l76RoleHead +
+		"| 31 | alice01  | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-admin     |\n" +
+		"|    |          |         |      |     |       |      | 13T10:5  | p49-read      |\n" +
+		"| 32 | bob      | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-read      |\n"
+	if got := l76SessionRoles(out, "alice01"); got != "[p49-admin p49-read]" {
+		t.Errorf("alice01: %q", got)
+	}
+	if got := l76SessionRoles(out, "bob"); got != "[p49-read]" {
+		t.Errorf("a continuation row leaked into the next user: %q", got)
+	}
+	// The header's own continuation row (empty ID) adds nothing to any user.
+	hdr := "| ID | User     | Service |\n|    | name     | Role    |\n"
+	if got := l76SessionRoles(hdr+out, "alice01"); got != "[p49-admin p49-read]" {
+		t.Errorf("header rows: %q", got)
+	}
+}
+
+func TestL76SessionRolesOtherShapeIsReportedVerbatim(t *testing.T) {
+	out := l76RoleHead +
+		"| 31 | alice01  | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-read [admin] |\n"
+	got := l76SessionRoles(out, "alice01")
+	if !strings.Contains(got, "unrecognised") || !strings.Contains(got, "`p49-read [admin]`") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestL76UserRowsKeepTheRawRowsAndTheirContinuations(t *testing.T) {
+	out := l76RoleHead +
+		"| 31 | alice01  | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-admin     |\n" +
+		"|    |          |         |      |     |       |      | 13T10:5  | p49-read      |\n" +
+		"| 32 | bob      | sshd    | port | ssh | 1.2.3 | mgmt | 2026-10- | p49-read      |\n"
+	got := l76UserRows(out, "alice01")
+	for _, want := range []string{"| ID | User", "| 31 | alice01", "p49-read      |"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "bob") {
+		t.Errorf("another user's row:\n%s", got)
+	}
+	if l76UserRows(out, "carol") != "" {
+		t.Error("rows for a user with none")
+	}
+}
+
+func TestL76ChdirNoteOnlyWhenTheLineIsThere(t *testing.T) {
+	if l76ChdirNote([]string{"a", "b"}) != "" {
+		t.Error("a note without the line")
+	}
+	got := l76ChdirNote([]string{"Could not chdir to home directory /home/alice01: No such file or directory\nrows"})
+	if !strings.Contains(got, "cosmetic") {
+		t.Errorf("got %q", got)
 	}
 }

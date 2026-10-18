@@ -398,24 +398,6 @@ func (e *l76Env) checkSchema() {
 		e.evidence["schema-server-group.txt"])
 }
 
-// checkSessionState is the schema check's arm for the session-state path
-// (pre-flight M2). It needs a logged-in user, so cell (a) calls it with its
-// own state read: the read must hold a `session` block whose `username` is
-// user (YANG `list session`, srl_nokia-aaa.yang 487). Otherwise a wrong path
-// or leaf name would read as "no roles" in cells (b), (h), (i) and (j), and
-// the run is INVALID.
-func (e *l76Env) checkSessionState(state, user string) {
-	e.t.Helper()
-	if !strings.Contains(state, "session ") {
-		e.invalid("`%s` returned no session block, so its path is not this image's:\n%s",
-			l76ReadSessionState, l76FilterLog(state))
-	}
-	if l76UserSessions(state, user) == "" {
-		e.invalid("`%s` has no session block with `username %s`, so the leaf is not this image's:\n%s",
-			l76ReadSessionState, user, l76FilterLog(state))
-	}
-}
-
 // (a) the control login. A port49 user that fails here makes the run
 // INVALID: nothing after it would be about TACACS+.
 func (e *l76Env) cellA() {
@@ -445,7 +427,6 @@ func (e *l76Env) cellA() {
 			"not run the exec command in sr_cli. The fix is a cited SR Linux pty opener, in a follow-up commit, "+
 			"with its prompt and paging command cited to the 26.7 CLI guide.\n%s", user, l76FilterLog(outs[0]))
 	}
-	e.checkSessionState(outs[1], user)
 	e.aUser, e.aOuts, e.aRecs = user, outs, recs
 
 	// Spec §8 says an unknown platform gets an alarm. This cell measures and
@@ -483,6 +464,9 @@ func (e *l76Env) cellA() {
 		user, took.Round(time.Millisecond), l76Str(red, "verdict"), l76Str(red, "reason"), l76Str(red, "auth", "method"),
 		s.ID, s.Service, s.Method, s.PrivLvl, s.TTY, l76FilterLog(outs[0]), l76Render(recs),
 		l76Str(red, "reason"), alarm, l76PlatformName, daemonLog)
+	if note := l76ChdirNote(outs); note != "" {
+		e.out["a"] += "\n\n" + note
+	}
 }
 
 // (b) the authorization (a)'s login sent, read from (a)'s records.
@@ -493,8 +477,8 @@ func (e *l76Env) cellB() {
 	}
 	reqs := authzRequests(e.aRecs)
 	// Only the user's own session blocks (pre-flight I2).
-	own := l76UserSessions(e.aOuts[1], e.aUser)
-	roles := l76RolesOf(e.aOuts[1], e.aUser)
+	own := l76UserRows(e.aOuts[0], e.aUser)
+	roles := l76SessionRoles(e.aOuts[0], e.aUser)
 	s := l76SessionOf(e.aOuts[0], e.aUser)
 	// What port49 sent is read from its records, never assumed from the config.
 	var reply []string
@@ -505,8 +489,8 @@ func (e *l76Env) cellB() {
 	}
 	e.out["b"] = fmt.Sprintf("%d authorization request(s) for `%s`: %d `authorize_session`, %d `authorize_command` "+
 		"(per-command). Services: %v. port49's reply attributes (from its record): %v. The session's roles "+
-		"(`info from state`, this user's session blocks only): %s; priv-lvl in the table: `%s`. `network-admin` %s "+
-		"in this user's session state.\n\n```\n%s\n```\n\nThis user's session state:\n\n```\n%s\n```",
+		"(the Role column of this user's rows in `show system aaa authentication session`): %s; priv-lvl in the table: `%s`. "+
+		"`network-admin` %s in this user's rows.\n\n```\n%s\n```\n\nThis user's rows in the session table, as the device printed them:\n\n```\n%s\n```",
 		len(reqs), e.aUser, l76Count(reqs, "authorize_session"), l76Count(reqs, "authorize_command"),
 		l76Services(reqs), reply, roles, s.PrivLvl, l76Appears(own, "network-admin"), l76Render(reqs),
 		l76FilterLog(own))
@@ -620,9 +604,9 @@ func (e *l76Env) cellH() {
 			user, oneLine(err.Error()), l76Render(recs))
 		return
 	}
-	if len(outs) < 2 {
+	if len(outs) < 1 {
 		e.out["h"] = fmt.Sprintf("With `priv-lvl=1` the login as `%s` returned %d output(s) for %d commands; "+
-			"the session state was not read.\n\n```\n%s\n```", user, len(outs), len(l76Commands), l76Render(recs))
+			"the session table was not read.\n\n```\n%s\n```", user, len(outs), len(l76Commands), l76Render(recs))
 		return
 	}
 	s := l76SessionOf(outs[0], user)
@@ -633,8 +617,8 @@ func (e *l76Env) cellH() {
 	// Only this user's session blocks: cell (d)'s break-glass session
 	// (p49-admin) may still be listed (pre-flight I2).
 	e.out["h"] = fmt.Sprintf("With port49 replying `priv-lvl=1`, `%s` logged in with roles %s and priv-lvl `%s` "+
-		"in the session table.\n\n```\n%s\n```\n\nThis user's session state:\n\n```\n%s\n```",
-		user, l76RolesOf(outs[1], user), priv, l76Render(recs), l76FilterLog(l76UserSessions(outs[1], user)))
+		"in the session table.\n\n```\n%s\n```\n\nThis user's rows in the session table, as the device printed them:\n\n```\n%s\n```",
+		user, l76SessionRoles(outs[0], user), priv, l76Render(recs), l76FilterLog(l76UserRows(outs[0], user)))
 }
 
 // (i) priv-lvl-authorization false: the YANG default.
@@ -651,16 +635,16 @@ func (e *l76Env) cellI() {
 			user, oneLine(err.Error()), l76Render(recs))
 		return
 	}
-	if len(outs) < 2 {
+	if len(outs) < 1 {
 		e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false`, `%s` logged in and returned %d output(s) for "+
-			"%d commands; the session state was not read. Authorization requests: %d.\n\n```\n%s\n```",
+			"%d commands; the session table was not read. Authorization requests: %d.\n\n```\n%s\n```",
 			user, len(outs), len(l76Commands), len(authzRequests(recs)), l76Render(recs))
 		return
 	}
 	e.out["i"] = fmt.Sprintf("With `priv-lvl-authorization false`, `%s` logged in. Authorization requests: %d. "+
-		"Roles in this user's session state: %s (the lab's roles; anything else is in the state below).\n\n```\n%s\n```\n\n"+
-		"This user's session state:\n\n```\n%s\n```", user, len(authzRequests(recs)), l76RolesOf(outs[1], user),
-		l76Render(recs), l76FilterLog(l76UserSessions(outs[1], user)))
+		"Roles in the Role column of this user's rows: %s.\n\n```\n%s\n```\n\n"+
+		"This user's rows in the session table, as the device printed them:\n\n```\n%s\n```", user, len(authzRequests(recs)),
+		l76SessionRoles(outs[0], user), l76Render(recs), l76FilterLog(l76UserRows(outs[0], user)))
 }
 
 // (j) the Nokia role service request on top of priv-lvl authorization.
@@ -677,13 +661,16 @@ func (e *l76Env) cellJ() {
 		survived = "**failed** (" + oneLine(err.Error()) + ")"
 	}
 	reqs := authzRequests(recs)
-	roles := "(the session state was not read)"
-	if len(outs) > 1 {
-		roles = l76RolesOf(outs[1], user)
+	roles := "(the session table was not read)"
+	rows := ""
+	if len(outs) > 0 {
+		roles = l76SessionRoles(outs[0], user)
+		rows = "\n\nThis user's rows in the session table, as the device printed them:\n\n```\n" +
+			l76FilterLog(l76UserRows(outs[0], user)) + "\n```"
 	}
 	e.out["j"] = fmt.Sprintf("With `service-request nokia-srl-authorization-role true`, the login as `%s` %s. "+
-		"Authorization requests: %d, services %v. Roles: %s.\n\n```\n%s\n```",
-		user, survived, len(reqs), l76Services(reqs), roles, l76Render(recs))
+		"Authorization requests: %d, services %v. Roles: %s.\n\n```\n%s\n```%s",
+		user, survived, len(reqs), l76Services(reqs), roles, l76Render(recs), rows)
 }
 
 // (e) a wrong shared secret: port49d is restarted with a random key; the
