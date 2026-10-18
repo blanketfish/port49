@@ -704,3 +704,16 @@ func l76RunSection(retries []string, dir string) string {
 		"\n\nEvidence: `tests/lab/evidence/" + dir + "/` (device outputs, masked config, AAA log " +
 		"lines, the redacted decision log).\n"
 }
+
+// l76Restoring is the live test's restore flag, apart from l76Env so a unit
+// test can use it.
+type l76Restoring struct{ restoring bool }
+
+// restore runs f as a deferred restore: invalid returns, instead of stopping,
+// while f runs on an already-failing run, and stops the run again once f is
+// done. Every cell's defer goes through it.
+func (r *l76Restoring) restore(f func()) {
+	r.restoring = true
+	defer func() { r.restoring = false }()
+	f()
+}

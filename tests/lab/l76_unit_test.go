@@ -1065,19 +1065,18 @@ func TestL76RunSectionHasItsOwnHeading(t *testing.T) {
 	}
 }
 
-// invalid returns, instead of stopping, only while a deferred restore runs, so
-// every defer in a cell must set the flag first. A bare `defer e.set(...)` or
-// `defer e.restartStanding()` would make a failed restore stop the unwinding
-// or, worse, leave the flag off.
-func TestL76EveryDeferInACellSetsRestoring(t *testing.T) {
+// invalid returns, instead of stopping, only while a deferred restore runs
+// (restore sets and clears the flag), so every defer in a cell must go through
+// restore. A bare `defer e.set(...)` would let a failed restore stop the
+// unwinding. This scan is a tripwire beside the behavioral test below.
+func TestL76EveryDeferInACellGoesThroughRestore(t *testing.T) {
 	src, err := os.ReadFile("l76_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defers := 0
 	inCell := false
-	lines := strings.Split(string(src), "\n")
-	for i, line := range lines {
+	for _, line := range strings.Split(string(src), "\n") {
 		if strings.HasPrefix(line, "func ") {
 			inCell = strings.HasPrefix(line, "func (e *l76Env) cell")
 		}
@@ -1086,17 +1085,38 @@ func TestL76EveryDeferInACellSetsRestoring(t *testing.T) {
 			continue
 		}
 		defers++
-		// gofmt may break the closure over lines: join the defer with the
-		// next one, which must be the flag.
-		two := trim
-		if i+1 < len(lines) {
-			two += " " + strings.TrimSpace(lines[i+1])
-		}
-		if !strings.HasPrefix(two, "defer func() { e.restoring = true") {
-			t.Errorf("a cell's defer does not set e.restoring first: %s", two)
+		if !strings.HasPrefix(trim, "defer e.restore(") {
+			t.Errorf("a cell's defer does not go through e.restore: %s", trim)
 		}
 	}
 	if defers < 4 {
 		t.Errorf("found %d defers in cells, want at least 4 (h, i, j, e)", defers)
+	}
+}
+
+// restore raises the flag for f and clears it when f returns, so a later
+// INVALID (a leak gate, say) stops the run again.
+func TestL76RestoreClearsTheFlagWhenItReturns(t *testing.T) {
+	e := &l76Restoring{}
+	var inside, insideReturns bool
+	e.restore(func() {
+		inside = e.restoring
+		insideReturns = l76ReturnsFromInvalid(e.restoring, true)
+	})
+	if !inside || !insideReturns {
+		t.Errorf("inside restore: restoring=%v, invalid would return=%v; want both true", inside, insideReturns)
+	}
+	if e.restoring {
+		t.Error("restoring is still set after restore returned")
+	}
+	if l76ReturnsFromInvalid(e.restoring, true) {
+		t.Error("after restore, an INVALID on a failing run would return instead of stopping")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		e.restore(func() { panic("restore failed") })
+	}()
+	if e.restoring {
+		t.Error("restoring is still set after f panicked")
 	}
 }

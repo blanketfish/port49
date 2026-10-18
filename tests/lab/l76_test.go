@@ -85,9 +85,10 @@ type l76Env struct {
 	retries []string // try's retried dials, both attempts each (pre-flight M3)
 	dumped  bool     // dumpDevice has run
 
-	// restoring is set by a deferred restore, and by nothing else: it lets
-	// invalid log instead of stop while the run is already failing.
-	restoring bool
+	// l76Restoring's restoring flag is set by restore for the length of a
+	// deferred restore, and by nothing else: it lets invalid log instead of
+	// stop while the run is already failing.
+	l76Restoring
 }
 
 // guard is the STOP sentinel and the disk floor, before every cell.
@@ -286,6 +287,7 @@ func (e *l76Env) restart(cfg string) {
 	e.t.Helper()
 	if err := e.l.restart(cfg); err != nil {
 		e.invalid("restarting port49d on %s: %v", cfg, err)
+		return
 	}
 	if err := e.l.waitTACACSReady(3 * time.Minute); err != nil {
 		e.invalid("after restarting port49d: %v", err)
@@ -298,6 +300,7 @@ func (e *l76Env) restartStanding() {
 	cfg, err := e.l.configPath()
 	if err != nil {
 		e.invalid("the standing config: %v", err)
+		return
 	}
 	e.restart(cfg)
 }
@@ -585,7 +588,7 @@ func (e *l76Env) cellH() {
 	if err != nil {
 		e.invalid("cell h: %v", err)
 	}
-	defer func() { e.restoring = true; e.restartStanding() }()
+	defer e.restore(e.restartStanding)
 	e.restart(cfg)
 	user, outs, recs, err := e.tokenLogin("h")
 	if err != nil {
@@ -614,10 +617,9 @@ func (e *l76Env) cellH() {
 func (e *l76Env) cellI() {
 	e.guard()
 	const on = "priv-lvl-authorization true"
-	defer func() {
-		e.restoring = true
+	defer e.restore(func() {
 		e.set(l76PrivLvlAuthzOn, func(run string) bool { return strings.Contains(run, on) })
-	}()
+	})
 	e.set(l76PrivLvlAuthzOff, func(run string) bool { return !strings.Contains(run, on) })
 	user, outs, recs, err := e.tokenLogin("i")
 	if err != nil {
@@ -641,10 +643,9 @@ func (e *l76Env) cellI() {
 func (e *l76Env) cellJ() {
 	e.guard()
 	const on = "nokia-srl-authorization-role true"
-	defer func() {
-		e.restoring = true
+	defer e.restore(func() {
 		e.set(l76RoleServiceOff, func(run string) bool { return !strings.Contains(run, on) })
-	}()
+	})
 	e.set(l76RoleServiceOn, func(run string) bool { return strings.Contains(run, on) })
 	user, outs, recs, err := e.tokenLogin("j")
 	survived := "survived"
@@ -682,7 +683,7 @@ func (e *l76Env) cellE() {
 		e.invalid("cell e: %v", err)
 	}
 	e.t.Setenv(l76WrongKeyEnv, e.wrongKey)
-	defer func() { e.restoring = true; e.restartStanding() }()
+	defer e.restore(e.restartStanding)
 	if err := e.l.restart(path); err != nil {
 		e.invalid("cell e: restarting port49d on the wrong key: %v", err)
 	}
@@ -776,6 +777,7 @@ func (e *l76Env) cellG() {
 	}
 	if back == 0 {
 		e.invalid("cell g: the device never asked the restarted port49d in 5 minutes (%d probes)", probes)
+		return
 	}
 	user, _, recs, err := e.tokenLogin("g")
 	login := "logged in"
@@ -808,11 +810,13 @@ func (e *l76Env) note() {
 	for _, c := range l76Cells {
 		if e.out[c.id] == "" {
 			e.invalid("cell %s was not measured", c.id)
+			return
 		}
 	}
 	secrets, err := e.secrets()
 	if err != nil {
 		e.invalid("the run's seed tokens: %v", err)
+		return
 	}
 
 	var log strings.Builder
@@ -820,6 +824,7 @@ func (e *l76Env) note() {
 		b, err := json.Marshal(r)
 		if err != nil {
 			e.invalid("re-encoding a record: %v", err)
+			return
 		}
 		log.Write(l72RedactCredentialHash(b))
 		log.WriteByte('\n')
@@ -841,38 +846,47 @@ func (e *l76Env) note() {
 		body := e.evidence[n]
 		if leaks := l76Leaks(body, secrets); len(leaks) > 0 {
 			e.invalid("evidence %s holds %v", n, leaks)
+			return
 		}
 		if leaks := l72HashValueLeaks(body); len(leaks) > 0 {
 			e.invalid("evidence %s holds a hash value under %v", n, leaks)
+			return
 		}
 		if strings.HasSuffix(n, ".txt") {
 			if leaks := l72TranscriptLeaks(body); len(leaks) > 0 {
 				e.invalid("evidence %s carries %v", n, leaks)
+				return
 			}
 		}
 		if n != "decisions.jsonl" {
 			if w := labcreds.TokenShaped([]byte(body)); w != "" {
 				e.invalid("evidence %s holds a token-shaped string", n)
+				return
 			}
 		}
 	}
 	note := obs + l76Claim()
 	if leaks := l76Leaks(note, secrets); len(leaks) > 0 {
 		e.invalid("the note holds %v", leaks)
+		return
 	}
 	if leaks := l72HashValueLeaks(note); len(leaks) > 0 {
 		e.invalid("the note holds a hash value under %v", leaks)
+		return
 	}
 	if w := labcreds.TokenShaped([]byte(note)); w != "" {
 		e.invalid("the note holds a token-shaped string")
+		return
 	}
 	dir := filepath.Join(root, "tests", "lab", "evidence", "L76-"+e.l.p.name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		e.invalid("%v", err)
+		return
 	}
 	for _, n := range names {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(e.evidence[n]), 0o644); err != nil {
 			e.invalid("%v", err)
+			return
 		}
 	}
 	e.l.result(e.t, "L76", l76Claim(), obs)
