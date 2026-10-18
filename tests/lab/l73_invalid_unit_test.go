@@ -47,14 +47,16 @@ func TestJunosLineRefusal(t *testing.T) {
 		ln, out string
 		want    bool
 	}{
-		"clean set":         {ln, ln + "\r\nbreakglass@srx1# ", false},
-		"syntax error":      {ln, ln + "\r\n                  ^\r\nsyntax error.\r\nbreakglass@srx1# ", true},
-		"unknown command":   {ln, ln + "\r\nunknown command.\r\nbreakglass@srx1# ", true},
-		"error colon":       {ln, ln + "\r\nerror: bad\r\nbreakglass@srx1# ", true},
-		"missing argument":  {ln, ln + "\r\nmissing argument.\r\nbreakglass@srx1# ", true},
-		"set warning":       {ln, ln + "\r\nwarning: something odd\r\nbreakglass@srx1# ", true},
-		"delete not found":  {"delete system tacplus-server", "delete system tacplus-server\r\nwarning: statement not found\r\nbreakglass@srx1# ", false},
-		"delete real error": {"delete system tacplus-server", "delete system tacplus-server\r\nerror: bad\r\nbreakglass@srx1# ", true},
+		"clean set":                         {ln, ln + "\r\nbreakglass@srx1# ", false},
+		"clean set as the image answers it": {ln, ln + " \r\n\r\n[edit]\r\nbreakglass@srx1#  " + ln + " \r\n\r\n[edit]\r\nbreakglass@srx1# ", false},
+		"clean set at a level":              {ln, ln + "\r\n\r\n[edit system]\r\nbreakglass@srx1# ", false},
+		"syntax error":                      {ln, ln + "\r\n                  ^\r\nsyntax error.\r\nbreakglass@srx1# ", true},
+		"unknown command":                   {ln, ln + "\r\nunknown command.\r\nbreakglass@srx1# ", true},
+		"error colon":                       {ln, ln + "\r\nerror: bad\r\nbreakglass@srx1# ", true},
+		"missing argument":                  {ln, ln + "\r\nmissing argument.\r\nbreakglass@srx1# ", true},
+		"set warning":                       {ln, ln + "\r\nwarning: something odd\r\nbreakglass@srx1# ", true},
+		"delete not found":                  {"delete system tacplus-server", "delete system tacplus-server\r\nwarning: statement not found\r\nbreakglass@srx1# ", false},
+		"delete real error":                 {"delete system tacplus-server", "delete system tacplus-server\r\nerror: bad\r\nbreakglass@srx1# ", true},
 	} {
 		if got := junosLineRefusal(c.ln, c.out) != ""; got != c.want {
 			t.Errorf("%s: refusal %v want %v", name, got, c.want)

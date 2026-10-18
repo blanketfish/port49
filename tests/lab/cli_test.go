@@ -432,7 +432,9 @@ func junosLineRefusal(ln, out string) string {
 	rest := strings.ReplaceAll(out, ln, "")
 	for _, l := range strings.Split(strings.ReplaceAll(rest, "\r", ""), "\n") {
 		l = strings.TrimSpace(l)
-		if l != "" && !strings.HasSuffix(l, "# ") && !strings.HasSuffix(l, "#") {
+		// A taken set line leaves the echo, a blank line, "[edit]" (or
+		// "[edit <level>]") and the prompt with the line redisplayed.
+		if l != "" && !strings.HasPrefix(l, "[edit") && !strings.HasSuffix(l, "# ") && !strings.HasSuffix(l, "#") {
 			return "the device answered a set line: " + l
 		}
 	}
