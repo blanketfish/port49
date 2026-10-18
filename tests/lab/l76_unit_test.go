@@ -40,6 +40,9 @@ func TestL76CellsAreTheRegistersCells(t *testing.T) {
 		if at <= last {
 			t.Errorf("cell %s is out of order in the row", c.id)
 		}
+		if n := strings.Count(row, "("+c.id+") "+c.claim); n != 1 {
+			t.Errorf("cell %s's claim is in the row %d times, want once", c.id, n)
+		}
 		last = at
 	}
 	if !strings.HasPrefix(l76Claim(), "Nokia SR Linux") || !strings.Contains(l76Claim(), "(j) "+l76Cells[9].claim) {
@@ -101,6 +104,84 @@ func TestL76FilesAgree(t *testing.T) {
 	if got := l76LeafList(cli, "accounting-method"); strings.Join(got, " ") != "port49" {
 		t.Errorf("accounting-method is %v, want [port49]", got)
 	}
+
+	// Each statement sits in the block that owns it: the priv-lvl to role
+	// mapping is what cell (h) measures, so a swap must not pass.
+	path := func(names ...string) []string {
+		t.Helper()
+		lines := strings.Split(cli, "\n")
+		for _, n := range names {
+			var ok bool
+			if lines, ok = l76Child(lines, n); !ok {
+				t.Fatalf("%s has no block %q under %q", l76Config, n, names)
+			}
+		}
+		return lines
+	}
+	for _, c := range []struct {
+		where []string
+		own   string
+	}{
+		{[]string{"system", "aaa", "authorization", "role p49-read", "tacacs"}, "priv-lvl 1"},
+		{[]string{"system", "aaa", "authorization", "role p49-admin", "tacacs"}, "priv-lvl 15"},
+		{[]string{"system", "configuration", "role p49-read", "rule /"}, "action read"},
+		{[]string{"system", "configuration", "role p49-admin", "rule /"}, "action write"},
+		{[]string{"system", "aaa", "server-group port49", "tacacs"}, "priv-lvl-authorization true"},
+		{[]string{"system", "aaa", "server-group port49", "server 172.100.100.1", "tacacs"}, "port 49\nsecret-key " + labcreds.Key},
+	} {
+		if got := strings.Join(l76Own(path(c.where...)), "\n"); got != c.own {
+			t.Errorf("%s holds %q, want %q", strings.Join(c.where, " > "), got, c.own)
+		}
+	}
+	user := path("system", "aaa", "authentication", "user "+labcreds.BreakglassUser)
+	if got := strings.Join(l76Own(user), "\n"); !strings.HasPrefix(got, "password "+labcreds.BreakglassPassword+"\nrole [") {
+		t.Errorf("%s's own lines are not its password and its role list", labcreds.BreakglassUser)
+	}
+	if got := l76LeafList(strings.Join(user, "\n"), "role"); strings.Join(got, " ") != "p49-admin" {
+		t.Errorf("%s's roles are %v, want [p49-admin]", labcreds.BreakglassUser, got)
+	}
+}
+
+// l76Child returns the body of the first direct child block of lines whose
+// header line is `name {`, by brace depth.
+func l76Child(lines []string, name string) ([]string, bool) {
+	depth, start := 0, -1
+	for i, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if depth == 0 && start < 0 && ln == name+" {" {
+			start = i + 1
+		}
+		if strings.HasSuffix(ln, "{") {
+			depth++
+		}
+		if ln == "}" {
+			depth--
+			if start >= 0 && depth == 0 {
+				return lines[start:i], true
+			}
+		}
+	}
+	return nil, false
+}
+
+// l76Own returns the depth-0 lines of a block body: its leaf statements,
+// without the blocks nested in it and without bracket-list contents.
+func l76Own(body []string) []string {
+	var out []string
+	depth := 0
+	for _, ln := range body {
+		ln = strings.TrimSpace(ln)
+		switch {
+		case ln == "":
+		case strings.HasSuffix(ln, "{"):
+			depth++
+		case ln == "}":
+			depth--
+		case depth == 0:
+			out = append(out, ln)
+		}
+	}
+	return out
 }
 
 func l76TwoDigits(n int) string { return string([]byte{byte('0' + n/10), byte('0' + n%10)}) }
