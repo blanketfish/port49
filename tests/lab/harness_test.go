@@ -134,8 +134,9 @@ var platforms = []platform{
 	// cEOS, not vEOS: the image is a container (`ceos:4.36.3M`, imported, not
 	// built). The device's own `show version` is the version string's
 	// authority; TestL73's cell (a) checks it holds 4.36.3M.
+	// Ready after 23 to 28s in the 2026-10-18 L73 runs; the budget is 3x.
 	{"ceos436", "arista_ceos", "topologies/ceos436.clab.yml", "172.100.100.11", "leaf1",
-		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 5 * time.Minute},
+		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 90 * time.Second},
 	// Help-only rows (helpOnlyPlatforms): an L71 help cell and nothing else,
 	// on addresses no inventory names.
 	{"iolxe1718", "cisco_iol-xe", "topologies/iolxe1718.clab.yml", "172.100.100.51", "iol1",

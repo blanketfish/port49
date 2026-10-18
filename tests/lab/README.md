@@ -61,6 +61,8 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
        `sha256:64a17c7eb9eb5c4cc36b5398347e6edaf0f82ff5d30a5b740ef08ea07585ff8c`, 3170396026 bytes,
        source sha256 `500e0a67549f663a3201ab839d40b6be9082263b14cd5e2b669d27b9bc9125be`,
        Δ of `/` 11000M (81908M to 70908M avail).
+     - `ceos:4.36.3M` (imported, not built), ID
+       `sha256:0da07c2edcea0e2969c66941771f7af2e2c5e0008008fb2882d3e0d16ff2be63`, 1073813169 bytes.
    - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
    - Nexus 9300v 10.4(2)F: copy the qcow2 into `vrnetlab/cisco/n9kv` **renamed to
      `n9kv-<version>.qcow2`** — the Makefile derives the image tag from that name with a `sed`,
