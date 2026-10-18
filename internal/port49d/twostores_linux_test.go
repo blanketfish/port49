@@ -944,3 +944,94 @@ func TestADaemonServesNothingBeforeItsMarksLoad(t *testing.T) {
 		t.Fatalf("serving without the load said:\n%s", out.String())
 	}
 }
+
+// Task 10 review I2: a run after a store gone enforces a mark it holds. The
+// mark is written to the directory as the broker's identity would, which
+// leaves the token and the context alone, so the daemon's marks copy is the
+// only thing that can refuse the login. The run that starts while the store
+// is gone must refuse a token minted before the mark.
+func TestAHeldRunStillEnforcesAMarkItHolds(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	startSplitDaemon(t, f.daemon, &out, 1)
+	tok := mintOn(t, api, f.pki, "leaf1")
+	dir, err := etcd.Open(etcd.Config{Endpoints: []string{f.dsrv.Endpoint}, TLS: f.dsrv.TLS(t, "port49-broker"),
+		Prefix: "/port49/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dir.Close() })
+	if err := dir.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: time.Now(), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); metricAt(t, daemonMetrics(t, &out),
+		`port49_revocations_in_force{by="principal"}`) != 1; time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the daemon never took the mark")
+		}
+	}
+	f.ddproxy.Hang(true)
+	f.proxy.Hang(true)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 90*time.Second)
+	f.proxy.Hang(false)
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 120*time.Second)
+	addrs := regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	dev := tacacsClient{t: t, addr: addrs[len(addrs)-1][1], key: []byte("run-test-secret")}
+	if !strings.Contains(out.String(), "port49d: directory store: this run serves from the marks it holds (1)") {
+		t.Fatalf("the held run did not say it holds the mark:\n%s", out.String())
+	}
+	if st := dev.login("alice", tok); st == wire.AuthenStatusPass {
+		t.Fatal("a run after a store gone logged in a revoked principal: it forgot its marks")
+	}
+}
+
+// Task 10 review I1: a held run runs the start checks before it follows a
+// directory that answers late. Here the directory's key window names a key
+// this region lacks: the run says so, never follows it, and keeps serving
+// from the marks it holds.
+func TestAHeldRunRefusesADirectoryThatFailsTheStartChecks(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	startSplitDaemon(t, f.daemon, &out, 1)
+	f.ddproxy.Hang(true)
+	f.proxy.Hang(true)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 90*time.Second)
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.proxy.Hang(false)
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 120*time.Second)
+	addrs := regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	dev := tacacsClient{t: t, addr: addrs[len(addrs)-1][1], key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	mark := len(out.String())
+	f.ddproxy.Hang(false)
+	waitWithinFrom(t, &out, mark, "port49d: directory store: not followed yet (crypt: the directory store (etcd ", 30*time.Second)
+	if got := out.String()[mark:]; !strings.Contains(got, "key-from-elsewhere") || strings.Contains(got, "port49d: port49d:") {
+		t.Fatalf("the refusal reads wrong:\n%s", got)
+	}
+	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	if err != nil || r.Error != "" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	time.Sleep(4 * time.Second) // what a followed directory would need
+	// The broker's revoke also ends the session's context, so the observable
+	// is the mark count: a followed directory would put the mark in the copy.
+	if v := metricAt(t, daemonMetrics(t, &out), `port49_revocations_in_force{by="principal"}`); v != 0 {
+		t.Fatalf("the run followed a directory that failed the start checks: %v mark(s) in force", v)
+	}
+}

@@ -395,7 +395,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}()
 		go func() {
 			defer wg.Done()
-			if dir.get() == nil && !openDirectoryLater(ctx, cfg, m, out, dir) {
+			if dir.get() == nil && !openDirectoryLater(ctx, cfg, keys, m, out, d, dir) {
 				return
 			}
 			feed := dir.get()
@@ -458,22 +458,33 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 }
 
 // openDirectoryLater opens the directory store once it answers, trying
-// every 5s, on a run that serves from the marks it holds (R19); each new
-// reason is said once. It reports false when ctx ended first.
-func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer,
-	dir *dirHandle) bool {
+// every 5s, on a run that serves from the marks it holds (R19). The start
+// checks the cold path runs run here too, before the handle is set (R27,
+// R28): the configuration may have changed since the start that loaded the
+// marks. A directory that fails them is closed, not followed, and the run
+// keeps serving from its marks; each new reason is said once. It reports
+// false when ctx ended first. sess is the session store's handle.
+func openDirectoryLater(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics,
+	out io.Writer, sess *etcdstore.Store, dir *dirHandle) bool {
 	said := ""
 	for {
 		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
 		if err == nil {
-			dir.set(s)
-			return true
+			bound := 4 * cfg.Stores.Directory.Etcd.CallTimeout
+			if err = checkTwoStores(ctx, cfg, sess, s, bound); err == nil {
+				err = checkDirectoryKeys(ctx, "port49d", s, directoryRef(cfg), keys, out, bound, false)
+			}
+			if err == nil {
+				dir.set(s)
+				return true
+			}
+			s.Close()
 		}
 		if ctx.Err() != nil {
 			return false
 		}
 		if why := err.Error(); why != said {
-			fmt.Fprintf(out, "port49d: directory store: not opened yet (%v); serving from the marks this "+
+			fmt.Fprintf(out, "port49d: directory store: not followed yet (%v); serving from the marks this "+
 				"process holds; trying again every 5s\n", err)
 			said = why
 		}
