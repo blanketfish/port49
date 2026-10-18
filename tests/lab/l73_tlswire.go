@@ -591,7 +591,11 @@ func l73Describe(conns []l73Conn, from time.Time) string {
 			s += fmt.Sprintf(", alert from %s level %d description %d (%s)", who, a.Level, a.Description, l73AlertName(a.Description))
 		}
 		if len(c.Plain) > 0 {
-			s += fmt.Sprintf(", %d plain TACACS+ header(s)", len(c.Plain))
+			var hdrs []string
+			for _, h := range c.Plain {
+				hdrs = append(hdrs, fmt.Sprintf("type %d seq_no %d flags 0x%02x", h.Type, h.SeqNo, h.Flags))
+			}
+			s += fmt.Sprintf(", %d plain TACACS+ header(s) (%s)", len(c.Plain), strings.Join(hdrs, "; "))
 		}
 		if c.Incomplete {
 			s += ", capture incomplete"

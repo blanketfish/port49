@@ -588,3 +588,13 @@ func TestL73ConnsRecordsWhoClosedFirstAndHowMuchWasSent(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestL73DescribeShowsPlainHeaderFieldsOnly(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	conns := []l73Conn{{Server: "172.100.100.1:300", SYNAt: t0, Answer: "syn-ack", End: "server-rst", EndAt: t0,
+		Plain: []l73Plain{{Type: 1, SeqNo: 1, Flags: 0x04, Length: 105}}}}
+	got := l73Describe(conns, t0)
+	if !strings.Contains(got, "1 plain TACACS+ header(s) (type 1 seq_no 1 flags 0x04)") {
+		t.Fatal(got)
+	}
+}
