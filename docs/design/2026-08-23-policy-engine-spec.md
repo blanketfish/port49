@@ -1311,6 +1311,19 @@ If login context is absent, the daemon fails closed and logs a distinct reason �
 `context_missing` is operationally very different from `no_rule_matched` and the two must
 never share a log line.
 
+**Session authorization does not compare the request's level with `ctx.privilege`.** The
+privilege comparison is command authorization's (§5.3). The level a session authorization
+replies is policy's answer, and the request's level says nothing a session reply should be
+bounded by: a device may ask for its session above the level its login START carried. SR Linux
+26.7.2 sends its session authorization (`service=shell`, `cmd*` empty) above its login START's
+1, and a comparison here denied `privilege_exceeded` and failed the whole login (L76 run
+2026-10-18 (archived evidence; results note pending)). Every other check in §5.3's order —
+`context_missing`, `username_mismatch`, `credential_revoked`, `session_expired`,
+`context_stale` — and the `service_unsupported` check above still run on a session
+authorization. A permit raises `ctx.privilege` only from the level its reply grants, clamped to
+the context's ceiling (§5.3). The level the device asked at is recorded, and consulted for
+nothing, as `request.priv_lvl` (§5.7).
+
 ### 5.3 Command authorization (daemon)
 
 ```
@@ -1321,7 +1334,9 @@ normalize(request)
   → if now > ctx.session_expires       → DENY (session_expired)
   → if now - ctx.refreshed_at
        > staleness_ceiling             → DENY (context_stale)
-  → if request level > ctx.privilege   → DENY (privilege_exceeded)
+  → if cmd ≠ "" and
+       request level > ctx.privilege   → DENY (privilege_exceeded)
+       (command authorization only; a session authorization, cmd empty, skips this line, §5.2)
        (ctx.privilege is the HIGHEST level port49 has granted this user on this device:
         the login START's level, raised by the `priv-lvl` a permitted session
         authorization carried and by an escalation, and never lowered by a grant — the
@@ -2195,6 +2210,7 @@ A deny at the per-command point:
   "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
   "request": {
     "service": "shell",
+    "priv_lvl": 15,
     "raw": ["service=shell", "cmd=copy", "cmd-arg=running-config", "cmd-arg=tftp://10.9.9.9/x"],
     "vector": ["copy", "running-config", "tftp://10.9.9.9/x"]
   },
@@ -2232,6 +2248,14 @@ fleet's devices actually ask under" is a field to group by rather than a string 
 of an array — the question an operator has after renaming `tacplus-options service-name` on
 half an SRX fleet, and the one a `service_unsupported` denial has to answer. It is recorded,
 never consulted for policy (§5.2).
+
+`request.priv_lvl` is the `priv_lvl` of the authorization request's header, on every
+`authorize_session` and `authorize_command` record including the denials, and present when it
+is 0 (0 is a valid level). It is there so a reader can compare what level the device asked at
+with `session.privilege` (the highest level port49 has granted, §5.3), and so a new platform's
+behavior is read off the log: which level it sends its session authorization at, and whether
+its commands follow the level a session reply granted. It is recorded, never consulted: only a
+command authorization compares it with the context (§5.3), and the field is not a policy input.
 
 `reply.attributes` is what a permitted `authorize_session` returned, as sent — every
 placeholder filled (§6). A replay re-derives it from the blob and the record's own
@@ -2473,7 +2497,7 @@ refused request named; any other path is recorded `mint`.
 | `context_missing` | no login context for `(nas, username)` — port49 did not authenticate this session under that name |
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
-| `privilege_exceeded` | the request is above the session's granted level |
+| `privilege_exceeded` | a command authorization's request level (`request.priv_lvl`) is above the session's granted level; session authorization is never denied this (§5.2) |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`; on every endpoint but the refresh's challenge and refresh, an OIDC token's `auth_time` is; either way the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`, or the principal's directory membership has not been verified for that long (§5.1.3); context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `issue`, a mark on the principal or an OIDC logout refuses the sign-in's token, so nothing is issued; on `revoke`, a revocation's own record |
