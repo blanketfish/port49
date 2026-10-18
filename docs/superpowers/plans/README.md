@@ -7172,9 +7172,9 @@ the inventory-only refresh's cost at fleet size.
   - **Port (a).** Junos (`L73-juniper_vjunos-router.md`) and NX-OS (`L73-cisco_nxos.md`) dial 49
     when no port is set, so the reference configuration sets the port on the device; IOS XE dials
     6049 (`L73-cisco_iosxe.md`); EOS defaults to 300 (`L73-arista_ceos.md`). NX-OS sent a TLS
-    ClientHello (215 bytes, four connections) to :49, where the RFC 8907 listener was running; a
-    strike there is shared with 300 (ruling 17), but the note records no port49 record for it, so
-    set the port before the first login.
+    ClientHello (215 bytes, four connections) to :49, where the RFC 8907 listener was running. The
+    note shows no port49 record for them; if the RFC 8907 listener strikes them, ruling 17 shares
+    the strike with 300. Set the port before the first login.
   - **SNI (c).** Junos sends the literal address as server name, so `server_names` must list it or
     stay unset (`L73-juniper_vjunos-router.md`); IOS XE, NX-OS and EOS send none.
   - **Enrolment (e).** Every platform's leaf is clientAuth only. Junos, IOS XE and NX-OS send leaf
@@ -7198,7 +7198,7 @@ the inventory-only refresh's cost at fleet size.
     `bad_certificate` (`L73-arista_ceos.md`). All four refused an expired certificate and one from
     an unknown CA.
   - **Fallback timings (i), warning first.** **When port49's store is down (ERROR replies), IOS
-    XE 17.18.02 over TLS does not fall to its local method, so break-glass fails** (ok false in
+    XE 17.18.02 over TLS, as on 49 (L4), does not fall to its local method, so break-glass fails** (ok false in
     4.1 s after two `store_unavailable` records, `L73-cisco_iosxe.md`). Measured on the others
     with the same fault: break-glass landed on Junos in 2.2 s (`L73-juniper_vjunos-router.md`),
     EOS in 2.0 s (`L73-arista_ceos.md`) and NX-OS in 5.2 s (`L73-cisco_nxos.md`). After an alert,
@@ -7334,7 +7334,7 @@ reference. The page also carries, each as what an operator sees and the fix:
   Without a client certificate a login is refused `no_client_certificate` (that refusal is
   measured, L72 cell c).
 - **IOS XE and a down store.** When port49's store is down and port49 answers ERROR
-  (`store_unavailable`), IOS XE 17.18.02 over TLS does not fall to its local method, so
+  (`store_unavailable`), IOS XE 17.18.02 over TLS, as on 49 (L4), does not fall to its local method, so
   break-glass fails (`tests/lab/results/L73-cisco_iosxe.md`, cell i, ok false in 4.1 s). Junos,
   EOS and NX-OS fell to local in the same test (`L73-juniper_vjunos-router.md`,
   `L73-arista_ceos.md`, `L73-cisco_nxos.md`). The 3am table says it as a warning beside the
