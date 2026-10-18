@@ -561,6 +561,7 @@ func (e *l73Env) ready(cell string) []l73Conn {
 			return conns
 		}
 		if time.Now().After(deadline) {
+			e.invalidDeviceLogs()
 			e.t.Fatalf("INVALID: %s: the device opened no connection to %s in 3 minutes of break-glass logins. "+
 				"The likely cause is the device's dead-server memory outlasting 3 minutes after a refusal or a "+
 				"stopped port49d (IOS XE: look at its deadtime and server state), not the TLS configuration", cell, l73Server)

@@ -356,7 +356,7 @@ func TestL73EOSAsksConfirmWhatIsTyped(t *testing.T) {
 	need := map[string][]string{}
 	for _, a := range l73EOSDialect.Asks {
 		need[a.Ask] = a.Need
-		if a.Ask != "" && strings.HasPrefix(a.Ask, "tacacs-server") == false && !slices.Equal(a.In, l73EOSProbeIn) {
+		if a.Ask != "" && strings.HasPrefix(a.Ask, "tacacs-server") == false && !slices.Equal(a.In, l73EOSProbeIn) && !slices.Equal(a.In, []string{"aaa group server tacacs+ " + l73Group}) {
 			t.Errorf("%q is asked outside the scratch profile", a.Ask)
 		}
 	}
@@ -390,5 +390,26 @@ func TestL73EOSMissing(t *testing.T) {
 		if strings.Contains(g, labcreds.Key) || strings.Contains(g, " key ") {
 			t.Errorf("a key reached the message: %q", g)
 		}
+	}
+}
+
+// The EOS INVALID evidence is the device's own TACACS+ view, and the group
+// member's help is recorded as a Want, never a Need.
+func TestL73EOSInvalidEvidenceAndMemberAsk(t *testing.T) {
+	d := l73EOSDialect
+	if !slices.Equal(d.InvalidCmds, []string{"show tacacs", "show running-config section tacacs", "show aaa"}) {
+		t.Fatal(d.InvalidCmds)
+	}
+	i := slices.IndexFunc(d.Asks, func(a l73Ask) bool { return a.Ask == "server "+l73Server+" " })
+	if i < 0 {
+		t.Fatal("no group-member ask")
+	}
+	a := d.Asks[i]
+	if len(a.Need) != 0 || !slices.Contains(a.Want, "port") || !slices.Equal(a.In, []string{"aaa group server tacacs+ " + l73Group}) ||
+		!slices.Equal(a.Out, []string{"exit"}) {
+		t.Fatalf("%+v", a)
+	}
+	if got := l71MaskExchange("tacacs-server host 172.100.100.1 key 7 0123456789abcdef tls"); strings.Contains(got, "0123456789abcdef") {
+		t.Fatal(got)
 	}
 }

@@ -124,14 +124,19 @@ var l73EOSDialect = l73Dialect{
 		{Ask: "certificate " + l73CertID + ".crt ", Control: []string{"key"}, Need: []string{"key"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
 		{Ask: "chain certificate ", Control: []string{"WORD"}, Need: []string{"WORD"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
 		{Ask: "trust certificate ", Control: []string{"WORD"}, Need: []string{"WORD"}, In: l73EOSProbeIn, Out: l73EOSProbeOut},
-		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
+		{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
+		// Recorded, not required: what a group member takes after its address (Task 14 attempt 5).
+		{Ask: "server " + l73Server + " ", Control: []string{"<cr>", "port", "tls", "vrf"}, Want: []string{"port", "tls", "vrf"},
+			In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}}},
 	VersionCmd: "show version | include Software image version", VersionHas: "4.36.3M",
 	Enrol: "EOS's documented enrolment (`security pki key generate`, `security pki certificate generate signing-request`, " +
 		"the request read off the screen, the lab CA's answer copied to `certificate:`; the SSL profile names the " +
 		"intermediate as its `chain certificate`)",
-	Fallback:       "`aaa authentication login default group port49 local` (configs/eos-startup.cfg)",
-	Revocation:     "no CRL in its SSL profile",
-	LogCmd:         "show logging | include TACACS|TLS|SSL|AAA",
+	Fallback:   "`aaa authentication login default group port49 local` (configs/eos-startup.cfg)",
+	Revocation: "no CRL in its SSL profile",
+	LogCmd:     "show logging | include TACACS|TLS|SSL|AAA",
+	// Read when the device never reaches port49 or the control login fails; keys are masked by the scrub.
+	InvalidCmds:    []string{"show tacacs", "show running-config section tacacs", "show aaa"},
 	DiagOpAsks:     []string{"show management security ssl profile ", "show management security ssl certificate ", "copy "},
 	DiagFilterAsks: []string{"tacacs-server "},
 	DiagFilter:     []string{"ssl", "profile", "tls"},
