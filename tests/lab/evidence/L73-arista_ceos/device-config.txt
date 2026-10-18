@@ -1,0 +1,43 @@
+show running-config section tacacs^M
+tacacs-server tls ssl-profile l73-tls^M
+tacacs-server host 172.100.100.1 tls^M
+aaa group server tacacs+ port49^M
+   server 172.100.100.1 tls^M
+leaf1#
+show running-config section management security^M
+management security^M
+   ssl profile l73-tls^M
+      certificate l73-dev.crt key l73-dev.key^M
+      trust certificate l73-root.crt^M
+      chain certificate l73-inter.crt^M
+leaf1#
+show management security ssl profile l73-tls^M
+Profile State ^M
+------- ----- ^M
+l73-tls valid ^M
+^M
+leaf1#
+show tacacs^M
+TACACS+ server            : 172.100.100.1/300 TLS^M
+SSL profile               : l73-tls^M
+          Connection opens:         56^M
+         Connection closes:          0^M
+    Connection disconnects:          0^M
+       Connection failures:         56^M
+       Connection timeouts:          0^M
+             Messages sent:          0^M
+         Messages received:          0^M
+            Receive errors:          0^M
+          Receive timeouts:          0^M
+             Send timeouts:          0^M
+                DNS errors:          0^M
+               Cert errors:          0^M
+           TLS resumptions:          0^M
+ Unknown attribute ignored:          0^M
+Unknown attribute failures:          0^M
+^M
+TACACS+ server-group: port49^M
+     0: 172.100.100.1/300 TLS^M
+^M
+Last time counters were cleared: never^M
+leaf1#

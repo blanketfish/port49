@@ -1,0 +1,285 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+  <cr>  <cr>^M
+^M
+iol1(config)#tacacs-server host 192.0.2.71 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `tacacs-server ?`, then Ctrl-U
+tacacs-server ?^M
+  administration      Start tacacs+ deamon handling administrative messages^M
+  attribute           Customize selected tacacs attributes^M
+  cache               AAA auth cache default server group^M
+  directed-request    Allow user to specify tacacs server to use with `@server'^M
+  dns-alias-lookup    Enable IP Domain Name System Alias lookup for TACACS servers^M
+  domain-stripping    Strip the domain from the username^M
+  extended            Enable extended TACACS^M
+  host                Specify a TACACS server^M
+  key                 Set TACACS+ encryption key.^M
+  last-resort         Define TACACS action if no server responds^M
+  optional-passwords  The first TACACS request can be made without <MASKED>^M
+  packet              Modify TACACS+ packet options^M
+  retransmit          Search iterations of the TACACS server list^M
+  timeout             Time to wait for a TACACS server to reply^M
+^M
+iol1(config)#tacacs-server ^H^H^H^H^H^H^H^H^H^H^H^H^H^H              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `?`, then Ctrl-U
+?^M
+Configure commands:^M
+  aaa                         Authentication, Authorization and Accounting.^M
+  access-list                 Add an access list entry^M
+  accounting                  Policy accounting feature^M
+  alias                       Create command alias^M
+  alps                        Configure Airline Protocol Support^M
+  ancp                        Configure ANCP^M
+  apollo                      Apollo global configuration commands^M
+  appletalk                   Appletalk global configuration commands^M
+  arap                        Appletalk Remote Access Protocol^M
+  archive                     Archive the configuration^M
+  arp                         Set a static ARP entry^M
+  async-bootp                 Modify system bootp parameters^M
+  auto                        Configure Automation^M
+  auto-ip-ring                Auto-IP-Ring global configuration commands^M
+  avc                         Application visibility and control^M
+  banner                      Define a login banner^M
+  bba-group                   Configure BBA Group^M
+  beep                        Configure BEEP (Blocks Extensible Exchange Protocol)^M
+  bfd                         BFD configuration commands^M
+  bfd-template                BFD template configuration^M
+  boot                        Modify system boot parameters^M
+  boot-end-marker             boot-end-marker^M
+  boot-start-marker           boot-start-marker^M
+  bridge                      Bridge Group.^M
+  bridge-domain               Bridge-domain global configuration commands^M
+  bstun                       BSTUN global configuration commands^M
+  buffers                     Adjust system buffer pool parameters^M
+  bulkstat                    Bulkstat Application^M
+  busy-message                Display message when connection to host fails^M
+  call                        Configure Call parameters^M
+  cdp                         Global CDP configuration subcommands^M
+  cef                         Cisco Express Forwarding^M
+  cfg-mode                    Enter configuration mode^M
+  chat-script                 Define a modem chat script^M
+  class-map                   Configure CPL Class Map^M
+  classmap-template           create a parameterized class from base class^M
+  clns                        Global CLNS configuration subcommands^M
+  clock                       Configure time-of-day clock^M
+  cns                         CNS agents^M
+  config-register             Define the configuration register^M
+  configuration               Configuration access^M
+  connect                     cross-connect two interfaces^M
+  control-plane               Configure control plane services^M
+  cops                        Common Open Policy Service (COPS)^M
+  crypto                      Encryption module^M
+  cts                         Cisco Trusted Security commands^M
+  dapr                        Dynamic Application Policy Routing (DAPR) configuration^M
+  decnet                      Global DECnet configuration subcommands^M
+  default                     Set a command to its defaults^M
+  default-value               Default character-bits values^M
+  define                      interface range macro definition^M
+  device-tracking             Device tracking configuration commands^M
+  dialer                      Dialer commands^M
+  dialer-list                 Create a dialer list entry^M
+  dlsw                        Data Link Switching global configuration commands^M
+  dnsix-dmdp                  Provide DMDP service for DNSIX^M
+  dnsix-nat                   Provide DNSIX service for audit trails^M
+  do-exec                     To run exec commands in config mode^M
+  downward-compatible-config  Generate a configuration compatible with older software^M
+  dspu                        DownStream Physical Unit Command^M
+  eap                         EAP Global Configuration Commands^M
+  enable                      Modify enable <MASKED>^M
+  end                         Exit from configure mode^M
+  esmc                        Ethernet Synchronization Messaging Channel^M
+  ethernet                    Ethernet configuration^M
+  event                       Event related configuration commands^M
+  exception                   Exception handling^M
+  exception-slave             exception-slave^M
+  exit                        Exit from configure mode^M
+  fhrp                        Configure First Hop Redundancy Protocols^M
+  file                        Adjust file system parameters^M
+  flow                        Global Flow configuration subcommands^M
+  flow-sampler-map            Flow sampler configuration^M
+  flowspec                    FlowSpec configuration^M
+  format                      Format the output^M
+  fqdn                        fqdn config commands^M
+  frame-relay                 global frame relay configuration commands^M
+  global-address-family       Enter address-family base routing topology mode^M
+  graceful-reload             graceful reload configuration^M
+  group-policy                Group-policy configuration^M
+  gtp                         Enable GTP Gn'^M
+  help                        Description of the interactive help system^M
+  hostname                    Set system's network name^M
+  hw-module                   Control of individual components in the system^M
+  id-manager                  ID Pool Manager^M
+  interface                   Select an interface to configure^M
+  ip                          Global IP configuration subcommands^M
+  ipc                         Configure IPC system^M
+  ipv6                        Global IPv6 configuration commands^M
+  ipx                         Novell/IPX global configuration commands^M
+  isis                        Global ISIS configuration subcommands^M
+  kerberos                    Configure Kerberos^M
+  key                         Key management^M
+  keymap                      Define a new keymap^M
+  kron                        Kron interval Facility^M
+  l2                          Layer 2 configuration^M
+  l2tp                        Layer 2 Tunneling Protocol (L2TP) parameters^M
+  l2tp-class                  l2tp-class configuration^M
+  l2vpn                       Layer2 VPN commands^M
+  l3vpn                       l3vpn encapsulation ip commands^M
+  lacp                        LACP configuration^M
+  lat                         DEC Local Area Transport (LAT) transmission protocol^M
+  li-view                     LI View^M
+  line                        Configure a terminal line^M
+  lldp                        Global LLDP configuration subcommands^M
+  lnm                         IBM Lan Manager^M
+  load                        Load Protocol^M
+  locaddr-priority-list       Establish queueing priorities based on LU address^M
+  location                    Global location configuration commands^M
+  logging                     Modify message logging facilities^M
+  login                       Enable secure login checking^M
+  login-string                Define a host-specific login string^M
+  maintenance-template        maintenance-template configuration^M
+  map-class                   Configure static map class^M
+  map-list                    Configure static map list^M
+  map3270keys                 map3270keys^M
+  mcsa                        Configure mcsa^M
+  mdns-sd                     mDNS Service Discovery Gateway Configuration^M
+  media                       Media Commands^M
+  memory                      Configure memory management^M
+  menu                        Define a user-interface menu^M
+  metadata                    Metadata Application^M
+  mka                         MACsec Key Agreement (MKA) configuration^M
+  mode                        Firewall mode^M
+  modemcap                    Modem Capabilities database^M
+  monitor                     Monitoring different system events^M
+  mop                         Configure the DEC MOP Server^M
+  mpls                        Configure MPLS parameters^M
+  multilink                   PPP multilink global configuration^M
+  named-ordering-route-map    named ordering route-map enable^M
+  nat46                       NAT46 configuration commands^M
+  nat64                       NAT64 configuration commands^M
+  nat66                       NAT66 configuration commands^M
+  ncia                        Native Client Interface Architecture^M
+  netbios                     NETBIOS access control filtering^M
+  netconf                     Configure NETCONF^M
+  network-clock               Network clock configuration commands^M
+  nhrp                        NHRP global commands^M
+  no                          Negate a command or set its defaults^M
+  novell                      Novell/IPX global configuration commands^M
+  ntp                         Configure NTP^M
+  object-group                Configure Object Group^M
+  onep                        ONEP functionality^M
+  otv                         Configure OTV information^M
+  overlay                     Global Overlay Tunnel Configurations^M
+  parser                      Configure parser^M
+  password                    Configure encryption <MASKED>^M
+  pdm                         Policy Definition manager configurations^M
+  pdm                         Policy Definition manager configurations^M
+  performance                 Global Performance monitor configuration^M
+  performance-measurement     Performance Measurement configuration^M
+  pnp                         Configure PNP^M
+  policy-manager              Policy Manager configuration commands^M
+  policy-map                  Configure Policy Map^M
+  policy-peer                 External Policy Delegation(EPD) peer parameters^M
+  ppp                         PPP global configuration^M
+  pppoe                       PPPoE global configuration^M
+  privilege                   Command privilege parameters^M
+  process                     Configure process^M
+  process-max-time            Maximum time for process to run before voluntarily relinquishing processor^M
+  prompt                      Set system's prompt^M
+  pseudowire-class            Pseudowire-class configuration^M
+  pseudowire-static-oam       Static PW OAM configuration^M
+  pseudowire-tlv              Global PW TLV configuration^M
+  ptp                         Precision Time Protocol^M
+  qos                         Global QoS configuration subcommands^M
+  rbe                         Commands for Routing RFC 1483 Ethernet encapsulated packets^M
+  rcmd                        Remote command configuration commands^M
+  rcp-enable                  Enable server side of RCP^M
+  redirect                    Configure L4 redirect parameters^M
+  redundancy                  Enter redundancy mode^M
+  regexp                      regexp commands^M
+  resource                    Configure Embedded Resource Manager (ERM)^M
+  resource-group              Configure Resource Group settings^M
+  resume-string               Define a host-specific resume string^M
+  rif                         Source-route RIF cache^M
+  rlogin                      Rlogin configuration commands^M
+  route-map                   Create route-map or enter route-map command mode^M
+  route-tag                   Route Tag^M
+  router                      Enable a routing process^M
+  routing-default-optimize    Enable routing default optimization^M
+  rsh-disable-command         rsh-disable-command^M
+  rsh-enable                  Enable server side of RSH^M
+  rsrb                        RSRB LSAP/DSAP filtering^M
+  rwatch                      Enter RIB_RWATCH test configuration submode^M
+  sampler                     Define a Sampler^M
+  sap-priority-list           Establish queueing priorities based on SAP and/or MAC address(es)^M
+  sasl                        Configure SASL^M
+  sbfd                        SBFD configuration commands^M
+  scheduler                   Scheduler parameters^M
+  scheduler-interval          scheduler-interval^M
+  scripting                   Configure options for scripting languages^M
+  segment-routing             Enter Segment Routing Mode^M
+  service                     Modify use of network based services^M
+  service-export              Configure a Central controller^M
+  service-family              Configure external service-family clients^M
+  service-group               service-group global command^M
+  service-instance            Configure a Static Service^M
+  service-list                Enter the service list^M
+  service-routing             Configure service-routing ^M
+  sgbp                        SGBP Stack Group Bidding Protocol configuration^M
+  sgi                         Configure SGI^M
+  shell                       Configure shell command^M
+  site-manager                Site-manager Configuration Commands^M
+  smrp                        Simple Multicast Routing Protocol configuration commands^M
+  sna                         Network Management Physical Unit Command^M
+  snapshot-template           snapshot-template configuration^M
+  snmp                        Modify non engine SNMP parameters^M
+  snmp-server                 Modify SNMP engine parameters^M
+  sntp                        Configure SNTP^M
+  source                      Get config from another source^M
+  source-bridge               Source-route bridging ring groups^M
+  spanning-tree               Spanning Tree Subsystem^M
+  spd                         Selective Packet Discard parameters^M
+  stacks                      Configure stacks^M
+  standby                     Global HSRP configuration commands^M
+  state-machine               Define a TCP dispatch state machine^M
+  stun                        STUN global configuration commands^M
+  subscriber                  Subscriber configuration^M
+  subscriber-policy           Subscriber policy^M
+  system                      System configuration^M
+  tacacs-server               Modify TACACS query parameters^M
+  tag-switching               Dynamic Tag Switching commands^M
+  tarp                        Global TARP configuration subcommands^M
+  template                    Select a template to configure^M
+  terminal-queue              Terminal queue commands^M
+  tftp-server                 Provide TFTP service for netload requests^M
+  time-range                  Define time range entries^M
+  timezone                    timezone^M
+  tn3270                      tn3270 configuration command^M
+  tod-clock                   Time-of-Day clock^M
+  track                       Object tracking configuration commands^M
+  translate                   Translate global configuration commands^M
+  ttycap                      Define a new termcap^M
+  user-name                   Establish User Name Authentication^M
+  username                    Establish User Name Authentication^M
+  version                     version^M
+  vines                       VINES global configuration commands^M
+  virtual-profile             Virtual Profile configuration^M
+  virtual-template            Virtual Template configuration^M
+  vlan                        VLAN configuration commands^M
+  vlan-autoconfig             Configure dynamic VLAN interface^M
+  vpdn                        Virtual Private Dialup Network^M
+  vpdn-group                  VPDN group configuration^M
+  vpdn-template               vpdn-template configuration^M
+  vrf                         VRF commands^M
+  vrrs                        vrrs global command^M
+  vty-async                   Enable virtual async line configuration^M
+  vxlan                       Configure VxLAN information^M
+  wsma                        Configure Web Services Management Agents^M
+  x25                         X.25 Level 3^M
+  xconnect                    Xconnect config commands^M
+  xns                         XNS global configuration commands^M
+  xot                         Global XOT commands^M
+^M
+iol1(config)#
+

@@ -34,6 +34,47 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    - vJunos-router 23.4R2-S2.1: copy the qcow2 into `vrnetlab/juniper/vjunosrouter`. On an
      AMD host, patch the CPU check by hand and use `make docker-image` — see the plan's
      Task 15 prerequisites for the exact guestfish lines. On Intel, `make`.
+   - **L73 images** (opt-in selectors; one per run). Built just before each run, from
+     `/mnt/images/` (the Cisco ones from CML refplat 20260409, signature verified):
+     - vJunos-router 26.2R1.7 (`vjunos26`) and vJunos-switch 26.2R1.7 (`vjunosswitch26`): copy
+       the qcow2 into `vrnetlab/juniper/vjunosrouter` (or `vjunosswitch`), patch
+       `/home/pfe/junos/start-junos.sh` on `/dev/sda2` for AMD exactly as for 23.4 (the
+       `CPU_FLAG` line), `make IMAGE=<qcow2> docker-build`, then delete the copy.
+     - Catalyst 8000V 17.18.02 (`iosxe1718`): as 17.13.01a above, with
+       `c8000v-universalk9_8G_serial.17.18.02.qcow2`.
+     - Nexus 9300v 10.6.2.F (`nxos106`): copy `nexus9300v64.10.6.2.F.qcow2` into
+       `vrnetlab/cisco/n9kv` as `n9kv-9300v64-10.6.2.F.qcow2`, then
+       `make IMAGE=n9kv-9300v64-10.6.2.F.qcow2 docker-build`.
+     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): `make IMAGE=iol-xe-17-18-02.tar.gz
+       docker-build` in `vrnetlab/cisco/iol`.
+     - XRd control plane 26.1.1 (`xrd261`, L71 help cell only): `docker load -i
+       ios-xrd-control-plane-26-1-1.tar.gz`, tagged `port49lab/xrd-control-plane:26.1.1`. XRd
+       needs `fs.inotify.max_user_instances` >= 4000 (`sudo sysctl -w`, not persisted).
+
+     - cEOS-lab 4.36.3M (`ceos436`): imported as `ceos:4.36.3M` (containerlab kind `arista_ceos`);
+       no build.
+
+     The lab's disk floor is 67584M. If a build would cross it, free space in this order:
+     `go clean -cache`, then the `controller-17.13.01a` image, then an earlier L73 image (its
+     results are committed, and this recipe rebuilds it). Built 2026-10-17:
+     - `vrnetlab/juniper_vjunos-router:26.2R1.7`, ID
+       `sha256:64a17c7eb9eb5c4cc36b5398347e6edaf0f82ff5d30a5b740ef08ea07585ff8c`, 3170396026 bytes,
+       source sha256 `500e0a67549f663a3201ab839d40b6be9082263b14cd5e2b669d27b9bc9125be`,
+       Δ of `/` 11000M (81908M to 70908M avail).
+     - `ceos:4.36.3M` (imported, not built), ID
+       `sha256:0da07c2edcea0e2969c66941771f7af2e2c5e0008008fb2882d3e0d16ff2be63`, 1073813169 bytes.
+     - `vrnetlab/cisco_n9kv:9300v64-10.6.2.F` (built 2026-10-18; the 10.4.2.F leftover qcow2 in the
+       build directory was removed after `cmp` proved it identical to `/mnt/images`), ID
+       `sha256:3ddc45448d436dcd592654f84f9ddda5aa95fcf11b0a23d3de5367a2a2ece5bd`, 3485174928 bytes,
+       source sha256 `f0ceb78ebb1cb0e6e82599fd9140364d77b0aa21e28bb3118191090b043a395e`,
+       Δ of `/` 8744M (80052M to 71308M avail).
+       Removed 2026-10-18 (lead's ruling, to pass the C8000V disk gate; its L73 results are committed in
+       b4d12cbf and this recipe rebuilds it).
+     - `vrnetlab/cisco_c8000v:17.18.02` (built 2026-10-18, recipe `MODE=autonomous`, the 17.18.02 qcow2
+       copied in and removed again), ID
+       `sha256:d41d1a5bd9e7f092ca0fcae636ab9c808fe6d2f3a3bdca25d72c55f49f8d175c`, 2913613093 bytes,
+       source sha256 `6443ee46b0e2a437812a4d96a05e8f8135ee5d929c12468e3cae5fe0142cd2dd`,
+       Δ of `/` 8328M (79094M to 70766M avail, after the N9Kv removal above).
    - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
    - Nexus 9300v 10.4(2)F: copy the qcow2 into `vrnetlab/cisco/n9kv` **renamed to
      `n9kv-<version>.qcow2`** — the Makefile derives the image tag from that name with a `sed`,
@@ -59,7 +100,8 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    Check `docker images` for the tag each build produced and match the `image:` lines in
    `topologies/`. Expected: `vrnetlab/arista_veos:4.32.2F`,
    `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`,
-   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`, `vrnetlab/cisco_c8000v:17.13.01a`.
+   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`, `vrnetlab/cisco_c8000v:17.13.01a`, and for L73
+   `vrnetlab/juniper_vjunos-router:26.2R1.7`.
 
    The N9Kv asks the host for more than the others: the launcher gives the VM **10 GB of RAM
    and 4 vCPUs**. Do not deploy it beside another VM platform on a machine that cannot spare
@@ -743,7 +785,7 @@ The note is `results/L72-reference.md`, and the evidence (decision log lines and
 transcripts) is `evidence/L72-reference/`. Besides the decision log, cells h, l and n read
 port49d's `port49_connection_events_total` (`declined_refused` against `held_refused`) to tell a
 decline, which opens a window and is no strike, from a strike. No device's RFC 9887 behaviour is
-measured here; that is L73, open until an image carries a client (L71).
+measured here; that is L73 (closed 2026-10-18; see the L73 section below).
 
 **Running L72 and L71 (recorded).** Make the run worktree under the repository, not `/tmp`:
 `git worktree add --detach ~/git/port49/.worktrees/run-l7x <sha>`. `/tmp` is a nosuid tmpfs, and
@@ -785,3 +827,54 @@ client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
   that still held a process leaves behind) and `sudo ip link del p49rbr0`. A left-over etcd member or
   port49 process is ended by the PID in its `*.pid` file under `/tmp/p49l74*/`, after checking
   `/proc/<pid>/cmdline` by hand: `kill <pid>`.
+
+## L73: device RFC 9887 clients against port49
+
+`PORT49_LAB_PLATFORMS=<selector> go test -tags lab ./tests/lab/ -run '^TestL73$' -count=1 -v -timeout 3h`,
+one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`; help cells `iolxe1718`, `xrd261`;
+`vjunosswitch26`), from a pinned worktree under `.worktrees/`, after `make build`.
+
+- **Opt-in selectors.** A run that names no platform never deploys them.
+- **Occupancy.** The test takes the lab's single-occupant lock (`/tmp/port49-lab.lock`,
+  `labOccupyForRun`), holds it until `TestMain` has torn the topology down, and refuses to start
+  beside another containerlab topology.
+- **Order of a run.** It first asks the image's help about every statement it types (an addendum
+  to L71). It then enrols the device: the key pair stays on the device, a Junos request is read
+  from a file, and an IOS XE, NX-OS or EOS request is read off the terminal. Last, it runs cells
+  (a)-(j) against port49d, restarted per cell with a `tls_listener:`.
+- **Dialects.** Per-platform lines, asks and enrolment prompts live in `l73_dialect.go`
+  (`l73Dialects`). An unknown prompt is INVALID, with the scrubbed screen in
+  `PORT49_L73_INVALID_DIR`.
+- **Evidence.** Raw captures stay git-ignored in `captures/L73-<platform>/`, outside
+  `make evidence`'s glob: TLS is not `labpcap`'s. The committed evidence is
+  `evidence/L73-<platform>/<cell>.tls.json`, a per-connection summary whose types hold no session
+  bytes. Beside it are the redacted decision log, the device's masked configuration and TLS log
+  lines, and the help exchange.
+- **PKI.** `PORT49_L73_ALG=rsa` switches the lab PKI from ECDSA P-256 to RSA 2048.
+
+## L76: Nokia SR Linux over TACACS+
+
+`PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 90m`,
+from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only with `-run '^TestL76$'`: the
+`srlinux` row is opt-in, and with no `-run`, `TestL73` would deploy the node too.
+
+- **The image's terms.** The public SR Linux image is for learning, demo, test and CI use only. It is pulled
+  anonymously from ghcr.io: no `docker login`, no token, no employer account.
+- **The node.** `srl1` (172.100.100.71), `kind: nokia_srlinux`, image `ghcr.io/nokia/srlinux:26.7.2-519`
+  (digest `sha256:0096fe3e...b48be8`). It is a container, not a vrnetlab VM. The row is opt-in.
+- **Sources.** Every SR Linux command and statement the test uses is checked against Nokia's 26.7
+  documentation, containerlab's srl kind page, or the image's own YANG and `sr_cli --help`. The results
+  note's "Sources" section lists each one with its page (`l76Sources`).
+- **The config.** `configs/srlinux-startup.cli`, in containerlab's hierarchical `.cli` form, is applied
+  after SR Linux's default config. It follows Nokia's *Configuration Basics Guide 26.7*, "Securing access",
+  except where the image's YANG overrules it: the local server group must be named `local`, the
+  accounting event is `command`, and each local role must list `services [ cli ]` or no login on it succeeds. The file has no comments because containerlab's `.cli` comment syntax is
+  not documented. Its secret and break-glass password are `labcreds`' published values.
+- **Device commands.** The test reads and changes the device with `docker exec clab-port49-srlinux-srl1
+  sr_cli -d`, which runs as the container's root, outside TACACS+. Cells (i), (j) and (l) restore what they change, and cell (k) clears the checkpoint it tries to make. A run of the closed entry needs `PORT49_LAB_REMEASURE=L76`.
+- **Occupancy.** The test takes `/tmp/port49-lab.lock` (`labOccupyForRun`) and holds it through `TestMain`'s teardown.
+- **Evidence.** `evidence/L76-nokia_srlinux/` holds the masked running config, the model excerpts, each
+  login's outputs, the AAA log lines (filtered), and the redacted decision log. `evidence/L76-nokia_srlinux.pcap`
+  is the redacted capture (`make evidence`).
+- **An INVALID run** writes no note. It keeps the device's own view, filtered and leak-checked, in the
+  git-ignored `logs/L76-invalid-<stamp>/` (masked running config, AAA log tail, session table).

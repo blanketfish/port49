@@ -42,3 +42,34 @@ breakglass@srx1# set system tacplus-server 192.0.2.71    
 ```
 
 
+
+## Addendum 2026-10-18: vJunos-router 26.2R1.7 (`vrnetlab/juniper_vjunos-router:26.2R1.7`)
+
+Probed by TestL73 (commit `d1614baa70cddaff861c0c171bb82ad9a3360522`, `PORT49_LAB_PLATFORMS=vjunos26`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-juniper_vjunos-router/l71-probe.txt`.
+
+**Has a client.** Typed `set system tacplus-server 192.0.2.71 ?`; the help lists:
+
+```
+> tls                  TACACS+ over TLS
+```
+
+Full help:
+
+```
+set system tacplus-server 192.0.2.71 ?
+Possible completions:
+  <[Enter]>            Execute this command
++ apply-groups         Groups from which to inherit configuration data
++ apply-groups-except  Don't inherit configuration data from these groups
+  port                 TACACS+ authentication server port number
+  routing-instance     Routing instance
+  secret               Shared secret with the authentication server
+  single-connection    Optimize TCP connection attempts
+  source-address       Use specified address as source address
+  timeout              Request timeout period (1..90 seconds)
+> tls                  TACACS+ over TLS
+  |                    Pipe through a command
+[edit]
+breakglass@srx1# set system tacplus-server 192.0.2.71    
+```
+

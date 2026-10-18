@@ -7,7 +7,7 @@ import (
 )
 
 func TestL71ProbesEveryPlatform(t *testing.T) {
-	for _, p := range []string{"arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_vjunos-router", "juniper_vsrx"} {
+	for _, p := range []string{"arista_eos", "cisco_iosxe", "cisco_nxos", "arista_ceos", "cisco_iol-xe", "cisco_xrd", "juniper_vjunos-router", "juniper_vsrx"} {
 		pr, ok := l71Probes[p]
 		if !ok || len(pr.ask) == 0 || len(pr.yes) == 0 || len(pr.cleanup) == 0 ||
 			len(pr.control) == 0 || pr.snapshot == "" || pr.cfgMark == "" {
@@ -132,5 +132,21 @@ func TestL71MaskExchange(t *testing.T) {
 	}
 	if strings.ContainsAny(got, "\x1b\b\r") {
 		t.Errorf("raw control bytes survived:\n%s", got)
+	}
+}
+
+// Junos prefixes an inherited option with "+" and a container with ">";
+// the word after the marker is the option. Before this, a client offered as
+// "> tls" read as no tls at all.
+func TestL71SaysReadsJunosMarkedOptions(t *testing.T) {
+	help := "+ apply-groups         Groups\n  secret               Shared secret\n> tls                  TLS configuration\n"
+	if line, ok := l71Says(help, []string{"tls"}); !ok || line != "> tls                  TLS configuration" {
+		t.Fatalf("%q %v", line, ok)
+	}
+	if _, ok := l71Says(help, []string{"apply-groups"}); !ok {
+		t.Fatal("a + option missed")
+	}
+	if _, ok := l71Says("> \n", []string{"tls"}); ok {
+		t.Fatal("a bare marker read as an option")
 	}
 }

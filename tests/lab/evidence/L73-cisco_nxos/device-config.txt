@@ -1,0 +1,70 @@
+show running-config tacacs+^M^M
+^M
+!Command: show running-config tacacs+^M
+!Running configuration last done at: Sun Oct 18 06:26:14 2026^M
+!Time: Sun Oct 18 06:26:16 2026^M
+^M
+version 10.6(2) Bios:version  ^M
+feature tacacs+^M
+^M
+tacacs-server secure tls^M
+tacacs-server host 172.100.100.1 port 300 ^M
+tacacs-server host 172.100.100.1 tls client-trustpoint l73-dev ^M
+aaa group server tacacs+ port49 ^M
+    server 172.100.100.1 ^M
+    use-vrf management^M
+    source-interface mgmt0^M
+^M
+^M
+^Mnx1# 
+show crypto ca trustpoints^M^M
+trustpoint: l73-dev; key-pair: l73-key^M
+revokation methods:  none^M
+^M
+trustpoint: l73-root; key-pair: ^M
+revokation methods:  none^M
+^M
+^Mnx1# 
+show crypto ca certificates l73-dev^M^M
+Trustpoint: l73-dev^M
+certificate:^M
+subject=CN = nx1^M
+issuer=CN = L73 Lab Device Intermediate^M
+<LONG>^M
+notBefore=Oct 18 05:14:15 2026 GMT^M
+notAfter=Oct 19 06:14:15 2026 GMT^M
+SHA1 Fingerprint=3F:1A:FC:43:C5:0E:FF:57:B2:10:46:05:CB:9A:1A:06:07:99:44:9F^M
+purposes: sslserver sslclient ^M
+^M
+CA certificate 0:^M
+subject=CN = L73 Lab Device Intermediate^M
+issuer=CN = L73 Lab Root^M
+<LONG>^M
+notBefore=Oct 18 05:14:02 2026 GMT^M
+notAfter=Oct 20 06:14:02 2026 GMT^M
+SHA1 Fingerprint=0B:2C:1D:40:DD:7A:7F:EC:ED:6D:3B:4A:63:D3:8B:80:5F:2D:DF:ED^M
+purposes: sslserver sslclient ^M
+^M
+CA certificate 1:^M
+subject=CN = L73 Lab Root^M
+issuer=CN = L73 Lab Root^M
+<LONG>^M
+notBefore=Oct 18 05:14:02 2026 GMT^M
+notAfter=Oct 20 06:14:02 2026 GMT^M
+SHA1 Fingerprint=49:59:C8:17:55:37:0B:7E:C1:27:23:BB:2B:41:54:EE:5B:B9:0E:A1^M
+purposes: sslserver sslclient ^M
+^M
+^Mnx1# 
+show tacacs-server^M^M
+timeout value:5^M
+deadtime value:0^M
+secure tacacs mode:tls^M
+source interface:any available^M
+Global Test Username:test^M
+total number of servers:1^M
+^M
+following TACACS+ servers are configured:^M
+        172.100.100.1:^M
+                available on port:300^M
+                tls client trustpoint:l73-dev^M
+^Mnx1# 

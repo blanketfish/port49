@@ -1,0 +1,76 @@
+show logging | include TACACS|TLS|PKI|SSL|CRYPTO^M
+    TLS Profiles: ^M
+*Oct 18 07:45:37.075: %<LONG>: Crypto algorithms release (Rel5b), Entropy release (3.4.1)^M
+*Oct 18 07:45:37.075: %<LONG>: Crypto algorithms release (Rel5b), Entropy release (3.4.1)^M
+*Oct 18 07:45:37.079: %CRYPTO-5-SELF_TEST_END: Crypto Integrity self-test completed successfully^M
+*Oct 18 07:45:37.199: %CRYPTO-5-SELF_TEST_END: Crypto Algorithm self-test completed successfully^M
+*Oct 18 07:45:42.458: %<LONG>: TLS Client is IOS based^M
+*Oct 18 07:45:42.585: %<LONG>: Cisco PSB security compliance is being enforced^M
+*Oct 18 07:45:44.995: %<LONG>: Crypto algorithms release (Rel5b), Entropy release (3.4.1)^M
+*Oct 18 07:45:45.038: %CRYPTO-5-SELF_TEST_END: Crypto Algorithm self-test completed successfully^M
+*Oct 18 07:45:45.802: %CRYPTO-6-ISAKMP_ON_OFF: ISAKMP is OFF^M
+*Oct 18 07:45:45.802: %CRYPTO-6-GDOI_ON_OFF: GDOI is OFF^M
+*Oct 18 07:45:47.132: %<LONG>: A key named xe1.example.com has been generated or imported by crypto-engine^M
+*Oct 18 07:45:47.426: %<LONG>: TACACS+ server port49-host is configured without tls^M
+*Oct 18 07:45:53.010: %<LONG>: A key named xe1.example.com.server has been generated or imported by crypto-engine^M
+*Oct 18 07:46:02.657: %PKI-6-SUDI_INFO: PKI: platform doesn't support sudi certificate^M
+*Oct 18 07:46:02.657: %PKI-6-SUDI_INFO: PKI: no sudi certificate is installed^M
+*Oct 18 07:46:02.657: %<LONG>: PKI functions can not be initialized until an authoritative time source, like NTP, can be obtained.^M
+*Oct 18 07:46:02.660: %PKI-6-TRUSTPOINT_CREATE: Trustpoint: <LONG> created successfully^M
+*Oct 18 07:46:02.846: %<LONG>: A key named <LONG> has been generated or imported by crypto-engine^M
+*Oct 18 07:46:02.869: %PKI-4-NOCONFIGAUTOSAVE: Configuration was modified.  Issue "write memory" to save new IOS PKI configuration^M
+*Oct 18 07:46:06.654: %<LONG>: TACACS+ server l71probe is configured without tls^M
+*Oct 18 07:46:07.909: %<LONG>: TACACS+ server l71probe is configured without tls^M
+*Oct 18 07:46:09.416: %<LONG>: TACACS+ server l71probe is configured without tls^M
+*Oct 18 07:46:11.226: %<LONG>: A key named l73-key has been generated or imported by crypto-engine^M
+*Oct 18 07:46:11.468: %PKI-6-TRUSTPOINT_CREATE: Trustpoint: l73-root created successfully^M
+*Oct 18 07:46:12.474: %PKI-6-TRUSTPOINT_CREATE: Trustpoint: l73-dev created successfully^M
+*Oct 18 07:46:16.983: %PKI-6-CSR_FINGERPRINT: ^M
+*Oct 18 07:46:16.983: %<LONG>: ^M
+*Oct 18 07:46:17.138: %PKI-6-TRUSTPOINT_CREATE: Trustpoint: SLA-TrustPoint created successfully^M
+*Oct 18 07:46:17.140: %PKI-4-NOCONFIGAUTOSAVE: Configuration was modified.  Issue "write memory" to save new IOS PKI configuration^M
+*Oct 18 07:46:18.945: %PKI-1-CERT_EXPIRY_ALERT: ID Certificate belonging to trustpoint l73-dev will expire in 0 Days 23 hours 59 mins 59 secs at 2026-10-19T07:46:17Z.^M
+*Oct 18 07:46:23.826: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:46:29.166: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:46:36.459: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:46:39.233: %<LONG>: TACACS+ server port49-host is configured without tls^M
+*Oct 18 07:46:43.751: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:46:45.811: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:46:45.811: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:46:49.344: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:46:52.631: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:46:52.631: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:05.603: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:05.603: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:06.106: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:11.028: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:11.028: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:12.687: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:20.503: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:20.503: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:21.005: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:27.594: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:27.594: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:27.596: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:35.439: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:35.439: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:35.942: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:42.522: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:42.522: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:42.524: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:46.520: %SYS-4-INSECURE_CONFIG: Module: AAA - Command: tacacs server port49-host - Reason: TLS is not configured, exposing traffic to potential eavesdropping - Remediation: Configure secure options under server to enhance security^M
+*Oct 18 07:47:46.520: %SYS-4-INSECURE_CONFIG: Module: AAA - Command: tacacs server l71probe - Reason: TLS is not configured, exposing traffic to potential eavesdropping - Remediation: Configure secure options under server to enhance security^M
+*Oct 18 07:47:46.520: %SYS-4-INSECURE_CONFIG: Module: AAA - Command: tacacs server l71probe - Reason: TLS is not configured, exposing traffic to potential eavesdropping - Remediation: Configure secure options under server to enhance security^M
+*Oct 18 07:47:46.520: %SYS-4-INSECURE_CONFIG: Module: AAA - Command: tacacs server l71probe - Reason: TLS is not configured, exposing traffic to potential eavesdropping - Remediation: Configure secure options under server to enhance security^M
+*Oct 18 07:47:46.520: %SYS-4-INSECURE_CONFIG: Module: AAA - Command: tacacs server port49-host - Reason: TLS is not configured, exposing traffic to potential eavesdropping - Remediation: Configure secure options under server to enhance security^M
+*Oct 18 07:47:50.346: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:47:50.346: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:47:50.849: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:57.425: %<LONG>: Certificate chain validation has failed.  The certificate (SN: <LONG>) has expired.    Validity period ended on 2026-10-18T06:47:13Z^M
+*Oct 18 07:47:57.426: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:47:59.450: %<LONG>: Certificate chain validation has failed.  The certificate (SN: <LONG>) has expired.    Validity period ended on 2026-10-18T06:47:13Z^M
+*Oct 18 07:48:09.027: %<LONG>: Negotiated Cipher is TLS_AES_128_GCM_SHA256^M
+*Oct 18 07:48:09.027: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1^M
+*Oct 18 07:48:09.530: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+*Oct 18 07:48:16.105: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1^M
+xe1#

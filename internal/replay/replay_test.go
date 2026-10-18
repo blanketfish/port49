@@ -685,3 +685,46 @@ func TestAVerbatimBlobNeverPrintsItsSessionAttributes(t *testing.T) {
 		}
 	}
 }
+
+// A command-shaped request with an empty cmd (`cmd=` with a `cmd-arg`, or a
+// `cmd=reload` followed by `cmd=`) is never a session (spec §5.2). It goes to
+// the authorizer like any command, which denies the empty command
+// no_rule_matched with the policy block attached, so replay agrees with the
+// handler's own record rather than reporting a tampered log.
+func TestAnEmptyCmdCommandShapeReplaysToTheSameDenial(t *testing.T) {
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
+		Attributes: []string{"priv-lvl=15"},
+		Rules:      []engine.Rule{{Verdict: engine.Permit, Rule: "**", Role: "net_operator"}}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"service=shell", "cmd=", "cmd-arg=reload"},
+		{"service=shell", "cmd=reload", "cmd="},
+	} {
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+		st := memory.New(time.Now)
+		st.PutBlob(context.Background(), hash, body, time.Hour)
+		st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+			store.Context{CtxID: "ctx1", Username: "alice", Principal: "user:alice@example.com", PrivLvl: 15, BlobHash: hash}, time.Hour)
+		m := metrics.New(prometheus.NewRegistry())
+		h := author.New(st, &author.Engine{Store: st, Metrics: m}, sink, m, time.Now, platform.Defaults(),
+			time.Hour, time.Minute, time.Hour)
+		r := wire.AuthorRequest{PrivLvl: 15, User: []byte("alice"), Port: []byte("vty0")}
+		for _, a := range args {
+			r.Args = append(r.Args, []byte(a))
+		}
+		resp := h.Handle(context.Background(), authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}, r)
+		if resp.Status != wire.AuthorStatusFail {
+			t.Fatalf("%v: must be denied, got %+v", args, resp)
+		}
+		res := replayAll(t, log.String())
+		if len(res) != 1 || res[0].Status != Agree || res[0].Event != decision.EventAuthorizeCommand || res[0].Reason != decision.NoRuleMatched {
+			t.Fatalf("%v: %+v\n%s", args, res, log.String())
+		}
+	}
+}

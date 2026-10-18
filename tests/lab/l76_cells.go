@@ -1,0 +1,1131 @@
+package lab
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+
+	"github.com/rhwendt/port49/internal/decision"
+)
+
+// L76 measures Nokia SR Linux against port49 over plain TACACS+ (spec §15).
+// The node is opt-in (optInPlatforms): only PORT49_LAB_PLATFORMS=srlinux
+// deploys it.
+const (
+	l76Sel          = "srlinux"
+	l76PlatformName = "nokia_srlinux"
+	l76Node         = "srl1"
+	l76Addr         = "172.100.100.71"
+	l76Image        = "ghcr.io/nokia/srlinux:26.7.2-519"
+	l76Version      = "SR Linux 26.7.2-519"
+	l76Topo         = "topologies/srlinux.clab.yml"
+	l76Config       = "configs/srlinux-startup.cli"
+	// l76Container is containerlab's name for the node: clab-<topology>-<node>.
+	l76Container = "clab-port49-srlinux-srl1"
+	// l76AAALog is the AAA manager's log (SA#configuring-local-accounting).
+	l76AAALog = "/var/log/srlinux/debug/sr_aaa_mgr.log"
+	// l76WrongKeyEnv holds cell (e)'s random wrong key, for port49d only.
+	l76WrongKeyEnv = "PORT49_L76_WRONG_KEY"
+	// l76KeyAnchor is port49d-lab.yaml's standing key block (l28Anchor's text;
+	// l28's is lab-tagged, so it is repeated here and tested against the file).
+	l76KeyAnchor = "  lab_key:\n    current: {version: 1, secret_env: PORT49_LAB_KEY}\n"
+	// l76LocalNameRule is srl_nokia-aaa.yang's must on server-group name.
+	l76LocalNameRule = "Server group name must be 'local' if and only if local server type is 'local'"
+	// l76AdminDefault is SR Linux's documented default admin password
+	// (SA#configuring-authentication-local-users; CLAB#credentials). It is
+	// public, and it is in the leak gate only so no transcript carries it.
+	l76AdminDefault = "NokiaSrl1!"
+)
+
+type l76Cell struct{ id, claim string }
+
+// l76Cells are spec §15 L76's cells, word for word (TestL76CellsAreTheRegistersCells).
+var l76Cells = []l76Cell{
+	{"a", "a user that exists only in port49 logs in over SSH; the session table names it, the port49 group and the priv-lvl; the authentication type on the wire"},
+	{"b", "the authorization requests the login sends with priv-lvl-authorization true: services and attributes; whether any per-command request follows; what the device does with priv-lvl=15 and the optional shell:roles"},
+	{"c", "the accounting records a CLI command sends: start and stop, their attributes; whether a session start or stop is sent"},
+	{"d", "a wrong password: port49's refusal, the time to the device's refusal, and whether a port49 deny falls through to local"},
+	{"e", "a wrong shared secret: port49's no_known_key_matches, and whether the break-glass account still logs in through local, and how fast"},
+	{"f", "port49 stopped: the break-glass login through local and its time; a port49 user refused; whether a CLI command still runs with accounting unreachable, and its time"},
+	{"g", "port49 restarted: the time until the device asks port49 again; the empty connections a quiet minute holds (health checks) and whether port49 logs them"},
+	{"h", "priv-lvl=1 in the reply: the roles the session gets (p49-read only) and the session table's priv-lvl"},
+	{"i", "priv-lvl-authorization false (the default): whether any authorization request is sent, and the roles the session gets"},
+	{"j", "service-request nokia-srl-authorization-role true: the services the device asks for, port49's answers, and whether the login survives them"},
+	{"k", "a priv-lvl 1 user's second exec channel on one SSH login: the session table's Role cell on the first and the second exec, and whether a documented harmless write that p49-read must not be allowed succeeds on either"},
+	{"l", "exit-on-reject true: whether the break-glass account still logs in through local, and how fast, when port49 denies it, with a wrong shared secret and with port49 stopped"},
+}
+
+// l76Claim is the note's Claim: the row's lead and every cell.
+func l76Claim() string {
+	parts := make([]string, len(l76Cells))
+	for i, c := range l76Cells {
+		parts[i] = "(" + c.id + ") " + c.claim
+	}
+	return "Nokia SR Linux against port49 over TACACS+ on port 49, server group `port49` then `local`, " +
+		"accounting to `port49`: " + strings.Join(parts, "; ") + "."
+}
+
+// l76LeafList reads `name [ a b ]` or the same over several lines, as
+// `info` prints it.
+func l76LeafList(text, name string) []string {
+	re := regexp.MustCompile(`(?:^|[\s{])` + regexp.QuoteMeta(name) + `\s+\[([^\]]*)\]`)
+	m := re.FindStringSubmatch(text)
+	if m == nil {
+		return nil
+	}
+	return strings.Fields(m[1])
+}
+
+var (
+	// l76Hashed is a crypt-style hash or SR Linux's reversible key form
+	// ($aes1$ for secret-key; $y$, $ar2$, $6$ for passwords).
+	// The run ends at whitespace, a quote or a closing bracket, so a quoted
+	// value keeps its delimiters. bcrypt ($2a$ $2b$ $2y$), scrypt ($7$) and
+	// argon2 are included.
+	l76Hashed = regexp.MustCompile(`\$(?:aes1|ar2|y|argon2(?:id|i|d)|scrypt|2[aby]|[156789])\$[^\s"'}\]]*`)
+	// l76Keyed is a secret-key, password or authentication-key statement and
+	// its value, after a space, "=" or ":". The value is a quoted string
+	// (spaces and escaped quotes allowed, never across a line), a quote that
+	// never closes (taken to the end of the line), or a bare run that stops
+	// at a quote, so a JSON string's closing quote survives.
+	l76Keyed = regexp.MustCompile(`(\b(?:secret-key|password|authentication-key)(?:[ \t]*[=:][ \t]*|[ \t]+))("(?:[^"\\\n]|\\[^\n])*"|"[^\n]*|[^\s"]+)`)
+	// l76QuotedValue is a quoted value that closes on its own line.
+	l76QuotedValue = regexp.MustCompile(`^"(?:[^"\\\n]|\\[^\n])*"$`)
+	// l76LineWrap is a device's line wrap inside one value: a line break with
+	// the indentation around it. A space inside a line is not one.
+	l76LineWrap = regexp.MustCompile(`\s*\n\s*`)
+	// l76JSONKeyed is the same statements in JSON output: the key, then a
+	// string value that may hold spaces and escaped quotes.
+	l76JSONKeyed = regexp.MustCompile(`("(?:secret-key|password|authentication-key)"[ \t]*:[ \t]*")(?:[^"\\]|\\.)*(")`)
+	// l76Long is the lab rule's sed mask: 24 or more base64-ish characters.
+	l76Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+	// l76Word is a long run the mask leaves alone: a lowercase keyword joined
+	// by hyphens or underscores, such as nokia-srl-authorization-role-netconf
+	// or aaa_accounting_event_type.
+	l76Word = regexp.MustCompile(`^[a-z]+(?:[-_][a-z]+)*$`)
+	// l76SSHKey is an OpenSSH public key with its comment. containerlab
+	// writes the runner's own public keys into admin-user and linuxadmin-user
+	// `ssh-key` (its srl template), and the comment is user@host or an email.
+	// Certificate types (-cert-v01@openssh.com) carry the same comment.
+	l76SSHKey = regexp.MustCompile(`(?:(?:sk-)?(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp\d+)(?:-cert-v01@openssh\.com)?|sk-[a-z0-9-]+@openssh\.com)[ \t]+[A-Za-z0-9+/=]+[^"\]\n]*`)
+	// l76DropLine is the lab rule's grep -v -i.
+	l76DropLine = regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+)
+
+// l76MaskConfig is device configuration made fit for a note: every SSH
+// public key (with its user@host comment) and every hash masked, every
+// secret-key and password value masked, the statements kept.
+func l76MaskConfig(s string) string {
+	s = l76SSHKey.ReplaceAllString(s, "<ssh public key masked>")
+	s = l76Hashed.ReplaceAllString(s, "<masked>")
+	s = l76JSONKeyed.ReplaceAllString(s, "${1}<masked>${2}")
+	return l76MaskLong(l76MaskKeyed(s))
+}
+
+// l76MaskKeyed masks the value of every secret-key, password and
+// authentication-key statement, keeping a quoted value's quotes.
+func l76MaskKeyed(s string) string {
+	return l76Keyed.ReplaceAllStringFunc(s, func(m string) string {
+		sm := l76Keyed.FindStringSubmatch(m)
+		switch sm[2] {
+		case "{", "<masked>", `"<masked>"`:
+			return m
+		}
+		if l76QuotedValue.MatchString(sm[2]) {
+			return sm[1] + `"<masked>"`
+		}
+		return sm[1] + "<masked>"
+	})
+}
+
+// l76IsKeyword is a hyphen- or underscore-joined run of lowercase words, each
+// at most 16 letters and the whole at most 64 characters. A lowercase secret
+// longer than that, or one without separators, is masked; a passphrase of
+// short words is indistinguishable from a keyword, so l76Leaks covers the
+// known ones by value.
+func l76IsKeyword(m string) bool {
+	if len(m) > 64 || !l76Word.MatchString(m) {
+		return false
+	}
+	for _, w := range strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '_' }) {
+		if len(w) > 16 {
+			return false
+		}
+	}
+	return true
+}
+
+// l76MaskLong masks every long base64-ish run that is not a keyword.
+func l76MaskLong(s string) string {
+	return l76Long.ReplaceAllStringFunc(s, func(m string) string {
+		// A decision reason is the closed vocabulary of spec section 5.7,
+		// not a secret; the run may carry its "reason=" prefix.
+		if decision.Known(decision.Reason(strings.TrimPrefix(m, "reason="))) || l76IsKeyword(m) {
+			return m
+		}
+		return "<LONG>"
+	})
+}
+
+// l76FilterLog is the lab rule's shell filter as code, for any device text
+// that is not configuration: lines naming a password, token, secret or JWT
+// are dropped, then hashes and long runs are masked.
+func l76FilterLog(s string) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		if !l76DropLine.MatchString(ln) {
+			keep = append(keep, ln)
+		}
+	}
+	s = l76SSHKey.ReplaceAllString(strings.Join(keep, "\n"), "<ssh public key masked>")
+	s = l76JSONKeyed.ReplaceAllString(l76Hashed.ReplaceAllString(s, "<masked>"), "${1}<masked>${2}")
+	return l76MaskLong(l76MaskKeyed(s))
+}
+
+// l76Grep keeps the lines of text that contain any key, ignoring case.
+func l76Grep(text string, keys []string) string {
+	var keep []string
+	for _, ln := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		low := strings.ToLower(ln)
+		for _, k := range keys {
+			if strings.Contains(low, strings.ToLower(k)) {
+				keep = append(keep, ln)
+				break
+			}
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// l76Leaks names what text must not hold: any of secrets (by index, never by
+// value), any hash, any JWT.
+func l76Leaks(text string, secrets []string) []string {
+	var out []string
+	folded := strings.ToLower(text)
+	squeezed := l76Squeeze(folded)
+	for i, s := range secrets {
+		if s == "" {
+			continue
+		}
+		// Exact, then folded to lower case (a device may upper-case a value)
+		// with line wraps removed (a device may wrap a long one).
+		q := l76Squeeze(strings.ToLower(s))
+		if strings.Contains(text, s) || (q != "" && strings.Contains(squeezed, q)) {
+			out = append(out, fmt.Sprintf("secret #%d", i))
+		}
+	}
+	if l76Hashed.MatchString(text) {
+		out = append(out, "a hash")
+	}
+	if strings.Contains(text, "eyJ") {
+		out = append(out, "a JWT")
+	}
+	if l76SSHKey.MatchString(text) {
+		out = append(out, "an SSH public key")
+	}
+	return out
+}
+
+// l76Squeeze removes each line break with the indentation around it, which
+// rejoins a value the device wrapped. Spaces inside a line stay.
+func l76Squeeze(s string) string {
+	return l76LineWrap.ReplaceAllString(s, "")
+}
+
+// l76Session is one row of `show system aaa authentication session`
+// (SA#display-user-session-information). Current is the row's trailing
+// `*` on the user name. Roles is the row's Role cell, plus the Role cells of
+// the continuation rows that follow it (an empty ID), comma-joined; Odd holds,
+// verbatim, any Role cell that is not a plain role name or a comma list of them.
+type l76Session struct {
+	ID, User, Service, Method, PrivLvl, TTY string
+	Current                                 bool
+	Roles, Odd                              string
+}
+
+// l76RoleName is one role in a Role cell.
+var l76RoleName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// l76TableCells splits a table row into its trimmed cells, without the empty
+// cells outside the outer bars. ok is false for a line with fewer than 8.
+func l76TableCells(ln string) (cells []string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(ln), "|")
+	if len(parts) < 8 {
+		return nil, false
+	}
+	for _, p := range parts[1 : len(parts)-1] {
+		cells = append(cells, strings.TrimSpace(p))
+	}
+	return cells, true
+}
+
+// l76Sessions reads the rows of the session table whose first cell is a
+// number. Header rows, borders and a wrapped login-time line are skipped. A
+// row with an empty first cell that follows a session row adds its last
+// cell, the Role cell, to that session.
+func l76Sessions(out string) []l76Session {
+	var rows []l76Session
+	open := false // a session row has been read since the last header row
+	for _, ln := range strings.Split(out, "\n") {
+		cells, ok := l76TableCells(ln)
+		if !ok {
+			continue
+		}
+		c := append([]string{""}, cells...) // c[1] is the ID cell
+		id := c[1]
+		switch {
+		case id == "":
+			if open {
+				rows[len(rows)-1].addRole(c[len(c)-1])
+			}
+			continue
+		case strings.Trim(id, "0123456789") != "":
+			open = false // a header row: its continuation rows belong to no session
+			continue
+		}
+		open = true
+		user, cur := strings.CutSuffix(c[2], "*")
+		r := l76Session{ID: id, User: user, Service: c[3], Method: c[4], PrivLvl: c[5], TTY: c[6], Current: cur}
+		r.addRole(c[len(c)-1])
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// addRole adds one Role cell to s.
+func (s *l76Session) addRole(cell string) {
+	if cell == "" {
+		return
+	}
+	var names []string
+	for _, n := range strings.Split(cell, ",") {
+		n = strings.TrimSpace(n)
+		if !l76RoleName.MatchString(n) {
+			if s.Odd != "" {
+				s.Odd += " | "
+			}
+			s.Odd += cell
+			return
+		}
+		names = append(names, n)
+	}
+	if s.Roles != "" {
+		s.Roles += ","
+	}
+	s.Roles += strings.Join(names, ",")
+}
+
+// l76SessionRoles is what a note says of user's roles: the Role cells of the
+// user's rows in the session table, or that the table has no row for them. A
+// cell that is not a plain role name or a comma list is quoted verbatim, never
+// guessed at.
+func l76SessionRoles(out, user string) string {
+	var roles []string
+	var odd []string
+	found := false
+	for _, s := range l76Sessions(out) {
+		if s.User != user {
+			continue
+		}
+		found = true
+		if s.Roles != "" {
+			roles = append(roles, strings.Split(s.Roles, ",")...)
+		}
+		if s.Odd != "" {
+			odd = append(odd, s.Odd)
+		}
+	}
+	if !found {
+		return "(no row for `" + user + "` in the session table)"
+	}
+	sort.Strings(roles)
+	roles = slices.Compact(roles)
+	text := fmt.Sprintf("%v", roles)
+	for _, o := range odd {
+		text += fmt.Sprintf(" and an unrecognised Role cell, verbatim: `%s`", o)
+	}
+	return text
+}
+
+// l76UserRows is the raw table text for user: the header rows, then each of
+// the user's rows with the continuation rows under it, exactly as the device
+// printed them. It is "" when the table has no row for user.
+func l76UserRows(out, user string) string {
+	var header, keep []string
+	seen, mine := false, false
+	for _, ln := range strings.Split(out, "\n") {
+		cells, ok := l76TableCells(ln)
+		if !ok {
+			if !seen && strings.HasPrefix(strings.TrimSpace(ln), "+") {
+				header = append(header, ln)
+			}
+			mine = false
+			continue
+		}
+		switch id := cells[0]; {
+		case id == "":
+			if mine {
+				keep = append(keep, ln)
+			} else if !seen {
+				header = append(header, ln)
+			}
+		case strings.Trim(id, "0123456789") != "":
+			if !seen {
+				header = append(header, ln)
+			}
+			mine = false
+		default:
+			seen = true
+			u, _ := strings.CutSuffix(cells[1], "*")
+			mine = u == user
+			if mine {
+				keep = append(keep, ln)
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return strings.Join(append(header, keep...), "\n")
+}
+
+// The device reads (CM#configuration-datastores; the YANG rows of the cite
+// table for the state paths). Each is run as the container's root with
+// sr_cli -d, or in a token login.
+const (
+	l76ReadRunning  = "info from running system aaa"
+	l76ReadGroup    = "info from state system aaa server-group port49"
+	l76ReadSessions = "show system aaa authentication session"
+	l76ReadVersion  = "info from state system information version"
+)
+
+// l76Commands are what every token login runs: the session table with its
+// Role column (SA#display-user-session-information),
+// and the version.
+var l76Commands = []string{l76ReadSessions, l76ReadVersion}
+
+// The mid-run changes of cells (i) and (j), one flat `set /` line each
+// (CLAB#cli's flat form). The live test uses only these constants.
+const (
+	l76PrivLvlAuthzOff = "set / system aaa server-group port49 tacacs priv-lvl-authorization false"
+	l76PrivLvlAuthzOn  = "set / system aaa server-group port49 tacacs priv-lvl-authorization true"
+	l76RoleServiceOn   = "set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role true"
+	l76RoleServiceOff  = "set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role false"
+)
+
+// Cell (l)'s change: exit-on-reject is a leaf of system aaa authentication
+// (srl_nokia-aaa.yang:1165, default false).
+const (
+	l76ExitOnRejectOn  = "set / system aaa authentication exit-on-reject true"
+	l76ExitOnRejectOff = "set / system aaa authentication exit-on-reject false"
+)
+
+var l76SetLines = []string{l76PrivLvlAuthzOff, l76PrivLvlAuthzOn, l76RoleServiceOn, l76RoleServiceOff,
+	l76ExitOnRejectOn, l76ExitOnRejectOff}
+
+// Cell (k)'s write: a checkpoint of the running configuration, which a
+// read-only role must not be allowed to make, and its removal. The first is
+// sent over SSH as the user's exec, the second as the container's root.
+// <name> is a checkpoint name, which may not start with a digit
+// (srl_nokia-common.yang typedef checkpoint-name).
+const (
+	l76CheckpointMakeForm  = "tools system configuration generate-checkpoint name <name>"
+	l76CheckpointClearForm = "tools system configuration checkpoint <name> clear"
+	// The names of the first-exec and second-exec attempts.
+	l76CheckpointNameFirst  = "l76-k-first"
+	l76CheckpointNameSecond = "l76-k-second"
+)
+
+var l76WriteForms = []string{l76CheckpointMakeForm, l76CheckpointClearForm}
+
+func l76CheckpointMake(name string) string {
+	return strings.ReplaceAll(l76CheckpointMakeForm, "<name>", name)
+}
+
+func l76CheckpointClear(name string) string {
+	return strings.ReplaceAll(l76CheckpointClearForm, "<name>", name)
+}
+
+// l76ModelRead is how the schema check reads a YANG model from the image: a
+// container file read, not SR Linux CLI syntax.
+const l76ModelRead = `cat "$(find /opt/srlinux/models -name <model> | head -1)"`
+
+// l76RootForms are the sr_cli forms and file reads the harness runs as the
+// container's root.
+var l76RootForms = []string{
+	"sr_cli -d <command>",
+	l76CheckpointClearForm,
+	"sr_cli --help",
+	"sr_cli -d --candidate-mode --commit-at-end -- <line>",
+	"enter candidate",
+	"commit now",
+	"tail -n 400 " + l76AAALog,
+	l76ModelRead,
+}
+
+// The pages every SR Linux statement is checked against (the plan's cite
+// table): Nokia's 26.7 guide chapters, and containerlab's srl kind page.
+const (
+	l76SAURL   = "https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html"
+	l76CMURL   = "https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html"
+	l76CLABURL = "https://containerlab.dev/manual/kinds/srl/"
+)
+
+type l76Source struct{ what, cite string }
+
+// l76Sources is one row per command, statement or default the run relies
+// on, with its cite. A cite is one or more parts joined by "; ", each one
+// SA#<anchor>, CM#<anchor>, CLAB#<anchor>, YANG <file>[:<line>] or HELP,
+// with an optional note in parentheses that holds no "; ".
+var l76Sources = []l76Source{
+	{l76ReadSessions, "SA#display-user-session-information"},
+	{l76ReadVersion, "CM#configuration-datastores; YANG srl_nokia-system-info.yang:108 (leaf version)"},
+	{l76ReadRunning, "CM#configuration-datastores"},
+	{l76ReadGroup, "CM#configuration-datastores; SA#configuring-aaa-server-group"},
+	{l76PrivLvlAuthzOff, "CLAB#cli (flat form); SA#configuring-tacacsx-authorization"},
+	{l76PrivLvlAuthzOn, "CLAB#cli (flat form); SA#configuring-tacacsx-authorization"},
+	{l76RoleServiceOn, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
+	{l76RoleServiceOff, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
+	{l76ExitOnRejectOn, "CLAB#cli (flat form); YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication)"},
+	{l76ExitOnRejectOff, "CLAB#cli (flat form); YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication)"},
+	{l76CheckpointMakeForm, "CM#configuration-checkpoints (Generating a checkpoint); " +
+		"YANG srl_nokia-tools-configuration.yang:150 (container generate-checkpoint, leaf name)"},
+	{l76CheckpointClearForm, "CM#configuration-checkpoints (Clearing a checkpoint); " +
+		"YANG srl_nokia-tools-configuration.yang:120 (list checkpoint, key id, leaf clear)"},
+	{"sr_cli -d <command>", "HELP (-d/--dumb-terminal, with a positional command run as one line)"},
+	{"sr_cli --help", "HELP"},
+	{l76ModelRead, "YANG srl_nokia-aaa.yang; YANG srl_nokia-aaa-types.yang (the image's own models)"},
+	{"sr_cli -d --candidate-mode --commit-at-end -- <line>", "HELP (example: sr_cli --candidate-mode --commit-at-end -- <command>)"},
+	{"enter candidate", "CM#configuration-modes"},
+	{"commit now", "CM#commit-configuration-in-candidate-mode"},
+	{"tail -n 400 " + l76AAALog, "SA#configuring-local-accounting"},
+	{"authentication-method [ port49 local ]", "SA#configuring-authentication-local-users"},
+	{"user breakglass { password ...; role [ p49-admin ] }", "SA#configuring-authentication-local-users; SA#assign-roles-to-users"},
+	{"authorization { role <n> { services [ cli ]; tacacs { priv-lvl <n> } } }",
+		"SA#configuring-tacacsx-authorization; SA#configuring-service-authorization; SA#service-authorization-local-users; " +
+			"YANG srl_nokia-aaa.yang:763 (leaf-list services, no default)"},
+	{"accounting { accounting-method [ port49 ]; event command { record start-stop } }",
+		"SA#configuring-account; YANG srl_nokia-aaa-types.yang:77 (identity command, base aaa_accounting_event_type)"},
+	{"server-group local { type local }", "SA#configuring-authentication-local-users; YANG srl_nokia-aaa.yang:134 (the name must be local)"},
+	{"server-group port49 { type tacacs; tacacs { priv-lvl-authorization true } }",
+		"SA#configuring-aaa-server-group; SA#configuring-tacacsx-authorization"},
+	{"server 172.100.100.1 { network-instance mgmt; tacacs { port 49; secret-key ... } }",
+		"SA#configuring-aaa-server-group; YANG srl_nokia-aaa-tacacs.yang (port, default 49)"},
+	{"configuration { role <n> { rule / { action read|write } } }", "SA#configuring-role"},
+	{"exit-on-reject: default false", "YANG srl_nokia-aaa.yang:1165"},
+	{"priv-lvl-authorization false: authorization skipped, full admin", "YANG srl_nokia-aaa.yang:254"},
+	{"the TACACS+ health check: a TCP open and close every 30 s", "SA#aaa-server-group-configuration"},
+	{"ssh-server rate-limit: default 20 unauthenticated sessions", "YANG srl_nokia-ssh.yang:479"},
+}
+
+// l76CiteKnown says whether every part of cite is one of the cite kinds.
+func l76CiteKnown(cite string) bool {
+	if cite == "" {
+		return false
+	}
+	for _, part := range strings.Split(cite, "; ") {
+		if !(strings.HasPrefix(part, "SA#") || strings.HasPrefix(part, "CM#") || strings.HasPrefix(part, "CLAB#") ||
+			strings.HasPrefix(part, "YANG ") || part == "HELP" || strings.HasPrefix(part, "HELP (")) {
+			return false
+		}
+	}
+	return true
+}
+
+// l76CiteURL is where one cite part is read: its page and anchor, the
+// image's models, or the image's sr_cli --help.
+func l76CiteURL(part string) string {
+	anchor := func(p string) string {
+		a, _, _ := strings.Cut(p, " ")
+		return a
+	}
+	switch {
+	case strings.HasPrefix(part, "SA#"):
+		return l76SAURL + "#" + anchor(strings.TrimPrefix(part, "SA#"))
+	case strings.HasPrefix(part, "CM#"):
+		return l76CMURL + "#" + anchor(strings.TrimPrefix(part, "CM#"))
+	case strings.HasPrefix(part, "CLAB#"):
+		return l76CLABURL + "#" + anchor(strings.TrimPrefix(part, "CLAB#"))
+	case strings.HasPrefix(part, "YANG "):
+		return "/opt/srlinux/models in " + l76Image
+	default:
+		return "sr_cli --help in " + l76Image
+	}
+}
+
+// l76SourcesSection is the note's Sources: one line per l76Sources row,
+// each cite part followed by where it is read.
+func l76SourcesSection() string {
+	var b strings.Builder
+	for _, s := range l76Sources {
+		var parts []string
+		for _, p := range strings.Split(s.cite, "; ") {
+			parts = append(parts, p+" <"+l76CiteURL(p)+">")
+		}
+		fmt.Fprintf(&b, "- `%s`: %s\n", s.what, strings.Join(parts, "; "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// l76IdentityBase is the base of YANG identity name, without its prefix.
+func l76IdentityBase(yang, name string) string {
+	re := regexp.MustCompile(`identity\s+` + regexp.QuoteMeta(name) + `\s*\{[^}]*?\bbase\s+(?:[\w-]+:)?([\w-]+)\s*;`)
+	m := re.FindStringSubmatch(yang)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// l76SchemaFindingCount is how many findings l76SchemaFindings makes from the
+// image's models; checkSchema refuses a run that sees another number.
+const l76SchemaFindingCount = 5
+
+// l76SchemaFindings is what the image's AAA models say where Nokia's guide
+// says otherwise or nothing. aaa is srl_nokia-aaa.yang, types is
+// srl_nokia-aaa-types.yang.
+func l76SchemaFindings(aaa, types string) []string {
+	var out []string
+	if l76IdentityBase(types, "command") == "aaa_accounting_event_type" &&
+		l76IdentityBase(types, "commands") == "aaa_authorization_event_type" {
+		out = append(out, "The accounting event is `event command` (base aaa_accounting_event_type); "+
+			"the guide's `event commands` is an authorization event type.")
+	}
+	if strings.Contains(aaa, l76LocalNameRule) {
+		out = append(out, "A local server group must be named `local`; the guide's `LOCAL-GROUP` is refused.")
+	}
+	if strings.Contains(aaa, "grouping aaa-authorization-methods-config") &&
+		!strings.Contains(aaa, "uses aaa-authorization-methods-config") &&
+		!strings.Contains(aaa, "uses aaa-authorization-events-top") {
+		out = append(out, "The SR Linux native schema has no TACACS+ authorization method: "+
+			"`aaa-authorization-methods-config` and `aaa-authorization-events-top` are defined in "+
+			"srl_nokia-aaa.yang and never used, so there is no per-command authorization "+
+			"(OpenConfig's openconfig-aaa.yang does use them; OpenConfig mode is not measured).")
+	}
+	if strings.Contains(aaa, "leaf-list services") {
+		out = append(out, "A local role grants no service unless `services` lists one (leaf-list, no default; "+
+			"the guide: \"By default, a role has no services configured\"), and a user whose roles grant none of the "+
+			"service it connects with is refused and the session closed. Both lab roles list `cli`. L76 runs 1 to 4 "+
+			"failed on the lab's own role configuration, which listed no service, not on port49.")
+	}
+	if strings.Contains(aaa, "authorization is skipped for TACACS+ users granting full admin access") {
+		out = append(out, "`priv-lvl-authorization` false (the default) skips authorization and grants full admin.")
+	}
+	return out
+}
+
+// l76SchemaExcerpt is the lines of yang holding any key, trimmed and masked.
+func l76SchemaExcerpt(yang string, keys []string) string {
+	var keep []string
+	for _, ln := range strings.Split(yang, "\n") {
+		for _, k := range keys {
+			if strings.Contains(ln, k) {
+				keep = append(keep, strings.TrimSpace(ln))
+				break
+			}
+		}
+	}
+	return l76MaskConfig(strings.Join(keep, "\n"))
+}
+
+// l76At walks a decoded decision record. The harness's str/sub/strs are
+// lab-tagged; these are their untagged twins for code `make test` covers.
+func l76At(m map[string]any, path ...string) any {
+	var v any = m
+	for _, k := range path {
+		mm, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = mm[k]
+	}
+	return v
+}
+
+func l76Str(m map[string]any, path ...string) string {
+	s, _ := l76At(m, path...).(string)
+	return s
+}
+
+func l76Strs(m map[string]any, path ...string) []string {
+	a, _ := l76At(m, path...).([]any)
+	var out []string
+	for _, v := range a {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// l76Of is the records whose session names user.
+func l76Of(recs []map[string]any, user string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if l76Str(r, "session", "username") == user {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func l76Count(recs []map[string]any, event string) int {
+	n := 0
+	for _, r := range recs {
+		if l76Str(r, "event") == event {
+			n++
+		}
+	}
+	return n
+}
+
+// l76Diagnoses counts the unvalidated records' diagnoses.
+func l76Diagnoses(recs []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, r := range recs {
+		if d := l76Str(r, "unvalidated", "diagnosis"); d != "" {
+			out[d]++
+		}
+	}
+	return out
+}
+
+// l76Services counts the authorization requests' service values.
+func l76Services(recs []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, r := range recs {
+		if e := l76Str(r, "event"); e == "authorize_session" || e == "authorize_command" {
+			out[l76Str(r, "request", "service")]++
+		}
+	}
+	return out
+}
+
+// l76Render is one line per record: what a note shows of the decision log.
+// It holds no credential: records carry only credential_sha256, and this
+// does not print it.
+func l76Render(recs []map[string]any) string {
+	var b strings.Builder
+	for _, r := range recs {
+		ev := l76Str(r, "event")
+		switch {
+		case ev == "account":
+			fmt.Fprintf(&b, "account flags=%s user=%s record=%v\n", l76Str(r, "flags"),
+				l76Str(r, "session", "username"), l76Strs(r, "record", "raw"))
+		case l76At(r, "unvalidated") != nil:
+			fmt.Fprintf(&b, "%s diagnosis=%s\n", ev, l76Str(r, "unvalidated", "diagnosis"))
+		case ev == "authorize_session" || ev == "authorize_command":
+			fmt.Fprintf(&b, "%s %s/%s user=%s service=%s request=%v reply=%v\n", ev, l76Str(r, "verdict"),
+				l76Str(r, "reason"), l76Str(r, "session", "username"), l76Str(r, "request", "service"),
+				l76Strs(r, "request", "raw"), l76Strs(r, "reply", "attributes"))
+		default:
+			fmt.Fprintf(&b, "%s %s/%s method=%s user=%s\n", ev, l76Str(r, "verdict"), l76Str(r, "reason"),
+				l76Str(r, "auth", "method"), l76Str(r, "session", "username"))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// l76WrongKeyConfig is cfg with its one standing key block pointed at
+// l76WrongKeyEnv: port49d then validates no packet the device sends.
+func l76WrongKeyConfig(cfg string) (string, error) {
+	if n := strings.Count(cfg, l76KeyAnchor); n != 1 {
+		return "", fmt.Errorf("the lab config holds the standing lab_key block %d times, want once", n)
+	}
+	return strings.Replace(cfg, l76KeyAnchor,
+		"  lab_key:\n    current: {version: 1, secret_env: "+l76WrongKeyEnv+"}\n", 1), nil
+}
+
+// l76Observation is the note's Observation: the schema check, then each
+// cell under its claim, in register order, then extra (the live test's
+// retries line and Evidence pointer), then the Sources every command
+// and statement cites (pre-flight I3). extra must start with "\n" and end
+// with a newline, as the cells' text does.
+func l76Observation(out map[string]string, schema, extra string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Schema and configuration\n\n%s\n", schema)
+	for _, c := range l76Cells {
+		fmt.Fprintf(&b, "\n### (%s) %s\n\n%s\n", c.id, c.claim, out[c.id])
+	}
+	b.WriteString(extra)
+	fmt.Fprintf(&b, "\n### Sources\n\n%s\n", l76SourcesSection())
+	return b.String()
+}
+
+// l76SafeInvalid is an INVALID message as it may be printed: msg itself when
+// l76Leaks finds nothing in it, else a fixed message that names what leaked
+// by index or shape, never by value.
+func l76SafeInvalid(msg string, secrets []string) string {
+	if leaks := l76Leaks(msg, secrets); len(leaks) > 0 {
+		return fmt.Sprintf("(message withheld: it held %s)", strings.Join(leaks, ", "))
+	}
+	return msg
+}
+
+// l76InvalidText is an INVALID message as it is printed: the long and keyed
+// values masked, then the l76SafeInvalid gate. It does not run l76FilterLog:
+// that drops every line naming a password or token, which would blank the
+// message's own wording ("logged in with a wrong password"). Every caller
+// filters or masks the device text it passes in.
+func l76InvalidText(msg string, secrets []string) string {
+	return l76SafeInvalid(l76MaskLong(l76MaskKeyed(msg)), secrets)
+}
+
+// l76ReturnsFromInvalid says whether invalid logs and returns instead of
+// ending the run: only a deferred restore (restoring) after the run has
+// already failed. Anything else must stop the run.
+func l76ReturnsFromInvalid(restoring, failed bool) bool {
+	return restoring && failed
+}
+
+// l76RunSection is the note's "Run" section, which l76Observation puts
+// between the cells and the Sources: the dials retried after a failure before
+// authentication, and the Evidence pointer. dir is the evidence directory's
+// name under tests/lab/evidence/.
+func l76RunSection(retries []string, dir string) string {
+	list := " none"
+	if len(retries) > 0 {
+		list = "\n\n- " + strings.Join(retries, "\n- ")
+	}
+	return "\n### Run\n\nDials retried after a failure before authentication (one retry each, 5 s later):" + list +
+		"\n\nEvidence: `tests/lab/evidence/" + dir + "/` (device outputs, masked config, AAA log " +
+		"lines, the redacted decision log).\n"
+}
+
+// l76Restoring is the live test's restore flag, apart from l76Env so a unit
+// test can use it.
+type l76Restoring struct{ restoring bool }
+
+// restore runs f as a deferred restore: invalid returns, instead of stopping,
+// while f runs on an already-failing run, and stops the run again once f is
+// done. Every cell's defer goes through it.
+func (r *l76Restoring) restore(f func()) {
+	r.restoring = true
+	defer func() { r.restoring = false }()
+	f()
+}
+
+// l76Summarize is the harness's summarize for an INVALID message, plus what the request
+// asked: the service and the names (never the values) of its attributes, one
+// line per authorization record. Each added line passes l76Leaks, and a hit
+// withholds that one line. The reason is printed verbatim; l76MaskLong keeps
+// it when it is in spec section 5.7's closed vocabulary.
+func l76Summarize(recs []map[string]any, secrets []string) string {
+	if len(recs) == 0 {
+		return "(no records at all reached the decision log)"
+	}
+	var b strings.Builder
+	for _, r := range recs {
+		fmt.Fprintf(&b, "\n  event=%s verdict=%s reason=%s flags=%s user=%s port=%s", l76Str(r, "event"), l76Str(r, "verdict"),
+			l76Str(r, "reason"), l76Str(r, "flags"), l76Str(r, "session", "username"), l76Str(r, "session", "port"))
+		if d := l76Str(r, "unvalidated", "diagnosis"); d != "" {
+			fmt.Fprintf(&b, " unvalidated_diagnosis=%s", d)
+		}
+		if l76At(r, "request") == nil {
+			continue
+		}
+		var names []string
+		for _, a := range l76Strs(r, "request", "raw") {
+			names = append(names, strings.SplitN(a, "=", 2)[0])
+		}
+		line := fmt.Sprintf("\n    service=%s attribute names: %s", l76Str(r, "request", "service"), strings.Join(names, ", "))
+		if leaks := l76Leaks(line, secrets); len(leaks) > 0 {
+			line = "\n    (request line withheld: it held " + strings.Join(leaks, ", ") + ")"
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// l76DecisionDump is the run's decision records as the INVALID dump keeps
+// them: credential hashes redacted, then l76FilterLog. The caller still gates
+// it with l76Leaks. A record that cannot be encoded is noted, not skipped.
+func l76DecisionDump(recs []map[string]any) string {
+	var lines []string
+	for _, r := range recs {
+		b, err := json.Marshal(r)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("(record not encoded: %v)", err))
+			continue
+		}
+		lines = append(lines, string(l76RedactHashes(b)))
+	}
+	return l76FilterLog(strings.Join(lines, "\n"))
+}
+
+// Cell (b)'s probe replies: the optional role attribute the shared lab policy
+// sends, and an invented optional attribute that separates "refuses any
+// unknown optional attribute" (IOS XE, L10) from "refuses this role name".
+const (
+	l76ProbeRoles    = `["priv-lvl=15","shell:roles*network-admin"]`
+	l76ProbeInvented = `["priv-lvl=15","p49-probe*x"]`
+)
+
+// l76AttrProbeText is one of cell (b)'s probes as the note states it: the
+// reply attributes port49 was set to send, whether SR Linux let the user in,
+// and port49's records. A refused login is an observation, not INVALID. It
+// names the Nokia page whose statement the outcome confirms or contradicts.
+func l76AttrProbeText(label, attrs, user string, loginErr error, recs []map[string]any) string {
+	outcome := "**logged in**"
+	if loginErr != nil {
+		outcome = "**refused**: " + strings.Join(strings.Fields(loginErr.Error()), " ")
+	}
+	return fmt.Sprintf("Probe (%s): port49 replied `%s`; `%s` %s. Nokia's SA#authorization-use-tacacsx-server "+
+		"says \"Unknown optional VSAs are discarded\": a login that is refused here contradicts it, one that "+
+		"succeeds confirms it.\n\n```\n%s\n```", label, attrs, user, outcome, l76Render(recs))
+}
+
+// l76ChdirNote is the note's observation of the home-directory line a token
+// login prints: SR Linux's sshd names a home directory the user does not
+// have. It is cosmetic. It is "" when no output carries the line.
+func l76ChdirNote(outs []string) string {
+	for _, o := range outs {
+		if strings.Contains(o, "Could not chdir to home directory") {
+			return "Observation: each token login prints `Could not chdir to home directory /home/<user>: No such " +
+				"file or directory` before its command output. The user has no home directory on the device; the " +
+				"line is cosmetic and the commands ran."
+		}
+	}
+	return ""
+}
+
+// l76BodyHash is an unvalidated record's body_sha256 value: a digest of a
+// packet body port49 could not validate (the wrong-key cell). It is no
+// credential, but evidence names the field and holds no 64-hex value under
+// a *_sha256 key, so L76 redacts it as the credential hashes are.
+var l76BodyHash = regexp.MustCompile(`("body_sha256"\s*:\s*")[0-9A-Fa-f]{64}(")`)
+
+// l76RedactHashes is l72RedactCredentialHash plus body_sha256, keeping every
+// key. cert_sha256, a public certificate fingerprint, is left alone. L76 uses
+// it for every decision-log text it keeps; the shared redactor is L72's and L73's.
+func l76RedactHashes(b []byte) []byte {
+	return l76BodyHash.ReplaceAll(l72RedactCredentialHash(b), []byte("${1}<redacted sha256>${2}"))
+}
+
+// l76DecisionEvidence is the run's decision records as the committed evidence
+// keeps them: one JSON line each, hashes redacted.
+func l76DecisionEvidence(recs []map[string]any) (string, error) {
+	var log strings.Builder
+	for _, r := range recs {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return "", fmt.Errorf("re-encoding a record: %w", err)
+		}
+		log.Write(l76RedactHashes(b))
+		log.WriteByte('\n')
+	}
+	return log.String(), nil
+}
+
+// l76VersionValue is the device's version value as `info from state system
+// information version` prints it: v<major>.<minor>.<patch>-<build>, then
+// -g and a short (7 to 12 hex) commit id. At 24 characters or more it would be
+// masked as a long run; it is public and names the image under test.
+var l76VersionValue = regexp.MustCompile(`\bv?\d+\.\d+\.\d+(?:-\d+)?(?:-g[0-9a-f]{7,12})?\b`)
+
+// l76VersionText is l76FilterLog for the version read alone: the version
+// value is kept, everything else is filtered and masked as usual. It is the
+// one place the exemption applies; l76MaskLong is unchanged.
+func l76VersionText(s string) string {
+	var kept []string
+	masked := l76VersionValue.ReplaceAllStringFunc(s, func(m string) string {
+		kept = append(kept, m)
+		return fmt.Sprintf("\x00%d\x00", len(kept)-1)
+	})
+	out := l76FilterLog(masked)
+	for i, m := range kept {
+		out = strings.Replace(out, fmt.Sprintf("\x00%d\x00", i), m, 1)
+	}
+	return out
+}
+
+// l76Channel is one accounted command of a login, from its start record.
+type l76Channel struct {
+	Cmd      string
+	Port     string
+	Priv     int
+	Redacted bool
+}
+
+// l76ChannelFacts is user's accounting start records in log order: one per
+// command, so the n-th is the n-th exec channel of a login that runs commands
+// one after another.
+func l76ChannelFacts(recs []map[string]any, user string) []l76Channel {
+	var out []l76Channel
+	for _, r := range recs {
+		if l76Str(r, "event") != "account" || l76Str(r, "flags") != "start" || l76Str(r, "session", "username") != user {
+			continue
+		}
+		c := l76Channel{Port: l76Str(r, "session", "port")}
+		if v, ok := l76At(r, "record", "priv_lvl").(float64); ok {
+			c.Priv = int(v)
+		}
+		if b, ok := l76At(r, "record", "redacted").(bool); ok {
+			c.Redacted = b
+		}
+		for _, a := range l76Strs(r, "record", "raw") {
+			if rest, ok := strings.CutPrefix(a, "cmd="); ok {
+				c.Cmd = rest
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// l76ChannelText states, from port49's accounting records, the port and
+// priv-lvl each command of one login was accounted at, whether they differ
+// (the second exec channel), and that port49 redacted a word of a command.
+// granted is the priv-lvl the reply gave.
+func l76ChannelText(ch []l76Channel, granted int) string {
+	if len(ch) == 0 {
+		return "No accounting start record was kept for this login, so the accounted port and priv-lvl are not known."
+	}
+	var b strings.Builder
+	b.WriteString("Accounted commands of this login, in order, from `evidence/L76-nokia_srlinux/decisions.jsonl`:\n\n")
+	for i, c := range ch {
+		fmt.Fprintf(&b, "%d. `%s`: port `%s`, priv-lvl %d\n", i+1, l76FilterLog(c.Cmd), c.Port, c.Priv)
+	}
+	differs := false
+	for _, c := range ch[1:] {
+		if c.Port != ch[0].Port || c.Priv != ch[0].Priv {
+			differs = true
+		}
+	}
+	if differs {
+		fmt.Fprintf(&b, "\nThe commands after the first are accounted on a different port or at a different priv-lvl "+
+			"than the first, while the reply granted priv-lvl %d. This line is only what the device sent port49; "+
+			"whether that channel runs with more authority is cell (k)'s question.\n", granted)
+	}
+	for _, c := range ch {
+		if c.Redacted {
+			b.WriteString("\nport49 redacts the word after `authentication` in the accounted `show system aaa authentication` " +
+				"command (the records carry `redacted: true` and the word is shown as `\u00abredacted\u00bb`): its accounting " +
+				"redaction treats that word as a credential, so an operator reading SR Linux accounting sees the command " +
+				"without it. Input for the `nokia_srlinux` adapter: whether that rule should be platform-aware.\n")
+			break
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// What root's clear found: the device's own state, and the verdict of cell
+// (k)'s write. The make's output is evidence only (the second exec channel
+// prints a chdir line that says "No such file or directory", so no word list
+// can read it).
+const (
+	l76WriteExists  = "exists"  // the clear removed a checkpoint: the write happened
+	l76WriteAbsent  = "absent"  // the clear said it does not exist: the write was refused
+	l76WriteUnknown = "unknown" // the clear failed some other way
+)
+
+// l76Write is one write attempt of cell (k).
+type l76Write struct {
+	Name     string
+	State    string // l76WriteExists, l76WriteAbsent or l76WriteUnknown
+	MakeOut  string // filtered
+	ClearOut string // filtered
+}
+
+// l76WriteState reads root's clear: a checkpoint it removed existed.
+func l76WriteState(clearOut string, clearErr error) string {
+	switch {
+	case strings.Contains(clearOut, "does not exist"):
+		return l76WriteAbsent
+	case clearErr == nil && !strings.Contains(strings.ToLower(clearOut), "error"):
+		return l76WriteExists
+	}
+	return l76WriteUnknown
+}
+
+// l76Refusal says whether the make's output is SR Linux's authorization
+// refusal. A line other than the message (the chdir line, say) does not count.
+func l76Refusal(out string) bool {
+	return strings.Contains(out, "No authorization to execute command")
+}
+
+func l76NewWrite(name, makeOut, clearOut string, clearErr error) l76Write {
+	return l76Write{Name: name, State: l76WriteState(clearOut, clearErr), MakeOut: makeOut, ClearOut: clearOut}
+}
+
+// l76WriteText is cell (k)'s verdict: first is the attempt as the first exec
+// of its login, second as the second exec.
+func l76WriteText(first, second l76Write) string {
+	var b strings.Builder
+	did := func(w l76Write) string {
+		switch w.State {
+		case l76WriteExists:
+			return "**succeeded** (root found and removed the checkpoint)"
+		case l76WriteAbsent:
+			return "was refused (root found no checkpoint)"
+		}
+		return "**could not be determined** (root's clear failed some other way)"
+	}
+	wrote := func(w l76Write) bool { return w.State != l76WriteAbsent }
+	fmt.Fprintf(&b, "A checkpoint is a harmless write that the `p49-read` role (`rule / { action read }`) must not be allowed "+
+		"(CM#configuration-checkpoints). Whether it happened is read from the device's own state, root's clear afterwards; "+
+		"the make's output is evidence only. As the first exec of a priv-lvl 1 login it %s; as the second exec it %s.", did(first), did(second))
+	switch {
+	case wrote(first) || wrote(second):
+		b.WriteString("\n\n**Security finding:** a priv-lvl 1 user, whose roles are `p49-read` only, ")
+		switch {
+		case first.State == l76WriteExists && second.State == l76WriteExists:
+			b.WriteString("wrote on both exec channels of one SSH login: the `p49-read` rule `/ read` does not gate `tools` commands.")
+		case first.State == l76WriteExists:
+			b.WriteString("wrote on the first exec channel of one SSH login; the second exec channel refused the same write.")
+		case second.State == l76WriteExists:
+			b.WriteString("wrote on the second exec channel of one SSH login; the first exec channel of the same login, with the same roles, refused the same write.")
+		default:
+			b.WriteString("may have written: the device's state after the attempt could not be determined for at least one channel, " +
+				"so a write is not ruled out. Treat it as a write until a run reads the state.")
+		}
+		b.WriteString(" This is not INVALID; it is a measurement the `nokia_srlinux` adapter and plan 12 must carry.")
+	default:
+		b.WriteString("\n\nThe write was refused on both channels, so the second exec's priv-lvl 15 accounting is not shown to " +
+			"add authority for a write.")
+	}
+	for _, w := range []l76Write{first, second} {
+		fmt.Fprintf(&b, "\n\n`%s`: make said %q; root's clear said %q.", w.Name, w.MakeOut, w.ClearOut)
+		if l76Refusal(w.MakeOut) == (w.State == l76WriteExists) && w.State != l76WriteUnknown {
+			fmt.Fprintf(&b, " The device's output and root's clear disagree about `%s`; the clear is the device's state and decides.", w.Name)
+		}
+	}
+	return b.String()
+}
+
+// l76ExitDefaultNote is on the break-glass cells that ran at the default.
+const l76ExitDefaultNote = "These break-glass results hold for `exit-on-reject` false, the default; cell (l) repeats them at true."
+
+// l76DeviceMismatchNote explains cell (d)'s reason.
+const l76DeviceMismatchNote = "The wrong password is a random string shaped like a token, so port49's device-tag check " +
+	"refuses it as `device_mismatch` (a token cut for another device, internal/daemon/authen/authen.go). A mistyped human " +
+	"password is not token-shaped and would reach `token_not_found`, as the break-glass line shows."
+
+// l76PrivLvlAuthzHazard is cell (i)'s operator hazard.
+const l76PrivLvlAuthzHazard = "**Operator hazard:** with `priv-lvl-authorization` at its default (false) no authorization " +
+	"request reaches port49, so port49's privilege and role answer is never asked for: every user port49 authenticates gets " +
+	"whatever the device grants without it. The YANG says that is full admin access (srl_nokia-aaa.yang:254); this run " +
+	"measured only reads as that user, so the full-admin claim is YANG-stated and not measured. Plan 12's reference config " +
+	"sets `priv-lvl-authorization true`."
+
+// l76ExitHazard is cell (l)'s operator line: refused names the scenarios in
+// which break-glass was refused with exit-on-reject true.
+func l76ExitHazard(refused []string) string {
+	if len(refused) == 0 {
+		return "In every scenario the break-glass account still logged in through `local` with `exit-on-reject` true."
+	}
+	return "**Operator hazard:** with `exit-on-reject` true the break-glass account was locked out when: " +
+		strings.Join(refused, "; ") + ". That is the configuration plan 12 would ship, so these are what an operator " +
+		"meets at 3am."
+}
+
+// l76FallThroughHazard is cell (d)'s operator hazard, with the cost cell (l)
+// measured for the fix.
+const l76FallThroughHazard = "**Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies " +
+	"still gets in if the device has a local account for them. port49's deny is not final on this platform. " +
+	"Setting `exit-on-reject` true makes it final, at a cost cell (l) measures: with it true the break-glass " +
+	"account is refused while port49 is up and denies it. Plan 12's reference config sets `exit-on-reject` " +
+	"(Ruling 1) knowing that."

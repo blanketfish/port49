@@ -1,0 +1,131 @@
+### typed `set system tacplus-server 192.0.2.71 ?`, then Ctrl-U
+set system tacplus-server 192.0.2.71 ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  port                 TACACS+ authentication server port number^M
+  routing-instance     Routing instance^M
+  secret               Shared <MASKED> the authentication server^M
+  single-connection    Optimize TCP connection attempts^M
+  source-address       Use specified address as source address^M
+  timeout              Request timeout period (1..90 seconds)^M
+> tls                  TACACS+ over TLS^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set system tacplus-server 192.0.2.71    ^H^H^H^Mbreakglass@srx1#                                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set system tacplus-server 192.0.2.71 tls ?`, then Ctrl-U
+set system tacplus-server 192.0.2.71 tls ?^M
+Possible completions:^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+> mutual-authentication  Enable TLS mutual authentication^M
++ trusted-ca-group     Name of the trusted CA groups (maximum 20)^M
+[edit]^M
+^Mbreakglass@srx1# set system tacplus-server 192.0.2.71 tls    ^H^H^H^Mbreakglass@srx1#                                            ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set system tacplus-server 192.0.2.71 tls mutual-authentication ?`, then Ctrl-U
+set system tacplus-server 192.0.2.71 tls mutual-authentication ?^M
+Possible completions:^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  certificate-id       Local Certificate ID^M
+[edit]^M
+^Mbreakglass@srx1# set system tacplus-server 192.0.2.71 tls mutual-authentication    ^H^H^H^Mbreakglass@srx1#                                                                  ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set system accounting destination tacplus server 192.0.2.71 ?`, then Ctrl-U
+set system accounting destination tacplus server 192.0.2.71 ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  port                 TACACS+ authentication server port number^M
+  routing-instance     Routing instance^M
+  secret               Shared <MASKED> the authentication server^M
+  single-connection    Optimize TCP connection attempts^M
+  source-address       Use specified address as source address^M
+  timeout              Request timeout period (1..90 seconds)^M
+> tls                  TACACS+ over TLS^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set system accounting destination tacplus server 192.0.2.71    ^H^H^H^Mbreakglass@srx1#                                                               ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set system accounting destination tacplus server 192.0.2.71 tls ?`, then Ctrl-U
+set system accounting destination tacplus server 192.0.2.71 tls ?^M
+Possible completions:^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+> mutual-authentication  Enable TLS mutual authentication^M
++ trusted-ca-group     Name of the trusted CA groups (maximum 20)^M
+[edit]^M
+^Mbreakglass@srx1# set system accounting destination tacplus server 192.0.2.71 tls    ^H^H^H^Mbreakglass@srx1#                                                                   ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set system accounting destination tacplus server 192.0.2.71 tls mutual-authentication ?`, then Ctrl-U
+set system accounting destination tacplus server 192.0.2.71 tls mutual-authentication ?^M
+Possible completions:^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  certificate-id       Local Certificate ID^M
+[edit]^M
+^Mbreakglass@srx1# set system accounting destination tacplus server 192.0.2.71 tls mutual-authentication    ^H^H^H^Mbreakglass@srx1#                                                                                         ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set security pki ?`, then Ctrl-U
+set security pki ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
+> acme-account-key     ACME account key^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+> auto-re-enrollment   Auto re-enroll of certificate^M
+> ca-profile           Certificate authority profile configuration^M
+> ca-profile-group     Certificate Authority profile group configuration^M
+> default-trusted-ca-certs  Default trusted CA certs automatic download configuration^M
+> traceoptions         PKI trace options^M
+> trap                 Trap options for PKI certificates^M
+> trusted-ca-group     Trusted Certificate Authority group configuration^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set security pki    ^H^H^H^Mbreakglass@srx1#                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set security pki ca-profile l73probe ?`, then Ctrl-U
+set security pki ca-profile l73probe ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
+> administrator        Administrator information^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+  ca-identity          Certificate authority identifier^M
+> enrollment           Enrollment parameters for certificate authority^M
+  proxy-profile        Use specified proxy server^M
+> revocation-check     Method for checking certificate revocations^M
+  routing-instance     Use specified routing instance^M
+  source-address       Use specified address as source address^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set security pki ca-profile l73probe    ^H^H^H^Mbreakglass@srx1#                                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set security pki ca-profile l73probe revocation-check ?`, then Ctrl-U
+set security pki ca-profile l73probe revocation-check ?^M
+Possible completions:^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
+> crl                  Certificate revocation list configuration^M
+  disable              Disable revocation check^M
+> ocsp                 Online Certificate Status Protocol (OCSP) configuration^M
+  use-crl              Use CRL for revocation check^M
+  use-ocsp             Use OCSP for revocation check^M
+[edit]^M
+^Mbreakglass@srx1# set security pki ca-profile l73probe revocation-check    ^H^H^H^Mbreakglass@srx1#                                                         ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `set security pki trusted-ca-group l73probe ?`, then Ctrl-U
+set security pki trusted-ca-group l73probe ?^M
+Possible completions:^M
+  <[Enter]>            Execute this command^M
++ apply-groups         Groups from which to inherit configuration data^M
++ apply-groups-except  Don't inherit configuration data from these groups^M
++ ca-profiles          Name of the CA profiles (maximum 20)^M
+  |                    Pipe through a command^M
+[edit]^M
+^Mbreakglass@srx1# set security pki trusted-ca-group l73probe    ^H^H^H^Mbreakglass@srx1#                                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+

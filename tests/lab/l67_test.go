@@ -1298,7 +1298,7 @@ func (x *l67X) composeHalf(t *testing.T) {
 		t.Fatal(err)
 	}
 	var l *lab
-	for _, p := range sel {
+	for _, p := range rowsFor(sel, false) {
 		if e2ePlatform(p.name) {
 			l = labFor(t, p)
 			break

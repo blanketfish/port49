@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,32 @@ func TestL72RedactsTheCredentialHash(t *testing.T) {
 	}
 	if again := l72RedactCredentialHash([]byte(got)); string(again) != got {
 		t.Fatal("redaction is idempotent")
+	}
+}
+
+// A mint record writes token_sha256 as an array; the redaction and the leak
+// check cover that shape too (the cEOS note 3a19c3da committed 1,240 of them).
+func TestL72RedactsTheArrayFormOfTheTokenHash(t *testing.T) {
+	a, b := strings.Repeat("ab12", 16), strings.Repeat("ef56", 16)
+	mint := `{"auth":{"method":"lab"},"event":"mint","token_sha256":["` + a + `"],"cert_sha256":"` + strings.Repeat("cd34", 16) + `"}`
+	if leaks := l72HashValueLeaks(mint); !slices.Equal(leaks, []string{"token_sha256"}) {
+		t.Fatalf("the check misses the array form: %q", leaks)
+	}
+	got := string(l72RedactCredentialHash([]byte(mint)))
+	if strings.Contains(got, a) || !strings.Contains(got, `"token_sha256":["<redacted sha256>"]`) || !strings.Contains(got, strings.Repeat("cd34", 16)) {
+		t.Fatalf("got %s", got)
+	}
+	if leaks := l72HashValueLeaks(got); len(leaks) != 0 {
+		t.Fatalf("still leaks %q", leaks)
+	}
+	two := `{"credential_sha256" : [ "` + a + `" , "` + b + `" ]}`
+	if got := string(l72RedactCredentialHash([]byte(two))); strings.Contains(got, a) || strings.Contains(got, b) {
+		t.Fatalf("got %s", got)
+	}
+	if leaks := l72HashValueLeaks(two); !slices.Equal(leaks, []string{"credential_sha256"}) {
+		t.Fatalf("%q", leaks)
+	}
+	if leaks := l72HashValueLeaks(`{"client_cert_sha256":"` + a + `","x_sha256":"` + a + `"}`); !slices.Equal(leaks, []string{"x_sha256"}) {
+		t.Fatalf("%q", leaks)
 	}
 }

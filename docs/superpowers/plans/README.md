@@ -297,6 +297,28 @@ minor not taken, ledgered as R30. **Re-review 2026-10-17** (1 Important, 4 Minor
 serves the union of every marks snapshot and writes only its own, a broker's pins and logouts in a
 record it cannot read, a heal-time key fault exits 1, only the heal's load lifts the ceiling, and a
 forget re-run after a directory restore. It opens L74 and L75.
+**L73 measured 2026-10-18** (`2026-10-17-l73-device-tls.md`; branch `test/l73-junos`): vJunos-router
+26.2R1.7, C8000V 17.18.02, N9Kv 10.6(2)F and cEOS-lab 4.36.3M, all ten cells each; L71 addenda for
+those four, IOL-XE 17.18.02 (no client) and XRd 26.1.1 (lists `tls`); L73 closed (vJunos-switch
+skipped; SRX unmeasured; a full L73 row on XRd 26.1.1 goes to the qualification-suite plan).
+**L76 measured 2026-10-18** (`2026-10-17-l76-srlinux.md`; branch `test/l76-srlinux`): Nokia SR Linux
+26.7.2-519 over TACACS+, cells (a)-(l); L76 closed. Inputs to a `nokia_srlinux` adapter and plan 12's
+SR Linux reference config:
+- priv-lvl maps to the local roles at or below it, and priv-lvl 1 gets `p49-read` only (h); each local
+  role must list `services [ cli ]` or the login is refused.
+- `priv-lvl-authorization false` (the default) sends port49 no authorization request, so port49's
+  privilege and role answer is never asked for (i). The YANG says that is full admin; the run measured
+  only reads. The reference config sets it true.
+- A port49 deny falls through to local with `exit-on-reject` at its default (d). With it true (l),
+  break-glass is **refused while port49 is up and denies it**, and still logs in through local with a
+  wrong shared secret or with port49 stopped; the reference config sets it knowing that cost.
+- The second exec channel of one login is accounted at priv-lvl 15 on port `unknown`, even for a
+  priv-lvl 1 user (c, h); the session table shows `p49-read` on both channels and a checkpoint write is
+  refused on both (k), so the accounting is not shown to add authority for a write.
+- Accounting is per CLI command, start and stop, with no exec session records (c); port49 redacts the
+  word after `authentication` in `show system aaa authentication` (c).
+- After a port49 restart the device asked again within 1 s, and health checks open connections that carry
+  no payload and write no records (g).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7156,14 +7178,73 @@ the inventory-only refresh's cost at fleet size.
 (internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
 
+**Carried from L76** (closed 2026-10-18; `tests/lab/results/L76-nokia_srlinux.md`): the SR Linux reference
+configuration sets:
+- `system aaa authentication exit-on-reject true` (cell l: break-glass is refused while port49 is up
+  and denies it, and logs in with port49 stopped or a wrong shared secret);
+- `priv-lvl-authorization true` on the port49 server group (cell i);
+- `services [ cli ]` on every local role that a TACACS+ priv-lvl maps to (schema findings).
+
+Before plan 12 ships `exit-on-reject true`, measure one case L76 could not reach: port49 up but
+answering ERROR (its store unreachable, `store_unavailable`). L76's store is in memory, so cell (l)
+covered a deny, a wrong key and port49 stopped, but not this one. If SR Linux treats an ERROR as a
+reject, break-glass is locked out exactly when the store is down. That is the 3am case, so the
+reference config waits on the measurement.
+
 **Carried from plan 11** (decision 50):
-- The reference device AAA configuration for `transport: tls`, per platform, written from L73 once
-  an image carries a client (plan 11 Q1): port (300; Cisco's documents default 6049), SNI, the
-  client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth), and no
-  non-TLS fallback server for the same host (RFC 9887 §5.1.1). **Junos** (per Juniper
-  documentation, unmeasured until L73 closes): mutual TLS is optional there and port49 requires the
-  client certificate, so the configuration must set `tls mutual-authentication certificate-id <id>`;
-  a client that sends no certificate is refused `no_client_certificate` (measured, L72 cell c).
+- The reference device AAA configuration for `transport: tls`, per platform, written from L73
+  (closed 2026-10-18; every reading below is from `tests/lab/results/L73-<platform>.md`): port,
+  SNI, the client certificate's enrolment (subjectAltName as `device_identity` expects, clientAuth),
+  single-connection, the fallback timings, and no non-TLS fallback server for the same host
+  (RFC 9887 §5.1.1). **Junos** (vJunos-router 26.2R1.7): mutual TLS is optional there and port49
+  requires the client certificate, so the configuration must set `tls mutual-authentication
+  certificate-id <id>`; a client that sends no certificate is refused `no_client_certificate`
+  (measured, L72 cell c). The L73 inputs, per platform:
+  - **Port (a).** Junos (`L73-juniper_vjunos-router.md`) and NX-OS (`L73-cisco_nxos.md`) dial 49
+    when no port is set, so the reference configuration sets the port on the device; IOS XE dials
+    6049 (`L73-cisco_iosxe.md`); EOS defaults to 300 (`L73-arista_ceos.md`). NX-OS sent a TLS
+    ClientHello (215 bytes, four connections) to :49, where the RFC 8907 listener was running. The
+    note shows no port49 record for them; if the RFC 8907 listener strikes them, ruling 17 shares
+    the strike with 300. Set the port before the first login.
+  - **SNI (c).** Junos sends the literal address as server name, so `server_names` must list it or
+    stay unset (`L73-juniper_vjunos-router.md`); IOS XE, NX-OS and EOS send none.
+  - **Enrolment (e).** Every platform's leaf is clientAuth only. Junos, IOS XE and NX-OS send leaf
+    and intermediate; EOS sends its leaf alone, so set `intermediates_file`
+    (`L73-arista_ceos.md`). NX-OS needs an RSA key: the ECC key Cisco document 224882 makes was
+    refused at `crypto ca enroll` ("no rsa key-pair is associated with the trustpoint
+    configuration"), so a reference configuration written from the document fails on 10.6(2)F
+    (`L73-cisco_nxos.md`). On Junos the lab filled the TLS trust folder and placed the client certificate through a
+    lab-only root shell (`L73-juniper_vjunos-router.md`). The refusals that led there (the image
+    naming a root-owned folder, a super-user's `file make-directory` refused) were seen in earlier
+    runs and are not in the note, so "Junos needs root" is not yet a measured claim. If it holds,
+    it is operator toil at fleet scale, to raise with the vendor.
+  - **Single-connection (h).** Without it one login opened 1 (Junos), 6 (IOS XE), 5 (NX-OS) and 6
+    (EOS) connections. With it the logins opened 2 then 1 new connections on Junos
+    (`L73-juniper_vjunos-router.md`), 1 then 0 on IOS XE and 1 then 0 on EOS, and 0 then 0 on NX-OS,
+    which reused the readiness probe's connection (`L73-cisco_iosxe.md`, `L73-arista_ceos.md`,
+    `L73-cisco_nxos.md`).
+  - **Server identity (d).** IOS XE 17.18.02 accepted a server certificate naming another address,
+    or none (cell d): it does not check the server's identity. Issue port49's server certificate
+    from a CA the device trusts for nothing else (`L73-cisco_iosxe.md`). Unproven on Junos and
+    NX-OS: both failed the login on a dNSName-only and on a wrong-iPAddress certificate with the
+    cause unproven (`L73-juniper_vjunos-router.md`, `L73-cisco_nxos.md`); EOS refused both with
+    `bad_certificate` (`L73-arista_ceos.md`). All four refused an expired certificate and one from
+    an unknown CA.
+  - **Fallback timings (i), warning first.** **When port49's store is down (ERROR replies), IOS
+    XE 17.18.02 over TLS, as on 49 (L4), does not fall to its local method, so break-glass fails** (ok false in
+    4.1 s after two `store_unavailable` records, `L73-cisco_iosxe.md`). Measured on the others
+    with the same fault: break-glass landed on Junos in 2.2 s (`L73-juniper_vjunos-router.md`),
+    EOS in 2.0 s (`L73-arista_ceos.md`) and NX-OS in 5.2 s (`L73-cisco_nxos.md`). After an alert,
+    a reset at Accept and a decline window it landed on all four: Junos about 45 ms, EOS 2.0 s,
+    IOS XE 5.1 s (alert), 21 ms (reset), 47 ms (window), NX-OS 5.2 s (reset 198 ms). NX-OS waits 5.00 s per handshake, so `handshake_timeout` must
+    exceed 5s and a login takes about 25 s (`L73-cisco_nxos.md`). IOS XE: two `tacacs server`
+    objects cannot share an address, so a TLS server replaces the plain one, and after declines the
+    server stays Dead for 57 to 67 s (`L73-cisco_iosxe.md`).
+  - **Never list a non-TLS server after a TLS one** on Junos or EOS: in the mixed list (j2) Junos
+    opened one connection and EOS three to the plain server, each reset at once, so what they
+    would have sent is unmeasured. IOS XE and NX-OS opened none. No platform sent a TACACS+ header.
+  - **XRd 26.1.1.** Its sshd rate-limits at 60 sessions a minute by default
+    (`L71-cisco_xrd.md`), which a login test must stay under.
 - Every deployment shape exposes `tls_listener.listen` (default 300) beside 49, with the source
   address preserved as for 49. Binding 300 needs what binding 49 does.
 - Alarms: `rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])` by outcome;
@@ -7267,8 +7348,11 @@ capabilities (plan 12 states it; this guide repeats it), and a table of `port49 
 9887 page (the two listeners, `listen: none`, `tls_listener`'s keys, device identity by
 inventory name or address, revocation, the 3am table, migrating a device from `tcp` to `tls`
 with the window where a device lists both servers kept short (RFC 9887 §6.1), and the server
-certificate's names: the DNS-ID or IP-ID devices are configured with, and any wildcard confined to
-a subdomain only TACACS+ servers use (RFC 9887 §5.1.6)), and the `tls_outcome` vocabulary in the
+certificate's names (a device configured with a DNS-ID or IP-ID is not shown to check it: IOS XE
+17.18.02 accepted a certificate naming another address, or none, so the server certificate must
+come from a CA the device trusts for nothing else, `tests/lab/results/L73-cisco_iosxe.md`; Junos and
+NX-OS unproven; any wildcard confined to a subdomain only TACACS+ servers use, RFC 9887 §5.1.6),
+and the `tls_outcome` vocabulary in the
 reference. The page also carries, each as what an operator sees and the fix:
 - **`tls_name_clash`.** Two `tls` devices whose names are equal under ASCII case fold are both
   refused admission, and the start names them. Rename one.
@@ -7276,11 +7360,18 @@ reference. The page also carries, each as what an operator sees and the fix:
   match, cannot be told from a certificate. Such a device is declined at Accept as
   `identity_mismatch`, with no handshake and no strike, and named once at start or reload. Rename
   it, or give it an `ip_address`.
-- **Junos** (per Juniper documentation, unmeasured until L73 closes). port49 requires the client
+- **Junos** (measured on vJunos-router 26.2R1.7, `tests/lab/results/L73-juniper_vjunos-router.md`).
+  port49 requires the client
   certificate and Junos makes mutual TLS optional, so set `tls mutual-authentication
   certificate-id <id>` (Junos 26.2R1 and later, routing and switching platforms, not SRX).
   Without a client certificate a login is refused `no_client_certificate` (that refusal is
   measured, L72 cell c).
+- **IOS XE and a down store.** When port49's store is down and port49 answers ERROR
+  (`store_unavailable`), IOS XE 17.18.02 over TLS, as on 49 (L4), does not fall to its local method, so
+  break-glass fails (`tests/lab/results/L73-cisco_iosxe.md`, cell i, ok false in 4.1 s). Junos,
+  EOS and NX-OS fell to local in the same test (`L73-juniper_vjunos-router.md`,
+  `L73-arista_ceos.md`, `L73-cisco_nxos.md`). The 3am table says it as a warning beside the
+  IOS XE row.
 - **The `component` label** on the four certificate-status metrics, and `sum by` or
   `ignoring(component)` where a rule matched them one-to-one.
 - **Config changes.** An edit to a `tls_listener:` key needs a restart (said once at SIGHUP).

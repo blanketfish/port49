@@ -1,0 +1,96 @@
+### typed `tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 ?^M
+  key                Encryption key for this TACACS+ server (overrides default)^M
+  port               TCP port of TACACS+ server ( default is 49 )^M
+  single-connection  Use one TCP connection for multiple sessions^M
+  timeout            Time to wait for this TACACS+ server to respond ( overrides default)^M
+  tls                Enable TLS for TACACS+ server^M
+  vrf                VRF for this TACACS+ server^M
+  <cr>               ^M
+^M
+leaf1(config)#tacacs-server host 192.0.2.71 ^M^[[14C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `tacacs-server host 192.0.2.71 tls ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 tls ?^M
+  port               TCP port of TACACS+ server ( default is 49 )^M
+  single-connection  Use one TCP connection for multiple sessions^M
+  timeout            Time to wait for this TACACS+ server to respond ( overrides default)^M
+  vrf                VRF for this TACACS+ server^M
+  <cr>               ^M
+^M
+leaf1(config)#tacacs-server host 192.0.2.71 tls ^M^[[14C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `tacacs-server ?`, then Ctrl-U
+tacacs-server ?^M
+  host      TACACS+ server configuration^M
+  key       Set TACACS+ <MASKED>^M
+  policy    Set TACACS+ policy^M
+  qos       Configure QoS parameters^M
+  timeout   Time to wait for a TACACS+ server to respond^M
+  tls       Configure TLS for TACACS+^M
+  username  Configure username parameters^M
+^M
+leaf1(config)#tacacs-server ^M^[[14C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `tacacs-server tls ?`, then Ctrl-U
+tacacs-server tls ?^M
+  ssl-profile  Configure global SSL profile to use^M
+^M
+leaf1(config)#tacacs-server tls ^M^[[14C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `certificate l73-dev.crt ?`, then Ctrl-U
+certificate l73-dev.crt ?^M
+  key  Configure key matching the certificate^M
+^M
+leaf1(config-mgmt-sec-ssl-profile-l73x)#certificate l73-dev.crt ^M^[[40C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `chain certificate ?`, then Ctrl-U
+chain certificate ?^M
+  WORD              Certificate name^M
+  auto-certificate  Use automatically retrieved CA certificates^M
+  local             Local certificate^M
+  policy            Policy parameters^M
+  requirement       Add a check to the certificate for validity^M
+^M
+leaf1(config-mgmt-sec-ssl-profile-l73x)#chain certificate ^M^[[40C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `trust certificate ?`, then Ctrl-U
+trust certificate ?^M
+  WORD              Certificate name^M
+  auto-certificate  Use automatically retrieved CA certificates^M
+  policy            Policy parameters^M
+  requirement       Add a check to the certificate for validity^M
+  system            Use system-supplied trust certificates^M
+^M
+leaf1(config-mgmt-sec-ssl-profile-l73x)#trust certificate ^M^[[40C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `?`, then Ctrl-U
+?^M
+  server   Add a TACACS+ server to the server - group^M
+  ----------------------------------------^M
+  comment  Up to 240 characters, comment for this mode^M
+  default  Set a command to its defaults^M
+  exit     Leave Server-group tacacs+ mode^M
+  no       Disable the command that follows^M
+  show     Display details of switch operation^M
+  !!       Append to comment^M
+^M
+leaf1(config-sg-tacacs+-port49)#
+
+### typed `server 172.100.100.1 ?`, then Ctrl-U
+server 172.100.100.1 ?^M
+  port  TCP port of TACACS server (default is 49)^M
+  tls   TLS TACACS server^M
+  vrf   VRF for this server^M
+  <cr>  ^M
+^M
+leaf1(config-sg-tacacs+-port49)#server 172.100.100.1 ^M^[[32C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+
+### typed `server 172.100.100.1 tls ?`, then Ctrl-U
+server 172.100.100.1 tls ?^M
+  port  TCP port of TACACS server (default is 49)^M
+  vrf   VRF for this server^M
+  <cr>  ^M
+^M
+leaf1(config-sg-tacacs+-port49)#server 172.100.100.1 tls ^M^[[32C^[[K^@^@^@^@^@^@^@^@^@^@^@^@
+

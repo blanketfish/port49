@@ -511,6 +511,9 @@ func TestL66PlatformsNameTheModuleOfTheirCollection(t *testing.T) {
 		"juniper_vjunos-router": "junipernetworks.junos", "juniper_vsrx": "junipernetworks.junos",
 	}
 	for _, p := range platforms {
+		if optInPlatforms[p.sel] {
+			continue
+		}
 		l, ok := l66Platforms[p.name]
 		if !ok {
 			t.Errorf("no L66 platform for %s", p.name)
@@ -530,6 +533,9 @@ func TestL66PlatformsNameTheModuleOfTheirCollection(t *testing.T) {
 
 func TestL66DeniedNodeIsAnotherLabNode(t *testing.T) {
 	for _, p := range platforms {
+		if optInPlatforms[p.sel] {
+			continue
+		}
 		d := l66DeniedNode(p.node)
 		if d == "" || d == p.node {
 			t.Errorf("denied node for %s = %q", p.node, d)

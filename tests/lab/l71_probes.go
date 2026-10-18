@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -58,13 +59,31 @@ var l71Probes = map[string]l71Probe{
 		yes: []string{"tls"}, control: []string{"secret", "port", "timeout"},
 		cleanup:  []string{"rollback 0", "exit configuration-mode"},
 		snapshot: "show configuration system tacplus-server | display set", cfgMark: "# ", opMark: "> "},
+	// cEOS runs EOS's parser: vEOS's question, asked of the cEOS 4.36.3M row
+	// (TestL73, ceos436).
+	"arista_ceos": {enter: []string{"configure"}, ask: []string{"tacacs-server host 192.0.2.71 "},
+		yes: []string{"ssl-profile", "tls"}, control: []string{"key", "port", "timeout"}, cleanup: []string{"end"},
+		snapshot: "show running-config | include tacacs", cfgMark: "(config"},
+	// IOL-XE runs IOS XE's parser: the C8000V question, asked of the L71
+	// help cell's IOL row (TestL73, iolxe1718).
+	"cisco_iol-xe": {enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 192.0.2.71 "},
+		yes: []string{"tls"}, control: []string{"key", "port", "timeout", "<cr>"},
+		cleanup:  []string{"end"},
+		snapshot: "show running-config | include tacacs", cfgMark: "(config"},
+	// XR: `abort` leaves configuration mode with nothing committed.
+	"cisco_xrd": {enter: []string{"configure"}, ask: []string{"tacacs-server host 192.0.2.71 "},
+		yes: []string{"tls"}, control: []string{"key", "port", "timeout"}, cleanup: []string{"abort"},
+		snapshot: "show running-config tacacs-server", cfgMark: "(config"},
 }
 
 // l71Says reports whether help, a CLI's answer to "?", lists one of yes as
-// an option word: the first token of an indented help line, exactly.
+// an option word: the first token of a help line, after a Junos `+` or `>` marker, exactly.
 func l71Says(help string, yes []string) (string, bool) {
 	for _, line := range strings.Split(help, "\n") {
 		f := strings.Fields(line)
+		if len(f) > 1 && (f[0] == "+" || f[0] == ">") {
+			f = f[1:] // Junos marks inherited (+) and container (>) options
+		}
 		if len(f) == 0 {
 			continue
 		}
@@ -188,7 +207,7 @@ func l71LineEmpty(out string) bool {
 // l71Secret is what l71MaskExchange hides in a probe exchange beyond what
 // labcreds.RedactNote finds: a hashed or plain key, secret or password a
 // device's help or echo might show.
-var l71Secret = regexp.MustCompile(`\$[0-9]\$\S+|key [0-9] \S+|secret \S+|password \S+`)
+var l71Secret = regexp.MustCompile(`\$[0-9]\$\S+|key [0-9] \S+|[Kk]ey: \S+|secret \S+|password \S+`)
 
 // l71MaskExchange is a probe exchange fit to commit: credentials masked, and
 // control bytes shown as `cat -v` shows them (a newline stays a newline), so
@@ -210,4 +229,18 @@ func l71MaskExchange(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// l71ClaimFor is the claim of platform's L71 note. Only a probe that creates
+// the `tacacs server l71probe` object says so.
+func l71ClaimFor(platform string) string {
+	made := ""
+	if slices.Contains(l71Probes[platform].enter, "tacacs server l71probe") {
+		made = " (on IOS-XE the probe creates a `tacacs server l71probe` object and removes it)"
+	}
+	return "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS) client, read from the CLI's own " +
+		"help with nothing left configured" + made + " (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
+		"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and Junos " +
+		"26.2R1 on routing and switching platforms, not SRX; every lab image predates them. L71 probes only the images in the harness platform list: vJunosEvolved " +
+		"23.4R2-S2.1 and vSRX 23.4R1.9 are not probed."
 }

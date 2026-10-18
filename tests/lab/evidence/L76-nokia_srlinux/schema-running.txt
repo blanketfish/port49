@@ -1,0 +1,70 @@
+    authentication {
+        idle-timeout 7200
+        authentication-method [
+            port49
+            local
+        ]
+        admin-user {
+            ssh-key [
+                "<ssh public key masked>"
+                "<ssh public key masked>"
+                "<ssh public key masked>"
+            ]
+        }
+        linuxadmin-user {
+            password <masked>
+            ssh-key [
+                "<ssh public key masked>"
+                "<ssh public key masked>"
+                "<ssh public key masked>"
+            ]
+        }
+        user breakglass {
+            password <masked>
+            role [
+                p49-admin
+            ]
+        }
+    }
+    authorization {
+        role p49-admin {
+            services [
+                cli
+            ]
+            tacacs {
+                priv-lvl 15
+            }
+        }
+        role p49-read {
+            services [
+                cli
+            ]
+            tacacs {
+                priv-lvl 1
+            }
+        }
+    }
+    accounting {
+        accounting-method [
+            port49
+        ]
+        event command {
+            record start-stop
+        }
+    }
+    server-group local {
+        type local
+    }
+    server-group port49 {
+        type tacacs
+        tacacs {
+            priv-lvl-authorization true
+        }
+        server 172.100.100.1 {
+            network-instance mgmt
+            tacacs {
+                port 49
+                secret-key <masked>
+            }
+        }
+    }

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -260,7 +261,24 @@ func dial(t *testing.T, addr string, key []byte) *client {
 	return &client{conn: conn, key: key, sid: 0xabcd1234, seq: 1}
 }
 
+// TestPAPLoginThenAuthorizeThenAccount drives the vEOS shape: the session
+// authorization arrives at the login START's priv_lvl 1 (tests/lab/results/
+// L1-arista_eos.md, L3-arista_eos.md).
 func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
+	papLoginAuthorizeAccount(t, 1, 1)
+}
+
+// TestPAPSessionAuthorizationAboveTheLoginLevel is the same round trip with the
+// shape SR Linux 26.7.2 sends: the login START at priv_lvl 0 and the session
+// authorization at 1, above the 0 port49 holds (tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl).
+// Session authorization does not compare the request's level with the
+// context's (spec §5.2).
+func TestPAPSessionAuthorizationAboveTheLoginLevel(t *testing.T) {
+	papLoginAuthorizeAccount(t, 0, 1)
+}
+
+func papLoginAuthorizeAccount(t *testing.T, startLvl, sessionLvl uint8) {
+	t.Helper()
 	log := &syncBuffer{}
 	st := memory.New(time.Now)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
@@ -271,7 +289,7 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	addr := ts.addr
 
 	c := dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: startLvl, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte("p49_e2e")}.Encode(), 0)
 	h, body := c.recv(t)
 	reply, err := wire.DecodeAuthenReply(body)
@@ -279,22 +297,33 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 		t.Fatalf("%+v %v seq=%d", reply, err, h.SeqNo)
 	}
 
-	// priv_lvl=1 on the session authorization, matching the login START above
-	// and what every device in the lab was measured sending: EOS asks
-	// `priv_lvl=1 args=[service=shell cmd*]` and only raises to 15 once this
-	// reply has granted `priv-lvl=15` (tests/lab/results/L1-arista_eos.md,
-	// L3-arista_eos.md). It used to say 15 here, which the §5.3 privilege check
-	// denies: the context holds the login START's 1 until this reply grants 15
-	// and the handler records it. See TestTheDevicePrivLvlRaisedByOurOwnSessionReply
-	// in internal/daemon/author for the whole sequence.
 	ts.slotFree(t)
 	c = dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: sessionLvl, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	_, body = c.recv(t)
 	ar, _ := wire.DecodeAuthorResponse(body)
 	if ar.Status != wire.AuthorStatusPassAdd || len(ar.Args) != 1 || string(ar.Args[0]) != "priv-lvl=15" {
 		t.Fatalf("%+v", ar)
+	}
+
+	// The device takes the level the reply granted, and its next command
+	// arrives at 15: permitted because the context holds the reply's 15, which
+	// policy granted, and not because the session request asked at 15.
+	ts.slotFree(t)
+	c = dial(t, addr, []byte("k2"))
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=show"), []byte("cmd-arg=version"), []byte("cmd-arg=<cr>")}}.Encode(), 0)
+	_, body = c.recv(t)
+	if cr, _ := wire.DecodeAuthorResponse(body); cr.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("a command at the level port49 granted must be permitted: %+v", cr)
+	}
+	// session.held_privilege is the context's level on arrival: the login
+	// START's level on the session record whatever level it asked at, and the
+	// reply's 15 on the command record.
+	held := fmt.Sprintf(`"held_privilege":%d`, startLvl)
+	if !log.contains(held+",") && !log.contains(held+"}") || !log.contains(`"held_privilege":15`) {
+		t.Fatalf("held_privilege %d then 15 expected on the authorization records: %s", startLvl, log.String())
 	}
 
 	ts.slotFree(t)

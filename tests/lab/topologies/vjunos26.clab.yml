@@ -1,0 +1,15 @@
+# L73 only (selector vjunos26, opt-in). Node srx1 at .21 on purpose: the
+# inventory, the seeds and the startup config are the 23.4 row's, and only
+# one platform is up at a time. The startup config is plain TACACS+ on 49;
+# TestL73 reconfigures the client for TLS and puts it back.
+name: port49-vjunos26
+topology:
+  nodes:
+    srx1:
+      kind: juniper_vjunosrouter
+      image: vrnetlab/juniper_vjunos-router:26.2R1.7
+      startup-config: ../configs/vjunos-startup.conf
+      mgmt-ipv4: 172.100.100.21
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

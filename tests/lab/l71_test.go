@@ -11,13 +11,6 @@ import (
 	"time"
 )
 
-const l71Claim = "Whether this image's CLI offers an RFC 9887 (TACACS+ over TLS) client, read from the CLI's own " +
-	"help with nothing left configured (on IOS-XE the probe creates a `tacacs server l71probe` object and removes " +
-	"it) (policy engine spec §15 L71; §13 decision 50 ruling 19). Vendor " +
-	"documentation puts the floor at Arista EOS 4.36.1F, Cisco IOS XE 17.18.1, Cisco NX-OS 10.6(1)F and Junos " +
-	"26.2R1 on routing and switching platforms, not SRX; every lab image predates them. L71 probes only the images in the harness platform list: vJunosEvolved " +
-	"23.4R2-S2.1 and vSRX 23.4R1.9 are not probed."
-
 func TestL71TLSClientSupport(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
@@ -112,39 +105,20 @@ func TestL71TLSClientSupport(t *testing.T) {
 				}
 			}
 			for _, ask := range probe.ask {
-				from := len(c.transcript())
-				if _, err := c.in.Write([]byte(ask + "?")); err != nil {
+				ans, err := l71AskHelp(c, ask, probe.control, probe.cfgMark)
+				if err != nil {
 					return err
 				}
-				// The prompt is already on screen when the help is requested,
-				// so a prompt cannot say the help has printed. A control
-				// option says it has started, and the configuration prompt
-				// redisplayed after that option says it has finished; a help
-				// that shows no control option is INVALID.
-				tail, werr := c.expectFrom(from, 20*time.Second, probe.control...)
-				if werr == nil {
-					at := len(tail)
-					for _, w := range probe.control {
-						if i := strings.Index(tail, w); i >= 0 && i < at {
-							at = i
-						}
-					}
-					_, werr = c.expectFrom(from+at, 20*time.Second, probe.cfgMark)
-				}
-				help := strings.ReplaceAll(c.transcript()[from:], "\r", "")
-				if _, uerr := c.in.Write([]byte{0x15}); uerr != nil { // Ctrl-U: the typed line is dropped, never entered
-					return uerr
-				}
-				empty := l71WaitEmptyLine(c, 5*time.Second)
-				fmt.Fprintf(&xchg, "### typed `%s?`, then Ctrl-U\n%s\n\n", ask, l71MaskExchange(c.transcript()[from:]))
-				if !empty {
+				help := ans.Help
+				fmt.Fprintf(&xchg, "### typed `%s?`, then Ctrl-U\n%s\n\n", ask, ans.Masked)
+				if !ans.Cleared {
 					dirty = true
 					return fmt.Errorf("INVALID: after Ctrl-U the prompt did not return with an empty line on `%s?`; "+
 						"nothing more was typed and the session was closed; on IOS-XE check for a "+
 						"`tacacs server l71probe` object and on every platform for an unfinished probe line", ask)
 				}
-				if werr != nil {
-					return l71Wrap(fmt.Sprintf("INVALID: no help for `%s?`", ask), werr)
+				if ans.WaitErr != nil {
+					return l71Wrap(fmt.Sprintf("INVALID: no help for `%s?`", ask), ans.WaitErr)
 				}
 				line, err := l71Read(help, probe)
 				if err != nil {
@@ -173,7 +147,7 @@ func TestL71TLSClientSupport(t *testing.T) {
 		}
 		l.captureNote = fmt.Sprintf("`%s/probe.txt` — the CLI exchange from the help request to the empty-line check, "+
 			"credentials masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.", ev)
-		l.result(t, "L71", l71Claim, obs.String())
+		l.result(t, "L71", l71ClaimFor(l.p.name), obs.String())
 	})
 }
 
@@ -190,4 +164,44 @@ func l71WaitEmptyLine(c *cliConn, within time.Duration) bool {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// l71Answer is one help request's outcome: what the CLI printed, the masked
+// exchange to commit, whether Ctrl-U left an empty line (if not, nothing
+// more may be typed: close the session), and whether the help never
+// finished printing.
+type l71Answer struct {
+	Help, Masked string
+	Cleared      bool
+	WaitErr      error
+}
+
+// l71AskHelp types ask and "?" with no newline, waits for a control word
+// and then the configuration prompt redisplayed, then Ctrl-U. Its error is
+// an I/O error writing to the CLI.
+func l71AskHelp(c *cliConn, ask string, control []string, cfgMark string) (l71Answer, error) {
+	from := len(c.transcript())
+	if _, err := c.in.Write([]byte(ask + "?")); err != nil {
+		return l71Answer{}, err
+	}
+	// The prompt is already on screen when the help is requested, so a prompt
+	// cannot say the help has printed. A control option says it has started,
+	// and the configuration prompt redisplayed after that option says it has
+	// finished; a help that shows no control option is INVALID.
+	tail, werr := c.expectFrom(from, 20*time.Second, control...)
+	if werr == nil {
+		at := len(tail)
+		for _, w := range control {
+			if i := strings.Index(tail, w); i >= 0 && i < at {
+				at = i
+			}
+		}
+		_, werr = c.expectFrom(from+at, 20*time.Second, cfgMark)
+	}
+	help := strings.ReplaceAll(c.transcript()[from:], "\r", "")
+	if _, err := c.in.Write([]byte{0x15}); err != nil { // Ctrl-U: the typed line is dropped, never entered
+		return l71Answer{}, err
+	}
+	cleared := l71WaitEmptyLine(c, 5*time.Second)
+	return l71Answer{Help: help, Masked: l71MaskExchange(c.transcript()[from:]), Cleared: cleared, WaitErr: werr}, nil
 }
