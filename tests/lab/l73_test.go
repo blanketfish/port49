@@ -87,43 +87,46 @@ func l73Claim(vendor string) string {
 }
 
 type l73Env struct {
-	t          *testing.T
-	l          *lab
-	d          l73Dialect
-	opener     func(*lab) (*cliConn, error)
-	cfgScreens string               // the configure sessions' screens, for an INVALID's diagnosis
-	xeChecked  bool                 // IOS XE: the address read-back and the break-glass login are in the facts
-	xeLog      string               // those facts, kept in the INVALID directory as they are made
-	gaps       []string             // cell i: seconds from a row's last decline to the next row's first probe
-	probeAt    map[string]time.Time // when each ready() started its first probe
-	versionWhy string               // why the last token login's version was not read; "" when it was
-	x          map[string]bool      // the Want words the image's help listed
-	applied    *l73DeviceTLS        // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
-	dir        string               // 0700: configs, inventories, keys, state
-	home       string               // a port49 CLI's HOME, issued_key_store: file
-	evDir      string
-	capDir     string // git-ignored, outside writeEvidence's *.pcap glob
-	pki        *l73PKI
-	files      map[string]string
-	invTLS     string
-	invTCP     string
-	evidence   map[string][]byte // written only by note(), after the leak gate
-	secrets    []string
-	obs        []l73Obs
-	facts      []string
-	first      []l73Conn // cell a's connections: c and f read them
-	firstSpan  l73Span   // the control login in e.first, for h's comparison
-	port       int       // 0 when the device's default is 300
-	needSec    bool
-	tokenN     int
-	start      int64 // decision log offset when L73 began
-	csr        l73CSR
-	leaf       *x509.Certificate
-	l71Obs     string
-	touched    bool
-	bridge     bool
-	cfg        string // port49d's config now: the last daemon() call's, "" for the standing one
-	listen     string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
+	t           *testing.T
+	l           *lab
+	d           l73Dialect
+	opener      func(*lab) (*cliConn, error)
+	cfgScreens  string               // the configure sessions' screens, for an INVALID's diagnosis
+	xeChecked   bool                 // IOS XE: the address read-back and the break-glass login are in the facts
+	xeLog       string               // those facts, kept in the INVALID directory as they are made
+	lastDecline time.Time            // cell i: when the previous refusal row's last login ended
+	deadFor     []time.Duration      // seconds the TLS server stayed Dead after the previous row's last decline, per revive
+	sleep       func(time.Duration)  // time.Sleep unless a test sets it
+	gaps        []string             // cell i: seconds from a row's last decline to the next row's first probe
+	probeAt     map[string]time.Time // when each ready() started its first probe
+	versionWhy  string               // why the last token login's version was not read; "" when it was
+	x           map[string]bool      // the Want words the image's help listed
+	applied     *l73DeviceTLS        // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir         string               // 0700: configs, inventories, keys, state
+	home        string               // a port49 CLI's HOME, issued_key_store: file
+	evDir       string
+	capDir      string // git-ignored, outside writeEvidence's *.pcap glob
+	pki         *l73PKI
+	files       map[string]string
+	invTLS      string
+	invTCP      string
+	evidence    map[string][]byte // written only by note(), after the leak gate
+	secrets     []string
+	obs         []l73Obs
+	facts       []string
+	first       []l73Conn // cell a's connections: c and f read them
+	firstSpan   l73Span   // the control login in e.first, for h's comparison
+	port        int       // 0 when the device's default is 300
+	needSec     bool
+	tokenN      int
+	start       int64 // decision log offset when L73 began
+	csr         l73CSR
+	leaf        *x509.Certificate
+	l71Obs      string
+	touched     bool
+	bridge      bool
+	cfg         string // port49d's config now: the last daemon() call's, "" for the standing one
+	listen      string // the RFC 8907 address the last daemon() call moved the plain listener to, "" for the standing one
 }
 
 func TestL73(t *testing.T) {
@@ -630,6 +633,52 @@ func (e *l73Env) revive(cell string) {
 	e.t.Helper()
 	e.daemon(cell+"-revive", l73Daemon{Intermediates: e.files["inter.pem"]})
 	e.ready(cell + "-revive")
+	if err := e.waitServerUp(cell); err != nil {
+		e.t.Fatalf("INVALID: %v", err)
+	}
+}
+
+// waitServerUp, where the dialect reads server state (IOS XE), polls it every
+// 10s for at most 5 minutes until the TLS server reads Up or Alive, so the
+// measured login does not meet a server the device marked Dead by the last
+// cell's resets and declines. It records how long that took after the previous
+// row's last decline; the device's configuration is not touched. On timeout
+// it keeps the last screen and the device's own view.
+func (e *l73Env) waitServerUp(cell string) error {
+	if e.d.ServerStateCmd == "" {
+		return nil
+	}
+	start := time.Now()
+	read := func() (shown string, err error) {
+		e.cli(func(c *cliConn) error {
+			shown, err = c.sendExpect(e.d.ServerStateCmd, 30*time.Second, e.opMark(c))
+			return nil
+		})
+		return shown, err
+	}
+	sleep := e.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	polls, last, ok, err := l73WaitUp(read, sleep, l73XEServer, 10*time.Second, 5*time.Minute)
+	since := start
+	if !e.lastDecline.IsZero() {
+		since = e.lastDecline
+	}
+	dead := time.Since(since)
+	if !ok {
+		e.invalidScreen("server-state", "$ "+e.d.ServerStateCmd+"\n"+last)
+		e.noConnectionLogs()
+		return fmt.Errorf("%s: %s did not read Up in %d reads over %s (%s)", cell, l73XEServer, polls,
+			time.Since(start).Round(time.Second), l73Err(err))
+	}
+	if polls > 1 { // it read Dead at least once
+		e.deadFor = append(e.deadFor, dead)
+	}
+	e.xeFact(fmt.Sprintf("before %s's login, `%s` read %s Up after %d reads, %s after the previous row's last decline "+
+		"(the %s since this wait began)", cell, e.d.ServerStateCmd, l73XEServer, polls, dead.Round(time.Second),
+		time.Since(start).Round(time.Second)))
+	return nil
 }
 
 // reached is INVALID unless the device opened a connection to port49 during
@@ -2022,6 +2071,16 @@ func (e *l73Env) logBridge(when string) {
 // verdict needs a port49 record of the row's own reason; without one the row
 // says the cause is unproven and contradicts nothing.
 func (e *l73Env) cellI() {
+	defer func() {
+		e.lastDecline = time.Time{}
+		if len(e.deadFor) > 0 {
+			longest := slices.Max(e.deadFor)
+			e.xeFact(fmt.Sprintf("operator fact: on this image port49d's resets and declines leave the TLS client's server marked "+
+				"Dead, and logins fall to the local method meanwhile; across cell i's revives it read Up %s after the previous row's "+
+				"last decline at the longest (%d revives), by `%s` every 10s, with no dead-time setting changed",
+				longest.Round(time.Second), len(e.deadFor), e.d.ServerStateCmd))
+		}
+	}()
 	e.guard()
 	e.addSecondAddress()
 	e.logBridge("cell i start")
@@ -2049,13 +2108,12 @@ func (e *l73Env) cellI() {
 	docs := "yes: decision 50 rulings 5, 7 and 8 for the rows whose break-glass login landed (i-alert, i-accept, i-window); " +
 		"i-error is an observation only: spec §5.7 store_unavailable records from L4 that an authentication ERROR is final on Junos with tacplus alone"
 	contradicted := false
-	var lastDecline time.Time
 	for _, r := range refusals {
 		e.guard()
 		e.settle()
 		e.revive(r.id)
-		if !lastDecline.IsZero() {
-			e.gapFact(r.id, lastDecline, e.probeAt[r.id+"-revive"])
+		if !e.lastDecline.IsZero() {
+			e.gapFact(r.id, e.lastDecline, e.probeAt[r.id+"-revive"])
 		}
 		e.daemon(r.id, r.o)
 		stop := e.capture(r.id)
@@ -2069,7 +2127,7 @@ func (e *l73Env) cellI() {
 			ok2, took2, err2 = e.breakglassLogin()
 			s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
 		}
-		lastDecline = time.Now()
+		e.lastDecline = time.Now()
 		conns := stop()
 		e.reached(r.id, conns)
 		recs := e.l.recordsSince(off)

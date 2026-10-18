@@ -34,7 +34,11 @@ type l73Dialect struct {
 	// platform; 0 keeps the default.
 	HandshakeTimeout time.Duration
 	// LoginDial is the SSH dial deadline of a token login here; 0 is 45s.
-	LoginDial      time.Duration
+	LoginDial time.Duration
+	// ServerStateCmd reads the dialect's TACACS+ server state (IOS XE `show tacacs`);
+	// a revive then waits for the TLS server to read Up or Alive before the
+	// measured login. "" does not wait.
+	ServerStateCmd string
 	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
 	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
@@ -86,7 +90,7 @@ var l73IOSXEAsks = []l73Ask{
 }
 
 var l73IOSXEDialect = l73Dialect{
-	Family: "iosxe", Vendor: "IOS XE", Probe: "cisco_iosxe",
+	Family: "iosxe", Vendor: "IOS XE", Probe: "cisco_iosxe", ServerStateCmd: "show tacacs",
 	Enter: []string{"configure terminal", "tacacs server l71probe"}, Cleanup: []string{"exit", "no tacacs server l71probe", "end"},
 	CfgMark: "(config", Asks: l73IOSXEAsks,
 	VersionCmd: "show version | include Cisco IOS XE Software", VersionHas: "17.18", Attrs: `["priv-lvl=15"]`,
@@ -702,6 +706,40 @@ func l73ExtraMarks(family string) []string {
 		return []string{"Warning: Address not yet configured"}
 	}
 	return nil
+}
+
+// l73TacacsServerState is the "Server Status" of the server called name in
+// IOS XE's `show tacacs` ("Dead", "Alive"); "" when it is not listed.
+func l73TacacsServerState(show, name string) string {
+	in := false
+	for _, ln := range strings.Split(strings.ReplaceAll(show, "\r", ""), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(ln), ":")
+		switch {
+		case !ok:
+		case k == "Server name":
+			in = strings.TrimSpace(v) == name
+		case in && k == "Server Status":
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func l73ServerUp(state string) bool { return state == "Alive" || state == "Up" }
+
+// l73WaitUp reads the server state every `every` until name reads Up, or max
+// has been waited; it returns the reads made and the last screen.
+func l73WaitUp(read func() (string, error), sleep func(time.Duration), name string, every, max time.Duration) (polls int, last string, ok bool, err error) {
+	for waited := time.Duration(0); ; waited += every {
+		polls++
+		if last, err = read(); err != nil || l73ServerUp(l73TacacsServerState(last, name)) {
+			return polls, last, err == nil, err
+		}
+		if waited >= max {
+			return polls, last, false, nil
+		}
+		sleep(every)
+	}
 }
 
 // l73DoShowScreens are the answers, in order, to each `do show running-config

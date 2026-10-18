@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"os"
 	"regexp"
 	"slices"
@@ -990,5 +991,50 @@ func TestL73DoShowScreensKeepsWhatTheImagePrintedAfterEachDoShow(t *testing.T) {
 	}
 	if got := l73DoShowScreens("xe1(config)#exit\r\n"); len(got) != 0 {
 		t.Fatalf("%q", got)
+	}
+}
+
+// `show tacacs` as 17.18.02 printed it after the failed i-error login
+// (invalid-iosxe5), and the same server answered.
+const (
+	l73XEShowDead = "Tacacs+ Server -  public  :\r\n               Server name: l73-tls\r\n            Server address: 172.100.100.1\r\n" +
+		"               Server port: 300\r\n              Socket opens:         14\r\n             Server Status: Dead\r\nContinous Authc fail count:          0\r\n\r\n" +
+		"Tacacs+ Server -  public  :\r\n               Server name: l73-second\r\n             Server Status: Alive\r\n"
+	l73XEShowUp = "Tacacs+ Server -  public  :\r\n               Server name: l73-tls\r\n            Server address: 172.100.100.1\r\n" +
+		"             Server Status: Alive\r\n\r\nTacacs+ Server -  public  :\r\n               Server name: l73-second\r\n             Server Status: Dead\r\n"
+)
+
+func TestL73TacacsServerStateReadsTheNamedServersStatus(t *testing.T) {
+	for _, tc := range []struct{ show, name, want string }{
+		{l73XEShowDead, "l73-tls", "Dead"}, {l73XEShowDead, "l73-second", "Alive"},
+		{l73XEShowUp, "l73-tls", "Alive"}, {l73XEShowUp, "l73-second", "Dead"},
+		{l73XEShowUp, "l73-tl", ""}, {"", "l73-tls", ""},
+	} {
+		if got := l73TacacsServerState(tc.show, tc.name); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if !l73ServerUp("Alive") || !l73ServerUp("Up") || l73ServerUp("Dead") || l73ServerUp("") {
+		t.Error("Up and Alive are up; Dead and unread are not")
+	}
+}
+
+func TestL73WaitUpPollsEveryTenSecondsUntilUpOrTheBound(t *testing.T) {
+	screens := []string{l73XEShowDead, l73XEShowDead, l73XEShowUp}
+	var slept []time.Duration
+	read := func() (string, error) { s := screens[0]; screens = screens[1:]; return s, nil }
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+	polls, last, ok, err := l73WaitUp(read, sleep, "l73-tls", 10*time.Second, 5*time.Minute)
+	if err != nil || !ok || polls != 3 || last != l73XEShowUp || len(slept) != 2 || slept[0] != 10*time.Second {
+		t.Fatalf("polls %d ok %v err %v slept %v", polls, ok, err, slept)
+	}
+	slept = nil
+	polls, last, ok, _ = l73WaitUp(func() (string, error) { return l73XEShowDead, nil }, sleep, "l73-tls", 10*time.Second, 5*time.Minute)
+	if ok || polls != 31 || last != l73XEShowDead || len(slept) != 30 {
+		t.Fatalf("timeout: polls %d ok %v slept %d", polls, ok, len(slept))
+	}
+	_, _, ok, err = l73WaitUp(func() (string, error) { return "", errors.New("no cli") }, sleep, "l73-tls", 10*time.Second, time.Minute)
+	if ok || err == nil {
+		t.Fatalf("a failed read: ok %v err %v", ok, err)
 	}
 }
