@@ -300,38 +300,34 @@ func (s *Store) ClusterID(ctx context.Context) (uint64, error) {
 	return resp.Header.ClusterId, nil
 }
 
-// keyspaceProbeTTL is how long a probe key lives if its writer dies before
-// it deletes it, so nothing is left behind.
-const keyspaceProbeTTL = 60
+// probeLeaseTTL is the lifetime of a keyspace probe's lease, so nothing is
+// left behind if its holder dies before revoking it.
+const probeLeaseTTL = 60
 
-// ProbePut writes nonce under a reserved meta key of this store's prefix, on
-// a short lease, and returns the key's absolute name (plan 11a, R28). A
-// different store handle, on the same cluster, reads it with ProbeSees.
-func (s *Store) ProbePut(ctx context.Context, nonce string) (string, error) {
-	lease, err := s.ctx.Grant(ctx, keyspaceProbeTTL)
+// ProbeLeaseGrant grants a short lease on this store's cluster and returns
+// its id (plan 11a, R28). etcd checks no role for a lease call. Another
+// store handle's ProbeLeaseSeen finds it only when it reaches the same cluster.
+func (s *Store) ProbeLeaseGrant(ctx context.Context) (int64, error) {
+	resp, err := s.ctx.Grant(ctx, probeLeaseTTL)
 	if err != nil {
-		return "", unavailable(err)
+		return 0, unavailable(err)
 	}
-	key := s.k.meta("keyspace_probe_" + nonce)
-	if _, err := s.ctxKV.Put(ctx, key, nonce, clientv3.WithLease(lease.ID)); err != nil {
-		return "", unavailable(err)
-	}
-	return key, nil
+	return int64(resp.ID), nil
 }
 
-// ProbeSees reports whether key, an absolute name ProbePut returned,
-// holds nonce, read through this store's connection.
-func (s *Store) ProbeSees(ctx context.Context, key, nonce string) (bool, error) {
-	resp, err := s.ctxKV.Get(ctx, key)
+// ProbeLeaseSeen reports whether this store's cluster knows the lease id, a
+// live lease of the probe's TTL.
+func (s *Store) ProbeLeaseSeen(ctx context.Context, id int64) (bool, error) {
+	resp, err := s.ctx.TimeToLive(ctx, clientv3.LeaseID(id))
 	if err != nil {
 		return false, unavailable(err)
 	}
-	return len(resp.Kvs) == 1 && string(resp.Kvs[0].Value) == nonce, nil
+	return resp.TTL > 0 && resp.GrantedTTL == probeLeaseTTL, nil
 }
 
-// ProbeDelete removes a probe key; best effort, its lease expires anyway.
-func (s *Store) ProbeDelete(ctx context.Context, key string) {
-	s.ctxKV.Delete(ctx, key)
+// ProbeLeaseRevoke revokes the probe's lease; best effort, it expires anyway.
+func (s *Store) ProbeLeaseRevoke(ctx context.Context, id int64) {
+	s.ctx.Revoke(ctx, clientv3.LeaseID(id))
 }
 
 // maxJudgedPolicy is the most of a policy file meta/judged carries: under

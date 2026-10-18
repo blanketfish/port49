@@ -69,9 +69,10 @@ func TestTwoClustersSharingAnIdAreTwoKeyspaces(t *testing.T) {
 	}
 }
 
-// A probe that cannot complete refuses the start, naming the handle and a
-// closed-set cause, never etcd's text.
-func TestAHandleThatCannotWriteTheProbeRefusesTheStartWithItsCause(t *testing.T) {
+// The lease probe asks etcd for no role, so it works under enforced roles: one
+// member named twice by a broker identity is refused as one keyspace, and the
+// refusal is the keyspace's, not a permission error.
+func TestTheLeaseProbeWorksUnderEnforcedRoles(t *testing.T) {
 	srv, _ := rolesMemberScoped(t, etcd.ScopeDirectory)
 	open := func(user string) *etcd.Store {
 		s, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: srv.TLS(t, user), Prefix: "/port49/"})
@@ -81,11 +82,58 @@ func TestAHandleThatCannotWriteTheProbeRefusesTheStartWithItsCause(t *testing.T)
 		t.Cleanup(func() { s.Close() })
 		return s
 	}
-	// The daemon's directory role reads meta/ping, so ClusterID answers, and
-	// writes nothing: the probe's write is refused.
+	// The daemon identity reads and writes no lease-bearing key, and the
+	// broker's directory role does not reach /port49/dir/ keys: neither matters.
 	err := checkTwoStores(context.Background(), twoPrefixes("/port49/", "/port49/"), open("port49-broker"),
 		open("port49-daemon"), 5*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "write its probe through the directory store (refused)") {
+	if err == nil || !strings.Contains(err.Error(), "one keyspace named two ways") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Two enforced-roles members sharing a cluster id are two keyspaces.
+func TestTwoEnforcedClustersSharingAnIdAreAccepted(t *testing.T) {
+	mk := func() *etcd.Store {
+		srv := etcdtest.Start(t, etcdtest.Options{TLS: true, ClusterToken: "same-enforced"})
+		var grants []etcdtest.Grant
+		for _, g := range etcd.RolesFor("/port49/", etcd.ScopeDirectory) {
+			grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+		}
+		srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon}, "port49-broker": {etcd.RoleBroker}})
+		s, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: srv.TLS(t, "port49-broker"), Prefix: "/port49/"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	sess, dir := mk(), mk()
+	if err := checkTwoStores(context.Background(), twoPrefixes("/port49/", "/port49/"), sess, dir, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A probe that cannot complete refuses the start, naming the handle and a
+// closed-set cause, never etcd's text.
+func TestAHandleThatCannotAnswerTheProbeIsNamedWithItsCause(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	live, gone := openAt(t, srv.Endpoint, "/port49/"), openAt(t, srv.Endpoint, "/port49/")
+	gone.Close()
+	for _, c := range []struct {
+		name      string
+		sess, dir *etcd.Store
+		want      string
+	}{
+		{"directory", live, gone, "the directory store could not grant its probe lease (unreachable)"},
+		{"session", gone, live, "the session store could not look up the probe lease (unreachable)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := sameCluster(ctx, ctx, c.sess, c.dir, time.Second)
+			if err == nil || err.Error() != c.want {
+				t.Fatalf("%v, want %q", err, c.want)
+			}
+		})
 	}
 }

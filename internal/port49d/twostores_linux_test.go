@@ -580,10 +580,9 @@ func TestOneClusterNamedTwiceIsRefused(t *testing.T) {
 	}
 }
 
-// A key window record that decodes with no key id is corrupt; the refusal
-// names the record and how to clear it (no port49 command does), and does
-// not tell the operator to add an empty key.
-func TestAKeyWindowRecordWithNoIdRefusesTheStartAndNamesItsRepair(t *testing.T) {
+// A key window record that decodes with no key id is as good as unreadable:
+// the broker says so and writes its own window over it, with no operator step.
+func TestAKeyWindowRecordWithNoIdIsRewrittenAtStart(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -591,20 +590,21 @@ func TestAKeyWindowRecordWithNoIdRefusesTheStartAndNamesItsRepair(t *testing.T) 
 	f := splitFleet(t)
 	f.twoStores(t)
 	f.judged(t)
-	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+	root := f.dsrv.Client(t, "root")
+	if _, err := root.Put(context.Background(), "/port49/v1/meta/seal_keys",
 		`{"current":"","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
 		t.Fatal(err)
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- runBroker(context.Background(), f.broker) }()
-	select {
-	case err := <-errc:
-		if err == nil || !strings.Contains(err.Error(), "key window record (/port49/v1/meta/seal_keys)") ||
-			!strings.Contains(err.Error(), "etcdctl del /port49/v1/meta/seal_keys") ||
-			strings.Contains(err.Error(), `add ""`) {
-			t.Fatalf("%v", err)
-		}
-	case <-time.After(60 * time.Second):
-		t.Fatal("port49-broker started against a corrupt key window record")
+	startBroker(t, f.broker, &out, 1)
+	if !strings.Contains(out.String(), "the directory store's key window (/port49/v1/meta/seal_keys) does not name a "+
+		"readable key id; rewritten with this process's window") {
+		t.Fatalf("the rewrite was not said:\n%s", out.String())
+	}
+	resp, err := root.Get(context.Background(), "/port49/v1/meta/seal_keys")
+	var rec struct {
+		Current string `json:"current"`
+	}
+	if err != nil || len(resp.Kvs) != 1 || json.Unmarshal(resp.Kvs[0].Value, &rec) != nil || rec.Current == "" {
+		t.Fatalf("the record was not rewritten: %v", err)
 	}
 }

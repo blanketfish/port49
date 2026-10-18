@@ -2,8 +2,6 @@ package port49d
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -38,10 +36,7 @@ func checkDirectoryKeys(ctx context.Context, proc string, d *etcdstore.Store, re
 		return fmt.Errorf("directory store: reading its key window: %w", err)
 	}
 	if ok && (last.Current == "" || crypt.LineKeyID(last.Current) == "?") {
-		return &storeFault{fmt.Errorf("crypt: the directory store's key window record (%s) names no key id this "+
-			"process can print: the record is corrupt; no port49 command repairs it: delete it as etcd's root "+
-			"(etcdctl del %s) and start port49-broker, which writes it again",
-			ref.recordKey(), ref.recordKey())}
+		undecodable, ok = true, false // a record that names no key id is as good as unreadable
 	}
 	held := keys.Current.ID == last.Current || keys.Previous != nil && keys.Previous.ID == last.Current
 	if ok && !held {
@@ -52,8 +47,14 @@ func checkDirectoryKeys(ctx context.Context, proc string, d *etcdstore.Store, re
 			ref.where(), id, keyWindow(keys), id, proc)}
 	}
 	if undecodable {
-		fmt.Fprintf(out, "%s: crypt: the directory store's key window is unreadable (meta/seal_keys does not "+
-			"decode); every region holds the same encryption keys, and this start cannot check that it does\n", proc)
+		if write {
+			fmt.Fprintf(out, "%s: crypt: the directory store's key window (%s) does not name a readable key id; "+
+				"rewritten with this process's window\n", proc, ref.recordKey())
+		} else {
+			fmt.Fprintf(out, "%s: crypt: the directory store's key window (%s) does not name a readable key id; "+
+				"every region holds the same encryption keys, and this start cannot check that it does\n",
+				proc, ref.recordKey())
+		}
 	}
 	if !write {
 		return nil
@@ -93,35 +94,41 @@ func checkTwoStores(ctx context.Context, cfg config.Config, sess, dir *etcdstore
 	if a != b || !strings.HasPrefix(sp, dp) && !strings.HasPrefix(dp, sp) {
 		return nil
 	}
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return &storeFault{fmt.Errorf("stores: cannot make the keyspace probe: %w", err)}
-	}
-	nonce := hex.EncodeToString(raw)
-	key, err := dir.ProbePut(cctx, nonce)
+	same, err := sameCluster(cctx, ctx, sess, dir, bound)
 	if err != nil {
 		return &storeFault{fmt.Errorf("stores.directory and stores.session reach etcd clusters with one id (%x) "+
-			"and related prefixes, and the check that they are two keyspaces could not write its probe through "+
-			"the directory store (%s); not starting", a, outageCause(err))}
+			"and related prefixes, and the check that they are two keyspaces failed: %v; not starting", a, err)}
 	}
-	defer func() {
-		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
-		defer cancel()
-		dir.ProbeDelete(dctx, key)
-	}()
-	seen, err := sess.ProbeSees(cctx, key, nonce)
-	if err != nil {
-		return &storeFault{fmt.Errorf("stores.directory and stores.session reach etcd clusters with one id (%x) "+
-			"and related prefixes, and the check that they are two keyspaces could not read its probe through "+
-			"the session store (%s); not starting", a, outageCause(err))}
-	}
-	if !seen {
+	if !same {
 		return nil // two clusters that share an id: two keyspaces
 	}
 	return &storeFault{fmt.Errorf("stores.directory (prefix %s) and stores.session (prefix %s) reach one etcd "+
 		"cluster (id %x), and one prefix holds the other: they are one keyspace named two ways; omit "+
 		"stores.session for a single site, or give the directory a cluster of its own",
 		cfg.Stores.Directory.Etcd.Prefix, cfg.Stores.Session.Etcd.Prefix, a)}
+}
+
+// sameCluster tells whether two store handles reach one etcd cluster, which
+// a matching cluster id does not: etcd derives the id from the peer URLs and
+// the token, so separate clusters can share it. The directory handle grants a
+// short lease and the session handle asks after it; only one cluster knows
+// it. etcd checks no role for a lease call, so any identity can ask. A call
+// that cannot complete is an error naming the handle and a closed-set cause.
+func sameCluster(cctx, ctx context.Context, sess, dir *etcdstore.Store, bound time.Duration) (bool, error) {
+	id, err := dir.ProbeLeaseGrant(cctx)
+	if err != nil {
+		return false, fmt.Errorf("the directory store could not grant its probe lease (%s)", outageCause(err))
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+		defer cancel()
+		dir.ProbeLeaseRevoke(rctx, id)
+	}()
+	seen, err := sess.ProbeLeaseSeen(cctx, id)
+	if err != nil {
+		return false, fmt.Errorf("the session store could not look up the probe lease (%s)", outageCause(err))
+	}
+	return seen, nil
 }
 
 // recheckDirectoryKeys reads the directory's key window every

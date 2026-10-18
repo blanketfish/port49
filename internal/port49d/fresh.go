@@ -73,7 +73,7 @@ func outageCause(err error) string {
 	case errors.Is(err, errNoDirectory):
 		return "not opened yet"
 	case errors.Is(err, store.ErrRefused):
-		return "refused"
+		return "permission denied"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	default:
