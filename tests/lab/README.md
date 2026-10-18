@@ -68,6 +68,13 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
        `sha256:3ddc45448d436dcd592654f84f9ddda5aa95fcf11b0a23d3de5367a2a2ece5bd`, 3485174928 bytes,
        source sha256 `f0ceb78ebb1cb0e6e82599fd9140364d77b0aa21e28bb3118191090b043a395e`,
        Δ of `/` 8744M (80052M to 71308M avail).
+       Removed 2026-10-18 (lead's ruling, to pass the C8000V disk gate; its L73 results are committed in
+       b4d12cbf and this recipe rebuilds it).
+     - `vrnetlab/cisco_c8000v:17.18.02` (built 2026-10-18, recipe `MODE=autonomous`, the 17.18.02 qcow2
+       copied in and removed again), ID
+       `sha256:d41d1a5bd9e7f092ca0fcae636ab9c808fe6d2f3a3bdca25d72c55f49f8d175c`, 2913613093 bytes,
+       source sha256 `6443ee46b0e2a437812a4d96a05e8f8135ee5d929c12468e3cae5fe0142cd2dd`,
+       Δ of `/` 8328M (79094M to 70766M avail, after the N9Kv removal above).
    - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
    - Nexus 9300v 10.4(2)F: copy the qcow2 into `vrnetlab/cisco/n9kv` **renamed to
      `n9kv-<version>.qcow2`** — the Makefile derives the image tag from that name with a `sed`,
