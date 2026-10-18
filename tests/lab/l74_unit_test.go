@@ -331,3 +331,13 @@ func TestRegionEnvValuesAreShellInert(t *testing.T) {
 		t.Error("a key value was run as a command")
 	}
 }
+
+func TestDisagreeingCellsNamesTheRowsThatDisagree(t *testing.T) {
+	rows := []regionRow{{ID: "a", Agrees: true}, {ID: "c"}, {ID: "g", Agrees: true}, {ID: "i"}}
+	if got := strings.Join(disagreeingCells(rows), ","); got != "c,i" {
+		t.Fatalf("got %q", got)
+	}
+	if len(disagreeingCells(nil)) != 0 || len(disagreeingCells(rows[:1])) != 0 {
+		t.Fatal("agreeing rows were named")
+	}
+}

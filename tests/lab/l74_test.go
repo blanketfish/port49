@@ -30,6 +30,17 @@ type regionRow struct {
 	Agrees              bool
 }
 
+// disagreeingCells is the ids of the rows that disagree with the claim.
+func disagreeingCells(rows []regionRow) []string {
+	var ids []string
+	for _, r := range rows {
+		if !r.Agrees {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
+}
+
 // regionNote is a results note in L72's shape.
 func regionNote(row, platform, version, run, claim string, rows []regionRow, notMeasured []string) string {
 	var b strings.Builder
@@ -414,12 +425,7 @@ func TestRegions(t *testing.T) {
 	l74CellI(w, row)
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 	writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
-	var disagree []string
-	for _, r := range rows {
-		if !r.Agrees {
-			disagree = append(disagree, r.ID)
-		}
-	}
+	disagree := disagreeingCells(rows)
 	if len(disagree) > 0 {
 		t.Fatalf("cells %v disagree with decision 51: the note records what was observed", disagree)
 	}
