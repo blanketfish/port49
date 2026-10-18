@@ -431,7 +431,9 @@ var l76Sources = []l76Source{
 	{"tail -n 400 " + l76AAALog, "SA#configuring-local-accounting"},
 	{"authentication-method [ port49 local ]", "SA#configuring-authentication-local-users"},
 	{"user breakglass { password ...; role [ p49-admin ] }", "SA#configuring-authentication-local-users; SA#assign-roles-to-users"},
-	{"authorization { role <n> { tacacs { priv-lvl <n> } } }", "SA#configuring-tacacsx-authorization"},
+	{"authorization { role <n> { services [ cli ]; tacacs { priv-lvl <n> } } }",
+		"SA#configuring-tacacsx-authorization; SA#configuring-service-authorization; SA#service-authorization-local-users; " +
+			"YANG srl_nokia-aaa.yang:763 (leaf-list services, no default)"},
 	{"accounting { accounting-method [ port49 ]; event command { record start-stop } }",
 		"SA#configuring-account; YANG srl_nokia-aaa-types.yang:77 (identity command, base aaa_accounting_event_type)"},
 	{"server-group local { type local }", "SA#configuring-authentication-local-users; YANG srl_nokia-aaa.yang:134 (the name must be local)"},
@@ -525,6 +527,12 @@ func l76SchemaFindings(aaa, types string) []string {
 			"`aaa-authorization-methods-config` and `aaa-authorization-events-top` are defined in "+
 			"srl_nokia-aaa.yang and never used, so there is no per-command authorization "+
 			"(OpenConfig's openconfig-aaa.yang does use them; OpenConfig mode is not measured).")
+	}
+	if strings.Contains(aaa, "leaf-list services") {
+		out = append(out, "A local role grants no service unless `services` lists one (leaf-list, no default; "+
+			"the guide: \"By default, a role has no services configured\"), and a user whose roles grant none of the "+
+			"service it connects with is refused and the session closed. Both lab roles list `cli`. L76 runs 1 to 4 "+
+			"failed on the lab's own role configuration, which listed no service, not on port49.")
 	}
 	if strings.Contains(aaa, "authorization is skipped for TACACS+ users granting full admin access") {
 		out = append(out, "`priv-lvl-authorization` false (the default) skips authorization and grants full admin.")

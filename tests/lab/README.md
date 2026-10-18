@@ -834,8 +834,8 @@ from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only wit
   note's "Sources" section lists each one with its page (`l76Sources`).
 - **The config.** `configs/srlinux-startup.cli`, in containerlab's hierarchical `.cli` form, is applied
   after SR Linux's default config. It follows Nokia's *Configuration Basics Guide 26.7*, "Securing access",
-  except where the image's YANG overrules it: the local server group must be named `local`, and the
-  accounting event is `command`. The file has no comments because containerlab's `.cli` comment syntax is
+  except where the image's YANG overrules it: the local server group must be named `local`, the
+  accounting event is `command`, and each local role must list `services [ cli ]` or no login on it succeeds. The file has no comments because containerlab's `.cli` comment syntax is
   not documented. Its secret and break-glass password are `labcreds`' published values.
 - **Device commands.** The test reads and changes the device with `docker exec clab-port49-srlinux-srl1
   sr_cli -d`, which runs as the container's root, outside TACACS+. Cells (i) and (j) restore what they change.

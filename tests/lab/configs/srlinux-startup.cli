@@ -14,11 +14,17 @@ system {
         }
         authorization {
             role p49-read {
+                services [
+                    cli
+                ]
                 tacacs {
                     priv-lvl 1
                 }
             }
             role p49-admin {
+                services [
+                    cli
+                ]
                 tacacs {
                     priv-lvl 15
                 }

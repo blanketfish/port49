@@ -673,7 +673,7 @@ const l76TypesFixture = `
 
 // l76AAAFixture is copied from the same image's
 // /opt/srlinux/models/srl_nokia/models/system/srl_nokia-aaa.yang lines
-// 134-135, 254-257, 1096, 1123 and 1148 (no line of that file uses the
+// 134-135, 254-257, 763, 1096, 1123 and 1148 (no line of that file uses the
 // first two groupings).
 const l76AAAFixture = `
       must '(. = "local") = (../type = "srl-aaa-types:local")' {
@@ -682,6 +682,7 @@ const l76AAAFixture = `
         "Use TACACS+ priv-lvl based authorization
 
          If false, then authorization is skipped for TACACS+ users granting full admin access for those users.";
+    leaf-list services {
   grouping aaa-authorization-methods-config {
   grouping aaa-authorization-events-top {
       uses aaa-authorization-role-top;
@@ -701,7 +702,7 @@ func TestL76IdentityBase(t *testing.T) {
 
 func TestL76SchemaFindingsNameEachOverrule(t *testing.T) {
 	got := strings.Join(l76SchemaFindings(l76AAAFixture, l76TypesFixture), "\n")
-	for _, want := range []string{"`event command`", "named `local`", "no TACACS+ authorization method", "full admin"} {
+	for _, want := range []string{"`event command`", "named `local`", "no TACACS+ authorization method", "full admin", "grants no service"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("findings lack %q:\n%s", want, got)
 		}
@@ -712,6 +713,19 @@ func TestL76SchemaFindingsNameEachOverrule(t *testing.T) {
 	used := l76AAAFixture + "    uses aaa-authorization-methods-config;\n"
 	if strings.Contains(strings.Join(l76SchemaFindings(used, ""), "\n"), "no TACACS+ authorization method") {
 		t.Error("a used grouping read as unused")
+	}
+}
+
+func TestL76StartupRolesGrantTheCLIService(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("configs", "srlinux-startup.cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A role without a service refuses every login that lands on it (SA#service-authorization-local-users;
+	// srl_nokia-aaa.yang:763, no default): both authorization roles list the cli service.
+	re := regexp.MustCompile(`role p49-(read|admin) \{\s+services \[\s+cli\s+\]\s+tacacs \{`)
+	if n := len(re.FindAllString(string(raw), -1)); n != 2 {
+		t.Errorf("%d authorization roles list services [ cli ], want 2", n)
 	}
 }
 
@@ -866,7 +880,7 @@ func TestL76UserSessionsSkipsBracesInQuotedValues(t *testing.T) {
 var l76StartupRules = []struct{ re, what string }{
 	{`^authentication/authentication-method \[$`, "authentication-method [ port49 local ]"},
 	{`^authentication/(user \S+ \{|password \S+|role \[)$`, "user breakglass { password ...; role [ p49-admin ] }"},
-	{`^authorization/(role \S+ \{|priv-lvl \d+)$`, "authorization { role <n> { tacacs { priv-lvl <n> } } }"},
+	{`^authorization/(role \S+ \{|services \[|priv-lvl \d+)$`, "authorization { role <n> { services [ cli ]; tacacs { priv-lvl <n> } } }"},
 	{`^accounting/(accounting-method \[|event command \{|record start-stop)$`,
 		"accounting { accounting-method [ port49 ]; event command { record start-stop } }"},
 	{`^server-group local/(server-group local \{|type local)$`, "server-group local { type local }"},
