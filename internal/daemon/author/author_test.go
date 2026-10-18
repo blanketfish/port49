@@ -1506,9 +1506,10 @@ func authWith(t *testing.T, ceiling uint8, attrs ...string) (*Handler, *memory.S
 }
 
 // A session authorization above the context's level is permitted (spec §5.2).
-// SR Linux 26.7.2 was observed sending its session authorization at a priv_lvl
-// above its login START's (L76 run 2026-10-18); the reply's level is policy's,
-// so the request is not compared. The context afterwards holds the reply's
+// SR Linux 26.7.2 sends its login START at priv_lvl 0 and its session
+// authorization at 1, above the 0 port49 holds (tests/lab/results/
+// L76-nokia_srlinux.md, cell (b)); the reply's level is policy's, so the
+// request is not compared. The context afterwards holds the reply's
 // level, clamped to the ceiling, and never the request's: each case asks at 15
 // from a context at 1, and a later command at 15 is permitted only where the
 // reply granted it.
