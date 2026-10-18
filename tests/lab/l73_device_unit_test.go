@@ -718,7 +718,8 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"openssl x509 -noout -subject_hash_old -in /var/tmp/l73-inter.pem",
 		"mkdir -p " + d, "ls -l " + d,
 		"mkdir -p " + l73TrustDir + "/l73-dev", "ls -l " + l73TrustDir + "/l73-dev",
-		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 2048",
 		"chmod 600 " + l73TrustDir + "/l73-dev/client.key",
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
 		"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.crt",
@@ -739,8 +740,15 @@ func TestL73RootCmdAllowed(t *testing.T) {
 		"openssl rsa -in " + l73TrustDir + "/l73-dev/client.key", "scp " + l73TrustDir + "/l73-dev/client.key x:",
 		"chmod 644 " + l73TrustDir + "/l73-dev/client.key", "chmod 600 /var/tmp/l73-root.pem",
 		"chmod 600 " + l73TrustDir + "/l73-dev/client.key; cat " + l73TrustDir + "/l73-dev/client.key",
-		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out /var/tmp/k.pem",
-		"openssl genpkey -algorithm RSA -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl ecparam -name prime256v1 -genkey -noout", "openssl ecparam -name prime256v1 -genkey -noout -out /var/tmp/k.pem",
+		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key -text",
+		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key -param_out",
+		"openssl ecparam -name secp384r1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key",
+		"openssl ecparam -name prime256v1 -genkey -noout -out " + l73TrustDir + "/l73-dev/client.key; id",
+		"openssl genrsa", "openssl genrsa 2048", "openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 4096",
+		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 1024", "openssl genrsa -out /var/tmp/k.pem 2048",
+		"openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key 2048 -text", "openssl genrsa -out " + l73TrustDir + "/l73-dev/client.key",
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/other.csr`,
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1;id" -out /var/tmp/l73-client.csr`,
 		`openssl req -new -key ` + l73TrustDir + `/l73-dev/client.key -subj "/CN=srx1" -out /var/tmp/l73-client.csr -text`,
@@ -754,22 +762,23 @@ func TestL73RootCmdAllowed(t *testing.T) {
 }
 
 func TestL73RootClientCmds(t *testing.T) {
-	got, err := l73RootClientCmds("srx1")
+	prep, finish, err := l73RootClientCmds("srx1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	k := l73TrustDir + "/l73-dev/client.key"
-	want := []string{
-		"mkdir -p " + l73TrustDir + "/l73-dev",
-		"openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out " + k,
-		"chmod 600 " + k,
-		`openssl req -new -key ` + k + ` -subj "/CN=srx1" -out /var/tmp/l73-client.csr`,
+	if !slices.Equal(prep, []string{"mkdir -p " + l73TrustDir + "/l73-dev"}) {
+		t.Fatalf("prep %q", prep)
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %q", got)
+	if !slices.Equal(finish, []string{"chmod 600 " + k, `openssl req -new -key ` + k + ` -subj "/CN=srx1" -out /var/tmp/l73-client.csr`}) {
+		t.Fatalf("finish %q", finish)
+	}
+	ec, rsa := l73RootKeyCmds()
+	if ec != "openssl ecparam -name prime256v1 -genkey -noout -out "+k || rsa != "openssl genrsa -out "+k+" 2048" {
+		t.Fatalf("keys %q %q", ec, rsa)
 	}
 	for _, bad := range []string{"", "a b", "x;id", `x"y`, "$(id)", "-x"} {
-		if _, err := l73RootClientCmds(bad); err == nil {
+		if _, _, err := l73RootClientCmds(bad); err == nil {
 			t.Errorf("node %q accepted", bad)
 		}
 	}
@@ -777,7 +786,7 @@ func TestL73RootClientCmds(t *testing.T) {
 	if !slices.Equal(place, []string{"cp /var/tmp/l73-client.crt " + l73TrustDir + "/l73-dev/client.crt", "ls -l " + l73TrustDir + "/l73-dev"}) {
 		t.Fatalf("place %q", place)
 	}
-	for _, c := range append(got, place...) {
+	for _, c := range append(append(append(prep, ec, rsa), finish...), place...) {
 		if !l73RootCmdAllowed(c) {
 			t.Errorf("%q is not allowed", c)
 		}

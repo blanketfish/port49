@@ -22,7 +22,7 @@ type rootDevice struct {
 	shellRan    []string
 	tailPW      string
 	shown       string
-	genpkey     string // "" works; "quiet" fails with rc 1 and no words; "missing" says unknown command
+	keygen      string // "" both work; "noec": ecparam is missing; "quiet": ecparam exits 1 with no words; "none": neither works
 	rc          int
 	version     string
 }
@@ -65,13 +65,17 @@ func (d *rootDevice) line(ln string) {
 		d.shellRan = append(d.shellRan, ln)
 		d.rc = 0
 		switch {
-		case strings.HasPrefix(ln, "openssl genpkey") && d.genpkey == "quiet":
+		case strings.HasPrefix(ln, "openssl ecparam") && d.keygen == "quiet":
 			d.rc = 1
 			d.say("root@vj:~ # ")
 			return
-		case strings.HasPrefix(ln, "openssl genpkey") && d.genpkey == "missing":
+		case strings.HasPrefix(ln, "openssl ecparam") && (d.keygen == "noec" || d.keygen == "none"):
 			d.rc = 1
-			d.say("genpkey: unknown command\nroot@vj:~ # ")
+			d.say("Invalid command 'ecparam'; type \"help\" for a list.\nroot@vj:~ # ")
+			return
+		case strings.HasPrefix(ln, "openssl genrsa") && d.keygen == "none":
+			d.rc = 1
+			d.say("Invalid command 'genrsa'; type \"help\" for a list.\nroot@vj:~ # ")
 			return
 		case ln == "openssl version":
 			d.say("OpenSSL 1.0.2u  20 Dec 2019\n")
@@ -267,14 +271,17 @@ func TestL73JunosRootMakesTheClientKeyInPlaceAndKeepsOnlyTheRequest(t *testing.T
 	if d.hash != "" {
 		t.Error("a later session set the root hash again")
 	}
-	if !out.ClientMade || !strings.Contains(out.ClientCSR, "CERTIFICATE REQUEST") {
+	if !out.ClientMade || !strings.Contains(out.ClientCSR, "CERTIFICATE REQUEST") || out.ClientKey != "EC P-256 (openssl ecparam)" {
 		t.Errorf("outcome %+v", out)
 	}
 	j := strings.Join(d.shellRan, "\n")
-	for _, want := range []string{"openssl genpkey -algorithm EC", "chmod 600 " + l73ClientDir + "/client.key", "openssl req -new -key"} {
+	for _, want := range []string{"openssl ecparam -name prime256v1 -genkey -noout -out", "chmod 600 " + l73ClientDir + "/client.key", "openssl req -new -key"} {
 		if !strings.Contains(j, want) {
 			t.Errorf("shell never ran %q", want)
 		}
+	}
+	if strings.Contains(j, "genrsa") {
+		t.Error("the RSA fallback ran although ecparam worked")
 	}
 	for _, ran := range d.shellRan {
 		if !l73RootCmdAllowed(ran) {
@@ -298,7 +305,7 @@ func TestL73JunosRootClientNeedsTheDevicesOpenSSL(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	for _, ran := range d.shellRan {
-		if strings.Contains(ran, "genpkey") {
+		if strings.Contains(ran, "ecparam") || strings.Contains(ran, "genrsa") {
 			t.Errorf("made a key anyway: %q", ran)
 		}
 	}
@@ -320,30 +327,41 @@ func TestL73JunosRootPlacesTheSignedClientCertificate(t *testing.T) {
 	}
 }
 
-func TestL73JunosRootSilentFailureIsCaughtByTheExitStatus(t *testing.T) {
-	c, d := newRootDevice()
-	d.pw, d.genpkey = testPW, "quiet"
-	_, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
-	if err == nil || !strings.Contains(err.Error(), "rc=1") || !strings.Contains(err.Error(), "genpkey") {
-		t.Fatalf("a genpkey that exits 1 with no words went undetected: %v", err)
-	}
-	leakFree(t, "screen", screen, err.Error())
-	for _, ran := range d.shellRan {
-		if strings.HasPrefix(ran, "chmod ") {
-			t.Errorf("went on to %q after a failed genpkey", ran)
+func TestL73JunosRootFallsBackToRSAWhenEcparamIsMissingOrSilentlyFails(t *testing.T) {
+	for _, mode := range []string{"noec", "quiet"} {
+		c, d := newRootDevice()
+		d.pw, d.keygen = testPW, mode
+		out, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
+		if err != nil {
+			t.Fatalf("%s: %v", mode, oneLine(err.Error()))
 		}
+		if out.ClientKey != "RSA 2048 (openssl genrsa)" {
+			t.Errorf("%s: key %q", mode, out.ClientKey)
+		}
+		j := strings.Join(d.shellRan, "\n")
+		if !strings.Contains(j, "openssl genrsa -out "+l73ClientDir+"/client.key 2048") || !strings.Contains(j, "chmod 600") {
+			t.Errorf("%s: ran %q", mode, j)
+		}
+		leakFree(t, mode, screen, fmt.Sprintf("%+v", out))
 	}
 }
 
-func TestL73JunosRootFailureKeepsTheCommandsOutputInTheScreen(t *testing.T) {
+func TestL73JunosRootBothKeyCommandsFailingIsInvalidWithBothScreens(t *testing.T) {
 	c, d := newRootDevice()
-	d.pw, d.genpkey = testPW, "missing"
+	d.pw, d.keygen = testPW, "none"
 	_, screen, err := l73JunosRoot(c, l73RootJob{ClientNode: "srx1"}, testPW, "$6$salt$HASHBODY")
-	if err == nil {
-		t.Fatal("no error")
+	if err == nil || !strings.Contains(err.Error(), "ecparam") || !strings.Contains(err.Error(), "genrsa") {
+		t.Fatalf("err %v", err)
 	}
-	if !strings.Contains(screen, "genpkey: unknown command") {
-		t.Errorf("the screen lacks the device's words: %q", screen)
+	for _, want := range []string{"Invalid command 'ecparam'", "Invalid command 'genrsa'", "OpenSSL 1.0.2u"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the screen lacks %q: %q", want, screen)
+		}
+	}
+	for _, ran := range d.shellRan {
+		if strings.HasPrefix(ran, "chmod ") || strings.HasPrefix(ran, "openssl req") {
+			t.Errorf("went on after both failed: %q", ran)
+		}
 	}
 	leakFree(t, "screen", screen, err.Error())
 }
