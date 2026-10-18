@@ -692,3 +692,20 @@ func TestClusterIDIsTheClusters(t *testing.T) {
 		t.Fatalf("a second client of the same cluster read %x %v, want %x", again, err, id)
 	}
 }
+
+// A probe lease is seen only with the lifetime it was granted: another
+// cluster's lease under the same id, with another lifetime, is not seen.
+func TestAProbeLeaseIsSeenOnlyWithItsGrantedLifetime(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	id, ttl, err := s.ProbeLeaseGrant(context.Background())
+	if err != nil || ttl < 3600 || ttl >= 7200 {
+		t.Fatalf("%d %d %v", id, ttl, err)
+	}
+	defer s.ProbeLeaseRevoke(context.Background(), id)
+	if seen, err := s.ProbeLeaseSeen(context.Background(), id, ttl); err != nil || !seen {
+		t.Fatalf("the lease with its own lifetime: %v %v", seen, err)
+	}
+	if seen, err := s.ProbeLeaseSeen(context.Background(), id, ttl+1); err != nil || seen {
+		t.Fatalf("the lease with another lifetime: %v %v", seen, err)
+	}
+}

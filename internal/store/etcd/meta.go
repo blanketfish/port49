@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -300,29 +301,29 @@ func (s *Store) ClusterID(ctx context.Context) (uint64, error) {
 	return resp.Header.ClusterId, nil
 }
 
-// probeLeaseTTL is the lifetime of a keyspace probe's lease, so nothing is
-// left behind if its holder dies before revoking it.
-const probeLeaseTTL = 60
-
-// ProbeLeaseGrant grants a short lease on this store's cluster and returns
-// its id (plan 11a, R28). etcd checks no role for a lease call. Another
-// store handle's ProbeLeaseSeen finds it only when it reaches the same cluster.
-func (s *Store) ProbeLeaseGrant(ctx context.Context) (int64, error) {
-	resp, err := s.ctx.Grant(ctx, probeLeaseTTL)
+// ProbeLeaseGrant grants a lease on this store's cluster and returns its id
+// and the lifetime drawn for it, 3600 s plus up to 3600 s at random (plan
+// 11a, R28). etcd checks no role for a lease call. Another store handle's
+// ProbeLeaseSeen finds it only when it reaches the same cluster; the drawn
+// lifetime makes a lease of another cluster under the same id a mismatch.
+// The caller revokes it; one left behind holds no keys and expires.
+func (s *Store) ProbeLeaseGrant(ctx context.Context) (id, ttl int64, err error) {
+	ttl = 3600 + rand.Int64N(3600)
+	resp, err := s.ctx.Grant(ctx, ttl)
 	if err != nil {
-		return 0, unavailable(err)
+		return 0, 0, unavailable(err)
 	}
-	return int64(resp.ID), nil
+	return int64(resp.ID), ttl, nil
 }
 
-// ProbeLeaseSeen reports whether this store's cluster knows the lease id, a
-// live lease of the probe's TTL.
-func (s *Store) ProbeLeaseSeen(ctx context.Context, id int64) (bool, error) {
+// ProbeLeaseSeen reports whether this store's cluster knows the lease id
+// with exactly the lifetime it was granted.
+func (s *Store) ProbeLeaseSeen(ctx context.Context, id, ttl int64) (bool, error) {
 	resp, err := s.ctx.TimeToLive(ctx, clientv3.LeaseID(id))
 	if err != nil {
 		return false, unavailable(err)
 	}
-	return resp.TTL > 0 && resp.GrantedTTL == probeLeaseTTL, nil
+	return resp.TTL > 0 && resp.GrantedTTL == ttl, nil
 }
 
 // ProbeLeaseRevoke revokes the probe's lease; best effort, it expires anyway.

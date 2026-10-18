@@ -137,3 +137,44 @@ func TestAHandleThatCannotAnswerTheProbeIsNamedWithItsCause(t *testing.T) {
 		})
 	}
 }
+
+// R28 under enforced roles with nested prefixes (the key probe's failing case):
+// one member, an A role set at /port49/ and a B role set at /port49/dir/, held
+// by users of their own, so neither identity's grants reach the other's keys.
+// The lease probe still finds one cluster, both ways round, as the broker and
+// as the daemon.
+func TestNestedPrefixesUnderEnforcedRolesAreOneKeyspace(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	users := map[string][]string{}
+	for set, prefix := range map[string]string{"a": "/port49/", "b": "/port49/dir/"} {
+		for _, g := range etcd.RolesFor(prefix, etcd.ScopeShared) {
+			grants = append(grants, etcdtest.Grant{Role: set + "-" + g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+		}
+		users[set+"-broker"] = []string{set + "-" + etcd.RoleBroker}
+		users[set+"-daemon"] = []string{set + "-" + etcd.RoleDaemon}
+	}
+	srv.EnableAuth(t, grants, users)
+	open := func(user, prefix string) *etcd.Store {
+		s, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: srv.TLS(t, user), Prefix: prefix})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	for _, who := range []string{"broker", "daemon"} {
+		for _, c := range []struct{ name, sess, dir, su, du string }{
+			{"directory inside session", "/port49/", "/port49/dir/", "a-", "b-"},
+			{"session inside directory", "/port49/dir/", "/port49/", "b-", "a-"},
+		} {
+			t.Run(who+" "+c.name, func(t *testing.T) {
+				err := checkTwoStores(context.Background(), twoPrefixes(c.dir, c.sess), open(c.su+who, c.sess),
+					open(c.du+who, c.dir), 5*time.Second)
+				if err == nil || !strings.Contains(err.Error(), "one keyspace named two ways") {
+					t.Fatalf("%v", err)
+				}
+			})
+		}
+	}
+}

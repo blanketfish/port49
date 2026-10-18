@@ -115,7 +115,7 @@ func checkTwoStores(ctx context.Context, cfg config.Config, sess, dir *etcdstore
 // it. etcd checks no role for a lease call, so any identity can ask. A call
 // that cannot complete is an error naming the handle and a closed-set cause.
 func sameCluster(cctx, ctx context.Context, sess, dir *etcdstore.Store, bound time.Duration) (bool, error) {
-	id, err := dir.ProbeLeaseGrant(cctx)
+	id, ttl, err := dir.ProbeLeaseGrant(cctx)
 	if err != nil {
 		return false, fmt.Errorf("the directory store could not grant its probe lease (%s)", outageCause(err))
 	}
@@ -124,7 +124,7 @@ func sameCluster(cctx, ctx context.Context, sess, dir *etcdstore.Store, bound ti
 		defer cancel()
 		dir.ProbeLeaseRevoke(rctx, id)
 	}()
-	seen, err := sess.ProbeLeaseSeen(cctx, id)
+	seen, err := sess.ProbeLeaseSeen(cctx, id, ttl)
 	if err != nil {
 		return false, fmt.Errorf("the session store could not look up the probe lease (%s)", outageCause(err))
 	}
