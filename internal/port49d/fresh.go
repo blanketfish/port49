@@ -20,7 +20,7 @@ var directoryCheckEvery = time.Second
 // directory stops answering and when it answers again, with the copy's age,
 // until ctx ends. A handle not yet opened does not answer.
 func keepFresh(ctx context.Context, h *dirHandle, fresh *store.Freshness, timeout time.Duration, out io.Writer,
-	proc string) {
+	proc string, shared bool) {
 	t := time.NewTicker(directoryCheckEvery)
 	defer t.Stop()
 	for {
@@ -36,10 +36,18 @@ func keepFresh(ctx context.Context, h *dirHandle, fresh *store.Freshness, timeou
 		age, ok := fresh.Age()
 		switch fresh.Checked(err) {
 		case store.Stopped:
+			if shared {
+				fmt.Fprintln(out, sharedDownLine(proc))
+				break
+			}
 			fmt.Fprintf(out, "%s: directory store: not answering (%s): serving from the cache %s; revocations, "+
 				"lifts, enrollments, unlocks and second-factor resets are refused until it answers\n", proc,
 				printsafeErr(err), confirmedText(age, ok))
 		case store.Resumed:
+			if shared {
+				fmt.Fprintln(out, sharedUpLine(proc))
+				break
+			}
 			fmt.Fprintf(out, "%s: directory store: answering again; the cache was %s\n", proc, oldText(age, ok))
 		}
 		select {
@@ -49,6 +57,15 @@ func keepFresh(ctx context.Context, h *dirHandle, fresh *store.Freshness, timeou
 		}
 	}
 }
+
+// sharedDownLine and sharedUpLine are the outage lines of a one-store
+// deployment: there is no cache to serve from, so the broker refuses what
+// needs the store (the API answers 503 store_unavailable) until it answers.
+func sharedDownLine(proc string) string {
+	return proc + ": store: not answering: the one store is not answering and this broker refuses requests until it returns"
+}
+
+func sharedUpLine(proc string) string { return proc + ": store: answering again" }
 
 // ageText is d as port49 store status prints a cache age: tenths of a
 // second under a minute, whole seconds above.

@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
@@ -287,4 +289,89 @@ func metricsReadyz(t *testing.T, addr string) int {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode
+}
+
+// The start's role check runs per store (Task 9 ruling 6): on a directory
+// store the broker's role must reach ul/, which the shared-store check never
+// probes. A broker whose role lacks it is refused, naming
+// stores.directory.etcd.broker and the family.
+func TestTheDirectorysRoleCheckRefusesABrokerWithoutUnlockRecords(t *testing.T) {
+	const prefix = "/port49/"
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	for _, g := range etcd.RolesFor(prefix, etcd.ScopeDirectory) {
+		if g.Role == etcd.RoleBroker {
+			continue
+		}
+		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+	}
+	// The broker reaches every directory family but ul/.
+	for _, fam := range []string{"rv/", "mb/", "mk/", "lo/", "sf/", "meta/"} {
+		k := prefix + "v1/" + fam
+		grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k), Write: true})
+	}
+	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon}, "port49-broker": {etcd.RoleBroker}})
+	tc := srv.TLS(t, "port49-broker")
+	b, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: tc, Prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Close() })
+	leaf, err := x509.ParseCertificate(tc.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &config.EtcdConfig{CallTimeout: 2 * time.Second, Roles: config.RolesEnforced}
+	ref := storeRef{at: "stores.directory", scope: etcd.ScopeDirectory, dir: true}
+	err = checkRoles(context.Background(), nil, b, e, map[string]*x509.Certificate{"broker": leaf}, ref)
+	if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.broker") || !strings.Contains(err.Error(), "ul/") {
+		t.Fatalf("a broker without ul/ passed the directory check, or was refused for another reason: %v", err)
+	}
+}
+
+// An operator at 3am is not told a broker is serving when it is not: on one
+// store the outage line says the broker refuses requests, not that it serves
+// from a cache; on a split the cache wording stays. Both are pinned.
+func TestTheDirectoryOutageLineIsTrueForTheDeployment(t *testing.T) {
+	srv, proxy := rolesMemberScoped(t, etcd.ScopeDirectory)
+	raw, err := etcd.Open(etcd.Config{Endpoints: []string{"https://" + proxy.Addr()}, TLS: srv.TLS(t, "port49-broker"),
+		Prefix: "/port49/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	every := directoryCheckEvery
+	t.Cleanup(func() { directoryCheckEvery = every })
+	directoryCheckEvery = 20 * time.Millisecond
+	for _, c := range []struct {
+		name       string
+		shared     bool
+		down, up   string
+		mustNotSay string
+	}{
+		{"shared", true, "port49-broker: store: not answering: the one store is not answering and this broker refuses " +
+			"requests until it returns\n", "port49-broker: store: answering again\n", "serving from the cache"},
+		{"split", false, "port49-broker: directory store: not answering (", "port49-broker: directory store: answering again; the cache was ",
+			"refuses requests until it returns"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var out syncBuffer
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			h := &dirHandle{} // not opened yet: does not answer
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				keepFresh(ctx, h, store.NewFreshness(time.Now), time.Second, &out, "port49-broker", c.shared)
+			}()
+			waitWithin(t, &out, c.down, 5*time.Second)
+			h.set(raw)
+			waitWithin(t, &out, c.up, 5*time.Second)
+			cancel()
+			<-done
+			if strings.Contains(out.String(), c.mustNotSay) {
+				t.Fatalf("%s: the line says %q:\n%s", c.name, c.mustNotSay, out.String())
+			}
+		})
+	}
 }

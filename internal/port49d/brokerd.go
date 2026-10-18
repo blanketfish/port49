@@ -657,7 +657,10 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// The copy's freshness: the directory read every second (R17).
 	dirTimeout := cfg.Stores.Directory.Etcd.CallTimeout
 	wg.Add(1)
-	go func() { defer wg.Done(); keepFresh(ctx, bs.dir, bs.fresh, dirTimeout, stderr, "port49-broker") }()
+	go func() {
+		defer wg.Done()
+		keepFresh(ctx, bs.dir, bs.fresh, dirTimeout, stderr, "port49-broker", cfg.Stores.Shared)
+	}()
 
 	aln, err := admin.Listen(cfg.AdminSocket)
 	if err != nil {

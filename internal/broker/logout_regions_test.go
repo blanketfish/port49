@@ -75,3 +75,72 @@ func TestReachLogoutReturnsAStoreErrorDuringTheReach(t *testing.T) {
 		t.Fatalf("a failed reach reported %+v", rep)
 	}
 }
+
+// failing fails one store call and passes the rest through.
+type failing struct {
+	store.Store
+	contexts, receipts bool
+}
+
+func (s failing) ContextsByPrincipal(ctx context.Context, p string) ([]store.ContextRef, error) {
+	if s.contexts {
+		return nil, store.ErrUnavailable
+	}
+	return s.Store.ContextsByPrincipal(ctx, p)
+}
+
+func (s failing) DeleteReceiptsByPrincipal(ctx context.Context, p string) (int, error) {
+	if s.receipts {
+		return 0, store.ErrUnavailable
+	}
+	return s.Store.DeleteReceiptsByPrincipal(ctx, p)
+}
+
+// A step that fails does not stop the others, and what failed is reported,
+// never claimed reached: with the context listing down, the person's tokens
+// are still deleted, no context is claimed, and the error comes back.
+func TestReachLogoutPartialFailureReachesTheRestAndClaimsNothingMore(t *testing.T) {
+	ctx := context.Background()
+	f, iss, _ := oidcLoggedIn(t)
+	f.b.Store = failing{Store: f.st, contexts: true}
+	rep, err := f.b.ReachLogout(ctx, store.Logout{Key: store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice"), At: f.now})
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(rep.Err, store.ErrUnavailable) {
+		t.Fatalf("err %v, rep.Err %v", err, rep.Err)
+	}
+	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 0 {
+		t.Fatal("a failed context step stopped the token deletion")
+	}
+	if len(rep.Principals) == 0 || rep.TokenKeys == 0 {
+		t.Fatalf("the tokens that were deleted are not reported: %+v", rep)
+	}
+	if len(rep.Contexts) != 0 || !contextRevokedAt(t, f, "leaf1").IsZero() {
+		t.Fatalf("a context is claimed reached that was not: %+v", rep.Contexts)
+	}
+}
+
+// The last step failing leaves the earlier ones done and reported.
+func TestReachLogoutFailingLastStepKeepsWhatWasReached(t *testing.T) {
+	ctx := context.Background()
+	f, iss, _ := oidcLoggedIn(t)
+	f.b.Store = failing{Store: f.st, receipts: true}
+	rep, err := f.b.ReachLogout(ctx, store.Logout{Key: store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice"), At: f.now})
+	if !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("err %v", err)
+	}
+	if len(rep.Contexts) == 0 || contextRevokedAt(t, f, "leaf1").IsZero() {
+		t.Fatalf("the contexts reached before the failure are lost: %+v", rep)
+	}
+}
+
+// A broker with no identity verifiers reaches nothing and says so.
+func TestReachLogoutWithNoIdentityIsRefused(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	f.b.Identity = nil
+	rep, err := f.b.ReachLogout(context.Background(), store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"), At: f.now})
+	if err == nil || len(rep.Contexts) != 0 || rep.TokenKeys != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if !contextRevokedAt(t, f, "leaf1").IsZero() {
+		t.Fatal("a refused reach marked a context")
+	}
+}
