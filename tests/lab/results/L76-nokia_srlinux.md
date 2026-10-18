@@ -4,13 +4,13 @@
 - **Platform:** nokia_srlinux (containerlab node `srl1`, 172.100.100.71)
 - **Image version:** SR Linux 26.7.2-519 (`ghcr.io/nokia/srlinux:26.7.2-519`)
 - **Topology:** `tests/lab/topologies/srlinux.clab.yml`
-- **Capture:** `tests/lab/evidence/L76-nokia_srlinux.pcap` — 1832 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L76-nokia_srlinux.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L76-nokia_srlinux.pcap` — 2774 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L76-nokia_srlinux.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `69da9110faa9d879b88fbbfbe3959c3393f62d33`, `PORT49_LAB_PLATFORMS=srlinux`, `-run ^TestL76$`
+- **Run:** commit `495db21af60e8dde3ac13c2ae43f5a422c15dff3`, `PORT49_LAB_PLATFORMS=srlinux`, `-run ^TestL76$`
 
 ## Claim
 
-Nokia SR Linux against port49 over TACACS+ on port 49, server group `port49` then `local`, accounting to `port49`: (a) a user that exists only in port49 logs in over SSH; the session table names it, the port49 group and the priv-lvl; the authentication type on the wire; (b) the authorization requests the login sends with priv-lvl-authorization true: services and attributes; whether any per-command request follows; what the device does with priv-lvl=15 and the optional shell:roles; (c) the accounting records a CLI command sends: start and stop, their attributes; whether a session start or stop is sent; (d) a wrong password: port49's refusal, the time to the device's refusal, and whether a port49 deny falls through to local; (e) a wrong shared secret: port49's no_known_key_matches, and whether the break-glass account still logs in through local, and how fast; (f) port49 stopped: the break-glass login through local and its time; a port49 user refused; whether a CLI command still runs with accounting unreachable, and its time; (g) port49 restarted: the time until the device asks port49 again; the empty connections a quiet minute holds (health checks) and whether port49 logs them; (h) priv-lvl=1 in the reply: the roles the session gets (p49-read only) and the session table's priv-lvl; (i) priv-lvl-authorization false (the default): whether any authorization request is sent, and the roles the session gets; (j) service-request nokia-srl-authorization-role true: the services the device asks for, port49's answers, and whether the login survives them.
+Nokia SR Linux against port49 over TACACS+ on port 49, server group `port49` then `local`, accounting to `port49`: (a) a user that exists only in port49 logs in over SSH; the session table names it, the port49 group and the priv-lvl; the authentication type on the wire; (b) the authorization requests the login sends with priv-lvl-authorization true: services and attributes; whether any per-command request follows; what the device does with priv-lvl=15 and the optional shell:roles; (c) the accounting records a CLI command sends: start and stop, their attributes; whether a session start or stop is sent; (d) a wrong password: port49's refusal, the time to the device's refusal, and whether a port49 deny falls through to local; (e) a wrong shared secret: port49's no_known_key_matches, and whether the break-glass account still logs in through local, and how fast; (f) port49 stopped: the break-glass login through local and its time; a port49 user refused; whether a CLI command still runs with accounting unreachable, and its time; (g) port49 restarted: the time until the device asks port49 again; the empty connections a quiet minute holds (health checks) and whether port49 logs them; (h) priv-lvl=1 in the reply: the roles the session gets (p49-read only) and the session table's priv-lvl; (i) priv-lvl-authorization false (the default): whether any authorization request is sent, and the roles the session gets; (j) service-request nokia-srl-authorization-role true: the services the device asks for, port49's answers, and whether the login survives them; (k) a priv-lvl 1 user's second exec channel on one SSH login: the session table's Role cell on the first and the second exec, and whether a documented harmless write that p49-read must not be allowed succeeds on either; (l) exit-on-reject true: whether the break-glass account still logs in through local, and how fast, when port49 denies it, with a wrong shared secret and with port49 stopped.
 
 ## Observation
 
@@ -151,15 +151,15 @@ The server group's state (`info from state system aaa server-group port49`):
 
 ### (a) a user that exists only in port49 logs in over SSH; the session table names it, the port49 group and the priv-lvl; the authentication type on the wire
 
-`alice01` (a user with no local account) logged in over SSH in 1.309s. port49's redeem: permit/token_redeemed, auth.method `ascii`. The session table's row: id 18, service `srlinux-cli`, method `port49`, priv-lvl `15`, tty ``.
+`alice01` (a user with no local account) logged in over SSH in 1.261s. port49's redeem: permit/token_redeemed, auth.method `ascii`. The session table's row: id 18, service `srlinux-cli`, method `port49`, priv-lvl `15`, tty ``.
 
 ```
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |        Role         |
   <LONG>
-  | 12 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T17:32:57.249Z | p49-admin           |
-  | 13 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T17:32:57.563Z | p49-admin           |
-  | 18 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T17:33:00.995Z | p49-admin, p49-read |
+  | 12 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:18:08.226Z | p49-admin           |
+  | 13 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:18:08.536Z | p49-admin           |
+  | 18 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:11.718Z | p49-admin, p49-read |
   <LONG>
 
 ```
@@ -199,7 +199,7 @@ This user's rows in the session table, as the device printed them:
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |        Role         |
   <LONG>
-  | 18 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T17:33:00.995Z | p49-admin, p49-read |
+  | 18 | alice01*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:11.718Z | p49-admin, p49-read |
 ```
 
 Probe (b1): port49 replied `["priv-lvl=15","shell:roles*network-admin"]`; `alice02` **logged in**. Nokia's SA#authorization-use-tacacsx-server says "Unknown optional VSAs are discarded": a login that is refused here contradicts it, one that succeeds confirms it.
@@ -235,40 +235,55 @@ account flags=start user=alice01 record=[task_id=2 timezone=UTC service=shell pr
 account flags=stop user=alice01 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=info from state system information version]
 ```
 
+Accounted commands of this login, in order, from `evidence/L76-nokia_srlinux/decisions.jsonl`:
+
+1. `show system aaa authentication «redacted»`: port `ssh`, priv-lvl 15
+2. `info from state system information version`: port `unknown`, priv-lvl 15
+
+The commands after the first are accounted on a different port or at a different priv-lvl than the first, while the reply granted priv-lvl 15. Whether that channel also runs with more authority is measured in cell (k); this line is only what the device sent port49.
+
+port49 redacts the word after `authentication` in the accounted `show system aaa authentication` command (the records carry `redacted: true` and the word is shown as `«redacted»`): its accounting redaction treats that word as a credential, so an operator reading SR Linux accounting sees the command without it. Input for the `nokia_srlinux` adapter: whether that rule should be platform-aware.
+
 ### (d) a wrong password: port49's refusal, the time to the device's refusal, and whether a port49 deny falls through to local
 
-A wrong password for `alice04` was refused in 789ms. port49's records:
+These break-glass results hold for `exit-on-reject` false, the default; cell (l) repeats them at true.
+
+A wrong password for `alice04` was refused in 1.016s. port49's records:
 
 ```
 redeem deny/device_mismatch method=ascii user=alice04
 redeem deny/token_not_found method=ascii user=breakglass
 ```
 
-With port49 up, `breakglass` (local only; port49 denies it, having no token for it) logged in in 1.61s. So a port49 deny **falls** through to `local` with `exit-on-reject` at its default.
+With port49 up, `breakglass` (local only; port49 denies it, having no token for it) logged in in 1.168s. So a port49 deny **falls** through to `local` with `exit-on-reject` at its default.
 
 **Operator hazard:** with `exit-on-reject` at its default, a person whom port49 denies still gets in if the device has a local account for them. port49's deny is not final on this platform. Plan 12's reference config sets `exit-on-reject` (Ruling 1).
 
 The AAA log's lines for both users:
 
 ```
-2026-10-18T17:32:57.264332+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:57.264350+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084507+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084541+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084460+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084477+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440651+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440669+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797675+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00000|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797693+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00001|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:08.610827+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2531|3193|00000|EV|<LONG>|W: User alice04 authentication failed from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913726+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00004|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913745+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00005|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241255+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241285+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058515+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058536+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767673+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767690+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903237+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903256+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025825+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00002|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025844+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00003|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.610105+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3190|00000|EV|<LONG>|W: User alice04 authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144579+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00002|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144595+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00003|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
 ```
+
+The wrong password is a random string shaped like a token, so port49's device-tag check refuses it as `device_mismatch` (a token cut for another device, internal/daemon/authen/authen.go). A mistyped human password is not token-shaped and would reach `token_not_found`, as the break-glass line shows.
 
 ### (e) a wrong shared secret: port49's no_known_key_matches, and whether the break-glass account still logs in through local, and how fast
 
-port49d on a key the device does not have. `alice08` (port49 user): refused (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain) in 43ms. `breakglass` (local): logged in in 60ms. port49's diagnoses: map[no_known_key_matches:1] (1 unvalidated record(s), 0 redeem(s)).
+These break-glass results hold for `exit-on-reject` false, the default; cell (l) repeats them at true.
+
+port49d on a key the device does not have. `alice12` (port49 user): refused (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain) in 45ms. `breakglass` (local): logged in in 69ms. port49's diagnoses: map[no_known_key_matches:1] (1 unvalidated record(s), 0 redeem(s)).
 
 ```
 unvalidated diagnosis=no_known_key_matches
@@ -277,76 +292,98 @@ unvalidated diagnosis=no_known_key_matches
 The AAA log:
 
 ```
-2026-10-18T17:32:57.264332+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:57.264350+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084507+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084541+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084460+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084477+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440651+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440669+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797675+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00000|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797693+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00001|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913726+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00004|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913745+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00005|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:11.310446+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00002|EV|sessionOpened|N: Opened session 29 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:11.310467+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00003|EV|<LONG>|N: User breakglass on session 29 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:13.684360+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00002|EV|sessionOpened|N: Opened session 32 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:13.684379+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00003|EV|<LONG>|N: User breakglass on session 32 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:20.106638+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2531|3198|00004|EV|<LONG>|W: User alice08 authentication failed from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:20.164074+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3191|00000|EV|sessionOpened|N: Opened session 46 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:20.164093+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3191|00001|EV|<LONG>|N: User breakglass on session 46 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241255+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241285+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058515+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058536+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767673+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767690+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903237+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903256+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025825+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00002|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025844+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00003|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144579+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00002|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144595+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00003|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:21.099995+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00002|EV|sessionOpened|N: Opened session 29 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:21.100014+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00003|EV|<LONG>|N: User breakglass on session 29 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:23.253671+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00000|EV|sessionOpened|N: Opened session 32 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:23.253692+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00001|EV|<LONG>|N: User breakglass on session 32 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:29.876100+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00004|EV|sessionOpened|N: Opened session 45 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:29.876125+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00005|EV|<LONG>|N: User breakglass on session 45 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:35.341714+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00003|EV|sessionOpened|N: Opened session 53 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:35.341737+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00004|EV|<LONG>|N: User breakglass on session 53 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.491105+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3182|00002|EV|<LONG>|W: User breakglass authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.963204+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00005|EV|sessionOpened|N: Opened session 59 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.963223+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00006|EV|<LONG>|N: User breakglass on session 59 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.093980+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00004|EV|sessionOpened|N: Opened session 60 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.093998+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00005|EV|<LONG>|N: User breakglass on session 60 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.918205+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3187|00004|EV|<LONG>|W: User breakglass authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:51.103967+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3191|00006|EV|<LONG>|W: User alice12 authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:51.158888+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3182|00003|EV|sessionOpened|N: Opened session 65 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:51.158906+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3182|00004|EV|<LONG>|N: User breakglass on session 65 successfully authenticated from host 172.100.100.1 in network-instance mgmt
 ```
 
 ### (f) port49 stopped: the break-glass login through local and its time; a port49 user refused; whether a CLI command still runs with accounting unreachable, and its time
 
-port49d stopped. `breakglass`: logged in in 58ms. `alice09` (port49 user): refused (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain) in 43ms. A CLI command in a break-glass session with accounting unreachable ran; login and command took 470ms. The same command as the container's root (`sr_cli`) took 395ms (err <nil>).
+These break-glass results hold for `exit-on-reject` false, the default; cell (l) repeats them at true.
+
+port49d stopped. `breakglass`: logged in in 53ms. `alice13` (port49 user): refused (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain) in 45ms. A CLI command in a break-glass session with accounting unreachable ran; login and command took 488ms. The same command as the container's root (`sr_cli`) took 393ms (err <nil>).
 
 The AAA log:
 
 ```
-2026-10-18T17:32:57.264332+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:57.264350+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084507+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:32:58.084541+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084460+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:03.084477+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440651+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:05.440669+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797675+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00000|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:07.797693+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3196|00001|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913726+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00004|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:09.913745+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3189|00005|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:11.310446+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00002|EV|sessionOpened|N: Opened session 29 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:11.310467+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3198|00003|EV|<LONG>|N: User breakglass on session 29 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:13.684360+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00002|EV|sessionOpened|N: Opened session 32 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:13.684379+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3190|00003|EV|<LONG>|N: User breakglass on session 32 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:20.164074+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3191|00000|EV|sessionOpened|N: Opened session 46 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:20.164093+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3191|00001|EV|<LONG>|N: User breakglass on session 46 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.039479+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3188|00002|EV|sessionOpened|N: Opened session 47 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.039497+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3188|00003|EV|<LONG>|N: User breakglass on session 47 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.359542+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00002|EV|sessionOpened|N: Opened session 48 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.359561+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3187|00003|EV|<LONG>|N: User breakglass on session 48 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.403652+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2531|3189|00006|EV|<LONG>|W: User alice09 authentication failed from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.462515+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3192|00004|EV|sessionOpened|N: Opened session 50 for user breakglass from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.462533+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3192|00005|EV|<LONG>|N: User breakglass on session 50 successfully authenticated from host 172.100.100.1 in network-instance mgmt
-2026-10-18T17:33:31.823624+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2531|3323|00046|EV|sessionClosed|N: Closed session 50 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241255+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00000|EV|sessionOpened|N: Opened session 12 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:08.241285+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00001|EV|<LONG>|N: User breakglass on session 12 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058515+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00000|EV|sessionOpened|N: Opened session 13 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:09.058536+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3191|00001|EV|<LONG>|N: User breakglass on session 13 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767673+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00000|EV|sessionOpened|N: Opened session 20 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:13.767690+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3187|00001|EV|<LONG>|N: User breakglass on session 20 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903237+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00000|EV|sessionOpened|N: Opened session 23 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:15.903256+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00001|EV|<LONG>|N: User breakglass on session 23 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025825+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00002|EV|sessionOpened|N: Opened session 26 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:18.025844+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3192|00003|EV|<LONG>|N: User breakglass on session 26 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144579+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00002|EV|sessionOpened|N: Opened session 28 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:20.144595+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00003|EV|<LONG>|N: User breakglass on session 28 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:21.099995+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00002|EV|sessionOpened|N: Opened session 29 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:21.100014+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00003|EV|<LONG>|N: User breakglass on session 29 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:23.253671+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00000|EV|sessionOpened|N: Opened session 32 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:23.253692+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00001|EV|<LONG>|N: User breakglass on session 32 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:29.876100+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00004|EV|sessionOpened|N: Opened session 45 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:29.876125+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3180|00005|EV|<LONG>|N: User breakglass on session 45 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:35.341714+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00003|EV|sessionOpened|N: Opened session 53 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:35.341737+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00004|EV|<LONG>|N: User breakglass on session 53 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.491105+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3182|00002|EV|<LONG>|W: User breakglass authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.963204+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00005|EV|sessionOpened|N: Opened session 59 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:38.963223+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3190|00006|EV|<LONG>|N: User breakglass on session 59 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.093980+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00004|EV|sessionOpened|N: Opened session 60 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.093998+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3189|00005|EV|<LONG>|N: User breakglass on session 60 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:49.918205+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3187|00004|EV|<LONG>|W: User breakglass authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:51.158888+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3182|00003|EV|sessionOpened|N: Opened session 65 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:18:51.158906+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3182|00004|EV|<LONG>|N: User breakglass on session 65 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.056618+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00002|EV|sessionOpened|N: Opened session 66 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.056636+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3181|00003|EV|<LONG>|N: User breakglass on session 66 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.152737+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00004|EV|sessionOpened|N: Opened session 67 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.152755+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3184|00005|EV|<LONG>|N: User breakglass on session 67 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.192921+00:00 srl1 local6|WARN sr_aaa_mgr: aaa|2525|3180|00006|EV|<LONG>|W: User alice13 authentication failed from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.255806+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3183|00004|EV|sessionOpened|N: Opened session 69 for user breakglass from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.255824+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3183|00005|EV|<LONG>|N: User breakglass on session 69 successfully authenticated from host 172.100.100.1 in network-instance mgmt
+2026-10-18T18:19:02.630604+00:00 srl1 local6|NOTI sr_aaa_mgr: aaa|2525|3218|00050|EV|sessionClosed|N: Closed session 69 for user breakglass from host 172.100.100.1 in network-instance mgmt
 ```
 
 ### (g) port49 restarted: the time until the device asks port49 again; the empty connections a quiet minute holds (health checks) and whether port49 logs them
 
-After a restart, the device asked port49 again 1s later (1 break-glass probe(s), each a login followed by up to 5 s waiting for its record, then 5 s apart, under the SSH rate-limit default of 20 unauthenticated sessions, srl_nokia-ssh.yang 479). The next port49 login as `alice10` logged in.
+After a restart, the device asked port49 again 1s later (1 break-glass probe(s), each a login followed by up to 5 s waiting for its record, then 5 s apart, under the SSH rate-limit default of 20 unauthenticated sessions, srl_nokia-ssh.yang 479). The next port49 login as `alice14` logged in.
 
 ```
-redeem permit/token_redeemed method=ascii user=alice10
-authorize_session permit/context_matched user=alice10 service=shell request=[service=shell cmd*] reply=[priv-lvl=15 shell:roles*network-admin]
-account flags=start user=alice10 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=show system aaa authentication «redacted»]
-account flags=stop user=alice10 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=show system aaa authentication «redacted»]
-account flags=start user=alice10 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=info from state system information version]
-account flags=stop user=alice10 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=info from state system information version]
+redeem permit/token_redeemed method=ascii user=alice14
+authorize_session permit/context_matched user=alice14 service=shell request=[service=shell cmd*] reply=[priv-lvl=15 shell:roles*network-admin]
+account flags=start user=alice14 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=show system aaa authentication «redacted»]
+account flags=stop user=alice14 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=show system aaa authentication «redacted»]
+account flags=start user=alice14 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=info from state system information version]
+account flags=stop user=alice14 record=[task_id=2 timezone=UTC service=shell priv-lvl=15 cmd=info from state system information version]
 ```
 
-In a quiet 1m10s with nobody logging in, the device opened 2 connection(s) to port49 and sent 0 packet(s) with a payload; port49 wrote 0 record(s).
+In a quiet 1m10s with nobody logging in, the device opened 3 connection(s) to port49 and sent 0 packet(s) with a payload; port49 wrote 0 record(s).
 
 ### (h) priv-lvl=1 in the reply: the roles the session gets (p49-read only) and the session table's priv-lvl
 
@@ -367,8 +404,17 @@ This user's rows in the session table, as the device printed them:
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |   Role    |
   <LONG>
-  | 30 | alice05*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T17:33:11.608Z | p49-read  |
+  | 30 | alice05*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:21.178Z | p49-read  |
 ```
+
+Accounted commands of this login, in order, from `evidence/L76-nokia_srlinux/decisions.jsonl`:
+
+1. `show system aaa authentication «redacted»`: port `ssh`, priv-lvl 1
+2. `info from state system information version`: port `unknown`, priv-lvl 15
+
+The commands after the first are accounted on a different port or at a different priv-lvl than the first, while the reply granted priv-lvl 1. Whether that channel also runs with more authority is measured in cell (k); this line is only what the device sent port49.
+
+port49 redacts the word after `authentication` in the accounted `show system aaa authentication` command (the records carry `redacted: true` and the word is shown as `«redacted»`): its accounting redaction treats that word as a credential, so an operator reading SR Linux accounting sees the command without it. Input for the `nokia_srlinux` adapter: whether that rule should be platform-aware.
 
 ### (i) priv-lvl-authorization false (the default): whether any authorization request is sent, and the roles the session gets
 
@@ -388,8 +434,10 @@ This user's rows in the session table, as the device printed them:
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |   Role    |
   <LONG>
-  | 35 | alice06*   | srlinux-cli  | port49                |          |     | 172.100.100.1 | mgmt             | 2026-10-18T17:33:14.794Z |           |
+  | 35 | alice06*   | srlinux-cli  | port49                |          |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:24.140Z |           |
 ```
+
+**Operator hazard:** with `priv-lvl-authorization` at its default (false) no authorization request reaches port49, so port49's privilege and role answer is never asked for: every user port49 authenticates gets whatever the device grants without it. The YANG says that is full admin access (srl_nokia-aaa.yang:254); this run measured only reads as that user, so the full-admin claim is YANG-stated and not measured. Plan 12's reference config sets `priv-lvl-authorization true`.
 
 ### (j) service-request nokia-srl-authorization-role true: the services the device asks for, port49's answers, and whether the login survives them
 
@@ -411,8 +459,69 @@ This user's rows in the session table, as the device printed them:
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |        Role         |
   <LONG>
-  | 41 | alice07*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T17:33:17.752Z | p49-admin, p49-read |
+  | 41 | alice07*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:27.020Z | p49-admin, p49-read |
 ```
+
+### (k) a priv-lvl 1 user's second exec channel on one SSH login: the session table's Role cell on the first and the second exec, and whether a documented harmless write that p49-read must not be allowed succeeds on either
+
+With port49 replying `priv-lvl=1`, `alice08` ran the session-table read as its first and as its second exec (error: <nil>). The Role cell: first exec [p49-read], second exec [p49-read].
+
+The first exec's rows for this user:
+
+```
+  <LONG>
+  | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |   Role    |
+  <LONG>
+  | 46 | alice08*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:29.954Z | p49-read  |
+```
+
+The second exec's rows for this user:
+
+```
+  <LONG>
+  | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |   Role    |
+  <LONG>
+  | 47 | alice08*   | srlinux-cli  | port49                | 1        |     | 172.100.100.1 | mgmt             | 2026-10-18T18:18:30.964Z | p49-read  |
+```
+
+Accounted commands of this login, in order, from `evidence/L76-nokia_srlinux/decisions.jsonl`:
+
+1. `show system aaa authentication «redacted»`: port `ssh`, priv-lvl 1
+2. `show system aaa authentication «redacted»`: port `unknown`, priv-lvl 15
+
+The commands after the first are accounted on a different port or at a different priv-lvl than the first, while the reply granted priv-lvl 1. Whether that channel also runs with more authority is measured in cell (k); this line is only what the device sent port49.
+
+port49 redacts the word after `authentication` in the accounted `show system aaa authentication` command (the records carry `redacted: true` and the word is shown as `«redacted»`): its accounting redaction treats that word as a credential, so an operator reading SR Linux accounting sees the command without it. Input for the `nokia_srlinux` adapter: whether that rule should be platform-aware.
+
+A checkpoint is a harmless write that the `p49-read` role (`rule / { action read }`) must not be allowed (CM#configuration-checkpoints). As the first exec of a priv-lvl 1 login it was refused or made nothing; as the second exec it was refused or made nothing.
+
+The write was refused on both channels, so the second exec's priv-lvl 15 accounting is not shown to add authority for a write.
+
+`l76-k-first`: make said "Error: No authorization to execute command: 'tools / system configuration generate-checkpoint name l76-k-first'"; root's clear said "Error in <LONG>[id=l76-k-first]: Checkpoint 'l76-k-first' does not exist Error: Tools command failed".
+
+`l76-k-second`: make said "Could not chdir to home directory /home/alice09: No such file or directory Error: No authorization to execute command: 'tools / system configuration generate-checkpoint name l76-k-second'"; root's clear said "Error in <LONG>[id=l76-k-second]: Checkpoint 'l76-k-second' does not exist Error: Tools command failed".
+
+### (l) exit-on-reject true: whether the break-glass account still logs in through local, and how fast, when port49 denies it, with a wrong shared secret and with port49 stopped
+
+With `exit-on-reject` true (srl_nokia-aaa.yang:1165), a port49 user's token login: logged in.
+
+**A port49 deny of the break-glass account (port49 up).** `breakglass` (local): refused (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain) in 1.166s.
+
+```
+redeem deny/token_not_found method=ascii user=breakglass
+```
+
+**A wrong shared secret.** `breakglass` (local): logged in in 73ms.
+
+```
+unvalidated diagnosis=no_known_key_matches
+```
+
+**port49 stopped.** `breakglass` (local): logged in in 52ms.
+
+**Operator hazard:** with `exit-on-reject` true the break-glass account was locked out when: A port49 deny of the break-glass account (port49 up). That is the configuration plan 12 would ship, so these are what an operator meets at 3am.
+
+The AAA log, per scenario, is in `l1-aaa-log.txt`, `l2-aaa-log.txt` and `l3-aaa-log.txt` under the evidence directory.
 
 ### Run
 
@@ -430,6 +539,10 @@ Evidence: `tests/lab/evidence/L76-nokia_srlinux/` (device outputs, masked config
 - `set / system aaa server-group port49 tacacs priv-lvl-authorization true`: CLAB#cli (flat form) <https://containerlab.dev/manual/kinds/srl/#cli>; SA#configuring-tacacsx-authorization <https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html#configuring-tacacsx-authorization>
 - `set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role true`: CLAB#cli (flat form) <https://containerlab.dev/manual/kinds/srl/#cli>; SA#configuring-tacacs-authorization-with-vsas <https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html#configuring-tacacs-authorization-with-vsas>
 - `set / system aaa server-group port49 tacacs service-request nokia-srl-authorization-role false`: CLAB#cli (flat form) <https://containerlab.dev/manual/kinds/srl/#cli>; SA#configuring-tacacs-authorization-with-vsas <https://documentation.nokia.com/srlinux/26-7/books/config-basics/secur-access.html#configuring-tacacs-authorization-with-vsas>
+- `set / system aaa authentication exit-on-reject true`: CLAB#cli (flat form) <https://containerlab.dev/manual/kinds/srl/#cli>; YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication) </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>
+- `set / system aaa authentication exit-on-reject false`: CLAB#cli (flat form) <https://containerlab.dev/manual/kinds/srl/#cli>; YANG srl_nokia-aaa.yang:1165 (leaf exit-on-reject, in system aaa authentication) </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>
+- `tools system configuration generate-checkpoint name <name>`: CM#configuration-checkpoints (Generating a checkpoint) <https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html#configuration-checkpoints>; YANG srl_nokia-tools-configuration.yang:150 (container generate-checkpoint, leaf name) </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>
+- `tools system configuration checkpoint <name> clear`: CM#configuration-checkpoints (Clearing a checkpoint) <https://documentation.nokia.com/srlinux/26-7/books/config-basics/configuration-management.html#configuration-checkpoints>; YANG srl_nokia-tools-configuration.yang:120 (list checkpoint, key id, leaf clear) </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>
 - `sr_cli -d <command>`: HELP (-d/--dumb-terminal, with a positional command run as one line) <sr_cli --help in ghcr.io/nokia/srlinux:26.7.2-519>
 - `sr_cli --help`: HELP <sr_cli --help in ghcr.io/nokia/srlinux:26.7.2-519>
 - `cat "$(find /opt/srlinux/models -name <model> | head -1)"`: YANG srl_nokia-aaa.yang </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>; YANG srl_nokia-aaa-types.yang (the image's own models) </opt/srlinux/models in ghcr.io/nokia/srlinux:26.7.2-519>
