@@ -351,8 +351,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			return fail(err)
 		}
 		dir.set(dd)
-		// A run after a store gone has marks, so this cold-start check is the
-		// only one: the start that loaded the marks ran it (R27, R28).
+		// A held run (a run after a store gone) runs the same checks when it
+		// opens the directory late (openDirectoryLater).
 		de := cfg.Stores.Directory.Etcd
 		if err := retry(func() error { return checkTwoStores(ctx, cfg, d, dd, 4*de.CallTimeout) }); err != nil {
 			return fail(err)
