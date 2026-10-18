@@ -832,3 +832,12 @@ func l73SecretsFor(helpOnly bool, pems []string, seeds []labcreds.SeedToken) ([]
 	}
 	return append(append(append([]string{}, pems...), toks...), labcreds.Key, labcreds.BreakglassPassword), nil
 }
+
+// l73LogScreen is text, a device's or container's output, as it may be kept
+// in the INVALID directory: the lab key hidden, PEM bodies dropped, the
+// session-material and secret masks applied.
+func l73LogScreen(text string) string {
+	text = strings.ReplaceAll(text, labcreds.Key, "<key>")
+	text = strings.ReplaceAll(text, labcreds.BreakglassPassword, "<password>")
+	return l71MaskExchange(l73ScrubLog(l73DropPEM(text)))
+}

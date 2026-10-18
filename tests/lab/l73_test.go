@@ -322,6 +322,7 @@ func (e *l73Env) cli(fn func(*cliConn) error) {
 		err = fn(c)
 		c.Close()
 	} else {
+		e.containerLogs()
 		err = fmt.Errorf("INVALID: no break-glass CLI on %s: %w", e.l.p.name, err)
 	}
 	if measured {
@@ -346,7 +347,24 @@ func (e *l73Env) opMark(c *cliConn) string {
 func (e *l73Env) invalidScreen(name, out string) {
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
-			[]byte(l71MaskExchange(l73ScrubLog(hideKeys(l73DropPEM(out))))), 0o600)
+			[]byte(l73LogScreen(hideKeys(out))), 0o600)
+	}
+}
+
+// containerLogs keeps the node's container log (the last 300 lines) in the
+// INVALID directory, scrubbed like the help screens, before the run's teardown
+// destroys the container. Nothing is written without PORT49_L73_INVALID_DIR.
+func (e *l73Env) containerLogs() {
+	if os.Getenv("PORT49_L73_INVALID_DIR") == "" {
+		return
+	}
+	ids, _ := exec.Command("docker", "ps", "-a", "--filter", "name="+e.l.p.node, "--format", "{{.Names}}").Output()
+	for i, n := range strings.Fields(string(ids)) {
+		logs, err := exec.Command("docker", "logs", "--tail", "300", n).CombinedOutput()
+		if err != nil {
+			logs = append(logs, []byte("\n(docker logs failed: "+err.Error()+")")...)
+		}
+		e.invalidScreen(fmt.Sprintf("container-log-%d", i+1), "$ docker logs --tail 300 "+n+"\n"+string(logs))
 	}
 }
 

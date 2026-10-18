@@ -724,3 +724,20 @@ func TestL73SecretsForAHelpOnlyRowNeedNoSeedToken(t *testing.T) {
 		t.Fatal("a measured row with no minted token was accepted")
 	}
 }
+
+// A container's log goes to the INVALID directory only through the screens'
+// scrub: the lab key, a PEM body and a typed secret never reach the file.
+func TestL73LogScreenScrubsAContainerLog(t *testing.T) {
+	in := "boot ok\ntacacs-server host 10.0.0.1 key 0 " + labcreds.Key + "\n" +
+		"-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\n-----END PRIVATE KEY-----\n" +
+		"password " + labcreds.BreakglassPassword + "\nsshd: listening on 22\n"
+	got := l73LogScreen(in)
+	for _, bad := range []string{labcreds.Key, "QUJDREVG", labcreds.BreakglassPassword} {
+		if strings.Contains(got, bad) {
+			t.Errorf("the log screen still holds a secret (%d bytes of it)", len(bad))
+		}
+	}
+	if !strings.Contains(got, "boot ok") || !strings.Contains(got, "sshd: listening on 22") {
+		t.Errorf("the log screen lost the log: %q", got)
+	}
+}
