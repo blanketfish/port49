@@ -454,17 +454,23 @@ func l73Grade(loginOK, redeemed, reasonProven bool) string {
 
 // l73ControlInvalid is the INVALID message for a control login that did not
 // pass: the cause, the hint, the daemon's records and the TLS summary the
-// cell would have printed. The summary goes through the note's leak gate; if
-// it names a leak, only the leak's name is printed.
-func l73ControlInvalid(errText, hint, records, obs string) string {
-	summary := "summary: " + hideKeys(obs)
-	if leaks := l73SummaryLeaks(obs); len(leaks) > 0 {
-		summary = "summary withheld: " + strings.Join(leaks, ", ")
+// cell would have printed. summary is the caller's obs with the lab keys
+// already hidden (hideKeys lives in a lab-tagged file). It goes through the
+// note's leak gate; if it names a leak, only the leak's name is printed. The
+// gate covers the summary alone: errText is l73Err (scrubbed) and records is
+// e.quote (credential hash redacted), as in the PASS note.
+func l73ControlInvalid(errText, hint, records, summary string) string {
+	text := "summary: " + summary
+	if leaks := l73SummaryLeaks(summary); len(leaks) > 0 {
+		text = "summary withheld: " + strings.Join(leaks, ", ")
 	}
-	return fmt.Sprintf("INVALID: the control login over TLS did not pass (%s)%s; records: %s; %s", errText, hint, records, summary)
+	return fmt.Sprintf("INVALID: the control login over TLS did not pass (%s)%s; records: %s; %s", errText, hint, records, text)
 }
 
-var l73PEMDropRe = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`)
+// l73PEMDropRe matches a PEM block whole, its label any RFC 7468 text
+// (letters, digits, spaces, dots, hyphens), or to the end of the text when
+// the block is unterminated.
+var l73PEMDropRe = regexp.MustCompile(`(?s)-----BEGIN [A-Za-z0-9 .-]+-----.*?(?:-----END [A-Za-z0-9 .-]+-----|\z)`)
 
 // l73DropPEM removes every PEM block, certificate or key, whole: a public
 // certificate's fields are readable above the block, and a key must never

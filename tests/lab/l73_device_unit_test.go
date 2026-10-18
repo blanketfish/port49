@@ -1,8 +1,13 @@
 package lab
 
 import (
+	"bytes"
 	"encoding/pem"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -348,5 +353,59 @@ func TestL73DropPEM(t *testing.T) {
 	// An unterminated block drops through the end: nothing after BEGIN survives.
 	if got := l73DropPEM("a\n-----BEGIN CERTIFICATE-----\nMIIB\n"); strings.Contains(got, "MIIB") {
 		t.Fatal(got)
+	}
+}
+
+func TestL73DropPEMLabels(t *testing.T) {
+	for _, label := range []string{"NEW CERTIFICATE REQUEST", "X9.42 DH PARAMETERS", "OPENSSH-PRIVATE KEY", "CERTIFICATE"} {
+		in := "head\n-----BEGIN " + label + "-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\n-----END " + label + "-----\ntail\n"
+		got := l73DropPEM(in)
+		if strings.Contains(got, "QUJD") || !strings.Contains(got, "head") || !strings.Contains(got, "tail") {
+			t.Fatalf("%s: %q", label, got)
+		}
+	}
+}
+
+// Files without the lab tag build under plain `go vet ./...`; they must not
+// call what only lab-tagged files define (C1 of the T11 fix review).
+func TestL73UntaggedFilesUseNothingLabTagged(t *testing.T) {
+	files, _ := filepath.Glob("*.go")
+	tagged, untagged := map[string]bool{}, []string{}
+	defs := map[string]string{}
+	fset := token.NewFileSet()
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		af, err := parser.ParseFile(fset, f, src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(src[:min(len(src), 200)], []byte("//go:build lab")) {
+			tagged[f] = true
+			for _, d := range af.Decls {
+				if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+					defs[fn.Name.Name] = f
+				}
+			}
+		} else if !strings.HasSuffix(f, "_test.go") {
+			untagged = append(untagged, f)
+		}
+	}
+	for _, f := range untagged {
+		af, _ := parser.ParseFile(fset, f, nil, 0)
+		ast.Inspect(af, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				id, ok := c.Fun.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if def, bad := defs[id.Name]; bad {
+					t.Errorf("%s uses %s, defined only in lab-tagged %s", f, id.Name, def)
+				}
+			}
+			return true
+		})
 	}
 }

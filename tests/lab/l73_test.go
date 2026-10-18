@@ -354,7 +354,7 @@ func (e *l73Env) invalidDeviceLogs() {
 		for i, cmd := range e.d.InvalidCmds {
 			out, err := c.sendExpect(cmd, 60*time.Second, e.opMark(c))
 			if err != nil {
-				out += "\n(read failed: " + l73Err(err) + ")"
+				out = "(read failed: " + l73Err(err) + ")" // the error already carries the output's tail
 			}
 			e.invalidScreen(fmt.Sprintf("device-%d", i+1), "$ "+cmd+"\n"+out)
 		}
@@ -1152,9 +1152,11 @@ func (e *l73Env) cellA() {
 		if e.pki.Alg == "ecdsa" {
 			hint = "; if the record says handshake_failed, re-run with PORT49_L73_ALG=rsa and record why in the commit"
 		}
-		// Errorf first: the CLI read below Fatals if the break-glass login fails,
-		// and the INVALID's cause must be in the output either way.
-		e.t.Error(l73ControlInvalid(l73Err(err), hint, e.quote(recs), obs))
+		// Error first: the CLI read below Fatals if the break-glass login fails,
+		// and the INVALID's cause must be in the output either way. The message
+		// carries the leak-gated TLS summary (obs); invalidDeviceLogs keeps the
+		// dialect's InvalidCmds output, scrubbed and PEM-free, in the INVALID dir.
+		e.t.Error(l73ControlInvalid(l73Err(err), hint, e.quote(recs), hideKeys(obs)))
 		e.invalidDeviceLogs()
 		e.t.FailNow()
 	}
