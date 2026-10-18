@@ -221,6 +221,15 @@ func (w *regionWorld) answered(what string) func(string, time.Duration, error) s
 	}
 }
 
+// safeLine is the first line of out, or a note that it was withheld when it
+// holds a held secret or fails a leak check.
+func (w *regionWorld) safeLine(out string) string {
+	if l := firstLine(out); !w.leaky(l) {
+		return l
+	}
+	return "[withheld: the line holds a secret]"
+}
+
 // until is how long until region i's command answers want, polling every
 // 100ms, or false past d.
 func (w *regionWorld) until(i int, want string, d time.Duration) (time.Duration, bool) {
@@ -605,12 +614,24 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		cst == "permit" && lst == "pass" && code == 3 && reach == 0)
 
 	w.guard()
-	_, rcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
-	time.Sleep(5 * time.Second)
+	rout, rcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
+	// Region 2's port49d learns the mark from its marks watch, which sits on one
+	// member's connection: on the cut member's it is silent until gRPC's
+	// keepalive (10s + 2s) fails that connection, so the control is polled for
+	// 15s and the latency recorded, not read at a fixed 5s.
+	var d2 string
+	var d2After time.Duration
+	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(time.Second) {
+		d2 = w.answered("(d) region 2's command")(w.client(2).command("alice", "show", "version"))
+		if d2After = time.Since(start); d2 == "deny" {
+			break
+		}
+	}
 	d3 := w.answered("(d) region 3's command")(w.client(3).command("alice", "show", "version"))
-	d2 := w.answered("(d) region 2's command")(w.client(2).command("alice", "show", "version"))
-	row("d", "during the cut, a revocation in region 1: region 3's session still permitted (region 2's denied, the control)",
-		fmt.Sprintf("revoke exit %d; 5s later region 3 %s, region 2 %s", rcode, d3, d2),
+	row("d", "during the cut, a revocation in region 1: region 3's session still permitted (region 2's denied, the control, "+
+		"within gRPC keepalive's 10s + 2s)",
+		fmt.Sprintf("revoke exit %d: %s; region 2 %s after %v; region 3 %s", rcode, w.safeLine(rout), d2,
+			d2After.Round(100*time.Millisecond), d3),
 		rcode == 0 && d3 == "permit" && d2 == "deny")
 
 	w.guard()
