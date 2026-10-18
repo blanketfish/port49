@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
@@ -24,6 +25,7 @@ import (
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // holderShape is the holder a port49-broker writes under meta/hold
@@ -42,6 +44,15 @@ func lineHolder(holder string) string {
 		holder = holder[:200]
 	}
 	return fmt.Sprintf("%q", holder)
+}
+
+// directoryCache is the process's hold on the directory store's marks
+// (plan 11a, R19), kept across a store gone as the ledger is: whether
+// they were ever loaded, so a run after a store gone serves from them,
+// and how fresh they are.
+type directoryCache struct {
+	loaded atomic.Bool
+	fresh  *store.Freshness
 }
 
 // stores is what port49d's components read and write through (plan 7d):
@@ -63,6 +74,11 @@ type stores struct {
 	// on memory.
 	judged     judgedBundleReader
 	persistent bool
+	// dir is the directory store's raw handle (the session store's own in a
+	// shared store; nil on memory), and fresh the marks' freshness: what
+	// port49 store status reads (plan 11a).
+	dir   *dirHandle
+	fresh *store.Freshness
 	// follow keeps the ledger following the store's contexts, and the
 	// marks, until its ctx ends (crypt.FollowContexts, store.FollowMarks).
 	// runOnce runs it as soon as the stores are open, and joins it before
@@ -104,10 +120,11 @@ func (f *storeFault) Unwrap() error { return f.err }
 // openDaemon's, on the daemon's identity alone: the broker, the hold and
 // the ledger record are port49-broker's (plan 7e). gone is how the guard
 // ends the run. It says each step on out. authMarks, the process's, is
-// loaded from the store.
+// loaded from the store (the directory store, in a split), and dc is the
+// process's hold on it.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm,
-	authMarks *store.Marks) (stores, error) {
+	authMarks *store.Marks, dc *directoryCache) (stores, error) {
 	// One sayer for every layer, so a key is said once, not once per layer
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer("port49d", keys, out, time.Now))
@@ -118,10 +135,6 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		ledger.SetBase(mem.Seen() + 1)
 		st := crypt.Wrap(mem, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 		return stores{daemon: st, broker: st, author: st, close: func() {}}, nil
-	}
-	if !cfg.Stores.Shared {
-		return stores{}, &storeFault{errors.New("stores.session names a store of its own, and this build " +
-			"serves one store: omit stores.session")}
 	}
 	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
 	// A run after a store gone shows the alarm a run before raised from
@@ -135,7 +148,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if err != nil {
 		return stores{}, err
 	}
-	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, d, say)
+	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, dc, d, say)
 }
 
 // waitForStore is a start's wait for etcd (pre-flight I9, I13, M33), on
@@ -228,7 +241,7 @@ func procOf(cfg config.Config) string {
 // keep, and the sweep is the broker's.
 func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, authMarks *store.Marks,
-	d *etcdstore.Store, say crypt.Option) (stores, error) {
+	dc *directoryCache, d *etcdstore.Store, say crypt.Option) (stores, error) {
 	e := cfg.Stores.Session.Etcd
 	// retry runs f until it returns anything but an outage (or one of
 	// also), saying each outage and trying again in 5s with the
@@ -254,8 +267,12 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			}
 		}
 	}
+	dir := &dirHandle{}
 	fail := func(err error) (stores, error) {
 		d.Close()
+		if !cfg.Stores.Shared {
+			dir.close()
+		}
 		if ctx.Err() != nil {
 			return stores{}, ctx.Err()
 		}
@@ -306,17 +323,56 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// The marks are the process's, kept across a store gone as the ledger
 	// is (Ruling 11): a run after one first keeps every mark the store lost
 	// while this port49d was dark, which the load would lift otherwise, at
-	// each attempt (loadDaemonMarks).
+	// each attempt (loadDaemonMarks). In a split they are the directory
+	// store's.
 	sayKept := keptSayer(out, "as it starts again after a store gone")
 	var markRev uint64
-	if err := retry(func() error {
-		var err error
-		markRev, err = loadDaemonMarks(ctx, d, authMarks, again, e.BulkTimeout, sayKept)
-		return err
-	}); err != nil {
-		return fail(err)
+	loadFrom := func(feed store.MarkFeed, bound time.Duration) error {
+		return retry(func() error {
+			var err error
+			markRev, err = loadDaemonMarks(ctx, feed, authMarks, again, bound, sayKept)
+			return err
+		})
 	}
-	fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
+	switch {
+	case cfg.Stores.Shared:
+		dir.set(d)
+		if err := loadFrom(d, e.BulkTimeout); err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
+	case !dc.loaded.Load():
+		// No marks yet: the listeners stay closed until the directory
+		// answers, up to its start_timeout on a cold start (R19). Its role
+		// check ran in waitForStore (attempt): the daemon's read is confined
+		// to the marks and the key window.
+		dd, err := waitForStore(ctx, cfg, directoryRef(cfg), m, out, again, "the listeners stay closed")
+		if err != nil {
+			return fail(err)
+		}
+		dir.set(dd)
+		// A run after a store gone has marks, so this cold-start check is the
+		// only one: the start that loaded the marks ran it (R27, R28).
+		de := cfg.Stores.Directory.Etcd
+		if err := retry(func() error { return checkTwoStores(ctx, cfg, d, dd, 4*de.CallTimeout) }); err != nil {
+			return fail(err)
+		}
+		if err := retry(func() error {
+			return checkDirectoryKeys(ctx, "port49d", dd, directoryRef(cfg), keys, out, 4*de.CallTimeout, false)
+		}); err != nil {
+			return fail(err)
+		}
+		if err := loadFrom(dd, de.BulkTimeout); err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the directory store\n", authMarks.Len())
+	default:
+		// A run after a store gone holds its marks: it serves from them, and
+		// the follow below opens the directory and loads when it answers (R19).
+		fmt.Fprintf(out, "port49d: directory store: this run serves from the marks it holds (%d) and follows "+
+			"the directory store once it answers\n", authMarks.Len())
+	}
+	dc.loaded.Store(true)
 	logf := func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) }
 	upOf := func(feed string) func(bool) {
 		return func(up bool) { m.StoreFeedUp.WithLabelValues(feed).Set(b2f(up)) }
@@ -325,9 +381,13 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// store. The marks feed tells no one: there is no broker listener here,
 	// and authMarks is what every authorization, enable and replay reads.
 	// Its reload keeps what the store lost (daemonReloadHook; Ruling 5).
+	dirBulk, dirCall := e.BulkTimeout, e.CallTimeout
+	if !cfg.Stores.Shared {
+		dirBulk, dirCall = cfg.Stores.Directory.Etcd.BulkTimeout, cfg.Stores.Directory.Etcd.CallTimeout
+	}
 	follow := func(ctx context.Context) {
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 		go func() {
 			defer wg.Done()
 			crypt.FollowContexts(ctx, d, d, keys, ledger, rev, upOf("contexts"),
@@ -335,10 +395,16 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}()
 		go func() {
 			defer wg.Done()
-			store.FollowMarks(ctx, d, authMarks, markRev, nil, upOf("marks"),
-				daemonReloadHook(ctx, d, authMarks, m.StoreFeedRescans.WithLabelValues("marks"), e.BulkTimeout, out),
-				logf)
+			if dir.get() == nil && !openDirectoryLater(ctx, cfg, m, out, dir) {
+				return
+			}
+			feed := dir.get()
+			store.FollowMarks(ctx, feed, authMarks, markRev, nil,
+				func(up bool) { upOf("marks")(up); dc.fresh.FeedUp(up) },
+				daemonReloadHook(ctx, feed, authMarks, m.StoreFeedRescans.WithLabelValues("marks"),
+					dirBulk, out), logf)
 		}()
+		go func() { defer wg.Done(); keepFresh(ctx, dir, dc.fresh, dirCall, out, "port49d", cfg.Stores.Shared) }()
 		wg.Wait()
 	}
 	// The daemon's raw store fenced under its guard (crypt.Fenced,
@@ -352,6 +418,11 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		"checks and opens again after %d passes (%s.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter,
 		cfg.Stores.SessionPath())
 	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
+	if !cfg.Stores.Shared {
+		de := cfg.Stores.Directory.Etcd
+		daemon = placement.Wrap(placement.Config{Session: daemon, Directory: dir, Marks: authMarks,
+			CallTimeout: de.CallTimeout, BulkTimeout: de.BulkTimeout})
+	}
 	authorStore := daemon
 	if cc := e.ContextCache; cc.TTL > 0 {
 		ss := &staleSayer{out: out, ttl: cc.TTL, key: cfg.Stores.SessionPath() + ".etcd.context_cache.ttl"}
@@ -372,11 +443,44 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		etcd:       d,
 		judged:     d,
 		persistent: true,
+		dir:        dir,
+		fresh:      dc.fresh,
 		follow:     follow,
 		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
 			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
-		close: func() { d.Close() },
+		close: func() {
+			d.Close()
+			if !cfg.Stores.Shared {
+				dir.close()
+			}
+		},
 	}, nil
+}
+
+// openDirectoryLater opens the directory store once it answers, trying
+// every 5s, on a run that serves from the marks it holds (R19); each new
+// reason is said once. It reports false when ctx ended first.
+func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer,
+	dir *dirHandle) bool {
+	said := ""
+	for {
+		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		if err == nil {
+			dir.set(s)
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		if why := err.Error(); why != said {
+			fmt.Fprintf(out, "port49d: directory store: not opened yet (%v); serving from the marks this "+
+				"process holds; trying again every 5s\n", err)
+			said = why
+		}
+		if !sleepCtx(ctx, 5*time.Second) {
+			return false
+		}
+	}
 }
 
 // guardConfig is component's guard on etcd (Task 8a): the etcd block's, under

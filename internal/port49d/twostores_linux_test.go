@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/store/placement"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 // rolesMemberScoped is a TLS etcd member with the roles of a keyspace
@@ -55,12 +57,38 @@ func (f *fleet) twoStores(t *testing.T) {
 // through a proxy of their own.
 func (f *fleet) twoStoresOn(t *testing.T, srv *etcdtest.Server) {
 	t.Helper()
+	if srv != f.srv {
+		regrant(t, f.srv, "/port49/", etcd.ScopeSession)
+	}
 	ep := strings.TrimPrefix(srv.Endpoint, "https://")
 	f.dsrv, f.dproxy, f.ddproxy = srv, etcdtest.NewProxy(t, ep), etcdtest.NewProxy(t, ep)
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
 	bc, bk := srv.ClientFiles(t, "port49-broker")
 	withDirectory(t, f.daemon, f.ddproxy, srv, "daemon", dc, dk)
 	withDirectory(t, f.broker, f.dproxy, srv, "broker", bc, bk)
+}
+
+// regrant replaces the roles a member was started with (a shared keyspace's)
+// by those of a keyspace holding scope's families, as a session store of its
+// own has them (R23): the daemon there reads the marks snapshot at ds/m/.
+func regrant(t *testing.T, srv *etcdtest.Server, prefix string, scope etcd.Scope) {
+	t.Helper()
+	ctx := context.Background()
+	root := srv.Client(t, "root")
+	for _, g := range etcd.Roles(prefix) {
+		if _, err := root.RoleRevokePermission(ctx, g.Role, g.Key, g.RangeEnd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, g := range etcd.RolesFor(prefix, scope) {
+		perm := clientv3.PermRead
+		if g.Write {
+			perm = clientv3.PermReadWrite
+		}
+		if _, err := root.RoleGrantPermission(ctx, g.Role, g.Key, g.RangeEnd, clientv3.PermissionType(perm)); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // withDirectory rewrites the file at path: its stores.directory block
@@ -606,5 +634,313 @@ func TestAKeyWindowRecordWithNoIdIsRewrittenAtStart(t *testing.T) {
 	}
 	if err != nil || len(resp.Kvs) != 1 || json.Unmarshal(resp.Kvs[0].Value, &rec) != nil || rec.Current == "" {
 		t.Fatalf("the record was not rewritten: %v", err)
+	}
+}
+
+// Review Focus 1: a port49d cut from its directory keeps serving from its
+// cache: an open session's commands, and a login with a token minted before
+// the cut; port49_store_directory_reachable reads 0; the heal is said.
+func TestADaemonCutFromItsDirectoryServesFromItsCache(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	dev := tacacsClient{t: t, addr: startSplitDaemon(t, f.daemon, &out, 1), key: []byte("run-test-secret")}
+	waitFor(t, &out, "port49d: store: 0 revocation(s) in force from the directory store")
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	tok := mintOn(t, api, f.pki, "leaf1")
+	f.ddproxy.Hang(true)
+	waitWithin(t, &out, "port49d: directory store: not answering", 10*time.Second)
+	for i := 0; i < 3; i++ {
+		if !dev.permits("alice", "show", "version") {
+			t.Fatalf("a command was refused with the directory cut; log %s", log.String())
+		}
+	}
+	if st := dev.login("alice", tok); st != wire.AuthenStatusPass {
+		t.Fatalf("a token minted before the cut did not log in during it: status %d", st)
+	}
+	if v := metricAt(t, daemonMetrics(t, &out), "port49_store_directory_reachable"); v != 0 {
+		t.Fatalf("port49_store_directory_reachable %v with the directory cut", v)
+	}
+	f.ddproxy.Hang(false)
+	waitWithin(t, &out, "port49d: directory store: answering again", 10*time.Second)
+}
+
+// Review Focus 1, R17: a revocation made in another region while this one
+// is cut does not reach it until the heal, and then does.
+func TestAMarkMadeDuringACutReachesTheDaemonOnHeal(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	a := splitFleet(t)
+	a.twoStores(t)
+	a.judged(t)
+	c := splitFleet(t)
+	c.twoStoresOn(t, a.dsrv)
+	c.judged(t)
+	startBroker(t, a.broker, &out, 1)
+	apiC, stopC := startBroker(t, c.broker, &out, 2)
+	dev := tacacsClient{t: t, addr: startSplitDaemon(t, c.daemon, &out, 1), key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, apiC, c.pki, "leaf1"), &log)
+	// Region c's broker stops, so the daemon's own follow of the directory's
+	// marks is the only way the mark can reach it.
+	if err := stopC(); err != nil {
+		t.Fatal(err)
+	}
+	c.dproxy.Hang(true)
+	c.ddproxy.Hang(true)
+	waitWithin(t, &out, "port49d: directory store: not answering", 10*time.Second)
+	r, err := ask(adminSocketOf(t, a.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	if err != nil || r.Error != "" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	time.Sleep(2 * time.Second) // what a feed would need, had region c not been cut
+	if !dev.permits("alice", "show", "version") {
+		t.Fatal("region c denied the session during the cut: a mark made elsewhere cannot reach it until the heal (R17)")
+	}
+	c.dproxy.Hang(false)
+	c.ddproxy.Hang(false)
+	deadline := time.Now().Add(20 * time.Second)
+	for dev.permits("alice", "show", "version") {
+		if time.Now().After(deadline) {
+			t.Fatal("region c's session was still permitted 20s after the heal")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// Review Focus 2, R19: a cold start with the directory cut has no marks to
+// serve from: the listeners never open, and it exits at start_timeout.
+func TestAColdStartWithTheDirectoryCutStaysDark(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	addUnderDirectoryEtcd(t, f.daemon, "start_timeout: 5s")
+	f.ddproxy.Hang(true)
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.start_timeout") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(45 * time.Second):
+		t.Fatal("port49d did not give up on a directory that never answered")
+	}
+	if strings.Contains(out.String(), "port49d: listening on ") {
+		t.Fatalf("port49d listened with no marks:\n%s", out.String())
+	}
+}
+
+// Review Focus 2, R19: a run after a store gone holds its marks, and serves
+// from them while the directory is still cut.
+func TestARunAfterAStoreGoneServesThroughADirectoryCut(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	startSplitDaemon(t, f.daemon, &out, 1)
+	f.ddproxy.Hang(true)
+	f.proxy.Hang(true)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 90*time.Second)
+	f.proxy.Hang(false)
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 120*time.Second)
+	addrs := regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	dev := tacacsClient{t: t, addr: addrs[len(addrs)-1][1], key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	if !dev.permits("alice", "show", "version") {
+		t.Fatalf("a run after a store gone refused a command with the directory still cut; log %s", log.String())
+	}
+	if !strings.Contains(out.String(), "port49d: directory store: this run serves from the marks it holds") {
+		t.Fatalf("the run did not say it serves from its marks:\n%s", out.String())
+	}
+}
+
+// Carry (c): port49d's marks come from the directory store, not the session
+// store: a mark the broker made is counted at the daemon's start, from the
+// directory, and the session keyspace holds none.
+func TestADaemonLoadsItsMarksFromTheDirectoryStore(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	if err != nil || r.Error != "" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	startSplitDaemon(t, f.daemon, &out, 1)
+	waitFor(t, &out, "port49d: store: 1 revocation(s) in force from the directory store")
+	if n := keysUnder(t, f.srv, "/port49/v1/rv/"); n != 0 {
+		t.Fatalf("the session store holds %d mark(s)", n)
+	}
+	if n := keysUnder(t, f.dsrv, "/port49/v1/rv/"); n != 1 {
+		t.Fatalf("the directory store holds %d mark(s), want 1", n)
+	}
+}
+
+// Carry (b): the daemon's start runs the per-store role check on the
+// directory: roles that reach past rv/, meta/ping and meta/seal_keys (here,
+// a shared keyspace's) are refused, naming the directory block's identity.
+func TestADaemonWhoseDirectoryRoleReachesTooFarIsRefused(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	srv, _ := rolesMemberScoped(t, etcd.ScopeShared)
+	f.twoStoresOn(t, srv)
+	f.judged(t)
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.daemon") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49d started on a directory whose daemon role reaches past the marks")
+	}
+	if strings.Contains(out.String(), "port49d: listening on ") {
+		t.Fatalf("port49d listened:\n%s", out.String())
+	}
+}
+
+// R27: a directory last written under a key this configuration does not
+// hold refuses port49d's start too, and port49d writes nothing there.
+func TestADaemonRefusesADirectoryUnderAKeyThisRegionLacks(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	const rec = `{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`
+	root := f.dsrv.Client(t, "root")
+	if _, err := root.Put(context.Background(), "/port49/v1/meta/seal_keys", rec); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "the directory store (etcd ") ||
+			!strings.Contains(err.Error(), "key-from-elsewhere") ||
+			!strings.Contains(err.Error(), "which this configuration does not hold") ||
+			strings.Contains(err.Error(), "port49d: port49d:") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49d started against a directory under a key it lacks")
+	}
+	resp, err := root.Get(context.Background(), "/port49/v1/meta/seal_keys")
+	if err != nil || len(resp.Kvs) != 1 || string(resp.Kvs[0].Value) != rec {
+		t.Fatalf("port49d changed the directory's key window: %v", err)
+	}
+}
+
+// R28: port49d refuses one keyspace named two ways, on its own identities:
+// a directory at /port49/dir/ inside a session store at /port49/ on one
+// member, each under roles of its own scope, so the role check passes and the
+// lease probe is what finds one cluster.
+func TestADaemonRefusesNestedPrefixesOnOneCluster(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	f.judged(t)
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	users := map[string][]string{}
+	for set, c := range map[string]struct {
+		prefix string
+		scope  etcd.Scope
+	}{"a": {"/port49/", etcd.ScopeSession}, "b": {"/port49/dir/", etcd.ScopeDirectory}} {
+		for _, g := range etcd.RolesFor(c.prefix, c.scope) {
+			grants = append(grants, etcdtest.Grant{Role: set + "-" + g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+		}
+		users[set+"-broker"] = []string{set + "-" + etcd.RoleBroker}
+		users[set+"-daemon"] = []string{set + "-" + etcd.RoleDaemon}
+	}
+	srv.EnableAuth(t, grants, users)
+	// The directory is named through a proxy, so the config's text compare
+	// (R22) passes and only the lease probe can see one cluster.
+	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "https://"))
+	block := func(user, prefix, endpoint string) string {
+		c, k := srv.ClientFiles(t, user)
+		return fmt.Sprintf("    backend: etcd\n    etcd:\n      endpoints: [%s]\n      ca_file: %s\n      prefix: %s\n"+
+			"      daemon: {cert_file: %s, key_file: %s}\n      call_timeout: 500ms\n", endpoint,
+			filepath.Join(srv.Dir, "ca.pem"), prefix, c, k)
+	}
+	raw, err := os.ReadFile(f.daemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	body = body[:strings.Index(body, "stores:\n")] + "stores:\n  directory:\n" + block("b-daemon", "/port49/dir/", "https://"+proxy.Addr()) +
+		"  session:\n    packet_deadline: 1s\n" + block("a-daemon", "/port49/", srv.Endpoint) + body[strings.Index(body, "admin_socket:"):]
+	if err := os.WriteFile(f.daemon, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "one keyspace named two ways") {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("port49d started with one keyspace named twice")
+	}
+}
+
+// Carry (a): the marks copy loads before the first GetRevocation, so a cold
+// start, cut from the directory after it opened it and before its marks
+// loaded, serves nothing until they have: the
+// listeners stay closed (a request is refused at the connect, never allowed
+// on a copy that has not loaded), and the heal opens them with the load said.
+func TestADaemonServesNothingBeforeItsMarksLoad(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	var cut atomic.Bool
+	stderr = onWrite{w: &out, hook: func(line string) {
+		if strings.Contains(line, "port49d: directory store: the daemon's etcd certificate") && cut.CompareAndSwap(false, true) {
+			f.ddproxy.Hang(true)
+		}
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, f.daemon) }()
+	t.Cleanup(func() { cancel(); <-done })
+	const still = "the listeners stay closed; trying again in 5s"
+	waitWithin(t, &out, still, 30*time.Second)
+	if strings.Contains(out.String(), "port49d: listening on ") {
+		t.Fatalf("served before the marks loaded:\n%s", out.String())
+	}
+	f.ddproxy.Hang(false)
+	waitWithin(t, &out, "port49d: listening on ", 40*time.Second)
+	if !strings.Contains(out.String(), "revocation(s) in force from the directory store") {
+		t.Fatalf("serving without the load said:\n%s", out.String())
 	}
 }

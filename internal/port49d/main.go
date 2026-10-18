@@ -693,6 +693,9 @@ func run(parent context.Context, cfgPath string) error {
 	// The daemon's copy of the standing marks, which every authorization,
 	// enable and receipt replay reads (plan 7d; Ruling 17).
 	authMarks := store.NewMarks()
+	// And the directory store's marks are held across a store gone too, and
+	// how fresh they are (plan 11a, R19).
+	dc := &directoryCache{fresh: store.NewFreshness(time.Now)}
 	// The restore guard is the process's too: a restore that outlasts
 	// hold_ttl ends a run, and the next must still know what was followed
 	// (plan 7e, Task 15d).
@@ -703,7 +706,7 @@ func run(parent context.Context, cfgPath string) error {
 	// store is still down (plan 7f, I-1; the shape of the key alarm's gauge).
 	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
-		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored, hs)
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, dc, restored, hs)
 	}, 5*time.Second)
 }
 
@@ -749,7 +752,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // package comment gives. again says a store gone ended the run before.
 // authMarks and restored are the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, authMarks *store.Marks, restored *restoreGuard, hs *healthState) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks, dc *directoryCache, restored *restoreGuard, hs *healthState) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -795,6 +798,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// the store (openStores' retry), so the alert holds through the whole
 	// outage and resolves only when the listeners open again (passes sets 0).
 	hs.bind(m)
+	if cfg.Stores.Session.Backend == config.BackendEtcd {
+		tellFresh(dc.fresh, m)
+	}
 	if again && cfg.Stores.Session.Backend == config.BackendEtcd {
 		hs.atLeast(cfg.Stores.Session.Etcd.Health.CloseAfter)
 	}
@@ -912,7 +918,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// on the process's ledger, which denies a context another login wrote
 	// at a key (decision 35).
 	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm,
-		authMarks)
+		authMarks, dc)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while waiting for the store: nothing was served, as coldCopies says

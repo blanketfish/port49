@@ -503,7 +503,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer cancel()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 	marks := store.NewMarks()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), marks)
+		newKeyAlarm(), marks, testDirectoryCache())
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
@@ -604,7 +604,7 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 	}
 	var out syncBuffer
 	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
-		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	var fault *storeFault
 	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
 		t.Fatalf("a refused read of the ledger record: %v", err)
@@ -634,7 +634,7 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 			}
 			var out syncBuffer
 			_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
-				newReadiness(), false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+				newReadiness(), false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 			var fault *storeFault
 			if !errors.As(err, &fault) || !strings.Contains(err.Error(), "meta/witness and meta/purged") ||
 				!strings.Contains(err.Error(), "port49d store-roles") {
@@ -667,7 +667,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	defer cancel()
 	m := metrics.New(prometheus.NewRegistry())
 	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), store.NewMarks())
+		newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +735,7 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm,
-			store.NewMarks())
+			store.NewMarks(), testDirectoryCache())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -770,7 +770,7 @@ func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-			newKeyAlarm(), store.NewMarks())
+			newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -837,21 +837,6 @@ func TestLineHolderEchoesOnlyTheShapePort49dWrites(t *testing.T) {
 	}
 }
 
-// A split (stores.session of its own) is refused by port49d until it opens
-// the directory store (plan 11a, Task 10), named, never served as one store.
-// port49-broker opens both (Task 9).
-func TestASplitIsRefusedUntilTheDirectoryStoreOpens(t *testing.T) {
-	cfg := config.Config{Stores: config.StoresConfig{
-		Directory: config.StoreConfig{Backend: config.BackendEtcd},
-		Session:   config.StoreConfig{Backend: config.BackendEtcd},
-	}}
-	var fault *storeFault
-	if _, err := openStores(context.Background(), cfg, crypt.Keys{}, nil, io.Discard, nil, false, nil, nil, nil, nil); !errors.As(err, &fault) ||
-		!strings.Contains(err.Error(), "stores.session names a store of its own") {
-		t.Errorf("port49d: %v", err)
-	}
-}
-
 // The guard's hold_ttl line names the block the store was read through.
 func TestTheGuardNamesTheBlockItReadsThrough(t *testing.T) {
 	e := &config.EtcdConfig{}
@@ -861,4 +846,10 @@ func TestTheGuardNamesTheBlockItReadsThrough(t *testing.T) {
 			t.Errorf("%s: HoldTTLKey %q", at, got)
 		}
 	}
+}
+
+// testDirectoryCache is the process's hold on the directory marks, as run
+// builds it.
+func testDirectoryCache() *directoryCache {
+	return &directoryCache{fresh: store.NewFreshness(time.Now)}
 }
