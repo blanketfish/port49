@@ -308,19 +308,31 @@ func TestL73HelpWordsAreTheListedKeywords(t *testing.T) {
 func TestL73EOSDiagAsks(t *testing.T) {
 	d := l73EOSDialect
 	if d.DiagDeep != 2 || len(d.DiagAsks) != 1 || d.DiagAsks[0] != "tacacs-server host 192.0.2.71 tls " ||
-		len(d.DiagOpAsks) != 1 || d.DiagOpAsks[0] != "show management security ssl profile " {
+		len(d.DiagOpAsks) != 3 || d.DiagOpAsks[0] != "show management security ssl profile " || d.DiagOpAsks[2] != "copy " ||
+		!slices.Equal(d.DiagFilterAsks, []string{"tacacs-server "}) || !slices.Contains(d.DiagFilter, "ssl") ||
+		!slices.Contains(d.DiagSubAsks, "trust certificate ") {
 		t.Fatal(d.DiagAsks, d.DiagOpAsks, d.DiagDeep)
 	}
 	if !slices.Equal(d.DiagSubIn, []string{"management security", "ssl profile l73x"}) ||
 		!slices.Contains(d.DiagSubOut, "no ssl profile l73x") {
 		t.Fatal(d.DiagSubIn, d.DiagSubOut)
 	}
-	for _, a := range append(slices.Clone(d.DiagAsks), d.DiagOpAsks...) {
+	for _, a := range slices.Concat(d.DiagAsks, d.DiagOpAsks, d.DiagFilterAsks, d.DiagSubAsks[1:]) {
 		if !strings.HasSuffix(a, " ") || strings.Contains(a, "?") {
 			t.Errorf("%q", a)
 		}
 	}
 	if slices.Contains(d.Asks[0].Need, "ssl-profile") || !slices.Contains(d.Asks[0].Need, "tls") {
 		t.Errorf("the host ask requires %v", d.Asks[0].Need)
+	}
+}
+
+func TestL73HelpWordsHoldingNarrowsToTheFilter(t *testing.T) {
+	help := "  host    a\r\n  ssl-profile  b\r\n  tls  c\r\n  key  d\r\n  timeout  e\r\n"
+	if got := l73HelpWordsHolding(help, []string{"ssl", "tls"}); !slices.Equal(got, []string{"ssl-profile", "tls"}) {
+		t.Fatalf("%q", got)
+	}
+	if got := l73HelpWordsHolding(help, nil); len(got) != 5 {
+		t.Fatalf("%q", got)
 	}
 }

@@ -358,7 +358,7 @@ func (e *l73Env) diagHelp() {
 		if e.d.Family == "junos" {
 			opMark = "@" + e.l.p.node + opMark // the prompt as the CLI redisplays it; "> " alone also opens help lines
 		}
-		ask := func(name, line, mark string, deep int) error {
+		ask := func(name, line, mark string, deep int, subs []string) error {
 			words := strings.Fields(line)
 			last := []string(nil)
 			if len(words) > 0 {
@@ -373,7 +373,7 @@ func (e *l73Env) diagHelp() {
 				return errors.New("INVALID: after Ctrl-U the line was not empty; nothing more is typed")
 			}
 			if deep > 0 {
-				for i, w := range l73HelpWords(ans.Masked) {
+				for i, w := range l73HelpWordsHolding(ans.Masked, subs) {
 					if err := e.diagDeeper(c, name, line, w, i, deep, mark); err != nil {
 						return err
 					}
@@ -382,7 +382,7 @@ func (e *l73Env) diagHelp() {
 			return nil
 		}
 		for i, a := range e.d.DiagOpAsks {
-			if err := ask(fmt.Sprintf("help-op-%d", i+1), a, opMark, 0); err != nil {
+			if err := ask(fmt.Sprintf("help-op-%d", i+1), a, opMark, 0, nil); err != nil {
 				return err
 			}
 		}
@@ -391,8 +391,13 @@ func (e *l73Env) diagHelp() {
 				return l71Wrap("INVALID: "+ln, err)
 			}
 		}
+		for i, a := range e.d.DiagFilterAsks {
+			if err := ask(fmt.Sprintf("help-f%d", i+1), a, e.d.CfgMark, 1, e.d.DiagFilter); err != nil {
+				return err
+			}
+		}
 		for i, a := range e.d.DiagAsks {
-			if err := ask(fmt.Sprintf("help-%d", i+1), a, e.d.CfgMark, e.d.DiagDeep); err != nil {
+			if err := ask(fmt.Sprintf("help-%d", i+1), a, e.d.CfgMark, e.d.DiagDeep, nil); err != nil {
 				return err
 			}
 		}
@@ -403,7 +408,7 @@ func (e *l73Env) diagHelp() {
 				}
 			}
 			for i, a := range e.d.DiagSubAsks {
-				if err := ask(fmt.Sprintf("help-sub-%d", i+1), a, e.d.CfgMark, 0); err != nil {
+				if err := ask(fmt.Sprintf("help-sub-%d", i+1), a, e.d.CfgMark, 0, nil); err != nil {
 					return err
 				}
 			}

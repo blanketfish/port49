@@ -12,30 +12,32 @@ import (
 // l73Dialect is how TestL73 asks one platform's CLI about its RFC 9887
 // client, points the client at port49 and puts it back, and reads it.
 type l73Dialect struct {
-	Family      string // junos, iosxe, nxos, eos, xr: which line builders apply
-	Vendor      string // the note's name for the OS
-	Probe       string // the l71Probes entry whose question the first ask is
-	Enter       []string
-	Cleanup     []string
-	CfgMark     string // what every configuration prompt contains
-	Asks        []l73Ask
-	HelpOnly    bool
-	VersionCmd  string // run after each token login
-	VersionHas  string // what its output holds on the image under test
-	Attrs       string // port49d's session_attributes here; "" keeps the lab file's
-	Enrol       string // cell e's "configured" wording
-	Fallback    string // the startup config's login method list (cell i)
-	Revocation  string // the run facts' sentence on device-side revocation
-	LogCmd      string
-	ShowCmds    []string
-	InvalidCmds []string // read into PORT49_L73_INVALID_DIR when the control login fails
-	RefusalCmds []string // read into the INVALID dir when configuring the TLS client is refused
-	DiagOpAsks  []string // DiagAsks' operational-mode counterpart
-	DiagAsks    []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
-	DiagDeep    int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
-	DiagSubIn   []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
-	DiagSubAsks []string // asks made inside that submode ("" is the submode's own help)
-	DiagSubOut  []string // lines that leave it and undo what DiagSubIn made
+	Family         string // junos, iosxe, nxos, eos, xr: which line builders apply
+	Vendor         string // the note's name for the OS
+	Probe          string // the l71Probes entry whose question the first ask is
+	Enter          []string
+	Cleanup        []string
+	CfgMark        string // what every configuration prompt contains
+	Asks           []l73Ask
+	HelpOnly       bool
+	VersionCmd     string // run after each token login
+	VersionHas     string // what its output holds on the image under test
+	Attrs          string // port49d's session_attributes here; "" keeps the lab file's
+	Enrol          string // cell e's "configured" wording
+	Fallback       string // the startup config's login method list (cell i)
+	Revocation     string // the run facts' sentence on device-side revocation
+	LogCmd         string
+	ShowCmds       []string
+	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
+	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
+	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
+	DiagAsks       []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
+	DiagDeep       int      // levels below each DiagAsks answer asked too: every keyword the help lists, at most l73DiagWords of them
+	DiagFilter     []string // DiagFilterAsks are followed only into the keywords that hold one of these
+	DiagFilterAsks []string // DiagAsks' counterpart whose deeper levels DiagFilter narrows
+	DiagSubIn      []string // lines that enter a submode whose help DiagSubAsks asks, after DiagAsks
+	DiagSubAsks    []string // asks made inside that submode ("" is the submode's own help)
+	DiagSubOut     []string // lines that leave it and undo what DiagSubIn made
 }
 
 var l73JunosDialect = l73Dialect{
@@ -115,12 +117,14 @@ var l73EOSDialect = l73Dialect{
 	Revocation: "no CRL in its SSL profile",
 	LogCmd:     "show logging | include TACACS|TLS|SSL|AAA",
 	// 4.36.3M's help lists `tls` (not ssl-profile) after a host address (Task 14 attempt 1).
-	DiagOpAsks:  []string{"show management security ssl profile "},
-	DiagAsks:    []string{"tacacs-server host 192.0.2.71 tls "},
-	DiagDeep:    2,
-	DiagSubIn:   []string{"management security", "ssl profile l73x"},
-	DiagSubAsks: []string{""},
-	DiagSubOut:  []string{"exit", "no ssl profile l73x", "exit"},
+	DiagOpAsks:     []string{"show management security ssl profile ", "show management security ssl certificate ", "copy "},
+	DiagFilterAsks: []string{"tacacs-server "},
+	DiagFilter:     []string{"ssl", "profile", "tls"},
+	DiagAsks:       []string{"tacacs-server host 192.0.2.71 tls "},
+	DiagDeep:       2,
+	DiagSubIn:      []string{"management security", "ssl profile l73x"},
+	DiagSubAsks:    []string{"", "certificate ", "trust ", "trust certificate ", "tls ", "chain ", "peer "},
+	DiagSubOut:     []string{"exit", "no ssl profile l73x", "exit"},
 	ShowCmds: []string{"show running-config section tacacs", "show running-config section management security",
 		"show management security ssl profile " + l73EOSProfile, "show tacacs"},
 }
@@ -481,14 +485,18 @@ var l73HelpKeyword = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // line indented by two spaces, as EOS prints them. "<cr>", rules and
 // repeats are left out, and only plain keyword characters are kept, so what
 // is typed next is never something the device did not offer as a word.
-func l73HelpWords(help string) []string {
+func l73HelpWords(help string) []string { return l73HelpWordsHolding(help, nil) }
+
+// l73HelpWordsHolding is l73HelpWords narrowed to the keywords holding one
+// of subs (all of them when subs is empty).
+func l73HelpWordsHolding(help string, subs []string) []string {
 	var out []string
 	for _, ln := range strings.Split(strings.ReplaceAll(help, "\r", ""), "\n") {
 		if !strings.HasPrefix(ln, "  ") || strings.HasPrefix(ln, "   ") {
 			continue
 		}
 		f := strings.Fields(ln)
-		if len(f) == 0 || !l73HelpKeyword.MatchString(f[0]) || slices.Contains(out, f[0]) {
+		if len(f) == 0 || !l73HelpKeyword.MatchString(f[0]) || slices.Contains(out, f[0]) || !l73HoldsAny(f[0], subs) {
 			continue
 		}
 		if out = append(out, f[0]); len(out) == l73DiagWords {
@@ -496,4 +504,13 @@ func l73HelpWords(help string) []string {
 		}
 	}
 	return out
+}
+
+func l73HoldsAny(w string, subs []string) bool {
+	for _, s := range subs {
+		if strings.Contains(w, s) {
+			return true
+		}
+	}
+	return len(subs) == 0
 }
