@@ -213,7 +213,13 @@ var l73Dialects = map[string]l73Dialect{
 		}},
 	"cisco_xrd": {Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", HelpOnly: true,
 		Enter: []string{"configure"}, Cleanup: []string{"abort"}, CfgMark: "(config",
-		Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}}}},
+		// The SSH server's rate limit is asked, never configured: XRd's sshd resets a
+		// session over its limit (L73's first run), so the image's own help for the
+		// option is recorded beside the measurement. "<" is what a range or <cr>
+		// line starts with; the whole help is kept either way.
+		Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}},
+			{Ask: "ssh server ", Control: []string{"v2", "rate-limit"}, Evidence: true},
+			{Ask: "ssh server rate-limit ", Control: []string{"<"}, Evidence: true}}},
 }
 
 // l73IOLHost is the IOL-XE host ask: the legacy `tacacs-server host`, with an

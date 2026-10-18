@@ -28,7 +28,13 @@ func l73Opener(name string) func(*lab) (*cliConn, error) {
 			return l.iosxeCLIRaising(breakglassUser, breakglassPassword, true, false)
 		}
 	case "cisco_xrd":
-		return func(l *lab) (*cliConn, error) { return l.xrCLI(breakglassUser, breakglassPassword) }
+		// XRd's sshd resets a session that arrives while it is over its rate limit
+		// ("Incoming SSH session rate limit exceeded" in its log), which the readiness
+		// probe's logins just before the first open can cause.
+		return func(l *lab) (*cliConn, error) {
+			return l73OpenRetrying(func() (*cliConn, error) { return l.xrCLI(breakglassUser, breakglassPassword) },
+				6, 10*time.Second, time.Sleep)
+		}
 	}
 	return nil
 }
@@ -122,4 +128,27 @@ func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient 
 		return c.transcript()[from:], fmt.Errorf("refused: %s", strings.Join(refused, "; "))
 	}
 	return c.transcript()[from:], nil
+}
+
+// l73OpenRetrying is open, tried up to tries times, wait apart, but only when
+// the failure is the device resetting or closing the SSH handshake; any other
+// error (an authentication refusal above all) ends at once. When every try
+// fails, each try's error is in the one returned.
+func l73OpenRetrying(open func() (*cliConn, error), tries int, wait time.Duration, sleep func(time.Duration)) (*cliConn, error) {
+	var errs []string
+	for i := 1; i <= tries; i++ {
+		c, err := open()
+		if err == nil {
+			return c, nil
+		}
+		errs = append(errs, fmt.Sprintf("try %d: %v", i, err))
+		msg := err.Error()
+		if !strings.Contains(msg, "handshake failed") || !(strings.Contains(msg, "connection reset by peer") || strings.HasSuffix(msg, "EOF")) {
+			return nil, errors.New(strings.Join(errs, "; "))
+		}
+		if i < tries {
+			sleep(wait)
+		}
+	}
+	return nil, errors.New(strings.Join(errs, "; "))
 }

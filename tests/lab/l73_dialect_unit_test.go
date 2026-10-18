@@ -864,3 +864,27 @@ func TestL73IOSXEReadsTheDeviceOnAFailedLogin(t *testing.T) {
 		}
 	}
 }
+
+// XRd's sshd resets a session over its rate limit; the run records the image's
+// help for the option and configures nothing.
+func TestL73XRdAsksTheSSHRateLimitHelpAndConfiguresNothing(t *testing.T) {
+	d := l73Dialects["cisco_xrd"]
+	var asks []string
+	for _, a := range d.Asks {
+		asks = append(asks, a.Ask)
+		if len(a.In) > 0 {
+			t.Errorf("the ask %q enters a mode: %q", a.Ask, a.In)
+		}
+	}
+	if !slices.Contains(asks, "ssh server ") || !slices.Contains(asks, "ssh server rate-limit ") {
+		t.Fatalf("%q", asks)
+	}
+	for _, a := range d.Asks {
+		if (a.Ask == "ssh server " || a.Ask == "ssh server rate-limit ") && !a.Evidence {
+			t.Errorf("%q must be recorded as evidence, not graded", a.Ask)
+		}
+	}
+	if !d.HelpOnly {
+		t.Error("the XRd row is help only")
+	}
+}
