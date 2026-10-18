@@ -271,9 +271,19 @@ type Session struct {
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).
-	Port      string `json:"port"`
-	RemAddr   string `json:"rem_addr"`
-	Privilege uint8  `json:"privilege"`
+	Port    string `json:"port"`
+	RemAddr string `json:"rem_addr"`
+	// Privilege is the priv_lvl of the authorization request's header: the
+	// level the device asked at.
+	Privilege uint8 `json:"privilege"`
+	// HeldPrivilege is the context's level when the request arrived, before
+	// any raise this request makes, on every authorize_session and
+	// authorize_command record whose context was read, denials included. It
+	// is the number privilege_exceeded turns on, so comparing it with
+	// Privilege shows what the device asked for against what port49 held.
+	// Recorded only. A pointer so 0 (a valid level) is present when held and
+	// the field is absent where there was no context, as on context_missing.
+	HeldPrivilege *uint8 `json:"held_privilege,omitempty"`
 }
 
 // PrivilegeClamp is the context's held level before and after a join.
@@ -291,16 +301,7 @@ type Request struct {
 	// SRX fleet, and the one a service_unsupported denial has to answer. It is
 	// checked against the platform's session_services list and consulted for
 	// nothing else: the service never selects policy (spec §5.2, §5.7).
-	Service string `json:"service,omitempty"`
-	// PrivLvl is the priv_lvl of the authorization request's header, on every
-	// authorize_session and authorize_command record including the denials.
-	// It is recorded so a reader can compare what level the device asked at
-	// with session.privilege, and so a new platform's behavior is read off the
-	// log. Only command authorization compares it with the context; it is
-	// consulted for nothing else (spec §5.2, §5.3, §5.7). No omitempty:
-	// 0 is a valid level and a record that dropped it would read as "not
-	// recorded".
-	PrivLvl uint8    `json:"priv_lvl"`
+	Service string   `json:"service,omitempty"`
 	Raw     []string `json:"raw"`
 	Vector  []string `json:"vector"`
 	// Redacted says words were replaced with «redacted» before the record
