@@ -184,6 +184,9 @@ func TestL73CiscoAsksCoverEveryTypedKeyword(t *testing.T) {
 		}
 		var objAsks, groupAsks []l73Ask
 		for _, a := range l73Dialects[tc.platform].Asks {
+			if strings.HasPrefix(a.Ask, "crypto ") || (len(a.In) > 0 && strings.HasPrefix(a.In[0], "crypto ")) {
+				continue // the enrolment's key words, not the tacacs-server lines this test covers
+			}
 			if slices.Contains(a.In, groupIn) {
 				groupAsks = append(groupAsks, a)
 			} else {

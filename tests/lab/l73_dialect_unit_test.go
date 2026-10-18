@@ -760,3 +760,41 @@ func TestL71ClaimNamesTheProbeObjectOnlyWhereItIsCreated(t *testing.T) {
 		t.Fatal("the IOS XE probe no longer creates the object: the test checks nothing")
 	}
 }
+
+// NX-OS 10.6.2.F's terminal enrolment refuses an ECC key ("no rsa key-pair is
+// associated with the trustpoint configuration", attempt 19): the device key
+// is an RSA-2048 one, and the image's own help is asked about both words
+// before either is typed.
+func TestL73NXOSEnrolMakesAnRSAKeyAndAsksItsHelp(t *testing.T) {
+	prep, _, _ := l73CiscoEnrol("nxos", "nx1")
+	var cmds []string
+	for _, d := range prep {
+		cmds = append(cmds, d.Cmd)
+	}
+	j := strings.Join(cmds, "\n")
+	for _, want := range []string{"crypto key generate rsa label " + l73CiscoKey + " exportable modulus 2048", "rsakeypair " + l73CiscoKey} {
+		if !strings.Contains(j, want) {
+			t.Errorf("prep lacks %q:\n%s", want, j)
+		}
+	}
+	if strings.Contains(j, "ecc") {
+		t.Errorf("prep still makes an ECC key:\n%s", j)
+	}
+	need := map[string][]string{}
+	for _, a := range l73NXOSAsks {
+		key := a.Ask
+		if len(a.In) > 0 {
+			key = strings.Join(a.In, ";") + "|" + a.Ask
+		}
+		need[key] = a.Need
+	}
+	if got := need["crypto ca trustpoint "+l73CertID+"|"]; !slices.Contains(got, "rsakeypair") {
+		t.Errorf("no ask for the trustpoint's help needing rsakeypair: %v", need)
+	}
+	got := need["crypto key generate rsa "]
+	for _, w := range []string{"label", "modulus", "exportable"} {
+		if !slices.Contains(got, w) {
+			t.Errorf("the key-generation ask lacks Need %q: %v", w, got)
+		}
+	}
+}

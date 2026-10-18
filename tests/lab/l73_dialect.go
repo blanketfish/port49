@@ -100,6 +100,11 @@ var l73NXOSAsks = []l73Ask{
 	{Ask: "tacacs-server host 192.0.2.71 tls ", Control: []string{"client-trustpoint", "server-trustpoint"},
 		Need: []string{"client-trustpoint"}, Want: []string{"server-trustpoint"}},
 	{Ask: "", Control: []string{"server"}, Need: []string{"server"}, In: []string{"aaa group server tacacs+ " + l73Group}, Out: []string{"exit"}},
+	// The enrolment's key words, asked before they are typed. The image's
+	// terminal enrolment refuses an ECC key (attempt 19), so the device key is RSA.
+	{Ask: "crypto key generate rsa ", Control: []string{"label", "modulus", "exportable"}, Need: []string{"label", "modulus", "exportable"}},
+	{Ask: "", Control: []string{"revocation-check", "rsakeypair"}, Need: []string{"rsakeypair"},
+		In: []string{"crypto ca trustpoint " + l73CertID}, Out: []string{"exit"}},
 }
 
 // The scratch SSL profile the EOS asks enter, and how they leave it.
@@ -162,8 +167,12 @@ var l73Dialects = map[string]l73Dialect{
 		Family: "nxos", Vendor: "NX-OS", Probe: "cisco_nxos",
 		Enter: []string{"configure terminal"}, Cleanup: []string{"end"}, CfgMark: "(config", Asks: l73NXOSAsks,
 		VersionCmd: "show version | include NXOS:", VersionHas: "10.6(2)",
-		Enrol: "terminal enrolment as Cisco doc 224882 shows it (`crypto key generate ecc`, `crypto ca enroll`, " +
-			"the request read off the screen, the lab CA's answer pasted at `crypto ca import`)",
+		Enrol: "terminal enrolment as Cisco doc 224882 shows it, with an RSA-2048 key (`crypto key generate rsa label ... exportable modulus 2048`, `rsakeypair`, " +
+			"`crypto ca enroll`, the request read off the screen, the lab CA's answer pasted at `crypto ca import`). RSA, not the ECC key doc 224882 makes: this " +
+			"image's own refusal of the ECC key at `crypto ca enroll` was \"no rsa key-pair is associated with the trustpoint configuration\". The two key " +
+			"commands are documented in Cisco's Nexus 3600 Switch NX-OS Security Configuration Guide, Release 10.6(x), \"Configuring PKI\" " +
+			"(https://www.cisco.com/c/en/us/td/docs/dcn/nx-os/nexus3600/106x/configuration/security/cisco-nexus-3600-switch-nx-os-security-configuration-guide-106x/m_configuring_pki_9x.html; " +
+			"the Nexus 9000 10.6(x) page was not found at the guessed address, so this is the nearest), and the run asks the image's own help for both before typing",
 		Fallback:   "`aaa authentication login default group port49 local` (configs/nxos-startup.cfg)",
 		Revocation: "`revocation-check none` on both trustpoints",
 		LogCmd:     `show logging logfile | egrep "TACACS|tacacs|TLS|tls|PKI|pki" | last 40`,
@@ -600,9 +609,9 @@ func l73CiscoEnrol(family, node string) (prep []l73Dialog, enroll, load l73Dialo
 		load = l73Dialog{Cmd: "crypto pki import " + l73CertID + " certificate",
 			Steps: []l73Step{{"on a line by itself", "{LEAF}quit"}}, Done: "successfully imported"}
 	case "nxos":
-		prep = l73Lines("crypto key generate ecc label "+l73CiscoKey+" exportable modulus 256",
+		prep = l73Lines("crypto key generate rsa label "+l73CiscoKey+" exportable modulus 2048",
 			"crypto ca trustpoint "+l73RootProfile, "revocation-check none", "exit",
-			"crypto ca trustpoint "+l73CertID, "ecckeypair "+l73CiscoKey, "revocation-check none", "exit")
+			"crypto ca trustpoint "+l73CertID, "rsakeypair "+l73CiscoKey, "revocation-check none", "exit")
 		prep = append(prep,
 			l73Dialog{Cmd: "crypto ca authenticate " + l73RootProfile,
 				Steps: []l73Step{{"END OF INPUT", "{ROOT}END OF INPUT"}, {"accept this certificate", "yes"}}},
