@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -612,8 +613,33 @@ func (e *l73Env) configure(d l73DeviceTLS) {
 	}
 	if err != nil {
 		e.invalidScreen("configure", out)
+		e.refusalDiag(out)
 		e.t.Fatalf("INVALID: configuring the device's TLS client: %s", oneLine(l73ScrubLog(hideKeys(err.Error()))))
 	}
+}
+
+// refusalDiag keeps what the device says about a refused TLS configuration:
+// the directory a refused file path lies in, when it may be printed, and the
+// dialect's RefusalCmds, all scrubbed in the INVALID dir. Reading goes first
+// to a CLI that can fail; the refusal is already recorded.
+func (e *l73Env) refusalDiag(out string) {
+	cmds := slices.Clone(e.d.RefusalCmds)
+	if dir := l73RefusedDir(out); dir != "" && e.d.Family == "junos" {
+		cmds = append([]string{"file list " + dir}, cmds...)
+	}
+	if os.Getenv("PORT49_L73_INVALID_DIR") == "" || len(cmds) == 0 {
+		return
+	}
+	e.cli(func(c *cliConn) error {
+		for i, cmd := range cmds {
+			o, err := c.sendExpect(cmd, 60*time.Second, e.opMark(c))
+			if err != nil {
+				o = "(read failed: " + l73Err(err) + ")"
+			}
+			e.invalidScreen(fmt.Sprintf("refusal-%d", i+1), "$ "+cmd+"\n"+o)
+		}
+		return nil
+	})
 }
 
 // capture starts a capture of everything the device sends or receives

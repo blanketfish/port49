@@ -558,3 +558,17 @@ func l73MissingLines(typed []string, shown string) []string {
 	}
 	return missing
 }
+
+// l73RefusedDir is the directory of the path in a "File path '<p>' doesn't
+// exist" answer, when the path may be printed (l73PrintablePath) and lies
+// under /var or /config; otherwise "".
+func l73RefusedDir(out string) string {
+	m := l73FilePathAnswer.FindStringSubmatch(out)
+	if m == nil || !l73PrintablePath(m[2]) {
+		return ""
+	}
+	if !strings.HasPrefix(m[2], "/var/") && !strings.HasPrefix(m[2], "/config/") {
+		return ""
+	}
+	return m[2][:strings.LastIndex(m[2], "/")]
+}

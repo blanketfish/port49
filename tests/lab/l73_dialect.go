@@ -28,6 +28,7 @@ type l73Dialect struct {
 	LogCmd      string
 	ShowCmds    []string
 	InvalidCmds []string // read into PORT49_L73_INVALID_DIR when the control login fails
+	RefusalCmds []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagAsks    []string // help asked at a value position by PORT49_L73_DIAG=help, which then ends INVALID
 }
 
@@ -37,9 +38,10 @@ var l73JunosDialect = l73Dialect{
 	Asks: l73JunosAsks, VersionCmd: "show version | match Junos:", VersionHas: "26.2R1", Attrs: "[]",
 	Enrol: "the documented offline enrolment (`request security pki generate-key-pair`, " +
 		"`generate-certificate-request`, the lab CA's answer loaded back from a file)",
-	Fallback:   "`authentication-order [ tacplus password ]` (configs/vjunos-startup.conf)",
-	Revocation: "`revocation-check disable` on its CA profiles",
-	LogCmd:     `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,
+	Fallback:    "`authentication-order [ tacplus password ]` (configs/vjunos-startup.conf)",
+	Revocation:  "`revocation-check disable` on its CA profiles",
+	LogCmd:      `show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40`,
+	RefusalCmds: []string{"show security pki ca-certificate", "show configuration security pki | display set"},
 	DiagAsks: []string{"set system tacplus-server " + l73Server + " tls trusted-ca-group ",
 		"set system tacplus-server " + l73Server + " tls mutual-authentication certificate-id ",
 		"set system tacplus-server " + l73Server + " tls "},

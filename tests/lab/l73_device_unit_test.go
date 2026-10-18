@@ -490,3 +490,17 @@ func TestL73JunosDiagAsksStopAtTheValuePosition(t *testing.T) {
 		}
 	}
 }
+
+func TestL73RefusedDir(t *testing.T) {
+	for in, want := range map[string]string{
+		"File path '/var/db/certs/common/trusted-ca-groups/l73-trust' doesn't exists.": "/var/db/certs/common/trusted-ca-groups",
+		"File path '/config/x/y' doesn't exist.":                                       "/config/x",
+		"File path '/tmp/x/y' doesn't exists.":                                         "",
+		"File path '/" + strings.Repeat("QUJDREVG", 6) + "' doesn't exists.":           "",
+		"nothing here": "",
+	} {
+		if got := l73RefusedDir(in); got != want {
+			t.Errorf("%q: %q want %q", in, got, want)
+		}
+	}
+}
