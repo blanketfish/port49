@@ -376,6 +376,10 @@ const (
 
 var l76SetLines = []string{l76PrivLvlAuthzOff, l76PrivLvlAuthzOn, l76RoleServiceOn, l76RoleServiceOff}
 
+// l76ModelRead is how the schema check reads a YANG model from the image: a
+// container file read, not SR Linux CLI syntax.
+const l76ModelRead = `cat "$(find /opt/srlinux/models -name <model> | head -1)"`
+
 // l76RootForms are the sr_cli forms and file reads the harness runs as the
 // container's root.
 var l76RootForms = []string{
@@ -385,6 +389,7 @@ var l76RootForms = []string{
 	"enter candidate",
 	"commit now",
 	"tail -n 400 " + l76AAALog,
+	l76ModelRead,
 }
 
 // The pages every SR Linux statement is checked against (the plan's cite
@@ -414,6 +419,7 @@ var l76Sources = []l76Source{
 	{l76RoleServiceOff, "CLAB#cli (flat form); SA#configuring-tacacs-authorization-with-vsas"},
 	{"sr_cli -d <command>", "HELP (-d/--dumb-terminal, with a positional command run as one line)"},
 	{"sr_cli --help", "HELP"},
+	{l76ModelRead, "YANG srl_nokia-aaa.yang; YANG srl_nokia-aaa-types.yang (the image's own models)"},
 	{"sr_cli -d --candidate-mode --commit-at-end -- <line>", "HELP (example: sr_cli --candidate-mode --commit-at-end -- <command>)"},
 	{"enter candidate", "CM#configuration-modes"},
 	{"commit now", "CM#commit-configuration-in-candidate-mode"},
@@ -646,7 +652,8 @@ func l76WrongKeyConfig(cfg string) (string, error) {
 // l76Observation is the note's Observation: the schema check, then each
 // cell under its claim, in register order, then extra (the live test's
 // retries line and Evidence pointer), then the Sources every command
-// and statement cites (pre-flight I3).
+// and statement cites (pre-flight I3). extra must start with "\n" and end
+// with a newline, as the cells' text does.
 func l76Observation(out map[string]string, schema, extra string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "### Schema and configuration\n\n%s\n", schema)
@@ -666,4 +673,20 @@ func l76SafeInvalid(msg string, secrets []string) string {
 		return fmt.Sprintf("(message withheld: it held %s)", strings.Join(leaks, ", "))
 	}
 	return msg
+}
+
+// l76InvalidText is an INVALID message as it is printed: the long and keyed
+// values masked, then the l76SafeInvalid gate. It does not run l76FilterLog:
+// that drops every line naming a password or token, which would blank the
+// message's own wording ("logged in with a wrong password"). Every caller
+// filters or masks the device text it passes in.
+func l76InvalidText(msg string, secrets []string) string {
+	return l76SafeInvalid(l76MaskLong(l76MaskKeyed(msg)), secrets)
+}
+
+// l76ReturnsFromInvalid says whether invalid logs and returns instead of
+// ending the run: only a deferred restore (restoring) after the run has
+// already failed. Anything else must stop the run.
+func l76ReturnsFromInvalid(restoring, failed bool) bool {
+	return restoring && failed
 }

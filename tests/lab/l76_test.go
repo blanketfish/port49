@@ -81,6 +81,10 @@ type l76Env struct {
 
 	retries []string // try's retried dials, both attempts each (pre-flight M3)
 	dumped  bool     // dumpDevice has run
+
+	// restoring is set by a deferred restore, and by nothing else: it lets
+	// invalid log instead of stop while the run is already failing.
+	restoring bool
 }
 
 // guard is the STOP sentinel and the disk floor, before every cell.
@@ -91,18 +95,20 @@ func (e *l76Env) guard() {
 	}
 }
 
-// invalid ends the run with no note. Its message passes the log filter and
-// then l76Leaks against the run's secrets.
+// invalid ends the run with no note. Its message is masked and then passes
+// l76Leaks against the run's secrets.
 // A restore that fails inside a deferred call after an earlier INVALID
 // (the test is already failing and unwinding) is logged, not raised again,
-// so the first INVALID's reason stays the run's reason.
+// so the first INVALID's reason stays the run's reason. Only a deferred
+// restore sets e.restoring; any other INVALID stops the run, even if a stray
+// non-fatal failure came first.
 func (e *l76Env) invalid(format string, args ...any) {
 	e.t.Helper()
-	msg := l76FilterLog(fmt.Sprintf(format, args...))
-	// Whatever else it holds, a message that names a secret is not printed.
+	// Not l76FilterLog: it would drop this message's own wording when it names
+	// a password. Every caller filters or masks the device text it passes in.
 	secrets, _ := e.secrets() // on a seed error, the fixed secrets still gate
-	msg = l76SafeInvalid(msg, secrets)
-	if e.t.Failed() {
+	msg := l76InvalidText(fmt.Sprintf(format, args...), secrets)
+	if l76ReturnsFromInvalid(e.restoring, e.t.Failed()) {
 		e.t.Logf("also INVALID, while restoring after the first: %s", msg)
 		return
 	}
@@ -325,7 +331,9 @@ func l76SessionOf(out, user string) *l76Session {
 }
 func (e *l76Env) checkSchema() {
 	e.guard()
-	help, _, err := e.sr(30*time.Second, "--help")
+	// Exactly the cited form, `sr_cli --help`: not through sr, which adds -d.
+	helpOut, err := exec.Command("docker", "exec", l76Container, "sr_cli", "--help").CombinedOutput()
+	help := string(helpOut)
 	for _, flag := range []string{"--dumb-terminal", "--candidate-mode", "--commit-at-end"} {
 		if !strings.Contains(help, flag) {
 			e.invalid("sr_cli --help lacks %s (err %v), so the harness's device commands are not this image's", flag, err)
@@ -539,7 +547,7 @@ func (e *l76Env) cellD() {
 		e.invalid("cell d: %s logged in with a wrong password", user)
 	}
 	if !isAuthRejection(err) {
-		e.invalid("cell d: the wrong-password login failed before authentication: %v", err)
+		e.invalid("cell d: the login with the wrong credential failed before authentication: %v", err)
 	}
 	bgTook, bgErr := e.try(breakglassUser, breakglassPassword)
 	recs := e.l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {

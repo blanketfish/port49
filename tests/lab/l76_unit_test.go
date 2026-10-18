@@ -1005,7 +1005,42 @@ func TestL76InvalidUsesTheLeakGate(t *testing.T) {
 		t.Fatal("no invalid method")
 	}
 	body, _, _ = strings.Cut(body, "\n}\n")
-	if !strings.Contains(body, "l76SafeInvalid(") || !strings.Contains(body, "e.secrets()") {
-		t.Error("invalid does not gate its message with l76SafeInvalid over e.secrets()")
+	if !strings.Contains(body, "l76InvalidText(") || !strings.Contains(body, "e.secrets()") {
+		t.Error("invalid does not gate its message with l76InvalidText over e.secrets()")
+	}
+}
+
+func TestL76InvalidTextKeepsItsOwnWording(t *testing.T) {
+	seed := "seedtok-9f3a"
+	secrets := []string{"labkey-xyz", seed}
+	for _, m := range []string{
+		"cell d: alice01 logged in with a wrong password",
+		"cell d: the login with the wrong credential failed before authentication: ssh: handshake failed",
+		"cell a: the control login as alice01 failed after 3s: ssh: unable to authenticate, attempted methods [none password], no supported methods remain",
+		"evidence a-1.txt holds [secret #0]",
+	} {
+		if got := l76InvalidText(m, secrets); got != m {
+			t.Errorf("the message was changed:\n got %q\nwant %q", got, m)
+		}
+	}
+	if got := l76InvalidText("echo "+seed, secrets); strings.Contains(got, seed) || !strings.Contains(got, "secret #1") {
+		t.Errorf("a seed was printed: %q", got)
+	}
+	long := "AbCdEf0123456789AbCdEf0123456789xyz"
+	if got := l76InvalidText("device said "+long, secrets); strings.Contains(got, long) {
+		t.Errorf("a token-shaped run was printed: %q", got)
+	}
+}
+
+func TestL76ReturnsFromInvalidOnlyForADeferredRestoreAfterAFailure(t *testing.T) {
+	for _, c := range []struct{ restoring, failed, want bool }{
+		{false, false, false},
+		{false, true, false}, // a stray t.Errorf must not turn INVALID into a return
+		{true, false, false},
+		{true, true, true},
+	} {
+		if got := l76ReturnsFromInvalid(c.restoring, c.failed); got != c.want {
+			t.Errorf("restoring=%v failed=%v: got %v, want %v", c.restoring, c.failed, got, c.want)
+		}
 	}
 }
