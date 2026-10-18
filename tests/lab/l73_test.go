@@ -1141,11 +1141,11 @@ func (e *l73Env) allSecrets() []string {
 	runSeedsMu.Lock()
 	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
 	runSeedsMu.Unlock()
-	toks, err := labcreds.SecretsOf(seeds)
+	all, err := l73SecretsFor(e.d.HelpOnly, e.secrets, seeds)
 	if err != nil {
 		e.t.Fatalf("INVALID: the run's tokens: %v", err)
 	}
-	return append(append(append([]string{}, e.secrets...), toks...), labcreds.Key, breakglassPassword)
+	return all
 }
 
 func (e *l73Env) enrol() {

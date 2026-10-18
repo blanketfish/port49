@@ -704,3 +704,16 @@ func TestL73HelpBodyIsTheListWithoutEchoOrPrompt(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// A help-only row starts no port49d, so it mints no seed token; its probe
+// exchange is still checked against the lab's published key and password. A
+// measured row with no token is still refused.
+func TestL73SecretsForAHelpOnlyRowNeedNoSeedToken(t *testing.T) {
+	got, err := l73SecretsFor(true, []string{"pem-body"}, nil)
+	if err != nil || !slices.Contains(got, labcreds.Key) || !slices.Contains(got, labcreds.BreakglassPassword) || !slices.Contains(got, "pem-body") {
+		t.Fatalf("help-only: %q %v", got, err)
+	}
+	if _, err := l73SecretsFor(false, nil, nil); err == nil {
+		t.Fatal("a measured row with no minted token was accepted")
+	}
+}

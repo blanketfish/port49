@@ -817,3 +817,18 @@ func l73HelpBody(help string) []string {
 	}
 	return out
 }
+
+// l73SecretsFor is every secret a run's evidence is compared with: its key
+// PEMs, the seed tokens its daemons minted, the lab's published key and the
+// break-glass password. A help-only row starts no port49d and so mints none;
+// a measured row that minted none is refused (labcreds.SecretsOf).
+func l73SecretsFor(helpOnly bool, pems []string, seeds []labcreds.SeedToken) ([]string, error) {
+	var toks []string
+	if !helpOnly {
+		var err error
+		if toks, err = labcreds.SecretsOf(seeds); err != nil {
+			return nil, err
+		}
+	}
+	return append(append(append([]string{}, pems...), toks...), labcreds.Key, labcreds.BreakglassPassword), nil
+}
