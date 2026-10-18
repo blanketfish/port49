@@ -622,7 +622,7 @@ func l73CiscoEnrol(family, node string) (prep []l73Dialog, enroll, load l73Dialo
 			{"ip address:", "{ADDR}"}, {"Alternate Subject Name ?", "yes"}, {"Enter Alternate Subject Name", "{NODE}"}},
 			Done: "END CERTIFICATE REQUEST"}
 		load = l73Dialog{Cmd: "crypto ca import " + l73CertID + " certificate",
-			Steps: []l73Step{{"certificate in PEM format:", "{LEAF}END OF INPUT"}}}
+			Steps: []l73Step{{"certificate in PEM format:", "{LEAF}"}}}
 	}
 	return prep, enroll, load
 }
