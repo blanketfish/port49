@@ -52,6 +52,13 @@ func TestTheSnapshotsMarksAreTheirUnion(t *testing.T) {
 			t.Fatalf("%s: marks %v, confirmed %v; want both marks and the broker's time", name, held, v.confirmed)
 		}
 	}
+	// A valid young record beside one that does not open is still served.
+	good := seal("port49d@h1", now.Add(-time.Minute), a)
+	if v, ok, _ := loadSnapshots(context.Background(), fakeSnapshots{etcdstore.SnapshotMarks: {"port49d@h1": good,
+		"port49d@h3": []byte("not sealed")}}, keys, false, 4*time.Hour, time.Second, io.Discard, "port49d"); !ok ||
+		len(v.marks) != 1 {
+		t.Fatalf("a record beside an unsealed one: ok %v, marks %v", ok, v.marks)
+	}
 	// A record past the ceiling is not served; one that does not open is skipped.
 	stale := seal("port49d@h1", now.Add(-5*time.Hour), a, b)
 	if _, ok, _ := loadSnapshots(context.Background(), fakeSnapshots{etcdstore.SnapshotMarks: {"port49d@h1": stale,

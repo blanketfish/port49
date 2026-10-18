@@ -97,7 +97,7 @@ func TestASeededCopyIsASnapshotUntilConfirmed(t *testing.T) {
 	}
 }
 
-// loadFailFeed (the brief's flakyFeed; marks_test.go has one) fails every load while fail is set, and watches until ctx ends.
+// loadFailFeed fails every load while fail is set, and watches until ctx ends.
 type loadFailFeed struct {
 	mu   sync.Mutex
 	fail bool

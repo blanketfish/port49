@@ -185,10 +185,24 @@ func (f snapFeed) WatchRevocations(context.Context, uint64, func(r store.Revocat
 }
 
 // snapshotLine is the start's line for a run that serves from v.
-func snapshotLine(proc string, v snapshotView, ceiling time.Duration, then string) string {
+// cause is why the directory did not answer.
+func snapshotLine(proc string, v snapshotView, ceiling time.Duration, then string, cause error) string {
 	return fmt.Sprintf("%s: directory store: not answering; serving from %d snapshot(s), the newest %s's, confirmed "+
-		"%s ago: %d revocation(s) in their union; served until it is %s old (session.staleness_ceiling), then %s",
-		proc, v.records, printsafe.Line(v.newest, 200), ageText(time.Since(v.confirmed)), len(v.marks), ceiling, then)
+		"%s ago: %d revocation(s) in their union; served until it is %s old (session.staleness_ceiling), then %s; "+
+		"the directory store said: %s",
+		proc, v.records, printsafe.Line(v.newest, 200), ageText(time.Since(v.confirmed)), len(v.marks), ceiling, then,
+		printsafeErr(cause))
+}
+
+// noSnapshotLine is the start's line when the directory did not answer and
+// no snapshot serves: either none is young enough, or the session store's
+// records could not be read (serr).
+func noSnapshotLine(proc string, ref storeRef, cause, serr error, ceiling time.Duration) string {
+	why := fmt.Sprintf("no snapshot in the session store is younger than session.staleness_ceiling (%s)", ceiling)
+	if serr != nil {
+		why = fmt.Sprintf("the session store's snapshots could not be read (%s)", printsafeErr(serr))
+	}
+	return fmt.Sprintf("%s: directory store at %s: not answering (%s); %s", proc, ref.where(), printsafeErr(cause), why)
 }
 
 // keepSnapshot writes this process's snapshot records every snapshotEvery
@@ -197,7 +211,7 @@ func snapshotLine(proc string, v snapshotView, ceiling time.Duration, then strin
 // port49d) its broker record. A write that fails is said once until one
 // lands.
 func keepSnapshot(ctx context.Context, sess *etcdstore.Store, dir *dirHandle, fresh *store.Freshness,
-	keys crypt.Keys, writer string, ttl time.Duration, marks func() []store.Revocation,
+	keys crypt.Keys, writer string, ttl, bound time.Duration, marks func() []store.Revocation,
 	brokerTake func(*brokerSnapshot), out io.Writer, proc string) {
 	t := time.NewTicker(snapshotEvery)
 	defer t.Stop()
@@ -214,7 +228,7 @@ func keepSnapshot(ctx context.Context, sess *etcdstore.Store, dir *dirHandle, fr
 			continue // only a copy confirmed live is written
 		}
 		err := func() error {
-			rctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			rctx, cancel := context.WithTimeout(ctx, bound)
 			defer cancel()
 			rev, err := d.Revision(rctx)
 			if err != nil {
@@ -273,10 +287,33 @@ func watchCeiling(ctx context.Context, dc *directoryCache, ceiling time.Duration
 		case <-t.C:
 		}
 		if err := ceilingErr(dc.fresh, ceiling); err != nil {
-			fmt.Fprintf(out, "port49d: directory store: %v: the listeners close until the directory answers\n", err)
+			fmt.Fprintf(out, "port49d: directory store: %v: the listeners close; the next run serves a younger snapshot if the session store holds one, else waits for the directory\n", err)
 			dc.loaded.Store(false)
 			gone(&storeGone{why: "directory store: " + err.Error()})
 			return
 		}
+	}
+}
+
+// sayBrokerCeiling says once, when the snapshot port49-broker serves from
+// passes the ceiling, that its mints, refreshes and sign-ins are refused
+// until the directory answers; and again for a later snapshot. It returns
+// when ctx ends.
+func sayBrokerCeiling(ctx context.Context, fresh *store.Freshness, ceiling time.Duration, out io.Writer) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	said := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		err := ceilingErr(fresh, ceiling)
+		if err != nil && !said {
+			fmt.Fprintf(out, "port49-broker: directory store: %v: mints, refreshes and sign-ins are refused until the "+
+				"directory store answers\n", err)
+		}
+		said = err != nil
 	}
 }

@@ -1174,3 +1174,72 @@ func TestADeferredKeyFaultEndsPort49d(t *testing.T) {
 		t.Fatalf("the listeners opened %d times; want 2 (the first run, the snapshot run), no flapping", n)
 	}
 }
+
+// Task 10a review I1: a deferred check fault found in a run after a store
+// gone (a snapshot past its ceiling, then a younger one served) ends port49d
+// as it does a cold start's, not a retry every 5s.
+func TestADeferredKeyFaultAfterACeilingEndsPort49d(t *testing.T) {
+	var out syncBuffer
+	e, every, ceiling := stderr, snapshotEvery, snapshotCeiling
+	t.Cleanup(func() { stderr, snapshotEvery, snapshotCeiling = e, every, ceiling })
+	stderr, snapshotEvery = &out, time.Second
+	snapshotCeiling = func(config.Config) time.Duration { return 20 * time.Second }
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	startBroker(t, f.broker, &out, 1)
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	waitSnapshots(t, f.srv, 2)
+	f.ddproxy.Hang(true)
+	if err := stopD(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- run(context.Background(), f.daemon) }()
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 90*time.Second)
+	// The live broker keeps writing records: the next run serves a younger one.
+	waitCountWithin(t, &out, "port49d: listening on ", 3, 90*time.Second)
+	if _, err := f.dsrv.Client(t, "root").Put(context.Background(), "/port49/v1/meta/seal_keys",
+		`{"current":"key-from-elsewhere","written_at":"2026-10-17T00:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.ddproxy.Hang(false)
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "which this configuration does not hold") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatalf("port49d kept starting again over a directory under a key it lacks:\n%.2000s", out.String())
+	}
+}
+
+// Task 10a review I2: a ceiling gone with no younger snapshot in the session
+// store keeps the listeners closed until the directory answers.
+func TestACeilingWithNoYoungerSnapshotKeepsTheListenersClosed(t *testing.T) {
+	var out syncBuffer
+	e, every, ceiling := stderr, snapshotEvery, snapshotCeiling
+	t.Cleanup(func() { stderr, snapshotEvery, snapshotCeiling = e, every, ceiling })
+	stderr, snapshotEvery = &out, time.Second
+	snapshotCeiling = func(config.Config) time.Duration { return 20 * time.Second }
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	_, stopB := startBroker(t, f.broker, &out, 1)
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	waitSnapshots(t, f.srv, 2)
+	f.ddproxy.Hang(true)
+	if err := stopD(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	if err := stopB(); errors.Is(err, errDidNotStop) {
+		t.Fatal(err)
+	}
+	startSplitDaemon(t, f.daemon, &out, 2)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 90*time.Second)
+	waitWithin(t, &out, "no snapshot in the session store is younger than session.staleness_ceiling (20s)", 60*time.Second)
+	time.Sleep(3 * time.Second)
+	if n := strings.Count(out.String(), "port49d: listening on "); n != 2 {
+		t.Fatalf("the listeners opened %d times; want 2 (the first run, the snapshot run)", n)
+	}
+}

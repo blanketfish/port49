@@ -368,11 +368,10 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 				}
 				markRev = 0 // the follow loads the directory afresh once it opens (N5)
 				dc.fresh.Seed(snap.confirmed)
-				fmt.Fprintln(out, snapshotLine("port49d", snap, ceiling, "the listeners close"))
+				fmt.Fprintln(out, snapshotLine("port49d", snap, ceiling, "the listeners close", err))
 				break
 			}
-			fmt.Fprintf(out, "port49d: directory store at %s: not answering (%v); no snapshot in the session "+
-				"store is younger than session.staleness_ceiling (%s)\n", directoryRef(cfg).where(), err, ceiling)
+			fmt.Fprintln(out, noSnapshotLine("port49d", directoryRef(cfg), err, serr, ceiling))
 			if dd, err = waitForStore(ctx, cfg, directoryRef(cfg), m, out, again, "the listeners stay closed"); err != nil {
 				return fail(err)
 			}
@@ -435,7 +434,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			go func() {
 				defer wg.Done()
 				keepSnapshot(ctx, d, dir, dc.fresh, keys, writerName("port49d"), snapshotCeiling(cfg),
-					authMarks.All, nil, out, "port49d") // a marks record alone: no broker record (N4)
+					4*cfg.Stores.Directory.Etcd.CallTimeout, authMarks.All, nil, out, "port49d") // a marks record alone: no broker record (N4)
 			}()
 		}
 		go func() {
@@ -523,6 +522,13 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		},
 	}, nil
 }
+
+// directoryFault is a fault found when the directory opened after a snapshot
+// start (N2): it ends port49d in every mode, a run after a store gone
+// included, and is never a store gone.
+type directoryFault struct{ error }
+
+func (f *directoryFault) Unwrap() error { return f.error }
 
 // keepServing is a check's fault that a run keeping its marks does not end
 // on: said once, and the directory tried again (openDirectoryLater).

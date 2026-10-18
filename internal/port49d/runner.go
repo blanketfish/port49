@@ -909,14 +909,18 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 			"kept (%d context(s) marked revoked)\n", len(all), marked)
 	}
 	if r.logouts != nil {
-		var keys, ctxs int
+		var keys, ctxs, unfinished int
 		for _, e := range r.logouts.All() {
-			rep, _ := r.brk.ReachLogout(ctx, e.Logout) // each said by its own report's error, if any, below
+			rep, err := r.brk.ReachLogout(ctx, e.Logout)
 			keys, ctxs = keys+rep.TokenKeys, ctxs+len(rep.Contexts)
+			if err != nil {
+				unfinished++
+			}
 		}
 		if n := r.logouts.Len(); n > 0 {
 			fmt.Fprintf(stderr, "port49-broker: runner: %d standing logout(s) reached here: %d token key(s), "+
-				"%d context(s)\n", n, keys, ctxs)
+				"%d context(s); %d did not finish\n", n, keys, ctxs,
+				unfinished)
 		}
 	}
 	bundle := r.brk.Policy.Load().Bundle

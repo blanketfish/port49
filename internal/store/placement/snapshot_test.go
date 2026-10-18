@@ -17,13 +17,21 @@ func TestAnExpiredCopyAnswersUnavailable(t *testing.T) {
 	var expired error
 	marks := store.NewMarks()
 	marks.Set(store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: t0}, true)
-	s := Wrap(Config{Session: memory.New(clock), Directory: memory.New(clock), Marks: marks,
+	dir := memory.New(clock)
+	s := Wrap(Config{Session: memory.New(clock), Directory: dir, Members: dir, Marks: marks,
 		Logouts: store.NewLogoutSet(clock), LogoutDir: memory.New(clock), Expired: func() error { return expired },
 		CallTimeout: time.Second, BulkTimeout: time.Second})
 	if _, err := s.GetRevocation(ctx, store.RevocationPrincipal, alice); err != nil {
 		t.Fatalf("before the ceiling: %v", err)
 	}
+	SeedPins(s, []store.Membership{{Principal: alice, EntryID: "uuid:1", MapKeys: []string{"k1"}}})
+	if got, err := s.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
+		t.Fatalf("a cached pin before the ceiling: %+v %v", got, err)
+	}
 	expired = errors.New("the snapshot is past the ceiling")
+	if _, err := s.GetMembership(ctx, alice); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a cached pin past the ceiling: %v, want ErrUnavailable", err)
+	}
 	if _, err := s.GetRevocation(ctx, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a mark past the ceiling: %v, want ErrUnavailable", err)
 	}

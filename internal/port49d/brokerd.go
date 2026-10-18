@@ -179,11 +179,10 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			v, ok, serr := loadSnapshots(ctx, b, keys, true, ceiling, 4*e.CallTimeout, out, "port49-broker")
 			if serr == nil && ok {
 				snap = &v
-				fmt.Fprintln(out, snapshotLine("port49-broker", v, ceiling, "mints and sign-ins are refused"))
+				fmt.Fprintln(out, snapshotLine("port49-broker", v, ceiling, "mints, refreshes and sign-ins are refused", derr))
 				break
 			}
-			fmt.Fprintf(out, "port49-broker: directory store at %s: not answering (%v); no snapshot in the session "+
-				"store is younger than session.staleness_ceiling (%s)\n", directoryRef(cfg).where(), derr, ceiling)
+			fmt.Fprintln(out, noSnapshotLine("port49-broker", directoryRef(cfg), derr, serr, ceiling))
 			if dirRaw, derr = waitForStore(ctx, cfg, directoryRef(cfg), m, out, false, "nothing is served yet"); derr != nil {
 				return fail(derr)
 			}
@@ -762,9 +761,15 @@ func runBroker(parent context.Context, cfgPath string) error {
 		go func() {
 			defer wg.Done()
 			keepSnapshot(ctx, bs.raw, bs.dir, bs.fresh, keys, writerName("port49-broker"), snapshotCeiling(cfg),
-				marks.All, func(b *brokerSnapshot) { b.Logouts, b.Pins = bs.logouts.All(), placement.CachedPins(bs.st) },
+				4*cfg.Stores.Directory.Etcd.CallTimeout, marks.All, func(b *brokerSnapshot) { b.Logouts, b.Pins = bs.logouts.All(), placement.CachedPins(bs.st) },
 				stderr, "port49-broker")
 		}()
+	}
+	// A copy served from a snapshot past the ceiling refuses every read of it
+	// (placement.Config.Expired): said once, so the 503s have a reason.
+	if !cfg.Stores.Shared {
+		wg.Add(1)
+		go func() { defer wg.Done(); sayBrokerCeiling(ctx, bs.fresh, snapshotCeiling(cfg), stderr) }()
 	}
 	// The copy's freshness: the directory read every second (R17).
 	dirTimeout := cfg.Stores.Directory.Etcd.CallTimeout

@@ -728,7 +728,10 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 			return err
 		}
 		var gone *storeGone
+		var fault *directoryFault
 		switch {
+		case errors.As(err, &fault):
+			return err // a deferred check's fault ends the process in every mode (N2)
 		case errors.As(err, &gone):
 			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
 			again = true
@@ -757,6 +760,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return err
 	}
+	// A fault left by a run that ended some other way is not this run's: it
+	// is found again when the directory opens (N2).
+	select {
+	case <-dc.fatal:
+	default:
+	}
 	// A mark outlives any grace window a context is kept past its ceiling
 	// (crypt.DefaultLedgerKeep), so a record put back is past its ceiling
 	// before its mark goes.
@@ -767,7 +776,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// run starts the next.
 	defer func() {
 		var gone *storeGone
-		if c := context.Cause(parent); errors.As(c, &gone) {
+		var fault *directoryFault
+		if c := context.Cause(parent); errors.As(c, &gone) && !errors.As(err, &fault) {
 			err = gone
 		}
 	}()
@@ -1506,7 +1516,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		if brk != nil {
 			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
-		runErr = err
+		dc.loaded.Store(false) // the held marks are not served again
+		runErr = &directoryFault{err}
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
