@@ -272,7 +272,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
-	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
+	if got, err := b.readMark(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
 	// A correction only: a lift the feed brought since the write is not
@@ -389,6 +389,28 @@ func matchMark(r store.Revocation) func(principal, certKey string) bool {
 	}
 }
 
+// markReader is a store whose GetRevocation answers from a copy (the
+// placement router in a split) and that can also ask the directory itself.
+type markReader interface {
+	ReadRevocation(ctx context.Context, kind, key string) (store.Revocation, error)
+}
+
+// readMark is the mark kind|key, for a caller that must know whether one
+// stands: the store's answer, and when that is a miss and the store keeps a
+// copy, the directory's own, within its call timeout. A directory that does
+// not answer is an error, never "absent": a lift fails closed rather than
+// report "not revoked" about a mark the copy has not yet followed.
+func (b *Broker) readMark(ctx context.Context, kind, key string) (store.Revocation, error) {
+	r, err := b.Store.GetRevocation(ctx, kind, key)
+	if !errors.Is(err, store.ErrNotFound) {
+		return r, err
+	}
+	if mr, ok := b.Store.(markReader); ok {
+		return mr.ReadRevocation(ctx, kind, key)
+	}
+	return r, err
+}
+
 // Lift removes a mark, from the store and the listener. It restores no
 // token and un-marks no context: the contexts it marked stay revoked until
 // a login whose token was minted after the lift joins them (spec §5.6).
@@ -406,7 +428,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	defer release()
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
-	cur, err := b.Store.GetRevocation(ctx, kind, key)
+	cur, err := b.readMark(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		// The daemon's copy may hold a mark whose write failed (Revoke);

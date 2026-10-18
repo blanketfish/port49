@@ -136,6 +136,19 @@ func (p *placed) GetRevocation(ctx context.Context, kind, key string) (store.Rev
 	return store.Revocation{}, store.ErrNotFound
 }
 
+// ReadRevocation is the directory's own answer for a mark, never the copy's,
+// within CallTimeout: a lift or a revocation that must know whether a mark
+// stands asks it when the copy has none (the copy may not have followed a
+// mark made elsewhere yet). A directory that does not answer is
+// store.ErrUnavailable: the caller fails closed.
+func (p *placed) ReadRevocation(ctx context.Context, kind, key string) (r store.Revocation, err error) {
+	err = bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
+		r, x = p.c.Directory.GetRevocation(ctx, kind, key)
+		return
+	})
+	return r, err
+}
+
 // SwapLogin compares no mark: the session store holds none, and the marks a
 // login read came from the copy, which it has carried into the context
 // already (JoinContext; decision 51). Every request is denied by the copy

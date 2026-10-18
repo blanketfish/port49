@@ -1252,3 +1252,61 @@ func TestReachMarkByCertSplitsIssuerAndSerial(t *testing.T) {
 		t.Fatalf("malformed cert mark: %v %v", refs, err)
 	}
 }
+
+// copyMissStore is a store whose copy has no mark (GetRevocation misses) and
+// that can ask the directory itself (ReadRevocation), as the placement router
+// in a split does.
+type copyMissStore struct {
+	store.Store
+	read func(kind, key string) (store.Revocation, error)
+}
+
+func (c copyMissStore) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	return store.Revocation{}, store.ErrNotFound
+}
+
+func (c copyMissStore) ReadRevocation(_ context.Context, kind, key string) (store.Revocation, error) {
+	return c.read(kind, key)
+}
+
+// A lift whose copy misses reads the directory: a directory that does not
+// answer fails the lift closed, never "not revoked" (plan 11a, Task 9).
+func TestALiftWhoseCopyMissesAndWhoseDirectoryIsCutFailsClosed(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Marks = store.NewMarks()
+	ctx := context.Background()
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = copyMissStore{Store: f.st, read: func(string, string) (store.Revocation, error) {
+		return store.Revocation{}, fmt.Errorf("%w: the directory store did not answer", store.ErrUnavailable)
+	}}
+	_, err := f.b.Lift(ctx, RevokeRequest{Principal: alice})
+	if errors.Is(err, ErrNotRevoked) || !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a cut directory must fail the lift, not report it not revoked: %v", err)
+	}
+	if _, ok := f.b.Marks.Get(store.RevocationPrincipal, alice); !ok {
+		t.Fatal("the lift un-marked the copy while the directory was cut")
+	}
+}
+
+// A mark the copy has not followed yet is found in the directory and lifted
+// from it.
+func TestALiftWhoseCopyMissesLiftsTheDirectorysMark(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = copyMissStore{Store: f.st, read: func(string, string) (store.Revocation, error) { return mark, nil }}
+	if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the directory's mark was not deleted: %v", err)
+	}
+}

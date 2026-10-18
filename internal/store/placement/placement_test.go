@@ -132,3 +132,36 @@ func TestADirectoryThatDoesNotAnswerIsBoundedByCallTimeout(t *testing.T) {
 		t.Fatalf("the list: %v", err)
 	}
 }
+
+// A lift asks the directory itself when the copy has no mark (plan 11a, Task
+// 9 ruling): the answer is the directory's, and a directory that does not
+// answer is ErrUnavailable within the call timeout, never "absent".
+func TestReadRevocationAsksTheDirectoryNotTheCopy(t *testing.T) {
+	ctx := context.Background()
+	s, _, directory := wrapped(store.NewMarks())
+	r := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: t0}
+	if err := directory.PutRevocation(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetRevocation(ctx, r.Kind, r.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the copy has not followed the mark, so it is a miss: %v", err)
+	}
+	got, err := s.(interface {
+		ReadRevocation(context.Context, string, string) (store.Revocation, error)
+	}).ReadRevocation(ctx, r.Kind, r.Key)
+	if err != nil || got.Key != alice {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestReadRevocationOfACutDirectoryIsUnavailableWithinTheCallTimeout(t *testing.T) {
+	s := Wrap(Config{Session: memory.New(clock), Directory: hung{}, Marks: store.NewMarks(),
+		CallTimeout: 100 * time.Millisecond})
+	start := time.Now()
+	_, err := s.(interface {
+		ReadRevocation(context.Context, string, string) (store.Revocation, error)
+	}).ReadRevocation(context.Background(), store.RevocationPrincipal, alice)
+	if !errors.Is(err, store.ErrUnavailable) || time.Since(start) > 2*time.Second {
+		t.Fatalf("%v after %v", err, time.Since(start))
+	}
+}
