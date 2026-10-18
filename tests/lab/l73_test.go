@@ -91,13 +91,16 @@ type l73Env struct {
 	l          *lab
 	d          l73Dialect
 	opener     func(*lab) (*cliConn, error)
-	cfgScreens string          // the configure sessions' screens, for an INVALID's diagnosis
-	xeChecked  bool            // IOS XE: the address read-back and the break-glass login are in the facts
-	versionWhy string          // why the last token login's version was not read; "" when it was
-	x          map[string]bool // the Want words the image's help listed
-	applied    *l73DeviceTLS   // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
-	dir        string          // 0700: configs, inventories, keys, state
-	home       string          // a port49 CLI's HOME, issued_key_store: file
+	cfgScreens string               // the configure sessions' screens, for an INVALID's diagnosis
+	xeChecked  bool                 // IOS XE: the address read-back and the break-glass login are in the facts
+	xeLog      string               // those facts, kept in the INVALID directory as they are made
+	gaps       []string             // cell i: seconds from a row's last decline to the next row's first probe
+	probeAt    map[string]time.Time // when each ready() started its first probe
+	versionWhy string               // why the last token login's version was not read; "" when it was
+	x          map[string]bool      // the Want words the image's help listed
+	applied    *l73DeviceTLS        // IOS XE, NX-OS, EOS: the lines now on the device, undone before the next
+	dir        string               // 0700: configs, inventories, keys, state
+	home       string               // a port49 CLI's HOME, issued_key_store: file
 	evDir      string
 	capDir     string // git-ignored, outside writeEvidence's *.pcap glob
 	pki        *l73PKI
@@ -225,6 +228,9 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 	t.Cleanup(func() {
 		if !e.touched {
 			return
+		}
+		if t.Failed() {
+			e.keepConfigure() // every INVALID keeps what the image said to each typed line
 		}
 		// The restore restarts port49d after its CLI. Cell j's cleanup has taken
 		// 172.100.100.2 off the bridge by now, so the last cell's config would not
@@ -595,13 +601,19 @@ func (e *l73Env) ready(cell string) []l73Conn {
 	e.t.Helper()
 	deadline := time.Now().Add(3 * time.Minute)
 	for n := 1; ; n++ {
+		if n == 1 {
+			if e.probeAt == nil {
+				e.probeAt = map[string]time.Time{}
+			}
+			e.probeAt[cell] = time.Now()
+		}
 		stop := e.capture(fmt.Sprintf("%s-ready%d", cell, n))
 		_, _, _ = e.breakglassLogin()
 		if conns := stop(); len(l73Window(conns, l73Server, time.Time{}, time.Now())) > 0 {
 			return conns
 		}
 		if time.Now().After(deadline) {
-			e.invalidDeviceLogs()
+			e.noConnectionLogs()
 			e.t.Fatalf("INVALID: %s: the device opened no connection to %s in 3 minutes of break-glass logins. "+
 				"The likely cause is the device's dead-server memory outlasting 3 minutes after a refusal or a "+
 				"stopped port49d (IOS XE: look at its deadtime and server state), not the TLS configuration", cell, l73Server)
@@ -625,8 +637,27 @@ func (e *l73Env) revive(cell string) {
 func (e *l73Env) reached(cell string, conns []l73Conn) {
 	e.t.Helper()
 	if _, ok := l73FirstPort(conns, l73Server); !ok {
+		e.noConnectionLogs()
 		e.t.Fatalf("INVALID: %s: the device opened no connection to %s, so the cell measured nothing", cell, l73Server)
 	}
+}
+
+// noConnectionLogs keeps what the device itself says (the dialect's INVALID
+// commands: on IOS XE `show tacacs` carries server state, socket opens and
+// failed connects), the configure screens, and the gaps measured, scrubbed.
+func (e *l73Env) noConnectionLogs() {
+	e.invalidDeviceLogs()
+	if len(e.gaps) > 0 {
+		e.invalidScreen("gaps", strings.Join(e.gaps, "\n"))
+	}
+}
+
+// gapFact records the seconds from a refusal row's last decline to the next
+// row's first revive probe.
+func (e *l73Env) gapFact(row string, from, to time.Time) {
+	g := fmt.Sprintf("%s: %.1fs from the previous row's last decline to its first revive probe", row, to.Sub(from).Seconds())
+	e.gaps = append(e.gaps, g)
+	e.t.Logf("lab: gap %s", g)
 }
 
 // junosCommit commits lines over the break-glass CLI with port49d stopped,
@@ -811,12 +842,22 @@ func (e *l73Env) noteIOSXEServer(out string) {
 	e.xeChecked = true
 	for i, scr := range l73DoShowScreens(out) {
 		scr = l73MaskKeyWords(l73LogScreen(hideKeys(scr)))
-		e.facts = append(e.facts, fmt.Sprintf("IOS XE `show running-config | section tacacs`, typed right after the `address ipv4` line "+
+		e.xeFact(fmt.Sprintf("IOS XE `show running-config | section tacacs`, typed right after the `address ipv4` line "+
 			"of server object %d, with port49-host already removed: `%s`", i+1, strings.ReplaceAll(strings.TrimSpace(scr), "\n", " / ")))
 	}
 	ok, took, err := e.breakglassLogin()
-	e.facts = append(e.facts, fmt.Sprintf("with port49-host removed from the device, a break-glass login ok %v in %s (%s)",
+	e.xeFact(fmt.Sprintf("with port49-host removed from the device, a break-glass login ok %v in %s (%s)",
 		ok, took.Round(time.Millisecond), l73Err(err)))
+}
+
+// xeFact is a fact read from the IOS XE device: it goes to the note's facts,
+// the test log and, scrubbed, the INVALID directory, so a run that ends
+// INVALID still holds it.
+func (e *l73Env) xeFact(f string) {
+	e.facts = append(e.facts, f)
+	e.xeLog += f + "\n"
+	e.t.Logf("lab: %s", oneLine(l73MaskKeyWords(l73LogScreen(hideKeys(f)))))
+	e.invalidScreen("iosxe-server", e.xeLog)
 }
 
 // checkRestored reads the IOS XE restore back: port49-host must be on the
@@ -2008,10 +2049,14 @@ func (e *l73Env) cellI() {
 	docs := "yes: decision 50 rulings 5, 7 and 8 for the rows whose break-glass login landed (i-alert, i-accept, i-window); " +
 		"i-error is an observation only: spec §5.7 store_unavailable records from L4 that an authentication ERROR is final on Junos with tacplus alone"
 	contradicted := false
+	var lastDecline time.Time
 	for _, r := range refusals {
 		e.guard()
 		e.settle()
 		e.revive(r.id)
+		if !lastDecline.IsZero() {
+			e.gapFact(r.id, lastDecline, e.probeAt[r.id+"-revive"])
+		}
 		e.daemon(r.id, r.o)
 		stop := e.capture(r.id)
 		off, start := e.l.mark(), time.Now()
@@ -2024,6 +2069,7 @@ func (e *l73Env) cellI() {
 			ok2, took2, err2 = e.breakglassLogin()
 			s += fmt.Sprintf(", the second ok %v in %s (%s)", ok2, took2.Round(time.Millisecond), l73Err(err2))
 		}
+		lastDecline = time.Now()
 		conns := stop()
 		e.reached(r.id, conns)
 		recs := e.l.recordsSince(off)
