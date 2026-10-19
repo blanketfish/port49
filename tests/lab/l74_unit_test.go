@@ -799,3 +799,20 @@ func TestL75RunnerLineAcceptsOnlyTheFollowPath(t *testing.T) {
 		t.Fatal("the takeover's line was accepted as the follow path")
 	}
 }
+
+// Cell (i) reads broker 3's rescan counter, not port49d's: each has its own
+// marks feed, so port49d's rising proves nothing of the put-back. The address
+// the harness scrapes must be the one brokerYAML makes the broker listen on.
+func TestL74BrokerMetricsAreTheBrokersPort(t *testing.T) {
+	dir := t.TempDir()
+	w := &regionWorld{dir: dir, pki: newRegionPKI(t)}
+	if !strings.Contains(w.brokerYAML(3), `metrics_listen: "`+regionBrokerMetrics(3)+`"`) {
+		t.Fatalf("broker 3 does not listen for metrics on %s", regionBrokerMetrics(3))
+	}
+	if !strings.Contains(w.daemonYAML(3), `metrics_listen: "`+regionDaemonMetrics(3)+`"`) {
+		t.Fatalf("port49d 3 does not listen for metrics on %s", regionDaemonMetrics(3))
+	}
+	if regionBrokerMetrics(3) == regionDaemonMetrics(3) {
+		t.Fatal("the broker's and port49d's metrics share an address")
+	}
+}

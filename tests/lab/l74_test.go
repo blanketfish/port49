@@ -401,6 +401,12 @@ func regionInventory() string {
 	return "devices:\n  - {name: " + regionDevice + ", platform: arista_eos, addresses: [" + regionHostIP + "]}\n"
 }
 
+// regionDaemonMetrics and regionBrokerMetrics are where region i's port49d
+// and port49-broker serve /metrics (daemonYAML and brokerYAML listen there).
+// Each process has its own marks feed and counters, so a reading names which.
+func regionDaemonMetrics(i int) string { return regionIP(i) + ":9049" }
+func regionBrokerMetrics(i int) string { return regionIP(i) + ":9050" }
+
 func (w *regionWorld) daemonYAML(i int) string {
 	return fmt.Sprintf(`listen: "%[1]s:4949"
 metrics_listen: "%[1]s:9049"
@@ -531,8 +537,13 @@ func l74CellB(w *regionWorld, row func(id, claim, observed string, agrees bool))
 }
 
 // metrics is region i's port49d's /metrics, "" when it does not answer.
-func (w *regionWorld) metrics(i int) string {
-	resp, err := http.Get("http://" + regionIP(i) + ":9049/metrics")
+func (w *regionWorld) metrics(i int) string { return scrapeMetrics(regionDaemonMetrics(i)) }
+
+// brokerMetrics is region i's port49-broker's metrics page.
+func (w *regionWorld) brokerMetrics(i int) string { return scrapeMetrics(regionBrokerMetrics(i)) }
+
+func scrapeMetrics(addr string) string {
+	resp, err := http.Get("http://" + addr + "/metrics")
 	if err != nil {
 		return ""
 	}
@@ -961,8 +972,9 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if _, cerr := d.ctl(near, "compact", strconv.FormatInt(rev, 10), "--physical"); cerr != nil {
 		w.t.Fatalf("INVALID: the compaction at revision %d: %v", rev, cerr)
 	}
-	// Broker 3's metrics answer from the host during the cut.
-	rescansBefore := labeledMetric(w.metrics(3), "port49_store_feed_rescans_total", `feed="marks"`)
+	// Broker 3's own metrics (not port49d's, which has its own marks feed and
+	// counter) answer from the host during the cut.
+	rescansBefore := labeledMetric(w.brokerMetrics(3), "port49_store_feed_rescans_total", `feed="marks"`)
 	if rescansBefore < 0 {
 		w.t.Fatal("INVALID: broker 3's marks rescan counter could not be read before the heal")
 	}
@@ -970,7 +982,7 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
-	rescans, rerr := feedRescanned(func() string { return w.metrics(3) }, rescansBefore, 30*time.Second, time.Second)
+	rescans, rerr := feedRescanned(func() string { return w.brokerMetrics(3) }, rescansBefore, 30*time.Second, time.Second)
 	if rerr != nil {
 		w.t.Fatalf("INVALID: %v", rerr)
 	}
