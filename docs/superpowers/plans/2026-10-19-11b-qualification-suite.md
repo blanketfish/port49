@@ -47,6 +47,13 @@ A generator, `tests/qual/cmd/genprofile`, builds part 1 from a lab conformance r
 - the account port taken from the login's own records;
 - `qualDaemon` keyed on `o.transport`.
 
+**Revision 4** applies re-review 3 (2 Important, 1 Minor):
+- `tls_unknown_ca` plays its login and records the class event `tls_refused`, since the handshake succeeds client-side and the alert races a reset;
+- a received alert is read from `*net.OpError` "remote error";
+- port49's `tls_refused` record is required and kept outcome-only;
+- `single_connection` runs the full sequence;
+- only the minted user is templated, so the login's own records are picked.
+
 ## Global Constraints
 
 - **Toolchain.** Go 1.26+, module `github.com/rhwendt/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
@@ -1525,7 +1532,7 @@ type PacketFields struct {
 	PrivLvl      uint8  `yaml:"priv_lvl"`
 }
 type Reaction struct {
-	Step    string   `yaml:"step"` // a step name, "handshake", or "*"
+	Step    string   `yaml:"step"` // a step name, or "*"
 	On      string   `yaml:"on"`
 	Then    string   `yaml:"then"`
 	Outcome string   `yaml:"outcome"`
@@ -2774,8 +2781,8 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 func (tr Transcript) String() string
 // PlayedSteps is the step names Play plays for a scenario, in order:
 // token_login, tls_token_login and single_connection play every stimulus
-// step; wrong_credential, store_unavailable, tls_store_unavailable and
-// flight_delay play login alone; tls_unknown_ca plays "handshake". Play
+// step; wrong_credential, store_unavailable, tls_store_unavailable,
+// flight_delay and tls_unknown_ca play login alone. Play
 // uses it, and genprofile builds goldens to it, so the two cannot disagree.
 func PlayedSteps(p *Profile, scenario string) []string
 
@@ -2805,7 +2812,7 @@ func MergeFragment(base, fragment []byte) ([]byte, error) // the fragment's top-
 - `wrong_credential`: `login` with a credential the engine makes from random bytes, which is never a token.
 - `store_unavailable`: `login` (the harness has set the fault).
 - `single_connection`: every step with the single-connect flag on.
-- `tls_unknown_ca`: the handshake alone.
+- `tls_unknown_ca`: the handshake, then `login`. A TLS 1.3 client's handshake succeeds before port49 judges the certificate, so the refusal (an alert or a reset) is seen on the login and recorded as the class event `tls_refused`, with outcome `handshake_refused` (I-H).
 - `tls_token_login`, `tls_store_unavailable`: as their plain names, over TLS.
 
 `Play` plays `BaseScenario(scenario)` over `t.Transport`. The harness sets `t.Transport = ScenarioTransport(scenario)` and admits the device on that transport (I-B). `Play` returns an error when the two disagree.
@@ -2952,6 +2959,56 @@ func TestSingleConnectionReusesOnlyWhenTheServerAgrees(t *testing.T) {
 	}
 }
 
+// A real tls.Server that refuses the client's certificate in VerifyConnection,
+// as port49's listener does: the client's Handshake returns nil (TLS 1.3), and
+// the refusal reaches the first read as a *net.OpError "remote error", which
+// handshakeEvent names; tls_unknown_ca plays its login and ends tls_refused.
+func TestARefusedCertificateIsSeenOnTheLoginAsTLSRefused(t *testing.T) {
+	ca, other := testCA(t, "trusted"), testCA(t, "untrusted")
+	srvCert := issue(t, ca, false)
+	ln, _ := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{srvCert},
+		MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert,
+		VerifyConnection: func(tls.ConnectionState) error { return x509.UnknownAuthorityError{} }})
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { c.(*tls.Conn).Handshake(); c.Read(make([]byte, 1)); c.Close() }()
+		}
+	}()
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	p.Transports = []string{"tls"}
+	p.Stimulus.TLS = &TLSStimulus{ClientHello: nxosHello(), ServerIdentity: "chain_only"}
+	tr, err := Play(t.Context(), p, "tls_unknown_ca", Target{Addr: ln.Addr().String(), Transport: "tls", Scale: 1,
+		TLS: &TLSMaterial{Client: issue(t, other, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "handshake_refused" || tr.Steps[0].Event != "tls_refused" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+}
+
+// testCA and issue are testpki.NewCA and (*CA).Issue for a 127.0.0.1 server
+// leaf or a client leaf, per test. The names below are crypto/tls's own
+// alert texts (alert.go), so the map is exact; the real-server test above
+// proves the OpError shape end to end.
+func TestHandshakeEventNamesARemoteAlert(t *testing.T) {
+	for text, want := range map[string]string{
+		"tls: bad certificate":               "alert_bad_certificate",
+		"tls: unknown certificate authority": "alert_unknown_ca",
+		"tls: expired certificate":           "alert_certificate_expired",
+		"tls: handshake failure":             "alert_handshake_failure",
+		"tls: something new":                 "alert_other",
+	} {
+		err := &net.OpError{Op: "remote error", Err: errors.New(text)}
+		if got := handshakeEvent(err); got != want {
+			t.Errorf("%q: %s, want %s", text, got, want)
+		}
+	}
+}
+
 // golden_test.go
 func TestGoldenRoundTrips(t *testing.T) {
 	g := Golden{PendingLab: true, Scenarios: map[string]GoldenScenario{"token_login": {Outcome: "login_ok",
@@ -3051,7 +3108,7 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 	pl := &player{p: p, t: t, l: l, now: time.Now()}
 	pl.tr.Scenario = scenario
 	defer pl.closeConn()
-	steps := p.Stimulus.Steps[:len(PlayedSteps(p, scenario))] // "handshake" is handled below
+	steps := p.Stimulus.Steps[:len(PlayedSteps(p, scenario))]
 	switch BaseScenario(scenario) {
 	case "wrong_credential":
 		bogus := make([]byte, 24)
@@ -3061,9 +3118,16 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 	case "store_unavailable", "flight_delay":
 		steps = steps[:1]
 	case "unknown_ca": // tls_unknown_ca
-		if _, err := pl.dial(ctx); err != nil {
-			return pl.end("handshake_refused", StepResult{Step: "handshake", Event: handshakeEvent(err)}), nil
+		// A TLS 1.3 client's Handshake returns nil once it has written its
+		// Finished, before port49 judges the certificate (re-review I-H), so
+		// the refusal is observed on the login that follows: a received alert,
+		// or the reset port49 sends after it (which races the alert). Any of
+		// those is the class event tls_refused.
+		res, err := pl.step(ctx, steps[0])
+		if err != nil || isRefusal(res.Event) {
+			return pl.end("handshake_refused", StepResult{Step: steps[0].Name, Event: "tls_refused"}), nil
 		}
+		pl.tr.Steps = append(pl.tr.Steps, res)
 		return pl.end("handshake_ok"), nil
 	}
 	for _, s := range steps {
@@ -3105,9 +3169,7 @@ func (pl *player) end(outcome string, extra ...StepResult) Transcript {
 
 func PlayedSteps(p *Profile, scenario string) []string {
 	switch BaseScenario(scenario) {
-	case "unknown_ca":
-		return []string{"handshake"}
-	case "wrong_credential", "store_unavailable", "flight_delay":
+	case "wrong_credential", "store_unavailable", "flight_delay", "unknown_ca":
 		return []string{p.Stimulus.Steps[0].Name}
 	}
 	names := make([]string, len(p.Stimulus.Steps))
@@ -3149,7 +3211,8 @@ The rest of `engine.go`:
 
   It never puts the credential into an argument.
 - **`handshakeEvent(err)`**:
-  - a `tls.AlertError` maps to `alert_unknown_ca` (48), `alert_bad_certificate` (42), `alert_certificate_expired` (45) or `alert_handshake_failure` (40);
+  - **A received alert.** It arrives as a `*net.OpError` with `Op == "remote error"`, whose `Err` text is `tls: <description>`. `tls.AlertError` is QUIC's type and never matches here (re-review I-H). It maps by that text to `alert_<snake_case description>`: `bad certificate` → `alert_bad_certificate` (42, which crypto/tls sends for any `VerifyConnection` error, `internal/daemon/server/tls.go:262-268`), `unknown certificate authority` → `alert_unknown_ca`, `expired certificate` → `alert_certificate_expired`, `handshake failure` → `alert_handshake_failure`; any other description → `alert_other`.
+  - **`isRefusal(event)`** is true for any `alert_*`, `conn_reset` or `conn_closed` event.
   - `syscall.ECONNRESET` and `syscall.EPIPE` map to `conn_reset` (a write after a reset that was already read gives EPIPE);
   - `io.EOF` maps to `conn_closed`;
   - a deadline maps to `handshake_timeout`.
@@ -3480,7 +3543,7 @@ Expected: FAIL (`undefined: qualDaemon`).
 - **`run.touchPolicy()`** is described in Task 19.
 - **`qualProfile(t, p, root)`**:
   1. Load the golden (`root/<p.Golden>`; a missing file is an empty golden).
-  2. For each scenario in `p.Scenarios`, start a fresh daemon at scale 0.1 with `handshakeTimeout: time.Second`. The device is admitted with `transport: devicemock.ScenarioTransport(sc)` (I-B): `qualOpts` gains `transport string`, which decides the inventory's `transport:` and whether the TLS material is issued; `run.target` sets the same. Before `store_unavailable` and `tls_store_unavailable`, call `run.fault("store_unavailable")`. For `tls_unknown_ca`, the device's client certificate is issued by a second CA that the daemon's `client_ca_file` does not hold. Play the scenario with a fresh `run.login(0)`, then `fails, warns := devicemock.Judge(tr, g.Scenarios[sc])`.
+  2. For each scenario in `p.Scenarios`, start a fresh daemon at scale 0.1 with `handshakeTimeout: time.Second`. The device is admitted with `transport: devicemock.ScenarioTransport(sc)` (I-B): `qualOpts` gains `transport string`, which decides the inventory's `transport:` and whether the TLS material is issued; `run.target` sets the same. Before `store_unavailable` and `tls_store_unavailable`, call `run.fault("store_unavailable")`. For `tls_unknown_ca`, the device's client certificate is issued by a second CA that the daemon's `client_ca_file` does not hold. After the play, `qualProfile` also requires `run.logged(`"diagnosis":"tls_refused"`)` and `run.logged(`"tls_outcome":"unknown_ca"`)`. This way a port49 that accepted the untrusted device fails, even if the mock happened to see a reset for another reason. These are substring checks: nothing from that record is printed. Play the scenario with a fresh `run.login(0)`, then `fails, warns := devicemock.Judge(tr, g.Scenarios[sc])`.
      - Each warn is `t.Log`ged.
      - With `PORT49_QUAL_UPDATE=1`, a golden difference is rewritten: `g.Scenarios[sc] = GoldenFrom(tr)` and `g.PendingLab = true`. A gate still fails.
      - Otherwise each fail is `t.Error`ed, with `tr.String()` and the golden scenario printed.
@@ -3598,7 +3661,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 | `accounting` | the login's start and stop records | L6 |
 | `wrong_credential` | a random string as password, refused | L13 |
 | `store_unavailable` | `fault_file: store_unavailable`, then break-glass | L4, L28 |
-| `single_connection` | the startup config's single-connection form | L15, L73 h |
+| `single_connection` | the startup config's single-connection form, then the plain sequence in one cell: `show version`, `show users`, the stop record | L15, L73 h |
 | `tls_token_login` | (L73 dialects that are not `HelpOnly`) enrol, configure TLS, then the plain sequence in one cell: `show version`, `show users`, the stop record | L73 |
 | `tls_store_unavailable` | the same over TLS with the fault | L73 i |
 | `tls_unknown_ca` | the device presents a certificate from a CA port49 does not trust | L73 d |
@@ -3615,7 +3678,7 @@ func TestQualRecordKeepsOnlyTheWhitelist(t *testing.T) {
 		"session": map[string]any{"username": "qual01", "port": "0", "rem_addr": "172.100.100.1", "privilege": 1.0, "ctx_id": "x"},
 		"packet_fields": map[string]any{"action": "login", "authen_type": "pap", "service": "login", "priv_lvl": 1.0},
 		"server_msg": "anything"}
-	out, ok := qualRecord(in)
+	out, ok := qualRecord(in, "qual01")
 	if !ok {
 		t.Fatal("a redeem record is kept")
 	}
@@ -3633,13 +3696,38 @@ func TestQualRecordKeepsOnlyTheWhitelist(t *testing.T) {
 }
 
 func TestQualRecordKeepsEscalateAndDropsTheRest(t *testing.T) {
-	if _, ok := qualRecord(map[string]any{"event": "escalate"}); !ok {
+	if _, ok := qualRecord(map[string]any{"event": "escalate"}, "qual01"); !ok {
 		t.Fatal("escalate is a validated request record")
 	}
 	for _, ev := range []string{"mint", "unvalidated", "issue", "revoke", "authenticate"} {
-		if _, ok := qualRecord(map[string]any{"event": ev}); ok {
+		if _, ok := qualRecord(map[string]any{"event": ev}, "qual01"); ok {
 			t.Fatalf("%s is not stimulus evidence", ev)
 		}
+	}
+}
+
+// Only the minted user becomes {user}: a device's own account (SR Linux's root,
+// on port unknown) keeps its name, so genprofile can tell the login's records
+// from the device's (re-review 3 Minor). A lab system account is no secret.
+func TestQualRecordTemplatesOnlyTheMintedUser(t *testing.T) {
+	out, _ := qualRecord(map[string]any{"event": "account", "session": map[string]any{"username": "root", "port": "unknown"}}, "qual01")
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"username":"root"`) {
+		t.Fatalf("%s", b)
+	}
+}
+
+// port49's own tls_refused record is kept as diagnosis, transport and
+// tls_outcome only: never its source, detail or cert_sha256 (re-review I-H).
+func TestQualRecordKeepsATLSRefusalsOutcomeOnly(t *testing.T) {
+	out, ok := qualRecord(map[string]any{"event": "unvalidated", "unvalidated": map[string]any{
+		"source": "172.100.100.31:40001", "diagnosis": "tls_refused", "transport": "tls", "tls_outcome": "unknown_ca",
+		"detail": "x509: certificate signed by unknown authority", "cert_sha256": strings.Repeat("c", 64)}}, "qual01")
+	b, _ := json.Marshal(out)
+	if !ok || string(b) != `{"diagnosis":"tls_refused","event":"unvalidated","tls_outcome":"unknown_ca","transport":"tls"}` {
+		t.Fatalf("%v %s", ok, b)
+	}
+	if _, ok := qualRecord(map[string]any{"event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "bad_key"}}, "qual01"); ok {
+		t.Fatal("any other unvalidated record is dropped")
 	}
 }
 
@@ -3725,14 +3813,23 @@ type qualRun struct {
 // qualRecord keeps what a profile is generated from (spec §13 decision 52
 // ruling 2): event, verdict, reason, packet_fields, the request's service and
 // attribute list, the reply's attributes, the accounting record's flags and
-// attribute list, and the session's port and privilege. The user becomes
-// {user} and the address {rem_addr}. Every hash, id, name, message and every
-// record that is not a validated request is dropped: the generator cannot read
-// what is not here.
-func qualRecord(r map[string]any) (map[string]any, bool) {
+// attribute list, and the session's port and privilege. The minted user
+// becomes {user}; any other username (a device's own account, such as SR
+// Linux's root) is kept, so genprofile can pick the login's own records. The
+// address becomes {rem_addr}. port49's tls_refused record keeps its
+// diagnosis, transport and tls_outcome alone. Every hash, id, message, other
+// unvalidated record and record that is not a validated request is dropped:
+// the generator cannot read what is not here.
+func qualRecord(r map[string]any, user string) (map[string]any, bool) {
 	ev, _ := r["event"].(string)
 	switch ev {
 	case "redeem", "escalate", "authorize_session", "authorize_command", "account":
+	case "unvalidated":
+		u, _ := r["unvalidated"].(map[string]any)
+		if u == nil || u["diagnosis"] != "tls_refused" {
+			return nil, false
+		}
+		return map[string]any{"event": ev, "diagnosis": u["diagnosis"], "transport": u["transport"], "tls_outcome": u["tls_outcome"]}, true
 	default:
 		return nil, false
 	}
@@ -3746,7 +3843,11 @@ func qualRecord(r map[string]any) (map[string]any, bool) {
 		out["device"] = map[string]any{"platform": d["platform"], "transport": d["transport"]}
 	}
 	if s, ok := r["session"].(map[string]any); ok {
-		out["session"] = map[string]any{"port": s["port"], "privilege": s["privilege"], "username": "{user}", "rem_addr": "{rem_addr}"}
+		name := s["username"]
+		if name == user {
+			name = "{user}"
+		}
+		out["session"] = map[string]any{"port": s["port"], "privilege": s["privilege"], "username": name, "rem_addr": "{rem_addr}"}
 	}
 	if q, ok := r["request"].(map[string]any); ok {
 		out["request"] = map[string]any{"service": q["service"], "raw": templated(q["raw"])}
@@ -3922,7 +4023,12 @@ The plain cells, each started with `q.cell(name)` (which runs the STOP and disk 
 - **`cellAccounting`**: waits up to 60 s for an `account` record with `flags: stop` since the login (`q.l.waitForRecords`).
 - **`cellWrongCredential`**: `loginWithin("qual01", randomHex(q.t, 16), 60*time.Second)`. The login must fail. `randomHex` is L76's helper; the value goes into `q.secrets`.
 - **`cellStoreUnavailable`**: write `store_unavailable` to `/tmp/port49-lab-qual-fault`, then try a token login (it must fail), then break-glass (`q.l.dial(breakglassUser, breakglassPassword, 120*time.Second)`). Record in `q.run.BreakGlass["store_unavailable"]` whether it logged in, and how long it took. Remove the fault file in a `defer`.
-- **`cellSingleConnection`**: a token login under the startup config's single-connection form. When the platform row has no such form, the cell is recorded as not run.
+- **`cellSingleConnection`**: under the startup config's single-connection form, the same sequence as the TLS cell (re-review I-J), because the mock's `single_connection` plays every stimulus step:
+  - a fresh mint;
+  - `loginWithin("qual01", tok, 150*time.Second, "show version", "show users")`;
+  - wait up to 60 s for that login's `account` stop record.
+
+  When the platform row has no such form, the cell is recorded as not run, and genprofile leaves `single_connection` out of the profile's scenarios.
 
 `q.tlsCells(d)` reuses L73's machinery with the conformance config as its base:
 1. `e := newL73Env(q.t, q.l, d)`, then `e.enrol()`.
@@ -3938,7 +4044,7 @@ The plain cells, each started with `q.cell(name)` (which runs the STOP and disk 
 A unit test, `TestQualTLSDaemonYAMLKeepsTheBroker`, asserts `l73DaemonYAML` keeps the broker block's `policy_file` and adds `tls_listener:`.
 
 `q.write()` builds every evidence file, then gates them all before writing any:
-- `decisions.jsonl` is every record since `q.start`, mapped through `qualRecord`. Before mapping, the run is INVALID if any `redeem` has `auth.method == "lab"`: a seed answered.
+- `decisions.jsonl` is every record since `q.start`, mapped through `qualRecord(r, "qual01")`. Before mapping, the run is INVALID if any `redeem` has `auth.method == "lab"`: a seed answered.
 - For each plain cell, `<cell>.conns.json` is `l73Conns(raw, l.p.addr)` over the cell's time window (`l73Window`), keeping only `Server`, `DevicePort`, `SYNAt`, `End`, `EndAt` and `Plain` (the 12-byte headers with their version byte). `raw` is the capture file `tests/lab/captures/QUAL-<slug>-<lp>.pcap`.
 - `run.json`.
 
@@ -3983,11 +4089,11 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
     - the same sequence over `tls` in the `tls_token_login` window;
     - a refused redeem in the `wrong_credential` window;
     - a `store_unavailable` redeem in the `store_unavailable` and `tls_store_unavailable` windows;
-    - one login in the `single_connection` window;
-    - an SR-Linux-like `account` record on port `unknown` inside the `accounting` window, after the login's own records. `steps` must take the login's port, not this one.
+    - the full sequence (redeem, authorize_session, a permitted and a denied authorize_command, an account start and stop) in the `single_connection` window (re-review I-J);
+    - an SR-Linux-like `account` start record with `username: root` on port `unknown` at the **start** of the `token_login` window, before the login's own records (re-review 3 Minor). `steps` must pick the `{user}` record's port, not this earlier one.
   - `token_login.conns.json`;
   - `tls_token_login.tls.json`, with two connections: a full handshake with `psk_identities: 0`, and a resumption with `psk_identities: 1`;
-  - `tls_unknown_ca.tls.json`: one connection with a plaintext alert, `description: 48` (unknown_ca), from the server.
+  - `tls_unknown_ca.tls.json`: one connection with **no** plaintext alert and `end: server-rst`, which is what the lab produces under TLS 1.3. The `decisions.jsonl` `tls_unknown_ca` window holds the whitelisted `unvalidated` record `{"event":"unvalidated","diagnosis":"tls_refused","transport":"tls","tls_outcome":"unknown_ca"}`.
 
 **Interfaces:**
 - Consumes: the evidence layout (Task 12), `devicemock.Profile`, `devicemock.Golden`, `devicemock.Slug`.
@@ -4091,8 +4197,8 @@ func TestTheGoldenCoversEveryScenarioInPlayedOrder(t *testing.T) {
 	if len(tl.Steps) != 6 || tl.Steps[3].Step != "command_denied" || tl.Steps[3].Event != "author_fail" || tl.Steps[5].Event != "acct_success" {
 		t.Fatalf("token_login is the union of four lab cells, in step order: %+v", tl.Steps)
 	}
-	if u := g.Scenarios["tls_unknown_ca"]; u.Outcome != "handshake_refused" || u.Steps[0].Event != "alert_unknown_ca" {
-		t.Fatalf("tls_unknown_ca comes from its tls.json: %+v", u)
+	if u := g.Scenarios["tls_unknown_ca"]; u.Outcome != "handshake_refused" || u.Steps[0].Step != "login" || u.Steps[0].Event != "tls_refused" {
+		t.Fatalf("tls_unknown_ca is the class event on the login: %+v", u)
 	}
 	if fd, tls := g.Scenarios["flight_delay"], g.Scenarios["tls_token_login"]; fd.Outcome != tls.Outcome || fd.Steps[0].Event != tls.Steps[0].Event {
 		t.Fatalf("flight_delay copies tls_token_login's login: %+v %+v", fd, tls)
@@ -4301,7 +4407,7 @@ func StimulusEqual(a, b *devicemock.Profile) bool {
 Write the helpers in the same file, in full.
 
 - **`readJSON`** and **`readRecords`**: `json.Unmarshal` per line with a `bufio.Scanner`, buffer 1 MiB.
-- **`steps(recs)`** reads each step's fields from the first matching record **within the `token_login` scenario's windows** (see `goldenFrom`), from the plain (`device.transport` not `tls`) records:
+- **`steps(recs)`** reads each step's fields from the first matching record **within the `token_login` scenario's windows** (see `goldenFrom`), from the plain (`device.transport` not `tls`) records whose `session.username` is `{user}`, the minted login's (`qualRecord` keeps every other name). The same `{user}` filter applies in `goldenFrom`. The selection key is the template; no real username is written into a profile:
 
   | Record | Step |
   |---|---|
@@ -4312,7 +4418,7 @@ Write the helpers in the same file, in full.
   | first `account` with `flags: start` | `account_start`: `record.raw`, already templated, and that record's own port |
   | first `account` with `flags: stop` | `account_stop`, the same way |
 
-  The account steps' port is taken from that login's own start and stop records. SR Linux accounts a second exec channel on port `unknown` (L76 cell c), so the first `account` record anywhere in the run is not necessarily the login's.
+  The account steps' port is taken from that login's own start and stop records. SR Linux accounts its own `root` sessions and a second exec channel on port `unknown` (L76 cell c), sometimes a second before the login's `redeem`. So the first `account` record in a window is not necessarily the login's; the `{user}` filter is what picks the right one.
 
   Each step's `Fields` comes from `packet_fields`. A record with no `packet_fields` is an error: the run predates Task 5. A TLS-only device would read the TLS records; none exists today.
 - **`headerVersions(path)`** takes the first header of each type from the plain connections. Its version byte's low nibble is the minor version (M4). It is empty for a TLS-only run; the minor version there is 1 for pap or chap and 0 otherwise. In that case each such step also gets an `engine_gaps` entry, `minor_version_inferred_over_tls`, because TLS hides the header.
@@ -4348,7 +4454,7 @@ var scenarioCells = map[string]struct {
 	"token_login":           {[]string{"token_login", "command_permitted", "command_denied", "accounting"}, "tcp"},
 	"wrong_credential":      {[]string{"wrong_credential"}, "tcp"},
 	"store_unavailable":     {[]string{"store_unavailable"}, "tcp"},
-	"single_connection":     {[]string{"single_connection"}, "tcp"},
+	"single_connection":     {[]string{"single_connection"}, "tcp"}, // the full sequence in one cell (Task 12)
 	"tls_token_login":       {[]string{"tls_token_login"}, "tls"},
 	"tls_store_unavailable": {[]string{"tls_store_unavailable"}, "tls"},
 }
@@ -4359,8 +4465,10 @@ var scenarioCells = map[string]struct {
   - Pick one record per step the mock plays (`devicemock.PlayedSteps(p, sc)`, Task 9), in that order, by the table under `steps`. For example, a `redeem` with verdict `permit` is `authen_pass`, one with `deny` is `authen_fail`, and one whose reason is `store_unavailable` is `authen_error`; reply attributes are `reply.attributes`.
   - Set the outcome the way the reaction table ends it: `login_ok` when every step passed, else the pre-filled reaction's outcome for the first step that did not.
 
-  Two scenarios have no record window:
-  - **`tls_unknown_ca`** comes from `tls_unknown_ca.tls.json`: outcome `handshake_refused`, one step `handshake`. Its event is the first plaintext alert's name (`alert_<l73AlertName>`, for example `alert_unknown_ca`) when the connection has one, else `conn_reset` for `end: server-rst` or `conn_closed` for `server-fin`. A refused handshake writes no `redeem`, which is why the TLS summary is the source.
+  Two scenarios are not built from request records:
+  - **`tls_unknown_ca`** has outcome `handshake_refused` and one step, `login`, with the class event `tls_refused`: the device's refusal arrives as an alert or a reset that race (re-review I-H). Under TLS 1.3 the server's alert is encrypted, so `tls_unknown_ca.tls.json` never holds it. Its connection shows `end: server-rst` (or `server-fin`), and either confirms the class.
+    - The cell's evidence also holds port49's own `unvalidated` record (`diagnosis: tls_refused`, `tls_outcome`; `internal/daemon/server/tls.go:321-325`). genprofile requires it, with `tls_outcome: unknown_ca`, and fails naming the cell when it is absent. `qualRecord` keeps only `diagnosis`, `transport` and `tls_outcome` from an `unvalidated` record whose diagnosis is `tls_refused`. It drops `source`, `detail` and `cert_sha256`, and every other `unvalidated` record as before.
+    - That record carries no body and no session byte: its fields are the source address, the diagnosis, the transport, the outcome, a bounded printable `detail` (never a body, per its own doc comment) and the per-test leaf's fingerprint, of which only the outcome is kept.
   - **`flight_delay`** copies `tls_token_login`'s `login` step and that step's outcome (`login_ok` when it passed). The delay changes the timing, not port49's reply.
 
   A scenario in `scenarios(...)` with no golden is an error naming it, so a generated profile never reaches `TestQual` with an empty `want`.
