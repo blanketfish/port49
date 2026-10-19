@@ -37,6 +37,16 @@ A generator, `tests/qual/cmd/genprofile`, builds part 1 from a lab conformance r
 - fleet tokens minted on the test goroutine;
 - the L79 minors.
 
+**Revision 3** applies re-review 2 (I-G and 6 Minor):
+- goldens built from an explicit cell → scenario map, with `PlayedSteps` shared by `Play` and genprofile;
+- the TLS cell runs the full sequence;
+- `tls_unknown_ca` taken from its `tls.json` and `flight_delay` from `tls_token_login`, plus an eight-scenario fixture test;
+- `run` JSON tags;
+- notediff durations only with a unit, ranges included;
+- the fleet reload waited for;
+- the account port taken from the login's own records;
+- `qualDaemon` keyed on `o.transport`.
+
 ## Global Constraints
 
 - **Toolchain.** Go 1.26+, module `github.com/rhwendt/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
@@ -1003,7 +1013,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 - long runs.
 
 Every number left on a line is an observation, and a line whose words are unchanged but whose numbers moved is reported. How a number counts as moved depends on its kind:
-- **A duration** (a decimal, or a number followed by `ms`, `s` or `min`), such as NX-OS's 5.00 s flight, L13's timeouts or L74's round trip, has moved when it changed by more than `tolerance` (default 20%).
+- **A duration** (a number followed by `ms`, `s` or `min`; in a range such as `81–85ms`, both ends), such as NX-OS's 5.00 s flight, L13's timeouts or L74's round trip, has moved when it changed by more than `tolerance` (default 20%).
 - **Any other number** (a count, a byte length, an id) has moved when it changed at all: 5 → 6 connections and 40 → 41 are changes (I-A).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1048,6 +1058,19 @@ func TestChangedNamesAChangedCount(t *testing.T) {
 	if r, ad := changed(a, b, 0.2); len(r) != 1 || len(ad) != 1 {
 		t.Fatalf("integers compare exactly, whatever the tolerance: -%q +%q", r, ad)
 	}
+	a = normalize("- image SR Linux 26.7.2\n")
+	b = normalize("- image SR Linux 26.8.2\n")
+	if r, ad := changed(a, b, 0.2); len(r) != 1 || len(ad) != 1 {
+		t.Fatalf("a bare decimal is a version, not a duration: -%q +%q", r, ad)
+	}
+}
+
+func TestARangeIsTwoDurations(t *testing.T) {
+	a := normalize("- break-glass landed in 81–85ms\n")
+	b := normalize("- break-glass landed in 83–86ms\n")
+	if r, ad := changed(a, b, 0.2); len(r)+len(ad) != 0 {
+		t.Fatalf("both ends of a range carry its unit: -%q +%q", r, ad)
+	}
 }
 ```
 
@@ -1090,6 +1113,9 @@ var (
 	}
 	// group 1 the value, group 2 a decimal part, group 3 a unit (kept in the skeleton).
 	number = regexp.MustCompile(`(\d+(\.\d+)?)( ?(?:ms|min|s)\b)?`)
+	// A range whose unit follows its second number ("81–85ms", "100-200 ms"):
+	// the unit is copied onto the first, so both compare as durations.
+	unitRange = regexp.MustCompile(`(\d+(?:\.\d+)?)(\s?[–-]\s?)(\d+(?:\.\d+)?)( ?(?:ms|min|s)\b)`)
 )
 
 func normalize(note string) []string {
@@ -1123,10 +1149,13 @@ type num struct {
 // in their numbers pair up, and their numbers are then compared.
 func skeleton(l string) (string, []num) {
 	var nums []num
+	l = unitRange.ReplaceAllString(l, "$1$4$2$3$4")
 	s := number.ReplaceAllStringFunc(l, func(m string) string {
 		sub := number.FindStringSubmatch(m)
 		f, _ := strconv.ParseFloat(sub[1], 64)
-		nums = append(nums, num{v: f, duration: sub[2] != "" || sub[3] != ""})
+		// A duration only when a unit follows: a bare decimal is a version or
+		// an address part (26.7 vs 26.8), and compares exactly.
+		nums = append(nums, num{v: f, duration: sub[3] != ""})
 		return "#" + sub[3]
 	})
 	return s, nums
@@ -2743,6 +2772,12 @@ type Transcript struct {
 }
 func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (Transcript, error)
 func (tr Transcript) String() string
+// PlayedSteps is the step names Play plays for a scenario, in order:
+// token_login, tls_token_login and single_connection play every stimulus
+// step; wrong_credential, store_unavailable, tls_store_unavailable and
+// flight_delay play login alone; tls_unknown_ca plays "handshake". Play
+// uses it, and genprofile builds goldens to it, so the two cannot disagree.
+func PlayedSteps(p *Profile, scenario string) []string
 
 type GoldenStep struct {
 	Step  string   `json:"step"`
@@ -3016,7 +3051,7 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 	pl := &player{p: p, t: t, l: l, now: time.Now()}
 	pl.tr.Scenario = scenario
 	defer pl.closeConn()
-	steps := p.Stimulus.Steps
+	steps := p.Stimulus.Steps[:len(PlayedSteps(p, scenario))] // "handshake" is handled below
 	switch BaseScenario(scenario) {
 	case "wrong_credential":
 		bogus := make([]byte, 24)
@@ -3066,6 +3101,20 @@ func (pl *player) end(outcome string, extra ...StepResult) Transcript {
 	pl.tr.Steps = append(pl.tr.Steps, extra...)
 	pl.tr.Outcome, pl.tr.Conns = outcome, pl.nconns
 	return pl.tr
+}
+
+func PlayedSteps(p *Profile, scenario string) []string {
+	switch BaseScenario(scenario) {
+	case "unknown_ca":
+		return []string{"handshake"}
+	case "wrong_credential", "store_unavailable", "flight_delay":
+		return []string{p.Stimulus.Steps[0].Name}
+	}
+	names := make([]string, len(p.Stimulus.Steps))
+	for i, s := range p.Stimulus.Steps {
+		names[i] = s.Name
+	}
+	return names
 }
 ```
 
@@ -3411,16 +3460,21 @@ Expected: FAIL (`undefined: qualDaemon`).
 - [ ] **Step 5: Implement the harness** in the same file.
 
 - **`qualDaemon`**:
-  - **Output.** Point `stderr`/`stdout` at `syncBuffer`s, restored in `t.Cleanup`.
+  - **Output.** Point `stderr`/`stdout` at `syncBuffer`s, kept as `run.stderr` and `run.log` and restored in `t.Cleanup`.
   - **Broker.** `brokerConfig(t, policy)`, with the qual policy unless `o.policy` is set. Tokens come only from the broker's mint: there is no lab seed.
   - **Inventory.** One device per `max(o.devices, 1)`, named `q%04d` and addressed at `devicemock.LoopbackSource(i)` (Task 19) when `o.devices > 1`; otherwise one device, `q0000`, at 127.0.0.1. Each device takes `platform: <p.Platform>`.
-    - **A TLS profile** sets `transport: tls`. Issue, per test with `testpki`, a device CA, a server certificate for 127.0.0.1, and one client certificate per device naming it.
-    - **A tcp profile** gets a key group for 127.0.0.0/8 with a fresh 32-byte hex key in `T_RUN_SECRET`.
+    - **`o.transport == "tls"`** (the scenario's `ScenarioTransport`; "" means the profile's first transport) sets `transport: tls` on each device. Issue, per test with `testpki`, a device CA, a server certificate for 127.0.0.1, and one client certificate per device naming it. With **`o.untrustedClient`**, the client certificates come from a second CA that is not in `client_ca_file` (`tls_unknown_ca`).
+    - **`o.transport == "tcp"`** gets a key group for 127.0.0.0/8 with a fresh 32-byte hex key in `T_RUN_SECRET`.
   - **Config.** Build the run config with `writeRunConfigWith(…)`. Append the `tls_listener:` block, with `handshake_timeout: <o.handshakeTimeout>` when it is not zero, and `lab: {fault_file: <tmp>}`. Then rewrite the file through `devicemock.MergeFragment(cfg, tests/qual/qual-daemon.yaml)` and record `run.cfgPath`.
   - **Start.** Run `run(ctx, cfg)` and wait for both listening lines with `qualWaitFor`.
 - **`qualWaitFor(t, buf, want, d)`** polls for `want`. On timeout it fails with `qualWaitMessage(buf, want)`, never the buffer: that message lists the `event` and `reason` of the last 20 JSON lines and the non-JSON lines that contain no `_sha256` (I12).
 - **`run.login(i)`** returns `devicemock.Login{User: "qual01", Credential: []byte(mint(t, brokerAddr, pkiDir, deviceName(i))), RemAddr: "198.51.100.4"}`. It mints fresh on every call; the token is never printed.
-- **`run.target(p, i)`** returns a `devicemock.Target` with `Scale: o.scale` and `LocalAddr: LoopbackSource(i)` when `o.devices > 1`.
+- **`run.target(p, i)`** returns a `devicemock.Target` with:
+  - `Transport: o.transport`;
+  - `Addr`: the RFC 9887 listener for `tls`, the plain one for `tcp`;
+  - `Key` (tcp) or `TLS` (the device's own client certificate and the server CA pool);
+  - `Scale: o.scale`;
+  - `LocalAddr: LoopbackSource(i)` when `o.devices > 1`.
 - **`run.fault(code)`** writes the fault file, and calls no `t` helper (fleet mode calls it from a goroutine): a write error is kept and checked by the test goroutine.
 - **`run.logged(s)`** searches the decision-log buffer; **`run.said(s)`** searches port49d's stderr buffer.
 - **`run.touchPolicy()`** is described in Task 19.
@@ -3545,7 +3599,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 | `wrong_credential` | a random string as password, refused | L13 |
 | `store_unavailable` | `fault_file: store_unavailable`, then break-glass | L4, L28 |
 | `single_connection` | the startup config's single-connection form | L15, L73 h |
-| `tls_token_login` | (L73 dialects that are not `HelpOnly`) enrol, configure TLS, a token login | L73 |
+| `tls_token_login` | (L73 dialects that are not `HelpOnly`) enrol, configure TLS, then the plain sequence in one cell: `show version`, `show users`, the stop record | L73 |
 | `tls_store_unavailable` | the same over TLS with the fault | L73 i |
 | `tls_unknown_ca` | the device presents a certificate from a CA port49 does not trust | L73 d |
 
@@ -3874,7 +3928,11 @@ The plain cells, each started with `q.cell(name)` (which runs the STOP and disk 
 1. `e := newL73Env(q.t, q.l, d)`, then `e.enrol()`.
 2. Build the daemon config with `l73DaemonYAML(<the conformance config text>, l73Daemon{…})`: this is how `e.daemon` builds it, but from `q.config()`'s text instead of `labConfigPath()`'s. Write it through `e.write`, set `e.cfg`, and call `e.startOn()`.
 3. `e.configure(e.base())`.
-4. Play `tls_token_login` and `tls_store_unavailable` as the plain cells do. Run `tls_unknown_ca` with port49's `client_ca_file` swapped to a CA that did not sign the device's leaf (`e.files` holds the untrusted root L73 cell d uses).
+4. Play `tls_token_login` as the plain `token_login`, `command_permitted`, `command_denied` and `accounting` cells together (re-review I-G):
+   - a fresh mint, then `loginWithin("qual01", tok, 150*time.Second, "show version", "show users")`;
+   - wait up to 60 s for that login's `account` stop record, as `cellAccounting` does.
+
+   Command authorization and accounting are then covered over TLS, and the cell's window holds every step the mock's `tls_token_login` plays. Play `tls_store_unavailable` as the plain cell. Run `tls_unknown_ca` with port49's `client_ca_file` swapped to a CA that did not sign the device's leaf (`e.files` holds the untrusted root L73 cell d uses).
 5. Each TLS cell's connections are `e.capture(cell)()`'s `[]l73Conn`, kept as `<cell>.tls.json`. Restore the device with `e.restore()`.
 
 A unit test, `TestQualTLSDaemonYAMLKeepsTheBroker`, asserts `l73DaemonYAML` keeps the broker block's `policy_file` and adds `tls_listener:`.
@@ -3918,11 +3976,18 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 
 **Files:**
 - Create: `tests/qual/cmd/genprofile/main.go`, `tests/qual/cmd/genprofile/gen.go`, `tests/qual/cmd/genprofile/gen_test.go`
-- Create: `tests/qual/cmd/genprofile/testdata/QUAL-1.0-fixture_junos/`, a hand-written evidence fixture:
-  - `run.json`;
-  - `decisions.jsonl` in `qualRecord`'s shape: redeem, authorize_session, two authorize_command and two account records;
+- Create: `tests/qual/cmd/genprofile/testdata/QUAL-1.0-fixture_junos/`, a hand-written evidence fixture of a TLS-capable image, covering all ten cells:
+  - `run.json`, with `transports: [tcp, tls]` and every cell's start time in `cells`;
+  - `decisions.jsonl` in `qualRecord`'s shape, with `device.transport` set on each record:
+    - the plain sequence across the `token_login`, `command_permitted`, `command_denied` and `accounting` windows (redeem, authorize_session, a permitted and a denied authorize_command, an account start and stop);
+    - the same sequence over `tls` in the `tls_token_login` window;
+    - a refused redeem in the `wrong_credential` window;
+    - a `store_unavailable` redeem in the `store_unavailable` and `tls_store_unavailable` windows;
+    - one login in the `single_connection` window;
+    - an SR-Linux-like `account` record on port `unknown` inside the `accounting` window, after the login's own records. `steps` must take the login's port, not this one.
   - `token_login.conns.json`;
-  - `tls_token_login.tls.json`, with two connections: a full handshake with `psk_identities: 0`, and a resumption with `psk_identities: 1`.
+  - `tls_token_login.tls.json`, with two connections: a full handshake with `psk_identities: 0`, and a resumption with `psk_identities: 1`;
+  - `tls_unknown_ca.tls.json`: one connection with a plaintext alert, `description: 48` (unknown_ca), from the server.
 
 **Interfaces:**
 - Consumes: the evidence layout (Task 12), `devicemock.Profile`, `devicemock.Golden`, `devicemock.Slug`.
@@ -3940,6 +4005,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -3981,6 +4047,60 @@ func TestAGeneratedProfileLoads(t *testing.T) {
 	}
 	if len(p.Vetted.Commit) != 12 {
 		t.Fatalf("commits are recorded as 12 hex characters (git rev-parse --short=12): %q", p.Vetted.Commit)
+	}
+}
+
+// The generated golden has every scenario, each in the shape Play plays it,
+// and Judge passes a transcript of exactly that shape: so TestQual's verdict
+// on a generated profile turns on port49's replies, never on a golden built
+// to the wrong scenario (re-review I-G).
+func TestTheGoldenCoversEveryScenarioInPlayedOrder(t *testing.T) {
+	p, g, err := Generate("testdata/QUAL-1.0-fixture_junos", "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"token_login", "wrong_credential", "store_unavailable", "single_connection",
+		"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay"}
+	if !slices.Equal(p.Scenarios, want) {
+		t.Fatalf("scenarios %v, want all eight", p.Scenarios)
+	}
+	for _, sc := range want {
+		gs, ok := g.Scenarios[sc]
+		if !ok || gs.Outcome == "" {
+			t.Fatalf("%s: no golden", sc)
+		}
+		var names []string
+		for _, s := range gs.Steps {
+			names = append(names, s.Step)
+		}
+		// All of them when the play runs to the end; a prefix when a reaction stops it.
+		played := devicemock.PlayedSteps(p, sc)
+		if len(names) > len(played) || !slices.Equal(names, played[:len(names)]) ||
+			(gs.Outcome == "login_ok" && len(names) != len(played)) {
+			t.Fatalf("%s: golden steps %v, Play plays %v", sc, names, played)
+		}
+		tr := devicemock.Transcript{Scenario: sc, Outcome: gs.Outcome}
+		for _, s := range gs.Steps {
+			tr.Steps = append(tr.Steps, devicemock.StepResult{Step: s.Step, Event: s.Event, Args: s.Args})
+		}
+		if fails, _ := devicemock.Judge(tr, gs); len(fails) != 0 {
+			t.Fatalf("%s: %q", sc, fails)
+		}
+	}
+	tl := g.Scenarios["token_login"]
+	if len(tl.Steps) != 6 || tl.Steps[3].Step != "command_denied" || tl.Steps[3].Event != "author_fail" || tl.Steps[5].Event != "acct_success" {
+		t.Fatalf("token_login is the union of four lab cells, in step order: %+v", tl.Steps)
+	}
+	if u := g.Scenarios["tls_unknown_ca"]; u.Outcome != "handshake_refused" || u.Steps[0].Event != "alert_unknown_ca" {
+		t.Fatalf("tls_unknown_ca comes from its tls.json: %+v", u)
+	}
+	if fd, tls := g.Scenarios["flight_delay"], g.Scenarios["tls_token_login"]; fd.Outcome != tls.Outcome || fd.Steps[0].Event != tls.Steps[0].Event {
+		t.Fatalf("flight_delay copies tls_token_login's login: %+v %+v", fd, tls)
+	}
+	for _, s := range p.Stimulus.Steps {
+		if s.Port == "unknown" {
+			t.Fatal("an account step took another channel's port; steps reads the login's own records")
+		}
 	}
 }
 
@@ -4063,11 +4183,18 @@ var allowedFiles = []string{"run.json", "decisions.jsonl", "*.conns.json", "*.tl
 
 var forbidden = []string{"_sha256", "password", "secret", "BEGIN "}
 
+// run is run.json as qualRun (Task 12) writes it: the same snake_case tags,
+// so lab_platform decodes (encoding/json matches only case, not underscores).
 type run struct {
-	Platform, LabPlatform, Firmware, Image, Commit, Date string
-	Transports                                           []string
-	Cells                                                map[string]string `json:"cells"` // cell -> start time
-	BreakGlass                                           map[string]bool   `json:"break_glass"`
+	Platform    string            `json:"platform"`
+	LabPlatform string            `json:"lab_platform"`
+	Firmware    string            `json:"firmware"`
+	Image       string            `json:"image"`
+	Commit      string            `json:"commit"`
+	Date        string            `json:"date"`
+	Transports  []string          `json:"transports"`
+	Cells       map[string]string `json:"cells"` // cell -> start time, RFC 3339
+	BreakGlass  map[string]bool   `json:"break_glass"`
 }
 
 type conn struct {
@@ -4157,7 +4284,9 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	}
 	p.Reactions = prefillReactions(recs, r, note)
 	p.Scenarios = scenarios(evDir, p.Stimulus.TLS != nil)
-	g = goldenFrom(recs, r.Cells)
+	if g, err = goldenFrom(p, recs, r.Cells, evDir); err != nil {
+		return nil, g, err
+	}
 	return p, g, nil
 }
 
@@ -4172,7 +4301,7 @@ func StimulusEqual(a, b *devicemock.Profile) bool {
 Write the helpers in the same file, in full.
 
 - **`readJSON`** and **`readRecords`**: `json.Unmarshal` per line with a `bufio.Scanner`, buffer 1 MiB.
-- **`steps(recs)`** reads each step's fields from its first record:
+- **`steps(recs)`** reads each step's fields from the first matching record **within the `token_login` scenario's windows** (see `goldenFrom`), from the plain (`device.transport` not `tls`) records:
 
   | Record | Step |
   |---|---|
@@ -4180,10 +4309,12 @@ Write the helpers in the same file, in full.
   | first `authorize_session` | `authorize_session`: `request.raw` |
   | first `authorize_command` with `verdict: permit` | `command_permitted` |
   | first `authorize_command` with `verdict: deny` | `command_denied` |
-  | first `account` with `flags: start` | `account_start`: `record.raw`, already templated |
-  | first `account` with `flags: stop` | `account_stop` |
+  | first `account` with `flags: start` | `account_start`: `record.raw`, already templated, and that record's own port |
+  | first `account` with `flags: stop` | `account_stop`, the same way |
 
-  Each step's `Fields` comes from `packet_fields`. A record with no `packet_fields` is an error: the run predates Task 5.
+  The account steps' port is taken from that login's own start and stop records. SR Linux accounts a second exec channel on port `unknown` (L76 cell c), so the first `account` record anywhere in the run is not necessarily the login's.
+
+  Each step's `Fields` comes from `packet_fields`. A record with no `packet_fields` is an error: the run predates Task 5. A TLS-only device would read the TLS records; none exists today.
 - **`headerVersions(path)`** takes the first header of each type from the plain connections. Its version byte's low nibble is the minor version (M4). It is empty for a TLS-only run; the minor version there is 1 for pap or chap and 0 otherwise. In that case each such step also gets an `engine_gaps` entry, `minor_version_inferred_over_tls`, because TLS hides the header.
 - **`connPattern(evDir, n)`** returns `per_step` when `token_login.conns.json` holds at least `n` connections. It returns `single_connection` when `single_connection.conns.json` carried every step on one connection. `single_connect_flag` is the first header's `flags & 0x04`.
 - **`tlsStimulus(evDir, note)`** returns nil when there is no `*.tls.json`. Otherwise:
@@ -4203,8 +4334,36 @@ Write the helpers in the same file, in full.
 
   Acceptance rules are never pre-filled beyond one: `priv_lvl_range` from the device's own `priv_lvl` values, marked `unmeasured`, since seeing values is not measuring a limit.
 - **`scenarios(evDir, tls)`** lists the cells the run recorded (`token_login`, `wrong_credential`, `store_unavailable`, `single_connection`), plus `tls_token_login`, `tls_store_unavailable`, `tls_unknown_ca` and `flight_delay` when `tls`.
-- **`goldenFrom(recs, cells)`** splits the records first by `device.transport` (`tls` or not; I-B) and then by cell time window (`run.json`'s `cells` start times), so each scenario's golden holds only its own transport's records. It then builds each scenario's outcome and its steps' events and reply attributes from those records.
-- **`steps(recs)`** reads only the plain (`device.transport` not `tls`) records when the run has any, so a profile's step attributes come from one transport. A TLS-only device would read the TLS records; none exists today. For example, a `redeem` with verdict `permit` is `authen_pass` and one with `deny` is `authen_fail`, and the reply attributes are `reply.attributes`.
+- **`goldenFrom(p, recs, cells, evDir) (devicemock.Golden, error)`** builds each scenario's golden from an explicit map of lab cells to scenarios (re-review I-G). A cell's window runs from its start time in `run.json`'s `cells` to the next cell's start. Records are filtered by `device.transport` first (I-B).
+
+```go
+// scenarioCells: which lab cells' windows make each mock scenario's golden, and
+// over which transport. The mock's token_login plays every stimulus step, which
+// the lab spreads over four cells; their records, in stimulus step order, are
+// that golden. The TLS cell runs the same sequence (Task 12), so it is one cell.
+var scenarioCells = map[string]struct {
+	cells     []string
+	transport string
+}{
+	"token_login":           {[]string{"token_login", "command_permitted", "command_denied", "accounting"}, "tcp"},
+	"wrong_credential":      {[]string{"wrong_credential"}, "tcp"},
+	"store_unavailable":     {[]string{"store_unavailable"}, "tcp"},
+	"single_connection":     {[]string{"single_connection"}, "tcp"},
+	"tls_token_login":       {[]string{"tls_token_login"}, "tls"},
+	"tls_store_unavailable": {[]string{"tls_store_unavailable"}, "tls"},
+}
+```
+
+  For each mapped scenario:
+  - Take the records of its cells' windows on its transport.
+  - Pick one record per step the mock plays (`devicemock.PlayedSteps(p, sc)`, Task 9), in that order, by the table under `steps`. For example, a `redeem` with verdict `permit` is `authen_pass`, one with `deny` is `authen_fail`, and one whose reason is `store_unavailable` is `authen_error`; reply attributes are `reply.attributes`.
+  - Set the outcome the way the reaction table ends it: `login_ok` when every step passed, else the pre-filled reaction's outcome for the first step that did not.
+
+  Two scenarios have no record window:
+  - **`tls_unknown_ca`** comes from `tls_unknown_ca.tls.json`: outcome `handshake_refused`, one step `handshake`. Its event is the first plaintext alert's name (`alert_<l73AlertName>`, for example `alert_unknown_ca`) when the connection has one, else `conn_reset` for `end: server-rst` or `conn_closed` for `server-fin`. A refused handshake writes no `redeem`, which is why the TLS summary is the source.
+  - **`flight_delay`** copies `tls_token_login`'s `login` step and that step's outcome (`login_ok` when it passed). The delay changes the timing, not port49's reply.
+
+  A scenario in `scenarios(...)` with no golden is an error naming it, so a generated profile never reaches `TestQual` with an empty `want`.
 
 `main.go`:
 - **Without `-check`:**
@@ -4722,9 +4881,11 @@ func TestQualFleet(t *testing.T) {
 	if res := phase("concurrent logins", nil); res.Outcomes["login_ok"] != n {
 		t.Fatalf("every device logs in: %v", res.Outcomes)
 	}
-	if res := phase("reload under load", run.touchPolicy); res.Outcomes["login_ok"] != n || !run.said("port49d: policy refresh") {
+	if res := phase("reload under load", run.touchPolicy); res.Outcomes["login_ok"] != n {
 		t.Fatalf("a reload under load loses no login: %v", res.Outcomes)
 	}
+	// The 1 s watch and the push may land after the phase's plays end: wait for it.
+	qualWaitFor(t, run.stderr, "port49d: policy refresh", 10*time.Second)
 	res := phase("store down under load", func() { run.fault("store_unavailable") })
 	if res.Outcomes["login_ok"]+res.Outcomes["falls_to_local"] != n || res.P99 > 10*time.Second {
 		t.Fatalf("each play either logged in before the fault or fell to local after it, none hung: %+v", res)
@@ -4810,11 +4971,15 @@ jobs:
       - run: go run ./tests/qual/cmd/genprofile -check -evidence tests/lab/evidence/QUAL-SR-Linux-26.7.2-519-nokia_srlinux
 ```
 
-`genprofile -check` stays stable on SR Linux's `session.port`: all 35 `redeem` and `authorize_session` records in `tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl` carry `ssh`, a constant, not a per-run value. If a later run records a per-session value there, template it as `{port}` in `qualRecord` and the engine.
+`genprofile -check` stays stable on SR Linux's `session.port`:
+- all 35 `redeem` and `authorize_session` records in `tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl` carry `ssh`;
+- its `account` records carry `ssh` (22) or `unknown` (78; a second exec channel, L76 cell c), and `steps` takes the account steps' port from the login's own start and stop records (`ssh`), never from the first `account` record in the run (Task 13).
+
+If a later run records a per-session value in the login's own records, template it as `{port}` in `qualRecord` and the engine.
 
 Pin containerlab to the version beehive runs (`containerlab version`). If the prerequisite step cannot pass on a hosted runner (the 172.100.100.0/24 bridge, sudo), switch `runs-on` to beehive's self-hosted label and say so in the as-built. That is the one-line change the Global Constraints keep available.
 
-- [ ] **Step 2: Validate the YAML**: `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/lab-free.yml`. Raise the job's `timeout-minutes` to 90, which covers the two 40-minute steps.
+- [ ] **Step 2: Validate the YAML**: `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/lab-free.yml`.
 
   `gh workflow run lab-free.yml` dispatches only a workflow that is already on the default branch, so the first dispatch happens after this plan's PR merges. The controller runs it then (`gh workflow run lab-free.yml`, then `gh run list --workflow lab-free.yml --limit 1`) and records the result in the as-built entry (Task 23). If the prerequisites step fails on the hosted runner, `runs-on` moves to beehive in a one-line follow-up.
 - [ ] **Step 3: Commit**: `ci: the free-image tier runs SR Linux's qualification on dispatch and tags`.
