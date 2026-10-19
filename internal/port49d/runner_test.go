@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
@@ -308,6 +310,56 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	waitWithin(t, &out, "is still held by this replica's last run", 15*time.Second)
 	if strings.Contains(out.String(), "is run by") {
 		t.Fatalf("this replica's own last run was said as another's:\n%s", out.String())
+	}
+}
+
+// A followed logout whose reach fails on a store error is reached again
+// while the duties run, and the failure's line says how to end the sessions
+// by hand meanwhile: a logout is enforced on mints and refreshes only, so a
+// reach that is never retried leaves the person's live contexts up (final
+// review, I1). One the broker can never reach is not tried again.
+func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
+	was := logoutRetryFirst
+	logoutRetryFirst = 10 * time.Millisecond
+	t.Cleanup(func() { logoutRetryFirst = was })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	tries := map[string]int{}
+	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+		followedLogouts: make(chan store.LogoutEntry, 8)}
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		tries[l.Key]++
+		switch {
+		case l.Key == "never":
+			return broker.RevokeReport{}, fmt.Errorf("%w: no verifier", broker.ErrLogoutUnreachable)
+		case tries[l.Key] == 1:
+			return broker.RevokeReport{Principals: []string{"user:alice@example.com"}},
+				fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+		}
+		return broker.RevokeReport{TokenKeys: 1}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	until := time.Now().Add(time.Hour)
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: "never", Origin: "origin-never"}, Until: until}
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: store.OIDCKey(store.OIDCSub, "https://idp.example",
+		"sub-alice"), Origin: "origin-alice"}, Until: until}
+	waitWithin(t, &out, "a logout made elsewhere (origin-alice) reached 1 token key(s)", 5*time.Second)
+	if !strings.Contains(out.String(), "port49 revoke --principal user:alice@example.com") {
+		t.Fatalf("the failed reach's line gives no remedy:\n%s", out.String())
+	}
+	time.Sleep(100 * time.Millisecond) // ten retry periods
+	mu.Lock()
+	defer mu.Unlock()
+	if tries["never"] != 1 {
+		t.Fatalf("a logout that can never be reached was tried %d times", tries["never"])
 	}
 }
 

@@ -79,6 +79,9 @@ type runner struct {
 	// followedLogouts is told each logout the logouts feed brings, in a
 	// split (R26): the duties reach it in this region's session store.
 	followedLogouts chan store.LogoutEntry
+	// reach reaches a logout here: Broker.ReachLogout, or a test's (nil is
+	// the broker's).
+	reach func(ctx context.Context, l store.Logout) (broker.RevokeReport, error)
 	// dir is the directory store's handle in a split (plan 11a): the
 	// hourly key-window recheck reads it (R27). Nil in a shared store.
 	dir *dirHandle
@@ -923,16 +926,22 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	if r.logouts != nil {
 		var keys, ctxs, unfinished int
 		for _, e := range r.logouts.All() {
-			rep, err := r.brk.ReachLogout(ctx, e.Logout)
+			rep, err := r.reachLogout(ctx, e.Logout)
 			keys, ctxs = keys+rep.TokenKeys, ctxs+len(rep.Contexts)
-			if err != nil {
+			if err != nil && !errors.Is(err, broker.ErrLogoutUnreachable) {
+				// Queued (taking is set): the duties reach it again, and say how
+				// to end its sessions by hand while it does not finish.
 				unfinished++
+				r.followLogout(e)
 			}
 		}
 		if n := r.logouts.Len(); n > 0 {
-			fmt.Fprintf(stderr, "port49-broker: runner: %d standing logout(s) reached here: %d token key(s), "+
-				"%d context(s); %d did not finish\n", n, keys, ctxs,
-				unfinished)
+			line := fmt.Sprintf("port49-broker: runner: %d standing logout(s) reached here: %d token key(s), "+
+				"%d context(s); %d did not finish", n, keys, ctxs, unfinished)
+			if unfinished > 0 {
+				line += ", and are tried again once this replica's duties start"
+			}
+			fmt.Fprintln(stderr, line)
 		}
 	}
 	bundle := r.brk.Policy.Load().Bundle
@@ -1077,8 +1086,14 @@ func (r *runner) followLogout(e store.LogoutEntry) {
 
 // reachFollowed reaches each queued mark and logout in this region's session
 // store (Broker.ReachMark, Broker.ReachLogout), one line each, until ctx
-// ends.
+// ends. A logout whose reach did not finish is queued again after a wait
+// (retryLogout), doubling with each failure in a row, while the duties run:
+// a logout is enforced on mints and refreshes alone, so only its reach ends
+// the person's live contexts here. Every step is safe to run twice. One the
+// broker can never reach (ErrLogoutUnreachable) is not tried again; the next
+// takeover reaches every standing logout once more.
 func (r *runner) reachFollowed(ctx context.Context) {
+	failed := map[string]int{} // a logout's failed reaches in a row, by key
 	for {
 		select {
 		case <-ctx.Done():
@@ -1093,15 +1108,62 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			fmt.Fprintln(stderr, line)
 		case l := <-r.followedLogouts:
-			rep, err := r.brk.ReachLogout(ctx, l.Logout)
+			rep, err := r.reachLogout(ctx, l.Logout)
+			if err != nil && ctx.Err() != nil {
+				return // the duties ended mid-reach: the next takeover reaches it
+			}
 			line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
 				"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
-			if err != nil {
+			switch {
+			case err == nil:
+				delete(failed, l.Key)
+			case errors.Is(err, broker.ErrLogoutUnreachable):
 				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
+			default:
+				failed[l.Key]++
+				wait := logoutRetryFirst << min(failed[l.Key]-1, 6)
+				line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
+					"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
+					"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
+					r.brk.FollowedLogoutByHand(l.Logout, rep))
+				r.retryLogout(ctx, l, wait)
 			}
 			fmt.Fprintln(stderr, line)
 		}
 	}
+}
+
+// logoutRetryFirst is the wait before a failed logout reach is tried again;
+// each failure in a row doubles it, up to 64 times it.
+var logoutRetryFirst = time.Second
+
+// retryLogout queues l for reachFollowed again after wait, unless the duties
+// end first or its record has expired by then.
+func (r *runner) retryLogout(ctx context.Context, l store.LogoutEntry, wait time.Duration) {
+	go func() {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if !l.Until.IsZero() && time.Now().After(l.Until) {
+			return
+		}
+		select {
+		case r.followedLogouts <- l:
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// reachLogout is r.reach, else the broker's ReachLogout.
+func (r *runner) reachLogout(ctx context.Context, l store.Logout) (broker.RevokeReport, error) {
+	if r.reach != nil {
+		return r.reach(ctx, l)
+	}
+	return r.brk.ReachLogout(ctx, l)
 }
 
 // forwardingPending forwards this region's pending logouts to the

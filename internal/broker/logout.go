@@ -166,6 +166,34 @@ func (b *Broker) logoutRecordTTL() time.Duration {
 // being in the log; when it did not, nothing was written, so the form is
 // unconditional and lifts only once no held ID token could still mint.
 func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied bool) string {
+	if applied {
+		return b.logoutByHandWith(lt, rep, b.logoutRecovery)
+	}
+	return b.logoutByHandWith(lt, rep, func(p string) string {
+		return b.logoutUnapplied(p, b.Now().Add(b.logoutRecordTTL()))
+	})
+}
+
+// FollowedLogoutByHand is logoutByHand for a logout another region ingested
+// whose reach here did not finish (plan 11a, R26): its record stands, in the
+// directory and in this process's set, so the held ID token cannot mint
+// again, and a principal's mark may be lifted as soon as its contexts are
+// ended. No revoke record of it is in this region's log, so the form is not
+// conditional on one.
+func (b *Broker) FollowedLogoutByHand(l store.Logout, rep RevokeReport) string {
+	kind, issuer, value, ok := store.ParseOIDCKey(l.Key)
+	if !ok {
+		return b.revokeHow()
+	}
+	lt := oidc.LogoutToken{Issuer: issuer, Subject: value}
+	if kind == store.OIDCSid {
+		lt = oidc.LogoutToken{Issuer: issuer, Sid: value}
+	}
+	return b.logoutByHandWith(lt, rep, func(p string) string { return b.endThenLift(p, p+"'s") })
+}
+
+// logoutByHandWith is logoutByHand's form, each principal's step by each.
+func (b *Broker) logoutByHandWith(lt oidc.LogoutToken, rep RevokeReport, step func(principal string) string) string {
 	who := []string{"<principal>"}
 	lead := "for each principal the decision log's mint records name for this sub, and with its name for " +
 		"<principal> below, "
@@ -179,11 +207,7 @@ func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied boo
 	}
 	var each []string
 	for _, p := range who {
-		if applied {
-			each = append(each, b.logoutRecovery(p))
-		} else {
-			each = append(each, b.logoutUnapplied(p, b.Now().Add(b.logoutRecordTTL())))
-		}
+		each = append(each, step(p))
 	}
 	out := lead + strings.Join(each, "; and ")
 	if sidOnly {
@@ -388,6 +412,11 @@ func (b *Broker) reachLogout(ctx context.Context, key string, domains []string, 
 	}
 }
 
+// ErrLogoutUnreachable is a followed logout this broker can never reach: its
+// key names no OIDC session or subject, or an issuer no human verifier here
+// trusts. Reaching it again changes nothing.
+var ErrLogoutUnreachable = errors.New("broker: this logout cannot be reached here")
+
 // ReachLogout reaches, in this broker's session store, a logout another
 // region ingested (plan 11a, R26): the runner calls it for each logout it
 // follows. It writes no logout record and no revoke record; the region that
@@ -396,12 +425,13 @@ func (b *Broker) reachLogout(ctx context.Context, key string, domains []string, 
 func (b *Broker) ReachLogout(ctx context.Context, l store.Logout) (RevokeReport, error) {
 	kind, issuer, value, ok := store.ParseOIDCKey(l.Key)
 	if !ok || b.Identity == nil {
-		return RevokeReport{}, fmt.Errorf("broker: a followed logout's key does not name an OIDC session or subject")
+		return RevokeReport{}, fmt.Errorf("%w: a followed logout's key does not name an OIDC session or subject",
+			ErrLogoutUnreachable)
 	}
 	domains := b.Identity.HumanDomains(issuer)
 	if len(domains) == 0 {
-		return RevokeReport{}, fmt.Errorf("broker: a followed logout names issuer %s, which no human verifier here "+
-			"trusts; nothing reached", printsafe.Line(issuer, 200))
+		return RevokeReport{}, fmt.Errorf("%w: a followed logout names issuer %s, which no human verifier here "+
+			"trusts; nothing reached", ErrLogoutUnreachable, printsafe.Line(issuer, 200))
 	}
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
