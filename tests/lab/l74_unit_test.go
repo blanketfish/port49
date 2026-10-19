@@ -720,3 +720,23 @@ func TestL74FeedCompactedWaitsForTheLine(t *testing.T) {
 		t.Fatalf("a log with the line: %v", err)
 	}
 }
+
+func TestL75AnsweringAgainWaitsForTheLine(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b3.log")
+	p := &regionProc{name: "port49-broker l75 b3", log: log}
+	if err := os.WriteFile(log, []byte("port49-broker: directory store: not answering\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := l75AnsweringAgain(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "a port49 finding") {
+		t.Fatalf("a log without the line: %v, want the INVALID error", err)
+	}
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("port49-broker: directory store: answering again; the cache was 2.0s old\n")
+	if err := l75AnsweringAgain(p, 300*time.Millisecond); err != nil {
+		t.Fatalf("a log with the line: %v", err)
+	}
+}

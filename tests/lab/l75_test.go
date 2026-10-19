@@ -264,6 +264,16 @@ func (b *l75Broker) hang(w *regionWorld, on bool) bool {
 	}
 }
 
+// l75AnsweringAgain waits up to d for the broker to say its directory store
+// answers again (since the last mark): mints follow that check, not store
+// status, which pings live.
+func l75AnsweringAgain(p *regionProc, d time.Duration) error {
+	if _, err := p.wait("directory store: answering again", d); err != nil {
+		return fmt.Errorf("%s: a port49 finding if the heal held and store status said reachable: %w", p.name, err)
+	}
+	return nil
+}
+
 // l75Poll calls read every `every` until done accepts what it returned, or d
 // passes, and returns the last read, how long it took, and whether done
 // accepted it.
@@ -741,6 +751,11 @@ func l75(t *testing.T, w *regionWorld) []string {
 	mb, mbErr := l75Mint(w, bobC, bs[3].addr(), "")
 	if !bs[3].hang(w, false) {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
+	}
+	// store status pings live and says "reachable" up to one freshness check
+	// before mints reopen, so the control waits for the broker's own line.
+	if err := l75AnsweringAgain(bs[3].proc, 30*time.Second); err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
 	// The control for bob's refusal: after the heal he is a member b3 mints for.
 	mbAfter, _ := l75Mint(w, bobC, bs[3].addr(), "")
