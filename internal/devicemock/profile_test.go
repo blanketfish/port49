@@ -77,6 +77,8 @@ func TestNamesFirmware(t *testing.T) {
 		{"vJunos-router 123.4R2", "23.4R2", false},
 		{"fixture 1.0", "1.0", true},
 		{"image 10.6(2)F, lab", "10.6(2)F", true},
+		{"Nexus 9300v 10.6(2)F", "10.6", false},
+		{"Nexus 9300v 10.6(2)F", "10.6(2)F", true},
 		{"image 10.6(2)F.", "10.6(2)F", true},
 		{"anything", "", false},
 	} {

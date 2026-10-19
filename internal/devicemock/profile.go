@@ -372,7 +372,7 @@ func namesFirmware(line, fw string) bool {
 	if fw == "" {
 		return false
 	}
-	re := regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(fw) + `($|\.($|[^A-Za-z0-9])|[^A-Za-z0-9_.-])`)
+	re := regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(fw) + `($|\.($|[^A-Za-z0-9])|[^A-Za-z0-9_.(-])`)
 	return re.MatchString(line)
 }
 
