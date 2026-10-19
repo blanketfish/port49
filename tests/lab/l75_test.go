@@ -207,19 +207,32 @@ type l75Broker struct {
 	sess    *regionEtcd
 	proc    *regionProc
 	proxies []*etcdtest.Proxy
+	// api and metrics are the addresses the broker said when its mints opened,
+	// kept because proc.said() starts again at every mark.
+	api, metrics string
 }
 
 // l75Listening is port49-broker's line once its API serves.
 var l75Listening = regexp.MustCompile(`port49-broker: listening on (127\.0\.0\.1:\d+)`)
 
-// addr is the API address the broker's last start said.
-func (b *l75Broker) addr() string {
-	m := l75Listening.FindStringSubmatch(b.proc.said())
-	if m == nil {
-		return ""
+// l75Metrics is the line that names the broker's metrics address.
+var l75Metrics = regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`)
+
+// l75Addrs are the API and metrics addresses the last of a log's lines name,
+// "" for one it does not.
+func l75Addrs(log string) (api, metrics string) {
+	if m := l75Listening.FindAllStringSubmatch(log, -1); m != nil {
+		api = m[len(m)-1][1]
 	}
-	return m[1]
+	if m := l75Metrics.FindAllStringSubmatch(log, -1); m != nil {
+		metrics = m[len(m)-1][1]
+	}
+	return api, metrics
 }
+
+// addr is the API address the broker said at its last start(). It is not
+// read from proc.said(), which restarts at every mark.
+func (b *l75Broker) addr() string { return b.api }
 
 func (b *l75Broker) sock() string { return filepath.Join(b.o.dir, fmt.Sprintf("b%d.sock", b.o.i)) }
 
@@ -257,6 +270,10 @@ func (b *l75Broker) start(w *regionWorld) {
 		if time.Now().After(deadline) {
 			t.Fatalf("INVALID: %s's mints did not open within 120s: %s", b.proc.name, w.leakless(lastLine(b.proc.said())))
 		}
+	}
+	b.api, b.metrics = l75Addrs(b.proc.said())
+	if b.api == "" {
+		t.Fatalf("INVALID: %s opened its mints but said no API address", b.proc.name)
 	}
 }
 

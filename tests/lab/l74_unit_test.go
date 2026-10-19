@@ -579,3 +579,29 @@ func TestL74FeedStoppedWaitsForTheLine(t *testing.T) {
 		t.Fatalf("a log with the line after the mark: %v", err)
 	}
 }
+
+// A broker's addresses are read once at its start; a later mark empties
+// what said() returns, and must not empty the address (L75 (f), (g)).
+func TestL75AddrsComeFromTheStartNotTheMarkedLog(t *testing.T) {
+	log := "port49-broker: metrics on 127.0.0.1:41000\nport49-broker: listening on 127.0.0.1:42000\n"
+	api, metrics := l75Addrs(log)
+	if api != "127.0.0.1:42000" || metrics != "127.0.0.1:41000" {
+		t.Fatalf("l75Addrs = %q, %q", api, metrics)
+	}
+	if api, metrics := l75Addrs("port49-broker: listening on 127.0.0.1:42001, metrics on 127.0.0.1:41001\n"); api != "127.0.0.1:42001" || metrics != "127.0.0.1:41001" {
+		t.Fatalf("the combined line: %q, %q", api, metrics)
+	}
+	if api, _ := l75Addrs(""); api != "" {
+		t.Fatalf("an empty log named %q", api)
+	}
+	lf := filepath.Join(t.TempDir(), "b.log")
+	if err := os.WriteFile(lf, []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := &l75Broker{proc: &regionProc{log: lf}}
+	b.api, b.metrics = l75Addrs(b.proc.said())
+	b.proc.mark()
+	if b.proc.said() != "" || b.addr() != "127.0.0.1:42000" {
+		t.Fatalf("after a mark: said %q, addr %q", b.proc.said(), b.addr())
+	}
+}
