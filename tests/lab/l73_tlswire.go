@@ -38,6 +38,8 @@ type l73Hello struct {
 	PSKModes      []int    `json:"psk_key_exchange_modes,omitempty"`
 	EarlyData     bool     `json:"early_data"`
 	Extensions    []uint16 `json:"extensions"`
+	// CompressCertAlgs are compress_certificate's algorithm ids (RFC 8879).
+	CompressCertAlgs []uint16 `json:"compress_certificate_algorithms,omitempty"`
 }
 
 // l73ServerHello is port49's answer: the version and suite it chose, and
@@ -58,10 +60,11 @@ type l73Alert struct {
 
 // l73Plain is one RFC 8907 header the device sent, without its body.
 type l73Plain struct {
-	Type   uint8  `json:"type"`
-	SeqNo  uint8  `json:"seq_no"`
-	Flags  uint8  `json:"flags"`
-	Length uint32 `json:"length"`
+	Version uint8  `json:"version"` // major<<4 | minor
+	Type    uint8  `json:"type"`
+	SeqNo   uint8  `json:"seq_no"`
+	Flags   uint8  `json:"flags"`
+	Length  uint32 `json:"length"`
 }
 
 // l73Conn is one TCP connection the device opened.
@@ -426,6 +429,8 @@ func l73ParseClientHello(b []byte) (*l73Hello, error) {
 				h.ALPN = append(h.ALPN, string(list.vec8()))
 			}
 			data.bad = data.bad || list.bad
+		case 27: // compress_certificate: the algorithm ids only
+			h.CompressCertAlgs = l73U16s(data.vec8())
 		case 41: // pre_shared_key: counted, never copied
 			ids := &l73Reader{b: data.vec16()}
 			for len(ids.b) > 0 && !ids.bad {
@@ -496,7 +501,7 @@ func l73PlainHeaders(b []byte) []l73Plain {
 	var out []l73Plain
 	for len(b) >= 12 {
 		n := binary.BigEndian.Uint32(b[8:12])
-		out = append(out, l73Plain{Type: b[1], SeqNo: b[2], Flags: b[3], Length: n})
+		out = append(out, l73Plain{Version: b[0], Type: b[1], SeqNo: b[2], Flags: b[3], Length: n})
 		if uint64(len(b)) < 12+uint64(n) {
 			break
 		}

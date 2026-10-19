@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -312,6 +313,13 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		"l73ServerHello.PSKSelected": "bool", "l73ServerHello.HelloRetry": "bool",
 		"l73Alert.Level": "uint8", "l73Alert.Description": "uint8", "l73Alert.FromDevice": "bool",
 		"l73Plain.Type": "uint8", "l73Plain.SeqNo": "uint8", "l73Plain.Flags": "uint8", "l73Plain.Length": "uint32",
+		// compress_certificate's algorithm ids (RFC 8879): two-byte registry
+		// codes the device offers, the same for every connection; no random,
+		// key or secret can be carried in them (plan 11b, I3).
+		"l73Hello.CompressCertAlgs": "[]uint16",
+		// The 12-byte header's version octet (major<<4 | minor): one of four
+		// values RFC 8907 defines; it carries no session byte (plan 11b, M4).
+		"l73Plain.Version": "uint8",
 	}
 	got := l73FieldTypes(reflect.TypeOf(l73Conn{}))
 	if !maps.Equal(got, want) {
@@ -414,7 +422,7 @@ func TestL73ConnsPlainTACACSHeadersOnly(t *testing.T) {
 	if err != nil || len(conns) != 1 || len(conns[0].Plain) != 1 {
 		t.Fatalf("%+v %v", conns, err)
 	}
-	if p := conns[0].Plain[0]; p.Type != 1 || p.SeqNo != 1 || p.Flags != 0 || p.Length != uint32(len(body)) {
+	if p := conns[0].Plain[0]; p.Version != 0xc1 || p.Type != 1 || p.SeqNo != 1 || p.Flags != 0 || p.Length != uint32(len(body)) {
 		t.Fatalf("%+v", p)
 	}
 	js, _ := json.Marshal(conns)
@@ -523,6 +531,19 @@ func TestL73ClientHelloCutInsideAnExtensionIsAnError(t *testing.T) {
 	}
 	if h, err := l73ParseClientHello(l73HelloWith(0, []byte{0, 6, 0, 0, 3, 'a', 'b', 'c'})); err != nil || h.SNI != "abc" {
 		t.Errorf("a whole server_name: %+v %v", h, err)
+	}
+}
+
+// compress_certificate (27) is kept as its algorithm ids: a one-byte length,
+// then two-byte codes (RFC 8879). The ids are the device's offer, not session
+// bytes.
+func TestL73ClientHelloKeepsCompressCertificateAlgorithms(t *testing.T) {
+	h, err := l73ParseClientHello(l73HelloWith(27, []byte{4, 0, 2, 0, 1}))
+	if err != nil || !slices.Equal(h.CompressCertAlgs, []uint16{2, 1}) {
+		t.Fatalf("%+v %v", h, err)
+	}
+	if _, err := l73ParseClientHello(l73HelloWith(27, []byte{4, 0, 2})); err == nil {
+		t.Fatal("a compress_certificate list cut inside its length parsed without error")
 	}
 }
 
