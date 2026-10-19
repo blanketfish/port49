@@ -1200,3 +1200,157 @@ func TestAnIDOverMaxLenIsRefusedByRevoke(t *testing.T) {
 		t.Fatalf("MaxLen+1: %q %v", got, err)
 	}
 }
+
+// ReachMark reaches what a mark made elsewhere names in this broker's
+// session store, and writes no mark and no record: the region that made it
+// recorded it (plan 11a, R20).
+func TestReachMarkReachesWhatAMarkMadeElsewhereNames(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now,
+		Origin: "admin_socket uid 0"})
+	if err != nil || n != 2 || len(refs) != 1 || refs[0].NAS != "leaf1" {
+		t.Fatalf("%d %v %v", n, refs, err)
+	}
+	if c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); err != nil ||
+		c.RevokedAt.IsZero() {
+		t.Fatalf("leaf1's context: %+v %v", c, err)
+	}
+	for _, dev := range []string{"leaf1", "nx1"} {
+		if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: dev, Username: "alice"}); len(toks) != 0 {
+			t.Fatalf("%d unspent token(s) on %s survived", len(toks), dev)
+		}
+	}
+	if _, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReachMark wrote a mark: %v", err)
+	}
+	if recs := eventsOf(f.records(t), "revoke"); len(recs) != 0 {
+		t.Fatalf("ReachMark wrote a record: %v", recs)
+	}
+}
+
+// A certificate mark reaches the contexts of its issuer and serial, split at
+// the key's last '|'; a cert mark whose key has no '|' is an error, not a
+// silent no-op (plan 11a, R20: marks arrive from other regions).
+func TestReachMarkByCertSplitsIssuerAndSerial(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now,
+		Origin: "admin_socket uid 0"})
+	if err != nil || n != 0 || len(refs) != 1 || refs[0].NAS != "leaf1" {
+		t.Fatalf("%d %v %v", n, refs, err)
+	}
+	if c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); err != nil ||
+		c.RevokedAt.IsZero() {
+		t.Fatalf("leaf1's context: %+v %v", c, err)
+	}
+	_, refs, err = f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationCert, Key: "no-split", At: f.now})
+	if err == nil || len(refs) != 0 || !strings.Contains(err.Error(), store.RevocationCert) {
+		t.Fatalf("malformed cert mark: %v %v", refs, err)
+	}
+}
+
+// copyMissStore is a store whose copy has no mark (GetRevocation misses) and
+// that can ask the directory itself (ReadRevocation), as the placement router
+// in a split does.
+type copyMissStore struct {
+	store.Store
+	read func(kind, key string) (store.Revocation, error)
+}
+
+func (c copyMissStore) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	return store.Revocation{}, store.ErrNotFound
+}
+
+func (c copyMissStore) ReadRevocation(_ context.Context, kind, key string) (store.Revocation, error) {
+	return c.read(kind, key)
+}
+
+// A lift whose copy misses reads the directory: a directory that does not
+// answer fails the lift closed, never "not revoked" (plan 11a, Task 9).
+func TestALiftWhoseCopyMissesAndWhoseDirectoryIsCutFailsClosed(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Marks = store.NewMarks()
+	ctx := context.Background()
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = copyMissStore{Store: f.st, read: func(string, string) (store.Revocation, error) {
+		return store.Revocation{}, fmt.Errorf("%w: the directory store did not answer", store.ErrUnavailable)
+	}}
+	_, err := f.b.Lift(ctx, RevokeRequest{Principal: alice})
+	if errors.Is(err, ErrNotRevoked) || !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a cut directory must fail the lift, not report it not revoked: %v", err)
+	}
+	if _, ok := f.b.Marks.Get(store.RevocationPrincipal, alice); !ok {
+		t.Fatal("the lift un-marked the copy while the directory was cut")
+	}
+}
+
+// A mark the copy has not followed yet is found in the directory and lifted
+// from it.
+func TestALiftWhoseCopyMissesLiftsTheDirectorysMark(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = copyMissStore{Store: f.st, read: func(string, string) (store.Revocation, error) { return mark, nil }}
+	if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the directory's mark was not deleted: %v", err)
+	}
+}
+
+// deleteRevocationFails is a store whose lifts fail with err.
+type deleteRevocationFails struct {
+	store.Store
+	err error
+}
+
+func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string) error { return s.err }
+
+// A lift whose mark was revoked again while it ran lifts nothing, and says
+// so in the operator's words, never the store's "context changed" (dial fix
+// round 4 review, I1); any other failure keeps "could not be lifted, and
+// stands". Neither is recorded, and the listener keeps the mark.
+func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	conns := &fakeConns{}
+	f.b.Conns = conns
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	st := f.b.Store
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: the principal or certificate was revoked again while the lift ran", store.ErrConflict),
+			"broker: nothing was lifted: principal " + alice + " was revoked again while this lift ran, and that " +
+				"revocation stands; lift again only if it should go too"},
+		{fmt.Errorf("%w: no quorum", store.ErrUnavailable),
+			"broker: the revocation could not be lifted, and stands: store: unavailable: no quorum"},
+	} {
+		f.b.Store = deleteRevocationFails{st, c.err}
+		if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err == nil || err.Error() != c.want {
+			t.Fatalf("Lift = %v\nwant %s", err, c.want)
+		}
+	}
+	if on, told := conns.marked[[2]string{store.RevocationPrincipal, alice}]; !told || !on {
+		t.Fatalf("the listener lost the mark: %v", conns.marked)
+	}
+	if recs := eventsOf(f.records(t), "revoke"); len(recs) != 1 {
+		t.Fatalf("a failed lift was recorded: %v", recs)
+	}
+}

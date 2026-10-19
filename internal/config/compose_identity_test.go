@@ -45,8 +45,14 @@ func TestTheComposeExampleIdentityBlockIsBrokerIdentity(t *testing.T) {
 	if f.Broker.IdentitySet == nil {
 		t.Fatal("the uncommented identity block is not under broker:")
 	}
-	if store, _ := f.Rest["store"].(map[string]any); store["identity"] != nil {
-		t.Fatal("the identity block sits under store:")
+	// The key must be there, or the check below would pass on a missing one.
+	stores, ok := f.Rest["stores"].(map[string]any)
+	if !ok {
+		t.Fatal("the example has no stores: block")
+	}
+	dir, _ := stores["directory"].(map[string]any)
+	if stores["identity"] != nil || dir == nil || dir["identity"] != nil {
+		t.Fatal("the identity block sits under stores: or stores.directory:")
 	}
 	id, err := checkIdentity(f.Broker.IdentitySet, "")
 	if err != nil {

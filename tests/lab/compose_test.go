@@ -46,7 +46,7 @@ func healthDarkBound(interval, callTimeout time.Duration, closeAfter int) time.D
 	return time.Duration(closeAfter)*interval + callTimeout + 5*time.Second
 }
 
-// composeStoreBlock is the store: block deploy/compose's configs name for
+// composeStoreBlock is the stores: block deploy/compose's configs name for
 // component ("daemon" or "broker"), with the three in-container endpoints
 // and the lab's hold_ttl (storeLab's). The daemon's also names the health
 // checks; the broker has none.
@@ -56,12 +56,12 @@ func composeStoreBlock(component string) string {
 	if component == "broker" {
 		identity = "port49-broker"
 	} else {
-		health = fmt.Sprintf("    health: {interval: %s, close_after: %d, open_after: %d}\n",
+		health = fmt.Sprintf("      health: {interval: %s, close_after: %d, open_after: %d}\n",
 			labHealthInterval, labCloseAfter, labOpenAfter)
 	}
-	return fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]\n"+
-		"    ca_file: /etc/port49/etcd/ca.pem\n    %s: {cert_file: /etc/port49/etcd/%s.pem, key_file: /etc/port49/etcd/%s-key.pem}\n"+
-		"    hold_ttl: 60s\n%s", component, identity, identity, health)
+	return fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]\n"+
+		"      ca_file: /etc/port49/etcd/ca.pem\n      %s: {cert_file: /etc/port49/etcd/%s.pem, key_file: /etc/port49/etcd/%s-key.pem}\n"+
+		"      hold_ttl: 60s\n%s", component, identity, identity, health)
 }
 
 // composeLabFiles is the lab's version of deploy/compose's four YAML files

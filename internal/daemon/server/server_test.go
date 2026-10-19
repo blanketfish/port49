@@ -2250,7 +2250,7 @@ func (hangingStore) Candidates(ctx context.Context, _ store.TokenKey) ([]store.T
 	return nil, ctx.Err()
 }
 
-// A packet's store work ends at store.packet_deadline: the device hears
+// A packet's store work ends at packet_deadline: the device hears
 // ERROR then, never silence until its own timeout (spec §13, decision 35;
 // L35 measures what each image does with it).
 func TestAPacketsStoreWorkEndsAtItsDeadline(t *testing.T) {

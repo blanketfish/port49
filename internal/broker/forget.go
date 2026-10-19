@@ -59,8 +59,11 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 	m, err := b.Store.DeleteMembership(ctx, principal)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return fmt.Sprintf("no membership is held for %s, so nothing pins it; its next verification pins the "+
-			"entry the directory gives it then", printsafe.Line(principal, 200)), nil
+		// Not nothing: the store leaves a tombstone for a pin it lost, so a copy another
+		// region holds cannot put it back (plan 11a, I2).
+		return fmt.Sprintf("no membership was held for %s; it is forgotten all the same, and no region will "+
+			"restore an old pin for it; its next verification pins the entry the directory gives it then",
+			printsafe.Line(principal, 200)), nil
 	case err != nil:
 		b.logf("broker: forgetting %s failed: %v", printsafe.Line(principal, 200), err)
 		return "", fmt.Errorf("broker: forgetting %s failed, so the record may or may not be gone: run it again",

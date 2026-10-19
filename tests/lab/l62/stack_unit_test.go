@@ -61,8 +61,8 @@ func TestL62UnitBrokerConfigNamesTheRealmAndIssuance(t *testing.T) {
 		t.Errorf("humans = %v", b.Identity.Humans)
 	}
 	// Everything else is the original's, byte for byte.
-	if !strings.Contains(out, "store:\n  backend: etcd") || !strings.Contains(out, "certificate_status: {disabled: true}") {
-		t.Error("the rewrite lost the original's store or certificate_status")
+	if !strings.Contains(out, "stores:\n  directory:\n    backend: etcd") || !strings.Contains(out, "certificate_status: {disabled: true}") {
+		t.Error("the rewrite lost the original's stores or certificate_status")
 	}
 }
 

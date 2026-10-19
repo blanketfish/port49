@@ -79,7 +79,8 @@ type Store struct {
 	memberships map[string]membershipEntry
 	memberKeys  map[string]memberKeyEntry
 
-	writes int // incremented on every write; triggers sweep at sweepEvery
+	memberVer uint64 // the last membership version handed out
+	writes    int    // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
 	// than per key so a context that is deleted and written again never
 	// repeats a revision an earlier reader holds.
@@ -331,12 +332,12 @@ func (s *Store) sweepLocked() {
 
 	// Sweep the directory's records and keys past their expiry.
 	for p, e := range s.memberships {
-		if !e.exp.After(now) {
+		if !alive(e.exp, now) {
 			delete(s.memberships, p)
 		}
 	}
 	for k, e := range s.memberKeys {
-		if !e.expires.After(now) {
+		if !alive(e.expires, now) {
 			delete(s.memberKeys, k)
 		}
 	}
@@ -1547,6 +1548,7 @@ type membershipEntry struct {
 	m           store.Membership
 	exp         time.Time
 	forgottenAt time.Time
+	ver         uint64 // the record's version: PutPin compares it
 }
 
 // memberKeyEntry is one mapping key's index entry: every principal that
@@ -1574,7 +1576,7 @@ func (s *Store) liveMembershipLocked(principal string) (membershipEntry, bool) {
 	if !ok {
 		return membershipEntry{}, false
 	}
-	if !e.exp.After(s.now()) {
+	if !alive(e.exp, s.now()) {
 		delete(s.memberships, principal)
 		return membershipEntry{}, false
 	}
@@ -1590,18 +1592,58 @@ func (s *Store) liveMembershipLocked(principal string) (membershipEntry, bool) {
 func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.memberships == nil || s.memberKeys == nil {
+	return s.putMembershipLocked(m, ttl, nil)
+}
+
+// PutPin is PutMembership with no lease, written only when the record
+// stands as expect says (store.Store).
+func (s *Store) PutPin(_ context.Context, m store.Membership, expect store.PinExpect) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.putMembershipLocked(m, store.NoExpiry, &expect)
+}
+
+// initMembersLocked makes the membership maps, each only if it is missing.
+func (s *Store) initMembersLocked() {
+	if s.memberships == nil {
 		s.memberships = map[string]membershipEntry{}
+	}
+	if s.memberKeys == nil {
 		s.memberKeys = map[string]memberKeyEntry{}
 	}
-	exp := s.now().Add(ttl)
+}
+
+// stands reports whether e, a live record or none, is the state expect names.
+func (e membershipEntry) stands(live bool, expect store.PinExpect) bool {
+	switch {
+	case expect.Absent:
+		return !live
+	case expect.Forgotten:
+		return live && !e.forgottenAt.IsZero()
+	}
+	return live && e.forgottenAt.IsZero() && expect.Version != 0 && e.ver == expect.Version
+}
+
+func (s *Store) putMembershipLocked(m store.Membership, ttl time.Duration, expect *store.PinExpect) error {
+	s.initMembersLocked()
+	if expect != nil {
+		cur, live := s.liveMembershipLocked(m.Principal)
+		if !cur.stands(live, *expect) {
+			return store.ErrConflict
+		}
+	}
+	exp := expiry(s.now(), ttl)
 	for _, key := range m.MapKeys {
-		e := s.liveKeyLocked(key)
+		e, found := s.liveKeyLocked(key)
 		if !slices.Contains(e.claimants, m.Principal) {
 			e.claimants = append(slices.Clone(e.claimants), m.Principal)
 			sort.Strings(e.claimants)
 		}
-		e.expires = laterOf(e.expires, exp)
+		if found {
+			e.expires = laterExp(e.expires, exp)
+		} else {
+			e.expires = exp
+		}
 		s.memberKeys[key] = e
 	}
 	if e, ok := s.liveMembershipLocked(m.Principal); ok {
@@ -1614,19 +1656,20 @@ func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Du
 			return nil // a refusal outranks a grant verified at its instant
 		}
 	}
-	s.memberships[m.Principal] = membershipEntry{m: cloneMembership(m), exp: exp}
+	s.memberVer++
+	s.memberships[m.Principal] = membershipEntry{m: cloneMembership(m), exp: exp, ver: s.memberVer}
 	s.touchLocked()
 	return nil
 }
 
-// liveKeyLocked is key's entry, or an empty one when it is absent or past
-// its expiry.
-func (s *Store) liveKeyLocked(key string) memberKeyEntry {
+// liveKeyLocked is key's entry, or an empty one and false when it is absent
+// or past its expiry.
+func (s *Store) liveKeyLocked(key string) (memberKeyEntry, bool) {
 	e, ok := s.memberKeys[key]
-	if !ok || !e.expires.After(s.now()) {
-		return memberKeyEntry{}
+	if !ok || !alive(e.expires, s.now()) {
+		return memberKeyEntry{}, false
 	}
-	return e
+	return e, true
 }
 
 // claimsKeyLocked is whether principal has a live, unrefused record that
@@ -1634,6 +1677,28 @@ func (s *Store) liveKeyLocked(key string) memberKeyEntry {
 func (s *Store) claimsKeyLocked(principal, key string) bool {
 	e, live := s.liveMembershipLocked(principal)
 	return live && e.forgottenAt.IsZero() && !e.m.Refused && slices.Contains(e.m.MapKeys, key)
+}
+
+// expiry is ttl's expiry from now: none, the zero time, for
+// store.NoExpiry (plan 11a, R13).
+func expiry(now time.Time, ttl time.Duration) time.Time {
+	if ttl == store.NoExpiry {
+		return time.Time{}
+	}
+	return now.Add(ttl)
+}
+
+// alive reports whether a record expiring at exp stands at now: one with no
+// expiry always does.
+func alive(exp, now time.Time) bool { return exp.IsZero() || exp.After(now) }
+
+// laterExp is the later of two expiries of records that exist, no expiry
+// being the latest.
+func laterExp(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	return laterOf(a, b)
 }
 
 func laterOf(a, b time.Time) time.Time {
@@ -1648,14 +1713,16 @@ func laterOf(a, b time.Time) time.Time {
 func (s *Store) RefuseMapKeys(_ context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.memberKeys == nil || s.memberships == nil {
-		s.memberships = map[string]membershipEntry{}
-		s.memberKeys = map[string]memberKeyEntry{}
-	}
-	exp := s.now().Add(ttl)
+	s.initMembersLocked()
+	exp := expiry(s.now(), ttl)
 	for _, key := range mapKeys {
-		e := s.liveKeyLocked(key)
-		e.refusedAt, e.expires = laterOf(e.refusedAt, at), laterOf(e.expires, exp)
+		e, found := s.liveKeyLocked(key)
+		e.refusedAt = laterOf(e.refusedAt, at)
+		if found {
+			e.expires = laterExp(e.expires, exp)
+		} else {
+			e.expires = exp
+		}
 		s.memberKeys[key] = e
 	}
 	s.touchLocked()
@@ -1666,10 +1733,15 @@ func (s *Store) GetMembership(_ context.Context, principal string) (store.Member
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.liveMembershipLocked(principal)
-	if !ok || !e.forgottenAt.IsZero() {
+	if ok && !e.forgottenAt.IsZero() {
+		return store.Membership{}, store.ErrForgotten
+	}
+	if !ok {
 		return store.Membership{}, store.ErrNotFound
 	}
-	return cloneMembership(e.m), nil
+	out := cloneMembership(e.m)
+	out.Version = e.ver
+	return out, nil
 }
 
 // MembershipByKey answers the one claimant whose live, unrefused record
@@ -1678,7 +1750,7 @@ func (s *Store) GetMembership(_ context.Context, principal string) (store.Member
 func (s *Store) MembershipByKey(_ context.Context, mapKey string) (store.Membership, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := s.liveKeyLocked(mapKey)
+	k, _ := s.liveKeyLocked(mapKey)
 	principal := ""
 	for _, c := range k.claimants {
 		if s.claimsKeyLocked(c, mapKey) {
@@ -1718,11 +1790,19 @@ func (s *Store) DeleteMembership(_ context.Context, principal string) (store.Mem
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.liveMembershipLocked(principal)
-	if !ok || !e.forgottenAt.IsZero() {
+	if ok && !e.forgottenAt.IsZero() {
 		return store.Membership{}, store.ErrNotFound
 	}
 	now := s.now()
-	s.memberships[principal] = membershipEntry{forgottenAt: now, exp: laterOf(e.exp, now.Add(store.TombstoneFloor))}
+	s.initMembersLocked()
+	s.memberVer++
+	if !ok { // nothing held: the tombstone has no lease, so no copy elsewhere can outlive it
+		s.memberships[principal] = membershipEntry{forgottenAt: now, ver: s.memberVer}
+		s.touchLocked()
+		return store.Membership{}, store.ErrNotFound
+	}
+	s.memberships[principal] = membershipEntry{forgottenAt: now, exp: laterExp(e.exp, now.Add(store.TombstoneFloor)),
+		ver: s.memberVer}
 	s.touchLocked()
 	return cloneMembership(e.m), nil
 }

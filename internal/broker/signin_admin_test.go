@@ -622,7 +622,7 @@ func TestUnlockClearsTheCount(t *testing.T) {
 	}
 	// The throttled attempt was itself counted: six are held.
 	text, err := f.b.UnlockSignIn(ctx, "User:Alice@example.com", "admin_socket uid 0")
-	if err != nil || text != "cleared 6 failed sign-ins for "+alicePrincipal {
+	if err != nil || text != "cleared 6 failed sign-ins for "+alicePrincipal+" here; every region's count starts again" {
 		t.Fatalf("%q, %v", text, err)
 	}
 	recs := eventsOf(f.records(t), decision.EventSignInUnlock)

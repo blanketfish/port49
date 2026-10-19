@@ -297,6 +297,8 @@ minor not taken, ledgered as R30. **Re-review 2026-10-17** (1 Important, 4 Minor
 serves the union of every marks snapshot and writes only its own, a broker's pins and logouts in a
 record it cannot read, a heal-time key fault exits 1, only the heal's load lifts the ceiling, and a
 forget re-run after a directory restore. It opens L74 and L75.
+**11a executed 2026-10-19** on `feature/directory-and-session-stores` (Plan 11a — As built, below); L74
+and L75 closed.
 **L73 measured 2026-10-18** (`2026-10-17-l73-device-tls.md`; branch `test/l73-junos`): vJunos-router
 26.2R1.7, C8000V 17.18.02, N9Kv 10.6(2)F and cEOS-lab 4.36.3M, all ten cells each; L71 addenda for
 those four, IOL-XE 17.18.02 (no client) and XRd 26.1.1 (lists `tls`); L73 closed (vJunos-switch
@@ -7109,15 +7111,15 @@ review beside it. The Opus pre-flight (0 critical, 7 important, 14 minor) was ap
 
 ## Plan 11a — Directory and session stores (design §13; Ryan, 2026-10-14 and 2026-10-17)
 
-Status: **written 2026-10-17** (`2026-10-17-11a-directory-and-session-stores.md`, branch
-`feature/directory-and-session-stores`; twenty-two tasks: one spec, sixteen code, one docs sweep,
-two lab harnesses, one lab run, one docs; thirty rulings recorded as decision 51 by its Task 1, R1–R10
-and R13 (membership split by write rate, 2026-10-17) Ryan's; Q1, a back-channel logout's reach across
-regions, ruled by the team lead as R26: logout records in the directory store, followed into each
-broker's copy; the pre-flight's fixes on the team lead's rulings as R27–R29 and amendments to R13,
-R19 and R25, and the one item not taken as R30). It opens L74 (three regions: the cache, the cut, a
-restart during it, the fail-closed edges) and L75 (the TOTP used step, the unlock, membership's pin
-and back-channel logouts across brokers). Not executed.
+Status: **executed 2026-10-19** (`2026-10-17-11a-directory-and-session-stores.md`, branch
+`feature/directory-and-session-stores`; twenty-two tasks; decision 51; L74 and L75 closed 2026-10-19,
+`tests/lab/results/L74-regions.md` and `L75-regions.md`). Written 2026-10-17: thirty rulings recorded
+as decision 51 by its Task 1, R1–R10 and R13 (membership split by write rate) Ryan's; Q1, a
+back-channel logout's reach across regions, ruled by the team lead as R26: logout records in the
+directory store, followed into each broker's copy; the pre-flight's fixes on the team lead's rulings
+as R27–R29 and amendments to R13, R19 and R25, and the one item not taken as R30. It opened L74
+(three regions: the cache, the cut, a restart during it, the fail-closed edges) and L75 (the TOTP used
+step, the unlock, membership's pin and back-channel logouts across brokers).
 
 Roles and data placement are built in; topology is the operator's. port49 has two stores named by
 function. The **directory** store (`stores.directory`) holds what is written rarely and must agree
@@ -7138,6 +7140,107 @@ process sees it. Lab: three simulated regions with netem latency and a cut regio
 cache, the fail-closed edges, and the cross-region replay of a TOTP code. Backups stay the operator's
 tools (cron, Velero, etcd snapshots); the notes show one of each, alongside 9e's `port49 directory
 export` and `import`. Lands before plan 12, whose failure matrix includes the cut region.
+
+### Plan 11a — As built
+
+Executed from `2026-10-17-11a-directory-and-session-stores.md` on `feature/directory-and-session-stores`
+(base `29c11d98`; main merged in at `b3329154`), each task reviewed, most through one to three fix
+rounds. The ledger is `.superpowers/sdd/2026-10-17-11a-directory-and-session-stores/progress.md`, with
+each task's brief, report and review beside it. The Opus pre-flight (2 Critical, 9 Important, 20 Minor,
+then two re-reviews) was applied before Task 1.
+
+- **Built, with the task commits** (fixes follow the task's own commit):
+  - Task 1, spec: decision 51, L74 and L75 opened (`02e256c2`).
+  - Task 2, `stores:` replaces `store:` and `broker.directory.enrollment_store` (`eae7953c`, `72385ac5`).
+  - Task 3, a mark's origin in the process's copy, the directory cache's freshness, and a feed that
+    loads first (`76375c08`, `0987241c`).
+  - Task 4, unlock records in the directory store, `ul/` (`c9204005`, `c41587c6`, `7b57406a`).
+  - Task 5, an unlock starts every region's attempt count (`a363c07a`, `31150045`).
+  - Task 6, `internal/store/placement`: the marks in the directory store and their copy (`be87de5e`,
+    `c60d7749`, `f76945b8`).
+  - Task 7, etcd roles per store and the member count (`f4d19cbe`, `e0dfe912`).
+  - Task 8, `Broker.ReachMark`, Revoke's reach after its mark (`f1bb527d`, `e118928c`).
+  - Task 8a, directory membership's pin in the directory store with no lease, freshness per region
+    (`c3efddbe`, `90a07821`, `84d6b511`).
+  - Task 8b, back-channel logout records in the directory store, followed into each broker's copy
+    (`8ea39a66`, `582a165b`, `7d43014b`, `1a19a0dc`).
+  - Task 8c, `Broker.ReachLogout` (`92438b17`, `aea61ecd`).
+  - Task 9, port49-broker on two stores (`2173f277`, `c23d0a46`, `c0ca605b`, `0b194a8a`).
+  - Task 9a, every region holds the directory's encryption keys; one cluster named twice refused
+    (`8c934fc6`, `df873f96`, `51441e27`, `6785a6d9`).
+  - Task 10, port49d on two stores (`b8d1a5a3`, `f9db08e4`, `642026c8`).
+  - Task 10a, a restart during a cut serves from the region's sealed snapshot to the ceiling
+    (`ec4a43f8`, `7aa045b4`).
+  - Task 11, `port49d store-roles` prints a section per store (`db28096f`, `ee341fd4`).
+  - Task 12, `port49 store status` (`d312b7f7`, `22cfdc4e`, `4ba43c9e`).
+  - Task 13, the docs sweep: every config key named as `stores:` names it (`d05c567a`, `021bd304`).
+  - Task 14, the three-region harness for L74 (`b9d6861a`, `7b4c0f9f`, `e722fc4f`, `1f8d3c91`,
+    `0d49da99`, `7d3f800b`).
+  - Task 14a, the L75 harness (`053bb702`, `1307dbe5`, `49a15de6`).
+  - Task 15, the lab runs: nine runs; L74 and L75 closed at run 9, commit `470a6d08`
+    (`cfce0f84`; the region evidence redacts `token_sha256` and `credential_sha256`, `a5f84e2e`).
+  - Task 16, this record.
+- **Found by the lab, fixed in port49** (not in the plan's tasks):
+  - **One dark etcd member read as the directory not answering.** `RejectOldCluster` made
+    `clientv3.New` fail whenever any one member was down, so a restart with one member dark was a
+    cold-start outage, and a dark member with quorum intact stalled a call for the keepalive window
+    (10s plus 2s: gRPC raises a keepalive below 10s to 10s). Fixed: `RejectOldCluster` off,
+    `etcd.Open` never waits, reads are re-sent at a quarter and a half of the deadline, and the
+    revocation and the lift are re-sent on another member by an explicit context opt-in
+    (`767f0de1`, `e5e2093e`, `dbdbf117`, `c60af035`; `DialKeepAliveTime` 10s). The first diagnosis,
+    a blocking dial (`b13f56fa`), was wrong and is reverted by `767f0de1`.
+  - **`probeTLS` depended on endpoint order.** It now proceeds when any endpoint completes a verified
+    handshake and is a store fault only when none does (`cb392148`, `8d3f03af`); a certificate fault
+    confined to one member shows in `port49 store status` as `n/m members` (decisions 35 and 51).
+  - **A stray lift could erase a later revocation.** A hedged or late delete landed after a
+    re-revoke. A lift now deletes only the mark it read (`If ModRevision`), and a lift that finds the
+    mark revoked again says nothing was lifted (`fe991838`, `dea01ee8`, `068ea1e2`).
+  - **A logout or mark followed during a runner's takeover was dropped.** The follower queues from
+    the start of the takeover (`97b075b7`).
+  - **A watched pin served during a cut says it was served from the cached pin** (`a09127f4`).
+- **Rulings, as recorded, and what a review or a lab result changed:**
+  - R1–R10 and R13 are Ryan's and stand. R13 (pin, tombstone and refusals in the directory,
+    freshness in the session store) held; Task 8a's review found that a cut and a miss on the pin
+    read as "not pinned" (the moved-entry attack). It now reads as unavailable, and pin writes are
+    compare-and-set.
+  - **Q1 as ruled (R26).** A back-channel logout's reach across regions: the logout record lives in
+    the directory store. Ruled by the team lead under standing autonomy; Ryan may overrule, and no
+    overrule is recorded. Cost accepted: pending logouts are lost if the session store is lost before
+    the heal. Keycloak does not retry a 503 (L45), so a cut region answers 200 and holds the logout
+    pending.
+  - R19 (the sealed snapshot, a 4h ceiling) stands. Task 10a's review kept a younger snapshot serving
+    after the one that passed the ceiling is gone: skipping it costs availability and buys no
+    security.
+  - A failed start check after a snapshot start, or in port49-broker, ends the process (exit 1); a
+    held non-snapshot port49d run says it once and does not follow.
+  - L74 cell (d) waits 15s, not the harness's first 5s, for region 2's denial and records the
+    latency: the marks watch can sit on the dark member's connection for the keepalive window.
+  - L74 cell (i) proves the put-back by broker 3's `port49_store_feed_rescans_total{feed="marks"}`
+    rising after the heal, not by a log line.
+  - `tests/lab/results/*.md` keep `store.etcd.*`: they are historic measurement records.
+- **Lab.**
+  - **L74 closed 2026-10-19** (`tests/lab/results/L74-regions.md`, run 9 at `470a6d08`, etcd 3.6.15): all
+    nine cells agree with decision 51. A cut region keeps logging in from its cache and refuses
+    revocations (exit 1 in about half a second); a revocation made elsewhere reaches it about 11s
+    after the heal; `port49 store status` exits 3.
+  - **L75 closed 2026-10-19** (`tests/lab/results/L75-regions.md`, same run): a TOTP code is refused
+    across brokers (20 of 20 races), an unlock reaches every broker, attempt counts are per broker
+    (15 failures in all), membership's pin and a back-channel logout cross brokers, and a cut broker
+    answers a logout 200, applies it at once and holds it pending.
+- **Carried forward.**
+  - **Plan 12:** the list under "Plan 12", below, with the etcd version floor.
+  - **Plan 13:** the "Stores" page under "Plan 13", below, and the pending-logout dedupe note.
+  - **Pre-beta review:** a full logout queue drops a logout's reach (the tokens live to their TTL).
+  - **Qualification suite:** a lab cell for a write that lands after the heal (a lift or a revoke
+    sent on a stalled connection, delivered once the link returns), and its reverse, a stray revoke
+    re-creating a lifted mark (fails closed).
+  - **Parked:** the hedge fires at a quarter of `call_timeout`, 125ms at the 500ms default, close to
+    one cross-region read (40ms round trip at L74's netem); a stretched deployment's slow-tail reads
+    hedge routinely and double the read load. Consider a floor, or hedging after a half.
+  - **Parked minors:** a broker `dirErr` end-to-end test; a 1s held window before `watchCeiling`'s
+    first tick; the config does not refuse an etcd endpoint host that is not an IP literal or a valid
+    DNS name, or a non-numeric port (`store-roles` does today; when the config does,
+    `TestStoreRolesRefusesAnUnsafeEndpoint`'s `;` input fails at config first).
 
 ## Plan 12 — Deployment (§19 step 12)
 
@@ -7190,6 +7293,42 @@ answering ERROR (its store unreachable, `store_unavailable`). L76's store is in 
 covered a deny, a wrong key and port49 stopped, but not this one. If SR Linux treats an ERROR as a
 reject, break-glass is locked out exactly when the store is down. That is the 3am case, so the
 reference config waits on the measurement.
+
+**Carried from plan 11a** (decision 51):
+- Every shape ships a single-site example (`stores.directory` alone) and a multi-region one
+  (`stores.directory` stretched one member per region, `stores.session` per region), each with
+  `port49d store-roles` run once per cluster. On Kubernetes the stretched directory etcd is three
+  StatefulSets (one per cluster) joined across clusters, or VMs; the session etcd is a
+  StatefulSet per cluster. Neither is required; systemd and containers are peers.
+- The failure matrix includes the cut region (L74): devices keep logging in; directory writes and
+  password sign-in refused; `port49 store status` exits 3.
+- Alarms: `port49_store_directory_reachable == 0` for 1m (a region cut from the directory: its
+  revocations do not arrive); `time() - port49_store_directory_confirmed_timestamp_seconds > 60`
+  (the cache is stale, whatever the reason); `port49_store_logouts_pending > 0` for 5m (a cut region
+  holds logouts the other regions have not seen); `port49_store_feed_up{feed="marks"} == 0` as
+  before.
+- The same `encryption:` key material in every region, from one secret, and the three-step
+  rotation (R27) as a runbook.
+- Backups: each cluster its own. The directory etcd's snapshot (with `port49 directory export` from
+  cron beside it, under `umask 077`) and each region's session etcd's snapshot; Velero for a
+  Kubernetes-hosted etcd's volumes. One example of each in the operator notes.
+- `stores.directory.etcd.call_timeout` sized to the directory's cross-region round trip, and the
+  load test's numbers for the directory's reads at a sign-in.
+- **The etcd version floor is enforced nowhere.** The client sets `RejectOldCluster` off (it failed
+  `New` whenever any one member was down, which made one dark member a cold-start outage), and it
+  enforced only 3.5.0 in any case. The documented floor (3.4.24, 3.5.8 or 3.6) is a deployment
+  requirement: state it, and check it in the deployment tests, or at start without waiting on any
+  member. L74 and L75 ran on etcd 3.6.15.
+- **A dark member costs up to 12s.** gRPC raises a keepalive below 10s to 10s, plus a 2s timeout, so
+  a dropped link to one member stalls the marks watch (events resume on another member) and an
+  unhedged call for that long. Say it where the failure matrix and the alarms are written; reads and
+  the opted-in mark writes are hedged, other writes are not.
+- **The broker start's paged loads retry only `ErrUnavailable`.** Logouts and marks read 500 at a
+  time at one revision (`brokerd.go`, the two loads beside the ledger's), so a compaction between
+  pages returns `ErrCompacted` and the start exits instead of reading again. Pass
+  `store.ErrCompacted` to both retries, as the ledger load does (11a final review, N1). The same
+  pass can say a failed logout reach's long remedy once per run of failures rather than every
+  retry, and drop the entry when the logout lapses.
 
 **Carried from plan 11** (decision 50):
 - The reference device AAA configuration for `transport: tls`, per platform, written from L73
@@ -7344,7 +7483,23 @@ GitHub Action — written when the repository goes public. Six sections:
 **Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
 this file). From plan 9a's final review: the install must be 0755 with no setgid or file
 capabilities (plan 12 states it; this guide repeats it), and a table of `port49 ssh`, `trust` and
-`login` exit codes. From plan 11: an RFC
+`login` exit codes. From plan 11a: a
+"Stores" page:
+- the two roles, and what each holds;
+- the single-site and multi-region recipes;
+- a cut region at 3am (the plan's 3am table);
+- `port49 store status`;
+- `port49 directory forget` in a split (one forget reaches every region; refused during a cut);
+- a back-channel logout's reach in every region (R26), and the pending logouts of a cut region;
+- a restart during a cut: the snapshot and its ceiling (R19);
+- one set of encryption keys everywhere, and the three-step rotation (R27);
+- no migration from one store to two: a split starts on fresh stores (R25);
+- a user who logs in again during a cut may be logged out again when the logout arrives (a
+  late-followed logout ends logins made after it: a cut-off by time would fail open under
+  cross-region clock skew);
+- the "served from the cached pin" line is said once per principal per 10 minutes; past 1024
+  principals the map behind it stops deduplicating, so the line can repeat.
+From plan 11: an RFC
 9887 page (the two listeners, `listen: none`, `tls_listener`'s keys, device identity by
 inventory name or address, revocation, the 3am table, migrating a device from `tcp` to `tls`
 with the window where a device lists both servers kept short (RFC 9887 §6.1), and the server

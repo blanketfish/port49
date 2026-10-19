@@ -571,8 +571,8 @@ func TestTheDirectoryPasswordVerifierResolves(t *testing.T) {
 }
 
 // The verifier runs on either store shape (D7): on memory its enrollments
-// are the sealed file in the broker's state directory; with no
-// enrollment_store it takes store:'s shape. It still needs a directory.
+// are the sealed file in the broker's state directory; on etcd they are in
+// the directory store. It still needs a directory.
 func TestTheDirectoryPasswordVerifierNeedsADirectoryOnly(t *testing.T) {
 	if _, err := loadWith(t, passwordBroker(t, passwordBase, false)); err == nil || !strings.Contains(err.Error(), "broker.directory") {
 		t.Fatalf("no directory: %v", err)
@@ -582,58 +582,7 @@ func TestTheDirectoryPasswordVerifierNeedsADirectoryOnly(t *testing.T) {
 		t.Fatalf("the memory store: %v", err)
 	}
 	es := c.Broker.Directory.EnrollmentStore
-	if es.Backend != "memory" || es.Etcd != nil || es.File != filepath.Join(BrokerStateDir(c.Broker), "enrollments.json") {
-		t.Fatalf("%+v", es)
-	}
-}
-
-// enrollment_store's own etcd is checked as store.etcd is: https
-// endpoints, a CA, an identity; an unknown backend or key is refused; a
-// valid block loads with its fields; set without a directory_password
-// verifier, it is refused.
-func TestTheEnrollmentStoreHandle(t *testing.T) {
-	ca := write(t, "etcd-ca.pem", "x")
-	cert, key := write(t, "b.pem", "x"), write(t, "b-key.pem", "x")
-	block := func(body string) string {
-		return strings.Replace(passwordBroker(t, passwordBase, true), "    nested_groups: in_chain\n",
-			"    nested_groups: in_chain\n    enrollment_store:\n"+body, 1)
-	}
-	etcd := func(endpoints, identity string) string {
-		return "      backend: etcd\n      etcd:\n        endpoints: " + endpoints + "\n        ca_file: " + ca +
-			"\n        prefix: /port49-enrollments/\n" + identity + "        call_timeout: 500ms\n"
-	}
-	const eps = "[https://etcd-global-1:2379, https://etcd-global-2:2379]"
-	id := "        identity: {cert_file: " + cert + ", key_file: " + key + "}\n"
-	for _, tc := range []struct{ name, yaml, want string }{
-		{"an http endpoint", block(etcd("[http://etcd-global-1:2379]", id)), "enrollment_store.etcd.endpoints"},
-		{"no identity", block(etcd(eps, "")), "enrollment_store.etcd.identity"},
-		{"another backend", block("      backend: sql\n"), "memory or etcd"},
-		{"an unknown key", block("      backend: memory\n      table: x\n"), "@unknown:table: x"},
-		{"etcd with no etcd block", block("      backend: etcd\n"), "enrollment_store.etcd"},
-		{"memory with an etcd block", block("      backend: memory\n      etcd: {endpoints: [https://e:2379]}\n"), "enrollment_store.etcd"},
-		// brokerBlock's x509 verifier, its directory with a mapping, and the block.
-		{"without a password verifier", strings.Replace(withDirectoryBlock(t, brokerBlock), "    nested_groups: in_chain\n",
-			"    nested_groups: in_chain\n    enrollment_store:\n"+etcd(eps, id), 1),
-			"nothing is enrolled without one; remove it"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			want := unknownFieldLine(tc.yaml, tc.want)
-			_, err := loadWith(t, tc.yaml)
-			tc.want = want
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("got %v, want %q", err, tc.want)
-			}
-		})
-	}
-	c, err := loadWith(t, block(etcd(eps, id)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	es := c.Broker.Directory.EnrollmentStore
-	e := es.Etcd
-	if es.Backend != "etcd" || es.File != "" || e == nil || strings.Join(e.Endpoints, " ") != "https://etcd-global-1:2379 https://etcd-global-2:2379" ||
-		e.CAFile != ca || e.Prefix != "/port49-enrollments/" || e.CertFile != cert || e.KeyFile != key ||
-		e.CallTimeout != 500*time.Millisecond {
+	if es.Backend != "memory" || es.File != filepath.Join(BrokerStateDir(c.Broker), "enrollments.json") {
 		t.Fatalf("%+v", es)
 	}
 }

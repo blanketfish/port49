@@ -237,7 +237,7 @@ func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
 		v    any
 		want string
 	}{
-		{"sign_in_unlock", SignInUnlock{Failures: 3, Origin: "admin_socket uid 0"}, `{"failures":3,"origin":"admin_socket uid 0"}`},
+		{"sign_in_unlock", SignInUnlock{Failures: new(3), Origin: "admin_socket uid 0"}, `{"failures":3,"origin":"admin_socket uid 0"}`},
 		{"enrollments_import", EnrollmentsImport{Records: 2, ExportedAt: "2026-10-14T00:00:00Z", Origin: "o"},
 			`{"records":2,"exported_at":"2026-10-14T00:00:00Z","origin":"o"}`},
 	} {
@@ -246,7 +246,7 @@ func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
 			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
 		}
 	}
-	b, _ = json.Marshal(Record{Event: EventSignInUnlock, SignInUnlock: &SignInUnlock{Failures: 1, Origin: "o"},
+	b, _ = json.Marshal(Record{Event: EventSignInUnlock, SignInUnlock: &SignInUnlock{Failures: new(1), Origin: "o"},
 		SecondFactorReset: &SecondFactorReset{Origin: "o"}, EnrollmentsImport: &EnrollmentsImport{Origin: "o"}})
 	for _, want := range []string{`"sign_in_unlock":`, `"second_factor_reset":`, `"enrollments_import":`} {
 		if !strings.Contains(string(b), want) {

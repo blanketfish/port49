@@ -693,6 +693,9 @@ func run(parent context.Context, cfgPath string) error {
 	// The daemon's copy of the standing marks, which every authorization,
 	// enable and receipt replay reads (plan 7d; Ruling 17).
 	authMarks := store.NewMarks()
+	// And the directory store's marks are held across a store gone too, and
+	// how fresh they are (plan 11a, R19).
+	dc := &directoryCache{fresh: store.NewFreshness(time.Now), fatal: make(chan error, 1)}
 	// The restore guard is the process's too: a restore that outlasts
 	// hold_ttl ends a run, and the next must still know what was followed
 	// (plan 7e, Task 15d).
@@ -703,7 +706,7 @@ func run(parent context.Context, cfgPath string) error {
 	// store is still down (plan 7f, I-1; the shape of the key alarm's gauge).
 	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
-		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored, hs)
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, dc, restored, hs)
 	}, 5*time.Second)
 }
 
@@ -725,7 +728,10 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 			return err
 		}
 		var gone *storeGone
+		var fault *directoryFault
 		switch {
+		case errors.As(err, &fault):
+			return err // a deferred check's fault ends the process in every mode (N2)
 		case errors.As(err, &gone):
 			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
 			again = true
@@ -749,10 +755,16 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // package comment gives. again says a store gone ended the run before.
 // authMarks and restored are the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, authMarks *store.Marks, restored *restoreGuard, hs *healthState) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks, dc *directoryCache, restored *restoreGuard, hs *healthState) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
+	}
+	// A fault left by a run that ended some other way is not this run's: it
+	// is found again when the directory opens (N2).
+	select {
+	case <-dc.fatal:
+	default:
 	}
 	// A mark outlives any grace window a context is kept past its ceiling
 	// (crypt.DefaultLedgerKeep), so a record put back is past its ceiling
@@ -764,7 +776,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// run starts the next.
 	defer func() {
 		var gone *storeGone
-		if c := context.Cause(parent); errors.As(c, &gone) {
+		var fault *directoryFault
+		if c := context.Cause(parent); errors.As(c, &gone) && !errors.As(err, &fault) {
 			err = gone
 		}
 	}()
@@ -795,8 +808,11 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// the store (openStores' retry), so the alert holds through the whole
 	// outage and resolves only when the listeners open again (passes sets 0).
 	hs.bind(m)
-	if again && cfg.Store.Backend == config.BackendEtcd {
-		hs.atLeast(cfg.Store.Etcd.Health.CloseAfter)
+	if cfg.Stores.Session.Backend == config.BackendEtcd {
+		tellFresh(dc.fresh, m)
+	}
+	if again && cfg.Stores.Session.Backend == config.BackendEtcd {
+		hs.atLeast(cfg.Stores.Session.Etcd.Health.CloseAfter)
 	}
 
 	// A dead metrics listener is not a detail: without it nobody can see the
@@ -912,7 +928,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// on the process's ledger, which denies a context another login wrote
 	// at a key (decision 35).
 	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm,
-		authMarks)
+		authMarks, dc)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while waiting for the store: nothing was served, as coldCopies says
@@ -939,7 +955,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		restored.begin(m.RedemptionRestoreGuarded, m.StoreOps)
 		gctx, stopGuard := context.WithCancel(ctx)
 		guardDone := make(chan struct{})
-		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Store.Etcd.CallTimeout) }()
+		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Stores.Session.Etcd.CallTimeout) }()
 		defer func() { stopGuard(); <-guardDone }()
 	}
 	// The broker's store: the minter, the session manager, the broker, the
@@ -1200,7 +1216,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// (spec §5.8).
 		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout,
-		PacketDeadline: cfg.Store.PacketDeadline,
+		PacketDeadline: cfg.Stores.Session.PacketDeadline,
 		// A store gone resets the held connections (re-check R-M0).
 		Abort: func() bool { var g *storeGone; return errors.As(context.Cause(parent), &g) }}
 
@@ -1230,7 +1246,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// not gated. A stop meanwhile ends the run at once.
 	if sts.health != nil && again {
 		fmt.Fprintf(stderr, "port49d: store: the store answers; the listeners open again after %d consecutive "+
-			"health checks pass (store.etcd.health.open_after)\n", sts.health.openAfter)
+			"health checks pass (%s.etcd.health.open_after)\n", sts.health.openAfter, cfg.Stores.SessionPath())
 		if err := sts.health.passes(ctx); err != nil {
 			mln.Close()
 			stopSpool()
@@ -1314,7 +1330,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 		}
-		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
+		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
+			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
 		if brk != nil {
 			// The socket's deadline covers the wait and the run; one bound
 			// for both, so they cannot drift apart.
@@ -1490,6 +1507,18 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
+		cancel()
+		<-serveErr
+	case err := <-dc.fatal:
+		// The directory opened after a snapshot start and failed a start
+		// check (N2): a fault of the configuration, returned as a cold
+		// start's are, never a store gone.
+		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
+		}
+		dc.loaded.Store(false) // the held marks are not served again
+		runErr = &directoryFault{err}
 		cancel()
 		<-serveErr
 	case err := <-serveErr:

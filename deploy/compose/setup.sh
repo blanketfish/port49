@@ -49,7 +49,7 @@ pub "$L/etcd/ca.pem" /vol/etcd-root/ca.pem
 pub "$L/etcd/root.pem" /vol/etcd-root/root.pem
 install -o 0 -g 0 -m 0600 "$L/etcd/root-key.pem" /vol/etcd-root/root-key.pem
 
-# store-roles reads both store: blocks and the files they name, at the
+# store-roles reads both components' stores: blocks and the files they name, at the
 # paths each container sees them: stage both here, in this container alone.
 # The staged copy holds both components' etcd private keys and the exited
 # container keeps its filesystem layer, so /etc/port49 is a tmpfs (compose.yaml)

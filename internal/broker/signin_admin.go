@@ -327,16 +327,46 @@ func (b *Broker) UnlockSignIn(ctx context.Context, principal, origin string) (st
 	}
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)
 	defer cancel()
-	n, err := b.Store.ClearSignInAttempts(ctx, "principal:"+principal)
-	if err != nil {
+	prev, err := b.Enrollments.GetUnlock(ctx, principal)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrEnrollmentStoreLost):
+		return "", fmt.Errorf("broker: the enrollment store is lost (%s): %s", lostWhy(err), lostRemedy)
+	case err != nil:
 		b.logf("broker: unlocking %s failed: %v", printsafe.Line(principal, 200), err)
-		return "", fmt.Errorf("broker: unlocking %s failed: the store did not answer, so nothing changed: run it again",
-			printsafe.Line(principal, 200))
+		return "", fmt.Errorf("broker: unlocking %s failed: the directory store did not answer, so nothing "+
+			"changed: run it again", printsafe.Line(principal, 200))
+	}
+	// The unlock is the directory's: every region counts under a new key
+	// from here (R15).
+	switch err := b.Enrollments.PutUnlock(ctx, principal, b.Now()); {
+	case errors.Is(err, store.ErrEnrollmentStoreLost):
+		return "", fmt.Errorf("broker: the enrollment store is lost (%s): %s", lostWhy(err), lostRemedy)
+	case err != nil:
+		b.logf("broker: unlocking %s failed: %v", printsafe.Line(principal, 200), err)
+		return "", fmt.Errorf("broker: unlocking %s failed: the directory store did not answer, so nothing "+
+			"changed: run it again", printsafe.Line(principal, 200))
+	}
+	// This region's count under the key the unlock replaced, for the record;
+	// a failure here costs nothing, the unlock is in force, and the record
+	// then carries no count rather than a zero.
+	n, err := b.Store.ClearSignInAttempts(ctx, attemptKey(principal, prev))
+	if err != nil {
+		b.logf("broker: the unlock of %s is in force; this region's old count could not be read: %v",
+			printsafe.Line(principal, 200), err)
+		b.Log.Emit(decision.Record{TS: b.Now(), Event: decision.EventSignInUnlock, Principal: principal,
+			SignInUnlock: &decision.SignInUnlock{Origin: origin}})
+		b.say("sign-in: %s started every region's count again for %s; this region's old count could not be read",
+			origin, printsafe.Line(principal, 200))
+		return fmt.Sprintf("unlocked %s: every region's count starts again; this region's old count could not be "+
+			"read, so how many it held is unknown", printsafe.Line(principal, 200)), nil
 	}
 	b.Log.Emit(decision.Record{TS: b.Now(), Event: decision.EventSignInUnlock, Principal: principal,
-		SignInUnlock: &decision.SignInUnlock{Failures: n, Origin: origin}})
-	b.say("sign-in: %s cleared %d failed sign-ins for %s", origin, n, printsafe.Line(principal, 200))
-	return fmt.Sprintf("cleared %d failed sign-ins for %s", n, printsafe.Line(principal, 200)), nil
+		SignInUnlock: &decision.SignInUnlock{Failures: &n, Origin: origin}})
+	b.say("sign-in: %s cleared %d failed sign-ins for %s here, and started every region's count again", origin, n,
+		printsafe.Line(principal, 200))
+	return fmt.Sprintf("cleared %d failed sign-ins for %s here; every region's count starts again", n,
+		printsafe.Line(principal, 200)), nil
 }
 
 // InitEnrollments is init-enrollments (D7), the only thing that creates an

@@ -95,6 +95,9 @@ type signInAttempt struct {
 	w   http.ResponseWriter
 	now time.Time
 	src string
+	// principalKey is the principal's attempt key under its latest unlock
+	// (unlockedKey); empty before it is read.
+	principalKey string
 	// event is the event a refusal is recorded under: issue for a sign-in,
 	// enroll for a confirm (spec §5.7: an enroll deny carries the sign-in's
 	// reasons).
@@ -289,10 +292,50 @@ func (s *signInAttempt) underSourceLimit(ctx context.Context, cfg *oidc.Password
 		"too many failed sign-ins from this address; try again after %s")
 }
 
+// attemptKey is the principal's failed-attempt count key under its latest
+// unlock (plan 11a, R15). The count is the session store's, so per region;
+// the unlock is the directory's, so an unlock moves every region's count to
+// a new key at once, and the old counts lapse with their window.
+func attemptKey(principal string, unlockedAt time.Time) string {
+	if unlockedAt.IsZero() {
+		return "principal:" + principal
+	}
+	return "principal:" + principal + "@" + strconv.FormatInt(unlockedAt.UnixNano(), 10)
+}
+
+// unlockedKey reads principal's latest unlock from the directory store
+// and keys the principal's count under it (R15). A directory that does
+// not answer refuses the sign-in 503 store_unavailable, as the second
+// factor's read does: the sign-in needs the directory for its code anyway
+// (R16).
+func (s *signInAttempt) unlockedKey(ctx context.Context, principal string) bool {
+	at, err := s.b.Enrollments.GetUnlock(ctx, principal)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrEnrollmentStoreLost):
+		s.storeLost(lostWhy(err))
+		return false
+	case err != nil:
+		s.storeUnavailable(principal, "unlock", err, "")
+		return false
+	}
+	s.principalKey = attemptKey(principal, at)
+	return true
+}
+
+// principalAttemptKey is the key the principal is counted under: its
+// unlocked key once read, else the plain one.
+func (s *signInAttempt) principalAttemptKey(principal string) string {
+	if s.principalKey == "" {
+		return attemptKey(principal, time.Time{})
+	}
+	return s.principalKey
+}
+
 // underPrincipalLimit counts the attempt against the principal and judges it
 // (D4: counted before it is judged, so parallel attempts cannot pass it).
 func (s *signInAttempt) underPrincipalLimit(ctx context.Context, cfg *oidc.PasswordSignIn, principal string) bool {
-	return s.underLimit(ctx, cfg, "principal:"+principal, "principal_limit", principal, cfg.FailuresPerPrincipal,
+	return s.underLimit(ctx, cfg, s.principalAttemptKey(principal), "principal_limit", principal, cfg.FailuresPerPrincipal,
 		"too many failed sign-ins for this account; try again after %s, or an operator can clear it with "+
 			"`port49 directory unlock` for your account")
 }
@@ -448,7 +491,7 @@ func (s *signInAttempt) password(ctx context.Context, e directory.SignInEntry, p
 // the source's (with that limit on). A store error here is the broker's
 // line, never a refusal: the person is signed in.
 func (s *signInAttempt) succeeded(ctx context.Context, cfg *oidc.PasswordSignIn, principal string) {
-	if _, err := s.b.Store.ClearSignInAttempts(ctx, "principal:"+principal); err != nil {
+	if _, err := s.b.Store.ClearSignInAttempts(ctx, s.principalAttemptKey(principal)); err != nil {
 		s.b.sayOnce("sign_in_clear", sayEvery, "sign-in: a principal's failed-attempt count could not be cleared: %s",
 			printsafe.Line(err.Error(), 300))
 	}
@@ -564,7 +607,7 @@ func (b *Broker) signIn(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.underPrincipalLimit(ctx, cfg, e.Principal) {
+	if !s.unlockedKey(ctx, e.Principal) || !s.underPrincipalLimit(ctx, cfg, e.Principal) {
 		return
 	}
 	f, err := b.Enrollments.GetSecondFactor(ctx, e.Principal)
@@ -804,7 +847,7 @@ func (b *Broker) signInConfirm(w http.ResponseWriter, r *http.Request) {
 		s.storeUnavailable(principal, "second factor", err, "")
 		return
 	}
-	if !s.underPrincipalLimit(ctx, cfg, principal) {
+	if !s.unlockedKey(ctx, principal) || !s.underPrincipalLimit(ctx, cfg, principal) {
 		putBack()
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -288,6 +289,46 @@ func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
 	}
 	_, err = s.ctxKV.Put(ctx, s.k.meta("seal_keys"), string(body))
 	return unavailable(err)
+}
+
+// ClusterID is the etcd cluster's id, from a read's header (plan 11a, R28):
+// two clients of one cluster read one id, whatever address each names.
+func (s *Store) ClusterID(ctx context.Context) (uint64, error) {
+	resp, err := s.tok.Get(ctx, s.k.meta("ping"), clientv3.WithKeysOnly())
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	return resp.Header.ClusterId, nil
+}
+
+// ProbeLeaseGrant grants a lease on this store's cluster and returns its id
+// and the lifetime drawn for it, 3600 s plus up to 3600 s at random (plan
+// 11a, R28). etcd checks no role for a lease call. Another store handle's
+// ProbeLeaseSeen finds it only when it reaches the same cluster; the drawn
+// lifetime makes a lease of another cluster under the same id a mismatch.
+// The caller revokes it; one left behind holds no keys and expires.
+func (s *Store) ProbeLeaseGrant(ctx context.Context) (id, ttl int64, err error) {
+	ttl = 3600 + rand.Int64N(3600)
+	resp, err := s.ctx.Grant(ctx, ttl)
+	if err != nil {
+		return 0, 0, unavailable(err)
+	}
+	return int64(resp.ID), ttl, nil
+}
+
+// ProbeLeaseSeen reports whether this store's cluster knows the lease id
+// with exactly the lifetime it was granted.
+func (s *Store) ProbeLeaseSeen(ctx context.Context, id, ttl int64) (bool, error) {
+	resp, err := s.ctx.TimeToLive(ctx, clientv3.LeaseID(id))
+	if err != nil {
+		return false, unavailable(err)
+	}
+	return resp.TTL > 0 && resp.GrantedTTL == ttl, nil
+}
+
+// ProbeLeaseRevoke revokes the probe's lease; best effort, it expires anyway.
+func (s *Store) ProbeLeaseRevoke(ctx context.Context, id int64) {
+	s.ctx.Revoke(ctx, clientv3.LeaseID(id))
 }
 
 // maxJudgedPolicy is the most of a policy file meta/judged carries: under

@@ -17,8 +17,8 @@ import (
 
 func TestAnswerRefusesAnUnknownOpAndAnUnheldDevice(t *testing.T) {
 	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
-	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, second_factor_reset, "+
-		"sign_in_unlock, enrollments_init, enrollments_export and enrollments_import" {
+	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, store_status, "+
+		"second_factor_reset, sign_in_unlock, enrollments_init, enrollments_export and enrollments_import" {
 		t.Fatalf("%+v", r)
 	}
 	if r := s.answer(context.Background(), Request{Op: "keys_diagnose", Device: "x"}, 0); !strings.Contains(r.Error, "holds no unvalidated packet") {
@@ -336,5 +336,20 @@ func TestDirectoryForgetReachesTheBroker(t *testing.T) {
 	none := &Server{Held: &keyring.Held{}, Now: time.Now}
 	if r := none.answer(ctx, Request{Op: "directory_forget", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "runs no broker") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// store_status answers the process's lines and whether a store did not
+// answer; a process that reports no stores says so (plan 11a).
+func TestStoreStatusOp(t *testing.T) {
+	srv := &Server{Now: time.Now, StoreStatus: func(context.Context) (string, bool, error) {
+		return "directory  etcd    ?/3 members  unreachable  cache 1.0s", true, nil
+	}}
+	r := srv.answer(context.Background(), Request{Op: "store_status"}, 0)
+	if r.Error != "" || !r.Degraded || r.Text != "directory  etcd    ?/3 members  unreachable  cache 1.0s" {
+		t.Fatalf("%+v", r)
+	}
+	if r := (&Server{Now: time.Now}).answer(context.Background(), Request{Op: "store_status"}, 0); r.Error == "" {
+		t.Fatalf("a server with no StoreStatus answered %+v", r)
 	}
 }

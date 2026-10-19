@@ -1,0 +1,1 @@
+{"header":{"cluster_id":1,"member_id":2,"revision":3,"raft_term":4},"kvs":[{"key":"L3BvcnQ0OS92MS9kcy9tL3BvcnQ0OWRAaG9zdC1h","create_revision":2,"mod_revision":2,"version":1},{"key":"L3BvcnQ0OS92MS9kcy9tL3BvcnQ0OS1icm9rZXJAaG9zdC1h","create_revision":3,"mod_revision":3,"version":1}],"count":2}

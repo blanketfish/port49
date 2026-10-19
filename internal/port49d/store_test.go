@@ -60,13 +60,13 @@ func TestAStoreIdentityIsCheckedWhereItIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired := writeIdentity(t, ca, "port49-daemon", now.Add(-48*time.Hour), now.Add(-time.Hour), 0o600)
-	_, _, err = identity("daemon", expired, ca.Pool(), now)
+	_, _, err = identityAt("stores.directory.etcd.daemon", expired, ca.Pool(), now)
 	var fault *storeFault
 	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "expired at") || errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("an expired certificate: %v", err)
 	}
 	loose := writeIdentity(t, ca, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o644)
-	if _, _, err := identity("daemon", loose, ca.Pool(), now); !errors.As(err, &fault) || !strings.Contains(err.Error(), "chmod 600") {
+	if _, _, err := identityAt("stores.directory.etcd.daemon", loose, ca.Pool(), now); !errors.As(err, &fault) || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("a key others can read: %v", err)
 	}
 	garbled := writeIdentity(t, ca, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o600)
@@ -74,17 +74,17 @@ func TestAStoreIdentityIsCheckedWhereItIsRead(t *testing.T) {
 		0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := identity("daemon", garbled, ca.Pool(), now); !errors.As(err, &fault) ||
+	if _, _, err := identityAt("stores.directory.etcd.daemon", garbled, ca.Pool(), now); !errors.As(err, &fault) ||
 		!strings.Contains(err.Error(), garbled.KeyFile) || errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a certificate that does not parse: %v", err)
 	}
 	root := writeIdentity(t, ca, etcdstore.RootUser, now.Add(-time.Hour), now.Add(time.Hour), 0o600)
-	if _, _, err := identity("daemon", root, ca.Pool(), now); !errors.As(err, &fault) ||
+	if _, _, err := identityAt("stores.directory.etcd.daemon", root, ca.Pool(), now); !errors.As(err, &fault) ||
 		!strings.Contains(err.Error(), "etcd's administrator") {
 		t.Fatalf("a certificate for etcd's root: %v", err)
 	}
 	good := writeIdentity(t, ca, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o600)
-	if _, leaf, err := identity("daemon", good, ca.Pool(), now); err != nil || leaf.Subject.CommonName != "port49-daemon" {
+	if _, leaf, err := identityAt("stores.directory.etcd.daemon", good, ca.Pool(), now); err != nil || leaf.Subject.CommonName != "port49-daemon" {
 		t.Fatalf("a good identity: %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestProbeTLSTellsAFaultFromAnOutage(t *testing.T) {
 	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
 	ctx := context.Background()
 	good := srv.TLS(t, "port49-daemon")
-	if err := probeTLS(ctx, []string{srv.Endpoint}, good, time.Second); err != nil {
+	if err := probeTLS(ctx, "stores.directory.etcd", []string{srv.Endpoint}, good, time.Second); err != nil {
 		t.Fatalf("a good identity: %v", err)
 	}
 	now := time.Now()
@@ -105,26 +105,26 @@ func TestProbeTLSTellsAFaultFromAnOutage(t *testing.T) {
 		t.Fatal(err)
 	}
 	stranger := writeIdentity(t, other, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o600)
-	tc, _, err := identity("daemon", stranger, good.RootCAs, now)
+	tc, _, err := identityAt("stores.directory.etcd.daemon", stranger, good.RootCAs, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var fault *storeFault
-	if err := probeTLS(ctx, []string{srv.Endpoint}, tc, time.Second); !errors.As(err, &fault) {
+	if err := probeTLS(ctx, "stores.directory.etcd", []string{srv.Endpoint}, tc, time.Second); !errors.As(err, &fault) {
 		t.Fatalf("a client certificate etcd does not trust: %v", err)
 	}
 	wrongCA := good.Clone()
 	wrongCA.RootCAs = other.Pool()
-	if err := probeTLS(ctx, []string{srv.Endpoint}, wrongCA, time.Second); !errors.As(err, &fault) {
+	if err := probeTLS(ctx, "stores.directory.etcd", []string{srv.Endpoint}, wrongCA, time.Second); !errors.As(err, &fault) {
 		t.Fatalf("a server this CA does not verify: %v", err)
 	}
-	if err := probeTLS(ctx, []string{"https://127.0.0.1:1"}, good, time.Second); !errors.Is(err, store.ErrUnavailable) {
+	if err := probeTLS(ctx, "stores.directory.etcd", []string{"https://127.0.0.1:1"}, good, time.Second); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("nothing listening: %v", err)
 	}
 }
 
 // The start's roles check refuses a daemon that reaches past its role in
-// ErrNotSeparated's words, naming the fix; under store.etcd.roles:
+// ErrNotSeparated's words, naming the fix; under stores.directory.etcd.roles:
 // unenforced it skips the daemon's, and still refuses a broker that cannot
 // do its own work (Ruling 10; Task 11).
 func TestTheRolesCheckRunsTheBrokersUnderUnenforced(t *testing.T) {
@@ -156,29 +156,30 @@ func TestTheRolesCheckRunsTheBrokersUnderUnenforced(t *testing.T) {
 	b2, b2l := open("port49-broker2")
 	ctx := context.Background()
 	e := &config.EtcdConfig{CallTimeout: 2 * time.Second, Roles: config.RolesEnforced}
+	sharedRef := storeRef{at: "stores.directory", scope: etcdstore.ScopeShared}
 
-	err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l})
+	err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}, sharedRef)
 	if !errors.Is(err, etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "a store identity reaches past its role") ||
-		!strings.Contains(err.Error(), "store.etcd.roles: unenforced") || !strings.Contains(err.Error(), "store.etcd.daemon") {
+		!strings.Contains(err.Error(), "stores.directory.etcd.roles: unenforced") || !strings.Contains(err.Error(), "stores.directory.etcd.daemon") {
 		t.Fatalf("enforced, a daemon with the broker's role: %v", err)
 	}
 	e.Roles = config.RolesUnenforced
-	if err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}); err != nil {
+	if err := checkRoles(ctx, d, b2, e, map[string]*x509.Certificate{"daemon": dl, "broker": b2l}, sharedRef); err != nil {
 		t.Fatalf("unenforced, the daemon's check is skipped: %v", err)
 	}
-	err = checkRoles(ctx, d, b, e, map[string]*x509.Certificate{"daemon": dl, "broker": bl})
-	if !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "store.etcd.broker") {
+	err = checkRoles(ctx, d, b, e, map[string]*x509.Certificate{"daemon": dl, "broker": bl}, sharedRef)
+	if !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "stores.directory.etcd.broker") {
 		t.Fatalf("unenforced, a broker that cannot write meta/: %v", err)
 	}
 	// The daemon's identity alone (plan 7e): unenforced, its check is
 	// skipped and there is no broker's to run; enforced, it is refused as
 	// above.
-	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}); err != nil {
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}, sharedRef); err != nil {
 		t.Fatalf("unenforced, the daemon alone: %v", err)
 	}
 	e.Roles = config.RolesEnforced
-	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}); !errors.Is(err,
-		etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "store.etcd.daemon") {
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}, sharedRef); !errors.Is(err,
+		etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "stores.directory.etcd.daemon") {
 		t.Fatalf("enforced, the daemon alone with the broker's role: %v", err)
 	}
 }
@@ -502,7 +503,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer cancel()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +563,7 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 	marks := store.NewMarks()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), marks)
+		newKeyAlarm(), marks, testDirectoryCache())
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
@@ -603,7 +604,7 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 	}
 	var out syncBuffer
 	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
-		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	var fault *storeFault
 	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
 		t.Fatalf("a refused read of the ledger record: %v", err)
@@ -633,7 +634,7 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 			}
 			var out syncBuffer
 			_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
-				newReadiness(), false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+				newReadiness(), false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 			var fault *storeFault
 			if !errors.As(err, &fault) || !strings.Contains(err.Error(), "meta/witness and meta/purged") ||
 				!strings.Contains(err.Error(), "port49d store-roles") {
@@ -666,7 +667,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	defer cancel()
 	m := metrics.New(prometheus.NewRegistry())
 	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), store.NewMarks())
+		newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +697,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	// counts a fence timeout; the guard's context counter does not move,
 	// because the check takes no slot and trips no circuit.
 	guarded := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout"))
-	cctx, stopCheck := context.WithTimeout(ctx, cfg.Store.Etcd.CallTimeout)
+	cctx, stopCheck := context.WithTimeout(ctx, cfg.Stores.Session.Etcd.CallTimeout)
 	defer stopCheck()
 	if err := sts.health.check(cctx); !errors.Is(err, crypt.ErrFeedBehind) {
 		t.Fatalf("the health check with the feed stopped: %v, want an error wrapping crypt.ErrFeedBehind", err)
@@ -734,7 +735,7 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm,
-			store.NewMarks())
+			store.NewMarks(), testDirectoryCache())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -769,7 +770,7 @@ func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-			newKeyAlarm(), store.NewMarks())
+			newKeyAlarm(), store.NewMarks(), testDirectoryCache())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -834,4 +835,21 @@ func TestLineHolderEchoesOnlyTheShapePort49dWrites(t *testing.T) {
 			t.Errorf("lineHolder(%.80q) = %.300q, want %.300q", in, got, want)
 		}
 	}
+}
+
+// The guard's hold_ttl line names the block the store was read through.
+func TestTheGuardNamesTheBlockItReadsThrough(t *testing.T) {
+	e := &config.EtcdConfig{}
+	for _, at := range []string{"stores.directory", "stores.session"} {
+		if got := guardConfig("port49d", "daemon", at, e, metrics.New(prometheus.NewRegistry()), io.Discard,
+			func(error) {}).HoldTTLKey; got != at+".etcd.hold_ttl" {
+			t.Errorf("%s: HoldTTLKey %q", at, got)
+		}
+	}
+}
+
+// testDirectoryCache is the process's hold on the directory marks, as run
+// builds it.
+func testDirectoryCache() *directoryCache {
+	return &directoryCache{fresh: store.NewFreshness(time.Now)}
 }

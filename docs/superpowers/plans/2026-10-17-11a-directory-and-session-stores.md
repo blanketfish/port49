@@ -881,6 +881,8 @@ for path in ["docs/design/2026-08-21-port49-design.md", "docs/design/2026-08-23-
                 record = int(d.group(1)) < 51
             elif line.startswith("## "):
                 record = False
+            if line.startswith("- **Removed (R5, R25).**"):
+                continue
             if line.startswith("| **L") and "| closed" in line:
                 continue
         if not record and pat.search(line):
@@ -4488,9 +4490,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
   - `type store.LogoutEntry struct { Logout; Until time.Time }`.
   - `type store.LogoutSet`, with `NewLogoutSet(now func() time.Time)`, `Put(LogoutEntry)` (keeps
     the later `At` and the later `Until`, as `PutLogout` does), `Delete(key)`,
-    `Get(key) (Logout, bool)` (a live entry only), `Replace([]LogoutEntry) []LogoutEntry` (a load;
-    it returns the entries it did not hold before, by key and `At`), `All() []LogoutEntry` (the
-    live entries) and `Len()`.
+    `Get(key) (Logout, bool)` (a live entry only), `Merge([]LogoutEntry) []LogoutEntry` (a load: it puts each entry,
+    keeps the live entries the load lacks, so a snapshot a concurrent Put outran never erases a logout
+    (fail closed), and drops the lapsed; it returns the entries it did not hold before, by key and `At`), `All() []LogoutEntry` (the
+    live entries) and `Len()` (the live entries only).
   - `type store.LogoutFeed interface { Logouts(ctx) (uint64, []LogoutEntry, error); WatchLogouts(ctx, after uint64, fn func(e LogoutEntry, deleted bool, rev uint64), progress func(uint64)) error }`,
     which `*etcd.Store` satisfies.
   - `func store.FollowLogouts(ctx, feed LogoutFeed, set *LogoutSet, from uint64, on func(LogoutEntry), up func(bool), logf func(string, ...any)) error`.
@@ -4553,11 +4556,11 @@ func TestLogoutSetKeepsTheLaterAndExpires(t *testing.T) {
 	if _, ok := s.Get("sid 1:i 1:s"); ok {
 		t.Fatal("an expired logout is still served")
 	}
-	fresh := s.Replace([]LogoutEntry{{Logout: Logout{Key: "sub 1:i 1:u", At: now}, Until: now.Add(time.Hour)}})
+	fresh := s.Merge([]LogoutEntry{{Logout: Logout{Key: "sub 1:i 1:u", At: now}, Until: now.Add(time.Hour)}})
 	if s.Len() != 1 || len(fresh) != 1 || len(s.All()) != 1 {
-		t.Fatalf("Replace left %d, told %d new", s.Len(), len(fresh))
+		t.Fatalf("Merge left %d, told %d new", s.Len(), len(fresh))
 	}
-	if again := s.Replace(s.All()); len(again) != 0 {
+	if again := s.Merge(s.All()); len(again) != 0 {
 		t.Fatalf("a load of what the set holds told %d as new", len(again))
 	}
 	s.Delete("sub 1:i 1:u")
@@ -4848,16 +4851,35 @@ func (s *LogoutSet) Get(key string) (Logout, bool) {
 	return e.Logout, true
 }
 
-// Replace makes the set es: a load. It returns the entries it did not hold
+// Merge is a load: each entry of es is put as Put does, each live entry
+// the load lacks is kept, and each lapsed one is dropped. A load is a snapshot
+// that a concurrent Put (an ingestion, a forward) may have outrun, and
+// a logout must never be erased by one (fail closed); the cost is a logout
+// lingering until its own Until. It returns the entries it did not hold
 // before, by key and At, for the runner to reach (I4).
-func (s *LogoutSet) Replace(es []LogoutEntry) []LogoutEntry {
+func (s *LogoutSet) Merge(es []LogoutEntry) []LogoutEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	m := make(map[string]LogoutEntry, len(s.m)+len(es))
+	for k, e := range s.m {
+		if now.Before(e.Until) {
+			m[k] = e
+		}
+	}
 	var fresh []LogoutEntry
-	m := make(map[string]LogoutEntry, len(es))
 	for _, e := range es {
-		if cur, ok := s.m[e.Key]; !ok || !cur.At.Equal(e.At) {
+		cur, ok := m[e.Key]
+		if !ok || !cur.At.Equal(e.At) {
 			fresh = append(fresh, e)
+		}
+		if ok {
+			if cur.At.After(e.At) {
+				e.At, e.Origin = cur.At, cur.Origin
+			}
+			if cur.Until.After(e.Until) {
+				e.Until = cur.Until
+			}
 		}
 		m[e.Key] = e
 	}
@@ -4880,10 +4902,17 @@ func (s *LogoutSet) All() []LogoutEntry {
 	return out
 }
 
+// Len counts the live entries, as the operator line says them.
 func (s *LogoutSet) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.m)
+	now, n := s.now(), 0
+	for _, e := range s.m {
+		if now.Before(e.Until) {
+			n++
+		}
+	}
+	return n
 }
 
 // LogoutFeed is the directory's logout records as a stream.
@@ -4909,7 +4938,7 @@ func FollowLogouts(ctx context.Context, feed LogoutFeed, set *LogoutSet, from ui
 			var rev uint64
 			var es []LogoutEntry
 			if rev, es, err = feed.Logouts(ctx); err == nil {
-				fresh := set.Replace(es)
+				fresh := set.Merge(es)
 				from = max(rev, 1)
 				for _, e := range fresh {
 					if on != nil {
@@ -5942,7 +5971,7 @@ In `internal/port49d/brokerd.go`:
    			defer cancel()
    			rev, es, err := dirRaw.Logouts(lctx)
    			if err == nil {
-   				bs.logouts.Replace(es)
+   				bs.logouts.Merge(es) // a merge, not a replace: a load never erases a live logout (8b review I1); Len counts the live (M2)
    				bs.logoutRev = rev
    			}
    			return err
@@ -8882,7 +8911,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 Run:
 ```bash
 git grep -nE "$OLDKEYS" -- ':!docs/superpowers/plans/20*' ':!docs/superpowers/plans/README.md' \
-  ':!docs/design/*' ':!tests/lab/results'
+  ':!docs/design/*' ':!tests/lab/results' ':!internal/config/stores_test.go'
 ```
 
 (`OLDKEYS` as Task 1 Step 5 exports it. The two design files are checked by Task 1 Step 5's

@@ -1099,17 +1099,35 @@ var (
 func membershipAAD(principal string) []byte { return []byte("membership\x00" + principal) }
 
 func (w *wrapped) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
+	sealed, err := w.sealMembership(m)
+	if err != nil {
+		return err
+	}
+	return w.inner.PutMembership(ctx, sealed, ttl)
+}
+
+func (w *wrapped) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	sealed, err := w.sealMembership(m)
+	if err != nil {
+		return err
+	}
+	return w.inner.PutPin(ctx, sealed, expect)
+}
+
+// sealMembership is m as the backend keeps it: the clear part the index and
+// the tombstone rule need, and the rest sealed.
+func (w *wrapped) sealMembership(m store.Membership) (store.Membership, error) {
 	b, err := json.Marshal(membershipSecret{DN: m.DN, EntryID: m.EntryID, Username: m.Username, GroupDNs: m.GroupDNs,
 		GroupNames: m.GroupNames, MapKeys: m.MapKeys, Refused: m.Refused, VerifiedAt: m.VerifiedAt})
 	if err != nil {
-		return err
+		return store.Membership{}, err
 	}
 	sealed, err := w.keys.SealBound(b, membershipAAD(m.Principal))
 	if err != nil {
-		return err
+		return store.Membership{}, err
 	}
-	return w.inner.PutMembership(ctx, store.Membership{Principal: m.Principal, MapKeys: m.MapKeys,
-		Refused: m.Refused, VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site, Sealed: sealed}, ttl)
+	return store.Membership{Principal: m.Principal, MapKeys: m.MapKeys,
+		Refused: m.Refused, VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site, Sealed: sealed}, nil
 }
 
 func (w *wrapped) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {

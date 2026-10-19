@@ -60,10 +60,10 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	ca, cert, key := file("ca.pem"), file("c.pem"), file("c-key.pem")
-	daemonStore := "\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://127.0.0.1:2379]\n    ca_file: " + ca +
-		"\n    daemon: {cert_file: " + cert + ", key_file: " + key + "}\n    hold_ttl: 60s\n"
-	brokerStore := "\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://127.0.0.1:2379]\n    ca_file: " + ca +
-		"\n    broker: {cert_file: " + cert + ", key_file: " + key + "}\n    hold_ttl: 60s\n"
+	daemonStore := "\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://127.0.0.1:2379]\n      ca_file: " + ca +
+		"\n      daemon: {cert_file: " + cert + ", key_file: " + key + "}\n      hold_ttl: 60s\n"
+	brokerStore := "\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://127.0.0.1:2379]\n      ca_file: " + ca +
+		"\n      broker: {cert_file: " + cert + ", key_file: " + key + "}\n      hold_ttl: 60s\n"
 	state := filepath.Join(dir, "state")
 	if err := os.Mkdir(state, 0o700); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 
 func TestSplitDaemonYAMLRefusesABaseItCannotDerive(t *testing.T) {
 	n := splitNode{Listen: "x:49", Metrics: "m", Admin: "a", Spool: "s"}
-	if _, err := splitDaemonYAML("listen: other\n", n, "p", "i", "\nstore: {}\n"); err == nil {
+	if _, err := splitDaemonYAML("listen: other\n", n, "p", "i", "\nstores: {}\n"); err == nil {
 		t.Fatal("a base with none of the lines to swap was derived from without an error")
 	}
 }

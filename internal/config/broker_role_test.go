@@ -33,12 +33,13 @@ func brokerRoleYAML(t *testing.T) string {
 		"  policy_file: /etc/port49/policy.yaml",
 		"  state_dir: " + state,
 		"  certificate_status: {disabled: true}",
-		"store:",
-		"  backend: etcd",
-		"  etcd:",
-		"    endpoints: [https://etcd-0:2379]",
-		"    ca_file: " + filepath.Join(dir, "ca.pem"),
-		"    broker: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}",
+		"stores:",
+		"  directory:",
+		"    backend: etcd",
+		"    etcd:",
+		"      endpoints: [https://etcd-0:2379]",
+		"      ca_file: " + filepath.Join(dir, "ca.pem"),
+		"      broker: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}",
 	}, "\n") + "\n"
 }
 
@@ -57,9 +58,9 @@ func daemonRoleYAML(t *testing.T) string {
 		"encryption:\n  current: {id: v2, secret_env: PORT49_ENC_V2}\n" +
 		"policy: {file: /etc/port49/policy.yaml}\n" +
 		"admin_socket: " + filepath.Join(dir, "admin.sock") + "\n" +
-		"store:\n  backend: etcd\n  etcd:\n    endpoints: [https://etcd-0:2379]\n" +
-		"    ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
-		"    daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n"
+		"stores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-0:2379]\n" +
+		"      ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
+		"      daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n"
 }
 
 func loadDaemonRole(t *testing.T, raw string) (Config, error) {
@@ -91,21 +92,25 @@ func TestABrokerConfigLoads(t *testing.T) {
 // the key.
 func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 	for key, extra := range map[string]string{
-		"keys:":                   "keys: {prod_key: {current: {version: 3, secret_env: T_PROD_V3}}}\n",
-		"listen":                  "listen: :49\n",
-		"store.etcd.daemon":       "", // added under store.etcd below
-		"accounting":              "accounting: {spool_capacity: 10}\n",
-		"limits":                  "limits: {per_nas_connections: 4}\n",
-		"receipt_idle_ttl":        "receipt_idle_ttl: 5m\n",
-		"platforms":               "platforms: {arista_eos: {session_services: [shell]}}\n",
-		"policy:":                 "policy: {file: /etc/port49/policy.yaml}\n",
-		"broker.revocations_file": "",
-		"lab.fault_file":          "lab: {fault_file: /tmp/f}\n",
+		"keys:":                        "keys: {prod_key: {current: {version: 3, secret_env: T_PROD_V3}}}\n",
+		"listen":                       "listen: :49\n",
+		"stores.directory.etcd.daemon": "", // added under stores.directory.etcd below
+		"stores.session.etcd.daemon":   "", // a split: a session store beside the directory's, below
+		"accounting":                   "accounting: {spool_capacity: 10}\n",
+		"limits":                       "limits: {per_nas_connections: 4}\n",
+		"receipt_idle_ttl":             "receipt_idle_ttl: 5m\n",
+		"platforms":                    "platforms: {arista_eos: {session_services: [shell]}}\n",
+		"policy:":                      "policy: {file: /etc/port49/policy.yaml}\n",
+		"broker.revocations_file":      "",
+		"lab.fault_file":               "lab: {fault_file: /tmp/f}\n",
 	} {
 		raw := brokerRoleYAML(t) + extra
 		switch key {
-		case "store.etcd.daemon":
-			raw = strings.Replace(raw, "    broker: {", "    daemon: {cert_file: /x, key_file: /y}\n    broker: {", 1)
+		case "stores.directory.etcd.daemon":
+			raw = strings.Replace(raw, "      broker: {", "      daemon: {cert_file: /x, key_file: /y}\n      broker: {", 1)
+		case "stores.session.etcd.daemon":
+			raw += "  session:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-1:2379]\n" +
+				"      daemon: {cert_file: /x, key_file: /y}\n"
 		case "broker.revocations_file":
 			raw = strings.Replace(raw, "  state_dir:", "  revocations_file: /var/lib/port49/r.json\n  state_dir:", 1)
 		}
@@ -117,7 +122,7 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 
 // port49-broker.yaml requires each of these, naming it.
 func TestTheBrokersConfigRequiresItsKeys(t *testing.T) {
-	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "    broker: {",
+	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "      broker: {",
 		"  current: {id: v2"} {
 		var lines []string
 		for _, l := range strings.Split(brokerRoleYAML(t), "\n") {
@@ -139,8 +144,8 @@ func TestTheDaemonsConfigNeverNamesTheBrokersIdentity(t *testing.T) {
 	if c, err := loadDaemonRole(t, base); err != nil || c.Policy == nil || c.Broker != nil {
 		t.Fatalf("the split daemon's config: %+v %v", c, err)
 	}
-	withBrokerID := strings.Replace(base, "    daemon: {", "    broker: {cert_file: /x, key_file: /y}\n    daemon: {", 1)
-	if _, err := loadDaemonRole(t, withBrokerID); err == nil || !strings.Contains(err.Error(), "store.etcd.broker") {
+	withBrokerID := strings.Replace(base, "      daemon: {", "      broker: {cert_file: /x, key_file: /y}\n      daemon: {", 1)
+	if _, err := loadDaemonRole(t, withBrokerID); err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.broker") {
 		t.Fatalf("a daemon config naming the broker's identity: %v", err)
 	}
 	withBlock := strings.Replace(base, "policy: {file: /etc/port49/policy.yaml}\n", brokerBlock, 1)
@@ -153,27 +158,27 @@ func TestTheDaemonsConfigNeverNamesTheBrokersIdentity(t *testing.T) {
 	}
 }
 
-// StoreBlocks reads either file's store: block whatever role would load
+// StoresBlocks reads either file's stores: block whatever role would load
 // it (pre-flight I8): a 7d port49d.yaml naming both identities yields
 // both, as store-roles needs; Load under the daemon's role refuses the
 // same file. A block whose shape is wrong is refused by both.
-func TestStoreBlocksReadsEitherFileWithNoRole(t *testing.T) {
+func TestStoresBlocksReadsEitherFileWithNoRole(t *testing.T) {
 	dir := storeFiles(t)
 	both := []byte(storeDoc(dir, ""))
-	sc, err := StoreBlocks(both)
-	if err != nil || sc.Etcd == nil || sc.Etcd.Daemon.CertFile == "" || sc.Etcd.Broker == nil {
+	sc, err := StoresBlocks(both)
+	if err != nil || sc.Directory.Etcd == nil || sc.Directory.Etcd.Daemon.CertFile == "" || sc.Directory.Etcd.Broker == nil {
 		t.Fatalf("a 7d file's two identities: %+v %v", sc, err)
 	}
-	if sc, err := StoreBlocks([]byte(brokerRoleYAML(t))); err != nil || sc.Etcd.Broker == nil ||
-		sc.Etcd.Daemon.CertFile != "" {
+	if sc, err := StoresBlocks([]byte(brokerRoleYAML(t))); err != nil || sc.Directory.Etcd.Broker == nil ||
+		sc.Directory.Etcd.Daemon.CertFile != "" {
 		t.Fatalf("port49-broker.yaml: %+v %v", sc, err)
 	}
-	if sc, err := StoreBlocks([]byte(daemonRoleYAML(t))); err != nil || sc.Etcd.Broker != nil ||
-		sc.Etcd.Daemon.CertFile == "" {
+	if sc, err := StoresBlocks([]byte(daemonRoleYAML(t))); err != nil || sc.Directory.Etcd.Broker != nil ||
+		sc.Directory.Etcd.Daemon.CertFile == "" {
 		t.Fatalf("port49d.yaml with no broker: %+v %v", sc, err)
 	}
-	misshapen := strings.Replace(storeDoc(dir, ""), "    endpoints: [https://etcd-0:2379]", "    endpoints: []", 1)
-	if _, err := StoreBlocks([]byte(misshapen)); err == nil || !strings.Contains(err.Error(), "endpoints") {
+	misshapen := strings.Replace(storeDoc(dir, ""), "      endpoints: [https://etcd-0:2379]", "      endpoints: []", 1)
+	if _, err := StoresBlocks([]byte(misshapen)); err == nil || !strings.Contains(err.Error(), "endpoints") {
 		t.Fatalf("a store block with no endpoint was read: %v", err)
 	}
 }
@@ -245,7 +250,7 @@ func TestTheBrokersStateDirIsAnExistingAbsoluteDirectory(t *testing.T) {
 // separate, and the broker runs in port49d.
 func TestTheBrokerRunsOnEtcd(t *testing.T) {
 	raw := brokerRoleYAML(t)
-	raw = raw[:strings.Index(raw, "store:")]
+	raw = raw[:strings.Index(raw, "stores:")]
 	if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "port49-broker runs on etcd") {
 		t.Fatalf("port49-broker.yaml on memory: %v", err)
 	}
@@ -336,12 +341,12 @@ func TestTheInventoryServiceTakesThePolicyBlock(t *testing.T) {
 	}
 }
 
-// StoreBlocks refuses a stale seed key with staleSeedKeys' line, naming
+// StoresBlocks refuses a stale seed key with staleSeedKeys' line, naming
 // the minter, before the strict decode can say only that the field is
 // unknown (Task 13 review M-5).
-func TestStoreBlocksSaysWhereAStaleSeedKeyWent(t *testing.T) {
+func TestStoresBlocksSaysWhereAStaleSeedKeyWent(t *testing.T) {
 	raw := storeDoc(storeFiles(t), "") + "lab:\n  seed_tokens:\n    - {nas: leaf-01, username: alice, secret: x}\n"
-	if _, err := StoreBlocks([]byte(raw)); err == nil || !strings.Contains(err.Error(), `"secret" was removed`) {
+	if _, err := StoresBlocks([]byte(raw)); err == nil || !strings.Contains(err.Error(), `"secret" was removed`) {
 		t.Fatalf("%v", err)
 	}
 }

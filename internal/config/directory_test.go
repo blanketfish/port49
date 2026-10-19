@@ -280,10 +280,10 @@ func TestServersSharingAHostPortAreRefused(t *testing.T) {
 	}
 }
 
-// passwordBrokerOnEtcd is port49-broker.yaml (store: etcd at https://etcd-0:2379,
-// prefix /port49/) with a directory_password verifier and a broker.directory
-// that carries enrollment_store (nothing, when it is "").
-func passwordBrokerOnEtcd(t *testing.T, enrollmentStore string) string {
+// passwordBrokerOnEtcd is port49-broker.yaml (stores.directory: etcd at
+// https://etcd-0:2379, prefix /port49/) with a directory_password verifier and
+// a broker.directory.
+func passwordBrokerOnEtcd(t *testing.T) string {
 	t.Helper()
 	raw := brokerRoleYAML(t)
 	raw = strings.Replace(raw, "  client_ca_file: /etc/port49/clients-ca.pem\n", passwordBase, 1)
@@ -296,64 +296,27 @@ func passwordBrokerOnEtcd(t *testing.T, enrollmentStore string) string {
     bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     nested_groups: in_chain
-`+enrollmentStore, 1)
+`, 1)
 }
 
-// With no enrollment_store a broker on etcd keeps its enrollments in
-// store.etcd (Etcd nil, no file); memory beside an etcd store: is refused
-// (each replica would keep its own enrollments); an etcd of its own that
-// shares an endpoint with store.etcd is refused when its prefix nests with
-// store.etcd.prefix, and allowed under a prefix of its own (plan 9e, D12).
-func TestTheEnrollmentStoreBesideAnEtcdStore(t *testing.T) {
-	dir := storeFiles(t)
-	own := func(endpoint, prefix string) string {
-		p := ""
-		if prefix != "" {
-			p = "        prefix: " + prefix + "\n"
-		}
-		return "    enrollment_store:\n      backend: etcd\n      etcd:\n        endpoints: [" + endpoint + "]\n" +
-			"        ca_file: " + filepath.Join(dir, "ca.pem") + "\n" + p +
-			"        identity: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}\n"
-	}
-	const shared, other = "https://etcd-0:2379", "https://etcd-global:2379"
-	for _, tc := range []struct {
-		name, block, want string // want "" is accepted
-	}{
-		{"memory", "    enrollment_store: {backend: memory}\n", "store.backend is etcd"},
-		{"the same endpoint and prefix", own(shared, "/port49/"), "shares an endpoint with store.etcd"},
-		{"the same endpoint inside the stores prefix", own(shared, "/port49/enroll/"), "shares an endpoint with store.etcd"},
-		{"the same endpoint over the stores prefix", own(shared, "/"), "shares an endpoint with store.etcd"},
-		{"the same endpoint in another case", own("https://ETCD-0:2379", "/port49/"), "shares an endpoint with store.etcd"},
-		{"the same endpoint with its default prefix", own(shared, ""), ""},
-		{"the same endpoint with a prefix beside the stores", own(shared, "/port49-enrollments/"), ""},
-		{"another endpoint with the stores prefix", own(other, "/port49/"), ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := loadBrokerRole(t, passwordBrokerOnEtcd(t, tc.block))
-			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
-				t.Fatalf("got %v, want %q", err, tc.want)
-			}
-		})
-	}
-	c, err := loadBrokerRole(t, passwordBrokerOnEtcd(t, ""))
+// A directory_password verifier keeps its enrollments in the directory store
+// (plan 11a, R5): on etcd they are the broker's own etcd handle (no file),
+// on memory the sealed file in the broker's state directory.
+func TestEnrollmentsLiveInTheDirectoryStore(t *testing.T) {
+	c, err := loadBrokerRole(t, passwordBrokerOnEtcd(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if es := c.Broker.Directory.EnrollmentStore; es.Backend != "etcd" || es.Etcd != nil || es.File != "" {
-		t.Fatalf("no enrollment_store on an etcd store: %+v", es)
+	if es := c.Broker.Directory.EnrollmentStore; es.Backend != "etcd" || es.File != "" {
+		t.Fatalf("an etcd directory store: %+v", es)
 	}
-	c, err = loadBrokerRole(t, passwordBrokerOnEtcd(t, own(shared, "")))
+	c, err = loadWith(t, passwordBroker(t, passwordBase, true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := c.Broker.Directory.EnrollmentStore.Etcd; e == nil || e.Prefix != "/port49-enrollments/" {
-		t.Fatalf("the default prefix: %+v", e)
-	}
-	// Memory beside memory stays allowed.
-	if c, err = loadWith(t, strings.Replace(passwordBroker(t, passwordBase, true), "    nested_groups: in_chain\n",
-		"    nested_groups: in_chain\n    enrollment_store: {backend: memory}\n", 1)); err != nil ||
-		c.Broker.Directory.EnrollmentStore.File == "" {
-		t.Fatalf("memory on memory: %v", err)
+	if es := c.Broker.Directory.EnrollmentStore; es.Backend != "memory" ||
+		es.File != filepath.Join(BrokerStateDir(c.Broker), "enrollments.json") {
+		t.Fatalf("a memory directory store: %+v", es)
 	}
 }
 
@@ -362,7 +325,7 @@ func TestTheEnrollmentStoreBesideAnEtcdStore(t *testing.T) {
 func TestTheRevocationsFileMayNotBeTheEnrollmentsFile(t *testing.T) {
 	cfg := strings.Replace(passwordBroker(t, passwordBase, true), "/var/lib/port49/revocations.json",
 		"/var/lib/port49/enrollments.json", 1)
-	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "enrollment_store's file") {
+	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "stores.directory's enrollment file") {
 		t.Fatalf("%v", err)
 	}
 }

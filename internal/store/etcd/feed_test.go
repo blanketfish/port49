@@ -531,3 +531,125 @@ func TestAChangeThatDoesNotDecodeIsStillDelivered(t *testing.T) {
 		t.Fatal("an undecodable change was skipped, so a cache would not evict it")
 	}
 }
+
+// The pins feed tells each change to a membership record by its principal,
+// a forget's tombstone included, after the revision Revision read.
+func TestWatchMembershipsTellsEachChange(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rev, err := s.Revision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 4)
+	go s.WatchMemberships(ctx, rev, func(p string, _ uint64) { got <- p }, func(uint64) {})
+	m := store.Membership{Principal: "user:alice@example.com", EntryID: "uuid:1", VerifiedAt: t0}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteMembership(ctx, m.Principal); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case p := <-got:
+			if p != m.Principal {
+				t.Fatalf("told %q", p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("change %d was not told", i+1)
+		}
+	}
+}
+
+// The logouts feed: a load at one revision, then each put with its expiry.
+func TestLogoutsLoadAndWatch(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.PutLogout(ctx, store.Logout{Key: "sid 1:i 2:s1", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rev, es, err := s.Logouts(ctx)
+	if err != nil || len(es) != 1 || !es[0].Until.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("%v %+v %v", rev, es, err)
+	}
+	got := make(chan store.LogoutEntry, 1)
+	go s.WatchLogouts(ctx, rev, func(e store.LogoutEntry, deleted bool, _ uint64) {
+		if !deleted {
+			got <- e
+		}
+	}, func(uint64) {})
+	if err := s.PutLogout(ctx, store.Logout{Key: "sub 1:i 2:u1", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case e := <-got:
+		if e.Key != "sub 1:i 2:u1" {
+			t.Fatalf("told %+v", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the put was not told")
+	}
+}
+
+// DeleteLogout clears a pending record on the revision it was listed at;
+// a record written since stays, and deleting none is not an error.
+func TestDeleteLogoutClearsTheRecord(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	const key = "sid 1:i 2:s1"
+	listed := func() store.LogoutEntry {
+		t.Helper()
+		_, es, err := s.Logouts(ctx)
+		if err != nil || len(es) != 1 || es[0].Rev == 0 {
+			t.Fatalf("listed %+v %v", es, err)
+		}
+		return es[0]
+	}
+	if err := s.PutLogout(ctx, store.Logout{Key: key, At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	stale := listed()
+	if err := s.PutLogout(ctx, store.Logout{Key: key, At: t0.Add(time.Minute)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteLogout(ctx, key, stale.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetLogout(ctx, key); err != nil || !got.At.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("a delete on the revision read before a second logout erased it: %+v %v", got, err)
+	}
+	if err := s.DeleteLogout(ctx, key, listed().Rev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetLogout(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the deleted logout is read: %v", err)
+	}
+	if err := s.DeleteLogout(ctx, key, stale.Rev); err != nil {
+		t.Fatalf("deleting none: %v", err)
+	}
+}
+
+// The logouts load reads a page at a time at one revision (final review,
+// M3): more records than a page all come back, at the first page's revision.
+func TestTheLogoutsLoadReadsPages(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	for i := range 501 {
+		if err := s.PutLogout(ctx, store.Logout{Key: fmt.Sprintf("sid 1:i %d:s%d", len(fmt.Sprint(i))+1, i), At: t0},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rev, es, err := s.Logouts(ctx)
+	if err != nil || len(es) != 501 {
+		t.Fatalf("%d records: %v", len(es), err)
+	}
+	for _, e := range es {
+		if e.Rev == 0 || e.Rev > rev {
+			t.Fatalf("a record at revision %d, past the load's %d", e.Rev, rev)
+		}
+	}
+}

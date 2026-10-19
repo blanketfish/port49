@@ -60,7 +60,7 @@ type Deps struct {
 	Log         decision.Emitter
 	Now         func() time.Time
 	IdleTimeout time.Duration
-	// PacketDeadline bounds the store work of one packet (store.packet_deadline;
+	// PacketDeadline bounds the store work of one packet (the session store's packet_deadline;
 	// plan 7d): past it every store call returns, the handler answers
 	// store_unavailable, and the device hears that before its own timeout.
 	// It never shortens the authentication failure delay. Zero is none.

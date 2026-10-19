@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
@@ -24,6 +25,7 @@ import (
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // holderShape is the holder a port49-broker writes under meta/hold
@@ -44,6 +46,18 @@ func lineHolder(holder string) string {
 	return fmt.Sprintf("%q", holder)
 }
 
+// directoryCache is the process's hold on the directory store's marks
+// (plan 11a, R19), kept across a store gone as the ledger is: whether
+// they were ever loaded, so a run after a store gone serves from them,
+// and how fresh they are.
+type directoryCache struct {
+	loaded atomic.Bool
+	fresh  *store.Freshness
+	// fatal carries a fault found when the directory opened after a
+	// snapshot start (N2): runOnce returns it, so port49d exits 1 saying it.
+	fatal chan error
+}
+
 // stores is what port49d's components read and write through (plan 7d):
 // on etcd the daemon's alone, its identity, guard and sealing layer, the
 // broker being port49-broker (plan 7e); on memory one store for the daemon
@@ -54,7 +68,7 @@ type stores struct {
 	daemon, broker store.Store
 	// author is what command and session authorization read through: the
 	// daemon's store, behind a context cache when
-	// store.etcd.context_cache.ttl is set (plan 7f; design §12).
+	// etcd.context_cache.ttl is set (plan 7f; design §12).
 	author store.Store
 	// etcd is the daemon's raw backend on etcd. Nil on memory.
 	etcd *etcdstore.Store
@@ -63,6 +77,11 @@ type stores struct {
 	// on memory.
 	judged     judgedBundleReader
 	persistent bool
+	// dir is the directory store's raw handle (the session store's own in a
+	// shared store; nil on memory), and fresh the marks' freshness: what
+	// port49 store status reads (plan 11a).
+	dir   *dirHandle
+	fresh *store.Freshness
 	// follow keeps the ledger following the store's contexts, and the
 	// marks, until its ctx ends (crypt.FollowContexts, store.FollowMarks).
 	// runOnce runs it as soon as the stores are open, and joins it before
@@ -104,14 +123,15 @@ func (f *storeFault) Unwrap() error { return f.err }
 // openDaemon's, on the daemon's identity alone: the broker, the hold and
 // the ledger record are port49-broker's (plan 7e). gone is how the guard
 // ends the run. It says each step on out. authMarks, the process's, is
-// loaded from the store.
+// loaded from the store (the directory store, in a split), and dc is the
+// process's hold on it.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm,
-	authMarks *store.Marks) (stores, error) {
+	authMarks *store.Marks, dc *directoryCache) (stores, error) {
 	// One sayer for every layer, so a key is said once, not once per layer
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer("port49d", keys, out, time.Now))
-	if cfg.Store.Backend != config.BackendEtcd {
+	if cfg.Stores.Session.Backend != config.BackendEtcd {
 		// The memory store is new and empty: every record in it is sealed
 		// above its base (crypt.Ledger).
 		mem := memory.New(time.Now)
@@ -127,11 +147,11 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		m.CryptStoreKeyUnknown.Set(1)
 	}
 	rd.set(readyStore)
-	d, err := waitForStore(ctx, cfg, m, out, again, "the listeners stay closed")
+	d, err := waitForStore(ctx, cfg, sessionRef(cfg), m, out, again, "the listeners stay closed")
 	if err != nil {
 		return stores{}, err
 	}
-	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, d, say)
+	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, dc, d, say)
 }
 
 // waitForStore is a start's wait for etcd (pre-flight I9, I13, M33), on
@@ -140,18 +160,26 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 // meanwhile (closed), up to start_timeout on a cold start and with no
 // deadline when again. A configuration fault ends a cold start, named;
 // after a store gone it is said and tried again, re-reading the files.
-func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, again bool,
+func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer, again bool,
 	closed string) (*etcdstore.Store, error) {
-	e := cfg.Store.Etcd
+	e := ref.cfg.Etcd
 	proc := procOf(cfg)
 	// Both feeds read down from here until each first runs, so an alert on
 	// port49_store_feed_up == 0 fires through a wait for the store or a
 	// marks load still retrying, not on an absent series; and each rescan
 	// counter is there at 0, so the first rescan is an increase (final
 	// review 7e-1 M-3).
-	for _, feed := range []string{"contexts", "marks"} {
-		m.StoreFeedUp.WithLabelValues(feed).Set(0)
-		m.StoreFeedRescans.WithLabelValues(feed)
+	if !ref.dir {
+		for _, feed := range []string{"contexts", "marks"} {
+			m.StoreFeedUp.WithLabelValues(feed).Set(0)
+			m.StoreFeedRescans.WithLabelValues(feed)
+		}
+		if !cfg.Stores.Shared && cfg.Role == config.RoleBroker {
+			// A split broker also follows the pins and the logouts: down from
+			// here, so an alert sees one stuck before its feed first runs.
+			m.StoreFeedUp.WithLabelValues("pins").Set(0)
+			m.StoreFeedUp.WithLabelValues("logouts").Set(0)
+		}
 	}
 	eps := strings.Join(e.Endpoints, ", ")
 	var deadline time.Time
@@ -159,12 +187,9 @@ func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 		deadline = time.Now().Add(e.StartTimeout)
 	}
 	for {
-		s, err := attempt(ctx, cfg, m, out)
+		s, err := attempt(ctx, cfg, ref, m, out)
 		if err == nil {
-			if e.Roles == config.RolesUnenforced {
-				fmt.Fprintf(out, "%s: store.etcd.roles: unenforced: the daemon and the broker are not separated "+
-					"on etcd; a stolen daemon key can lift revocations\n", proc)
-			}
+			sayUnenforced(out, cfg, ref)
 			return s, nil
 		}
 		if ctx.Err() != nil {
@@ -177,14 +202,14 @@ func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 		case errors.As(err, &fault):
 			fmt.Fprintf(out, "%s: %v; %s; trying again in 5s\n", proc, err, closed)
 		case !deadline.IsZero() && time.Now().After(deadline):
-			return nil, fmt.Errorf("store: etcd at %s did not answer within store.etcd.start_timeout (%v); not "+
-				"starting", eps, e.StartTimeout)
+			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
+				"starting", ref.what(), eps, ref.at+".etcd", e.StartTimeout)
 		default:
 			wait := "until it answers"
 			if !deadline.IsZero() {
 				wait = fmt.Sprintf("up to %v", e.StartTimeout)
 			}
-			fmt.Fprintf(out, "%s: store: etcd at %s not answering (%v); %s; waiting %s\n", proc, eps, err, closed,
+			fmt.Fprintf(out, "%s: %s: etcd at %s not answering (%v); %s; waiting %s\n", proc, ref.what(), eps, err, closed,
 				wait)
 		}
 		select {
@@ -192,6 +217,14 @@ func waitForStore(ctx context.Context, cfg config.Config, m *metrics.Metrics, ou
 			return nil, ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
+	}
+}
+
+// sayUnenforced is the line a store opened with unenforced roles says.
+func sayUnenforced(out io.Writer, cfg config.Config, ref storeRef) {
+	if ref.cfg.Etcd.Roles == config.RolesUnenforced {
+		fmt.Fprintf(out, "%s: %s.etcd.roles: unenforced: the daemon and the broker are not separated "+
+			"on etcd; a stolen daemon key can lift revocations\n", procOf(cfg), ref.at)
 	}
 }
 
@@ -215,8 +248,8 @@ func procOf(cfg config.Config) string {
 // keep, and the sweep is the broker's.
 func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, authMarks *store.Marks,
-	d *etcdstore.Store, say crypt.Option) (stores, error) {
-	e := cfg.Store.Etcd
+	dc *directoryCache, d *etcdstore.Store, say crypt.Option) (stores, error) {
+	e := cfg.Stores.Session.Etcd
 	// retry runs f until it returns anything but an outage (or one of
 	// also), saying each outage and trying again in 5s with the
 	// listeners closed. ctx's end ends it.
@@ -241,8 +274,12 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			}
 		}
 	}
+	dir := &dirHandle{}
 	fail := func(err error) (stores, error) {
 		d.Close()
+		if !cfg.Stores.Shared {
+			dir.close()
+		}
 		if ctx.Err() != nil {
 			return stores{}, ctx.Err()
 		}
@@ -293,17 +330,80 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// The marks are the process's, kept across a store gone as the ledger
 	// is (Ruling 11): a run after one first keeps every mark the store lost
 	// while this port49d was dark, which the load would lift otherwise, at
-	// each attempt (loadDaemonMarks).
+	// each attempt (loadDaemonMarks). In a split they are the directory
+	// store's.
 	sayKept := keptSayer(out, "as it starts again after a store gone")
 	var markRev uint64
-	if err := retry(func() error {
-		var err error
-		markRev, err = loadDaemonMarks(ctx, d, authMarks, again, e.BulkTimeout, sayKept)
-		return err
-	}); err != nil {
-		return fail(err)
+	loadFrom := func(feed store.MarkFeed, bound time.Duration) error {
+		return retry(func() error {
+			var err error
+			markRev, err = loadDaemonMarks(ctx, feed, authMarks, again, bound, sayKept)
+			return err
+		})
 	}
-	fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
+	switch {
+	case cfg.Stores.Shared:
+		dir.set(d)
+		if err := loadFrom(d, e.BulkTimeout); err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
+	case !dc.loaded.Load():
+		// No marks yet. The directory is tried once; when it does not answer,
+		// the region's snapshots serve (R19), else the listeners stay closed
+		// until it answers, up to its start_timeout on a cold start. Its role
+		// check ran in attempt: the daemon's read is confined to the marks and
+		// the key window.
+		de := cfg.Stores.Directory.Etcd
+		dd, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		switch {
+		case err == nil:
+			sayUnenforced(out, cfg, directoryRef(cfg))
+		case errors.Is(err, store.ErrUnavailable):
+			ceiling := snapshotCeiling(cfg)
+			snap, ok, serr := loadSnapshots(ctx, d, keys, false, ceiling, 4*e.CallTimeout, out, "port49d")
+			if serr == nil && ok {
+				if err := loadFrom(snapFeed{snap}, e.BulkTimeout); err != nil {
+					return fail(err)
+				}
+				markRev = 0 // the follow loads the directory afresh once it opens (N5)
+				dc.fresh.Seed(snap.confirmed)
+				fmt.Fprintln(out, snapshotLine("port49d", snap, ceiling, "the listeners close", err))
+				break
+			}
+			fmt.Fprintln(out, noSnapshotLine("port49d", directoryRef(cfg), err, serr, ceiling))
+			if dd, err = waitForStore(ctx, cfg, directoryRef(cfg), m, out, again, "the listeners stay closed"); err != nil {
+				return fail(err)
+			}
+		default:
+			return fail(err)
+		}
+		if dd != nil {
+			// A held run (a run after a store gone) runs the same checks when it
+			// opens the directory late (openDirectoryLater).
+			if err := retry(func() error { return checkTwoStores(ctx, cfg, d, dd, 4*de.CallTimeout) }); err != nil {
+				dd.Close()
+				return fail(err)
+			}
+			if err := retry(func() error {
+				return checkDirectoryKeys(ctx, "port49d", dd, directoryRef(cfg), keys, out, 4*de.CallTimeout, false)
+			}); err != nil {
+				dd.Close()
+				return fail(err)
+			}
+			dir.set(dd)
+			if err := loadFrom(dd, de.BulkTimeout); err != nil {
+				return fail(err)
+			}
+			fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the directory store\n", authMarks.Len())
+		}
+	default:
+		// A run after a store gone holds its marks: it serves from them, and
+		// the follow below opens the directory and loads when it answers (R19).
+		fmt.Fprintf(out, "port49d: directory store: this run serves from the marks it holds (%d) and follows "+
+			"the directory store once it answers\n", authMarks.Len())
+	}
+	dc.loaded.Store(true)
 	logf := func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) }
 	upOf := func(feed string) func(bool) {
 		return func(up bool) { m.StoreFeedUp.WithLabelValues(feed).Set(b2f(up)) }
@@ -312,20 +412,65 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// store. The marks feed tells no one: there is no broker listener here,
 	// and authMarks is what every authorization, enable and replay reads.
 	// Its reload keeps what the store lost (daemonReloadHook; Ruling 5).
+	dirBulk, dirCall := e.BulkTimeout, e.CallTimeout
+	if !cfg.Stores.Shared {
+		dirBulk, dirCall = cfg.Stores.Directory.Etcd.BulkTimeout, cfg.Stores.Directory.Etcd.CallTimeout
+	}
 	follow := func(ctx context.Context) {
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 		go func() {
 			defer wg.Done()
 			crypt.FollowContexts(ctx, d, d, keys, ledger, rev, upOf("contexts"),
 				func() { m.StoreFeedRescans.WithLabelValues("contexts").Inc() }, logf)
 		}()
+		snapStart := dc.fresh.Snapshot()
+		if snapStart {
+			wg.Add(1)
+			go func() { defer wg.Done(); watchCeiling(ctx, dc, snapshotCeiling(cfg), gone, out) }()
+		}
+		if !cfg.Stores.Shared {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				keepSnapshot(ctx, d, dir, dc.fresh, keys, writerName("port49d"), snapshotCeiling(cfg),
+					4*cfg.Stores.Directory.Etcd.CallTimeout, authMarks.All, nil, out, "port49d") // a marks record alone: no broker record (N4)
+			}()
+		}
 		go func() {
 			defer wg.Done()
-			store.FollowMarks(ctx, d, authMarks, markRev, nil, upOf("marks"),
-				daemonReloadHook(ctx, d, authMarks, m.StoreFeedRescans.WithLabelValues("marks"), e.BulkTimeout, out),
-				logf)
+			if dir.get() == nil {
+				bound := 4 * cfg.Stores.Directory.Etcd.CallTimeout
+				// A fault the checks find after a snapshot start ends the process
+				// (N2): a store gone would open the listeners on the held marks and
+				// fail again. A held run keeps serving and retries, as it said.
+				check := func(s *etcdstore.Store) error {
+					err := checkTwoStores(ctx, cfg, d, s, bound)
+					if err == nil {
+						err = checkDirectoryKeys(ctx, "port49d", s, directoryRef(cfg), keys, out, bound, false)
+					}
+					if err != nil && !snapStart && !errors.Is(err, store.ErrUnavailable) {
+						return &keepServing{err}
+					}
+					return err
+				}
+				if err := openDirectoryLater(ctx, cfg, m, out, dir, "port49d", check); err != nil {
+					if ctx.Err() == nil {
+						select {
+						case dc.fatal <- err:
+						default:
+						}
+					}
+					return
+				}
+			}
+			feed := dir.get()
+			store.FollowMarks(ctx, feed, authMarks, markRev, nil,
+				func(up bool) { upOf("marks")(up); dc.fresh.FeedUp(up) },
+				daemonReloadHook(ctx, feed, authMarks, m.StoreFeedRescans.WithLabelValues("marks"),
+					dirBulk, out), logf)
 		}()
+		go func() { defer wg.Done(); keepFresh(ctx, dir, dc.fresh, dirCall, out, "port49d", cfg.Stores.Shared) }()
 		wg.Wait()
 	}
 	// The daemon's raw store fenced under its guard (crypt.Fenced,
@@ -333,14 +478,20 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// reads the fenced store below the guard (storeCheck), so it waits for the
 	// context feed as a read does and takes no slot and trips no circuit.
 	fd := crypt.Fenced(d, ledger)
-	gd := guard.WrapRev(fd, guardConfig(procOf(cfg), "daemon", e, m, out, gone))
+	gd := guard.WrapRev(fd, guardConfig(procOf(cfg), "daemon", cfg.Stores.SessionPath(), e, m, out, gone))
 	h := e.Health
 	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
-		"checks and opens again after %d passes (store.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter)
+		"checks and opens again after %d passes (%s.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter,
+		cfg.Stores.SessionPath())
 	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
+	if !cfg.Stores.Shared {
+		de := cfg.Stores.Directory.Etcd
+		daemon = placement.Wrap(placement.Config{Session: daemon, Directory: dir, Marks: authMarks,
+			CallTimeout: de.CallTimeout, BulkTimeout: de.BulkTimeout})
+	}
 	authorStore := daemon
 	if cc := e.ContextCache; cc.TTL > 0 {
-		ss := &staleSayer{out: out, ttl: cc.TTL}
+		ss := &staleSayer{out: out, ttl: cc.TTL, key: cfg.Stores.SessionPath() + ".etcd.context_cache.ttl"}
 		authorStore = crypt.Cached(daemon, ledger, crypt.CacheConfig{TTL: cc.TTL, Max: cc.MaxEntries,
 			IdleTTL: cfg.ContextIdleTTL, Lookups: m.ContextCacheLookups, Entries: m.ContextCacheEntries,
 			Stale: ss.serve, Fresh: ss.fresh})
@@ -349,7 +500,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			"served past %v until the listeners close\n", cc.TTL, cc.MaxEntries, cc.TTL)
 	} else {
 		ledger.DetachCache()
-		fmt.Fprintln(out, "port49d: store: the context cache is off (store.etcd.context_cache.ttl is not set)")
+		fmt.Fprintf(out, "port49d: store: the context cache is off (%s.etcd.context_cache.ttl is not set)\n",
+			cfg.Stores.SessionPath())
 	}
 	return stores{
 		daemon:     daemon,
@@ -357,24 +509,86 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		etcd:       d,
 		judged:     d,
 		persistent: true,
+		dir:        dir,
+		fresh:      dc.fresh,
 		follow:     follow,
 		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
 			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
-		close: func() { d.Close() },
+		close: func() {
+			d.Close()
+			if !cfg.Stores.Shared {
+				dir.close()
+			}
+		},
 	}, nil
 }
 
-// guardConfig is component's guard on etcd (Task 8a): store.etcd's
-// bounds and breaker, its lines on out begun with proc (procOf), and a
+// directoryFault is a fault found when the directory opened after a snapshot
+// start (N2): it ends port49d in every mode, a run after a store gone
+// included, and is never a store gone.
+type directoryFault struct{ error }
+
+func (f *directoryFault) Unwrap() error { return f.error }
+
+// keepServing is a check's fault that a run keeping its marks does not end
+// on: said once, and the directory tried again (openDirectoryLater).
+type keepServing struct{ error }
+
+func (k *keepServing) Unwrap() error { return k.error }
+
+// openDirectoryLater opens the directory store once it answers, trying
+// every 5s, on a run that serves from the marks or the snapshot it holds
+// (R19). check (nil skips it) is the start checks the cold path runs
+// (R27, R28), run before the handle is set: the configuration may have
+// changed since the start that loaded the marks. A directory that does not
+// answer, or whose check meets an outage or is a *keepServing, is closed,
+// said once per reason, and tried again; any other fault of a check is
+// returned (N2), the store closed: the caller ends the process on it. It
+// returns nil with the handle set, or ctx.Err() when ctx ended first.
+func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, dir *dirHandle,
+	proc string, check func(*etcdstore.Store) error) error {
+	said := ""
+	for {
+		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		if err == nil {
+			if check != nil {
+				err = check(s)
+			}
+			if err == nil {
+				dir.set(s)
+				return nil
+			}
+			s.Close()
+			var keep *keepServing
+			if ctx.Err() == nil && !errors.Is(err, store.ErrUnavailable) && !errors.As(err, &keep) {
+				return err
+			}
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if why := err.Error(); why != said {
+			fmt.Fprintf(out, "%s: directory store: not followed yet (%v); serving from the marks this "+
+				"process holds; trying again every 5s\n", proc, err)
+			said = why
+		}
+		if !sleepCtx(ctx, 5*time.Second) {
+			return ctx.Err()
+		}
+	}
+}
+
+// guardConfig is component's guard on etcd (Task 8a): the etcd block's, under
+// the config path at (cfg.Stores.SessionPath()), bounds and breaker, its lines on out begun with proc (procOf), and a
 // pool's store failing or refusing every call for hold_ttl ending the run
 // as a store gone.
-func guardConfig(proc, component string, e *config.EtcdConfig, m *metrics.Metrics, out io.Writer,
+func guardConfig(proc, component, at string, e *config.EtcdConfig, m *metrics.Metrics, out io.Writer,
 	gone func(error)) guard.Config {
 	return guard.Config{Proc: proc, Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
 		MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
 			guard.Bulk: e.MaxInFlight.Bulk},
 		Failures: e.Breaker.Failures, OpenFor: e.Breaker.OpenFor, Metrics: m.StoreGuard(),
-		StopAfter: e.HoldTTL, Unhealthy: func(why string) { gone(&storeGone{why: why}) },
+		StopAfter: e.HoldTTL, HoldTTLKey: at + ".etcd.hold_ttl", Unhealthy: func(why string) { gone(&storeGone{why: why}) },
 		Say: func(l string) { fmt.Fprintln(out, l) }}
 }
 
@@ -587,24 +801,25 @@ func checkSealKeysAs(ctx context.Context, proc string, s *etcdstore.Store, keys 
 // An outage is store.ErrUnavailable; a configuration fault is a
 // *storeFault naming what is wrong. Each start says the certificate's
 // expiry, once it succeeds.
-func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer) (*etcdstore.Store, error) {
-	e := cfg.Store.Etcd
+func attempt(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer) (*etcdstore.Store, error) {
+	e := ref.cfg.Etcd
+	at := ref.at + ".etcd"
 	now := time.Now()
 	pool, cas, err := caCerts(e.CAFile)
 	if err != nil {
-		return nil, &storeFault{fmt.Errorf("store.etcd.ca_file %s: %w", e.CAFile, err)}
+		return nil, &storeFault{fmt.Errorf("%s.ca_file %s: %w", at, e.CAFile, err)}
 	}
 	for _, ca := range cas {
 		if now.After(ca.NotAfter) || now.Before(ca.NotBefore) {
-			return nil, &storeFault{fmt.Errorf("store.etcd.ca_file %s: CA %s is valid only from %s to %s; "+
-				"replace it", e.CAFile, ca.Subject, ca.NotBefore.UTC().Format(time.RFC3339), ca.NotAfter.UTC().Format(time.RFC3339))}
+			return nil, &storeFault{fmt.Errorf("%s.ca_file %s: CA %s is valid only from %s to %s; "+
+				"replace it", at, e.CAFile, ca.Subject, ca.NotBefore.UTC().Format(time.RFC3339), ca.NotAfter.UTC().Format(time.RFC3339))}
 		}
 	}
 	name, id := "daemon", e.Daemon
 	if cfg.Role == config.RoleBroker {
 		name, id = "broker", *e.Broker
 	}
-	s, leaf, err := openIdentity(ctx, cfg, m, out, pool, now, name, id)
+	s, leaf, err := openIdentity(ctx, cfg, ref, m, out, pool, now, name, id)
 	if err != nil {
 		return nil, err
 	}
@@ -614,9 +829,9 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 	if err == nil {
 		leaves := map[string]*x509.Certificate{name: leaf}
 		if name == "broker" {
-			err = checkRoles(ctx, nil, s, e, leaves)
+			err = checkRoles(ctx, nil, s, e, leaves, ref)
 		} else {
-			err = checkRoles(ctx, s, nil, e, leaves)
+			err = checkRoles(ctx, s, nil, e, leaves, ref)
 		}
 	}
 	if err != nil {
@@ -626,51 +841,46 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 		}
 		return nil, &storeFault{err}
 	}
-	m.StoreCertExpiry.WithLabelValues(name).Set(float64(leaf.NotAfter.Unix()))
-	fmt.Fprintf(out, "%s: store: the %s's etcd certificate (CN=%s) is valid until %s (%d days)\n", procOf(cfg), name,
+	m.StoreCertExpiry.WithLabelValues(ref.certLabel(name)).Set(float64(leaf.NotAfter.Unix()))
+	fmt.Fprintf(out, "%s: %s: the %s's etcd certificate (CN=%s) is valid until %s (%d days)\n", procOf(cfg), ref.what(), name,
 		leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339), int(leaf.NotAfter.Sub(now).Hours()/24))
 	return s, nil
 }
 
 // openIdentity opens the store as one component's identity, name in
-// store.etcd: its certificate loaded and checked (identity) against pool
+// the etcd block: its certificate loaded and checked (identity) against pool
 // at now, and its TLS handshake probed (probeTLS). What the etcd store
 // skips, it says by key alone on out and counts (Task 7 review m-5): the
 // process's lines, and port49_store_index_records_undecodable_total.
-func openIdentity(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, pool *x509.CertPool,
-	now time.Time, name string, id config.EtcdIdentity) (*etcdstore.Store, *x509.Certificate, error) {
-	e := cfg.Store.Etcd
-	tc, leaf, err := identity(name, id, pool, now)
+func openIdentity(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer,
+	pool *x509.CertPool, now time.Time, name string, id config.EtcdIdentity) (*etcdstore.Store, *x509.Certificate, error) {
+	e := ref.cfg.Etcd
+	at := ref.at + ".etcd"
+	tc, leaf, err := identityAt(at+"."+name, id, pool, now)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := probeTLS(ctx, e.Endpoints, tc, 4*e.CallTimeout); err != nil {
+	if err := probeTLS(ctx, at, e.Endpoints, tc, 4*e.CallTimeout); err != nil {
 		return nil, nil, err
 	}
 	proc := procOf(cfg)
-	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": store: "+format+"\n", args...) }
+	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+ref.what()+": "+format+"\n", args...) }
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
 		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
 	if err != nil {
-		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: %w", name, err)}
+		return nil, nil, &storeFault{fmt.Errorf("%s.%s: %w", at, name, err)}
 	}
 	return s, leaf, nil
 }
 
-// identity loads one component's client certificate through keyfile,
+// identityAt loads one component's client certificate through keyfile,
 // which refuses a symlink, a mode group or other can read, a foreign
 // owner and an oversize file, all at the read (pre-flight I13). A
 // certificate that does not parse is refused naming both files (Task
 // 11), and so is one whose CN is etcd's root (Ruling T11-a). It then
 // checks the leaf's validity window against now (I9). An expired or
 // not-yet-valid certificate is a storeFault naming the file, the CN and
-// the instant, never "not answering".
-func identity(name string, id config.EtcdIdentity, pool *x509.CertPool, now time.Time) (*tls.Config, *x509.Certificate, error) {
-	return identityAt("store.etcd."+name, id, pool, now)
-}
-
-// identityAt is identity with the config path its errors name, so an
-// enrollment store's own etcd is not reported as store.etcd.
+// the instant, never "not answering". at is the config path its errors name.
 func identityAt(at string, id config.EtcdIdentity, pool *x509.CertPool, now time.Time) (*tls.Config, *x509.Certificate, error) {
 	pair, err := keyfile.LoadX509KeyPair(id.CertFile, id.KeyFile)
 	if err != nil {
@@ -701,23 +911,30 @@ func identityAt(at string, id config.EtcdIdentity, pool *x509.CertPool, now time
 // component, then reads once, briefly (pre-flight I9). Under TLS 1.3 etcd
 // refuses a client certificate after the handshake, with an alert on the
 // first read, and clientv3 would report that only as a deadline. So:
-//   - a certificate the server refuses, or a server certificate this CA
-//     does not verify, is a storeFault naming it;
-//   - an endpoint that does not answer is store.ErrUnavailable;
-//   - one endpoint that completes is enough.
-func probeTLS(ctx context.Context, endpoints []string, tc *tls.Config, timeout time.Duration) error {
+//   - one endpoint that completes is enough, whichever it is in the list: a
+//     fault confined to another member is that member's, and the client
+//     uses the ones that verify;
+//   - when none completes, a certificate the server refuses, or a server
+//     certificate this CA does not verify, is a storeFault naming the first
+//     endpoint that showed it;
+//   - otherwise an endpoint that does not answer is store.ErrUnavailable.
+func probeTLS(ctx context.Context, at string, endpoints []string, tc *tls.Config, timeout time.Duration) error {
 	var last error
+	var fault *storeFault
 	for _, ep := range endpoints {
 		u, err := url.Parse(ep)
 		if err != nil {
-			return &storeFault{fmt.Errorf("store.etcd.endpoints %q: %w", ep, err)}
+			return &storeFault{fmt.Errorf("%s.endpoints %q: %w", at, ep, err)}
 		}
 		dctx, cancel := context.WithTimeout(ctx, timeout)
 		conn, err := (&tls.Dialer{Config: tc}).DialContext(dctx, "tcp", u.Host)
 		cancel()
 		if err != nil {
 			if tlsFault(err) {
-				return &storeFault{fmt.Errorf("etcd at %s: the TLS handshake failed: %w", ep, err)}
+				if fault == nil {
+					fault = &storeFault{fmt.Errorf("etcd at %s: the TLS handshake failed: %w", ep, err)}
+				}
+				continue
 			}
 			last = err
 			continue
@@ -726,9 +943,15 @@ func probeTLS(ctx context.Context, endpoints []string, tc *tls.Config, timeout t
 		_, rerr := conn.Read(make([]byte, 1))
 		conn.Close()
 		if rerr != nil && tlsFault(rerr) {
-			return &storeFault{fmt.Errorf("etcd at %s refused this certificate: %w", ep, rerr)}
+			if fault == nil {
+				fault = &storeFault{fmt.Errorf("etcd at %s refused this certificate: %w", ep, rerr)}
+			}
+			continue
 		}
 		return nil
+	}
+	if fault != nil {
+		return fault
 	}
 	return fmt.Errorf("%w: %v", store.ErrUnavailable, last)
 }
@@ -746,31 +969,33 @@ func tlsFault(err error) bool {
 }
 
 // checkRoles is Ruling 10's start check, its refusal naming the identity
-// and the fix. Under store.etcd.roles: unenforced the daemon's is not run,
+// and the fix. Under roles: unenforced the daemon's is not run,
 // since its roles are not in force by the operator's choice; the broker's
 // still is, so neither identity is etcd's root and the broker's reach is
 // whole (Task 11). Each process holds one identity (plan 7e): d is nil on
 // port49-broker, and b on port49d.
-func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig, leaves map[string]*x509.Certificate) error {
+func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig, leaves map[string]*x509.Certificate,
+	ref storeRef) error {
+	at := ref.at + ".etcd"
 	cctx, cancel := context.WithTimeout(ctx, 4*e.CallTimeout)
 	defer cancel()
 	if d != nil && e.Roles != config.RolesUnenforced {
-		if err := d.CheckIdentity(cctx, false); err != nil {
+		if err := d.CheckIdentityAt(cctx, false, ref.scope); err != nil {
 			if errors.Is(err, etcdstore.ErrNotSeparated) {
-				return fmt.Errorf("store.etcd.daemon: its identity (CN=%s): %w: etcd's roles for port49 are not in force "+
+				return fmt.Errorf("%s.daemon: its identity (CN=%s): %w: etcd's roles for port49 are not in force "+
 					"(auth disabled, or that user holds the broker's or root's role); run 'port49d store-roles --config …' "+
-					"and apply its output as etcd's root, or set store.etcd.roles: unenforced to run without them",
-					leaves["daemon"].Subject.CommonName, err)
+					"and apply its output as etcd's root, or set %s.roles: unenforced to run without them",
+					at, leaves["daemon"].Subject.CommonName, err, at)
 			}
-			return fmt.Errorf("store.etcd.daemon: its identity (CN=%s): %w", leaves["daemon"].Subject.CommonName, err)
+			return fmt.Errorf("%s.daemon: its identity (CN=%s): %w", at, leaves["daemon"].Subject.CommonName, err)
 		}
 	}
 	if b == nil {
 		return nil
 	}
-	if err := b.CheckIdentity(cctx, true); err != nil {
-		return fmt.Errorf("store.etcd.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
-			"apply 'port49d store-roles' output", leaves["broker"].Subject.CommonName, err)
+	if err := b.CheckIdentityAt(cctx, true, ref.scope); err != nil {
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
+			"apply 'port49d store-roles' output", at, leaves["broker"].Subject.CommonName, err)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -14,12 +15,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
@@ -299,7 +302,7 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	waitWithin(t, &out, "port49-broker: runner: the takeover stopped: ", 20*time.Second)
 	hctx, hcancel := context.WithTimeout(ctx, 6*time.Second)
 	defer hcancel()
-	_, release, err := other.raw.Hold(hctx, cfg.Store.Etcd.HoldTTL, r.who, func(string) {})
+	_, release, err := other.raw.Hold(hctx, cfg.Stores.Session.Etcd.HoldTTL, r.who, func(string) {})
 	if err != nil {
 		t.Fatalf("another replica could not take the hold after a failed takeover: %v", err)
 	}
@@ -308,6 +311,121 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	if strings.Contains(out.String(), "is run by") {
 		t.Fatalf("this replica's own last run was said as another's:\n%s", out.String())
 	}
+}
+
+// A followed logout whose reach fails on a store error is reached again
+// while the duties run, and the failure's line says how to end the sessions
+// by hand meanwhile: a logout is enforced on mints and refreshes only, so a
+// reach that is never retried leaves the person's live contexts up (final
+// review, I1). One the broker can never reach is not tried again.
+func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
+	was := logoutRetryFirst
+	logoutRetryFirst = 10 * time.Millisecond
+	t.Cleanup(func() { logoutRetryFirst = was })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	tries := map[string]int{}
+	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+		followedLogouts: make(chan store.LogoutEntry, 8)}
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		tries[l.Key]++
+		switch {
+		case l.Key == "never":
+			return broker.RevokeReport{}, fmt.Errorf("%w: no verifier", broker.ErrLogoutUnreachable)
+		case tries[l.Key] == 1:
+			return broker.RevokeReport{Principals: []string{"user:alice@example.com"}},
+				fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+		}
+		return broker.RevokeReport{TokenKeys: 1}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	until := time.Now().Add(time.Hour)
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: "never", Origin: "origin-never"}, Until: until}
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: store.OIDCKey(store.OIDCSub, "https://idp.example",
+		"sub-alice"), Origin: "origin-alice"}, Until: until}
+	waitWithin(t, &out, "a logout made elsewhere (origin-alice) reached 1 token key(s)", 5*time.Second)
+	if !strings.Contains(out.String(), "port49 revoke --principal user:alice@example.com") {
+		t.Fatalf("the failed reach's line gives no remedy:\n%s", out.String())
+	}
+	time.Sleep(100 * time.Millisecond) // ten retry periods
+	mu.Lock()
+	defer mu.Unlock()
+	if tries["never"] != 1 {
+		t.Fatalf("a logout that can never be reached was tried %d times", tries["never"])
+	}
+}
+
+// judgedThen is meta/ whose first Judged read runs then first: the
+// takeover reads meta/judged after its snapshots of the marks and the logout
+// set, so then lands inside the takeover, past them.
+type judgedThen struct {
+	judgedStore
+	once sync.Once
+	then func()
+}
+
+func (j *judgedThen) Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error) {
+	j.once.Do(j.then)
+	return j.judgedStore.Judged(ctx)
+}
+
+// A logout and a mark the feeds bring while the takeover runs, after its
+// snapshots of the logout set and the marks, are still reached in this
+// region: they are queued from the start of the takeover, not from begin
+// (run 8 diagnosis, item 4; R26, R20). They are delivered at the takeover's
+// meta/judged read, inside the takeover (review of the run-8 fixes, M1).
+func TestALogoutAndAMarkFollowedDuringATakeoverAreReached(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	pol := b.Policy.Load()
+	if err := bs.raw.PutJudged(ctx, pol.Bundle, pol.Raw()); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	logout := store.LogoutEntry{Logout: store.Logout{Key: "oidc-sid|https://idp.example|s-late", At: time.Now(),
+		Origin: "late-logout-origin"}, Until: time.Now().Add(time.Hour)}
+	mark := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:late@example.com", At: time.Now()}
+	meta := &judgedThen{judgedStore: bs.raw}
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: meta, keys: keys, m: m, alarm: newKeyAlarm(),
+		who: "runner-a", ledger: crypt.NewLedger(), judge: make(chan *policy.Policy, 1),
+		marksReloaded: make(chan struct{}, 1), marks: store.NewMarks(),
+		witness:  openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		logouts:  store.NewLogoutSet(time.Now),
+		followed: make(chan store.Revocation, 1024), followedLogouts: make(chan store.LogoutEntry, 1024)}
+	meta.then = func() {
+		r.logouts.Put(logout)
+		r.followLogout(logout)
+		r.follow(store.MarkChange{Revocation: mark, Standing: true})
+	}
+	dctx, dcancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); r.duties(dctx) }()
+	defer func() { dcancel(); <-done }()
+	waitWithin(t, &out, "a logout made elsewhere (late-logout-origin) reached", 20*time.Second)
+	waitWithin(t, &out, "a revocation of user:late@example.com made elsewhere reached", 5*time.Second)
 }
 
 // The takeover's meta/judged read is tried again while the store is
@@ -698,7 +816,7 @@ func TestTheRunnersReloadHookRefusesTheReloadOnAFailedPutBack(t *testing.T) {
 		marks := store.NewMarks()
 		marks.Set(alice, true)
 		marks.Set(bob, true)
-		r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+		r := &runner{cfg: config.Config{Stores: config.StoresConfig{Session: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}}},
 			st: st, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
 		if running {
 			ctx := context.Background()
@@ -780,7 +898,7 @@ func TestAnIdleReplicasReloadHookRefusesAFailedReadAndNamesWhatItKeeps(t *testin
 		t.Fatal(err)
 	}
 	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
-	r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+	r := &runner{cfg: config.Config{Stores: config.StoresConfig{Session: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}}},
 		st: refusingRevocations{mem}, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
 	if err := r.reloadHook(ctx, rescans)(); err == nil {
 		t.Fatal("a read that failed did not refuse the reload")

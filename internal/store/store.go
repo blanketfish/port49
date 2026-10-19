@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,7 +20,8 @@ var ErrNotFound = errors.New("store: not found")
 // the one the caller read: SwapContext's context, written by another writer
 // since, expired, or appeared where none was; or CompleteIdempotency's
 // record, no longer held by the caller (plan 7a); or a RefreshContext with
-// an ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b).
+// an ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b); or a
+// DeleteRevocation whose mark was made again since it read it.
 // Nothing was written. The caller reads again and decides again;
 // JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
@@ -41,9 +43,15 @@ var ErrUnavailable = errors.New("store: unavailable")
 // access control: an etcd role that does not grant it, or authentication
 // that failed. It is configuration, not an outage: never ErrUnavailable,
 // so it opens no circuit, and the guard (internal/store/guard) stops
-// port49d's service when every call is refused for store.etcd.hold_ttl
+// port49d's service when every call is refused for etcd.hold_ttl
 // (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
 var ErrRefused = errors.New("store: refused this identity")
+
+// ErrPinHeld is a write that would move a principal's pin to another entry:
+// refused, since only a forget frees a principal (Ruling 3). It is no
+// access-control refusal (ErrRefused): the store is fine, and the operator's
+// way out is `port49 directory forget`.
+var ErrPinHeld = errors.New("store: the principal is pinned to another entry")
 
 // UnreadableContextError is a context record the store returned and the
 // sealing layer could not open: sealed under a key that has left the two-key
@@ -987,6 +995,8 @@ type Store interface {
 	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
 	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
+	// It lifts only the mark it read: one made again while it ran stands,
+	// and the lift returns ErrConflict.
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
@@ -1009,12 +1019,21 @@ type Store interface {
 	// record of another principal still lists is written ambiguous. A refused
 	// m (Refused, no groups) supersedes an older record the same way. A write
 	// verified before the principal's last forget is dropped, with no error:
-	// the forget left a tombstone holding its time (DeleteMembership).
+	// the forget left a tombstone holding its time (DeleteMembership). A ttl
+	// of NoExpiry writes the record and its keys with no lease.
 	PutMembership(ctx context.Context, m Membership, ttl time.Duration) error
+	// PutPin is PutMembership with no lease (NoExpiry), written only when the
+	// record stands as expect says: the directory store's pin writes, so a
+	// stale cache or a lagging feed can never overwrite a pin another region
+	// wrote since the read that decided the write. ErrConflict, and nothing
+	// written, when it does not. A write verified before the principal's last
+	// forget is dropped with no error, as PutMembership's.
+	PutPin(ctx context.Context, m Membership, expect PinExpect) error
 	// RefuseMapKeys marks each key refused as of at, unless a later
 	// verification holds it: MembershipByKey then answers ErrNotFound.
 	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
-	// GetMembership is the record for principal, or ErrNotFound.
+	// GetMembership is the record for principal, or ErrNotFound. A forget's
+	// tombstone is ErrForgotten.
 	GetMembership(ctx context.Context, principal string) (Membership, error)
 	// MembershipByKey is the record a mapping key indexes, or ErrNotFound when
 	// none does, the key is ambiguous or refused, or the record no longer
@@ -1034,7 +1053,10 @@ type Store interface {
 	// is dropped, so a verification in flight when the operator forgot can
 	// never write the old pin back. A tombstone is no record: no read
 	// returns it. `port49 directory forget` alone calls it (Ruling 3's
-	// escape; Task 13).
+	// escape; Task 13). With no live record it is ErrNotFound all the same,
+	// and still leaves a tombstone with no lease: a forget of a pin the store
+	// lost must still keep every region's copy from writing it back (plan
+	// 11a, I2).
 	DeleteMembership(ctx context.Context, principal string) (Membership, error)
 	// PutOnce writes value under key for ttl when no live record is there,
 	// in one atomic step, and reports whether it wrote (plan 7h): a logout
@@ -1118,7 +1140,7 @@ type EnrollmentMark struct {
 var ErrEnrollmentStoreLost = errors.New("store: the enrollment store is lost")
 
 // Enrollments is the enrollment store (plan 9e, D7, D12): its own handle,
-// opened from broker.directory.enrollment_store. Nothing creates it at a
+// opened from the directory store (stores.directory). Nothing creates it at a
 // start; CreateEnrollmentMark (init-enrollments), PutEnrollmentMark
 // (reset-second-factor --all) and Import are the only writers of the mark.
 type Enrollments interface {
@@ -1127,6 +1149,15 @@ type Enrollments interface {
 	// there); ErrConflict otherwise, and nothing is written. No lease.
 	SwapSecondFactor(ctx context.Context, f SecondFactor, rev uint64) error
 	SecondFactorPrincipals(ctx context.Context) ([]string, error)
+	// GetUnlock is when an operator last cleared principal's failed
+	// sign-ins (port49 directory unlock; plan 11a, R15), or ErrNotFound. A
+	// principal and a time: no secret, kept in the clear.
+	GetUnlock(ctx context.Context, principal string) (time.Time, error)
+	// PutUnlock records an unlock of principal at at, or a nanosecond after
+	// the unlock standing when at is not later: every unlock advances the
+	// record, whatever the writer's clock (plan 11a, R15). An empty principal
+	// is ErrNoPrincipal and a zero at ErrBadUnlock.
+	PutUnlock(ctx context.Context, principal string, at time.Time) error
 	GetEnrollmentMark(ctx context.Context) (EnrollmentMark, error) // ErrNotFound when none
 	// CreateEnrollmentMark writes m only where the store has no mark, no
 	// record and (the file) no file, lost or not; ErrConflict otherwise,
@@ -1178,6 +1209,17 @@ type RevStore interface {
 // idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
 const SupersededFor = 20 * time.Minute
 
+// NoExpiry is the ttl of a membership record, or of a refusal of map keys,
+// that lives until a forget or a later write replaces it: the directory
+// store's pins (plan 11a, R13). Any other ttl is a lease, as before.
+const NoExpiry time.Duration = -1
+
+// ErrForgotten is GetMembership's answer for a principal a forget left a
+// tombstone for (plan 11a, R13). It is an ErrNotFound, so every caller that
+// reads "no record" still does; the directory router tells it from a record
+// never written.
+var ErrForgotten = fmt.Errorf("%w: forgotten", ErrNotFound)
+
 // TombstoneFloor is the least a forget's tombstone is kept: a verification
 // in flight at the forget must find it however little of the record's ttl
 // was left.
@@ -1212,6 +1254,18 @@ type Membership struct {
 	Server     string
 	Site       string
 	Sealed     []byte // written by internal/store/crypt; nil in plaintext form
+	// Version is the backend's version of the record GetMembership read: what
+	// a PinExpect names. Zero when written, and in answers that name no
+	// single record.
+	Version uint64
+}
+
+// PinExpect is the state of a principal's record a PutPin was decided on:
+// no record (Absent), a forget's tombstone (Forgotten), or the held record
+// at Version, as GetMembership read it.
+type PinExpect struct {
+	Absent, Forgotten bool
+	Version           uint64
 }
 
 // MapKey is the index key of one certificate-mapping value: a hash, so the
@@ -1241,6 +1295,37 @@ func OIDCKey(kind, issuer, value string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s %d:%s %d:%s", kind, len(issuer), issuer, len(value), value)
+}
+
+// ParseOIDCKey is OIDCKey's inverse: the kind, issuer and value of a key
+// it made, and false for anything else (plan 11a: a runner reaches a logout
+// it followed by its key alone).
+func ParseOIDCKey(key string) (kind, issuer, value string, ok bool) {
+	kind, rest, found := strings.Cut(key, " ")
+	if !found || (kind != OIDCSid && kind != OIDCSub) {
+		return "", "", "", false
+	}
+	part := func(s string) (string, string, bool) {
+		n, tail, found := strings.Cut(s, ":")
+		l, err := strconv.Atoi(n)
+		if !found || err != nil || l <= 0 || l > len(tail) {
+			return "", "", false
+		}
+		return tail[:l], tail[l:], true
+	}
+	issuer, rest, ok1 := part(rest)
+	if !ok1 || !strings.HasPrefix(rest, " ") {
+		return "", "", "", false
+	}
+	value, rest, ok2 := part(rest[1:])
+	if !ok2 || rest != "" {
+		return "", "", "", false
+	}
+	// Only a key OIDCKey would make: Atoi also takes "+1" and "01".
+	if OIDCKey(kind, issuer, value) != key {
+		return "", "", "", false
+	}
+	return kind, issuer, value, true
 }
 
 // SidKey is the issuer-qualified sid a login context is indexed by
@@ -1363,6 +1448,9 @@ var ErrNoKey = errors.New("store: a record with no key")
 
 // ErrNoPrincipal is an owner written with no principal.
 var ErrNoPrincipal = errors.New("store: an owner record with no principal")
+
+// ErrBadUnlock is an unlock written with no time.
+var ErrBadUnlock = errors.New("store: an unlock needs its time")
 
 // ErrBadTTL is a record written with a life of zero or less.
 var ErrBadTTL = errors.New("store: a record with no life")

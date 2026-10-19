@@ -124,7 +124,7 @@ type Metrics struct {
 	StoreFenceTimeouts prometheus.Counter
 	// StoreHealthChecks counts port49d's store health checks by outcome
 	// (pass, fail; plan 7f), and StoreHealthFailures is the failed checks
-	// in a row now: at store.etcd.health.close_after the listeners close.
+	// in a row now: at the session store's etcd.health.close_after the listeners close.
 	// The count is the process's (healthState): each run's registry is set
 	// from it, and it reads at least close_after while the listeners are
 	// closed after a store gone.
@@ -152,6 +152,17 @@ type Metrics struct {
 	// port49_crl_next_update_timestamp_seconds is: an alert subtracts now.
 	// Its one label is the component, daemon or broker.
 	StoreCertExpiry *prometheus.GaugeVec
+	// StoreDirectoryReachable is 1 while this process's reads of the
+	// directory store answer, 0 while they do not (plan 11a; decision 51).
+	StoreDirectoryReachable prometheus.Gauge
+	// StoreDirectoryConfirmed is when this process last confirmed its copy
+	// of the directory store, in Unix seconds: a read answered while its
+	// marks feed ran. An alert subtracts it from now.
+	StoreDirectoryConfirmed prometheus.Gauge
+	// StoreLogoutsPending is how many back-channel logouts this region
+	// accepted while the directory store did not answer and has not yet
+	// forwarded to it (plan 11a, R26 as amended). No label.
+	StoreLogoutsPending prometheus.Gauge
 	// port49_accounting_attributions_total{attribution}: every accounting
 	// record the spool accepted, by the attribution it was given — "resolved",
 	// "unattributed", "system", "foreign" (spec §5.8). `foreign` is the one to
@@ -621,7 +632,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreHealthChecks: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_health_checks_total",
 			Help: "port49d's store health checks, by outcome (pass, fail)."}, []string{"outcome"}),
 		StoreHealthFailures: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_health_failures",
-			Help: "port49d's failed store health checks in a row; at store.etcd.health.close_after every listener closes."}),
+			Help: "port49d's failed store health checks in a row; at the session store's etcd.health.close_after every listener closes."}),
 		ContextCacheLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_cache_lookups_total",
 			Help: "The context cache's reads by outcome: hit, miss, stale (served past its ttl because the store failed)."},
 			[]string{"outcome"}),
@@ -636,6 +647,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_client_cert_expiry_timestamp_seconds",
 			Help: "When each component's etcd client certificate expires, in Unix seconds."}, []string{"component"}),
+		StoreDirectoryReachable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_directory_reachable",
+			Help: "1 while this process's reads of the directory store answer."}),
+		StoreDirectoryConfirmed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "port49_store_directory_confirmed_timestamp_seconds",
+			Help: "When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds."}),
+		StoreLogoutsPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_logouts_pending",
+			Help: "Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
@@ -849,7 +867,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

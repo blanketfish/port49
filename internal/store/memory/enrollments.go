@@ -19,6 +19,7 @@ type enrollments struct {
 	mu      sync.Mutex
 	mark    *store.EnrollmentMark
 	records map[string]store.SecondFactor
+	unlocks map[string]time.Time
 	seq     uint64 // the last revision handed out
 }
 
@@ -28,7 +29,7 @@ var errNoMarkTime = errors.New("memory: a mark needs its creation time")
 
 // NewEnrollments is an empty enrollment store: no mark, no records.
 func NewEnrollments(now func() time.Time) store.Enrollments {
-	return &enrollments{now: now, records: map[string]store.SecondFactor{}}
+	return &enrollments{now: now, records: map[string]store.SecondFactor{}, unlocks: map[string]time.Time{}}
 }
 
 func (e *enrollments) GetSecondFactor(_ context.Context, principal string) (store.SecondFactor, error) {
@@ -169,4 +170,30 @@ func (e *enrollments) Import(_ context.Context, raw []byte, replace bool) (int, 
 func cloneFactor(f store.SecondFactor) store.SecondFactor {
 	f.Secret, f.Sealed = slices.Clone(f.Secret), slices.Clone(f.Sealed)
 	return f
+}
+
+func (e *enrollments) GetUnlock(_ context.Context, principal string) (time.Time, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	at, ok := e.unlocks[principal]
+	if !ok {
+		return time.Time{}, store.ErrNotFound
+	}
+	return at, nil
+}
+
+func (e *enrollments) PutUnlock(_ context.Context, principal string, at time.Time) error {
+	switch {
+	case principal == "":
+		return store.ErrNoPrincipal
+	case at.IsZero():
+		return store.ErrBadUnlock
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if cur, ok := e.unlocks[principal]; ok && !at.After(cur) {
+		at = cur.Add(time.Nanosecond)
+	}
+	e.unlocks[principal] = at.UTC()
+	return nil
 }

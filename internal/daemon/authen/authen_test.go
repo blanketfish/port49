@@ -526,6 +526,10 @@ func (noStore) PutMembership(context.Context, store.Membership, time.Duration) e
 	panic("store called")
 }
 
+func (noStore) PutPin(context.Context, store.Membership, store.PinExpect) error {
+	panic("store called")
+}
+
 func (noStore) RefuseMapKeys(context.Context, []string, time.Time, time.Duration) error {
 	panic("store called")
 }

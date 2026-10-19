@@ -55,7 +55,7 @@ var pools = map[string]Pool{
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
-	"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
+	"PutMembership": Token, "PutPin": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
 	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
 	"GetLogout": Token, "PutMFAProof": Token, "GetMFAProof": Token,
@@ -63,6 +63,7 @@ var pools = map[string]Pool{
 
 	// store.Enrollments (plan 9e), guarded by WrapEnrollments.
 	"GetSecondFactor": Token, "SwapSecondFactor": Token, "GetEnrollmentMark": Token,
+	"GetUnlock": Token, "PutUnlock": Token,
 	"CreateEnrollmentMark": Token, "PutEnrollmentMark": Token, "SwapEnrollmentMark": Token,
 	"SecondFactorPrincipals": Bulk, "Export": Bulk, "Import": Bulk,
 }
@@ -74,8 +75,14 @@ func PoolOf(method string) Pool { return pools[method] }
 
 // Config is one component's guard.
 type Config struct {
-	Proc        string        // "port49d" or "port49-broker": the process whose lines these are
-	Component   string        // "daemon" or "broker": the metrics' label and the lines' subject
+	Proc      string // "port49d" or "port49-broker": the process whose lines these are
+	Component string // "daemon" or "broker": the metrics' label and the lines' subject
+	// Store is the noun each line leads with after the process: "store" when
+	// empty, "directory store" for a directory store of its own (plan 11a).
+	Store string
+	// HoldTTLKey is the config key the "closes its listeners" clause names;
+	// empty, "etcd.hold_ttl".
+	HoldTTLKey  string
 	CallTimeout time.Duration // the token and context pools' deadline per call
 	BulkTimeout time.Duration // the bulk pool's
 	MaxInFlight map[Pool]int
@@ -83,7 +90,7 @@ type Config struct {
 	OpenFor     time.Duration // how long it stays open before a probe
 	// StopAfter is how long a token or context pool's circuit may stay
 	// open, or its calls be refused in a steady run, before Unhealthy is
-	// told (store.etcd.hold_ttl), once per open circuit and once per
+	// told (the hold_ttl key), once per open circuit and once per
 	// refused run; zero never tells it. The bulk pool never tells it
 	// (re-check R-I5).
 	StopAfter time.Duration
@@ -296,7 +303,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	// A caller already gone, or already past its deadline, is read before
 	// the slot wait: a select on a free slot and a closed Done picks either
 	// at random, and the outcome must not (review I1). Past its deadline
-	// is a packet whose earlier calls spent store.packet_deadline: the
+	// is a packet whose earlier calls spent the packet_deadline: the
 	// store too slow for it, a deadline as one struck mid-call is.
 	if err := ctx.Err(); err != nil {
 		outcome := "canceled"
@@ -350,7 +357,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 // store.ErrUnavailable like any other (pre-flight M26): a caller that went
 // away is canceled, never counted; a caller whose deadline struck mid-call
 // is deadline, a failure, since the store was too slow for it (a packet's
-// store.packet_deadline on the daemon; pre-flight I10). A store answer is
+// the packet_deadline key on the daemon; pre-flight I10). A store answer is
 // read first of all: it is an answer whatever the caller's context did
 // after it.
 func classify(caller, call context.Context, err error) string {
@@ -417,9 +424,9 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		return
 	}
 	if open && p == Bulk {
-		g.c.Say(fmt.Sprintf("%s: store: the %s's bulk pool's circuit is open after %d consecutive failures (%v); "+
+		g.c.Say(fmt.Sprintf("%s: %s: the %s's bulk pool's circuit is open after %d consecutive failures (%v); "+
 			"the scans (the refresh, a revocation by principal, a start's purge) fail until a probe in %v succeeds; "+
-			"logins and commands are unaffected", g.c.Proc, g.c.Component, g.c.Failures, cause, g.c.OpenFor))
+			"logins and commands are unaffected", g.c.Proc, g.noun(), g.c.Component, g.c.Failures, cause, g.c.OpenFor))
 		return
 	}
 	if open {
@@ -427,7 +434,7 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		// port49-broker's never does (StopAfter 0).
 		closes := ""
 		if g.c.StopAfter > 0 {
-			closes = fmt.Sprintf("; %s closes its listeners if the store is gone for store.etcd.hold_ttl", g.c.Proc)
+			closes = fmt.Sprintf("; %s closes its listeners if the store is gone for %s", g.c.Proc, g.holdTTLKey())
 		}
 		// The broker's pools serve its API; devices and break-glass are the
 		// daemon's (Task 15a review M-4).
@@ -438,13 +445,29 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		case strings.HasSuffix(g.c.Component, enrollmentsSuffix):
 			impact = "password sign-in and second-factor enrollment through it are refused"
 		}
-		g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
-			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.c.Component, p,
+		g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
+			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.noun(), g.c.Component, p,
 			g.c.Failures, cause, g.c.OpenFor, impact, closes))
 		return
 	}
-	g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,
-		g.c.Component, p))
+	g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,
+		g.noun(), g.c.Component, p))
+}
+
+// noun is what the guard's lines call the store.
+func (g *guarded) noun() string {
+	if g.c.Store == "" {
+		return "store"
+	}
+	return g.c.Store
+}
+
+// holdTTLKey is the key a "closes its listeners" clause names.
+func (g *guarded) holdTTLKey() string {
+	if g.c.HoldTTLKey == "" {
+		return "etcd.hold_ttl"
+	}
+	return g.c.HoldTTLKey
 }
 
 func (g *guarded) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (n int, err error) {
@@ -663,6 +686,10 @@ func (g *guarded) PutMembership(ctx context.Context, m store.Membership, ttl tim
 	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutMembership(ctx, m, ttl) })
 }
 
+func (g *guarded) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutPin(ctx, m, expect) })
+}
+
 func (g *guarded) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
 	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.RefuseMapKeys(ctx, mapKeys, at, ttl) })
 }
@@ -773,6 +800,15 @@ func (e *guardedEnrollments) SwapSecondFactor(ctx context.Context, f store.Secon
 func (e *guardedEnrollments) SecondFactorPrincipals(ctx context.Context) (ps []string, err error) {
 	err = e.g.do(ctx, Bulk, func(ctx context.Context) (x error) { ps, x = e.inner.SecondFactorPrincipals(ctx); return })
 	return
+}
+
+func (e *guardedEnrollments) GetUnlock(ctx context.Context, principal string) (at time.Time, err error) {
+	err = e.g.do(ctx, Token, func(ctx context.Context) (x error) { at, x = e.inner.GetUnlock(ctx, principal); return })
+	return
+}
+
+func (e *guardedEnrollments) PutUnlock(ctx context.Context, principal string, at time.Time) error {
+	return e.g.do(ctx, Token, func(ctx context.Context) error { return e.inner.PutUnlock(ctx, principal, at) })
 }
 
 func (e *guardedEnrollments) GetEnrollmentMark(ctx context.Context) (m store.EnrollmentMark, err error) {

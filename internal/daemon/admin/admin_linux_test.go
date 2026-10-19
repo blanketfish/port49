@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/keyring"
 )
 
@@ -434,5 +435,55 @@ func TestAnImportBodyFollowsItsRequestLineAndAnExportComesBack(t *testing.T) {
 	var x Response
 	if err := json.NewDecoder(e).Decode(&x); err != nil || !bytes.Equal(x.Sealed, body) {
 		t.Fatalf("the export came back as %d bytes: %v", len(x.Sealed), err)
+	}
+}
+
+// A store_status that takes longer than the connection's first 5s is still
+// answered: it gets its own deadline, StatusWait (plan 11a, R21).
+func TestStoreStatusOutlastsTheFirstDeadline(t *testing.T) {
+	p := serve(t, &Server{Now: time.Now, StoreStatus: func(context.Context) (string, bool, error) {
+		time.Sleep(5500 * time.Millisecond)
+		return "directory  etcd    ?/? members  unreachable", true, nil
+	}})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(StatusWait))
+	fmt.Fprintln(c, `{"op":"store_status"}`)
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil || !r.Degraded || r.Text == "" {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+// A caller that hangs up cancels the reads behind its store_status.
+func TestStoreStatusStopsWhenTheCallerHangsUp(t *testing.T) {
+	started, ended := make(chan struct{}), make(chan struct{})
+	p := serve(t, &Server{Now: time.Now, StoreStatus: func(ctx context.Context) (string, bool, error) {
+		close(started)
+		<-ctx.Done()
+		close(ended)
+		return "", false, ctx.Err()
+	}})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(c, `{"op":"store_status"}`)
+	<-started
+	c.Close()
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the reads went on after the caller hung up")
+	}
+}
+
+// The wait covers two sequential call_timeouts at their 5s maximum.
+func TestStatusWaitCoversTheLargestCallTimeout(t *testing.T) {
+	if StatusOpTimeout != 2*config.MaxCallTimeout || StatusWait <= StatusOpTimeout {
+		t.Fatalf("StatusOpTimeout %v, StatusWait %v", StatusOpTimeout, StatusWait)
 	}
 }

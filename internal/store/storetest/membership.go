@@ -549,3 +549,128 @@ func MembershipKeyOutlivesNoRecord(t *testing.T, b Backend) {
 		t.Fatalf("q claimed a key p's live record still lists: answered %q %v, want ErrNotFound", m.Principal, err)
 	}
 }
+
+// MembershipWithNoExpiryOutlivesAnyTTL: a record and its map key written
+// with store.NoExpiry stand however far the clock moves, and so does the
+// tombstone a forget leaves of one, which GetMembership answers as
+// ErrForgotten (an ErrNotFound); a principal never written is ErrNotFound
+// and not ErrForgotten; a verification from before the forget never puts
+// the pin back (plan 11a, R13).
+func MembershipWithNoExpiryOutlivesAnyTTL(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	later := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	k := store.MapKey("san_email", "dave@corp.example.com")
+	m := store.Membership{Principal: "user:dave@corp.example.com", EntryID: "guid:d", MapKeys: []string{k},
+		VerifiedAt: t0}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil {
+		t.Fatal(err)
+	}
+	later(10 * 365 * 24 * time.Hour)
+	if got, err := s.GetMembership(ctx, m.Principal); err != nil || got.EntryID != "guid:d" {
+		t.Fatalf("a pin with no expiry, years on: %+v %v", got, err)
+	}
+	if got, err := s.MembershipByKey(ctx, k); err != nil || got.Principal != m.Principal {
+		t.Fatalf("its key, years on: %+v %v", got, err)
+	}
+	if _, err := s.GetMembership(ctx, "user:erin@corp.example.com"); !errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("never written: %v, want ErrNotFound and not ErrForgotten", err)
+	}
+	if _, err := s.DeleteMembership(ctx, m.Principal); err != nil {
+		t.Fatal(err)
+	}
+	later(10 * 365 * 24 * time.Hour)
+	if _, err := s.GetMembership(ctx, m.Principal); !errors.Is(err, store.ErrForgotten) ||
+		!errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the forget's tombstone, years on: %v, want ErrForgotten", err)
+	}
+	if err := s.PutMembership(ctx, m, store.NoExpiry); err != nil { // verified at t0, before the forget
+		t.Fatal(err)
+	}
+	if _, err := s.GetMembership(ctx, m.Principal); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("a verification from before the forget put the pin back: %v", err)
+	}
+}
+
+// MembershipPinIsCompareAndSet: PutPin writes a record with no lease only
+// when the record stands as the caller read it: absent, forgotten, or held
+// at the Version GetMembership gave. Anything else is ErrConflict and
+// writes nothing (plan 11a, review of 8a, I1).
+func MembershipPinIsCompareAndSet(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	p := "user:fay@corp.example.com"
+	pin := func(entry string, at time.Time) store.Membership {
+		return store.Membership{Principal: p, EntryID: entry, VerifiedAt: at}
+	}
+	if err := s.PutPin(ctx, pin("guid:1", t0), store.PinExpect{Forgotten: true}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expecting a tombstone of an absent record: %v", err)
+	}
+	if err := s.PutPin(ctx, pin("guid:1", t0), store.PinExpect{Version: 7}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expecting a held record of an absent one: %v", err)
+	}
+	if err := s.PutPin(ctx, pin("guid:1", t0), store.PinExpect{Absent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPin(ctx, pin("guid:2", t0.Add(time.Minute)), store.PinExpect{Absent: true}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expecting absent of a held record: %v", err)
+	}
+	held, err := s.GetMembership(ctx, p)
+	if err != nil || held.EntryID != "guid:1" || held.Version == 0 {
+		t.Fatalf("%+v %v: want guid:1 with a version", held, err)
+	}
+	if err := s.PutPin(ctx, pin("guid:2", t0.Add(time.Minute)), store.PinExpect{Version: held.Version + 1}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a stale version: %v", err)
+	}
+	if err := s.PutPin(ctx, pin("guid:1", t0.Add(time.Minute)), store.PinExpect{Version: held.Version}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPin(ctx, pin("guid:1", t0.Add(2*time.Minute)), store.PinExpect{Version: held.Version}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the version the last write replaced: %v", err)
+	}
+	if got, _ := s.GetMembership(ctx, p); got.EntryID != "guid:1" {
+		t.Fatalf("a refused PutPin wrote: %+v", got)
+	}
+	if _, err := s.DeleteMembership(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPin(ctx, pin("guid:3", t0.Add(time.Hour)), store.PinExpect{Absent: true}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expecting absent of a tombstone: %v", err)
+	}
+	if err := s.PutPin(ctx, pin("guid:3", t0.Add(time.Hour)), store.PinExpect{Forgotten: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, p); err != nil || got.EntryID != "guid:3" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone: a forget of a
+// principal the store holds nothing for is ErrNotFound, and still leaves a
+// tombstone with no lease, so a copy another region holds can never put the
+// pin back (plan 11a, review of 8a, I2).
+func MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	p := "user:gil@corp.example.com"
+	if _, err := s.DeleteMembership(ctx, p); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a forget of nothing: %v", err)
+	}
+	mu.Lock()
+	now = now.Add(10 * 365 * 24 * time.Hour)
+	mu.Unlock()
+	if _, err := s.GetMembership(ctx, p); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("years on: %v, want the tombstone", err)
+	}
+	if err := s.PutMembership(ctx, store.Membership{Principal: p, EntryID: "guid:old", VerifiedAt: t0.Add(-time.Minute)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetMembership(ctx, p); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("a verification from before the forget wrote the pin back: %v", err)
+	}
+}

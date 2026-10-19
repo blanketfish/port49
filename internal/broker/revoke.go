@@ -272,7 +272,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
-	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
+	if got, err := b.readMark(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
 	// A correction only: a lift the feed brought since the write is not
@@ -293,44 +293,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
-	var tokenKeys []store.TokenKey
-	if kind == store.RevocationPrincipal {
-		tokenKeys, err = b.Store.TokensByPrincipal(ctx, key)
-	} else {
-		tokenKeys, err = b.Store.TokensByCert(ctx, key)
-	}
-	note(err)
-	for _, k := range tokenKeys {
-		// Read first only to count, as the refresh does: an index entry
-		// outliving its tokens empties nothing. A read that fails counts.
-		toks, cerr := b.Store.Candidates(ctx, k)
-		if err := b.Store.DeleteTokens(ctx, k); err != nil {
-			note(err)
-			continue
-		}
-		// The delete's own time, not the revocation's start: a mint that
-		// stamped its record in between is superseded too (M3).
-		b.supersede(ctx, k, b.Now())
-		if cerr != nil || len(toks) > 0 {
-			rep.TokenKeys++
-		}
-	}
-	seen := map[store.ContextRef]bool{}
-	for pass := 0; pass < 2; pass++ {
-		var refs []store.ContextRef
-		if kind == store.RevocationPrincipal {
-			refs, err = b.Sessions.RevokeByPrincipal(ctx, key)
-		} else {
-			refs, err = b.Sessions.RevokeByCert(ctx, req.Issuer, req.Serial)
-		}
-		note(err)
-		for _, ref := range refs {
-			if !seen[ref] {
-				seen[ref] = true
-				rep.Contexts = append(rep.Contexts, ref)
-			}
-		}
-	}
+	n, refs, rerr := b.ReachMark(ctx, rep.Mark)
+	rep.TokenKeys, rep.Contexts = n, refs
+	note(rerr)
 	rep.Unreached = b.unreachedOf(rep.Contexts)
 	outcome := "applied"
 	if rep.Err != nil {
@@ -338,6 +303,79 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
 	return rep, nil
+}
+
+// ReachMark deletes the unspent tokens r names in this broker's session
+// store and marks its live contexts revoked there, as Revoke does after its
+// mark (spec §5.1.4): the token keys its index names, each deleted and
+// superseded, then the contexts, in two passes, so one a redemption in
+// flight wrote is marked too. It writes no mark and no record. In a split
+// (plan 11a, R20) the runner applies a mark another region made with it,
+// which that region's broker recorded. It returns how many token keys held
+// a token or could not be read, the contexts it marked, and the first step
+// that did not finish; the steps after it still run.
+func (b *Broker) ReachMark(ctx context.Context, r store.Revocation) (tokenKeys int, contexts []store.ContextRef,
+	err error) {
+	if b.Sessions == nil {
+		return 0, nil, errors.New("broker: revocation is not wired (no session manager); nothing was reached")
+	}
+	note := func(e error) {
+		if e != nil && err == nil {
+			err = e
+		}
+	}
+	var keys []store.TokenKey
+	var kerr error
+	if r.Kind == store.RevocationPrincipal {
+		keys, kerr = b.Store.TokensByPrincipal(ctx, r.Key)
+	} else {
+		keys, kerr = b.Store.TokensByCert(ctx, r.Key)
+	}
+	note(kerr)
+	for _, k := range keys {
+		// Read first only to count, as the refresh does: an index entry
+		// outliving its tokens empties nothing. A read that fails counts.
+		toks, cerr := b.Store.Candidates(ctx, k)
+		if derr := b.Store.DeleteTokens(ctx, k); derr != nil {
+			note(derr)
+			continue
+		}
+		// The delete's own time, not the revocation's start: a mint that
+		// stamped its record in between is superseded too (M3).
+		b.supersede(ctx, k, b.Now())
+		if cerr != nil || len(toks) > 0 {
+			tokenKeys++
+		}
+	}
+	var issuer, serial string
+	if r.Kind == store.RevocationCert {
+		i := strings.LastIndexByte(r.Key, '|')
+		if i < 0 {
+			// A mark from another region is not vetted here: say so rather
+			// than reach nothing in silence.
+			note(fmt.Errorf("broker: a %s mark whose key has no issuer|serial split reached no context", r.Kind))
+			return tokenKeys, nil, err
+		}
+		issuer, serial = r.Key[:i], r.Key[i+1:]
+	}
+	seen := map[store.ContextRef]bool{}
+	for pass := 0; pass < 2; pass++ {
+		var refs []store.ContextRef
+		var rerr error
+		if r.Kind == store.RevocationPrincipal {
+			refs, rerr = b.Sessions.RevokeByPrincipal(ctx, r.Key)
+		} else {
+			refs, rerr = b.Sessions.RevokeByCert(ctx, issuer, serial)
+		}
+		note(rerr)
+		for _, ref := range refs {
+			if !seen[ref] {
+				seen[ref] = true
+				contexts = append(contexts, ref)
+			}
+		}
+	}
+	return tokenKeys, contexts, err
 }
 
 // matchMark names the held connections r names: a principal's by its
@@ -349,6 +387,28 @@ func matchMark(r store.Revocation) func(principal, certKey string) bool {
 		}
 		return certKey == r.Key
 	}
+}
+
+// markReader is a store whose GetRevocation answers from a copy (the
+// placement router in a split) and that can also ask the directory itself.
+type markReader interface {
+	ReadRevocation(ctx context.Context, kind, key string) (store.Revocation, error)
+}
+
+// readMark is the mark kind|key, for a caller that must know whether one
+// stands: the store's answer, and when that is a miss and the store keeps a
+// copy, the directory's own, within its call timeout. A directory that does
+// not answer is an error, never "absent": a lift fails closed rather than
+// report "not revoked" about a mark the copy has not yet followed.
+func (b *Broker) readMark(ctx context.Context, kind, key string) (store.Revocation, error) {
+	r, err := b.Store.GetRevocation(ctx, kind, key)
+	if !errors.Is(err, store.ErrNotFound) {
+		return r, err
+	}
+	if mr, ok := b.Store.(markReader); ok {
+		return mr.ReadRevocation(ctx, kind, key)
+	}
+	return r, err
 }
 
 // Lift removes a mark, from the store and the listener. It restores no
@@ -368,7 +428,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	defer release()
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
-	cur, err := b.Store.GetRevocation(ctx, kind, key)
+	cur, err := b.readMark(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		// The daemon's copy may hold a mark whose write failed (Revoke);
@@ -379,6 +439,12 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)
 	}
 	if err := b.Store.DeleteRevocation(ctx, kind, key); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			// The store's "context changed" would send an operator to the
+			// sessions; this names the mark and what to do.
+			return RevokeReport{}, fmt.Errorf("broker: nothing was lifted: %s was revoked again while this lift "+
+				"ran, and that revocation stands; lift again only if it should go too", markWhat(cur))
+		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
 	}
 	b.Marks.Set(cur, false)
@@ -680,11 +746,15 @@ func RevocationsText(rs []store.Revocation) string {
 	}
 	var lines []string
 	for _, r := range rs {
-		what := "principal " + r.Key
-		if i := strings.LastIndex(r.Key, "|"); r.Kind == store.RevocationCert && i >= 0 {
-			what = fmt.Sprintf("certificate issuer=%q serial=%s", r.Key[:i], r.Key[i+1:])
-		}
-		lines = append(lines, fmt.Sprintf("%s since %s (%s)", what, r.At.UTC().Format(time.RFC3339), r.Origin))
+		lines = append(lines, fmt.Sprintf("%s since %s (%s)", markWhat(r), r.At.UTC().Format(time.RFC3339), r.Origin))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// markWhat names what r revokes, as an operator reads it.
+func markWhat(r store.Revocation) string {
+	if i := strings.LastIndex(r.Key, "|"); r.Kind == store.RevocationCert && i >= 0 {
+		return fmt.Sprintf("certificate issuer=%q serial=%s", r.Key[:i], r.Key[i+1:])
+	}
+	return "principal " + r.Key
 }

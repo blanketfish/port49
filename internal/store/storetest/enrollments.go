@@ -30,6 +30,7 @@ func RunEnrollments(t *testing.T, b EnrollmentsBackend) {
 		f    func(*testing.T, EnrollmentsBackend)
 	}{
 		{"SecondFactorSwapsByRevision", SecondFactorSwapsByRevision},
+		{"UnlockAlwaysAdvances", UnlockAlwaysAdvances},
 		{"EnrollmentMarkIsKept", EnrollmentMarkIsKept},
 		{"EnrollmentMarkIsCreatedOnce", EnrollmentMarkIsCreatedOnce},
 		{"ExportImportRoundTrips", ExportImportRoundTrips},
@@ -347,5 +348,37 @@ func SecondFactorSwapsByRevision(t *testing.T, b EnrollmentsBackend) {
 	}
 	if ps, err := s.SecondFactorPrincipals(ctx); err != nil || len(ps) != 1 || ps[0] != p {
 		t.Fatalf("%v %v", ps, err)
+	}
+}
+
+// UnlockAlwaysAdvances: none is ErrNotFound; a put reads back; a put at or
+// before the time standing (a slower clock in another region) is recorded a
+// nanosecond after it, so every unlock starts the count again; an empty
+// principal or a zero time is refused; one principal's unlock is not
+// another's (plan 11a, R15).
+func UnlockAlwaysAdvances(t *testing.T, b EnrollmentsBackend) {
+	ctx := context.Background()
+	e := b.New(t, func() time.Time { return t0 })
+	const p = "user:alice@example.com"
+	if _, err := e.GetUnlock(ctx, p); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a new store holds an unlock: %v", err)
+	}
+	if err := e.PutUnlock(ctx, p, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.PutUnlock(ctx, p, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.GetUnlock(ctx, p); err != nil || !got.Equal(t0.Add(time.Hour+time.Nanosecond)) {
+		t.Fatalf("%v %v, want a nanosecond after the standing unlock", got, err)
+	}
+	if err := e.PutUnlock(ctx, "", t0); !errors.Is(err, store.ErrNoPrincipal) {
+		t.Fatalf("an empty principal: %v", err)
+	}
+	if err := e.PutUnlock(ctx, p, time.Time{}); !errors.Is(err, store.ErrBadUnlock) {
+		t.Fatalf("a zero time: %v", err)
+	}
+	if _, err := e.GetUnlock(ctx, "user:bob@example.com"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("another principal: %v", err)
 	}
 }

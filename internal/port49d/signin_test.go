@@ -230,7 +230,7 @@ func (aliceDirectory) CheckPassword(context.Context, directory.Server, string, s
 	return nil
 }
 
-// downEnrollments is the global etcd's enrollment handle with etcd gone: it
+// downEnrollments is the directory store's enrollment handle with etcd gone: it
 // was opened (the dial is the start's, before this) and no call is answered.
 type downEnrollments struct{ store.Enrollments }
 
@@ -242,59 +242,44 @@ func (downEnrollments) GetSecondFactor(context.Context, string) (store.SecondFac
 	return store.SecondFactor{}, store.ErrUnavailable
 }
 
-// An etcd that does not answer at start, the global one or the enrollment
-// store's own, never stops port49d: the check says so and returns, the gauge
-// stays absent (the store is not known lost), and sign-in is store_unavailable
-// until a pass reaches it.
+func (downEnrollments) GetUnlock(context.Context, string) (time.Time, error) {
+	return time.Time{}, store.ErrUnavailable
+}
+
+// An etcd that does not answer at start, the directory store's, never stops
+// port49d: the check says so and returns, the gauge stays absent (the store
+// is not known lost), and sign-in is store_unavailable until a pass reaches it.
 func TestAnEnrollmentEtcdThatDoesNotAnswerNeverStopsTheStart(t *testing.T) {
-	for name, tc := range map[string]struct {
-		own    bool
-		shared bool
-	}{
-		"the global etcd":                   {shared: true},
-		"an own etcd with unreadable files": {own: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			cfg, _ := signInConfig(t, "127.0.0.1:0")
-			es := &cfg.Broker.Directory.EnrollmentStore
-			es.Backend, es.File = config.BackendEtcd, ""
-			var raw store.Enrollments
-			if tc.shared {
-				cfg.Store.Etcd = &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: 300 * time.Millisecond,
-					BulkTimeout: time.Second}
-				cfg.Store.Etcd.Breaker.Failures = 5
-				raw = downEnrollments{}
-			}
-			if tc.own {
-				missing := filepath.Join(t.TempDir(), "missing")
-				es.Etcd = &directory.EnrollmentEtcd{Endpoints: []string{"https://127.0.0.1:1"}, CAFile: missing,
-					CertFile: missing, KeyFile: missing, Prefix: "/e/", CallTimeout: 300 * time.Millisecond}
-			}
-			m := metrics.New(prometheus.NewRegistry())
-			b := builtSignInBroker(t, cfg, m)
-			var out syncBuffer
-			b.Say = func(format string, args ...any) { out.Write([]byte(fmt.Sprintf(format, args...) + "\n")) }
-			start := time.Now()
-			wireSignIn(context.Background(), cfg, b, signInTestKeys, m, raw, &out)
-			if d := time.Since(start); d > 10*time.Second {
-				t.Fatalf("the start waited %s", d)
-			}
-			if b.Enrollments == nil {
-				t.Fatal("no enrollment handle")
-			}
-			if n := testutil.CollectAndCount(m.DirectoryEnrollmentStoreOK); n != 0 {
-				t.Fatalf("the gauge is set (%d series) for a store that is only unreachable", n)
-			}
-			got := out.String()
-			if !strings.Contains(got, "did not answer at start") || !strings.Contains(got, "store_unavailable") ||
-				!strings.Contains(got, "directory-password sign-in on") {
-				t.Fatalf("output:\n%s", got)
-			}
-			b.SignInDirectory = aliceDirectory{}
-			if code, why := signInStatus(t, b); code != 503 || why != "store_unavailable" {
-				t.Fatalf("sign-in answered %d %q", code, why)
-			}
-		})
+	cfg, _ := signInConfig(t, "127.0.0.1:0")
+	es := &cfg.Broker.Directory.EnrollmentStore
+	es.Backend, es.File = config.BackendEtcd, ""
+	etcd := &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: 300 * time.Millisecond,
+		BulkTimeout: time.Second}
+	etcd.Breaker.Failures = 5
+	cfg.Stores.Session.Etcd, cfg.Stores.Directory.Etcd, cfg.Stores.Shared = etcd, etcd, true
+	m := metrics.New(prometheus.NewRegistry())
+	b := builtSignInBroker(t, cfg, m)
+	var out syncBuffer
+	b.Say = func(format string, args ...any) { out.Write([]byte(fmt.Sprintf(format, args...) + "\n")) }
+	start := time.Now()
+	wireSignIn(context.Background(), cfg, b, signInTestKeys, m, func() store.Enrollments { return downEnrollments{} }, &out)
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("the start waited %s", d)
+	}
+	if b.Enrollments == nil {
+		t.Fatal("no enrollment handle")
+	}
+	if n := testutil.CollectAndCount(m.DirectoryEnrollmentStoreOK); n != 0 {
+		t.Fatalf("the gauge is set (%d series) for a store that is only unreachable", n)
+	}
+	got := out.String()
+	if !strings.Contains(got, "did not answer at start") || !strings.Contains(got, "store_unavailable") ||
+		!strings.Contains(got, "directory-password sign-in on") || !strings.Contains(got, "stores.directory etcd") {
+		t.Fatalf("output:\n%s", got)
+	}
+	b.SignInDirectory = aliceDirectory{}
+	if code, why := signInStatus(t, b); code != 503 || why != "store_unavailable" {
+		t.Fatalf("sign-in answered %d %q", code, why)
 	}
 }
 

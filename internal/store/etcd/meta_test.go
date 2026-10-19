@@ -678,3 +678,34 @@ func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
 		t.Fatalf("the read: %+v %v (witness %d, purged %d)", r, err, w, p)
 	}
 }
+
+// ClusterID is the cluster's id from a read's header: the same through any
+// client of one cluster (plan 11a, R28).
+func TestClusterIDIsTheClusters(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	other := onShared(t, func() time.Time { return t0 })
+	id, err := s.ClusterID(context.Background())
+	if err != nil || id == 0 {
+		t.Fatalf("%x %v", id, err)
+	}
+	if again, err := other.ClusterID(context.Background()); err != nil || again != id {
+		t.Fatalf("a second client of the same cluster read %x %v, want %x", again, err, id)
+	}
+}
+
+// A probe lease is seen only with the lifetime it was granted: another
+// cluster's lease under the same id, with another lifetime, is not seen.
+func TestAProbeLeaseIsSeenOnlyWithItsGrantedLifetime(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	id, ttl, err := s.ProbeLeaseGrant(context.Background())
+	if err != nil || ttl < 3600 || ttl >= 7200 {
+		t.Fatalf("%d %d %v", id, ttl, err)
+	}
+	defer s.ProbeLeaseRevoke(context.Background(), id)
+	if seen, err := s.ProbeLeaseSeen(context.Background(), id, ttl); err != nil || !seen {
+		t.Fatalf("the lease with its own lifetime: %v %v", seen, err)
+	}
+	if seen, err := s.ProbeLeaseSeen(context.Background(), id, ttl+1); err != nil || seen {
+		t.Fatalf("the lease with another lifetime: %v %v", seen, err)
+	}
+}

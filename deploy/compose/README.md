@@ -66,6 +66,12 @@ the env files. A `secret_file` source is plan 12's to weigh.
 - `etcd-init` applies `port49d store-roles`' output once and enables auth. After a port49
   upgrade that changes the roles, re-apply `store-roles`' output by hand; it is never done
   silently.
+- **One store or two.** The example runs one etcd cluster, so `stores.session` is omitted: the session
+  store is the directory store. A deployment in several regions gives `stores.directory` an etcd
+  stretched one member per region and each region's `stores.session` an etcd of its own;
+  `port49d store-roles` then prints a section per store: run the directory's once against the stretched cluster, and each region's session section against that region's etcd. `port49 store status` (inside the
+  port49d container: `docker compose exec port49d port49 store status`) shows each store as port49d
+  sees it.
 - `context_cache` is off here, as everywhere by default, and so is `broker.directory` (see
   Directory below).
 

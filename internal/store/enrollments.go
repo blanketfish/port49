@@ -11,6 +11,10 @@ type EnrollmentBody struct {
 	MarkSealed     []byte                      `json:"mark_sealed,omitempty"`
 	ExportedAt     time.Time                   `json:"exported_at,omitzero"`
 	SecondFactors  map[string]EnrollmentRecord `json:"second_factors"`
+	// Unlocks is each principal's latest unlock (plan 11a, R15), in the file
+	// alone: an export carries none, since an unlock outlives no attempt
+	// window worth restoring.
+	Unlocks map[string]time.Time `json:"unlocks,omitempty"`
 }
 
 // EnrollmentRecord is a SecondFactor as a body keeps it. Over the sealing

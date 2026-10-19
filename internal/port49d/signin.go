@@ -17,12 +17,10 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/enrollfile"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 )
 
@@ -45,17 +43,22 @@ const (
 // found. Nothing here stops port49d: a store that cannot be opened or reached
 // refuses password sign-in alone, and every other path serves.
 //
-// shared is the *etcd.Store the broker runs on, for an enrollment_store that
-// names no etcd of its own; nil on the memory store. It does nothing for a
-// broker with no directory_password verifier.
+// dir is the directory store's handle, the broker's identity on it (the
+// session store's own in a shared store); nil on the memory store. It does
+// nothing for a broker with no directory_password verifier.
 //
 // The channel it returns closes once ctx is cancelled and the goroutines the
 // wiring started have returned; a caller that closes the store joins it first.
 func wirePasswordSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared *etcdstore.Store, out io.Writer) <-chan struct{} {
-	var sh store.Enrollments // a nil *Store is not a nil interface
-	if shared != nil {
-		sh = shared
+	m *metrics.Metrics, dir *dirHandle, out io.Writer) <-chan struct{} {
+	var sh func() store.Enrollments // nil: no shared store
+	if dir != nil {
+		sh = func() store.Enrollments {
+			if s := dir.get(); s != nil {
+				return s
+			}
+			return nil // a nil *Store is not a nil interface
+		}
 	}
 	return wireSignIn(ctx, cfg, b, keys, m, sh, out)
 }
@@ -76,9 +79,10 @@ func setPasswordSignIn(cfg config.Config, b *broker.Broker) {
 }
 
 // wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,
-// which a test can fake. Its channel is wirePasswordSignIn's.
+// read at each open so a directory that answers late is used when it does;
+// a test can fake it. Its channel is wirePasswordSignIn's.
 func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys crypt.Keys,
-	m *metrics.Metrics, shared store.Enrollments, out io.Writer) <-chan struct{} {
+	m *metrics.Metrics, shared func() store.Enrollments, out io.Writer) <-chan struct{} {
 	done := make(chan struct{})
 	if b == nil || cfg.Broker == nil || cfg.Broker.Identity == nil || cfg.Broker.Identity.PasswordSignIn == nil {
 		close(done)
@@ -101,19 +105,23 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 	switch {
 	case es.Backend != config.BackendEtcd:
 		open = func() (store.Enrollments, error) { return openEnrollmentFile(es.File, keys, m.CryptOpenFailures) }
-	case es.Etcd == nil && shared != nil:
-		where = "store.etcd " + strings.Join(cfg.Store.Etcd.Endpoints, ", ")
-		gc := guardConfig(proc, "broker", cfg.Store.Etcd, m, out, func(error) {})
+	case es.Backend == config.BackendEtcd && shared != nil:
+		where = "stores.directory etcd " + strings.Join(cfg.Stores.Directory.Etcd.Endpoints, ", ")
+		gc := guardConfig(proc, "broker", "stores.directory", cfg.Stores.Directory.Etcd, m, out, func(error) {})
+		if !cfg.Stores.Shared {
+			gc.Store = "directory store" // its circuit line at 3am reads as the directory's, not the session store's
+		}
 		gc.StopAfter, gc.Unhealthy = 0, nil
 		open = func() (store.Enrollments, error) {
-			return crypt.WrapEnrollments(guard.WrapEnrollments(shared, gc), keys, m.CryptOpenFailures), nil
+			sh := shared()
+			if sh == nil {
+				return nil, errNoDirectory // lateEnrollments opens again at its next interval
+			}
+			return crypt.WrapEnrollments(guard.WrapEnrollments(sh, gc), keys, m.CryptOpenFailures), nil
 		}
-	case es.Etcd != nil:
-		where = "etcd " + strings.Join(es.Etcd.Endpoints, ", ")
-		open = func() (store.Enrollments, error) { return openEnrollmentEtcd(es.Etcd, keys, m, proc, out) }
 	default:
-		// The config cannot make this: an etcd backend names an etcd or
-		// shares store.etcd, which has a broker only in port49-broker.
+		// The config cannot make this: an etcd backend shares the directory
+		// store, which has a broker only in port49-broker.
 		where = "no store"
 		open = func() (store.Enrollments, error) {
 			return nil, fmt.Errorf("%w: no enrollment store is configured for this process", store.ErrEnrollmentStoreLost)
@@ -243,58 +251,6 @@ func openEnrollmentFile(path string, keys crypt.Keys, openFailures *prometheus.C
 	}
 	return &reopenable{Enrollments: crypt.WrapEnrollments(f, keys, openFailures), lost: f.Lost}, nil
 }
-
-// openEnrollmentEtcd opens an enrollment store's own etcd: its CA and
-// identity read now, the dial never waited for (clientv3 does not), so an
-// etcd that is down surfaces as store.ErrUnavailable on the first call.
-func openEnrollmentEtcd(e *directory.EnrollmentEtcd, keys crypt.Keys, m *metrics.Metrics, proc string,
-	out io.Writer) (store.Enrollments, error) {
-	const at = "broker.directory.enrollment_store.etcd"
-	now := time.Now()
-	pool, cas, err := caCerts(e.CAFile)
-	if err != nil {
-		return nil, &storeFault{fmt.Errorf("%s.ca_file %s: %w", at, e.CAFile, err)}
-	}
-	for _, ca := range cas {
-		if now.After(ca.NotAfter) || now.Before(ca.NotBefore) {
-			return nil, &storeFault{fmt.Errorf("%s.ca_file %s: CA %s is valid only from %s to %s; replace it", at,
-				e.CAFile, ca.Subject, ca.NotBefore.UTC().Format(time.RFC3339), ca.NotAfter.UTC().Format(time.RFC3339))}
-		}
-	}
-	tc, leaf, err := identityAt(at+".identity", config.EtcdIdentity{CertFile: e.CertFile, KeyFile: e.KeyFile}, pool, now)
-	if err != nil {
-		return nil, err
-	}
-	pctx, cancel := context.WithTimeout(context.Background(), 4*e.CallTimeout)
-	err = probeTLS(pctx, e.Endpoints, tc, 4*e.CallTimeout)
-	cancel()
-	if err != nil {
-		return nil, err
-	}
-	m.StoreCertExpiry.WithLabelValues("broker_enrollments").Set(float64(leaf.NotAfter.Unix()))
-	fmt.Fprintf(out, "%s: enrollment store: its etcd certificate (CN=%s) is valid until %s (%d days)\n", proc,
-		leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339), int(leaf.NotAfter.Sub(now).Hours()/24))
-	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": enrollment store: "+format+"\n", args...) }
-	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, TLS: tc, Logf: logf,
-		DialTimeout: 4 * e.CallTimeout, IndexUndecodable: m.IndexRecordsUndecodable})
-	if err != nil {
-		return nil, fmt.Errorf("broker.directory.enrollment_store.etcd: %w", err)
-	}
-	gc := guard.Config{Proc: proc, Component: "broker", CallTimeout: e.CallTimeout, BulkTimeout: 10 * e.CallTimeout,
-		MaxInFlight: map[guard.Pool]int{guard.Token: 64, guard.Context: 64, guard.Bulk: 4}, Failures: 5,
-		OpenFor: 5 * time.Second, Metrics: m.StoreGuard(),
-		Say: func(l string) { fmt.Fprintln(out, l) }}
-	return &closingEnrollments{Enrollments: crypt.WrapEnrollments(guard.WrapEnrollments(s, gc), keys,
-		m.CryptOpenFailures), closer: s}, nil
-}
-
-// closingEnrollments closes the etcd it owns.
-type closingEnrollments struct {
-	store.Enrollments
-	closer interface{ Close() error }
-}
-
-func (c *closingEnrollments) Close() error { return c.closer.Close() }
 
 // lateEnrollments is a store.Enrollments that opens its backend on first use
 // and, while that fails, tries again no oftener than enrollmentRetryEvery,
@@ -444,6 +400,22 @@ func (l *lateEnrollments) SecondFactorPrincipals(ctx context.Context) ([]string,
 		return nil, err
 	}
 	return in.SecondFactorPrincipals(ctx)
+}
+
+func (l *lateEnrollments) GetUnlock(ctx context.Context, principal string) (time.Time, error) {
+	in, err := l.get()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return in.GetUnlock(ctx, principal)
+}
+
+func (l *lateEnrollments) PutUnlock(ctx context.Context, principal string, at time.Time) error {
+	in, err := l.getFresh()
+	if err != nil {
+		return err
+	}
+	return in.PutUnlock(ctx, principal, at)
 }
 
 func (l *lateEnrollments) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark, error) {

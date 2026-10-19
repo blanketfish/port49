@@ -90,6 +90,9 @@ func sweepStale() {
 	}
 }
 
+// soloSeq numbers the solo members of this process.
+var soloSeq atomic.Int64
+
 // Main starts the package's shared member, runs its tests, and stops it.
 // A package whose tests need etcd calls it from TestMain.
 func Main(m *testing.M) int {
@@ -206,6 +209,10 @@ func or(s, d string) string {
 type Options struct {
 	TLS            bool
 	ProgressNotify time.Duration
+	// ClusterToken, when set, is the member's initial cluster token: two
+	// members started with one are two clusters with one cluster id, as two
+	// default single-node etcds are.
+	ClusterToken string
 }
 
 // Server is one member of a test's own.
@@ -223,7 +230,13 @@ type Server struct {
 func Start(t testing.TB, o Options) *Server {
 	t.Helper()
 	s := &Server{Dir: t.TempDir()}
-	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify}
+	// A token of its own, so each member is a cluster of its own with its own
+	// id (plan 11a, R28): by default every solo member would share one.
+	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify,
+		token: fmt.Sprintf("port49-etcdtest-solo-%d-%d", os.Getpid(), soloSeq.Add(1))}
+	if o.ClusterToken != "" {
+		spec.token = o.ClusterToken
+	}
 	if o.TLS {
 		now := time.Now()
 		ca, err := testpki.NewCA("etcdtest CA", now.Add(-time.Hour), now.Add(24*time.Hour))
@@ -249,9 +262,24 @@ func Start(t testing.TB, o Options) *Server {
 			KeyFile: filepath.Join(s.Dir, "server-key.pem"), TrustedCAFile: filepath.Join(s.Dir, "ca.pem"),
 			ClientCertAuth: true}
 	}
-	e, err := member(spec)
-	if err != nil {
-		t.Fatal(err)
+	// A port picked first, not bound as port 0: the member lists its client
+	// URL as advertised, and Members dials that (plan 11a, R21).
+	// Another process can take the port before the member binds it; as
+	// StartCluster does, try again on a new one.
+	scheme := "http://"
+	if o.TLS {
+		scheme = "https://"
+	}
+	var e *embed.Etcd
+	for deadline := time.Now().Add(clusterRetryFor); ; {
+		spec.client = scheme + freePort(t)
+		var err error
+		if e, err = member(spec); err == nil {
+			break
+		} else if !strings.Contains(err.Error(), "address already in use") || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	s.e = e
 	t.Cleanup(func() { // a restore replaces s.e; a failed one leaves it nil
@@ -259,10 +287,6 @@ func Start(t testing.TB, o Options) *Server {
 			s.e.Close()
 		}
 	})
-	scheme := "http://"
-	if o.TLS {
-		scheme = "https://"
-	}
 	s.Endpoint = scheme + e.Clients[0].Addr().String()
 	s.spec = spec
 	s.spec.client = s.Endpoint

@@ -30,8 +30,9 @@ func TestAReplicaLeavesTheLostStateWhenTheMarkAppears(t *testing.T) {
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore
 	es.Backend, es.File = config.BackendEtcd, ""
-	cfg.Store.Etcd = &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
-	cfg.Store.Etcd.Breaker.Failures = 5
+	etcd := &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
+	etcd.Breaker.Failures = 5
+	cfg.Stores.Session.Etcd, cfg.Stores.Directory.Etcd, cfg.Stores.Shared = etcd, etcd, true
 	shared := memory.NewEnrollments(time.Now)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -42,7 +43,7 @@ func TestAReplicaLeavesTheLostStateWhenTheMarkAppears(t *testing.T) {
 		m := metrics.New(prometheus.NewRegistry())
 		b := builtSignInBroker(t, cfg, m)
 		b.Say = func(string, ...any) {}
-		wireSignIn(ctx, cfg, b, signInTestKeys, m, shared, io.Discard)
+		wireSignIn(ctx, cfg, b, signInTestKeys, m, func() store.Enrollments { return shared }, io.Discard)
 		if b.EnrollmentStoreLost() == "" {
 			t.Fatalf("replica %d is not lost before the mark", i)
 		}
@@ -93,8 +94,9 @@ func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore
 	es.Backend, es.File = config.BackendEtcd, ""
-	cfg.Store.Etcd = &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
-	cfg.Store.Etcd.Breaker.Failures = 5
+	etcd := &config.EtcdConfig{Endpoints: []string{"https://etcd-0:2379"}, CallTimeout: time.Second, BulkTimeout: time.Second}
+	etcd.Breaker.Failures = 5
+	cfg.Stores.Session.Etcd, cfg.Stores.Directory.Etcd, cfg.Stores.Shared = etcd, etcd, true
 	shared := &downStore{Enrollments: memory.NewEnrollments(time.Now)}
 	shared.down.Store(true)
 	mine := crypt.WrapEnrollments(shared.Enrollments, signInTestKeys, metrics.New(prometheus.NewRegistry()).CryptOpenFailures)
@@ -108,7 +110,7 @@ func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.
 	b := builtSignInBroker(t, cfg, m)
 	b.Say = func(string, ...any) {}
 	var out strings.Builder
-	wireSignIn(ctx, cfg, b, signInTestKeys, m, shared, &out)
+	wireSignIn(ctx, cfg, b, signInTestKeys, m, func() store.Enrollments { return shared }, &out)
 	if n := testutil.CollectAndCount(m.DirectoryEnrollmentStoreOK); n != 0 {
 		t.Fatalf("the gauge has %d series before the store answered", n)
 	}

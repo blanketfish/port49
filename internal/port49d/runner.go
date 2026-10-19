@@ -14,9 +14,11 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/placement"
 )
 
 // runner is one port49-broker's part in the keyspace's one runner (plan
@@ -42,6 +44,11 @@ type runner struct {
 	// pass's context half and meta/judged's writes run under it, so a lost
 	// hold ends them with the duties.
 	duty atomic.Pointer[context.Context]
+	// taking is set from the start of the takeover until the duties end:
+	// the feeds queue what they bring for the duties from then on (queuing),
+	// so a mark or logout that lands after the takeover's snapshot of the
+	// marks or the logout set, and before begin, is still reached here.
+	taking atomic.Bool
 	// judge is the policy the latest settled pass left nothing pending
 	// under, for the duties to record (settled, judging).
 	judge chan *policy.Policy
@@ -64,6 +71,27 @@ type runner struct {
 	// tookOver is told the policy each takeover carried, once it is done:
 	// it opens the start's mint gate (decision 36). nil tells nothing.
 	tookOver func(carried *policy.Policy)
+	// followed is told each mark the marks feed brings that stands, in a
+	// split (plan 11a, R20): the duties reach it in this region's session
+	// store (reachFollowed). Nil in a shared store, where the broker that
+	// made a mark reached it there.
+	followed chan store.Revocation
+	// followedLogouts is told each logout the logouts feed brings, in a
+	// split (R26): the duties reach it in this region's session store.
+	followedLogouts chan store.LogoutEntry
+	// reach reaches a logout here: Broker.ReachLogout, or a test's (nil is
+	// the broker's).
+	reach func(ctx context.Context, l store.Logout) (broker.RevokeReport, error)
+	// dir is the directory store's handle in a split (plan 11a): the
+	// hourly key-window recheck reads it (R27). Nil in a shared store.
+	dir *dirHandle
+	// logouts is the followed copy of the directory's logout records in a
+	// split: the takeover reaches every standing one here (R29). Nil in a
+	// shared store.
+	logouts *store.LogoutSet
+	// pending is how many back-channel logouts the last forwarding pass left
+	// pending in this region's session store (forwardingPending).
+	pending atomic.Int64
 }
 
 // judgedStore is meta/ as the runner reads and writes it (etcd.Store):
@@ -81,6 +109,11 @@ type judgedStore interface {
 var errNotRunning = errors.New("this replica no longer runs the keyspace")
 
 func (r *runner) running() bool { return r.duty.Load() != nil }
+
+// queuing is whether the feeds queue what they bring for the duties: from
+// the start of the takeover, not only once the duties run. One that the
+// takeover also reached is reached twice, which changes nothing.
+func (r *runner) queuing() bool { return r.taking.Load() || r.running() }
 
 // pass is the reloader's refresh pass on port49-broker (Ruling 6): the
 // whole Refresh while this replica runs, whose context half is the
@@ -112,7 +145,7 @@ func (r *runner) whole(ctx context.Context, priors []broker.Prior) (broker.Refre
 
 // run holds and runs until ctx ends.
 func (r *runner) run(ctx context.Context) {
-	e := r.cfg.Store.Etcd
+	e := r.cfg.Stores.Session.Etcd
 	for ctx.Err() == nil {
 		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
 			if r.held != "" && holder == r.held {
@@ -169,6 +202,8 @@ func (r *runner) run(ctx context.Context) {
 // after a put-back, the refresh's context half, the scheduled refresh and
 // the directory's pre-warm, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
+	r.taking.Store(true)
+	defer r.taking.Store(false)
 	carried, err := r.takeover(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -186,13 +221,23 @@ func (r *runner) duties(ctx context.Context) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(8)
+	if r.followed != nil {
+		wg.Add(2)
+		go func() { defer wg.Done(); r.reachFollowed(ctx) }()
+		go func() { defer wg.Done(); r.forwardingPending(ctx) }()
+	}
+	if r.dir != nil {
+		wg.Add(2)
+		go func() { defer wg.Done(); r.recheckDirectoryKeys(ctx) }()
+		go func() { defer wg.Done(); r.putBackLater(ctx) }()
+	}
 	go func() { defer wg.Done(); r.judging(ctx) }()
 	go func() { defer wg.Done(); r.keepWitness(ctx) }()
 	go func() { defer wg.Done(); r.reapplying(ctx) }()
 	go func() { defer wg.Done(); r.owed(ctx) }()
 	go func() {
 		defer wg.Done()
-		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Store.Etcd.SweepInterval, stderr)
+		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Stores.Session.Etcd.SweepInterval, stderr)
 	}()
 	go func() {
 		defer wg.Done()
@@ -355,6 +400,19 @@ func (r *runner) restoreMarks(ctx context.Context) error {
 	return nil
 }
 
+// putBackLater is the takeover's put-back in a split (R29): restoreMarks,
+// which waits for the directory, then the marks applied to the kept
+// contexts again when it put any back.
+func (r *runner) putBackLater(ctx context.Context) {
+	if err := r.restoreMarks(ctx); err != nil {
+		return // ctx ended
+	}
+	select {
+	case r.marksReloaded <- struct{}{}:
+	default:
+	}
+}
+
 // reloadHook is the marks feed's rescanned on every replica (store.
 // FollowMarks; plan 7e, Ruling 12). It counts a rescan. While this replica
 // runs, it puts back every mark its copy holds that the store lacks, once
@@ -373,7 +431,7 @@ func (r *runner) reloadHook(ctx context.Context, rescans prometheus.Counter) fun
 	say := keptSayerAs(stderr, "port49-broker", "this replica", "as its marks feed reloads", "")
 	return func() error {
 		rescans.Inc()
-		pctx, cancel := context.WithTimeout(ctx, r.cfg.Store.Etcd.BulkTimeout)
+		pctx, cancel := context.WithTimeout(ctx, r.cfg.Stores.Session.Etcd.BulkTimeout)
 		defer cancel()
 		if !r.running() {
 			stored, err := r.st.ListRevocations(pctx)
@@ -785,7 +843,9 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //  1. records this start's seal keys, warning on the last (checkSealKeys);
 //  2. puts back every mark this replica's copy holds that the store lacks
 //     (restoreMarks; Ruling 12), then lists the marks, so those are applied
-//     with the rest;
+//     with the rest; in a split it lists the marks it follows instead, and
+//     the put-back is its own duty (putBackLater; R29), so a cut holds
+//     nothing up;
 //  3. re-indexes every kept context the index lost (raw.Unindexed, then
 //     ReindexContexts), so the passes below reach it, and applies every
 //     standing mark the store holds to the live contexts it kept, by 7a's
@@ -806,25 +866,33 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 // reads the store retries every 5s while it is unavailable, and so does
 // step 5 while a principal's contexts cannot be looked up (Ruling T12-c).
 func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
-	e := r.cfg.Store.Etcd
+	e := r.cfg.Stores.Session.Etcd
 	if err := retryCtx(ctx, func() error {
 		return checkSealKeysAs(ctx, "port49-broker", r.raw, r.keys, r.m, stderr, 4*e.CallTimeout, r.alarm, true)
 	}); err != nil {
 		return nil, err
 	}
-	// The marks the store lost are put back first, and listed after, so
-	// they are applied with the rest (Ruling 12; pre-flight I5).
-	if err := r.restoreMarks(ctx); err != nil {
-		return nil, err
-	}
 	var all []store.Revocation
-	if err := retryCtx(ctx, func() (err error) {
-		if all, err = r.st.ListRevocations(ctx); err != nil {
-			return fmt.Errorf("listing the revocations in force: %w", err)
+	if r.dir != nil {
+		// A split's takeover does not wait for the directory (R29): it applies
+		// the marks this process follows, and the put-back is its own duty.
+		fmt.Fprintln(stderr, "port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the "+
+			"directory store; this region's duties run meanwhile")
+		all = r.marks.All()
+	} else {
+		// The marks the store lost are put back first, and listed after, so
+		// they are applied with the rest (Ruling 12; pre-flight I5).
+		if err := r.restoreMarks(ctx); err != nil {
+			return nil, err
 		}
-		return nil
-	}); err != nil {
-		return nil, err
+		if err := retryCtx(ctx, func() (err error) {
+			if all, err = r.st.ListRevocations(ctx); err != nil {
+				return fmt.Errorf("listing the revocations in force: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if err := retryCtx(ctx, func() error {
 		// The broker's raw store, outside the guard, as the sweep's is: the
@@ -854,6 +922,27 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	if len(all) > 0 {
 		fmt.Fprintf(stderr, "port49-broker: runner: %d standing revocation(s) applied to the live contexts the store "+
 			"kept (%d context(s) marked revoked)\n", len(all), marked)
+	}
+	if r.logouts != nil {
+		var keys, ctxs, unfinished int
+		for _, e := range r.logouts.All() {
+			rep, err := r.reachLogout(ctx, e.Logout)
+			keys, ctxs = keys+rep.TokenKeys, ctxs+len(rep.Contexts)
+			if err != nil && !errors.Is(err, broker.ErrLogoutUnreachable) {
+				// Queued (taking is set): the duties reach it again, and say how
+				// to end its sessions by hand while it does not finish.
+				unfinished++
+				r.followLogout(e)
+			}
+		}
+		if n := r.logouts.Len(); n > 0 {
+			line := fmt.Sprintf("port49-broker: runner: %d standing logout(s) reached here: %d token key(s), "+
+				"%d context(s); %d did not finish", n, keys, ctxs, unfinished)
+			if unfinished > 0 {
+				line += ", and are tried again once this replica's duties start"
+			}
+			fmt.Fprintln(stderr, line)
+		}
 	}
 	bundle := r.brk.Policy.Load().Bundle
 	var judged etcdstore.JudgedRecord
@@ -959,4 +1048,156 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		return nil, ctx.Err()
 	}
 	return carried, nil
+}
+
+// follow is the marks feed's tell in a split, after MarkChanged: a mark
+// that stands is queued for the duties to reach here, from the start of the
+// takeover (queuing). A replica that does not run queues nothing, and a full
+// queue drops the mark,
+// said: the marks deny it on every request, and the next takeover
+// applies every mark to the live contexts.
+func (r *runner) follow(c store.MarkChange) {
+	if r.followed == nil || !c.Standing || !r.queuing() {
+		return
+	}
+	select {
+	case r.followed <- c.Revocation:
+	default:
+		fmt.Fprintf(stderr, "port49-broker: runner: a revocation of %s made elsewhere was not queued to reach this "+
+			"region's tokens (the queue is full); the marks deny it on every request, and the next takeover "+
+			"applies it\n", printsafe.Line(c.Key, 160))
+	}
+}
+
+// followLogout queues a logout the feed brought for the running duties,
+// as follow queues a mark; a full queue drops it, said: the logout set
+// refuses its mints and refreshes regardless.
+func (r *runner) followLogout(e store.LogoutEntry) {
+	if r.followedLogouts == nil || !r.queuing() {
+		return
+	}
+	select {
+	case r.followedLogouts <- e:
+	default:
+		fmt.Fprintln(stderr, "port49-broker: runner: a logout made elsewhere was not queued to reach this region's "+
+			"sessions (the queue is full); its mints and refreshes are refused regardless")
+	}
+}
+
+// reachFollowed reaches each queued mark and logout in this region's session
+// store (Broker.ReachMark, Broker.ReachLogout), one line each, until ctx
+// ends. A logout whose reach did not finish is queued again after a wait
+// (retryLogout), doubling with each failure in a row, while the duties run:
+// a logout is enforced on mints and refreshes alone, so only its reach ends
+// the person's live contexts here. Every step is safe to run twice. One the
+// broker can never reach (ErrLogoutUnreachable) is not tried again; the next
+// takeover reaches every standing logout once more.
+func (r *runner) reachFollowed(ctx context.Context) {
+	failed := map[string]int{} // a logout's failed reaches in a row, by key
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case mark := <-r.followed:
+			n, refs, err := r.brk.ReachMark(ctx, mark)
+			line := fmt.Sprintf("port49-broker: runner: a revocation of %s made elsewhere reached %d token "+
+				"key(s) and %d context(s) here", printsafe.Line(mark.Key, 160), n, len(refs))
+			if err != nil {
+				line += fmt.Sprintf("; not every step finished (%s): the marks deny it on every request, and the "+
+					"next takeover applies it again", printsafe.Line(err.Error(), 300))
+			}
+			fmt.Fprintln(stderr, line)
+		case l := <-r.followedLogouts:
+			rep, err := r.reachLogout(ctx, l.Logout)
+			if err != nil && ctx.Err() != nil {
+				return // the duties ended mid-reach: the next takeover reaches it
+			}
+			line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
+				"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
+			switch {
+			case err == nil:
+				delete(failed, l.Key)
+			case errors.Is(err, broker.ErrLogoutUnreachable):
+				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
+			default:
+				failed[l.Key]++
+				wait := logoutRetryFirst << min(failed[l.Key]-1, 6)
+				line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
+					"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
+					"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
+					r.brk.FollowedLogoutByHand(l.Logout, rep))
+				r.retryLogout(ctx, l, wait)
+			}
+			fmt.Fprintln(stderr, line)
+		}
+	}
+}
+
+// logoutRetryFirst is the wait before a failed logout reach is tried again;
+// each failure in a row doubles it, up to 64 times it.
+var logoutRetryFirst = time.Second
+
+// retryLogout queues l for reachFollowed again after wait, unless the duties
+// end first or its record has expired by then.
+func (r *runner) retryLogout(ctx context.Context, l store.LogoutEntry, wait time.Duration) {
+	go func() {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if !l.Until.IsZero() && time.Now().After(l.Until) {
+			return
+		}
+		select {
+		case r.followedLogouts <- l:
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// reachLogout is r.reach, else the broker's ReachLogout.
+func (r *runner) reachLogout(ctx context.Context, l store.Logout) (broker.RevokeReport, error) {
+	if r.reach != nil {
+		return r.reach(ctx, l)
+	}
+	return r.brk.ReachLogout(ctx, l)
+}
+
+// forwardingPending forwards this region's pending logouts to the
+// directory every 5s while it answers (placement.ForwardPending), sets
+// port49_store_logouts_pending, and says each pass that forwarded any, and
+// once per run of passes that could not.
+func (r *runner) forwardingPending(ctx context.Context) { r.forwardPendingFrom(ctx, r.raw) }
+
+// forwardPendingFrom is forwardingPending over the session store's pending
+// records. When the duties end (the hold moved) the gauge and the count are
+// zeroed: another replica now reports the pending logouts, and a sum() across
+// replicas must not count them twice.
+func (r *runner) forwardPendingFrom(ctx context.Context, pending placement.PendingLogouts) {
+	defer func() {
+		r.m.StoreLogoutsPending.Set(0)
+		r.pending.Store(0)
+	}()
+	said := false
+	for {
+		n, left, err := placement.ForwardPending(ctx, r.st, pending)
+		r.m.StoreLogoutsPending.Set(float64(left))
+		r.pending.Store(int64(left))
+		switch {
+		case n > 0:
+			fmt.Fprintf(stderr, "port49-broker: runner: %d pending back-channel logout(s) forwarded to the "+
+				"directory store, and so to every region\n", n)
+			said = false
+		case err != nil && left > 0 && !said:
+			fmt.Fprintf(stderr, "port49-broker: runner: %d back-channel logout(s) pending until the directory store "+
+				"answers (%s); they are applied in this region already\n", left, printsafe.Line(err.Error(), 300))
+			said = true
+		}
+		if !sleepCtx(ctx, 5*time.Second) {
+			return
+		}
+	}
 }

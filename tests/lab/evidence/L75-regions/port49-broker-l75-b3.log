@@ -1,0 +1,103 @@
+port49-broker: metrics on 127.0.0.1:45427
+port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-20T01:47:41Z (0 days)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-20T01:47:41Z (0 days)
+port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 1
+port49-broker: store: 0 revocation(s) in force from the directory store
+port49-broker: directory: 1 servers (localhost:10636 site lab priority 100); this broker's site is lab (site); bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com
+port49-broker: directory: bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com: the weakest of the three (design §10); its password is read from LAB_DIRECTORY_BIND_PASSWORD
+port49-broker: directory: certificates map by san_email (weak, pinned to CN=L75 users CA) through mail; principal from mail, username from uid; nested groups direct under ou=G,dc=corp,dc=example,dc=com
+port49-broker: directory: mail and uid must be writable only by directory administrators: two entries holding one value are both refused (identity_ambiguous, username_collision) until it is fixed
+port49-broker: directory: grace 4h0m0s; pre-warm every 1h0m0s; the scheduled refresh every 5m0s stamps refreshed_at (session.staleness_ceiling denies a session past it)
+port49-broker: identity: humans: x509 (trust anchor /tmp/p49l741683135443/l75-users-ca.pem)
+port49-broker: identity: keys refreshed every 1h0m0s; trusted without a refresh until 24h0m0s after the last (broker.identity.jwks_max_age); clock_skew 1m0s; max_token_age 2h0m0s
+port49-broker: issuance: issuing as CN=port49 issuing CA f9456506,O=port49 (sha256:a34333cf9db2051c39652693548ba74e257b2f1023c2eff5e270c8d1dbce7810), valid until 2031-10-18T01:50:56Z
+port49-broker: issuance: certificates of 12h0m0s over an OIDC sign-in, from the issuing CA in /tmp/p49l741683135443/b3-state
+2026/10/19 01:50:59 sign-in: the enrollment store is lost (it holds no creation mark): password sign-in is refused until an operator acts. On a new install run `port49 directory init-enrollments` once; if this broker has enrolled people, restore the store (`port49 directory import`, or the etcd snapshot) or run `port49 directory reset-second-factor --all`
+port49-broker: broker: directory-password sign-in on (second factor totp; principal domains corp.example.com; enrollments in stores.directory etcd https://127.0.0.1:41625, https://127.0.0.1:36897, https://127.0.0.1:33597; enrollment is open only after reset-second-factor, new entries for 336h; limits 5 per principal, 50 per source, per 15m)
+port49-broker: policy: no bundle has been judged on this keyspace; this start is not judged against one
+port49-broker: directory: selected localhost:10636 (lab, priority 100)
+port49-broker: policy: mints wait for a takeover to judge bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
+port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
+port49-broker: admin socket on /tmp/p49l741683135443/b3.sock (port49 revoke, port49 directory forget, reset-second-factor, unlock, init-enrollments, export, import)
+port49-broker: listening on 127.0.0.1:45903, metrics on 127.0.0.1:45427
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1841124, since 2026-10-19T01:50:59Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
+port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the store was restored; going by meta/judged alone
+port49-broker: runner: the bundle in force (sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d) is not the one the last runner judged (none recorded); 0 unspent token(s) purged (run 'port49 token' again)
+port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d)
+port49-broker: runner: recorded bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d as judged (the takeover's carry left nothing owed)
+port49-broker: policy: mints open: this replica's takeover is done (bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d)
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
+port49-broker: directory: pre-warm: 0 groups, 0 principals verified, 0 skipped
+{"ts":"2026-10-19T02:02:32.882Z","event":"issue","verdict":"deny","reason":"sign_in_refused","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"second_factor"}}
+{"ts":"2026-10-19T02:02:33.092Z","event":"issue","verdict":"deny","reason":"sign_in_refused","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"second_factor"}}
+{"ts":"2026-10-19T02:02:33.265Z","event":"issue","verdict":"deny","reason":"sign_in_refused","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"second_factor"}}
+{"ts":"2026-10-19T02:02:33.523Z","event":"issue","verdict":"deny","reason":"sign_in_refused","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"second_factor"}}
+{"ts":"2026-10-19T02:02:33.694Z","event":"issue","verdict":"deny","reason":"sign_in_refused","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"second_factor"}}
+{"ts":"2026-10-19T02:02:33.905Z","event":"issue","verdict":"deny","reason":"sign_in_throttled","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32","failed":"principal_limit"}}
+{"ts":"2026-10-19T02:03:00.002Z","event":"issue","verdict":"permit","reason":"certificate_issued","principal":"user:carol@corp.example.com","auth":{"method":"directory_password","directory_password":{"amr":["pwd","otp"],"auth_time":"2026-10-19T02:03:00.002Z","entry_sha256":"e337ae1d4ff28f26c30a26e896243da524b228eafb9806c93143731fa35b88bb"}},"certificate":{"serial":"69583a8826fabb1688aafb2173afbc8c","issuer":"CN=port49 issuing CA f9456506,O=port49","fingerprint":"sha256:c1c60e090e5f03b1ad12b2b4e2f81dfc6f928378731e844a048d9a447d1b8340","not_after":"2026-10-19T14:03:00Z"},"sign_in":{"source":"127.0.0.1/32"}}
+{"ts":"2026-10-19T02:03:00.554Z","event":"sign_in_unlock","principal":"user:carol@corp.example.com","sign_in_unlock":{"failures":0,"origin":"admin_socket uid 1000"}}
+port49-broker: sign-in: admin_socket uid 1000 cleared 0 failed sign-ins for user:carol@corp.example.com here, and started every region's count again
+{"ts":"2026-10-19T02:03:00.568Z","event":"second_factor_reset","principal":"user:bob@corp.example.com","second_factor_reset":{"reopen_until":"2026-10-20T02:03:00.568Z","origin":"admin_socket uid 1000"}}
+port49-broker: sign-in: admin_socket uid 1000 reset user:bob@corp.example.com's second factor; they may enroll until 2026-10-20T02:03:00.568Z
+port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+2026/10/19 02:03:30 sign-in: the unlock store did not answer: store: unavailable: no answer in 500ms (store: unavailable: context deadline exceeded)
+{"ts":"2026-10-19T02:03:30.003Z","event":"issue","verdict":"deny","reason":"store_unavailable","principal":"user:carol@corp.example.com","auth":{"method":"directory_password"},"sign_in":{"source":"127.0.0.1/32"}}
+2026/10/19 02:03:31 broker: unlocking user:carol@corp.example.com failed: store: unavailable: no answer in 500ms (store: unavailable: context deadline exceeded)
+2026/10/19 02:03:31 broker: resetting user:bob@corp.example.com failed: store: unavailable: no answer in 500ms (store: unavailable: context deadline exceeded)
+port49-broker: directory store: answering again; the cache was 31.2s old
+{"ts":"2026-10-19T02:03:32.561Z","event":"blob","blob":{"hash":"sha256:f51bba5ab243ac23122df63840654cc85af582a7ec9c4e56a99e0ba826853b23","body":{"version":2,"bundle":"sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
+{"ts":"2026-10-19T02:03:32.563Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:carol@corp.example.com","auth":{"method":"cert","directory":{"source":"fresh","verified_at":"2026-10-19T02:03:32.558Z","server":"localhost:10636","site":"lab"}},"device":{"nas":"","name":"l75-device","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:f51bba5ab243ac23122df63840654cc85af582a7ec9c4e56a99e0ba826853b23"},"policy":{"bundle":"sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d","subject":"carol","grants":[{"scope":"all","roles":["admin"]}]}}
+{"ts":"2026-10-19T02:03:33.424Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:carol@corp.example.com","auth":{"method":"cert","directory":{"source":"fresh","verified_at":"2026-10-19T02:03:33.419Z","server":"localhost:10636","site":"lab"}},"device":{"nas":"","name":"l75-device","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:f51bba5ab243ac23122df63840654cc85af582a7ec9c4e56a99e0ba826853b23"},"policy":{"bundle":"sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d","subject":"carol","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+2026/10/19 02:03:33 broker: forgetting user:carol@corp.example.com failed: store: unavailable: the directory store does not answer, so nothing was forgotten
+port49-broker: directory store: not answering: serving user:carol@corp.example.com's cached directory membership (its pin as this region last read it); a forget made elsewhere reaches this region when the directory answers
+{"ts":"2026-10-19T02:03:33.957Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:carol@corp.example.com","auth":{"method":"cert","directory":{"source":"fresh","verified_at":"2026-10-19T02:03:33.953Z","server":"localhost:10636","site":"lab"}},"device":{"nas":"","name":"l75-device","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:f51bba5ab243ac23122df63840654cc85af582a7ec9c4e56a99e0ba826853b23"},"policy":{"bundle":"sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d","subject":"carol","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: broker: answering a connection from 127.0.0.1 store_unavailable and closing it before it bound
+{"ts":"2026-10-19T02:03:33.960Z","event":"mint","verdict":"deny","reason":"store_unavailable","auth":{"method":"cert","fingerprint":"sha256:fb8782b9ab3f6720329158c66035cb2012dc981042d09c0027345c302e66ea43"}}
+port49-broker: directory store: answering again; the cache was 2.0s old
+{"ts":"2026-10-19T02:03:35.120Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:bob@corp.example.com","auth":{"method":"cert","directory":{"source":"fresh","verified_at":"2026-10-19T02:03:35.116Z","server":"localhost:10636","site":"lab"}},"device":{"nas":"","name":"l75-device","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:f51bba5ab243ac23122df63840654cc85af582a7ec9c4e56a99e0ba826853b23"},"policy":{"bundle":"sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d","subject":"bob","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: signal received, draining
+port49-broker: drained, exiting
+port49-broker: metrics on 127.0.0.1:42077
+port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-20T01:47:41Z (0 days)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-20T01:47:41Z (0 days)
+port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 405
+port49-broker: store: 0 revocation(s) in force from the directory store
+port49-broker: directory: 1 servers (localhost:10636 site lab priority 100); this broker's site is lab (site); bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com
+port49-broker: directory: bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com: the weakest of the three (design §10); its password is read from LAB_DIRECTORY_BIND_PASSWORD
+port49-broker: directory: certificates map by san_email (weak, pinned to CN=L75 users CA) through mail; principal from mail, username from uid; nested groups direct under ou=G,dc=corp,dc=example,dc=com
+port49-broker: directory: mail and uid must be writable only by directory administrators: two entries holding one value are both refused (identity_ambiguous, username_collision) until it is fixed
+port49-broker: directory: grace 4h0m0s; pre-warm every 1h0m0s; the scheduled refresh every 5m0s stamps refreshed_at (session.staleness_ceiling denies a session past it)
+port49-broker: identity: humans: x509 (trust anchor /tmp/p49l741683135443/l75-users-ca.pem); oidc https://127.0.0.1:45961 (client_id port49-cli, principal from email in corp.example.com, email_verified required; algorithms RS256)
+port49-broker: identity: the principal claim must be one only the identity provider's administrators can set: a person who can edit their own would choose whose principal they are; on a provider brokering another, turn off "trust email"
+port49-broker: identity: https://127.0.0.1:45961 is fetched directly (no HTTPS_PROXY)
+port49-broker: identity: keys refreshed every 1h0m0s; trusted without a refresh until 24h0m0s after the last (broker.identity.jwks_max_age); clock_skew 1m0s; max_token_age 2h0m0s
+port49-broker: directory: selected localhost:10636 (lab, priority 100)
+port49-broker: policy: mints open: meta/judged names bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d, the one this replica serves
+port49-broker: identity: https://127.0.0.1:45961: keys from https://127.0.0.1:45961/jwks
+port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
+port49-broker: admin socket on /tmp/p49l741683135443/b3.sock (port49 revoke, port49 directory forget)
+port49-broker: listening on 127.0.0.1:34235, metrics on 127.0.0.1:42077
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1871533, since 2026-10-19T02:03:43Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
+port49-broker: runner: the bundle in force (sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d) is the one the last runner judged; no unspent token purged
+port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d)
+port49-broker: runner: recorded bundle sha256:e9fe3f28be2c64fed1539f9cccb496ef2bfd459b8d406a393e457d7b67a1fd2d as judged (the takeover's carry left nothing owed)
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
+port49-broker: runner: a logout made elsewhere (backchannel_logout https://127.0.0.1:45961) reached 0 token key(s) and 0 context(s) here
+port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: not answering: a back-channel logout was applied in this region and is pending; it is forwarded to the directory, and so to every region, once the directory answers
+{"ts":"2026-10-19T02:03:50.240Z","event":"revoke","verdict":"deny","reason":"credential_revoked","revocation":{"by":"sid","oidc_issuer":"https://127.0.0.1:45961","sid":"l75-g-ed0ea5d3ff9cf38c6e1201a9","at":"2026-10-19T02:03:50.240Z","origin":"backchannel_logout https://127.0.0.1:45961"}}
+port49-broker: logout: https://127.0.0.1:45961 ended session sid l75-g-ed0ea5d3ff9cf38c6e1201a9, which no mint is on record for; 0 contexts marked; its tokens are refused from now on
+{"ts":"2026-10-19T02:03:50.745Z","event":"mint","verdict":"deny","reason":"credential_revoked","principal":"user:carol@corp.example.com","auth":{"method":"oidc","oidc":{"issuer":"https://127.0.0.1:45961","sub":"sub-carol","sid":"l75-g-ed0ea5d3ff9cf38c6e1201a9","auth_time":"2026-10-19T02:03:49.000Z"}}}
+port49-broker: runner: 1 back-channel logout(s) pending until the directory store answers (store: unavailable: the directory store is not answering); they are applied in this region already
+port49-broker: directory store: answering again; the cache was 5.4s old
+port49-broker: runner: a logout made elsewhere (backchannel_logout https://127.0.0.1:45961) reached 0 token key(s) and 0 context(s) here
+port49-broker: runner: 1 pending back-channel logout(s) forwarded to the directory store, and so to every region

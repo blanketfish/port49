@@ -319,7 +319,7 @@ type CertificateStatusOCSP struct {
 	Hash      string        `yaml:"hash"`    // the CertID hash: sha256 (default) or sha1
 }
 
-// StoreConfig is `store:`, resolved (plan 7d; spec §13, decision 35): the
+// StoreConfig is one block of `stores:` (stores.directory or stores.session), resolved (plan 7d; plan 11a; spec §13, decisions 35 and 51): the
 // backend and every packet's store deadline, and on etcd its client.
 type StoreConfig struct {
 	// Backend is memory (the default) or etcd. etcd requires admin_socket,
@@ -327,11 +327,14 @@ type StoreConfig struct {
 	Backend string
 	// PacketDeadline bounds every TACACS+ packet's store work: default 2s,
 	// 100ms to 2s (Junos times out a reply at about 3s; spec §15, L13), and
-	// at least store.etcd.call_timeout.
+	// at least the session store's etcd.call_timeout.
 	PacketDeadline time.Duration
 	// Etcd is nil on memory.
 	Etcd *EtcdConfig
 }
+
+// MaxCallTimeout is etcd.call_timeout's largest value.
+const MaxCallTimeout = 5 * time.Second
 
 // storeYAML mirrors the store block; checkStore resolves it.
 type storeYAML struct {
@@ -347,7 +350,7 @@ const (
 	RolesUnenforced = "unenforced"
 )
 
-// EtcdConfig is store.etcd: where the keyspace is, and how port49d
+// EtcdConfig is an etcd block of stores: where the keyspace is, and how port49d
 // bounds every call to it (decision 35).
 type EtcdConfig struct {
 	// Endpoints are https only: port49d authenticates by client certificate.
@@ -430,7 +433,7 @@ type EtcdInFlight struct {
 	Bulk    int `yaml:"bulk"`
 }
 
-// EtcdHealth is store.etcd.health (plan 7f; spec §13, decision 37):
+// EtcdHealth is etcd.health (plan 7f; spec §13, decision 37):
 // port49d checks the store every Interval (default 1s, 200ms to 10s, at
 // least call_timeout, which bounds each check), closes every listener after
 // CloseAfter consecutive failed checks (default 5, 2 to 60), and, in a run
@@ -442,7 +445,7 @@ type EtcdHealth struct {
 	OpenAfter  int           `yaml:"open_after"`
 }
 
-// EtcdContextCache is store.etcd.context_cache (plan 7f; design §12):
+// EtcdContextCache is etcd.context_cache (plan 7f; design §12):
 // command and session authorization read a context from it for up to TTL
 // (100ms to 60s; "seconds, not minutes"), at most MaxEntries (default
 // 65536, 1 to 1048576). Absent, there is no cache: its TTL is a term in
@@ -535,7 +538,7 @@ type fileConfig struct {
 	Lab            *LabConfig                `yaml:"lab"`
 	InventoryOpts  inventoryYAML             `yaml:"inventory"`
 	AdminSocket    string                    `yaml:"admin_socket"`
-	Store          storeYAML                 `yaml:"store"`
+	Stores         storesYAML                `yaml:"stores"`
 	Policy         *policyYAML               `yaml:"policy"`
 	// KeyRefs is port49-broker.yaml's in place of keys: the names a policy
 	// may assign, and never a secret (plan 7e, Ruling 2).
@@ -617,9 +620,9 @@ type Config struct {
 	// Empty, the default, is off, and no packet is held.
 	AdminSocket string
 
-	// Store is where tokens, receipts and contexts live: memory, the
-	// default, or etcd (plan 7d).
-	Store StoreConfig
+	// Stores is where records live (plan 11a; spec §13 decision 51): the
+	// directory store and the session store, one store when Shared.
+	Stores StoresConfig
 
 	// MaxRemovedPercent refuses an inventory reload that takes more than this
 	// share of the devices in force out of service — removed, or kept and
@@ -997,7 +1000,7 @@ func load(path string, role Role) (Config, error) {
 		if p.File == "" {
 			// On etcd policy: is required, so removing it is no fix there.
 			fix := ""
-			if or(f.Store.Backend, BackendMemory) == BackendMemory {
+			if f.Stores.sessionBackend() == BackendMemory {
 				fix = ", or remove the block to run port49d on inventory_file's key groups"
 			}
 			return Config{}, fmt.Errorf("config: policy.file is required when policy: is present: name the policy "+
@@ -1009,15 +1012,15 @@ func load(path string, role Role) (Config, error) {
 		}
 		c.Policy = &p
 	}
-	if c.Store, err = checkStore(f.Store, role, f.Broker != nil, f.Policy != nil, f.AdminSocket != ""); err != nil {
+	if c.Stores, err = checkStores(f.Stores, func(at string, s storeYAML, session bool) (StoreConfig, error) {
+		return checkStore(at, s, session, role, f.Broker != nil, f.Policy != nil, f.AdminSocket != "")
+	}); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	if c.Broker != nil {
-		if err := resolveEnrollmentStore(c.Broker, c.Store); err != nil {
-			return Config{}, err
-		}
+		resolveEnrollmentStore(c.Broker, c.Stores.Directory)
 	}
-	if role == RoleDaemon && c.Store.Backend == BackendEtcd && c.Lab != nil && len(c.Lab.SeedTokens) > 0 {
+	if role == RoleDaemon && c.Stores.Session.Backend == BackendEtcd && c.Lab != nil && len(c.Lab.SeedTokens) > 0 {
 		return Config{}, errors.New("config: lab.seed_tokens: lab seed tokens are minted by port49-broker on etcd; " +
 			"move lab.seed_tokens and lab.seed_token_file into port49-broker.yaml (plan 7e)")
 	}
@@ -1393,15 +1396,10 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		b.Directory = d
 	}
 	// A directory_password verifier checks the password at the directory
-	// (plan 9e; decision 47), so it needs one; and its enrollment store is
-	// nothing without it (D12).
-	switch {
-	case id.PasswordSignIn != nil && b.Directory == nil:
+	// (plan 9e; decision 47), so it needs one.
+	if id.PasswordSignIn != nil && b.Directory == nil {
 		return nil, errors.New("config: broker.identity.humans: directory_password checks a password at the " +
 			"directory, and broker.directory is not configured: configure it, or remove the verifier")
-	case id.PasswordSignIn == nil && b.DirectorySet != nil && b.DirectorySet.EnrollmentStore != nil:
-		return nil, errors.New("config: broker.directory.enrollment_store: no directory_password verifier is " +
-			"listed, so nothing is enrolled without one; remove it")
 	}
 	// A workload certificate's directory (plan 8b; spec §13 decision 41 ruling
 	// 1) reuses broker.directory's pool, bind and base_dn, so it needs one.
@@ -1484,8 +1482,10 @@ func brokerRefusals(f fileConfig) error {
 		{"policy:", f.Policy != nil, "port49-broker's policy is broker.policy_file"},
 		{"broker.revocations_file", f.Broker != nil && f.Broker.RevocationsFile != "",
 			"on etcd the store keeps the marks (decision 36); remove it"},
-		{"store.etcd.daemon", f.Store.Etcd != nil && (f.Store.Etcd.Daemon != EtcdIdentity{}),
-			"the daemon's etcd identity is port49d's alone"},
+		{"stores.directory.etcd.daemon", f.Stores.Directory != nil && f.Stores.Directory.Etcd != nil &&
+			(f.Stores.Directory.Etcd.Daemon != EtcdIdentity{}), "the daemon's etcd identity is port49d's alone"},
+		{"stores.session.etcd.daemon", f.Stores.Session != nil && f.Stores.Session.Etcd != nil &&
+			(f.Stores.Session.Etcd.Daemon != EtcdIdentity{}), "the daemon's etcd identity is port49d's alone"},
 		{"lab.fault_file", lab.FaultFile != "", "the lab's fault switch is port49d's"},
 		{"lab.session_attributes", len(lab.SessionAttributes) > 0, "the lab's answers are port49d's"},
 		{"lab.command_attributes", len(lab.CommandAttributes) > 0, "the lab's answers are port49d's"},
@@ -1780,7 +1780,7 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
 			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
 	}
-	others = append(others, struct{ key, path string }{"broker.directory.enrollment_store's file",
+	others = append(others, struct{ key, path string }{"stores.directory's enrollment file",
 		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
 	if b.Identity != nil {
 		for _, v := range append(slices.Clone(b.Identity.OIDC), b.Identity.K8s...) {
@@ -1867,7 +1867,7 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 		others = append(others, namedPath{"broker.identity's kept keys for " + iss,
 			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
 	}
-	others = append(others, namedPath{"broker.directory.enrollment_store's file",
+	others = append(others, namedPath{"stores.directory's enrollment file",
 		filepath.Join(BrokerStateDir(&b), "enrollments.json")})
 	return checkStatusBlock(cs, "broker.certificate_status", stateDir, others)
 }
@@ -2016,7 +2016,7 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 // line and a fixed category, and no text from the document (yamlfault).
 func decodeFault(err error) error { return yamlfault.Of(err) }
 
-// checkStoreShape resolves `store:` (plan 7d; spec §13, decision 35): the
+// checkStoreShape resolves one block of `stores:`, at its path (plan 7d; spec §13, decision 35): the
 // backend, the packet deadline, and on etcd every key's default and
 // bound. It holds every check that is not a role's, and refuses what
 // would run unsafely in any file:
@@ -2026,29 +2026,29 @@ func decodeFault(err error) error { return yamlfault.Of(err) }
 // Either identity may be named or absent: which a file must name is its
 // role's (checkStore). A key file's mode, owner and symlink are refused
 // where it is read, by internal/keyfile (Task 12).
-func checkStoreShape(s storeYAML) (StoreConfig, error) {
+func checkStoreShape(at string, s storeYAML, session bool) (StoreConfig, error) {
 	out := StoreConfig{Backend: or(s.Backend, BackendMemory), PacketDeadline: orD(s.PacketDeadline, 2*time.Second)}
 	if out.PacketDeadline < 100*time.Millisecond || out.PacketDeadline > 2*time.Second {
-		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be 100ms to 2s, so a device hears port49's "+
+		return StoreConfig{}, fmt.Errorf(at+".packet_deadline %v: must be 100ms to 2s, so a device hears port49's "+
 			"answer before its own TACACS+ timeout, which is about 3s on Junos (spec §15, L13)", out.PacketDeadline)
 	}
 	switch out.Backend {
 	case BackendMemory:
 		if s.Etcd != nil {
-			return StoreConfig{}, errors.New("store.etcd is set but store.backend is memory: say store.backend: etcd, " +
-				"or remove store.etcd")
+			return StoreConfig{}, errors.New(at + ".etcd is set but " + at + ".backend is memory: say " + at + ".backend: etcd, " +
+				"or remove " + at + ".etcd")
 		}
 		return out, nil
 	case BackendEtcd:
 	default:
-		return StoreConfig{}, fmt.Errorf("store.backend %q: must be memory or etcd", s.Backend)
+		return StoreConfig{}, fmt.Errorf(at+".backend %q: must be memory or etcd", s.Backend)
 	}
 	if s.Etcd == nil {
-		return StoreConfig{}, errors.New("store.backend is etcd and store.etcd is missing")
+		return StoreConfig{}, errors.New(at + ".backend is etcd and " + at + ".etcd is missing")
 	}
 	e := *s.Etcd
 	if len(e.Endpoints) == 0 {
-		return StoreConfig{}, errors.New("store.etcd.endpoints is empty")
+		return StoreConfig{}, errors.New(at + ".etcd.endpoints is empty")
 	}
 	// As checkService: no user information, where a credential would sit,
 	// and no path, query or fragment, where a token would be pasted. None
@@ -2057,19 +2057,19 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		u, err := url.Parse(ep)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" || u.User != nil ||
 			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-			return StoreConfig{}, fmt.Errorf("store.etcd.endpoints[%d] must be https://host:port, with no user "+
+			return StoreConfig{}, fmt.Errorf(at+".etcd.endpoints[%d] must be https://host:port, with no user "+
 				"information, path, query or fragment: port49d authenticates to etcd by client certificate "+
 				"(decision 35)", i)
 		}
 	}
 	e.Prefix = or(e.Prefix, "/port49/")
 	if !strings.HasPrefix(e.Prefix, "/") {
-		return StoreConfig{}, fmt.Errorf("store.etcd.prefix %q: must start with /", e.Prefix)
+		return StoreConfig{}, fmt.Errorf(at+".etcd.prefix %q: must start with /", e.Prefix)
 	}
 	if !strings.HasSuffix(e.Prefix, "/") {
 		e.Prefix += "/"
 	}
-	if err := readableFile("store.etcd.ca_file", e.CAFile); err != nil {
+	if err := readableFile(at+".etcd.ca_file", e.CAFile); err != nil {
 		return StoreConfig{}, err
 	}
 	var ids []struct {
@@ -2080,13 +2080,13 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		ids = append(ids, struct {
 			name string
 			id   EtcdIdentity
-		}{"store.etcd.daemon", e.Daemon})
+		}{at + ".etcd.daemon", e.Daemon})
 	}
 	if e.Broker != nil {
 		ids = append(ids, struct {
 			name string
 			id   EtcdIdentity
-		}{"store.etcd.broker", *e.Broker})
+		}{at + ".etcd.broker", *e.Broker})
 	}
 	for _, id := range ids {
 		for _, f := range [][2]string{{".cert_file", id.id.CertFile}, {".key_file", id.id.KeyFile}} {
@@ -2104,7 +2104,7 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 	switch e.Roles = or(e.Roles, RolesEnforced); e.Roles {
 	case RolesEnforced, RolesUnenforced:
 	default:
-		return StoreConfig{}, fmt.Errorf("store.etcd.roles %q: must be enforced or unenforced", e.Roles)
+		return StoreConfig{}, fmt.Errorf(at+".etcd.roles %q: must be enforced or unenforced", e.Roles)
 	}
 	for _, d := range []struct {
 		name     string
@@ -2112,12 +2112,12 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		def      time.Duration
 		min, max time.Duration
 	}{
-		{"store.etcd.call_timeout", &e.CallTimeout, 500 * time.Millisecond, 10 * time.Millisecond, 5 * time.Second},
-		{"store.etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
-		{"store.etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
-		{"store.etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},
-		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 10 * time.Second, time.Minute},
-		{"store.etcd.sweep_interval", &e.SweepInterval, 10 * time.Minute, time.Minute, 24 * time.Hour},
+		{at + ".etcd.call_timeout", &e.CallTimeout, 500 * time.Millisecond, 10 * time.Millisecond, MaxCallTimeout},
+		{at + ".etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
+		{at + ".etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
+		{at + ".etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},
+		{at + ".etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 10 * time.Second, time.Minute},
+		{at + ".etcd.sweep_interval", &e.SweepInterval, 10 * time.Minute, time.Minute, 24 * time.Hour},
 	} {
 		*d.v = orD(*d.v, d.def)
 		if *d.v < d.min || *d.v > d.max {
@@ -2130,7 +2130,7 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		e.StartTimeout = time.Duration(*e.StartTimeoutSet)
 	}
 	if e.StartTimeout != 0 && (e.StartTimeout < 5*time.Second || e.StartTimeout > 10*time.Minute) {
-		return StoreConfig{}, fmt.Errorf("store.etcd.start_timeout %v: must be 0 (wait for as long as it takes), "+
+		return StoreConfig{}, fmt.Errorf(at+".etcd.start_timeout %v: must be 0 (wait for as long as it takes), "+
 			"or 5s to 10m", e.StartTimeout)
 	}
 	// health: each value its default when absent (plan 7f, Ruling 3).
@@ -2139,17 +2139,17 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 	}
 	e.Health.Interval = orD(e.Health.Interval, time.Second)
 	if e.Health.Interval < 200*time.Millisecond || e.Health.Interval > 10*time.Second {
-		return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be 200ms to 10s", e.Health.Interval)
+		return StoreConfig{}, fmt.Errorf(at+".etcd.health.interval %v: must be 200ms to 10s", e.Health.Interval)
 	}
 	// context_cache: absent is no cache; present, its ttl is required
 	// (Ruling 5).
 	if c := e.ContextCacheSet; c != nil {
 		if c.TTL == 0 {
-			return StoreConfig{}, errors.New("store.etcd.context_cache.ttl is not set: the cache's ttl is explicit " +
-				"configuration (design §12); set it, or remove store.etcd.context_cache for no cache")
+			return StoreConfig{}, errors.New(at + ".etcd.context_cache.ttl is not set: the cache's ttl is explicit " +
+				"configuration (design §12); set it, or remove " + at + ".etcd.context_cache for no cache")
 		}
 		if c.TTL < 100*time.Millisecond || c.TTL > time.Minute {
-			return StoreConfig{}, fmt.Errorf("store.etcd.context_cache.ttl %v: must be 100ms to 1m0s (\"seconds, not "+
+			return StoreConfig{}, fmt.Errorf(at+".etcd.context_cache.ttl %v: must be 100ms to 1m0s (\"seconds, not "+
 				"minutes\": design §12)", c.TTL)
 		}
 		e.ContextCache = *c
@@ -2159,21 +2159,21 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		v             *int
 		def, min, max int
 	}{
-		{"store.etcd.breaker.failures", &e.Breaker.Failures, 5, 1, 100},
-		{"store.etcd.max_in_flight.token", &e.MaxInFlight.Token, 64, 1, 4096},
-		{"store.etcd.max_in_flight.context", &e.MaxInFlight.Context, 128, 1, 4096},
-		{"store.etcd.max_in_flight.bulk", &e.MaxInFlight.Bulk, 4, 1, 4096},
-		{"store.etcd.health.close_after", &e.Health.CloseAfter, 5, 2, 60},
-		{"store.etcd.health.open_after", &e.Health.OpenAfter, 3, 1, 60},
-		{"store.etcd.context_cache.max_entries", &e.ContextCache.MaxEntries, 65536, 1, 1 << 20},
+		{at + ".etcd.breaker.failures", &e.Breaker.Failures, 5, 1, 100},
+		{at + ".etcd.max_in_flight.token", &e.MaxInFlight.Token, 64, 1, 4096},
+		{at + ".etcd.max_in_flight.context", &e.MaxInFlight.Context, 128, 1, 4096},
+		{at + ".etcd.max_in_flight.bulk", &e.MaxInFlight.Bulk, 4, 1, 4096},
+		{at + ".etcd.health.close_after", &e.Health.CloseAfter, 5, 2, 60},
+		{at + ".etcd.health.open_after", &e.Health.OpenAfter, 3, 1, 60},
+		{at + ".etcd.context_cache.max_entries", &e.ContextCache.MaxEntries, 65536, 1, 1 << 20},
 	} {
 		*n.v = orI(*n.v, n.def)
 		if *n.v < n.min || *n.v > n.max {
 			return StoreConfig{}, fmt.Errorf("%s %d: must be %d to %d", n.name, *n.v, n.min, n.max)
 		}
 	}
-	if out.PacketDeadline < e.CallTimeout {
-		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be at least store.etcd.call_timeout (%v)",
+	if session && out.PacketDeadline < e.CallTimeout {
+		return StoreConfig{}, fmt.Errorf(at+".packet_deadline %v: must be at least "+at+".etcd.call_timeout (%v)",
 			out.PacketDeadline, e.CallTimeout)
 	}
 	out.Etcd = &e
@@ -2186,14 +2186,14 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 //     from under policy:, and no broker: block;
 //   - port49-broker names its own identity alone, and runs on etcd;
 //   - either on etcd names admin_socket.
-func checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket bool) (StoreConfig, error) {
-	out, err := checkStoreShape(s)
+func checkStore(at string, s storeYAML, session bool, role Role, hasBroker, hasPolicy, hasAdminSocket bool) (StoreConfig, error) {
+	out, err := checkStoreShape(at, s, session)
 	if err != nil {
 		return StoreConfig{}, err
 	}
 	if out.Backend != BackendEtcd {
 		if role == RoleBroker {
-			return StoreConfig{}, errors.New("store.backend: port49-broker runs on etcd: with the memory store, run " +
+			return StoreConfig{}, errors.New(at + ".backend: port49-broker runs on etcd: with the memory store, run " +
 				"the broker in port49d (a broker: block in port49d.yaml)")
 		}
 		return out, nil
@@ -2202,48 +2202,48 @@ func checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket boo
 	switch role {
 	case RoleBroker:
 		if e.Broker == nil {
-			return StoreConfig{}, errors.New("store.etcd.broker is missing: port49-broker authenticates to etcd as " +
+			return StoreConfig{}, errors.New(at + ".etcd.broker is missing: port49-broker authenticates to etcd as " +
 				"itself (decision 35)")
 		}
 		if e.Daemon != (EtcdIdentity{}) {
-			return StoreConfig{}, errors.New("store.etcd.daemon: the daemon's identity is port49d's alone; remove " +
+			return StoreConfig{}, errors.New(at + ".etcd.daemon: the daemon's identity is port49d's alone; remove " +
 				"it from port49-broker.yaml (plan 7e)")
 		}
 		if s.Etcd.HealthSet != nil {
-			return StoreConfig{}, errors.New("store.etcd.health is port49d's: port49-broker never closes a listener " +
+			return StoreConfig{}, errors.New(at + ".etcd.health is port49d's: port49-broker never closes a listener " +
 				"on the store (design §12); remove it from port49-broker.yaml")
 		}
 		if s.Etcd.ContextCacheSet != nil {
-			return StoreConfig{}, errors.New("store.etcd.context_cache is port49d's: port49-broker serves no device; " +
+			return StoreConfig{}, errors.New(at + ".etcd.context_cache is port49d's: port49-broker serves no device; " +
 				"remove it from port49-broker.yaml")
 		}
 	default:
 		if hasBroker {
-			return StoreConfig{}, errors.New("store.backend: etcd runs the broker as its own process (plan 7e): " +
-				"move the broker: block, with store.etcd.broker, into port49-broker.yaml and start port49-broker; " +
+			return StoreConfig{}, errors.New(at + ".backend: etcd runs the broker as its own process (plan 7e): " +
+				"move the broker: block, with " + at + ".etcd.broker, into port49-broker.yaml and start port49-broker; " +
 				"name the policy port49d admits from under policy: (file, watch_interval)")
 		}
 		if !hasPolicy {
-			return StoreConfig{}, errors.New("store.backend etcd needs the policy port49d admits from: name it " +
+			return StoreConfig{}, errors.New(at + ".backend etcd needs the policy port49d admits from: name it " +
 				"under policy: (file, watch_interval) (plan 7e)")
 		}
 		if e.Broker != nil {
-			return StoreConfig{}, errors.New("store.etcd.broker: the broker's identity is port49-broker's alone; " +
+			return StoreConfig{}, errors.New(at + ".etcd.broker: the broker's identity is port49-broker's alone; " +
 				"remove it from port49d.yaml (plan 7e)")
 		}
 		if e.Daemon == (EtcdIdentity{}) {
-			return StoreConfig{}, errors.New("store.etcd.daemon is missing: port49d authenticates to etcd as " +
+			return StoreConfig{}, errors.New(at + ".etcd.daemon is missing: port49d authenticates to etcd as " +
 				"itself (decision 35)")
 		}
 		// The checks are port49d's, so the bound is too: the broker cannot
 		// set health and loads with any call_timeout.
-		if e.Health.Interval < e.CallTimeout {
-			return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be at least store.etcd.call_timeout "+
+		if session && e.Health.Interval < e.CallTimeout {
+			return StoreConfig{}, fmt.Errorf(at+".etcd.health.interval %v: must be at least "+at+".etcd.call_timeout "+
 				"(%v), which bounds each check", e.Health.Interval, e.CallTimeout)
 		}
 	}
 	if !hasAdminSocket {
-		return StoreConfig{}, errors.New("store.backend etcd needs admin_socket: port49-broker's answers " +
+		return StoreConfig{}, errors.New(at + ".backend etcd needs admin_socket: port49-broker's answers " +
 			"'port49 revoke', the one way to lift a mark on etcd, and port49d's 'port49 keys diagnose' " +
 			"(decision 35; plan 7e)")
 	}
@@ -2292,30 +2292,6 @@ func readableFile(name, path string) error {
 		return fmt.Errorf("%s %s: not a regular file", name, path)
 	}
 	return nil
-}
-
-// StoreBlocks is `store:` from either file's bytes, port49d.yaml's or
-// port49-broker.yaml's, decoded as strictly as Load (the stale seed keys
-// first, as Load refuses them) and checked for its shape alone
-// (checkStoreShape): either identity may be named or absent (plan 7e,
-// pre-flight I8). It is for `port49d store-roles`, which reads nothing
-// else, and which reads a 7d port49d.yaml naming both identities that
-// Load under the daemon's role refuses.
-func StoreBlocks(raw []byte) (StoreConfig, error) {
-	if err := staleSeedKeys(raw); err != nil {
-		return StoreConfig{}, err
-	}
-	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return StoreConfig{}, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
-	}
-	s, err := checkStoreShape(f.Store)
-	if err != nil {
-		return StoreConfig{}, fmt.Errorf("config: %w", err)
-	}
-	return s, nil
 }
 
 // envName is what an environment variable's name looks like. A secret_env

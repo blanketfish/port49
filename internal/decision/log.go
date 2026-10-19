@@ -97,7 +97,10 @@ type SecondFactorReset struct {
 
 // SignInUnlock is an operator clearing a principal's failed-attempt count.
 type SignInUnlock struct {
-	Failures int    `json:"failures"`
+	// Failures is the count the answering broker held; nil, and so absent,
+	// when its session store did not answer the clear: the unlock is in
+	// force but the count is unknown, which is not zero.
+	Failures *int   `json:"failures,omitempty"`
 	Origin   string `json:"origin"`
 }
 

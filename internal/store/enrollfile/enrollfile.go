@@ -52,6 +52,7 @@ type File struct {
 	present bool   // a file is at path: one opened, one that did not, or one written
 	mark    *store.EnrollmentMark
 	records map[string]store.SecondFactor
+	unlocks map[string]time.Time
 	seq     uint64 // the last revision handed out
 	markRev uint64 // the last mark revision handed out
 }
@@ -139,6 +140,10 @@ func (f *File) load(b store.EnrollmentBody) {
 		f.records[p] = store.SecondFactorOf(p, r)
 		f.seq = max(f.seq, r.Rev)
 	}
+	f.unlocks = b.Unlocks
+	if f.unlocks == nil {
+		f.unlocks = map[string]time.Time{}
+	}
 }
 
 func (f *File) lostErr() error {
@@ -148,9 +153,9 @@ func (f *File) lostErr() error {
 	return fmt.Errorf("%w: %s: %s", store.ErrEnrollmentStoreLost, f.path, f.lost)
 }
 
-// body is the content for mark and records, as written.
-func body(mark *store.EnrollmentMark, records map[string]store.SecondFactor) store.EnrollmentBody {
-	b := store.EnrollmentBody{SecondFactors: make(map[string]store.EnrollmentRecord, len(records))}
+// body is the content for mark, records and unlocks, as written.
+func body(mark *store.EnrollmentMark, records map[string]store.SecondFactor, unlocks map[string]time.Time) store.EnrollmentBody {
+	b := store.EnrollmentBody{SecondFactors: make(map[string]store.EnrollmentRecord, len(records)), Unlocks: unlocks}
 	if mark != nil {
 		b.CreatedAt, b.ReopenAllUntil, b.MarkSealed = mark.CreatedAt, mark.ReopenAllUntil, mark.Sealed
 	}
@@ -217,7 +222,7 @@ func (f *File) SwapSecondFactor(_ context.Context, sf store.SecondFactor, rev ui
 		next[p] = r
 	}
 	next[sf.Principal] = clone(sf)
-	if err := f.write(body(f.mark, next)); err != nil {
+	if err := f.write(body(f.mark, next, f.unlocks)); err != nil {
 		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	f.seq, f.records, f.present = sf.Rev, next, true
@@ -266,7 +271,7 @@ func (f *File) SwapEnrollmentMark(_ context.Context, m store.EnrollmentMark, rev
 		return store.ErrConflict
 	}
 	m = f.revised(m)
-	if err := f.write(body(&m, f.records)); err != nil {
+	if err := f.write(body(&m, f.records, f.unlocks)); err != nil {
 		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	f.mark = &m
@@ -293,7 +298,7 @@ func (f *File) CreateEnrollmentMark(_ context.Context, m store.EnrollmentMark) e
 	if f.present || f.lost != "" || f.mark != nil || len(f.records) > 0 {
 		return store.ErrConflict
 	}
-	raw, err := f.seal(body(&m, nil))
+	raw, err := f.seal(body(&m, nil, f.unlocks))
 	if err != nil {
 		return err
 	}
@@ -325,7 +330,7 @@ func (f *File) PutEnrollmentMark(_ context.Context, m store.EnrollmentMark) erro
 		}
 		records = map[string]store.SecondFactor{}
 	}
-	if err := f.write(body(&m, records)); err != nil {
+	if err := f.write(body(&m, records, f.unlocks)); err != nil {
 		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	m = f.revised(m)
@@ -365,7 +370,7 @@ func (f *File) Export(_ context.Context) ([]byte, error) {
 	if f.mark == nil {
 		return nil, errors.New("enrollfile: the enrollment store has no creation mark to export")
 	}
-	b := body(f.mark, f.records)
+	b := body(f.mark, f.records, nil)
 	b.ExportedAt = f.now().UTC()
 	return json.Marshal(b)
 }
@@ -404,7 +409,7 @@ func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Ti
 		next[p] = sf
 	}
 	mark := store.EnrollmentMark{CreatedAt: b.CreatedAt, ReopenAllUntil: b.ReopenAllUntil, Sealed: b.MarkSealed}
-	if err := f.write(body(&mark, next)); err != nil {
+	if err := f.write(body(&mark, next, f.unlocks)); err != nil {
 		return 0, time.Time{}, fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	mark = f.revised(mark)
@@ -447,4 +452,46 @@ func createExclusive(dir, base string, raw []byte) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+func (f *File) GetUnlock(_ context.Context, principal string) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.lostErr(); err != nil {
+		return time.Time{}, err
+	}
+	at, ok := f.unlocks[principal]
+	if !ok {
+		return time.Time{}, store.ErrNotFound
+	}
+	return at, nil
+}
+
+// PutUnlock writes the file with the unlock in place and, only once it
+// is written, in memory: a write that fails changes nothing.
+func (f *File) PutUnlock(_ context.Context, principal string, at time.Time) error {
+	switch {
+	case principal == "":
+		return store.ErrNoPrincipal
+	case at.IsZero():
+		return store.ErrBadUnlock
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.lostErr(); err != nil {
+		return err
+	}
+	if cur, ok := f.unlocks[principal]; ok && !at.After(cur) {
+		at = cur.Add(time.Nanosecond)
+	}
+	next := make(map[string]time.Time, len(f.unlocks)+1)
+	for p, t := range f.unlocks {
+		next[p] = t
+	}
+	next[principal] = at.UTC()
+	if err := f.write(body(f.mark, f.records, next)); err != nil {
+		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
+	}
+	f.unlocks, f.present = next, true
+	return nil
 }

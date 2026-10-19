@@ -24,6 +24,9 @@ import (
 type Marks struct {
 	mu sync.RWMutex
 	m  map[[2]string]time.Time
+	// origin is each mark's Origin, as its put carried it (plan 11a): Get
+	// answers a mark whole, and revokedError names a CA's.
+	origin map[[2]string]string
 	// unwritten is each mark put in force before the store was known to
 	// hold it (Pend): a load that lacks it keeps it (Ruling T9-b).
 	unwritten map[[2]string]bool
@@ -37,7 +40,7 @@ type Marks struct {
 
 // NewMarks is an empty set: no mark stands.
 func NewMarks() *Marks {
-	return &Marks{m: map[[2]string]time.Time{}, unwritten: map[[2]string]bool{}, unrecorded: map[[2]string]bool{}}
+	return &Marks{m: map[[2]string]time.Time{}, origin: map[[2]string]string{}, unwritten: map[[2]string]bool{}, unrecorded: map[[2]string]bool{}}
 }
 
 // Set puts r in force, or lifts it when on is false. A mark already in
@@ -53,6 +56,7 @@ func (m *Marks) Set(r Revocation, on bool) {
 	if !on {
 		if _, ok := m.m[k]; ok {
 			delete(m.m, k)
+			delete(m.origin, k)
 			m.count()
 		}
 		delete(m.unwritten, k)
@@ -61,6 +65,7 @@ func (m *Marks) Set(r Revocation, on bool) {
 	}
 	if _, ok := m.m[k]; !ok {
 		m.m[k] = r.At
+		m.origin[k] = r.Origin
 		m.count()
 	}
 }
@@ -197,6 +202,9 @@ func (m *Marks) Put(r Revocation) bool {
 		return false
 	}
 	m.m[k] = r.At
+	if r.Origin != "" {
+		m.origin[k] = r.Origin
+	}
 	delete(m.unwritten, k)
 	delete(m.unrecorded, k)
 	return true
@@ -252,6 +260,24 @@ func (m *Marks) Len() int {
 	return len(m.m)
 }
 
+// Get is the mark in force for (kind, key), with the origin its put
+// carried, and whether one stands. The placement router's GetRevocation
+// reads it (plan 11a; decision 51), so a login's and a mint's check never
+// waits on the directory store. A nil *Marks names nothing.
+func (m *Marks) Get(kind, key string) (Revocation, bool) {
+	if m == nil {
+		return Revocation{}, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	k := [2]string{kind, key}
+	at, ok := m.m[k]
+	if !ok {
+		return Revocation{}, false
+	}
+	return Revocation{Kind: kind, Key: key, At: at, Origin: m.origin[k]}, true
+}
+
 // All is every mark in force, sorted by kind and key.
 func (m *Marks) All() []Revocation {
 	if m == nil {
@@ -261,7 +287,7 @@ func (m *Marks) All() []Revocation {
 	defer m.mu.RUnlock()
 	out := make([]Revocation, 0, len(m.m))
 	for k, at := range m.m {
-		out = append(out, Revocation{Kind: k[0], Key: k[1], At: at})
+		out = append(out, Revocation{Kind: k[0], Key: k[1], At: at, Origin: m.origin[k]})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
@@ -332,7 +358,9 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 // follow began, a put whose lift came after would stand again for a
 // moment, and close the held connections of a principal already let back
 // in. up and logf are as crypt.FollowContexts's, each stop said and the
-// first delivery after one said as following the store again.
+// first delivery after one said as following the store again. A from of 0
+// is a feed never read: it loads first, as after a compaction, trying again
+// every second (plan 11a).
 func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
 	up func(bool), rescanned func() error, logf func(string, ...any)) error {
 	failing := false
@@ -343,6 +371,30 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		if failing {
 			logf("store: the marks feed follows the store again")
 			failing = false
+		}
+	}
+	for from == 0 {
+		err := rescanned()
+		if err == nil {
+			var rev uint64
+			if rev, err = LoadMarks(ctx, feed, m, on); err == nil {
+				from = max(rev, 1)
+				if failing {
+					logf("store: the marks feed loaded the marks; it follows the store again")
+					failing = false
+				}
+				break
+			}
+		}
+		up(false)
+		if !failing {
+			logf("store: the marks feed cannot load the marks (%v); trying again every second", err)
+			failing = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
 		}
 	}
 	for {

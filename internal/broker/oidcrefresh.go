@@ -275,16 +275,22 @@ func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshR
 // socket there is no revoke to run: the cut is the grants, as unrecordedNote
 // says.
 func (b *Broker) logoutRecovery(principal string) string {
-	const seen = "if the decision log has a revoke record with origin backchannel_logout for "
+	return "if the decision log has a revoke record with origin backchannel_logout for " + principal +
+		" just before this line, " + b.endThenLift(principal, "its")
+}
+
+// endThenLift is how an operator ends principal's contexts once a logout
+// record refuses the held ID token: revoke, then lift at once. its names the
+// principal's contexts in the sentence ("its", or the principal's own).
+func (b *Broker) endThenLift(principal, its string) string {
 	if b.AdminSocket == "" {
-		return seen + principal + " just before this line, " + b.proc() + " has no admin_socket configured, so " +
-			"end its contexts: remove " + principal + "'s grants from broker.policy_file (live within two watch " +
-			"intervals), and restore them once " + principal + "'s session ceiling has passed so they may log " +
-			"in again; or configure admin_socket and revoke there"
+		return b.proc() + " has no admin_socket configured, so end " + its + " contexts: remove " + principal +
+			"'s grants from broker.policy_file (live within two watch intervals), and restore them once " +
+			principal + "'s session ceiling has passed so they may log in again; or configure admin_socket and " +
+			"revoke there"
 	}
 	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
-	return seen + principal +
-		" just before this line, end its contexts with `port49 revoke --principal " + principal + "` on " + where +
+	return "end " + its + " contexts with `port49 revoke --principal " + principal + "` on " + where +
 		", then `port49 revoke --principal " + principal + " --lift` there so they may log in again; a lift can be lost across a " + b.proc() +
 		" stop, so last check that `port49 revoke --list` there shows no mark for " + principal
 }

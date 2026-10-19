@@ -795,6 +795,39 @@ TestL71TLSClientSupport -v -timeout 3h`. It sends no TACACS+, so its capture is 
 transcript (`evidence/L71-<platform>/probe.txt`), not a pcap. vJunosEvolved and vSRX 23.4 are not
 in the harness platform list and are not probed.
 
+## L74 and L75: three regions
+
+`make lab-regions` (`go test -tags lab ./tests/lab/ -run '^TestRegions$' -timeout 120m`) on the lab
+host. It builds three network namespaces, `p49r1..3`, each joined by a veth to the host bridge
+`p49rbr0` (10.149.0.1/24). Region i is 10.149.0.(10+i). `tc netem delay 20ms` sits on each
+region's side, so region to region is 40ms round trip and host to region 20ms. The cut is iptables
+in region 3's namespace dropping its traffic with the other two regions; the host still reaches it,
+so the harness keeps driving it. The directory etcd has one member per namespace; each region also
+runs a one-member session etcd on its own loopback, a port49-broker and a port49d. The TACACS+
+client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
+
+- **Needs:** `sudo -n` for `ip`, `tc` and `iptables` (and `sudo -n -u <you>` inside the namespace);
+  `PORT49_LAB_ETCD_BIN` naming a directory with etcd and etcdctl v3.6.15; and L67's directory
+  images. Stopping a process needs no sudo. The lab is single-occupant: the run takes the
+  shared lock `/tmp/port49-lab.lock` (as L73 and L76 do) before its pre-clean, which deletes
+  `p49r1..3` and `p49rbr0`, and refuses to start while another run holds it.
+- **L75's brokers run on the host**, not in a namespace: directory membership needs the directory
+  (OpenLDAP, L67's containers), which the namespaces cannot reach.
+- **10.149.0.0/24 must be free** (`ip -4 route`).
+- **Stopping is by recorded PID, and the keys are not on argv.** Each member and process is
+  started as `sh -c 'echo $$ > <name>.pid; . <run.env>; exec <argv>'` with its pidfile and `run.env`
+  (the TACACS+ and encryption keys, 0600) in the run's 0700 temporary directory, so the PID is the
+  program's and sudo's log holds no key. A stop reads the pidfile, checks that `/proc/<pid>/cmdline`
+  still holds the member's `--data-dir` or the process's `--config` argument, and sends SIGTERM; past
+  15s it checks again and sends SIGKILL; a wait on a process that will not end is bounded at 10s and
+  reported. A mismatch is logged and skipped. Nothing is ever ended by a `pkill` or `pgrep -f`
+  pattern.
+- **Removing a left-over network** (a run killed hard skips its cleanup): `sudo ip netns del p49r1`
+  (and `p49r2`, `p49r3`), then `sudo ip link del p49r1h` (and `p49r2h`, `p49r3h`, which a namespace
+  that still held a process leaves behind) and `sudo ip link del p49rbr0`. A left-over etcd member or
+  port49 process is ended by the PID in its `*.pid` file under `/tmp/p49l74*/`, after checking
+  `/proc/<pid>/cmdline` by hand: `kill <pid>`.
+
 ## L73: device RFC 9887 clients against port49
 
 `PORT49_LAB_PLATFORMS=<selector> go test -tags lab ./tests/lab/ -run '^TestL73$' -count=1 -v -timeout 3h`,
