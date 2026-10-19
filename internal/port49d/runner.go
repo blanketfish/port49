@@ -44,6 +44,11 @@ type runner struct {
 	// pass's context half and meta/judged's writes run under it, so a lost
 	// hold ends them with the duties.
 	duty atomic.Pointer[context.Context]
+	// taking is set from the start of the takeover until the duties end:
+	// the feeds queue what they bring for the duties from then on (queuing),
+	// so a mark or logout that lands after the takeover's snapshot of the
+	// marks or the logout set, and before begin, is still reached here.
+	taking atomic.Bool
 	// judge is the policy the latest settled pass left nothing pending
 	// under, for the duties to record (settled, judging).
 	judge chan *policy.Policy
@@ -101,6 +106,11 @@ type judgedStore interface {
 var errNotRunning = errors.New("this replica no longer runs the keyspace")
 
 func (r *runner) running() bool { return r.duty.Load() != nil }
+
+// queuing is whether the feeds queue what they bring for the duties: from
+// the start of the takeover, not only once the duties run. One that the
+// takeover also reached is reached twice, which changes nothing.
+func (r *runner) queuing() bool { return r.taking.Load() || r.running() }
 
 // pass is the reloader's refresh pass on port49-broker (Ruling 6): the
 // whole Refresh while this replica runs, whose context half is the
@@ -189,6 +199,8 @@ func (r *runner) run(ctx context.Context) {
 // after a put-back, the refresh's context half, the scheduled refresh and
 // the directory's pre-warm, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
+	r.taking.Store(true)
+	defer r.taking.Store(false)
 	carried, err := r.takeover(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -1030,12 +1042,13 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 }
 
 // follow is the marks feed's tell in a split, after MarkChanged: a mark
-// that stands is queued for the running duties to reach here. A replica
-// that does not run queues nothing, and a full queue drops the mark,
+// that stands is queued for the duties to reach here, from the start of the
+// takeover (queuing). A replica that does not run queues nothing, and a full
+// queue drops the mark,
 // said: the marks deny it on every request, and the next takeover
 // applies every mark to the live contexts.
 func (r *runner) follow(c store.MarkChange) {
-	if r.followed == nil || !c.Standing || !r.running() {
+	if r.followed == nil || !c.Standing || !r.queuing() {
 		return
 	}
 	select {
@@ -1051,7 +1064,7 @@ func (r *runner) follow(c store.MarkChange) {
 // as follow queues a mark; a full queue drops it, said: the logout set
 // refuses its mints and refreshes regardless.
 func (r *runner) followLogout(e store.LogoutEntry) {
-	if r.followedLogouts == nil || !r.running() {
+	if r.followedLogouts == nil || !r.queuing() {
 		return
 	}
 	select {

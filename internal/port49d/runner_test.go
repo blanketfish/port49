@@ -20,6 +20,7 @@ import (
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
@@ -308,6 +309,56 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	if strings.Contains(out.String(), "is run by") {
 		t.Fatalf("this replica's own last run was said as another's:\n%s", out.String())
 	}
+}
+
+// A logout and a mark the feeds bring while the takeover runs, after its
+// snapshots of the logout set and the marks, are still reached in this
+// region: they are queued from the start of the takeover, not from begin
+// (run 8 diagnosis, item 4; R26, R20). The tookOver hook runs after the
+// takeover's snapshots and before begin, the gap they used to be dropped in.
+func TestALogoutAndAMarkFollowedDuringATakeoverAreReached(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	pol := b.Policy.Load()
+	if err := bs.raw.PutJudged(ctx, pol.Bundle, pol.Raw()); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	logout := store.LogoutEntry{Logout: store.Logout{Key: "oidc-sid|https://idp.example|s-late", At: time.Now(),
+		Origin: "late-logout-origin"}, Until: time.Now().Add(time.Hour)}
+	mark := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:late@example.com", At: time.Now()}
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm(),
+		who: "runner-a", ledger: crypt.NewLedger(), judge: make(chan *policy.Policy, 1),
+		marksReloaded: make(chan struct{}, 1), marks: store.NewMarks(),
+		witness:  openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		logouts:  store.NewLogoutSet(time.Now),
+		followed: make(chan store.Revocation, 1024), followedLogouts: make(chan store.LogoutEntry, 1024)}
+	r.tookOver = func(*policy.Policy) {
+		r.logouts.Put(logout)
+		r.followLogout(logout)
+		r.follow(store.MarkChange{Revocation: mark, Standing: true})
+	}
+	dctx, dcancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); r.duties(dctx) }()
+	defer func() { dcancel(); <-done }()
+	waitWithin(t, &out, "a logout made elsewhere (late-logout-origin) reached", 20*time.Second)
+	waitWithin(t, &out, "a revocation of user:late@example.com made elsewhere reached", 5*time.Second)
 }
 
 // The takeover's meta/judged read is tried again while the store is
