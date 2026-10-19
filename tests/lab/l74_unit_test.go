@@ -740,3 +740,53 @@ func TestL75AnsweringAgainWaitsForTheLine(t *testing.T) {
 		t.Fatalf("a log with the line: %v", err)
 	}
 }
+
+func appendLog(t *testing.T, path, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString(text)
+}
+
+// (g) runs after each restarted broker's takeover: the keyspace held, then
+// the bundle recorded as judged; either missing is INVALID.
+func TestL75TookOverNeedsBothLines(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b2.log")
+	p := &regionProc{name: "port49-broker l75 b2", log: log}
+	appendLog(t, log, "port49-broker: runner: took keyspace /port49/ (\"x\")\n")
+	if err := l75TookOver(p, 400*time.Millisecond); err == nil || !strings.Contains(err.Error(), "a port49 finding if the keyspace was free") {
+		t.Fatalf("the keyspace held but no judged line: %v, want the INVALID error", err)
+	}
+	appendLog(t, log, "port49-broker: runner: recorded bundle sha256:ab as judged (the takeover's carry left nothing owed)\n")
+	if err := l75TookOver(p, 400*time.Millisecond); err != nil {
+		t.Fatalf("both lines said: %v", err)
+	}
+	q := &regionProc{name: "port49-broker l75 b3", log: filepath.Join(t.TempDir(), "none.log")}
+	if l75TookOver(q, 300*time.Millisecond) == nil {
+		t.Fatal("a broker that said nothing was taken as having taken over")
+	}
+}
+
+// (g) accepts either line a runner says of a logout it reached, and names
+// the path without copying the takeover's line, which holds token key names.
+func TestL75RunnerLineAcceptsEitherPath(t *testing.T) {
+	dir := t.TempDir()
+	follow := &regionProc{name: "b2", log: filepath.Join(dir, "f.log")}
+	appendLog(t, follow.log, "port49-broker: runner: a logout made elsewhere reached 1 session(s)\n")
+	if _, via, err := l75RunnerLine(follow, 300*time.Millisecond); err != nil || !strings.HasPrefix(via, "followed") {
+		t.Fatalf("follow path: %q %v", via, err)
+	}
+	take := &regionProc{name: "b2", log: filepath.Join(dir, "t.log")}
+	appendLog(t, take.log, "port49-broker: runner: 1 standing logout(s) reached here: 2 token key(s) SECRETLOOKING\n")
+	_, via, err := l75RunnerLine(take, 300*time.Millisecond)
+	if err != nil || !strings.HasPrefix(via, "takeover") || strings.Contains(via, "SECRETLOOKING") {
+		t.Fatalf("takeover path: %q %v", via, err)
+	}
+	none := &regionProc{name: "b2", log: filepath.Join(dir, "n.log")}
+	if _, _, err := l75RunnerLine(none, 300*time.Millisecond); err == nil {
+		t.Fatal("no runner line was accepted")
+	}
+}

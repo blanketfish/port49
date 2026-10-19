@@ -264,6 +264,45 @@ func (b *l75Broker) hang(w *regionWorld, on bool) bool {
 	}
 }
 
+// l75TookOver waits up to d for the broker's runner to hold the keyspace and
+// record its bundle as judged: the takeover is done, so a logout after it
+// takes the follow path.
+func l75TookOver(p *regionProc, d time.Duration) error {
+	start := time.Now()
+	for _, want := range []string{"runner: took keyspace", "as judged"} {
+		if _, err := p.wait(want, d-time.Since(start)); err != nil {
+			return fmt.Errorf("%s: its takeover did not finish, a port49 finding if the keyspace was free: %w", p.name, err)
+		}
+	}
+	return nil
+}
+
+// The two lines a runner says of a logout it reached: the follow path's, and
+// the takeover's for one already standing (it holds token key names, so it is
+// never copied into a row).
+var l75RunnerLines = []struct{ say, via string }{
+	{"a logout made elsewhere", "followed (a logout made elsewhere)"},
+	{"standing logout(s) reached here", "takeover (standing logout(s) reached here)"},
+}
+
+// l75RunnerLine waits up to d for the broker's runner to say it reached the
+// logout by either path, and returns how long it took and which path.
+func l75RunnerLine(p *regionProc, d time.Duration) (time.Duration, string, error) {
+	start := time.Now()
+	for {
+		said := p.said()
+		for _, l := range l75RunnerLines {
+			if strings.Contains(said, l.say) {
+				return time.Since(start), l.via, nil
+			}
+		}
+		if time.Since(start) > d {
+			return d, "", fmt.Errorf("%s did not say it reached the logout within %v", p.name, d)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // l75AnsweringAgain waits up to d for the broker to say its directory store
 // answers again (since the last mark): mints follow that check, not store
 // status, which pings live.
@@ -775,6 +814,14 @@ func l75(t *testing.T, w *regionWorld) []string {
 		bs[i].o.provider = true
 		bs[i].start(w)
 	}
+	// A restarted broker serves mints before its runner holds the keyspace; a
+	// logout that arrives in that gap is reached by the takeover, with its own
+	// line, not by the follow path (g) measures. Wait for each takeover.
+	for i := 1; i <= 3; i++ {
+		if err := l75TookOver(bs[i].proc, 60*time.Second); err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+	}
 	plain := l75Client(w.pki, nil)
 	idToken := func(sid string) string {
 		tok := iss.IDToken(t, "k1", "port49-cli", "sub-carol", time.Now(),
@@ -804,11 +851,10 @@ func l75(t *testing.T, w *regionWorld) []string {
 	bs[2].proc.mark()
 	lo1 := l75Logout(plain, bs[1].addr(), logoutToken(s1))
 	took, why := refusedWithin(bs[2], tok1, 30*time.Second)
-	line, lerr := bs[2].proc.wait("a logout made elsewhere", 30*time.Second)
+	line, via, lerr := l75RunnerLine(bs[2].proc, 30*time.Second)
 	row("g", "a logout received at broker 1 refuses broker 2's mint for that session",
 		fmt.Sprintf("mint at b2 %d; logout at b1 %d; b2 refused after %v (%s); b2's runner line after %v (%v): %s",
-			g1, lo1, took.Round(10*time.Millisecond), why, line.Round(10*time.Millisecond), lerr == nil,
-			firstLineWith(bs[2].proc.said(), "a logout made elsewhere")),
+			g1, lo1, took.Round(10*time.Millisecond), why, line.Round(10*time.Millisecond), lerr == nil, via),
 		l75JudgeG(g1, lo1, why, lerr == nil))
 
 	w.guard()
