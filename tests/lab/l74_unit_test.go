@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -670,5 +671,52 @@ func TestL75OnePendingIsExact(t *testing.T) {
 		if got := l75OnePending(status); got != want {
 			t.Errorf("l75OnePending(%q) = %v, want %v", status, got, want)
 		}
+	}
+}
+
+func TestL74MarkRevisionOfReadsTheKeysModRevision(t *testing.T) {
+	js := `{"kvs":[{"key":"` + base64.StdEncoding.EncodeToString([]byte("/port49/v1/rv/p/user:bob@example.com")) +
+		`","mod_revision":7},{"key":"` + base64.StdEncoding.EncodeToString([]byte("/port49/v1/rv/p/user:alice@example.com")) +
+		`","mod_revision":9}]}`
+	if got := markRevisionOf(js, "alice@example.com"); got != 9 {
+		t.Fatalf("alice's mark revision = %d, want 9", got)
+	}
+	if markRevisionOf(js, "carol") != 0 || markRevisionOf("not json", "alice") != 0 {
+		t.Fatal("an absent key or unreadable answer must read 0")
+	}
+}
+
+// Compacting at the lift's own revision keeps its event: the cell is INVALID
+// unless the compaction is above the revocation plus the lift.
+func TestL74CompactedPastTheLift(t *testing.T) {
+	if err := compactedPastTheLift(11, 13); err != nil {
+		t.Fatalf("revoked 11, compacted 13 (a write after the lift): %v", err)
+	}
+	if compactedPastTheLift(11, 12) == nil {
+		t.Fatal("compacting at the lift's own revision was accepted")
+	}
+	if compactedPastTheLift(0, 20) == nil {
+		t.Fatal("an unread revocation revision was accepted")
+	}
+}
+
+func TestL74FeedCompactedWaitsForTheLine(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b3.log")
+	p := &regionProc{name: "port49-broker r3", log: log}
+	if err := os.WriteFile(log, []byte("port49-broker: the marks feed stopped\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := feedCompacted(p, 300*time.Millisecond, 13)
+	if err == nil || !strings.Contains(err.Error(), "a port49 finding if the compaction") {
+		t.Fatalf("a log without the line: %v, want the INVALID error", err)
+	}
+	f, ferr := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	defer f.Close()
+	f.WriteString("port49-broker: the marks feed's revision was compacted; loading the marks again\n")
+	if err := feedCompacted(p, 300*time.Millisecond, 13); err != nil {
+		t.Fatalf("a log with the line: %v", err)
 	}
 }

@@ -821,9 +821,48 @@ func etcdCount(js string) int64 {
 	return r.Count
 }
 
-// (i) a lift in region 1 during a cut longer than a compaction: region 3's
-// runner cannot tell it from a mark a restore lost, and puts it back on the
-// heal (R17; plan 7e Ruling 12).
+// markRevisionOf is the mod_revision of the first key holding who in
+// `etcdctl get --prefix -w json`'s answer, 0 when none does.
+func markRevisionOf(js, who string) int64 {
+	var r struct {
+		Kvs []struct {
+			Key         []byte `json:"key"`
+			ModRevision int64  `json:"mod_revision"`
+		} `json:"kvs"`
+	}
+	if json.Unmarshal([]byte(js), &r) != nil {
+		return 0
+	}
+	for _, kv := range r.Kvs {
+		if strings.Contains(string(kv.Key), who) {
+			return kv.ModRevision
+		}
+	}
+	return 0
+}
+
+// compactedPastTheLift is nil when the compaction at compacted is above the
+// revision just after the revocation at revoked: etcd keeps the event at the
+// compaction revision, so a watch resuming from the revocation's successor
+// still gets the lift, unless something was written after it.
+func compactedPastTheLift(revoked, compacted int64) error {
+	if revoked == 0 || compacted <= revoked+1 {
+		return fmt.Errorf("the compaction at revision %d is not above the revocation's %d plus its lift", compacted, revoked)
+	}
+	return nil
+}
+
+// feedCompacted waits up to d for p to say its marks feed's revision was
+// compacted: without that line no rescan ran, so cell (i) measured a lift
+// that arrived as an event.
+func feedCompacted(p *regionProc, d time.Duration, compactedAt int64) error {
+	if _, err := p.wait("the marks feed's revision was compacted", d); err != nil {
+		return fmt.Errorf("region 3's marks feed did not report its revision compacted, a port49 finding if the compaction "+
+			"(at revision %d, above the lift) landed: %w", compactedAt, err)
+	}
+	return nil
+}
+
 // feedStopped waits up to d for p to say its marks feed stopped (since the
 // last mark), or errs naming what it did not say: the cut did not reach the
 // feed, so cell (i) would measure a lift that arrived as an event.
@@ -834,6 +873,9 @@ func feedStopped(p *regionProc, d time.Duration) error {
 	return nil
 }
 
+// (i) a lift in region 1 during a cut longer than a compaction: region 3's
+// runner cannot tell it from a mark a restore lost, and puts it back on the
+// heal (R17; plan 7e Ruling 12).
 func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
 	d := w.dirMembers[1]
 	near := "https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379" // the side that keeps its quorum
@@ -853,6 +895,14 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if _, err := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second); err != nil {
 		w.t.Fatalf("INVALID: broker 3 never learned the mark before the cut: %v", err)
 	}
+	marks, merr := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "-w", "json")
+	if merr != nil {
+		w.t.Fatalf("INVALID: reading alice's mark before the cut: %v", merr)
+	}
+	revokedAt := markRevisionOf(marks, "alice@example.com")
+	if revokedAt == 0 {
+		w.t.Fatal("INVALID: alice's mark revision could not be read before the cut")
+	}
 	w.brokers[3].mark() // the put-back line is looked for from here
 	cut := w.cutRegion3()
 	defer cut.heal()
@@ -867,6 +917,12 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if _, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
 		w.t.Fatalf("INVALID: the lift in region 1: exit %d", lcode)
 	}
+	// One write after the lift, and the compaction at that revision: etcd keeps
+	// the event at the compaction revision, so compacting at the lift's own
+	// would leave region 3's watch its delete.
+	if out, perr := d.ctl(near, "put", "/l74/after-lift", "1"); perr != nil {
+		w.t.Fatalf("INVALID: the write after the lift: %v: %s", perr, out)
+	}
 	st, serr := d.ctl(near, "endpoint", "status", "-w", "json")
 	if serr != nil {
 		w.t.Fatalf("INVALID: the directory's endpoint status: %v: %s", serr, st)
@@ -875,12 +931,18 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if rev == 0 {
 		w.t.Fatal("INVALID: the directory's revision could not be read")
 	}
+	if err := compactedPastTheLift(revokedAt, rev); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
+	}
 	if _, cerr := d.ctl(near, "compact", strconv.FormatInt(rev, 10), "--physical"); cerr != nil {
 		w.t.Fatalf("INVALID: the compaction at revision %d: %v", rev, cerr)
 	}
 	w.guard()
 	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal: %v", err)
+	}
+	if err := feedCompacted(w.brokers[3], 30*time.Second, rev); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
 	}
 	took, perr := w.brokers[3].wait("are put back", 60*time.Second)
 	keys, kerr := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--keys-only")
@@ -889,8 +951,8 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	}
 	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
 	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
-		fmt.Sprintf("lift exit 0; compacted at revision %d; put-back line after %v: %s; alice's marks in the directory after: %d",
-			rev, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
+		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); put-back line after %v: %s; alice's marks in the directory after: %d",
+			revokedAt, rev, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
 		perr == nil && n == 1)
 	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
