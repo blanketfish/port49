@@ -1,19 +1,22 @@
 package store
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
 
 // Freshness is how current a process's copy of the directory store is
-// (plan 11a; spec §13 decision 51): whether its marks feed runs, and the
-// last time a read of the directory answered while it did. A watch that
-// runs and a store that answers a linearizable read leave the copy at most
-// one check and one delivery behind. It is safe for concurrent use.
+// (plan 11a; spec §13 decision 51): whether its feeds run (the marks feed,
+// and each other feed the process follows, Need), and the last time a read
+// of the directory answered while they all did. A watch that runs and a
+// store that answers a linearizable read leave the copy at most one check
+// and one delivery behind. It is safe for concurrent use.
 type Freshness struct {
 	mu        sync.Mutex
 	now       func() time.Time
 	feedUp    bool
+	others    map[string]bool // each other feed a confirmation needs (Need), and whether it runs
 	confirmed time.Time
 	snapshot  bool // the copy is a snapshot's, not yet reloaded from the directory
 	checked   bool
@@ -63,7 +66,58 @@ func (f *Freshness) FeedUp(up bool) {
 	}
 }
 
-// Checked is a directory read's answer: nil confirms the copy while the
+// Need has a confirmation also need each of feeds running (Up): a split
+// broker's pins and logouts feeds (final review, M4). Each is down until
+// its first Up.
+func (f *Freshness) Need(feeds ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.others == nil {
+		f.others = map[string]bool{}
+	}
+	for _, feed := range feeds {
+		f.others[feed] = false
+	}
+}
+
+// Up is the up hook of a feed Need named; one it did not name is ignored.
+func (f *Freshness) Up(feed string, up bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.others[feed]; ok {
+		f.others[feed] = up
+	}
+}
+
+// Down is each feed not running, by name ("marks" for the marks feed),
+// sorted after marks.
+func (f *Freshness) Down() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var down []string
+	for feed, up := range f.others {
+		if !up {
+			down = append(down, feed)
+		}
+	}
+	sort.Strings(down)
+	if !f.feedUp {
+		down = append([]string{"marks"}, down...)
+	}
+	return down
+}
+
+// allUp is whether every feed runs; f.mu is held.
+func (f *Freshness) allUp() bool {
+	for _, up := range f.others {
+		if !up {
+			return false
+		}
+	}
+	return f.feedUp
+}
+
+// Checked is a directory read's answer: nil confirms the copy while every
 // feed runs. It returns Stopped when the directory stops answering (a
 // first check that fails included), Resumed when it answers after a stop,
 // and Steady otherwise.
@@ -76,7 +130,7 @@ func (f *Freshness) Checked(err error) Transition {
 	if err != nil {
 		f.why = err.Error()
 	}
-	if err == nil && f.feedUp {
+	if err == nil && f.allUp() {
 		f.confirmed = f.now()
 		if f.onConfirm != nil {
 			f.onConfirm(f.confirmed)

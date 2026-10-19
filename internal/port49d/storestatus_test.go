@@ -38,6 +38,11 @@ func TestRoleStatusLines(t *testing.T) {
 			pending: 2}, "directory  etcd    ?/? members  unreachable  cache 2.0s  2 logouts pending"},
 		{roleStatus{role: "directory", backend: "etcd", membersErr: true, cache: true, age: 90 * time.Second, aged: true,
 			snapshot: true}, "directory  etcd    ?/? members  unreachable  cache 1m30s (snapshot)"},
+		// A feed down names itself: the cache's age stops at its last confirmation
+		// (final review, M4).
+		{roleStatus{role: "directory", backend: "etcd", answering: 3, listed: 3, reachable: true, cache: true,
+			age: 40 * time.Second, aged: true, down: []string{"logouts"}, pending: 1},
+			"directory  etcd    3/3 members  reachable  cache 40.0s  feeds down: logouts  1 logouts pending"},
 	} {
 		if got := c.s.line(); got != c.want {
 			t.Errorf("%+v:\n got %q\nwant %q", c.s, got, c.want)
@@ -72,7 +77,7 @@ func TestStoreStatusAnswerReadsEachStore(t *testing.T) {
 
 	text, degraded, err := st.answer(context.Background())
 	if err != nil || degraded || !strings.Contains(text, "directory  etcd    1/1 members  reachable  cache 1m") ||
-		!strings.Contains(text, "(snapshot)  2 logouts pending") ||
+		!strings.Contains(text, "(snapshot)  feeds down: marks  2 logouts pending") ||
 		!strings.Contains(text, "session    etcd    1/1 members  reachable") {
 		t.Fatalf("%q degraded=%v %v", text, degraded, err)
 	}

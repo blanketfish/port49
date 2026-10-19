@@ -140,3 +140,32 @@ func TestAFailedLoadKeepsTheSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// A copy is confirmed only while every feed the process follows runs, not
+// the marks feed alone: with the logouts feed down, a confirmed age would
+// vouch for a stale logout set, in store status and in each snapshot record
+// (final review, M4). Down names the feeds not running.
+func TestFreshnessConfirmsOnlyWhileEveryFeedRuns(t *testing.T) {
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	f := NewFreshness(func() time.Time { return now })
+	f.Need("pins", "logouts")
+	f.FeedUp(true)
+	f.Up("pins", true)
+	f.Checked(nil)
+	if _, ok := f.Age(); ok {
+		t.Fatal("confirmed with the logouts feed down")
+	}
+	if got := f.Down(); len(got) != 1 || got[0] != "logouts" {
+		t.Fatalf("down %v, want [logouts]", got)
+	}
+	f.Up("logouts", true)
+	f.Checked(nil)
+	if _, ok := f.Age(); !ok || len(f.Down()) != 0 {
+		t.Fatalf("not confirmed with every feed up; down %v", f.Down())
+	}
+	f.FeedUp(false)
+	f.Up("pins", false)
+	if got := f.Down(); len(got) != 2 || got[0] != "marks" || got[1] != "pins" {
+		t.Fatalf("down %v, want [marks pins]", got)
+	}
+}

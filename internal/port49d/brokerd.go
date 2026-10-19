@@ -152,6 +152,11 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return brokerStores{}, err
 	}
 	bs.fresh = store.NewFreshness(time.Now)
+	if !cfg.Stores.Shared {
+		// A split broker's copy is the marks, the pins and the logouts: it is
+		// confirmed only while all three feeds run (final review, M4).
+		bs.fresh.Need("pins", "logouts")
+	}
 	tellFresh(bs.fresh, m)
 	// startChecks is what a directory store of its own passes before it is
 	// used (R27, R28), and the broker writes its key window there.
@@ -735,7 +740,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		case <-ready:
 		}
 		placement.FollowPins(ctx, bs.st, bs.dir.get(),
-			func(up bool) { m.StoreFeedUp.WithLabelValues("pins").Set(b2f(up)) },
+			func(up bool) { m.StoreFeedUp.WithLabelValues("pins").Set(b2f(up)); bs.fresh.Up("pins", up) },
 			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
 	}()
 	// In a split, follow the logouts into this replica's copy. Each one the
@@ -750,7 +755,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			case <-ready:
 			}
 			store.FollowLogouts(ctx, bs.dir.get(), bs.logouts, bs.logoutRev, rn.followLogout,
-				func(up bool) { m.StoreFeedUp.WithLabelValues("logouts").Set(b2f(up)) },
+				func(up bool) { m.StoreFeedUp.WithLabelValues("logouts").Set(b2f(up)); bs.fresh.Up("logouts", up) },
 				func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
 		}()
 	}

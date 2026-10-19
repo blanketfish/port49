@@ -24,7 +24,8 @@ type roleStatus struct {
 	cache, aged       bool // a directory line carries a cache age; aged: it was ever confirmed
 	snapshot          bool // the cache is a snapshot this run started from, not yet confirmed live (R19)
 	age               time.Duration
-	pending           int // back-channel logouts not yet forwarded to the directory (R26)
+	pending           int      // back-channel logouts not yet forwarded to the directory (R26)
+	down              []string // the directory feeds not running: the cache is not confirmed meanwhile
 }
 
 // line is s as the CLI prints it.
@@ -53,6 +54,9 @@ func (s roleStatus) line() string {
 			age += " (snapshot)"
 		}
 		l += "  cache " + age
+		if len(s.down) > 0 {
+			l += "  feeds down: " + strings.Join(s.down, ", ")
+		}
 	}
 	if s.pending > 0 {
 		l += fmt.Sprintf("  %d logouts pending", s.pending)
@@ -110,6 +114,7 @@ func (s *storeStatus) answer(ctx context.Context) (string, bool, error) {
 	d.cache = true
 	d.age, d.aged = s.fresh.Age()
 	d.snapshot = s.fresh.Snapshot()
+	d.down = s.fresh.Down()
 	if s.pending != nil {
 		d.pending = s.pending()
 	}
