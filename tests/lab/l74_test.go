@@ -829,7 +829,7 @@ func etcdCount(js string) int64 {
 // feed, so cell (i) would measure a lift that arrived as an event.
 func feedStopped(p *regionProc, d time.Duration) error {
 	if _, err := p.wait("the marks feed stopped", d); err != nil {
-		return fmt.Errorf("the cut did not stop the marks feed, so a lift after it would not be a missed event: %w", err)
+		return fmt.Errorf("the cut did not stop the marks feed, so a lift after it would not be a missed event, a port49 finding if the cut held: %w", err)
 	}
 	return nil
 }

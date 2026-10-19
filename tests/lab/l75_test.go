@@ -296,16 +296,24 @@ func (b *l75Broker) scrape() string {
 // port49_directory_enrollment_store_ok 1: a broker that started before
 // init-enrollments caches the store as lost and looks again every 30s
 // (decision 47, D7), so (a) waits for the others rather than measuring that.
-func l75EnrollmentStoreSeen(bs []*l75Broker, d time.Duration) error {
+func l75EnrollmentStoreSeen(bs []*l75Broker, d time.Duration) (time.Duration, error) {
+	start := time.Now()
 	for _, b := range bs {
 		_, _, ok := l75Poll(b.scrape, func(m string) bool {
 			return metricOf(m, "port49_directory_enrollment_store_ok") == 1
 		}, d, time.Second)
 		if !ok {
-			return fmt.Errorf("%s did not read port49_directory_enrollment_store_ok 1 within %v", b.proc.name, d)
+			return time.Since(start), fmt.Errorf("%s did not read port49_directory_enrollment_store_ok 1 within %v, "+
+				"past D7's 30s recheck: a port49 finding if the store was initialised", b.proc.name, d)
 		}
 	}
-	return nil
+	return time.Since(start), nil
+}
+
+// l75OnePending is whether a store status says exactly one logout pending:
+// "11 logouts pending" is not "1 logouts pending".
+func l75OnePending(status string) bool {
+	return regexp.MustCompile(`(^|[^0-9])1 logouts pending`).MatchString(status)
 }
 
 // start writes the config, starts the broker and waits until its mints are open.
@@ -522,7 +530,8 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	// Brokers 2 and 3 started before init-enrollments: they take the new store
 	// up within 30s, and (a) must not run before they have.
-	if err := l75EnrollmentStoreSeen(bs[2:], 45*time.Second); err != nil {
+	storeSeen, err := l75EnrollmentStoreSeen(bs[2:], 45*time.Second)
+	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
 	apiOf := func(b *l75Broker) *l67API {
@@ -571,8 +580,9 @@ func l75(t *testing.T, w *regionWorld) []string {
 	r2 := apiOf(bs[2]).signIn("carol", pw, code)
 	rc := apiOf(bs[2]).signIn("carol", pw, carol.code())
 	row("a", "a code signed in at broker 1 is refused at broker 2 within its step (broker 2 takes a fresh code)",
-		fmt.Sprintf("broker 1: %d; broker 2, the same code: %d %s; broker 2, a fresh code: %d", r1.Status, r2.Status, r2.Error,
-			rc.Status), l75JudgeA(r1.Status, r2.Status, rc.Status))
+		fmt.Sprintf("broker 1: %d; broker 2, the same code: %d %s; broker 2, a fresh code: %d; brokers 2 and 3 read the "+
+			"enrollment store as ok %v after init-enrollments (D7: within 30s)", r1.Status, r2.Status, r2.Error,
+			rc.Status, storeSeen.Round(100*time.Millisecond)), l75JudgeA(r1.Status, r2.Status, rc.Status))
 
 	// (b) twenty steps: one code to b1 and b2 at once. The loser of a race is
 	// a failed attempt, so b1 is unlocked after every pair: each pair then runs
@@ -802,7 +812,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		out, code, _ := w.port49("store", "status", "--socket", bs[3].sock())
 		scode = code
 		return out
-	}, func(s string) bool { return strings.Contains(s, "1 logouts pending") }, 10*time.Second, time.Second)
+	}, l75OnePending, 10*time.Second, time.Second)
 	b1st, _ := l75Mint(w, plain, bs[1].addr(), tok2)
 	bs[3].proc.mark()
 	healedAt := time.Now()
@@ -818,7 +828,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 			"forwarded line %v; b1 refused %v after the heal (%s)", g2, lo3, r3, why3, statusAfter.Round(100*time.Millisecond), scode,
 			strings.ReplaceAll(status, "\n", " / "), b1st, ferr == nil, fromHeal.Round(10*time.Millisecond), why2),
 		g2 == http.StatusOK && lo3 == http.StatusOK && r3 == http.StatusUnauthorized &&
-			strings.Contains(status, "1 logouts pending") && scode == 3 && b1st == http.StatusOK && ferr == nil &&
+			l75OnePending(status) && scode == 3 && b1st == http.StatusOK && ferr == nil &&
 			why2 == "credential_revoked")
 
 	var procs []*regionProc

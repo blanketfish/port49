@@ -573,7 +573,8 @@ func TestL74FeedStoppedWaitsForTheLine(t *testing.T) {
 	if err := os.WriteFile(log, []byte("port49-broker: directory store: not answering\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := feedStopped(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not stop the marks feed") {
+	if err := feedStopped(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not stop the marks feed") ||
+		!strings.Contains(err.Error(), "a port49 finding if the cut held") {
 		t.Fatalf("a log without the line: %v, want the INVALID error", err)
 	}
 	p.mark()
@@ -633,15 +634,16 @@ func TestL75EnrollmentStoreSeenWaitsAndGivesUp(t *testing.T) {
 		}
 		return "1"
 	})
-	if err := l75EnrollmentStoreSeen([]*l75Broker{late}, 10*time.Second); err != nil {
+	if _, err := l75EnrollmentStoreSeen([]*l75Broker{late}, 10*time.Second); err != nil {
 		t.Fatalf("a broker that reads 1 on its third scrape: %v", err)
 	}
 	if n.Load() < 3 {
 		t.Fatalf("it did not wait for the metric: %d scrape(s)", n.Load())
 	}
 	never := l75MetricsServer(t, func() string { return "0" })
-	if err := l75EnrollmentStoreSeen([]*l75Broker{never}, 1500*time.Millisecond); err == nil ||
-		!strings.Contains(err.Error(), "did not read port49_directory_enrollment_store_ok 1") {
+	if _, err := l75EnrollmentStoreSeen([]*l75Broker{never}, 1500*time.Millisecond); err == nil ||
+		!strings.Contains(err.Error(), "did not read port49_directory_enrollment_store_ok 1") ||
+		!strings.Contains(err.Error(), "a port49 finding if the store was initialised") {
 		t.Fatalf("a broker that never reads 1: %v, want the INVALID error", err)
 	}
 }
@@ -653,5 +655,20 @@ func TestL75PollReturnsTheLastReadAtTheLimit(t *testing.T) {
 		func(s string) bool { return s == "never" }, 300*time.Millisecond, 100*time.Millisecond)
 	if ok || got != fmt.Sprint("read ", reads) || reads < 2 {
 		t.Fatalf("got %q ok %v after %d reads", got, ok, reads)
+	}
+}
+
+// The pending count matches exactly: 11 is not 1.
+func TestL75OnePendingIsExact(t *testing.T) {
+	for status, want := range map[string]bool{
+		"directory  etcd  1 logouts pending": true,
+		"1 logouts pending":                  true,
+		"11 logouts pending":                 false,
+		"21 logouts pending":                 false,
+		"0 logouts pending":                  false,
+	} {
+		if got := l75OnePending(status); got != want {
+			t.Errorf("l75OnePending(%q) = %v, want %v", status, got, want)
+		}
 	}
 }
