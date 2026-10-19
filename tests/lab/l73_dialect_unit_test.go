@@ -897,19 +897,15 @@ func TestL73NXOSImportWaitsForTheImagesOwnPrompt(t *testing.T) {
 	}
 }
 
-// NX-OS 10.6.2.F answered port49d's server flight 5.00 s late in the first
-// run, exactly when the default handshake_timeout fired, so its daemon runs
-// with the spec's maximum; nothing else is widened. A failed control login
-// there reads the device's own view, and none of those commands can print a
-// private key.
-func TestL73NXOSWidensTheHandshakeAndReadsTheDevice(t *testing.T) {
+// NX-OS 10.6.2.F answers port49d's server flight 5.00 s late on every
+// connection, which the default handshake_timeout (10s) covers, so no
+// platform widens it. A failed control login there reads the device's own
+// view, and none of those commands can print a private key.
+func TestL73NXOSRunsAtTheDefaultHandshakeAndReadsTheDevice(t *testing.T) {
 	d := l73Dialects["cisco_nxos"]
-	if d.HandshakeTimeout != 30*time.Second {
-		t.Errorf("nxos handshake timeout %s", d.HandshakeTimeout)
-	}
 	for name, o := range l73Dialects {
-		if name != "cisco_nxos" && o.HandshakeTimeout != 0 {
-			t.Errorf("%s widens the handshake timeout to %s", name, o.HandshakeTimeout)
+		if o.HandshakeTimeout != 0 {
+			t.Errorf("%s sets the handshake timeout to %s; the default is what runs", name, o.HandshakeTimeout)
 		}
 	}
 	want := []string{"show logging last 50", "show crypto ca certificates l73-dev", "show crypto key mypubkey rsa", "show running-config tacacs+"}

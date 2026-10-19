@@ -230,7 +230,7 @@ type l73Daemon struct {
 	Status        string // certificate_status, a YAML flow mapping
 	FaultFile     string
 	Attrs         string // session_attributes, a YAML flow list; "" keeps the lab file's
-	// HandshakeTimeout is tls_listener.handshake_timeout; 0 keeps the default (5s).
+	// HandshakeTimeout is tls_listener.handshake_timeout; 0 keeps the default (10s).
 	HandshakeTimeout time.Duration
 }
 

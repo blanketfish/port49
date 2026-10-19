@@ -191,9 +191,6 @@ var l73Dialects = map[string]l73Dialect{
 		Fallback:   "`aaa authentication login default group port49 local` (configs/nxos-startup.cfg)",
 		Revocation: "`revocation-check none` on both trustpoints",
 		LogCmd:     `show logging logfile | egrep "TACACS|tacacs|TLS|tls|PKI|pki" | last 40`,
-		// The first run saw the device send its client flight 5.00 s after the
-		// server's flight, the instant the default 5s handshake_timeout fired.
-		HandshakeTimeout: 30 * time.Second,
 		// A token login is five TACACS+ steps (redeem, authorize session, account,
 		// authorize command, account), each on its own connection that this image
 		// delays 5.00 s: about 25 s, so 45 s is too little margin.

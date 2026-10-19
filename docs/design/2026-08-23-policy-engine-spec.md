@@ -2293,9 +2293,9 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Twelve decision events, one at each point a decision is made, plus eight report
+One envelope. Twelve decision events, one at each point a decision is made, plus nine report
 events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`,
-`second_factor_reset`, `sign_in_unlock`, `enrollments_import`) that share the envelope and carry no verdict:
+`second_factor_reset`, `sign_in_unlock`, `enrollments_import`, `generic_platform`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -2368,6 +2368,15 @@ count starts again at the unlock, which is a directory record (decision 51). A
 twentieth, `enrollments_import`, is a report: `port49 directory import` replaced or filled the
 enrollment store (D13), `{"enrollments_import": {"records": N, "exported_at": ..., "replaced":
 true|absent, "origin": ...}}`.
+
+A twenty-first, `generic_platform`, is a report too: port49d serves an admitted device whose
+platform has no adapter with its set's generic adapter (§8, "Unknown platforms"), and writes
+one record per such device per bundle, at start and at each swap that puts a bundle in force:
+`{"reason": "platform_unknown", "device": {"name", "platform"}, "policy": {"bundle"}}`. A process
+start writes them again. It carries no verdict. The device's own records are decided and written
+as on any platform, a permit as a permit. port49-broker does not write it. The start and reload
+lines name each such platform and its count, and `port49_devices_generic_platform` is its alarm,
+naming no device.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -2530,7 +2539,7 @@ refused request named; any other path is recorded `mint`.
 | `enrollment_store_lost` | `issue`, `enroll`: the broker's enrollment store is lost — it has no creation mark (its file or key is missing, a new install not yet initialised by `port49 directory init-enrollments` included), or its file will not unseal (a lost or rotated seal key, tampering) (§13 decision 47 D7). Password sign-in is refused for everyone, before anything is counted or read; certificates already issued, tokens and IdP sign-in serve. The API answers 503. On a new install the operator runs `port49 directory init-enrollments`; otherwise restores the file or the etcd snapshot (`port49 directory import`), or runs `port49 directory reset-second-factor --all`. Alertable: `port49_directory_enrollment_store_ok` reads 0 |
 | `second_factor_enrolled` | `enroll`: a person's TOTP second factor was confirmed with its first code (§13 decision 47 ruling 4). A permit; alertable |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
-| `platform_unknown` | the device's platform has no adapter; generic fallback applied |
+| `platform_unknown` | `generic_platform`: the device's platform has no adapter; generic fallback applied. Written by port49d once per device per bundle (§8); never the reason of a decision |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened, failing authentication (one sealed under a key port49 does not hold is left unrevoked and unrecorded, §5.1.3) — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
@@ -4591,7 +4600,8 @@ An unknown **device** — one not in inventory — fails closed. That is an admi
 
 An unknown **platform** is different: the device is legitimately admitted, we simply lack a
 dialect file. It receives a generic adapter (`priv-lvl` only, `supports: [session]`) and
-raises an alarm. Someone will always rack something unmodeled, and that must not take down
+raises an alarm: a `generic_platform` record per device per bundle (§5.7), a line at start and at
+each reload, and `port49_devices_generic_platform`, whatever the inventory's source. Someone will always rack something unmodeled, and that must not take down
 their login.
 
 ---
@@ -5527,7 +5537,7 @@ removal raises both.
 it, and a slug neither knows is kept as the device's platform: the device is admitted and served by
 the generic adapter (§8, "Unknown platforms"); each publication that changes the set of such
 platforms says so, and `port49_inventory_generic_platform_devices` holds their devices' count
-always, whatever the source, rather than falling back to generic in silence.
+always, whatever the source, rather than falling back to generic in silence; and each port49d serving the bundle holds the same count in `port49_devices_generic_platform`.
 
 **Filters, maps and addresses run in the service.** A source's `filter` (`status`, default
 `[active]`, compared in lower case so each recorded spelling matches — `"ACTIVE"` on NetBox 3.7.8,
@@ -10371,11 +10381,11 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   is misconfigured, not hostile. Every
   reply on the TLS listener sets the unencrypted flag. A packet that fails another header check
   is `not_tacacs` and struck, as on 49.
-- **14. The handshake has a deadline**: `handshake_timeout`, default 5s, 1s to 30s. That bounds
+- **14. The handshake has a deadline**: `handshake_timeout`, default 10s, 1s to 30s. That bounds
   the slot a stalled peer holds under the per-NAS cap. A timeout is `handshake_timeout`, struck.
-  The default sits above the shortest measured reply timeout (3s, L13) only because a
-  handshake that takes longer is already lost to that device, and the deadline exists to free
-  the slot. Measured: NX-OS 10.6(2)F needs more than 5s (tests/lab/results/L73-cisco_nxos.md).
+  The default is above NX-OS 10.6(2)F's measured 5.00 s client-flight delay, with margin
+  (tests/lab/results/L73-cisco_nxos.md); a device whose reply timeout is shorter than its own
+  handshake has already lost the exchange, and the deadline frees the slot.
 - **15. The listener's files reload without a restart.** `cert_file`, `key_file`,
   `client_ca_file` and `intermediates_file` are read again every `reload_interval` (default 1m,
   10s to 1h) and at every SIGHUP. A set whose bytes changed and that loads is swapped in whole

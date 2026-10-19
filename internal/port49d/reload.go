@@ -123,6 +123,10 @@ type reloader struct {
 	// review m6). Either may be nil; run sets them.
 	seen *keyring.Seen
 	held *keyring.Held
+	// generic writes the generic_platform records a bundle owes, at each swap
+	// (spec §5.7, §8). Daemon-only: nil in port49-broker, so a split
+	// deployment writes one record per port49d.
+	generic *genericRecorder
 	// invSeen is when the inventory file was last read and found in force,
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
 	invSeen atomic.Int64
@@ -1203,6 +1207,9 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 			"(spec §10)\n", file, n)
 	}
 	sayPolicy(r.procName(), pol, now)
+	if r.generic != nil {
+		r.generic.record(pol, now)
+	}
 	r.refresh(ctx)
 	// After the pass, not before: the walk over every subject and device must
 	// not delay the supersede that a tightened requirement depends on.

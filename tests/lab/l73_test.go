@@ -1756,8 +1756,7 @@ func (e *l73Env) cellA() {
 		e.facts = append(e.facts, "the device reports "+version)
 	}
 	if e.d.HandshakeTimeout > 0 {
-		e.facts = append(e.facts, fmt.Sprintf("port49d ran with tls_listener.handshake_timeout %s (the default is 5s) for this platform, because the image's first "+
-			"run sent its client flight 5.00 s after the server's flight, as the 5s timeout fired; each connection line records \"device's next data N s after the "+
+		e.facts = append(e.facts, fmt.Sprintf("port49d ran with tls_listener.handshake_timeout %s (the default is 10s) for this platform; each connection line records \"device's next data N s after the "+
 			"server's first data\", the measured delay on that connection", e.d.HandshakeTimeout))
 	}
 	e.add("a", configured, obs+"; the control's records: "+e.quote(recs),

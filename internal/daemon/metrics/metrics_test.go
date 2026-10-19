@@ -114,6 +114,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_broker_connections":                         false,
 		"port49_blob_cache_lookups_total":                   false,
 		"port49_devices_quarantined":                        false,
+		"port49_devices_generic_platform":                   false,
 		"port49_context_refreshes_total":                    false,
 		"port49_contexts_reindexed_total":                   false,
 		"port49_contexts_reindex_failures_total":            false,

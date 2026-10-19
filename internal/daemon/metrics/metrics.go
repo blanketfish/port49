@@ -221,9 +221,16 @@ type Metrics struct {
 	// is named at start and at every reload; the gauge names none.
 	DevicesAdmissionRefused prometheus.GaugeFunc
 	admissionRefused        atomic.Pointer[func() int]
-	tlsDeviceLife           atomic.Pointer[func() (float64, bool)]
-	tlsServerLife           atomic.Pointer[func() float64]
-	devicesTransport        atomic.Pointer[func() map[string]int]
+	// port49_devices_generic_platform: how many admitted devices the bundle
+	// in force serves with the generic adapter because their platform has
+	// no adapter (spec §8, "Unknown platforms"). Each is written as a
+	// generic_platform record per bundle; the gauge is what an alert
+	// watches, and it names no device.
+	DevicesGenericPlatform prometheus.GaugeFunc
+	genericPlatform        atomic.Pointer[func() int]
+	tlsDeviceLife          atomic.Pointer[func() (float64, bool)]
+	tlsServerLife          atomic.Pointer[func() float64]
+	devicesTransport       atomic.Pointer[func() map[string]int]
 	// port49_context_refreshes_total{outcome}: live login contexts a policy
 	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 	// policy in force written into it), "unchanged", "revoked" (no grant left
@@ -561,6 +568,9 @@ func (m *Metrics) SetDirectoryGroupNamesAmbiguous(count func() float64) {
 // CountAdmissionRefused sets what port49_devices_admission_refused reports.
 func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
+// CountGenericPlatform sets what port49_devices_generic_platform reports.
+func (m *Metrics) CountGenericPlatform(count func() int) { m.genericPlatform.Store(&count) }
+
 // WatchTLSLifetime sets what the two certificate lifetime gauges report.
 func (m *Metrics) WatchTLSLifetime(device func() (float64, bool), server func() float64) {
 	m.tlsDeviceLife.Store(&device)
@@ -815,6 +825,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.DevicesGenericPlatform = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_generic_platform",
+		Help: "Admitted devices the bundle in force serves with the generic adapter: their platform has no adapter."}, func() float64 {
+		if count := m.genericPlatform.Load(); count != nil {
+			return float64((*count)())
+		}
+		return 0
+	})
 	m.DirectoryBindHoldoff = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_directory_bind_holdoff_seconds",
 		Help: "Seconds left in the hold-off after a directory server refused the broker's bind, during which no unbound server is dialled; 0 when clear."}, func() float64 {
 		if remaining := m.directoryBindHoldoff.Load(); remaining != nil {
@@ -869,7 +886,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
-		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused,

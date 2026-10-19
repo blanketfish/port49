@@ -145,6 +145,10 @@ const (
 	// filled the enrollment store from an export (spec §5.7; §13 decision 47
 	// D13).
 	EventEnrollmentsImport = "enrollments_import"
+	// EventGenericPlatform is not a decision: port49d serves an admitted
+	// device whose platform has no adapter with the generic adapter; one
+	// record per device per bundle (spec §5.7, §8).
+	EventGenericPlatform = "generic_platform"
 )
 
 // EventEnroll is POST /v1/sign-in/confirm: whether a person's first second-factor code
