@@ -167,6 +167,24 @@ func (p *Policy) Admitted(name string) (admission.Resolved, bool) {
 	return r, ok
 }
 
+// GenericDevices is every admitted device whose platform has no adapter, served
+// by the set's generic adapter (spec §8, "Unknown platforms"), sorted by name. A
+// device with no platform is not one: it is unconfigured.
+func (p *Policy) GenericDevices() []admission.Device {
+	var out []admission.Device
+	for _, d := range p.env.Devices {
+		if d.Platform == "" || p.PlatformSource(d.Platform) != "generic" {
+			continue
+		}
+		if r, ok := p.Admitted(d.Name); !ok || r.Refused != "" {
+			continue
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // AdmissionRefusals are the inventory devices admission refuses, by name. On
 // an unassessed policy — no key groups and no Env.KeyRefs — every device not
 // pinned on its record is refused no_key_group, which is what port49d, always

@@ -1469,6 +1469,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
+		r.generic = newGenericRecorder(log, procOf(cfg))
+		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)
 		r.mfaUnavailable = mfaUnavailable
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
