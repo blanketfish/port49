@@ -3,7 +3,11 @@
 # (TestEveryManifestPatternMatchesATest checks it). rows: the §15 rows it re-measures;
 # for a closed row env.PORT49_LAB_REMEASURE names its guard entry (loadManifest refuses
 # otherwise). notes: every results note it rewrites, every platform's.
+# timeout_minutes: the binary's -test.timeout; unset means 120 a platform, make lab's budget
+# (an entry that is one platform of a longer Make budget carries that budget).
 # measured_minutes: the last full run's wall time for the entry (Task 4).
+# excluded: the closed rows the runner does not rerun, each with why
+# (TestEveryClosedRowIsRunOrExcluded: a closed row is in an entry's rows or here).
 entries:
   - id: L10
     run: '^TestL10ServiceAndAttributeSpellings$'
@@ -12,18 +16,25 @@ entries:
     env: {PORT49_LAB_REMEASURE: L10}
     notes: [tests/lab/results/L10-arista_eos.md, tests/lab/results/L10-cisco_iosxe.md, tests/lab/results/L10-cisco_nxos.md,
             tests/lab/results/L10-juniper_vjunos-router.md, tests/lab/results/L10-juniper_vsrx.md]
-  - {id: L73-vjunos26, run: '^TestL73$', platforms: vjunos26, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
-     notes: [tests/lab/results/L73-juniper_vjunos-router.md]}
-  - {id: L73-iosxe1718, run: '^TestL73$', platforms: iosxe1718, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
-     notes: [tests/lab/results/L73-cisco_iosxe.md]}
-  - {id: L73-nxos106, run: '^TestL73$', platforms: nxos106, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
-     notes: [tests/lab/results/L73-cisco_nxos.md]}
-  - {id: L73-ceos436, run: '^TestL73$', platforms: ceos436, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
-     notes: [tests/lab/results/L73-arista_ceos.md]}
+  # TestL73 writes the L71 note of its platform: it appends an addendum to one that exists, so
+  # a rerun grows L71-<platform>.md and notediff shows it. The help-only platforms (iolxe1718,
+  # xrd261) ask L71's question alone; their entries exist for that note.
+  - {id: L73-vjunos26, run: '^TestL73$', platforms: vjunos26, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+     notes: [tests/lab/results/L73-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vjunos-router.md]}
+  - {id: L73-iosxe1718, run: '^TestL73$', platforms: iosxe1718, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+     notes: [tests/lab/results/L73-cisco_iosxe.md, tests/lab/results/L71-cisco_iosxe.md]}
+  - {id: L73-nxos106, run: '^TestL73$', platforms: nxos106, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+     notes: [tests/lab/results/L73-cisco_nxos.md, tests/lab/results/L71-cisco_nxos.md]}
+  - {id: L73-ceos436, run: '^TestL73$', platforms: ceos436, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+     notes: [tests/lab/results/L73-arista_ceos.md, tests/lab/results/L71-arista_ceos.md]}
+  - {id: L73-iolxe1718, run: '^TestL73$', platforms: iolxe1718, rows: [L71], env: {PORT49_LAB_REMEASURE: L71},
+     notes: [tests/lab/results/L71-cisco_iol-xe.md]}
+  - {id: L73-xrd261, run: '^TestL73$', platforms: xrd261, rows: [L71], env: {PORT49_LAB_REMEASURE: L71},
+     notes: [tests/lab/results/L71-cisco_xrd.md]}
   - {id: L76-srlinux, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
      notes: [tests/lab/results/L76-nokia_srlinux.md]}
   - {id: L74-L75, target: lab-regions, run: '^TestRegions$', rows: [L74, L75], env: {PORT49_LAB_REMEASURE: "L74,L75"},
-     notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md]}
+     timeout_minutes: 120, notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md]}
   - id: L5
     run: '^TestL5Watchdog$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -180,6 +191,12 @@ entries:
     rows: [L35]
     env: {PORT49_LAB_REMEASURE: L35}
     notes: [tests/lab/results/L35-arista_eos.md, tests/lab/results/L35-juniper_vjunos-router.md, tests/lab/results/L35-juniper_vsrx.md, tests/lab/results/L35-cisco_nxos.md, tests/lab/results/L35-cisco_iosxe.md]
+  - id: L35-restore
+    run: '^TestStoreSnapshotRestore$'
+    platforms: eos,nxos,iosxe
+    rows: [L35]
+    env: {PORT49_LAB_REMEASURE: L35-restore}
+    notes: [tests/lab/results/L35-restore-arista_eos.md, tests/lab/results/L35-restore-cisco_nxos.md, tests/lab/results/L35-restore-cisco_iosxe.md]
   - id: L36
     run: '^TestJunosReauthorizationAfterRestart$'
     platforms: vjunos,vsrx
@@ -204,33 +221,189 @@ entries:
     rows: [L41]
     env: {PORT49_LAB_REMEASURE: L41}
     notes: [tests/lab/results/L41-arista_eos.md, tests/lab/results/L41-juniper_vjunos-router.md, tests/lab/results/L41-juniper_vsrx.md, tests/lab/results/L41-cisco_nxos.md, tests/lab/results/L41-cisco_iosxe.md]
-  - id: L49
+  - id: L49-eos
     run: '^TestL49Oxidized$'
-    platforms: eos,vjunos,vsrx,nxos,iosxe
+    platforms: eos
     rows: [L49]
     env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
-    notes: [tests/lab/results/L49-oxidized-arista_eos.md, tests/lab/results/L49-oxidized-juniper_vjunos-router.md, tests/lab/results/L49-oxidized-juniper_vsrx.md, tests/lab/results/L49-oxidized-cisco_nxos.md, tests/lab/results/L49-oxidized-cisco_iosxe.md]
+    timeout_minutes: 90
+    notes: [tests/lab/results/L49-oxidized-arista_eos.md]
+  - id: L49-vjunos
+    run: '^TestL49Oxidized$'
+    platforms: vjunos
+    rows: [L49]
+    env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L49-oxidized-juniper_vjunos-router.md]
+  - id: L49-vsrx
+    run: '^TestL49Oxidized$'
+    platforms: vsrx
+    rows: [L49]
+    env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L49-oxidized-juniper_vsrx.md]
+  - id: L49-nxos
+    run: '^TestL49Oxidized$'
+    platforms: nxos
+    rows: [L49]
+    env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L49-oxidized-cisco_nxos.md]
+  - id: L49-iosxe
+    run: '^TestL49Oxidized$'
+    platforms: iosxe
+    rows: [L49]
+    env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L49-oxidized-cisco_iosxe.md]
   - id: L53
     run: '^TestL53HostKeyScan$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
     rows: [L53]
     env: {PORT49_LAB_REMEASURE: L53, PORT49_LAB_SSH: "1"}
+    timeout_minutes: 180
     notes: [tests/lab/results/L53-arista_eos.md, tests/lab/results/L53-juniper_vjunos-router.md, tests/lab/results/L53-juniper_vsrx.md, tests/lab/results/L53-cisco_nxos.md, tests/lab/results/L53-cisco_iosxe.md]
-  - id: L64-L65
+  - id: L64-L65-eos
     run: '^TestL64L65$'
-    platforms: eos,vjunos,vsrx,nxos,iosxe
+    platforms: eos
     rows: [L64, L65]
     env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
-    notes: [tests/lab/results/L64-arista_eos.md, tests/lab/results/L64-juniper_vjunos-router.md, tests/lab/results/L64-juniper_vsrx.md, tests/lab/results/L64-cisco_nxos.md, tests/lab/results/L64-cisco_iosxe.md, tests/lab/results/L65-arista_eos.md, tests/lab/results/L65-juniper_vjunos-router.md, tests/lab/results/L65-juniper_vsrx.md, tests/lab/results/L65-cisco_nxos.md, tests/lab/results/L65-cisco_iosxe.md]
-  - id: L66
+    timeout_minutes: 180
+    notes: [tests/lab/results/L64-arista_eos.md, tests/lab/results/L65-arista_eos.md]
+  - id: L64-L65-vjunos
+    run: '^TestL64L65$'
+    platforms: vjunos
+    rows: [L64, L65]
+    env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
+    timeout_minutes: 180
+    notes: [tests/lab/results/L64-juniper_vjunos-router.md, tests/lab/results/L65-juniper_vjunos-router.md]
+  - id: L64-L65-vsrx
+    run: '^TestL64L65$'
+    platforms: vsrx
+    rows: [L64, L65]
+    env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
+    timeout_minutes: 180
+    notes: [tests/lab/results/L64-juniper_vsrx.md, tests/lab/results/L65-juniper_vsrx.md]
+  - id: L64-L65-nxos
+    run: '^TestL64L65$'
+    platforms: nxos
+    rows: [L64, L65]
+    env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
+    timeout_minutes: 180
+    notes: [tests/lab/results/L64-cisco_nxos.md, tests/lab/results/L65-cisco_nxos.md]
+  - id: L64-L65-iosxe
+    run: '^TestL64L65$'
+    platforms: iosxe
+    rows: [L64, L65]
+    env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
+    timeout_minutes: 180
+    notes: [tests/lab/results/L64-cisco_iosxe.md, tests/lab/results/L65-cisco_iosxe.md]
+  - id: L66-eos
     run: '^TestL66$'
-    platforms: eos,vjunos,vsrx,nxos,iosxe
+    platforms: eos
     rows: [L66]
     env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
-    notes: [tests/lab/results/L66-arista_eos.md, tests/lab/results/L66-juniper_vjunos-router.md, tests/lab/results/L66-juniper_vsrx.md, tests/lab/results/L66-cisco_nxos.md, tests/lab/results/L66-cisco_iosxe.md]
+    timeout_minutes: 90
+    notes: [tests/lab/results/L66-arista_eos.md]
+  - id: L66-vjunos
+    run: '^TestL66$'
+    platforms: vjunos
+    rows: [L66]
+    env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L66-juniper_vjunos-router.md]
+  - id: L66-vsrx
+    run: '^TestL66$'
+    platforms: vsrx
+    rows: [L66]
+    env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L66-juniper_vsrx.md]
+  - id: L66-nxos
+    run: '^TestL66$'
+    platforms: nxos
+    rows: [L66]
+    env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L66-cisco_nxos.md]
+  - id: L66-iosxe
+    run: '^TestL66$'
+    platforms: iosxe
+    rows: [L66]
+    env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
+    timeout_minutes: 90
+    notes: [tests/lab/results/L66-cisco_iosxe.md]
   - id: L71
     run: '^TestL71TLSClientSupport$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
     rows: [L71]
     env: {PORT49_LAB_REMEASURE: L71}
     notes: [tests/lab/results/L71-arista_eos.md, tests/lab/results/L71-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vsrx.md, tests/lab/results/L71-cisco_nxos.md, tests/lab/results/L71-cisco_iosxe.md]
+  - id: L42-L43
+    run: '^(TestL42NestedGroups|TestL43BindMechanisms)$'
+    rows: [L42, L43]
+    env: {PORT49_LAB_REMEASURE: "L42,L43"}
+    timeout_minutes: 30
+    notes: [tests/lab/results/L42-openldap.md, tests/lab/results/L42-samba_ad.md, tests/lab/results/L43-openldap.md, tests/lab/results/L43-samba_ad.md]
+  - id: L45-L46
+    run: '^(TestL45LogoutToken|TestL46FreshAuthentication)$'
+    rows: [L45, L46]
+    env: {PORT49_LAB_REMEASURE: "L45,L46"}
+    timeout_minutes: 30
+    notes: [tests/lab/results/L45-keycloak.md, tests/lab/results/L46-keycloak.md]
+  - id: L48
+    run: '^TestL48StepCA$'
+    rows: [L48]
+    env: {PORT49_LAB_REMEASURE: L48}
+    timeout_minutes: 75
+    notes: [tests/lab/results/L48-step_ca.md]
+  - id: L55
+    run: '^TestL55PublicClient$'
+    rows: [L55]
+    env: {PORT49_LAB_REMEASURE: L55}
+    timeout_minutes: 30
+    notes: [tests/lab/results/L55-keycloak.md]
+  - id: L56
+    run: '^TestL56IssuedEndToEnd$'
+    platforms: eos
+    rows: [L56]
+    env: {PORT49_LAB_REMEASURE: L56}
+    timeout_minutes: 60
+    notes: [tests/lab/results/L56-arista_eos.md]
+  - id: L61
+    run: '^TestL61KeycloakAMR$'
+    rows: [L61]
+    env: {PORT49_LAB_REMEASURE: L61}
+    timeout_minutes: 30
+    notes: [tests/lab/results/L61-keycloak.md]
+  - id: L67
+    run: '^TestL67$'
+    platforms: eos
+    rows: [L67]
+    env: {PORT49_LAB_REMEASURE: L67}
+    timeout_minutes: 45
+    notes: [tests/lab/results/L67-openldap.md, tests/lab/results/L67-samba_ad.md]
+  - id: L69
+    run: '^TestL69$'
+    rows: [L69]
+    env: {PORT49_LAB_REMEASURE: L69, PORT49_LAB_K8S: "1"}
+    timeout_minutes: 60
+    notes: [tests/lab/results/L69-kind.md]
+  - id: L72
+    run: '^TestL72ReferenceClients$'
+    rows: [L72]
+    env: {PORT49_LAB_REMEASURE: L72}
+    notes: [tests/lab/results/L72-reference.md]
+excluded:
+  - rows: [L62]
+    reason: needs the real TPM and Ryan present at the machine; no agent or unattended run touches the TPM. Run by hand with `make lab-l62-up` before a release.
+  - rows: [L44, L50]
+    reason: need the Windows Server VM under KVM, the cached evaluation ISO and 66 GiB, and run up to 240 minutes (`PORT49_LAB_L44=1`, `make lab-l50`). Left out of the default run; run by hand before a release. L67's Windows cell (`make lab-l67-windows`, 240m) is likewise by hand; the L67 entry here reruns its OpenLDAP and Samba AD cells only.
+  - rows: [L27, L30, L32, L33]
+    reason: driven by tests/lab/sot/run.sh <stack> <l32|l33|e2e|l30>, which owns each NetBox or Nautobot compose stack's lifecycle and runs go test itself; the test binary skips without the L32_STACK environment it sets. Run by hand per stack before a release, as the L27 and L33 notes record.
+  - rows: [L21, L51]
+    reason: measured by hand (the notes say "taken by hand" and "with the scripts in tests/lab/l51/"); no harness test writes them, so there is nothing to rerun.
+  - rows: [L11]
+    reason: measured in the Junos lab tests of 2026-09 and recorded in port49-junos-lab-tests-results.md, which no harness test writes.
+  - rows: [L54]
+    reason: its test went with `port49 devices trust` (459efda6); the note is a record and nothing rewrites it. L53's host-key scan remains in the L53 entry.

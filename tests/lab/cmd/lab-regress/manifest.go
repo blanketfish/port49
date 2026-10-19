@@ -20,26 +20,53 @@ type Entry struct {
 	Env             map[string]string `yaml:"env"`
 	Notes           []string          `yaml:"notes"`
 	MeasuredMinutes int               `yaml:"measured_minutes"`
+	// TimeoutMinutes is the binary's -test.timeout; zero means 120 minutes a
+	// platform, make lab's budget (timeoutFor).
+	TimeoutMinutes int `yaml:"timeout_minutes"`
+}
+
+// Exclusion records a closed row the runner does not rerun, and why. It is
+// data the loader checks and the closed-row test reads, so the gap is in the
+// repository and not only in a report.
+type Exclusion struct {
+	Rows   []string `yaml:"rows"`
+	Reason string   `yaml:"reason"`
+}
+
+type Manifest struct {
+	Entries  []Entry     `yaml:"entries"`
+	Excluded []Exclusion `yaml:"excluded"`
 }
 
 func loadManifest(path, spec string) ([]Entry, error) {
+	m, err := loadManifestFile(path, spec)
+	return m.Entries, err
+}
+
+func loadManifestFile(path, spec string) (Manifest, error) {
+	var m Manifest
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return m, err
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
-	var m struct {
-		Entries []Entry `yaml:"entries"`
-	}
 	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return m, fmt.Errorf("%s: %w", path, err)
 	}
 	specText, err := os.ReadFile(spec)
 	if err != nil {
-		return nil, err
+		return m, err
 	}
+	seen := map[string]bool{}
 	for _, e := range m.Entries {
+		if e.ID == "" || e.Run == "" {
+			return m, fmt.Errorf("%s: an entry needs an id and a run pattern (%+v)", path, e)
+		}
+		if seen[e.ID] {
+			return m, fmt.Errorf("%s: duplicate entry id %s (-only would run both)", path, e.ID)
+		}
+		seen[e.ID] = true
 		names := strings.Split(e.Env["PORT49_LAB_REMEASURE"], ",")
 		for _, row := range e.Rows {
 			if !rowClosed(string(specText), row) {
@@ -49,12 +76,29 @@ func loadManifest(path, spec string) ([]Entry, error) {
 			// so L26b and L26c name L26 as L22-carried names L22; L5 never names L53.
 			belongs := regexp.MustCompile(`^` + regexp.QuoteMeta(row) + `(\D|$)`)
 			if !slices.ContainsFunc(names, belongs.MatchString) {
-				return nil, fmt.Errorf("%s: row %s is closed, so env.PORT49_LAB_REMEASURE must name it "+
+				return m, fmt.Errorf("%s: row %s is closed, so env.PORT49_LAB_REMEASURE must name it "+
 					"(tests/lab guardClosed refuses the run otherwise)", e.ID, row)
 			}
 		}
 	}
-	return m.Entries, nil
+	for _, x := range m.Excluded {
+		if len(x.Rows) == 0 || strings.TrimSpace(x.Reason) == "" {
+			return m, fmt.Errorf("%s: an exclusion names its rows and gives a reason (%+v)", path, x)
+		}
+	}
+	return m, nil
+}
+
+// closedRows lists the rows of spec §15 whose Status begins "closed".
+func closedRows(spec string) []string {
+	var out []string
+	re := regexp.MustCompile(`^\| \*\*(L\d+)\*\* \|`)
+	for _, ln := range strings.Split(spec, "\n") {
+		if m := re.FindStringSubmatch(ln); m != nil && rowClosed(spec, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
 }
 
 // rowClosed is tests/lab's registerRowClosed (harness_test.go:3371), which a

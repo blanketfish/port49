@@ -22,6 +22,12 @@ func TestLabInheritedLockIsAdoptedAndExcludesAThird(t *testing.T) {
 			fmt.Println("CHILD: a fresh open took the lock the parent holds")
 			os.Exit(4)
 		}
+		// A process this binary starts must not inherit the lock: a daemon that
+		// outlives a timeout would hold the lab under a dead runner's name.
+		if out, err := exec.Command("sh", "-c", "test ! -e /proc/self/fd/3 && echo clean").CombinedOutput(); err != nil {
+			fmt.Printf("CHILD: the lock descriptor leaked into a grandchild: %v %s\n", err, out)
+			os.Exit(5)
+		}
 		fmt.Println("CHILD: adopted")
 		os.Exit(0)
 	}

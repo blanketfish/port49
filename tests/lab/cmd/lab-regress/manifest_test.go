@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 const specPath = "../../../../docs/design/2026-08-23-policy-engine-spec.md"
@@ -118,5 +119,125 @@ func TestLoadManifestMatchesGuardNamesToRowsByTheirLeadingID(t *testing.T) {
 	}
 	if err := load("L5", "L53"); err == nil {
 		t.Fatal("L53 must not satisfy closed row L5")
+	}
+}
+
+func writeManifest(t *testing.T, y string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "m.yaml")
+	if err := os.WriteFile(p, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestLoadManifestRefusesADuplicateIDAndAnEmptyRun(t *testing.T) {
+	p := writeManifest(t, "entries:\n  - {id: a, run: '^TestA$'}\n  - {id: a, run: '^TestB$'}\n")
+	if _, err := loadManifest(p, specPath); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("a duplicate id makes -only run both entries: %v", err)
+	}
+	p = writeManifest(t, "entries:\n  - {id: a}\n")
+	if _, err := loadManifest(p, specPath); err == nil || !strings.Contains(err.Error(), "run") {
+		t.Fatalf("an entry with no run pattern must be refused: %v", err)
+	}
+}
+
+func TestLoadManifestRefusesAnExclusionWithoutAReason(t *testing.T) {
+	p := writeManifest(t, "entries: []\nexcluded:\n  - {rows: [L62]}\n")
+	if _, err := loadManifest(p, specPath); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("an exclusion records why: %v", err)
+	}
+}
+
+// The runner reruns closed entries (spec decision 52 ruling 7): every closed
+// row of §15 is in an entry's rows or excluded with a reason, so a row that
+// drops out of the regression is a recorded decision and never an oversight.
+func TestEveryClosedRowIsRunOrExcluded(t *testing.T) {
+	m, err := loadManifestFile("../../regress.yaml", specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := map[string]string{}
+	for _, e := range m.Entries {
+		for _, r := range e.Rows {
+			covered[r] = "entry " + e.ID
+		}
+	}
+	for _, x := range m.Excluded {
+		for _, r := range x.Rows {
+			if covered[r] == "" {
+				covered[r] = "excluded"
+			}
+		}
+	}
+	for _, row := range closedRows(string(spec)) {
+		if covered[row] == "" {
+			t.Errorf("%s is closed in spec §15 and is neither in an entry's rows nor in excluded", row)
+		}
+	}
+}
+
+func TestEntryTimeouts(t *testing.T) {
+	if got := timeoutFor(Entry{TimeoutMinutes: 180}); got != 180*time.Minute {
+		t.Fatalf("an entry's own timeout_minutes wins: %v", got)
+	}
+	if got := timeoutFor(Entry{Platforms: "eos,vsrx"}); got != 240*time.Minute {
+		t.Fatalf("the default is 120 minutes a platform, as make lab budgets: %v", got)
+	}
+	if got := timeoutFor(Entry{}); got != 120*time.Minute {
+		t.Fatalf("an entry with no platforms is one 120 minute run: %v", got)
+	}
+	bin, run := deadlines(Entry{TimeoutMinutes: 60})
+	if run-bin < 5*time.Minute {
+		t.Fatalf("the binary's own timeout must fire well before the runner's kill, so its cleanup runs: %v %v", bin, run)
+	}
+}
+
+func TestATopLevelSkipIsFoundAndASubtestSkipIsNot(t *testing.T) {
+	out := "=== RUN   TestA\n=== RUN   TestA/eos\n    --- SKIP: TestA/eos (0.00s)\n--- PASS: TestA (1.00s)\n" +
+		"--- SKIP: TestB (0.00s)\n    l74_test.go:457: PORT49_LAB_ETCD_BIN names no directory\n"
+	s := &skipScanner{}
+	// Written in pieces that split a line, as a pipe delivers it.
+	for i := 0; i < len(out); i += 7 {
+		end := min(i+7, len(out))
+		s.Write([]byte(out[i:end]))
+	}
+	s.Close()
+	if got := s.Skipped(); len(got) != 1 || got[0] != "TestB" {
+		t.Fatalf("want only the top-level skip TestB, got %v", got)
+	}
+}
+
+func TestASkippedEntryIsReportedAndFailsTheRunUnlessOptedOut(t *testing.T) {
+	var ran []string
+	r := &runner{stopPath: filepath.Join(t.TempDir(), "none"), exec: func(e Entry) error {
+		ran = append(ran, e.ID)
+		if e.ID == "a" {
+			return &skippedError{Tests: []string{"TestA"}}
+		}
+		return nil
+	}}
+	rep := r.runAll([]Entry{{ID: "a"}, {ID: "b"}})
+	if len(rep.Skipped) != 1 || rep.Skipped[0] != "a" || len(rep.Done) != 1 || rep.Done[0] != "b" {
+		t.Fatalf("a skipped entry is not done, and the rest still run: %+v ran %v", rep, ran)
+	}
+	if !rep.failed(false) {
+		t.Fatal("a skipped entry must fail the run")
+	}
+	if rep.failed(true) {
+		t.Fatal("-allow-skip opts out")
+	}
+}
+
+func TestAnEntryWithoutPlatformsOrRemeasureInheritsNoneOfTheOperators(t *testing.T) {
+	t.Setenv("PORT49_LAB_PLATFORMS", "vsrx")
+	t.Setenv("PORT49_LAB_REMEASURE", "L99")
+	joined := strings.Join(childEnv(Entry{ID: "regions"}, 3), "\n")
+	if strings.Contains(joined, "PORT49_LAB_PLATFORMS") || strings.Contains(joined, "L99") {
+		t.Fatalf("the operator's selection reached an entry that names none:\n%s", joined)
 	}
 }

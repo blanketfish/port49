@@ -34,5 +34,10 @@ func labInheritedLock(path string) (release func(), ok bool, err error) {
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return nil, true, fmt.Errorf("PORT49_LAB_LOCK_FD %d is not held: %v", fd, err)
 	}
+	// exec passes on every descriptor without FD_CLOEXEC, and ExtraFiles gives
+	// this one none: without it each containerlab, docker, tcpdump or port49d
+	// this run starts would keep the lab locked after the run, and after the
+	// runner that named it, are gone.
+	syscall.CloseOnExec(fd)
 	return func() {}, true, nil // the parent releases it
 }
