@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 func TestEmitWritesOneLinePerRecord(t *testing.T) {
@@ -280,5 +282,47 @@ func TestATCPRecordIsUnchangedAndATLSOneSaysSo(t *testing.T) {
 	}
 	if strings.Contains(b.String(), "key_ref") {
 		t.Errorf("a TLS record named a key: %s", b.String())
+	}
+}
+
+func TestPacketFieldsNameTheHeaderAndNothingElse(t *testing.T) {
+	f := AuthenFields(wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, PrivLvl: 1, User: []byte("u"), Port: []byte("tty1"),
+		RemAddr: []byte("192.0.2.1"), Data: []byte("SECRET-DATA")})
+	b, _ := json.Marshal(Record{Event: EventRedeem, PacketFields: f})
+	got := string(b)
+	for _, want := range []string{`"action":"login"`, `"authen_type":"pap"`, `"service":"login"`, `"priv_lvl":1`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%s lacks %s", got, want)
+		}
+	}
+	for _, never := range []string{"SECRET-DATA", "tty1", "192.0.2.1", `"u"`} {
+		if strings.Contains(got, never) {
+			t.Fatalf("packet_fields carried %q: %s", never, got)
+		}
+	}
+	if AuthorFields(wire.AuthorRequest{AuthenMethod: 0x7e}).AuthenMethod != "unknown_126" {
+		t.Fatal("an unknown method is named unknown_<n>")
+	}
+	if AcctFields(wire.AcctRequest{}).AuthenType != "not_set" {
+		t.Fatal("authen_type 0 is not_set on authorization and accounting")
+	}
+}
+
+func TestPacketFieldsEveryEnumHasAName(t *testing.T) {
+	for _, m := range []map[uint8]string{actions, types, services, methods} {
+		for v, n := range m {
+			if n == "" || strings.HasPrefix(n, "unknown_") || strings.ToLower(n) != n {
+				t.Fatalf("value %d has name %q", v, n)
+			}
+		}
+	}
+	if len(actions) != 3 || len(types) != 6 || len(services) != 9 || len(methods) != 11 {
+		t.Fatalf("enum sizes %d %d %d %d", len(actions), len(types), len(services), len(methods))
+	}
+	// A record without packet_fields (unvalidated) omits the key.
+	b, _ := json.Marshal(Record{Event: EventUnvalidated, Unvalidated: &Unvalidated{Source: "x"}})
+	if strings.Contains(string(b), "packet_fields") {
+		t.Fatalf("unvalidated record carries packet_fields: %s", b)
 	}
 }

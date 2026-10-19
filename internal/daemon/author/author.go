@@ -242,9 +242,10 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	port := string(req.Port)
 	vector := Vector(cmd, cmdArgs)
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
-		Device:  peer.Device(),
-		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
-		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
+		Device:       peer.Device(),
+		PacketFields: decision.AuthorFields(req),
+		Session:      &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
+		Request:      &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
 	session := isSession(cmd, raw)
 	if session {
 		rec.Event = decision.EventAuthorizeSession

@@ -15,26 +15,27 @@ import (
 )
 
 type Record struct {
-	TS          time.Time    `json:"ts"`
-	Event       string       `json:"event"`
-	Verdict     string       `json:"verdict,omitempty"`
-	Reason      Reason       `json:"reason,omitempty"`
-	Principal   string       `json:"principal,omitempty"`
-	Auth        *Auth        `json:"auth,omitempty"`
-	Device      *Device      `json:"device,omitempty"`
-	Session     *Session     `json:"session,omitempty"`
-	Request     *Request     `json:"request,omitempty"`
-	Reply       *Reply       `json:"reply,omitempty"`
-	Flags       string       `json:"flags,omitempty"`
-	Attribution string       `json:"attribution,omitempty"`
-	TaskID      string       `json:"task_id,omitempty"`
-	AcctRecord  *AcctRecord  `json:"record,omitempty"`
-	Mint        *Mint        `json:"mint,omitempty"`
-	Policy      *Policy      `json:"policy,omitempty"`
-	Blob        *Blob        `json:"blob,omitempty"`
-	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
-	ServerMsg   string       `json:"server_msg,omitempty"`
-	Gap         *Gap         `json:"gap,omitempty"`
+	TS           time.Time     `json:"ts"`
+	Event        string        `json:"event"`
+	Verdict      string        `json:"verdict,omitempty"`
+	Reason       Reason        `json:"reason,omitempty"`
+	Principal    string        `json:"principal,omitempty"`
+	Auth         *Auth         `json:"auth,omitempty"`
+	Device       *Device       `json:"device,omitempty"`
+	Session      *Session      `json:"session,omitempty"`
+	Request      *Request      `json:"request,omitempty"`
+	PacketFields *PacketFields `json:"packet_fields,omitempty"`
+	Reply        *Reply        `json:"reply,omitempty"`
+	Flags        string        `json:"flags,omitempty"`
+	Attribution  string        `json:"attribution,omitempty"`
+	TaskID       string        `json:"task_id,omitempty"`
+	AcctRecord   *AcctRecord   `json:"record,omitempty"`
+	Mint         *Mint         `json:"mint,omitempty"`
+	Policy       *Policy       `json:"policy,omitempty"`
+	Blob         *Blob         `json:"blob,omitempty"`
+	Unvalidated  *Unvalidated  `json:"unvalidated,omitempty"`
+	ServerMsg    string        `json:"server_msg,omitempty"`
+	Gap          *Gap          `json:"gap,omitempty"`
 	// Change is the inventory_change record's body (spec §5.7, §10).
 	Change *Change `json:"change,omitempty"`
 	// Forget is the directory_forget record's body (spec §5.7).

@@ -72,8 +72,13 @@ func TestSessionAuthorizationReturnsAttributes(t *testing.T) {
 	if resp.Status != wire.AuthorStatusPassAdd || len(resp.Args) != 1 || string(resp.Args[0]) != "priv-lvl=15" {
 		t.Fatalf("%+v", resp)
 	}
-	if r := lastRecord(t, log); r["event"] != "authorize_session" || r["reason"] != "context_matched" {
+	r := lastRecord(t, log)
+	if r["event"] != "authorize_session" || r["reason"] != "context_matched" {
 		t.Fatalf("%v", r)
+	}
+	if pf, _ := r["packet_fields"].(map[string]any); len(pf) != 4 || pf["authen_type"] != "ascii" || pf["service"] != "login" ||
+		pf["authen_method"] != "tacacsplus" || pf["priv_lvl"] != float64(15) || pf["action"] != nil {
+		t.Fatalf("authorize_session record's packet_fields: %v", r["packet_fields"])
 	}
 }
 
@@ -86,6 +91,9 @@ func TestCommandPermitAndDenyWithServerMsg(t *testing.T) {
 	vec := r["request"].(map[string]any)["vector"].([]any)
 	if r["event"] != "authorize_command" || len(vec) != 2 || vec[1] != "version" {
 		t.Fatalf("%v", r)
+	}
+	if pf, _ := r["packet_fields"].(map[string]any); pf["authen_method"] != "tacacsplus" || pf["authen_type"] != "ascii" {
+		t.Fatalf("authorize_command record's packet_fields: %v", r["packet_fields"])
 	}
 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=reload", "cmd-arg=<cr>"))
 	if resp.Status != wire.AuthorStatusFail || !strings.HasPrefix(string(resp.ServerMsg), "port49: denied") {

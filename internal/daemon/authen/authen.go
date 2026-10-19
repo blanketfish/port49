@@ -224,7 +224,8 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 // credHash is ignored.
 func (s *Session) newRecord(method string, credHash [32]byte) decision.Record {
 	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
-		Device: s.peer.Device(),
+		Device:       s.peer.Device(),
+		PacketFields: decision.AuthenFields(s.start),
 		Session: &decision.Session{Port: string(s.start.Port), RemAddr: string(s.start.RemAddr),
 			Privilege: s.start.PrivLvl, Username: Canonical(s.user)}}
 	if method != "" {
