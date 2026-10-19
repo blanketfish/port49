@@ -264,6 +264,50 @@ func (b *l75Broker) hang(w *regionWorld, on bool) bool {
 	}
 }
 
+// l75Poll calls read every `every` until done accepts what it returned, or d
+// passes, and returns the last read, how long it took, and whether done
+// accepted it.
+func l75Poll(read func() string, done func(string) bool, d, every time.Duration) (string, time.Duration, bool) {
+	start := time.Now()
+	for {
+		got := read()
+		if done(got) {
+			return got, time.Since(start), true
+		}
+		if time.Since(start) >= d {
+			return got, time.Since(start), false
+		}
+		time.Sleep(every)
+	}
+}
+
+// scrape is the broker's metrics page, "" when it does not answer.
+func (b *l75Broker) scrape() string {
+	resp, err := http.Get("http://" + b.metrics + "/metrics")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return string(raw)
+}
+
+// l75EnrollmentStoreSeen waits up to d for every broker in bs to read
+// port49_directory_enrollment_store_ok 1: a broker that started before
+// init-enrollments caches the store as lost and looks again every 30s
+// (decision 47, D7), so (a) waits for the others rather than measuring that.
+func l75EnrollmentStoreSeen(bs []*l75Broker, d time.Duration) error {
+	for _, b := range bs {
+		_, _, ok := l75Poll(b.scrape, func(m string) bool {
+			return metricOf(m, "port49_directory_enrollment_store_ok") == 1
+		}, d, time.Second)
+		if !ok {
+			return fmt.Errorf("%s did not read port49_directory_enrollment_store_ok 1 within %v", b.proc.name, d)
+		}
+	}
+	return nil
+}
+
 // start writes the config, starts the broker and waits until its mints are open.
 func (b *l75Broker) start(w *regionWorld) {
 	t := w.t
@@ -475,6 +519,11 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	if out, code, _ := w.port49("directory", "init-enrollments", "--socket", bs[1].sock()); code != 0 {
 		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, w.leakless(oneLineMax(out, 300)))
+	}
+	// Brokers 2 and 3 started before init-enrollments: they take the new store
+	// up within 30s, and (a) must not run before they have.
+	if err := l75EnrollmentStoreSeen(bs[2:], 45*time.Second); err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
 	apiOf := func(b *l75Broker) *l67API {
 		a, err := newL67API("https://"+b.addr(), filepath.Join(w.pki.lab, testpki.LabCA))

@@ -4,11 +4,14 @@ package lab
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -608,5 +611,47 @@ func TestL75AddrsComeFromTheStartNotTheMarkedLog(t *testing.T) {
 	b.proc.mark()
 	if b.proc.said() != "" || b.addr() != "127.0.0.1:42000" {
 		t.Fatalf("after a mark: said %q, addr %q", b.proc.said(), b.addr())
+	}
+}
+
+func l75MetricsServer(t *testing.T, value func() string) *l75Broker {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, "port49_directory_enrollment_store_ok %s\n", value())
+	}))
+	t.Cleanup(srv.Close)
+	return &l75Broker{proc: &regionProc{name: "port49-broker l75 bX"}, metrics: strings.TrimPrefix(srv.URL, "http://")}
+}
+
+// (a) runs only after the brokers that started before init-enrollments read
+// the store as ok; a broker that never does is INVALID, not a "no" for (a).
+func TestL75EnrollmentStoreSeenWaitsAndGivesUp(t *testing.T) {
+	var n atomic.Int32
+	late := l75MetricsServer(t, func() string {
+		if n.Add(1) < 3 {
+			return "0"
+		}
+		return "1"
+	})
+	if err := l75EnrollmentStoreSeen([]*l75Broker{late}, 10*time.Second); err != nil {
+		t.Fatalf("a broker that reads 1 on its third scrape: %v", err)
+	}
+	if n.Load() < 3 {
+		t.Fatalf("it did not wait for the metric: %d scrape(s)", n.Load())
+	}
+	never := l75MetricsServer(t, func() string { return "0" })
+	if err := l75EnrollmentStoreSeen([]*l75Broker{never}, 1500*time.Millisecond); err == nil ||
+		!strings.Contains(err.Error(), "did not read port49_directory_enrollment_store_ok 1") {
+		t.Fatalf("a broker that never reads 1: %v, want the INVALID error", err)
+	}
+}
+
+// l75Poll reports the last read and whether it was accepted.
+func TestL75PollReturnsTheLastReadAtTheLimit(t *testing.T) {
+	reads := 0
+	got, _, ok := l75Poll(func() string { reads++; return fmt.Sprint("read ", reads) },
+		func(s string) bool { return s == "never" }, 300*time.Millisecond, 100*time.Millisecond)
+	if ok || got != fmt.Sprint("read ", reads) || reads < 2 {
+		t.Fatalf("got %q ok %v after %d reads", got, ok, reads)
 	}
 }
