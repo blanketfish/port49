@@ -235,24 +235,44 @@ func (s *Store) GetMFAProof(ctx context.Context, key string) (store.MFAProof, er
 }
 
 // Logouts is every live logout record at one revision, which it returns
-// (store.LogoutFeed; plan 11a, R26). A record that does not decode is said
-// by its key and skipped.
+// (store.LogoutFeed; plan 11a, R26), read a page at a time as the marks are
+// (pre-flight I14): a logout record lives a day on a broker that issues, so
+// the set can be large. A record that does not decode is said by its key and
+// skipped.
 func (s *Store) Logouts(ctx context.Context) (uint64, []store.LogoutEntry, error) {
 	prefix := s.k.family(famLogout)
-	resp, err := s.tok.Get(clientv3.WithRequireLeader(ctx), prefix, clientv3.WithPrefix())
-	if err != nil {
-		return 0, nil, unavailable(err)
-	}
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from, rev := prefix, int64(0)
 	now := s.now()
 	var out []store.LogoutEntry
-	for _, kv := range resp.Kvs {
-		e, ok := s.logoutEntry(prefix, kv.Key, kv.Value)
-		if ok && now.Before(e.Until) {
-			e.Rev = uint64(kv.ModRevision)
-			out = append(out, e)
+	for {
+		opts := []clientv3.OpOption{clientv3.WithRange(end), clientv3.WithLimit(500)}
+		if rev > 0 {
+			opts = append(opts, clientv3.WithRev(rev))
 		}
+		resp, err := s.tok.Get(clientv3.WithRequireLeader(ctx), from, opts...)
+		if errors.Is(err, rpctypes.ErrCompacted) {
+			return 0, nil, store.ErrCompacted
+		}
+		if err != nil {
+			return 0, nil, unavailable(err)
+		}
+		if rev == 0 {
+			rev = resp.Header.Revision
+		}
+		for _, kv := range resp.Kvs {
+			e, ok := s.logoutEntry(prefix, kv.Key, kv.Value)
+			if ok && now.Before(e.Until) {
+				e.Rev = uint64(kv.ModRevision)
+				out = append(out, e)
+			}
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			break
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
-	return uint64(resp.Header.Revision), out, nil
+	return uint64(rev), out, nil
 }
 
 // WatchLogouts calls fn for every put and delete of a logout record after

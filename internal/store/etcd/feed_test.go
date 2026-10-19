@@ -631,3 +631,25 @@ func TestDeleteLogoutClearsTheRecord(t *testing.T) {
 		t.Fatalf("deleting none: %v", err)
 	}
 }
+
+// The logouts load reads a page at a time at one revision (final review,
+// M3): more records than a page all come back, at the first page's revision.
+func TestTheLogoutsLoadReadsPages(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	for i := range 501 {
+		if err := s.PutLogout(ctx, store.Logout{Key: fmt.Sprintf("sid 1:i %d:s%d", len(fmt.Sprint(i))+1, i), At: t0},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rev, es, err := s.Logouts(ctx)
+	if err != nil || len(es) != 501 {
+		t.Fatalf("%d records: %v", len(es), err)
+	}
+	for _, e := range es {
+		if e.Rev == 0 || e.Rev > rev {
+			t.Fatalf("a record at revision %d, past the load's %d", e.Rev, rev)
+		}
+	}
+}
