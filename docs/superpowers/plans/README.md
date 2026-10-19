@@ -7323,6 +7323,12 @@ reference config waits on the measurement.
   a dropped link to one member stalls the marks watch (events resume on another member) and an
   unhedged call for that long. Say it where the failure matrix and the alarms are written; reads and
   the opted-in mark writes are hedged, other writes are not.
+- **The broker start's paged loads retry only `ErrUnavailable`.** Logouts and marks read 500 at a
+  time at one revision (`brokerd.go`, the two loads beside the ledger's), so a compaction between
+  pages returns `ErrCompacted` and the start exits instead of reading again. Pass
+  `store.ErrCompacted` to both retries, as the ledger load does (11a final review, N1). The same
+  pass can say a failed logout reach's long remedy once per run of failures rather than every
+  retry, and drop the entry when the logout lapses.
 
 **Carried from plan 11** (decision 50):
 - The reference device AAA configuration for `transport: tls`, per platform, written from L73
