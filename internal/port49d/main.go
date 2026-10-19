@@ -652,6 +652,7 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 		return nil
 	}
 	m.CountQuarantined(func() int { return quarantinedAt(live.Load(), now()) })
+	m.CountGenericPlatform(func() int { return len(live.Load().GenericDevices()) })
 	return live.Quarantined
 }
 
