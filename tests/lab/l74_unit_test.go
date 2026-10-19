@@ -700,24 +700,36 @@ func TestL74CompactedPastTheLift(t *testing.T) {
 	}
 }
 
-func TestL74FeedCompactedWaitsForTheLine(t *testing.T) {
-	log := filepath.Join(t.TempDir(), "b3.log")
-	p := &regionProc{name: "port49-broker r3", log: log}
-	if err := os.WriteFile(log, []byte("port49-broker: the marks feed stopped\n"), 0o600); err != nil {
-		t.Fatal(err)
+func TestL74LabeledMetricReadsTheMarksFeed(t *testing.T) {
+	text := "port49_store_feed_rescans_total{feed=\"contexts\"} 4\nport49_store_feed_rescans_total{feed=\"marks\"} 2\n"
+	if got := labeledMetric(text, "port49_store_feed_rescans_total", `feed="marks"`); got != 2 {
+		t.Fatalf("marks rescans = %v, want 2", got)
 	}
-	err := feedCompacted(p, 300*time.Millisecond, 13)
-	if err == nil || !strings.Contains(err.Error(), "a port49 finding if the compaction") {
-		t.Fatalf("a log without the line: %v, want the INVALID error", err)
+	if got := labeledMetric(text, "port49_store_feed_rescans_total", `feed="pins"`); got != -1 {
+		t.Fatalf("an absent series = %v, want -1", got)
 	}
-	f, ferr := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
-	if ferr != nil {
-		t.Fatal(ferr)
+}
+
+// Cell (i) needs the marks feed to rescan after the heal: the counter rising
+// is the evidence, since the feed does not say a compaction while it is failing.
+func TestL74FeedRescannedWaitsForTheCounterToRise(t *testing.T) {
+	n := 0
+	rising := func() string {
+		n++
+		v := 2
+		if n >= 3 {
+			v = 3
+		}
+		return fmt.Sprintf("port49_store_feed_rescans_total{feed=\"marks\"} %d\n", v)
 	}
-	defer f.Close()
-	f.WriteString("port49-broker: the marks feed's revision was compacted; loading the marks again\n")
-	if err := feedCompacted(p, 300*time.Millisecond, 13); err != nil {
-		t.Fatalf("a log with the line: %v", err)
+	after, err := feedRescanned(rising, 2, 10*time.Second, 10*time.Millisecond)
+	if err != nil || after != 3 {
+		t.Fatalf("a counter that rises on the third scrape: %v, %v", after, err)
+	}
+	flat := func() string { return "port49_store_feed_rescans_total{feed=\"marks\"} 2\n" }
+	if _, err := feedRescanned(flat, 2, 200*time.Millisecond, 20*time.Millisecond); err == nil ||
+		!strings.Contains(err.Error(), "a port49 finding") {
+		t.Fatalf("a counter that never rises: %v, want the INVALID error", err)
 	}
 }
 
@@ -757,6 +769,7 @@ func TestL75TookOverNeedsBothLines(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "b2.log")
 	p := &regionProc{name: "port49-broker l75 b2", log: log}
 	appendLog(t, log, "port49-broker: runner: took keyspace /port49/ (\"x\")\n")
+	appendLog(t, log, "port49-broker: runner: not recording bundle sha256:ab as judged: the store did not answer\n")
 	if err := l75TookOver(p, 400*time.Millisecond); err == nil || !strings.Contains(err.Error(), "a port49 finding if the keyspace was free") {
 		t.Fatalf("the keyspace held but no judged line: %v, want the INVALID error", err)
 	}
@@ -770,9 +783,10 @@ func TestL75TookOverNeedsBothLines(t *testing.T) {
 	}
 }
 
-// (g) accepts either line a runner says of a logout it reached, and names
-// the path without copying the takeover's line, which holds token key names.
-func TestL75RunnerLineAcceptsEitherPath(t *testing.T) {
+// (g) accepts the follow path's line only, once the takeover has finished:
+// the takeover's "standing logout(s) reached here" means the logout was not
+// followed.
+func TestL75RunnerLineAcceptsOnlyTheFollowPath(t *testing.T) {
 	dir := t.TempDir()
 	follow := &regionProc{name: "b2", log: filepath.Join(dir, "f.log")}
 	appendLog(t, follow.log, "port49-broker: runner: a logout made elsewhere reached 1 session(s)\n")
@@ -780,13 +794,8 @@ func TestL75RunnerLineAcceptsEitherPath(t *testing.T) {
 		t.Fatalf("follow path: %q %v", via, err)
 	}
 	take := &regionProc{name: "b2", log: filepath.Join(dir, "t.log")}
-	appendLog(t, take.log, "port49-broker: runner: 1 standing logout(s) reached here: 2 token key(s) SECRETLOOKING\n")
-	_, via, err := l75RunnerLine(take, 300*time.Millisecond)
-	if err != nil || !strings.HasPrefix(via, "takeover") || strings.Contains(via, "SECRETLOOKING") {
-		t.Fatalf("takeover path: %q %v", via, err)
-	}
-	none := &regionProc{name: "b2", log: filepath.Join(dir, "n.log")}
-	if _, _, err := l75RunnerLine(none, 300*time.Millisecond); err == nil {
-		t.Fatal("no runner line was accepted")
+	appendLog(t, take.log, "port49-broker: runner: 1 standing logout(s) reached here: 2 token key(s)\n")
+	if _, _, err := l75RunnerLine(take, 300*time.Millisecond); err == nil {
+		t.Fatal("the takeover's line was accepted as the follow path")
 	}
 }

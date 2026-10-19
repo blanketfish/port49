@@ -852,15 +852,39 @@ func compactedPastTheLift(revoked, compacted int64) error {
 	return nil
 }
 
-// feedCompacted waits up to d for p to say its marks feed's revision was
-// compacted: without that line no rescan ran, so cell (i) measured a lift
-// that arrived as an event.
-func feedCompacted(p *regionProc, d time.Duration, compactedAt int64) error {
-	if _, err := p.wait("the marks feed's revision was compacted", d); err != nil {
-		return fmt.Errorf("region 3's marks feed did not report its revision compacted, a port49 finding if the compaction "+
-			"(at revision %d, above the lift) landed: %w", compactedAt, err)
+// labeledMetric is the value of the series name{...sub...} in text, or -1.
+func labeledMetric(text, name, sub string) float64 {
+	for _, l := range strings.Split(text, "\n") {
+		rest, ok := strings.CutPrefix(l, name+"{")
+		if !ok {
+			continue
+		}
+		labels, val, ok := strings.Cut(rest, "} ")
+		if !ok || !strings.Contains(labels, sub) {
+			continue
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
+			return f
+		}
 	}
-	return nil
+	return -1
+}
+
+// feedRescanned polls read (the broker's metrics page) every `every` until
+// its marks feed's rescan counter is above before, or d passes. The feed
+// says nothing of a compaction while it is failing, so the counter is the
+// evidence that the put-back path ran at all.
+func feedRescanned(read func() string, before float64, d, every time.Duration) (float64, error) {
+	var after float64
+	_, _, ok := l75Poll(read, func(m string) bool {
+		after = labeledMetric(m, "port49_store_feed_rescans_total", `feed="marks"`)
+		return after > before
+	}, d, every)
+	if !ok {
+		return after, fmt.Errorf("region 3's marks feed did not rescan after the heal (port49_store_feed_rescans_total "+
+			"{feed=\"marks\"} %v, was %v), a port49 finding if the compaction landed above the lift", after, before)
+	}
+	return after, nil
 }
 
 // feedStopped waits up to d for p to say its marks feed stopped (since the
@@ -937,12 +961,18 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if _, cerr := d.ctl(near, "compact", strconv.FormatInt(rev, 10), "--physical"); cerr != nil {
 		w.t.Fatalf("INVALID: the compaction at revision %d: %v", rev, cerr)
 	}
+	// Broker 3's metrics answer from the host during the cut.
+	rescansBefore := labeledMetric(w.metrics(3), "port49_store_feed_rescans_total", `feed="marks"`)
+	if rescansBefore < 0 {
+		w.t.Fatal("INVALID: broker 3's marks rescan counter could not be read before the heal")
+	}
 	w.guard()
 	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
-	if err := feedCompacted(w.brokers[3], 30*time.Second, rev); err != nil {
-		w.t.Fatalf("INVALID: %v", err)
+	rescans, rerr := feedRescanned(func() string { return w.metrics(3) }, rescansBefore, 30*time.Second, time.Second)
+	if rerr != nil {
+		w.t.Fatalf("INVALID: %v", rerr)
 	}
 	took, perr := w.brokers[3].wait("are put back", 60*time.Second)
 	keys, kerr := d.ctl(w.dirEndpoints(), "get", "/port49/v1/rv/", "--prefix", "--keys-only")
@@ -951,8 +981,8 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	}
 	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
 	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
-		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); put-back line after %v: %s; alice's marks in the directory after: %d",
-			revokedAt, rev, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
+		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); broker 3's marks rescans %v before the heal, %v after; put-back line after %v: %s; alice's marks in the directory after: %d",
+			revokedAt, rev, rescansBefore, rescans, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
 		perr == nil && n == 1)
 	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
