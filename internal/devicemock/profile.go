@@ -337,6 +337,9 @@ func (p *Profile) Validate(repoRoot string) error {
 			cite(fmt.Sprintf("reactions[%d]", i), s, r.Status == "measured")
 		}
 	}
+	if err := p.refusalDisagreement(); err != nil {
+		errs = append(errs, err)
+	}
 	for _, a := range p.Acceptance {
 		if !ruleKinds[a.Kind] {
 			errs = append(errs, fmt.Errorf("acceptance %s: kind %q", a.ID, a.Kind))

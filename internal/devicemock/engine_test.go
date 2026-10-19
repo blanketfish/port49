@@ -323,8 +323,8 @@ func TestEveryRequestCarriesTheStepsShape(t *testing.T) {
 	if acct.AcctFlags != wire.AcctFlagStart {
 		t.Errorf("acct flags %#x, want start", acct.AcctFlags)
 	}
-	if len(author.Args) != 1 || string(author.Args[0]) != "service=junos-exec" {
-		t.Errorf("author args %q", author.Args)
+	if len(author.Args) != 1 || !bytes.Equal(author.Args[0], []byte("service=junos-exec")) {
+		t.Errorf("author args: %d, want the one service attribute", len(author.Args))
 	}
 	want := map[string]bool{"service=shell": false}
 	for _, a := range acct.Args {
@@ -332,11 +332,11 @@ func TestEveryRequestCarriesTheStepsShape(t *testing.T) {
 		switch {
 		case strings.HasPrefix(s, "task_id="):
 			if _, err := strconv.Atoi(strings.TrimPrefix(s, "task_id=")); err != nil {
-				t.Errorf("task_id is not expanded: %s", s)
+				t.Errorf("task_id is not expanded (%d bytes)", len(s))
 			}
 		case strings.HasPrefix(s, "start_time="):
 			if _, err := strconv.Atoi(strings.TrimPrefix(s, "start_time=")); err != nil {
-				t.Errorf("start_time is not expanded: %s", s)
+				t.Errorf("start_time is not expanded (%d bytes)", len(s))
 			}
 		default:
 			if _, ok := want[s]; ok {
@@ -348,7 +348,7 @@ func TestEveryRequestCarriesTheStepsShape(t *testing.T) {
 		}
 	}
 	if len(acct.Args) != 3 || !want["service=shell"] {
-		t.Errorf("acct args %q", acct.Args)
+		t.Errorf("acct args: %d (service=shell present: %v), want 3", len(acct.Args), want["service=shell"])
 	}
 }
 
@@ -457,5 +457,56 @@ func TestARefusalOnAnotherScenarioConsultsTheTableToo(t *testing.T) {
 	tr, err := Play(t.Context(), p, "tls_token_login", tgt, Login{User: "q", Credential: freshCredential(t)})
 	if err != nil || tr.Outcome != "login_refused" {
 		t.Fatalf("%v\n%s", err, tr)
+	}
+}
+
+// resetter accepts and resets at once (SO_LINGER 0), before any alert: the
+// other half of the race the alert-versus-reset ordering decides.
+func resetter(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.(*net.TCPConn).SetLinger(0)
+			c.Close()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// A profile that reacts on one alert gets that reaction when the reset wins.
+func TestARefusalReactionHoldsWhateverArrivesFirst(t *testing.T) {
+	p, tgt := refusalProfile(t)
+	p.Reactions = append(p.Reactions, Reaction{Step: "login", On: "alert_bad_certificate", Then: "give_up",
+		Outcome: "login_refused", Status: "unmeasured"})
+	tgt.Addr = resetter(t)
+	for _, sc := range []string{"tls_unknown_ca", "tls_token_login"} {
+		tr, err := Play(t.Context(), p, sc, tgt, Login{User: "q", Credential: freshCredential(t)})
+		if err != nil || tr.Outcome != "login_refused" {
+			t.Fatalf("%s: %v\n%s", sc, err, tr)
+		}
+	}
+}
+
+func TestValidateRefusesRefusalReactionsThatDisagree(t *testing.T) {
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	p.Reactions = append(p.Reactions,
+		Reaction{Step: "login", On: "alert_unknown_ca", Then: "give_up", Outcome: "login_refused", Status: "unmeasured"},
+		Reaction{Step: "login", On: "conn_reset", Then: "failover_local", Outcome: "falls_to_local", Status: "unmeasured"})
+	err := p.Validate(root)
+	if err == nil || !strings.Contains(err.Error(), "step login: refusal reactions disagree") {
+		t.Fatalf("%v", err)
+	}
+	p.Reactions[len(p.Reactions)-1].Then, p.Reactions[len(p.Reactions)-1].Outcome = "give_up", "login_refused"
+	if err := p.Validate(root); err != nil {
+		t.Fatalf("agreeing reactions are fine: %v", err)
 	}
 }

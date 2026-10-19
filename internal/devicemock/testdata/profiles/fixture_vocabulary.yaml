@@ -35,13 +35,13 @@ reactions:
   - {step: "*", on: author_error, then: next_step, status: unmeasured}
   - {step: "*", on: acct_success, then: send_credential, status: unmeasured}
   - {step: "*", on: acct_error, then: stop, status: unmeasured}
-  - {step: "*", on: conn_reset, then: retry, status: unmeasured}
-  - {step: "*", on: conn_closed, then: failover_local, status: unmeasured}
+  - {step: "*", on: conn_reset, then: give_up, status: unmeasured}
+  - {step: "*", on: conn_closed, then: give_up, status: unmeasured}
   - {step: "*", on: reply_single_connect, then: failover_next_server, status: unmeasured}
   - {step: "*", on: alert_unknown_ca, then: give_up, status: unmeasured}
-  - {step: "*", on: alert_bad_certificate, then: reuse_connection, status: unmeasured}
-  - {step: "*", on: alert_certificate_expired, then: new_connection, status: unmeasured}
-  - {step: "*", on: alert_handshake_failure, then: next_step, status: unmeasured}
+  - {step: "*", on: alert_bad_certificate, then: give_up, status: unmeasured}
+  - {step: "*", on: alert_certificate_expired, then: give_up, status: unmeasured}
+  - {step: "*", on: alert_handshake_failure, then: give_up, status: unmeasured}
   - {step: "*", on: handshake_timeout, then: send_credential, status: unmeasured}
 acceptance: []
 engine_gaps: []

@@ -158,7 +158,7 @@ func (pl *player) refusal(step string, err error) (string, bool) {
 	if !errors.Is(err, errConn) || !isRefusal(ev) {
 		return "", false
 	}
-	if r, rerr := pl.p.React(step, ev); rerr == nil && r.Outcome != "" {
+	if r, ok := pl.p.RefusalReaction(step, ev); ok && r.Outcome != "" {
 		return r.Outcome, true
 	}
 	return "handshake_refused", true
