@@ -7,10 +7,14 @@ import (
 	"time"
 )
 
-// LogoutEntry is a back-channel logout's record and when it lapses.
+// LogoutEntry is a back-channel logout's record and when it lapses. Rev is
+// the record's revision where a store lists its records (etcd's Logouts):
+// a pending record's delete is on it (DeleteLogout). It is never part of a
+// snapshot.
 type LogoutEntry struct {
 	Logout
 	Until time.Time
+	Rev   uint64 `json:"-"`
 }
 
 // LogoutSet is a process's copy of the directory store's logout records

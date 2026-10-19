@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
@@ -67,7 +70,7 @@ func (p *pendingFake) Logouts(ctx context.Context) (uint64, []store.LogoutEntry,
 	return 1, out, nil
 }
 
-func (p *pendingFake) DeleteLogout(_ context.Context, key string) error {
+func (p *pendingFake) DeleteLogout(_ context.Context, key string, _ uint64) error {
 	p.keys = slices.DeleteFunc(p.keys, func(k string) bool { return k == key })
 	return nil
 }
@@ -160,5 +163,54 @@ func TestAReloadFromAStaleSnapshotStillRefuses(t *testing.T) {
 	reach = false    // a new cut, before the watch delivers the logout
 	if _, err := a.GetLogout(ctx, l.Key); err != nil {
 		t.Fatalf("the region that took the logout accepts the session: %v", err)
+	}
+}
+
+// relogoutDir is a directory whose first PutLogout runs then first: a second
+// logout of the same key landing pending in the session store mid-pass.
+type relogoutDir struct {
+	*memory.Store
+	once sync.Once
+	then func()
+}
+
+func (d *relogoutDir) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	d.once.Do(d.then)
+	return d.Store.PutLogout(ctx, l, ttl)
+}
+
+// A logout of the same key that lands pending while a forwarding pass runs,
+// after the pass read the pending records, is not erased by the pass's
+// delete: the delete is on the revision the pass read, so the newer record
+// stays pending and the next pass forwards it (final review, M2).
+func TestAReLogoutDuringAForwardStaysPending(t *testing.T) {
+	ctx := context.Background()
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	sess, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, Prefix: "/forward/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	first := store.Logout{Key: store.SidKey("https://idp", "s1"), At: time.Now().Add(-time.Minute),
+		Origin: "backchannel_logout https://idp"}
+	if err := sess.PutLogout(ctx, first, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	again := first
+	again.At = time.Now()
+	dir := &relogoutDir{Store: memory.New(clock)}
+	dir.then = func() {
+		if err := sess.PutLogout(ctx, again, time.Hour); err != nil {
+			t.Error(err)
+		}
+	}
+	a := Wrap(Config{Session: memory.New(clock), Directory: dir.Store, Marks: store.NewMarks(),
+		Logouts: store.NewLogoutSet(clock), LogoutDir: dir, CallTimeout: time.Second, BulkTimeout: time.Second})
+	if n, _, err := ForwardPending(ctx, a, sess); err != nil || n != 1 {
+		t.Fatalf("the pass: forwarded %d, %v", n, err)
+	}
+	got, err := sess.GetLogout(ctx, first.Key)
+	if err != nil || !got.At.Equal(again.At) {
+		t.Fatalf("the second logout, landed mid-pass, is no longer pending: %+v %v", got, err)
 	}
 }

@@ -677,7 +677,7 @@ func (p *placed) GetLogout(ctx context.Context, key string) (store.Logout, error
 // in a split (the session's *etcd.Store).
 type PendingLogouts interface {
 	Logouts(ctx context.Context) (uint64, []store.LogoutEntry, error)
-	DeleteLogout(ctx context.Context, key string) error
+	DeleteLogout(ctx context.Context, key string, rev uint64) error
 }
 
 // ForwardPending writes each pending logout to the directory, with the
@@ -697,7 +697,7 @@ func ForwardPending(ctx context.Context, s store.Store, pending PendingLogouts) 
 	for i, e := range es {
 		ttl := time.Until(e.Until)
 		if ttl <= 0 {
-			_ = pending.DeleteLogout(ctx, e.Key) // lapsed: nothing left to refuse
+			_ = pending.DeleteLogout(ctx, e.Key, e.Rev) // lapsed: nothing left to refuse
 			continue
 		}
 		if !p.reachable() {
@@ -709,7 +709,9 @@ func ForwardPending(ctx context.Context, s store.Store, pending PendingLogouts) 
 			return forwarded, len(es) - i, err
 		}
 		p.c.Logouts.Put(e)
-		if err := pending.DeleteLogout(ctx, e.Key); err != nil {
+		// On the revision read: a second logout of the key, pending since,
+		// stays for the next pass (final review, M2).
+		if err := pending.DeleteLogout(ctx, e.Key, e.Rev); err != nil {
 			return forwarded, len(es) - i, err
 		}
 		forwarded++

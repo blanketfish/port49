@@ -594,20 +594,40 @@ func TestLogoutsLoadAndWatch(t *testing.T) {
 	}
 }
 
-// DeleteLogout clears a pending record; deleting none is not an error.
+// DeleteLogout clears a pending record on the revision it was listed at;
+// a record written since stays, and deleting none is not an error.
 func TestDeleteLogoutClearsTheRecord(t *testing.T) {
 	s := onShared(t, func() time.Time { return t0 })
 	ctx := context.Background()
-	if err := s.PutLogout(ctx, store.Logout{Key: "sid 1:i 2:s1", At: t0}, time.Hour); err != nil {
+	const key = "sid 1:i 2:s1"
+	listed := func() store.LogoutEntry {
+		t.Helper()
+		_, es, err := s.Logouts(ctx)
+		if err != nil || len(es) != 1 || es[0].Rev == 0 {
+			t.Fatalf("listed %+v %v", es, err)
+		}
+		return es[0]
+	}
+	if err := s.PutLogout(ctx, store.Logout{Key: key, At: t0}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteLogout(ctx, "sid 1:i 2:s1"); err != nil {
+	stale := listed()
+	if err := s.PutLogout(ctx, store.Logout{Key: key, At: t0.Add(time.Minute)}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetLogout(ctx, "sid 1:i 2:s1"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.DeleteLogout(ctx, key, stale.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetLogout(ctx, key); err != nil || !got.At.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("a delete on the revision read before a second logout erased it: %+v %v", got, err)
+	}
+	if err := s.DeleteLogout(ctx, key, listed().Rev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetLogout(ctx, key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the deleted logout is read: %v", err)
 	}
-	if err := s.DeleteLogout(ctx, "sid 1:i 2:s1"); err != nil {
+	if err := s.DeleteLogout(ctx, key, stale.Rev); err != nil {
 		t.Fatalf("deleting none: %v", err)
 	}
 }

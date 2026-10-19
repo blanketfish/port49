@@ -248,6 +248,7 @@ func (s *Store) Logouts(ctx context.Context) (uint64, []store.LogoutEntry, error
 	for _, kv := range resp.Kvs {
 		e, ok := s.logoutEntry(prefix, kv.Key, kv.Value)
 		if ok && now.Before(e.Until) {
+			e.Rev = uint64(kv.ModRevision)
 			out = append(out, e)
 		}
 	}
@@ -293,11 +294,15 @@ func (s *Store) WatchLogouts(ctx context.Context, after uint64, fn func(store.Lo
 	return fmt.Errorf("%w: the logouts watch ended", store.ErrUnavailable)
 }
 
-// DeleteLogout removes the logout record under key: a pending logout the
-// runner forwarded to the directory (placement.ForwardPending). None is not
-// an error.
-func (s *Store) DeleteLogout(ctx context.Context, key string) error {
-	_, err := s.tok.Delete(ctx, s.k.logout(key))
+// DeleteLogout removes the logout record under key if it is still the one
+// read at rev (LogoutEntry.Rev): a pending logout the runner forwarded to
+// the directory (placement.ForwardPending). A record written since, a second
+// logout of the same key, stays pending for the next pass, as DeleteRevocation
+// leaves a mark made since its read. None, or one changed, is not an error.
+func (s *Store) DeleteLogout(ctx context.Context, key string, rev uint64) error {
+	k := s.k.logout(key)
+	_, err := s.tok.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(k), "=", int64(rev))).
+		Then(clientv3.OpDelete(k)).Commit()
 	return unavailable(err)
 }
 

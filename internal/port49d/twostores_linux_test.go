@@ -416,7 +416,7 @@ type pendingFake struct{ es []store.LogoutEntry }
 func (p pendingFake) Logouts(context.Context) (uint64, []store.LogoutEntry, error) {
 	return 1, p.es, nil
 }
-func (p pendingFake) DeleteLogout(context.Context, string) error { return nil }
+func (p pendingFake) DeleteLogout(context.Context, string, uint64) error { return nil }
 
 // cutDirectory takes no logout.
 type cutDirectory struct{}
