@@ -68,6 +68,13 @@ func l75BrokerYAML(o l75Opts) string {
         ca_file: %s
 `, o.issuer, o.issuerCA)
 	}
+	// A broker with an issuer takes a person's ID token only at
+	// /v1/certificate, never as a mint bearer (decision 43, ruling 13); (g)
+	// mints with the ID token, as decision 39 has it for a broker with none.
+	issuance := "    issuance: {}\n"
+	if o.provider {
+		issuance = ""
+	}
 	stores := regionStoresYAML(o.pki, "broker", o.session)
 	if o.directory != nil {
 		var members []string
@@ -97,8 +104,7 @@ broker:
   identity:
     humans:
       - {type: x509, trust_anchor_file: %[6]s}
-%[7]s    issuance: {}
-  directory:
+%[7]s%[16]s  directory:
     servers:
       - {uri: "ldaps://%[8]s", priority: 100, site: lab}
     site: lab
@@ -121,7 +127,7 @@ broker:
     grace: 4h
 `, o.dir, o.i, filepath.Join(o.pki.lab, testpki.LabServerCert), filepath.Join(o.pki.lab, testpki.LabServerKey), state,
 		o.usersCA, human, l67HostPort(o.x.uri), o.x.d.pki.caFile, o.x.bindDN, o.x.baseDN, o.x.groupsBaseDN,
-		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr) + stores
+		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr, issuance) + stores
 }
 
 func l75Policy() string {

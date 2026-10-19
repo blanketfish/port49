@@ -407,6 +407,11 @@ func TestL75BrokerConfigLoads(t *testing.T) {
 		if got := cfg.Broker.Identity.PasswordSignIn != nil; got == provider {
 			t.Fatalf("provider %v: password sign-in %v", provider, got)
 		}
+		// Provider mode has no issuer, so a person's ID token is a mint bearer
+		// (decision 39), as row (g) states; the password mode needs one.
+		if got := cfg.Broker.Identity.Issuance != nil; got == provider {
+			t.Fatalf("provider %v: issuance %v", provider, got)
+		}
 	}
 }
 
