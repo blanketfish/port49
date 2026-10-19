@@ -321,10 +321,14 @@ SR Linux reference config:
   word after `authentication` in `show system aaa authentication` (c).
 - After a port49 restart the device asked again within 1 s, and health checks open connections that carry
   no payload and write no records (g).
+
 **11b written 2026-10-19** (`2026-10-19-11b-qualification-suite.md`, twenty-three tasks: one spec, thirteen
-code, five lab, two CI, two docs; decision 52 written by its Task 1; one question for
-Ryan, Q1, when the SR Linux job runs). It builds mock devices from closed lab evidence, `make lab-regress`
-and `make qual-vet` (Plan 11b, below).
+code, five lab, two CI, two docs; decision 52 written by its Task 1). Its pre-flight review (5 Critical, 14
+Important, 14 Minor) is applied as revision 1 the same day. The team lead ruled Q1 (the SR Linux job runs on
+dispatch and release tags) and Q2 (an L78 result showing no lockout on vJunos leaves the Junos rule
+unmeasured and L78 open for hardware Junos; decision 48 ruling 4 is provisional on L78). It builds mock
+devices from closed lab evidence, `make lab-regress` and `make qual-vet` (Plan 11b, below).
+
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7249,7 +7253,8 @@ then two re-reviews) was applied before Task 1.
 ## Plan 11b — Qualification suite (design §14; Ryan, 2026-10-17 and 2026-10-19)
 
 Status: **written 2026-10-19** (`2026-10-19-11b-qualification-suite.md`, branch
-`feature/qualification-suite`; twenty-three tasks; decision 52; opens L78). Numbered 11b, not 12: it
+`feature/qualification-suite`; twenty-three tasks; decision 52; opens L78 and L79; revision 1 applies the
+pre-flight review). Numbered 11b, not 12: it
 needs 11a's stores in the conformance runs, and plan 12 consumes its fleet mode for the load test, so it
 lands between them (the 05b and 06b1 precedent; nothing is renumbered).
 
@@ -7261,13 +7266,15 @@ parts. Credit: cisshgo (MIT) for "behaviour is data" and fleet mode.
    - the connection pattern;
    - each step's packet fields and attribute list;
    - the accounting records.
-2. **Reaction table.** GETPASS → CONTINUE; FAIL → stop; ERROR → the measured fallback (IOS XE 17.18.02
+2. **Reaction table.** GETPASS → `send_credential`; FAIL → stop; ERROR → the measured fallback (IOS XE 17.18.02
    over TLS: break-glass fails); an alert → give up.
-3. **Acceptance rules.** Byte limits, privilege range, role names, refused attributes. Each cites its
-   results note, or is `unmeasured` and never gates.
+3. **Acceptance rules.** Byte limits, privilege range, role names, refused attributes. A measured rule
+   cites a note whose Image version line names that firmware; otherwise it is `unmeasured` and never gates.
 
-One engine, `internal/devicemock`, plays any profile against a real in-process port49d under one
-qualification policy (`tests/qual/qual-policy.yaml`), with credentials minted fresh per test:
+One engine, `internal/devicemock`, plays any profile against a real in-process port49d. It runs under the
+same policy (`tests/qual/qual-policy.yaml`), daemon fragment (`tests/qual/qual-daemon.yaml`) and broker
+mint path as the lab conformance run, so a golden from the lab is the mock's expectation. Credentials are
+minted fresh per test:
 - **TLS:** a byte-exact hello probe, then a `crypto/tls` session. Delays run at 0.1 scale against
   `handshake_timeout: 1s`, and one test runs the real 5.00 s against the 10 s default.
 - **Gates:** port49's replies are pinned in goldens; a measured acceptance-rule violation fails.
@@ -7284,14 +7291,14 @@ The tooling around it:
 - **Fleet mode** (`make qual-fleet`): N mocks from N loopback addresses against one port49d.
 - **`docs/qualified-platforms.md`**, generated from the profiles and notes, with a drift test.
 - **Tiers:** mocks on every PR on any runner (`qual.yml`, `runs-on` one line); SR Linux, the one
-  redistributable image, in `lab-free.yml`; vendor images on beehive only, before pre-beta and release
+  redistributable image, in `lab-free.yml` on dispatch and release tags; vendor images on beehive only, before pre-beta and release
   tags and on any image change, not nightly.
 
 **Spec sections.**
 - §5.7: a `packet_fields` object on validated request records, the header fields as enum names (decision
   52 ruling 3).
-- §13: decision 52.
-- §15: the register's citation rule for every device claim in a profile; L78 opened.
+- §13: decision 52; decision 48 ruling 4 made provisional on L78.
+- §15: L78 and L79 opened.
 - Design §14.
 
 **Earlier plans hand it.**
@@ -7310,15 +7317,16 @@ The tooling around it:
 
 **Lab entries.**
 - Opens and measures **L78**: a Junos *permit* reply over 255 bytes in total, Ryan's lock-out prior,
-  unmeasured until now.
-- Re-measures closed rows L1, L4, L6, L10, L13, L15, L19, L21, L28 and L73 per firmware, closing nothing
-  by itself (decision 52 ruling 10).
+  unmeasured until now. It stays open for hardware Junos whatever vJunos shows.
+- Opens and closes **L79**: a directory write delivered after the heal (11a's M4).
+- Re-measures rows L1, L4, L6, L10, L13, L15, L19, L21, L28 and L73, open or closed, per firmware, closing
+  none (decision 52 ruling 10).
 - Adds a full **L73** note on **XRd 26.1.1** through a new XR dialect, help first.
 
 **Carry-ins.**
 - XRd 26.1.1's full L73 row (Task 16).
-- 11a's **M4**: a lift or revoke delivered after the heal, and its reverse stray revoke, as L74 cells (j)
-  and (k) (Task 17).
+- 11a's **M4**: a lift or revoke delivered after the heal, and its reverse stray revoke, as row L79,
+  cells (j) and (k) on L74's harness (Task 17).
 - L76's **R3-M1**: `l76WriteText`'s mixed-pair wording, no rerun (Task 18).
 
 ## Plan 12 — Deployment (§19 step 12)
