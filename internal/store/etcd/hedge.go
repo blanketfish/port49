@@ -7,6 +7,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -57,28 +59,34 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 	actx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type answer struct {
-		err error
-		msg any
+		err     error
+		msg     any
+		deliver func()
 	}
 	answers := make(chan answer, 3)
 	send := func() {
 		msg := reflect.New(rv.Elem().Type()).Interface()
-		go func() { answers <- answer{invoker(actx, method, req, msg, cc, opts...), msg} }()
+		own, deliver := ownCallOptions(opts)
+		go func() { answers <- answer{invoker(actx, method, req, msg, cc, own...), msg, deliver} }()
 	}
+	var result error
+	defer func() { finished(opts, result) }()
 	send()
 	inflight, hedges := 1, 0
 	timer := time.NewTimer(total / 4)
 	defer timer.Stop()
 	var last error
+	var lastDeliver func()
 	for {
 		select {
 		case a := <-answers:
 			inflight--
 			if a.err == nil {
 				rv.Elem().Set(reflect.ValueOf(a.msg).Elem())
+				a.deliver()
 				return nil
 			}
-			last = a.err
+			last, lastDeliver = a.err, a.deliver
 			if inflight == 0 {
 				// A write's connection that failed outright (Unavailable, as
 				// when keepalive closes the dark one) is no answer either: try
@@ -91,6 +99,8 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 					send()
 					continue
 				}
+				lastDeliver()
+				result = last
 				return last
 			}
 		case <-timer.C:
@@ -102,9 +112,58 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 			}
 		case <-ctx.Done():
 			if last != nil {
+				lastDeliver()
+				result = last
 				return last
 			}
-			return status.FromContextError(ctx.Err()).Err()
+			result = status.FromContextError(ctx.Err()).Err()
+			return result
+		}
+	}
+}
+
+// ownCallOptions is opts for one copy of a hedged call. The options that
+// write into the caller's memory when a call finishes (Peer, Header,
+// Trailer) get targets of the copy's own, since a losing copy may still
+// finish after hedgeReads has returned, while the caller reads them
+// (clientv3's retry interceptor reads its Peer on every failed attempt).
+// deliver copies the copy's into the caller's; hedgeReads calls it only for
+// the answer it returns, on its own goroutine, after that copy finished.
+// OnFinish is left out: hedgeReads calls it once (finished).
+func ownCallOptions(opts []grpc.CallOption) (own []grpc.CallOption, deliver func()) {
+	own = make([]grpc.CallOption, 0, len(opts))
+	var copies []func()
+	for _, o := range opts {
+		switch o := o.(type) {
+		case grpc.PeerCallOption:
+			p := new(peer.Peer)
+			own = append(own, grpc.Peer(p))
+			copies = append(copies, func() { *o.PeerAddr = *p })
+		case grpc.HeaderCallOption:
+			md := new(metadata.MD)
+			own = append(own, grpc.Header(md))
+			copies = append(copies, func() { *o.HeaderAddr = *md })
+		case grpc.TrailerCallOption:
+			md := new(metadata.MD)
+			own = append(own, grpc.Trailer(md))
+			copies = append(copies, func() { *o.TrailerAddr = *md })
+		case grpc.OnFinishCallOption:
+		default:
+			own = append(own, o)
+		}
+	}
+	return own, func() {
+		for _, c := range copies {
+			c()
+		}
+	}
+}
+
+// finished tells each OnFinish in opts the hedged call's one result.
+func finished(opts []grpc.CallOption, err error) {
+	for _, o := range opts {
+		if f, ok := o.(grpc.OnFinishCallOption); ok {
+			f.OnFinish(err)
 		}
 	}
 }
