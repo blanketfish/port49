@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -151,7 +152,15 @@ var (
 		"command_denied", "accounted", "rejected_by_device", "handshake_ok", "handshake_refused")
 	ruleKinds = set("max_attribute_bytes", "max_reply_bytes", "priv_lvl_range", "attribute_refused", "role_names")
 
-	shortSHA  = regexp.MustCompile(`^[0-9a-f]{7,12}$`)
+	transports       = set("tcp", "tls")
+	connModes        = set("per_step", "single_connection")
+	acctFlags        = set("start", "stop", "watchdog")
+	appliesTo        = set("authorize_session", "command_permitted", "any")
+	effects          = set("lockout", "session_refused", "attribute_ignored")
+	clientChains     = set("leaf", "leaf_and_intermediate")
+	serverIdentities = set("chain_only", "ip", "dns")
+
+	shortSHA  = regexp.MustCompile(`^[0-9a-f]{12}$`)
 	imageLine = regexp.MustCompile(`(?m)^- \*\*Image version:\*\* (.*)$`)
 	slugBad   = regexp.MustCompile(`[^A-Za-z0-9.]+`)
 )
@@ -227,7 +236,31 @@ func (p *Profile) Validate(repoRoot string) error {
 	}
 	var errs []error
 	if p.Vetted.Commit != "" && !shortSHA.MatchString(p.Vetted.Commit) {
-		errs = append(errs, errors.New("vetted.commit must be a 7 to 12 character lowercase hex short SHA"))
+		errs = append(errs, errors.New("vetted.commit must be exactly 12 lowercase hex characters (a short SHA)"))
+	}
+	if p.Firmware == "" {
+		errs = append(errs, errors.New("firmware is empty; a note's Image version line must name one"))
+	}
+	enum := func(where, v string, allowed map[string]bool, optional bool) {
+		if (v == "" && optional) || allowed[v] {
+			return
+		}
+		errs = append(errs, fmt.Errorf("%s: %q is not in the closed vocabulary", where, v))
+	}
+	for _, t := range p.Transports {
+		enum("transports", t, transports, false)
+	}
+	enum("stimulus.connections.mode", p.Stimulus.Connections.Mode, connModes, false)
+	if t := p.Stimulus.TLS; t != nil {
+		enum("stimulus.tls.client_chain", t.ClientChain, clientChains, true)
+		enum("stimulus.tls.server_identity", t.ServerIdentity, serverIdentities, true)
+	}
+	for _, n := range p.Vetted.Notes {
+		if err := notePath(n); err != nil {
+			errs = append(errs, fmt.Errorf("vetted.notes: %w", err))
+		} else if _, err := os.Stat(filepath.Join(repoRoot, n)); err != nil {
+			errs = append(errs, fmt.Errorf("vetted.notes: %s: %v", n, err))
+		}
 	}
 	// cite checks one source. measured: the note's Image version line must
 	// name this firmware (decision 52 ruling 4); unmeasured: the note need
@@ -235,6 +268,10 @@ func (p *Profile) Validate(repoRoot string) error {
 	cite := func(where string, s Source, measured bool) {
 		if s.Note == "" || s.Register == "" {
 			errs = append(errs, fmt.Errorf("%s: a source needs note and register", where))
+			return
+		}
+		if err := notePath(s.Note); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			return
 		}
 		body, err := os.ReadFile(filepath.Join(repoRoot, s.Note))
@@ -248,7 +285,7 @@ func (p *Profile) Validate(repoRoot string) error {
 		// A note may hold several sections (addenda), each with its own line.
 		named := false
 		for _, m := range imageLine.FindAllStringSubmatch(string(body), -1) {
-			named = named || strings.Contains(m[1], p.Firmware)
+			named = named || namesFirmware(m[1], p.Firmware)
 		}
 		if !named {
 			errs = append(errs, fmt.Errorf("%s: %s's Image version line does not name firmware %q; "+
@@ -270,6 +307,7 @@ func (p *Profile) Validate(repoRoot string) error {
 		if !stepTypes[s.Type] || !stepNames[s.Name] {
 			errs = append(errs, fmt.Errorf("steps[%d]: type %q name %q", i, s.Type, s.Name))
 		}
+		enum(fmt.Sprintf("steps[%d].flags", i), s.Flags, acctFlags, true)
 		for field, v := range map[string]string{"action": s.Fields.Action, "authen_type": s.Fields.AuthenType,
 			"service": s.Fields.Service, "authen_method": s.Fields.AuthenMethod} {
 			if v == "" {
@@ -291,6 +329,9 @@ func (p *Profile) Validate(repoRoot string) error {
 		if !reactOn[r.On] || !reactThen[r.Then] || !outcomes[r.Outcome] {
 			errs = append(errs, fmt.Errorf("reactions[%d]: on %q then %q outcome %q", i, r.On, r.Then, r.Outcome))
 		}
+		if r.Step != "*" {
+			enum(fmt.Sprintf("reactions[%d].step", i), r.Step, stepNames, false)
+		}
 		errs = append(errs, statusErr(fmt.Sprintf("reactions[%d]", i), r.Status, r.Sources)...)
 		for _, s := range r.Sources {
 			cite(fmt.Sprintf("reactions[%d]", i), s, r.Status == "measured")
@@ -300,12 +341,39 @@ func (p *Profile) Validate(repoRoot string) error {
 		if !ruleKinds[a.Kind] {
 			errs = append(errs, fmt.Errorf("acceptance %s: kind %q", a.ID, a.Kind))
 		}
+		enum("acceptance "+a.ID+".applies", a.Applies, appliesTo, true)
+		enum("acceptance "+a.ID+".effect", a.Effect, effects, true)
 		errs = append(errs, statusErr("acceptance "+a.ID, a.Status, a.Sources)...)
 		for _, s := range a.Sources {
 			cite("acceptance "+a.ID, s, a.Status == "measured")
 		}
 	}
+	for _, g := range p.EngineGaps {
+		for _, s := range g.Sources {
+			cite("engine_gaps "+g.ID, s, false)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// notePath accepts only a Markdown note under tests/lab/results/, so a
+// profile cannot make the loader read any other file.
+func notePath(n string) error {
+	c := path.Clean(n)
+	if strings.Contains(n, "..") || c != n || !strings.HasPrefix(c, "tests/lab/results/") || !strings.HasSuffix(c, ".md") {
+		return fmt.Errorf("note %q must be a clean .md path under tests/lab/results/", n)
+	}
+	return nil
+}
+
+// namesFirmware reports whether an Image version line names firmware fw as a
+// whole token: 23.4R2 is not named by a line that says 23.4R2-S2.1.
+func namesFirmware(line, fw string) bool {
+	if fw == "" {
+		return false
+	}
+	re := regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(fw) + `($|\.($|[^A-Za-z0-9])|[^A-Za-z0-9_.-])`)
+	return re.MatchString(line)
 }
 
 func statusErr(where, status string, src []Source) []error {

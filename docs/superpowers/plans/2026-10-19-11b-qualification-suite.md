@@ -1449,7 +1449,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 
 **Files:**
 - Create: `internal/devicemock/profile.go`, `internal/devicemock/forbidden.go`, `internal/devicemock/profile_test.go`
-- Create, in `internal/devicemock/testdata/`: `notes/L99-fixture_junos.md`, `notes/L99-fixture_junos-2.md`, `profiles/fixture_junos.yaml`, `profiles/fixture_plain.yaml`, `profiles/fixture_vocabulary.yaml`
+- Create, in `internal/devicemock/testdata/`: `tests/lab/results/L99-fixture_junos.md`, `tests/lab/results/L99-fixture_junos-2.md`, `profiles/fixture_junos.yaml`, `profiles/fixture_plain.yaml`, `profiles/fixture_vocabulary.yaml`
 
 **Interfaces:**
 - Produces (every later task uses these names):
@@ -1568,7 +1568,7 @@ var Codes map[string]map[string]uint8 // the wire values the engine can send, by
 
 - [ ] **Step 1: Write the fixtures.** Paths in a fixture are relative to `internal/devicemock/testdata`, which the tests pass as `repoRoot`.
 
-`testdata/notes/L99-fixture_junos.md`:
+`testdata/tests/lab/results/L99-fixture_junos.md`:
 
 ```markdown
 # L99 — fixture_junos
@@ -1578,7 +1578,7 @@ var Codes map[string]map[string]uint8 // the wire values the engine can send, by
 - **Image version:** fixture 1.0
 ```
 
-`testdata/notes/L99-fixture_junos-2.md` is the same, with `- **Image version:** fixture 2.0`.
+`testdata/tests/lab/results/L99-fixture_junos-2.md` is the same, with `- **Image version:** fixture 2.0`.
 
 `testdata/profiles/fixture_plain.yaml`:
 
@@ -1588,12 +1588,12 @@ platform: juniper_junos
 lab_platform: fixture_junos
 firmware: "1.0"
 image: fixture 1.0
-vetted: {date: 2026-10-19, commit: "0000000", evidence: "", notes: [notes/L99-fixture_junos.md]}
+vetted: {date: 2026-10-19, commit: "000000000000", evidence: "", notes: [tests/lab/results/L99-fixture_junos.md]}
 transports: [tcp]
 scenarios: [token_login, wrong_credential, store_unavailable]
 stimulus:
   connections: {mode: per_step, single_connect_flag: false}
-  sources: [{note: notes/L99-fixture_junos.md, register: L99}]
+  sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]
   steps:
     - {name: login, type: authen, minor_version: 1, fields: {action: login, authen_type: pap, service: login, priv_lvl: 1}, port: "0"}
     - {name: authorize_session, type: author, minor_version: 0,
@@ -1602,12 +1602,12 @@ stimulus:
        fields: {authen_type: pap, service: login, authen_method: tacacsplus, priv_lvl: 1}, port: "0",
        args: ["task_id={task_id}", "start_time={start_time}", "service=shell"]}
 reactions:
-  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
 acceptance: []
 engine_gaps: []
 golden: ""
@@ -1623,7 +1623,7 @@ acceptance:
     max: 255
     effect: lockout
     status: measured
-    sources: [{note: notes/L99-fixture_junos.md, register: L99}]
+    sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]
     note: a fixture of L78's claim, marked measured here so the gate itself can be tested
 ```
 
@@ -1676,17 +1676,17 @@ func TestLoadRefuses(t *testing.T) {
 	})
 	t.Run("a missing note", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "notes/L99-fixture_junos.md, register: L99}]\n    note:", "notes/L98-gone.md, register: L98}]\n    note:", 1)
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L98-gone.md, register: L98}]\n    note:", 1)
 		}, "L98-gone.md")
 	})
 	t.Run("a measured rule with no source", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "    sources: [{note: notes/L99-fixture_junos.md, register: L99}]\n    note:", "    note:", 1)
+			return strings.Replace(s, "    sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "    note:", 1)
 		}, "junos_reply_total")
 	})
 	t.Run("a measured claim citing another firmware's note", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "notes/L99-fixture_junos.md, register: L99}]\n    note:", "notes/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
 		}, "Image version")
 	})
 	t.Run("an unknown reaction", func(t *testing.T) {
@@ -1710,7 +1710,7 @@ func TestLoadRefuses(t *testing.T) {
 
 func TestAnUnmeasuredRuleMayCiteAnotherFirmwaresNote(t *testing.T) {
 	raw, _ := os.ReadFile("testdata/profiles/fixture_junos.yaml")
-	s := strings.Replace(string(raw), "    status: measured\n    sources: [{note: notes/L99-fixture_junos.md", "    status: unmeasured\n    sources: [{note: notes/L99-fixture_junos-2.md", 1)
+	s := strings.Replace(string(raw), "    status: measured\n    sources: [{note: tests/lab/results/L99-fixture_junos.md", "    status: unmeasured\n    sources: [{note: tests/lab/results/L99-fixture_junos-2.md", 1)
 	path := filepath.Join(t.TempDir(), "p.yaml")
 	os.WriteFile(path, []byte(s), 0o600)
 	if _, err := Load(path, root); err != nil {

@@ -16,6 +16,7 @@ var (
 		{regexp.MustCompile(`[0-9a-fA-F]{40,}`), "long hex"},
 		{regexp.MustCompile(`-----BEGIN [A-Z0-9 ]+-----`), "a PEM BEGIN block"},
 		{regexp.MustCompile(`[A-Za-z0-9+/]{44,}={0,2}`), "long base64"},
+		{regexp.MustCompile(`[0-9A-Za-z]{30,}`), "a port49 token shape"},
 		{regexp.MustCompile(`(?i)\b(credential|token)_sha256=`), "a credential hash"},
 	}
 	// Keys the schema itself defines that match forbiddenKey's shape but
@@ -36,6 +37,11 @@ func credentialShaped(n *yaml.Node, path string) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k := n.Content[i].Value
+			// A secret used as a key must be refused here, before the decoder
+			// can echo it in an unknown-field error.
+			if what := valueShape(k); what != "" {
+				return fmt.Errorf("%s: a key shaped like credential material (%s)", path, what)
+			}
 			if forbiddenKey.MatchString(k) && !allowedKey[k] {
 				return fmt.Errorf("%s.%s: a key named like credential material", path, k)
 			}
@@ -44,11 +50,19 @@ func credentialShaped(n *yaml.Node, path string) error {
 			}
 		}
 	case yaml.ScalarNode:
-		for _, f := range forbiddenValue {
-			if f.re.MatchString(n.Value) {
-				return fmt.Errorf("%s: a value shaped like credential material (%s)", path, f.what)
-			}
+		if what := valueShape(n.Value); what != "" {
+			return fmt.Errorf("%s: a value shaped like credential material (%s)", path, what)
 		}
 	}
 	return nil
+}
+
+// valueShape names the first forbiddenValue pattern s matches, or "".
+func valueShape(s string) string {
+	for _, f := range forbiddenValue {
+		if f.re.MatchString(s) {
+			return f.what
+		}
+	}
+	return ""
 }

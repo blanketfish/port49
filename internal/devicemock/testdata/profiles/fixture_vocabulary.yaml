@@ -3,12 +3,12 @@ platform: juniper_junos
 lab_platform: fixture_junos
 firmware: "1.0"
 image: fixture 1.0
-vetted: {date: 2026-10-19, commit: "0000000", evidence: "", notes: [notes/L99-fixture_junos.md]}
+vetted: {date: 2026-10-19, commit: "000000000000", evidence: "", notes: [tests/lab/results/L99-fixture_junos.md]}
 transports: [tcp]
 scenarios: [token_login, wrong_credential, store_unavailable]
 stimulus:
   connections: {mode: per_step, single_connect_flag: false}
-  sources: [{note: notes/L99-fixture_junos.md, register: L99}]
+  sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]
   steps:
     - {name: login, type: authen, minor_version: 1, fields: {action: login, authen_type: pap, service: login, priv_lvl: 1}, port: "0"}
     - {name: authorize_session, type: author, minor_version: 0,
@@ -17,12 +17,12 @@ stimulus:
        fields: {authen_type: pap, service: login, authen_method: tacacsplus, priv_lvl: 1}, port: "0",
        args: ["task_id={task_id}", "start_time={start_time}", "service=shell"]}
 reactions:
-  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
   - {step: "*", on: authen_pass, then: next_step, status: unmeasured}
   - {step: "*", on: authen_fail, then: send_credential, status: unmeasured}
   - {step: "*", on: authen_getpass, then: stop, status: unmeasured}
