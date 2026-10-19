@@ -556,3 +556,26 @@ func TestL75PolicyLoadsWithTheDirectoryOn(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Cell (i) lifts only once broker 3's marks feed has stopped; without the
+// line it is INVALID, not a measurement of a lift that arrived as an event.
+func TestL74FeedStoppedWaitsForTheLine(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b3.log")
+	p := &regionProc{name: "port49-broker r3", log: log}
+	if err := os.WriteFile(log, []byte("port49-broker: directory store: not answering\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := feedStopped(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not stop the marks feed") {
+		t.Fatalf("a log without the line: %v, want the INVALID error", err)
+	}
+	p.mark()
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("port49-broker: directory store: the marks feed stopped (store: unavailable)\n")
+	if err := feedStopped(p, 300*time.Millisecond); err != nil {
+		t.Fatalf("a log with the line after the mark: %v", err)
+	}
+}

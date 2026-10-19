@@ -824,6 +824,16 @@ func etcdCount(js string) int64 {
 // (i) a lift in region 1 during a cut longer than a compaction: region 3's
 // runner cannot tell it from a mark a restore lost, and puts it back on the
 // heal (R17; plan 7e Ruling 12).
+// feedStopped waits up to d for p to say its marks feed stopped (since the
+// last mark), or errs naming what it did not say: the cut did not reach the
+// feed, so cell (i) would measure a lift that arrived as an event.
+func feedStopped(p *regionProc, d time.Duration) error {
+	if _, err := p.wait("the marks feed stopped", d); err != nil {
+		return fmt.Errorf("the cut did not stop the marks feed, so a lift after it would not be a missed event: %w", err)
+	}
+	return nil
+}
+
 func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
 	d := w.dirMembers[1]
 	near := "https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379" // the side that keeps its quorum
@@ -846,6 +856,14 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	w.brokers[3].mark() // the put-back line is looked for from here
 	cut := w.cutRegion3()
 	defer cut.heal()
+	// The lift must reach region 3 as a missed event: until broker 3's marks
+	// feed has stopped, its watch stream may still deliver the lift's delete
+	// after the heal, and there is nothing to put back. A stalled stream is
+	// failed by gRPC keepalive (10s + 2s) or the minority member's no-leader
+	// cancel, so the wait is 30s.
+	if err := feedStopped(w.brokers[3], 30*time.Second); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
+	}
 	if _, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
 		w.t.Fatalf("INVALID: the lift in region 1: exit %d", lcode)
 	}
