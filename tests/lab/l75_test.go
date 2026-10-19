@@ -795,7 +795,14 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	lo3 := l75Logout(plain, bs[3].addr(), logoutToken(s2))
 	r3, why3 := l75Mint(w, plain, bs[3].addr(), tok2)
-	status, scode, _ := w.port49("store", "status", "--socket", bs[3].sock())
+	// The pending count behind store status is refreshed every 5s, so a status
+	// read at once can lag the logout it just took: poll for up to 10s.
+	var scode int
+	status, statusAfter, _ := l75Poll(func() string {
+		out, code, _ := w.port49("store", "status", "--socket", bs[3].sock())
+		scode = code
+		return out
+	}, func(s string) bool { return strings.Contains(s, "1 logouts pending") }, 10*time.Second, time.Second)
 	b1st, _ := l75Mint(w, plain, bs[1].addr(), tok2)
 	bs[3].proc.mark()
 	healedAt := time.Now()
@@ -807,8 +814,8 @@ func l75(t *testing.T, w *regionWorld) []string {
 	fromHeal := time.Since(healedAt)
 	row("g2", "with broker 3 cut, a logout there is answered 200, refused there at once and pending; broker 1 "+
 		"mints for it until the heal, then refuses",
-		fmt.Sprintf("mint at b1 %d; logout at b3 %d; b3's mint %d %s; status exit %d: %s; b1's mint during the cut %d; "+
-			"forwarded line %v; b1 refused %v after the heal (%s)", g2, lo3, r3, why3, scode,
+		fmt.Sprintf("mint at b1 %d; logout at b3 %d; b3's mint %d %s; status (after %v) exit %d: %s; b1's mint during the cut %d; "+
+			"forwarded line %v; b1 refused %v after the heal (%s)", g2, lo3, r3, why3, statusAfter.Round(100*time.Millisecond), scode,
 			strings.ReplaceAll(status, "\n", " / "), b1st, ferr == nil, fromHeal.Round(10*time.Millisecond), why2),
 		g2 == http.StatusOK && lo3 == http.StatusOK && r3 == http.StatusUnauthorized &&
 			strings.Contains(status, "1 logouts pending") && scode == 3 && b1st == http.StatusOK && ferr == nil &&
