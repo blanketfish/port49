@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -144,19 +145,26 @@ func (s *storeStatus) read(ctx context.Context, role string, h *etcdstore.Store,
 		defer wg.Done()
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		perr = h.Ping(cctx)
+		if perr = h.Ping(cctx); perr != nil {
+			perr = errors.Join(perr, cctx.Err()) // a read that ran out of time says so
+		}
 	}()
 	mctx, mcancel := context.WithTimeout(ctx, 2*timeout)
 	r.answering, r.listed, merr = h.Members(mctx, timeout)
+	if merr != nil {
+		merr = errors.Join(merr, mctx.Err())
+	}
 	mcancel()
 	wg.Wait()
 	r.membersErr = merr != nil
 	r.reachable = perr == nil
+	// The closed-set cause, as the outage line says it: an error's text can
+	// echo what a peer sent (final review, M6).
 	switch {
 	case perr != nil:
-		r.why = perr.Error()
+		r.why = outageCause(perr)
 	case merr != nil:
-		r.why = merr.Error()
+		r.why = "the member list: " + outageCause(merr)
 	}
 	return r
 }

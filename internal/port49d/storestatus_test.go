@@ -83,7 +83,9 @@ func TestStoreStatusAnswerReadsEachStore(t *testing.T) {
 	}
 	proxy.Hang(true)
 	text, degraded, err = st.answer(context.Background())
-	if err != nil || !degraded || !strings.Contains(text, "session    etcd    ?/? members  unreachable") ||
+	// The why is outageCause's closed set, never the error's text, which can
+	// echo what a peer sent (final review, M6).
+	if err != nil || !degraded || !strings.Contains(text, "session    etcd    ?/? members  unreachable\n           timed out") ||
 		!strings.Contains(text, "directory  etcd    1/1 members  reachable") {
 		t.Fatalf("session cut: %q degraded=%v %v", text, degraded, err)
 	}
