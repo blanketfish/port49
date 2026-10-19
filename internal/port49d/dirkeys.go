@@ -74,10 +74,10 @@ func checkDirectoryKeys(ctx context.Context, proc string, d *etcdstore.Store, re
 // prefixes that are neither equal nor one holding the other, end it. An id
 // is not proof of one cluster (etcd derives it from the peer URLs and the
 // token, so two default single-node clusters share one), so a match is
-// probed: the directory handle writes a random nonce on a short lease and
-// the session handle reads it; the split is refused only when it does. A
-// probe that cannot complete refuses the start, naming the handle and a
-// closed-set cause. The nonce is never logged.
+// probed (sameCluster): the directory handle grants a short lease and the
+// session handle looks it up; the split is refused only when it finds it,
+// and the lease is revoked after. A probe that cannot complete refuses the
+// start, naming the handle and a closed-set cause.
 func checkTwoStores(ctx context.Context, cfg config.Config, sess, dir *etcdstore.Store, bound time.Duration) error {
 	cctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
