@@ -1000,6 +1000,19 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
 }
 
+// regionEvidenceLog is a process's log as evidence: every line leaky names is
+// dropped and each credential_sha256 and token_sha256 value is redacted, as
+// the L72 evidence does. Evidence names the field and never holds a value.
+func regionEvidenceLog(raw string, leaky func(string) bool) string {
+	var kept []string
+	for _, l := range strings.Split(raw, "\n") {
+		if !leaky(l) {
+			kept = append(kept, l)
+		}
+	}
+	return string(l72RedactCredentialHash([]byte(strings.Join(kept, "\n"))))
+}
+
 // writeRegionNote writes tests/lab/results/<row>-regions.md and the
 // processes' logs as its evidence, each filtered of every line naming a
 // held secret; a note that would hold one fails the test.
@@ -1029,14 +1042,8 @@ func writeRegionNote(t *testing.T, w *regionWorld, row, claim string, rows []reg
 	}
 	for _, p := range procs {
 		raw, _ := os.ReadFile(p.log)
-		var kept []string
-		for _, l := range strings.Split(string(raw), "\n") {
-			if !w.leaky(l) {
-				kept = append(kept, l)
-			}
-		}
 		name := strings.ReplaceAll(p.name, " ", "-") + ".log"
-		if err := os.WriteFile(filepath.Join(ev, name), []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(ev, name), []byte(regionEvidenceLog(string(raw), w.leaky)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

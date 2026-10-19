@@ -816,3 +816,21 @@ func TestL74BrokerMetricsAreTheBrokersPort(t *testing.T) {
 		t.Fatal("the broker's and port49d's metrics share an address")
 	}
 }
+
+// A region log goes into the evidence with its token and credential hashes
+// redacted, the array form a mint record writes included.
+func TestL74RegionEvidenceLogRedactsTheHashes(t *testing.T) {
+	h := strings.Repeat("ab12", 16)
+	raw := `{"credential_sha256":"` + h + `","x":1}` + "\n" +
+		`{"event":"mint","token_sha256":["` + h + `","` + h + `"]}` + "\n" +
+		`{"token_sha256":"` + h + `"}` + "\n" +
+		`{"bundle_sha256":"` + h + `"}` + "\n" +
+		"secret line\n"
+	got := regionEvidenceLog(raw, func(l string) bool { return strings.HasPrefix(l, "secret") })
+	if strings.Count(got, h) != 1 || !strings.Contains(got, `"bundle_sha256":"`+h+`"`) {
+		t.Fatalf("only the bundle hash may survive:\n%s", got)
+	}
+	if strings.Contains(got, "secret line") || strings.Count(got, `"<redacted sha256>`) < 3 {
+		t.Fatalf("leaky line kept or field lost:\n%s", got)
+	}
+}
