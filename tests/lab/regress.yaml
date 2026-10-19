@@ -1,0 +1,236 @@
+# The closed lab entries `make lab-regress` reruns (plan 11b, decision 52 ruling 7).
+# One entry per harness run. run: an anchored go test -run pattern naming tests exactly
+# (TestEveryManifestPatternMatchesATest checks it). rows: the §15 rows it re-measures;
+# for a closed row env.PORT49_LAB_REMEASURE names its guard entry (loadManifest refuses
+# otherwise). notes: every results note it rewrites, every platform's.
+# measured_minutes: the last full run's wall time for the entry (Task 4).
+entries:
+  - id: L10
+    run: '^TestL10ServiceAndAttributeSpellings$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L10]
+    env: {PORT49_LAB_REMEASURE: L10}
+    notes: [tests/lab/results/L10-arista_eos.md, tests/lab/results/L10-cisco_iosxe.md, tests/lab/results/L10-cisco_nxos.md,
+            tests/lab/results/L10-juniper_vjunos-router.md, tests/lab/results/L10-juniper_vsrx.md]
+  - {id: L73-vjunos26, run: '^TestL73$', platforms: vjunos26, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
+     notes: [tests/lab/results/L73-juniper_vjunos-router.md]}
+  - {id: L73-iosxe1718, run: '^TestL73$', platforms: iosxe1718, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
+     notes: [tests/lab/results/L73-cisco_iosxe.md]}
+  - {id: L73-nxos106, run: '^TestL73$', platforms: nxos106, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
+     notes: [tests/lab/results/L73-cisco_nxos.md]}
+  - {id: L73-ceos436, run: '^TestL73$', platforms: ceos436, rows: [L73], env: {PORT49_LAB_REMEASURE: L73},
+     notes: [tests/lab/results/L73-arista_ceos.md]}
+  - {id: L76-srlinux, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
+     notes: [tests/lab/results/L76-nokia_srlinux.md]}
+  - {id: L74-L75, target: lab-regions, run: '^TestRegions$', rows: [L74, L75], env: {PORT49_LAB_REMEASURE: "L74,L75"},
+     notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md]}
+  - id: L5
+    run: '^TestL5Watchdog$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L5]
+    env: {PORT49_LAB_REMEASURE: L5}
+    notes: [tests/lab/results/L5-arista_eos.md, tests/lab/results/L5-juniper_vjunos-router.md, tests/lab/results/L5-juniper_vsrx.md, tests/lab/results/L5-cisco_nxos.md, tests/lab/results/L5-cisco_iosxe.md]
+  - id: L7
+    run: '^(TestL7EAPI|TestL7NXAPI)$'
+    platforms: eos,nxos
+    rows: [L7]
+    env: {PORT49_LAB_REMEASURE: L7}
+    notes: [tests/lab/results/L7-arista_eos.md, tests/lab/results/L7-cisco_nxos.md]
+  - id: L8
+    run: '^TestL8PasswordLength$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L8]
+    env: {PORT49_LAB_REMEASURE: L8}
+    notes: [tests/lab/results/L8-arista_eos.md, tests/lab/results/L8-juniper_vjunos-router.md, tests/lab/results/L8-juniper_vsrx.md, tests/lab/results/L8-cisco_nxos.md, tests/lab/results/L8-cisco_iosxe.md]
+  - id: L3
+    run: '^TestL3Enable$'
+    platforms: eos,nxos,iosxe
+    rows: [L3]
+    env: {PORT49_LAB_REMEASURE: L3}
+    notes: [tests/lab/results/L3-arista_eos.md, tests/lab/results/L3-cisco_nxos.md, tests/lab/results/L3-cisco_iosxe.md]
+  - id: L3-nxos
+    run: '^TestL3NXOSEnable$'
+    platforms: nxos
+    rows: [L3]
+    env: {PORT49_LAB_REMEASURE: L3-nxos}
+    notes: [tests/lab/results/L3-nxos-cisco_nxos.md]
+  - id: L9-abbreviations
+    run: '^TestL9JunosAbbreviations$'
+    platforms: vjunos,vsrx
+    rows: [L9]
+    env: {PORT49_LAB_REMEASURE: L9-abbreviations}
+    notes: [tests/lab/results/L9-abbreviations-juniper_vjunos-router.md, tests/lab/results/L9-abbreviations-juniper_vsrx.md]
+  - id: L12-bits
+    run: '^TestL12JunosBits$'
+    platforms: vjunos,vsrx
+    rows: [L12]
+    env: {PORT49_LAB_REMEASURE: L12-bits}
+    notes: [tests/lab/results/L12-bits-juniper_vjunos-router.md, tests/lab/results/L12-bits-juniper_vsrx.md]
+  - id: L24
+    run: '^TestL24JunosIdleTimeout$'
+    platforms: vjunos,vsrx
+    rows: [L24]
+    env: {PORT49_LAB_REMEASURE: L24}
+    notes: [tests/lab/results/L24-juniper_vjunos-router.md, tests/lab/results/L24-juniper_vsrx.md]
+  - id: L12-configuration
+    run: '^TestL12JunosConfiguration$'
+    platforms: vjunos,vsrx
+    rows: [L12]
+    env: {PORT49_LAB_REMEASURE: L12-configuration}
+    notes: [tests/lab/results/L12-configuration-juniper_vjunos-router.md, tests/lab/results/L12-configuration-juniper_vsrx.md]
+  - id: L12-netconf
+    run: '^TestL12JunosNetconf$'
+    platforms: vjunos,vsrx
+    rows: [L12]
+    env: {PORT49_LAB_REMEASURE: L12-netconf}
+    notes: [tests/lab/results/L12-netconf-juniper_vjunos-router.md, tests/lab/results/L12-netconf-juniper_vsrx.md]
+  - id: L12-wire
+    run: '^TestL12JunosWire$'
+    platforms: vjunos,vsrx
+    rows: [L12, L9]
+    env: {PORT49_LAB_REMEASURE: "L12,L9"}
+    notes: [tests/lab/results/L12-juniper_vjunos-router.md, tests/lab/results/L12-juniper_vsrx.md, tests/lab/results/L9-juniper_vjunos-router.md, tests/lab/results/L9-juniper_vsrx.md]
+  - id: L26
+    run: '^TestL26JunosKeywords$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26}
+    notes: [tests/lab/results/L26-juniper_vjunos-router.md, tests/lab/results/L26-juniper_vsrx.md]
+  - id: L26b
+    run: '^TestL26bJunosKeywordDeny$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26b}
+    notes: [tests/lab/results/L26b-juniper_vjunos-router.md, tests/lab/results/L26b-juniper_vsrx.md]
+  - id: L26c
+    run: '^TestL26cJunosRPCReach$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26c}
+    notes: [tests/lab/results/L26c-juniper_vjunos-router.md, tests/lab/results/L26c-juniper_vsrx.md]
+  - id: L26c-entries
+    run: '^TestL26cEntryNetconf$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26c-entries}
+    notes: [tests/lab/results/L26c-entries-juniper_vjunos-router.md, tests/lab/results/L26c-entries-juniper_vsrx.md]
+  - id: L26c-scripts
+    run: '^TestL26cEntryScripts$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26c-scripts}
+    notes: [tests/lab/results/L26c-scripts-juniper_vjunos-router.md, tests/lab/results/L26c-scripts-juniper_vsrx.md]
+  - id: L26c-junoscript
+    run: '^TestL26cJunoscriptDeny$'
+    platforms: vjunos,vsrx
+    rows: [L26]
+    env: {PORT49_LAB_REMEASURE: L26c-junoscript}
+    notes: [tests/lab/results/L26c-junoscript-juniper_vjunos-router.md, tests/lab/results/L26c-junoscript-juniper_vsrx.md]
+  - id: L57
+    run: '^TestL57JunosGroups$'
+    platforms: vjunos,vsrx
+    rows: [L57]
+    env: {PORT49_LAB_REMEASURE: L57}
+    notes: [tests/lab/results/L57-juniper_vjunos-router.md, tests/lab/results/L57-juniper_vsrx.md]
+  - id: L68
+    run: '^TestL68ViewConfigurationCLI$'
+    platforms: vjunos,vsrx
+    rows: [L68]
+    env: {PORT49_LAB_REMEASURE: L68}
+    notes: [tests/lab/results/L68-juniper_vjunos-router.md, tests/lab/results/L68-juniper_vsrx.md]
+  - id: L22
+    run: '^(TestAdapterReplies|TestAdapterCarried)$'
+    platforms: eos,nxos,iosxe
+    rows: [L22]
+    env: {PORT49_LAB_REMEASURE: "L22,L22-carried"}
+    notes: [tests/lab/results/L22-arista_eos.md, tests/lab/results/L22-cisco_nxos.md, tests/lab/results/L22-cisco_iosxe.md, tests/lab/results/L22-carried-arista_eos.md, tests/lab/results/L22-carried-cisco_nxos.md, tests/lab/results/L22-carried-cisco_iosxe.md]
+  - id: L23
+    run: '^TestL23InertBesideReadonly$'
+    platforms: eos,nxos
+    rows: [L23]
+    env: {PORT49_LAB_REMEASURE: L23}
+    notes: [tests/lab/results/L23-arista_eos.md, tests/lab/results/L23-cisco_nxos.md]
+  - id: L28
+    run: '^TestL28KeyMiss$'
+    platforms: eos,vjunos,nxos,iosxe
+    rows: [L28]
+    env: {PORT49_LAB_REMEASURE: "L28,L28-rotation"}
+    notes: [tests/lab/results/L28-arista_eos.md, tests/lab/results/L28-juniper_vjunos-router.md, tests/lab/results/L28-cisco_nxos.md, tests/lab/results/L28-cisco_iosxe.md]
+  - id: L29-reload
+    run: '^TestL29Reload$'
+    platforms: eos,vjunos,nxos,iosxe
+    rows: [L29]
+    env: {PORT49_LAB_REMEASURE: L29-reload}
+    notes: [tests/lab/results/L29-reload-arista_eos.md, tests/lab/results/L29-reload-juniper_vjunos-router.md, tests/lab/results/L29-reload-cisco_nxos.md, tests/lab/results/L29-reload-cisco_iosxe.md]
+  - id: L31
+    run: '^TestL31BreakGlass$'
+    platforms: eos,nxos,iosxe
+    rows: [L31]
+    env: {PORT49_LAB_REMEASURE: L31}
+    notes: [tests/lab/results/L31-arista_eos.md, tests/lab/results/L31-cisco_nxos.md, tests/lab/results/L31-cisco_iosxe.md]
+  - id: L34
+    run: '^TestSessionLifetime$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L34]
+    env: {PORT49_LAB_REMEASURE: L34}
+    notes: [tests/lab/results/L34-arista_eos.md, tests/lab/results/L34-juniper_vjunos-router.md, tests/lab/results/L34-juniper_vsrx.md, tests/lab/results/L34-cisco_nxos.md, tests/lab/results/L34-cisco_iosxe.md]
+  - id: L35
+    run: '^TestStoreOutageEndToEnd$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L35]
+    env: {PORT49_LAB_REMEASURE: L35}
+    notes: [tests/lab/results/L35-arista_eos.md, tests/lab/results/L35-juniper_vjunos-router.md, tests/lab/results/L35-juniper_vsrx.md, tests/lab/results/L35-cisco_nxos.md, tests/lab/results/L35-cisco_iosxe.md]
+  - id: L36
+    run: '^TestJunosReauthorizationAfterRestart$'
+    platforms: vjunos,vsrx
+    rows: [L36]
+    env: {PORT49_LAB_REMEASURE: L36}
+    notes: [tests/lab/results/L36-juniper_vjunos-router.md, tests/lab/results/L36-juniper_vsrx.md]
+  - id: L37
+    run: '^TestSplitEndToEnd$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L37]
+    env: {PORT49_LAB_REMEASURE: L37}
+    notes: [tests/lab/results/L37-arista_eos.md, tests/lab/results/L37-juniper_vjunos-router.md, tests/lab/results/L37-juniper_vsrx.md, tests/lab/results/L37-cisco_nxos.md, tests/lab/results/L37-cisco_iosxe.md]
+  - id: L38
+    run: '^TestIOSXEOpenSessionUnreachable$'
+    platforms: iosxe
+    rows: [L38]
+    env: {PORT49_LAB_REMEASURE: L38}
+    notes: [tests/lab/results/L38-cisco_iosxe.md]
+  - id: L41
+    run: '^TestL41GoDarkMidSession$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L41]
+    env: {PORT49_LAB_REMEASURE: L41}
+    notes: [tests/lab/results/L41-arista_eos.md, tests/lab/results/L41-juniper_vjunos-router.md, tests/lab/results/L41-juniper_vsrx.md, tests/lab/results/L41-cisco_nxos.md, tests/lab/results/L41-cisco_iosxe.md]
+  - id: L49
+    run: '^TestL49Oxidized$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L49]
+    env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
+    notes: [tests/lab/results/L49-oxidized-arista_eos.md, tests/lab/results/L49-oxidized-juniper_vjunos-router.md, tests/lab/results/L49-oxidized-juniper_vsrx.md, tests/lab/results/L49-oxidized-cisco_nxos.md, tests/lab/results/L49-oxidized-cisco_iosxe.md]
+  - id: L53
+    run: '^TestL53HostKeyScan$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L53]
+    env: {PORT49_LAB_REMEASURE: L53, PORT49_LAB_SSH: "1"}
+    notes: [tests/lab/results/L53-arista_eos.md, tests/lab/results/L53-juniper_vjunos-router.md, tests/lab/results/L53-juniper_vsrx.md, tests/lab/results/L53-cisco_nxos.md, tests/lab/results/L53-cisco_iosxe.md]
+  - id: L64-L65
+    run: '^TestL64L65$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L64, L65]
+    env: {PORT49_LAB_REMEASURE: "L64,L65", PORT49_LAB_SSH: "1"}
+    notes: [tests/lab/results/L64-arista_eos.md, tests/lab/results/L64-juniper_vjunos-router.md, tests/lab/results/L64-juniper_vsrx.md, tests/lab/results/L64-cisco_nxos.md, tests/lab/results/L64-cisco_iosxe.md, tests/lab/results/L65-arista_eos.md, tests/lab/results/L65-juniper_vjunos-router.md, tests/lab/results/L65-juniper_vsrx.md, tests/lab/results/L65-cisco_nxos.md, tests/lab/results/L65-cisco_iosxe.md]
+  - id: L66
+    run: '^TestL66$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L66]
+    env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
+    notes: [tests/lab/results/L66-arista_eos.md, tests/lab/results/L66-juniper_vjunos-router.md, tests/lab/results/L66-juniper_vsrx.md, tests/lab/results/L66-cisco_nxos.md, tests/lab/results/L66-cisco_iosxe.md]
+  - id: L71
+    run: '^TestL71TLSClientSupport$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L71]
+    env: {PORT49_LAB_REMEASURE: L71}
+    notes: [tests/lab/results/L71-arista_eos.md, tests/lab/results/L71-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vsrx.md, tests/lab/results/L71-cisco_nxos.md, tests/lab/results/L71-cisco_iosxe.md]

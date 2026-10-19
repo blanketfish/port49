@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -150,6 +150,11 @@ lab-directory:
 # PORT49_LAB_ETCD_BIN (etcd v3.6.15) and the L67 directory containers' images.
 lab-regions:
 	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
+
+# The closed lab entries, rerun under the lab lock and diffed against their notes
+# (plan 11b). Beehive only. LAB_REGRESS_ARGS passes -only=<ids> or -dry-run.
+lab-regress:
+	go run ./tests/lab/cmd/lab-regress -manifest tests/lab/regress.yaml $(LAB_REGRESS_ARGS)
 
 # L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
 # the Windows Server DC. Needs Docker with Compose v2.24.4+, KVM, the cached

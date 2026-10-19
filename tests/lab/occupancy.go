@@ -44,6 +44,13 @@ func labOccupyForRun(path, who string) error {
 	if labHeld != nil {
 		return nil
 	}
+	if release, ok, err := labInheritedLock(path); ok {
+		if err != nil {
+			return err
+		}
+		labHeld = release
+		return nil
+	}
 	release, err := labOccupy(path, who)
 	if err != nil {
 		return err
