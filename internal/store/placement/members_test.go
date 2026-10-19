@@ -3,6 +3,7 @@ package placement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -338,6 +339,35 @@ func TestACutDirectoryServesTheCachedPinAndRefusesNewPins(t *testing.T) {
 	}
 	if _, err := a.DeleteMembership(ctx, alice); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a forget during the cut: %v, want ErrUnavailable", err)
+	}
+}
+
+// A pin the watched copy already holds, read while the directory is cut, is
+// served and said, as a miss served from this region's record is (spec §13
+// d51 R13; run 8 diagnosis, L75 (f)). Said once per principal, not per read.
+func TestACutReadOfAWatchedPinIsSaid(t *testing.T) {
+	ctx := context.Background()
+	reach := true
+	a, _, _, _, _ := twoRegions(&reach)
+	var said []string
+	a.(*placed).c.Say = func(f string, args ...any) { said = append(said, fmt.Sprintf(f, args...)) }
+	if err := a.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" || len(said) != 0 {
+		t.Fatalf("the reachable read: %+v %v, said %q", got, err, said)
+	}
+	if _, ok := a.(*placed).cached(alice); !ok {
+		t.Fatal("setup: the reachable read left no watched pin")
+	}
+	reach = false
+	for i := 0; i < 2; i++ {
+		if got, err := a.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
+			t.Fatalf("read %d during the cut: %+v %v", i, got, err)
+		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "serving "+alice+"'s cached directory membership") {
+		t.Fatalf("said %q, want the cached-pin line once", said)
 	}
 }
 

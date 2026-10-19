@@ -390,6 +390,9 @@ func (p *placed) getMembership(ctx context.Context, principal string, again bool
 		}
 		return local, nil // pinned by this region's record whether or not the put-back landed
 	case pinHeld:
+		if !p.reachable() {
+			p.sayCached(principal) // the watched copy's pin, served during a cut (d51 R13)
+		}
 		if lerr == nil && local.EntryID == pin.EntryID {
 			local.MapKeys, local.Refused = pin.MapKeys, pin.Refused
 			return local, nil
