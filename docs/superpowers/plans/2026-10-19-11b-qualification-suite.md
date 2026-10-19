@@ -27,7 +27,15 @@ A generator, `tests/qual/cmd/genprofile`, builds part 1 from a lab conformance r
 - `docs/design/2026-08-21-port49-design.md` §14, the testing strategy: "nothing about device behavior is asserted elsewhere without citing an entry".
 - The roadmap brief: `docs/superpowers/plans/README.md`, "Plan 11b".
 
-**Revision 1 (2026-10-19)** applies the pre-flight review (`.superpowers/sdd/qual-suite/preflight.md`: 5 Critical, 14 Important, 14 Minor) and the team lead's rulings on Q1 and Q2.
+**Revision 1 (2026-10-19)** applies the pre-flight review (`.superpowers/sdd/qual-suite/preflight.md`: 5 Critical, 14 Important, 14 Minor) and the team lead's rulings on Q1 and Q2. **Revision 2** applies re-review 1 (1 Critical, 6 Important, 8 Minor):
+- 12-character commits;
+- notediff compares integers exactly;
+- `tls_*` scenarios chosen by transport;
+- two lab-free invocations;
+- no tagged darwin vet;
+- the guard test's want map;
+- fleet tokens minted on the test goroutine;
+- the L79 minors.
 
 ## Global Constraints
 
@@ -74,7 +82,7 @@ A transcript alone is not enough. A device branches on port49's replies, and the
    - GETPASS → `send_credential`;
    - FAIL → `stop`;
    - ERROR → the measured fallback (IOS XE 17.18.02 over TLS: break-glass fails);
-   - `unknown_ca` → `give_up`;
+   - `alert_unknown_ca` → `give_up`;
    - a reply with the single-connect flag → `reuse_connection`.
 3. **Acceptance rules** (data, reviewed by hand). Constraints the device enforces on port49's replies: attribute and reply byte limits, the privilege range, the role names it honours, the attribute names it refuses.
    - **A measured claim cites a results note whose `Image version:` line names this profile's firmware** (decision 52 ruling 4).
@@ -299,6 +307,15 @@ Ryan, 2026-10-17 and 2026-10-19).**
   VM shows (decision 52; plan 11b).
 ```
 
+- [ ] **Step 3b: Make decision 51's lift wording provisional on L79** (rule 2). Find the decision 51 ruling that gives the operator text for a lift during a cut ("could not be lifted, and stands"; search `could not be lifted` in §13). Add to that ruling:
+
+```markdown
+  *Provisional on L79*: whether a lift reported as standing can still land after the heal, through
+  the kernel's retransmission of the cut connection, is unmeasured (11a final review, dial-fix M4).
+```
+
+  If the search finds the wording only in the roadmap and the code, not in §13, add the same sentence to decision 51's text on revocation during a cut, and note in the commit message where it was put.
+
 - [ ] **Step 4: Document `packet_fields` in §5.7** (I8). §5.7 documents record fields in prose, not in a table. After the paragraph that documents `request.service` (search `"service" AV pair`), add a paragraph:
 
 ```markdown
@@ -324,8 +341,8 @@ data or argument, and an `unvalidated` record never carries it (decision 52 ruli
 
 - [ ] **Step 6: Check the edits**
 
-Run: `grep -n '^\*\*52\.' docs/design/2026-08-23-policy-engine-spec.md && grep -c '^| \*\*L7[89]\*\*' docs/design/2026-08-23-policy-engine-spec.md && grep -c 'Provisional on L78' docs/design/2026-08-23-policy-engine-spec.md && grep -c 'authenticate`' docs/design/2026-08-23-policy-engine-spec.md`
-Expected: one line for decision 52, then `2`, then `1`, then `0`.
+Run: `grep -n '^\*\*52\.' docs/design/2026-08-23-policy-engine-spec.md && grep -c '^| \*\*L7[89]\*\*' docs/design/2026-08-23-policy-engine-spec.md && grep -c 'Provisional on L7[89]' docs/design/2026-08-23-policy-engine-spec.md && grep -c 'authenticate`' docs/design/2026-08-23-policy-engine-spec.md`
+Expected: one line for decision 52, then `2`, then `2`, then `0`.
 
 - [ ] **Step 7: Commit**
 
@@ -948,7 +965,9 @@ Add `lab-regress` to `.PHONY`.
 
 - [ ] **Step 9: Run the tests**
 
-Run: `go test ./tests/lab/cmd/lab-regress/ -count=1 && make lab-unit && GOOS=darwin go vet ./tests/lab/cmd/lab-regress/ && GOOS=darwin go vet -tags lab ./tests/lab/ && go run ./tests/lab/cmd/lab-regress -dry-run`
+Run: `go test ./tests/lab/cmd/lab-regress/ -count=1 && make lab-unit && make check-darwin && go run ./tests/lab/cmd/lab-regress -dry-run`
+
+`GOOS=darwin go vet -tags lab ./tests/lab/` is deliberately not run. It already fails on main at `tests/lab/l56_test.go:131` (`syscall.TIOCSPTLCK`), and `make check-darwin`'s untagged `go vet ./...` covers the new untagged `occupancy_*.go` files.
 Expected: PASS, then the entry list with `total 0 min (last measured)`.
 
 - [ ] **Step 10: Commit**
@@ -983,7 +1002,9 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 - packet counts;
 - long runs.
 
-A duration is an observation: NX-OS's 5.00 s flight, L13's timeouts, L74's round trip. A line whose words are unchanged but whose numbers moved is reported when any number moved by more than `tolerance` (default 20%).
+Every number left on a line is an observation, and a line whose words are unchanged but whose numbers moved is reported. How a number counts as moved depends on its kind:
+- **A duration** (a decimal, or a number followed by `ms`, `s` or `min`), such as NX-OS's 5.00 s flight, L13's timeouts or L74's round trip, has moved when it changed by more than `tolerance` (default 20%).
+- **Any other number** (a count, a byte length, an id) has moved when it changed at all: 5 → 6 connections and 40 → 41 are changes (I-A).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1021,6 +1042,11 @@ func TestChangedNamesAChangedCount(t *testing.T) {
 	b := normalize("- (h) NX-OS opened 6 connections\n")
 	if r, ad := changed(a, b, 0.2); len(r) != 1 || len(ad) != 1 {
 		t.Fatalf("a changed count is an observation: -%q +%q", r, ad)
+	}
+	a = normalize("- the reply was 40 bytes\n")
+	b = normalize("- the reply was 41 bytes\n")
+	if r, ad := changed(a, b, 0.2); len(r) != 1 || len(ad) != 1 {
+		t.Fatalf("integers compare exactly, whatever the tolerance: -%q +%q", r, ad)
 	}
 }
 ```
@@ -1062,7 +1088,8 @@ var (
 		{regexp.MustCompile(`\b\d+ packets\b`), "<n> packets"},
 		{regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`), "<LONG>"},
 	}
-	number = regexp.MustCompile(`\d+(\.\d+)?`)
+	// group 1 the value, group 2 a decimal part, group 3 a unit (kept in the skeleton).
+	number = regexp.MustCompile(`(\d+(\.\d+)?)( ?(?:ms|min|s)\b)?`)
 )
 
 func normalize(note string) []string {
@@ -1084,27 +1111,39 @@ func normalize(note string) []string {
 	return out
 }
 
+// num is one number on a line. A duration (a decimal, or a number followed
+// by ms, s or min) is compared with the tolerance; every other number (a
+// count, an id, a byte length) is compared exactly (re-review I-A).
+type num struct {
+	v        float64
+	duration bool
+}
+
 // skeleton is a line with its numbers replaced, so two lines that differ only
 // in their numbers pair up, and their numbers are then compared.
-func skeleton(l string) (string, []float64) {
-	var nums []float64
+func skeleton(l string) (string, []num) {
+	var nums []num
 	s := number.ReplaceAllStringFunc(l, func(m string) string {
-		f, _ := strconv.ParseFloat(m, 64)
-		nums = append(nums, f)
-		return "#"
+		sub := number.FindStringSubmatch(m)
+		f, _ := strconv.ParseFloat(sub[1], 64)
+		nums = append(nums, num{v: f, duration: sub[2] != "" || sub[3] != ""})
+		return "#" + sub[3]
 	})
 	return s, nums
 }
 
-func within(a, b []float64, tol float64) bool {
+func within(a, b []num, tol float64) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] == b[i] {
+		if a[i].v == b[i].v {
 			continue
 		}
-		if m := math.Max(math.Abs(a[i]), math.Abs(b[i])); m == 0 || math.Abs(a[i]-b[i])/m > tol {
+		if !a[i].duration || !b[i].duration {
+			return false
+		}
+		if m := math.Max(math.Abs(a[i].v), math.Abs(b[i].v)); m == 0 || math.Abs(a[i].v-b[i].v)/m > tol {
 			return false
 		}
 	}
@@ -1112,7 +1151,7 @@ func within(a, b []float64, tol float64) bool {
 }
 
 func changed(old, new []string, tol float64) (removed, added []string) {
-	pool := map[string][][]float64{}
+	pool := map[string][][]num{}
 	lines := map[string][]string{}
 	for _, l := range old {
 		s, n := skeleton(l)
@@ -1486,6 +1525,8 @@ type EngineGap struct {
 func Load(path, repoRoot string) (*Profile, error)
 func (p *Profile) Validate(repoRoot string) error
 func Slug(firmware string) string // "10.6(2)F" -> "10.6-2-F"
+func ScenarioTransport(sc string) string // "tls" for tls_* and flight_delay, else "tcp"
+func BaseScenario(sc string) string      // sc without "tls_"
 var Codes map[string]map[string]uint8 // the wire values the engine can send, by field
 ```
 
@@ -1717,7 +1758,10 @@ func credentialShaped(n *yaml.Node, path string) error {
 var (
 	stepTypes = set("authen", "author", "acct")
 	stepNames = set("login", "authorize_session", "command_permitted", "command_denied", "account_start", "account_stop")
-	scenarios = set("token_login", "wrong_credential", "store_unavailable", "single_connection", "unknown_ca", "flight_delay")
+	// A scenario's transport is its prefix: tls_* and flight_delay over RFC 9887,
+	// the rest over 49 (re-review I-B; ScenarioTransport).
+	scenarios = set("token_login", "wrong_credential", "store_unavailable", "single_connection",
+		"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay")
 	reactOn   = set("authen_pass", "authen_fail", "authen_getpass", "authen_getuser", "authen_getdata", "authen_error",
 		"author_pass_add", "author_pass_repl", "author_fail", "author_error", "acct_success", "acct_error",
 		"conn_reset", "conn_closed", "reply_single_connect", "alert_unknown_ca", "alert_bad_certificate",
@@ -1748,6 +1792,20 @@ func set(xs ...string) map[string]bool {
 	}
 	return m
 }
+
+// ScenarioTransport is the transport a scenario runs over: "tls" for tls_* and
+// flight_delay, "tcp" for the rest. The harness admits the device on that
+// transport for that scenario, and genprofile splits records the same way
+// (by device.transport).
+func ScenarioTransport(sc string) string {
+	if strings.HasPrefix(sc, "tls_") || sc == "flight_delay" {
+		return "tls"
+	}
+	return "tcp"
+}
+
+// BaseScenario is sc without its tls_ prefix: what the engine plays.
+func BaseScenario(sc string) string { return strings.TrimPrefix(sc, "tls_") }
 
 var slugBad = regexp.MustCompile(`[^A-Za-z0-9.]+`)
 
@@ -1842,6 +1900,8 @@ func (p *Profile) Validate(repoRoot string) error {
 	for _, sc := range p.Scenarios {
 		if !scenarios[sc] {
 			errs = append(errs, fmt.Errorf("scenario %q is not in the conformance set", sc))
+		} else if tr := ScenarioTransport(sc); !slices.Contains(p.Transports, tr) {
+			errs = append(errs, fmt.Errorf("scenario %q needs transport %s, which the profile does not list", sc, tr))
 		}
 	}
 	for i, r := range p.Reactions {
@@ -1876,7 +1936,7 @@ func statusErr(where, status string, src []Source) []error {
 }
 ```
 
-Imports: `bytes`, `errors`, `fmt`, `os`, `path/filepath`, `regexp`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/rhwendt/port49/internal/tacacs/wire`.
+Imports: `bytes`, `errors`, `fmt`, `os`, `path/filepath`, `regexp`, `slices`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/rhwendt/port49/internal/tacacs/wire`.
 
 - [ ] **Step 6: Run the tests**
 
@@ -2190,7 +2250,19 @@ var ErrNoBuilder error
   - a hand-built hello carrying `27` with `[0x0002, 0x0001]` yields `CompressCertAlgs: [2 1]`;
   - a header with version byte `0xc1` yields `Version: 0xc1`.
 
-  Run `make lab-unit` and confirm the new cases fail; implement; run again and confirm they pass. Both are counts and ids, never session bytes, so `l73SummaryLeaks` is unaffected.
+  In the same step, update `TestL73SummaryTypesHaveNoRoomForSessionBytes`'s `want` map (`tests/lab/l73_tlswire_unit_test.go:299`) on purpose (I-E). That test pins the summary types' exact field sets, so it fails until both fields are added:
+
+```go
+		// compress_certificate's algorithm ids (RFC 8879): two-byte registry
+		// codes the device offers, the same for every connection; no random,
+		// key or secret can be carried in them (plan 11b, I3).
+		"l73Hello.CompressCertAlgs": "[]uint16",
+		// The 12-byte header's version octet (major<<4 | minor): one of four
+		// values RFC 8907 defines; it carries no session byte (plan 11b, M4).
+		"l73Plain.Version": "uint8",
+```
+
+  Run `make lab-unit` and confirm the new cases, and the guard test, fail. Implement, then run it again and confirm they pass. Both fields are ids and counts, never session bytes, so `l73SummaryLeaks` is unaffected.
 
 - [ ] **Step 2: Write the failing engine tests**
 
@@ -2698,7 +2770,10 @@ func MergeFragment(base, fragment []byte) ([]byte, error) // the fragment's top-
 - `wrong_credential`: `login` with a credential the engine makes from random bytes, which is never a token.
 - `store_unavailable`: `login` (the harness has set the fault).
 - `single_connection`: every step with the single-connect flag on.
-- `unknown_ca`: the handshake alone.
+- `tls_unknown_ca`: the handshake alone.
+- `tls_token_login`, `tls_store_unavailable`: as their plain names, over TLS.
+
+`Play` plays `BaseScenario(scenario)` over `t.Transport`. The harness sets `t.Transport = ScenarioTransport(scenario)` and admits the device on that transport (I-B). `Play` returns an error when the two disagree.
 - `flight_delay`: the `login` step on the delayed connection (I2).
 
 **Order inside a step** (M5). The engine checks acceptance on the reply first. A gate ends the play `rejected_by_device` before any reaction is looked up, so a gate on an event no reaction covers still reports the gate.
@@ -2935,11 +3010,14 @@ type player struct {
 }
 
 func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (Transcript, error) {
+	if ScenarioTransport(scenario) != t.Transport {
+		return Transcript{}, fmt.Errorf("devicemock: scenario %s runs over %s, the target is %s", scenario, ScenarioTransport(scenario), t.Transport)
+	}
 	pl := &player{p: p, t: t, l: l, now: time.Now()}
 	pl.tr.Scenario = scenario
 	defer pl.closeConn()
 	steps := p.Stimulus.Steps
-	switch scenario {
+	switch BaseScenario(scenario) {
 	case "wrong_credential":
 		bogus := make([]byte, 24)
 		rand.Read(bogus)
@@ -2947,7 +3025,7 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 		steps = steps[:1]
 	case "store_unavailable", "flight_delay":
 		steps = steps[:1]
-	case "unknown_ca":
+	case "unknown_ca": // tls_unknown_ca
 		if _, err := pl.dial(ctx); err != nil {
 			return pl.end("handshake_refused", StepResult{Step: "handshake", Event: handshakeEvent(err)}), nil
 		}
@@ -3023,7 +3101,7 @@ The rest of `engine.go`:
   It never puts the credential into an argument.
 - **`handshakeEvent(err)`**:
   - a `tls.AlertError` maps to `alert_unknown_ca` (48), `alert_bad_certificate` (42), `alert_certificate_expired` (45) or `alert_handshake_failure` (40);
-  - `syscall.ECONNRESET` maps to `conn_reset`;
+  - `syscall.ECONNRESET` and `syscall.EPIPE` map to `conn_reset` (a write after a reset that was already read gives EPIPE);
   - `io.EOF` maps to `conn_closed`;
   - a deadline maps to `handshake_timeout`.
 - **`Transcript.String()`** prints one line per step (`step event args=[…] server_msg=<n> bytes conn=<k>`), then the outcome, then the gates and warnings by rule id and detail. It is the only form tests print.
@@ -3164,7 +3242,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
   - from `internal/port49d`'s tests: `run(ctx, cfgPath)`, `stderr`/`stdout`, `syncBuffer`, `brokerConfig`, `writeRunConfigWith`, `mint`;
   - `testpki`.
 - Produces:
-  - `type qualOpts struct { policy string; scale float64; handshakeTimeout time.Duration; devices int }`;
+  - `type qualOpts struct { policy string; scale float64; handshakeTimeout time.Duration; devices int; transport string; untrustedClient bool }`. `transport` is `devicemock.ScenarioTransport(sc)`; "" means the profile's first transport. `untrustedClient` issues the device's leaf from a CA the daemon does not trust (`tls_unknown_ca`);
   - `func qualDaemon(t *testing.T, p *devicemock.Profile, o qualOpts) *qualRun`, with methods `target(p, i)`, `login(i)`, `fault(code)`, `logged(sub) bool`, `addr`;
   - `func qualWaitFor(t *testing.T, buf *syncBuffer, want string, d time.Duration)`;
   - env `PORT49_QUAL_UPDATE=1` rewrites goldens as `pending_lab`.
@@ -3274,8 +3352,10 @@ func TestQualNXOSRealFlightUnderTheDefault(t *testing.T) {
 	if err != nil || tr.Outcome != "login_ok" {
 		t.Fatalf("%v\n%s", err, tr)
 	}
-	if !run.logged(`"event":"redeem"`) || !run.logged(`"transport":"tls"`) || run.logged(`"tls_outcome":"handshake_timeout"`) {
-		t.Fatal("port49 did not serve the device over TLS at the real flight delay")
+	// login_ok needs a PASS over TLS, which only a served device gets; the log
+	// check adds that no handshake timed out on the way.
+	if run.logged(`"tls_outcome":"handshake_timeout"`) {
+		t.Fatal("a handshake timed out at the real flight delay under the default")
 	}
 }
 
@@ -3341,10 +3421,12 @@ Expected: FAIL (`undefined: qualDaemon`).
 - **`qualWaitFor(t, buf, want, d)`** polls for `want`. On timeout it fails with `qualWaitMessage(buf, want)`, never the buffer: that message lists the `event` and `reason` of the last 20 JSON lines and the non-JSON lines that contain no `_sha256` (I12).
 - **`run.login(i)`** returns `devicemock.Login{User: "qual01", Credential: []byte(mint(t, brokerAddr, pkiDir, deviceName(i))), RemAddr: "198.51.100.4"}`. It mints fresh on every call; the token is never printed.
 - **`run.target(p, i)`** returns a `devicemock.Target` with `Scale: o.scale` and `LocalAddr: LoopbackSource(i)` when `o.devices > 1`.
-- **`run.fault(code)`** writes the fault file; **`run.logged(s)`** searches the decision-log buffer.
+- **`run.fault(code)`** writes the fault file, and calls no `t` helper (fleet mode calls it from a goroutine): a write error is kept and checked by the test goroutine.
+- **`run.logged(s)`** searches the decision-log buffer; **`run.said(s)`** searches port49d's stderr buffer.
+- **`run.touchPolicy()`** is described in Task 19.
 - **`qualProfile(t, p, root)`**:
   1. Load the golden (`root/<p.Golden>`; a missing file is an empty golden).
-  2. For each scenario in `p.Scenarios`, start a fresh daemon at scale 0.1 with `handshakeTimeout: time.Second`. Before `store_unavailable`, call `run.fault("store_unavailable")`. Play the scenario with a fresh `run.login(0)`, then `fails, warns := devicemock.Judge(tr, g.Scenarios[sc])`.
+  2. For each scenario in `p.Scenarios`, start a fresh daemon at scale 0.1 with `handshakeTimeout: time.Second`. The device is admitted with `transport: devicemock.ScenarioTransport(sc)` (I-B): `qualOpts` gains `transport string`, which decides the inventory's `transport:` and whether the TLS material is issued; `run.target` sets the same. Before `store_unavailable` and `tls_store_unavailable`, call `run.fault("store_unavailable")`. For `tls_unknown_ca`, the device's client certificate is issued by a second CA that the daemon's `client_ca_file` does not hold. Play the scenario with a fresh `run.login(0)`, then `fails, warns := devicemock.Judge(tr, g.Scenarios[sc])`.
      - Each warn is `t.Log`ged.
      - With `PORT49_QUAL_UPDATE=1`, a golden difference is rewritten: `g.Scenarios[sc] = GoldenFrom(tr)` and `g.PendingLab = true`. A gate still fails.
      - Otherwise each fail is `t.Error`ed, with `tr.String()` and the golden scenario printed.
@@ -3730,7 +3812,9 @@ func newQualEnv(t *testing.T, l *lab) *qualEnv {
 // the slug is e.g. Nexus-9300v-10.6-2-F.
 //
 // inventoryPlatform is node's platform in tests/lab/inventory-lab.yaml (admission.LoadFile):
-// the port49 platform the profile's mock is admitted as. gitHead is `git rev-parse HEAD`.
+// the port49 platform the profile's mock is admitted as. gitHead is `git rev-parse --short=12 HEAD`:
+// twelve hex characters, under l73SummaryLeaks' 32 and devicemock.Load's 40, so a recorded
+// commit never trips a leak gate (re-review C-A). Every commit this plan records is that form.
 
 // run starts port49d on the conformance config, opens the broker session as
 // the slice does, and plays each cell under one capture.
@@ -3816,8 +3900,8 @@ lab-qualify:
 
 - [ ] **Step 6: Run the unit and vet checks**
 
-Run: `make lab-unit && go vet -tags lab ./tests/lab/ && GOOS=darwin go vet -tags lab ./tests/lab/`
-Expected: PASS; both vets clean.
+Run: `make lab-unit && go vet -tags lab ./tests/lab/ && make check-darwin`
+Expected: PASS; vet and check-darwin clean. The tagged darwin vet is not run: l56's pre-existing break, as in Task 2 Step 9.
 
 - [ ] **Step 7: Commit**
 
@@ -3859,6 +3943,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/devicemock"
 )
 
 func TestGenerateTheFixture(t *testing.T) {
@@ -3876,6 +3962,25 @@ func TestGenerateTheFixture(t *testing.T) {
 	}
 	if err := p.Validate("testdata"); err != nil {
 		t.Fatalf("a generated profile must load: %v", err)
+	}
+}
+
+// Through Load, not only Validate: Load's credential check sees the written
+// YAML, so a 40-hex commit or any hash that slipped in fails here (re-review C-A).
+func TestAGeneratedProfileLoads(t *testing.T) {
+	p, _, err := Generate("testdata/QUAL-1.0-fixture_junos", "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	if err := writeProfile(path, p, "testdata/QUAL-1.0-fixture_junos"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := devicemock.Load(path, "testdata"); err != nil {
+		t.Fatalf("a generated profile, as written, must load: %v", err)
+	}
+	if len(p.Vetted.Commit) != 12 {
+		t.Fatalf("commits are recorded as 12 hex characters (git rev-parse --short=12): %q", p.Vetted.Commit)
 	}
 }
 
@@ -3926,7 +4031,9 @@ func TestStimulusEqualIgnoresReviewedParts(t *testing.T) {
 }
 ```
 
-The fixture's `run.json` names `lab_platform: fixture_junos`, `firmware: "1.0"` and `image: fixture 1.0`. The fixture directory also holds `testdata/tests/lab/results/QUAL-1.0-fixture_junos.md`, with an `Image version:` line naming `fixture 1.0`.
+The fixture's `run.json` names `lab_platform: fixture_junos`, `firmware: "1.0"`, `image: fixture 1.0` and `commit: "a291b6c52513"` (twelve hex characters, as `gitHead` records).
+
+`main.go`'s writer is `func writeProfile(path string, p *devicemock.Profile, evDir string) error` (the header comment, then YAML with indent 2), so the test writes exactly what the command writes. The fixture directory also holds `testdata/tests/lab/results/QUAL-1.0-fixture_junos.md`, with an `Image version:` line naming `fixture 1.0`.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -3959,7 +4066,8 @@ var forbidden = []string{"_sha256", "password", "secret", "BEGIN "}
 type run struct {
 	Platform, LabPlatform, Firmware, Image, Commit, Date string
 	Transports                                           []string
-	BreakGlass                                           map[string]bool `json:"break_glass"`
+	Cells                                                map[string]string `json:"cells"` // cell -> start time
+	BreakGlass                                           map[string]bool   `json:"break_glass"`
 }
 
 type conn struct {
@@ -4049,7 +4157,7 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	}
 	p.Reactions = prefillReactions(recs, r, note)
 	p.Scenarios = scenarios(evDir, p.Stimulus.TLS != nil)
-	g = goldenFrom(recs)
+	g = goldenFrom(recs, r.Cells)
 	return p, g, nil
 }
 
@@ -4084,7 +4192,7 @@ Write the helpers in the same file, in full.
   - `server_hello` is that connection's;
   - `flight_delay` is the minimum over every connection with both timestamps of `device_reply_at - server_flight_at`, rounded to 10 ms (`time.Duration(math.Round(float64(d)/1e7) * 1e7)`);
   - `client_chain` and `server_identity` are left to review, defaulting to `leaf_and_intermediate` and `chain_only`;
-  - its source is `note` with `Register: "L73"`.
+  - its source is `note`, with `Register: "QUAL"` as the stimulus has.
 - **`prefillReactions(recs, r, note)`** writes one entry per (step, event) the records show, with `status: measured` and source `note`:
   - `authen_pass` → `next_step`;
   - `authen_getpass` → `send_credential`;
@@ -4094,13 +4202,14 @@ Write the helpers in the same file, in full.
   - the `store_unavailable` cell's `authen_error` → `failover_local`/`falls_to_local` when `r.BreakGlass["store_unavailable"]` is true, else `give_up`/`break_glass_fails`.
 
   Acceptance rules are never pre-filled beyond one: `priv_lvl_range` from the device's own `priv_lvl` values, marked `unmeasured`, since seeing values is not measuring a limit.
-- **`scenarios(evDir, tls)`** lists the cells the run recorded (`token_login`, `wrong_credential`, `store_unavailable`, `single_connection`), plus `unknown_ca` and `flight_delay` when `tls`.
-- **`goldenFrom(recs)`** builds each scenario's outcome and its steps' events and reply attributes from the records. For example, a `redeem` with verdict `permit` is `authen_pass` and one with `deny` is `authen_fail`, and the reply attributes are `reply.attributes`.
+- **`scenarios(evDir, tls)`** lists the cells the run recorded (`token_login`, `wrong_credential`, `store_unavailable`, `single_connection`), plus `tls_token_login`, `tls_store_unavailable`, `tls_unknown_ca` and `flight_delay` when `tls`.
+- **`goldenFrom(recs, cells)`** splits the records first by `device.transport` (`tls` or not; I-B) and then by cell time window (`run.json`'s `cells` start times), so each scenario's golden holds only its own transport's records. It then builds each scenario's outcome and its steps' events and reply attributes from those records.
+- **`steps(recs)`** reads only the plain (`device.transport` not `tls`) records when the run has any, so a profile's step attributes come from one transport. A TLS-only device would read the TLS records; none exists today. For example, a `redeem` with verdict `permit` is `authen_pass` and one with `deny` is `authen_fail`, and the reply attributes are `reply.attributes`.
 
 `main.go`:
 - **Without `-check`:**
   - It calls `Generate`.
-  - It writes the profile with `yaml.NewEncoder`, indent 2, after a header comment: `# Generated by genprofile from <evidence> at <commit>; stimulus is generated, reactions and acceptance are reviewed by hand (decision 52 ruling 1).`
+  - It writes the profile with `writeProfile` (`yaml.NewEncoder`, indent 2), after a header comment: `# Generated by genprofile from <evidence> at <commit>; stimulus is generated, reactions and acceptance are reviewed by hand (decision 52 ruling 1).`
   - It writes the golden with `devicemock.WriteGolden`.
   - It prints the checklist:
     1. each reaction against the note's cell text;
@@ -4199,6 +4308,10 @@ The run steps a derived policy's Junos session reply through totals of 200, 240,
 - [ ] **Step 1: Write the failing pure test**
 
 ```go
+// This checks l78Split's arithmetic only: l78Rendered is built from it, so it
+// cannot catch the projection rendering differently. The measured total is
+// the authorize_session record's reply.attributes, which TestL78 records and
+// the note cites.
 func TestL78PolicyRendersEachTotalWithEveryAttributeUnder255(t *testing.T) {
 	for _, total := range l78Totals {
 		pol := l78Policy(total)
@@ -4415,7 +4528,9 @@ func TestL79CellsAreTheirOwnRow(t *testing.T) {
   - **If (j) shows a lift landing after "could not be lifted":** the operator text is wrong. Fix `port49 revoke --lift`'s message and 11a's "Stores" notes in the roadmap, cite the note, and use a `fix:` commit for the message.
   - **If a revocation is silently lost (a security weakening):** stop and report it to Ryan before any fix.
 
-- [ ] **Step 4: Commit**: `docs: close lab register entries L79` with the note, the evidence, the harness change and the spec Status.
+- [ ] **Step 4: Commit, in two commits.**
+  1. `test: L79 cells j and k on L74's harness`: `l74_test.go` and `l74_unit_test.go`.
+  2. `docs: close lab register entries L79`: the note, the evidence, the §15 Status, and decision 51's provisional mark resolved (Task 1 Step 3b). That is "provisional on L79" removed, or the ruling corrected and cited if (j) contradicted it.
 
 ---
 
@@ -4589,17 +4704,25 @@ func TestQualFleet(t *testing.T) {
 	run := qualDaemon(t, p, qualOpts{scale: 0.1, handshakeTimeout: time.Second, devices: n})
 	fleet := devicemock.Fleet{Profile: p, N: n, Concurrency: 100, Scenario: "token_login"}
 	phase := func(name string, mid func()) devicemock.FleetResult {
-		if mid != nil {
-			go func() { time.Sleep(200 * time.Millisecond); mid() }()
+		// Mint every device's token here, on the test goroutine: mint's helpers
+		// call t.Fatal, which is invalid from a worker (re-review I-F). Workers
+		// only index this slice.
+		logins := make([]devicemock.Login, n)
+		for i := range n {
+			logins[i] = run.login(i)
 		}
-		res := fleet.Run(t.Context(), func(i int) devicemock.Target { return run.target(p, i) }, run.login)
+		if mid != nil {
+			go func() { time.Sleep(200 * time.Millisecond); mid() }() // mid never calls a t helper
+		}
+		res := fleet.Run(t.Context(), func(i int) devicemock.Target { return run.target(p, i) },
+			func(i int) devicemock.Login { return logins[i] })
 		t.Logf("%s: %d plays, outcomes %v, errors %d, p50 %s, p99 %s", name, res.Plays, res.Outcomes, res.Errors, res.P50, res.P99)
 		return res
 	}
 	if res := phase("concurrent logins", nil); res.Outcomes["login_ok"] != n {
 		t.Fatalf("every device logs in: %v", res.Outcomes)
 	}
-	if res := phase("reload under load", run.touchPolicy); res.Outcomes["login_ok"] != n || !run.logged("policy refresh") {
+	if res := phase("reload under load", run.touchPolicy); res.Outcomes["login_ok"] != n || !run.said("port49d: policy refresh") {
 		t.Fatalf("a reload under load loses no login: %v", res.Outcomes)
 	}
 	res := phase("store down under load", func() { run.fault("store_unavailable") })
@@ -4613,7 +4736,11 @@ func TestQualFleet(t *testing.T) {
 }
 ```
 
-`run.touchPolicy` rewrites the policy file with an added comment line; the broker's 1 s policy watch then reloads it. `run.login` mints once per play; with 500 devices the broker's per-principal connection cap applies, so set `MaxConnsPerPrincipal` in `qualDaemon` to `max(4, o.devices)`. The test asserts no latency number: plan 12 sets the targets.
+`run.touchPolicy` rewrites the policy file with one more harmless deny (`show qual-reload-<n>`) added to `qual_denies`, a real change, and the broker's 1 s policy watch reloads it.
+
+`run.said(sub)` searches port49d's stderr buffer, not the decision log. `port49d: policy refresh` is the prefix `internal/port49d/reload.go:1307-1309` writes after a reload refreshes contexts; `run_test.go`'s `TestRunServesAPolicyEditToALiveSessionWithNoLogout` waits on the same line.
+
+`run.login` mints once per play, on the test goroutine before the phase starts; with 500 devices the broker's per-principal connection cap applies, so set `MaxConnsPerPrincipal` in `qualDaemon` to `max(4, o.devices)`. The test asserts no latency number: plan 12 sets the targets.
 
 - [ ] **Step 4: Makefile**
 
@@ -4658,7 +4785,7 @@ permissions: {contents: read}
 jobs:
   srlinux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -4673,15 +4800,23 @@ jobs:
       - run: bash -c "$(curl -sL https://get.containerlab.dev)" -- -v 0.71.1
       - run: docker pull ghcr.io/nokia/srlinux:26.7.2-519
       - run: make build
-      - name: L76 and the conformance run
-        run: sg docker -c "PORT49_LAB_REMEASURE=L76 PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^(TestQualify|TestL76)$' -count=1 -v -timeout 50m"
+      # Two processes, each with its own TestMain teardown: in one, TestL76 leaves srl1 up
+      # and TestQualify's single-occupant docker ps check refuses to run (re-review I-C).
+      - name: L76
+        run: sg docker -c "PORT49_LAB_REMEASURE=L76 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 40m"
+      - name: The conformance run
+        run: sg docker -c "PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestQualify$' -count=1 -v -timeout 40m"
       - run: go run ./tests/lab/cmd/notediff -fail-on-change -note tests/lab/results/L76-nokia_srlinux.md
       - run: go run ./tests/qual/cmd/genprofile -check -evidence tests/lab/evidence/QUAL-SR-Linux-26.7.2-519-nokia_srlinux
 ```
 
+`genprofile -check` stays stable on SR Linux's `session.port`: all 35 `redeem` and `authorize_session` records in `tests/lab/evidence/L76-nokia_srlinux/decisions.jsonl` carry `ssh`, a constant, not a per-run value. If a later run records a per-session value there, template it as `{port}` in `qualRecord` and the engine.
+
 Pin containerlab to the version beehive runs (`containerlab version`). If the prerequisite step cannot pass on a hosted runner (the 172.100.100.0/24 bridge, sudo), switch `runs-on` to beehive's self-hosted label and say so in the as-built. That is the one-line change the Global Constraints keep available.
 
-- [ ] **Step 2: Validate the YAML**: `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/lab-free.yml`. Then run the workflow once by dispatch (`gh workflow run lab-free.yml`) and read its result with `gh run list --workflow lab-free.yml --limit 1`.
+- [ ] **Step 2: Validate the YAML**: `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/lab-free.yml`. Raise the job's `timeout-minutes` to 90, which covers the two 40-minute steps.
+
+  `gh workflow run lab-free.yml` dispatches only a workflow that is already on the default branch, so the first dispatch happens after this plan's PR merges. The controller runs it then (`gh workflow run lab-free.yml`, then `gh run list --workflow lab-free.yml --limit 1`) and records the result in the as-built entry (Task 23). If the prerequisites step fails on the hosted runner, `runs-on` moves to beehive in a one-line follow-up.
 - [ ] **Step 3: Commit**: `ci: the free-image tier runs SR Linux's qualification on dispatch and tags`.
 
 ---
@@ -4700,7 +4835,7 @@ Pin containerlab to the version beehive runs (`containerlab version`). If the pr
 
 A row exists only where a profile exists and every note it cites exists. Untested platforms are not listed. The cells are defined from the golden:
 - **TACACS+ 49:** `yes` when the profile's transports include `tcp` and the golden's `token_login` outcome is `login_ok`.
-- **TLS 300:** `yes` when the transports include `tls` and `token_login` is `login_ok`; `—` without `tls`.
+- **TLS 300:** `yes` when the transports include `tls` and the golden's `tls_token_login` outcome is `login_ok`; `—` without `tls`.
 - **command authorization:** `yes` when the golden's `token_login` steps hold a `command_permitted` with event `author_pass_add` or `author_pass_repl`, and a `command_denied` with `author_fail`.
 - **accounting:** `yes` when an `account_stop` step has event `acct_success`.
 - **status:**

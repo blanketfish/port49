@@ -7314,6 +7314,10 @@ The tooling around it:
 - SONiC (L77) gets its profile when its lab row lands.
 - Plan 12 drives fleet mode at the §5 target rate.
 - Plan 13 publishes the qualified-platforms page and the contributor guide.
+- **Known, not fixed here:** `GOOS=darwin go vet -tags lab ./tests/lab/` fails on main at
+  `tests/lab/l56_test.go:131` (`syscall.TIOCSPTLCK` is Linux-only). `make check-darwin` does not vet the
+  `lab` tag, so CI never sees it. The fix (moving L56's pty helper into an `_linux_test.go` file) belongs
+  to the next touch of L56, or the pre-beta review.
 
 **Lab entries.**
 - Opens and measures **L78**: a Junos *permit* reply over 255 bytes in total, Ryan's lock-out prior,
