@@ -10381,11 +10381,11 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   is misconfigured, not hostile. Every
   reply on the TLS listener sets the unencrypted flag. A packet that fails another header check
   is `not_tacacs` and struck, as on 49.
-- **14. The handshake has a deadline**: `handshake_timeout`, default 5s, 1s to 30s. That bounds
+- **14. The handshake has a deadline**: `handshake_timeout`, default 10s, 1s to 30s. That bounds
   the slot a stalled peer holds under the per-NAS cap. A timeout is `handshake_timeout`, struck.
-  The default sits above the shortest measured reply timeout (3s, L13) only because a
-  handshake that takes longer is already lost to that device, and the deadline exists to free
-  the slot. Measured: NX-OS 10.6(2)F needs more than 5s (tests/lab/results/L73-cisco_nxos.md).
+  The default is above NX-OS 10.6(2)F's measured 5.00 s client-flight delay, with margin
+  (tests/lab/results/L73-cisco_nxos.md); a device whose reply timeout is shorter than its own
+  handshake has already lost the exchange, and the deadline frees the slot.
 - **15. The listener's files reload without a restart.** `cert_file`, `key_file`,
   `client_ca_file` and `intermediates_file` are read again every `reload_interval` (default 1m,
   10s to 1h) and at every SIGHUP. A set whose bytes changed and that loads is swapped in whole

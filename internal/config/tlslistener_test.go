@@ -48,7 +48,7 @@ func TestTLSListenerDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	tl := c.TLSListener
-	if tl == nil || tl.Listen != ":300" || tl.HandshakeTimeout != 5*time.Second || tl.SessionTicketLifetime != 0 ||
+	if tl == nil || tl.Listen != ":300" || tl.HandshakeTimeout != 10*time.Second || tl.SessionTicketLifetime != 0 ||
 		tl.ExpiryWarningFraction != 0.33 || tl.ReloadInterval != time.Minute {
 		t.Fatalf("defaults: %+v", tl)
 	}

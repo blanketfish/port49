@@ -32,7 +32,7 @@ type TLSListenerConfig struct {
 	// ServerNames, when set, are the SNI names a ClientHello may ask for
 	// (ruling 10). Lower-cased at load.
 	ServerNames           []string      `yaml:"server_names"`
-	HandshakeTimeout      time.Duration `yaml:"handshake_timeout"`       // default 5s; 1s to 30s
+	HandshakeTimeout      time.Duration `yaml:"handshake_timeout"`       // default 10s; 1s to 30s
 	SessionTicketLifetime time.Duration `yaml:"session_ticket_lifetime"` // default 0s (off); up to 1h
 	// ExpiryWarningFraction is expiry_warning_fraction (ruling 16): a device
 	// certificate with less than this fraction of its own lifetime left is
@@ -133,7 +133,7 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 		}
 		t.ServerNames[i] = n
 	}
-	t.HandshakeTimeout = orD(t.HandshakeTimeout, 5*time.Second)
+	t.HandshakeTimeout = orD(t.HandshakeTimeout, 10*time.Second)
 	if t.HandshakeTimeout < time.Second || t.HandshakeTimeout > 30*time.Second {
 		return nil, fmt.Errorf("config: %s.handshake_timeout must be between 1s and 30s; got %s", key, t.HandshakeTimeout)
 	}
