@@ -36,11 +36,13 @@ func Check(rules []AcceptanceRule, step string, args [][]byte) (gate, warn []Vio
 	return gate, warn
 }
 
+// attrName is the name before the separator. An argument with no separator is
+// malformed and may hold anything, so it is never named.
 func attrName(a []byte) string {
 	if i := bytes.IndexAny(a, "=*"); i >= 0 {
 		return string(a[:i])
 	}
-	return string(a)
+	return "<unnamed>"
 }
 
 func attrValue(a []byte) string {
@@ -66,6 +68,8 @@ func violates(r AcceptanceRule, args [][]byte) string {
 			}
 		}
 	case "max_reply_bytes":
+		// The total counts each argument's whole name=value bytes, not the
+		// 1-byte length prefix the wire adds per argument.
 		total := 0
 		for _, a := range args {
 			total += len(a)

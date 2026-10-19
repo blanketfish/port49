@@ -121,3 +121,39 @@ func TestRoleNamesReadsQuotedAndBareValues(t *testing.T) {
 		}
 	}
 }
+
+func TestAMalformedAttributeIsNamedUnnamedNeverEchoed(t *testing.T) {
+	r := AcceptanceRule{ID: "r", Kind: "max_attribute_bytes", Applies: "any", Max: 5, Status: "measured"}
+	gate, _ := Check([]AcceptanceRule{r}, "authorize_session", [][]byte{[]byte("zq7-no-separator-distinctive")})
+	if len(gate) != 1 || strings.Contains(gate[0].Detail, "zq7") || !strings.Contains(gate[0].Detail, "<unnamed>") {
+		t.Fatalf("%+v", gate)
+	}
+}
+
+// The total counts whole name=value bytes, without the 1-byte length prefix.
+func TestReplyTotalPassesAt255AndGatesAt256(t *testing.T) {
+	r := AcceptanceRule{ID: "r", Kind: "max_reply_bytes", Applies: "any", Max: 255, Status: "measured"}
+	at := func(n int) [][]byte {
+		return [][]byte{[]byte("a=" + strings.Repeat("x", 100)), []byte("b=" + strings.Repeat("x", n-102-2))}
+	}
+	if gate, _ := Check([]AcceptanceRule{r}, "authorize_session", at(255)); len(gate) != 0 {
+		t.Fatalf("255 bytes gated: %+v", gate)
+	}
+	if gate, _ := Check([]AcceptanceRule{r}, "authorize_session", at(256)); len(gate) != 1 {
+		t.Fatal("256 bytes passed")
+	}
+}
+
+func TestRoleNamesCurrentBehaviourOnOddInput(t *testing.T) {
+	for in, want := range map[string][]string{
+		`"network-admin`:        {"network-admin"},
+		`network-admin"`:        {"network-admin"},
+		``:                      {},
+		`   `:                   {},
+		"network-admin\tp49-ro": {"network-admin", "p49-ro"},
+	} {
+		if got := roleNames(in); !slices.Equal(got, want) && !(len(got) == 0 && len(want) == 0) {
+			t.Errorf("roleNames(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

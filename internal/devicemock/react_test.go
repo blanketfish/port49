@@ -20,7 +20,7 @@ func TestReactFindsTheStepThenTheWildcardAndRefusesTheUnknown(t *testing.T) {
 
 func TestReactRefusesAnUnknownStepOrEvent(t *testing.T) {
 	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
-	for _, c := range [][2]string{{"no_such_step", "authen_pass"}, {"login", "no_such_event"}} {
+	for _, c := range [][2]string{{"no_such_step", "author_pass_add"}, {"login", "no_such_event"}} {
 		if r, err := p.React(c[0], c[1]); err == nil {
 			t.Errorf("%v: %+v %v", c, r, err)
 		}
@@ -28,7 +28,7 @@ func TestReactRefusesAnUnknownStepOrEvent(t *testing.T) {
 }
 
 func TestAStepsOwnEntryBeatsTheWildcard(t *testing.T) {
-	p := &Profile{Reactions: []Reaction{
+	p := &Profile{Stimulus: Stimulus{Steps: []Step{{Name: "login"}}}, Reactions: []Reaction{
 		{Step: "*", On: "authen_fail", Then: "stop"},
 		{Step: "login", On: "authen_fail", Then: "retry"},
 	}}
