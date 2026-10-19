@@ -2401,9 +2401,10 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 func BuildClientHello(h Hello, serverIP string) ([]byte, error) // one TLS record; fresh random, session id, key share
 func Probe(ctx context.Context, d *net.Dialer, addr string, h Hello, serverIP string) (ServerHello, error)
 type TLSMaterial struct {
-	Client    tls.Certificate // generated per test
-	ServerCAs *x509.CertPool
-	ServerIP  string
+	Client     tls.Certificate // generated per test
+	ServerCAs  *x509.CertPool  // nil fails closed (never the system roots)
+	ServerIP   string          // checked for server_identity ip
+	ServerName string          // checked for server_identity dns; empty is an error
 }
 func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config
 func DelayFlight(c net.Conn, d time.Duration, sleep func(time.Duration)) net.Conn
@@ -2584,6 +2585,8 @@ import (
 	"time"
 )
 
+// ErrNoBuilder marks a ClientHello extension the engine cannot build: an
+// engine gap to list in the profile, never skipped silently.
 var ErrNoBuilder = errors.New("devicemock: no builder for this extension")
 
 // hrrRandom is RFC 8446 §4.1.3's HelloRetryRequest random.
@@ -2767,10 +2770,15 @@ import (
 	"time"
 )
 
+// TLSMaterial is what a test generates for one session: the device's client
+// certificate, the CAs it trusts for port49's certificate, and the address
+// (server_identity ip) and DNS name (server_identity dns) it checks that
+// certificate against. Nothing in it is read from or written to disk.
 type TLSMaterial struct {
-	Client    tls.Certificate
-	ServerCAs *x509.CertPool
-	ServerIP  string
+	Client     tls.Certificate
+	ServerCAs  *x509.CertPool
+	ServerIP   string
+	ServerName string
 }
 
 var goCurves = map[uint16]tls.CurveID{29: tls.X25519, 23: tls.CurveP256, 24: tls.CurveP384, 25: tls.CurveP521}
@@ -2783,11 +2791,20 @@ var goCurves = map[uint16]tls.CurveID{29: tls.X25519, 23: tls.CurveP256, 24: tls
 // sent here (crypto/tls omits it), only by the probe: an engine gap each
 // profile that has one lists.
 func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS13,
-		Certificates: []tls.Certificate{m.Client}, NextProtos: s.ClientHello.ALPN}
-	if len(s.ClientHello.SupportedVersions) == 1 && s.ClientHello.SupportedVersions[0] == 772 {
-		cfg.MinVersion = tls.VersionTLS13
+	cfg := &tls.Config{Certificates: []tls.Certificate{m.Client}, NextProtos: s.ClientHello.ALPN}
+	// The versions the device offers bound the session: extension 43's list,
+	// or the legacy version when it sends none (a 1.2-only device). crypto/tls
+	// floors at 1.2, so an offer of 1.1 or 1.0 is raised to it.
+	versions := s.ClientHello.SupportedVersions
+	if len(versions) == 0 {
+		versions = []uint16{s.ClientHello.LegacyVersion}
 	}
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS12
+	for _, v := range versions {
+		v = max(v, tls.VersionTLS12)
+		cfg.MinVersion, cfg.MaxVersion = min(cfg.MinVersion, v), max(cfg.MaxVersion, v)
+	}
+	cfg.MaxVersion = min(cfg.MaxVersion, tls.VersionTLS13)
 	for _, g := range s.ClientHello.SupportedGroups {
 		if c, ok := goCurves[g]; ok {
 			cfg.CurvePreferences = append(cfg.CurvePreferences, c)
@@ -2798,12 +2815,21 @@ func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config {
 		if len(cs.PeerCertificates) == 0 {
 			return errors.New("devicemock: no server certificate")
 		}
+		if m.ServerCAs == nil {
+			return errors.New("devicemock: no server CAs; refusing to fall back to the system roots")
+		}
 		opts := x509.VerifyOptions{Roots: m.ServerCAs, Intermediates: x509.NewCertPool()}
 		for _, c := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(c)
 		}
-		if s.ServerIdentity == "ip" || s.ServerIdentity == "dns" {
-			opts.DNSName = m.ServerIP
+		switch s.ServerIdentity {
+		case "ip":
+			opts.DNSName = m.ServerIP // an IP literal matches iPAddress SANs only
+		case "dns":
+			if m.ServerName == "" {
+				return errors.New("devicemock: server_identity dns needs TLSMaterial.ServerName")
+			}
+			opts.DNSName = m.ServerName
 		}
 		_, err := cs.PeerCertificates[0].Verify(opts)
 		return err

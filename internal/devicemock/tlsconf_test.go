@@ -3,6 +3,7 @@ package devicemock
 import (
 	"crypto/tls"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,13 +59,17 @@ func handshake(t *testing.T, s *TLSStimulus, m TLSMaterial, server tls.Certifica
 }
 
 func material(t *testing.T, ca *testpki.CA, ip string) TLSMaterial {
+	return materialNamed(t, ca, ip, "")
+}
+
+func materialNamed(t *testing.T, ca *testpki.CA, ip, name string) TLSMaterial {
 	t.Helper()
 	now := time.Now()
 	client, err := ca.Issue(testpki.Leaf{CommonName: "device", Client: true, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return TLSMaterial{Client: client, ServerCAs: ca.Pool(), ServerIP: ip}
+	return TLSMaterial{Client: client, ServerCAs: ca.Pool(), ServerIP: ip, ServerName: name}
 }
 
 func TestSessionConfigChecksTheServerChainAndTheNameAsMeasured(t *testing.T) {
@@ -117,5 +122,84 @@ func TestSessionConfigFollowsTheDevicesVersionsAndCurves(t *testing.T) {
 	s.ClientHello.SupportedVersions = []uint16{772, 771}
 	if SessionConfig(s, TLSMaterial{}).MinVersion != tls.VersionTLS12 {
 		t.Error("a device that offers 1.2 too must be allowed it")
+	}
+}
+
+// serverWith is a server certificate from a fresh CA carrying the given names.
+func serverWith(t *testing.T, ips []net.IP, dns []string) (tls.Certificate, *testpki.CA) {
+	t.Helper()
+	now := time.Now()
+	ca, err := testpki.NewCA("names", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := ca.Issue(testpki.Leaf{IPs: ips, DNSNames: dns, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, ca
+}
+
+// dns checks the configured name, ip checks the address (L73 cell d): a
+// certificate with only an address fails dns, one with only a name fails ip.
+func TestSessionConfigDNSChecksTheNameAndIPChecksTheAddress(t *testing.T) {
+	ipOnly, ipCA := serverWith(t, testpki.Loopback(), nil)
+	nameOnly, nameCA := serverWith(t, nil, []string{"port49.example"})
+	cases := []struct {
+		name     string
+		identity string
+		server   tls.Certificate
+		ca       *testpki.CA
+		wantErr  bool
+	}{
+		{"an IP-only certificate fails dns", "dns", ipOnly, ipCA, true},
+		{"a dNSName certificate passes dns", "dns", nameOnly, nameCA, false},
+		{"the same IP-only certificate passes ip", "ip", ipOnly, ipCA, false},
+		{"a dNSName-only certificate fails ip", "ip", nameOnly, nameCA, true},
+	}
+	for _, tc := range cases {
+		s := &TLSStimulus{ServerIdentity: tc.identity, ClientHello: nxosHello()}
+		m := materialNamed(t, tc.ca, "127.0.0.1", "port49.example")
+		if err := handshake(t, s, m, tc.server); (err != nil) != tc.wantErr {
+			t.Errorf("%s: err %v", tc.name, err)
+		}
+	}
+}
+
+func TestSessionConfigRefusesADNSProfileWithNoName(t *testing.T) {
+	server, ca := serverWith(t, nil, []string{"port49.example"})
+	s := &TLSStimulus{ServerIdentity: "dns", ClientHello: nxosHello()}
+	if err := handshake(t, s, materialNamed(t, ca, "127.0.0.1", ""), server); err == nil || !strings.Contains(err.Error(), "needs TLSMaterial.ServerName") {
+		t.Fatal("a dns profile with no ServerName must be an error, not an IP check")
+	}
+}
+
+func TestSessionConfigWithNoServerCAsFailsClosed(t *testing.T) {
+	server, ca := selfSignedWithCA(t)
+	m := material(t, ca, "127.0.0.1")
+	m.ServerCAs = nil
+	s := &TLSStimulus{ServerIdentity: "chain_only", ClientHello: nxosHello()}
+	if err := handshake(t, s, m, server); err == nil || !strings.Contains(err.Error(), "no server CAs") {
+		t.Fatal("a nil ServerCAs fell back to other roots")
+	}
+}
+
+func TestSessionConfigBoundsVersionsByTheProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		legacy   uint16
+		versions []uint16
+		min, max uint16
+	}{
+		{"1.3 only", 771, []uint16{772}, tls.VersionTLS13, tls.VersionTLS13},
+		{"1.3 and 1.2", 771, []uint16{772, 771}, tls.VersionTLS12, tls.VersionTLS13},
+		{"no extension 43 is 1.2 only", 771, nil, tls.VersionTLS12, tls.VersionTLS12},
+		{"1.1 offered is floored at 1.2", 771, []uint16{772, 771, 770}, tls.VersionTLS12, tls.VersionTLS13},
+	} {
+		s := &TLSStimulus{ClientHello: Hello{LegacyVersion: tc.legacy, SupportedVersions: tc.versions}}
+		cfg := SessionConfig(s, TLSMaterial{})
+		if cfg.MinVersion != tc.min || cfg.MaxVersion != tc.max {
+			t.Errorf("%s: min %x max %x", tc.name, cfg.MinVersion, cfg.MaxVersion)
+		}
 	}
 }

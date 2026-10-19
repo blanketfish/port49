@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+// ErrNoBuilder marks a ClientHello extension the engine cannot build: an
+// engine gap to list in the profile, never skipped silently.
 var ErrNoBuilder = errors.New("devicemock: no builder for this extension")
 
 // hrrRandom is RFC 8446 §4.1.3's HelloRetryRequest random.
