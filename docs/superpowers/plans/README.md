@@ -321,6 +321,10 @@ SR Linux reference config:
   word after `authentication` in `show system aaa authentication` (c).
 - After a port49 restart the device asked again within 1 s, and health checks open connections that carry
   no payload and write no records (g).
+**11b written 2026-10-19** (`2026-10-19-11b-qualification-suite.md`, twenty-three tasks: one spec, thirteen
+code, five lab, two CI, two docs; decision 52 written by its Task 1; one question for
+Ryan, Q1, when the SR Linux job runs). It builds mock devices from closed lab evidence, `make lab-regress`
+and `make qual-vet` (Plan 11b, below).
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -7241,6 +7245,81 @@ then two re-reviews) was applied before Task 1.
     first tick; the config does not refuse an etcd endpoint host that is not an IP literal or a valid
     DNS name, or a non-numeric port (`store-roles` does today; when the config does,
     `TestStoreRolesRefusesAnUnsafeEndpoint`'s `;` input fails at config first).
+
+## Plan 11b — Qualification suite (design §14; Ryan, 2026-10-17 and 2026-10-19)
+
+Status: **written 2026-10-19** (`2026-10-19-11b-qualification-suite.md`, branch
+`feature/qualification-suite`; twenty-three tasks; decision 52; opens L78). Numbered 11b, not 12: it
+needs 11a's stores in the conformance runs, and plan 12 consumes its fleet mode for the load test, so it
+lands between them (the 05b and 06b1 precedent; nothing is renumbered).
+
+**Builds.** A mock device per vetted platform and firmware. Each is a YAML profile (snake_case) in three
+parts. Credit: cisshgo (MIT) for "behaviour is data" and fleet mode.
+1. **Stimulus**, generated from closed lab evidence:
+   - the ClientHello;
+   - the flight delay (NX-OS 10.6(2)F: 5.00 s);
+   - the connection pattern;
+   - each step's packet fields and attribute list;
+   - the accounting records.
+2. **Reaction table.** GETPASS → CONTINUE; FAIL → stop; ERROR → the measured fallback (IOS XE 17.18.02
+   over TLS: break-glass fails); an alert → give up.
+3. **Acceptance rules.** Byte limits, privilege range, role names, refused attributes. Each cites its
+   results note, or is `unmeasured` and never gates.
+
+One engine, `internal/devicemock`, plays any profile against a real in-process port49d under one
+qualification policy (`tests/qual/qual-policy.yaml`), with credentials minted fresh per test:
+- **TLS:** a byte-exact hello probe, then a `crypto/tls` session. Delays run at 0.1 scale against
+  `handshake_timeout: 1s`, and one test runs the real 5.00 s against the 10 s default.
+- **Gates:** port49's replies are pinned in goldens; a measured acceptance-rule violation fails.
+- **Escape hatch:** Go only for what a profile cannot say, listed in its `engine_gaps`.
+
+The tooling around it:
+- **`genprofile`** builds part 1 from whitelisted evidence and pre-fills parts 2 and 3. It never reads
+  a capture or a body.
+- **`TestQualify`** is the lab conformance run that produces that evidence.
+- **`make qual-vet`** chains the lab run, the generator, the mocks and the list for review.
+- **`make lab-regress`** reruns closed entries on beehive under the lab lock (held once, passed to each
+  child as a descriptor) and the STOP sentinel; `notediff` reports changed observations. Its full-run
+  time is measured in Task 4.
+- **Fleet mode** (`make qual-fleet`): N mocks from N loopback addresses against one port49d.
+- **`docs/qualified-platforms.md`**, generated from the profiles and notes, with a drift test.
+- **Tiers:** mocks on every PR on any runner (`qual.yml`, `runs-on` one line); SR Linux, the one
+  redistributable image, in `lab-free.yml`; vendor images on beehive only, before pre-beta and release
+  tags and on any image change, not nightly.
+
+**Spec sections.**
+- §5.7: a `packet_fields` object on validated request records, the header fields as enum names (decision
+  52 ruling 3).
+- §13: decision 52.
+- §15: the register's citation rule for every device claim in a profile; L78 opened.
+- Design §14.
+
+**Earlier plans hand it.**
+- L73's `l73Dialects`, `l73Conns` and `*.tls.json` summaries.
+- The lab harness (`platforms`, `labOccupyForRun`, the `lab.fault_file` switch).
+- The decision log's validated records.
+- `internal/port49d`'s in-process run, broker and `mint` test helpers, and `testpki`.
+- 11a's stores. Plan 11's `handshake_timeout` (10 s default since PR #28).
+
+**Leaves for later.**
+- An SSH front on the mock (cisshgo-style): its CLI would be invented behaviour, and the ssh path is
+  measured on real devices (L54, L64).
+- SONiC (L77) gets its profile when its lab row lands.
+- Plan 12 drives fleet mode at the §5 target rate.
+- Plan 13 publishes the qualified-platforms page and the contributor guide.
+
+**Lab entries.**
+- Opens and measures **L78**: a Junos *permit* reply over 255 bytes in total, Ryan's lock-out prior,
+  unmeasured until now.
+- Re-measures closed rows L1, L4, L6, L10, L13, L15, L19, L21, L28 and L73 per firmware, closing nothing
+  by itself (decision 52 ruling 10).
+- Adds a full **L73** note on **XRd 26.1.1** through a new XR dialect, help first.
+
+**Carry-ins.**
+- XRd 26.1.1's full L73 row (Task 16).
+- 11a's **M4**: a lift or revoke delivered after the heal, and its reverse stray revoke, as L74 cells (j)
+  and (k) (Task 17).
+- L76's **R3-M1**: `l76WriteText`'s mixed-pair wording, no rerun (Task 18).
 
 ## Plan 12 — Deployment (§19 step 12)
 
