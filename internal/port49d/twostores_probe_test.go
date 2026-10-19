@@ -1,3 +1,5 @@
+//go:build linux
+
 package port49d
 
 import (
