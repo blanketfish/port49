@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,5 +65,37 @@ func TestTheSnapshotsMarksAreTheirUnion(t *testing.T) {
 	if _, ok, _ := loadSnapshots(context.Background(), fakeSnapshots{etcdstore.SnapshotMarks: {"port49d@h1": stale,
 		"port49d@h3": []byte("not sealed")}}, keys, false, 4*time.Hour, time.Second, io.Discard, "port49d"); ok {
 		t.Fatal("a record past the ceiling was served")
+	}
+}
+
+// A record confirmed ahead of this host's clock (a writer's clock ahead, or a
+// forged record) never counts as young for longer than the ceiling allows:
+// one past snapshotSkew ahead is not served, and one within it counts from
+// now, never from the future, so the copy's age is never negative and R19's
+// ceiling still bounds the serve (final review, M1).
+func TestASnapshotConfirmedInTheFutureIsNotYoungForever(t *testing.T) {
+	keys := signInTestKeys
+	a := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:a@example.com", At: time.Now().Add(-time.Hour)}
+	seal := func(conf time.Time) map[string][]byte {
+		raw, err := sealSnapshot(keys, etcdstore.SnapshotMarks, "port49d@h1",
+			marksSnapshot{Writer: "port49d@h1", Revision: 9, Confirmed: conf, Marks: []store.Revocation{a}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string][]byte{"port49d@h1": raw}
+	}
+	var out syncBuffer
+	if _, ok, _ := loadSnapshots(context.Background(), fakeSnapshots{etcdstore.SnapshotMarks: seal(time.Now().Add(time.Hour))},
+		keys, false, 4*time.Hour, time.Second, &out, "port49d"); ok {
+		t.Fatal("a record confirmed an hour ahead was served")
+	}
+	if !strings.Contains(out.String(), "ahead of this host's clock") {
+		t.Fatalf("a record from the future was skipped silently: %q", out.String())
+	}
+	before := time.Now()
+	v, ok, _ := loadSnapshots(context.Background(), fakeSnapshots{etcdstore.SnapshotMarks: seal(time.Now().Add(snapshotSkew / 2))},
+		keys, false, 4*time.Hour, time.Second, io.Discard, "port49d")
+	if !ok || v.confirmed.After(time.Now()) || v.confirmed.Before(before) {
+		t.Fatalf("a record within the skew: ok %v, confirmed %v, want now", ok, v.confirmed)
 	}
 }

@@ -108,6 +108,12 @@ func openSnapshots(ctx context.Context, src snapshotSource, keys crypt.Keys, kin
 	return nil
 }
 
+// snapshotSkew is how far ahead of this host's clock a snapshot record's
+// Confirmed may be and still be served, as from now: a writer's clock a
+// little ahead. One further ahead (a clock far off, or a forged record)
+// would read young forever, and R19's ceiling would never bound the serve.
+const snapshotSkew = time.Minute
+
 // loadSnapshots is what a start in a cut serves from (R19, N1): the union
 // of the marks of every marks record that opens and is younger than
 // ceiling, never the newest alone, so a deleted or replayed record lifts
@@ -118,7 +124,21 @@ func loadSnapshots(ctx context.Context, src snapshotSource, keys crypt.Keys, bro
 	bound time.Duration, out io.Writer, proc string) (snapshotView, bool, error) {
 	var v snapshotView
 	seen := map[[2]string]bool{}
-	young := func(at time.Time) bool { return time.Since(at) < ceiling }
+	now := time.Now()
+	// young clamps at to now, and is false for one past snapshotSkew ahead,
+	// said.
+	young := func(kind, w string, at *time.Time) bool {
+		if at.After(now.Add(snapshotSkew)) {
+			fmt.Fprintf(out, "%s: directory store: the snapshot record %s/%s is confirmed at %s, ahead of this "+
+				"host's clock by more than %v; skipped\n", proc, kind, printsafe.Line(w, 200),
+				at.UTC().Format(time.RFC3339), snapshotSkew)
+			return false
+		}
+		if at.After(now) {
+			*at = now
+		}
+		return now.Sub(*at) < ceiling
+	}
 	note := func(w string, at time.Time) {
 		v.records++
 		if at.After(v.confirmed) {
@@ -130,7 +150,7 @@ func loadSnapshots(ctx context.Context, src snapshotSource, keys crypt.Keys, bro
 		if json.Unmarshal(raw, &b) != nil || b.Writer != w {
 			return false
 		}
-		if !young(b.Confirmed) {
+		if !young(etcdstore.SnapshotMarks, w, &b.Confirmed) {
 			return true
 		}
 		note(w, b.Confirmed)
@@ -157,7 +177,7 @@ func loadSnapshots(ctx context.Context, src snapshotSource, keys crypt.Keys, bro
 		if json.Unmarshal(raw, &b) != nil || b.Writer != w {
 			return false
 		}
-		if !young(b.Confirmed) {
+		if !young(etcdstore.SnapshotBroker, w, &b.Confirmed) {
 			return true
 		}
 		brokers++
