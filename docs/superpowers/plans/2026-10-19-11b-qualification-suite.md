@@ -3124,6 +3124,11 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 		// or the reset port49 sends after it (which races the alert). Any of
 		// those is the class event tls_refused.
 		res, err := pl.step(ctx, steps[0])
+		if err != nil && !isRefusal(handshakeEvent(err)) {
+			// A timeout or any other failure is not a refusal: surface it
+			// rather than pass it off as tls_refused (re-review 4).
+			return pl.tr, err
+		}
 		if err != nil || isRefusal(res.Event) {
 			return pl.end("handshake_refused", StepResult{Step: steps[0].Name, Event: "tls_refused"}), nil
 		}
@@ -3699,6 +3704,8 @@ func TestQualRecordKeepsEscalateAndDropsTheRest(t *testing.T) {
 	if _, ok := qualRecord(map[string]any{"event": "escalate"}, "qual01"); !ok {
 		t.Fatal("escalate is a validated request record")
 	}
+	// A bare unvalidated record is dropped; only the tls_refused diagnosis is
+	// kept (TestQualRecordKeepsATLSRefusalsOutcomeOnly below).
 	for _, ev := range []string{"mint", "unvalidated", "issue", "revoke", "authenticate"} {
 		if _, ok := qualRecord(map[string]any{"event": ev}, "qual01"); ok {
 			t.Fatalf("%s is not stimulus evidence", ev)
