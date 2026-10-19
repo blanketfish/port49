@@ -311,11 +311,25 @@ func TestAFailedTakeoverLetsTheHoldGo(t *testing.T) {
 	}
 }
 
+// judgedThen is meta/ whose first Judged read runs then first: the
+// takeover reads meta/judged after its snapshots of the marks and the logout
+// set, so then lands inside the takeover, past them.
+type judgedThen struct {
+	judgedStore
+	once sync.Once
+	then func()
+}
+
+func (j *judgedThen) Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error) {
+	j.once.Do(j.then)
+	return j.judgedStore.Judged(ctx)
+}
+
 // A logout and a mark the feeds bring while the takeover runs, after its
 // snapshots of the logout set and the marks, are still reached in this
 // region: they are queued from the start of the takeover, not from begin
-// (run 8 diagnosis, item 4; R26, R20). The tookOver hook runs after the
-// takeover's snapshots and before begin, the gap they used to be dropped in.
+// (run 8 diagnosis, item 4; R26, R20). They are delivered at the takeover's
+// meta/judged read, inside the takeover (review of the run-8 fixes, M1).
 func TestALogoutAndAMarkFollowedDuringATakeoverAreReached(t *testing.T) {
 	f := splitFleet(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -342,13 +356,14 @@ func TestALogoutAndAMarkFollowedDuringATakeoverAreReached(t *testing.T) {
 	logout := store.LogoutEntry{Logout: store.Logout{Key: "oidc-sid|https://idp.example|s-late", At: time.Now(),
 		Origin: "late-logout-origin"}, Until: time.Now().Add(time.Hour)}
 	mark := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:late@example.com", At: time.Now()}
-	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm(),
+	meta := &judgedThen{judgedStore: bs.raw}
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: meta, keys: keys, m: m, alarm: newKeyAlarm(),
 		who: "runner-a", ledger: crypt.NewLedger(), judge: make(chan *policy.Policy, 1),
 		marksReloaded: make(chan struct{}, 1), marks: store.NewMarks(),
 		witness:  openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
 		logouts:  store.NewLogoutSet(time.Now),
 		followed: make(chan store.Revocation, 1024), followedLogouts: make(chan store.LogoutEntry, 1024)}
-	r.tookOver = func(*policy.Policy) {
+	meta.then = func() {
 		r.logouts.Put(logout)
 		r.followLogout(logout)
 		r.follow(store.MarkChange{Revocation: mark, Standing: true})
