@@ -5,6 +5,7 @@
 # otherwise). notes: every results note it rewrites, every platform's.
 # timeout_minutes: the binary's -test.timeout; unset means 120 a platform, make lab's budget
 # (an entry that is one platform of a longer Make budget carries that budget).
+# target: the Make target that runs the same entry by hand; the runner always execs the shared binary.
 # measured_minutes: the last full run's wall time for the entry (Task 4).
 # excluded: the closed rows the runner does not rerun, each with why
 # (TestEveryClosedRowIsRunOrExcluded: a closed row is in an entry's rows or here).
@@ -16,6 +17,15 @@ entries:
     env: {PORT49_LAB_REMEASURE: L10}
     notes: [tests/lab/results/L10-arista_eos.md, tests/lab/results/L10-cisco_iosxe.md, tests/lab/results/L10-cisco_nxos.md,
             tests/lab/results/L10-juniper_vjunos-router.md, tests/lab/results/L10-juniper_vsrx.md]
+  # L71 runs before every L73 entry: TestL73 adds its addendum to the L71 notes it measures,
+  # and the L71 rerun rewrites those notes whole, so the other order would wipe them
+  # (TestTheL71EntryRunsBeforeEveryL73Entry).
+  - id: L71
+    run: '^TestL71TLSClientSupport$'
+    platforms: eos,vjunos,vsrx,nxos,iosxe
+    rows: [L71]
+    env: {PORT49_LAB_REMEASURE: L71}
+    notes: [tests/lab/results/L71-arista_eos.md, tests/lab/results/L71-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vsrx.md, tests/lab/results/L71-cisco_nxos.md, tests/lab/results/L71-cisco_iosxe.md]
   # TestL73 writes the L71 note of its platform: it appends an addendum to one that exists, so
   # a rerun grows L71-<platform>.md and notediff shows it. The help-only platforms (iolxe1718,
   # xrd261) ask L71's question alone; their entries exist for that note.
@@ -333,12 +343,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L66, PORT49_LAB_ANSIBLE: "1"}
     timeout_minutes: 90
     notes: [tests/lab/results/L66-cisco_iosxe.md]
-  - id: L71
-    run: '^TestL71TLSClientSupport$'
-    platforms: eos,vjunos,vsrx,nxos,iosxe
-    rows: [L71]
-    env: {PORT49_LAB_REMEASURE: L71}
-    notes: [tests/lab/results/L71-arista_eos.md, tests/lab/results/L71-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vsrx.md, tests/lab/results/L71-cisco_nxos.md, tests/lab/results/L71-cisco_iosxe.md]
   - id: L42-L43
     run: '^(TestL42NestedGroups|TestL43BindMechanisms)$'
     rows: [L42, L43]

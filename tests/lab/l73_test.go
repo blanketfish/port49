@@ -1332,7 +1332,57 @@ func (e *l73Env) helpProbe() bool {
 	return hasClient
 }
 
-// writeL71 appends the addendum to this platform's L71 note, or writes the
+// l71AddendumHeading keys TestL73's section of an L71 note: a rerun replaces
+// it in place, so the note does not grow by one addendum a run.
+const l71AddendumHeading = "## Addendum: TestL73 probe"
+
+// upsertL71Addendum puts section, which starts with l71AddendumHeading, into
+// doc: in the place of the section TestL73 wrote before (this heading, or the
+// older "## Addendum <date>: ..." form whose text opens "Probed by TestL73"),
+// else at the end. A section runs to the next "## " heading. Any other
+// addendum is left as it is.
+func upsertL71Addendum(doc, section string) string {
+	lines := strings.Split(strings.TrimRight(doc, "\n"), "\n")
+	var out []string
+	placed := false
+	for i := 0; i < len(lines); {
+		j := i + 1
+		for j < len(lines) && !strings.HasPrefix(lines[j], "## ") {
+			j++
+		}
+		if l71OwnAddendum(lines[i:j]) {
+			if !placed {
+				out = append(out, strings.Split(strings.TrimRight(section, "\n"), "\n")...)
+				out = append(out, "")
+				placed = true
+			}
+		} else {
+			out = append(out, lines[i:j]...)
+		}
+		i = j
+	}
+	if !placed {
+		out = append(out, "", section)
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+func l71OwnAddendum(sec []string) bool {
+	if sec[0] == l71AddendumHeading {
+		return true
+	}
+	if !strings.HasPrefix(sec[0], "## Addendum ") {
+		return false
+	}
+	for _, ln := range sec[1:] {
+		if strings.TrimSpace(ln) != "" {
+			return strings.HasPrefix(ln, "Probed by TestL73")
+		}
+	}
+	return false
+}
+
+// writeL71 puts the addendum to this platform's L71 note, or writes the
 // note when there is none (vJunos-switch, IOL-XE and XRd were never
 // probed). Its evidence is the masked help exchange.
 func (e *l73Env) writeL71() {
@@ -1350,9 +1400,15 @@ func (e *l73Env) writeL71() {
 	if err := os.WriteFile(filepath.Join(root, ev), body, 0o644); err != nil {
 		e.t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", "L71-"+e.l.p.name+".md")); err == nil {
-		e.l.appendNote(e.t, "L71", fmt.Sprintf("## Addendum %s: %s (`%s`)\n\nProbed by TestL73 (%s); the exchange is `%s`.\n\n%s",
-			time.Now().UTC().Format("2006-01-02"), e.l.p.version, e.l.p.image, runLine(), ev, e.l71Obs))
+	notePath := filepath.Join(root, "tests", "lab", "results", "L71-"+e.l.p.name+".md")
+	if doc, err := os.ReadFile(notePath); err == nil {
+		section := fmt.Sprintf("%s\n\nMeasured %s on %s (`%s`). Probed by TestL73 (%s); the exchange is `%s`.\n\n%s",
+			l71AddendumHeading, time.Now().UTC().Format("2006-01-02"), e.l.p.version, e.l.p.image, runLine(), ev, e.l71Obs)
+		out := upsertL71Addendum(string(doc), labcreds.RedactNote(section))
+		if err := os.WriteFile(notePath, []byte(out), 0o644); err != nil {
+			e.t.Fatalf("write %s: %v", notePath, err)
+		}
+		e.t.Logf("wrote the L71 addendum in %s", notePath)
 		return
 	}
 	e.l.captureNote = fmt.Sprintf("`%s` — the CLI exchange from the help request to the empty-line check, credentials "+

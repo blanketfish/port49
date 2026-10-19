@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -191,9 +192,12 @@ func TestEntryTimeouts(t *testing.T) {
 	if got := timeoutFor(Entry{}); got != 120*time.Minute {
 		t.Fatalf("an entry with no platforms is one 120 minute run: %v", got)
 	}
-	bin, run := deadlines(Entry{TimeoutMinutes: 60})
-	if run-bin < 5*time.Minute {
-		t.Fatalf("the binary's own timeout must fire well before the runner's kill, so its cleanup runs: %v %v", bin, run)
+	// -test.timeout is a panic that skips TestMain's teardown; the harness's
+	// SIGTERM handler is what tears down. So the runner's deadline (SIGTERM) is
+	// the budget, and the binary's own timeout is only a backstop after it.
+	sigterm, backstop := deadlines(Entry{TimeoutMinutes: 60})
+	if sigterm != 60*time.Minute || backstop-sigterm < 10*time.Minute {
+		t.Fatalf("SIGTERM at the budget, -test.timeout well after it: %v %v", sigterm, backstop)
 	}
 }
 
@@ -239,5 +243,38 @@ func TestAnEntryWithoutPlatformsOrRemeasureInheritsNoneOfTheOperators(t *testing
 	joined := strings.Join(childEnv(Entry{ID: "regions"}, 3), "\n")
 	if strings.Contains(joined, "PORT49_LAB_PLATFORMS") || strings.Contains(joined, "L99") {
 		t.Fatalf("the operator's selection reached an entry that names none:\n%s", joined)
+	}
+}
+
+// A full run rewrites each L71 note, and TestL73 then adds its addendum to
+// the notes it measures: the L71 entry must run first or it would wipe them.
+func TestTheL71EntryRunsBeforeEveryL73Entry(t *testing.T) {
+	entries, err := loadManifest("../../regress.yaml", specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l71 := -1
+	for i, e := range entries {
+		if e.ID == "L71" {
+			l71 = i
+		}
+	}
+	if l71 < 0 {
+		t.Fatal("no L71 entry")
+	}
+	for i, e := range entries {
+		if strings.HasPrefix(e.ID, "L73-") && i < l71 {
+			t.Errorf("%s comes before the L71 entry: the L71 rerun would overwrite the addendum it records", e.ID)
+		}
+	}
+}
+
+func TestAProcessStillHoldingStdoutIsNamedALeak(t *testing.T) {
+	err := waitError(exec.ErrWaitDelay, "L10")
+	if err == nil || !strings.Contains(err.Error(), "leak") || !strings.Contains(err.Error(), "stdout") {
+		t.Fatalf("name the leaked process: %v", err)
+	}
+	if got := waitError(nil, "L10"); got != nil {
+		t.Fatalf("a clean exit is not an error: %v", got)
 	}
 }

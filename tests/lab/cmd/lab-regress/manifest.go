@@ -12,7 +12,9 @@ import (
 )
 
 type Entry struct {
-	ID              string            `yaml:"id"`
+	ID string `yaml:"id"`
+	// Target is the Make target an operator runs to do the same entry by hand
+	// (make lab-regions); the runner itself always execs the one shared binary.
 	Target          string            `yaml:"target"`
 	Run             string            `yaml:"run"`
 	Platforms       string            `yaml:"platforms"`

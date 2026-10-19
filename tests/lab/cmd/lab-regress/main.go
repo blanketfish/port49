@@ -94,13 +94,26 @@ func timeoutFor(e Entry) time.Duration {
 	return time.Duration(n) * 120 * time.Minute
 }
 
-// deadlines are the binary's -test.timeout and the runner's own, later one.
-// The binary's fires first, and the runner then waits for it to finish before
-// it signals, so a run that overruns is stopped by the test's own timeout
-// handling and not by a kill in the middle of a deploy.
-func deadlines(e Entry) (binary, runner time.Duration) {
-	binary = timeoutFor(e)
-	return binary, binary + 15*time.Minute
+// deadlines are the runner's, at which it sends SIGTERM, and the binary's
+// -test.timeout, which comes later. A -test.timeout expiry is a panic that
+// skips TestMain's teardown; the harness's SIGTERM handler is the path that
+// tears the topology down, so the budget is the runner's deadline and the
+// binary's own timeout is a backstop for a harness that ignores SIGTERM.
+func deadlines(e Entry) (sigtermAfter, testTimeout time.Duration) {
+	sigtermAfter = timeoutFor(e)
+	return sigtermAfter, sigtermAfter + 15*time.Minute
+}
+
+// waitError is cmd.Run's error made deliberate for the one case that is not a
+// test failure: the binary exited, but a process it started still holds the
+// entry's stdout. That is a leak (a daemon or capture the harness did not
+// stop), and the operator should look for it before the next entry.
+func waitError(err error, id string) error {
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return fmt.Errorf("%s: the test binary exited, but a process it started still holds its stdout: "+
+			"a leaked daemon or capture; look for it before the next entry", id)
+	}
+	return err
 }
 
 type runner struct {
@@ -210,8 +223,8 @@ func run() int {
 	}
 	r := &runner{stopPath: stopPath, exec: func(e Entry) error {
 		fmt.Printf("=== lab-regress %s ===\n", e.ID)
-		testTimeout, killAfter := deadlines(e)
-		ctx, cancel := context.WithTimeout(context.Background(), killAfter)
+		sigtermAfter, testTimeout := deadlines(e)
+		ctx, cancel := context.WithTimeout(context.Background(), sigtermAfter)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin, "-test.run", e.Run, "-test.count=1", "-test.v",
 			"-test.timeout", testTimeout.String())
@@ -225,7 +238,7 @@ func run() int {
 		err := cmd.Run()
 		scan.Close()
 		if err != nil {
-			return err
+			return waitError(err, e.ID)
 		}
 		if sk := scan.Skipped(); len(sk) > 0 {
 			return &skippedError{Tests: sk}
