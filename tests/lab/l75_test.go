@@ -269,7 +269,7 @@ func (b *l75Broker) hang(w *regionWorld, on bool) bool {
 // takes the follow path.
 func l75TookOver(p *regionProc, d time.Duration) error {
 	start := time.Now()
-	for _, want := range []string{"runner: took keyspace", "as judged"} {
+	for _, want := range []string{"runner: took keyspace", "runner: recorded bundle"} {
 		if _, err := p.wait(want, d-time.Since(start)); err != nil {
 			return fmt.Errorf("%s: its takeover did not finish, a port49 finding if the keyspace was free: %w", p.name, err)
 		}
@@ -277,16 +277,16 @@ func l75TookOver(p *regionProc, d time.Duration) error {
 	return nil
 }
 
-// The two lines a runner says of a logout it reached: the follow path's, and
-// the takeover's for one already standing (it holds token key names, so it is
-// never copied into a row).
+// l75RunnerLines are the lines (g) accepts of a runner that reached a logout:
+// the follow path's only. After the takeover wait the logout arrives to a
+// running runner, so the takeover's "standing logout(s) reached here" would
+// mean the follow path was not what was measured.
 var l75RunnerLines = []struct{ say, via string }{
 	{"a logout made elsewhere", "followed (a logout made elsewhere)"},
-	{"standing logout(s) reached here", "takeover (standing logout(s) reached here)"},
 }
 
 // l75RunnerLine waits up to d for the broker's runner to say it reached the
-// logout by either path, and returns how long it took and which path.
+// logout by the follow path, and returns how long it took and the line named.
 func l75RunnerLine(p *regionProc, d time.Duration) (time.Duration, string, error) {
 	start := time.Now()
 	for {
