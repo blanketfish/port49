@@ -1,6 +1,7 @@
 package devicemock
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -9,7 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,14 +149,18 @@ func TestSingleConnectionReusesOnlyWhenTheServerAgrees(t *testing.T) {
 
 func TestWrongCredentialPlaysLoginAloneWithAFreshOne(t *testing.T) {
 	f := newFake(t, []byte("fresh-key"))
-	f.authen, f.echo = []uint8{wire.AuthenStatusFail}, true
+	f.authen = []uint8{wire.AuthenStatusFail}
 	cred := freshCredential(t)
 	tr, err := playFake(t, "fixture_plain.yaml", f, "wrong_credential", cred)
 	if err != nil || tr.Outcome != "login_refused" || len(tr.Steps) != 1 {
 		t.Fatalf("%v\n%s", err, tr)
 	}
-	if tr.Steps[0].ServerMsgLen != 48 { // the echoed random credential, 24 bytes hex
-		t.Fatalf("the engine sends its own random credential, not the login's: %s", tr)
+	got := f.seen()
+	if len(got) != 1 || len(got[0].Data) == 0 {
+		t.Fatalf("login alone, with a credential: %d requests", len(got))
+	}
+	if bytes.Equal(got[0].Data, cred) { // never print either value
+		t.Fatalf("the engine sent the login's credential: both are %d bytes", len(cred))
 	}
 }
 
@@ -189,6 +197,7 @@ func issue(t *testing.T, ca *testpki.CA, client bool) tls.Certificate {
 }
 
 func tlsRefuser(t *testing.T, ca *testpki.CA) net.Listener {
+	t.Helper()
 	srvCert := issue(t, ca, false)
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{srvCert},
 		MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert,
@@ -249,7 +258,7 @@ func TestATimeoutOnTheUnknownCALoginIsAnErrorNotARefusal(t *testing.T) {
 	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
 	p.Transports = []string{"tls"}
 	p.Stimulus.TLS = &TLSStimulus{ClientHello: nxosHello(), ServerIdentity: "chain_only"}
-	ctx, cancel := contextWithTimeout(t, 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	tr, err := Play(ctx, p, "tls_unknown_ca", Target{Addr: ln.Addr().String(), Transport: "tls", Scale: 1,
 		TLS: &TLSMaterial{Client: issue(t, ca, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
@@ -275,6 +284,178 @@ func TestHandshakeEventNamesARemoteAlert(t *testing.T) {
 	}
 }
 
-func contextWithTimeout(t *testing.T, d time.Duration) (ctx context.Context, cancel context.CancelFunc) {
-	return context.WithTimeout(t.Context(), d)
+func TestAGateOnAnEventNoReactionCoversStillReportsTheGate(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen = []uint8{wire.AuthenStatusPass}
+	f.authorArgs = longArgs()
+	p, _ := Load("testdata/profiles/fixture_junos.yaml", root)
+	p.Reactions = slices.DeleteFunc(p.Reactions, func(r Reaction) bool { return r.On == "author_pass_add" })
+	tr, err := Play(t.Context(), p, "token_login", Target{Addr: f.ln.Addr().String(), Transport: "tcp", Key: f.key, Scale: 1},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || len(tr.Gate) != 1 || tr.Outcome != "rejected_by_device" {
+		t.Fatalf("the gate is reported before any reaction is looked up: %v\n%s", err, tr)
+	}
+}
+
+func TestEveryRequestCarriesTheStepsShape(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen = []uint8{wire.AuthenStatusPass}
+	f.authorArgs = [][]byte{[]byte("local-user-name=p49-ro")}
+	cred := freshCredential(t)
+	tr, err := playFake(t, "fixture_plain.yaml", f, "token_login", cred)
+	if err != nil || tr.Outcome != "login_ok" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+	got := f.seen()
+	if len(got) != 3 {
+		t.Fatalf("%d requests", len(got))
+	}
+	login, author, acct := got[0], got[1], got[2]
+	if login.MinorVersion != 1 || author.MinorVersion != 0 || acct.MinorVersion != 0 {
+		t.Errorf("minor versions %d %d %d, want the steps' 1 0 0", login.MinorVersion, author.MinorVersion, acct.MinorVersion)
+	}
+	if !bytes.Equal(login.Data, cred) || login.AuthenType != wire.AuthenTypePAP {
+		t.Errorf("a PAP login carries the credential as data (%v)", bytes.Equal(login.Data, cred))
+	}
+	if login.Flags&wire.FlagSingleConnect != 0 || acct.Flags&wire.FlagSingleConnect != 0 {
+		t.Error("per_step without the flag: no single-connect request flag")
+	}
+	if acct.AcctFlags != wire.AcctFlagStart {
+		t.Errorf("acct flags %#x, want start", acct.AcctFlags)
+	}
+	if len(author.Args) != 1 || string(author.Args[0]) != "service=junos-exec" {
+		t.Errorf("author args %q", author.Args)
+	}
+	want := map[string]bool{"service=shell": false}
+	for _, a := range acct.Args {
+		s := string(a)
+		switch {
+		case strings.HasPrefix(s, "task_id="):
+			if _, err := strconv.Atoi(strings.TrimPrefix(s, "task_id=")); err != nil {
+				t.Errorf("task_id is not expanded: %s", s)
+			}
+		case strings.HasPrefix(s, "start_time="):
+			if _, err := strconv.Atoi(strings.TrimPrefix(s, "start_time=")); err != nil {
+				t.Errorf("start_time is not expanded: %s", s)
+			}
+		default:
+			if _, ok := want[s]; ok {
+				want[s] = true
+			}
+		}
+		if strings.Contains(s, "{") || strings.Contains(s, string(cred)) {
+			t.Errorf("an argument is unexpanded or holds the credential: %d bytes", len(s))
+		}
+	}
+	if len(acct.Args) != 3 || !want["service=shell"] {
+		t.Errorf("acct args %q", acct.Args)
+	}
+}
+
+func TestASCIILoginSendsNoDataOnTheStartAndTheSingleConnectFlagWhenAsked(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen = []uint8{wire.AuthenStatusFail}
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	p.Stimulus.Steps[0].Fields.AuthenType = "ascii"
+	p.Stimulus.Connections.SingleConnectFlag = true
+	_, err := Play(t.Context(), p, "token_login", Target{Addr: f.ln.Addr().String(), Transport: "tcp", Key: f.key, Scale: 1},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.seen()
+	if len(got) != 1 || len(got[0].Data) != 0 || got[0].Flags&wire.FlagSingleConnect == 0 {
+		t.Fatalf("ascii START has no data and the profile's flag is set: %d requests", len(got))
+	}
+}
+
+func TestAReplyForAnotherSessionIsAnError(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen, f.wrongSession = []uint8{wire.AuthenStatusPass}, true
+	_, err := playFake(t, "fixture_plain.yaml", f, "token_login", freshCredential(t))
+	if err == nil || !strings.Contains(err.Error(), "does not answer the request") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestAClearReplyOverTCPIsRefused(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen, f.clearReply = []uint8{wire.AuthenStatusPass}, true
+	tr, err := playFake(t, "fixture_plain.yaml", f, "token_login", freshCredential(t))
+	if err == nil || !strings.Contains(err.Error(), "unencrypted") {
+		t.Fatalf("port 49 never answers in the clear: %v\n%s", err, tr)
+	}
+}
+
+func tlsFakeProfile(t *testing.T) (*Profile, *testpki.CA, *fake) {
+	t.Helper()
+	ca := testCA(t, "trusted")
+	f := newFakeTLS(t, issue(t, ca, false))
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	p.Transports = []string{"tls"}
+	p.Stimulus.TLS = &TLSStimulus{ClientHello: nxosHello(), ServerIdentity: "ip", FlightDelay: 5 * time.Second}
+	return p, ca, f
+}
+
+// A device's measured flight delay holds on every TLS connection it makes,
+// scaled by Target.Scale (decision 52 ruling 9).
+func TestEveryTLSConnectionIsDelayedByTheScaledFlight(t *testing.T) {
+	p, ca, f := tlsFakeProfile(t)
+	f.authen = []uint8{wire.AuthenStatusPass}
+	f.authorArgs = [][]byte{[]byte("local-user-name=p49-ro")}
+	var mu sync.Mutex
+	var slept []time.Duration
+	tr, err := Play(t.Context(), p, "tls_token_login", Target{Addr: f.ln.Addr().String(), Transport: "tls", Scale: 0.1,
+		Sleep: func(d time.Duration) { mu.Lock(); slept = append(slept, d); mu.Unlock() },
+		TLS:   &TLSMaterial{Client: issue(t, ca, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "login_ok" || tr.Conns != 3 {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+	if len(slept) != 3 {
+		t.Fatalf("%d delayed flights over %d connections", len(slept), tr.Conns)
+	}
+	for _, d := range slept {
+		if d != 500*time.Millisecond {
+			t.Errorf("delay %v, want 5s at scale 0.1", d)
+		}
+	}
+}
+
+func refusalProfile(t *testing.T) (*Profile, Target) {
+	t.Helper()
+	ca, other := testCA(t, "trusted"), testCA(t, "untrusted")
+	ln := tlsRefuser(t, ca)
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	p.Transports = []string{"tls"}
+	p.Stimulus.TLS = &TLSStimulus{ClientHello: nxosHello(), ServerIdentity: "chain_only"}
+	return p, Target{Addr: ln.Addr().String(), Transport: "tls", Scale: 1,
+		TLS: &TLSMaterial{Client: issue(t, other, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}}
+}
+
+// A refusal event the profile has a reaction for ends as that reaction says;
+// with none, as the default handshake_refused.
+func TestARefusalEventConsultsTheReactionTable(t *testing.T) {
+	p, tgt := refusalProfile(t)
+	p.Reactions = append(p.Reactions, Reaction{Step: "login", On: "alert_bad_certificate", Then: "failover_next_server",
+		Outcome: "falls_to_local", Status: "unmeasured"})
+	tr, err := Play(t.Context(), p, "tls_unknown_ca", tgt, Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "falls_to_local" || tr.Steps[len(tr.Steps)-1].Event != "tls_refused" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+	p2, tgt2 := refusalProfile(t)
+	tr, err = Play(t.Context(), p2, "tls_unknown_ca", tgt2, Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "handshake_refused" {
+		t.Fatalf("no reaction: the default. %v\n%s", err, tr)
+	}
+}
+
+func TestARefusalOnAnotherScenarioConsultsTheTableToo(t *testing.T) {
+	p, tgt := refusalProfile(t)
+	p.Reactions = append(p.Reactions, Reaction{Step: "login", On: "alert_bad_certificate", Then: "give_up",
+		Outcome: "login_refused", Status: "unmeasured"})
+	tr, err := Play(t.Context(), p, "tls_token_login", tgt, Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "login_refused" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
 }

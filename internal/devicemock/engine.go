@@ -107,11 +107,12 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 		// event tls_refused.
 		res, err := pl.step(ctx, steps[0])
 		if err != nil {
-			if !isRefusal(handshakeEvent(err)) {
+			outcome, ok := pl.refusal(steps[0].Name, err)
+			if !ok {
 				// A timeout or any other failure is not a refusal.
 				return pl.tr, err
 			}
-			return pl.end("handshake_refused", StepResult{Step: steps[0].Name, Event: "tls_refused", Conn: pl.nconns}), nil
+			return pl.end(outcome, StepResult{Step: steps[0].Name, Event: "tls_refused", Conn: pl.nconns}), nil
 		}
 		pl.tr.Steps = append(pl.tr.Steps, res)
 		return pl.end("handshake_ok"), nil
@@ -119,8 +120,8 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 	for _, s := range steps {
 		res, err := pl.step(ctx, s)
 		if err != nil {
-			if errors.Is(err, errConn) && isRefusal(handshakeEvent(err)) {
-				return pl.end("handshake_refused", StepResult{Step: s.Name, Event: handshakeEvent(err), Conn: pl.nconns}), nil
+			if outcome, ok := pl.refusal(s.Name, err); ok {
+				return pl.end(outcome, StepResult{Step: s.Name, Event: handshakeEvent(err), Conn: pl.nconns}), nil
 			}
 			return pl.tr, err
 		}
@@ -147,6 +148,20 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 		}
 	}
 	return pl.end("login_ok"), nil
+}
+
+// refusal reports whether err is the device being refused (an alert, a reset
+// or a close) and how the play ends: as the profile's reaction to that event
+// says, else handshake_refused. A timeout is never a refusal.
+func (pl *player) refusal(step string, err error) (string, bool) {
+	ev := handshakeEvent(err)
+	if !errors.Is(err, errConn) || !isRefusal(ev) {
+		return "", false
+	}
+	if r, rerr := pl.p.React(step, ev); rerr == nil && r.Outcome != "" {
+		return r.Outcome, true
+	}
+	return "handshake_refused", true
 }
 
 func (pl *player) end(outcome string, extra ...StepResult) Transcript {
@@ -205,9 +220,8 @@ func (pl *player) dial(ctx context.Context) error {
 			c.Close()
 			return errors.New("devicemock: a tls play needs the profile's stimulus.tls and the target's TLS material")
 		}
-		if pl.tr.Scenario == "flight_delay" {
-			c = DelayFlight(c, pl.scaled(pl.p.Stimulus.TLS.FlightDelay), pl.t.Sleep)
-		}
+		// The device's measured delay holds on every connection it makes.
+		c = DelayFlight(c, pl.scaled(pl.p.Stimulus.TLS.FlightDelay), pl.t.Sleep)
 		tc := tls.Client(c, SessionConfig(pl.p.Stimulus.TLS, *pl.t.TLS))
 		hctx, cancel := context.WithTimeout(ctx, ioTimeout)
 		defer cancel()
@@ -257,10 +271,13 @@ func (pl *player) recv() (wire.Header, []byte, error) {
 	if _, err := io.ReadFull(pl.c, body); err != nil {
 		return h, nil, err
 	}
-	if h.Flags&wire.FlagUnencrypted == 0 {
-		if pl.t.Transport == "tls" {
-			return h, nil, errors.New("reply obfuscated over tls")
-		}
+	// RFC 9887 §4: the unencrypted flag is set over TLS and never over 49.
+	switch unenc := h.Flags&wire.FlagUnencrypted != 0; {
+	case pl.t.Transport == "tls" && !unenc:
+		return h, nil, errors.New("reply obfuscated over tls")
+	case pl.t.Transport != "tls" && unenc:
+		return h, nil, errors.New("reply unencrypted over tcp")
+	case !unenc:
 		body = wire.Obfuscate(h, pl.t.Key, body)
 	}
 	return h, body, nil
@@ -281,7 +298,9 @@ func (pl *player) step(ctx context.Context, s Step) (StepResult, error) {
 			return fail(err)
 		}
 	}
-	pl.c.SetDeadline(pl.deadline(ctx))
+	if err := pl.c.SetDeadline(pl.deadline(ctx)); err != nil {
+		return fail(err)
+	}
 	var sid [4]byte
 	if _, err := rand.Read(sid[:]); err != nil {
 		return StepResult{}, err
