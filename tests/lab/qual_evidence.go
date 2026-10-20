@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -315,4 +318,27 @@ func qualCommandCells(platform string, recs []map[string]any) (permitted, denied
 		denied, why = "fail", strings.TrimSpace(why+" "+err.Error())
 	}
 	return permitted, denied, why
+}
+
+// qualWriteEvidence gates the files and the note together, and only then
+// replaces dir with files. Any hit returns its kinds and touches nothing.
+func qualWriteEvidence(dir string, files map[string][]byte, note string, secrets []string) []string {
+	bad := qualGate(files, secrets)
+	bad = append(bad, qualNoteGate(note, secrets)...)
+	if len(bad) > 0 {
+		sort.Strings(bad)
+		return bad
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return []string{err.Error()}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return []string{err.Error()}
+	}
+	for name, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			return []string{err.Error()}
+		}
+	}
+	return nil
 }

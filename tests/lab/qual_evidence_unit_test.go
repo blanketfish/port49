@@ -371,3 +371,41 @@ func TestQualCommandCellsOnJunosAreNotApplicable(t *testing.T) {
 		t.Fatalf("nxos empty: %s %s", p, d)
 	}
 }
+
+// A gate hit, in the files or in the note, leaves what was on disk untouched: nothing new is written.
+func TestQualWriteEvidenceWritesNothingOnAHit(t *testing.T) {
+	const secret = "planted-secret-value-9"
+	dir := filepath.Join(t.TempDir(), "QUAL-x")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "old.json")
+	if err := os.WriteFile(old, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clean := map[string][]byte{"run.json": []byte(`{"a":1}`)}
+	for name, c := range map[string]struct {
+		files map[string][]byte
+		note  string
+	}{
+		"note hit":  {clean, "mentions " + secret},
+		"files hit": {map[string][]byte{"run.json": []byte(secret)}, "fine"},
+	} {
+		bad := qualWriteEvidence(dir, c.files, c.note, []string{secret})
+		if len(bad) == 0 {
+			t.Fatalf("%s: not refused", name)
+		}
+		if _, err := os.Stat(old); err != nil {
+			t.Fatalf("%s: the old evidence was removed", name)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "run.json")); err == nil {
+			t.Fatalf("%s: new evidence was written", name)
+		}
+	}
+	if bad := qualWriteEvidence(dir, clean, "fine", []string{secret}); len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
+		t.Fatal("a clean run writes its evidence")
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/devicemock"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // qualUser is the username tests/qual/qual-policy.yaml gives its one subject.
@@ -148,6 +148,7 @@ func (q *qualEnv) play() {
 		stopped = true
 		q.l.capAbs = q.master // e.capture moved it
 		rawStop()
+		q.l.capAbs = "" // a sub-capture's flush must not probe the stopped master
 	}
 	defer stop() // a Fatal must not leave a root tcpdump running
 	q.start = q.l.mark()
@@ -170,7 +171,9 @@ func (q *qualEnv) play() {
 		}
 	}
 	stop()
+	q.l.capAbs = q.master // the note points at the master capture
 	q.l.captureNote = q.l.stoppedCaptureLine(q.t)
+	q.l.capAbs = ""
 	q.write()
 }
 
@@ -701,32 +704,17 @@ func (q *qualEnv) write() {
 	rb, _ := json.MarshalIndent(q.run, "", "  ")
 	files["run.json"] = rb
 
-	secrets := append([]string{breakglassPassword}, q.secrets...)
+	secrets := append([]string{breakglassPassword, labcreds.Key}, q.secrets...)
 	if q.e != nil {
 		secrets = append(secrets, q.e.allSecrets()...)
 	}
-	if bad := qualGate(files, secrets); len(bad) > 0 {
-		sort.Strings(bad)
-		q.t.Fatalf("INVALID: the evidence holds what it must not; nothing written:\n  %s", strings.Join(bad, "\n  "))
-	}
 	dir := filepath.Join(root, "tests", "lab", "evidence", "QUAL-"+q.slug+"-"+q.l.p.name)
-	if err := os.RemoveAll(dir); err != nil {
-		q.t.Fatal(err)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		q.t.Fatal(err)
-	}
-	for name, b := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-			q.t.Fatal(err)
-		}
-	}
 	claim := "The conformance cells of plan 11b under tests/qual/qual-policy.yaml and tests/qual/qual-daemon.yaml, with " +
 		"tokens the broker minted. Each cell re-measures the register rows it cites and closes none."
 	obs := "Every cell's verdict, with the rows it re-measures:\n\n" + strings.Join(q.notes, "\n") +
 		fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/QUAL-%s-%s/` (whitelisted decision records, connection headers and run.json).", q.slug, q.l.p.name)
-	if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
-		q.t.Fatalf("INVALID: %s; nothing written", strings.Join(bad, "; "))
+	if bad := qualWriteEvidence(dir, files, claim+"\n"+obs, secrets); len(bad) > 0 {
+		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
 }
