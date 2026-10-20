@@ -22,9 +22,9 @@ reactions:
   - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
   - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
   - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
-  # Fleet-only and fictional (L99): a store that fails while plays are in flight. Unmeasured.
-  - {step: "*", on: author_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: acct_error, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  # Fleet-only and fictional (fixture only): a store that fails while plays are in flight.
+  - {step: "*", on: author_fail, then: stop, outcome: login_refused, status: unmeasured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: acct_error, then: next_step, status: unmeasured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
   - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
 acceptance: []
 engine_gaps: []

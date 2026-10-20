@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -198,7 +200,7 @@ type qualRun struct {
 	faults     string
 	policyPath string // the broker's policy file, for touchPolicy
 	policyText string
-	touches    int
+	denyExtra  [2]string // touch's accumulated denies: other platforms' list, then Junos's
 	clients    []tls.Certificate
 	pool       *x509.CertPool
 	minted     []string // kept only for the golden check: never printed
@@ -208,9 +210,10 @@ type qualRun struct {
 func qualDeviceName(i int) string { return fmt.Sprintf("q%04d", i) }
 
 var (
-	qualTCPLine    = regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`)
-	qualTLSLine    = regexp.MustCompile(`port49d: RFC 9887 listener on (127\.0\.0\.1:\d+)`)
-	qualBrokerLine = regexp.MustCompile(`port49d: broker listening on (127\.0\.0\.1:\d+)`)
+	qualTCPLine     = regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`)
+	qualTLSLine     = regexp.MustCompile(`port49d: RFC 9887 listener on (127\.0\.0\.1:\d+)`)
+	qualMetricsLine = regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`)
+	qualBrokerLine  = regexp.MustCompile(`port49d: broker listening on (127\.0\.0\.1:\d+)`)
 )
 
 // qualDaemon starts a real port49d under the qualification policy and
@@ -386,18 +389,36 @@ func (r *qualRun) login(i int) devicemock.Login {
 	return devicemock.Login{User: "qual01", Credential: []byte(tok), RemAddr: "198.51.100.4"}
 }
 
-// touchPolicy rewrites the policy file with one more harmless deny, a real
-// change the broker's policy watch reloads. The deny alternates between two
-// Junos keyword paths the keyword tree proves (platforms/keywords/1.3.0/
-// juniper_junos.yaml), so every touch changes the file and none makes a Junos
-// projection fail closed. It calls no t helper: fleet mode calls it from a
-// goroutine, so the error is returned.
-func (r *qualRun) touchPolicy() error {
-	r.touches++
-	cmd := []string{"show system uptime", "show system alarms"}[r.touches%2]
-	text := strings.ReplaceAll(r.policyText, `deny: ["show users"]`, `deny: ["show users", "`+cmd+`"]`)
-	text = strings.ReplaceAll(text, `deny: ["show system users"]`, `deny: ["show system users", "`+cmd+`"]`)
-	if text == r.policyText {
+// touchPolicy rewrites the policy file with one more harmless deny on the role
+// list the run's devices are in, a real change the broker's policy watch
+// reloads. touchPolicyOutsideFleet does the same to the other platforms' list,
+// which no device of the run is in: no device's answer changes. The deny
+// alternates between two Junos keyword paths the keyword tree proves
+// (platforms/keywords/1.3.0/juniper_junos.yaml), so every touch changes the
+// file and none makes a Junos projection fail closed. Edits accumulate: a touch
+// never reverts an earlier one. They call no t helper: fleet mode calls them
+// from a goroutine, so the error is returned.
+func (r *qualRun) touchPolicy() error { return r.touch(r.p.Platform == "juniper_junos") }
+
+func (r *qualRun) touchPolicyOutsideFleet() error { return r.touch(r.p.Platform != "juniper_junos") }
+
+func (r *qualRun) touch(junos bool) error {
+	i, list := 0, `deny: ["show users"]`
+	if junos {
+		i, list = 1, `deny: ["show system users"]`
+	}
+	next := "show system uptime"
+	if r.denyExtra[i] == next {
+		next = "show system alarms"
+	}
+	r.denyExtra[i] = next
+	text := r.policyText
+	for j, l := range []string{`deny: ["show users"]`, `deny: ["show system users"]`} {
+		if r.denyExtra[j] != "" {
+			text = strings.ReplaceAll(text, l, l[:len(l)-1]+`, "`+r.denyExtra[j]+`"]`)
+		}
+	}
+	if !strings.Contains(r.policyText, list) {
 		return errors.New("touchPolicy: the policy has no qual_denies deny to extend")
 	}
 	tmp := r.policyPath + ".tmp"
@@ -405,6 +426,25 @@ func (r *qualRun) touchPolicy() error {
 		return err
 	}
 	return os.Rename(tmp, r.policyPath)
+}
+
+// refreshSettled reports whether port49_policy_refresh_pending reads 0: the
+// settle pass after the last reload is done. It calls no t helper.
+func (r *qualRun) refreshSettled() (bool, error) {
+	m := qualMetricsLine.FindStringSubmatch(r.stderr.String())
+	if m == nil {
+		return false, errors.New("no metrics address in port49d's output")
+	}
+	resp, err := http.Get("http://" + m[1] + "/metrics")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(string(body), "port49_policy_refresh_pending 0\n"), nil
 }
 
 // fault puts the lab fault in force. It calls no t helper: fleet mode calls it
