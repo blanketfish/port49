@@ -373,6 +373,9 @@ func TestJunosEvidenceWithoutCommandCellsEmitsNoCommandSteps(t *testing.T) {
 		if err := p.Validate("testdata"); err != nil {
 			t.Fatalf("dropStarts=%v: %v", dropStarts, err)
 		}
+		if !hasGap(p, "command_authorization_not_sent") {
+			t.Fatalf("dropStarts=%v: the absent command steps are recorded as an engine gap, never left to inference: %+v", dropStarts, p.EngineGaps)
+		}
 	}
 }
 
@@ -658,5 +661,19 @@ func TestCheckComparesTheCommittedStimulus(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Replace(reviewed, "port: \"0\"", "port: tty9", 1)), 0o644)
 	if err := run1(ev, true); err == nil || !strings.Contains(err.Error(), "differs") {
 		t.Fatalf("-check on a moved stimulus: %v", err)
+	}
+}
+
+func hasGap(p *devicemock.Profile, id string) bool {
+	return slices.ContainsFunc(p.EngineGaps, func(g devicemock.EngineGap) bool { return g.ID == id })
+}
+
+func TestACompleteRunCarriesNoCommandAuthorizationGap(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasGap(p, "command_authorization_not_sent") {
+		t.Fatal("command steps were played: no gap")
 	}
 }

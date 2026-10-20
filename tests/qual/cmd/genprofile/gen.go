@@ -193,6 +193,14 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	if p.Stimulus.Steps, err = steps(baseRecs, &r); err != nil {
 		return nil, g, err
 	}
+	if !slices.ContainsFunc(p.Stimulus.Steps, func(s devicemock.Step) bool { return s.Name == "command_permitted" }) ||
+		!slices.ContainsFunc(p.Stimulus.Steps, func(s devicemock.Step) bool { return s.Name == "command_denied" }) {
+		// steps() skips a command step only when its cell is not_applicable, so its
+		// absence is recorded, and the qualified list reads it instead of inferring it.
+		p.EngineGaps = append(p.EngineGaps, devicemock.EngineGap{ID: "command_authorization_not_sent",
+			What:    "the device sends no per-command authorization (L18); its command cells are not_applicable",
+			Sources: []devicemock.Source{note}})
+	}
 	if err := minorVersions(evDir, &r, p, note); err != nil {
 		return nil, g, err
 	}
