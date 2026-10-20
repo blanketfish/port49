@@ -575,6 +575,12 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		dial = 45 * time.Second
 	}
 	login := func(user, secret string, cmds ...string) error {
+		if q.l.p.name == "cisco_iosxe" {
+			// IOS XE answers a second exec channel on one SSH connection with EOF:
+			// loginWithin types each command at one pty's prompt instead.
+			_, err := q.l.loginWithin(user, secret, 150*time.Second, cmds...)
+			return err
+		}
 		_, err := q.l.loginWithinDial(q.l.p.addr+":22", user, secret, dial, 150*time.Second, cmds...)
 		return err
 	}
