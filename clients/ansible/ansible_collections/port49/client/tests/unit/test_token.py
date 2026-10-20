@@ -537,7 +537,7 @@ class HostKeys(PluginCase):
         self.assertEqual(self.calls.agent, [])
 
     def test_an_untemplated_connection_is_checked(self):  # review fix round 2, r1
-        # ansible-core 2.16 to 2.18 may give a lookup "{{ conn }}" unrendered: it might be network_cli, so check.
+        # ansible-core (seen on 2.16.19 and 2.21.4) may give a lookup "{{ conn }}" unrendered: it might be network_cli, so check.
         other = self.newkey("other")
         self.put(self.names, f"leaf1 {ED}\nleaf2 {ED}\n")
         self.put(self.kh, f"10.0.0.11 {other}\n10.0.0.12 {other}\n")

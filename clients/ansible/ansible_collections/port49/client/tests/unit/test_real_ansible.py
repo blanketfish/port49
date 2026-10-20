@@ -301,7 +301,7 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
         self.assert_checked(*self.mismatched_run(["ansible_connection: ssh"], vars_lines))
 
     def test_a_templated_play_connection_is_checked(self):  # review fix round 2, r1
-        # ansible-core 2.16 to 2.18 may hand a lookup the play's ansible_connection untemplated ("{{ conn }}").
+        # ansible-core (seen on 2.16.19 and 2.21.4) may hand a lookup the play's ansible_connection untemplated ("{{ conn }}").
         _, vars_lines = readme_play(self.fake)
         vars_lines = vars_lines.replace("ansible_connection: ansible.netcommon.network_cli",
                                         'ansible_connection: "{{ conn }}"')
