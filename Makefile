@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-update test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -102,6 +102,16 @@ lab-unit:
 # over. Needs Docker with Compose v2.24.4+. No device, no TPM.
 lab-l62-up:
 	PORT49_L62_UP=1 go test -tags lab ./tests/lab/l62/ -run '^TestL62Up$$' -count=1 -v -timeout 10h
+
+# The mock tier (plan 11b): every profile against a real in-process port49d. No images,
+# no captures, any runner. qual-update rewrites the goldens a port49 change moved, marked
+# pending_lab until the next lab run.
+qual:
+	go test ./internal/devicemock/... -count=1
+	go test ./internal/port49d/ -run '^TestQual' -count=1 -timeout 20m
+
+qual-update:
+	PORT49_QUAL_UPDATE=1 go test ./internal/port49d/ -run '^TestQual$$' -count=1 -timeout 20m
 
 vet:
 # gofmt lists every unformatted file and fails if there is one. No tee to
