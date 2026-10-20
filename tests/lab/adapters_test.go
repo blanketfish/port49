@@ -134,7 +134,7 @@ func TestAdapterReplies(t *testing.T) {
 				row.identity == adminRow.identity && row.clear == adminRow.clear && row.cfg == adminRow.cfg && row.showVersion
 			fmt.Fprintf(&obs, "| `%s` | %s | %s | %s | %s | %s | %s |\n", a, row.session, row.identity,
 				row.reach("clear counters", row.clear), row.reach("configure terminal", row.cfg), row.permit(row.showVersion),
-				yesNo(inert))
+				inertWord(inert, row.err == nil && len(row.unobserved) == 0 && len(adminRow.unobserved) == 0))
 			if row.err != nil && l.p.name == "cisco_iosxe" {
 				// A refused session stops this image answering SSH for about a
 				// minute (L18); wait it out before the next variant.
@@ -201,6 +201,15 @@ func permitted(b bool) string {
 		return "permitted by port49"
 	}
 	return "not permitted"
+}
+
+// inertWord is the inert column: a row whose commands or whose admin control
+// were not all observed is not evidence of "not inert", so it says so.
+func inertWord(inert, observed bool) string {
+	if !observed {
+		return "not observed"
+	}
+	return yesNo(inert)
 }
 
 func yesNo(b bool) string {

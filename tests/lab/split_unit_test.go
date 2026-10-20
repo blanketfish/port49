@@ -381,3 +381,14 @@ func TestGuardClosedRefusesAClosedEntryWithANote(t *testing.T) {
 		}
 	}
 }
+
+func TestInertWordSaysNotObservedForARowItNeverSaw(t *testing.T) {
+	for _, c := range []struct {
+		inert, observed bool
+		want            string
+	}{{true, true, "yes"}, {false, true, "no"}, {false, false, "not observed"}} {
+		if got := inertWord(c.inert, c.observed); got != c.want {
+			t.Errorf("inertWord(%v, %v) = %q, want %q", c.inert, c.observed, got, c.want)
+		}
+	}
+}
