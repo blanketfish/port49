@@ -69,6 +69,18 @@ func TestHungLoginBeforeDark(t *testing.T) {
 		{"no dark time read", []wirePacket{
 			authenPkt(ms(1000), 40010, 1, true, ""),
 		}, time.Time{}, cellInvalid},
+		{"a later try held 3.5s until dark", []wirePacket{
+			authenPkt(ms(100), 40011, 1, true, ""), authenPkt(ms(601), 40011, 2, false, "ERROR(7)"),
+			authenPkt(ms(1500), 40012, 1, true, ""),
+		}, dark, cellFailed},
+		{"a later try answered PASS", []wirePacket{
+			authenPkt(ms(100), 40013, 1, true, ""), authenPkt(ms(601), 40013, 2, false, "ERROR(7)"),
+			authenPkt(ms(1100), 40014, 1, true, ""), authenPkt(ms(1600), 40014, 2, false, "PASS(1)"),
+		}, dark, cellFailed},
+		{"a later try cut off by dark inside packet_deadline", []wirePacket{
+			authenPkt(ms(100), 40015, 1, true, ""), authenPkt(ms(601), 40015, 2, false, "ERROR(7)"),
+			authenPkt(ms(4000), 40016, 1, true, ""),
+		}, dark, cellValid},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

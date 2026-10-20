@@ -178,21 +178,26 @@ func (g cellGrade) String() string {
 
 // hungLoginBeforeDark grades a step-3 token login during which port49d went
 // dark at darkAt (decision 37), from the login's AUTHEN exchanges. The claim
-// is port49d's answer: the login's verdict, its first AUTHEN reply that is
-// not a GET prompt, is ERROR within deadline (packet_deadline). That answer
-// comes about 500ms into the hang and dark about 5s in, but a device whose
-// failed login takes longer (Junos's and NX-OS's second try) meets dark
-// before the login ends: its later tries find the listener closed and fall to
-// the local method, where the token's user has no account, so the login is
-// refused either way. Such a cell measured the hung store and is valid. A
-// verdict that is not ERROR, or comes late, fails, and so does a request
-// port49d still held past deadline when it went dark; darkAt is read by a
-// poll and may be up to darkPoll late, which the hold is allowed. A dark that
-// came before port49d owed a verdict leaves the cell unmeasured (invalid).
+// is port49d's answer: every verdict it gives a login while the store hangs,
+// each AUTHEN reply that is not a GET prompt, is ERROR within deadline
+// (packet_deadline). The first comes about 500ms into the hang and dark about
+// 5s in, but a device whose failed login takes longer (Junos's and NX-OS's
+// second try) meets dark before the login ends: its later tries find the
+// listener closed and fall to the local method, where the token's user has no
+// account, so the login is refused either way. Every exchange is graded: a
+// verdict that is not ERROR, or comes late, fails the cell, and so does a
+// request port49d still held past deadline when it went dark; darkAt is read
+// by a poll and may be up to darkPoll late, which the hold is allowed. With
+// none failed, the cell measured the hung store (valid) when at least one
+// verdict was ERROR in time; a request dark cut off inside deadline is then
+// the dark's, not port49d's. With no such verdict, dark came before port49d
+// owed one, and the cell is unmeasured (invalid).
 func hungLoginBeforeDark(xs []exchange, darkAt time.Time, deadline time.Duration) (cellGrade, string) {
 	if darkAt.IsZero() {
 		return cellInvalid, "no time was read for port49d's dark"
 	}
+	var answered []string
+	unmeasured := "the device sent no AUTHEN verdict request before port49d went dark"
 	for _, x := range xs {
 		if x.Req.Header.Type != wire.TypeAuthen {
 			continue
@@ -203,7 +208,8 @@ func hungLoginBeforeDark(xs []exchange, darkAt time.Time, deadline time.Duration
 				return cellFailed, fmt.Sprintf("AUTHEN seq %d was unanswered %s, until port49d went dark, past packet_deadline %s",
 					seq, held.Round(time.Millisecond), deadline)
 			}
-			return cellInvalid, fmt.Sprintf("AUTHEN seq %d was cut off by port49d's dark inside packet_deadline", seq)
+			unmeasured = fmt.Sprintf("AUTHEN seq %d was cut off by port49d's dark inside packet_deadline", seq)
+			continue
 		}
 		st, in := replyStatus(*x.Reply), x.Reply.At.Sub(x.Req.At)
 		switch {
@@ -215,10 +221,13 @@ func hungLoginBeforeDark(xs []exchange, darkAt time.Time, deadline time.Duration
 			return cellFailed, fmt.Sprintf("AUTHEN seq %d was answered ERROR in %s, past packet_deadline %s",
 				seq, in.Round(time.Millisecond), deadline)
 		}
-		return cellValid, fmt.Sprintf("AUTHEN seq %d answered %s in %s; port49d went dark %s later, before the device's login ended",
-			seq, st, in.Round(time.Millisecond), darkAt.Sub(x.Reply.At).Round(100*time.Millisecond))
+		answered = append(answered, fmt.Sprintf("AUTHEN seq %d %s in %s", seq, st, in.Round(time.Millisecond)))
 	}
-	return cellInvalid, "the device sent no AUTHEN verdict request before port49d went dark"
+	if len(answered) == 0 {
+		return cellInvalid, unmeasured
+	}
+	return cellValid, "every verdict before dark was ERROR in time (" + strings.Join(answered, "; ") +
+		"); the rest of the login met port49d's dark"
 }
 
 // replyStatus is a reply's status, by name.
