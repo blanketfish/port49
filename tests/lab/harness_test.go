@@ -3143,23 +3143,9 @@ func splitSent(path, addr string, from, to time.Time) (syns, data int, err error
 	return syns, data, nil
 }
 
-// The lab's store timings, which the dark bound is computed from: every
-// config the harness writes sets hold_ttl 60s, and call_timeout and
-// breaker.failures are the defaults (internal/config).
-const (
-	labHoldTTL         = 60 * time.Second
-	labCallTimeout     = 500 * time.Millisecond
-	labBreakerFailures = 5
-)
-
-// darkBound is the longest an idle port49d on a hung store takes to close its
-// listeners (Task 17 review I-8): its probe pings every hold_ttl/6, failures
-// failed pings open the context pool's circuit, the circuit must have been
-// open hold_ttl, and the next call after that (up to another hold_ttl/6, plus
-// the call's own timeout) tells Unhealthy. 5s is slack for the process.
-func darkBound(holdTTL, callTimeout time.Duration, failures int) time.Duration {
-	return time.Duration(failures)*(holdTTL/6) + holdTTL + holdTTL/6 + callTimeout + 5*time.Second
-}
+// labCallTimeout is the store call timeout every config the harness writes
+// leaves at its default (internal/config); healthDarkBound adds it.
+const labCallTimeout = 500 * time.Millisecond
 
 // serverListed checks a configuration read back from the device: with add,
 // the second server is listed in the group after the first (and the first is
@@ -3281,21 +3267,22 @@ func denialBefore(rs []authorReply, end time.Time, window time.Duration) bool {
 	return false
 }
 
-// darkTimes is when, after a hang began, a port49d said its context pool's
-// circuit is open and when it closed its listeners; zero is never.
-type darkTimes struct{ Open, Dark time.Duration }
+// darkTimes is when, after a hang began, a port49d said its store health checks
+// failed close_after times in a row and when it closed its listeners (decision
+// 37); zero is never.
+type darkTimes struct{ Checks, Dark time.Duration }
 
 // waitDark polls each process (seen answers whether its stderr, since the
-// hang, holds a substring; the token pool's circuit or the context pool's
-// opening counts, the bulk pool's does not) every 250ms, until every one has closed its
-// listeners or within has passed.
+// hang, holds a substring) every 250ms, until every one has closed its
+// listeners or within has passed. The cause is the health-check line that
+// says why, not a circuit: the check runs below the guard and trips none.
 func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool) []darkTimes {
 	out := make([]darkTimes, len(seen))
 	for time.Since(hungAt) < within {
 		done := true
 		for i, has := range seen {
-			if out[i].Open == 0 && (has("token pool's circuit is open") || has("context pool's circuit is open")) {
-				out[i].Open = time.Since(hungAt)
+			if out[i].Checks == 0 && has("consecutive store health checks failed") {
+				out[i].Checks = time.Since(hungAt)
 			}
 			if out[i].Dark == 0 && has("closing every listener") {
 				out[i].Dark = time.Since(hungAt)
@@ -3310,40 +3297,34 @@ func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool)
 	return out
 }
 
-// describe says both times and the span between them.
+// describe says both times.
 func (d darkTimes) describe() string {
 	r := func(x time.Duration) time.Duration { return x.Round(100 * time.Millisecond) }
 	switch {
-	case d.Open == 0 && d.Dark == 0:
-		return "the circuit never opened and the listeners never closed"
+	case d.Checks == 0 && d.Dark == 0:
+		return "the health checks never failed close_after times and the listeners never closed"
 	case d.Dark == 0:
-		return fmt.Sprintf("circuit open at %s, listeners never closed", r(d.Open))
-	case d.Open == 0:
-		return fmt.Sprintf("listeners closed at %s, no circuit-open line before them", r(d.Dark))
+		return fmt.Sprintf("health checks failed at %s, listeners never closed", r(d.Checks))
+	case d.Checks == 0:
+		return fmt.Sprintf("listeners closed at %s, no health-check line before them", r(d.Dark))
 	}
-	return fmt.Sprintf("circuit open at %s, listeners closed at %s (open to dark %s)", r(d.Open), r(d.Dark), r(d.Dark-d.Open))
+	return fmt.Sprintf("health checks failed at %s, listeners closed at %s", r(d.Checks), r(d.Dark))
 }
 
-// verdict is what the times say against the configuration: dark within
-// darkBound of the hang, and, from the circuit opening, between hold_ttl and
-// hold_ttl + hold_ttl/6 + call_timeout (decision 35), with 5s for the
-// 250ms poll and the process.
+// verdict is what the times say against the configuration (decision 37): the
+// listeners close within healthDarkBound of the hang, and on the health
+// checks' line, not for some other reason.
 func (d darkTimes) verdict(who string) []string {
 	var out []string
-	bound := darkBound(labHoldTTL, labCallTimeout, labBreakerFailures)
+	bound := healthDarkBound(labHealthInterval, labCallTimeout, labCloseAfter)
 	if d.Dark == 0 {
 		return []string{who + " did not close its listeners within the wait"}
 	}
 	if d.Dark > bound {
 		out = append(out, fmt.Sprintf("%s closed its listeners %s after the hang, past the bound %s", who, d.Dark.Round(100*time.Millisecond), bound))
 	}
-	if d.Open == 0 {
-		out = append(out, who+" closed its listeners with no circuit-open line before them")
-		return out
-	}
-	if span, lo, hi := d.Dark-d.Open, labHoldTTL-5*time.Second, labHoldTTL+labHoldTTL/6+labCallTimeout+5*time.Second; span < lo || span > hi {
-		out = append(out, fmt.Sprintf("%s went dark %s after its circuit opened, outside hold_ttl to hold_ttl/6 later (%s to %s)",
-			who, span.Round(100*time.Millisecond), lo, hi))
+	if d.Checks == 0 {
+		out = append(out, who+" closed its listeners with no store-health-check line before them")
 	}
 	return out
 }

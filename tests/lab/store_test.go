@@ -27,9 +27,9 @@ import (
 const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port49d answers a command FAIL " +
 	"store_unavailable and a login ERROR store_unavailable within packet_deadline (2s), before the " +
 	"device's own TACACS+ timeout, and the device acts as on L4's store outage, never as on a silent server; " +
-	"once port49d closes its listeners on losing the store (hold_ttl), the device acts as with " +
+	"once port49d closes its listeners on losing the store (its health checks, decision 37), the device acts as with " +
 	"port49d stopped and break-glass logs in; and once the store returns and port49d listens again, an open " +
-	"session's next command is answered from the context the store kept (plan 7d; spec §13 decision 35)."
+	"session's next command is answered from the context the store kept (plan 7d; spec §13 decisions 35 and 37)."
 
 // storeLab is the lab's etcd: a TLS member with port49's roles, behind a
 // proxy the test hangs, and the two stores: blocks that point the split's
@@ -321,11 +321,10 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 
 		// 3. The store hangs. Every time below that a device sees is the
 		// capture's, request to reply (pre-flight I17). Each measurement
-		// gets its own hang, the store back between them: the probe pings
-		// every hold_ttl/6 (10s at 60s) and five failed pings open the
-		// circuit, and a login or a break-glass login can take most of that
-		// on its own (on the split port49d holds no hold; go-dark is the
-		// probe and the breaker, step 4's bound). A cell during which port49d
+		// gets its own hang, the store back between them: port49d's health
+		// checks close its listeners after close_after (5) failed checks a
+		// second apart (decision 37, step 4's bound), and a login or a
+		// break-glass login can take most of that on its own. A cell during which port49d
 		// closed its listeners, while the store hung or after it came back
 		// (IB1), measured port49d dark, not a hung store: it is marked
 		// INVALID and measured again on a fresh hang, up to storeAttempts
@@ -440,11 +439,12 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		errOff = l.errLogSize()
 		proxy.Hang(true)
 		hungAt := time.Now()
-		// port49d holds no hold on the split (plan 7e, Ruling 11): it goes dark
-		// when its probe has found the context pool's circuit open for
-		// hold_ttl, which takes longer than 7d's lost hold did (12s on EOS).
-		// The wait runs to 180s so the observed time is always written; the
-		// bound is the configuration's (darkBound), and a time past it fails.
+		// port49d goes dark on decision 37's health checks: close_after (5)
+		// consecutive failed checks, interval (1s) apart, about 5s in. The
+		// line says "consecutive store health checks failed" and no circuit
+		// opens first: the check runs below the guard. The wait runs to 180s
+		// so the observed time is always written; the bound is the
+		// configuration's (healthDarkBound), and a time past it fails.
 		dts := waitDark(hungAt, 180*time.Second, func(sub string) bool { return len(l.errLinesSince(errOff, sub)) > 0 })
 		dark := l.errLinesSince(errOff, "closing every listener")
 		wide("4. port49d's line", fmt.Sprintf("%s after the hang: %s | %s", dts[0].Dark.Round(100*time.Millisecond),

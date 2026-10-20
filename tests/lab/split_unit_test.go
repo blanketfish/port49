@@ -250,17 +250,6 @@ func TestSplitAttemptsReadsWhichServerRefusedAndWhichAnswered(t *testing.T) {
 	}
 }
 
-func TestDarkBoundAtTheLabsValues(t *testing.T) {
-	// 5 failed pings 10s apart, hold_ttl for the open circuit, a sixth more
-	// for the next call, the call's own timeout, and 5s of slack.
-	if got, want := darkBound(60*time.Second, 500*time.Millisecond, 5), 125500*time.Millisecond; got != want {
-		t.Fatalf("darkBound = %s, want %s", got, want)
-	}
-	if darkBound(15*time.Second, 500*time.Millisecond, 5) >= darkBound(60*time.Second, 500*time.Millisecond, 5) {
-		t.Error("the bound does not grow with hold_ttl")
-	}
-}
-
 func TestServerListedReadsTheGroupBack(t *testing.T) {
 	both := map[string]string{
 		"arista_eos":  "aaa group server tacacs+ port49\n   server 172.100.100.1\n   server 172.100.100.2\n",
@@ -330,18 +319,18 @@ func TestDenialBeforeAttributesASessionEnd(t *testing.T) {
 	}
 }
 
-func TestDarkTimesVerdictJudgesBothSpans(t *testing.T) {
+func TestDarkTimesVerdictJudgesDecision37sHealthChecks(t *testing.T) {
 	s := time.Second
 	for _, c := range []struct {
 		name string
 		d    darkTimes
 		bad  int
 	}{
-		{"as designed", darkTimes{Open: 50 * s, Dark: 112 * s}, 0},
-		{"past the bound", darkTimes{Open: 100 * s, Dark: 170 * s}, 1},
-		{"never dark", darkTimes{Open: 50 * s}, 1},
-		{"dark with no circuit line", darkTimes{Dark: 100 * s}, 1},
-		{"dark too soon after opening", darkTimes{Open: 50 * s, Dark: 70 * s}, 1},
+		{"as designed", darkTimes{Checks: 5 * s, Dark: 5 * s}, 0},
+		{"health-check line and no circuit line", darkTimes{Checks: 5300 * time.Millisecond, Dark: 5300 * time.Millisecond}, 0},
+		{"past the bound", darkTimes{Checks: 12 * s, Dark: 12 * s}, 1},
+		{"never dark", darkTimes{Checks: 5 * s}, 1},
+		{"dark with neither line", darkTimes{Dark: 5 * s}, 1},
 	} {
 		if got := c.d.verdict("port49d"); len(got) != c.bad {
 			t.Errorf("%s: %d findings %v, want %d", c.name, len(got), got, c.bad)
