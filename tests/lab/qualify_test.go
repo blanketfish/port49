@@ -553,6 +553,13 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		e.facts = append(e.facts, "NX-OS sends no command authorization on a per-request TLS connection (L73 cells a and h); the TLS cells run with single-connection on")
 	}
 	e.configure(base)
+	if base.SingleConnection {
+		// The device may open its one connection as soon as the line is typed, before any
+		// readiness capture runs, and then reuse it for every request: restart port49d so
+		// the first login opens a connection the probe's capture sees.
+		q.guard()
+		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+	}
 	q.login()
 	e.ready("qual-tls")
 
