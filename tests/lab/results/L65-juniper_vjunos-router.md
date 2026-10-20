@@ -1,12 +1,12 @@
 # L65 — juniper_vjunos-router
 
-- **Date measured:** 2026-10-14
+- **Date measured:** 2026-10-20
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L64L65-juniper_vjunos-router.pcap` — 3226 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L64L65-juniper_vjunos-router.pcap` — 2346 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `bd3a4b91e356c3a015bfc78a4493ff1f797e48c4`, `PORT49_LAB_PLATFORMS=vjunos`, `-run TestL64L65`
+- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,9 +14,9 @@ The Python client (`port49.netmiko.connect`) against juniper_vjunos-router (poli
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.0.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.6, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit bd3a4b91e356c3a015bfc78a4493ff1f797e48c4 into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 30728fa3429a1beea98251be87a16837056daa55 into the shared lab venv.
 
-The 10s before the first cell: 35 decision records and 700 TACACS+ packets to or from the device.
+The 10s before the first cell: 0 decision records and 0 TACACS+ packets to or from the device.
 
 | cell | outcome | elapsed |
 |---|---|---|
@@ -26,8 +26,8 @@ The 10s before the first cell: 35 decision records and 700 TACACS+ packets to or
 | L65c | PASS | 16.7s |
 | L65d | PASS | 16.7s |
 | L65e2 | PASS | 6.5s |
-| L65f1 | PASS | 16.6s |
-| L65f2 | PASS | 16.6s |
+| L65f1 | PASS | 16.7s |
+| L65f2 | PASS | 16.7s |
 
 ### L65e1: PASS
 
@@ -35,7 +35,7 @@ The 10s before the first cell: 35 decision records and 700 TACACS+ packets to or
 
 ### L65a: PASS
 
-`connect(srx1)` from an empty known_hosts, with `HashKnownHosts yes`: outcome `connected`, 91 lines of output, the device's key `ssh-ed25519`; the file holds 1 line(s); `ssh-keygen -F srx1` finds 1, of key types [ssh-ed25519], hashed: true (read error: <nil>); the key Paramiko accepted: `ssh-ed25519`; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: port49: permanently added 'srx1' (ssh-ed25519) to /tmp/p49l64home3737360460/.ssh/known_hosts
+`connect(srx1)` from an empty known_hosts, with `HashKnownHosts yes`: outcome `connected`, 91 lines of output, the device's key `ssh-ed25519`; the file holds 1 line(s); `ssh-keygen -F srx1` finds 1, of key types [ssh-ed25519], hashed: true (read error: <nil>); the key Paramiko accepted: `ssh-ed25519`; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: port49: permanently added 'srx1' (ssh-ed25519) to /tmp/p49l64home316647081/.ssh/known_hosts
 
 ### L65b: PASS
 
@@ -56,7 +56,7 @@ A second `connect(srx1)`: outcome `connected`, 91 lines of output, the device's 
 ```
 debug1: Next authentication method: keyboard-interactive
 Authenticated to 172.100.100.21 ([172.100.100.21]:22) using "keyboard-interactive".
-debug1: client_input_hostkeys: searching /tmp/p49l64home3737360460/.ssh/known_hosts for srx1 / (none)
+debug1: client_input_hostkeys: searching /tmp/p49l64home316647081/.ssh/known_hosts for srx1 / (none)
 Learned new hostkey: ECDSA SHA256:nkmJy0ygYhdKpYOz9P2E0QXa/2+XYSf2mTq6t52ZNig
 Learned new hostkey: ECDSA SHA256:qMyY0hXuejsmToBhRtUv6Rwd4W+5cSN6VdXoYVp5cNg
 Learned new hostkey: ECDSA SHA256:0E3Qg1PEERghWq3gDAx2OSGPvBrYQyHARg9Uft3R+04

@@ -1,12 +1,12 @@
 # L65 — juniper_vsrx
 
-- **Date measured:** 2026-10-14
+- **Date measured:** 2026-10-20
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L64L65-juniper_vsrx.pcap` — 1566 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L64L65-juniper_vsrx.pcap` — 1562 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `bd3a4b91e356c3a015bfc78a4493ff1f797e48c4`, `PORT49_LAB_PLATFORMS=vsrx`, `-run TestL64L65`
+- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,28 +14,28 @@ The Python client (`port49.netmiko.connect`) against juniper_vsrx (policy engine
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.0.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.6, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit bd3a4b91e356c3a015bfc78a4493ff1f797e48c4 into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 30728fa3429a1beea98251be87a16837056daa55 into the shared lab venv.
 
-The 10s before the first cell: 10 decision records and 200 TACACS+ packets to or from the device.
+The 10s before the first cell: 7 decision records and 140 TACACS+ packets to or from the device.
 
 | cell | outcome | elapsed |
 |---|---|---|
-| L65e1 | PASS | 6.8s |
+| L65e1 | PASS | 7.7s |
 | L65a | PASS | 6.8s |
 | L65b | PASS | 6.8s |
-| L65c | PASS | 16.7s |
+| L65c | PASS | 16.6s |
 | L65d | PASS | 16.6s |
 | L65e2 | PASS | 6.5s |
 | L65f1 | PASS | 16.6s |
-| L65f2 | PASS | 16.6s |
+| L65f2 | PASS | 16.7s |
 
 ### L65e1: PASS
 
-`connect(vsrx1)` against the entry `port49 ssh` filed: outcome `connected`, 51 lines of output, the device's key `ssh-ed25519`; the file held 1 line(s) before and 1 after; 188 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: 
+`connect(vsrx1)` against the entry `port49 ssh` filed: outcome `connected`, 51 lines of output, the device's key `ssh-ed25519`; the file held 1 line(s) before and 1 after; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: 
 
 ### L65a: PASS
 
-`connect(vsrx1)` from an empty known_hosts, with `HashKnownHosts yes`: outcome `connected`, 51 lines of output, the device's key `ssh-ed25519`; the file holds 1 line(s); `ssh-keygen -F vsrx1` finds 1, of key types [ssh-ed25519], hashed: true (read error: <nil>); the key Paramiko accepted: `ssh-ed25519`; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: port49: permanently added 'vsrx1' (ssh-ed25519) to /tmp/p49l64home3346601706/.ssh/known_hosts
+`connect(vsrx1)` from an empty known_hosts, with `HashKnownHosts yes`: outcome `connected`, 51 lines of output, the device's key `ssh-ed25519`; the file holds 1 line(s); `ssh-keygen -F vsrx1` finds 1, of key types [ssh-ed25519], hashed: true (read error: <nil>); the key Paramiko accepted: `ssh-ed25519`; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]. Driver stderr: port49: permanently added 'vsrx1' (ssh-ed25519) to /tmp/p49l64home3297795943/.ssh/known_hosts
 
 ### L65b: PASS
 
@@ -51,13 +51,13 @@ A second `connect(vsrx1)`: outcome `connected`, 51 lines of output, the device's
 
 ### L65e2: PASS
 
-`port49 ssh -v vsrx1 -- show version` against the entry Python filed (`ssh-ed25519`): exit 0; ssh: clean; the file held 1 line(s) before and 2 after, of key types ssh-ed25519, ecdsa-sha2-nistp256 (UpdateHostKeys is on; types it adds after authentication are an observation, the negotiated key's line must be unchanged; read error: <nil>); 106 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account]. 
+`port49 ssh -v vsrx1 -- show version` against the entry Python filed (`ssh-ed25519`): exit 0; ssh: clean; the file held 1 line(s) before and 2 after, of key types ssh-ed25519, ecdsa-sha2-nistp256 (UpdateHostKeys is on; types it adds after authentication are an observation, the negotiated key's line must be unchanged; read error: <nil>); 104 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account]. 
 
 ```
 debug1: Next authentication method: keyboard-interactive
 Authenticated to 172.100.100.22 ([172.100.100.22]:22) using "keyboard-interactive".
-debug1: client_input_hostkeys: searching /tmp/p49l64home3346601706/.ssh/known_hosts for vsrx1 / (none)
-Learned new hostkey: ECDSA SHA256:qJvDUmdWPOJKEEKg6Um0xSAeVIQ7If+EvL14C3Y7E4c
+debug1: client_input_hostkeys: searching /tmp/p49l64home3297795943/.ssh/known_hosts for vsrx1 / (none)
+Learned new hostkey: ECDSA SHA256:Zc4b1UVhnFVQHSYZuybUHyHfbauUkDXb2RbawT2cAac
 ```
 
 Observed: ssh filed further key types after authentication (UpdateHostKeys): ecdsa-sha2-nistp256.

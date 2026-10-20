@@ -1,12 +1,12 @@
 # L64 — juniper_vsrx
 
-- **Date measured:** 2026-10-14
+- **Date measured:** 2026-10-20
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L64L65-juniper_vsrx.pcap` — 1566 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L64L65-juniper_vsrx.pcap` — 1562 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `bd3a4b91e356c3a015bfc78a4493ff1f797e48c4`, `PORT49_LAB_PLATFORMS=vsrx`, `-run TestL64L65`
+- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,20 +14,20 @@
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.0.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.6, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit bd3a4b91e356c3a015bfc78a4493ff1f797e48c4 into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 30728fa3429a1beea98251be87a16837056daa55 into the shared lab venv.
 
-The 10s before the first cell: 10 decision records and 200 TACACS+ packets to or from the device.
+The 10s before the first cell: 7 decision records and 140 TACACS+ packets to or from the device.
 
 | cell | outcome | elapsed |
 |---|---|---|
-| L64a | PASS | 6.5s |
-| L64b | PASS | 1m25s |
+| L64a | PASS | 6.6s |
+| L64b | PASS | 1m24.3s |
 | L64c | PASS | 26.7s |
 | L64d | PASS | 16.5s |
 
 ### L64a: PASS
 
-`port49 ssh -v vsrx1 -- show version` with an empty known_hosts: exit 0; 51 lines of output; ssh tried [keyboard-interactive], authenticated by `keyboard-interactive`; 1 askpass asks (the keyboard-interactive and password methods tried); 1 redeem records; 104 TACACS+ packets in the window (the positive control: it must be above 0); records: blob x1, mint x1, redeem x1, authorize_session x1, account x3. ssh: accepted. After the login `ssh-keygen -F vsrx1` finds 1 line(s), of key types [ssh-ed25519] (a read error: <nil>); the file holds 1 line(s).
+`port49 ssh -v vsrx1 -- show version` with an empty known_hosts: exit 0; 51 lines of output; ssh tried [keyboard-interactive], authenticated by `keyboard-interactive`; 1 askpass asks (the keyboard-interactive and password methods tried); 1 redeem records; 166 TACACS+ packets in the window (the positive control: it must be above 0); records: blob x1, mint x1, redeem x1, authorize_session x1, account x6. ssh: accepted. After the login `ssh-keygen -F vsrx1` finds 1 line(s), of key types [ssh-ed25519] (a read error: <nil>); the file holds 1 line(s).
 
 ```
 Warning: Permanently added 'vsrx1' (ED25519) to the list of known hosts.
@@ -37,7 +37,7 @@ Authenticated to 172.100.100.22 ([172.100.100.22]:22) using "keyboard-interactiv
 
 ### L64b: PASS
 
-The device rebooted: true (System booted 2026-10-14 03:35:39 UTC, then 2026-10-14 03:37:33 UTC). The scan's key is the same after the reload (SHA256:L5ycJzIf7cGQuQeEUhEA9amwS6OtKoevoS3sHZkIm80).
+The device rebooted: true (System booted 2026-10-20 11:46:17 UTC, then 2026-10-20 11:48:11 UTC). The scan's key is the same after the reload (SHA256:8LRikIKnMgKckoc857vlzeBq09Yd2bhPgsO3XBhfgpU).
 
 The filed lines (type and key, compared with the host field left out) before the reload: 1; after: 2; added by the login: ecdsa-sha2-nistp256; gone after it: none.
 
@@ -55,22 +55,22 @@ System going down IMMEDIATELY
 
                                                                                
 Shutdown NOW!
-[pid 28956]
+[pid 28948]
 
 breakglass@srx1> 
-The reload command was sent at 03:37:01; the device was seen down (no SSH banner on two connections in a row) at 03:37:05, and was serving SSH authentication again no later than 1m12s after that.
-Before the reload, `show system uptime` says: ["show system uptime \r" "System booted: 2026-10-14 03:35:39 UTC (00:01:21 ago)\r"]. After: ["show system uptime \r" "System booted: 2026-10-14 03:37:33 UTC (00:00:44 ago)\r"].
+The reload command was sent at 11:47:38; the device was seen down (no SSH banner on two connections in a row) at 11:47:42, and was serving SSH authentication again no later than 1m11s after that.
+Before the reload, `show system uptime` says: ["show system uptime \r" "System booted: 2026-10-20 11:46:17 UTC (00:01:20 ago)\r"]. After: ["show system uptime \r" "System booted: 2026-10-20 11:48:11 UTC (00:00:42 ago)\r"].
 ```
 
-The 10s before the first cell: 10 decision records and 200 TACACS+ packets to or from the device.
+The 10s before the first cell: 7 decision records and 140 TACACS+ packets to or from the device.
 
-After it, `port49 ssh -v vsrx1 -- show version`: exit 0; 51 lines of output; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]; ssh: clean; the warning banner is present: false.
+After it, `port49 ssh -v vsrx1 -- show version`: exit 0; 51 lines of output; 324 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account account account account account account account account]; ssh: clean; the warning banner is present: false.
 
 ```
 debug1: Next authentication method: keyboard-interactive
 Authenticated to 172.100.100.22 ([172.100.100.22]:22) using "keyboard-interactive".
-debug1: client_input_hostkeys: searching /tmp/p49l64home3346601706/.ssh/known_hosts for vsrx1 / (none)
-Learned new hostkey: ECDSA SHA256:qJvDUmdWPOJKEEKg6Um0xSAeVIQ7If+EvL14C3Y7E4c
+debug1: client_input_hostkeys: searching /tmp/p49l64home3297795943/.ssh/known_hosts for vsrx1 / (none)
+Learned new hostkey: ECDSA SHA256:Zc4b1UVhnFVQHSYZuybUHyHfbauUkDXb2RbawT2cAac
 ```
 
 ### L64c: PASS
@@ -80,11 +80,11 @@ Learned new hostkey: ECDSA SHA256:qJvDUmdWPOJKEEKg6Um0xSAeVIQ7If+EvL14C3Y7E4c
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the ED25519 key sent by the remote host is
-Offending ED25519 key in /tmp/p49l64home3346601706/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3346601706/.ssh/known_hosts' -R 'vsrx1'
+Offending ED25519 key in /tmp/p49l64home3297795943/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home3297795943/.ssh/known_hosts' -R 'vsrx1'
 Host key for vsrx1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before vsrx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under vsrx1 is not the one 172.100.100.22 presents: either the device's key changed, or the address inventory gives for vsrx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3346601706/.ssh/known_hosts -R vsrx1 and connect again
+port49 ssh: ssh stopped before vsrx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under vsrx1 is not the one 172.100.100.22 presents: either the device's key changed, or the address inventory gives for vsrx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3297795943/.ssh/known_hosts -R vsrx1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 
 ### L64d: PASS
@@ -94,10 +94,10 @@ port49 ssh: ssh stopped before vsrx1 asked for the token, so it was never sent (
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the RSA key sent by the remote host is
-Offending RSA key in /tmp/p49l64home3346601706/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3346601706/.ssh/known_hosts' -R 'vsrx1'
+Offending RSA key in /tmp/p49l64home3297795943/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home3297795943/.ssh/known_hosts' -R 'vsrx1'
 Host key for vsrx1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before vsrx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under vsrx1 is not the one 172.100.100.22 presents: either the device's key changed, or the address inventory gives for vsrx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3346601706/.ssh/known_hosts -R vsrx1 and connect again
+port49 ssh: ssh stopped before vsrx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under vsrx1 is not the one 172.100.100.22 presents: either the device's key changed, or the address inventory gives for vsrx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3297795943/.ssh/known_hosts -R vsrx1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 

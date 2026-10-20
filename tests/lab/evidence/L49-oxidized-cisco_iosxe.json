@@ -73,7 +73,7 @@
       "crashfile_written_by_stale_run": false,
       "crashfiles_total": 0,
       "first_status": "success",
-      "oxidized_log_excerpt": "2026-10-08 03:41:43.468771 W [7:Job 'xe1'] Oxidized::Node -- 172.100.100.41 raised Net::SSH::AuthenticationFailed with msg \"Authentication failed for user svc-oxidized@172.100.100.41\"",
+      "oxidized_log_excerpt": "2026-10-20 11:06:00.266742 W [7:Job 'xe1'] Oxidized::Node -- 172.100.100.41 raised Net::SSH::AuthenticationFailed with msg \"Authentication failed for user svc-oxidized@172.100.100.41\"",
       "process_crash_file": false,
       "receipt_idle_ttl": "2m",
       "stale_redeem_by_verdict_reason": {
@@ -105,8 +105,8 @@
         },
         {
           "command": "show vtp status",
-          "verdict": "deny",
-          "reason": "no_rule_matched"
+          "verdict": "permit",
+          "reason": "permit_dominates"
         },
         {
           "command": "show inventory",
@@ -119,9 +119,7 @@
           "reason": "permit_dominates"
         }
       ],
-      "denied": [
-        "show vtp status"
-      ],
+      "denied": null,
       "ended": true,
       "status": "success"
     }

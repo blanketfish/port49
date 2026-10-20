@@ -1,7 +1,7 @@
 # L49 — cisco_iosxe
 
-- **Date measured:** 2026-10-08
-- **Run:** commit `31c329cdd227a8075e60ccd3937d1f4b398c62df`, `PORT49_LAB_PLATFORMS=iosxe`, `-run TestL49`
+- **Date measured:** 2026-10-20
+- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL49Oxidized$`
 - **Platform:** cisco_iosxe
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`), Oxidized 0.37.0-101-g65125713 (image `oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc`, oxidized/oxidized@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc)
 - **Capture:** `tests/lab/evidence/L49-oxidized-cisco_iosxe.json`
@@ -13,7 +13,7 @@ Oxidized as the day-one consumer of minted tokens (plan 8): the commands each mo
 
 ## Observation
 
-- **Device capture:** `tests/lab/evidence/L49-oxidized-cisco_iosxe.pcap` — 4358 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L49-oxidized-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Device capture:** `tests/lab/evidence/L49-oxidized-cisco_iosxe.pcap` — 4510 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L49-oxidized-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **A. What Oxidized sends** (role `**`, `port49-oxidized-run` with `PORT49_TTL=15m`):
   - The example's `config` sets `auth_methods` with `keyboard-interactive` (which Oxidized's default list `none`, `publickey`, `password` lacks) for the `eos` model alone, under `models: eos: vars`. This device's sshd listed, for `none`: `publickey,keyboard-interactive,password`.
   - Oxidized's own startup run (with the setup run's token, before this phase's mark) ended, status `success`; authentications at port49d: 1 (permit/token_redeemed x1).
@@ -28,12 +28,12 @@ Oxidized as the day-one consumer of minted tokens (plan 8): the commands each mo
   - 3m later, `PUT /node/next/xe1` with no new mint: the run ended; Oxidized's status `no_connection` (a success would be `success`).
   - Authentications that one stale run cost: 1 redeem records for `svc-oxidized` between the mark taken just before the `PUT` and the settle after it (deny/token_spent x1); no other run was started in that span.
   - Oxidized's log for the stale run (class and message lines only):
-    - `2026-10-08 03:41:43.468771 W [7:Job 'xe1'] Oxidized::Node -- 172.100.100.41 raised Net::SSH::AuthenticationFailed with msg "Authentication failed for user svc-oxidized@172.100.100.41"`
+    - `2026-10-20 11:06:00.266742 W [7:Job 'xe1'] Oxidized::Node -- 172.100.100.41 raised Net::SSH::AuthenticationFailed with msg "Authentication failed for user svc-oxidized@172.100.100.41"`
   - Node crashfiles in Oxidized's `crashes` directory: 0 written by the stale run (modified at or after the `PUT`), 0 in all; the process-crash file `crash` exists: no.
   - The wrapper again with a new 60s token (wrapper exit 0): the run ended with status `success`; Oxidized read the new credential at `/reload`: yes.
 - **C. The example's role** (`examples/oxidized/policy.yaml`, the same stack):
-  - The run ended with status `success`; 6 authorize_command records, 1 denied.
-  - The snippet lacks: `show vtp status`.
+  - The run ended with status `success`; 6 authorize_command records, 0 denied.
+  - Every command was permitted.
 - **D. No token in Oxidized's log** (`docker compose logs oxidized`, through the secrets check against every token minted in A to C and the workload's key):
   - A: Oxidized's log (990 bytes, default level) holds none of the 7 tokens minted so far and no compact JWS.
   - B and C: Oxidized's log (2035 bytes, default level) holds none of the 15 tokens minted so far and no compact JWS.
