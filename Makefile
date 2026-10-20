@@ -178,7 +178,7 @@ lab-regions:
 
 # The closed lab entries, rerun under the lab lock and diffed against their notes
 # (plan 11b). Beehive only. LAB_REGRESS_ARGS passes -only=<ids> or -dry-run.
-lab-regress:
+lab-regress: build
 	go run ./tests/lab/cmd/lab-regress -manifest tests/lab/regress.yaml $(LAB_REGRESS_ARGS)
 
 # L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
