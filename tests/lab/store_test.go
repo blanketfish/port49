@@ -115,17 +115,8 @@ func replyTimesFrom(path, key string, from, to time.Time, server bool) []string 
 		return []string{"capture unreadable: " + err.Error()}
 	}
 	var out []string
-	for _, p := range pkts {
-		if !p.FromDevice || p.At.Before(from) || p.At.After(to) {
-			continue
-		}
-		var reply *wirePacket
-		for i, q := range pkts {
-			if !q.FromDevice && q.SrcPort == p.SrcPort && q.Header.SessionID == p.Header.SessionID &&
-				q.Header.SeqNo == p.Header.SeqNo+1 && !q.At.Before(p.At) && (reply == nil || q.At.Before(reply.At)) {
-				reply = &pkts[i]
-			}
-		}
+	for _, x := range exchangesIn(pkts, from, to) {
+		p, reply := x.Req, x.Reply
 		if reply == nil {
 			out = append(out, fmt.Sprintf("%s seq %d unanswered", p.Kind(), p.Header.SeqNo))
 			continue
@@ -142,6 +133,92 @@ func replyTimesFrom(path, key string, from, to time.Time, server bool) []string 
 		return []string{"no request in the capture"}
 	}
 	return out
+}
+
+// exchange is one request the device sent and the reply it got, nil when
+// none came.
+type exchange struct {
+	Req   wirePacket
+	Reply *wirePacket
+}
+
+// exchangesIn is every request the device sent between from and to, in
+// capture order, each with the first reply on its connection and session at
+// the next seq.
+func exchangesIn(pkts []wirePacket, from, to time.Time) []exchange {
+	var out []exchange
+	for _, p := range pkts {
+		if !p.FromDevice || p.At.Before(from) || p.At.After(to) {
+			continue
+		}
+		var reply *wirePacket
+		for i, q := range pkts {
+			if !q.FromDevice && q.SrcPort == p.SrcPort && q.Header.SessionID == p.Header.SessionID &&
+				q.Header.SeqNo == p.Header.SeqNo+1 && !q.At.Before(p.At) && (reply == nil || q.At.Before(reply.At)) {
+				reply = &pkts[i]
+			}
+		}
+		out = append(out, exchange{Req: p, Reply: reply})
+	}
+	return out
+}
+
+// cellGrade is what a step-3 cell that met port49d's dark measured.
+type cellGrade int
+
+const (
+	cellInvalid cellGrade = iota // dark came first: measure it again
+	cellValid                    // the hung store's answer was measured before dark
+	cellFailed                   // port49d's answer broke the claim
+)
+
+func (g cellGrade) String() string {
+	return [...]string{"invalid", "valid", "failed"}[g]
+}
+
+// hungLoginBeforeDark grades a step-3 token login during which port49d went
+// dark at darkAt (decision 37), from the login's AUTHEN exchanges. The claim
+// is port49d's answer: the login's verdict, its first AUTHEN reply that is
+// not a GET prompt, is ERROR within deadline (packet_deadline). That answer
+// comes about 500ms into the hang and dark about 5s in, but a device whose
+// failed login takes longer (Junos's and NX-OS's second try) meets dark
+// before the login ends: its later tries find the listener closed and fall to
+// the local method, where the token's user has no account, so the login is
+// refused either way. Such a cell measured the hung store and is valid. A
+// verdict that is not ERROR, or comes late, fails, and so does a request
+// port49d still held past deadline when it went dark; darkAt is read by a
+// poll and may be up to darkPoll late, which the hold is allowed. A dark that
+// came before port49d owed a verdict leaves the cell unmeasured (invalid).
+func hungLoginBeforeDark(xs []exchange, darkAt time.Time, deadline time.Duration) (cellGrade, string) {
+	if darkAt.IsZero() {
+		return cellInvalid, "no time was read for port49d's dark"
+	}
+	for _, x := range xs {
+		if x.Req.Header.Type != wire.TypeAuthen {
+			continue
+		}
+		seq := x.Req.Header.SeqNo
+		if x.Reply == nil {
+			if held := darkAt.Sub(x.Req.At); held > deadline+darkPoll {
+				return cellFailed, fmt.Sprintf("AUTHEN seq %d was unanswered %s, until port49d went dark, past packet_deadline %s",
+					seq, held.Round(time.Millisecond), deadline)
+			}
+			return cellInvalid, fmt.Sprintf("AUTHEN seq %d was cut off by port49d's dark inside packet_deadline", seq)
+		}
+		st, in := replyStatus(*x.Reply), x.Reply.At.Sub(x.Req.At)
+		switch {
+		case strings.HasPrefix(st, "GET"):
+			continue
+		case !strings.HasPrefix(st, "ERROR"):
+			return cellFailed, fmt.Sprintf("the hung store's login was answered %s (AUTHEN seq %d), not ERROR", st, seq)
+		case in > deadline:
+			return cellFailed, fmt.Sprintf("AUTHEN seq %d was answered ERROR in %s, past packet_deadline %s",
+				seq, in.Round(time.Millisecond), deadline)
+		}
+		return cellValid, fmt.Sprintf("AUTHEN seq %d answered %s in %s; port49d went dark %s later, before the device's login ended",
+			seq, st, in.Round(time.Millisecond), darkAt.Sub(x.Reply.At).Round(100*time.Millisecond))
+	}
+	return cellInvalid, "the device sent no AUTHEN verdict request before port49d went dark"
 }
 
 // replyStatus is a reply's status, by name.
@@ -202,6 +279,11 @@ func (l *lab) listenAgain(off int64, within time.Duration) error {
 	}
 	return l.awaitTACACS()
 }
+
+// labPacketDeadline is stores.directory.packet_deadline's default, which
+// the lab's stores: block leaves unset: the bound on port49d's answer to a
+// request while the store hangs.
+const labPacketDeadline = 2 * time.Second
 
 // storeAttempts is how many times one of step 3's cells is measured
 // before it is recorded INVALID: the first, and three re-runs (Ruling
@@ -328,7 +410,10 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		// closed its listeners, while the store hung or after it came back
 		// (IB1), measured port49d dark, not a hung store: it is marked
 		// INVALID and measured again on a fresh hang, up to storeAttempts
-		// times (Ruling T15-a).
+		// times (Ruling T15-a). The token login is the exception: a failed
+		// login on vJunos, vSRX and NX-OS outlasts the 5s to dark, so a cell
+		// that met dark is graded by hungLoginBeforeDark on port49d's verdict
+		// before it.
 		off = l.mark()
 		type window struct {
 			what     string
@@ -337,13 +422,18 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		var windows []window
 		var berr error
 		// measure is called twice per attempt: with a nil fail before the
-		// hang, to prepare, and then to measure.
-		hang := func(what string, measure func(attempt int, fail func(string, ...any))) {
+		// hang, to prepare, and then to measure. metDark, when not nil,
+		// grades a cell that met port49d's dark from the capture of the hang
+		// and when dark came.
+		hang := func(what string, measure func(attempt int, fail func(string, ...any)),
+			metDark func(from, to, darkAt time.Time) (cellGrade, string)) {
 			for attempt := 1; attempt <= storeAttempts; attempt++ {
-				var cellFailed []string
-				cellFail := func(format string, args ...any) { cellFailed = append(cellFailed, fmt.Sprintf(format, args...)) }
+				var cellFails []string
+				cellFail := func(format string, args ...any) { cellFails = append(cellFails, fmt.Sprintf(format, args...)) }
 				measure(attempt, nil) // what the cell spends, a token, is minted while the store answers
 				errOff = l.errLogSize()
+				stopWatch := make(chan struct{})
+				darkAt := darkWatch(stopWatch, func() bool { return len(l.errLinesSince(errOff, darkCloseText)) > 0 })
 				from := time.Now()
 				proxy.Hang(true)
 				measure(attempt, cellFail)
@@ -351,15 +441,36 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 				to := time.Now()
 				// The circuits' probes, and the fence's next answered read.
 				time.Sleep(15 * time.Second)
+				close(stopWatch)
 				label := fmt.Sprintf("3. %s, attempt %d (hung %s)", what, attempt, to.Sub(from).Round(time.Second))
 				if lit(errOff, label) {
+					<-darkAt
 					windows = append(windows, window{label, from, to})
-					failed = append(failed, cellFailed...)
+					failed = append(failed, cellFails...)
 					return
 				}
-				row(label, "INVALID: port49d closed its listeners before the cell ended; measured again")
+				grade, why := cellInvalid, "port49d closed its listeners before the cell ended"
+				if at := <-darkAt; metDark != nil {
+					l.flushCapture(t)
+					grade, why = metDark(from, to, at)
+				}
+				switch grade {
+				case cellValid:
+					row(label, "valid, port49d went dark during it: "+why)
+					windows = append(windows, window{label, from, to})
+					failed = append(failed, cellFails...)
+				case cellFailed:
+					row(label, "FAILED, port49d went dark during it: "+why)
+					fail("step 3 (%s): %s", what, why)
+					failed = append(failed, cellFails...)
+				default:
+					row(label, "INVALID: "+why+"; measured again")
+				}
 				if err := l.listenAgain(errOff, 150*time.Second); err != nil {
-					t.Fatalf("after an INVALID cell (%s): %v", label, err)
+					t.Fatalf("after a cell that met port49d's dark (%s): %v", label, err)
+				}
+				if grade != cellInvalid {
+					return
 				}
 			}
 			fail("step 3 (%s) was INVALID on all %d attempts: port49d closed its listeners first every time", what, storeAttempts)
@@ -382,7 +493,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 					f("with the store hung the next command was not refused: %s", hung)
 				}
 				row(fmt.Sprintf("3. store hung, the open session's `show version` (attempt %d)", attempt), hung)
-			})
+			}, nil)
 		}
 		var tok3 string
 		hang("the token login", func(attempt int, f func(string, ...any)) {
@@ -398,6 +509,12 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			if lerr == nil {
 				f("a token login succeeded with the store hung")
 			}
+		}, func(from, to, darkAt time.Time) (cellGrade, string) {
+			pkts, _, err := pcapTACACSPackets(capPath, labKeyDefault)
+			if err != nil {
+				return cellInvalid, "the capture is unreadable: " + err.Error()
+			}
+			return hungLoginBeforeDark(exchangesIn(pkts, from, to), darkAt, labPacketDeadline)
 		})
 		hang("break-glass", func(attempt int, f func(string, ...any)) {
 			if f == nil {
@@ -408,7 +525,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			row(fmt.Sprintf("3. store hung, break-glass and `show version` (attempt %d)", attempt),
 				fmt.Sprintf("login err %v; printed %s (compare tests/lab/results/L4-error-%s.md)", berr,
 					firstOut(outs), l.p.name))
-		})
+		}, nil)
 		recs = l.waitForRecords(off, 20*time.Second, func([]map[string]any) bool { return true })
 		cmds, redeems := reasonsOf(recs, "authorize_command"), reasonsOf(recs, "redeem")
 		wide("3. records", fmt.Sprintf("authorize_command %v; redeem %v; authorize_session %v; accounting %v", cmds, redeems,

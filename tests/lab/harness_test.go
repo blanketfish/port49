@@ -3280,8 +3280,12 @@ const (
 	darkCloseText = "closing every listener"
 )
 
+// darkPoll is how often waitDark and darkWatch read port49d's stderr, so a
+// dark time they read is up to darkPoll late.
+const darkPoll = 250 * time.Millisecond
+
 // waitDark polls each process (seen answers whether its stderr, since the
-// hang, holds a substring) every 250ms, until every one has closed its
+// hang, holds a substring) every darkPoll, until every one has closed its
 // listeners or within has passed. The cause is the health-check line that
 // says why, not a circuit: the check runs below the guard and trips none.
 func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool) []darkTimes {
@@ -3300,9 +3304,31 @@ func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool)
 		if done {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(darkPoll)
 	}
 	return out
+}
+
+// darkWatch polls closed (whether port49d has said it closes its listeners)
+// every darkPoll until stop is closed, and sends on the channel it returns
+// when it first had, the zero time when it never did.
+func darkWatch(stop <-chan struct{}, closed func() bool) <-chan time.Time {
+	at := make(chan time.Time, 1)
+	go func() {
+		for {
+			if closed() {
+				at <- time.Now()
+				return
+			}
+			select {
+			case <-stop:
+				at <- time.Time{}
+				return
+			case <-time.After(darkPoll):
+			}
+		}
+	}()
+	return at
 }
 
 // describe says both times.
