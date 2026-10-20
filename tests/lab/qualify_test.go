@@ -132,6 +132,11 @@ func (q *qualEnv) guard() {
 // the slice does, and plays each cell under one capture.
 func (q *qualEnv) play() {
 	q.guard()
+	// The broker's server certificate must exist when port49d starts, and a
+	// later write would mint a new CA the running daemon does not trust.
+	if err := testpki.WriteLab(filepath.Join(root, slicePKIDir), sliceEmail, time.Now()); err != nil {
+		q.t.Fatal(err)
+	}
 	q.cfg = q.config()
 	if err := q.l.stopDaemon(); err != nil {
 		q.t.Fatal(err)
@@ -248,9 +253,6 @@ func (q *qualEnv) login() {
 		q.t.Fatalf("INVALID: %s is missing: run `make build` first (%v)", port49, err)
 	}
 	pki := filepath.Join(root, slicePKIDir)
-	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
-		q.t.Fatal(err)
-	}
 	sockDir, err := os.MkdirTemp("", "p49qual")
 	if err != nil {
 		q.t.Fatal(err)
