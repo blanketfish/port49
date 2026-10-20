@@ -45,8 +45,9 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
      - Nexus 9300v 10.6.2.F (`nxos106`): copy `nexus9300v64.10.6.2.F.qcow2` into
        `vrnetlab/cisco/n9kv` as `n9kv-9300v64-10.6.2.F.qcow2`, then
        `make IMAGE=n9kv-9300v64-10.6.2.F.qcow2 docker-build`.
-     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): `make IMAGE=iol-xe-17-18-02.tar.gz
-       docker-build` in `vrnetlab/cisco/iol`.
+     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): copy `iol-xe-17-18-02.tar.gz` into
+       `vrnetlab/cisco/iol` first (an `IMAGE=/mnt/images/...` path fails the Makefile's version
+       regex), then `make IMAGE=iol-xe-17-18-02.tar.gz docker-build` there.
      - XRd control plane 26.1.1 (`xrd261`, L71 help cell only): `docker load -i
        ios-xrd-control-plane-26-1-1.tar.gz`, tagged `port49lab/xrd-control-plane:26.1.1`. XRd
        needs `fs.inotify.max_user_instances` >= 4000 (`sudo sysctl -w`, not persisted).
@@ -919,14 +920,17 @@ L22 (44). Entries that failed carry no `measured_minutes`.
 The runner stops at the first failure. Of the 8:
 
 - **L35, L37**: the test still expected plan 7e's circuit-open line. port49d now goes dark on
-  decision 37's health checks (about 5 s), so the verdict was stale, not the device.
+  decision 37's health checks (about 5 s), so the verdict was stale, not the device. The verdict is
+  fixed, but L35 and L37 have not passed under it yet: rerun them (`-only=L35,L37`) and expect their
+  notes to change.
 - **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29.
-- **L29-reload on vjunos**: a connection open across the change was reset in the refused/rekeyed
+- **L29-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
   phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
   flake, so retry the entry.
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
-`feature netconf` and port49d sees no packet within 8 min. It is an image flake; retry the entry.
+`feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device appears to hang while the launcher applies its
+startup config. Retry the entry.
 
 **What a run needs beyond the base setup:**
 
@@ -935,6 +939,6 @@ The runner stops at the first failure. Of the 8:
 - L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
   with `/home/rwendt/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
   the L66 preflight prints the exact command with the collection names.
-- Building `vrnetlab/cisco_iol`: copy the image file into the build directory. An
-  `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
+- Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
+  IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
 - cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).
