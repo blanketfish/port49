@@ -217,6 +217,9 @@ func (q *qualEnv) config() string {
 
 func (q *qualEnv) startDaemon(cfg string) {
 	q.t.Helper()
+	// The conformance config has no lab seed file: the broker mints every
+	// token, so there is no seed file for the harness to read.
+	q.l.splitActive = true
 	if err := q.l.startDaemonWith(cfg, true); err != nil {
 		q.t.Fatalf("INVALID: port49d would not start on the conformance config: %v", err)
 	}
@@ -232,6 +235,7 @@ func (q *qualEnv) restoreDaemon() {
 		q.t.Errorf("could not stop the conformance daemon: %v", err)
 		return
 	}
+	q.l.splitActive = false
 	std, err := q.l.configPath()
 	if err != nil {
 		q.t.Errorf("derive this platform's daemon config: %v", err)
