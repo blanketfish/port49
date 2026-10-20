@@ -922,7 +922,8 @@ The runner stops at the first failure. Of the 8:
   decision 37's health checks (about 5 s), so the verdict was stale, not the device.
 - **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29.
 - **L29-reload on vjunos**: a connection open across the change was reset in the refused/rekeyed
-  phase. Under investigation.
+  phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
+  flake, so retry the entry.
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
 `feature netconf` and port49d sees no packet within 8 min. It is an image flake; retry the entry.
