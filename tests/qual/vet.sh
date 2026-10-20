@@ -18,8 +18,9 @@ filter <"$log" | grep -E '^(--- |ok |FAIL)' || true
 ev=$(find tests/lab/evidence -maxdepth 1 -type d -name 'QUAL-*' -newer "$marker" -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
 [ -n "$ev" ] || { echo "qual-vet: lab-qualify wrote no tests/lab/evidence/QUAL-* directory"; exit 1; }
 go run ./tests/qual/cmd/genprofile -evidence "$ev"
-make qual
+# the list first: make qual fails while the committed page is stale
 make qualified-platforms
+make qual
 git status --short -- tests/qual tests/lab/results tests/lab/evidence docs/qualified-platforms.md
 git diff --stat -- tests/qual docs/qualified-platforms.md
 echo "qual-vet: the raw lab log is $log (unfiltered; read it only through the secret filter)"
