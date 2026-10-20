@@ -1,0 +1,6 @@
+# Every daemon key that shapes a reply, shared byte for byte by the lab conformance run
+# (tests/lab qualConfig) and the mock (internal/port49d qualDaemon), merged into each with
+# devicemock.MergeFragment (decision 52 ruling 5). Nothing else goes here; nothing that shapes a
+# reply goes anywhere else. Platform overrides would go here; there are none.
+session:
+  staleness_ceiling: 0s

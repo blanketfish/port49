@@ -1,0 +1,15 @@
+# The qualification policy (plan 11b, decision 52 ruling 5): the broker's policy in every lab
+# conformance run (TestQualify) and every mock (TestQual), so a golden from the lab is the mock's
+# expectation. Changing it changes every golden: run `make qual-update`, review the diff; the next
+# release tag's lab run re-vets.
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: qual_admin, privilege: admin, permit: ["**"]}
+  # show users is safe on every platform; never a command that changes a device here.
+  - {name: qual_denies, deny: ["show users"]}
+subjects:
+  # Both identities: the mock's broker issues alice@example.com (testpki.WriteLabWith), the lab's
+  # slice PKI alice@slice.port49.test (tests/lab/slice_test.go).
+  - {name: qual_operator, identity: ["user:alice@example.com", "user:alice@slice.port49.test"], username: qual01, token_ttl: 60s}
+grants:
+  - {subject: qual_operator, scope: all_devices, roles: [qual_admin, qual_denies], max_privilege: admin}
