@@ -3,6 +3,17 @@
 # expectation. Changing it changes every golden: run `make qual-update`, review the diff; the next
 # release tag's lab run re-vets.
 platform_set: 1.3.0
+# nokia_srlinux has no platform_set 1.3.0 adapter: its devices are served by the generic adapter,
+# which renders no attribute, and SR Linux refuses a login whose authorization carries no priv-lvl
+# (priv-lvl-authorization true; tests/lab/results/L76-nokia_srlinux.md cells a and h). This block is a
+# policy override local to the qual policy, not an adapter: it renders only priv-lvl, as L76 measured
+# the device reads it (1 -> p49-read, 15 -> p49-admin).
+platforms:
+  nokia_srlinux:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=15"]
+      admin: ["priv-lvl=15"]
 scopes:
   - {name: all_devices, match: {}}
   # Each platform is in exactly one of the next two (TestQualPolicyDeniesOncePerPlatform): a new
