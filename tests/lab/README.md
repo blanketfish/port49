@@ -906,3 +906,34 @@ procedures are in `tests/qual/README.md`.
 
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.
+
+## Regressions (plan 11b)
+
+`make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
+notes. Each entry's `measured_minutes` is its wall time in the first full run (commit `30728fa3`,
+2026-10-19/20): 58 of 66 entries ok, 8 FAIL, 723.5 minutes for the passing entries. A clean full run
+is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
+`make lab-regress LAB_REGRESS_ARGS=-only=L73-nxos106`. The slowest are L34 (103 min), L36 (67) and
+L22 (44). Entries that failed carry no `measured_minutes`.
+
+The runner stops at the first failure. Of the 8:
+
+- **L35, L37**: the test still expected plan 7e's circuit-open line. port49d now goes dark on
+  decision 37's health checks (about 5 s), so the verdict was stale, not the device.
+- **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29.
+- **L29-reload on vjunos**: a connection open across the change was reset in the refused/rekeyed
+  phase. Under investigation.
+
+**NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
+`feature netconf` and port49d sees no packet within 8 min. It is an image flake; retry the entry.
+
+**What a run needs beyond the base setup:**
+
+- `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
+  (on beehive, `/mnt/images/etcd-v3.6.15`). L35-restore needs `etcdutl`.
+- L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
+  with `/home/rwendt/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
+  the L66 preflight prints the exact command with the collection names.
+- Building `vrnetlab/cisco_iol`: copy the image file into the build directory. An
+  `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
+- cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).
