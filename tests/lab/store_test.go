@@ -436,6 +436,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		// and when dark came.
 		hang := func(what string, measure func(attempt int, fail func(string, ...any)),
 			metDark func(from, to, darkAt time.Time) (cellGrade, string)) {
+			lastWhy := ""
 			for attempt := 1; attempt <= storeAttempts; attempt++ {
 				var cellFails []string
 				cellFail := func(format string, args ...any) { cellFails = append(cellFails, fmt.Sprintf(format, args...)) }
@@ -474,6 +475,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 					failed = append(failed, cellFails...)
 				default:
 					row(label, "INVALID: "+why+"; measured again")
+					lastWhy = why
 				}
 				if err := l.listenAgain(errOff, 150*time.Second); err != nil {
 					t.Fatalf("after a cell that met port49d's dark (%s): %v", label, err)
@@ -482,7 +484,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 					return
 				}
 			}
-			fail("step 3 (%s) was INVALID on all %d attempts: port49d closed its listeners first every time", what, storeAttempts)
+			fail("step 3 (%s) was INVALID on all %d attempts (the last: %s)", what, storeAttempts, lastWhy)
 		}
 		if !sessionOnly {
 			hang("the open session's command", func(attempt int, f func(string, ...any)) {
