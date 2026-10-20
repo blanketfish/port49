@@ -18,4 +18,6 @@ Whether SR Linux, served by the platform-set 1.3.0 generic adapter (which render
 
 port49d's decision records for that login, in order: `blob`, `mint` (permit, grants_matched), `redeem` (permit, token_redeemed, user `qual01`, port `ssh`), `authorize_session` (permit, context_matched). The `authorize_session` record's reply is null: port49 answered permit with no attribute. The device refused the login anyway. With the block in place (priv-lvl=15) the same cell passes (QUAL-SR-Linux-26.7.2-519-nokia_srlinux.md).
 
+This run stopped as INVALID before the harness wrote its evidence, so it wrote no run.json. The record is the pcap and `decisions.jsonl` beside it; the latter was produced afterwards from the run's own daemon log with the harness's `qualRecords`, the same whitelist and gate.
+
 This measures one image and the device configuration of tests/lab/configs/srlinux-startup.cli (`priv-lvl-authorization true`). It does not measure a login with `priv-lvl-authorization false`; that is L76 cell (i): no authorization request is sent at all.
