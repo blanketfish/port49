@@ -923,8 +923,12 @@ func (r *l69Run) cellB(a *kindCluster, br *localBroker) {
 			m := r.mint(br, raw)
 			c.Observed["mint"] = m
 			c.Pass = m.Exit == 0 && frac >= 0.75 && frac <= 0.97
-			c.Why = fmt.Sprintf("the file changed at %.2f of expirationSeconds (measured from the old token's iat; the docs' "+
-				"\"about 80%%\" is provisional until this is recorded); the new token minted exit %d", frac, m.Exit)
+			bound := "outside [0.75, 0.97], so the docs' \"about 80%%\" does not hold"
+			if c.Pass {
+				bound = "inside [0.75, 0.97], so the docs' \"about 80%%\" stands"
+			}
+			c.Why = fmt.Sprintf("the file changed at %.2f of expirationSeconds (measured from the old token's iat; "+
+				bound+"); the new token minted exit %d", frac, m.Exit)
 			return
 		}
 		c.Why = "the token file did not change within 660s"
