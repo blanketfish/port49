@@ -1,4 +1,4 @@
-.PHONY: qual qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -119,6 +119,11 @@ qual-fleet:
 # while the committed page is stale.
 qualified-platforms:
 	go run ./tests/qual/cmd/qualified > docs/qualified-platforms.md
+
+# Vet a firmware and generate its mock for review (tests/qual/README.md). Commits nothing.
+qual-vet:
+	@test -n "$(P)" || { echo "usage: make qual-vet P=<selector>"; exit 2; }
+	bash tests/qual/vet.sh $(P)
 
 qual-update:
 	PORT49_QUAL_UPDATE=1 go test ./internal/port49d/ -run '^TestQual$$' -count=1 -timeout 20m

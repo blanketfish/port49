@@ -898,6 +898,9 @@ Output, with `<slug>` the firmware's `devicemock.Slug` and `<lp>` the lab platfo
 - `tests/lab/evidence/QUAL-<slug>-<lp>.pcap`, beside the directory, redacted like every capture;
 - `tests/lab/results/QUAL-<slug>-<lp>.md`, the note.
 
+To vet a firmware and add its mock in one command, use `make qual-vet P=<selector>`; the
+procedures are in `tests/qual/README.md`.
+
 `run.json` holds `cells` (the start time of each cell that ran) and `results` (every cell's verdict: `pass`,
 `fail`, `not_applicable` or `not_run`).
 
