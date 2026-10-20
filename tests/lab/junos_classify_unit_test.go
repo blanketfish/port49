@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -121,11 +122,13 @@ func TestSessionPermitted(t *testing.T) {
 }
 
 // noteBlocks reads a note's per-session output blocks: under each `### <name>`
-// heading, "`<label>`:" followed by a fenced block.
+// heading, "`<label>`:" followed by a fenced block, or one "Every RPC:" block,
+// which the harness writes when no session opened and every RPC shares its reply.
 func noteBlocks(t *testing.T, note string) map[string]map[string]string {
 	t.Helper()
 	heading := regexp.MustCompile(`(?m)^### (.+)$`)
 	block := regexp.MustCompile("(?s)\n`([^`\n]+)`:\n\n```\n(.*?)\n```\n")
+	every := regexp.MustCompile("(?s)\nEvery RPC:\n\n```\n(.*?)\n```\n")
 	out := map[string]map[string]string{}
 	locs := heading.FindAllStringSubmatchIndex(note, -1)
 	for i, l := range locs {
@@ -137,6 +140,11 @@ func noteBlocks(t *testing.T, note string) map[string]map[string]string {
 		out[name] = map[string]string{}
 		for _, m := range block.FindAllStringSubmatch(note[l[1]:end], -1) {
 			out[name][m[1]] = m[2]
+		}
+		if m := every.FindStringSubmatch(note[l[1]:end]); m != nil {
+			for _, r := range junosNetconfRPCs {
+				out[name][r.rpc] = m[1]
+			}
 		}
 	}
 	return out
@@ -255,5 +263,24 @@ func TestAskingForCommand(t *testing.T) {
 		if got := askingForCommand(c.out); got != c.want {
 			t.Errorf("askingForCommand(%q) = %v, want %v", c.out, got, c.want)
 		}
+	}
+}
+
+// A collapsed "Every RPC:" block reads as the same reply under every RPC, so a
+// note written either way gives the classifier the same cells.
+func TestNoteBlocksReadsTheCollapsedEveryRPCForm(t *testing.T) {
+	reply := "no session: alice04: the device sent no NETCONF hello: the NETCONF channel closed: EOF ()"
+	collapsed := "### v\n\nEvery RPC:\n\n```\n" + reply + "\n```\n"
+	var each strings.Builder
+	each.WriteString("### v\n")
+	for _, r := range junosNetconfRPCs {
+		fmt.Fprintf(&each, "\n`%s`:\n\n```\n%s\n```\n", r.rpc, reply)
+	}
+	got, want := noteBlocks(t, collapsed), noteBlocks(t, each.String())
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the collapsed form reads %v, the per-RPC form %v", got, want)
+	}
+	if len(got["v"]) != len(junosNetconfRPCs) {
+		t.Errorf("the collapsed form fills %d RPCs, want %d", len(got["v"]), len(junosNetconfRPCs))
 	}
 }
