@@ -417,3 +417,22 @@ func TestDarkLineSubstringsArePort49dsOwn(t *testing.T) {
 		}
 	}
 }
+
+func TestInertColumnSaysNoForARefusedRow(t *testing.T) {
+	for _, c := range []struct {
+		name                          string
+		refused, rowUnobs, adminUnobs bool
+		want                          string
+	}{
+		{"refused session", true, false, false, "no"},
+		{"refused, its commands never ran", true, true, false, "no"},
+		{"row command unfinished", false, true, false, "not observed"},
+		{"admin control unfinished", false, false, true, "not observed"},
+		{"opened and the same as admin", false, false, false, "yes"},
+	} {
+		inert := !c.refused // the session opened and nothing moved
+		if got := inertWord(inert && !c.refused, inertObserved(c.refused, c.rowUnobs, c.adminUnobs)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

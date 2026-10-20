@@ -134,7 +134,7 @@ func TestAdapterReplies(t *testing.T) {
 				row.identity == adminRow.identity && row.clear == adminRow.clear && row.cfg == adminRow.cfg && row.showVersion
 			fmt.Fprintf(&obs, "| `%s` | %s | %s | %s | %s | %s | %s |\n", a, row.session, row.identity,
 				row.reach("clear counters", row.clear), row.reach("configure terminal", row.cfg), row.permit(row.showVersion),
-				inertWord(inert, row.err == nil && len(row.unobserved) == 0 && len(adminRow.unobserved) == 0))
+				inertWord(inert, inertObserved(row.err != nil, len(row.unobserved) > 0, len(adminRow.unobserved) > 0)))
 			if row.err != nil && l.p.name == "cisco_iosxe" {
 				// A refused session stops this image answering SSH for about a
 				// minute (L18); wait it out before the next variant.
@@ -201,6 +201,13 @@ func permitted(b bool) string {
 		return "permitted by port49"
 	}
 	return "not permitted"
+}
+
+// inertObserved is whether the row measured anything: a refused session is a
+// measurement (not inert), and otherwise every command of the row and of
+// admin's control must have finished.
+func inertObserved(refused, rowUnobserved, adminUnobserved bool) bool {
+	return refused || (!rowUnobserved && !adminUnobserved)
 }
 
 // inertWord is the inert column: a row whose commands or whose admin control
